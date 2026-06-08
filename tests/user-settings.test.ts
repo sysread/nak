@@ -28,6 +28,32 @@ describe('coerceSettings', () => {
     expect(coerceSettings({ rando: 'value' })).toEqual({});
   });
 
+  it('coerces a well-formed tierModels map and drops bad entries', () => {
+    const good = {
+      modelId: 'glm-5-1',
+      thinking: 'high',
+      contextWindow: 200_000,
+      supportsReasoning: true,
+      supportsVision: true,
+      supportsResponseFormat: true,
+      label: 'GLM 5.1',
+    };
+    expect(
+      coerceSettings({
+        tierModels: {
+          smart: good,
+          balanced: { modelId: '', thinking: 'high' },
+          bogusTier: good,
+        },
+      })
+    ).toEqual({ tierModels: { smart: good } });
+  });
+
+  it('omits tierModels entirely when no entry survives', () => {
+    expect(coerceSettings({ tierModels: { smart: { modelId: '' } } })).toEqual({});
+    expect(coerceSettings({ tierModels: 'nope' })).toEqual({});
+  });
+
   it('tolerates an empty object', () => {
     expect(coerceSettings({})).toEqual({});
   });

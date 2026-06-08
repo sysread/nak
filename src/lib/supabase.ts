@@ -17,6 +17,7 @@
 import { createClient, type SupabaseClient, type Session } from '@supabase/supabase-js';
 import type { AppConfig } from './config';
 import {
+  coerceTierModels,
   isModelTier,
   isReasoningEffort,
   isThinkingLevel,
@@ -24,8 +25,10 @@ import {
   type ModelTier,
   type ReasoningEffort,
   type ThinkingLevel,
+  type TierModels,
   type Verbosity,
 } from './models';
+import { coerceCatalog, type CatalogModel } from './models/catalog';
 import { isAccent, isColorMode, type Accent, type ColorMode } from './theme';
 import { isLogLevel, createLogger, type LogLevel } from './logger.svelte';
 
@@ -1116,6 +1119,15 @@ export const RECENT_THREAD_CUTOFF_MS = 3 * 24 * 60 * 60 * 1000;
 export interface UserSettings {
   defaultModel?: ModelTier;
   /**
+   * Per-tier model + reasoning overrides. Each entry repoints a tier
+   * (Smart/Balanced/Fast) at a user-chosen Venice model and pins that
+   * tier's default reasoning level, carrying a capability snapshot so the
+   * chat send path resolves synchronously without the catalog. Absent
+   * tiers fall back to the built-in TierSpec. See TierModelConfig in
+   * ./models for the snapshot rationale.
+   */
+  tierModels?: TierModels;
+  /**
    * User-level reasoning-effort default, used on reasoning-capable
    * models when the thread hasn't overridden it. Absent means fall
    * back to {@link DEFAULT_REASONING_EFFORT} in code (`low`) so an
@@ -1272,6 +1284,8 @@ export function coerceSettings(raw: unknown): UserSettings {
   const r = raw as Record<string, unknown>;
   const out: UserSettings = {};
   if (isModelTier(r.defaultModel)) out.defaultModel = r.defaultModel;
+  const tierModels = coerceTierModels(r.tierModels);
+  if (tierModels) out.tierModels = tierModels;
   if (isReasoningEffort(r.defaultReasoningEffort)) {
     out.defaultReasoningEffort = r.defaultReasoningEffort;
   }
@@ -1662,6 +1676,23 @@ export class SupabaseService {
   }
 
   /**
+   * Fetch the live Venice text-model catalog through the venice edge
+   * function's /models route, coerced into the flat CatalogModel shape the
+   * Settings model picker reads. The function holds the shared key
+   * server-side and relays Venice's response; coercion lives in
+   * src/lib/models/catalog.ts (browser-side) so a malformed row degrades
+   * to "skipped" rather than failing the whole list. Errors surface as
+   * VeniceError, the same shape the Usage pane already renders.
+   */
+  async fetchModels(): Promise<CatalogModel[]> {
+    const { data, error } = await this.client.functions.invoke('venice/models', {
+      body: {},
+    });
+    if (error) throw await veniceFunctionError(error);
+    return coerceCatalog(data);
+  }
+
+  /**
    * Generate an embedding through the venice edge function's /embed route,
    * replacing the browser's direct Venice call. The function reads the shared
    * key server-side; this keeps the same { model, input } request and
@@ -1837,6 +1868,13 @@ export class SupabaseService {
     if ('defaultModel' in patch) {
       if (patch.defaultModel === undefined) delete merged.defaultModel;
       else if (isModelTier(patch.defaultModel)) merged.defaultModel = patch.defaultModel;
+    }
+    if ('tierModels' in patch) {
+      // Re-run the coercer so a sloppy caller can't persist a malformed
+      // snapshot; an all-empty result clears the key entirely.
+      const cleaned = coerceTierModels(patch.tierModels);
+      if (cleaned) merged.tierModels = cleaned;
+      else delete merged.tierModels;
     }
     if ('defaultReasoningEffort' in patch) {
       if (patch.defaultReasoningEffort === undefined) {

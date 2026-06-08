@@ -40,6 +40,47 @@ asking back.
 
 ## Model tiers
 
+Nak gives you three model **tiers** - **Smart**, **Balanced**, and
+**Fast** - rather than making you pick a raw model id every time. A tier
+is a named slot: pick a tier for a conversation (or as your account
+default) and Nak resolves it to whichever concrete Venice model that slot
+points at. Threads store the tier, not the model, so re-pointing a tier
+later doesn't strand your old conversations.
+
+Out of the box the three tiers are tuned for a speed/capability spread,
+but each slot is **configurable** in Settings -> AI -> *Models*:
+
+- **Pick the model.** Each tier has a searchable picker populated live
+  from Venice's model catalog. Click it and start typing to filter
+  (fuzzy match, so "v4" finds "DeepSeek V4"); every row lays out the
+  model name with its **capability icons** (reasoning, vision, tools)
+  and right-aligned pills for **context window** and **input/output
+  price**, so you can compare models at a glance before committing.
+  Point Smart at a frontier model, Fast at a small quick one, whatever
+  fits how you work. The selected model's same capability/context/price
+  strip also shows on the tier row itself.
+- **Set the reasoning effort.** Each tier carries its own default
+  thinking level (see below), set from a second dropdown on the same row.
+  This is what makes the tiers feel different even when they front
+  similar models - Fast defaults thinking off for snappy replies, Smart
+  leans into it.
+- **Mark the account default.** The radio on each row picks which tier
+  new threads start on. You can still override the tier per-conversation
+  from the chat top bar.
+- **Reset.** A tier you've customized shows a **Reset** link that drops
+  your override and returns it to its built-in model and reasoning level.
+
+Changes save the moment you make them - no Save button. If the model you
+picked is later retired by Venice, the dropdown keeps showing it as your
+current choice and the tier keeps working until you pick a replacement.
+
+> Heads-up: Nak ships extra safety handling (the
+> [glitch recovery](#automatic-glitch-recovery) re-roll) only for the
+> models it has vetted. If you point a tier at a model Nak hasn't seen,
+> the reasoning and vision controls still work from the catalog's
+> capability flags, but that model-specific safety net doesn't extend to
+> it.
+
 ## Reasoning effort
 
 Reasoning models can spend hidden "thinking" tokens before they start
@@ -57,10 +98,11 @@ conversation**:
 Notes on how it behaves:
 
 - The picker shows on every tier that uses a reasoning-capable model
-  (all three of Smart, Balanced, and Fast do today). Each tier just
-  starts at a different position - **Smart** defaults to *Medium*,
-  **Balanced** to *Low*, and **Fast** to *Off* - and you can move any
-  conversation up or down from there.
+  (all three of Smart, Balanced, and Fast do by default). Each tier
+  starts at its configured default - out of the box **Smart** is
+  *Medium*, **Balanced** *Low*, and **Fast** *Off*, and you can change a
+  tier's default in Settings -> AI -> *Models* - and you can move any
+  individual conversation up or down from there.
 - Your pick is **per conversation** and sticky: it's saved on the
   thread, so it survives refreshes and follows you across devices.
 - The row marked **default** is your account-level default (set in

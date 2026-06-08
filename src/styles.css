@@ -530,23 +530,113 @@ label {
   margin: 0 0 1rem;
 }
 
-.model-choices {
+/* Per-tier model + reasoning configuration rows in the AI pane. Each
+   row is the Smart/Balanced/Fast slot: a default-tier radio, a model
+   select + reasoning select, and a metadata strip of capability chips,
+   context window, and price sourced from the live Venice catalog. */
+.tier-config {
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
+  gap: 0.65rem;
+  margin-bottom: 1rem;
 }
 
-.model-choice {
+.tier-row {
   display: flex;
-  align-items: flex-start;
+  flex-direction: column;
   gap: 0.5rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+/* The tier marked as the account default gets an accent border so the
+   radio selection reads at a glance without scanning for the dot. */
+.tier-row-default {
+  border-color: var(--accent);
+}
+
+.tier-row-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.tier-default-radio {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
   cursor: pointer;
   margin-bottom: 0;
 }
 
-.model-choice input[type='radio'] {
-  margin-top: 0.25rem;
+.tier-default-radio input[type='radio'] {
   width: auto;
+  margin: 0;
+}
+
+.tier-icon {
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.tier-badge {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 0.05rem 0.45rem;
+}
+
+/* Reset / Retry text affordances. Borderless so they read as inline
+   actions next to the prose rather than competing with the real buttons
+   in the pane. */
+.tier-reset {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 0;
+  width: auto;
+}
+
+.tier-reset:hover {
+  text-decoration: underline;
+}
+
+.tier-row-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.tier-row-controls select {
+  flex: 1 1 auto;
+  min-width: 8rem;
+}
+
+.tier-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+/* One capability / context / price pill. Subtle fill so the strip reads
+   as metadata rather than interactive chips. */
+.cap-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+  background: var(--bg-2);
+  border-radius: 999px;
+  padding: 0.1rem 0.5rem;
 }
 
 /* Prompts settings pane. Each prompt is a small card with a name input,

@@ -5,7 +5,6 @@ import {
   DEFAULT_TIER,
   DEFAULT_VERBOSITY,
   EMBEDDING_STORAGE_DIMS,
-  LEGACY_MODELS,
   MODELS,
   REASONING_EFFORTS,
   REASONING_EFFORT_LABELS,
@@ -18,8 +17,9 @@ import {
   VERBOSITIES,
   VERBOSITY_LABELS,
   agentModel,
-  findContextWindowById,
-  findModelById,
+  coerceTierModelConfig,
+  coerceTierModels,
+  effectiveTierSpec,
   isModelTier,
   isReasoningEffort,
   isThinkingLevel,
@@ -30,7 +30,18 @@ import {
   resolveVerbosity,
   thinkingWireForTier,
   type AgentRole,
+  type TierModelConfig,
 } from '../src/lib/models';
+
+const SAMPLE_CONFIG: TierModelConfig = {
+  modelId: 'some-new-model',
+  thinking: 'high',
+  contextWindow: 512_000,
+  supportsReasoning: true,
+  supportsVision: false,
+  supportsResponseFormat: true,
+  label: 'Some New Model',
+};
 
 describe('MODELS (active registry)', () => {
   it('keys every entry by its own id', () => {
@@ -50,21 +61,17 @@ describe('MODELS (active registry)', () => {
     expect(MODELS['mistral-small-3-2-24b-instruct'].supportsReasoning).toBe(false);
   });
   it('marks the vision-capable ids as supportsVision=true', () => {
-    // Vision-capable entries today: the analyze_image sub-call's
-    // primary (e2ee-qwen3-vl-30b-a3b-p) and its uncensored fallback
-    // (venice-uncensored-1-2); the Smart tier's foreground model
-    // (qwen-3-7-plus, which inlines image_url parts directly rather
-    // than routing through analyze_image); plus one legacy entry still
-    // in the registry for thread rows that pinned it explicitly via
-    // per-thread model override (qwen-3-6-plus, from before the Smart
-    // tier swapped to 3.7). Balanced and Fast both front
+    // Vision-capable entries today: analyze_image's server-side vision
+    // sub-call primary (e2ee-qwen3-vl-30b-a3b-p) and its uncensored
+    // fallback (venice-uncensored-1-2), plus the Smart tier's foreground
+    // model (qwen-3-7-plus, which inlines image_url parts directly rather
+    // than routing through analyze_image). Balanced and Fast both front
     // deepseek-v4-flash, which is text-only - vision goes through
     // analyze_image.
     const visionIds = new Set([
       'venice-uncensored-1-2',
       'e2ee-qwen3-vl-30b-a3b-p',
       'qwen-3-7-plus',
-      'qwen-3-6-plus',
     ]);
     for (const [id, spec] of Object.entries(MODELS)) {
       expect(spec.supportsVision).toBe(visionIds.has(id));
@@ -365,76 +372,78 @@ describe('padEmbeddingForStorage', () => {
   });
 });
 
-describe('findModelById', () => {
-  it('returns the spec for currently-active ids', () => {
-    expect(findModelById('deepseek-v4-flash')).toBe(MODELS['deepseek-v4-flash']);
-    expect(findModelById('qwen-3-6-plus')).toBe(MODELS['qwen-3-6-plus']);
-    expect(findModelById('mistral-small-3-2-24b-instruct')).toBe(
-      MODELS['mistral-small-3-2-24b-instruct']
-    );
+describe('coerceTierModelConfig', () => {
+  it('accepts a well-formed snapshot', () => {
+    expect(coerceTierModelConfig(SAMPLE_CONFIG)).toEqual(SAMPLE_CONFIG);
   });
-  it('returns null for retired ids - retired specs do not carry the same shape', () => {
-    expect(findModelById('arcee-trinity-large-thinking')).toBeNull();
-    expect(findModelById('grok-41-fast')).toBeNull();
-    expect(findModelById('kimi-k2-5')).toBeNull();
-    expect(findModelById('zai-org-glm-5-1')).toBeNull();
-    expect(findModelById('deepseek-v4-pro')).toBeNull();
-    expect(findModelById('qwen3-5-35b-a3b')).toBeNull();
+  it('falls back label to the model id when absent', () => {
+    const noLabel: Record<string, unknown> = { ...SAMPLE_CONFIG };
+    delete noLabel.label;
+    expect(coerceTierModelConfig(noLabel)?.label).toBe(SAMPLE_CONFIG.modelId);
   });
-  it('returns null for unknown / empty inputs', () => {
-    expect(findModelById('never-existed')).toBeNull();
-    expect(findModelById(null)).toBeNull();
-    expect(findModelById(undefined)).toBeNull();
-    expect(findModelById('')).toBeNull();
+  it('rejects a missing modelId', () => {
+    expect(coerceTierModelConfig({ ...SAMPLE_CONFIG, modelId: '' })).toBeNull();
   });
-});
-
-describe('findContextWindowById', () => {
-  it('returns the window for a currently-active id', () => {
-    expect(findContextWindowById('deepseek-v4-flash')).toBe(MODELS['deepseek-v4-flash'].contextWindow);
-    expect(findContextWindowById('qwen-3-6-plus')).toBe(MODELS['qwen-3-6-plus'].contextWindow);
+  it('rejects an invalid thinking level', () => {
+    expect(coerceTierModelConfig({ ...SAMPLE_CONFIG, thinking: 'extreme' })).toBeNull();
   });
-
-  // Historical assistant rows carry ids that used to front a tier - if
-  // the legacy fallback breaks, every pre-swap message silently loses
-  // its context-ring indicator. Pin every retired id so each swap
-  // generation stays readable.
-  it('falls back to LEGACY_MODELS for retired ids', () => {
-    expect(findContextWindowById('arcee-trinity-large-thinking')).toBe(256_000);
-    expect(findContextWindowById('gemma-4-uncensored')).toBe(256_000);
-    expect(findContextWindowById('kimi-k2-5')).toBe(256_000);
-    expect(findContextWindowById('kimi-k2-6')).toBe(256_000);
-    expect(findContextWindowById('minimax-m27')).toBe(198_000);
-    expect(findContextWindowById('grok-41-fast')).toBe(1_000_000);
-    expect(findContextWindowById('zai-org-glm-5-1')).toBe(200_000);
-    expect(findContextWindowById('qwen3-5-35b-a3b')).toBe(256_000);
-    expect(findContextWindowById('zai-org-glm-5')).toBe(198_000);
-    expect(findContextWindowById('zai-org-glm-4.7')).toBe(198_000);
-    expect(findContextWindowById('deepseek-v4-pro')).toBe(1_000_000);
+  it('rejects a non-numeric context window', () => {
+    expect(
+      coerceTierModelConfig({ ...SAMPLE_CONFIG, contextWindow: 'big' })
+    ).toBeNull();
   });
-
-  it('returns null for an unknown id and for null/empty input', () => {
-    expect(findContextWindowById('never-existed')).toBeNull();
-    expect(findContextWindowById(null)).toBeNull();
-    expect(findContextWindowById(undefined)).toBeNull();
-    expect(findContextWindowById('')).toBeNull();
+  it('rejects non-boolean capability flags', () => {
+    expect(
+      coerceTierModelConfig({ ...SAMPLE_CONFIG, supportsVision: 'yes' })
+    ).toBeNull();
+  });
+  it('rejects non-objects', () => {
+    expect(coerceTierModelConfig(null)).toBeNull();
+    expect(coerceTierModelConfig('nope')).toBeNull();
   });
 });
 
-describe('LEGACY_MODELS', () => {
-  it('keys every entry by its own id', () => {
-    for (const [key, spec] of Object.entries(LEGACY_MODELS)) {
-      expect(spec.id).toBe(key);
+describe('coerceTierModels', () => {
+  it('keeps only well-formed entries under a real tier key', () => {
+    const result = coerceTierModels({
+      smart: SAMPLE_CONFIG,
+      balanced: { ...SAMPLE_CONFIG, thinking: 'bogus' },
+      nonsense: SAMPLE_CONFIG,
+    });
+    expect(result).toEqual({ smart: SAMPLE_CONFIG });
+  });
+  it('returns undefined when nothing survives', () => {
+    expect(coerceTierModels({})).toBeUndefined();
+    expect(coerceTierModels({ smart: { modelId: '' } })).toBeUndefined();
+    expect(coerceTierModels(null)).toBeUndefined();
+  });
+});
+
+describe('effectiveTierSpec', () => {
+  it('returns the built-in spec when no override exists', () => {
+    for (const tier of TIER_ORDER) {
+      expect(effectiveTierSpec(tier, {})).toEqual(TIERS[tier]);
+      expect(effectiveTierSpec(tier, undefined)).toEqual(TIERS[tier]);
     }
   });
-  it('declares a positive context window on every entry', () => {
-    for (const spec of Object.values(LEGACY_MODELS)) {
-      expect(spec.contextWindow).toBeGreaterThan(0);
-    }
+  it('folds an override over the built-in spec, keeping tier identity', () => {
+    const spec = effectiveTierSpec('smart', { smart: SAMPLE_CONFIG });
+    // Identity (label/icon/tier) stays built-in.
+    expect(spec.tier).toBe('smart');
+    expect(spec.label).toBe(TIERS.smart.label);
+    expect(spec.icon).toBe(TIERS.smart.icon);
+    // Backing model + capabilities + default thinking come from the override.
+    expect(spec.id).toBe(SAMPLE_CONFIG.modelId);
+    expect(spec.contextWindow).toBe(SAMPLE_CONFIG.contextWindow);
+    expect(spec.supportsReasoning).toBe(SAMPLE_CONFIG.supportsReasoning);
+    expect(spec.supportsVision).toBe(SAMPLE_CONFIG.supportsVision);
+    expect(spec.defaultThinking).toBe(SAMPLE_CONFIG.thinking);
+    // Description is regenerated so it can't contradict the picked model.
+    expect(spec.description).toContain(SAMPLE_CONFIG.label);
   });
-  it('does not overlap with active MODELS', () => {
-    for (const id of Object.keys(LEGACY_MODELS)) {
-      expect(MODELS).not.toHaveProperty(id);
-    }
+  it('feeds the thinking cascade so an override default flows through', () => {
+    const spec = effectiveTierSpec('fast', { fast: { ...SAMPLE_CONFIG, thinking: 'medium' } });
+    // No thread override, account default 'low' loses to the tier default.
+    expect(resolveThinking(null, 'low', spec.defaultThinking)).toBe('medium');
   });
 });

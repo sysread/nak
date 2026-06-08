@@ -59,6 +59,7 @@
     app,
     activate,
     persistDefaultModel,
+    persistTierModels,
     persistDefaultReasoningEffort,
     persistDefaultVerbosity,
     persistDefaultLogLevel,
@@ -80,14 +81,29 @@
   import {
     REASONING_EFFORTS,
     REASONING_EFFORT_LABELS,
+    THINKING_LEVELS,
+    THINKING_LEVEL_LABELS,
     TIERS,
     TIER_ORDER,
     VERBOSITIES,
     VERBOSITY_LABELS,
+    effectiveTierSpec,
     type ModelTier,
     type ReasoningEffort,
+    type ThinkingLevel,
+    type TierModelConfig,
     type Verbosity,
   } from '$lib/models';
+  import {
+    tierRowView,
+    tierConfigFromCatalog,
+    tierConfigFromSpec,
+  } from '$lib/ui/model-picker';
+  import {
+    catalog,
+    shouldAutoRefreshCatalog,
+    refreshCatalog,
+  } from '$lib/models-catalog.svelte';
   import type { SystemPrompt } from '$lib/supabase';
   import {
     ACCENTS,
@@ -100,6 +116,7 @@
     type ColorMode,
   } from '$lib/theme';
   import SecretInput from '../components/SecretInput.svelte';
+  import ModelCombobox from '../components/ModelCombobox.svelte';
   import { updateState, applyUpdate, checkForUpdates } from '$lib/update.svelte';
   import { VeniceError } from '$lib/venice';
   import {
@@ -517,6 +534,17 @@
     }
   });
 
+  // First-landing-on-the-AI-pane catalog fetch, same lazy-on-open shape
+  // as the Usage auto-refresh above. The catalog populates the per-tier
+  // model dropdowns; shouldAutoRefreshCatalog() carries the same
+  // stale + not-in-flight + last-attempt-didn't-error guard so a failing
+  // fetch surfaces its error instead of retry-storming.
+  $effect(() => {
+    if (group === 'ai' && shouldAutoRefreshCatalog() && app.supabase) {
+      void refreshCatalog(app.supabase);
+    }
+  });
+
   async function onUsageRefresh(): Promise<void> {
     if (!app.supabase) {
       customError = 'Not connected yet.';
@@ -918,6 +946,61 @@
       defaultModel = prev;
       modelError = err instanceof Error ? err.message : String(err);
     }
+  }
+
+  // Per-tier model + reasoning config. The selects below read their
+  // values from `app.tierModels` (reactive) via `tierRowView`, so these
+  // handlers persist the next whole map and let persistTierModels do the
+  // optimistic apply + rollback - no local form mirror to keep in sync.
+  // A tier config is one atomic snapshot, so we always write the full map
+  // (current map with the one tier replaced or removed).
+  async function persistTierConfig(
+    tier: ModelTier,
+    config: TierModelConfig | null
+  ): Promise<void> {
+    modelError = null;
+    modelInfo = null;
+    const next = { ...app.tierModels };
+    if (config) next[tier] = config;
+    else delete next[tier];
+    try {
+      await persistTierModels(next);
+      modelInfo = config
+        ? `${TIERS[tier].label} now uses ${config.label}.`
+        : `${TIERS[tier].label} reset to its built-in model.`;
+    } catch (err) {
+      modelError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  function onPickTierModel(tier: ModelTier, modelId: string): void {
+    // Keep the tier's current default reasoning level when only the model
+    // changes - the two selects are independent decisions.
+    const thinking = effectiveTierSpec(tier, app.tierModels).defaultThinking
+      ?? defaultReasoningEffort;
+    const model = (catalog.data ?? []).find((m) => m.id === modelId);
+    const config = model
+      ? tierConfigFromCatalog(model, thinking)
+      : // The synthetic "current" option (off-catalog id) re-selected:
+        // preserve the existing snapshot's capabilities via the spec.
+        tierConfigFromSpec(
+          effectiveTierSpec(tier, app.tierModels),
+          thinking,
+          app.tierModels[tier]?.label
+        );
+    void persistTierConfig(tier, config);
+  }
+
+  function onPickTierThinking(tier: ModelTier, thinking: ThinkingLevel): void {
+    // Rebuild the snapshot for the tier's currently-selected model with
+    // the new reasoning level. Prefer the live catalog row so capabilities
+    // refresh; fall back to the effective spec for an off-catalog model.
+    const spec = effectiveTierSpec(tier, app.tierModels);
+    const model = (catalog.data ?? []).find((m) => m.id === spec.id);
+    const config = model
+      ? tierConfigFromCatalog(model, thinking)
+      : tierConfigFromSpec(spec, thinking, app.tierModels[tier]?.label);
+    void persistTierConfig(tier, config);
   }
 
   async function onPickReasoning(next: ReasoningEffort): Promise<void> {
@@ -1389,30 +1472,96 @@
           >Save</button>
         </div>
 
-        <h3 class="pane-section">Default model</h3>
+        <h3 class="pane-section">Models</h3>
         <p class="subtle">
-          Used for any thread that doesn't have its own model set. You can override
-          per-thread from the chat top bar.
+          Each tier is a slot you can point at any Venice chat model and
+          give its own default reasoning effort. The <strong>radio</strong>
+          marks which tier new threads use by default; you can override the
+          tier per-thread from the chat top bar. Capability icons, context
+          window, and price come from the live Venice catalog.
         </p>
-        <div class="form-row model-choices">
+        <div class="tier-config">
           {#each TIER_ORDER as tier (tier)}
-            <label class="model-choice">
-              <input
-                type="radio"
-                name="default-model"
-                value={tier}
-                checked={defaultModel === tier}
-                onchange={() => onPickModel(tier)}
-              />
-              <span>
-                <strong>{TIERS[tier].label}</strong>
-                <span class="subtle" style="margin-left:0.35rem">{TIERS[tier].description}</span>
-                <span class="subtle" style="display:block;font-size:0.8rem;margin-top:0.1rem">
-                  {TIERS[tier].id} · {(TIERS[tier].contextWindow / 1000).toFixed(0)}k context
-                </span>
-              </span>
-            </label>
+            {@const row = tierRowView(tier, app.tierModels, catalog.data ?? [])}
+            <div class="tier-row" class:tier-row-default={defaultModel === tier}>
+              <div class="tier-row-head">
+                <label class="tier-default-radio">
+                  <input
+                    type="radio"
+                    name="default-model"
+                    value={tier}
+                    checked={defaultModel === tier}
+                    onchange={() => onPickModel(tier)}
+                  />
+                  <span class="tier-icon" aria-hidden="true">{TIERS[tier].icon}</span>
+                  <strong>{TIERS[tier].label}</strong>
+                </label>
+                {#if defaultModel === tier}
+                  <span class="tier-badge">Account default</span>
+                {/if}
+                {#if row.overridden}
+                  <button
+                    type="button"
+                    class="tier-reset"
+                    onclick={() => persistTierConfig(tier, null)}
+                  >Reset</button>
+                {/if}
+              </div>
+
+              <div class="tier-row-controls">
+                <ModelCombobox
+                  options={row.options}
+                  value={row.spec.id}
+                  disabled={catalog.data === null}
+                  ariaLabel={`Model for ${TIERS[tier].label}`}
+                  onSelect={(id) => onPickTierModel(tier, id)}
+                />
+                <label class="sr-only" for={`tier-thinking-${tier}`}
+                  >Reasoning for {TIERS[tier].label}</label
+                >
+                <select
+                  id={`tier-thinking-${tier}`}
+                  value={row.thinking}
+                  disabled={!row.spec.supportsReasoning}
+                  title={row.spec.supportsReasoning
+                    ? 'Default reasoning effort for this tier'
+                    : "This model doesn't support reasoning"}
+                  onchange={(e) =>
+                    onPickTierThinking(
+                      tier,
+                      (e.currentTarget as HTMLSelectElement).value as ThinkingLevel
+                    )}
+                >
+                  {#each THINKING_LEVELS as lvl (lvl)}
+                    <option value={lvl}>{THINKING_LEVEL_LABELS[lvl]} thinking</option>
+                  {/each}
+                </select>
+              </div>
+
+              <div class="tier-row-meta">
+                {#each row.chips as chip (chip.label)}
+                  <span class="cap-chip"
+                    ><span aria-hidden="true">{chip.icon}</span> {chip.label}</span
+                  >
+                {/each}
+                <span class="cap-chip">{row.contextLabel} context</span>
+                <span class="cap-chip">{row.priceLabel}</span>
+              </div>
+            </div>
           {/each}
+          {#if catalog.loading}
+            <p class="subtle">Loading models from Venice…</p>
+          {/if}
+          {#if catalog.error}
+            <p class="error">
+              Couldn't load the model catalog: {catalog.error}
+              <button
+                type="button"
+                class="tier-reset"
+                onclick={() => app.supabase && refreshCatalog(app.supabase)}
+              >Retry</button>
+            </p>
+          {/if}
         </div>
 
         <h3 class="pane-section">Default reasoning effort</h3>

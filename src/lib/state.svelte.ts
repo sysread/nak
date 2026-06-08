@@ -31,6 +31,7 @@ import {
 } from './supabase';
 import { VeniceClient } from './venice';
 import { resetUsage } from './usage-store.svelte';
+import { resetCatalog } from './models-catalog.svelte';
 import { detectTimezone } from './timezone';
 import {
   DEFAULT_REASONING_EFFORT,
@@ -38,6 +39,7 @@ import {
   DEFAULT_VERBOSITY,
   type ModelTier,
   type ReasoningEffort,
+  type TierModels,
   type Verbosity,
 } from './models';
 import {
@@ -156,6 +158,16 @@ interface AppState {
    */
   defaultModel: ModelTier;
   /**
+   * Per-tier model + reasoning overrides from
+   * `profiles.settings.tierModels`. Empty object on activate() (no
+   * overrides = built-in tier defaults); overwritten from Supabase on
+   * unlock. Read at chat send time via `effectiveTierSpec(tier,
+   * app.tierModels)` so a configured tier resolves to the user's model
+   * and reasoning level. Each entry is a capability snapshot, so chat
+   * resolution never has to wait on the lazily-fetched catalog.
+   */
+  tierModels: TierModels;
+  /**
    * User-level default reasoning-effort. Seeded to
    * DEFAULT_REASONING_EFFORT on activate(), then overwritten from
    * Supabase `profiles.settings.defaultReasoningEffort` on unlock.
@@ -267,6 +279,7 @@ export const app = $state<AppState>({
   supabase: null,
   venice: null,
   defaultModel: DEFAULT_TIER,
+  tierModels: {},
   defaultReasoningEffort: DEFAULT_REASONING_EFFORT,
   defaultVerbosity: DEFAULT_VERBOSITY,
   colorMode: cachedTheme?.mode ?? DEFAULT_MODE,
@@ -295,6 +308,10 @@ export const app = $state<AppState>({
 // describing why it has to do more than a plain assignment.
 function setDefaultModel(tier: ModelTier): void {
   app.defaultModel = tier;
+}
+
+function setTierModels(tierModels: TierModels): void {
+  app.tierModels = tierModels;
 }
 
 function setDefaultReasoningEffort(effort: ReasoningEffort): void {
@@ -463,6 +480,28 @@ export async function persistDefaultModel(tier: ModelTier): Promise<void> {
     await app.supabase.updateSettings({ defaultModel: tier });
   } catch (err) {
     setDefaultModel(prev);
+    throw err;
+  }
+}
+
+/**
+ * Persist the whole per-tier override map. Callers build the next map
+ * (current map with one tier added, changed, or removed) and hand it in
+ * whole - mirroring updateSystemPrompts' replace-wholesale contract,
+ * since a tier config is a single atomic snapshot rather than a set of
+ * independently-mergeable fields. Optimistic with rollback.
+ */
+export async function persistTierModels(tierModels: TierModels): Promise<void> {
+  if (!app.supabase) throw new Error(NOT_CONNECTED);
+  const prev = app.tierModels;
+  setTierModels(tierModels);
+  try {
+    const merged = await app.supabase.updateSettings({ tierModels });
+    // Adopt the coerced server shape so a snapshot the coercer scrubbed
+    // (e.g. an all-empty map collapsing to absence) is reflected locally.
+    setTierModels(merged.tierModels ?? {});
+  } catch (err) {
+    setTierModels(prev);
     throw err;
   }
 }
@@ -678,6 +717,9 @@ export async function persistSystemPrompts(prompts: SystemPrompt[]): Promise<voi
  */
 export function applyServerSettings(s: UserSettings): void {
   if (s.defaultModel) setDefaultModel(s.defaultModel);
+  // Always assign so a tier the user cleared on another tab (absent from
+  // the blob) drops the stale local override rather than ghosting it.
+  setTierModels(s.tierModels ?? {});
   if (s.defaultReasoningEffort) setDefaultReasoningEffort(s.defaultReasoningEffort);
   if (s.defaultVerbosity) setDefaultVerbosity(s.defaultVerbosity);
   if (s.defaultLogLevel) setDefaultLogLevel(s.defaultLogLevel);
@@ -810,6 +852,7 @@ export function activate(config: AppConfig): void {
   // settings fetch resolves sees sane values. `applyServerSettings`
   // overwrites these from the blob if the fetch succeeds.
   app.defaultModel = DEFAULT_TIER;
+  app.tierModels = {};
   app.defaultReasoningEffort = DEFAULT_REASONING_EFFORT;
   app.defaultVerbosity = DEFAULT_VERBOSITY;
   app.defaultLogLevel = DEFAULT_LOG_LEVEL;
@@ -860,9 +903,9 @@ async function loadSettingsThenStartWorkers(config: AppConfig): Promise<void> {
  * Used by `resetForSignOut()` (sign-out releases each Web Lock so a
  * queued tab can take over) and by `haltBackgroundWork()` (a newer
  * build is waiting and processing must stop on stale code until the
- * user reloads). The `resetUsage()` call keeps billing rows from
- * leaking across a sign-out / sign-in-as-someone-else into the
- * Usage pane's cache.
+ * user reloads). The `resetUsage()` / `resetCatalog()` calls keep
+ * billing rows and the model catalog from leaking across a sign-out /
+ * sign-in-as-someone-else into the Settings panes' caches.
  */
 function stopBackgroundWorkers(): void {
   supervisor.stop();
@@ -873,6 +916,7 @@ function stopBackgroundWorkers(): void {
   deepSleep.stop();
   rem.stop();
   resetUsage();
+  resetCatalog();
 }
 
 /**
@@ -946,6 +990,7 @@ export function enterSetup(): void {
 export function resetForSignOut(): void {
   stopBackgroundWorkers();
   app.defaultModel = DEFAULT_TIER;
+  app.tierModels = {};
   app.defaultReasoningEffort = DEFAULT_REASONING_EFFORT;
   app.defaultVerbosity = DEFAULT_VERBOSITY;
   app.defaultLogLevel = DEFAULT_LOG_LEVEL;

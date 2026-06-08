@@ -242,8 +242,8 @@ Venice base URL; the function does.
 - `/stream` - the streaming round chain. Owns tool dispatch, output
   guards, persistence, retry/control-channel fan-out. See
   [Streaming and tool dispatch in the venice edge function](./chat.md).
-- `/complete`, `/embed`, `/text-parser`, `/usage`, `/image/generate`
-  - one-shot relays.
+- `/complete`, `/embed`, `/text-parser`, `/usage`, `/models`,
+  `/image/generate` - one-shot relays.
 - `/backfill` - service-role-only, the embedding backfill cron
   target.
 

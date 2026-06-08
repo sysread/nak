@@ -35,6 +35,7 @@ import {
   veniceComplete,
   veniceEmbed,
   veniceExtractText,
+  veniceFetchModels,
   veniceFetchUsagePage,
   veniceGenerateImage,
   VeniceError,
@@ -277,6 +278,38 @@ async function handleUsage(req: Request): Promise<Response> {
     if (err instanceof VeniceError) {
       // Mirror handleEmbed: surface Venice's 429 as a 429 so the browser loop
       // can back off; everything else collapses to 502 (bad upstream).
+      return json({ error: err.message, kind: err.kind }, err.kind === 'rate_limit' ? 429 : 502);
+    }
+    return json({ error: (err as Error).message }, 500);
+  }
+}
+
+/**
+ * Browser-triggered proxy for GET /models?type=text. The Settings model
+ * picker fetches this to populate the per-tier and vision model dropdowns
+ * with the live Venice catalog. Authenticated as the calling user (the
+ * gateway's verify_jwt has already validated the session JWT - same model
+ * as /usage, no service-role check); the catalog is account-agnostic, so
+ * any project member sees the same list against the one shared key.
+ *
+ * Thin passthrough: relays Venice's JSON verbatim and lets the browser
+ * (src/lib/models/catalog.ts) flatten and coerce it, keeping this handler
+ * free of CatalogModel knowledge. POST from the browser (functions.invoke
+ * is always POST) even though the upstream call is a GET.
+ */
+async function handleModels(): Promise<Response> {
+  const admin = adminClient();
+  if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
+  const apiKey = await readVeniceKey(admin);
+  if (!apiKey) {
+    return json({ error: 'no Venice key configured (app_config unseeded)' }, 503);
+  }
+
+  try {
+    const result = await veniceFetchModels({ apiKey });
+    return json(result);
+  } catch (err) {
+    if (err instanceof VeniceError) {
       return json({ error: err.message, kind: err.kind }, err.kind === 'rate_limit' ? 429 : 502);
     }
     return json({ error: (err as Error).message }, 500);
@@ -766,6 +799,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const route = new URL(req.url).pathname.split('/').filter(Boolean).pop();
   if (route === 'embed' && req.method === 'POST') return handleEmbed(req);
   if (route === 'usage' && req.method === 'POST') return handleUsage(req);
+  if (route === 'models' && req.method === 'POST') return handleModels();
   if (route === 'backfill' && req.method === 'POST') return handleBackfill(req);
   if (route === 'text-parser' && req.method === 'POST') return handleTextParser(req);
   if (route === 'image-generate' && req.method === 'POST') return handleImageGenerate(req);
