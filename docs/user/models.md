@@ -50,13 +50,15 @@ later doesn't strand your old conversations.
 Out of the box the three tiers are tuned for a speed/capability spread,
 but each slot is **configurable** in Settings -> AI -> *Models*:
 
-- **Pick the model.** Each tier has a dropdown populated live from
-  Venice's model catalog. Point Smart at a frontier model, Fast at a
-  small quick one, whatever fits how you work. Next to each tier sits a
-  strip showing the selected model's **capability icons** (reasoning,
-  vision, tools), its **context window**, and its **price** per million
-  tokens - all read straight from the catalog so you can compare before
-  committing.
+- **Pick the model.** Each tier has a searchable picker populated live
+  from Venice's model catalog. Click it and start typing to filter
+  (fuzzy match, so "v4" finds "DeepSeek V4"); every row lays out the
+  model name with its **capability icons** (reasoning, vision, tools)
+  and right-aligned pills for **context window** and **input/output
+  price**, so you can compare models at a glance before committing.
+  Point Smart at a frontier model, Fast at a small quick one, whatever
+  fits how you work. The selected model's same capability/context/price
+  strip also shows on the tier row itself.
 - **Set the reasoning effort.** Each tier carries its own default
   thinking level (see below), set from a second dropdown on the same row.
   This is what makes the tiers feel different even when they front

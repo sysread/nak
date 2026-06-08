@@ -116,6 +116,7 @@
     type ColorMode,
   } from '$lib/theme';
   import SecretInput from '../components/SecretInput.svelte';
+  import ModelCombobox from '../components/ModelCombobox.svelte';
   import { updateState, applyUpdate, checkForUpdates } from '$lib/update.svelte';
   import { VeniceError } from '$lib/venice';
   import {
@@ -1508,22 +1509,13 @@
               </div>
 
               <div class="tier-row-controls">
-                <label class="sr-only" for={`tier-model-${tier}`}
-                  >Model for {TIERS[tier].label}</label
-                >
-                <select
-                  id={`tier-model-${tier}`}
+                <ModelCombobox
+                  options={row.options}
                   value={row.spec.id}
                   disabled={catalog.data === null}
-                  onchange={(e) =>
-                    onPickTierModel(tier, (e.currentTarget as HTMLSelectElement).value)}
-                >
-                  {#each row.options as opt (opt.id)}
-                    <option value={opt.id}
-                      >{opt.label}{opt.deprecated ? ' (deprecated)' : ''}</option
-                    >
-                  {/each}
-                </select>
+                  ariaLabel={`Model for ${TIERS[tier].label}`}
+                  onSelect={(id) => onPickTierModel(tier, id)}
+                />
                 <label class="sr-only" for={`tier-thinking-${tier}`}
                   >Reasoning for {TIERS[tier].label}</label
                 >

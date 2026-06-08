@@ -3,8 +3,10 @@ import { coerceCatalog, type CatalogModel } from '../src/lib/models/catalog';
 import {
   buildModelOptions,
   capabilityChips,
+  filterModelOptions,
   formatContextWindow,
   formatPricing,
+  fuzzyMatch,
   tierConfigFromCatalog,
   tierRowView,
 } from '../src/lib/ui/model-picker';
@@ -119,6 +121,64 @@ describe('formatPricing', () => {
     expect(formatPricing({ inputUsdPerM: null, outputUsdPerM: null })).toBe(
       'Pricing n/a'
     );
+  });
+});
+
+describe('fuzzyMatch', () => {
+  it('scores an in-order subsequence and rejects a miss', () => {
+    expect(fuzzyMatch('qwn', 'Qwen 3.7 Plus')).not.toBeNull();
+    expect(fuzzyMatch('xyz', 'Qwen 3.7 Plus')).toBeNull();
+  });
+  it('treats an empty query as a match-all (score 0)', () => {
+    expect(fuzzyMatch('', 'anything')).toBe(0);
+    expect(fuzzyMatch('   ', 'anything')).toBe(0);
+  });
+  it('is case-insensitive', () => {
+    expect(fuzzyMatch('GPT', 'gpt-oss')).not.toBeNull();
+  });
+  it('ranks a contiguous hit above a scattered one (boundary held equal)', () => {
+    // Both start with 'a' (same word-boundary bonus), so the only
+    // difference is the contiguous run in the first.
+    const contiguous = fuzzyMatch('abc', 'abcdef')!;
+    const scattered = fuzzyMatch('abc', 'axbxcx')!;
+    expect(contiguous).toBeGreaterThan(scattered);
+  });
+  it('rewards a word-boundary hit', () => {
+    const boundary = fuzzyMatch('f', 'deep flash')!;
+    const midword = fuzzyMatch('f', 'deepflash')!;
+    expect(boundary).toBeGreaterThan(midword);
+  });
+});
+
+describe('filterModelOptions', () => {
+  const fixture = (name: string, id: string): CatalogModel => ({ ...SAMPLE, name, id });
+  const opts = buildModelOptions(
+    [
+      fixture('Qwen 3.7 Plus', 'qwen-3-7-plus'),
+      fixture('DeepSeek V4 Flash', 'deepseek-v4-flash'),
+      fixture('GPT OSS 20B', 'gpt-oss-20b'),
+    ],
+    null
+  );
+  it('returns every option (original order) for an empty query', () => {
+    expect(filterModelOptions(opts, '').map((o) => o.id)).toEqual(
+      opts.map((o) => o.id)
+    );
+    expect(filterModelOptions(opts, '   ')).toHaveLength(opts.length);
+  });
+  it('filters to fuzzy-matching options', () => {
+    const r = filterModelOptions(opts, 'deep');
+    expect(r).toHaveLength(1);
+    expect(r[0].id).toBe('deepseek-v4-flash');
+  });
+  it('matches on the model id, not just the label', () => {
+    // "oss-20" appears only in the id, proving the id is searched too.
+    const r = filterModelOptions(opts, 'oss-20');
+    expect(r.map((o) => o.id)).toContain('gpt-oss-20b');
+  });
+  it('orders best match first', () => {
+    const r = filterModelOptions(opts, 'qwen');
+    expect(r[0].id).toBe('qwen-3-7-plus');
   });
 });
 

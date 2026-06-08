@@ -219,3 +219,62 @@ export function tierRowView(
     overridden: override != null,
   };
 }
+
+/**
+ * Fuzzy subsequence score of `query` against `text`, or null when the
+ * query's characters don't appear in order. Higher is a better match.
+ * Pure scoring heuristic, not a ranking standard - it just has to order
+ * a few dozen model names sensibly in the combobox:
+ *
+ *   - every query char must appear in order (subsequence) or it's a miss;
+ *   - contiguous runs score higher than scattered hits ("gpt4" beats
+ *     "g...p...t...4");
+ *   - a char landing at a word boundary (start, after a space/hyphen)
+ *     scores higher, so "v4" favors "DeepSeek-V4" over "...v...4...";
+ *   - longer texts get a mild penalty so a tight short match outranks the
+ *     same letters buried in a longer name.
+ *
+ * Case-insensitive. An empty query scores 0 (matches everything), which
+ * `filterModelOptions` short-circuits before calling this.
+ */
+export function fuzzyMatch(query: string, text: string): number | null {
+  const q = query.trim().toLowerCase();
+  if (q.length === 0) return 0;
+  const t = text.toLowerCase();
+  let score = 0;
+  let from = 0;
+  let prev = -2;
+  for (const ch of q) {
+    const at = t.indexOf(ch, from);
+    if (at === -1) return null;
+    score += at === prev + 1 ? 2 : 1;
+    const before = at === 0 ? ' ' : t[at - 1];
+    if (before === ' ' || before === '-') score += 3;
+    prev = at;
+    from = at + 1;
+  }
+  return score - text.length * 0.01;
+}
+
+/**
+ * Filter + rank model options against a fuzzy query, matching on the
+ * display label and (for live catalog rows) the model id, so "qwen-3-7"
+ * finds it by id even though the label reads "Qwen 3.7 Plus". An empty
+ * query returns the options untouched (preserving the caller's order).
+ * Stable best-score-first ordering; original order breaks ties.
+ */
+export function filterModelOptions(
+  options: readonly ModelOption[],
+  query: string
+): ModelOption[] {
+  if (query.trim().length === 0) return [...options];
+  const scored: { opt: ModelOption; score: number; order: number }[] = [];
+  options.forEach((opt, order) => {
+    const labelScore = fuzzyMatch(query, opt.label);
+    const idScore = opt.model ? fuzzyMatch(query, opt.id) : null;
+    const best = Math.max(labelScore ?? -Infinity, idScore ?? -Infinity);
+    if (best > -Infinity) scored.push({ opt, score: best, order });
+  });
+  scored.sort((a, b) => b.score - a.score || a.order - b.order);
+  return scored.map((s) => s.opt);
+}

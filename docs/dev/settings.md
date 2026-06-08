@@ -55,9 +55,11 @@ landing tab move together.
   preferences persist to `profiles.settings`.
 
   The **Models** subsection is the per-tier configuration UI: each of
-  Smart/Balanced/Fast gets a model dropdown (populated from the live
-  Venice catalog via `models-catalog.svelte.ts`), a reasoning-effort
-  dropdown, a default-tier radio, and a capability/context/price strip.
+  Smart/Balanced/Fast gets a fuzzy-search model combobox
+  (`ModelCombobox`, populated from the live Venice catalog via
+  `models-catalog.svelte.ts`, with per-row capability/context/price
+  columns), a reasoning-effort dropdown, a default-tier radio, and a
+  capability/context/price strip on the row itself.
   Picking a model or reasoning level writes a `TierModelConfig` snapshot
   into `profiles.settings.tierModels[tier]` (via `persistTierModels`);
   the chat send path reads it back through `effectiveTierSpec(tier,
@@ -132,7 +134,10 @@ every update) so it's covered here rather than in its own file.
 - `src/lib/ui/model-picker.ts` — pure UI primitives for the picker:
   `tierRowView` (row view-model), `buildModelOptions`, `capabilityChips`,
   `formatContextWindow`, `formatPricing`, `tierConfigFromCatalog`,
-  `tierConfigFromSpec`.
+  `tierConfigFromSpec`, plus the combobox's `fuzzyMatch` /
+  `filterModelOptions`.
+- `src/components/ModelCombobox.svelte` — the fuzzy-search model picker
+  (subgrid-aligned rows; combobox/listbox a11y). See `./components.md`.
 - `src/lib/models/index.ts` — `TierModelConfig` / `TierModels`,
   `coerceTierModels`, and `effectiveTierSpec` (folds a user override over
   the built-in TierSpec).

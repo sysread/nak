@@ -73,6 +73,50 @@ custom property makes the scale prop work without inline keyframes.
 Consumers: `Chat.svelte` (several spots), `Help.svelte` (doc
 transitions), archive loading sentinel in the drawer.
 
+## `<ModelCombobox>`
+
+File: `src/components/ModelCombobox.svelte`.
+
+Search-and-select combobox for the per-tier model picker in
+Settings -> AI -> Models, replacing the native `<select>` (which
+can't render the per-row capability badges, context-window pill, and
+input/output price pill, nor type-to-filter). Each row aligns the
+model name left, capability badges centered, and the context + price
+pills right; CSS **subgrid** keeps those columns aligned across every
+row. A fuzzy search box filters the list as the user types.
+
+```ts
+interface Props {
+  options: ModelOption[];   // from tierRowView.options
+  value: string;            // selected model id
+  disabled?: boolean;
+  ariaLabel: string;        // e.g. "Model for Smart"
+  onSelect: (id: string) => void;
+}
+```
+
+- ARIA is the "combobox with external listbox" pattern: the search
+  `<input role="combobox">` owns `aria-activedescendant`, the `<ul
+  role="listbox">` holds `role="option"` rows. Arrow keys move the
+  highlight, Enter selects it, Escape closes; the rows are pointer
+  targets (hover sets the highlight). Open-from-trigger highlights the
+  current selection so Enter-on-open re-picks it.
+- Conventions mirror `TopicsFilter.svelte`: `open` state, button +
+  popover binds, a document-level click-outside listener, and
+  component-scoped styles. The popover widens past the trigger
+  (`width: max-content`, capped) to fit the four columns.
+- Decision logic - the fuzzy matcher (`fuzzyMatch`), the filter/rank
+  (`filterModelOptions`), and the per-row data (`capabilityChips`,
+  `formatContextWindow`, `formatPricing`) - lives in
+  `src/lib/ui/model-picker.ts` and is unit-tested in
+  `tests/model-picker.test.ts`. The `.svelte` file owns only the
+  keyboard model, the open/close glue, and the markup.
+- An off-catalog "current" option (a model no longer in the live
+  catalog) renders name-only - no badges or pills, since the snapshot
+  doesn't carry catalog capability/pricing data.
+
+Consumer: `Settings.svelte` (one per tier in the Models subsection).
+
 ## `<ContextRing>`
 
 File: `src/components/ContextRing.svelte`.
