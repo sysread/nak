@@ -127,11 +127,14 @@ parent - `messages.thread_id -> threads.user_id = auth.uid()`.
   whether the pre-send guard allows a file along. Image -> true (vision
   inlines it; non-vision tiers get an analyze_image note); non-empty
   `extracted_text` -> true; else false.
-- **Thread-scoped image lookup**: `analyze_image` reaches an image via
-  `findImageByFilenameInThread` (joins `messages.thread_id`, most recent
-  match regardless of expiry), then hands Venice a signed URL; expired
-  (`storage_path === null`) throws an actionable error. Thread-scoped so
-  the model can re-analyze an image attached on a prior turn.
+- **Thread-scoped image lookup**: `analyze_image` (server-side, in the
+  venice edge function) reaches an image by joining `message_attachments`
+  to `messages` on `thread_id` (most recent match regardless of expiry),
+  downloads the bytes from the bucket, and inlines them to Venice as a
+  base64 data URL; expired (`storage_path === null`) throws an actionable
+  error. Thread-scoped so the model can re-analyze an image attached on a
+  prior turn. (Inlining rather than a signed URL avoids Venice failing to
+  fetch a URL that resolves to an internal host in local/dev runtimes.)
 - **Generated images never put base64 on the tool-result row**: the
   ~700KB base64 rides under `GENERATED_IMAGE_RESULT_KEY` and is stripped
   before `encodeToolContent`; the bytes reach the user via the bucket

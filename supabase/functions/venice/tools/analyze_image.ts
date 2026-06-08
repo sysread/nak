@@ -1,11 +1,14 @@
-// analyze_image (function-side port)
+// analyze_image (function-side - the live implementation)
 //
 // Vision-tier sub-completion against an image attachment in the
 // current thread. Wire schema lives in
-// src/lib/tools/analyze_image.schema.ts.
+// src/lib/tools/analyze_image.schema.ts; the browser ToolDef of the
+// same name is schema-only (it advertises the tool to the model via
+// buildToolList) and never executes - dispatch happens here, in the
+// streaming function's performToolCall.
 //
-// Simplifications vs the browser path:
-// - Single-attempt (no 3x retry loop for empty/truncated responses).
+// Simplifications vs a browser dispatch:
+// - One attempt per model (no 3x empty/truncated retry loop).
 //   Empty/truncated surfaces as a tool error and the model can
 //   retry at its own discretion.
 // - Miss diagnostic doesn't enumerate live filenames in the thread;
@@ -21,20 +24,73 @@ import { registerTool, type ToolContext, type ToolDef } from '../performToolCall
 import { readVeniceKey } from './_venice_key.ts';
 import { toolComplete } from './_venice_complete.ts';
 
-// Mirror of agentModel('visionAnalysis') in src/lib/models/index.ts.
-// venice-uncensored-1-2: 128k context, native vision, supports tool
-// calling, no reasoning. Swapped in over the prior e2ee-qwen3 vision
-// model because the qwen variant returned more compact text but
-// behaved identically on the vision contract; uncensored gives the
-// model latitude on prompts that the original was reluctant on,
-// without any change to the wire shape this tool uses.
-const VISION_MODEL = 'venice-uncensored-1-2';
+// analyze_image runs its query against the primary vision model first
+// and retries once against the uncensored fallback on any failure.
+//
+// Primary - e2ee-qwen3-vl-30b-a3b-p: 128k context, native vision, no
+// reasoning. The stricter content posture, used for the common case.
+//
+// Fallback - venice-uncensored-1-2: same vision wire contract, but
+// permissive. The motivating case is Venice's content-safety filter
+// spuriously rejecting an innocuous photo (a loaf of home-baked bread
+// tripped it); the uncensored model describes it without the block.
+//
+// These ids mirror MODELS entries in src/lib/models/index.ts but are
+// duplicated here because the edge function is a Deno island and can't
+// import from src/lib (see supabase/functions/README.md).
+const PRIMARY_VISION_MODEL = 'e2ee-qwen3-vl-30b-a3b-p';
+const FALLBACK_VISION_MODEL = 'venice-uncensored-1-2';
 
 interface AttachmentRow {
   id: string;
   filename: string;
   storage_path: string | null;
   mime_type: string;
+}
+
+/**
+ * Run the query against one vision model id. Returns the trimmed
+ * answer, or throws when the model returns nothing or truncates. A
+ * content-safety rejection from Venice arrives as a thrown VeniceError
+ * out of toolComplete and propagates straight out; execute() catches
+ * both shapes the same way and routes to the fallback model.
+ */
+async function runVision(
+  apiKey: string,
+  model: string,
+  query: string,
+  imageUrl: string,
+  filename: string,
+): Promise<string> {
+  const result = await toolComplete({
+    apiKey,
+    model,
+    messages: [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: query },
+          { type: 'image_url', image_url: { url: imageUrl } },
+        ] as unknown as string,
+      },
+    ],
+    maxTokens: 8196,
+  });
+
+  const trimmed = result.text.trim();
+  if (trimmed.length === 0) {
+    throw new Error(
+      `Vision model ${model} returned no text for "${filename}" (finish_reason=${result.finishReason ?? 'null'}). ` +
+        'Usually a transient provider blip - retry, or describe to the user that the image analysis failed.',
+    );
+  }
+  if (result.finishReason !== 'stop') {
+    throw new Error(
+      `Vision model ${model} returned truncated output for "${filename}" (finish_reason=${result.finishReason ?? 'null'}). ` +
+        'Retry, or describe to the user that the image analysis failed.',
+    );
+  }
+  return trimmed;
 }
 
 export const analyzeImage: ToolDef = {
@@ -104,36 +160,26 @@ export const analyzeImage: ToolDef = {
     const apiKey = await readVeniceKey(ctx.adminClient);
     if (!apiKey) throw new Error('no Venice key configured (app_config unseeded)');
 
-    const result = await toolComplete({
-      apiKey,
-      model: VISION_MODEL,
-      messages: [
-        {
-          role: 'user',
-          content: [
-            { type: 'text', text: query },
-            { type: 'image_url', image_url: { url: imageUrl } },
-          ] as unknown as string,
-        },
-      ],
-      maxTokens: 8196,
-    });
-
-    const trimmed = result.text.trim();
-    if (trimmed.length === 0) {
-      throw new Error(
-        `Vision model returned no text for "${filename}" (finish_reason=${result.finishReason ?? 'null'}). ` +
-          'Usually a transient provider blip - retry, or describe to the user that the image analysis failed.',
+    // Primary vision model first, falling back once to the permissive
+    // uncensored model on any failure. Failure-agnostic on purpose: a
+    // content block arrives as either a thrown VeniceError (HTTP 4xx
+    // from veniceComplete) or a non-stop finish_reason indistinguishable
+    // from an ordinary truncation, so we can't match on it. Any primary
+    // failure routes to the fallback; a genuinely-transient primary
+    // failure just costs one extra sub-call on the other model.
+    try {
+      return { answer: await runVision(apiKey, PRIMARY_VISION_MODEL, query, imageUrl, filename) };
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `[analyze_image] primary ${PRIMARY_VISION_MODEL} failed for "${filename}": ${detail}; falling back to ${FALLBACK_VISION_MODEL}`,
       );
+      // Fallback. If this also throws, the error propagates to the
+      // model so it can apologise / describe the failure rather than
+      // relaying a partial answer as if it were real. The model-facing
+      // retry guidance rides on runVision's thrown message.
+      return { answer: await runVision(apiKey, FALLBACK_VISION_MODEL, query, imageUrl, filename) };
     }
-    if (result.finishReason !== 'stop') {
-      throw new Error(
-        `Vision model returned truncated output for "${filename}" (finish_reason=${result.finishReason ?? 'null'}). ` +
-          'Retry, or describe to the user that the image analysis failed.',
-      );
-    }
-
-    return { answer: trimmed };
   },
 };
 

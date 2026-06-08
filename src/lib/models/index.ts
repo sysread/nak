@@ -257,9 +257,13 @@ export const MODELS = {
     // stays clean. See buildChatBody in venice.ts (reasoning_effort is
     // only forwarded when the caller opts in).
     supportsReasoning: false,
-    // Vision-capable; this is the id the analyze_image tool uses for
-    // its sub-completions. The `e2ee-` prefix is Venice's marker for
-    // end-to-end-encrypted serving.
+    // Vision-capable. analyze_image's primary vision sub-call uses this
+    // id; that tool runs server-side (supabase/functions/venice/tools/
+    // analyze_image.ts) and falls back to venice-uncensored-1-2 when
+    // this model fails. Listed here as a known Venice model and to back
+    // the supportsVision contract; the edge tool holds the id directly
+    // (it can't import from src/lib). The `e2ee-` prefix is Venice's
+    // marker for end-to-end-encrypted serving.
     supportsVision: true,
     supportsResponseFormat: true,
   },
@@ -278,10 +282,12 @@ export const MODELS = {
   'venice-uncensored-1-2': {
     id: 'venice-uncensored-1-2',
     contextWindow: 128_000,
-    // Non-reasoning vision model used by the analyze_image tool (see
-    // AGENT_MODELS.visionAnalysis below). The analyze_image call site
-    // never sends reasoning_effort, so the missing CoT pass costs
-    // nothing on the wire.
+    // Non-reasoning vision model: analyze_image's permissive fallback,
+    // tried when the primary vision sub-call fails - e.g. a spurious
+    // content-safety block on an innocuous photo. That tool runs
+    // server-side (supabase/functions/venice/tools/analyze_image.ts)
+    // and holds this id directly; listed here as a known Venice model
+    // and to back the supportsVision contract.
     supportsReasoning: false,
     supportsVision: true,
     supportsResponseFormat: true,
@@ -399,8 +405,7 @@ export type AgentRole =
   | 'bias'
   | 'recall'
   | 'conversationRecall'
-  | 'wikiRecall'
-  | 'visionAnalysis';
+  | 'wikiRecall';
 
 /**
  * Background-agent role -> Venice id. The right-hand side is checked
@@ -531,17 +536,6 @@ export type AgentRole =
  *     distinct slot so the three recall surfaces can be retuned
  *     independently if one regresses.
  *
- *   visionAnalysis - venice-uncensored-1-2. Vision sub-completion
- *     for the analyze_image tool. Decoupled from any user-facing
- *     tier so a tier retarget doesn't silently break image
- *     analysis. 128k context, native vision, supports tool calling,
- *     non-reasoning; the call site never sends reasoning_effort, so
- *     the missing CoT pass costs nothing on the wire. Swapped in
- *     over the prior e2ee-qwen3 vision model because uncensored
- *     gives the model latitude on prompts that the original was
- *     reluctant on, without any change to the wire shape this tool
- *     uses.
- *
  *   autoTitle - e2ee-gpt-oss-20b-p. Background title-generation
  *     completion that fires from Chat.svelte in parallel with the
  *     main chat-loop on the opening user turn. Single-shot text
@@ -573,7 +567,6 @@ export const AGENT_MODELS = {
   recall:             'deepseek-v4-flash',
   conversationRecall: 'deepseek-v4-flash',
   wikiRecall:         'deepseek-v4-flash',
-  visionAnalysis:     'venice-uncensored-1-2',
   autoTitle:          'e2ee-gpt-oss-20b-p',
 } as const satisfies Record<AgentRole, ModelId>;
 

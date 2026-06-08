@@ -7,12 +7,16 @@
 //
 // Two concerns are intentionally NOT in this file:
 //
-//   - The concrete tool implementations. Today src/lib/tools/*.ts hosts
-//     them browser-side, dispatched by chat-loop.ts via executeToolCall.
-//     This file is just the dispatch shape so the orchestrator has
-//     something to call against; individual tool ports are tracked
-//     separately under the migration inventory and register themselves
-//     via registerTool() as they land.
+//   - The concrete tool implementations. They live in sibling
+//     tools/*.ts modules that self-register via registerTool() (pulled
+//     in for side effect by tools/index.ts). This file is just the
+//     dispatch shape the orchestrator calls against. The browser keeps
+//     same-named modules under src/lib/tools/*.ts, but a streamed chat
+//     turn dispatches HERE - those browser modules now serve only the
+//     wire schema the request-shape builder advertises. Their
+//     executeToolCall path has no production caller; a browser module
+//     still executes only when a background agent's toolbox includes
+//     the tool (browser-side agent dispatch via executeToolboxCall).
 //   - The model arming / toolbox catalog. Which tools a turn can
 //     reach is decided at request-shape time (browser composes the
 //     `tools` array against thread.toolboxes_enabled) and the chosen

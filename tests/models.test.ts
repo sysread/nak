@@ -50,16 +50,16 @@ describe('MODELS (active registry)', () => {
     expect(MODELS['mistral-small-3-2-24b-instruct'].supportsReasoning).toBe(false);
   });
   it('marks the vision-capable ids as supportsVision=true', () => {
-    // Vision-capable entries today: the analyze_image sub-call
-    // (venice-uncensored-1-2), the Smart tier's foreground model
+    // Vision-capable entries today: the analyze_image sub-call's
+    // primary (e2ee-qwen3-vl-30b-a3b-p) and its uncensored fallback
+    // (venice-uncensored-1-2); the Smart tier's foreground model
     // (qwen-3-7-plus, which inlines image_url parts directly rather
-    // than routing through analyze_image), plus two legacy entries
-    // still in the registry for thread rows that pinned them
-    // explicitly via per-thread model override (e2ee-qwen3-vl-30b-a3b-p
-    // from before the visionAnalysis switch and qwen-3-6-plus from
-    // before the Smart tier swapped to 3.7). Balanced and Fast both
-    // front deepseek-v4-flash, which is text-only - vision goes
-    // through analyze_image.
+    // than routing through analyze_image); plus one legacy entry still
+    // in the registry for thread rows that pinned it explicitly via
+    // per-thread model override (qwen-3-6-plus, from before the Smart
+    // tier swapped to 3.7). Balanced and Fast both front
+    // deepseek-v4-flash, which is text-only - vision goes through
+    // analyze_image.
     const visionIds = new Set([
       'venice-uncensored-1-2',
       'e2ee-qwen3-vl-30b-a3b-p',
@@ -136,8 +136,11 @@ describe('AGENT_MODELS (background agents)', () => {
     expect(AGENT_MODELS.intuition).toBe('mistral-small-3-2-24b-instruct');
     expect(AGENT_MODELS.summary).toBe('mistral-small-3-2-24b-instruct');
     expect(AGENT_MODELS.samskara).toBe('mistral-small-3-2-24b-instruct');
-    // Vision sub-call.
-    expect(AGENT_MODELS.visionAnalysis).toBe('venice-uncensored-1-2');
+    // No vision slot here: analyze_image's vision sub-call runs
+    // server-side in the venice edge function, which holds the primary
+    // (e2ee-qwen3-vl-30b-a3b-p) and uncensored-fallback
+    // (venice-uncensored-1-2) ids directly - AGENT_MODELS is the
+    // browser-side agent registry and doesn't drive it.
     // Auto-title: Chat.svelte's parallel background completion that
     // names a fresh thread before the main reply finishes streaming.
     expect(AGENT_MODELS.autoTitle).toBe('e2ee-gpt-oss-20b-p');

@@ -59,15 +59,18 @@ The always-on toolbox carries:
   thread when `toolboxes_enabled=[]` by default; gating it would
   mean a toolbox flip before the model could name the
   conversation.
-- `analyze_image` - fires a one-shot vision sub-completion (the
-  `visionAnalysis` agent model) for an image attachment identified by
-  filename and a caller-supplied query. Always-on so the model can
-  reach for it on any tier when the user sends an image. The main model phrases the
+- `analyze_image` - fires a vision sub-completion for an image
+  attachment identified by filename and a caller-supplied query. Runs
+  against a primary vision model first and falls back once to a
+  permissive uncensored model on any failure (e.g. a spurious
+  content-safety block on an innocuous photo). Always-on so the
+  model can reach for it on any tier when the user sends an image. The main model phrases the
   query from the user's intent (e.g. "what does this say?" becomes
   an OCR-focused query); the tool returns the vision model's plain-
-  text answer. Image bytes live in `ctx.attachments`, hydrated by
-  the chat loop from the current user message's DB rows - no
-  in-tool DB query needed.
+  text answer. Like every chat tool it executes server-side in the
+  venice edge function (`supabase/functions/venice/tools/analyze_image.ts`),
+  which looks the image up by filename in the thread, downloads the
+  bytes, and inlines them as a base64 data URL.
 
 The gated `research` toolbox carries:
 
@@ -179,11 +182,12 @@ The gated `images` toolbox carries:
   `GENERATED_IMAGE_RESULT_KEY`) shared by the tool and the
   chat-loop. Kept separate so the chat-loop imports them without
   pulling the lazy generate_image impl chunk.
-- `src/lib/tools/analyze_image.ts` - fires a one-shot vision sub-
-  completion against the `visionAnalysis` agent model with the image
-  bytes from `ctx.attachments`. Requires `ToolContext.attachments` to be
-  populated (the chat loop does this from the current user
-  message's attachment rows). Returns `{answer: string}`.
+- `src/lib/tools/analyze_image.ts` - schema-only browser registration.
+  The implementation is server-side in
+  `supabase/functions/venice/tools/analyze_image.ts` (primary vision
+  model + uncensored fallback on any failure); the browser ToolDef
+  exists only so `buildToolList` advertises analyze_image in the wire
+  `tools` array, and its `execute()` throws if ever called.
 - `src/lib/tools/ask_user.ts` - the clarifying-question tool. Pure
   args-validator that returns a `{__ask_user_pending__: true,
   question, options}` sentinel; the chat-loop suspends after
