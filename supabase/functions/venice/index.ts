@@ -369,8 +369,23 @@ async function handleComplete(req: Request): Promise<Response> {
           429
         );
       }
+      // Reaching here means veniceComplete exhausted its transient-retry
+      // schedule (or hit a non-retryable kind), so the 502 reflects a
+      // sustained upstream Venice failure, not a blip. Log the cause: the
+      // Supabase edge gateway records only the 502 status code, not this
+      // body, so without this line an upstream failure is opaque from
+      // `supabase logs` / the MCP get_logs view - you'd have to catch the
+      // response live in the browser. err.message already embeds Venice's
+      // status + a body snippet for kind='http'.
+      console.error(
+        `[venice/complete] upstream failure kind=${err.kind} status=${err.status ?? 'n/a'}: ${err.message}`,
+      );
       return json({ error: err.message, kind: err.kind }, 502);
     }
+    // Non-VeniceError here is an unexpected throw (a code bug, not an
+    // upstream relay); log the whole thing - stack included - so it is
+    // not a silent 500.
+    console.error('[venice/complete] unexpected error:', err);
     return json({ error: (err as Error).message }, 500);
   }
 }

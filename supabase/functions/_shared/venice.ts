@@ -195,6 +195,69 @@ export interface VeniceCompleteOptions {
   body: Record<string, unknown>;
   baseUrl?: string;
   fetchImpl?: typeof fetch;
+  /**
+   * Backoff delays (ms) BETWEEN retry attempts for transient upstream
+   * failures; length is the number of retries. Defaults to
+   * COMPLETE_RETRY_SCHEDULE_MS. Pass `[]` to disable retries (the unit
+   * tests that assert single-attempt error mapping do this so they stay
+   * fast and exercise the classifier directly).
+   */
+  retrySchedule?: number[];
+  /**
+   * Aborts the in-flight fetch and any pending backoff sleep. Optional -
+   * the route handler does not wire one today (the backoff is bounded),
+   * but tool sub-completions and tests can cancel.
+   */
+  signal?: AbortSignal;
+}
+
+// Transient-failure retry schedule for the non-streaming completion.
+// Venice's /chat/completions intermittently returns a 5xx (capacity)
+// or drops the connection; a single hiccup otherwise fails the whole
+// non-streaming call, which silently kills whatever background feature
+// issued it (auto-title, intuition, context recall, web_search, the
+// summary/topics/bias agents, ...). These are the same transient
+// classes the streaming path already retries server-side
+// (withRateLimitRetry in getStreamingCompletion); the non-streaming
+// path lost its retry loop in the move onto the edge function. 429 is
+// deliberately NOT retried here: the browser's SupabaseService.complete
+// owns the rate-limit loop and honors Venice's Retry-After, so retrying
+// it here too would just stack waits. Deterministic (no jitter) on
+// purpose - the retries hit Venice's infra, not ours, and the per-turn
+// caller count is small, so there's no thundering herd against our own
+// service to spread out.
+const COMPLETE_RETRY_SCHEDULE_MS = [500, 1500, 4000];
+
+/**
+ * True for failures a retry might clear: a connection-level error, or an
+ * upstream 5xx (500/502/503/504). A 4xx (bad request, auth) and a
+ * 'parse' (deterministic bad body) won't improve on retry, and
+ * 'rate_limit' is owned by the browser's retry loop.
+ */
+function isTransientCompleteError(err: VeniceError): boolean {
+  if (err.kind === 'network') return true;
+  return (
+    err.kind === 'http' && typeof err.status === 'number' && err.status >= 500
+  );
+}
+
+/**
+ * Resolve after `ms`, or early with `true` if `signal` aborts first.
+ * `false` means the full delay elapsed. No signal = a plain sleep.
+ */
+function sleepCancellable(ms: number, signal?: AbortSignal): Promise<boolean> {
+  if (signal?.aborted) return Promise.resolve(true);
+  return new Promise<boolean>((resolve) => {
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve(false);
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 /**
@@ -202,13 +265,45 @@ export interface VeniceCompleteOptions {
  * forwards the body verbatim, returns the parsed JSON response verbatim.
  * The browser's parseChatCompletion takes the shape from there.
  *
- * On 429, the helper reads Retry-After / x-ratelimit-reset-* into a
+ * Retries transient upstream failures (5xx / connection drop) on the
+ * COMPLETE_RETRY_SCHEDULE_MS backoff before giving up; see
+ * isTransientCompleteError for what counts and why 429 is excluded. On
+ * 429, the helper reads Retry-After / x-ratelimit-reset-* into a
  * retryAfterMs hint so the browser's retry loop can act on Venice's
  * window rather than picking a backoff blindly. Other non-OK statuses
  * collapse to http; network failures to network; non-JSON success
  * bodies to parse.
  */
 export async function veniceComplete(opts: VeniceCompleteOptions): Promise<unknown> {
+  const schedule = opts.retrySchedule ?? COMPLETE_RETRY_SCHEDULE_MS;
+  let attempt = 0;
+  for (;;) {
+    try {
+      return await veniceCompleteOnce(opts);
+    } catch (err) {
+      const retriesLeft = attempt < schedule.length;
+      if (
+        !(err instanceof VeniceError) ||
+        !isTransientCompleteError(err) ||
+        !retriesLeft
+      ) {
+        throw err;
+      }
+      const interrupted = await sleepCancellable(schedule[attempt], opts.signal);
+      // Aborted mid-backoff: surface the failure we already have rather
+      // than firing another attempt the caller no longer wants.
+      if (interrupted) throw err;
+      attempt += 1;
+    }
+  }
+}
+
+/**
+ * One attempt of the /chat/completions proxy: fetch, classify a non-OK
+ * status into a typed VeniceError, parse the body. The retrying
+ * veniceComplete wrapper above owns the attempt loop.
+ */
+async function veniceCompleteOnce(opts: VeniceCompleteOptions): Promise<unknown> {
   const baseUrl = (opts.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, '');
   const fetchImpl = opts.fetchImpl ?? fetch;
 
@@ -221,6 +316,7 @@ export async function veniceComplete(opts: VeniceCompleteOptions): Promise<unkno
         Authorization: `Bearer ${opts.apiKey}`,
       },
       body: JSON.stringify(opts.body),
+      signal: opts.signal,
     });
   } catch (err) {
     throw new VeniceError(

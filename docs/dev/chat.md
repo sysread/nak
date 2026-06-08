@@ -202,7 +202,18 @@ A chat turn goes:
   `VeniceError(kind='rate_limit')` after retries exhaust. The
   streaming path has its own retry surface server-side - the
   function emits a `rate_limit_retry` event around the sleep so
-  the UI can pulse a banner.
+  the UI can pulse a banner. Distinct from the 429 loop:
+  `veniceComplete` (function-side, in `_shared/venice.ts`) retries
+  *transient* upstream failures - an upstream 5xx or a connection
+  drop - on a fixed `[500, 1500, 4000]ms` backoff before giving up,
+  so a brief Venice hiccup no longer fails the whole non-streaming
+  call (auto-title, intuition, context recall, web_search, and the
+  summary/topics/bias agents all ride this path). 429 is excluded
+  there on purpose - this `SupabaseService.complete` loop already
+  owns it. A 502 from `/complete` therefore now means the retry
+  schedule was exhausted (sustained outage), and the handler logs
+  `kind`/`status`/message to the function logs since the edge
+  gateway records only the bare status code.
 - `ChatLoopHandlers` - the event surface the UI uses: text
   updates, tool start/done/error, persistence events,
   `onToolboxesEnabledChange` (for the composer toolbox flash
