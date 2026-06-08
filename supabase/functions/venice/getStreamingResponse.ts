@@ -707,12 +707,31 @@ export async function getStreamingResponse(
       // assistant row separately (above) and let the NEXT terminal
       // round commit the streaming row to 'complete'. The streaming
       // row content stays empty until the next round produces text.
+      //
+      // Re-stamp created_at to now() in the same UPDATE. The streaming
+      // row was born on the first response_text of the turn
+      // (ensureAssistantRow); when the model narrates a preamble before
+      // calling tools, that birth is EARLIER than the tool-result rows
+      // this round just persisted. The terminal commit reuses this same
+      // row id and commit_assistant_message never touches created_at, so
+      // an un-restamped row carries that early timestamp and sorts the
+      // final response card AHEAD of the tool cards in any created_at-
+      // ordered view (mergeMessagesById on thread switch, listMessages on
+      // refetch). The live arrival-order view looks right, then the
+      // response jumps to the front of the round on the first re-sort.
+      // Bumping the timestamp at the boundary - after this round's tool
+      // rows are already persisted - keeps the eventual terminal row
+      // chronologically after them. A row that was never carried across a
+      // boundary (model called tools with no preamble text, so
+      // ensureAssistantRow first fired in the terminal round) is born
+      // after the tools and needs no fix; this path only runs when the
+      // row already exists at a boundary.
       lastUpdateContent = '';
       if (assistantRowId !== null) {
         // RLS OFF: filter by id only.
         await opts.adminClient
           .from('messages')
-          .update({ content: '' })
+          .update({ content: '', created_at: new Date().toISOString() })
           .eq('id', assistantRowId);
       }
 
