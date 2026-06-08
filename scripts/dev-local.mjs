@@ -328,9 +328,9 @@ function pgLiteral(s) {
 // ---------------------------------------------------------------------------
 // Write the importable config. This is the exact shape Setup -> Import from
 // JSON accepts (parseExportedConfig in src/lib/config.ts): kind/version plus
-// the three keys. The master password is chosen in the browser at import
-// time - it never touches this file, which is plaintext by the same design
-// as the app's own export.
+// the Supabase URL and publishable key. Neither is a secret (the publishable
+// key ships in the client bundle), so the file is plaintext by the same
+// design as the app's own export.
 // ---------------------------------------------------------------------------
 function writeConfig(apiUrl, appClientKey) {
   step(5, 'Write importable config');
@@ -410,7 +410,7 @@ function serveBackfillShim() {
 function printGettingStarted() {
   console.log('');
   console.log(`  ${style.bold('First time:')} in the app, ${style.bold('Setup -> Import from JSON')} -> pick ${style.cyan('nak-local-config.json')},`);
-  console.log(`  set any master password, then log in: ${style.bold(DEV_EMAIL)} / ${style.bold(DEV_PASSWORD)}`);
+  console.log(`  click Save and continue, then log in: ${style.bold(DEV_EMAIL)} / ${style.bold(DEV_PASSWORD)}`);
   console.log(`  Studio: ${style.cyan('http://127.0.0.1:54323')}   Stop everything: ${style.bold('Ctrl-C')}`);
   console.log('');
 }

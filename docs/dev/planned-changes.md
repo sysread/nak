@@ -13,8 +13,23 @@ investigation cycles and the lessons learned are worth saving.
 ## Contents
 
 - [Biometric unlock for the master password](#biometric-unlock-for-the-master-password)
+  (obsolete - the master-password layer was removed; kept as WebAuthn PRF reference)
 
 ## Biometric unlock for the master password
+
+> **Obsolete (2026-06).** This feature existed to unlock the
+> master-password / AES-GCM encrypted config blob, which has since
+> been removed. The local config is now plaintext (Supabase URL +
+> publishable key, both non-secret by design) and the Venice key
+> lives server-side in `app_config`, so there is no longer a
+> browser-side secret for a biometric gesture to gate - the feature
+> as specified has no target. The integration points named below
+> (`nak:config:v1`, `changePassword`, `Unlock.svelte`,
+> `EditConfig.svelte`) no longer exist. Everything from "Threat
+> model and primitive" onward is preserved purely as a WebAuthn PRF
+> reference: the lessons learned, the playground patterns, and the
+> failure-mode table are reusable if a future feature ever needs a
+> device-bound secret in the browser.
 
 **Status:** attempted, reverted on a working tree at commit
 `c09a43c` (2026-05-01). PRF could not be made to work on the test

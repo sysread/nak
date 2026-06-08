@@ -1110,8 +1110,8 @@ export const RECENT_THREAD_CUTOFF_MS = 3 * 24 * 60 * 60 * 1000;
 
 /**
  * Per-user preferences persisted on `profiles.settings` (jsonb). Keeps
- * prefs that should follow the account across browsers — API keys and
- * the master-password KDF remain per-device by design.
+ * prefs that should follow the account across browsers — the local
+ * Supabase config (URL + publishable key) stays per-device by design.
  */
 export interface UserSettings {
   defaultModel?: ModelTier;

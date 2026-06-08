@@ -61,7 +61,7 @@ landing tab move together.
   `USAGE_STALE_MS` reuse the cache, opens after it re-fetch.
   Custom date ranges bypass the cache and fetch on-demand. Nothing
   persists to disk — the cache is in-memory only and gets wiped on
-  `lock()`. While paging through
+  sign-out (`resetForSignOut`). While paging through
   a wider window, `fetchUsage`'s `onProgress` callback feeds a
   `pagesLoaded`/`pagesTotal` pair into both the shared store and
   the pane's custom-range state. The pane renders a thin progress
@@ -73,14 +73,17 @@ landing tab move together.
   in the determinate phase. The totals strip itself pairs each
   currency's total spend pill with an avg-per-day pill that
   divides the total by the inclusive day count of the picked range.
-- **Security** - rotates two passwords. **Master password**
-  re-encrypts the local config blob and doesn't touch Supabase;
-  **account password** re-verifies the current password then calls
-  Supabase to rotate the login. Both require the current password.
-- **API keys** — the three API keys (Supabase URL, Supabase
-  publishable key, Venice key). Re-encrypts the config blob on
-  save, which is why the pane requires the current master password.
-  An **Export** subsection downloads the three keys as a plaintext
+- **Security** - rotates the Supabase account (login) password. It
+  re-verifies the current password by re-signing in, then calls
+  Supabase `updateUser` to set the new one. There is no master
+  password any more - the local config is plaintext - so this is
+  the only password the pane touches.
+- **API keys** — the Supabase URL + publishable key the browser
+  uses to reach the project. Saving rewrites the plaintext
+  `nak:config:v2` localStorage entry and re-activates the in-memory
+  services with the new values. The Venice key is not here - it
+  lives server-side in `app_config`, read by the edge function. An
+  **Export** subsection downloads those two values as a plaintext
   JSON file for re-import on another browser - read-only, no
   persistence change.
 
@@ -114,12 +117,14 @@ every update) so it's covered here rather than in its own file.
 - `src/lib/usage-store.svelte.ts` — reactive cache for the Usage
   pane's default rolling-7-day window. Nothing runs at boot; the
   Settings pane drives the first fetch via `refreshUsage`. Wiped
-  by `state.svelte.ts::lock()` via `resetUsage` so rows tied to
-  the prior API key don't leak into a subsequent unlock. Exposes
+  by `state.svelte.ts::resetForSignOut()` via `resetUsage` so rows
+  tied to the prior Venice key don't leak into the next sign-in.
+  Exposes
   `usage` (the `$state` rune), `refreshUsage`, `resetUsage`,
   `isUsageStale`, plus the `USAGE_STALE_MS` constant.
-- `src/lib/config.ts` — `saveConfig` (keys pane) and
-  `changePassword` (security pane).
+- `src/lib/config.ts` — `saveConfig` (keys pane). The Security
+  pane's password rotation lives in `supabase.ts`
+  (`changeAuthPassword`), not here.
 - `src/lib/theme.ts` — `ColorMode`, `Accent`, `applyTheme`,
   `cacheTheme`, `readCachedTheme`, `effectiveMode`.
 - `index.html` — the inline boot script that applies cached
@@ -155,11 +160,12 @@ every update) so it's covered here rather than in its own file.
   state so a non-default fetch doesn't evict the cached default
   view. The Refresh button routes through whichever source
   matches the current date pickers. The cache is in-memory only
-  and is wiped on `lock()` so rows billed against the previous
-  API key don't leak into a subsequent unlock with a different
-  config.
-- **Security pane submit** — `changePassword(old, new)` in
-  config.ts. Settings catches errors and displays them inline.
+  and is wiped on sign-out (`resetForSignOut`) so rows billed
+  against the previous Venice key don't leak into the next
+  sign-in.
+- **Security pane submit** — `changeAuthPassword(current, new)` in
+  supabase.ts (rotates the Supabase login). Settings catches errors
+  and displays them inline.
 
 ## Data model
 
@@ -196,9 +202,9 @@ every update) so it's covered here rather than in its own file.
 - **`localStorage['nak:theme:v1']`** — `<mode>|<accent>`.
   Non-secret cache used by the inline boot script in
   `index.html` to avoid flash-of-wrong-theme on first paint.
-- **`localStorage['nak:config:v1']`** — encrypted config blob;
-  the Keys pane overwrites it on save. See
-  `./auth-session.md`.
+- **`localStorage['nak:config:v2']`** — plaintext JSON holding the
+  Supabase URL + publishable key (neither is a secret). The Keys
+  pane overwrites it on save. See `./auth-session.md`.
 - **Reactive state** — `app.defaultModel`,
   `app.defaultReasoningEffort`, `app.defaultVerbosity`,
   `app.colorMode`, `app.accent`, `app.systemPrompts`. Seeded
@@ -223,8 +229,10 @@ every update) so it's covered here rather than in its own file.
   writes reactive state. Does NOT persist to Supabase; callers
   that want server persistence must also call
   `updateSettings`.
-- `changePassword(old, new)` — decrypts with old, re-encrypts
-  under new. Doesn't touch Supabase.
+- `changeAuthPassword(current, new)` (supabase.ts) — re-verifies
+  the current password by re-signing in, then rotates the Supabase
+  login via `updateUser`. This is the only password rotation left;
+  the local config has none.
 - `applyTheme(mode, accent)` — writes two data attributes
   (`data-theme`, `data-accent`) to `<html>`. CSS reacts via
   attribute selectors.
@@ -254,9 +262,9 @@ every update) so it's covered here rather than in its own file.
 
 ## Interactions with other features
 
-- **Auth-session** — the Keys pane overwrites the encrypted
-  config blob via `saveConfig`; the Security pane re-encrypts
-  via `changePassword`. Neither touches Supabase. See
+- **Auth-session** — the Keys pane overwrites the plaintext
+  config via `saveConfig` (local only); the Security pane rotates
+  the Supabase login via `changeAuthPassword` (Supabase only). See
   `./auth-session.md`.
 - **Chat** — chat reads every AI-pane setting
   (`defaultModel`, `defaultReasoningEffort`, `defaultVerbosity`,
@@ -289,9 +297,10 @@ every update) so it's covered here rather than in its own file.
   complete anyway. If you're tempted to add a Save button to a
   preference, the answer is almost always auto-apply with
   rollback. The known exceptions:
-  - **Keys** and **Security** panes need an explicit Save - they
-    re-encrypt the config blob, and a typo on auto-apply could
-    lock the user out.
+  - **Keys** and **Security** panes need an explicit Save - the
+    Keys pane re-activates the in-memory services against a new
+    endpoint and the Security pane rotates the Supabase login, so a
+    typo auto-applied on either could lock the user out.
   - **Journal -> Day boundary** has a Save button because the
     IANA-zone validation in `normalizeTimezone()` needs a commit
     gesture. Auto-applying on every keystroke would surface an
@@ -325,17 +334,18 @@ every update) so it's covered here rather than in its own file.
   transform inline scripts. Keep the theme-cache read logic
   there simple; use `var`, avoid template literals and arrow
   functions, don't import anything.
-- **Password rotation doesn't invalidate sessions.** The
-  encrypted blob re-encrypts; the sessionStorage session
-  blob keeps its plaintext copy, so an open tab stays
-  unlocked. This is the right behavior (rotating a password
-  shouldn't force a re-unlock in the tab doing the rotation)
-  but surprises people reviewing the flow.
+- **Account-password rotation re-signs the current tab in.**
+  `changeAuthPassword` re-signs in with the current password to
+  verify it (Supabase `updateUser` doesn't ask for the old one),
+  which issues a fresh session for the same user, then sets the new
+  password. The tab that did the rotation stays signed in on the
+  fresh session rather than being kicked to the Auth screen - the
+  right behavior, but it surprises people reviewing the flow.
 
 ## Where to go next
 
-- `./auth-session.md` — the master-password and keys side
-  of the Keys and Security panes.
+- `./auth-session.md` — the local-config and session side of
+  the Keys and Security panes.
 - `./chat.md` — the consumer of every AI-pane setting.
 - `./architecture.md` — where the reactive state store sits
   in the boot flow.

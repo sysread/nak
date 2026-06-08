@@ -280,6 +280,6 @@ export class TopicsAgent implements Agent<TopicsInput, TopicsOutput> {
  * the parser without spinning up a SupabaseService stub. Kept behind a
  * `__test` namespace so production callers can't accidentally lean
  * on it - consistent with the convention in routing.svelte.ts /
- * crypto.ts / session.ts.
+ * session.ts.
  */
 export const __test = { parseTopics, normaliseTag };

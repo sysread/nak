@@ -435,7 +435,7 @@ leading `_` (or carry a `__test` namespace export at the bottom
 of the file). Don't widen the production API for a test that
 could read internal state via a dedicated export. The
 `__test = { ... }` pattern (see `routing.svelte.ts`,
-`crypto.ts`, `session.ts`) keeps the test surface visible and
+`session.ts`) keeps the test surface visible and
 the production exports narrow.
 
 **5. Run knip before merging non-trivial work.** `mise run knip`

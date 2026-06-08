@@ -250,7 +250,7 @@ export abstract class BaseWorkerManager<O extends BaseStartOpts = BaseStartOpts>
   /**
    * Tell the worker to exit and release the Web Lock. Safe to call
    * when no worker is running (used as a blanket cleanup from
-   * `lock()` in state.svelte.ts).
+   * `resetForSignOut()` in state.svelte.ts).
    */
   stop(): void {
     // Set first so a still-queued lock request bails out when it

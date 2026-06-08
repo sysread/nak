@@ -24,9 +24,9 @@
    *                 open of this pane (and re-fetched when older
    *                 than USAGE_STALE_MS); custom date ranges fetch
    *                 on demand. Read-only; nothing persists to disk.
-   *   export      — download the three keys as a plaintext JSON file
-   *                 for import on another browser. See config.ts for
-   *                 the file format.
+   *   export      — download the Supabase URL + publishable key as a
+   *                 plaintext JSON file for import on another browser.
+   *                 See config.ts for the file format.
    *   security    — Supabase account-password rotation. The local
    *                 config has no master password to rotate anymore
    *                 (retired with the streaming-root cleanup); this
@@ -387,7 +387,7 @@
     exportInfo = null;
     exportError = null;
     if (!app.config) {
-      exportError = 'No active config — please unlock first.';
+      exportError = 'No active config to export.';
       return;
     }
     try {
@@ -1188,9 +1188,8 @@
       authPwError = 'Enter your current account password.';
       return;
     }
-    // Supabase enforces a 6-character minimum by default. Bump to 8 to
-    // match the master-password form above so both rotations have the
-    // same floor.
+    // Supabase enforces a 6-character minimum by default. Hold the floor
+    // at 8 so the account password is not the weakest link in the chain.
     if (authPwNew.length < 8) {
       authPwError = 'New password must be at least 8 characters.';
       return;
@@ -1260,8 +1259,9 @@
       {#if group === 'keys'}
         <h2>API keys</h2>
         <p class="subtle">
-          Update your Supabase and Venice credentials. Requires your current master
-          password to re-encrypt.
+          Update the Supabase URL and publishable key this browser uses to
+          reach your project. Saving re-connects with the new values. (Your
+          Venice key lives server-side in your Supabase project, not here.)
         </p>
         <form onsubmit={onSaveKeys}>
           <div class="form-row">
@@ -1279,15 +1279,16 @@
 
         <h3 class="pane-section">Export</h3>
         <p class="subtle">
-          Download your Supabase and Venice credentials as a JSON file so you
+          Download your Supabase URL and publishable key as a JSON file so you
           can reimport them when setting up Nak on another browser. This is a
           local-only feature - the file is generated in your browser and
           never uploaded.
         </p>
-        <p class="subtle" style="color:var(--warn);font-size:0.85rem">
-          ⚠ The exported file contains your API keys in plaintext. Store it
-          with the same care as any other secret (e.g. your password
-          manager). Deleting it afterward is a fine choice.
+        <p class="subtle" style="font-size:0.85rem">
+          Neither value is a secret: the publishable key is the same one your
+          deployed app ships to every visitor, and your data is guarded by the
+          Supabase sign-in flow plus Row Level Security, not by keeping these
+          private.
         </p>
         <p class="subtle" style="font-size:0.85rem">
           Import happens on the Setup screen of a fresh install - the

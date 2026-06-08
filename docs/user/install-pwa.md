@@ -47,8 +47,8 @@ the composer, ready for you to edit and send.
   to whatever you were typing (you don't lose draft text).
 - If Nak wasn't running, it launches straight into the chat screen
   with the shared content waiting in the composer.
-- If Nak is locked when the share arrives, the content is held
-  until you unlock — nothing is sent anywhere or written to
+- If you're signed out when the share arrives, the content is held
+  until you sign in - nothing is sent anywhere or written to
   Supabase until you press send.
 
 ### Platform notes

@@ -219,8 +219,8 @@ A few things people often assume are happening but aren't:
 
 - [Memory](./memory.md) - the user-facing side of reflection and
   recall.
-- [Security model](./security.md) - what's encrypted, what's stored
-  plaintext, and what the master password protects.
+- [Security model](./security.md) - what's stored where (plaintext
+  config vs the server-side Venice key) and what RLS protects.
 - [Search](./search.md) - the user-facing side of the embeddings
   pipeline.
 - [Models & reasoning](./models.md) - the fast tier that all
