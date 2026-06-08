@@ -73,11 +73,10 @@ You can reach these pages two ways:
 
 ### Data & security
 
-- [Security model](./security.md) — how your API keys are encrypted,
-  what the master password protects, and how locking the session
-  works.
-- [Export & import](./export-import.md) — moving your keys to another
-  browser.
+- [Security model](./security.md) — what's stored where, what RLS
+  protects, and why the publishable key is safe to ship.
+- [Export & import](./export-import.md) — moving your Supabase URL
+  and publishable key to another browser.
 
 ### Under the hood
 

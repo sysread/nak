@@ -61,16 +61,17 @@ signal or the child's exit triggers it.
 The app already has a Setup -> Import from JSON flow
 (`parseExportedConfig` in
 [`src/lib/config.ts`](../../src/lib/config.ts)) that accepts
-`{kind:"nak-config", version:2, supabaseUrl, supabasePublishableKey,
-veniceApiKey}`. `dev-start` writes exactly that shape, so the
+`{kind:"nak-config", version:2, supabaseUrl,
+supabasePublishableKey}`. `dev-start` writes exactly that shape, so the
 handoff needs no app code. It is a one-time act per browser -
 the local publishable key and the config file are stable across
 sessions:
 
 1. In the app (Vite is already running): Setup -> Import from
    JSON -> pick `nak-local-config.json`.
-2. Set any master password - it encrypts the imported keys in
-   this browser and never touches the file.
+2. Click Save and continue - the imported values are stored as
+   plaintext JSON in this browser (neither is a secret) and the
+   file is left untouched.
 3. Log in with the seeded credentials (default
    `dev@nak.local` / `devpass123`).
 
@@ -179,8 +180,8 @@ The script wires the edge functions into the local stack:
 ## Interactions
 
 - [Auth & session](./auth-session.md) - the imported config and
-  the seeded GoTrue user feed the master-password envelope and
-  session lifecycle.
+  the seeded GoTrue user feed the plaintext local config and the
+  Supabase session lifecycle.
 - [Build & deploy](./build-deploy.md) - the cloud counterpart:
   the sync-on-deploy workflow that applies the same
   `schema.sql` to the linked project.

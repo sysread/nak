@@ -397,7 +397,7 @@ A few things to know:
   notifications](#reply-notifications) on and the tab is
   backgrounded when a clarifying question lands, the notification's
   body is the question itself, so you can decide whether to switch
-  back without first unlocking and opening the app. The question
+  back without first reopening the app. The question
   card in the message list is the durable signal regardless of
   whether the notification fires.
 - **Answered questions stay in the transcript.** After you answer,

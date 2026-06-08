@@ -9,7 +9,7 @@ import { readFile, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { banner, info, ok, warn, bail, ask, confirm, style } from './lib/ui.mjs';
+import { banner, info, ok, bail, confirm, style } from './lib/ui.mjs';
 import { ghAvailable, ghAuthStatus } from './lib/github.mjs';
 import { supaAvailable } from './lib/supabase.mjs';
 import { getRepoSlug, pagesUrl } from './lib/repo.mjs';
@@ -58,10 +58,10 @@ banner('Nak — first-time setup wizard');
 console.log(
   `This wizard will:\n` +
     `  ${style.dim('1.')} enable GitHub Pages on your fork (if not already on),\n` +
-    `  ${style.dim('2.')} create or link a Supabase project and apply the schema,\n` +
+    `  ${style.dim('2.')} create or link a Supabase project, apply the schema, and store your\n` +
+    `     Venice API key server-side in it,\n` +
     `  ${style.dim('3.')} whitelist your Pages URL in Supabase auth config,\n` +
-    `  ${style.dim('4.')} prompt for your Venice API key,\n` +
-    `  ${style.dim('5.')} print a one-shot setup link that auto-fills the app.\n\n` +
+    `  ${style.dim('4.')} print a one-shot setup link that auto-fills the app.\n\n` +
     `You can rerun it anytime — all steps are idempotent.\n`
 );
 
@@ -98,34 +98,16 @@ await runChild('setup-pages.mjs');
 console.log(`\n${style.magenta('━━ Phase 2: Supabase ━━')}`);
 const supa = await runChildWithResult('setup-supabase.mjs');
 
-// --- Phase 3: Venice ---------------------------------------------------------
-console.log(`\n${style.magenta('━━ Phase 3: Venice ━━')}`);
-info('We need your Venice API key to call chat completions.');
-info('Get one at: https://venice.ai/settings/api');
-
-let veniceApiKey;
-const envKey = (process.env.VENICE_API_KEY || '').trim();
-if (envKey) {
-  const useEnv = await confirm(
-    `Found ${style.bold('VENICE_API_KEY')} in your environment (starts with ${style.dim(envKey.slice(0, 6))}…). Use it?`,
-    { default: true }
-  );
-  if (useEnv) {
-    veniceApiKey = envKey;
-    ok('Using VENICE_API_KEY from environment.');
-  }
-}
-if (!veniceApiKey) {
-  veniceApiKey = await ask('Paste your Venice API key', { secret: true });
-}
-if (!veniceApiKey) bail('Venice API key is required.');
-
-// --- Phase 4: build setup link -----------------------------------------------
-console.log(`\n${style.magenta('━━ Phase 4: Setup link ━━')}`);
+// --- Phase 3: build setup link -----------------------------------------------
+// The Venice API key was already stored in the project's app_config table
+// during Phase 2 (setup-supabase.mjs), where the edge function reads it
+// server-side. The setup link only needs the two values the browser keeps in
+// localStorage - the Supabase URL and publishable key - and neither is a
+// secret, so nothing sensitive travels in the link.
+console.log(`\n${style.magenta('━━ Phase 3: Setup link ━━')}`);
 const payload = {
   supabaseUrl: supa.supabaseUrl,
   supabasePublishableKey: supa.supabasePublishableKey,
-  veniceApiKey,
 };
 const b64 = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
 const link = `${supa.pagesUrl}#setup=${b64}`;
@@ -135,15 +117,9 @@ console.log(
     `  ${style.bold(style.cyan(link))}\n\n` +
     `The ${style.bold('#setup=…')} fragment is URL fragment, not query — it ${style.bold('never')} leaves your\n` +
     `machine in an HTTP request. The app reads it locally, pre-fills the Setup form,\n` +
-    `and clears it from the address bar. You'll be asked to pick a master password\n` +
-    `which encrypts the three values into localStorage.\n\n` +
+    `and clears it from the address bar. It carries only your Supabase URL and\n` +
+    `publishable key (neither is a secret); sign in with the email and password you\n` +
+    `set up above.\n\n` +
     `If the Pages deploy is still running, wait ~2 minutes and refresh. You can watch\n` +
     `progress at: ${style.dim(`https://github.com/${slug.owner}/${slug.repo}/actions`)}\n`
 );
-
-if (process.stdout.isTTY) {
-  warn(
-    'Treat the link above like a password — anyone with it can log in as you ' +
-      'until the master password is set. Close this terminal session when done.'
-  );
-}

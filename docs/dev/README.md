@@ -49,8 +49,8 @@ changing a contract that other features depend on.
 
 ### Core features
 
-- [Auth & session](./auth-session.md) — Supabase auth,
-  master-password envelope, session lifecycle, locking.
+- [Auth & session](./auth-session.md) — Supabase auth, the
+  plaintext local config, and session lifecycle.
 - [Chat](./chat.md) — chat screen + chat-loop + models +
   realtime thread list.
 - [Exchange](./exchange.md) — per-thread streaming state

@@ -13,9 +13,10 @@
  * and do not touch this module.
  *
  * Lifecycle: nothing runs at app boot - the cache stays empty until
- * the user lands on the Usage pane. `state.svelte.ts::lock()` calls
- * `resetUsage()` so rows tied to the previous API key don't leak
- * across an unlock-lock-unlock to a different config.
+ * the user lands on the Usage pane. `resetForSignOut()` in
+ * state.svelte.ts calls `resetUsage()` so rows tied to the previous
+ * Venice key don't leak across a sign-out / sign-in-as-someone-else
+ * into a project with a different key.
  *
  * No localStorage. Billing data stays in memory only - a full page
  * reload always costs one fetch when the pane is eventually opened.
@@ -181,9 +182,10 @@ export async function refreshUsage(source: UsageFetcher): Promise<void> {
 }
 
 /**
- * Wipe the cached data. Called from `state.svelte.ts::lock()` so a
- * subsequent unlock with a different API key starts from a clean
- * slate rather than surfacing the prior user's billing rows.
+ * Wipe the cached data. Called from `resetForSignOut()` in
+ * state.svelte.ts so a subsequent sign-in to a project with a
+ * different Venice key starts from a clean slate rather than
+ * surfacing the prior user's billing rows.
  */
 export function resetUsage(): void {
   usage.data = null;

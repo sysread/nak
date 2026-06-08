@@ -281,8 +281,9 @@ Consumers: assistant message action bar in `Chat.svelte`.
 File: `src/components/SecretInput.svelte`.
 
 Password-style input with an eye-icon reveal toggle. Used for the
-master password and for the three long API keys in Setup /
-Settings. Bindable value; toggle flips input type between
+Supabase publishable key in Setup / the Keys pane and for the
+account-password fields on the Auth screen and Security pane.
+Bindable value; toggle flips input type between
 `password` and `text`.
 
 ```ts
@@ -297,13 +298,13 @@ interface Props {
 ```
 
 Autocomplete defaults to `'off'` so browsers don't try to autofill
-the Supabase publishable key into a credit-card form somewhere. Master-
-password callers override with `'current-password'` /
+the Supabase publishable key into a credit-card form somewhere.
+Account-password callers override with `'current-password'` /
 `'new-password'` so password managers and Chrome devtools see the
 hint and stop warning about a missing attribute.
 
-Consumers: `Setup.svelte`, `Unlock.svelte`, `EditConfig.svelte`,
-`Settings.svelte` (keys pane, security pane).
+Consumers: `Setup.svelte` (publishable key) and `Settings.svelte`
+(keys pane publishable key, security pane account-password fields).
 
 ## `<UpdateBanner>`
 

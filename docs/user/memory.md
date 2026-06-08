@@ -417,8 +417,8 @@ reads go the same way.
 - [What runs in the background](./background.md) - the reflection
   and recall loops in more detail, alongside the other
   behind-the-scenes features.
-- [Security model](./security.md) - RLS, encryption, and what the
-  master password does (and doesn't) protect.
+- [Security model](./security.md) - RLS, where your keys live, and
+  what the publishable key does (and doesn't) expose.
 - [The chat interface](./chat.md) - where the tool-call strip
   appears so you can watch recall fire.
 

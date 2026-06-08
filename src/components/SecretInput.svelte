@@ -1,20 +1,21 @@
 <script lang="ts">
   /*
    * Password / secret input with a reveal toggle (eye icon).
-   * Used for master password fields and for the three long API keys
-   * (where seeing what you pasted is the difference between a working
-   * app and a "Supabase rejected the publishable key" error).
+   * Used for the Supabase publishable key (Setup and the Keys pane,
+   * where seeing what you pasted is the difference between a working
+   * app and a "Supabase rejected the publishable key" error) and for
+   * the account-password fields in the Settings Security pane.
    *
    * Autocomplete defaults to "off" so browsers don't try to autofill the
-   * Supabase publishable key into a credit-card form somewhere. Master-password
-   * fields override with "current-password" / "new-password" so OS
+   * Supabase publishable key into a credit-card form somewhere. Account-
+   * password fields override with "current-password" / "new-password" so OS
    * password managers and Chrome devtools stop warning about the missing
-   * attribute and can remember the freshly-chosen passphrase.
+   * attribute and can remember the freshly-chosen password.
    *
    * autofocus is owned here rather than via a leaked element ref: a
-   * caller that wants the field focused on mount (the Unlock screen)
-   * sets the prop, and we do the tick()-then-focus dance internally so
-   * the DOM node never has to escape the component.
+   * caller that wants the field focused on mount sets the prop, and we
+   * do the tick()-then-focus dance internally so the DOM node never has
+   * to escape the component.
    */
   import { tick } from 'svelte';
 

@@ -16,7 +16,7 @@
  *     drawer.
  *
  *   - slots(): the active set. Iterated by the wake-lock effect and
- *     by the screen-level cleanup on lock/sign-out.
+ *     by the screen-level cleanup on sign-out.
  *
  *   - dispose(threadId): drop the slot. Called when a thread is
  *     deleted (or the realtime feed says so). Aborts any in-flight
