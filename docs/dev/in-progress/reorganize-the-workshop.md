@@ -41,9 +41,12 @@ progress over Realtime. `runHeadlessToolLoop`, `executeToolCall`,
 
 ## THE PLAN
 
-Three phases. **Each phase is independently shippable** - if a phase
-2 migration stalls, phase 1 still leaves the tree cleaner than it
-found it.
+Three sequenced phases, plus a **Phase 4 ledger** of tech debt the
+migration surfaces along the way. **Each phase is independently
+shippable** - if a phase 2 migration stalls, phase 1 still leaves the
+tree cleaner than it found it. The Phase 4 items aren't sequenced at
+all - they're opportunistic cleanups logged as the deletions reveal
+them.
 
 ### PHASE 1 - drop the already-dead browser dispatch leaf [DONE]
 
@@ -66,8 +69,8 @@ surfaced** by that last one: the cookbook-change event bus
 tools went server-side - `onCookbookChange` subscribers (Cookbook
 modal, Recipes tab) remain but nothing browser-side fires the event
 now. Re-driving a cookbook refresh after a chat-driven recipe write
-wants a server-aware trigger (recipes-table Realtime), tracked as
-separate work. Gate + knip green.
+wants a server-aware trigger (recipes-table Realtime) - logged in the
+Phase 4 ledger below. Gate + knip green.
 
 **Scope:** the ~33 browser tool impl files whose `execute()` has had
 no caller since the streaming-root migration. The triage doc at
@@ -198,6 +201,39 @@ becomes orphaned. Drop in one cleanup PR:
 **Done when:** `src/lib/tools/` contains only `.schema.ts` files +
 `types.ts` + `wire.ts` + `index.ts` (now a schema-only catalog). One
 dispatcher, one registry, end of split.
+
+### PHASE 4 - surfaced tech debt (running ledger)
+
+**Not a sequenced phase - a ledger.** Collapsing the split keeps
+kicking up collateral: code that was load-bearing only for a path the
+migration severed, or a contract that quietly lost one of its ends.
+Each phase's deletions reveal more (Phase 1's knip pass alone orphaned
+7 helper exports). These items are **independent and opportunistic** -
+none gate Phase 2/3, and most are a small PR each. Log them here as
+they surface so the next session can pick one up without re-deriving
+the context, and so "we deleted the caller but left the callee
+half-alive" never reads as intentional.
+
+**Open items:**
+
+- **Cookbook-change event bus lost its publisher.**
+  `src/lib/cookbook-events.ts` exposes `onCookbookChange` (subscribe)
+  and used to expose `notifyCookbookChanged` (a `window` CustomEvent
+  dispatch). The only publisher was the browser `recipe_*` tools'
+  `execute()`; those went server-side, so Phase 1 deleted the orphaned
+  publisher (knip-flagged). The **subscribers stay live** - the
+  Cookbook modal and the drawer's Recipes tab subscribe to refresh
+  their lists - so a **chat-driven recipe write no longer refreshes
+  those views**. Pre-existing since the streaming migration (the
+  browser `execute()` was already dead); Phase 1 only made it visible.
+  Direct UI edits in `Cookbook.svelte` (which call
+  `SupabaseService.createRecipe/updateRecipe/revertRecipe` directly,
+  still live) refresh their own local state and never used the bus.
+  **Fix shape:** re-drive the refresh with a server-aware trigger - a
+  `recipes`-table Realtime subscription is the natural shape (mirrors
+  how other server-side writes notify the browser). Same pattern the
+  Phase 2 agent runs will want for progress streaming, so it may fall
+  out of that work.
 
 ## toggle_toolbox: not actually an exception
 
