@@ -25,8 +25,8 @@
   legible without letting the model accidentally style the transcript.
 -->
 <script lang="ts">
-  import { slide } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
+  import { safeSlide } from '$lib/ui/safe-slide';
 
   interface Props {
     reasoning: string;
@@ -106,9 +106,13 @@
            prose. Reads as "someone else's voice" which is apt for a
            chain-of-thought trace — it's the model's inner monologue,
            not part of the reply proper. -->
+      <!-- safeSlide, not the raw `slide` transition: this panel auto-closes
+           on a timer mid-stream, which can fire while the chat shell is
+           display:none behind an open modal. Plain slide measures NaN height
+           there and floods the console - see src/lib/ui/safe-slide.ts. -->
       <blockquote
         class="reasoning-body"
-        transition:slide={{ duration, easing: cubicOut }}
+        transition:safeSlide={{ duration, easing: cubicOut }}
       >
         {reasoning}
       </blockquote>
