@@ -38,7 +38,6 @@
   import type { Snippet } from 'svelte';
   import type { Message, Attachment } from '$lib/supabase';
   import { app } from '$lib/state.svelte';
-  import { findContextWindowById } from '$lib/models';
   import {
     citationFlashDelay,
     hasCitationRefsInBody,
@@ -52,7 +51,18 @@
     content: string;
     reasoning?: string | null;
     citations?: Message['citations'];
-    model?: string | null;
+    /**
+     * Context window (tokens) of the thread's CURRENT model, for the
+     * usage ring's denominator. Deliberately the current model's window,
+     * not the window of whatever model historically answered this row:
+     * the ring is a budget indicator for the conversation as it stands,
+     * and the current model is the one whose limit the user has to manage.
+     * A row whose turn was larger than today's window fills the ring to
+     * full (the arc clamps) and the detail shows the raw counts exceeding
+     * the window - a useful "this thread no longer fits the current model"
+     * signal. Null hides the ring.
+     */
+    contextWindow?: number | null;
     usage?: Message['usage'];
     /**
      * ISO timestamp from `messages.created_at`. Forwarded to
@@ -109,7 +119,7 @@
     content,
     reasoning = null,
     citations = null,
-    model = null,
+    contextWindow = null,
     usage = null,
     createdAt = null,
     children,
@@ -139,10 +149,6 @@
   );
   const controlsVisible = $derived(
     showCitationsControls(hasCitations, citationsUnavailable)
-  );
-
-  const contextWindow = $derived(
-    usage ? findContextWindowById(model ?? undefined) : null
   );
 
   const stamp = $derived(formatMessageStamp(createdAt, app.displayTimezone));

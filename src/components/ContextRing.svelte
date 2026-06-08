@@ -1,14 +1,18 @@
 <!--
   Per-message context-window indicator.
 
-  Renders a small circular progress ring showing how full the model's
-  context window was after this turn finished. Sourced from the
-  `{prompt_tokens, completion_tokens, total_tokens}` usage block that
-  Venice attaches to each assistant response (see
+  Renders a small circular progress ring showing how much of the
+  thread's CURRENT model context window this turn's tokens represent.
+  Sourced from the `{prompt_tokens, completion_tokens, total_tokens}`
+  usage block that Venice attaches to each assistant response (see
   `stream_options.include_usage` in venice.ts) combined with the
-  contextWindow of the model that produced the row (looked up by id in
-  models.ts). When either piece is missing the component renders
-  nothing — the caller doesn't have to guard the call site.
+  contextWindow the caller passes in - the window of the model the
+  thread resolves to NOW, not whatever model historically answered the
+  row. (AssistantBody sources it from the effective tier spec.) The ring
+  is a budget indicator for the conversation as it stands; measuring old
+  rows against the current window is the point, not a compromise. When
+  either piece is missing the component renders nothing — the caller
+  doesn't have to guard the call site.
 
   Placement: sits in `.msg-actions` alongside CopyButton. Visually
   matches that button's 14px icon footprint and uses the same

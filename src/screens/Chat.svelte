@@ -6597,7 +6597,7 @@
                   content={block.assistant.content}
                   reasoning={block.assistant.reasoning}
                   citations={block.assistant.citations}
-                  model={block.assistant.model}
+                  contextWindow={currentTierSpec.contextWindow}
                   usage={block.assistant.usage}
                   createdAt={block.assistant.created_at}
                   attachments={block.assistant.attachments}
@@ -6661,7 +6661,7 @@
                   content={block.message.content}
                   reasoning={block.message.reasoning}
                   citations={block.message.citations}
-                  model={block.message.model}
+                  contextWindow={currentTierSpec.contextWindow}
                   usage={block.message.usage}
                   createdAt={block.message.created_at}
                   attachments={block.message.attachments}

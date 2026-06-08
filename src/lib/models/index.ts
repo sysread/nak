@@ -19,10 +19,12 @@
  *      rationale per slot lives in the docblock on AGENT_MODELS itself
  *      rather than scattered across the agent files.
  *
- * Retired ids - model strings that used to front a tier or an agent but
- * no longer do - live in ./legacy.ts. `findContextWindowById` reads
- * from both maps so the per-message context ring on historical
- * assistant rows keeps resolving long after a swap.
+ * There is no retired-id registry. Threads store a tier, not a concrete
+ * id (see below), so a model leaving Venice never orphans a thread - the
+ * tier just resolves to its current backing model. The per-message
+ * context ring measures each row against the thread's CURRENT model
+ * window (passed in by the caller), not the window of whatever model
+ * historically answered it, so no historical-id lookup is needed either.
  *
  * Why the indirection: Venice (and AI providers generally) rotate model
  * names aggressively. If we stored a literal id like 'kimi-k2-5' on
@@ -31,10 +33,6 @@
  * we can retarget by editing this file alone - the same thinking
  * applies to AGENT_MODELS for the background agents.
  */
-
-import { LEGACY_MODELS, type LegacyModelSpec } from './legacy';
-
-export { LEGACY_MODELS, type LegacyModelSpec };
 
 // --- Reasoning / verbosity wire-config knobs -------------------------------
 
@@ -195,8 +193,11 @@ export interface ModelSpec {
 
 /**
  * Active model registry. Keyed by Venice id; every entry is something
- * Nak currently points at from a tier or an agent. Retired ids live
- * in ./legacy.ts.
+ * Nak currently points at from a tier or an agent - this is the small
+ * curated seed that makes chat and the background agents work
+ * synchronously and offline. The live Venice catalog (./catalog.ts)
+ * supplies capability data for every OTHER model, but only in the
+ * Settings model picker; the hot path never reaches for it.
  *
  * Declared `as const satisfies Record<string, ModelSpec>` so the keys
  * are literal-typed - that lets AGENT_MODELS below enforce at compile
@@ -211,18 +212,6 @@ export const MODELS = {
     supportsReasoning: true,
     // Native vision: image_url parts can be inlined directly without
     // routing through the analyze_image tool.
-    supportsVision: true,
-    supportsResponseFormat: true,
-  },
-  // Retained after the Smart tier swapped to qwen-3-7-plus so threads
-  // that pinned this id via per-thread model override still resolve to
-  // a valid spec on read. Identical capability surface to the new
-  // qwen-3-7-plus; reasoning_effort is ignored by both, vision is
-  // native on both.
-  'qwen-3-6-plus': {
-    id: 'qwen-3-6-plus',
-    contextWindow: 1_000_000,
-    supportsReasoning: true,
     supportsVision: true,
     supportsResponseFormat: true,
   },
@@ -540,7 +529,7 @@ export type AgentRole =
  *     the entire conversation is the context.
  *
  *     NOTE on capacity: the Balanced and Fast foreground tiers ALSO
- *     front this id (Smart was moved off to qwen-3-6-plus). The
+ *     front this id (Smart is on qwen-3-7-plus). The
  *     earlier policy of "background agents must not share capacity
  *     with foreground tiers" has been deliberately relaxed. If
  *     overload errors return under the shared-capacity shape, the
@@ -870,34 +859,6 @@ export function resolveVerbosity(
   defaultVerbosity: Verbosity
 ): Verbosity {
   return threadVerbosity ?? defaultVerbosity;
-}
-
-/**
- * Reverse lookup: given a Venice model id, return the active ModelSpec
- * keyed under it. Only resolves currently-active ids; returns null for
- * retired ids (use `findContextWindowById` for the ring's broader
- * lookup that includes the legacy registry).
- *
- * Used by callers that need capability flags - the ring just needs
- * the window and reads `findContextWindowById` directly.
- */
-export function findModelById(id: string | null | undefined): ModelSpec | null {
-  if (typeof id !== 'string' || id.length === 0) return null;
-  return (MODELS as Readonly<Record<string, ModelSpec>>)[id] ?? null;
-}
-
-/**
- * Ring helper: returns the context window for any model id Nak has
- * ever pinned. Falls back to the legacy registry when the id isn't
- * active. Used by AssistantBody.svelte's per-message context-window
- * indicator on assistant rows whose `model` column references either
- * a current id or a retired one.
- */
-export function findContextWindowById(id: string | null | undefined): number | null {
-  if (typeof id !== 'string' || id.length === 0) return null;
-  const active = (MODELS as Readonly<Record<string, ModelSpec>>)[id];
-  if (active) return active.contextWindow;
-  return LEGACY_MODELS[id]?.contextWindow ?? null;
 }
 
 /**

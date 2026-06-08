@@ -93,11 +93,16 @@ interface Props {
 }
 ```
 
-- Renders nothing when either token prop is missing. The data comes
-  from the `messages.usage` JSONB column (sourced from Venice's
-  `usage` epilogue frame) and the model's `contextWindow` in
-  `src/lib/models.ts`; both are missing for very old assistant
-  rows and for turns where usage wasn't reported.
+- Renders nothing when either token prop is missing. `totalTokens`
+  comes from the `messages.usage` JSONB column (sourced from Venice's
+  `usage` epilogue frame; absent on turns where usage wasn't
+  reported). `contextWindow` is the thread's CURRENT effective-tier
+  window, passed in by `AssistantBody` from `effectiveTierSpec` - not
+  a lookup on the row's historical `messages.model`. So an old row is
+  measured against the model the user is on now (the window they have
+  to manage); a turn larger than today's window fills the ring and the
+  detail shows raw counts over the window. There is no retired-model
+  registry.
 - `createdAt` is the assistant row's `messages.created_at`. Formatted
   via `Intl.DateTimeFormat` with `dateStyle: 'medium'` + `timeStyle:
   'short'` and the user's `app.journalTimezone` (seeded from

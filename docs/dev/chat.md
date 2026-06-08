@@ -350,14 +350,21 @@ A chat turn goes:
   the next turn automatically. (The function never edits the
   system preamble; it forwards what the browser sent.)
 - **Concrete vs. abstract model ids.** `messages.model` stores
-  the *concrete* Venice id (`'kimi-k2-5'`) captured at send-time,
-  not the abstract tier. Retargeting a tier later doesn't rewrite
-  history. `threads.model` stores the abstract tier (`'smart'`) —
-  same reason, opposite direction (let retunes flow through).
+  the *concrete* Venice id captured at send-time, not the abstract
+  tier - a historical record of which model answered the row.
+  Nothing reads it back today (the context ring measures against
+  the thread's current model, not this column); it's kept as
+  provenance. `threads.model` stores the abstract tier (`'smart'`),
+  so retunes flow through and a model leaving Venice never orphans
+  a thread.
 - **The trailing `usage` SSE frame is optional.** Not every
   provider sends it, and a cancelled stream may drop it. `usage`
   is nullable in `messages` and the context ring renders nothing
-  when either usage or the model's context window is missing.
+  when usage is missing. The ring's denominator is the thread's
+  CURRENT effective-tier window (passed into `AssistantBody`), not
+  a lookup on `messages.model` - so an old row is measured against
+  the model the user is on now, which is the window they actually
+  have to manage. There is no retired-model registry.
 - **Realtime echo of your own write.** `subscribeToMessages`
   delivers an insert event for every row including your own.
   The dedup-by-id at the append site handles both orderings
