@@ -414,6 +414,24 @@ A chat turn goes:
   how rounds persist, keep the boundary event paired with the
   non-terminal row insert or the live view silently regresses to
   the concatenation bug.
+- **The terminal row's `created_at` is re-stamped at every round
+  boundary so it sorts after the tool rows.** The function streams
+  into one reused assistant row (`assistantRowId`), created lazily on
+  the first `response_text` of the WHOLE turn. When the model narrates
+  a preamble before calling tools, that row is born early - before the
+  round's tool-result rows - and `commit_assistant_message` reuses the
+  same id without touching `created_at`. Since every created_at-ordered
+  view (`mergeMessagesById` on thread switch, `listMessages` on refetch)
+  sorts ascending, an un-restamped terminal row sorts AHEAD of its own
+  tool cards: the live arrival-order view reads `[tool1, tool2, tool3,
+  response]`, then the response jumps to the front of the round on the
+  first re-sort. The fix lives in `getStreamingResponse.ts` at the
+  round-boundary reset (the same UPDATE that wipes the carried row's
+  content to ''): it bumps `created_at` to `now()` after the round's
+  tool rows are persisted, keeping the eventual terminal commit
+  chronologically after them. If you stop reusing the streaming row
+  across rounds, or move the commit off that row id, this re-stamp is
+  the thing that was holding the card order together.
 - **Reconnect POLLS the DB row; it does NOT resume the live stream.**
   When `selectThread` finds the transcript tail is a
   `status='streaming'` assistant row and no local slot is producing it
