@@ -4,9 +4,9 @@
  * Three surfaces under test:
  *
  *   - The tool sits in the main chat catalog (model sees it) and is
- *     absent from agent-only toolboxes (reflection / recall / wiki
- *     agents have no UI to render to, so they must not be able to
- *     reach for it).
+ *     absent from agent-only toolboxes (the background wiki /
+ *     memory-librarian agents have no UI to render to, so they must
+ *     not be able to reach for it).
  *   - `execute()` validates arguments and returns the pending sentinel
  *     shape the chat-loop's suspend path expects.
  *   - The content-parse helpers round-trip both sentinel and answered
@@ -18,9 +18,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   TOOLS,
-  memoryToolbox,
   type ToolDef,
 } from '../src/lib/tools';
+import { memoryLibrarianToolbox } from '../src/lib/tools/memory_librarian_toolbox';
 import {
   parseAskUserContent,
   buildAskUserAnswerContent,
@@ -35,9 +35,9 @@ describe('ask_user — registry scoping', () => {
   });
 
   it('is absent from agent-only toolboxes', () => {
-    // The memory agent has no UI surface to render a clarifying
+    // A background agent has no UI surface to render a clarifying
     // question to; ask_user must stay scoped to the main chat loop.
-    expect(memoryToolbox.tools.map((t) => t.name)).not.toContain('ask_user');
+    expect(memoryLibrarianToolbox.tools.map((t) => t.name)).not.toContain('ask_user');
   });
 
   it('schema declares question and options as required', () => {

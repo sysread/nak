@@ -375,11 +375,15 @@ function setUserLocation(location: string): void {
  * Does NOT persist; user-driven changes route through
  * `persistDisplayTimezone`. Caller is responsible for normalizing
  * user-supplied input to a valid IANA name first.
+ *
+ * Only the wiki worker still needs a live timezone push: it owns the
+ * one remaining browser-side day-gate. Reflection's day-gate moved
+ * server-side (it reads profiles.settings.displayTimezone directly),
+ * so the supervisor no longer takes a timezone.
  */
 function setDisplayTimezone(tz: string): void {
   app.displayTimezone = tz;
   wiki.whenLoaded((m) => m.setTimezone(tz || null));
-  supervisor.whenLoaded((m) => m.setTimezone(tz || null));
 }
 
 /**
@@ -789,7 +793,6 @@ function startBackgroundWorkers(config: AppConfig): void {
   supervisor.start({
     supabase: app.supabase,
     config,
-    timezone: app.displayTimezone || null,
   });
   samskara.start({ supabase: app.supabase, config });
   // Bias-observer worker silently analyzes processed conversations

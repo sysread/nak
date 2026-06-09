@@ -222,10 +222,12 @@ the function-side wire shape:
   main user-facing chat (`chat-loop.ts`).
 - `SupabaseService.complete(req)` - non-streaming one-shot,
   routed through the venice/complete route. Used by every
-  background path: the intuition / samskara / summary / reflection
+  browser background path: the intuition / samskara / summary
   / journal agents, the four recall agents (memory, conversation,
   wiki, journal), and the headless tool loop they share, plus the
-  web_search / research_docs / analyze_image sub-tools.
+  web_search / research_docs / analyze_image sub-tools. The
+  reflection agent runs in the edge function and calls Venice
+  directly rather than routing through this browser method.
 - `SupabaseService.embed(req)` - per-query vector. Routes through
   venice/embed.
 - `SupabaseService.extractText(file, filename)` - multipart upload
@@ -275,10 +277,11 @@ server-side via `pg_cron` and the `venice` edge function - see
   terminal assistant message newer than `last_summarised_msg_id`,
   runs the summary agent (fast model), writes `threads.summary`.
   Covered in `./summaries.md`.
-- `src/lib/agents/reflection/worker.ts` — same trigger as summary,
-  different outcome: reads the thread transcript and calls the
-  memory tools via a headless tool loop to update long-term
-  memory. Covered in `./memory.md`.
+- `supabase/functions/venice/agents/reflection.ts` — fires from
+  the completed-chat-turn tail (via `EdgeRuntime.waitUntil` in
+  `getStreamingResponse`), reads one day-gate-eligible thread,
+  and calls the memory tools via a headless tool loop to update
+  long-term memory. Covered in `./memory.md`.
 
 Each worker has a **manager** on the main thread
 (`agents/*/manager.ts`) that handles
@@ -330,12 +333,12 @@ Three categories of work:
    triggered it.
 
 3. **Background derivation the user controls in-session — browser
-   owns today.** Reflection, wiki, intuition, samskara, memory
-   librarian, journaling, auto-title. Run while the app is
-   unlocked; the user toggles them via settings. Losing them on
-   tab close isn't a correctness problem, just a "work resumes
-   next session." Long-term candidates for the function side as
-   the cron + waitUntil pattern matures.
+   owns today.** Wiki, intuition, samskara, memory librarian,
+   journaling, auto-title. Run while the app is unlocked; the
+   user toggles them via settings. Losing them on tab close isn't
+   a correctness problem, just a "work resumes next session."
+   Long-term candidates for the function side as the cron +
+   waitUntil pattern matures.
 
 Each row in the database has exactly **one writer-of-record**, set
 by which production path birthed it. The shared table is fine
@@ -406,5 +409,7 @@ follows the claim-RPC pattern.
   friends compose.
 - `./chat.md` — the chat loop and the UI that drives it.
 - `./auth-session.md` — the full session lifecycle picture.
-- `./embeddings.md` — the canonical worker example; reflection and
+- `./embeddings.md` — the canonical browser worker example;
   summaries follow the same shape.
+- `./memory.md` — reflection, a server-side counterpart that
+  fires from the edge function's chat-turn tail.

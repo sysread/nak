@@ -41,20 +41,20 @@ ride the system prompt independently.
 ## Role in the app
 
 Every turn the main chat model can call `memory_recall` to pull in
-relevant memories; every time a thread goes quiet, a background
-reflection worker reads the transcript and decides whether to write,
-update, or invalidate memories based on what it saw. The store lives
-in each user's own Supabase; the writes happen through the same
-tool harness the main chat uses.
+relevant memories; at the tail of each completed streaming chat turn,
+the venice edge function fires a reflection pass that reads a settled
+thread and decides whether to write, update, or invalidate memories
+based on what it saw. The store lives in each user's own Supabase;
+the writes happen through the same tool harness the main chat uses.
 
 From the user's perspective this is the Memory feature documented
 in `docs/user/memory.md`. The dev side has four moving parts:
 
 1. **The store** — `memories` table, RLS-scoped, with a pgvector
    `embedding` column populated asynchronously.
-2. **The writer** — the reflection agent runs in a background Web
-   Worker, reads settled threads end-to-end, and uses the
-   `memoryToolbox` (a write-scoped subset of the memory tools).
+2. **The writer** — the reflection agent runs in the venice edge
+   function, reads settled threads end-to-end, and uses a
+   write-scoped subset of the memory tools.
 3. **The reader** — the recall agent runs inline during a chat
    turn when the main model invokes the `memory_recall` tool.
    Read-only.
@@ -101,7 +101,7 @@ in `docs/user/memory.md`. The dev side has four moving parts:
   volitional confidence nudges. +0.5 cap 10.0 and ×0.7 no floor
   respectively, matching the `reaffirm_memory_confidence` /
   `doubt_memory_confidence` RPCs. Sit alongside the reflection-
-  only `memory_invalidate` (halving) in the `memoryToolbox`.
+  only `memory_invalidate` (halving) in the reflection toolbox.
 - `src/lib/tools/memory_relate.ts`, `memory_unrelate.ts` — the
   graph layer. Four kinds (supports / contradicts / generalises
   / specialises); self-loops rejected at the tool boundary;
@@ -111,9 +111,10 @@ in `docs/user/memory.md`. The dev side has four moving parts:
   model calls; triggers `RecallAgent`.
 - `src/lib/agents/recall/agent.ts`, `prompt.ts` — the recall
   agent. Inline, read-only, returns a structured JSON note.
-- `src/lib/agents/reflection/{agent,prompt,loop,worker,manager}.ts`
-  — the reflection worker. Background, write-scoped, no return
-  value (side effects = memory tool calls).
+- `supabase/functions/venice/agents/reflection.ts` — the reflection
+  agent. Exports `reflectOneThread(adminClient, userId)`; runs
+  write-scoped with no return value (side effects = memory tool
+  calls).
 - `src/lib/agents/deep-sleep/{agent,prompt,loop,worker,manager,
   runner.svelte,types}.ts` — the memory librarian's slow-wave
   consolidation pass. Background worker; every ~12h it picks a
@@ -240,12 +241,15 @@ in `docs/user/memory.md`. The dev side has four moving parts:
   `recallToolbox`. Returns a structured JSON output the tool
   encodes as the `role='tool'` message payload for the next
   round.
-- **Reflection worker cycle** — started by
-  `reflectionManager.start()` on `activate()`. Acquires the
-  `worker_kind='reflection'` lease; polls `threads` for rows
-  where there's a terminal assistant message newer than
-  `last_reflected_msg_id` and no live claim; claims one, runs
-  the agent, stamps `last_reflected_msg_id` via a guarded RPC.
+- **Reflection (edge function tail)** — at the end of each
+  successfully completed streaming chat turn, `getStreamingResponse`
+  fires `reflectOneThread(adminClient, userId)` via
+  `EdgeRuntime.waitUntil` as background work after the chat response
+  ships. Each invocation opportunistically drains one day-gate-
+  eligible thread from the existing reflection queue - NOT
+  necessarily the thread that just finished. Claim mutual exclusion
+  is the per-thread claim RPC (each call uses a fresh random holder
+  id); no `worker_leases` row is involved.
 - **User memory CRUD through the assistant** — user asks "what
   do you remember about me?" or "forget that I liked X"; the
   main model calls `memory_search` / `memory_update` /
@@ -309,15 +313,16 @@ in `docs/user/memory.md`. The dev side has four moving parts:
 - **RLS policies** — all four (select / insert / update / delete)
   are `auth.uid() = user_id`. No cross-user read is possible
   via the publishable key.
-- **`threads.last_reflected_msg_id`**, plus
-  `reflection_holder_id` and `reflection_claim_expires_at`
-  — same shape as the
-  summaries claim columns. A message id (not a timestamp) is
-  the pointer because ids are stable across clock skew and
+- **`threads.last_reflected_msg_id`** — progress pointer for
+  the reflection queue. A message id (not a timestamp) is the
+  pointer because ids are stable across clock skew and
   terminal-assistant-detection is a straightforward query.
-- **Reflection lease** — `worker_leases` row with
-  `worker_kind='reflection'`. Runs concurrently with the
-  `'embedding'` and `'summary'` leases.
+- **Reflection claim columns** — `threads.reflection_holder_id`
+  and `threads.reflection_claim_expires_at` are the mutual-
+  exclusion primitive for the server-side reflection path.
+  The claim-RPC pair (`claim_next_thread_for_reflection` /
+  `mark_thread_reflected_if_claimed`) uses a fresh random holder
+  id per call; there is no `worker_leases` row for reflection.
 - **`memories.last_librarian_visit_at timestamptz`** — per-row
   "when did deep-sleep last visit this neighborhood." Picked
   oldest-first (nulls first) as the seed for the next cycle.
@@ -423,9 +428,14 @@ in `docs/user/memory.md`. The dev side has four moving parts:
   `RecallOutput` is a discriminated union:
   `{kind:'none'} | {kind:'note', note:string}`. The recall tool
   parses this and hands the JSON back to the main chat loop.
-- `ReflectionAgent.run(req)` — returns a `ReflectionOutput` that
-  carries counters, not text. The agent's "answer" is whatever
-  `memory_*` tool calls it made; the final text is discarded.
+- `reflectOneThread(adminClient, userId)` — the edge function
+  entry point. Claims one day-gate-eligible thread (newest message
+  on a prior calendar day in the user's timezone, with >= 2 user
+  messages), runs the reflection agent's headless tool loop, and
+  stamps `last_reflected_msg_id` via a claim-guarded RPC. The
+  agent's "answer" is whatever `memory_*` tool calls it made;
+  the final text is discarded. Returns without error when the
+  queue is empty or the claim is lost.
 
 ## Interactions with other features
 
@@ -443,9 +453,9 @@ in `docs/user/memory.md`. The dev side has four moving parts:
   as a prominent affordance of its own. The settings module
   now has no awareness of memories at all.
 - **Tools** — the five memory tools live in the registry
-  (`tools/index.ts`). Reflection uses `memoryToolbox` (a
-  write-scoped subset: search + create + update + invalidate,
-  NOT delete, NOT any recall). Recall uses `recallToolbox`
+  (`tools/index.ts`). Reflection uses a write-scoped subset
+  (search + create + update + invalidate, NOT delete, NOT any
+  recall) defined in the edge function. Recall uses `recallToolbox`
   (search only). See `./tools.md`.
 - **Embeddings** — the worker populates `memories.embedding`
   on a poll of `embedding is null`. Memory search's vector path
@@ -460,23 +470,23 @@ in `docs/user/memory.md`. The dev side has four moving parts:
   `./topics.md` under "Memory topics" for the worker shape, the
   schema deltas, and the trigger / claim discipline.
 - **Summaries / conversation recall** — separate store (thread
-  rows), separate agents. Mentioned here only because the
-  reflection loop shares the same claim-pattern plumbing with
-  the summary loop (see `src/lib/agents/reflection/loop.ts` and
-  `src/lib/agents/summary/loop.ts` — they mirror each other
-  on purpose).
-- **Logging** - the reflection worker's loop driver and
-  the `memory_recall` agent both emit breadcrumbs through
-  `createLogger` (`reflection-worker`, `recall-agent`).
-  Worker-side entries relay main-thread via postMessage
-  and surface in the in-app log drawer alongside
-  main-thread logs. See `./logging.md`.
+  rows), separate agents. Summary runs in the browser supervisor
+  fleet; reflection runs in the venice edge function, fired from
+  the completed-chat-turn tail. Both use the same per-row
+  claim-RPC pattern on `threads` but have independent claim
+  columns and no shared lease.
+- **Logging** - the reflection agent (edge function) and the
+  `memory_recall` agent (browser inline) both emit breadcrumbs
+  through `createLogger` (`reflection-agent`, `recall-agent`).
+  Edge function entries surface in Supabase function logs;
+  recall-agent entries surface in the in-app log drawer.
+  See `./logging.md`.
 
 ## Gotchas
 
 - **Invalidate vs delete is load-bearing.** The reflection
   agent's prompt explicitly tells it "use memory_invalidate,
-  not memory_delete" and the `memoryToolbox` doesn't even
+  not memory_delete" and its toolbox doesn't even
   contain delete. Halving confidence is reversible; if new
   evidence re-confirms a memory the agent invalidated, the
   next update can promote it back. Hard deletes are

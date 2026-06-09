@@ -1,7 +1,7 @@
 /**
- * Single-cycle driver for the wiki worker. Mirrors
- * `../reflection/loop.ts`: acquire lease -> claim thread -> run
- * agent -> mark pointer.
+ * Single-cycle driver for the wiki worker. Same shape as the
+ * supervised unit loops (`../summary/loop.ts`, `../auto_title/loop.ts`):
+ * acquire lease -> claim thread -> run agent -> mark pointer.
  *
  * The pointer-advance is unconditional on `done`. The autonomous
  * agent's `wiki_*` tool calls land their side effects directly; even

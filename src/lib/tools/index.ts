@@ -42,17 +42,14 @@
  * deliberate user-or-model gate so an autonomous turn can't scribble
  * over user data without intent.
  *
- * Note on the agent-only `memoryToolbox` re-exported near the bottom
- * of this file: its definition lives in `./memory_toolbox` (kept out
- * of this barrel for reflection-worker bundling reasons - see that
- * file's header) but the export rides through here so callers can
- * still pull it from `$lib/tools`. It is a DIFFERENT set of tools
- * (`memory_invalidate` in place of `memory_delete`) than the user-
- * facing `memoriesToolbox` defined in this file. Agents must not
- * hard-delete on their own authority - they can only soft-decay
- * confidence. The user-facing surface keeps hard-delete because
- * "forget X" is user-directed and unambiguous. Don't collapse the
- * two.
+ * Note on the user-facing `memoriesToolbox` defined here vs. the
+ * agent-only memory toolboxes (`memoryLibrarianToolbox` here; the
+ * reflection toolbox, which now lives server-side in
+ * supabase/functions/venice/agents/reflection.ts): the agent sets
+ * substitute `memory_invalidate` (soft-decay) for `memory_delete`.
+ * Agents must not hard-delete on their own authority - they can only
+ * decay confidence. The user-facing surface keeps hard-delete because
+ * "forget X" is user-directed and unambiguous. Don't collapse the two.
  */
 import type { ToolDef, OpenAIToolDef, Toolbox } from './types';
 
@@ -127,19 +124,11 @@ import { docUpdateSchema } from './doc_update.schema';
 import { docDeleteSchema } from './doc_delete.schema';
 import { generateImageSchema } from './generate_image.schema';
 
-// Agent-only toolbox re-exports moved to the bottom of the file
-// alongside other re-exports. Direct `export ... from` rather than
-// `import` + `export` so Rollup can tree-shake the chain out of the
-// main chunk when main-chunk consumers don't reference these
-// symbols (the workers / agents that DO use them import directly
-// from `./memory_toolbox` etc., not via this barrel).
-
 // `lazyTool` lives in `./lazy.ts` so the agent-toolbox files
-// (`./memory_toolbox`, `./recall_toolbox`,
-// `./conversation_recall_toolbox`, `./wiki_recall_toolbox`) can use
-// it too. With every consumer going through the lazy path, Vite
-// emits one chunk per impl module regardless of which toolbox
-// dispatches into it.
+// (`./memory_librarian_toolbox`, `./wiki_toolbox`,
+// `./wiki_librarian_toolbox`) can use it too. With every consumer
+// going through the lazy path, Vite emits one chunk per impl module
+// regardless of which toolbox dispatches into it.
 import { lazyTool } from './lazy';
 
 // `serverSideTool` wraps a schema into a ToolDef whose execute() throws
@@ -373,12 +362,12 @@ export const cookingToolbox: Toolbox = {
  * memory levers (reaffirm/doubt for graded confidence, relate/
  * unrelate for the memory-graph layer).
  *
- * Contrast with the agent-only `memoryToolbox` (defined in
- * `./memory_toolbox`, re-exported near the bottom of this file),
- * which swaps `memory_delete` for `memory_invalidate` and includes
- * `memory_search` directly because agents don't have access to the
- * always-on registry. Agents operating on their own authority only
- * get soft-decay, not hard delete.
+ * Contrast with the agent-only memory toolboxes (the server-side
+ * reflection toolbox; `memoryLibrarianToolbox` here), which swap
+ * `memory_delete` for `memory_invalidate` and include `memory_search`
+ * directly because agents don't have access to the always-on
+ * registry. Agents operating on their own authority only get
+ * soft-decay, not hard delete.
  */
 export const memoriesToolbox: Toolbox = {
   name: 'memories',
@@ -520,8 +509,8 @@ export const GATED_TOOLBOX_META: readonly ToolboxMeta[] = GATED_TOOLBOXES.map(
 /**
  * Flat, deduped view of every tool reachable from the main chat
  * model - i.e. every tool across `TOOLBOXES`. Does NOT include
- * agent-only toolboxes (`memoryToolbox`, `recallToolbox`,
- * `conversationRecallToolbox`) - those are addressed by toolbox
+ * agent-only toolboxes (`memoryLibrarianToolbox`, `wikiToolbox`,
+ * `wikiLibrarianToolbox`) - those are addressed by toolbox
  * directly. Exposed for test assertions and any future UI that
  * wants to inventory the full catalog; the wire builder
  * (`buildToolList`) still composes from `TOOLBOXES` so a tool's
@@ -603,16 +592,6 @@ export function getToolFormatters(name: string): ToolFormatters | undefined {
   if (!tool) return undefined;
   return { formatArgs: tool.formatArgs, formatResult: tool.formatResult };
 }
-
-// Re-export the agent-only `memoryToolbox`, whose definition lives in
-// its own leaf file (`./memory_toolbox`). It moved out of this barrel
-// because the reflection worker imports it - see that file's header
-// for the IIFE/code-splitting failure mode that keeps it out of
-// `./index.ts`. Direct `export ... from` re-export so Rollup can elide
-// the chain when main-chunk consumers don't read the symbol. Worker /
-// agent entry points import the toolbox directly via its source path,
-// not through this barrel.
-export { memoryToolbox } from './memory_toolbox';
 
 export { toOpenAIToolDef, buildToolboxWireList, executeToolboxCall };
 // `toggleToolbox` is read by chat-prompt.ts for its `.name`; re-exported

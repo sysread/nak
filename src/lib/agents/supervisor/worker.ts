@@ -4,19 +4,18 @@
  * state machine) and cross-tab singleton coordination lives in the
  * manager. This file is the message boundary: construct ONE Supabase
  * client + ONE Venice client + ONE LeaseCoordinator, instantiate the
- * five agents the seven work units need, and drive `runOneCycle`
+ * four agents the five work units need, and drive `runOneCycle`
  * until abort.
  *
  * See `./loop.ts` for the rationale on why the supervisor exists at
  * all (heartbeat / auth amortisation across the formerly-separate
- * per-feature workers) and which features it consolidates (the seven
+ * per-feature workers) and which features it consolidates (the five
  * simple claim-based ones; embeddings / bias / samskara / wiki /
- * wiki-librarian remain standalone).
+ * wiki-librarian remain standalone, and reflection runs server-side).
  */
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { SupabaseService } from '../../supabase';
 import { LeaseCoordinator } from '../../embeddings/lease';
-import { ReflectionAgent } from '../reflection/agent';
 import { SummaryAgent } from '../summary/agent';
 import { TopicsAgent } from '../topics/agent';
 import { MemoryTopicsAgent } from '../memory_topics/agent';
@@ -35,7 +34,6 @@ interface StartMessage {
   accessToken: string;
   refreshToken: string;
   userId: string;
-  reflectionModel: string;
   summaryModel: string;
   topicsModel: string;
   memoryTopicsModel: string;
@@ -53,13 +51,6 @@ interface StartMessage {
   idleIntervalMs: number;
   /** Sleep on transient error (ms). */
   errorBackoffMs: number;
-  /**
-   * User's display timezone (IANA) - threaded into the reflection
-   * unit's day-gate. Live-updateable via the 'timezone' inbound
-   * message; null falls back to UTC server-side. See
-   * src/lib/agents/wiki/worker.ts for the matching pattern.
-   */
-  timezone: string | null;
 }
 
 interface StopMessage {
@@ -72,12 +63,7 @@ interface SessionMessage {
   refreshToken: string;
 }
 
-interface TimezoneMessage {
-  type: 'timezone';
-  timezone: string | null;
-}
-
-type InboundMessage = StartMessage | StopMessage | SessionMessage | TimezoneMessage;
+type InboundMessage = StartMessage | StopMessage | SessionMessage;
 
 interface LogOutbound {
   type: 'log';
@@ -97,13 +83,6 @@ function post(msg: LogOutbound | ProgressOutbound): void {
 }
 
 let currentClient: SupabaseClient | null = null;
-
-// Holder cell so a 'timezone' postMessage updates the value the
-// next cycle's SupervisorContext reads. Same shape as the wiki
-// worker's tzHolder. Initialised to null inside runWorker so a
-// pre-start 'timezone' message doesn't matter (the start message
-// also carries timezone and overwrites).
-const tzHolder: { value: string | null } = { value: null };
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
   if (ms <= 0) return Promise.resolve();
@@ -145,7 +124,6 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
     return;
   }
   currentClient = client;
-  tzHolder.value = msg.timezone;
 
   const supabase = new SupabaseService(
     { supabaseUrl: msg.supabaseUrl, supabasePublishableKey: msg.supabasePublishableKey },
@@ -156,15 +134,14 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
     heartbeatMs: msg.leaseHeartbeatMs,
   });
 
-  // Five agents instantiated once for the worker's lifetime. The
-  // sixth unit (auto_title) needs no agent - title-gen drives
+  // Four agents instantiated once for the worker's lifetime. The
+  // fifth unit (auto_title) needs no agent - title-gen drives
   // SupabaseService.complete directly.
   //
   // Each agent's model id comes from the start payload (resolved
   // from AGENT_MODELS on the main thread) so a model swap in the
   // registry takes effect on the next worker start without
   // requiring a code change here.
-  const reflection = new ReflectionAgent(supabase, msg.reflectionModel);
   const summary = new SummaryAgent(supabase, msg.summaryModel);
   const topics = new TopicsAgent(supabase, msg.topicsModel);
   const memoryTopics = new MemoryTopicsAgent(supabase, msg.memoryTopicsModel);
@@ -191,10 +168,9 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
         coordinator,
         holderId: msg.holderId,
         userId: msg.userId,
-        timezone: tzHolder,
         signal,
         onLeaseLost,
-        agents: { reflection, summary, topics, memoryTopics, recipeTopics },
+        agents: { summary, topics, memoryTopics, recipeTopics },
         tunables: {
           threadClaimTtlSeconds: msg.threadClaimTtlSeconds,
         },
@@ -242,8 +218,6 @@ workerGlobal.addEventListener('message', (evt: MessageEvent<InboundMessage>) => 
           message: `supervisor forwarded setSession failed: ${err.message}`,
         });
       });
-  } else if (msg.type === 'timezone') {
-    tzHolder.value = msg.timezone;
   }
 });
 

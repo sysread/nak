@@ -113,10 +113,10 @@ agent-side toolbox aggregators).
 ### PHASE 2 - migrate agent fleets server-side, one at a time
 
 **Five fleets to move.** Each one is a self-contained PR:
-**reflection** (simplest), **wiki** (autonomous), **wiki-librarian**,
-**rem**, **deep-sleep**. After each one lands, the browser impls of
-its tools may newly fall dead - drop them alongside the migration PR
-(not a separate cleanup).
+**reflection** (simplest) [DONE - see concrete design below],
+**wiki** (autonomous), **wiki-librarian**, **rem**, **deep-sleep**.
+After each one lands, the browser impls of its tools may newly fall
+dead - drop them alongside the migration PR (not a separate cleanup).
 
 **The function side already has the runner.** `supabase/functions/
 venice/agents/_run.ts` exports `runHeadlessAgent` - a mirror of
@@ -176,7 +176,26 @@ below. It's still the simplest fleet because the cron half is
 replaced by a `waitUntil` off the chat turn, but it does touch the
 claim RPCs.)
 
-#### Reflection: concrete design (from the migration research)
+#### Reflection: concrete design (from the migration research) [LANDED, pending prod verify]
+
+**Status.** Reflection is the first fleet to land. Shipped: the
+server-side agent (`supabase/functions/venice/agents/reflection.ts`,
+`reflectOneThread`), the `getStreamingResponse` terminal-tail hook
+(`edgeWaitUntil`, gated on `terminalKind === 'completed'`), the two
+prereqs (server-side `memory_invalidate` + the `p_user_id` claim/mark
+RPC overloads), and the full browser cutover: the supervisor's
+`reflection` unit is gone (5 units remain), `src/lib/agents/reflection/`
+and `src/lib/tools/memory_toolbox.ts` are deleted, and the supervisor's
+now-vestigial timezone plumbing (holder cell, `setTimezone`, the
+`'timezone'` postMessage, the `SupervisorStartOpts.timezone` field) is
+removed - reflection was the only supervised unit with a day-gate, and
+the server side reads the timezone from `profiles.settings` directly.
+The toolbox-composition invariant (soft-decay set, no `memory_delete`,
+no `ask_user`) moved to `supabase/functions/tests/reflection.test.ts`.
+Local gate + Deno tests + knip green. **Production verification still
+owed** per the Phase 2 gate below (reflection is invisible UI-wise -
+verify via memory writes after a terminal round on an OLDER eligible
+thread, or the edge function logs).
 
 **Trigger reframe - it drains *older* threads, not "this" one.** The
 claim RPC only claims threads whose newest message lands on a
@@ -247,9 +266,11 @@ becomes orphaned. Drop in one cleanup PR:
   projector stays - it serves `buildToolList`).
 - `src/lib/tools/index.ts`'s `executeToolCall` export and the agent-
   side toolbox re-exports.
-- The 4 agent-side toolbox aggregators (`memory_toolbox.ts`,
-  `memory_librarian_toolbox.ts`, `wiki_toolbox.ts`,
-  `wiki_librarian_toolbox.ts`).
+- The 3 surviving agent-side toolbox aggregators
+  (`memory_librarian_toolbox.ts`, `wiki_toolbox.ts`,
+  `wiki_librarian_toolbox.ts`). `memory_toolbox.ts` already went in
+  Phase 2 - it was reflection-exclusive, so it died with the reflection
+  cutover rather than waiting for demolition.
 - The remaining 13 browser tool impl files (memory CRUD, wiki CRUD,
   conversation_search). Schemas stay - `buildToolList` still uses
   them.

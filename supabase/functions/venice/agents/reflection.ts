@@ -1,0 +1,601 @@
+// Reflection agent (function-side port of src/lib/agents/reflection/).
+//
+// Reflection turns a finished conversation into long-term memory: it
+// reads the thread, then uses the agent-only memory toolbox (soft-decay,
+// never hard-delete) to create/update/invalidate memories about the
+// user. The model's final text is discarded - the memory_* side effects
+// ARE the output.
+//
+// Drive shape - it drains OLDER threads, not "this" one. This module is
+// fired from getStreamingResponse's terminal tail (via edgeWaitUntil)
+// once per completed chat turn, but it does NOT reflect the thread that
+// just finished. claim_next_thread_for_reflection only claims a thread
+// whose newest message lands on a PRIOR calendar day in the user's
+// timezone and that carries >= 2 user messages. So each turn-completion
+// opportunistically drains ONE reflection-eligible thread from the
+// existing day-gated queue. The day-gate exists because memory_recall
+// has no per-conversation source attribution: a memory derived from a
+// half-finished thought must not ride straight back into the same
+// conversation that produced it. Faithful to the browser supervisor's
+// behaviour (same queue, same gate); only the driver changed from a
+// supervisor poll to a chat-activity piggyback.
+//
+// No lease coordinator. The browser ran reflection under a
+// LeaseCoordinator so that only one of several open tabs/devices drove
+// the supervisor at a time. Server-side that coordination is moot: the
+// claim RPC's atomic per-thread claim+TTL IS the mutual exclusion. Two
+// concurrent edge invocations that both call claim simply get two
+// different threads (or one gets none) - more reflection throughput, not
+// a correctness problem. So this module claims with a fresh per-call
+// holder id and skips the lease machinery entirely.
+
+import type { SupabaseClient } from '@supabase/supabase-js';
+import type { ToolDef } from '../performToolCall.ts';
+import { readVeniceKey } from '../tools/_venice_key.ts';
+import { memorySearch } from '../tools/memory_search.ts';
+import { memoryCreate } from '../tools/memory_create.ts';
+import { memoryUpdate } from '../tools/memory_update.ts';
+import { memoryInvalidate } from '../tools/memory_invalidate.ts';
+import { memoryReaffirm } from '../tools/memory_reaffirm.ts';
+import { memoryDoubt } from '../tools/memory_doubt.ts';
+import { memoryRelate } from '../tools/memory_relate.ts';
+import { memoryUnrelate } from '../tools/memory_unrelate.ts';
+import {
+  runHeadlessAgent,
+  type AgentTool,
+  type AgentToolContext,
+  type Toolbox,
+} from './_run.ts';
+import {
+  messageToVenice,
+  type StoredMessage,
+  type VeniceWireMessage,
+} from './_recall_helpers.ts';
+
+// Mirror of agentModel('reflection').id in src/lib/models/index.ts.
+// AGENT_MODELS is a static role->model map, NOT one of the per-user
+// configurable tiers, so the browser path resolved this same constant -
+// hardcoding it here stays faithful after the cutover.
+const REFLECTION_MODEL = 'deepseek-v4-flash';
+
+// Mirror of the supervisor's threadClaimTtlSeconds (src/lib/agents/
+// supervisor/manager.ts). Generous enough to cover a reflection's
+// several Venice round-trips; if it lapses mid-run the mark RPC returns
+// false and the run is discarded (the thread re-queues for next time).
+const REFLECTION_CLAIM_TTL_SECONDS = 120;
+
+// Schema caps mirror supabase/functions/venice/tools/memory_*.ts so the
+// wire schemas the agent's model sees match the server-side validators'
+// limits. (8000 / 200 / 80 / 500 are the same numbers those tools
+// enforce on execute.)
+const MAX_MEMORY_DATA_CHARS = 8000;
+const MAX_MEMORY_CHANGELOG_MESSAGE_CHARS = 200;
+const MAX_MEMORY_LABEL_CHARS = 80;
+const MEMORY_RELATE_MAX_NOTE_CHARS = 500;
+
+// ---------------------------------------------------------------------------
+// Wire schemas for the agent-only memory toolbox. Ported from the
+// browser src/lib/tools/memory_*.schema.ts so the reflection model gets
+// the same tool contracts regardless of which path drove it. This is the
+// soft-decay set: memory_invalidate (halve confidence) stands in for
+// memory_delete (hard erase) so a background agent can never destroy a
+// memory row on its own authority.
+// ---------------------------------------------------------------------------
+
+const MEMORY_SEARCH_WIRE_SCHEMA: AgentTool['wire'] = {
+  type: 'function',
+  function: {
+    name: 'memory_search',
+    description:
+      "Semantic search over the user's saved memories. Returns " +
+      '{id, label, data, confidence, confidence_tag, updated_at, ' +
+      'relations}[]. Empty query lists everything. Use this FIRST, ' +
+      'before writing, to find an existing memory to update instead of ' +
+      'creating a near-duplicate.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description:
+            'Natural-language query. Embedding match (paraphrases work). Empty/omitted lists all.',
+        },
+        limit: {
+          type: 'integer',
+          minimum: 1,
+          maximum: 100,
+          description: 'Max results (default 20, max 100).',
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+};
+
+const MEMORY_CREATE_WIRE_SCHEMA: AgentTool['wire'] = {
+  type: 'function',
+  function: {
+    name: 'memory_create',
+    description:
+      'Save a new memory. Three required fields: label (short handle, ' +
+      `1-${MAX_MEMORY_LABEL_CHARS} chars), data (the full content, max ` +
+      `${MAX_MEMORY_DATA_CHARS} chars - split if longer), and message (a ` +
+      'one-line, commit-style summary of what you saved and why, which ' +
+      'lands in the memory changelog the user reviews). Optional ' +
+      'confidence (1.0..10.0, default 1.0) marks a memory as already-' +
+      'corroborated; raise above default only with converging evidence ' +
+      'in the current exchange. Returns the created memory row.',
+    parameters: {
+      type: 'object',
+      properties: {
+        label: {
+          type: 'string',
+          minLength: 1,
+          maxLength: MAX_MEMORY_LABEL_CHARS,
+          description: 'Required. Short name for the memory.',
+        },
+        data: {
+          type: 'string',
+          minLength: 1,
+          maxLength: MAX_MEMORY_DATA_CHARS,
+          description: `Required. Full content (max ${MAX_MEMORY_DATA_CHARS} chars).`,
+        },
+        message: {
+          type: 'string',
+          minLength: 1,
+          maxLength: MAX_MEMORY_CHANGELOG_MESSAGE_CHARS,
+          description:
+            'Required. One-line, commit-style summary of what this memory ' +
+            'captures and why you saved it. Lands in the memory changelog.',
+        },
+        confidence: {
+          type: 'number',
+          minimum: 1.0,
+          maximum: 10.0,
+          description:
+            'Optional initial confidence (1.0..10.0, default 1.0). ' +
+            'Raise only with converging evidence in the current exchange.',
+        },
+      },
+      required: ['label', 'data', 'message'],
+      additionalProperties: false,
+    },
+  },
+};
+
+const MEMORY_UPDATE_WIRE_SCHEMA: AgentTool['wire'] = {
+  type: 'function',
+  function: {
+    name: 'memory_update',
+    description:
+      'Update a memory by id (use memory_search to find the id). Two ' +
+      'required fields: id, and message (a one-line, commit-style summary ' +
+      'of what changed and why, which lands in the memory changelog the ' +
+      'user reviews). Then provide at least one of label or data to ' +
+      `change (data capped at ${MAX_MEMORY_DATA_CHARS} chars); omit ` +
+      'either to leave it unchanged. Returns the updated row.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: {
+          type: 'string',
+          description: 'Required. UUID of the memory (from memory_search).',
+        },
+        message: {
+          type: 'string',
+          minLength: 1,
+          maxLength: MAX_MEMORY_CHANGELOG_MESSAGE_CHARS,
+          description:
+            'Required. One-line, commit-style summary of what changed and ' +
+            'why. Lands in the memory changelog.',
+        },
+        label: { type: 'string', minLength: 1, maxLength: MAX_MEMORY_LABEL_CHARS },
+        data: { type: 'string', minLength: 1, maxLength: MAX_MEMORY_DATA_CHARS },
+      },
+      required: ['id', 'message'],
+      additionalProperties: false,
+    },
+  },
+};
+
+const MEMORY_INVALIDATE_WIRE_SCHEMA: AgentTool['wire'] = {
+  type: 'function',
+  function: {
+    name: 'memory_invalidate',
+    description:
+      'Mark a memory as contradicted/outdated, halving its confidence ' +
+      'so it stops surfacing in search. Repeated invalidation hides it ' +
+      "entirely; the row isn't hard-deleted, so memory_update / " +
+      'memory_create can restore confidence later. Returns ' +
+      '{id, confidence} post-decay.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'UUID of the memory.' },
+      },
+      required: ['id'],
+      additionalProperties: false,
+    },
+  },
+};
+
+const MEMORY_REAFFIRM_WIRE_SCHEMA: AgentTool['wire'] = {
+  type: 'function',
+  function: {
+    name: 'memory_reaffirm',
+    description:
+      "Add 0.5 to a memory's confidence (capped at 10.0) when the " +
+      'current exchange corroborates it or you just used it ' +
+      'successfully. Returns {id, confidence} post-bump.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'UUID of the memory.' },
+      },
+      required: ['id'],
+      additionalProperties: false,
+    },
+  },
+};
+
+const MEMORY_DOUBT_WIRE_SCHEMA: AgentTool['wire'] = {
+  type: 'function',
+  function: {
+    name: 'memory_doubt',
+    description:
+      "Multiply a memory's confidence by 0.7 when the current exchange " +
+      'weakens it without fully contradicting it (no floor; below 0.05 ' +
+      'the memory hides from search but is recoverable). For outright ' +
+      'contradictions prefer memory_update with corrected text or ' +
+      'memory_invalidate. Returns {id, confidence} post-doubt.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'UUID of the memory.' },
+      },
+      required: ['id'],
+      additionalProperties: false,
+    },
+  },
+};
+
+const MEMORY_RELATE_WIRE_SCHEMA: AgentTool['wire'] = {
+  type: 'function',
+  function: {
+    name: 'memory_relate',
+    description:
+      'Link two memories with a directed edge (supports / contradicts / ' +
+      'generalises / specialises). Optional note (up to ' +
+      `${MEMORY_RELATE_MAX_NOTE_CHARS} chars) records the rationale. ` +
+      'Relations surface next to their source memory in retrieval. ' +
+      'Self-loops rejected; duplicate edges (same from/to/kind) collapse ' +
+      'to no-op. Returns {id, kind}.',
+    parameters: {
+      type: 'object',
+      properties: {
+        from_id: {
+          type: 'string',
+          description: 'UUID of the source memory (edge originates here).',
+        },
+        to_id: {
+          type: 'string',
+          description: 'UUID of the target memory (edge points here).',
+        },
+        kind: {
+          type: 'string',
+          enum: ['supports', 'contradicts', 'generalises', 'specialises'],
+          description:
+            'supports = target reinforces source; contradicts = target ' +
+            'disagrees; generalises = target is broader; specialises = ' +
+            'target is narrower.',
+        },
+        note: {
+          type: 'string',
+          maxLength: MEMORY_RELATE_MAX_NOTE_CHARS,
+          description: 'Optional rationale for the link.',
+        },
+      },
+      required: ['from_id', 'to_id', 'kind'],
+      additionalProperties: false,
+    },
+  },
+};
+
+const MEMORY_UNRELATE_WIRE_SCHEMA: AgentTool['wire'] = {
+  type: 'function',
+  function: {
+    name: 'memory_unrelate',
+    description:
+      'Remove a directed edge between two memories. Hard-delete; no ' +
+      "soft version. id is the relation row's UUID (not a memory id) - " +
+      'surfaced when the relation appears in search. Returns ' +
+      '{deleted: true}.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: {
+          type: 'string',
+          description: 'UUID of the relation row (NOT a memory id).',
+        },
+      },
+      required: ['id'],
+      additionalProperties: false,
+    },
+  },
+};
+
+// Reflection's user-turn instruction. Verbatim port of REFLECTION_PROMPT
+// in src/lib/agents/reflection/prompt.ts so the model gets identical
+// guidance whichever path triggered it. ASCII em-dashes in the browser
+// original are preserved here to keep the two literals diff-identical;
+// this is the one place the repo's ASCII-only rule yields to "the prompt
+// text must match the browser byte-for-byte." (Smart punctuation in a
+// prompt is invisible to the model and harmless; a drift between the two
+// copies during the migration window is the real risk.)
+const REFLECTION_PROMPT = `You've just finished the conversation above. Now step out of that
+role. You're not talking to the user anymore — nobody will read this
+reply. Your job is to update long-term memory based on what
+happened, using the memory tools below.
+
+Think about:
+
+- **Facts about the user** — name, work, tools, projects, preferences,
+  constraints. Concrete, reusable information.
+- **Personality signals** — pay special attention here. How they
+  communicate (terse vs expansive, formal vs casual, blunt vs
+  hedged), the tone they use and the tone they want back, their sense
+  of humor, what they value, and what frustrates or delights them.
+  This is who they are, not just what they asked for.
+- **Reactions to you** — pay special attention here too. How did they
+  respond to your answers AND to your tone? Did they push back, agree,
+  redirect, go quiet, warm up, or get short with you? Did a particular
+  phrasing, level of detail, or register land well or badly? When a
+  response visibly worked or visibly missed, capture what about it did
+  — that is the highest-signal data about what works with this person.
+- **Self-guidance** — short notes to your future self, in the voice
+  of a coach. "This user prefers terse answers." "Don't assume
+  they want code examples without asking." "They appreciate when
+  you name the tradeoff rather than defaulting to a recommendation."
+  "Match their dry tone — eager cheerfulness reads as noise to them."
+
+The personality and reaction signals are the easiest to overlook and
+the most valuable to get right — fact extraction is the floor, not the
+goal. A future turn improves more from knowing how this person likes
+to be talked to than from another stored fact.
+
+Workflow for each memory you consider writing:
+
+1. Call memory_search with a related query FIRST. Check whether a
+   similar memory already exists.
+2. If one exists and your new insight is a refinement, call
+   memory_update on it (which also bumps confidence — corroborated
+   memories rank higher). Don't create a near-duplicate.
+3. If a new insight contradicts an existing memory, call
+   memory_invalidate on the stale one. This doesn't delete it, it
+   halves its confidence so search stops surfacing it. Repeated
+   invalidation hides it entirely. Recoverable if you re-learn the
+   fact later.
+4. Only call memory_create when nothing close exists.
+
+Be conservative. Fewer high-signal memories beat many low-signal
+ones. Don't record the obvious ("the user asked a question"),
+ephemeral details that only matter for one conversation, or
+anything that reads like a summary of what was already said.
+
+When you have nothing more to write, reply with a single word. The
+word is discarded — only the tool calls matter.`;
+
+/**
+ * Wrap a registered server-side ToolDef as an AgentTool for the
+ * reflection toolbox. The ToolDef's execute() already does the real DB
+ * work scoped to ctx.userId; we just adapt the AgentToolContext shape
+ * (which carries the same fields) and pin the wire schema the model
+ * sees. Calling into the registered impl rather than re-implementing
+ * keeps reflection's writes byte-identical to the chat-side memory
+ * tools.
+ */
+function asAgentTool(tool: ToolDef, wire: AgentTool['wire']): AgentTool {
+  return {
+    name: tool.name,
+    wire,
+    execute: (args, agentCtx) =>
+      tool.execute(args, {
+        adminClient: agentCtx.adminClient,
+        userId: agentCtx.userId,
+        threadId: agentCtx.threadId,
+        signal: agentCtx.signal,
+        depth: agentCtx.depth,
+      }),
+  };
+}
+
+function buildReflectionToolbox(): Toolbox {
+  return {
+    name: 'reflection',
+    tools: [
+      asAgentTool(memorySearch, MEMORY_SEARCH_WIRE_SCHEMA),
+      asAgentTool(memoryCreate, MEMORY_CREATE_WIRE_SCHEMA),
+      asAgentTool(memoryUpdate, MEMORY_UPDATE_WIRE_SCHEMA),
+      asAgentTool(memoryInvalidate, MEMORY_INVALIDATE_WIRE_SCHEMA),
+      asAgentTool(memoryReaffirm, MEMORY_REAFFIRM_WIRE_SCHEMA),
+      asAgentTool(memoryDoubt, MEMORY_DOUBT_WIRE_SCHEMA),
+      asAgentTool(memoryRelate, MEMORY_RELATE_WIRE_SCHEMA),
+      asAgentTool(memoryUnrelate, MEMORY_UNRELATE_WIRE_SCHEMA),
+    ],
+  };
+}
+
+/**
+ * Load the thread's messages and slice at the claimed terminal message.
+ * Unlike the recall helpers' loadThreadSlice (which trims back to the
+ * last user turn), reflection wants everything UP TO AND INCLUDING the
+ * terminal assistant message the claim was made against. Slicing at
+ * terminal_msg_id means a user who raced more turns in between claim and
+ * fetch doesn't change what we reflect on - the extra turns queue the
+ * thread for the next cycle instead.
+ *
+ * No char-budget trim: matches the browser reflection agent, which sent
+ * the whole slice. The day-gated queue + deepseek-v4-flash's 256k window
+ * make an over-budget thread a rare corner; if it ever bites, trimming
+ * is a separate follow-up, not a silent divergence introduced here.
+ */
+async function loadReflectionSlice(
+  adminClient: SupabaseClient,
+  threadId: string,
+  terminalMsgId: string,
+): Promise<StoredMessage[]> {
+  const { data, error } = await adminClient
+    .from('messages')
+    .select('id, role, content, tool_calls, tool_call_id, name')
+    .eq('thread_id', threadId)
+    .order('created_at', { ascending: true });
+  if (error) throw new Error(`listMessages failed: ${error.message}`);
+  const all = (data ?? []) as StoredMessage[];
+  const idx = all.findIndex((m) => m.id === terminalMsgId);
+  return idx >= 0 ? all.slice(0, idx + 1) : all;
+}
+
+/**
+ * Resolve the user's display timezone for the day-gate. Stored in
+ * profiles.settings.displayTimezone (Settings -> AI -> About you).
+ * Falls back to UTC, matching the claim RPC's own p_timezone default.
+ */
+async function loadDisplayTimezone(
+  adminClient: SupabaseClient,
+  userId: string,
+): Promise<string> {
+  const { data, error } = await adminClient
+    .from('profiles')
+    .select('settings')
+    .eq('user_id', userId)
+    .maybeSingle<{ settings: Record<string, unknown> | null }>();
+  if (error || !data?.settings) return 'UTC';
+  const tz = data.settings.displayTimezone;
+  return typeof tz === 'string' && tz.length > 0 ? tz : 'UTC';
+}
+
+/** Outcome of one reflectOneThread cycle, for the caller's diagnostic log. */
+export interface ReflectionCycleResult {
+  outcome: 'no-thread' | 'empty-slice' | 'reflected' | 'claim-lost';
+  threadId?: string;
+  toolCalls?: number;
+}
+
+/**
+ * Run one reflection cycle for `userId`: claim the oldest day-gate-
+ * eligible thread, reflect on it, mark it done. A no-op when the queue
+ * is empty. Best-effort by contract - the caller fires this from a chat
+ * turn's background tail and must not let a reflection failure touch the
+ * turn's recorded outcome; this function throws only on programmer error
+ * (missing Venice key), and the caller wraps the whole call regardless.
+ */
+export async function reflectOneThread(
+  adminClient: SupabaseClient,
+  userId: string,
+): Promise<ReflectionCycleResult> {
+  const timezone = await loadDisplayTimezone(adminClient, userId);
+  // Fresh holder per call - see the no-lease rationale in the file
+  // preamble. The claim+mark pair share this one holder; nothing else
+  // needs to recognise it.
+  const holderId = crypto.randomUUID();
+
+  // Claim atomically. p_user_id is the b-strict escape hatch: the
+  // service-role admin client has no auth.uid(), so the RPC scopes to
+  // the thread owner via coalesce(p_user_id, auth.uid()).
+  const { data: claimRows, error: claimErr } = await adminClient.rpc(
+    'claim_next_thread_for_reflection',
+    {
+      p_holder_id: holderId,
+      p_ttl_seconds: REFLECTION_CLAIM_TTL_SECONDS,
+      p_timezone: timezone,
+      p_user_id: userId,
+    },
+  );
+  if (claimErr) {
+    throw new Error(`claim_next_thread_for_reflection failed: ${claimErr.message}`);
+  }
+  const claim = Array.isArray(claimRows) ? claimRows[0] : claimRows;
+  if (!claim || typeof claim.thread_id !== 'string') {
+    return { outcome: 'no-thread' };
+  }
+  const threadId = claim.thread_id as string;
+  const terminalMsgId = claim.terminal_msg_id as string;
+
+  const slice = await loadReflectionSlice(adminClient, threadId, terminalMsgId);
+
+  // Pathological empty thread: mark it done so the queue advances rather
+  // than re-claiming the same row forever. Skip the Venice round-trip.
+  if (slice.length > 0) {
+    const apiKey = await readVeniceKey(adminClient);
+    if (!apiKey) throw new Error('no Venice key configured (app_config unseeded)');
+
+    const convo: VeniceWireMessage[] = slice.map(messageToVenice);
+    // Reflection instruction as the final user turn - the "switch modes"
+    // idiom. The model sees the whole prior conversation in its native
+    // shape and reads this as "now do this different task."
+    convo.push({ role: 'user', content: REFLECTION_PROMPT });
+
+    const baseCtx: Omit<AgentToolContext, 'signal' | 'depth'> = {
+      adminClient,
+      userId,
+      threadId,
+    };
+
+    const result = await runHeadlessAgent(
+      {
+        model: REFLECTION_MODEL,
+        messages: convo,
+        toolbox: buildReflectionToolbox(),
+        baseCtx,
+        apiKey,
+        // No outer turn to cancel - reflection runs in the background
+        // tail after the chat response already shipped. A never-aborting
+        // signal lets runHeadlessAgent run to its own maxRounds backstop.
+        signal: new AbortController().signal,
+      },
+      // parentDepth 0: reflection is a top-level agent (depth 1), same as
+      // the main chat's tool-dispatched agents.
+      0,
+    );
+
+    // Mark only after the agent finished. A false return means the claim
+    // expired or was stolen mid-run (claim-lost): any memory writes the
+    // agent already made stay - they're owned by the user, not the claim
+    // - and the next cycle re-reflects, finding its own writes via
+    // memory_search rather than duplicating.
+    const marked = await markReflected(adminClient, threadId, holderId, terminalMsgId, userId);
+    return {
+      outcome: marked ? 'reflected' : 'claim-lost',
+      threadId,
+      toolCalls: result.toolCalls,
+    };
+  }
+
+  const marked = await markReflected(adminClient, threadId, holderId, terminalMsgId, userId);
+  return { outcome: marked ? 'empty-slice' : 'claim-lost', threadId };
+}
+
+async function markReflected(
+  adminClient: SupabaseClient,
+  threadId: string,
+  holderId: string,
+  terminalMsgId: string,
+  userId: string,
+): Promise<boolean> {
+  const { data, error } = await adminClient.rpc('mark_thread_reflected_if_claimed', {
+    p_thread_id: threadId,
+    p_holder_id: holderId,
+    p_msg_id: terminalMsgId,
+    p_user_id: userId,
+  });
+  if (error) {
+    throw new Error(`mark_thread_reflected_if_claimed failed: ${error.message}`);
+  }
+  return data === true;
+}
+
+// Test-only surface. The toolbox composition (soft-decay set, no
+// memory_delete, no ask_user) is a safety invariant - background agents
+// must never hard-delete or reach for a UI tool - so it gets its own
+// assertion in supabase/functions/tests/reflection.test.ts.
+export const __test = { buildReflectionToolbox };

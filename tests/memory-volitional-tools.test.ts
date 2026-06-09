@@ -7,8 +7,10 @@
  *   - memory_relate (edge insert, self-loop rejection, kind validation,
  *     duplicate handling)
  *   - memory_unrelate (edge delete)
- *   - registry scoping: all four live in both `memoriesToolbox` (chat)
- *     and `memoryToolbox` (reflection).
+ *   - registry scoping: all four live in the chat `memoriesToolbox`.
+ *     The reflection agent's toolbox carries the same four (plus
+ *     memory_invalidate) server-side; that composition is asserted in
+ *     supabase/functions/tests/reflection.test.ts.
  *
  * The Supabase layer is stubbed per-test. RLS is a Supabase concern -
  * the tools' job is wiring the right RPC with the right args and
@@ -17,7 +19,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   memoriesToolbox,
-  memoryToolbox,
   type ToolContext,
   type ToolDef,
 } from '../src/lib/tools';
@@ -59,17 +60,6 @@ describe('volitional memory tools — registry scoping', () => {
     expect(names).toContain('memory_unrelate');
     // And still ships the user-authorised hard-delete.
     expect(names).toContain('memory_delete');
-  });
-
-  it('memoryToolbox (reflection) exposes the same four alongside invalidate', () => {
-    const names = memoryToolbox.tools.map((t: ToolDef) => t.name);
-    expect(names).toContain('memory_reaffirm');
-    expect(names).toContain('memory_doubt');
-    expect(names).toContain('memory_relate');
-    expect(names).toContain('memory_unrelate');
-    expect(names).toContain('memory_invalidate');
-    // Reflection still does NOT get hard-delete on its own authority.
-    expect(names).not.toContain('memory_delete');
   });
 
 });

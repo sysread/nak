@@ -6,11 +6,12 @@
  * calls — the output IS the final text, which the worker writes back
  * to `threads.summary`.
  *
- * Shape mirrors `../reflection/agent.ts` deliberately. The loop-
- * harness + worker-entry pattern in the parent directory expects an
- * `Agent<Input, Output>` it can `run()` against, and reusing the
- * same scaffold means anyone reading the reflection code has this
- * one's vocabulary for free.
+ * Shape mirrors the other supervised agent classes (`../topics/agent.ts`,
+ * `../memory_topics/agent.ts`) deliberately. The loop-harness +
+ * worker-entry pattern in the parent directory expects an
+ * `Agent<Input, Output>` it can `run()` against, and reusing the same
+ * scaffold means anyone reading one agent has the others' vocabulary
+ * for free.
  *
  * The agent does NOT acquire or release the lease, claim or save the
  * summary, or spawn its own worker. Those live in `./loop.ts` and

@@ -70,6 +70,7 @@ import {
   stripGeneratedImage,
   type GeneratedImagePayload,
 } from './tools/_generated_image.ts';
+import { reflectOneThread } from './agents/reflection.ts';
 
 // Magic flag the ask_user tool returns to suspend the round chain
 // pending a user answer. Mirrors src/lib/tools/ask_user.ts'
@@ -989,6 +990,33 @@ export async function getStreamingResponse(
     console.log(
       `[orchestrator ${runId}] end terminalKind=${terminalKind} persistedId=${persistedId || 'none'}`,
     );
+
+    // Reflection piggyback. A completed chat turn is the trigger that
+    // drains ONE day-gate-eligible OLDER thread from the reflection
+    // queue (not this thread - see agents/reflection.ts for why). This
+    // is the server-side replacement for the browser supervisor's
+    // reflection poll. Runs here in the already-detached waitUntil tail,
+    // after the response shipped and the channels tore down, so it never
+    // delays the user-visible turn. Best-effort and fully isolated: a
+    // reflection failure must not alter this turn's recorded outcome,
+    // hence the swallow - the chat row already committed above.
+    if (terminalKind === 'completed') {
+      try {
+        const r = await reflectOneThread(opts.adminClient, opts.userId);
+        if (r.outcome !== 'no-thread') {
+          console.log(
+            `[orchestrator ${runId}] reflection ${r.outcome}` +
+              (r.threadId ? ` thread=${r.threadId}` : '') +
+              (typeof r.toolCalls === 'number' ? ` toolCalls=${r.toolCalls}` : ''),
+          );
+        }
+      } catch (err) {
+        console.error(
+          `[orchestrator ${runId}] reflection tail failed:`,
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    }
   }
 }
 

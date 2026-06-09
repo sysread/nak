@@ -18,13 +18,17 @@
  * another picks up everything together rather than feature-by-
  * feature. One supervisor amortises all that overhead.
  *
- * Scope: this supervisor takes the six simple claim-based workers
- * (auto_title, summary, reflection, topics, memory_topics,
- * recipe_topics). Embeddings, bias, samskara,
- * wiki, and wiki-librarian stay standalone - the first three
- * because they have their own multi-phase complexity, the last
- * two because they accept main-thread `setProfile` / `setTimezone`
- * messages that would need a passthrough channel design here.
+ * Scope: this supervisor takes the five simple claim-based workers
+ * (auto_title, summary, topics, memory_topics, recipe_topics).
+ * Embeddings, bias, samskara, wiki, and wiki-librarian stay
+ * standalone - the first three because they have their own
+ * multi-phase complexity, the last two because they accept
+ * main-thread `setProfile` / `setTimezone` messages that would need
+ * a passthrough channel design here. Reflection is NOT in this
+ * fleet: it runs server-side in the venice edge function
+ * (supabase/functions/venice/agents/reflection.ts), fired from a
+ * completed chat turn's tail rather than driven by a supervisor
+ * poll, so the supervisor has no memory-writing unit.
  *
  * The rotation pattern mirrors the bias and samskara outer loops:
  * walk every unit per rotation; if any unit reports 'progress',
@@ -35,14 +39,12 @@ import type { SupabaseService } from '../../supabase';
 import type { LeaseCoordinator } from '../../embeddings/lease';
 import { createLogger } from '../../logger.svelte';
 
-import { runOneCycle as runReflection } from '../reflection/loop';
 import { runOneCycle as runAutoTitle } from '../auto_title/loop';
 import { runOneCycle as runSummary } from '../summary/loop';
 import { runOneCycle as runTopics } from '../topics/loop';
 import { runOneCycle as runMemoryTopics } from '../memory_topics/loop';
 import { runOneCycle as runRecipeTopics } from '../recipe_topics/loop';
 
-import type { ReflectionAgent } from '../reflection/agent';
 import type { SummaryAgent } from '../summary/agent';
 import type { TopicsAgent } from '../topics/agent';
 import type { MemoryTopicsAgent } from '../memory_topics/agent';
@@ -78,19 +80,9 @@ export interface SupervisorContext {
   coordinator: LeaseCoordinator;
   holderId: string;
   userId: string;
-  /**
-   * User's display timezone (IANA), live-updateable. Read on every
-   * unit cycle so a Settings edit that mutates the holder cell
-   * reaches the next claim without restarting the worker. The
-   * reflection unit threads it into its claim RPC's day-gate;
-   * other units ignore it for now (auto_title, summary, topics
-   * don't have day-gates).
-   */
-  timezone: { value: string | null };
   signal: AbortSignal;
   onLeaseLost: () => void;
   agents: {
-    reflection: ReflectionAgent;
     summary: SummaryAgent;
     topics: TopicsAgent;
     memoryTopics: MemoryTopicsAgent;
@@ -129,9 +121,9 @@ export interface WorkUnit {
  * Ordered list of work units the supervisor walks per rotation.
  * Order is roughly "cheapest probe first" so an unfortunate
  * supervisor signal-abort drains as few unit cycles as possible:
- * the title/topic units each cost one claim RPC, and
- * reflection/summary do the most work-per-cycle (Venice round-trips)
- * so they sit at the bottom.
+ * the title/topic units each cost one claim RPC, and summary does
+ * the most work-per-cycle (a Venice round-trip) so it sits at the
+ * bottom.
  */
 export const UNITS: readonly WorkUnit[] = [
   { name: 'auto_title', run: runAutoTitleUnit },
@@ -139,7 +131,6 @@ export const UNITS: readonly WorkUnit[] = [
   { name: 'memory_topics', run: runMemoryTopicsUnit },
   { name: 'recipe_topics', run: runRecipeTopicsUnit },
   { name: 'summary', run: runSummaryUnit },
-  { name: 'reflection', run: runReflectionUnit },
 ];
 
 // --- Unit adapters ------------------------------------------------------
@@ -162,25 +153,6 @@ async function runAutoTitleUnit(
     onLeaseLost: noLeaseLost,
   });
   if (result === 'titled' || result === 'no-title' || result === 'claim-lost') return 'progress';
-  if (result === 'error') return 'error';
-  return 'empty-phase';
-}
-
-async function runReflectionUnit(
-  ctx: SupervisorContext
-): Promise<SupervisorCycleResult> {
-  const result = await runReflection({
-    agent: ctx.agents.reflection,
-    supabase: ctx.supabase,
-    coordinator: heldCoordinator,
-    holderId: ctx.holderId,
-    userId: ctx.userId,
-    threadClaimTtlSeconds: ctx.tunables.threadClaimTtlSeconds,
-    timezone: ctx.timezone.value,
-    signal: ctx.signal,
-    onLeaseLost: noLeaseLost,
-  });
-  if (result === 'reflected' || result === 'claim-lost') return 'progress';
   if (result === 'error') return 'error';
   return 'empty-phase';
 }

@@ -21,13 +21,13 @@ import {
   buildToolList,
   buildToolboxWireList,
   executeToolboxCall,
-  memoryToolbox,
   toOpenAIToolDef,
   toggleToolbox,
   type ToolContext,
   type Toolbox,
   type ToolDef,
 } from '../src/lib/tools';
+import { memoryInvalidate } from '../src/lib/tools/memory_invalidate';
 import type { SupabaseService } from '../src/lib/supabase';
 
 /**
@@ -585,37 +585,13 @@ describe('memory_update', () => {
   });
 });
 
-describe('memoryToolbox', () => {
-  it('swaps memory_delete for memory_invalidate — agents get soft-delete only', () => {
-    // Soft-delete by design: an autonomous agent shouldn't be hard-
-    // erasing user data based on its own reading of the conversation.
-    // memory_delete stays available to the main chat (user-directed
-    // "forget X"). memory_invalidate halves confidence; recoverable.
-    // The volitional-memory additions (reaffirm/doubt/relate/unrelate)
-    // ride alongside - finer-grained nudges plus the graph layer.
-    const names = memoryToolbox.tools.map((t) => t.name);
-    expect(names).toEqual([
-      'memory_search',
-      'memory_create',
-      'memory_update',
-      'memory_invalidate',
-      'memory_reaffirm',
-      'memory_doubt',
-      'memory_relate',
-      'memory_unrelate',
-    ]);
-    expect(names).not.toContain('memory_delete');
-    expect(names).not.toContain('toggle_tools');
-  });
-
-  it('carries a stable name and a non-empty description for downstream prompts', () => {
-    expect(memoryToolbox.name).toBe('memory');
-    expect(memoryToolbox.description.length).toBeGreaterThan(0);
-  });
-});
+// The agent-only memory toolbox's composition (soft-decay set,
+// memory_invalidate in place of memory_delete) is now enforced
+// server-side - see supabase/functions/tests/reflection.test.ts, which
+// asserts the reflection agent's toolbox tool set.
 
 describe('memory_invalidate', () => {
-  const tool = memoryToolbox.tools.find((t) => t.name === 'memory_invalidate')!;
+  const tool = memoryInvalidate;
 
   it('calls decayMemoryConfidence and returns the new confidence', async () => {
     const { svc, spies } = mockSupabase();
@@ -653,9 +629,9 @@ describe('memory_invalidate', () => {
 
 describe('buildToolboxWireList', () => {
   it('projects every tool in the toolbox to the OpenAI wire shape, in declared order', () => {
-    const wire = buildToolboxWireList(memoryToolbox);
+    const wire = buildToolboxWireList(memoriesToolbox);
     expect(wire.map((t) => t.function.name)).toEqual(
-      memoryToolbox.tools.map((t) => t.name)
+      memoriesToolbox.tools.map((t) => t.name)
     );
     for (const item of wire) {
       expect(item.type).toBe('function');
@@ -673,7 +649,7 @@ describe('buildToolboxWireList', () => {
 describe('executeToolboxCall', () => {
   it('dispatches to the named tool within the given toolbox', async () => {
     const { svc, spies } = mockSupabase();
-    await executeToolboxCall(memoryToolbox, 'memory_create', { label: 'x', data: 'y', message: 'note' }, ctxFor(svc));
+    await executeToolboxCall(memoriesToolbox, 'memory_create', { label: 'x', data: 'y', message: 'note' }, ctxFor(svc));
     // createMemory now takes an optional third `confidence` arg; the
     // tool passes `undefined` when the caller doesn't supply one.
     expect(spies.createMemory).toHaveBeenCalledWith('x', 'y', undefined);
@@ -681,19 +657,19 @@ describe('executeToolboxCall', () => {
 
   it("throws with the toolbox name in the message when the tool isn't in this toolbox", async () => {
     // `toggle_tools` IS a real ToolDef in the global registry, but it's
-    // deliberately absent from memoryToolbox — so a dispatch against
+    // deliberately absent from memoriesToolbox — so a dispatch against
     // this toolbox must refuse it. The error names the toolbox so
-    // memory-agent errors don't read identically to main-chat errors.
+    // toolbox-scoped errors don't read identically to main-chat errors.
     const { svc } = mockSupabase();
     await expect(
-      executeToolboxCall(memoryToolbox, 'toggle_tools', { enable: true }, ctxFor(svc))
-    ).rejects.toThrow(/toolbox 'memory'/);
+      executeToolboxCall(memoriesToolbox, 'toggle_tools', { enable: true }, ctxFor(svc))
+    ).rejects.toThrow(/toolbox 'memories'/);
   });
 
   it('throws on an entirely unknown tool name', async () => {
     const { svc } = mockSupabase();
     await expect(
-      executeToolboxCall(memoryToolbox, 'no_such_tool', {}, ctxFor(svc))
+      executeToolboxCall(memoriesToolbox, 'no_such_tool', {}, ctxFor(svc))
     ).rejects.toThrow(/no_such_tool/);
   });
 

@@ -316,12 +316,20 @@ A chat turn goes:
   (memory facts verbatim; conversations + wiki by id); the system
   prompt nudges the model to consider this first when it wants broad
   context on the user. Same executor path. See `./context-recall.md`.
-- **Summaries / reflection / journal** — no direct call;
-  their triggers watch for a terminal assistant message
-  newer than `last_summarised_msg_id` /
-  `last_reflected_msg_id`. The chat loop creates that
-  assistant message; the workers pick it up on their next
-  poll. See `./summaries.md`, `./memory.md`.
+- **Summaries / journal** — no direct call; their triggers
+  watch for a terminal assistant message newer than
+  `last_summarised_msg_id`. The chat loop creates that
+  assistant message; the background workers pick it up on
+  their next poll. See `./summaries.md`.
+- **Reflection** — driven directly from the completed-turn
+  tail. `getStreamingResponse` (the streaming orchestrator)
+  fires `reflectOneThread` via `EdgeRuntime.waitUntil` after
+  the chat response ships, draining one day-gate-eligible
+  thread from the reflection queue as background work. The
+  chat loop creates the terminal assistant message that makes
+  a thread eligible; reflection acts on it on the same turn's
+  tail (after at least a calendar day has elapsed). See
+  `./memory.md`.
 - **Topics** — `Chat.svelte` owns the `selectedTopics` /
   `topicsVocabulary` state for the drawer's topic-filter
   dropdown and threads `selectedTopics` through the three

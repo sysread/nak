@@ -1,6 +1,6 @@
 /**
- * Soft-delete a memory by halving its confidence. The reflection
- * agent's equivalent of memory_delete — contradicted memories shouldn't
+ * Soft-delete a memory by halving its confidence. The background
+ * agents' equivalent of memory_delete — contradicted memories shouldn't
  * be hard-erased, they should just stop winning search against newer,
  * more-confident ones. Repeated invalidation drives confidence below
  * the 0.05 search floor (see schema `search_memories_by_embedding`),
@@ -9,9 +9,11 @@
  *
  * Deliberately separate from the main chat's `memory_delete` (which
  * stays hard-delete, because when a user says "forget X" they expect
- * the row gone, not ranked lower). This tool ships only in
- * `memoryToolbox` — the reflection agent's toolbox — and is not part
- * of the main chat's tool registry.
+ * the row gone, not ranked lower). This browser tool ships in
+ * `memoryLibrarianToolbox` (the memory-librarian agents) and is not
+ * part of the main chat's tool registry. The reflection agent runs the
+ * same tool server-side (supabase/functions/venice/tools/
+ * memory_invalidate.ts) since reflection moved into the edge function.
  *
  * Return value carries the post-decay confidence so the calling model
  * sees the effect of its action. A memory that's been invalidated

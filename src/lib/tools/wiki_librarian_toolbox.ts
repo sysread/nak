@@ -24,14 +24,13 @@
  *     article claims it, or contradicting evidence when the article
  *     says she works somewhere else.
  *
- * No memory write tools - memory mutations are reflection's
- * territory. The librarian only reads.
+ * No memory write tools - memory mutations belong to reflection and
+ * the memory-librarian agents. The wiki librarian only reads.
  *
  * Tool impls are lazy-loaded via `lazyTool`; only the schemas are
- * eagerly imported here. Same chunking discipline as
- * `memory_toolbox.ts` and `wiki_toolbox.ts` - importing this file
- * from a worker bundle should not transitively pull in research_docs
- * or other chat-only tools.
+ * eagerly imported here. Same chunking discipline as `wiki_toolbox.ts`
+ * - importing this file from a worker bundle should not transitively
+ * pull in research_docs or other chat-only tools.
  */
 import type { Toolbox } from './types';
 import { lazyTool } from './lazy';

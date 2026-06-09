@@ -6,14 +6,13 @@
  *     self-merge rejection)
  *   - argument trimming + happy-path RPC dispatch
  *   - toolbox scoping: present in memoryLibrarianToolbox; absent from
- *     memoriesToolbox, memoryToolbox
+ *     the chat memoriesToolbox
  *   - toolbox composition: librarian set excludes memory_create and
  *     memory_update (the design rules from the librarian discussion)
  */
 import { describe, it, expect, vi } from 'vitest';
 import {
   memoriesToolbox,
-  memoryToolbox,
   type ToolContext,
   type ToolDef,
 } from '../src/lib/tools';
@@ -56,11 +55,8 @@ describe('memoryLibrarianToolbox composition', () => {
     expect(names).not.toContain('memory_delete');
   });
 
-  it('memory_consolidate is NOT in the chat / reflection toolboxes', () => {
+  it('memory_consolidate is NOT in the chat memoriesToolbox', () => {
     expect(memoriesToolbox.tools.map((t: ToolDef) => t.name)).not.toContain(
-      'memory_consolidate'
-    );
-    expect(memoryToolbox.tools.map((t: ToolDef) => t.name)).not.toContain(
       'memory_consolidate'
     );
   });

@@ -5,8 +5,8 @@
  * only the supervisor-specific payload + timing constants.
  *
  * Cross-tab singleton via `navigator.locks.request('nak:supervisor-
- * worker')`. The worker consolidates six formerly-standalone
- * features (auto_title, summary, reflection, topics, memory_topics,
+ * worker')`. The worker consolidates five formerly-standalone
+ * features (auto_title, summary, topics, memory_topics,
  * recipe_topics) under one lease / heartbeat / auth-bridge to cut
  * the per-feature coordination overhead. See
  * `./loop.ts` for the rotation contract and which other workers
@@ -34,6 +34,13 @@ import type { Session } from '@supabase/supabase-js';
 import { BaseWorkerManager, type BaseStartOpts } from '../base-manager';
 import { agentModel } from '../../models';
 
+// The supervisor takes no feature-specific start options - it drives a
+// fixed set of claim-based units, none of which is parameterised at
+// start. Reflection (the one unit that needed a per-user timezone for
+// its day-gate) now runs server-side and reads the timezone from the
+// profile directly, so BaseStartOpts (supabase + config) is the whole
+// contract.
+
 const WORKER_DEFAULTS = {
   leaseTtlSeconds: 300,
   leaseHeartbeatMs: 90_000,
@@ -43,17 +50,7 @@ const WORKER_DEFAULTS = {
   errorBackoffMs: 30_000,
 };
 
-export interface SupervisorStartOpts extends BaseStartOpts {
-  /**
-   * User's display timezone (IANA) - threaded into the reflection
-   * unit's day-gate. Null falls back to UTC server-side. Live-
-   * updated via `setTimezone()` so a Settings edit reaches the
-   * worker without a restart.
-   */
-  timezone: string | null;
-}
-
-class SupervisorManager extends BaseWorkerManager<SupervisorStartOpts> {
+class SupervisorManager extends BaseWorkerManager<BaseStartOpts> {
   protected readonly lockName = 'nak:supervisor-worker';
   protected readonly loggerSource = 'supervisor-worker';
 
@@ -64,32 +61,19 @@ class SupervisorManager extends BaseWorkerManager<SupervisorStartOpts> {
     });
   }
 
-  protected buildStartPayload(opts: SupervisorStartOpts, session: Session): Record<string, unknown> {
+  protected buildStartPayload(opts: BaseStartOpts, session: Session): Record<string, unknown> {
     return {
       supabaseUrl: opts.config.supabaseUrl,
       supabasePublishableKey: opts.config.supabasePublishableKey,
       accessToken: session.access_token,
       refreshToken: session.refresh_token,
       userId: session.user.id,
-      reflectionModel: agentModel('reflection').id,
       summaryModel: agentModel('summary').id,
       topicsModel: agentModel('topics').id,
       memoryTopicsModel: agentModel('memoryTopics').id,
       recipeTopicsModel: agentModel('recipeTopics').id,
-      timezone: opts.timezone,
       ...WORKER_DEFAULTS,
     };
-  }
-
-  /**
-   * Live-update the worker's timezone without a restart. Mirrors
-   * `wikiManager.setTimezone`. The worker reads the next value off
-   * its holder cell on every cycle, so the day-gate moves with the
-   * user's Settings edit.
-   */
-  setTimezone(timezone: string | null): void {
-    if (!this.worker) return;
-    this.worker.postMessage({ type: 'timezone', timezone });
   }
 }
 

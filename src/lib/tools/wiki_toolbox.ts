@@ -1,7 +1,7 @@
 /**
  * Toolbox for the autonomous wiki agent. Factored out of
- * `./index.ts` into its own leaf file for the same reason
- * `memory_toolbox.ts` exists - importing `./index.ts` from a worker
+ * `./index.ts` into its own leaf file for the same reason the other
+ * agent-toolbox leaf files are - importing `./index.ts` from a worker
  * bundle transitively pulls in `research_docs` and other chat-only
  * tools, blowing up the worker build.
  *

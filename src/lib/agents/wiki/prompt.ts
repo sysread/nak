@@ -13,7 +13,8 @@
  * a messages array whose prefix IS the original conversation - the
  * model sees itself as the prior assistant, which is a better angle
  * for spotting topical content worth committing than reading a
- * third-party transcript. Same idiom as REFLECTION_PROMPT.
+ * third-party transcript. Same "now switch tasks" idiom the other
+ * background-agent prompts use.
  *
  * Framing layers:
  *   - Discarded reply: the value is the side effects (wiki_*

@@ -67,13 +67,14 @@ a thread is worth opening without fetching full message history.
   overwrites `summary` rather than appending.
 - **`threads.summary_claim_holder`** +
   **`threads.summary_claim_expires`** — per-row claim for
-  cross-device coordination. Same shape as reflection and
-  embeddings claim columns; partial index on
+  cross-device coordination. Same shape as the embeddings
+  claim columns; partial index on
   `summary_claim_holder is not null` keeps it tiny in steady
   state.
 - **`worker_leases` row** — `worker_kind='summary'`. Partitioned
-  from the `'reflection'` and `'embedding'` leases so a device
-  can hold all three concurrently.
+  from the `'embedding'` lease so a device can hold both
+  concurrently. Reflection does not use a `worker_leases` row;
+  its mutual exclusion is the per-thread claim RPC.
 - **`clear_thread_embedding_on_change` trigger** — fires on
   UPDATE when `title` or `summary` changes; nulls the
   `embedding` + `embedding_model` + embed claim columns. Ensures
@@ -168,6 +169,7 @@ a thread is worth opening without fetching full message history.
   summary to produce the search vector.
 - `./conversation-recall.md` — the primary consumer of
   summaries.
-- `./memory.md` — sibling background loop (reflection),
-  same plumbing shape.
+- `./memory.md` — reflection, the memory-write counterpart;
+  server-side rather than browser-side, but uses the same
+  per-row claim-RPC pattern on `threads`.
 - `./architecture.md` — the worker model in context.

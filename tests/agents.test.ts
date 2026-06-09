@@ -1,10 +1,11 @@
 /**
  * Contract tests for the `Agent` interface.
  *
- * There are no concrete agents to test yet — the memory-reflection
- * agent is queued behind a design conversation about cross-device
- * lease coordination. What we CAN verify here is that the interface
- * itself is usable:
+ * The interface backs the supervised browser agents (summary, topics,
+ * memory_topics, recipe_topics). This file is the sentinel on the
+ * shared contract itself, driven by a trivial in-memory witness rather
+ * than any one production agent. What we verify here is that the
+ * interface stays usable:
  *
  *   1. A trivial in-memory implementation assigns cleanly to
  *      `Agent<Req, Res>` with narrowed generics — if the interface
@@ -23,8 +24,37 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import type { Agent, AgentRunRequest, AgentRunResult } from '../src/lib/agents/types';
-import { memoryToolbox, executeToolboxCall, type ToolContext } from '../src/lib/tools';
+import { executeToolboxCall, type ToolContext, type Toolbox } from '../src/lib/tools';
 import type { SupabaseService } from '../src/lib/supabase';
+
+/**
+ * Minimal inline toolbox so the contract witness doesn't couple to any
+ * production toolbox's composition (those churn as agents migrate
+ * server-side). The single memory_create tool routes to
+ * SupabaseService.createMemory exactly as the real tool does, including
+ * passing the absent `confidence` through as undefined, so the spy
+ * assertion below stays meaningful.
+ */
+const ECHO_TOOLBOX: Toolbox = {
+  name: 'echo-toolbox',
+  description: 'single create tool for the contract witness',
+  tools: [
+    {
+      name: 'memory_create',
+      description: 'create a memory',
+      shortDescription: 'create',
+      parameters: {},
+      execute: (args: Record<string, unknown>, ctx: ToolContext) =>
+        (ctx.supabase as unknown as {
+          createMemory: (l: string, d: string, c?: number) => Promise<unknown>;
+        }).createMemory(
+          args.label as string,
+          args.data as string,
+          args.confidence as number | undefined,
+        ),
+    },
+  ],
+};
 
 /**
  * A minimal concrete agent used only by these tests. It's deliberately
@@ -46,7 +76,7 @@ interface EchoResponse {
 class EchoAgent implements Agent<EchoRequest, EchoResponse> {
   readonly name = 'echo';
   readonly model = 'venice-test-model';
-  readonly toolbox = memoryToolbox;
+  readonly toolbox = ECHO_TOOLBOX;
 
   constructor(private supabase: SupabaseService) {}
 
@@ -121,7 +151,7 @@ describe('Agent interface — EchoAgent as contract witness', () => {
     const agent = new EchoAgent(mockSupabase().svc);
     expect(agent.name).toBe('echo');
     expect(agent.model).toBe('venice-test-model');
-    expect(agent.toolbox).toBe(memoryToolbox);
+    expect(agent.toolbox).toBe(ECHO_TOOLBOX);
   });
 
   it('run() returns a typed result on the happy path with toolCalls counted', async () => {
