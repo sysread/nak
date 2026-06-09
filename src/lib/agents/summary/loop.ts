@@ -4,7 +4,7 @@
  * supervisor owns the sleep policy for the whole supervised batch, so
  * this module just reports what happened. Factoring the state machine
  * out keeps it unit-testable without a Web Worker runtime, and mirrors
- * the sibling unit loops (`../wiki/loop.ts`, `../topics/loop.ts`)
+ * the sibling unit loops (`../topics/loop.ts`, `../auto_title/loop.ts`)
  * deliberately - they share the lease-acquire -> claim -> work -> save
  * progression, so reading one gives you the others' vocabulary.
  *

@@ -126,9 +126,10 @@ const samskara = lazyManager(() =>
 const bias = lazyManager(() =>
   import('./agents/bias/manager').then((m) => m.biasManager)
 );
-const wiki = lazyManager(() =>
-  import('./agents/wiki/manager').then((m) => m.wikiManager)
-);
+// The autonomous wiki agent is no longer a worker here: it runs
+// server-side on a pg_cron schedule against the venice edge function
+// (/wiki-sweep; see docs/dev/wiki.md). The librarian below is still a
+// browser worker pending its own fleet migration.
 const wikiLibrarian = lazyManager(() =>
   import('./agents/wiki-librarian/manager').then((m) => m.wikiLibrarianManager)
 );
@@ -218,10 +219,12 @@ interface AppState {
    */
   notifyOnComplete: boolean;
   /**
-   * User wiki feature: background wiki worker runs unless this is
-   * explicitly false. Seeded to true on activate() so a brand-new
-   * account gets wiki entries out of the box; overwritten from
-   * Supabase `profiles.settings.wikiAutomaticEnabled` on unlock.
+   * User wiki feature: the server-side wiki sweep processes this
+   * user's threads unless this is explicitly false (the cron sweep's
+   * claim predicate reads the persisted form per candidate thread).
+   * Seeded to true on activate() so a brand-new account gets wiki
+   * entries out of the box; overwritten from Supabase
+   * `profiles.settings.wikiAutomaticEnabled` on unlock.
    */
   wikiAutomaticEnabled: boolean;
   /**
@@ -243,10 +246,11 @@ interface AppState {
   memoryLibrarianEnabled: boolean;
   /**
    * IANA timezone the model sees when reasoning about "what time is
-   * it for the user" in the per-turn metadata system message; also
-   * used by the wiki worker to bucket day-eligible threads. Seeded
-   * from the browser's detected zone on activate() so a first-time
-   * user lands on sensible defaults; overwritten from Supabase
+   * it for the user" in the per-turn metadata system message; the
+   * persisted form is also what the server-side day-gated agents
+   * (reflection, wiki) bucket eligibility against. Seeded from the
+   * browser's detected zone on activate() so a first-time user lands
+   * on sensible defaults; overwritten from Supabase
    * `profiles.settings.displayTimezone` on unlock.
    */
   displayTimezone: string;
@@ -339,12 +343,13 @@ function setNotifyOnComplete(enabled: boolean): void {
 }
 
 /**
- * Apply the display name in memory and live-update the wiki workers
- * so the next background article uses the new name without a worker
+ * Apply the display name in memory and live-update the wiki librarian
+ * worker so the next background run uses the new name without a worker
  * restart. Empty string is "not set" - the chat-loop's per-turn
  * metadata builder treats it the same as absent. The prompt builder
  * suppresses the "About the user" block when both this and
- * userLocation are empty.
+ * userLocation are empty. (The autonomous wiki agent reads the same
+ * settings server-side per run, so it needs no live push.)
  *
  * Does NOT persist. The settings-load path uses this directly (the
  * value just came back from Supabase, so persisting it again would
@@ -353,59 +358,44 @@ function setNotifyOnComplete(enabled: boolean): void {
  */
 function setUserName(name: string): void {
   app.userName = name;
-  wiki.whenLoaded((m) => m.setProfile(name, app.userLocation));
   wikiLibrarian.whenLoaded((m) => m.setProfile(name, app.userLocation));
 }
 
 /**
  * Apply the user's location in memory and live-update the wiki
- * workers. Empty string is "not set". Does NOT persist - same split
- * as `setUserName`: the settings-load path uses this directly,
- * user-driven changes route through `persistUserLocation`.
+ * librarian worker. Empty string is "not set". Does NOT persist -
+ * same split as `setUserName`: the settings-load path uses this
+ * directly, user-driven changes route through `persistUserLocation`.
  */
 function setUserLocation(location: string): void {
   app.userLocation = location;
-  wiki.whenLoaded((m) => m.setProfile(app.userName, location));
   wikiLibrarian.whenLoaded((m) => m.setProfile(app.userName, location));
 }
 
 /**
- * Apply the display timezone in memory and push the new zone to the
- * wiki worker so it starts bucketing on the right days immediately.
- * Does NOT persist; user-driven changes route through
- * `persistDisplayTimezone`. Caller is responsible for normalizing
- * user-supplied input to a valid IANA name first.
+ * Apply the display timezone in memory. Does NOT persist; user-driven
+ * changes route through `persistDisplayTimezone`. Caller is
+ * responsible for normalizing user-supplied input to a valid IANA
+ * name first.
  *
- * Only the wiki worker still needs a live timezone push: it owns the
- * one remaining browser-side day-gate. Reflection's day-gate moved
- * server-side (it reads profiles.settings.displayTimezone directly),
- * so the supervisor no longer takes a timezone.
+ * No live worker push remains: both day-gated agents (reflection,
+ * wiki) read profiles.settings.displayTimezone server-side, so the
+ * persisted setting is the only consumer.
  */
 function setDisplayTimezone(tz: string): void {
   app.displayTimezone = tz;
-  wiki.whenLoaded((m) => m.setTimezone(tz || null));
 }
 
 /**
- * Flip the background wiki worker on/off in the current session.
- * The toggle is the live switch, not a passive preference. Does
- * NOT persist; user-driven changes from Settings.svelte route
+ * Flip the in-memory "automatic wiki updates" flag. The live switch
+ * is the persisted setting: the server-side wiki sweep's claim
+ * predicate reads profiles.settings.wikiAutomaticEnabled per
+ * candidate thread, so there is no worker to start or stop here.
+ * Does NOT persist; user-driven changes from Settings.svelte route
  * through `persistWikiAutomaticEnabled`.
  */
 function setWikiAutomaticEnabled(enabled: boolean): void {
   app.wikiAutomaticEnabled = enabled;
-  if (!app.supabase || !app.config) return;
-  if (enabled) {
-    wiki.start({
-      supabase: app.supabase,
-      config: app.config,
-      timezone: app.displayTimezone || null,
-      userName: app.userName,
-      userLocation: app.userLocation,
-    });
-  } else {
-    wiki.stop();
-  }
 }
 
 /**
@@ -773,10 +763,10 @@ function startBackgroundWorkers(config: AppConfig): void {
   // unlock / sign-in will call `activate()` again.
   //
   // The workers run concurrently and partition the shared
-  // `worker_leases` table on `worker_kind` ('reflection' / 'summary' /
-  // 'topics' / 'memory-topics' / 'recipe-topics' /
-  // 'auto_title' / 'samskara' / 'wiki') so one device can hold every
-  // lease simultaneously without contention. The summary worker feeds
+  // `worker_leases` table on `worker_kind` ('summary' / 'topics' /
+  // 'memory-topics' / 'recipe-topics' / 'auto_title' / 'samskara')
+  // so one device can hold every lease simultaneously without
+  // contention. The summary worker feeds
   // the drawer's search feature - it writes `threads.summary`, which the
   // server-side cron backfill then picks up to build the searchable
   // vector (see docs/dev/embeddings.md).
@@ -801,15 +791,10 @@ function startBackgroundWorkers(config: AppConfig): void {
   // patterns" block when biases clear a tier. See
   // docs/dev/bias-profile.md.
   bias.start({ supabase: app.supabase, config });
-  if (app.wikiAutomaticEnabled) {
-    wiki.start({
-      supabase: app.supabase,
-      config,
-      timezone: app.displayTimezone || null,
-      userName: app.userName,
-      userLocation: app.userLocation,
-    });
-  }
+  // The autonomous wiki agent has no browser worker to start: the
+  // server-side cron sweep reads app.wikiAutomaticEnabled's persisted
+  // form (profiles.settings.wikiAutomaticEnabled) per candidate
+  // thread, so the Settings toggle gates it without any wiring here.
   if (app.wikiLibrarianEnabled) {
     wikiLibrarian.start({
       supabase: app.supabase,
@@ -914,7 +899,6 @@ function stopBackgroundWorkers(): void {
   supervisor.stop();
   samskara.stop();
   bias.stop();
-  wiki.stop();
   wikiLibrarian.stop();
   deepSleep.stop();
   rem.stop();

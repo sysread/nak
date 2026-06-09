@@ -125,10 +125,10 @@ import { docDeleteSchema } from './doc_delete.schema';
 import { generateImageSchema } from './generate_image.schema';
 
 // `lazyTool` lives in `./lazy.ts` so the agent-toolbox files
-// (`./memory_librarian_toolbox`, `./wiki_toolbox`,
-// `./wiki_librarian_toolbox`) can use it too. With every consumer
-// going through the lazy path, Vite emits one chunk per impl module
-// regardless of which toolbox dispatches into it.
+// (`./memory_librarian_toolbox`, `./wiki_librarian_toolbox`) can use
+// it too. With every consumer going through the lazy path, Vite emits
+// one chunk per impl module regardless of which toolbox dispatches
+// into it.
 import { lazyTool } from './lazy';
 
 // `serverSideTool` wraps a schema into a ToolDef whose execute() throws
@@ -509,7 +509,7 @@ export const GATED_TOOLBOX_META: readonly ToolboxMeta[] = GATED_TOOLBOXES.map(
 /**
  * Flat, deduped view of every tool reachable from the main chat
  * model - i.e. every tool across `TOOLBOXES`. Does NOT include
- * agent-only toolboxes (`memoryLibrarianToolbox`, `wikiToolbox`,
+ * agent-only toolboxes (`memoryLibrarianToolbox`,
  * `wikiLibrarianToolbox`) - those are addressed by toolbox
  * directly. Exposed for test assertions and any future UI that
  * wants to inventory the full catalog; the wire builder

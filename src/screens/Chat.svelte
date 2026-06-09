@@ -166,7 +166,7 @@
     wikiStore,
     runWikiSearch,
   } from '$lib/wiki-store.svelte';
-  import { onWikiChange } from '$lib/wiki-events';
+  import { onWikiChange, emitWikiChange } from '$lib/wiki-events';
   import {
     documentStore,
     runDocumentSearch,
@@ -1802,6 +1802,19 @@
   $effect(() => {
     if (!app.supabase || !session) return;
     return app.supabase.subscribeToUserLogs(session.user.id, appendFromEdge);
+  });
+
+  // Realtime: relay server-side wiki writes into the window-level
+  // wiki-change event bus. The autonomous wiki agent runs in the
+  // venice function (cron-driven sweep), where emitWikiChange is
+  // unreachable - this subscription is how an open Wiki panel learns
+  // a background article write landed. Browser-side writers (the Wiki
+  // UI, the librarian's tools) still fire the bus directly; their
+  // own DB writes ALSO echo back through this subscription, which is
+  // harmless - consumers refetch idempotently.
+  $effect(() => {
+    if (!app.supabase || !session) return;
+    return app.supabase.subscribeToWikiArticleChanges(session.user.id, emitWikiChange);
   });
 
   // Inline title rename state.

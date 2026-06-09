@@ -45,7 +45,7 @@ export const wikiDelete: ToolDef = {
           message,
         });
       } catch {
-        // best-effort; see the matching comment in wiki_create.ts.
+        // best-effort; a failed changelog write must not undo the delete.
       }
     }
     emitWikiChange();

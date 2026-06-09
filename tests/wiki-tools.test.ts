@@ -1,16 +1,17 @@
 /**
- * Unit coverage for the wiki source-attribution path. The autonomous
- * agent's wiki_create / wiki_update tools attach the current thread
- * to wiki_article_sources automatically; the librarian's wiki_update
- * accepts a `source_thread_ids` parameter and validates each id
- * against the threads table before attaching.
+ * Unit coverage for the browser wiki_update tool's source-attribution
+ * path - the one wiki write impl still dispatched browser-side (by
+ * the wiki librarian; the autonomous agent's create/update/delete run
+ * server-side in the venice function now, with their own port of this
+ * logic). The librarian's wiki_update accepts a `source_thread_ids`
+ * parameter and validates each id against the threads table before
+ * attaching; a non-empty ctx.threadId is trusted directly.
  *
  * These tests stub SupabaseService at the method surface so the
  * actual DB never gets hit; they exist to lock down the dispatch
- * choices each tool makes given its ctx.threadId + args shape.
+ * choices the tool makes given its ctx.threadId + args shape.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { wikiCreate } from '../src/lib/tools/wiki_create';
 import { wikiUpdate } from '../src/lib/tools/wiki_update';
 import type { ToolContext } from '../src/lib/tools/types';
 import type { SupabaseService, WikiArticle } from '../src/lib/supabase';
@@ -26,7 +27,6 @@ function fakeArticle(id: string, content = 'body'): WikiArticle {
 }
 
 interface Spies {
-  createWikiArticle: ReturnType<typeof vi.fn>;
   updateWikiArticle: ReturnType<typeof vi.fn>;
   attachWikiArticleSources: ReturnType<typeof vi.fn>;
   findExistingThreadIds: ReturnType<typeof vi.fn>;
@@ -38,9 +38,6 @@ function mockSupabase(opts: { knownThreadIds?: string[] } = {}): {
 } {
   const known = new Set(opts.knownThreadIds ?? []);
   const spies: Spies = {
-    createWikiArticle: vi.fn(async (args: { title: string; content: string }) =>
-      fakeArticle('art-new', args.content)
-    ),
     updateWikiArticle: vi.fn(async (id: string) => fakeArticle(id)),
     attachWikiArticleSources: vi.fn(async () => undefined),
     findExistingThreadIds: vi.fn(async (ids: readonly string[]) => {
@@ -49,7 +46,7 @@ function mockSupabase(opts: { knownThreadIds?: string[] } = {}): {
       return out;
     }),
   };
-  // A minimal shape adequate for the wiki tools' surface; cast through
+  // A minimal shape adequate for the wiki tool's surface; cast through
   // unknown to satisfy the SupabaseService interface without stubbing
   // every method.
   const svc = spies as unknown as SupabaseService;
@@ -65,48 +62,8 @@ function ctxFor(svc: SupabaseService, threadId: string): ToolContext {
   };
 }
 
-describe('wiki_create source attribution', () => {
-  it('autonomous: attaches ctx.threadId after a successful create', async () => {
-    const { svc, spies } = mockSupabase();
-    const ctx = ctxFor(svc, 'thread-abc');
-    const result = await wikiCreate.execute(
-      { title: 'Foo', content: 'Hello world.', message: 'add Foo' },
-      ctx
-    );
-    expect(spies.createWikiArticle).toHaveBeenCalledTimes(1);
-    expect(spies.attachWikiArticleSources).toHaveBeenCalledTimes(1);
-    expect(spies.attachWikiArticleSources).toHaveBeenCalledWith('art-new', [
-      'thread-abc',
-    ]);
-    expect((result as WikiArticle).id).toBe('art-new');
-  });
-
-  it('skips the attach when ctx.threadId is empty (would never happen via the agent, but is the right no-op)', async () => {
-    const { svc, spies } = mockSupabase();
-    const ctx = ctxFor(svc, '');
-    await wikiCreate.execute(
-      { title: 'Foo', content: 'body', message: 'add Foo' },
-      ctx
-    );
-    expect(spies.attachWikiArticleSources).not.toHaveBeenCalled();
-  });
-
-  it('returns the article even if the attach throws (best-effort secondary write)', async () => {
-    const { svc, spies } = mockSupabase();
-    spies.attachWikiArticleSources.mockImplementation(async () => {
-      throw new Error('rls denied');
-    });
-    const ctx = ctxFor(svc, 'thread-abc');
-    const result = await wikiCreate.execute(
-      { title: 'Foo', content: 'body', message: 'add Foo' },
-      ctx
-    );
-    expect((result as WikiArticle).id).toBe('art-new');
-  });
-});
-
 describe('wiki_update source attribution', () => {
-  it('autonomous: attaches ctx.threadId after a successful update', async () => {
+  it('attaches a non-empty ctx.threadId after a successful update', async () => {
     const { svc, spies } = mockSupabase();
     const ctx = ctxFor(svc, 'thread-abc');
     await wikiUpdate.execute(
@@ -160,10 +117,10 @@ describe('wiki_update source attribution', () => {
     expect(spies.attachWikiArticleSources).not.toHaveBeenCalled();
   });
 
-  it('autonomous + librarian-style param: combines ctx.threadId with validated ids', async () => {
-    // Defensive shape: an autonomous-run wiki_update where the model also
+  it('combines a non-empty ctx.threadId with validated source_thread_ids', async () => {
+    // Defensive shape: a thread-scoped wiki_update where the model also
     // happens to pass source_thread_ids. The tool should merge ctx.threadId
-    // with the validated ids; we trust the autonomous thread directly,
+    // with the validated ids; we trust the ctx thread directly,
     // we validate the model-supplied ids.
     const { svc, spies } = mockSupabase({ knownThreadIds: ['t-extra'] });
     const ctx = ctxFor(svc, 'thread-abc');
@@ -213,16 +170,9 @@ describe('wiki_update source attribution', () => {
 });
 
 describe('wiki prompts: no inline-citation guidance', () => {
-  it('autonomous prompt does not mention ?cid= or markdown citation syntax', async () => {
-    const { buildWikiAutonomousPrompt } = await import(
-      '../src/lib/agents/wiki/prompt'
-    );
-    const prompt = buildWikiAutonomousPrompt({ userProfile: null });
-    expect(prompt).not.toContain('?cid=');
-    expect(prompt).not.toContain('[label](?cid');
-    expect(prompt).not.toContain('source-conversation link');
-  });
-
+  // The autonomous prompt's twin assertion lives in the Deno suite
+  // (supabase/functions/tests/wiki.test.ts) - that prompt moved
+  // server-side with its agent.
   it('librarian prompt advertises source_thread_ids instead of inline citations', async () => {
     const { buildWikiLibrarianPrompt } = await import(
       '../src/lib/agents/wiki-librarian/prompt'

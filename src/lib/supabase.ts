@@ -734,6 +734,19 @@ export interface WikiChangelogEntry {
   created_at: string;
 }
 
+/**
+ * Outcome of a server-side wiki retry (the venice function's
+ * /wiki-retry route; see retryWikiThread below). Mirror of the
+ * function's WikiRetryResult union. `toolCalls` can legitimately be
+ * zero - the agent is prompted to skip rather than fabricate edits -
+ * so the Skipped panel surfaces the count instead of assuming a
+ * cleared skip means new changelog rows.
+ */
+export type WikiRetryResult =
+  | { kind: 'ok'; terminalMsgId: string; toolCalls: number; reasoning: string }
+  | { kind: 'no-op'; reason: string }
+  | { kind: 'error'; error: string };
+
 function coerceWikiChangelogKind(raw: unknown): WikiChangelogKind | null {
   if (raw === 'create' || raw === 'update' || raw === 'delete') return raw;
   return null;
@@ -4256,119 +4269,6 @@ export class SupabaseService {
   }
 
   /**
-   * Claim the oldest thread eligible for the wiki agent.
-   *   (1) The eligibility predicate gates on the newest message's
-   *       calendar day in the user's tz being strictly before today
-   *       (the "next-day" rule the spec asks for).
-   *   (2) The lateral that finds the bucket key reads
-   *       `messages.created_at` directly rather than
-   *       `threads.updated_at`, so a future bump to threads.updated_at
-   *       from an unrelated write can't shift the gate.
-   * Returns null when the queue is empty.
-   */
-  async claimNextThreadForWiki(
-    holderId: string,
-    ttlSeconds: number,
-    timezone: string | null
-  ): Promise<{
-    threadId: string;
-    terminalMsgId: string;
-    title: string | null;
-    /** ISO 8601 timestamp of the newest message in the claimed thread. */
-    newestMsgAt: string;
-  } | null> {
-    const { data, error } = await this.client.rpc('claim_next_thread_for_wiki', {
-      p_holder_id: holderId,
-      p_ttl_seconds: ttlSeconds,
-      // Null-coerce - PostgREST passes explicit nulls through, and
-      // `at time zone null` returns null which would null out the
-      // WHERE predicate.
-      p_timezone: timezone ?? 'UTC',
-    });
-    if (error) throw new SupabaseError(error.message);
-    const rows = (data ?? []) as {
-      thread_id: string;
-      terminal_msg_id: string;
-      title: string | null;
-      newest_msg_at: string;
-    }[];
-    if (rows.length === 0) return null;
-    return {
-      threadId: rows[0].thread_id,
-      terminalMsgId: rows[0].terminal_msg_id,
-      title: rows[0].title ?? null,
-      newestMsgAt: rows[0].newest_msg_at,
-    };
-  }
-
-  /**
-   * Advance `threads.last_wiki_processed_msg_id` to `msgId` IF our
-   * claim is still ours. Returns false on claim-lost; caller drops
-   * the cycle. Called unconditionally after every agent run so a
-   * no-op cycle (agent decided no topic warranted a wiki update)
-   * still advances the pointer past the terminal message.
-   */
-  async markThreadWikiProcessedIfClaimed(
-    threadId: string,
-    holderId: string,
-    msgId: string
-  ): Promise<boolean> {
-    const { data, error } = await this.client.rpc(
-      'mark_thread_wiki_processed_if_claimed',
-      {
-        p_thread_id: threadId,
-        p_holder_id: holderId,
-        p_msg_id: msgId,
-      }
-    );
-    if (error) throw new SupabaseError(error.message);
-    return data === true;
-  }
-
-  /**
-   * Record an agent failure against the claimed wiki thread. Atomic
-   * increment + branch in SQL so a multi-device race can't double-
-   * count or end up with a half-applied skip. See the function header
-   * in schema.sql for the full state-transition table; the short
-   * version is "increment under claim, then either release for retry
-   * or advance the pointer to give up".
-   *
-   * - 'released': failure count below threshold; claim cleared so the
-   *   next cycle re-claims promptly.
-   * - 'skipped': failure count reached the threshold; pointer advanced
-   *   to msgId, counter reset, claim cleared. Conversation rejoins the
-   *   queue only when a new turn changes the terminal message.
-   * - 'claim-lost': the claim was no longer ours (TTL lapsed or another
-   *   device took over). Caller treats as a normal claim-lost.
-   */
-  async recordWikiFailureOrSkip(
-    threadId: string,
-    holderId: string,
-    msgId: string,
-    maxFailures: number,
-    reason: string | null
-  ): Promise<'released' | 'skipped' | 'claim-lost'> {
-    const { data, error } = await this.client.rpc(
-      'record_wiki_failure_or_skip',
-      {
-        p_thread_id: threadId,
-        p_holder_id: holderId,
-        p_msg_id: msgId,
-        p_max_failures: maxFailures,
-        p_reason: reason,
-      }
-    );
-    if (error) throw new SupabaseError(error.message);
-    if (data === 'released' || data === 'skipped' || data === 'claim-lost') {
-      return data;
-    }
-    // Defensive: unrecognised return from the RPC. Treat as released
-    // so the thread re-enters the queue rather than stays orphaned
-    // under a stale claim.
-    return 'released';
-  }
-
-  /**
    * List the user's wiki-skipped threads, most recent first. The
    * Wiki tab's Skipped panel renders this; a row drops off the list
    * automatically when the next successful wiki run on that thread
@@ -4400,39 +4300,39 @@ export class SupabaseService {
   }
 
   /**
-   * Resolve the "terminal assistant message" id the worker would pin
-   * against a given thread. The Skipped panel's Retry button uses
-   * this to feed the inline wiki-agent run with the same anchor the
-   * background worker would have chosen. Returns null when the
-   * thread has no eligible assistant message - the caller should
-   * surface a no-op rather than calling the agent with a null id.
+   * Ask the venice function to re-run the wiki agent against one
+   * skipped thread (the Skipped panel's Retry button). The whole
+   * claim-free retry cycle - terminal-message resolution, the agent's
+   * tool loop with the content-filter fallback, the pointer advance
+   * that clears the skip marker - runs server-side; this is a thin
+   * authenticated POST. Agent-level failures come back as
+   * `kind: 'error'` in the union (an application outcome, not a
+   * transport error); only transport/auth failures throw.
    */
-  async computeWikiTerminalMsgId(threadId: string): Promise<string | null> {
-    const { data, error } = await this.client.rpc(
-      'compute_wiki_terminal_msg_id',
-      { p_thread_id: threadId }
-    );
-    if (error) throw new SupabaseError(error.message);
-    if (typeof data === 'string' && data.length > 0) return data;
-    return null;
-  }
-
-  /**
-   * Advance the wiki pointer + clear the skip marker from outside
-   * the worker's claim protocol. Called by the Skipped panel's
-   * Retry button after a successful inline agent run. RLS scopes
-   * the underlying RPC to the caller's own threads, so this is
-   * safe to expose to the UI directly.
-   */
-  async manualAdvanceWikiPointer(
-    threadId: string,
-    msgId: string
-  ): Promise<void> {
-    const { error } = await this.client.rpc('manual_advance_wiki_pointer', {
-      p_thread_id: threadId,
-      p_msg_id: msgId,
+  async retryWikiThread(threadId: string): Promise<WikiRetryResult> {
+    const { data, error } = await this.client.functions.invoke('venice/wiki-retry', {
+      body: { threadId },
     });
-    if (error) throw new SupabaseError(error.message);
+    if (error) throw await veniceFunctionError(error);
+    const result = data as Partial<WikiRetryResult> | null;
+    // Boundary validation: the function returns the union below; an
+    // unrecognised shape collapses to an error result rather than
+    // letting a malformed payload masquerade as success.
+    if (result && result.kind === 'ok' && typeof result.terminalMsgId === 'string') {
+      return {
+        kind: 'ok',
+        terminalMsgId: result.terminalMsgId,
+        toolCalls: typeof result.toolCalls === 'number' ? result.toolCalls : 0,
+        reasoning: typeof result.reasoning === 'string' ? result.reasoning : '(none)',
+      };
+    }
+    if (result && result.kind === 'no-op' && typeof result.reason === 'string') {
+      return { kind: 'no-op', reason: result.reason };
+    }
+    if (result && result.kind === 'error' && typeof result.error === 'string') {
+      return { kind: 'error', error: result.error };
+    }
+    return { kind: 'error', error: 'wiki-retry returned an unrecognised response' };
   }
 
   /**
@@ -6143,6 +6043,41 @@ export class SupabaseService {
       .subscribe((status, err) => {
         log.debug(`logs channel subscribe status: ${status}`, err ?? '');
       });
+    return () => {
+      void this.client.removeChannel(channel);
+    };
+  }
+
+  /**
+   * Subscribe to any change on the signed-in user's wiki articles.
+   * The autonomous wiki agent writes articles server-side (the
+   * cron-driven sweep), where the browser's emitWikiChange event bus
+   * is unreachable - this replication-stream subscription is how an
+   * open Wiki panel learns a background write landed. The caller
+   * (Chat.svelte) routes the notification into emitWikiChange so
+   * every existing wiki surface refetches through the path it
+   * already had.
+   *
+   * Coarse on purpose: no per-event payloads, just "something
+   * changed". The wiki surfaces refetch their own lists; pushing row
+   * deltas through would duplicate their loaders for no win.
+   */
+  subscribeToWikiArticleChanges(userId: string, onChange: () => void): () => void {
+    const channel = this.client
+      .channel(`wiki_articles:${userId}`)
+      .on(
+        'postgres_changes' as never,
+        {
+          event: '*',
+          schema: 'public',
+          table: 'wiki_articles',
+          filter: `user_id=eq.${userId}`,
+        },
+        () => {
+          onChange();
+        }
+      )
+      .subscribe();
     return () => {
       void this.client.removeChannel(channel);
     };

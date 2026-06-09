@@ -15,14 +15,16 @@
    * (trimmed Venice error message) lets the user identify it without
    * opening the Logs drawer.
    *
-   * Clicking a row navigates to the underlying conversation. There is
-   * no "Retry" affordance: the eligibility predicate in
-   * `claim_next_thread_for_wiki` is gated on the terminal message id
-   * differing from the pointer, so editing the conversation (adding,
-   * removing, or modifying a turn) is what naturally re-eligibilises
-   * it. A successful next run clears the skip marker via
-   * `mark_thread_wiki_processed_if_claimed`, draining the row from
-   * this list.
+   * Clicking a row navigates to the underlying conversation. The
+   * Retry button asks the venice function (/wiki-retry) to re-run the
+   * agent against the thread immediately; a successful run clears the
+   * skip marker server-side and the row gains an inline result chip.
+   * Editing the conversation also naturally re-eligibilises the
+   * thread for the background sweep (the eligibility predicate in
+   * `claim_next_thread_for_wiki` gates on the terminal message id
+   * differing from the pointer), and a successful sweep run clears
+   * the skip marker via `mark_thread_wiki_processed_if_claimed`,
+   * draining the row from this list.
    *
    * Holds an in-memory snapshot; nothing here is persisted across
    * panel teardown, so flipping tabs and back fetches fresh.
@@ -30,7 +32,6 @@
   import { app } from '$lib/state.svelte';
   import { navigate } from '$lib/routing.svelte';
   import { onWikiChange, emitWikiChange } from '$lib/wiki-events';
-  import { WikiAgent } from '$lib/agents/wiki/agent';
   import {
     displayTitle,
     formatSkipTimestamp,
@@ -95,22 +96,13 @@
     retrying[row.threadId] = true;
     retrying = { ...retrying };
     try {
-      const session = await app.supabase.getSession();
-      if (!session) {
-        retryError[row.threadId] = 'Not signed in.';
-        retryError = { ...retryError };
-        return;
-      }
-      // Build a per-click WikiAgent on the main thread. The agent's
-      // internal primary -> fallback retry path runs identically to
-      // the worker's, so the manual button hits the uncensored
-      // fallback on a content-classifier rejection without
-      // duplicating that policy here.
-      const agent = new WikiAgent(app.supabase);
-      const result = await agent.retrySkippedThread({
-        threadId: row.threadId,
-        userId: session.user.id,
-      });
+      // The whole retry cycle runs server-side (the venice function's
+      // /wiki-retry route): terminal-message resolution, the agent's
+      // tool loop with its content-classifier fallback, and the
+      // pointer advance that clears the skip marker. This is a thin
+      // authenticated POST; the result union mirrors what the old
+      // in-browser agent returned.
+      const result = await app.supabase.retryWikiThread(row.threadId);
       if (result.kind === 'ok') {
         // Successful run. Stash the agent's tool-call count + final
         // reasoning so the row can show what actually happened
@@ -142,8 +134,8 @@
   }
 
   function dismissRow(threadId: string): void {
-    // Local-only: the skip marker was already cleared in the DB
-    // inside retrySkippedThread. Hiding it from the rendered list
+    // Local-only: the skip marker was already cleared in the DB by
+    // the server-side retry. Hiding it from the rendered list
     // is enough; on the next mount, listWikiSkippedThreads won't
     // include this thread anyway.
     dismissed[threadId] = true;
@@ -152,11 +144,11 @@
 
   $effect(() => {
     void load();
-    // The wiki-change event fires after the worker successfully
-    // processes a thread (which CAN clear a skip marker via the mark
-    // RPC). The panel doesn't get a direct signal on skip-stamping
-    // because the worker doesn't emit a wiki-change event for that
-    // case - the article store didn't change - so a stale list while
+    // The wiki-change event fires when an article row changes -
+    // direct edits in the Wiki UI, or the wiki_articles realtime
+    // subscription relaying a server-side agent write. Skip-stamping
+    // doesn't touch the articles table, so the panel gets no direct
+    // signal when the sweep adds a NEW skip row - a stale list while
     // the panel is open is possible. The fix-once-stale path is a
     // panel reopen; the cost of polling here would outweigh the
     // benefit for a low-frequency surface.
