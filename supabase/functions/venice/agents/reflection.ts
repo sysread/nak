@@ -31,8 +31,12 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createEdgeLogger } from '../../_shared/edge-log.ts';
-import type { ToolDef } from '../performToolCall.ts';
 import { readVeniceKey } from '../tools/_venice_key.ts';
+import {
+  asAgentTool,
+  loadThreadSliceUpTo,
+  MEMORY_SEARCH_WIRE_SCHEMA,
+} from './_agent_tools.ts';
 import { memorySearch } from '../tools/memory_search.ts';
 import { memoryCreate } from '../tools/memory_create.ts';
 import { memoryUpdate } from '../tools/memory_update.ts';
@@ -49,7 +53,6 @@ import {
 } from './_run.ts';
 import {
   messageToVenice,
-  type StoredMessage,
   type VeniceWireMessage,
 } from './_recall_helpers.ts';
 
@@ -82,36 +85,6 @@ const MEMORY_RELATE_MAX_NOTE_CHARS = 500;
 // memory_delete (hard erase) so a background agent can never destroy a
 // memory row on its own authority.
 // ---------------------------------------------------------------------------
-
-const MEMORY_SEARCH_WIRE_SCHEMA: AgentTool['wire'] = {
-  type: 'function',
-  function: {
-    name: 'memory_search',
-    description:
-      "Semantic search over the user's saved memories. Returns " +
-      '{id, label, data, confidence, confidence_tag, updated_at, ' +
-      'relations}[]. Empty query lists everything. Use this FIRST, ' +
-      'before writing, to find an existing memory to update instead of ' +
-      'creating a near-duplicate.',
-    parameters: {
-      type: 'object',
-      properties: {
-        query: {
-          type: 'string',
-          description:
-            'Natural-language query. Embedding match (paraphrases work). Empty/omitted lists all.',
-        },
-        limit: {
-          type: 'integer',
-          minimum: 1,
-          maximum: 100,
-          description: 'Max results (default 20, max 100).',
-        },
-      },
-      additionalProperties: false,
-    },
-  },
-};
 
 const MEMORY_CREATE_WIRE_SCHEMA: AgentTool['wire'] = {
   type: 'function',
@@ -386,30 +359,6 @@ anything that reads like a summary of what was already said.
 When you have nothing more to write, reply with a single word. The
 word is discarded — only the tool calls matter.`;
 
-/**
- * Wrap a registered server-side ToolDef as an AgentTool for the
- * reflection toolbox. The ToolDef's execute() already does the real DB
- * work scoped to ctx.userId; we just adapt the AgentToolContext shape
- * (which carries the same fields) and pin the wire schema the model
- * sees. Calling into the registered impl rather than re-implementing
- * keeps reflection's writes byte-identical to the chat-side memory
- * tools.
- */
-function asAgentTool(tool: ToolDef, wire: AgentTool['wire']): AgentTool {
-  return {
-    name: tool.name,
-    wire,
-    execute: (args, agentCtx) =>
-      tool.execute(args, {
-        adminClient: agentCtx.adminClient,
-        userId: agentCtx.userId,
-        threadId: agentCtx.threadId,
-        signal: agentCtx.signal,
-        depth: agentCtx.depth,
-      }),
-  };
-}
-
 function buildReflectionToolbox(): Toolbox {
   return {
     name: 'reflection',
@@ -424,36 +373,6 @@ function buildReflectionToolbox(): Toolbox {
       asAgentTool(memoryUnrelate, MEMORY_UNRELATE_WIRE_SCHEMA),
     ],
   };
-}
-
-/**
- * Load the thread's messages and slice at the claimed terminal message.
- * Unlike the recall helpers' loadThreadSlice (which trims back to the
- * last user turn), reflection wants everything UP TO AND INCLUDING the
- * terminal assistant message the claim was made against. Slicing at
- * terminal_msg_id means a user who raced more turns in between claim and
- * fetch doesn't change what we reflect on - the extra turns queue the
- * thread for the next cycle instead.
- *
- * No char-budget trim: matches the browser reflection agent, which sent
- * the whole slice. The day-gated queue + deepseek-v4-flash's 256k window
- * make an over-budget thread a rare corner; if it ever bites, trimming
- * is a separate follow-up, not a silent divergence introduced here.
- */
-async function loadReflectionSlice(
-  adminClient: SupabaseClient,
-  threadId: string,
-  terminalMsgId: string,
-): Promise<StoredMessage[]> {
-  const { data, error } = await adminClient
-    .from('messages')
-    .select('id, role, content, tool_calls, tool_call_id, name')
-    .eq('thread_id', threadId)
-    .order('created_at', { ascending: true });
-  if (error) throw new Error(`listMessages failed: ${error.message}`);
-  const all = (data ?? []) as StoredMessage[];
-  const idx = all.findIndex((m) => m.id === terminalMsgId);
-  return idx >= 0 ? all.slice(0, idx + 1) : all;
 }
 
 /**
@@ -532,7 +451,7 @@ export async function reflectOneThread(
     const terminalMsgId = claim.terminal_msg_id as string;
     log.info(`picked up thread ${threadId} @ msg ${terminalMsgId}`);
 
-    const slice = await loadReflectionSlice(adminClient, threadId, terminalMsgId);
+    const slice = await loadThreadSliceUpTo(adminClient, threadId, terminalMsgId);
 
     // Pathological empty thread: mark it done so the queue advances
     // rather than re-claiming the same row forever. Skip the Venice

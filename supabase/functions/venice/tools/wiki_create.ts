@@ -1,0 +1,109 @@
+// wiki_create (function-side port)
+//
+// Persist a new wiki article, attach the current thread as a source,
+// and append a changelog row. Wire schema lives in
+// src/lib/tools/wiki_create.schema.ts. Constants mirrored from
+// src/lib/wiki.ts. Auth: b-strict, explicit user_id stamp.
+//
+// Title uniqueness is enforced at the DB level (unique (user_id,
+// lower(title))). The Postgres unique-violation is detected and
+// rephrased as actionable text the agent can read, so it knows to
+// fall back to wiki_search + wiki_update instead of retrying the
+// create.
+
+import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
+import {
+  appendWikiChangelog,
+  attachWikiArticleSources,
+} from './_wiki_helpers.ts';
+
+// Mirror of MAX_WIKI_TITLE_CHARS / MAX_WIKI_CONTENT_CHARS /
+// MAX_WIKI_CHANGELOG_MESSAGE_CHARS in src/lib/wiki.ts.
+const MAX_WIKI_TITLE_CHARS = 200;
+const MAX_WIKI_CONTENT_CHARS = 16000;
+const MAX_WIKI_CHANGELOG_MESSAGE_CHARS = 200;
+
+export const wikiCreate: ToolDef = {
+  name: 'wiki_create',
+  async execute(args: Record<string, unknown>, ctx: ToolContext) {
+    const title = typeof args.title === 'string' ? args.title.trim() : '';
+    const content = typeof args.content === 'string' ? args.content : '';
+    const message = typeof args.message === 'string' ? args.message.trim() : '';
+    if (!title) throw new Error('title is required');
+    if (!content) throw new Error('content is required');
+    if (!message) throw new Error('message is required');
+    if (title.length > MAX_WIKI_TITLE_CHARS) {
+      throw new Error(
+        `title exceeds ${MAX_WIKI_TITLE_CHARS}-char limit (got ${title.length})`,
+      );
+    }
+    if (content.length > MAX_WIKI_CONTENT_CHARS) {
+      throw new Error(
+        `content exceeds ${MAX_WIKI_CONTENT_CHARS}-char limit (got ${content.length}); split or trim`,
+      );
+    }
+    if (message.length > MAX_WIKI_CHANGELOG_MESSAGE_CHARS) {
+      throw new Error(
+        `message exceeds ${MAX_WIKI_CHANGELOG_MESSAGE_CHARS}-char limit (got ${message.length})`,
+      );
+    }
+
+    // RLS OFF: user_id stamped on insert - service-role would
+    // otherwise let a row land under any owner.
+    const { data: row, error } = await ctx.adminClient
+      .from('wiki_articles')
+      .insert({ user_id: ctx.userId, title, content })
+      .select('id, title, content, created_at, updated_at')
+      .single();
+    if (error) {
+      // Unique-violation reads as code 23505 in PostgREST's error
+      // wrapper; the message form varies, so sniff both. Rephrase as
+      // agent-readable so the model flips to wiki_update without
+      // retrying the create.
+      if (
+        error.code === '23505' ||
+        /duplicate key|unique constraint|23505/i.test(error.message)
+      ) {
+        throw new Error(
+          `An article titled "${title}" already exists. Run wiki_search to find its id, then call wiki_update to integrate.`,
+        );
+      }
+      throw new Error(`createWikiArticle failed: ${error.message}`);
+    }
+    const article = row as { id: string; title: string };
+
+    // Auto-attach the current thread as a source. The autonomous wiki
+    // agent processes exactly one thread per cycle and that thread's
+    // id is in ctx.threadId. Best-effort secondary write - if it
+    // fails, the article is still created and the user just doesn't
+    // see the thread in the bibliography. Throwing here would force a
+    // duplicate-title retry, which is worse than a missing source row.
+    if (ctx.threadId) {
+      try {
+        await attachWikiArticleSources(ctx.adminClient, article.id, [ctx.threadId]);
+      } catch {
+        // best-effort; see comment above.
+      }
+    }
+
+    // Best-effort changelog. The article is already created at this
+    // point; a failure here would leave an article without a matching
+    // changelog entry, which is a smaller harm than throwing back to
+    // the agent and tempting it into a retry that would hit the
+    // unique-title constraint.
+    try {
+      await appendWikiChangelog(ctx.adminClient, ctx.userId, {
+        article_id: article.id,
+        kind: 'create',
+        title_at_change: article.title,
+        message,
+      });
+    } catch {
+      // best-effort; see comment above.
+    }
+
+    return row;
+  },
+};
+
+registerTool(wikiCreate);

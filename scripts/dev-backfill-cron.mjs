@@ -2,25 +2,31 @@
 // DEV SHIM - not used in production, not part of any deploy.
 // ===========================================================================
 //
-// Stands in for the hosted pg_cron job that drives embedding backfill.
+// Stands in for the hosted pg_cron jobs that drive the venice
+// function's scheduled routes.
 //
-// In production, supabase/schema.sql schedules `nak_trigger_embed_backfill()`
-// every 5 minutes via pg_cron; it POSTs to the venice function's /backfill
-// route through pg_net. The local Supabase stack (`mise run dev-start`) ships
-// neither pg_cron nor pg_net, so that schedule is guarded to no-op locally -
-// nothing drains the embedding queue without an open browser tab anymore (the
-// browser worker was deleted when backfill moved server-side).
+// In production, supabase/schema.sql schedules two pg_net dispatches:
+//   - `nak_trigger_embed_backfill()` every 5 minutes -> POST /backfill
+//     (drains pending embeddings server-side);
+//   - `nak_trigger_wiki_sweep()` hourly -> POST /wiki-sweep (runs the
+//     autonomous wiki agent on day-gate-eligible threads).
+// The local Supabase stack (`mise run dev-start`) ships neither pg_cron
+// nor pg_net, so those schedules are guarded to no-op locally - nothing
+// drains either queue without this shim (the browser workers that used
+// to do this work were deleted when the features moved server-side).
 //
-// This script reproduces exactly what the cron job does: every N seconds it
-// POSTs to the LOCAL /backfill route with the legacy service-role key, the same
-// call pg_net makes in prod. Run it alongside `mise run dev-start` when you want
-// the queue to drain on a cadence locally instead of hand-running the curl.
+// This script reproduces exactly what the cron jobs do: every N seconds
+// it POSTs each route on the LOCAL stack with the legacy service-role
+// key, the same call pg_net makes in prod. One shared interval for both
+// routes - prod cadences differ (5 min vs hourly) but locally you want
+// fast feedback on whichever queue you're testing, and an empty-queue
+// tick is nearly free.
 //
 // It is local-only by construction: it reads the stack endpoints from
 // `supabase status` and refuses any non-loopback API target, so a shell with
 // prod creds in the environment can never point it at the hosted project.
 //
-// See docs/dev/embeddings.md and
+// See docs/dev/embeddings.md, docs/dev/wiki.md, and
 // docs/dev/in-progress/venice-edge-functions/embeddings.md.
 // ===========================================================================
 import { runCapture } from './lib/shell.mjs';
@@ -77,40 +83,81 @@ async function readLocalStack() {
   return { apiUrl: s.API_URL.replace(/\/$/, ''), serviceRoleKey: s.SERVICE_ROLE_KEY };
 }
 
-// One cron tick: POST /backfill and report the BackfillSummary the function
-// returns. Never throws - a failed tick logs a warning and the next tick
-// retries, exactly as a fire-and-forget cron job would.
-async function tick(apiUrl, serviceRoleKey) {
-  const stamp = new Date().toISOString().slice(11, 19);
+// POST one scheduled route with the service-role bearer and return the
+// parsed JSON summary, or null on a transport/HTTP failure (already
+// logged). Never throws - a failed tick logs a warning and the next
+// tick retries, exactly as a fire-and-forget cron job would.
+async function postRoute(apiUrl, serviceRoleKey, route, stamp) {
   try {
-    const res = await fetch(`${apiUrl}/functions/v1/venice/backfill`, {
+    const res = await fetch(`${apiUrl}/functions/v1/venice/${route}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${serviceRoleKey}` },
       body: '{}',
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) {
-      warn(`[${stamp}] backfill HTTP ${res.status}: ${JSON.stringify(body)}`);
-      return;
+      warn(`[${stamp}] ${route} HTTP ${res.status}: ${JSON.stringify(body)}`);
+      return null;
     }
-    const { embedded = 0, rejected = 0, noEmbedding = 0, errors = 0, rateLimited = false } = body;
-    const headline = embedded > 0 ? style.green(`embedded ${embedded}`) : style.dim('nothing pending');
-    const extras =
-      rejected || noEmbedding || errors || rateLimited
-        ? ` (rejected ${rejected}, noEmbedding ${noEmbedding}, errors ${errors}, rateLimited ${rateLimited})`
-        : '';
-    info(`[${stamp}] ${headline}${extras}`);
+    return body;
   } catch (err) {
-    warn(`[${stamp}] tick failed: ${err.message}`);
+    warn(`[${stamp}] ${route} tick failed: ${err.message}`);
+    return null;
   }
+}
+
+// One cron tick: POST /backfill and report the BackfillSummary.
+async function tickBackfill(apiUrl, serviceRoleKey) {
+  const stamp = new Date().toISOString().slice(11, 19);
+  const body = await postRoute(apiUrl, serviceRoleKey, 'backfill', stamp);
+  if (!body) return;
+  const { embedded = 0, rejected = 0, noEmbedding = 0, errors = 0, rateLimited = false } = body;
+  const headline = embedded > 0 ? style.green(`embedded ${embedded}`) : style.dim('nothing pending');
+  const extras =
+    rejected || noEmbedding || errors || rateLimited
+      ? ` (rejected ${rejected}, noEmbedding ${noEmbedding}, errors ${errors}, rateLimited ${rateLimited})`
+      : '';
+  info(`[${stamp}] backfill: ${headline}${extras}`);
+}
+
+// One cron tick: POST /wiki-sweep and report the WikiSweepSummary.
+async function tickWikiSweep(apiUrl, serviceRoleKey) {
+  const stamp = new Date().toISOString().slice(11, 19);
+  const body = await postRoute(apiUrl, serviceRoleKey, 'wiki-sweep', stamp);
+  if (!body) return;
+  const {
+    claimed = 0,
+    processed = 0,
+    emptySlice = 0,
+    skipped = 0,
+    released = 0,
+    claimLost = 0,
+    errors = 0,
+  } = body;
+  const headline =
+    claimed > 0 ? style.green(`claimed ${claimed}, processed ${processed}`) : style.dim('nothing eligible');
+  const extras =
+    emptySlice || skipped || released || claimLost || errors
+      ? ` (emptySlice ${emptySlice}, skipped ${skipped}, released ${released}, claimLost ${claimLost}, errors ${errors})`
+      : '';
+  info(`[${stamp}] wiki-sweep: ${headline}${extras}`);
+}
+
+// Run both scheduled routes sequentially. The wiki sweep can hold the
+// connection for a while (each processed thread is a full LLM tool
+// loop), so it goes second - the cheap backfill tick isn't queued
+// behind it.
+async function tick(apiUrl, serviceRoleKey) {
+  await tickBackfill(apiUrl, serviceRoleKey);
+  await tickWikiSweep(apiUrl, serviceRoleKey);
 }
 
 async function main() {
   const intervalSeconds = parseInterval();
-  banner('Embedding backfill cron shim (DEV)');
+  banner('Venice cron shim (DEV): backfill + wiki-sweep');
   const { apiUrl, serviceRoleKey } = await readLocalStack();
   ok(`Targeting ${style.cyan(apiUrl)} every ${style.bold(intervalSeconds + 's')}. Ctrl-C to stop.`);
-  info(style.dim('Local stand-in for the hosted pg_cron job (prod runs every 5 min).'));
+  info(style.dim('Local stand-in for the hosted pg_cron jobs (prod: backfill every 5 min, wiki sweep hourly).'));
 
   // Fire once immediately so you do not wait a full interval for the first run.
   await tick(apiUrl, serviceRoleKey);
@@ -119,7 +166,7 @@ async function main() {
   const stop = () => {
     clearInterval(timer);
     console.log('');
-    ok('Backfill shim stopped.');
+    ok('Cron shim stopped.');
     process.exit(0);
   };
   process.on('SIGINT', stop);

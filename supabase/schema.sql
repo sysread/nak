@@ -6948,8 +6948,47 @@ alter table public.threads
   -- successful run alongside the rest of the per-thread state.
   add column if not exists wiki_skip_fallback_attempted boolean not null default false;
 
--- Claim the next thread eligible for wiki processing. Two notable
--- shape choices:
+-- Resolve a stored timezone preference to one Postgres will accept.
+-- The global wiki sweep below evaluates the day-gate for EVERY user
+-- inside one query; a single profile carrying a malformed
+-- displayTimezone would make `at time zone` raise and wedge the whole
+-- sweep (one bad row pins the queue for all users). The browser-era
+-- claim took the timezone as a parameter, so a bad value only ever
+-- broke its own user's claim - the global shape needs the per-row
+-- guard. Probe the value and fall back to UTC on anything Postgres
+-- rejects.
+create or replace function public.nak_safe_timezone(p_tz text)
+returns text
+language plpgsql stable as $$
+begin
+  if p_tz is null or p_tz = '' then
+    return 'UTC';
+  end if;
+  perform now() at time zone p_tz;
+  return p_tz;
+exception when others then
+  return 'UTC';
+end $$;
+
+-- Claim the next thread eligible for wiki processing, across ALL
+-- users. SECURITY DEFINER global sweep (same posture as
+-- claim_next_pending_wiki_article in the embeddings section): the
+-- caller is the venice function's /wiki-sweep route, driven by
+-- pg_cron with a service-role bearer, so there is no auth.uid() to
+-- scope by. EXECUTE is locked to service_role below. The per-user
+-- inputs the browser worker used to pass as parameters are read off
+-- the joined profile instead:
+--   - the day-gate timezone comes from settings->>'displayTimezone'
+--     (via nak_safe_timezone, UTC fallback);
+--   - the Settings "automatic wiki updates" toggle gates eligibility
+--     here (only the literal string 'false' disables - anything else,
+--     including a missing key, means enabled, matching the client's
+--     `?? true` default; a cast would let one malformed value wedge
+--     the global sweep).
+-- Returns user_id alongside the thread columns so the agent can scope
+-- its run to the owner.
+--
+-- Two notable shape choices, unchanged from the browser-era claim:
 --   (1) Eligibility uses the NEWEST message's created_at (read off a
 --       second lateral) rather than threads.updated_at. Both columns
 --       move on every insert, but reading the timestamp from messages
@@ -6969,24 +7008,30 @@ drop function if exists public.claim_next_thread_for_wiki(text, int);
 drop function if exists public.claim_next_thread_for_wiki(text, int, text);
 create or replace function public.claim_next_thread_for_wiki(
   p_holder_id text,
-  p_ttl_seconds int,
-  -- User's display timezone from Settings -> AI -> About you;
-  -- determines the calendar day the eligibility gate buckets on.
-  p_timezone text default 'UTC'
+  p_ttl_seconds int
 ) returns table (
   thread_id uuid,
+  user_id uuid,
   terminal_msg_id uuid,
   title text,
   newest_msg_at timestamptz
 )
-language sql security invoker as $$
+language sql security definer
+set search_path = public as $$
   with candidate as (
     select
       t.id as thread_id,
+      t.user_id as user_id,
       term.msg_id as terminal_msg_id,
       t.title as title,
       newest.created_at as newest_msg_at
       from public.threads t
+      inner join public.profiles p on p.user_id = t.user_id
+      cross join lateral (
+        -- One safe-timezone resolution per candidate row, shared by
+        -- both sides of the day-gate comparison below.
+        select public.nak_safe_timezone(p.settings->>'displayTimezone') as tz
+      ) usertz
       cross join lateral (
         -- Terminal-msg lateral: latest assistant row whose
         -- tool_calls is empty/null and whose
@@ -7015,7 +7060,7 @@ language sql security invoker as $$
          order by m2.created_at desc
          limit 1
       ) newest
-     where t.user_id = auth.uid()
+     where (p.settings->>'wikiAutomaticEnabled') is distinct from 'false'
        and (t.wiki_claim_expires_at is null
             or t.wiki_claim_expires_at < now())
        and (
@@ -7053,8 +7098,8 @@ language sql security invoker as $$
          --       (flag stamped true).
          (
            term.msg_id is distinct from t.last_wiki_processed_msg_id
-           and (newest.created_at at time zone p_timezone)::date
-               < (now() at time zone p_timezone)::date
+           and (newest.created_at at time zone usertz.tz)::date
+               < (now() at time zone usertz.tz)::date
          )
          or (
            t.wiki_last_skip_reason is not null
@@ -7071,8 +7116,16 @@ language sql security invoker as $$
          wiki_claim_expires_at = now() + make_interval(secs => p_ttl_seconds)
     from candidate c
    where t.id = c.thread_id
-  returning t.id as thread_id, c.terminal_msg_id, c.title, c.newest_msg_at;
+  returning t.id as thread_id, t.user_id as user_id, c.terminal_msg_id,
+            c.title, c.newest_msg_at;
 $$;
+
+-- Global sweep, owner-privileged: only the cron-driven service role
+-- may claim across users.
+revoke all on function public.claim_next_thread_for_wiki(text, int)
+  from public, anon, authenticated;
+grant execute on function public.claim_next_thread_for_wiki(text, int)
+  to service_role;
 
 -- Advance the per-thread wiki pointer IF our claim is still ours.
 -- Called after every successful agent run - even a no-op run (agent
@@ -7085,7 +7138,13 @@ drop function if exists public.mark_thread_wiki_processed_if_claimed(uuid, text,
 create or replace function public.mark_thread_wiki_processed_if_claimed(
   p_thread_id uuid,
   p_holder_id text,
-  p_msg_id uuid
+  p_msg_id uuid,
+  -- b-strict escape hatch (see claim_next_thread_for_reflection): the
+  -- venice function's wiki sweep runs with a service-role client that
+  -- has no auth.uid(), so it passes the owner id the claim returned.
+  -- security invoker stays correct because service_role bypasses RLS
+  -- and the coalesce scopes the update to one user either way.
+  p_user_id uuid default null
 ) returns boolean
 language plpgsql security invoker as $$
 declare
@@ -7108,12 +7167,16 @@ begin
          -- with content-filter would never get the fallback retry.
          wiki_skip_fallback_attempted = false
    where id = p_thread_id
-     and user_id = auth.uid()
+     and user_id = coalesce(p_user_id, auth.uid())
      and wiki_claim_holder = p_holder_id
      and wiki_claim_expires_at > now();
   get diagnostics updated = row_count;
   return updated > 0;
 end $$;
+
+grant execute on function
+  public.mark_thread_wiki_processed_if_claimed(uuid, text, uuid, uuid)
+  to service_role;
 
 -- Record an agent failure against the claimed wiki thread. The error
 -- path in loop.ts calls this instead of mark_thread_wiki_processed
@@ -7147,7 +7210,11 @@ create or replace function public.record_wiki_failure_or_skip(
   -- wiki_last_skip_reason on the skip path so the Skipped panel can
   -- render it. Ignored on the release path - in-flight failures
   -- don't warrant surfacing yet; only the final give-up does.
-  p_reason text default null
+  p_reason text default null,
+  -- b-strict escape hatch, same as the mark RPC above: null from a
+  -- browser caller (auth.uid() in scope), the thread owner's id from
+  -- the service-role wiki sweep.
+  p_user_id uuid default null
 ) returns text
 language plpgsql security invoker as $$
 declare
@@ -7156,7 +7223,7 @@ begin
   update public.threads
      set wiki_failure_count = wiki_failure_count + 1
    where id = p_thread_id
-     and user_id = auth.uid()
+     and user_id = coalesce(p_user_id, auth.uid())
      and wiki_claim_holder = p_holder_id
      and wiki_claim_expires_at > now()
   returning wiki_failure_count into v_new_count;
@@ -7198,6 +7265,10 @@ begin
   return 'released';
 end $$;
 
+grant execute on function
+  public.record_wiki_failure_or_skip(uuid, text, uuid, int, text, uuid)
+  to service_role;
+
 -- Read the user's skipped-thread list. Joined with the title for
 -- display and the newest message timestamp so the panel can sort by
 -- recency. RLS scopes to auth.uid() - the security_invoker posture
@@ -7223,22 +7294,26 @@ language sql security invoker as $$
 $$;
 
 -- Compute the same "terminal assistant message" id the worker would
--- pin against a given thread. Used by the in-panel Retry button on
--- the Skipped page, which runs the wiki agent inline against the
--- thread and needs the same msg id the worker would have picked.
--- Returns null when the thread has no assistant message with
--- non-empty content and no tool calls (the agent would have nothing
--- to anchor against).
+-- pin against a given thread. Used by the Skipped-panel Retry flow
+-- (the venice function's /wiki-retry route), which runs the wiki
+-- agent against the thread and needs the same msg id the sweep would
+-- have picked. Returns null when the thread has no assistant message
+-- with non-empty content and no tool calls (the agent would have
+-- nothing to anchor against).
 drop function if exists public.compute_wiki_terminal_msg_id(uuid);
 create or replace function public.compute_wiki_terminal_msg_id(
-  p_thread_id uuid
+  p_thread_id uuid,
+  -- b-strict escape hatch: the /wiki-retry route runs with the
+  -- service-role client and passes the gateway-validated user id;
+  -- a browser caller leaves this null and auth.uid() applies.
+  p_user_id uuid default null
 ) returns uuid
 language sql security invoker as $$
   select m.id
     from public.messages m
    inner join public.threads t on t.id = m.thread_id
    where m.thread_id = p_thread_id
-     and t.user_id = auth.uid()
+     and t.user_id = coalesce(p_user_id, auth.uid())
      and m.role = 'assistant'
      and (m.tool_calls is null
           or jsonb_typeof(m.tool_calls) <> 'array'
@@ -7249,20 +7324,25 @@ language sql security invoker as $$
    limit 1;
 $$;
 
+grant execute on function
+  public.compute_wiki_terminal_msg_id(uuid, uuid) to service_role;
+
 -- Advance the wiki pointer + clear the skip marker from outside the
--- worker's claim protocol. Used by the in-panel Retry button after a
--- successful inline agent run: the worker's mark RPC requires an
--- active claim (the worker holds one for the duration of its
--- cycle), but the manual retry doesn't go through the claim
--- protocol at all. This RPC does the equivalent state transition
--- without the claim guard - it's RLS-scoped to auth.uid()'s own
--- threads, so a user can only manually advance their own pointers.
--- No-op when the thread isn't found (e.g. a thread the user just
--- deleted while the retry was in flight).
+-- sweep's claim protocol. Used by the /wiki-retry route after a
+-- successful agent run: the sweep's mark RPC requires an active
+-- claim, but the manual retry doesn't go through the claim protocol
+-- at all. This RPC does the equivalent state transition without the
+-- claim guard - scoped to the owning user (auth.uid() or the
+-- gateway-validated id the service-role caller passes), so a user
+-- can only advance their own pointers. No-op when the thread isn't
+-- found (e.g. a thread the user just deleted while the retry was in
+-- flight).
 drop function if exists public.manual_advance_wiki_pointer(uuid, uuid);
 create or replace function public.manual_advance_wiki_pointer(
   p_thread_id uuid,
-  p_msg_id uuid
+  p_msg_id uuid,
+  -- b-strict escape hatch, same as compute_wiki_terminal_msg_id.
+  p_user_id uuid default null
 ) returns void
 language sql security invoker as $$
   update public.threads
@@ -7274,8 +7354,11 @@ language sql security invoker as $$
          wiki_last_skip_reason = null,
          wiki_skip_fallback_attempted = false
    where id = p_thread_id
-     and user_id = auth.uid();
+     and user_id = coalesce(p_user_id, auth.uid());
 $$;
+
+grant execute on function
+  public.manual_advance_wiki_pointer(uuid, uuid, uuid) to service_role;
 
 -- Embeddings pipeline RPCs for wiki articles. Same claim/save shape
 -- as memories, same 2048-dim padded vectors,
@@ -8617,6 +8700,19 @@ begin
   ) then
     alter publication supabase_realtime add table public.messages;
   end if;
+  -- wiki_articles feeds the browser's emitWikiChange refresh: the
+  -- autonomous wiki agent writes articles server-side (cron-driven, no
+  -- browser event bus to fire), so an open Wiki panel learns about
+  -- changes through a user-scoped postgres_changes subscription
+  -- instead of the old worker progress message.
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'wiki_articles'
+  ) then
+    alter publication supabase_realtime add table public.wiki_articles;
+  end if;
 end $$;
 
 -- ---------------------------------------------------------------------------
@@ -9080,6 +9176,84 @@ begin
   end if;
 exception when others then
   raise notice 'embedding backfill cron setup skipped: %', sqlerrm;
+end
+$cron$;
+
+-- ---------------------------------------------------------------------------
+-- Scheduled wiki sweep (pg_cron -> pg_net -> venice/wiki-sweep)
+--
+-- Drives the server-side autonomous wiki agent. Replaces the browser
+-- wiki Web Worker: a cron tick POSTs to the venice function's
+-- /wiki-sweep route, which claims day-gate-eligible threads across
+-- every member (claim_next_thread_for_wiki above) and runs the wiki
+-- agent's tool loop on each, bounded per invocation. Same Vault-secret
+-- custody and no-op-until-seeded behavior as the embed backfill
+-- trigger above.
+--
+-- Hourly, not every-5-minutes: wiki eligibility only changes when a
+-- user's local calendar day rolls over (plus the rare content-filter
+-- recovery re-entry), and each processed thread is an LLM tool-loop,
+-- so a tighter cadence would mostly buy empty claims. The per-tick
+-- bound lives in the function handler; the schedule resumes a long
+-- drain across ticks.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.nak_trigger_wiki_sweep()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $fn$
+declare
+  v_url text;
+  v_key text;
+begin
+  begin
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'project_url' $q$ into v_url;
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'service_role_key' $q$ into v_key;
+  exception when others then
+    return;  -- vault not installed or unreadable; nothing to dispatch
+  end;
+  if v_url is null or v_key is null then
+    return;  -- secrets not seeded yet
+  end if;
+  begin
+    execute format(
+      $q$ select net.http_post(
+            url := %L,
+            headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', %L),
+            body := '{}'::jsonb
+          ) $q$,
+      v_url || '/functions/v1/venice/wiki-sweep',
+      'Bearer ' || v_key
+    );
+  exception when others then
+    raise notice 'nak_trigger_wiki_sweep: dispatch failed: %', sqlerrm;
+  end;
+end;
+$fn$;
+
+revoke all on function public.nak_trigger_wiki_sweep() from public, anon, authenticated;
+
+do $cron$
+begin
+  if exists (select 1 from pg_available_extensions where name = 'pg_cron')
+     and exists (select 1 from pg_available_extensions where name = 'pg_net') then
+    create extension if not exists pg_cron;
+    create extension if not exists pg_net;
+    if exists (select 1 from cron.job where jobname = 'nak-wiki-sweep') then
+      perform cron.unschedule('nak-wiki-sweep');
+    end if;
+    -- Minute 7, offset from the embed backfill's */5 grid so the two
+    -- pg_net dispatches don't stack on the same tick.
+    perform cron.schedule(
+      'nak-wiki-sweep',
+      '7 * * * *',
+      $job$ select public.nak_trigger_wiki_sweep(); $job$
+    );
+  end if;
+exception when others then
+  raise notice 'wiki sweep cron setup skipped: %', sqlerrm;
 end
 $cron$;
 

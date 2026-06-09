@@ -48,6 +48,7 @@ import {
 } from '../_shared/backfill.ts';
 import { streamChannelName } from '../_shared/venice-stream.ts';
 import { getStreamingResponse } from './getStreamingResponse.ts';
+import { retryWikiThread, runWikiSweepTick } from './agents/wiki.ts';
 // Side-effect import: every tool module under ./tools/ calls
 // registerTool() at module-load via this barrel, populating the
 // performToolCall registry before the first /stream request lands.
@@ -569,6 +570,53 @@ async function handleBackfill(req: Request): Promise<Response> {
   return json(summary);
 }
 
+/**
+ * Cron-driven autonomous wiki sweep. Claims day-gate-eligible threads
+ * across every member (the claim RPC reads each user's timezone +
+ * "automatic wiki updates" toggle off their profile) and runs the
+ * wiki agent's tool loop on each. Bounded per invocation inside
+ * runWikiSweepTick; the hourly schedule resumes the drain. Runs
+ * synchronously and returns the tick summary - pg_net ignores it, but
+ * the local dev shim (scripts/dev-backfill-cron.mjs) prints it.
+ */
+async function handleWikiSweep(req: Request): Promise<Response> {
+  if (!isServiceRole(req)) return json({ error: 'forbidden' }, 403);
+
+  const admin = adminClient();
+  if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
+
+  const summary = await runWikiSweepTick(admin);
+  return json(summary);
+}
+
+/**
+ * User-triggered retry of a wiki-skipped thread (the Wiki Skipped
+ * panel's Retry button). Authenticated as the calling user; the
+ * gateway-validated id scopes every RPC the retry makes. Responds
+ * with the WikiRetryResult union - agent-level failures are an
+ * application outcome (kind: 'error'), not a transport error, so the
+ * panel can render them without sniffing status codes.
+ */
+async function handleWikiRetry(req: Request): Promise<Response> {
+  const userId = userIdFromJwt(req);
+  if (!userId) return json({ error: 'unauthorized' }, 401);
+
+  const admin = adminClient();
+  if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
+
+  let body: { threadId?: unknown };
+  try {
+    body = await req.json();
+  } catch {
+    return json({ error: 'invalid JSON body' }, 400);
+  }
+  const threadId = typeof body.threadId === 'string' ? body.threadId : '';
+  if (!threadId) return json({ error: 'threadId is required' }, 400);
+
+  const result = await retryWikiThread(admin, userId, threadId);
+  return json(result);
+}
+
 interface StreamRequestBody {
   threadId?: string;
   userMessageId?: string;
@@ -842,6 +890,8 @@ Deno.serve(async (req: Request): Promise<Response> => {
   if (route === 'usage' && req.method === 'POST') return handleUsage(req);
   if (route === 'models' && req.method === 'POST') return handleModels();
   if (route === 'backfill' && req.method === 'POST') return handleBackfill(req);
+  if (route === 'wiki-sweep' && req.method === 'POST') return handleWikiSweep(req);
+  if (route === 'wiki-retry' && req.method === 'POST') return handleWikiRetry(req);
   if (route === 'text-parser' && req.method === 'POST') return handleTextParser(req);
   if (route === 'image-generate' && req.method === 'POST') return handleImageGenerate(req);
   if (route === 'complete' && req.method === 'POST') return handleComplete(req);
