@@ -41,12 +41,16 @@ progress over Realtime. `runHeadlessToolLoop`, `executeToolCall`,
 
 ## THE PLAN
 
-Three sequenced phases, plus a **Phase 4 ledger** of tech debt the
-migration surfaces along the way. **Each phase is independently
-shippable** - if a phase 2 migration stalls, phase 1 still leaves the
-tree cleaner than it found it. The Phase 4 items aren't sequenced at
-all - they're opportunistic cleanups logged as the deletions reveal
-them.
+The original three phases of the split (P1 dead-leaf drop, P2 fleet
+migration, P3 demolition), plus **Phase 4 - edge-to-drawer log
+streaming** (an observability gap the split opened: server-side agents
+can no longer reach the Logs drawer), plus a **Phase 5 ledger** of tech
+debt the migration surfaces along the way. **Each phase is
+independently shippable** - if a phase 2 migration stalls, phase 1
+still leaves the tree cleaner than it found it. Phase 4 is likewise
+independent and arguably wants to land mid-Phase-2 (see its Timing
+note). The Phase 5 items aren't sequenced at all - they're
+opportunistic cleanups logged as the deletions reveal them.
 
 ### PHASE 1 - drop the already-dead browser dispatch leaf [DONE]
 
@@ -70,7 +74,7 @@ tools went server-side - `onCookbookChange` subscribers (Cookbook
 modal, Recipes tab) remain but nothing browser-side fires the event
 now. Re-driving a cookbook refresh after a chat-driven recipe write
 wants a server-aware trigger (recipes-table Realtime) - logged in the
-Phase 4 ledger below. Gate + knip green.
+Phase 5 ledger below. Gate + knip green.
 
 **Scope:** the ~33 browser tool impl files whose `execute()` has had
 no caller since the streaming-root migration. The triage doc at
@@ -275,15 +279,79 @@ becomes orphaned. Drop in one cleanup PR:
   conversation_search). Schemas stay - `buildToolList` still uses
   them.
 - `src/lib/tools/lazy.ts` if it has no remaining caller.
-- The agent class shells in `src/lib/agents/{reflection,wiki,wiki-
+- The agent class shells in `src/lib/agents/{wiki,wiki-
   librarian,rem,deep-sleep}/agent.ts` if their last reader was the
-  Web Worker (the worker becomes a thin dispatcher).
+  Web Worker (the worker becomes a thin dispatcher). Reflection's
+  shell already went in Phase 2.
 
 **Done when:** `src/lib/tools/` contains only `.schema.ts` files +
 `types.ts` + `wire.ts` + `index.ts` (now a schema-only catalog). One
 dispatcher, one registry, end of split.
 
-### PHASE 4 - surfaced tech debt (running ledger)
+### PHASE 4 - edge-to-drawer log streaming
+
+**The split blinded the Logs drawer to server-side work.** The in-app
+Logs drawer (`src/lib/logger.svelte.ts` + the panel in `Chat.svelte`)
+shows main-thread logs directly and relays Web Worker logs into the
+same ring buffer via `appendFromWorker` (workers `postMessage`
+`{type:'nak-log', entry}`; each manager routes it in). Once an agent
+moves into the venice edge function, that pipe is severed - the edge
+function's `console.log` lands only in Supabase's function logs, never
+the drawer. Reflection is the first casualty; every remaining fleet
+migration widens the blind spot. This phase restores the drawer as the
+single observability surface for background work regardless of where it
+runs.
+
+**Mechanism: Realtime Broadcast, the same transport streaming chat
+already uses.** The edge function publishes structured log entries to a
+per-user Broadcast channel; the browser subscribes and feeds them into
+the existing ring buffer. Broadcast is ephemeral pub/sub with no table
+backing (contrast Supabase Queues / `pgmq`, which is table-backed and
+pull-based - wrong tool). The streaming publisher (`broadcast.ts`,
+`channel.send({type:'broadcast', ...})`) is the working reference.
+
+**Shape:**
+
+- **Per-user log channel** (e.g. `logs:<userId>`). Browser subscribes
+  on sign-in (or on drawer-relevant lifecycle); edge functions publish
+  to it.
+- **Reuse the wire shape.** `SerializableLogEntry` already crosses the
+  worker boundary intact (Errors flattened to name/message/stack).
+  Send the same shape over Broadcast; add an `appendFromEdge` that is
+  `appendFromWorker` with a different ingress. Edge logs then render in
+  the drawer indistinguishably from worker logs.
+- **Edge-side `createLogger`.** A Deno-side logger mirroring the
+  browser API that publishes to the user's channel instead of (or
+  alongside) `console.log`. Reflection's `[orchestrator <runId>]
+  reflection ...` line is the natural first consumer + test case.
+
+**Open questions (design forks, resolve at implementation):**
+
+- **Channel auth.** A user must only receive their own logs. Either a
+  Realtime *private channel* with an authorization policy on
+  `realtime.messages`, or an unguessable channel name. Check how the
+  `thread:<id>:stream` channels are secured today and mirror it.
+- **Subscribe-gated publishing.** TRACE can be high-volume; the
+  project-wide budget is ~500 msg/sec (see `broadcast.ts`). Don't
+  broadcast logs nobody is watching - gate edge publishing on a live
+  subscriber, and decide whether the level filter applies client-side
+  (simpler, more bandwidth) or is pushed to the edge (less bandwidth,
+  more coupling). Reuse the adaptive-tier backpressure from
+  `broadcast.ts` if volume warrants.
+- **Ephemerality.** Logs emitted while the drawer is disconnected are
+  lost from the UI (still in Supabase function logs server-side).
+  Acceptable for a live debug surface; name it so it isn't mistaken
+  for a gap.
+
+**Timing.** Independent of the dispatcher split - it can land any time.
+But it pays for itself earliest if it lands NEXT, before the remaining
+Phase 2 fleets migrate: each fleet that moves server-side before this
+exists loses drawer observability (the same blind spot reflection just
+hit), and reflection is a ready-made first consumer to validate it
+against. Sequenced here per the "before the cleanup ledger" framing,
+but bringing it forward is the stronger call.
+
+### PHASE 5 - surfaced tech debt (running ledger)
 
 **Not a sequenced phase - a ledger.** Collapsing the split keeps
 kicking up collateral: code that was load-bearing only for a path the
