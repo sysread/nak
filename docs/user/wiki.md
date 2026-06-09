@@ -184,8 +184,9 @@ instructions or close the dialog.
 ## The autonomous background agent
 
 A background agent reads conversations a day after they settle and
-either updates an existing article or creates a new one. The
-specifics:
+either updates an existing article or creates a new one. It runs on
+your Supabase project on an hourly schedule, not in your browser -
+articles keep accruing with no tab open. The specifics:
 
 - A conversation becomes eligible the day **after** its newest
   message lands (in your timezone). A conversation that wraps Monday
@@ -239,10 +240,11 @@ Each row shows:
 - The **timestamp** the agent gave up.
 - The **error detail** the agent received (trimmed for display).
 
-Each row carries a **Retry** button. Clicking it re-runs the wiki
-agent against the conversation right now, on the main thread, going
-through the same primary -> uncensored-fallback two-shot the worker
-uses. On success the row stays visible with the agent's verdict
+Each row carries a **Retry** button. Clicking it asks the server to
+re-run the wiki agent against the conversation right now, going
+through the same primary -> uncensored-fallback two-shot the
+scheduled sweep uses. On success the row stays visible with the
+agent's verdict
 inline: how many wiki edits landed (often **zero** - the agent's
 prompt tells it to be conservative and skip rather than fabricate
 content), and a one-line **reasoning** summary the agent wrote
@@ -252,12 +254,12 @@ you can retry again once you've made changes. The agent's writes
 (any new wiki articles, any updates) land regardless, since the
 wiki tools commit each call individually.
 
-The autonomous worker also processes skipped rows on its own
+The autonomous agent also processes skipped rows on its own
 schedule. Adding or editing turns in the conversation is not the
 trigger - skipped threads bypass the usual "wait a day after the
-last message" cooldown so the worker can pick them up on its next
+last message" cooldown so the agent can pick them up on its next
 sweep without waiting. If you want immediate feedback, use the
-Retry button; if you can wait, the worker will get to them.
+Retry button; if you can wait, the sweep will get to them.
 
 If the panel is empty, the autonomous agent hasn't given up on
 anything - that's the steady state.

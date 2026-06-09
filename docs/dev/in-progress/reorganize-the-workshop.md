@@ -118,7 +118,8 @@ agent-side toolbox aggregators).
 
 **Five fleets to move.** Each one is a self-contained PR:
 **reflection** (simplest) [DONE - see concrete design below],
-**wiki** (autonomous), **wiki-librarian**, **rem**, **deep-sleep**.
+**wiki** (autonomous) [DONE - see concrete design below],
+**wiki-librarian**, **rem**, **deep-sleep**.
 After each one lands, the browser impls of its tools may newly fall
 dead - drop them alongside the migration PR (not a separate cleanup).
 
@@ -253,7 +254,31 @@ register it in `tools/index.ts`.
    only consumer. `runHeadlessToolLoop` STAYS (wiki / wiki-librarian
    / rem / deep-sleep still use it). -> Phase 3 demolition list.
 
-#### Wiki (autonomous): concrete design (from the migration research)
+#### Wiki (autonomous): concrete design [LANDED, pending prod verify]
+
+**Status.** Shipped across two commits (server side, then browser
+cutover): `agents/wiki.ts` (`runWikiSweepTick` + `retryWikiThread`),
+the `wiki_create`/`wiki_update`/`wiki_delete` tool ports with shared
+`_wiki_helpers.ts`, the `/wiki-sweep` (service role) + `/wiki-retry`
+(user JWT) routes, the global SECURITY DEFINER claim sweep +
+`p_user_id` overloads + hourly `nak-wiki-sweep` cron in schema.sql,
+the dev-shim wiki tick, the full browser cutover (worker fleet
+deleted; `agent.ts` keeps only the manual `updateOne` flow; Settings
+toggle is a plain settings write the claim predicate reads), and the
+`wiki_articles` postgres_changes subscription that re-drives
+`emitWikiChange` for server-side writes. The shared agent plumbing
+(`asAgentTool`, `loadThreadSliceUpTo`, the memory_search wire schema)
+moved to `agents/_agent_tools.ts`, consumed by reflection and wiki
+both. Toolbox/sentinel/prompt invariants live in
+`supabase/functions/tests/wiki.test.ts`. Gate + Deno + knip green.
+**Production verification still owed** per the Phase 2 gate (watch a
+hosted cron tick claim and process an eligible thread; confirm the
+drawer shows the `wiki` source lines and the Skipped panel's Retry
+round-trips). Known unit-coverage gap, accepted: the in-run
+content-filter fallback ordering and the retry pointer semantics
+have no injection seam server-side (`runHeadlessAgent` calls
+`toolComplete` directly) - live verification covers them until the
+runner grows one.
 
 **Trigger: pg_cron, per the original table.** The reflection-style
 chat-turn piggyback was considered (wiki's queue is the same
@@ -373,19 +398,22 @@ becomes orphaned. Drop in one cleanup PR:
   projector stays - it serves `buildToolList`).
 - `src/lib/tools/index.ts`'s `executeToolCall` export and the agent-
   side toolbox re-exports.
-- The 3 surviving agent-side toolbox aggregators
-  (`memory_librarian_toolbox.ts`, `wiki_toolbox.ts`,
-  `wiki_librarian_toolbox.ts`). `memory_toolbox.ts` already went in
-  Phase 2 - it was reflection-exclusive, so it died with the reflection
+- The 2 surviving agent-side toolbox aggregators
+  (`memory_librarian_toolbox.ts`, `wiki_librarian_toolbox.ts`).
+  `memory_toolbox.ts` and `wiki_toolbox.ts` already went in Phase 2 -
+  each was exclusive to its fleet, so it died with that fleet's
   cutover rather than waiting for demolition.
-- The remaining 13 browser tool impl files (memory CRUD, wiki CRUD,
-  conversation_search). Schemas stay - `buildToolList` still uses
-  them.
+- The remaining 12 browser tool impl files (memory CRUD, wiki
+  search/update/delete, conversation_search). `wiki_create` already
+  died with the wiki cutover (the librarian toolbox never had it).
+  Schemas stay - `buildToolList` still uses them.
 - `src/lib/tools/lazy.ts` if it has no remaining caller.
-- The agent class shells in `src/lib/agents/{wiki,wiki-
+- The agent class shells in `src/lib/agents/{wiki-
   librarian,rem,deep-sleep}/agent.ts` if their last reader was the
   Web Worker (the worker becomes a thin dispatcher). Reflection's
-  shell already went in Phase 2.
+  shell already went in Phase 2; the wiki shell survived its cutover
+  deliberately - `WikiAgent` now carries only the manual `updateOne`
+  flow (a no-tool completion, outside the dispatcher split).
 
 **Done when:** `src/lib/tools/` contains only `.schema.ts` files +
 `types.ts` + `wire.ts` + `index.ts` (now a schema-only catalog). One

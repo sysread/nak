@@ -107,9 +107,12 @@ Pick a short, stable source tag. Existing tags:
   `samskara-worker` - browser background loop drivers (embedding
   backfill runs server-side now, so it logs in Supabase, not this
   drawer)
-- `reflection` - the reflection agent, which runs in the venice
-  edge function and reaches the drawer over the Broadcast log
-  channel (see "Edge-to-main relay"), not via a Web Worker
+- `reflection`, `wiki` - the reflection agent and the autonomous
+  wiki agent, which run in the venice edge function and reach the
+  drawer over the Broadcast log channel (see "Edge-to-main relay"),
+  not via a Web Worker
+- `wiki-manual` - the browser-side per-article "Ask agent to
+  update" flow (a main-thread completion, not a worker)
 - `samskara` - chat-loop-side samskara helpers
 - `chat` - main screen one-offs (e.g. attachment persist failures)
 
@@ -140,9 +143,9 @@ position stays meaningful across bursts.
 The browser background workers (summary, attachment-expiry,
 samskara, and the supervised auto_title / topics / memory_topics /
 recipe_topics units) import the logger from their loop drivers.
-Reflection is NOT among them - it runs server-side and uses the
-edge-to-main relay below. Worker-context calls detect
-`WorkerGlobalScope` at module init and:
+Reflection and the autonomous wiki agent are NOT among them - they
+run server-side and use the edge-to-main relay below. Worker-context
+calls detect `WorkerGlobalScope` at module init and:
 
 1. Mirror the actionable tiers (`info` / `warn` / `error`) to
    the worker's own console. `trace` and `debug` skip this step,
@@ -168,9 +171,10 @@ drawer too.
 ## Edge-to-main relay
 
 Background work that runs in the venice edge function (reflection
-today; the other agent fleets as they migrate off the browser) has
-no Web Worker postMessage path to the drawer - its `console.log`
-lands only in Supabase's function logs. `createEdgeLogger(userId,
+and the autonomous wiki agent today; the remaining agent fleets as
+they migrate off the browser) has no Web Worker postMessage path to
+the drawer - its `console.log` lands only in Supabase's function
+logs. `createEdgeLogger(userId,
 source)` in `supabase/functions/_shared/edge-log.ts` restores the
 drawer as the single observability surface. It mirrors the browser
 `createLogger` API (`trace` / `debug` / `info` / `warn` / `error`)
@@ -197,7 +201,9 @@ service_role and bypasses it.
 broadcast POST. A caller running under `EdgeRuntime.waitUntil`
 (reflection's chat-turn tail) MUST `await log.flush()` before
 settling, or the runtime can tear down the last un-awaited send -
-typically the outcome line, the one most worth seeing. The console
+typically the outcome line, the one most worth seeing. The wiki
+sweep flushes per processed thread for the same reason, even though
+its route runs synchronously. The console
 mirror means a dropped broadcast still survives in the function log,
 so flush is about drawer fidelity, not data safety.
 
