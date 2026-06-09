@@ -475,12 +475,13 @@ in `docs/user/memory.md`. The dev side has four moving parts:
   the completed-chat-turn tail. Both use the same per-row
   claim-RPC pattern on `threads` but have independent claim
   columns and no shared lease.
-- **Logging** - the reflection agent (edge function) and the
-  `memory_recall` agent (browser inline) both emit breadcrumbs
-  through `createLogger` (`reflection-agent`, `recall-agent`).
-  Edge function entries surface in Supabase function logs;
-  recall-agent entries surface in the in-app log drawer.
-  See `./logging.md`.
+- **Logging** - the reflection agent (edge function) emits
+  breadcrumbs through `createEdgeLogger` (source `reflection`),
+  which both writes to the Supabase function logs AND broadcasts to
+  the user's `logs:<id>` channel so the entries land in the in-app
+  Logs drawer alongside browser logs (see `./logging.md`
+  "Edge-to-main relay"). The `memory_recall` agent runs browser-
+  inline and logs through `createLogger` (`recall-agent`).
 
 ## Gotchas
 

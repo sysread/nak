@@ -244,7 +244,7 @@
   type AskUserCardComponent = typeof import('../components/AskUserCard.svelte').default;
   type SamskaraToastsComponent = typeof import('../components/SamskaraToasts.svelte').default;
   import { extractedTextDrawer } from '$lib/extractedTextDrawer.svelte';
-  import { logsDrawer, createLogger } from '$lib/logger.svelte';
+  import { logsDrawer, createLogger, appendFromEdge } from '$lib/logger.svelte';
 
   const log = createLogger('chat');
   import { VeniceError, StreamDisconnectedError, cancelStream, awaitStreamSettled, type VeniceMessage } from '$lib/venice';
@@ -1791,6 +1791,17 @@
         }
       },
     });
+  });
+
+  // Realtime: follow the current user's edge-function log channel and
+  // feed entries into the Logs drawer. Background work that runs server-
+  // side (reflection, and the agent fleets as they migrate off the
+  // browser) has no Web Worker postMessage path to the drawer, so it
+  // broadcasts structured entries to `logs:<userId>` instead; this is
+  // the browser end of that pipe. RLS scopes the channel to the owner.
+  $effect(() => {
+    if (!app.supabase || !session) return;
+    return app.supabase.subscribeToUserLogs(session.user.id, appendFromEdge);
   });
 
   // Inline title rename state.

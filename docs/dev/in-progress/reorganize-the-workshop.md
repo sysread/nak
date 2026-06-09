@@ -288,7 +288,25 @@ becomes orphaned. Drop in one cleanup PR:
 `types.ts` + `wire.ts` + `index.ts` (now a schema-only catalog). One
 dispatcher, one registry, end of split.
 
-### PHASE 4 - edge-to-drawer log streaming
+### PHASE 4 - edge-to-drawer log streaming [LANDED, pending prod verify]
+
+**Status.** Shipped: `createEdgeLogger` (`supabase/functions/_shared/
+edge-log.ts`) - browser-logger-shaped API that console-mirrors AND
+POSTs each entry to the private `logs:<userId>` Realtime Broadcast
+topic via the HTTP endpoint, with `flush()` for waitUntil tails; the
+`realtime.messages` "log channel: owner subscribe" policy; the browser
+end (`appendFromEdge` ingress + `SupabaseService.subscribeToUserLogs`,
+wired in `Chat.svelte`); and reflection rewired as the first consumer
+(it logs claim/run/mark/outcome through the edge logger and flushes
+before returning, so `reflectOneThread` is now non-throwing). Gate +
+Deno + knip + markdownlint green. **Verify locally:** with the dev
+stack up, set the drawer to a low tier, complete a chat turn against a
+seeded older eligible thread, and confirm `reflection` entries appear
+in the drawer (this is the verification surface the earlier "watch the
+drawer" plan wanted - it now exists). One thing to confirm on the live
+stack: that the HTTP broadcast endpoint delivers to `private:true`
+subscribers (the documented path; if not, swap `broadcastLogEntry` to
+the websocket-join approach `getStreamingResponse` uses).
 
 **The split blinded the Logs drawer to server-side work.** The in-app
 Logs drawer (`src/lib/logger.svelte.ts` + the panel in `Chat.svelte`)

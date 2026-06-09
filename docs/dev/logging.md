@@ -59,8 +59,13 @@ Two jobs, one module:
 ## Files
 
 - `src/lib/logger.svelte.ts` - the logger module. Holds the
-  reactive buffer, the drawer open/close singleton, and the
-  worker-to-main log relay.
+  reactive buffer, the drawer open/close singleton, the
+  worker-to-main relay (`appendFromWorker`), and the edge-to-main
+  relay ingress (`appendFromEdge`).
+- `supabase/functions/_shared/edge-log.ts` - the edge-side
+  `createEdgeLogger`. Mirrors the browser logger API but publishes
+  each entry to the user's `logs:<id>` Realtime Broadcast topic (see
+  "Edge-to-main relay"). The Deno-side counterpart to this module.
 - `src/components/LogsDrawer.svelte` - the right-side drawer.
   Reads `logs.entries` and `logsDrawer.state.open` reactively.
   Composition only: the filter runes, the three `$effect`s
@@ -98,11 +103,13 @@ log.debug('payload', { foo, bar });
 Pick a short, stable source tag. Existing tags:
 
 - `update` - service-worker update lifecycle
-- `reflection-worker`, `summary-worker`,
-  `attachment-expiry-worker`, `samskara-worker` - background
-  loop drivers (embedding backfill runs server-side now, so it
-  logs in Supabase, not this drawer)
-- `recall-agent`, `conversation-recall-agent` - tool executors
+- `summary-worker`, `attachment-expiry-worker`,
+  `samskara-worker` - browser background loop drivers (embedding
+  backfill runs server-side now, so it logs in Supabase, not this
+  drawer)
+- `reflection` - the reflection agent, which runs in the venice
+  edge function and reaches the drawer over the Broadcast log
+  channel (see "Edge-to-main relay"), not via a Web Worker
 - `samskara` - chat-loop-side samskara helpers
 - `chat` - main screen one-offs (e.g. attachment persist failures)
 
@@ -130,10 +137,12 @@ position stays meaningful across bursts.
 
 ## Worker-to-main relay
 
-Three of the five background workers (embeddings, reflection,
-summary, attachment-expiry, samskara) import the logger from their
-loop drivers. Worker-context calls detect `WorkerGlobalScope` at
-module init and:
+The browser background workers (summary, attachment-expiry,
+samskara, and the supervised auto_title / topics / memory_topics /
+recipe_topics units) import the logger from their loop drivers.
+Reflection is NOT among them - it runs server-side and uses the
+edge-to-main relay below. Worker-context calls detect
+`WorkerGlobalScope` at module init and:
 
 1. Mirror the actionable tiers (`info` / `warn` / `error`) to
    the worker's own console. `trace` and `debug` skip this step,
@@ -155,6 +164,42 @@ still use directly (e.g. the `setSession failed` message emitted
 before the loop can import the logger). Those go through a local
 `createLogger('<worker-name>')` in the manager so they land in the
 drawer too.
+
+## Edge-to-main relay
+
+Background work that runs in the venice edge function (reflection
+today; the other agent fleets as they migrate off the browser) has
+no Web Worker postMessage path to the drawer - its `console.log`
+lands only in Supabase's function logs. `createEdgeLogger(userId,
+source)` in `supabase/functions/_shared/edge-log.ts` restores the
+drawer as the single observability surface. It mirrors the browser
+`createLogger` API (`trace` / `debug` / `info` / `warn` / `error`)
+and, for each entry:
+
+1. Console-mirrors to the function log (all tiers - the function
+   log has no devtools-noise problem, so it keeps a complete record
+   even when the drawer is closed or disconnected).
+2. Serializes the entry to the **same `SerializableLogEntry` shape**
+   the worker relay uses and POSTs it to the Realtime broadcast HTTP
+   endpoint on the private `logs:<userId>` topic.
+
+The browser subscribes via `SupabaseService.subscribeToUserLogs`
+(wired in `Chat.svelte` on the same auth lifecycle as the thread
+subscription) and feeds each payload to `appendFromEdge`, which
+lands it in the same ring buffer as worker logs - a server-side
+`reflection` entry renders indistinguishably from a browser one.
+Authorization is the "log channel: owner subscribe" policy on
+`realtime.messages` (the topic name carries the owner id, so a user
+only ever sees their own logs); the function publishes under
+service_role and bypasses it.
+
+`createEdgeLogger` exposes a `flush()` that awaits every in-flight
+broadcast POST. A caller running under `EdgeRuntime.waitUntil`
+(reflection's chat-turn tail) MUST `await log.flush()` before
+settling, or the runtime can tear down the last un-awaited send -
+typically the outcome line, the one most worth seeing. The console
+mirror means a dropped broadcast still survives in the function log,
+so flush is about drawer fidelity, not data safety.
 
 ## Contracts
 
@@ -202,4 +247,16 @@ drawer too.
   The drawer's renderer reads `.stack` off whatever it gets, so
   the two paths are indistinguishable to the UI - but a downstream
   consumer that wanted a real `Error` instance would need to
-  reconstruct it.
+  reconstruct it. The edge relay flattens Errors the same way, so
+  `appendFromEdge` and `appendFromWorker` reconstitute identically.
+- **Edge logs are ephemeral in the drawer.** Broadcast has no
+  backlog: an entry published while the browser isn't subscribed
+  (drawer-bearing tab closed, or before the `subscribeToUserLogs`
+  channel joins) is not in the drawer. It still lives in Supabase's
+  function logs - the console mirror is the durable record. Don't
+  treat the drawer as a complete server-side audit trail.
+- **The log channel must be subscribed with `private: true`.** That
+  flag engages the `realtime.messages` RLS policy that scopes the
+  topic to its owner. A plain `private: false` subscribe would join
+  a public room and never receive the edge function's private-flagged
+  broadcasts.

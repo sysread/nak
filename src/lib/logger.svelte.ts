@@ -324,14 +324,12 @@ export function createLogger(source: string): Logger {
   };
 }
 
-/**
- * Relay a worker-originated log entry into the main-thread buffer.
- * Called by each worker manager's `message` handler when it sees a
- * `{type:'nak-log'}` wire message. Does NOT re-emit to console -
- * the worker already logged there; mirroring again would double-
- * print.
- */
-export function appendFromWorker(entry: SerializableLogEntry): void {
+// Shared ingress for remotely-originated entries (Web Worker postMessage
+// or edge-function Broadcast). Both arrive pre-serialized; reconstitute
+// the details and push into the same ring buffer. No console mirror -
+// the origin already logged to its own console, and re-emitting would
+// double-print.
+function appendSerialized(entry: SerializableLogEntry): void {
   pushEntry({
     timestamp: entry.timestamp,
     level: entry.level,
@@ -339,6 +337,28 @@ export function appendFromWorker(entry: SerializableLogEntry): void {
     message: entry.message,
     details: entry.details.map(fromSerializableDetail),
   });
+}
+
+/**
+ * Relay a worker-originated log entry into the main-thread buffer.
+ * Called by each worker manager's `message` handler when it sees a
+ * `{type:'nak-log'}` wire message.
+ */
+export function appendFromWorker(entry: SerializableLogEntry): void {
+  appendSerialized(entry);
+}
+
+/**
+ * Relay an edge-function-originated log entry into the buffer. Called by
+ * the `SupabaseService.subscribeToUserLogs` handler when a `nak-log`
+ * Broadcast event arrives on the user's `logs:<id>` channel. The edge
+ * logger (supabase/functions/_shared/edge-log.ts) emits the identical
+ * SerializableLogEntry shape, so server-side background work (reflection,
+ * and the other agent fleets as they migrate off the browser) renders in
+ * the drawer indistinguishably from worker logs.
+ */
+export function appendFromEdge(entry: SerializableLogEntry): void {
+  appendSerialized(entry);
 }
 
 export function isWorkerLogMessage(data: unknown): data is WorkerLogMessage {

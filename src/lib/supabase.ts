@@ -31,7 +31,12 @@ import {
 } from './models';
 import { coerceCatalog, type CatalogModel } from './models/catalog';
 import { isAccent, isColorMode, type Accent, type ColorMode } from './theme';
-import { isLogLevel, createLogger, type LogLevel } from './logger.svelte';
+import {
+  isLogLevel,
+  createLogger,
+  type LogLevel,
+  type SerializableLogEntry,
+} from './logger.svelte';
 
 const log = createLogger('supabase');
 import type { OpenAIToolCall } from './tools/types';
@@ -6103,6 +6108,34 @@ export class SupabaseService {
           handlers.onDelete?.(payload.old.id);
         }
       )
+      .subscribe();
+    return () => {
+      void this.client.removeChannel(channel);
+    };
+  }
+
+  /**
+   * Subscribe to the signed-in user's edge-function log channel. Server-
+   * side background work (reflection, and the agent fleets as they
+   * migrate off the browser) publishes structured entries to the private
+   * `logs:<userId>` Broadcast topic; this feeds each one to `onEntry`,
+   * which the caller routes into the Logs drawer via `appendFromEdge`.
+   *
+   * `private: true` engages the "log channel: owner subscribe" policy on
+   * realtime.messages (supabase/schema.sql) - a user only receives their
+   * own logs. The edge function publishes under service_role and bypasses
+   * the policy. Returns an unsubscribe teardown, same shape as
+   * subscribeToThreads.
+   */
+  subscribeToUserLogs(
+    userId: string,
+    onEntry: (entry: SerializableLogEntry) => void
+  ): () => void {
+    const channel = this.client
+      .channel(`logs:${userId}`, { config: { private: true } })
+      .on('broadcast', { event: 'nak-log' }, ({ payload }) => {
+        onEntry(payload as SerializableLogEntry);
+      })
       .subscribe();
     return () => {
       void this.client.removeChannel(channel);

@@ -8691,6 +8691,23 @@ create policy "control channel: owner publish" on realtime.messages
     )
   );
 
+-- Per-user log channel. Background work that runs in the venice edge
+-- function (reflection, and the other agent fleets as they migrate) has
+-- no Web Worker postMessage path back to the browser Logs drawer, so it
+-- publishes structured log entries to a 'logs:<user-uuid>' Broadcast
+-- topic instead. The topic name carries the owner's id directly, so the
+-- subscribe gate is a literal equality - no threads join needed. The
+-- function publishes under service_role (bypasses this policy); the
+-- browser only ever subscribes (never publishes), so there is no
+-- matching INSERT policy. Browser must subscribe with private:true for
+-- this to engage.
+drop policy if exists "log channel: owner subscribe" on realtime.messages;
+create policy "log channel: owner subscribe" on realtime.messages
+  for select to authenticated
+  using (
+    realtime.topic() = 'logs:' || (select auth.uid())::text
+  );
+
 -- ---------------------------------------------------------------------------
 -- User Documents (Library)
 --

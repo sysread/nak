@@ -997,19 +997,13 @@ export async function getStreamingResponse(
     // is the server-side replacement for the browser supervisor's
     // reflection poll. Runs here in the already-detached waitUntil tail,
     // after the response shipped and the channels tore down, so it never
-    // delays the user-visible turn. Best-effort and fully isolated: a
-    // reflection failure must not alter this turn's recorded outcome,
-    // hence the swallow - the chat row already committed above.
+    // delays the user-visible turn. reflectOneThread is non-throwing and
+    // logs its own outcome (to the function log + the user's Logs
+    // drawer); the catch is a defensive backstop so a reflection bug
+    // still can't disturb this turn's already-committed row.
     if (terminalKind === 'completed') {
       try {
-        const r = await reflectOneThread(opts.adminClient, opts.userId);
-        if (r.outcome !== 'no-thread') {
-          console.log(
-            `[orchestrator ${runId}] reflection ${r.outcome}` +
-              (r.threadId ? ` thread=${r.threadId}` : '') +
-              (typeof r.toolCalls === 'number' ? ` toolCalls=${r.toolCalls}` : ''),
-          );
-        }
+        await reflectOneThread(opts.adminClient, opts.userId);
       } catch (err) {
         console.error(
           `[orchestrator ${runId}] reflection tail failed:`,
