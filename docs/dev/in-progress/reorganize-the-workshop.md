@@ -382,6 +382,95 @@ establishes the pattern it wants.)
 the backfill one (same loopback-only guard, same service-role
 bearer).
 
+#### Wiki-librarian: concrete design (from the migration research)
+
+**This fleet is a CONVERGENCE, not just a port.** The librarian
+already runs server-side for one of its three trigger paths: the
+chat-dispatched `wiki_librarian` tool
+(`supabase/functions/venice/agents/wiki_librarian.ts`) carries its
+own copy of the custom-instructions prompt AND its own inlined
+`wiki_update` / `wiki_delete` implementations - which have **drifted**
+(title cap 300 vs the real 200, content cap 50k vs the real 16k;
+`src/lib/wiki.ts` and the registered function-side ports both say
+200/16000). That drift is the two-dispatcher disease in miniature,
+inside one runtime. The migration collapses all three paths
+(scheduled 12h sweep, sparkles-button manual run, chat-dispatched
+tool) onto ONE server-side prompt builder and ONE toolbox built from
+the registered tool ports.
+
+**Trigger surfaces:**
+
+- **Scheduled**: hourly pg_cron -> `nak_trigger_wiki_librarian_sweep()`
+  -> `POST /wiki-librarian-sweep` (isServiceRole). The browser's
+  per-user `claim_wiki_librarian_run` (invoker, auth.uid()) is
+  replaced by a global SECURITY DEFINER
+  `claim_next_user_for_wiki_librarian(p_min_interval_seconds)`:
+  atomically stamps `profiles.wiki_librarian_last_run_at` for the
+  most-overdue eligible user and returns their `user_id`; gated on
+  `settings->>'wikiLibrarianEnabled' is distinct from 'false'` (the
+  same string-compare-not-cast rule as the wiki sweep). Stamp-before-
+  run is faithful to the browser claim: a crashed run waits out the
+  interval rather than retrying hot. The
+  `LIBRARIAN_MIN_ARTICLES` (3) skip runs post-claim, also faithful.
+  One user per tick - librarian runs are the heaviest agent cycles,
+  and the hourly schedule catches up a multi-user backlog fine at
+  this scale.
+- **Manual** (sparkles button): user-JWT `POST /wiki-librarian-run`
+  with `{instructions: string|null}`. Does NOT touch the cadence
+  stamp (faithful: manual and scheduled runs were independent). The
+  Wiki strip's **live step list survives** via the plan's per-run
+  channel recommendation: `runHeadlessAgent` gains an optional
+  `onProgress` hook (server twin of the browser
+  `HeadlessToolLoopEvent`: thinking rounds + tool calls with the
+  model-emitted `activity` narration), the route publishes each event
+  to a `nak-agent:<runId>` private Broadcast channel, and the browser
+  subscribes BEFORE the POST (the pre-subscribe rule from chat.md).
+- **Chat-dispatched**: the existing `wiki_librarian` ToolDef stays,
+  rewired to the shared prompt builder + shared toolbox. Its drifted
+  inline tools die.
+
+**Toolbox.** wiki_search + conversation_search + memory_search +
+wiki_update + wiki_delete (no wiki_create), built from the registered
+ToolDefs via `asAgentTool`. One deliberate context split: the write
+tools get a BLANKED `threadId` in their context so the delegating
+chat thread is never auto-attached as an article source (the
+librarian attributes via model-supplied `source_thread_ids` only -
+current behavior on every path), while `conversation_search` keeps
+the real threadId for its self-exclude.
+
+**Busy coordination changes shape.** The browser's
+`wikiLibrarianRunner` rune (workerBusy + manualBusy, per-tab) becomes
+a DB-level in-flight guard shared by all three server paths: an
+atomic claim with a TTL, taken at run start and released at run end,
+so a manual run during a scheduled run (or a chat-dispatched run
+during either) returns a clean "a librarian run is already in
+flight" error instead of racing. The UI keeps a local manualBusy for
+its own button spinner; the preemptive "gray the button while the
+SCHEDULED run is in flight" affordance is dropped (the browser only
+knew about it via worker postMessage; server-side the collision error
+covers the same safety with a worse-case UX of one error message per
+12 hours).
+
+**The Phase 3 test seam lands here** (it gates the project; landing
+it with this fleet stops the coverage bleed): `RunHeadlessAgentOptions`
+gains an injectable completion override (default `toolComplete`), and
+the behavioral tests return - librarian prompt-variant selection and
+discipline invariants, plus the wiki agent's fallback ordering and
+retry pointer semantics from the deleted browser suites.
+
+**Browser cutover.** Delete `src/lib/agents/wiki-librarian/` (all
+seven files incl. the worker fleet, `runner.svelte.ts`, and the
+690-line prompt), `wiki_librarian_toolbox.ts`, and the browser
+`wiki_search` / `wiki_update` / `wiki_delete` impls (the librarian
+toolbox was their last live dispatcher; `conversation_search` and
+`memory_search` STAY - the memory-librarian fleet still dispatches
+them browser-side). `state.svelte.ts` drops the librarian manager
+wiring and - with the last setProfile consumer gone - the
+`setUserName` / `setUserLocation` worker-push plumbing entirely.
+Wiki.svelte's strip swaps `runManually` for the new SupabaseService
+method + progress subscription; Chat.svelte's
+`wikiLibrarianRunner.busy` gray-out goes with the rune.
+
 **Why wiki-related agents before memory librarians.** wiki/
 wiki-librarian touch a much smaller live data shape than rem/
 deep-sleep; mis-migrations there are easier to roll back without user
