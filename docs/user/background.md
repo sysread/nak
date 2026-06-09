@@ -145,8 +145,10 @@ your browser. It runs on your Supabase project on a schedule (every
 few minutes), so it keeps working with no tab open - close the laptop
 and new memories still get embedded. Most of the model-driven workers
 above (titles, summaries, tagging) need the app open in a tab;
-reflection, the [autonomous wiki agent](./wiki.md), embeddings, and
-the storage cleanup below run server-side without one.
+reflection, the [autonomous wiki agent](./wiki.md) and its librarian,
+the [memory librarian](./memory.md#the-memory-librarian)'s two
+tidy-up passes, embeddings, and the storage cleanup below run
+server-side without one.
 
 What you see: nothing. A just-written memory is unembedded for a
 short window (up to a few minutes) until the next scheduled pass

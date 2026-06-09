@@ -107,10 +107,11 @@ Pick a short, stable source tag. Existing tags:
   `samskara-worker` - browser background loop drivers (embedding
   backfill runs server-side now, so it logs in Supabase, not this
   drawer)
-- `reflection`, `wiki`, `wiki-librarian` - the reflection agent, the
-  autonomous wiki agent, and the wiki librarian, which run in the
-  venice edge function and reach the drawer over the Broadcast log
-  channel (see "Edge-to-main relay"), not via a Web Worker
+- `reflection`, `wiki`, `wiki-librarian`, `rem`, `deep-sleep` - the
+  reflection agent, the autonomous wiki agent, the wiki librarian,
+  and the two memory-librarian passes, which run in the venice edge
+  function and reach the drawer over the Broadcast log channel (see
+  "Edge-to-main relay"), not via a Web Worker
 - `wiki-manual` - the browser-side per-article "Ask agent to
   update" flow (a main-thread completion, not a worker)
 - `samskara` - chat-loop-side samskara helpers

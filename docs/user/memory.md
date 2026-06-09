@@ -345,19 +345,32 @@ the stronger of the two existing confidences (it does not
 manufacture new confidence on a merge), so memories that survive
 repeated consolidation passes don't drift artificially upward.
 
-Both passes are coordinated across devices so only one run happens
-per cycle, and they share a cross-device mutex so they can't run at
-the same time. The Memories panel's top bar groups two icon
-actions - **moon** for deep-sleep, **shuffle** for rem - that trigger
-a manual run when you want to see what the librarian would do
-without waiting for the next scheduled cycle. On a narrow screen the
-pair collapses into a single overflow (**...**) menu to keep the bar
-uncluttered. The panel shows a
-step-by-step progress strip and a one-sentence summary of what the
-agent did.
+Both passes run in the background on your Supabase project, the
+same place the wiki's background agents live - no tab needs to be
+open, and your memories keep getting tidied whether or not the app
+is running. Each pass keeps its own roughly-12-hour clock, enforced
+server-side, so exactly one scheduled run happens per cycle no
+matter how many devices you use.
 
-The librarian can be disabled entirely under **Settings -> Memory ->
-Memory librarian**.
+Only one librarian run can happen at a time. The two passes - and
+the manual buttons below - share a single lock, so starting one
+while another is already running shows a "try again in a moment"
+message instead of racing two passes over the same memories.
+
+The Memories panel's top bar groups two icon actions - **moon** for
+deep-sleep, **shuffle** for rem - that trigger a manual run when
+you want to see what the librarian would do without waiting for the
+next scheduled cycle. On a narrow screen the pair collapses into a
+single overflow (**...**) menu to keep the bar uncluttered. The
+panel shows a live step-by-step progress strip while the run
+executes and a one-sentence summary of what the agent did when it
+finishes; you can switch to another drawer tab mid-run and come
+back - the strip picks up where it left off. A manual run does not reset the
+12-hour clock for the next scheduled one.
+
+The scheduled runs can be turned off under **Settings -> Memory ->
+Memory librarian**. The manual buttons keep working with the toggle
+off - they only run when you click them.
 
 ## Forgetting
 
@@ -391,8 +404,9 @@ future session can't re-promote what isn't there.
   project. Nak has no separate backup story for memories.
 
 None of this leaves your infrastructure. Nak's own project has no
-server; memory writes go from your browser to your Supabase. Memory
-reads go the same way.
+server; memory writes come from your browser or from the background
+passes running on your own Supabase project, and land in your
+Supabase either way. Memory reads go the same way.
 
 ## Limitations
 

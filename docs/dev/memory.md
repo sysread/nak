@@ -48,17 +48,21 @@ based on what it saw. The store lives in each user's own Supabase;
 the writes happen through the same tool harness the main chat uses.
 
 From the user's perspective this is the Memory feature documented
-in `docs/user/memory.md`. The dev side has four moving parts:
+in `docs/user/memory.md`. The dev side has five moving parts:
 
 1. **The store** — `memories` table, RLS-scoped, with a pgvector
    `embedding` column populated asynchronously.
 2. **The writer** — the reflection agent runs in the venice edge
    function, reads settled threads end-to-end, and uses a
    write-scoped subset of the memory tools.
-3. **The reader** — the recall agent runs inline during a chat
-   turn when the main model invokes the `memory_recall` tool.
-   Read-only.
-4. **The browser** — `src/screens/Memories.svelte` (panel) plus
+3. **The reader** — the recall agent runs in the venice edge
+   function, inline in the tool dispatch when the main model
+   invokes the `memory_recall` tool. Read-only.
+4. **The librarians** — rem and deep-sleep, the two tidy-up
+   passes, also in the venice edge function. Hourly pg_cron
+   sweeps drive a per-user 12h cadence; the Memories panel's
+   manual buttons trigger the same review cores on demand.
+5. **The browser** — `src/screens/Memories.svelte` (panel) plus
    `src/components/MemoryList.svelte` (sidebar) plus
    `src/lib/memories-store.svelte.ts` (shared rune). Reached as a
    sibling drawer tab next to chats / recipes / journal; the URL
@@ -87,71 +91,85 @@ in `docs/user/memory.md`. The dev side has four moving parts:
 ## Files
 
 - `src/lib/memories.ts` — the shared `searchMemoriesSemantic`
-  helper. Owns the embed → pad → RPC + ILIKE merge pipeline.
-  Called by both the `memory_search` tool and the Memories
-  browser so the two can't drift on what "search a memory"
-  means.
-- `src/lib/tools/memory_search.ts` — thin tool wrapper over
-  `searchMemoriesSemantic`. Preserves the LLM-facing parameter
-  schema.
-- `src/lib/tools/memory_create.ts`, `memory_update.ts`,
-  `memory_invalidate.ts`, `memory_delete.ts` — the CRUD surface.
-  Invalidate halves confidence; delete hard-removes.
-- `src/lib/tools/memory_reaffirm.ts`, `memory_doubt.ts` — the
-  volitional confidence nudges. +0.5 cap 10.0 and ×0.7 no floor
-  respectively, matching the `reaffirm_memory_confidence` /
-  `doubt_memory_confidence` RPCs. Sit alongside the reflection-
-  only `memory_invalidate` (halving) in the reflection toolbox.
-- `src/lib/tools/memory_relate.ts`, `memory_unrelate.ts` — the
-  graph layer. Four kinds (supports / contradicts / generalises
-  / specialises); self-loops rejected at the tool boundary;
-  duplicate edges collapse to a no-op (unique constraint on
-  `(user_id, from, to, kind)`).
-- `src/lib/tools/memory_recall.ts` — top-level tool the main
-  model calls; triggers `RecallAgent`.
-- `src/lib/agents/recall/agent.ts`, `prompt.ts` — the recall
-  agent. Inline, read-only, returns a structured JSON note.
+  helper. Owns the embed → pad → RPC + ILIKE merge pipeline for
+  the browser surfaces (the Memories panel and the opening-recall
+  gather). The function-side `memory_search` tool mirrors the
+  same pipeline; keep the two in step so a human and the model
+  can't disagree on what "search a memory" means.
+- `src/lib/tools/memory_*.schema.ts` — the browser side of every
+  chat-facing memory tool (search / create / update / delete /
+  reaffirm / doubt / relate / unrelate / recall). Schema-only
+  `serverSideTool` registrations: the browser ships the wire
+  `tools` array and the venice function dispatches. No memory
+  tool executes in the browser.
+- `supabase/functions/venice/tools/memory_*.ts` — the tool
+  implementations. Invalidate halves confidence; delete
+  hard-removes; reaffirm +0.5 cap 10.0 and doubt ×0.7 no floor,
+  matching the `reaffirm_memory_confidence` /
+  `doubt_memory_confidence` RPCs; relate/unrelate manage the
+  graph (self-loops rejected at the tool boundary, duplicate
+  edges collapse to a no-op on the unique constraint). b-strict
+  throughout: the service-role client bypasses RLS, so every
+  query stamps or filters `user_id` explicitly.
+- `supabase/functions/venice/agents/recall.ts` — the recall
+  agent plus the registered `memory_recall` ToolDef. Inline in
+  the chat turn's tool dispatch, read-only (memory_search only),
+  returns a structured JSON note. Side effect: upserts a
+  `memory_conversation` row per surfaced memory - the
+  co-occurrence hint queue rem drains.
 - `supabase/functions/venice/agents/reflection.ts` — the reflection
   agent. Exports `reflectOneThread(adminClient, userId)`; runs
   write-scoped with no return value (side effects = memory tool
   calls).
-- `src/lib/agents/deep-sleep/{agent,prompt,loop,worker,manager,
-  runner.svelte,types}.ts` — the memory librarian's slow-wave
-  consolidation pass. Background worker; every ~12h it picks a
-  longest-unvisited memory, embeds it, fetches similarity
-  neighbors via `searchMemoriesByEmbeddingScored`, and runs the
-  agent on the seed + neighbors batch. The agent has the
-  `memoryLibrarianToolbox` (search, consolidate, relate,
-  invalidate, doubt) and decides for each pair whether to
-  consolidate, relate, or leave. Marks the entire batch
-  visited after a successful run so the next sweep moves on.
-- `src/lib/agents/rem/{agent,prompt,loop,worker,manager,
-  runner.svelte,types}.ts` — the memory librarian's associative
-  integration pass. Background worker; every ~12h it picks the
-  oldest eligible conversation from `memory_conversation`,
-  fetches the batch of memories the recall agent surfaced on
-  that conversation, and runs the agent on it. Primary mode is
+- `supabase/functions/venice/agents/deep_sleep.ts` — the memory
+  librarian's slow-wave consolidation pass. Per run it picks the
+  longest-unvisited memory as the seed, embeds it, fetches the
+  top-8 cosine neighbors above 0.80 via
+  `search_memories_by_embedding_scored`, and runs the agent on
+  the seed + neighbors batch (skipping Venice entirely when the
+  seed is lonely). The agent decides per pair whether to
+  consolidate, relate, or leave. Marks the entire batch visited
+  after a successful run so the next sweep moves on. Exports
+  `runDeepSleepSweepTick` (cron path) and `runDeepSleepManual`
+  (Memories-panel path).
+- `supabase/functions/venice/agents/rem.ts` — the memory
+  librarian's associative integration pass. Per run it drains up
+  to 3 eligible conversations from `memory_conversation` (oldest
+  first), fetches the batch of memories the recall agent surfaced
+  on each, and runs the agent on batches of 2+ (smaller batches
+  are marked processed without a Venice call). Primary mode is
   `memory_relate`; rare consolidations handled via the same
-  toolbox. Marks the conversation's `memory_conversation` rows
-  processed after a successful run. Shares the
-  'memory-librarian' lease partition with deep-sleep so the two
-  passes can't run concurrently across devices.
-- `src/lib/tools/memory_consolidate.ts` and
-  `memory_consolidate.schema.ts` — the librarian's content-write
-  primitive. Wraps the `consolidate_memories` RPC which atomically
+  toolbox. Marks the conversation's rows processed after a
+  successful run. Exports `runRemSweepTick` and `runRemManual`.
+- `supabase/functions/venice/agents/_memory_librarian_tools.ts` —
+  the toolbox shared by both librarian passes
+  (`buildMemoryLibrarianToolbox`: consolidate, search,
+  relate/unrelate, invalidate, doubt, conversation_search -
+  deliberately no create / update / reaffirm) plus the shared
+  in-flight guard helpers (`claimMemoryLibrarianInflight` /
+  `releaseMemoryLibrarianInflight`).
+- `supabase/functions/venice/tools/memory_consolidate.ts` — the
+  librarian's content-write primitive (wire schema lives with the
+  toolbox above; not reachable from reflection or the main chat).
+  Wraps the `consolidate_memories` RPC which atomically
   rewrites the survivor's content + confidence (max of the two
   inputs, NOT a bump), halves the loser's confidence, redirects
   `memory_conversation` rows from loser to survivor, and
   redirects `memory_relations` edges (dropping self-loops and
   duplicates).
-- `src/lib/tools/memory_librarian_toolbox.ts` — toolbox shared
-  by both librarian agents. Includes `memory_consolidate`,
-  search, relate/unrelate, invalidate, doubt, and
-  conversation_search. Deliberately omits create / update /
-  reaffirm (the design rules from the librarian discussion).
+- `src/lib/agents/memory-librarian-run.svelte.ts` — the
+  navigation-stable singleton holding the manual-run UI state
+  (pass / steps / result / error). Subscribes to the per-user
+  `agent-runs:<userId>` Broadcast channel BEFORE POSTing
+  `/rem-run` or `/deep-sleep-run`, filters events on the runId it
+  minted, and survives the Memories panel unmounting on a drawer
+  tab switch.
 - `src/lib/memory-events.ts` — window-level event bus the
-  librarians and the content-write tools use to notify the
-  in-page memories store and the changelog panel of writes.
+  browser's memory surfaces use to notify each other of writes.
+  Fired by the panel's direct edits, by the manual librarian
+  strip on a finished run, and by the realtime subscription
+  relaying server-side writes (see the Chat entry under
+  "Interactions with other features").
 - `src/components/MemoryChangelogPanel.svelte` — the Memories
   tab's default surface when no memory is selected (suppressed
   while a librarian confirm/progress strip is up, gated by
@@ -169,8 +187,6 @@ in `docs/user/memory.md`. The dev side has four moving parts:
   primitives the Memories panel uses to render the manual-run
   progress strip. Unit-tested at
   `tests/memory-librarian-ui.test.ts`.
-- `src/lib/tools/recall_toolbox.ts` — the read-only toolbox the
-  recall agent uses. Standalone file to break an import cycle.
 - `src/screens/Memories.svelte` — human-facing browser, panel
   side. Mounted in the chat shell's main column when the
   `memories` drawer tab is active; sibling of `Cookbook.svelte`
@@ -229,18 +245,27 @@ in `docs/user/memory.md`. The dev side has four moving parts:
   relation edges into the existing map. Owns the AbortController
   for the in-flight semantic search so rapid typing doesn't fire
   one embedding request per character.
-- `supabase/schema.sql` (memory section + reflection section) —
-  table shape, triggers, RLS policies, reflection claim columns
-  on `threads`.
+- `supabase/schema.sql` (memory section + reflection section +
+  the "Cadence gates + run coordination for the two librarian
+  agents" block) — table shape, triggers, RLS policies,
+  reflection claim columns on `threads`, the librarian cadence
+  columns + global claim RPCs + shared in-flight guard, and the
+  `nak-rem-sweep` / `nak-deep-sleep-sweep` pg_cron dispatches.
+- `supabase/functions/tests/memory_librarian.test.ts`,
+  `memory_librarian_behavior.test.ts`,
+  `memory_consolidate.test.ts` — Deno suites: toolbox-composition
+  and prompt invariants for both passes, behavioral coverage
+  (cadence, guard, retry stamping) driven through the runner's
+  completion seam, and the consolidate tool's RPC contract.
 
 ## Entry points
 
 - **`memory_recall` tool call** — main model invokes it mid-turn;
-  chat loop dispatches to `RecallAgent.run`, which spawns a
-  headless tool-call loop on the fast tier with
-  `recallToolbox`. Returns a structured JSON output the tool
-  encodes as the `role='tool'` message payload for the next
-  round.
+  the venice function's tool dispatcher (`performToolCall`) runs
+  the registered ToolDef in `agents/recall.ts`, which spawns a
+  headless read-only tool loop on the fast tier. Returns a
+  structured JSON output the tool encodes as the `role='tool'`
+  message payload for the next round.
 - **Reflection (edge function tail)** — at the end of each
   successfully completed streaming chat turn, `getStreamingResponse`
   fires `reflectOneThread(adminClient, userId)` via
@@ -250,6 +275,25 @@ in `docs/user/memory.md`. The dev side has four moving parts:
   necessarily the thread that just finished. Claim mutual exclusion
   is the per-thread claim RPC (each call uses a fresh random holder
   id); no `worker_leases` row is involved.
+- **Librarian cron sweeps** — pg_cron jobs `nak-rem-sweep`
+  (hourly, minute 17) and `nak-deep-sleep-sweep` (hourly, minute
+  47) read vault secrets and pg_net-POST `/rem-sweep` /
+  `/deep-sleep-sweep` with the service-role bearer ->
+  `runRemSweepTick` / `runDeepSleepSweepTick`. Each tick claims
+  the most-overdue eligible user via the global SECURITY DEFINER
+  RPC (`claim_next_user_for_rem` / `claim_next_user_for_deep_sleep`),
+  which stamps the per-user 12h cadence column BEFORE the run and
+  gates on the `memoryLibrarianEnabled` Settings toggle. In local
+  dev, `scripts/dev-backfill-cron.mjs` ticks both routes.
+- **Librarian manual runs** — the Memories panel's moon
+  (deep-sleep) and shuffle (rem) buttons ->
+  `librarianRun.start()` in `memory-librarian-run.svelte.ts` ->
+  `SupabaseService.runDeepSleep` / `runRem` -> `POST
+  /deep-sleep-run` / `/rem-run` (user JWT) with a client-minted
+  runId. Live step events ride the per-user `agent-runs:<userId>`
+  Broadcast channel (subscribe-before-POST); a collision with any
+  other librarian run folds into a `busy` result. Manual runs
+  never touch the cadence stamps.
 - **User memory CRUD through the assistant** — user asks "what
   do you remember about me?" or "forget that I liked X"; the
   main model calls `memory_search` / `memory_update` /
@@ -308,7 +352,7 @@ in `docs/user/memory.md`. The dev side has four moving parts:
   underlying tables.
 - **Trigger `clear_memory_embedding_on_change`** — nulls
   `embedding`, `embedding_model`, and both claim columns when
-  `label` or `data` changes. Ensures an in-flight worker save
+  `label` or `data` changes. Ensures an in-flight backfill save
   can't land a now-stale embedding.
 - **RLS policies** — all four (select / insert / update / delete)
   are `auth.uid() = user_id`. No cross-user read is possible
@@ -339,9 +383,17 @@ in `docs/user/memory.md`. The dev side has four moving parts:
   Cascade on delete from both `memories` and `threads`; merge-on-
   consolidation handled in the `consolidate_memories` RPC.
 - **`profiles.deep_sleep_last_run_at`,
-  `profiles.rem_last_run_at`** — singleton cadence gates,
-  mirroring `wiki_librarian_last_run_at`. `claim_deep_sleep_run`
-  and `claim_rem_run` RPCs perform the atomic UPDATE-with-WHERE.
+  `profiles.rem_last_run_at`** — per-user cadence gates,
+  mirroring `wiki_librarian_last_run_at`. Stamped by the global
+  SECURITY DEFINER claims `claim_next_user_for_deep_sleep` /
+  `claim_next_user_for_rem` (EXECUTE locked to `service_role`),
+  which pick the most-overdue eligible user and stamp inside the
+  claiming UPDATE - BEFORE the run, so a crashed run waits out
+  the 12h interval instead of retrying hot. Eligibility gates on
+  `settings->>'memoryLibrarianEnabled' is distinct from 'false'`,
+  the same string-compare-on-purpose shape as the wiki sweeps (a
+  boolean cast could wedge the all-users sweep on one malformed
+  value).
 - **`consolidate_memories(survivor_id, loser_id, label, data)`
   RPC** — the librarian's atomic content-write. Sets survivor
   confidence to `greatest(survivor, loser)` (preserves stronger
@@ -350,9 +402,22 @@ in `docs/user/memory.md`. The dev side has four moving parts:
   self-loops and unique-constraint duplicates from the
   redirected edges. Single transaction; no client-side
   coordination needed.
-- **Librarian lease** — `worker_leases` row with
-  `worker_kind='memory-librarian'`. Shared between deep-sleep
-  and rem so only one of them can run per user across devices.
+- **Shared in-flight guard** —
+  `profiles.memory_librarian_inflight_holder` /
+  `memory_librarian_inflight_expires_at`, taken via
+  `claim_memory_librarian_inflight` and released via
+  `release_memory_librarian_inflight` (atomic holder + 600s TTL,
+  same shape as the wiki librarian's). ONE guard covers both
+  passes and all four entry paths (two sweeps + two manual
+  routes), so a rem run never overlaps a deep-sleep run for the
+  same user regardless of how either started. The TTL unwedges a
+  guard a crashed run left behind; release is holder-checked.
+- **Realtime publication membership** — `memories` is a member of
+  the `supabase_realtime` publication. Every agent that writes
+  memory rows (reflection, the librarians, the chat tools) runs
+  server-side, so an open Memories panel learns about writes
+  through the browser's `postgres_changes` subscription rather
+  than an in-page event.
 - **`memory_changelog` table** — append-only audit trail of
   content-affecting mutations, parallel in shape and intent to
   `wiki_changelog`. Columns: `id`, `user_id`, `memory_id`
@@ -379,14 +444,13 @@ in `docs/user/memory.md`. The dev side has four moving parts:
 
 ## Contracts
 
-- `memory_search.execute({ query, limit })` — vector search (when
-  `query` is non-empty) merged with ILIKE against unembedded
-  rows. Result shape: `{ id, label, data, updated_at }[]`. The
-  model can't tell vector from ILIKE apart; the fallback is
-  pure plumbing.
+Every tool `execute` below runs function-side (the venice
+function's `performToolCall` registry, or an agent toolbox built
+from the same ports); the browser carries only the wire schemas.
+
 - `memory_create.execute({ label, data, message })` — inserts.
-  The trigger nulls the embedding; the worker embeds it on its
-  next cycle. `message` is required (commit-style) and appends a
+  The trigger nulls the embedding; the backfill embeds it on its
+  next pass. `message` is required (commit-style) and appends a
   `create` changelog row.
 - `memory_update.execute({ id, label?, data?, message })` —
   writes changed fields, calls `bump_memory_confidence`, and
@@ -424,10 +488,29 @@ in `docs/user/memory.md`. The dev side has four moving parts:
   `confidence_tag` (nullable), and a `relations` array per row
   hydrated from `get_memory_relations`. Up to 5 edges per
   source (`SEARCH_RELATION_FANOUT`).
-- `RecallAgent.run(req): Promise<AgentRunResult<RecallOutput>>` —
-  `RecallOutput` is a discriminated union:
-  `{kind:'none'} | {kind:'note', note:string}`. The recall tool
-  parses this and hands the JSON back to the main chat loop.
+- `memory_recall` (the registered ToolDef in `agents/recall.ts`)
+  — settles on a discriminated union:
+  `{kind:'none'} | {kind:'note', note:string}`. The tool parses
+  the model's JSON and hands it back to the main chat loop as the
+  tool result.
+- `runRemSweepTick(adminClient)` /
+  `runDeepSleepSweepTick(adminClient)` — non-throwing by
+  contract; return per-tick outcome summaries (`no-user` /
+  `inflight-blocked` / `empty-queue` or `no-eligible` /
+  `too-small` / `reviewed` / `error`) that pg_net ignores and the
+  dev shim prints. The cadence stamp lands at claim time, so a
+  tick that ends empty or blocked still consumes that user's 12h
+  slot.
+- `runRemManual(adminClient, userId, onProgress?)` /
+  `runDeepSleepManual(adminClient, userId, onProgress?)` —
+  non-throwing; return result unions the routes relay
+  (`ok` / `empty-queue` or `no-eligible` / `too-small` / `busy` /
+  `error`). `busy` is the shared in-flight guard's collision
+  surface. The `onProgress` hook feeds the panel's live step
+  strip (`preparing` / the runner's `thinking` + `tool` /
+  `done`); attaching it also injects the `activity` narration
+  parameter into the tools' wire schemas, so the sweep paths
+  (no listener) stay narration-free.
 - `reflectOneThread(adminClient, userId)` — the edge function
   entry point. Claims one day-gate-eligible thread (newest message
   on a prior calendar day in the user's timezone, with >= 2 user
@@ -440,27 +523,37 @@ in `docs/user/memory.md`. The dev side has four moving parts:
 ## Interactions with other features
 
 - **Chat** — the main model invokes `memory_recall` as a tool
-  mid-turn. The chat loop dispatches it, the recall agent runs
-  inline on the fast tier, the structured output becomes a
-  `role='tool'` message, and the main model folds the returned
-  note into its reply. The chat screen also owns the
-  `memories` drawer tab and the `MemoryList` / `Memories` panel
-  pair that render against the shared `memoriesStore`. See
-  `./chat.md`.
-- **Settings** — no interaction. There used to be a "Browse
-  memories" button in the AI pane (and a prose pointer after
-  that); both went away once the Memories drawer tab landed
-  as a prominent affordance of its own. The settings module
-  now has no awareness of memories at all.
-- **Tools** — the five memory tools live in the registry
-  (`tools/index.ts`). Reflection uses a write-scoped subset
-  (search + create + update + invalidate, NOT delete, NOT any
-  recall) defined in the edge function. Recall uses `recallToolbox`
-  (search only). See `./tools.md`.
-- **Embeddings** — the worker populates `memories.embedding`
-  on a poll of `embedding is null`. Memory search's vector path
-  reads that column; the ILIKE fallback covers the "just
-  written, not yet embedded" window. See `./embeddings.md`.
+  mid-turn. The venice function's tool dispatcher runs it, the
+  recall agent runs inline on the fast tier, the structured
+  output becomes a `role='tool'` message, and the main model
+  folds the returned note into its reply. The chat screen also
+  owns the `memories` drawer tab, the `MemoryList` / `Memories`
+  panel pair that render against the shared `memoriesStore`, and
+  the realtime wiring: an effect in Chat.svelte subscribes
+  `SupabaseService.subscribeToMemoryChanges(userId,
+  emitMemoryChange)` so server-side writes flow into the same
+  event bus every memory surface already listens on (coarse
+  "something changed", no row deltas - the wiki twin's
+  rationale). See `./chat.md`.
+- **Settings** — the Memory group's single toggle
+  (`memoryLibrarianEnabled`) gates the scheduled librarian
+  sweeps. Consumed server-side by both claim predicates, so
+  flipping it is just a settings write with no worker to start
+  or stop. Manual runs ignore it - the user explicitly asked.
+- **Tools** — the chat-facing memory tools ride the browser
+  registry (`tools/index.ts`) as schema-only `serverSideTool`
+  defs; the implementations live in
+  `supabase/functions/venice/tools/`. Reflection uses a
+  write-scoped subset (search + create + update + invalidate,
+  NOT delete, NOT any recall) defined in its agent module; the
+  librarians share `_memory_librarian_tools.ts` (consolidate
+  instead of create/update). See `./tools.md`.
+- **Embeddings** — the server-side backfill populates
+  `memories.embedding` on a poll of `embedding is null`. Memory
+  search's vector path reads that column; the ILIKE fallback
+  covers the "just written, not yet embedded" window. Deep-sleep
+  re-embeds its seed through the same Venice model to query the
+  scored neighbor RPC. See `./embeddings.md`.
 - **Topics** — the memory-topics background worker tags each
   memory with 1-4 short topic strings so the Memories drawer can
   offer a topic filter. Both surfaces (search + filter) share the
@@ -475,13 +568,22 @@ in `docs/user/memory.md`. The dev side has four moving parts:
   the completed-chat-turn tail. Both use the same per-row
   claim-RPC pattern on `threads` but have independent claim
   columns and no shared lease.
-- **Logging** - the reflection agent (edge function) emits
-  breadcrumbs through `createEdgeLogger` (source `reflection`),
-  which both writes to the Supabase function logs AND broadcasts to
-  the user's `logs:<id>` channel so the entries land in the in-app
-  Logs drawer alongside browser logs (see `./logging.md`
-  "Edge-to-main relay"). The `memory_recall` agent runs browser-
-  inline and logs through `createLogger` (`recall-agent`).
+- **Logging** - the reflection agent and both librarian passes
+  emit breadcrumbs through `createEdgeLogger` (sources
+  `reflection`, `rem`, `deep-sleep`), which both writes to the
+  Supabase function logs AND broadcasts to the user's `logs:<id>`
+  channel so the entries land in the in-app Logs drawer alongside
+  browser logs (see `./logging.md` "Edge-to-main relay"). The
+  manual librarian runs additionally publish live step events
+  over the sibling `agent-runs:<userId>` Broadcast topic
+  (`_shared/agent-progress.ts`), same transport and
+  flush-before-respond contract as the log relay.
+- **Edge function auth** (`./edge-function-auth.md`) - the sweep
+  routes are gated on `isServiceRole`; the manual routes on the
+  gateway-validated user JWT. The cadence claims are SECURITY
+  DEFINER global sweeps locked to `service_role`; the in-flight
+  guard pair carries the `coalesce(p_user_id, auth.uid())`
+  b-strict escape hatch.
 
 ## Gotchas
 
@@ -505,9 +607,9 @@ in `docs/user/memory.md`. The dev side has four moving parts:
   assistant row with `tool_calls` on it. That row is in the
   transcript the recall agent would otherwise read, and it
   confuses the agent into re-invoking the same recall it was
-  meant to satisfy. `RecallAgent` drops any trailing assistant-
-  with-tool_calls row before handing the transcript to its
-  model.
+  meant to satisfy. The recall agent (`agents/recall.ts`) drops
+  any trailing assistant-with-tool_calls row before handing the
+  transcript to its model.
 - **Embedding dimensions are padded.** Venice's current model
   emits 1024 dims; the column is `vector(2048)` for future
   compat. The padding is zero-extension; cosine similarity is
@@ -551,6 +653,34 @@ in `docs/user/memory.md`. The dev side has four moving parts:
   fan-out) is what prevents a cyclic graph from blowing the
   priming budget; callers adding deeper traversal must add
   their own cycle-bound.
+- **Error-path stamping differs between sweep and manual runs -
+  deliberately.** It reads like an inconsistency; it isn't. A
+  SWEEP agent error leaves the work unit unstamped (rem's
+  `memory_conversation` rows stay unprocessed; deep-sleep's batch
+  stays unvisited) so the next scheduled cycle retries it -
+  nobody is watching, so silent retry is the right failure mode.
+  A MANUAL deep-sleep run stamps the batch visited even when the
+  agent errors: the seed picker is deterministic
+  (oldest-unvisited first), so without the stamp a poison
+  neighborhood - one whose batch reliably kills the agent - would
+  wedge the button on the same batch click after click. Stamping
+  on error costs one skipped neighborhood per ~12h; wedging the
+  button costs the feature. (Manual rem keeps the
+  leave-unprocessed shape - its queue is multi-conversation per
+  run, so one failing conversation doesn't pin the button.)
+- **Cadence stamps land before the run.** The claim RPCs stamp
+  `rem_last_run_at` / `deep_sleep_last_run_at` inside the
+  claiming UPDATE, so a tick that ends `empty-queue`,
+  `too-small`, or `inflight-blocked` still consumes that user's
+  12h slot. A crashed run waits out the interval instead of
+  retrying hot; the cost is that a blocked tick is that cycle's
+  librarian activity. Manual runs never touch the stamps.
+- **One in-flight guard, two passes, four paths.** The shared
+  guard means a manual deep-sleep click can come back `busy`
+  because a scheduled REM sweep happens to be mid-flight - not
+  just another deep-sleep. Intentional: both passes reason over
+  the same memory rows, and two agents reshaping the same
+  neighborhood concurrently would make conflicting decisions.
 - **Tag leakage into the LLM's voice is expected.** The
   qualitative tags (`[corroborated]` / `[hedged]` / `[shaky]`)
   ride inline in the injected memory text on purpose - the
@@ -563,7 +693,7 @@ in `docs/user/memory.md`. The dev side has four moving parts:
 
 - `docs/user/memory.md` — user-facing version of the same
   story. Useful for framing.
-- `./embeddings.md` — the worker that makes semantic search
+- `./embeddings.md` — the backfill that makes semantic search
   work.
 - `./conversation-recall.md` — the sibling recall surface that
   targets thread summaries, not memory rows.

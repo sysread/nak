@@ -19,13 +19,12 @@
  * bridge from the tools layer to the UI; no direct import the other
  * way.
  *
- * The event name and dispatcher live in the plain-`.ts` sibling
- * `cookbook-events.ts` - the `recipe_*` tools need to signal
- * changes, and the tool registry gets bundled into the reflection
- * Web Worker, which crashes with `$state is not defined` if it
- * pulls a rune-using module into the worker bundle. UI imports
- * `onCookbookChange` / `notifyCookbookChanged` from the events
- * module directly.
+ * The event name lives in the plain-`.ts` sibling
+ * `cookbook-events.ts`. The bus currently has subscribers but no
+ * browser-side publisher - the `recipe_*` tools that used to fire it
+ * dispatch server-side now; see the reorganize-the-workshop plan
+ * doc's Phase 5 ledger for the recipes-table realtime subscription
+ * that should re-drive it.
  */
 import {
   DEFAULT_LIST_PAGE_SIZE,

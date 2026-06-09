@@ -1,15 +1,14 @@
 /**
  * Wire helpers for tool calls. Pure utilities that handle the
- * OpenAI/Venice wire format in both directions - projecting stored or
- * in-loop tool calls back onto the wire (sanitizeToolCallsForWire,
- * sanitizeToolCallIdForWire), and parsing the inbound arguments JSON
- * string into a usable args object (parseToolArguments). No other
- * dependencies, so anyone touching tool-call wire data - the chat
- * loop, the headless agent loop in `./run.ts`, every agent that
- * replays a stored thread (reflection, recall, conversation_recall,
- * summary) - can call in without dragging
- * chat-loop along. Keeping the helpers here means a fix or extension
- * lands in one place rather than five copies.
+ * OpenAI/Venice wire format in both directions - projecting ToolDefs
+ * and stored tool calls onto the wire (toOpenAIToolDef,
+ * sanitizeToolCallsForWire, sanitizeToolCallIdForWire), and parsing
+ * the inbound arguments JSON string into a usable args object
+ * (parseToolArguments). No other dependencies, so anyone touching
+ * tool-call wire data - the chat loop, the no-tool completion agents
+ * (summary, topics) that replay stored threads - can call in without
+ * dragging chat-loop along. Keeping the helpers here means a fix or
+ * extension lands in one place rather than five copies.
  */
 
 import type { OpenAIToolCall, OpenAIToolDef, ToolDef } from './types';
@@ -91,7 +90,7 @@ export function sanitizeToolCallIdForWire(id: string): string {
  * every subsequent round and every future turn that replays the offending
  * assistant row from the DB, because the bad arguments string rides along
  * unchanged. The `activity` param required of every tool call (see
- * ACTIVITY_PARAM_SCHEMA in tools/dispatch.ts) is a free-form sentence the
+ * ACTIVITY_PARAM_SCHEMA below) is a free-form sentence the
  * model writes itself, which is exactly the shape most prone to this.
  *
  * Parse-and-restringify when the blob is valid JSON (canonicalises
@@ -104,12 +103,11 @@ export function sanitizeToolCallIdForWire(id: string): string {
  * tool-error result row), so the next round's model sees the failure
  * via the tool result regardless of what the echoed arguments say.
  *
- * Used by:
- *   - chat-loop.ts (toVeniceMessage + the in-loop history push)
- *   - tools/run.ts (the headless agent loop's in-loop history push)
- *   - every agent's messageToVenice helper that projects a stored
- *     Message onto a VeniceMessage (reflection, recall,
- *     conversation_recall, summary).
+ * Used by chat-loop.ts (toVeniceMessage + the in-loop history push)
+ * and the no-tool completion agents' messageToVenice helpers that
+ * project a stored Message onto a VeniceMessage (summary, topics).
+ * The venice function's agent runner carries its own mirror of this
+ * discipline.
  */
 export function sanitizeToolCallsForWire(
   calls: readonly OpenAIToolCall[]
@@ -159,9 +157,9 @@ export function sanitizeToolCallsForWire(
  * tool whose schema nests free-form fields under a wrapper still
  * benefits.
  *
- * Throws on invalid JSON. Callers (chat-loop.ts, tools/run.ts) catch
- * the throw and surface it as a tool error so the next round sees
- * the parse failure instead of a silent default.
+ * Throws on invalid JSON. The caller (chat-loop.ts) catches the
+ * throw and surfaces it as a tool error so the next round sees the
+ * parse failure instead of a silent default.
  */
 export function parseToolArguments(raw: string): Record<string, unknown> {
   if (raw.length === 0) return {};

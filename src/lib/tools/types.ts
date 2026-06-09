@@ -11,13 +11,14 @@
  *                        the model knows what's behind the toggle without
  *                        needing the full schema)
  *   - parameters    : JSON Schema for the args, shipped verbatim
- *   - execute       : browser-side handler; receives parsed args + context
- *
- * The context is assembled in `chat-loop.ts` at call-time and carries the
- * things a tool might need: the Supabase client (scoped by the signed-in
- * user's JWT, so RLS handles isolation), the user id for explicit writes,
- * the containing thread id (for per-thread toggles), and an AbortSignal
- * that cascades from the outer send() cancellation.
+ *   - execute       : nominally a browser-side handler. In practice
+ *                     every ToolDef is a `serverSideTool` whose
+ *                     execute() throws - all dispatch happens in the
+ *                     venice edge function (`performToolCall`), and
+ *                     the browser ships only the catalog + wire
+ *                     schemas. The signature survives so the contract
+ *                     tests (and any future browser-side dispatch)
+ *                     have a shape to hold onto.
  */
 import type { SupabaseService } from '../supabase';
 
@@ -36,54 +37,6 @@ export interface ToolContext {
    * Optional/undefined is treated as 0.
    */
   depth?: number;
-  /**
-   * Opt-in filter for `wiki_search`: when true, the tool drops any
-   * article whose ONLY source row in `wiki_article_sources` is
-   * `ctx.threadId`. Articles linked to multiple threads (or to no
-   * thread at all) still come through. Set by callers that should not
-   * see this thread's own synthesised output echoed back as recall -
-   * the main chat-loop and `WikiRecallAgent`'s inner tool loop. Left
-   * unset by the autonomous wiki agent and the wiki librarian, both
-   * of which need to FIND articles derived from the thread they are
-   * processing in order to decide update-vs-create.
-   *
-   * Carried on the ctx (not in the LLM-visible args schema) so the
-   * model cannot pass or strip it - the harness owns the decision.
-   * `memories` has no equivalent flag because it lacks source-thread
-   * tracking; if a future schema change adds one, the equivalent ctx
-   * flag goes here.
-   */
-  wikiExcludeOwnThreadSoleSources?: boolean;
-  /**
-   * Opt-in filter for `conversation_search`: when true, the tool
-   * drops any hit whose `thread.id` equals `ctx.threadId`. Set by
-   * every caller that should be searching OTHER conversations rather
-   * than the live one - the main chat-loop and `ConversationRecallAgent`'s
-   * inner tool loop. Left unset by callers that are not thread-scoped
-   * (e.g. the wiki librarian, which runs over the whole wiki and
-   * passes `threadId: ''` - the empty id matches nothing so the
-   * filter would be a no-op even if set).
-   *
-   * Same ctx-vs-args rationale as the wiki flag: the model does not
-   * get to control whether its own conversation echoes back as a
-   * search hit; the harness makes the call per caller.
-   */
-  conversationExcludeOwnThread?: boolean;
-  /**
-   * Opt-in hook for the recall agent's memory_search calls: when set,
-   * memory_search invokes it with the ids of every memory it
-   * returned. The recall path uses this to feed the rem librarian's
-   * hint queue (`memory_conversation`) - memories the recall agent
-   * surfaces during a conversation are evidence that they belong
-   * together from the user's perspective, even when their similarity
-   * neighborhoods don't make that obvious.
-   *
-   * Best-effort: memory_search wraps the call in a try/catch so a
-   * misbehaving recorder can't tear down the search. Carried on the
-   * ctx (not in the LLM-visible args schema) so the harness owns the
-   * tracking; the model has no signal that a recorder is attached.
-   */
-  recordRecalledMemoryIds?: (ids: readonly string[]) => void;
 }
 
 /**

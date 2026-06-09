@@ -19,8 +19,8 @@
  * server-side via pg_cron + the venice edge function - see
  * docs/dev/embeddings.md), but this coordinator is now shared
  * infrastructure: every worker under
- * `src/lib/agents/` (supervisor, samskara, bias, wiki, wiki-librarian,
- * deep-sleep, rem) constructs one, partitioned by `workerKind`. The
+ * `src/lib/agents/` (supervisor, samskara, bias) constructs one,
+ * partitioned by `workerKind`. The
  * directory name is a vestige; the code is fleet-wide.
  *
  * Heartbeat timing: default TTL is 45s and we beat every 20s. That's

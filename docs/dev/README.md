@@ -61,8 +61,8 @@ changing a contract that other features depend on.
 - [Attachments](./attachments.md) — per-message file
   attachments, Venice text-parser integration, and the
   expiration worker.
-- [Tools](./tools.md) — tool registry + the two parallel
-  executors (chat-side and headless-agent-side).
+- [Tools](./tools.md) — the browser-side toolbox catalog +
+  the edge-side dispatch (chat tools and agent loops).
 - [Memory](./memory.md) — `memories` store + reflection
   agent + memory recall.
 - [Wiki](./wiki.md) — flat encyclopedic articles about

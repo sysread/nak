@@ -11,12 +11,10 @@
 //     tools/*.ts modules that self-register via registerTool() (pulled
 //     in for side effect by tools/index.ts). This file is just the
 //     dispatch shape the orchestrator calls against. The browser keeps
-//     same-named modules under src/lib/tools/*.ts, but a streamed chat
-//     turn dispatches HERE - those browser modules now serve only the
-//     wire schema the request-shape builder advertises. Their
-//     executeToolCall path has no production caller; a browser module
-//     still executes only when a background agent's toolbox includes
-//     the tool (browser-side agent dispatch via executeToolboxCall).
+//     only schema modules under src/lib/tools/*.schema.ts - every
+//     dispatch (streamed chat turns AND the background agents'
+//     headless loops in agents/_run.ts) happens HERE; the browser's
+//     role is composing the wire `tools` array the request carries.
 //   - The model arming / toolbox catalog. Which tools a turn can
 //     reach is decided at request-shape time (browser composes the
 //     `tools` array against thread.toolboxes_enabled) and the chosen

@@ -1,17 +1,16 @@
 /**
  * Window-level event bus for cross-surface notification of memory
- * writes. Parallel to `wiki-events.ts`. Emitters: the memory librarian
- * agents (deep-sleep and rem), which write to memories /
- * memory_relations / memory_conversation directly via supabase, and
- * the content-write tools (memory_create / _update / _delete /
- * _consolidate) which fire it after appending their changelog row. The
- * Memories panel and sidebar re-run their search to refresh; the
- * MemoryChangelogPanel reloads its first page so a write that lands
- * while the panel is open shows up without a manual refresh.
- *
- * Single-tab consistency only - Supabase realtime is not subscribed
- * for memory tables. A future realtime subscriber can fire this
- * event on INSERT/UPDATE/DELETE without consumers changing.
+ * writes. Parallel to `wiki-events.ts`. Emitters: the Memories
+ * panel's direct edits, the manual librarian strip
+ * (memory-librarian-run.svelte.ts) when a run finishes, and the
+ * realtime relay in Chat.svelte
+ * (SupabaseService.subscribeToMemoryChanges -> emitMemoryChange),
+ * which is how the server-side writers - reflection, the chat-facing
+ * memory tools, the rem and deep-sleep librarian passes - reach an
+ * open panel. The Memories panel and sidebar re-run their search to
+ * refresh; the MemoryChangelogPanel reloads its first page so a
+ * write that lands while the panel is open shows up without a
+ * manual refresh.
  */
 const MEMORY_CHANGE_EVENT = 'nak:memory-change';
 

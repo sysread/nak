@@ -44,10 +44,12 @@ Covered in detail on [Appearance](./appearance.md). Also holds the
 ### Memory
 
 A single toggle for the **memory librarian** - the autonomous agent
-that tidies your memory store in the background, merging duplicates,
+that tidies your memory store on a schedule, merging duplicates,
 filling in relationships, and retiring entries that contradict newer
-ones. Turning it off leaves your existing memories untouched; it
-just stops the background reorganization. See [Memory](./memory.md).
+ones. It runs in the background on your Supabase project, whether or
+not the app is open. Turning it off leaves your existing memories
+untouched and stops the scheduled runs; the manual run buttons in
+the Memories panel keep working. See [Memory](./memory.md).
 
 ### Wiki
 

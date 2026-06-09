@@ -4088,8 +4088,10 @@ export class SupabaseService {
    * `wiki_article_sources` are absent from the map (orphan articles -
    * never written from a recorded conversation).
    *
-   * Powers the `wiki_search` sole-source exclusion (see ToolContext's
-   * `wikiExcludeOwnThreadSoleSources`): the recall path needs to know
+   * Powers the sole-source exclusion in `searchWikiArticlesSemantic`
+   * (src/lib/wiki.ts, the `excludeSoleSourceThreadId` option; the
+   * venice function's wiki_search carries the same filter on its tool
+   * context): the recall path needs to know
    * "is the current thread the ONLY source of this article?", which is
    * cheaper to answer against an in-memory map of all sources for the
    * returned candidates than as a per-article round-trip. Empty input

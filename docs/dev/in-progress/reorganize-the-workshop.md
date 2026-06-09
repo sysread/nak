@@ -120,7 +120,9 @@ agent-side toolbox aggregators).
 **reflection** (simplest) [DONE - see concrete design below],
 **wiki** (autonomous) [DONE - see concrete design below],
 **wiki-librarian** [DONE - see concrete design below],
-**rem + deep-sleep** (one PR - see the combined design below for why).
+**rem + deep-sleep** [DONE - one PR; see the combined design below].
+All five fleets are server-side; Phase 2 is complete pending the
+production verifications listed per fleet.
 After each one lands, the browser impls of its tools may newly fall
 dead - drop them alongside the migration PR (not a separate cleanup).
 
@@ -503,7 +505,34 @@ data implications. memory librarians are heavier (per-user
 consolidation across the full memory set) and want the most
 end-to-end confidence before touching.
 
-#### Rem + deep-sleep: concrete design (combined fleet)
+#### Rem + deep-sleep: concrete design (combined fleet) [LANDED, pending prod verify]
+
+**Status.** Shipped across two commits (server, then browser
+cutover): `agents/rem.ts` + `agents/deep_sleep.ts` with the shared
+toolbox/guard module (`agents/_memory_librarian_tools.ts`), the
+`memory_consolidate` tool port, the global definer claims + shared
+in-flight guard + two hourly crons (minutes 17/47) in schema.sql, the
+four routes (`/rem-sweep`, `/deep-sleep-sweep` service-role;
+`/rem-run`, `/deep-sleep-run` user-JWT with agent-runs progress
+events), the dev-shim ticks, and the full browser cutover - which
+took most of PHASE 3 with it (see there; the impls fell dead with
+their last dispatcher). Both agents thread the completion seam from
+day one; deep-sleep adds an `embed` seam so the batch pipeline tests
+run without network
+(`supabase/functions/tests/memory_librarian{,_behavior}.test.ts`,
+`memory_consolidate.test.ts`). `memories` joined the realtime
+publication; Chat.svelte relays the postgres_changes echo into
+`emitMemoryChange`. Drift bug fixed in passing: the edge mirror of
+`classifyMemoryConfidence` had wrong bands (tagged the neutral
+[1.5, 5.0) band 'hedged'; dropped 'shaky' below 0.05) - realigned to
+the browser's. Gate (1417 vitest) + Deno (118) + knip + markdownlint
+green. **Locally verified end-to-end**, including in-browser: sweep
+ticks (rem reviewed a real co-occurrence batch; deep-sleep performed
+a real consolidation with changelog row), cadence gates, busy
+collision, 403/401, and the Memories strip streaming live step
+events over the Broadcast pipe with the model-narrated activity
+labels (a real `memory_relate` edge landed during the eyeball run).
+**Production verification still owed** per the Phase 2 gate.
 
 **Why one PR for two fleets.** The two memory librarians are
 conjoined to a degree wiki/wiki-librarian were not: one toolbox
@@ -620,33 +649,42 @@ stamps. The browser suites
 subjects; `tests/memory-librarian-ui.test.ts` (pure UI primitives)
 stays.
 
-### PHASE 3 - demolition
+### PHASE 3 - demolition [DONE - landed with the rem + deep-sleep cutover]
 
 **After all 5 agents are server-side**, the entire browser dispatcher
-becomes orphaned. Drop in one cleanup PR:
+becomes orphaned. The plan called for a separate cleanup PR, but the
+Phase 2 rule ("the browser impls of its tools may newly fall dead -
+drop them alongside the migration PR") swallowed the whole list when
+the last fleet landed: with rem + deep-sleep gone, NOTHING dispatched
+tools in the browser, so the final cutover commit took the lot.
+Dropped:
 
 - `src/lib/tools/run.ts` (`runHeadlessToolLoop`).
-- `src/lib/tools/dispatch.ts` (`executeToolboxCall`, the wire
-  projector stays - it serves `buildToolList`).
-- `src/lib/tools/index.ts`'s `executeToolCall` export and the agent-
-  side toolbox re-exports.
-- The 1 surviving agent-side toolbox aggregator
+- `src/lib/tools/dispatch.ts` whole: `executeToolboxCall` and
+  `buildToolboxWireList` died; the wire projector (`toOpenAIToolDef`
+  plus the activity-parameter injection, which `buildToolList` still
+  needs) moved to `wire.ts` with the other wire-shape helpers.
+- The last agent-side toolbox aggregator
   (`memory_librarian_toolbox.ts`). The other three
   (`memory_toolbox.ts`, `wiki_toolbox.ts`,
   `wiki_librarian_toolbox.ts`) already went in Phase 2 - each was
-  exclusive to its fleet, so it died with that fleet's cutover
-  rather than waiting for demolition.
-- The remaining 10 browser tool impl files (the 9 memory tools +
-  `conversation_search`), all owned by the memory-librarian fleet.
-  The wiki impls already died with their fleets' cutovers. Schemas
-  stay - `buildToolList` still uses them.
-- `src/lib/tools/lazy.ts` if it has no remaining caller.
-- The agent class shells in `src/lib/agents/{wiki-
-  librarian,rem,deep-sleep}/agent.ts` if their last reader was the
-  Web Worker (the worker becomes a thin dispatcher). Reflection's
-  shell already went in Phase 2; the wiki shell survived its cutover
-  deliberately - `WikiAgent` now carries only the manual `updateOne`
-  flow (a no-tool completion, outside the dispatcher split).
+  exclusive to its fleet, so it died with that fleet's cutover.
+- All 10 surviving browser tool impl files (the 9 memory tools +
+  `conversation_search`) plus `memory_invalidate`'s impl + schema
+  (agent-only - it was never in a chat toolbox, so its schema died
+  too). Every other schema stays - `buildToolList` uses them; every
+  chat ToolDef is a `serverSideTool` now.
+- `src/lib/tools/lazy.ts` (`lazyTool` lost its last caller).
+- The browser test suites whose subjects died
+  (`tools-run`, `memory-volitional-tools`, `memory-consolidate-tool`,
+  `memory-librarian-run`, `conversation-search-own-thread`); their
+  invariants live in the Deno suites. `SupabaseService` shed the
+  agent-only methods (the librarian claim/queue/visit family, plus
+  the orphaned `decay`/`bumpMemoryConfidence` pair).
+
+The wiki agent shell (`src/lib/agents/wiki/agent.ts`) survives
+deliberately - it carries only the manual `updateOne` flow, a no-tool
+completion outside the dispatcher split.
 
 **Also in this phase - NOT optional: restore the agent-loop test
 seam.** [DONE - landed with the wiki-librarian fleet, as
@@ -656,14 +694,17 @@ the browser suites used to carry are back through it -
 `supabase/functions/tests/wiki_behavior.test.ts` restores the wiki
 agent's primary-then-fallback ordering and the retry flow's
 pointer/skip-marker semantics, and `agent_run.test.ts` covers the
-seam + progress hook themselves. The rem/deep-sleep ports must use
-the seam from day one so their browser test inventories migrate
-instead of dying.
+seam + progress hook themselves. The rem/deep-sleep ports used the
+seam from day one as required
+(`memory_librarian_behavior.test.ts`, plus deep-sleep's `embed`
+seam for the network-free batch pipeline).
 
 **Done when:** `src/lib/tools/` contains only `.schema.ts` files +
-`types.ts` + `wire.ts` + `index.ts` (now a schema-only catalog), and
-the server-side agents' in-run behaviors are unit-tested through the
-runner's injection seam. One dispatcher, one registry, end of split.
+`types.ts` + `wire.ts` + `server_side.ts` + `index.ts` (a schema-only
+catalog), and the server-side agents' in-run behaviors are
+unit-tested through the runner's injection seam. One dispatcher, one
+registry, end of split. **This is now the actual state of the
+tree.**
 
 ### PHASE 4 - edge-to-drawer log streaming [LANDED, pending prod verify]
 
@@ -760,12 +801,13 @@ half-alive" never reads as intentional.
 
 **Open items:**
 
-- **Re-inspect the no-tool completion agents after Phase 3.** The
+- **Re-inspect the no-tool completion agents after Phase 3.** [Phase
+  3 is closed - this item is now actionable.] The
   "What stays browser-side" list excludes the plain-completion agents
   (`auto_title`, `summary`, `topics`, `memory_topics`,
   `recipe_topics`, `bias`, `intuition`, `samskara`) from the
-  dispatcher split on the grounds that they dispatch no tools. Once
-  the split closes, revisit each: whether the server-side patterns
+  dispatcher split on the grounds that they dispatch no tools. Now
+  that the split has closed, revisit each: whether the server-side patterns
   the migration established (cron sweep / waitUntil tail / edge
   logger) now make a server port cheap enough to justify, and whether
   any browser-only assumptions in them have quietly become
@@ -806,10 +848,11 @@ half-alive" never reads as intentional.
   `SupabaseService.createRecipe/updateRecipe/revertRecipe` directly,
   still live) refresh their own local state and never used the bus.
   **Fix shape:** re-drive the refresh with a server-aware trigger - a
-  `recipes`-table Realtime subscription is the natural shape (mirrors
-  how other server-side writes notify the browser). Same pattern the
-  Phase 2 agent runs will want for progress streaming, so it may fall
-  out of that work.
+  `recipes`-table Realtime subscription is the natural shape. The
+  worked pattern now exists twice: `subscribeToWikiArticleChanges`
+  (wiki fleet) and `subscribeToMemoryChanges` (rem + deep-sleep
+  fleet), both publication members + a Chat.svelte effect relaying
+  into the feature's event bus. Recipes is a copy of either.
 
 ## toggle_toolbox: not actually an exception
 

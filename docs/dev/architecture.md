@@ -333,12 +333,13 @@ Three categories of work:
    triggered it.
 
 3. **Background derivation the user controls in-session — browser
-   owns today.** Wiki, intuition, samskara, memory librarian,
-   journaling, auto-title. Run while the app is unlocked; the
-   user toggles them via settings. Losing them on tab close isn't
-   a correctness problem, just a "work resumes next session."
-   Long-term candidates for the function side as the cron +
-   waitUntil pattern matures.
+   owns today.** Intuition, samskara, summaries, topic tagging,
+   auto-title. Run while the app is unlocked. Losing them on tab
+   close isn't a correctness problem, just a "work resumes next
+   session." Long-term candidates for the function side as the
+   cron + waitUntil pattern matures - the wiki agents and the
+   memory librarian (rem + deep-sleep) have already made that
+   move and now run cron-driven in the venice function.
 
 Each row in the database has exactly **one writer-of-record**, set
 by which production path birthed it. The shared table is fine
