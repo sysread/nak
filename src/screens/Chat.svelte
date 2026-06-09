@@ -172,7 +172,6 @@
     runDocumentSearch,
   } from '$lib/documents-store.svelte';
   import { onDocumentChange } from '$lib/document-events';
-  import { wikiLibrarianRunner } from '$lib/agents/wiki-librarian/runner.svelte';
   import { deepSleepRunner } from '$lib/agents/deep-sleep/runner.svelte';
   import { remRunner } from '$lib/agents/rem/runner.svelte';
   import { moodState } from '$lib/samskara/mood.svelte';
@@ -6635,10 +6634,12 @@
             {
               id: 'librarian',
               label: 'Run librarian',
-              title: wikiLibrarianRunner.busy
-                ? 'The librarian is already running'
-                : 'Run the wiki librarian now',
-              disabled: wikiLibrarianRunner.busy,
+              // No preemptive busy gray-out: the librarian runs
+              // server-side and the browser has no live view of the
+              // scheduled sweep. The server's in-flight guard rejects
+              // a colliding run with a clean "already in flight"
+              // message in the strip instead.
+              title: 'Run the wiki librarian now',
               onclick: () => (wikiLibrarianTrigger = true),
               icon: librarianIcon,
             },

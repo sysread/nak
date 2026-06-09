@@ -211,11 +211,7 @@ const recipePhotosRemove = serverSideTool(recipePhotosRemoveSchema);
 const recipePhotosReorder = serverSideTool(recipePhotosReorderSchema);
 const recipePhotoLabelSet = serverSideTool(recipePhotoLabelSetSchema);
 const researchDocs = serverSideTool(researchDocsSchema);
-const wikiSearch = lazyTool(
-  wikiSearchSchema,
-  () => import('./wiki_search'),
-  'wikiSearch'
-);
+const wikiSearch = serverSideTool(wikiSearchSchema);
 const wikiList = serverSideTool(wikiListSchema);
 const wikiGet = serverSideTool(wikiGetSchema);
 const wikiLibrarian = serverSideTool(wikiLibrarianSchema);

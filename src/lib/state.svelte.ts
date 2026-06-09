@@ -126,13 +126,10 @@ const samskara = lazyManager(() =>
 const bias = lazyManager(() =>
   import('./agents/bias/manager').then((m) => m.biasManager)
 );
-// The autonomous wiki agent is no longer a worker here: it runs
-// server-side on a pg_cron schedule against the venice edge function
-// (/wiki-sweep; see docs/dev/wiki.md). The librarian below is still a
-// browser worker pending its own fleet migration.
-const wikiLibrarian = lazyManager(() =>
-  import('./agents/wiki-librarian/manager').then((m) => m.wikiLibrarianManager)
-);
+// The wiki agents are no longer workers here: both the autonomous
+// per-conversation agent and the librarian run server-side on
+// pg_cron schedules against the venice edge function (/wiki-sweep,
+// /wiki-librarian-sweep; see docs/dev/wiki.md).
 // Memory librarian workers. Two agents (deep-sleep and rem) share
 // the 'memory-librarian' lease partition so only one can run at a
 // time per user across devices; their cadence gates (deep_sleep_last_
@@ -343,13 +340,11 @@ function setNotifyOnComplete(enabled: boolean): void {
 }
 
 /**
- * Apply the display name in memory and live-update the wiki librarian
- * worker so the next background run uses the new name without a worker
- * restart. Empty string is "not set" - the chat-loop's per-turn
- * metadata builder treats it the same as absent. The prompt builder
- * suppresses the "About the user" block when both this and
- * userLocation are empty. (The autonomous wiki agent reads the same
- * settings server-side per run, so it needs no live push.)
+ * Apply the display name in memory. Empty string is "not set" - the
+ * chat-loop's per-turn metadata builder treats it the same as absent.
+ * No worker push remains: every prompt that renders an "About the
+ * user" block (the wiki agent, the librarian) reads
+ * profiles.settings.userName server-side per run.
  *
  * Does NOT persist. The settings-load path uses this directly (the
  * value just came back from Supabase, so persisting it again would
@@ -358,18 +353,16 @@ function setNotifyOnComplete(enabled: boolean): void {
  */
 function setUserName(name: string): void {
   app.userName = name;
-  wikiLibrarian.whenLoaded((m) => m.setProfile(name, app.userLocation));
 }
 
 /**
- * Apply the user's location in memory and live-update the wiki
- * librarian worker. Empty string is "not set". Does NOT persist -
- * same split as `setUserName`: the settings-load path uses this
- * directly, user-driven changes route through `persistUserLocation`.
+ * Apply the user's location in memory. Empty string is "not set".
+ * Does NOT persist - same split as `setUserName`: the settings-load
+ * path uses this directly, user-driven changes route through
+ * `persistUserLocation`.
  */
 function setUserLocation(location: string): void {
   app.userLocation = location;
-  wikiLibrarian.whenLoaded((m) => m.setProfile(app.userName, location));
 }
 
 /**
@@ -399,23 +392,16 @@ function setWikiAutomaticEnabled(enabled: boolean): void {
 }
 
 /**
- * Flip the wiki librarian on/off. Independent of the per-conversation
- * wiki worker - the user can disable autonomy on one or the other
- * without losing the other.
+ * Flip the in-memory wiki-librarian flag. Independent of the
+ * automatic wiki agent - the user can disable autonomy on one or the
+ * other without losing the other. The live switch is the persisted
+ * setting: the librarian sweep's claim predicate reads
+ * profiles.settings.wikiLibrarianEnabled server-side, so there is no
+ * worker to start or stop here. Does NOT persist; user-driven changes
+ * route through `persistWikiLibrarianEnabled`.
  */
 function setWikiLibrarianEnabled(enabled: boolean): void {
   app.wikiLibrarianEnabled = enabled;
-  if (!app.supabase || !app.config) return;
-  if (enabled) {
-    wikiLibrarian.start({
-      supabase: app.supabase,
-      config: app.config,
-      userName: app.userName,
-      userLocation: app.userLocation,
-    });
-  } else {
-    wikiLibrarian.stop();
-  }
 }
 
 /**
@@ -791,18 +777,11 @@ function startBackgroundWorkers(config: AppConfig): void {
   // patterns" block when biases clear a tier. See
   // docs/dev/bias-profile.md.
   bias.start({ supabase: app.supabase, config });
-  // The autonomous wiki agent has no browser worker to start: the
-  // server-side cron sweep reads app.wikiAutomaticEnabled's persisted
-  // form (profiles.settings.wikiAutomaticEnabled) per candidate
-  // thread, so the Settings toggle gates it without any wiring here.
-  if (app.wikiLibrarianEnabled) {
-    wikiLibrarian.start({
-      supabase: app.supabase,
-      config,
-      userName: app.userName,
-      userLocation: app.userLocation,
-    });
-  }
+  // The wiki agents have no browser workers to start: the server-side
+  // cron sweeps read the persisted toggles
+  // (profiles.settings.wikiAutomaticEnabled / wikiLibrarianEnabled)
+  // per claim, so the Settings switches gate them without any wiring
+  // here.
   if (app.memoryLibrarianEnabled) {
     deepSleep.start({ supabase: app.supabase, config });
     rem.start({ supabase: app.supabase, config });
@@ -899,7 +878,6 @@ function stopBackgroundWorkers(): void {
   supervisor.stop();
   samskara.stop();
   bias.stop();
-  wikiLibrarian.stop();
   deepSleep.stop();
   rem.stop();
   resetUsage();

@@ -747,6 +747,34 @@ export type WikiRetryResult =
   | { kind: 'no-op'; reason: string }
   | { kind: 'error'; error: string };
 
+/**
+ * Outcome of a server-side manual librarian run (the venice
+ * function's /wiki-librarian-run route; see runWikiLibrarian below).
+ * `busy` means another librarian run (scheduled, manual, or
+ * chat-dispatched) holds the in-flight guard - the UI surfaces a
+ * "try again in a moment" rather than racing two passes.
+ */
+export type WikiLibrarianRunResult =
+  | { kind: 'ok'; finalText: string; toolCalls: number; articleCount: number }
+  | { kind: 'busy' }
+  | { kind: 'error'; error: string };
+
+/**
+ * One live step event from a server-side agent run, as published to
+ * the agent-runs:<userId> Broadcast channel by the venice function.
+ * Mirror of the function's LibrarianProgressEvent: `preparing` (with
+ * the article snapshot size), the runner's `thinking` / `tool`
+ * events, and a closing `done`. `runId` is the demux key - every
+ * event carries the id the client minted for its run, so concurrent
+ * runs (or a stale subscription) can't cross streams.
+ */
+export type AgentRunProgressEvent = { runId: string } & (
+  | { kind: 'preparing'; articleCount: number }
+  | { kind: 'thinking'; round: number }
+  | { kind: 'tool'; name: string; activity: string; ok: boolean; ms: number }
+  | { kind: 'done'; ok: boolean }
+);
+
 function coerceWikiChangelogKind(raw: unknown): WikiChangelogKind | null {
   if (raw === 'create' || raw === 'update' || raw === 'delete') return raw;
   return null;
@@ -4336,24 +4364,37 @@ export class SupabaseService {
   }
 
   /**
-   * Atomic claim for one wiki-librarian run. Returns true if the
-   * caller acquired the run (the prior timestamp is older than
-   * `minIntervalSeconds`, or no run has happened yet); false
-   * otherwise. The worker calls this BEFORE invoking the agent so
-   * two devices waking up at the same moment don't both run the
-   * agent against the same wiki.
-   *
-   * The atomicity comes from the SQL UPDATE-with-WHERE shape - the
-   * update only matches when the interval has passed, so concurrent
-   * callers either both miss the predicate (one already won) or one
-   * matches and the others don't.
+   * Ask the venice function to run the wiki librarian now (the Wiki
+   * panel's sparkles button). The whole run - article snapshot,
+   * prompt build, the tool loop, the in-flight guard shared with the
+   * scheduled sweep and the chat-dispatched path - happens
+   * server-side; this is a thin authenticated POST. `runId` is the
+   * client-minted demux key for the live step events: subscribe via
+   * subscribeToAgentRunProgress BEFORE calling this, or the first
+   * events race the subscription.
    */
-  async claimWikiLibrarianRun(minIntervalSeconds: number): Promise<boolean> {
-    const { data, error } = await this.client.rpc('claim_wiki_librarian_run', {
-      p_min_interval_seconds: minIntervalSeconds,
+  async runWikiLibrarian(args: {
+    instructions: string | null;
+    runId: string;
+  }): Promise<WikiLibrarianRunResult> {
+    const { data, error } = await this.client.functions.invoke('venice/wiki-librarian-run', {
+      body: { instructions: args.instructions, runId: args.runId },
     });
-    if (error) throw new SupabaseError(error.message);
-    return data === true;
+    if (error) throw await veniceFunctionError(error);
+    const result = data as Partial<WikiLibrarianRunResult> | null;
+    if (result && result.kind === 'ok' && typeof result.finalText === 'string') {
+      return {
+        kind: 'ok',
+        finalText: result.finalText,
+        toolCalls: typeof result.toolCalls === 'number' ? result.toolCalls : 0,
+        articleCount: typeof result.articleCount === 'number' ? result.articleCount : 0,
+      };
+    }
+    if (result && result.kind === 'busy') return { kind: 'busy' };
+    if (result && result.kind === 'error' && typeof result.error === 'string') {
+      return { kind: 'error', error: result.error };
+    }
+    return { kind: 'error', error: 'wiki-librarian-run returned an unrecognised response' };
   }
 
   /**
@@ -6078,6 +6119,33 @@ export class SupabaseService {
         }
       )
       .subscribe();
+    return () => {
+      void this.client.removeChannel(channel);
+    };
+  }
+
+  /**
+   * Subscribe to the signed-in user's agent-run progress channel. The
+   * venice function publishes live step events (model rounds, tool
+   * calls with their narration) for user-triggered agent runs - the
+   * Wiki librarian's manual-run strip is the consumer. Subscribe
+   * BEFORE issuing the run's POST (the pre-subscribe rule streaming
+   * chat established); filter by runId at the call site since the
+   * topic is per-user, not per-run. `private: true` engages the
+   * "agent-run channel: owner subscribe" policy on realtime.messages.
+   */
+  subscribeToAgentRunProgress(
+    userId: string,
+    onEvent: (event: AgentRunProgressEvent) => void
+  ): () => void {
+    const channel = this.client
+      .channel(`agent-runs:${userId}`, { config: { private: true } })
+      .on('broadcast', { event: 'agent-progress' }, ({ payload }) => {
+        onEvent(payload as AgentRunProgressEvent);
+      })
+      .subscribe((status, err) => {
+        log.debug(`agent-runs channel subscribe status: ${status}`, err ?? '');
+      });
     return () => {
       void this.client.removeChannel(channel);
     };
