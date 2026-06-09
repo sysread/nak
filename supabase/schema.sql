@@ -5873,9 +5873,14 @@ end $$;
 -- existing row (health bump + appended substrate provenance) instead
 -- of minting a twin. The long-tail fire behaviour (no health-
 -- threshold filter) is unchanged; this only affects MINT, not FIRE.
+-- The tier filter was added after the original 2-arg shape shipped;
+-- drop the old signature so the 3-arg version doesn't create an
+-- overload that PostgREST can't disambiguate.
+drop function if exists public.samskara_nearest_by_prediction(vector, int);
 create or replace function public.samskara_nearest_by_prediction(
   p_query_embedding vector(2048),
-  p_k_max int
+  p_k_max int,
+  p_tier int default null
 ) returns table (
   id uuid,
   cosine real,
@@ -5885,16 +5890,22 @@ language sql stable security invoker as $$
   -- Returns the k nearest samskaras by cosine similarity against the
   -- supplied prediction embedding. Ordered by pgvector's cosine
   -- distance ascending so the most-similar row comes first; the
-  -- caller reads `cosine` (1 - distance) for a threshold check. Does
-  -- NOT filter by tier because a tier-2 compound duplicating a tier-1
-  -- prediction is still a duplicate worth collapsing; callers that
-  -- want tier-aware behaviour can post-filter on the return.
+  -- caller reads `cosine` (1 - distance) for a threshold check.
+  --
+  -- p_tier null (the default) searches every tier - the original
+  -- behaviour, used by the tier-1 mint dedup guard where a tier-2
+  -- compound duplicating a tier-1 prediction is still worth catching.
+  -- p_tier = N restricts to that tier, which the tier-2 mint dedup
+  -- guard needs: "is there an existing COMPOUND this close?" can't be
+  -- answered by post-filtering a global-k list, because nearer tier-1
+  -- rows would crowd a genuine tier-2 twin out of the top k.
   select s.id,
          (1 - (s.prediction_embedding <=> p_query_embedding))::real as cosine,
          s.tier
     from public.samskaras s
    where s.user_id = auth.uid()
      and s.prediction_embedding is not null
+     and (p_tier is null or s.tier = p_tier)
    order by s.prediction_embedding <=> p_query_embedding asc
    limit p_k_max
 $$;
@@ -6207,6 +6218,200 @@ begin
   end if;
 
   return v_collapsed;
+end $$;
+
+-- Tier-2 (compound) candidate detection -----------------------------------
+--
+-- Finds ONE recurring co-fire constellation of tier-1 samskaras worth
+-- compounding into a tier-2 parent, or returns nothing. The worker's
+-- mint-tier2 phase calls this, hands the child predictions to the
+-- minter agent, and (if the agent confirms) inserts a tier-2 row whose
+-- provenance points back at these children.
+--
+-- This is the INVERSE of samskara_collapse_by_cofiring, and the two
+-- read the same co-fire self-join, so the distinction is load-bearing:
+--   - dedup merges pairs that are the SAME claim - high co-fire AND
+--     high embedding cosine (>= p_cosine_floor, default 0.70). One is
+--     deleted.
+--   - tier-2 groups claims that CO-ACTIVATE BUT STAY DISTINCT - high
+--     co-fire but cosine strictly BELOW that floor. Nothing is deleted;
+--     a parent is added.
+-- The cosine band [p_cosine_lo, p_cosine_hi) is the seam. p_cosine_hi
+-- MUST stay below dedup's p_cosine_floor or the two phases fight over
+-- the same pairs - dedup deleting what tier-2 just grouped.
+--
+-- Group shape: the strongest eligible edge seeds the group, then every
+-- node that shares an eligible edge with BOTH seed members joins (up to
+-- p_max_group_size, strongest first). Requiring both - not either -
+-- keeps the constellation coherent: a node co-firing with only one seed
+-- member is adjacent, not part of the pattern.
+--
+-- Coverage skip: if an existing tier-2's child-set already overlaps the
+-- candidate by Jaccard >= p_overlap_skip, return nothing. The group
+-- still co-fires every cycle, so without this guard detection would
+-- re-surface the same compound forever - the tier-2 analog of the
+-- tier-1 twin problem. The mint phase's embedding dedup is the second
+-- net (it catches a different child set that synthesized to the same
+-- claim).
+--
+-- Volatile (not stable): builds a temp edge table so the seed, the
+-- neighbour scan, and the per-member weight read all hit the eligible
+-- self-join once rather than three times. `on commit drop` scopes it to
+-- the PostgREST call's transaction.
+create or replace function public.samskara_tier2_candidate(
+  p_min_cofires    int  default 4,
+  p_cosine_lo      real default 0.30,
+  p_cosine_hi      real default 0.68,
+  p_min_group_size int  default 3,
+  p_max_group_size int  default 6,
+  p_overlap_skip   real default 0.60
+) returns table (
+  samskara_id uuid,
+  prediction text,
+  valence real,
+  cofire_weight real
+)
+language plpgsql security invoker as $$
+declare
+  v_uid uuid := auth.uid();
+  v_active int;
+  v_seed_a uuid;
+  v_seed_b uuid;
+  v_extra uuid[];
+  v_group uuid[];
+  v_existing record;
+  v_overlap real;
+begin
+  -- Cheap precondition before the costly self-join: tier-2 is
+  -- meaningless until a substantial tier-1 corpus has actually fired.
+  -- Floor at min-group-size + 1 so a group can even form.
+  select count(*) into v_active
+    from public.samskaras
+   where user_id = v_uid and tier = 1 and fire_count > 0;
+  if v_active < greatest(p_min_group_size + 1, 8) then
+    return;
+  end if;
+
+  -- Eligible edges materialized once. Each is a tier-1<->tier-1 pair
+  -- that co-fires in >= p_min_cofires cohorts AND whose prediction-
+  -- embedding cosine sits in the [lo, hi) band - above lo to reject
+  -- spurious co-fires, strictly below hi (dedup's floor) so we only
+  -- ever group claims dedup deliberately leaves distinct.
+  create temporary table if not exists _tier2_edges (
+    a_id uuid,
+    b_id uuid,
+    cofires int
+  ) on commit drop;
+  delete from _tier2_edges;
+  insert into _tier2_edges (a_id, b_id, cofires)
+  with pair_cofires as (
+    select least(f1.samskara_id, f2.samskara_id) as a_id,
+           greatest(f1.samskara_id, f2.samskara_id) as b_id,
+           count(*)::int as cofires
+      from public.samskara_fires f1
+      join public.samskara_fires f2
+        on f1.cohort_id = f2.cohort_id
+       and f1.samskara_id < f2.samskara_id
+     where f1.user_id = v_uid
+       and f2.user_id = v_uid
+     group by 1, 2
+     having count(*) >= p_min_cofires
+  )
+  select pc.a_id, pc.b_id, pc.cofires
+    from pair_cofires pc
+    join public.samskaras sa on sa.id = pc.a_id
+    join public.samskaras sb on sb.id = pc.b_id
+   where sa.user_id = v_uid
+     and sb.user_id = v_uid
+     and sa.tier = 1
+     and sb.tier = 1
+     and sa.prediction_embedding is not null
+     and sb.prediction_embedding is not null
+     and (1 - (sa.prediction_embedding <=> sb.prediction_embedding))::real >= p_cosine_lo
+     and (1 - (sa.prediction_embedding <=> sb.prediction_embedding))::real <  p_cosine_hi;
+
+  -- Seed: the strongest single eligible edge. Deterministic tie-break
+  -- on the ids so repeated calls pick the same seed when co-fire counts
+  -- tie.
+  select e.a_id, e.b_id into v_seed_a, v_seed_b
+    from _tier2_edges e
+   order by e.cofires desc, e.a_id, e.b_id
+   limit 1;
+  if v_seed_a is null then
+    return;
+  end if;
+
+  -- Grow: nodes sharing an eligible edge with BOTH seed members,
+  -- strongest combined co-fire first, capped at the group budget.
+  select coalesce(array_agg(node order by w desc), array[]::uuid[])
+    into v_extra
+    from (
+      select i.node, sum(i.cofires)::int as w
+        from (
+          select a_id as node, b_id as other, cofires from _tier2_edges
+          union all
+          select b_id as node, a_id as other, cofires from _tier2_edges
+        ) i
+       where i.other in (v_seed_a, v_seed_b)
+         and i.node not in (v_seed_a, v_seed_b)
+       group by i.node
+      having count(distinct i.other) = 2
+       order by w desc
+       limit greatest(p_max_group_size - 2, 0)
+    ) picked;
+
+  v_group := array[v_seed_a, v_seed_b] || v_extra;
+  if coalesce(array_length(v_group, 1), 0) < p_min_group_size then
+    return;
+  end if;
+
+  -- Coverage skip. Jaccard of the candidate group against each existing
+  -- tier-2's child-set; bail if any already covers this constellation.
+  for v_existing in
+    select sp.samskara_id as t2_id,
+           array_agg(sp.ref_id) as children
+      from public.samskara_provenance sp
+      join public.samskaras s2 on s2.id = sp.samskara_id
+     where sp.user_id = v_uid
+       and sp.kind = 'samskara'
+       and s2.tier = 2
+     group by sp.samskara_id
+  loop
+    select (
+      cardinality(array(
+        select unnest(v_group) intersect select unnest(v_existing.children)
+      ))::real
+      / nullif(cardinality(array(
+          select unnest(v_group) union select unnest(v_existing.children)
+        )), 0)::real
+    ) into v_overlap;
+    if coalesce(v_overlap, 0) >= p_overlap_skip then
+      return;
+    end if;
+  end loop;
+
+  -- Emit the members with a per-member weight = summed co-fire count of
+  -- that member's eligible edges to the rest of the group. Becomes the
+  -- provenance weight on the minted tier-2's child links; the compound's
+  -- own valence is the minter agent's call, not a weighted mean here.
+  return query
+    with mem as (
+      select unnest(v_group) as mid
+    ),
+    weighted as (
+      select m.mid,
+             coalesce(sum(e.cofires), 0)::real as cw
+        from mem m
+        left join _tier2_edges e
+          on (e.a_id = m.mid and e.b_id = any(v_group))
+          or (e.b_id = m.mid and e.a_id = any(v_group))
+       group by m.mid
+    )
+    select s.id, s.prediction, s.valence, w.cw
+      from weighted w
+      join public.samskaras s
+        on s.id = w.mid
+       and s.user_id = v_uid;
 end $$;
 
 -- Journal feature removed -------------------------------------------------

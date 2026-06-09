@@ -73,9 +73,52 @@ function fakeSupabase(overrides: Partial<SupabaseService> = {}): SupabaseService
     samskaraTopForSummary: vi.fn(async () => []),
     samskaraSaveCompoundSummary: vi.fn(async () => false),
     samskaraApplyReaction: vi.fn(async () => undefined),
+    samskaraTier2Candidate: vi.fn(async () => []),
+    samskaraNearestByPrediction: vi.fn(async () => []),
+    samskaraReinforceExisting: vi.fn(async () => true),
+    embed: vi.fn(async () => ({ data: [{ embedding: [0.1, 0.2] as number[] }] })),
     listMessages: vi.fn(async () => []),
     ...overrides,
   } as unknown as SupabaseService;
+}
+
+/**
+ * Chainable mock of the raw Supabase client the mint phases reach
+ * through (`ctx.supabase.client`). Records the row passed to
+ * `.from('samskaras').insert(...)` and the rows passed to
+ * `.from('samskara_provenance').upsert(...)` so tests can assert tier
+ * and provenance shape without a real PostgREST.
+ */
+function fakeClient(insertId = 't2-new'): {
+  client: unknown;
+  inserted: Record<string, unknown>[];
+  provRows: Record<string, unknown>[][];
+} {
+  const inserted: Record<string, unknown>[] = [];
+  const provRows: Record<string, unknown>[][] = [];
+  const client = {
+    from: (table: string) => {
+      if (table === 'samskaras') {
+        return {
+          insert: (row: Record<string, unknown>) => {
+            inserted.push(row);
+            return {
+              select: () => ({
+                single: async () => ({ data: { id: insertId }, error: null }),
+              }),
+            };
+          },
+        };
+      }
+      return {
+        upsert: async (rows: Record<string, unknown>[]) => {
+          provRows.push(rows);
+          return { error: null };
+        },
+      };
+    },
+  };
+  return { client, inserted, provRows };
 }
 
 function buildCtx(overrides: Partial<CycleContext> = {}): CycleContext {
@@ -418,6 +461,159 @@ describe('samskara runOneCycle - dedup phase', () => {
     await runOneCycle(ctx);
     const result = await runOneCycle(ctx);
     expect(result).toBe<CycleResult>('error');
+  });
+});
+
+describe('samskara runOneCycle - mint-tier2 phase', () => {
+  const candidateGroup = [
+    { samskaraId: 's1', prediction: 'pushes back on flowery prose', valence: -0.2, cofireWeight: 8 },
+    { samskaraId: 's2', prediction: 'wants code without preamble', valence: 0.1, cofireWeight: 7 },
+    { samskaraId: 's3', prediction: 'corrects over-explanation', valence: -0.1, cofireWeight: 6 },
+  ];
+
+  it('returns empty-phase when no candidate group is found', async () => {
+    const { coordinator } = buildCoordinator();
+    const candidate = vi.fn(async () => []);
+    const mintTier2 = vi.fn(async () => null);
+    const supabase = fakeSupabase({
+      samskaraTier2Candidate: candidate,
+    } as unknown as Partial<SupabaseService>);
+    const agent = fakeAgent({ mintTier2 } as unknown as Partial<SamskaraAgent>);
+    const ctx = buildCtx({ coordinator, supabase, agent, phase: 'mint-tier2' });
+    await runOneCycle(ctx); // acquired-lease
+    const result = await runOneCycle(ctx);
+    expect(candidate).toHaveBeenCalled();
+    // Agent must not run on a sub-threshold group.
+    expect(mintTier2).not.toHaveBeenCalled();
+    expect(result).toBe<CycleResult>('empty-phase');
+  });
+
+  it('mints a tier-2 row with samskara provenance and fires onMint', async () => {
+    const { coordinator } = buildCoordinator();
+    const mintTier2 = vi.fn(async () => ({
+      confirm: true,
+      prediction: 'runs on an efficiency instinct in technical exchanges',
+      innerVoice: 'be terse',
+      valence: -0.1,
+      confidence: 0.5,
+    }));
+    const { client, inserted, provRows } = fakeClient('t2-abc');
+    const supabase = fakeSupabase({
+      samskaraTier2Candidate: vi.fn(async () => candidateGroup),
+      client,
+    } as unknown as Partial<SupabaseService>);
+    const agent = fakeAgent({ mintTier2 } as unknown as Partial<SamskaraAgent>);
+    const mints: { tier: 1 | 2 }[] = [];
+    const ctx = buildCtx({
+      coordinator,
+      supabase,
+      agent,
+      phase: 'mint-tier2',
+      onMint: (info) => mints.push(info),
+    });
+    await runOneCycle(ctx);
+    const result = await runOneCycle(ctx);
+    expect(result).toBe<CycleResult>('progress');
+    // The agent saw the child predictions, stripped of the bookkeeping
+    // fields the RPC carries.
+    expect(mintTier2).toHaveBeenCalledWith(
+      [
+        { prediction: 'pushes back on flowery prose', valence: -0.2 },
+        { prediction: 'wants code without preamble', valence: 0.1 },
+        { prediction: 'corrects over-explanation', valence: -0.1 },
+      ],
+      expect.anything()
+    );
+    // tier:2 row inserted.
+    expect(inserted).toHaveLength(1);
+    expect(inserted[0].tier).toBe(2);
+    expect(inserted[0].inner_voice).toBe('be terse');
+    // Provenance points at the three children with kind='samskara'.
+    expect(provRows).toHaveLength(1);
+    expect(provRows[0]).toHaveLength(3);
+    expect(provRows[0].every((r) => r.kind === 'samskara')).toBe(true);
+    expect(provRows[0].map((r) => r.ref_id)).toEqual(['s1', 's2', 's3']);
+    expect(provRows[0].map((r) => r.weight)).toEqual([8, 7, 6]);
+    // onMint fired with tier 2.
+    expect(mints).toEqual([{ tier: 2, valence: -0.1, confidence: 0.5 }]);
+  });
+
+  it('returns empty-phase without inserting when the agent declines', async () => {
+    const { coordinator } = buildCoordinator();
+    const mintTier2 = vi.fn(async () => null);
+    const { client, inserted } = fakeClient();
+    const supabase = fakeSupabase({
+      samskaraTier2Candidate: vi.fn(async () => candidateGroup),
+      client,
+    } as unknown as Partial<SupabaseService>);
+    const agent = fakeAgent({ mintTier2 } as unknown as Partial<SamskaraAgent>);
+    const ctx = buildCtx({ coordinator, supabase, agent, phase: 'mint-tier2' });
+    await runOneCycle(ctx);
+    const result = await runOneCycle(ctx);
+    expect(mintTier2).toHaveBeenCalled();
+    expect(inserted).toHaveLength(0);
+    expect(result).toBe<CycleResult>('empty-phase');
+  });
+
+  it('reinforces an existing compound instead of minting a twin on a dedup hit', async () => {
+    const { coordinator } = buildCoordinator();
+    const mintTier2 = vi.fn(async () => ({
+      confirm: true,
+      prediction: 'efficiency instinct',
+      innerVoice: '',
+      valence: 0,
+      confidence: 0.5,
+    }));
+    const nearest = vi.fn(async () => [{ id: 't2-existing', cosine: 0.92, tier: 2 }]);
+    const reinforce = vi.fn(async () => true);
+    const { client, inserted } = fakeClient();
+    const supabase = fakeSupabase({
+      samskaraTier2Candidate: vi.fn(async () => candidateGroup),
+      samskaraNearestByPrediction: nearest,
+      samskaraReinforceExisting: reinforce,
+      client,
+    } as unknown as Partial<SupabaseService>);
+    const agent = fakeAgent({ mintTier2 } as unknown as Partial<SamskaraAgent>);
+    const mints: { tier: 1 | 2 }[] = [];
+    const ctx = buildCtx({
+      coordinator,
+      supabase,
+      agent,
+      phase: 'mint-tier2',
+      onMint: (info) => mints.push(info),
+    });
+    await runOneCycle(ctx);
+    const result = await runOneCycle(ctx);
+    expect(result).toBe<CycleResult>('progress');
+    // Dedup query was tier-scoped to compounds.
+    expect(nearest).toHaveBeenCalledWith(expect.anything(), 1, 2);
+    // Reinforced health only - no substrate provenance for a tier-2.
+    expect(reinforce).toHaveBeenCalledWith('t2-existing', [], expect.any(Number));
+    // No new row, no mint toast.
+    expect(inserted).toHaveLength(0);
+    expect(mints).toEqual([]);
+  });
+
+  it('skips entirely when throttled - no candidate RPC fires', async () => {
+    const { coordinator } = buildCoordinator();
+    const candidate = vi.fn(async () => candidateGroup);
+    const supabase = fakeSupabase({
+      samskaraTier2Candidate: candidate,
+    } as unknown as Partial<SupabaseService>);
+    const ctx = buildCtx({
+      coordinator,
+      supabase,
+      phase: 'mint-tier2',
+      phaseThrottle: {
+        lastRunMs: new Map([['mint-tier2', Date.now()]]),
+        minIntervalMs: 60_000,
+        intervalOverridesMs: { 'mint-tier2': 5 * 60 * 1000 },
+      },
+    });
+    await runOneCycle(ctx); // acquired-lease
+    const result = await runOneCycle(ctx);
+    expect(result).toBe<CycleResult>('empty-phase');
+    expect(candidate).not.toHaveBeenCalled();
   });
 });
 

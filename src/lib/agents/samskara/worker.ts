@@ -41,6 +41,17 @@ import {
  */
 const PHASE_THROTTLE_MIN_INTERVAL_MS = 60 * 1000;
 
+/**
+ * mint-tier2 throttle - deliberately longer than the 60s shared
+ * default. Compound constellations form over many turns, not bursts, so
+ * there's no responsiveness cost to checking infrequently; and the
+ * detection self-join (every tier-1<->tier-1 co-fire pair) is the
+ * heaviest query in the worker, so a tight interval would re-run it for
+ * no gain. Five minutes keeps it off the common idle path while still
+ * catching new constellations within a session.
+ */
+const TIER2_THROTTLE_INTERVAL_MS = 5 * 60 * 1000;
+
 interface StartMessage {
   type: 'start';
   supabaseUrl: string;
@@ -173,9 +184,11 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
   const phaseThrottle: {
     lastRunMs: Map<SamskaraPhase, number>;
     minIntervalMs: number;
+    intervalOverridesMs?: Partial<Record<SamskaraPhase, number>>;
   } = {
     lastRunMs: new Map(),
     minIntervalMs: PHASE_THROTTLE_MIN_INTERVAL_MS,
+    intervalOverridesMs: { 'mint-tier2': TIER2_THROTTLE_INTERVAL_MS },
   };
 
   const napConfig: NapConfig = {
