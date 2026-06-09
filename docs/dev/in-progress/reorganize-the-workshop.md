@@ -120,7 +120,7 @@ agent-side toolbox aggregators).
 **reflection** (simplest) [DONE - see concrete design below],
 **wiki** (autonomous) [DONE - see concrete design below],
 **wiki-librarian** [DONE - see concrete design below],
-**rem**, **deep-sleep**.
+**rem + deep-sleep** (one PR - see the combined design below for why).
 After each one lands, the browser impls of its tools may newly fall
 dead - drop them alongside the migration PR (not a separate cleanup).
 
@@ -167,8 +167,12 @@ Smallest first. Each agent's trigger shape decides the surface:
 | **reflection** | memory CRUD (8) | per-thread, post-round | inline in `getStreamingResponse` tail (via `waitUntil`) |
 | **wiki** (autonomous) | wiki CRUD + memory_search | per-thread, becomes-substantive | pg_cron scan + claim/save RPC |
 | **wiki-librarian** | wiki edits + conversation/memory_search | scheduled batch + user-triggered | pg_cron for batch; HTTP POST for "run now" button |
-| **rem** | memory librarian set | scheduled batch | pg_cron + claim/save RPC |
+| **rem** | memory librarian set | scheduled batch + user-triggered | pg_cron + HTTP POST |
 | **deep-sleep** | memory librarian set | scheduled batch + user-triggered | pg_cron + HTTP POST |
+
+(Correction from research: rem has a manual "run now" path too - the
+Memories top-bar drives BOTH librarians through a shared progress
+strip, not just deep-sleep as an earlier draft of this table said.)
 
 **Why reflection first.** No cron - it piggybacks on the streaming
 tail instead of a scheduled poll, so it isolates the per-agent port
@@ -498,6 +502,123 @@ deep-sleep; mis-migrations there are easier to roll back without user
 data implications. memory librarians are heavier (per-user
 consolidation across the full memory set) and want the most
 end-to-end confidence before touching.
+
+#### Rem + deep-sleep: concrete design (combined fleet)
+
+**Why one PR for two fleets.** The two memory librarians are
+conjoined to a degree wiki/wiki-librarian were not: one toolbox
+(`memory_librarian_toolbox` - the sole consumer of
+`memory_consolidate`), one model slot (both `deepseek-v4-flash`),
+one Settings toggle (`memoryLibrarianEnabled` starts/stops both),
+one cross-device mutex (the shared `'memory-librarian'` lease
+partition), and one Memories-screen UI (a single
+`memory-librarian-run.svelte.ts` state module drives both manual-run
+buttons through one progress strip). Migrating rem alone would leave
+that shared strip running two protocols at once (Broadcast events
+for rem, in-page callbacks for deep-sleep), open a transitional
+mutex gap (a server rem sweep cannot see the browser lease
+deep-sleep holds), and force a second pass over every shared file.
+Deep-sleep's marginal cost on top of rem is small - simpler prompt
+than the wiki librarian, and its one extra ingredient (server-side
+query embedding) already exists in `_shared/backfill.ts` +
+`tools/memory_search.ts`.
+
+**What each agent does** (unchanged - the prompts port verbatim):
+deep-sleep consolidates SIMILARITY neighborhoods (oldest-unvisited
+seed -> embed -> top-8 cosine neighbors above 0.80 -> the agent
+merges/relates/doubts); rem integrates CO-OCCURRENCE batches (oldest
+eligible conversation from `memory_conversation` -> the memories the
+recall agent surfaced together -> the agent draws the missed graph
+edges). Both bottom out in the same toolbox; both treat "no changes"
+as the default outcome. The hint queue rem drains is already fed
+server-side - `agents/recall.ts` upserts `memory_conversation` rows -
+so the browser's `upsertMemoryConversationRows` is already dead and
+dies in the cutover.
+
+**Trigger surfaces** (the librarian pattern, twice):
+
+- **Scheduled**: two hourly pg_cron jobs at offset minutes -
+  `nak_trigger_rem_sweep()` (minute 17) and
+  `nak_trigger_deep_sleep_sweep()` (minute 47) - POSTing to
+  `/rem-sweep` and `/deep-sleep-sweep` (isServiceRole). The per-user
+  invoker claims (`claim_rem_run` / `claim_deep_sleep_run`,
+  auth.uid()-gated booleans) are replaced by global SECURITY DEFINER
+  `claim_next_user_for_rem` / `claim_next_user_for_deep_sleep`
+  (clones of the wiki librarian's: stamp the cadence column BEFORE
+  the run, gate on `settings->>'memoryLibrarianEnabled' is distinct
+  from 'false'`, most-overdue user first, FOR UPDATE SKIP LOCKED,
+  EXECUTE service_role only). The cadence columns
+  (`rem_last_run_at`, `deep_sleep_last_run_at`) stay independent so
+  the 12h cycles drift apart naturally, same as today.
+- **Manual** (Memories top-bar): user-JWT `POST /rem-run` /
+  `POST /deep-sleep-run` with `{runId}`. No cadence stamp (faithful:
+  the browser manual runners bypassed the claim). Step events ride
+  the existing `agent-runs:<userId>` Broadcast channel with the
+  client-minted runId for demux; the strip subscribes BEFORE the
+  POST.
+
+**Mutual exclusion: one shared in-flight guard.** The browser lease
+made the two SCHEDULED librarians mutually exclusive per user but
+left manual runs only locally guarded (a manual run could overlap a
+remote device's scheduled run). The server replaces all of it with
+one `claim_memory_librarian_inflight` / `release` pair (holder +
+TTL, on profiles - the wiki librarian's guard shape) taken by all
+four paths (2 sweeps, 2 manual routes). That preserves the stated
+intent ("only one of the two can run at a time per user") and closes
+the manual-run hole for free. Collisions return `{kind:'busy'}`.
+
+**Server-side prerequisites:**
+
+- Port `memory_consolidate` (the one librarian tool the registry
+  lacks). Validation verbatim; calls the `consolidate_memories` RPC;
+  changelog entry via `_memory_changelog.ts`.
+- `p_user_id` b-strict overloads for `pick_rem_eligible_conversations`,
+  `search_memories_by_embedding_scored`, and `consolidate_memories`
+  (all invoker + auth.uid() today; the admin client needs the
+  explicit-user escape hatch). The plain table reads/writes
+  (seed pick, batch fetch, mark-processed, mark-visited) go through
+  the admin client with explicit `user_id` scoping, like the wiki
+  helpers.
+- Shared toolbox builder in `agents/_memory_librarian_tools.ts`
+  (both agents consume it; the composition invariants - no
+  memory_create/update/reaffirm/delete, no ask_user - get one Deno
+  test). Wire schemas for invalidate/doubt/relate/unrelate move from
+  reflection.ts to the shared module where both consumers need them.
+
+**UI refresh.** Server-side memory writes can't fire the in-page
+`emitMemoryChange`. Add `memories` to the `supabase_realtime`
+publication and a `subscribeToMemoryChanges` postgres_changes
+subscription that re-drives `emitMemoryChange` - the exact shape of
+the wiki fleet's `wiki_articles` subscription. (This also fixes a
+pre-existing gap: the browser WORKER runs called `emitMemoryChange`
+inside the worker's module instance, which never reached the main
+thread's Memories panel anyway.)
+
+**Browser cutover.** Delete `src/lib/agents/rem/` and
+`src/lib/agents/deep-sleep/` (7 files each),
+`memory_librarian_toolbox.ts`, and every browser tool impl that
+falls dead with them - this is the LAST fleet, so the expectation is
+all 10 remaining impls (9 memory + conversation_search) plus the
+aggregator go, leaving Phase 3 only the shared infra
+(`runHeadlessToolLoop`, `lazy.ts`, dispatch plumbing).
+`memory-librarian-run.svelte.ts` is rewritten subscribe-then-POST
+(the navigation-stable singleton design survives; only the transport
+changes). `state.svelte.ts` drops both lazyManagers;
+`setMemoryLibrarianEnabled` becomes a plain settings write the claim
+predicates read. The Memories top-bar keeps both buttons; the
+workerBusy gray-out goes the way of the librarian's (the guard's
+busy error covers the collision).
+
+**Tests through the seam from day one** (the Phase 3 gate rule):
+toolbox/prompt invariants plus fake-admin behavioral coverage - rem
+agent error leaves the conversation UNprocessed (retry next cycle),
+too-small batches mark processed, deep-sleep's lonely seed stamps
+its visit and skips Venice entirely, an agent error skips the visit
+stamps. The browser suites
+(`tests/memory-librarian-run.test.ts`,
+`tests/memory-consolidate-tool.test.ts`) port or die with their
+subjects; `tests/memory-librarian-ui.test.ts` (pure UI primitives)
+stays.
 
 ### PHASE 3 - demolition
 
