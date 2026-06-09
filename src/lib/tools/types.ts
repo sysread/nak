@@ -1,6 +1,6 @@
 /**
  * Shared types for the tool-calling subsystem. The shape of `ToolDef` is
- * what the rest of the app reads from; `toOpenAIToolDef()` in `./index.ts`
+ * what the rest of the app reads from; `toOpenAIToolDef()` in `./wire.ts`
  * projects it down to the OpenAI / Venice wire format at send-time.
  *
  * Every tool is a function with:
@@ -29,18 +29,11 @@ export interface ToolContext {
   /**
    * Agent-recursion depth this tool is running at. 0 means the main
    * chat loop dispatched the call; N means we are N agents deep below
-   * the main chat (main chat -> tool -> agent -> tool -> agent -> ...).
-   * `runHeadlessToolLoop` reads this off the incoming `toolCtx`,
-   * increments it once for the agent it is starting, and stamps the
-   * incremented value onto the per-call ctx its own tools see. A tool
-   * that spawns an agent passes its own ctx.depth into the agent run
-   * request so the bump compounds. Optional/undefined is treated as
-   * 0 - older callers and tests that don't construct a ctx with this
-   * field still behave like the main chat. The hard cap lives in
-   * `tools/run.ts` as `MAX_AGENT_DEPTH`; trying to start an agent
-   * deeper than that throws before the agent does any work, so a
-   * runaway agent-spawning chain bottoms out instead of stack-
-   * exploding.
+   * the main chat. The live recursion guard is server-side now (the
+   * venice function's performToolCall / agents/_run.ts mirror this
+   * field and enforce the depth cap); the browser field survives for
+   * the ToolContext shape tests and any future browser-side dispatch.
+   * Optional/undefined is treated as 0.
    */
   depth?: number;
   /**

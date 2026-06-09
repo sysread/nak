@@ -1,8 +1,7 @@
 /**
  * `serverSideTool` - wrap a schema into a ToolDef whose `execute`
- * throws. The dual of `./lazy.ts`'s `lazyTool`: lazyTool defers a
- * live browser impl, serverSideTool declares there is no browser impl
- * at all.
+ * throws. Every chat tool is one of these: the browser carries no
+ * tool impls at all.
  *
  * A streamed chat turn dispatches its tools in the venice edge
  * function (`performToolCall`), not the browser - see
@@ -19,11 +18,6 @@
  * regression re-routes dispatch browser-side it surfaces loudly here
  * (naming the tool and its edge home) instead of silently running
  * stale logic that has drifted from the live edge implementation.
- *
- * Contrast `lazyTool`, used for the tools whose browser `execute()` is
- * still live (the background agent fleets dispatch their toolboxes
- * browser-side via `executeToolboxCall`). Those keep a real impl
- * module loaded on first dispatch; these have none to load.
  */
 import type { ToolDef } from './types';
 

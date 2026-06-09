@@ -126,21 +126,12 @@ const samskara = lazyManager(() =>
 const bias = lazyManager(() =>
   import('./agents/bias/manager').then((m) => m.biasManager)
 );
-// The wiki agents are no longer workers here: both the autonomous
-// per-conversation agent and the librarian run server-side on
-// pg_cron schedules against the venice edge function (/wiki-sweep,
-// /wiki-librarian-sweep; see docs/dev/wiki.md).
-// Memory librarian workers. Two agents (deep-sleep and rem) share
-// the 'memory-librarian' lease partition so only one can run at a
-// time per user across devices; their cadence gates (deep_sleep_last_
-// run_at, rem_last_run_at) are independent so they run on naturally
-// staggered schedules. Toggled together by app.memoryLibrarianEnabled.
-const deepSleep = lazyManager(() =>
-  import('./agents/deep-sleep/manager').then((m) => m.deepSleepManager)
-);
-const rem = lazyManager(() =>
-  import('./agents/rem/manager').then((m) => m.remManager)
-);
+// The wiki agents (autonomous + librarian) and the two memory
+// librarians (deep-sleep, rem) are no longer workers here: they run
+// server-side on pg_cron schedules against the venice edge function
+// (/wiki-sweep, /wiki-librarian-sweep, /rem-sweep, /deep-sleep-sweep;
+// see docs/dev/wiki.md and docs/dev/memory.md). Their Settings
+// toggles are plain settings writes the claim RPCs read.
 
 export type AppPhase = 'loading' | 'setup' | 'unlocked';
 
@@ -405,21 +396,17 @@ function setWikiLibrarianEnabled(enabled: boolean): void {
 }
 
 /**
- * Flip the memory librarian on/off. Toggles both deep-sleep and rem
- * together - they share the cross-device 'memory-librarian' lease
- * partition and their work is complementary, so the user-facing
- * concept is a single "memory librarian" switch.
+ * Flip the in-memory memory-librarian flag. One switch for both
+ * passes (deep-sleep and rem) - their work is complementary and they
+ * share the server-side in-flight guard, so the user-facing concept
+ * is a single "memory librarian". The live switch is the persisted
+ * setting: both sweeps' claim predicates read
+ * profiles.settings.memoryLibrarianEnabled server-side, so there is
+ * no worker to start or stop here. Does NOT persist; user-driven
+ * changes route through `persistMemoryLibrarianEnabled`.
  */
 function setMemoryLibrarianEnabled(enabled: boolean): void {
   app.memoryLibrarianEnabled = enabled;
-  if (!app.supabase || !app.config) return;
-  if (enabled) {
-    deepSleep.start({ supabase: app.supabase, config: app.config });
-    rem.start({ supabase: app.supabase, config: app.config });
-  } else {
-    deepSleep.stop();
-    rem.stop();
-  }
 }
 
 /**
@@ -777,15 +764,11 @@ function startBackgroundWorkers(config: AppConfig): void {
   // patterns" block when biases clear a tier. See
   // docs/dev/bias-profile.md.
   bias.start({ supabase: app.supabase, config });
-  // The wiki agents have no browser workers to start: the server-side
-  // cron sweeps read the persisted toggles
-  // (profiles.settings.wikiAutomaticEnabled / wikiLibrarianEnabled)
-  // per claim, so the Settings switches gate them without any wiring
-  // here.
-  if (app.memoryLibrarianEnabled) {
-    deepSleep.start({ supabase: app.supabase, config });
-    rem.start({ supabase: app.supabase, config });
-  }
+  // The wiki agents and the memory librarians have no browser workers
+  // to start: the server-side cron sweeps read the persisted toggles
+  // (profiles.settings.wikiAutomaticEnabled / wikiLibrarianEnabled /
+  // memoryLibrarianEnabled) per claim, so the Settings switches gate
+  // them without any wiring here.
 }
 
 /**
@@ -878,8 +861,6 @@ function stopBackgroundWorkers(): void {
   supervisor.stop();
   samskara.stop();
   bias.stop();
-  deepSleep.stop();
-  rem.stop();
   resetUsage();
   resetCatalog();
 }

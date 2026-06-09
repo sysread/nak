@@ -8,22 +8,33 @@
  * run state lived in the component, navigating away mid-run would
  * discard the progress strip and the result, and a run that finished
  * while the panel was unmounted would leave nothing to show on
- * return. The run itself is already safe across navigation - the
- * `runManually` promise floats on the runner module, not the
- * component, and each `consolidate_memories` call is atomic - but the
- * UI state has to live somewhere that outlives the panel.
+ * return. The run itself is already safe across navigation - it
+ * executes in the venice edge function (the /rem-run and
+ * /deep-sleep-run routes), and the awaiting promise floats on this
+ * module, not the component - but the UI state has to live somewhere
+ * that outlives the panel.
  *
  * This singleton is that home. The panel reads `pass / steps /
  * resultLine / resultText / error` and calls `start()`; the whole run
  * lifecycle runs here, so navigating away and back just re-renders
- * the same state. Mirrors how `deepSleepRunner` / `remRunner` already
- * keep `manualBusy` on a module singleton.
+ * the same state.
+ *
+ * Transport: the same subscribe-then-POST contract as the Wiki
+ * librarian strip. Live step events ride the per-user agent-runs
+ * Broadcast channel; this module subscribes BEFORE the POST (the
+ * pre-subscribe rule streaming chat established) and filters on the
+ * runId it minted, so a stale or concurrent run's events can't cross
+ * into this strip. Cross-run mutual exclusion is server-side - the
+ * shared memory-librarian in-flight guard folds collisions into a
+ * `busy` result - so the only local guard needed is against
+ * double-submitting from this same module.
  *
  * The confirmation step deliberately stays panel-local: it's pre-run
  * UI with nothing in flight, so losing it on navigation (and
  * re-opening with one click) is fine.
  */
-import type { SupabaseService } from '../supabase';
+import type { AgentRunProgressEvent, SupabaseService } from '../supabase';
+import { emitMemoryChange } from '../memory-events';
 import {
   pushStep,
   deepSleepResultLine,
@@ -31,11 +42,6 @@ import {
   type MemoryLibrarianPass,
   type MemoryLibrarianStep,
 } from '../ui/memory-librarian';
-import {
-  runManually as runDeepSleepManually,
-  deepSleepRunner,
-} from './deep-sleep/runner.svelte';
-import { runManually as runRemManually, remRunner } from './rem/runner.svelte';
 
 interface LibrarianRunState {
   /** Which pass is active or was last shown. Null = strip is clear. */
@@ -44,6 +50,7 @@ interface LibrarianRunState {
   resultLine: string | null;
   resultText: string | null;
   error: string | null;
+  running: boolean;
 }
 
 const state = $state<LibrarianRunState>({
@@ -52,11 +59,34 @@ const state = $state<LibrarianRunState>({
   resultLine: null,
   resultText: null,
   error: null,
+  running: false,
 });
 
 interface StartDeps {
   supabase: SupabaseService;
 }
+
+/**
+ * Map a wire progress event onto the step-list event union. The wire
+ * `preparing` carries the agent-specific count field; the step-list
+ * primitives want the pass-tagged variant so the label copy can name
+ * the work unit.
+ */
+function stepEventFor(
+  pass: MemoryLibrarianPass,
+  event: AgentRunProgressEvent
+): Parameters<typeof pushStep>[1] {
+  if (event.kind === 'preparing') {
+    return pass === 'deep-sleep'
+      ? { kind: 'deep-sleep-preparing', batchSize: event.batchSize ?? 0 }
+      : { kind: 'rem-preparing', conversationCount: event.conversationCount ?? 0 };
+  }
+  return event;
+}
+
+const BUSY_MESSAGE =
+  'Another memory-librarian run is already in flight (scheduled, or the ' +
+  'other pass). Try again in a moment.';
 
 export const librarianRun = {
   get pass(): MemoryLibrarianPass | null {
@@ -89,7 +119,7 @@ export const librarianRun = {
   },
   /** True while a manual run (either pass) is mid-flight. */
   get running(): boolean {
-    return deepSleepRunner.manualBusy || remRunner.manualBusy;
+    return state.running;
   },
 
   /** Clear the strip. The Dismiss button calls this; no-op mid-run. */
@@ -104,87 +134,77 @@ export const librarianRun = {
 
   /**
    * Kick off a manual pass and stream its progress into this store.
-   * Guards against starting while either pass is already busy (the
-   * two share a cross-device lease and never run concurrently). The
-   * whole lifecycle - session fetch, the runManually call, the
-   * result handoff - lives here rather than in the panel so it
-   * survives the panel being unmounted mid-run.
+   * Guards against double-submitting locally; everything else
+   * (collisions with scheduled runs or the other pass) is the
+   * server-side guard's job and comes back as a `busy` result.
    */
   async start(pass: MemoryLibrarianPass, deps: StartDeps): Promise<void> {
-    if (deepSleepRunner.busy || remRunner.busy) return;
+    if (state.running) return;
+    state.running = true;
     state.pass = pass;
     state.steps = [];
     state.resultLine = null;
     state.resultText = null;
     state.error = null;
 
-    let userId: string;
+    const runId = crypto.randomUUID();
+    let unsubscribe: (() => void) | null = null;
     try {
       const session = await deps.supabase.getSession();
       if (!session) {
         state.error = 'Not signed in.';
         return;
       }
-      userId = session.user.id;
-    } catch (err) {
-      state.error = err instanceof Error ? err.message : String(err);
-      return;
-    }
+      unsubscribe = deps.supabase.subscribeToAgentRunProgress(
+        session.user.id,
+        (event) => {
+          if (event.runId === runId) pushStep(state.steps, stepEventFor(pass, event));
+        }
+      );
 
-    try {
       if (pass === 'deep-sleep') {
-        const result = await runDeepSleepManually({
-          supabase: deps.supabase,
-          userId,
-          onProgress: (event) => {
-            if (event.kind === 'preparing') {
-              pushStep(state.steps, {
-                kind: 'deep-sleep-preparing',
-                batchSize: event.batchSize,
-              });
-            } else {
-              pushStep(state.steps, event);
-            }
-          },
-        });
+        const result = await deps.supabase.runDeepSleep({ runId });
+        if (result.kind === 'busy') {
+          state.error = BUSY_MESSAGE;
+          return;
+        }
         state.resultLine = deepSleepResultLine({
           kind: result.kind,
-          batchSize: result.batchSize,
-          toolCalls: result.toolCalls,
+          batchSize: result.kind === 'ok' || result.kind === 'too-small' ? result.batchSize : 0,
+          toolCalls: result.kind === 'ok' ? result.toolCalls : 0,
         });
         if (result.kind === 'error') {
           state.error = result.error ?? 'Deep-sleep run failed.';
-        } else if (result.finalText.trim().length > 0) {
+        } else if (result.kind === 'ok' && result.finalText.trim().length > 0) {
           state.resultText = result.finalText.trim();
         }
       } else {
-        const result = await runRemManually({
-          supabase: deps.supabase,
-          userId,
-          onProgress: (event) => {
-            if (event.kind === 'preparing') {
-              pushStep(state.steps, {
-                kind: 'rem-preparing',
-                conversationCount: event.conversationCount,
-              });
-            } else {
-              pushStep(state.steps, event);
-            }
-          },
-        });
+        const result = await deps.supabase.runRem({ runId });
+        if (result.kind === 'busy') {
+          state.error = BUSY_MESSAGE;
+          return;
+        }
         state.resultLine = remResultLine({
           kind: result.kind,
-          conversationsProcessed: result.conversationsProcessed,
-          toolCalls: result.toolCalls,
+          conversationsProcessed:
+            result.kind === 'ok' ? result.conversationsProcessed : 0,
+          toolCalls: result.kind === 'ok' ? result.toolCalls : 0,
         });
         if (result.kind === 'error') {
           state.error = result.error ?? 'Rem run failed.';
-        } else if (result.finalText.trim().length > 0) {
+        } else if (result.kind === 'ok' && result.finalText.trim().length > 0) {
           state.resultText = result.finalText.trim();
         }
       }
+      // Fire the local refresh immediately - the memories realtime
+      // echo also arrives, but consumers refetch idempotently and the
+      // local fire keeps the panel snappy.
+      emitMemoryChange();
     } catch (err) {
       state.error = err instanceof Error ? err.message : String(err);
+    } finally {
+      unsubscribe?.();
+      state.running = false;
     }
   },
 };

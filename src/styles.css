@@ -3988,7 +3988,7 @@ button.top-bar-overflow-btn {
 }
 
 /* When the model supplied an `activity` narration (see
-   src/lib/tools/dispatch.ts for the injected schema), the row swaps
+   src/lib/tools/wire.ts for the injected schema), the row swaps
    from a single tool-name line to a two-row layout: the activity
    sentence on a full-width line above, the status glyph + tool name +
    duration pill + chevron on the summary line below. The activity

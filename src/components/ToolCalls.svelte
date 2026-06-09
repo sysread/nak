@@ -3,7 +3,7 @@
    * Nested tool-call display, rendered inside an assistant bubble when
    * that turn invoked tools. One row per call. When the model provided
    * an `activity` narration (injected into every tool schema in
-   * src/lib/tools/dispatch.ts), the row stacks vertically: the
+   * src/lib/tools/wire.ts), the row stacks vertically: the
    * sentence on a full-width line above the summary so it wraps freely
    * on narrow viewports, with the status glyph + tool name + duration
    * pill + chevron on the summary line below.

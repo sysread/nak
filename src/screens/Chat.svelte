@@ -167,13 +167,13 @@
     runWikiSearch,
   } from '$lib/wiki-store.svelte';
   import { onWikiChange, emitWikiChange } from '$lib/wiki-events';
+  import { emitMemoryChange } from '$lib/memory-events';
   import {
     documentStore,
     runDocumentSearch,
   } from '$lib/documents-store.svelte';
   import { onDocumentChange } from '$lib/document-events';
-  import { deepSleepRunner } from '$lib/agents/deep-sleep/runner.svelte';
-  import { remRunner } from '$lib/agents/rem/runner.svelte';
+  import { librarianRun } from '$lib/agents/memory-librarian-run.svelte';
   import { moodState } from '$lib/samskara/mood.svelte';
   import {
     bandIndexFor,
@@ -1814,6 +1814,15 @@
   $effect(() => {
     if (!app.supabase || !session) return;
     return app.supabase.subscribeToWikiArticleChanges(session.user.id, emitWikiChange);
+  });
+
+  // Realtime: the memories twin of the wiki relay above. Every memory
+  // writer is server-side now (reflection on the chat-turn tail, the
+  // rem / deep-sleep librarian sweeps), so this subscription is how an
+  // open Memories panel learns a background write landed.
+  $effect(() => {
+    if (!app.supabase || !session) return;
+    return app.supabase.subscribeToMemoryChanges(session.user.id, emitMemoryChange);
   });
 
   // Inline title rename state.
@@ -6574,20 +6583,20 @@
             {
               id: 'deep-sleep',
               label: 'Deep-sleep pass',
-              title: deepSleepRunner.busy
-                ? 'Deep-sleep is already running'
+              title: librarianRun.running
+                ? 'A memory-librarian pass is already running'
                 : 'Run the deep-sleep pass now (similarity-sweep consolidation)',
-              disabled: deepSleepRunner.busy,
+              disabled: librarianRun.running,
               onclick: () => (deepSleepTrigger = true),
               icon: deepSleepIcon,
             },
             {
               id: 'rem',
               label: 'Rem pass',
-              title: remRunner.busy
-                ? 'Rem is already running'
+              title: librarianRun.running
+                ? 'A memory-librarian pass is already running'
                 : 'Run the rem pass now (associative integration over recent recall)',
-              disabled: remRunner.busy,
+              disabled: librarianRun.running,
               onclick: () => (remTrigger = true),
               icon: remIcon,
             },

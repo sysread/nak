@@ -760,16 +760,44 @@ export type WikiLibrarianRunResult =
   | { kind: 'error'; error: string };
 
 /**
+ * Outcome of a server-side manual rem run (the venice function's
+ * /rem-run route; see runRem below). Same `busy` contract as the
+ * wiki librarian: the shared memory-librarian in-flight guard turns
+ * a collision with a scheduled or deep-sleep run into a clean
+ * "try again in a moment" instead of two passes racing.
+ */
+export type RemRunResult =
+  | { kind: 'ok'; finalText: string; toolCalls: number; conversationsProcessed: number }
+  | { kind: 'empty-queue' }
+  | { kind: 'busy' }
+  | { kind: 'error'; error: string };
+
+/** Outcome of a server-side manual deep-sleep run (/deep-sleep-run; see runDeepSleep). */
+export type DeepSleepRunResult =
+  | { kind: 'ok'; finalText: string; toolCalls: number; batchSize: number }
+  | { kind: 'no-eligible' }
+  | { kind: 'too-small'; batchSize: number }
+  | { kind: 'busy' }
+  | { kind: 'error'; error: string };
+
+/**
  * One live step event from a server-side agent run, as published to
  * the agent-runs:<userId> Broadcast channel by the venice function.
- * Mirror of the function's LibrarianProgressEvent: `preparing` (with
- * the article snapshot size), the runner's `thinking` / `tool`
- * events, and a closing `done`. `runId` is the demux key - every
- * event carries the id the client minted for its run, so concurrent
- * runs (or a stale subscription) can't cross streams.
+ * Mirror of the per-agent progress unions: `preparing` (whose count
+ * field names the agent's work unit - articles for the wiki
+ * librarian, conversations for rem, the memory batch for
+ * deep-sleep), the runner's `thinking` / `tool` events, and a
+ * closing `done`. `runId` is the demux key - every event carries the
+ * id the client minted for its run, so concurrent runs (or a stale
+ * subscription) can't cross streams.
  */
 export type AgentRunProgressEvent = { runId: string } & (
-  | { kind: 'preparing'; articleCount: number }
+  | {
+      kind: 'preparing';
+      articleCount?: number;
+      conversationCount?: number;
+      batchSize?: number;
+    }
   | { kind: 'thinking'; round: number }
   | { kind: 'tool'; name: string; activity: string; ok: boolean; ms: number }
   | { kind: 'done'; ok: boolean }
@@ -1259,8 +1287,8 @@ export interface UserSettings {
    * agents run on their staggered 12h cadences, consolidating
    * cross-thread duplicate memories and populating the relations
    * graph. Independent of the wiki librarian; default-on like the
-   * other librarian toggles. See src/lib/agents/deep-sleep and
-   * src/lib/agents/rem.
+   * other librarian toggles. Both sweeps run server-side; see
+   * supabase/functions/venice/agents/{rem,deep_sleep}.ts.
    */
   memoryLibrarianEnabled?: boolean;
   /**
@@ -4398,235 +4426,72 @@ export class SupabaseService {
   }
 
   /**
-   * Atomic claim for one deep-sleep run: cross-device coordination
-   * via an UPDATE-with-WHERE on profiles.deep_sleep_last_run_at
-   * (the same per-user cadence-stamp shape the server-side wiki
-   * librarian uses). Deep-sleep and rem
-   * share the 'memory-librarian' lease partition (mutex), but the
-   * cadence gates are independent so the two agents can run on
-   * staggered schedules.
+   * Ask the venice function to run the rem (associative integration)
+   * memory-librarian pass now (the Memories panel's manual button).
+   * The whole run - eligibility pick, prompt build, the tool loop,
+   * the in-flight guard shared with the scheduled sweeps and the
+   * deep-sleep paths - happens server-side; this is a thin
+   * authenticated POST. `runId` is the client-minted demux key for
+   * the live step events: subscribe via subscribeToAgentRunProgress
+   * BEFORE calling this, or the first events race the subscription.
    */
-  async claimDeepSleepRun(minIntervalSeconds: number): Promise<boolean> {
-    const { data, error } = await this.client.rpc('claim_deep_sleep_run', {
-      p_min_interval_seconds: minIntervalSeconds,
+  async runRem(args: { runId: string }): Promise<RemRunResult> {
+    const { data, error } = await this.client.functions.invoke('venice/rem-run', {
+      body: { runId: args.runId },
     });
-    if (error) throw new SupabaseError(error.message);
-    return data === true;
-  }
-
-  async claimRemRun(minIntervalSeconds: number): Promise<boolean> {
-    const { data, error } = await this.client.rpc('claim_rem_run', {
-      p_min_interval_seconds: minIntervalSeconds,
-    });
-    if (error) throw new SupabaseError(error.message);
-    return data === true;
-  }
-
-  /**
-   * Consolidate two memories into one. The agent decides "A and B are
-   * the same fact" and calls this with (survivorId, loserId,
-   * newLabel, newData). Server-side RPC handles the four-step
-   * sequence atomically: max-confidence survivor write, loser halve,
-   * memory_conversation redirect, memory_relations redirect. See
-   * schema.sql consolidate_memories for the full rationale.
-   *
-   * Returns the survivor's post-update confidence so the calling tool
-   * can echo it to the LLM. Throws if either row is missing, not
-   * owned by the caller, or if survivor_id == loser_id.
-   */
-  async consolidateMemories(
-    survivorId: string,
-    loserId: string,
-    newLabel: string,
-    newData: string
-  ): Promise<number> {
-    const { data, error } = await this.client.rpc('consolidate_memories', {
-      p_survivor_id: survivorId,
-      p_loser_id: loserId,
-      p_new_label: newLabel,
-      p_new_data: newData,
-    });
-    if (error) throw new SupabaseError(error.message);
-    if (typeof data !== 'number') {
-      throw new SupabaseError(
-        `consolidate_memories returned non-numeric: ${JSON.stringify(data)}`
-      );
-    }
-    return data;
-  }
-
-  /**
-   * Upsert one or more (memory_id, conversation_id) rows into
-   * memory_conversation. Bumps last_seen_at to now() on conflict so
-   * the eligibility predicate (`last_processed_at < last_seen_at`)
-   * re-fires for any pair whose memories were recently referenced
-   * again.
-   *
-   * Caller passes the rows already keyed to a single conversation;
-   * we stamp user_id from the session so the RLS check passes
-   * without the caller needing to thread the user id through.
-   *
-   * Best-effort by contract: the recall path swallows errors here -
-   * a missed upsert just means rem doesn't see this co-occurrence
-   * this cycle. Not worth blocking the recall path.
-   */
-  async upsertMemoryConversationRows(
-    conversationId: string,
-    memoryIds: string[]
-  ): Promise<void> {
-    if (memoryIds.length === 0) return;
-    const session = await this.getSession();
-    if (!session) throw new SupabaseError('Not authenticated.');
-    const now = new Date().toISOString();
-    const rows = memoryIds.map((memory_id) => ({
-      user_id: session.user.id,
-      memory_id,
-      conversation_id: conversationId,
-      last_seen_at: now,
-    }));
-    const { error } = await this.client
-      .from('memory_conversation')
-      .upsert(rows, { onConflict: 'memory_id,conversation_id' });
-    if (error) throw new SupabaseError(error.message);
-  }
-
-  /**
-   * Update last_librarian_visit_at = now() for a batch of memory ids.
-   * Deep-sleep calls this after a successful agent run on the seed +
-   * its similarity neighbors, so the next sweep picks a different
-   * neighborhood. Confidence-only nudges don't reset the timestamp;
-   * label/data changes do (via the trigger).
-   */
-  async markMemoriesLibrarianVisited(ids: string[]): Promise<void> {
-    if (ids.length === 0) return;
-    const { error } = await this.client
-      .from('memories')
-      .update({ last_librarian_visit_at: new Date().toISOString() })
-      .in('id', ids);
-    if (error) throw new SupabaseError(error.message);
-  }
-
-  /**
-   * Pick the next deep-sleep seed: oldest last_librarian_visit_at,
-   * nulls (never-visited) first. The partial-style index
-   * memories_librarian_visit_idx is configured `nulls first` so this
-   * query is an index scan.
-   *
-   * Confidence floor of 0.05 mirrors the memory_search hide threshold;
-   * memories that have decayed below the floor are effectively retired
-   * and not worth the agent's attention. Returns null when the user
-   * has no eligible memories (empty store, or every memory below
-   * floor).
-   */
-  async pickDeepSleepSeed(): Promise<{
-    id: string;
-    label: string;
-    data: string;
-    confidence: number;
-    updated_at: string;
-    last_librarian_visit_at: string | null;
-  } | null> {
-    const { data, error } = await this.client
-      .from('memories')
-      .select('id, label, data, confidence, updated_at, last_librarian_visit_at')
-      .gte('confidence', 0.05)
-      .order('last_librarian_visit_at', { ascending: true, nullsFirst: true })
-      .order('updated_at', { ascending: true })
-      .limit(1)
-      .maybeSingle();
-    if (error) throw new SupabaseError(error.message);
-    if (!data) return null;
-    return data as {
-      id: string;
-      label: string;
-      data: string;
-      confidence: number;
-      updated_at: string;
-      last_librarian_visit_at: string | null;
-    };
-  }
-
-  /**
-   * Pick the oldest conversations that have unprocessed
-   * memory_conversation rows for the rem agent. Returns at most
-   * `limit` conversation ids ordered by their oldest unprocessed
-   * row's last_seen_at - so a single conversation that recalled
-   * twice in a row doesn't queue-jump one that recalled once a long
-   * time ago.
-   *
-   * The eligibility predicate is `last_processed_at < last_seen_at`, a
-   * column-vs-column comparison PostgREST's filter syntax can't
-   * express - it would send "last_seen_at" as a literal and Postgres
-   * rejects it as a bad timestamp. The dedup + FIFO ordering live in
-   * the pick_rem_eligible_conversations RPC so the comparison can read
-   * as SQL.
-   */
-  async pickRemEligibleConversations(limit: number): Promise<string[]> {
-    const { data, error } = await this.client.rpc(
-      'pick_rem_eligible_conversations',
-      { p_limit: limit }
-    );
-    if (error) throw new SupabaseError(error.message);
-    return ((data ?? []) as Array<{ conversation_id: string }>).map(
-      (r) => r.conversation_id
-    );
-  }
-
-  /**
-   * Fetch every memory_conversation row for one conversation - rem
-   * uses this as the batch of memories to hand to the agent. Joined
-   * against memories so the agent gets the label/data/confidence in
-   * one round-trip. Filters out memories below the search floor
-   * (same 0.05 cutoff as deep-sleep seed selection) - a memory the
-   * user has effectively retired isn't worth the agent's attention
-   * even if it was recalled recently.
-   */
-  async fetchMemoriesForConversation(
-    conversationId: string
-  ): Promise<
-    Array<{
-      memory_id: string;
-      label: string;
-      data: string;
-      confidence: number;
-    }>
-  > {
-    const { data, error } = await this.client
-      .from('memory_conversation')
-      .select(
-        'memory_id, memories!inner(id, label, data, confidence, user_id)'
-      )
-      .eq('conversation_id', conversationId)
-      .gte('memories.confidence', 0.05);
-    if (error) throw new SupabaseError(error.message);
-    type Row = {
-      memory_id: string;
-      memories: {
-        id: string;
-        label: string;
-        data: string;
-        confidence: number;
+    if (error) throw await veniceFunctionError(error);
+    const result = data as Partial<RemRunResult> | null;
+    if (result && result.kind === 'ok' && typeof result.finalText === 'string') {
+      return {
+        kind: 'ok',
+        finalText: result.finalText,
+        toolCalls: typeof result.toolCalls === 'number' ? result.toolCalls : 0,
+        conversationsProcessed:
+          typeof result.conversationsProcessed === 'number'
+            ? result.conversationsProcessed
+            : 0,
       };
-    };
-    return ((data ?? []) as unknown as Row[]).map((r) => ({
-      memory_id: r.memory_id,
-      label: r.memories.label,
-      data: r.memories.data,
-      confidence: r.memories.confidence,
-    }));
+    }
+    if (result && result.kind === 'empty-queue') return { kind: 'empty-queue' };
+    if (result && result.kind === 'busy') return { kind: 'busy' };
+    if (result && result.kind === 'error' && typeof result.error === 'string') {
+      return { kind: 'error', error: result.error };
+    }
+    return { kind: 'error', error: 'rem-run returned an unrecognised response' };
   }
 
   /**
-   * Mark every memory_conversation row for one conversation as
-   * processed (last_processed_at = now()). Rem calls this after a
-   * successful agent run on the conversation's batch.
+   * Ask the venice function to run the deep-sleep memory-librarian
+   * pass now. Same contract as runRem (and the wiki librarian's
+   * runWikiLibrarian): subscribe to the progress channel before the
+   * POST; the in-flight collision comes back as kind 'busy'.
    */
-  async markMemoryConversationProcessed(conversationId: string): Promise<void> {
-    const { error } = await this.client
-      .from('memory_conversation')
-      .update({ last_processed_at: new Date().toISOString() })
-      .eq('conversation_id', conversationId);
-    if (error) throw new SupabaseError(error.message);
+  async runDeepSleep(args: { runId: string }): Promise<DeepSleepRunResult> {
+    const { data, error } = await this.client.functions.invoke('venice/deep-sleep-run', {
+      body: { runId: args.runId },
+    });
+    if (error) throw await veniceFunctionError(error);
+    const result = data as Partial<DeepSleepRunResult> | null;
+    if (result && result.kind === 'ok' && typeof result.finalText === 'string') {
+      return {
+        kind: 'ok',
+        finalText: result.finalText,
+        toolCalls: typeof result.toolCalls === 'number' ? result.toolCalls : 0,
+        batchSize: typeof result.batchSize === 'number' ? result.batchSize : 0,
+      };
+    }
+    if (result && result.kind === 'no-eligible') return { kind: 'no-eligible' };
+    if (result && result.kind === 'too-small') {
+      return {
+        kind: 'too-small',
+        batchSize: typeof result.batchSize === 'number' ? result.batchSize : 0,
+      };
+    }
+    if (result && result.kind === 'busy') return { kind: 'busy' };
+    if (result && result.kind === 'error' && typeof result.error === 'string') {
+      return { kind: 'error', error: result.error };
+    }
+    return { kind: 'error', error: 'deep-sleep-run returned an unrecognised response' };
   }
 
   // Background-worker pipeline --------------------------------------------
@@ -5211,37 +5076,6 @@ export class SupabaseService {
     const { data, error } = await this.client.rpc('list_user_recipe_topics');
     if (error) throw new SupabaseError(error.message);
     return parseTopicVocabulary(data);
-  }
-
-  /**
-   * Halve a memory's confidence — the reflection agent's `memory_invalidate`
-   * soft-delete path. Returns the new confidence (the server-side value
-   * after the update). A memory hit many times falls below the 0.05
-   * search-hide floor without hard-deleting, keeping it recoverable if
-   * the agent re-learns the fact. Not gated on RLS beyond the
-   * `user_id = auth.uid()` check inside the RPC.
-   */
-  async decayMemoryConfidence(id: string): Promise<number | null> {
-    const { data, error } = await this.client.rpc('decay_memory_confidence', {
-      p_id: id,
-    });
-    if (error) throw new SupabaseError(error.message);
-    return typeof data === 'number' ? data : null;
-  }
-
-  /**
-   * Bump a memory's confidence by 1.0, capped at 10.0. The cap prevents
-   * a runaway agent from saturating the log boost; the bump itself is
-   * what the reflection agent calls after a corroborating
-   * `memory_update` so repeatedly-confirmed memories surface ahead of
-   * single-sighting ones in search.
-   */
-  async bumpMemoryConfidence(id: string): Promise<number | null> {
-    const { data, error } = await this.client.rpc('bump_memory_confidence', {
-      p_id: id,
-    });
-    if (error) throw new SupabaseError(error.message);
-    return typeof data === 'number' ? data : null;
   }
 
   /**
@@ -6126,10 +5960,41 @@ export class SupabaseService {
   }
 
   /**
+   * Subscribe to any change on the signed-in user's memories. The
+   * wiki-articles twin above, for the memory writers that all live
+   * server-side now (reflection on the chat-turn tail, the rem and
+   * deep-sleep librarian sweeps): the caller (Chat.svelte) routes the
+   * notification into emitMemoryChange so an open Memories panel
+   * refetches through the path it already had. Same coarse contract -
+   * "something changed", no row deltas.
+   */
+  subscribeToMemoryChanges(userId: string, onChange: () => void): () => void {
+    const channel = this.client
+      .channel(`memories:${userId}`)
+      .on(
+        'postgres_changes' as never,
+        {
+          event: '*',
+          schema: 'public',
+          table: 'memories',
+          filter: `user_id=eq.${userId}`,
+        },
+        () => {
+          onChange();
+        }
+      )
+      .subscribe();
+    return () => {
+      void this.client.removeChannel(channel);
+    };
+  }
+
+  /**
    * Subscribe to the signed-in user's agent-run progress channel. The
    * venice function publishes live step events (model rounds, tool
    * calls with their narration) for user-triggered agent runs - the
-   * Wiki librarian's manual-run strip is the consumer. Subscribe
+   * Wiki librarian's manual-run strip and the Memories panel's
+   * rem / deep-sleep strips are the consumers. Subscribe
    * BEFORE issuing the run's POST (the pre-subscribe rule streaming
    * chat established); filter by runId at the call site since the
    * topic is per-user, not per-run. `private: true` engages the

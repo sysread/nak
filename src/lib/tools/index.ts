@@ -5,12 +5,9 @@
  *
  * Responsibility split:
  *   - Each chat tool has a `<tool>.schema.ts` carrying its name +
- *     description + parameters. The matching ToolDef is either a
- *     `serverSideTool(schema)` (schema-only; the impl lives in the
- *     venice edge function and dispatch happens there) or a
- *     `lazyTool(schema, ...)` (a live browser impl loaded on first
- *     dispatch, used by the background agent fleets - those still run
- *     their tool loops browser-side via `executeToolboxCall`).
+ *     description + parameters. The matching ToolDef is a
+ *     `serverSideTool(schema)`: schema-only catalog metadata; the impl
+ *     lives in the venice edge function and dispatch happens there.
  *   - This file composes them into named toolboxes (cooking, memories,
  *     always_on), resolves names to defs, and projects them into
  *     the OpenAI / Venice request shape.
@@ -18,11 +15,11 @@
  *     which imports the registry from here to render the dynamic tool
  *     catalog. Prose blocks and the catalog renderer live there, not
  *     here.
- *   - A streamed chat turn does NOT dispatch tools here. The browser
- *     ships the wire `tools` array (via `buildToolList`) and the edge
- *     function's `performToolCall` runs the tool; the browser observes
- *     the result over the stream. The only browser-side dispatch left
- *     is the agent fleets' `executeToolboxCall` (see `./dispatch.ts`).
+ *   - Nothing dispatches tools in the browser. The browser ships the
+ *     wire `tools` array (via `buildToolList`) and the edge function's
+ *     `performToolCall` runs the tool; the browser observes the result
+ *     over the stream. The last browser-side dispatchers (the memory
+ *     librarian fleets) migrated to the venice function.
  *
  * Toolbox model: the always_on toolbox rides with every request and
  * carries every read-only surface (the recall pair, web search,
@@ -43,9 +40,10 @@
  * over user data without intent.
  *
  * Note on the user-facing `memoriesToolbox` defined here vs. the
- * agent-only memory toolboxes (`memoryLibrarianToolbox` here; the
- * reflection toolbox, which now lives server-side in
- * supabase/functions/venice/agents/reflection.ts): the agent sets
+ * agent-only memory toolboxes (both server-side now: the reflection
+ * toolbox in supabase/functions/venice/agents/reflection.ts, the
+ * memory-librarian toolbox in agents/_memory_librarian_tools.ts):
+ * the agent sets
  * substitute `memory_invalidate` (soft-decay) for `memory_delete`.
  * Agents must not hard-delete on their own authority - they can only
  * decay confidence. The user-facing surface keeps hard-delete because
@@ -53,26 +51,11 @@
  */
 import type { ToolDef, OpenAIToolDef, Toolbox } from './types';
 
-// --- Eagerly-imported always-on tools -------------------------------
-// The umbrella `context` tool, the four per-layer recall tools, web
-// search, update_title, analyze_image, and the toggle meta-tool fire
-// on the first-message critical path (the recall surfaces on topic
-// boundaries / when the model needs persistent context, web_search
-// on time-sensitive questions, update_title on the very first turn,
-// analyze_image when the user attaches an image). The cold-start
-// chunk-fetch tax is not acceptable there, so they stay eager. The
-// other always-on tools (search/list/read across memories,
-// conversations, recipes, wiki, app docs) are still
-// always-on but lazy-imported via the lazyTool wrappers below - they
-// fire on demand, not on every turn, so the schema rides eagerly
-// while the impl module loads on first dispatch.
-// Schema-only registrations for the always-on tools whose browser
-// `execute()` is dead - a streamed chat turn dispatches these in the
-// venice edge function, not the browser (see `./server_side.ts`). The
-// schemas still ride eagerly because the first-message critical path
-// renders the catalog and ships the wire `tools` array; only the impl
-// modules moved server-side, so what stays here is the schema half
-// wrapped by `serverSideTool` below.
+// --- Always-on tool schemas ------------------------------------------
+// Schema-only registrations: every browser `execute()` is dead - tool
+// dispatch happens in the venice edge function (see `./server_side.ts`).
+// The schemas ride eagerly because the first-message critical path
+// renders the catalog and ships the wire `tools` array.
 import { toggleToolboxSchema } from './toggle_tools.schema';
 import { memoryRecallSchema } from './memory_recall.schema';
 import { conversationRecallSchema } from './conversation_recall.schema';
@@ -83,14 +66,10 @@ import { updateTitleSchema } from './update_title.schema';
 import { analyzeImageSchema } from './analyze_image.schema';
 import { askUserSchema } from './ask_user.schema';
 
-// --- Lazy-loaded tool schemas ---------------------------------------
-// The schemas (name + description + shortDescription + parameters)
-// stay eager because every chat-loop turn renders the catalog and
-// every wire payload sends the tool-list shape. The matching impl
-// modules are dynamic-imported on first dispatch via the `lazyTool`
-// helper below; Vite emits one chunk per `import('./<tool>')` call.
-// Tools split across always-on (read paths) and the gated write
-// boxes - the lazy split is orthogonal to gating.
+// --- Gated + remaining always-on tool schemas ------------------------
+// Same schema-only story as above. Tools split across always-on (read
+// paths) and the gated write boxes; gating is a wire-payload concern,
+// not a dispatch one.
 import { memorySearchSchema } from './memory_search.schema';
 import { memoryCreateSchema } from './memory_create.schema';
 import { memoryUpdateSchema } from './memory_update.schema';
@@ -124,18 +103,11 @@ import { docUpdateSchema } from './doc_update.schema';
 import { docDeleteSchema } from './doc_delete.schema';
 import { generateImageSchema } from './generate_image.schema';
 
-// `lazyTool` lives in `./lazy.ts` so the agent-toolbox files
-// (`./memory_librarian_toolbox`, `./wiki_librarian_toolbox`) can use
-// it too. With every consumer going through the lazy path, Vite emits
-// one chunk per impl module regardless of which toolbox dispatches
-// into it.
-import { lazyTool } from './lazy';
-
 // `serverSideTool` wraps a schema into a ToolDef whose execute() throws
-// - for chat tools whose browser impl is dead (dispatch moved to the
-// venice edge function). The dual of lazyTool: lazyTool defers a live
-// browser impl, serverSideTool declares there is none. See
-// `./server_side.ts`.
+// - the browser ships catalog metadata only; every dispatch happens in
+// the venice edge function. The last browser-side dispatchers (the
+// memory-librarian fleets) migrated server-side, so every ToolDef here
+// is schema-only. See `./server_side.ts`.
 import { serverSideTool } from './server_side';
 
 // --- Schema-only always-on tools ------------------------------------
@@ -156,50 +128,15 @@ const analyzeImage = serverSideTool(analyzeImageSchema);
 const askUser = serverSideTool(askUserSchema);
 
 // --- Gated tool wrappers --------------------------------------------
-// Each is a thin object: schema fields spread in eagerly, execute()
-// resolves the impl chunk on first call. Subsequent calls hit the
-// browser's module cache - latency is one Promise resolution.
-const memorySearch = lazyTool(
-  memorySearchSchema,
-  () => import('./memory_search'),
-  'memorySearch'
-);
-const memoryCreate = lazyTool(
-  memoryCreateSchema,
-  () => import('./memory_create'),
-  'memoryCreate'
-);
-const memoryUpdate = lazyTool(
-  memoryUpdateSchema,
-  () => import('./memory_update'),
-  'memoryUpdate'
-);
+const memorySearch = serverSideTool(memorySearchSchema);
+const memoryCreate = serverSideTool(memoryCreateSchema);
+const memoryUpdate = serverSideTool(memoryUpdateSchema);
 const memoryDelete = serverSideTool(memoryDeleteSchema);
-const memoryReaffirm = lazyTool(
-  memoryReaffirmSchema,
-  () => import('./memory_reaffirm'),
-  'memoryReaffirm'
-);
-const memoryDoubt = lazyTool(
-  memoryDoubtSchema,
-  () => import('./memory_doubt'),
-  'memoryDoubt'
-);
-const memoryRelate = lazyTool(
-  memoryRelateSchema,
-  () => import('./memory_relate'),
-  'memoryRelate'
-);
-const memoryUnrelate = lazyTool(
-  memoryUnrelateSchema,
-  () => import('./memory_unrelate'),
-  'memoryUnrelate'
-);
-const conversationSearch = lazyTool(
-  conversationSearchSchema,
-  () => import('./conversation_search'),
-  'conversationSearch'
-);
+const memoryReaffirm = serverSideTool(memoryReaffirmSchema);
+const memoryDoubt = serverSideTool(memoryDoubtSchema);
+const memoryRelate = serverSideTool(memoryRelateSchema);
+const memoryUnrelate = serverSideTool(memoryUnrelateSchema);
+const conversationSearch = serverSideTool(conversationSearchSchema);
 const conversationGet = serverSideTool(conversationGetSchema);
 const recipeList = serverSideTool(recipeListSchema);
 const recipeGet = serverSideTool(recipeGetSchema);
@@ -533,17 +470,10 @@ function byName(name: string): ToolDef | undefined {
   return undefined;
 }
 
-// `toOpenAIToolDef`, `buildToolboxWireList`, and `executeToolboxCall`
-// live in `./dispatch` so the reflection agent worker can reach them
-// without walking the rest of this barrel (which statically imports
-// `research_docs` + lazy docs-glob, incompatible with the worker's
-// IIFE format). Re-exported below for callers that still import from
-// `$lib/tools`.
-import {
-  toOpenAIToolDef,
-  buildToolboxWireList,
-  executeToolboxCall,
-} from './dispatch';
+// `toOpenAIToolDef` lives in `./wire.ts` with the other wire-shape
+// projections; it injects the required `activity` narration parameter
+// into every tool the chat request ships.
+import { toOpenAIToolDef } from './wire';
 
 /**
  * The tools array we send with a request, built from the thread's
@@ -589,7 +519,7 @@ export function getToolFormatters(name: string): ToolFormatters | undefined {
   return { formatArgs: tool.formatArgs, formatResult: tool.formatResult };
 }
 
-export { toOpenAIToolDef, buildToolboxWireList, executeToolboxCall };
+export { toOpenAIToolDef };
 // `toggleToolbox` is read by chat-prompt.ts for its `.name`; re-exported
 // for that one consumer.
 export { toggleToolbox };

@@ -20,7 +20,6 @@ import {
   TOOLS,
   type ToolDef,
 } from '../src/lib/tools';
-import { memoryLibrarianToolbox } from '../src/lib/tools/memory_librarian_toolbox';
 import {
   parseAskUserContent,
   buildAskUserAnswerContent,
@@ -34,11 +33,10 @@ describe('ask_user — registry scoping', () => {
     expect(TOOLS.map((t: ToolDef) => t.name)).toContain('ask_user');
   });
 
-  it('is absent from agent-only toolboxes', () => {
-    // A background agent has no UI surface to render a clarifying
-    // question to; ask_user must stay scoped to the main chat loop.
-    expect(memoryLibrarianToolbox.tools.map((t) => t.name)).not.toContain('ask_user');
-  });
+  // The agent-only exclusion (background agents have no UI surface to
+  // render a clarifying question to) is asserted server-side where the
+  // agent toolboxes live now: supabase/functions/tests/
+  // {reflection,wiki,wiki_librarian,memory_librarian}.test.ts.
 
   it('schema declares question and options as required', () => {
     expect(askUserSchema.parameters.required).toContain('question');

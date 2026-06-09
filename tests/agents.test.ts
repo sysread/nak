@@ -24,7 +24,25 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import type { Agent, AgentRunRequest, AgentRunResult } from '../src/lib/agents/types';
-import { executeToolboxCall, type ToolContext, type Toolbox } from '../src/lib/tools';
+import type { ToolContext, Toolbox } from '../src/lib/tools';
+
+/**
+ * Toolbox-scoped dispatch, local to this witness. The production
+ * dispatcher this mirrored died when the last browser-side tool loop
+ * migrated to the venice function; the contract under test here is
+ * the Agent interface, not the dispatch helper, so a three-line local
+ * stand-in keeps the witness honest.
+ */
+async function dispatchToolboxCall(
+  toolbox: Toolbox,
+  name: string,
+  args: Record<string, unknown>,
+  ctx: ToolContext
+): Promise<unknown> {
+  const tool = toolbox.tools.find((t) => t.name === name);
+  if (!tool) throw new Error(`Unknown tool in toolbox '${toolbox.name}': ${name}`);
+  return tool.execute(args, ctx);
+}
 import type { SupabaseService } from '../src/lib/supabase';
 
 /**
@@ -101,7 +119,7 @@ class EchoAgent implements Agent<EchoRequest, EchoResponse> {
       signal: req.signal ?? new AbortController().signal,
     };
     try {
-      const created = (await executeToolboxCall(
+      const created = (await dispatchToolboxCall(
         this.toolbox,
         'memory_create',
         { label: req.input.label, data: req.input.data, message: 'echo create' },
@@ -200,7 +218,7 @@ describe('Agent interface — EchoAgent as contract witness', () => {
         ],
       };
       async run(req: AgentRunRequest<void>): Promise<AgentRunResult<void>> {
-        await executeToolboxCall(this.toolbox, 'record', {}, {
+        await dispatchToolboxCall(this.toolbox, 'record', {}, {
           supabase: svc,
           userId: req.userId,
           threadId: req.threadId ?? 't-x',
