@@ -7781,55 +7781,126 @@ begin
    where user_id = v_user;
 end $$;
 
--- Wiki librarian last-run timestamp + atomic-claim RPC. The wiki
+-- Wiki librarian cadence + run-coordination state. The wiki
 -- librarian is a separate background agent that periodically
 -- reorganises the user's wiki: consolidating duplicates, fact-
 -- checking against conversation history, merging articles that
 -- belong together. It runs on a long minimum interval (12 hours
 -- by default) - far less often than the per-conversation wiki
--- agent - and there's no per-thread queue. Cross-device
--- coordination needs an atomic "is it time to run yet?" check
--- so two devices that both wake up don't both run the agent.
+-- agent - and there's no per-thread queue. The scheduled drive is
+-- the venice function's /wiki-librarian-sweep route (pg_cron ->
+-- pg_net, see the cron section at the bottom of this file).
 --
--- Approach: store the last successful run timestamp on profiles
--- and gate the run via an UPDATE-with-WHERE that only matches
--- when `now() - last_run >= min_interval`. The UPDATE is atomic
--- per row, so only one device's call ever sees the row update;
--- the others see zero rows updated and skip.
+-- Cadence gate: store the last run timestamp on profiles and gate
+-- via an UPDATE-with-WHERE that only matches when `now() - last_run
+-- >= min_interval`. The UPDATE is atomic per row, so concurrent
+-- sweep ticks can't double-claim a user. The stamp lands BEFORE the
+-- run on purpose: a run that dies mid-flight waits out the interval
+-- rather than retrying hot against whatever killed it.
+--
+-- In-flight guard: a separate holder+TTL pair, because the cadence
+-- stamp can't express "running right now". Three server paths can
+-- start a librarian run (the scheduled sweep, the Wiki panel's
+-- manual-run button, the chat-dispatched wiki_librarian tool); the
+-- guard makes them mutually exclusive so two runs never edit the
+-- wiki concurrently. Manual and chat runs take ONLY the guard (not
+-- the cadence stamp - user-driven runs don't reset the 12h clock).
 alter table public.profiles
-  add column if not exists wiki_librarian_last_run_at timestamptz;
+  add column if not exists wiki_librarian_last_run_at timestamptz,
+  add column if not exists wiki_librarian_inflight_holder text,
+  add column if not exists wiki_librarian_inflight_expires_at timestamptz;
 
--- Atomic claim. Returns true if this caller acquired the run
--- (i.e. the timestamp had aged past p_min_interval_seconds, OR
--- no prior run timestamp was stored), false otherwise. The
--- worker calls this BEFORE running the agent; if it returns
--- false the worker skips this cycle and naps until the next
--- check.
---
--- security invoker so RLS scopes the row to the calling user.
--- profiles already has a self-update policy.
+-- Claim the next user due for a scheduled librarian run, across ALL
+-- users. SECURITY DEFINER global sweep (same posture as
+-- claim_next_thread_for_wiki): the caller is the cron-driven
+-- service role, so there is no auth.uid() to scope by; EXECUTE is
+-- locked to service_role below. Gated on the Settings toggle (only
+-- the literal string 'false' disables - matching the client's
+-- `?? true` default, and a cast could wedge the global sweep on one
+-- malformed value). Most-overdue user first; returns their user_id
+-- or no row when nobody is due.
 drop function if exists public.claim_wiki_librarian_run(int);
-create or replace function public.claim_wiki_librarian_run(
+drop function if exists public.claim_next_user_for_wiki_librarian(int);
+create or replace function public.claim_next_user_for_wiki_librarian(
   p_min_interval_seconds int
+) returns uuid
+language sql security definer
+set search_path = public as $$
+  with candidate as (
+    select p.user_id
+      from public.profiles p
+     where (p.settings->>'wikiLibrarianEnabled') is distinct from 'false'
+       and (
+         p.wiki_librarian_last_run_at is null
+         or p.wiki_librarian_last_run_at
+              < now() - make_interval(secs => p_min_interval_seconds)
+       )
+     order by p.wiki_librarian_last_run_at asc nulls first
+     limit 1
+     for update of p skip locked
+  )
+  update public.profiles p
+     set wiki_librarian_last_run_at = now()
+    from candidate c
+   where p.user_id = c.user_id
+  returning p.user_id;
+$$;
+
+revoke all on function public.claim_next_user_for_wiki_librarian(int)
+  from public, anon, authenticated;
+grant execute on function public.claim_next_user_for_wiki_librarian(int)
+  to service_role;
+
+-- Take the per-user in-flight guard. Returns true when this holder
+-- acquired it (no current holder, or the previous holder's TTL
+-- lapsed - a crashed run must not wedge the librarian forever).
+-- b-strict: the venice function calls with the service-role client
+-- and passes the owner id explicitly; coalesce keeps a hypothetical
+-- browser caller correct.
+drop function if exists public.claim_wiki_librarian_inflight(text, int, uuid);
+create or replace function public.claim_wiki_librarian_inflight(
+  p_holder_id text,
+  p_ttl_seconds int,
+  p_user_id uuid default null
 ) returns boolean
 language plpgsql security invoker as $$
 declare
   updated int;
 begin
-  if auth.uid() is null then
-    return false;
-  end if;
   update public.profiles
-     set wiki_librarian_last_run_at = now()
-   where user_id = auth.uid()
+     set wiki_librarian_inflight_holder = p_holder_id,
+         wiki_librarian_inflight_expires_at = now() + make_interval(secs => p_ttl_seconds)
+   where user_id = coalesce(p_user_id, auth.uid())
      and (
-       wiki_librarian_last_run_at is null
-       or wiki_librarian_last_run_at
-            < now() - make_interval(secs => p_min_interval_seconds)
+       wiki_librarian_inflight_holder is null
+       or wiki_librarian_inflight_expires_at is null
+       or wiki_librarian_inflight_expires_at < now()
      );
   get diagnostics updated = row_count;
   return updated > 0;
 end $$;
+
+grant execute on function
+  public.claim_wiki_librarian_inflight(text, int, uuid) to service_role;
+
+-- Release the in-flight guard IF it is still ours. A lapsed-and-
+-- stolen guard is left alone (the thief owns it now). No-op when
+-- the holder doesn't match.
+drop function if exists public.release_wiki_librarian_inflight(text, uuid);
+create or replace function public.release_wiki_librarian_inflight(
+  p_holder_id text,
+  p_user_id uuid default null
+) returns void
+language sql security invoker as $$
+  update public.profiles
+     set wiki_librarian_inflight_holder = null,
+         wiki_librarian_inflight_expires_at = null
+   where user_id = coalesce(p_user_id, auth.uid())
+     and wiki_librarian_inflight_holder = p_holder_id;
+$$;
+
+grant execute on function
+  public.release_wiki_librarian_inflight(text, uuid) to service_role;
 
 -- Atomic assistant-message commit with conflict detection -----------------
 --
@@ -8804,6 +8875,19 @@ create policy "log channel: owner subscribe" on realtime.messages
     realtime.topic() = 'logs:' || (select auth.uid())::text
   );
 
+-- Same owner-subscribe shape for the agent-run progress channel: the
+-- venice function publishes live step events (model rounds, tool
+-- calls) for user-triggered agent runs - the Wiki librarian's
+-- manual-run strip is the first consumer. Per-USER topic rather than
+-- per-run so this one literal-equality policy covers every run; the
+-- payload carries the runId and consumers demux client-side.
+drop policy if exists "agent-run channel: owner subscribe" on realtime.messages;
+create policy "agent-run channel: owner subscribe" on realtime.messages
+  for select to authenticated
+  using (
+    realtime.topic() = 'agent-runs:' || (select auth.uid())::text
+  );
+
 -- ---------------------------------------------------------------------------
 -- User Documents (Library)
 --
@@ -9254,6 +9338,80 @@ begin
   end if;
 exception when others then
   raise notice 'wiki sweep cron setup skipped: %', sqlerrm;
+end
+$cron$;
+
+-- ---------------------------------------------------------------------------
+-- Scheduled wiki-librarian sweep (pg_cron -> pg_net -> venice/wiki-librarian-sweep)
+--
+-- Drives the scheduled half of the server-side wiki librarian. The
+-- route claims the most-overdue eligible user
+-- (claim_next_user_for_wiki_librarian; the 12h minimum interval is
+-- enforced by that claim, not by this schedule) and runs the
+-- librarian's review for them. Hourly tick, one user per tick: the
+-- claim's interval gate makes a tighter schedule pointless, and a
+-- librarian run is the heaviest agent cycle in the system. Same
+-- Vault-secret custody and no-op-until-seeded behavior as the embed
+-- backfill trigger above.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.nak_trigger_wiki_librarian_sweep()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $fn$
+declare
+  v_url text;
+  v_key text;
+begin
+  begin
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'project_url' $q$ into v_url;
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'service_role_key' $q$ into v_key;
+  exception when others then
+    return;  -- vault not installed or unreadable; nothing to dispatch
+  end;
+  if v_url is null or v_key is null then
+    return;  -- secrets not seeded yet
+  end if;
+  begin
+    execute format(
+      $q$ select net.http_post(
+            url := %L,
+            headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', %L),
+            body := '{}'::jsonb
+          ) $q$,
+      v_url || '/functions/v1/venice/wiki-librarian-sweep',
+      'Bearer ' || v_key
+    );
+  exception when others then
+    raise notice 'nak_trigger_wiki_librarian_sweep: dispatch failed: %', sqlerrm;
+  end;
+end;
+$fn$;
+
+revoke all on function public.nak_trigger_wiki_librarian_sweep() from public, anon, authenticated;
+
+do $cron$
+begin
+  if exists (select 1 from pg_available_extensions where name = 'pg_cron')
+     and exists (select 1 from pg_available_extensions where name = 'pg_net') then
+    create extension if not exists pg_cron;
+    create extension if not exists pg_net;
+    if exists (select 1 from cron.job where jobname = 'nak-wiki-librarian-sweep') then
+      perform cron.unschedule('nak-wiki-librarian-sweep');
+    end if;
+    -- Minute 37: offset from the wiki sweep's minute 7 and the embed
+    -- backfill's */5 grid so the heavy agent dispatches never share a
+    -- tick.
+    perform cron.schedule(
+      'nak-wiki-librarian-sweep',
+      '37 * * * *',
+      $job$ select public.nak_trigger_wiki_librarian_sweep(); $job$
+    );
+  end if;
+exception when others then
+  raise notice 'wiki librarian sweep cron setup skipped: %', sqlerrm;
 end
 $cron$;
 

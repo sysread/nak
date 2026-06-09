@@ -5,22 +5,25 @@
 // Stands in for the hosted pg_cron jobs that drive the venice
 // function's scheduled routes.
 //
-// In production, supabase/schema.sql schedules two pg_net dispatches:
+// In production, supabase/schema.sql schedules three pg_net dispatches:
 //   - `nak_trigger_embed_backfill()` every 5 minutes -> POST /backfill
 //     (drains pending embeddings server-side);
 //   - `nak_trigger_wiki_sweep()` hourly -> POST /wiki-sweep (runs the
-//     autonomous wiki agent on day-gate-eligible threads).
+//     autonomous wiki agent on day-gate-eligible threads);
+//   - `nak_trigger_wiki_librarian_sweep()` hourly -> POST
+//     /wiki-librarian-sweep (runs the librarian for the most-overdue
+//     eligible user; the 12h cadence lives in its claim RPC).
 // The local Supabase stack (`mise run dev-start`) ships neither pg_cron
 // nor pg_net, so those schedules are guarded to no-op locally - nothing
-// drains either queue without this shim (the browser workers that used
+// drains any queue without this shim (the browser workers that used
 // to do this work were deleted when the features moved server-side).
 //
 // This script reproduces exactly what the cron jobs do: every N seconds
 // it POSTs each route on the LOCAL stack with the legacy service-role
-// key, the same call pg_net makes in prod. One shared interval for both
-// routes - prod cadences differ (5 min vs hourly) but locally you want
-// fast feedback on whichever queue you're testing, and an empty-queue
-// tick is nearly free.
+// key, the same call pg_net makes in prod. One shared interval for all
+// routes - prod cadences differ but locally you want fast feedback on
+// whichever queue you're testing, and an empty-queue tick is nearly
+// free.
 //
 // It is local-only by construction: it reads the stack endpoints from
 // `supabase status` and refuses any non-loopback API target, so a shell with
@@ -143,21 +146,35 @@ async function tickWikiSweep(apiUrl, serviceRoleKey) {
   info(`[${stamp}] wiki-sweep: ${headline}${extras}`);
 }
 
-// Run both scheduled routes sequentially. The wiki sweep can hold the
-// connection for a while (each processed thread is a full LLM tool
-// loop), so it goes second - the cheap backfill tick isn't queued
-// behind it.
+// One cron tick: POST /wiki-librarian-sweep and report the outcome.
+async function tickWikiLibrarianSweep(apiUrl, serviceRoleKey) {
+  const stamp = new Date().toISOString().slice(11, 19);
+  const body = await postRoute(apiUrl, serviceRoleKey, 'wiki-librarian-sweep', stamp);
+  if (!body) return;
+  const { outcome = 'unknown', toolCalls = 0, articleCount = 0 } = body;
+  const headline =
+    outcome === 'reviewed'
+      ? style.green(`reviewed ${articleCount} articles (${toolCalls} tool calls)`)
+      : outcome === 'no-user'
+        ? style.dim('nobody due')
+        : outcome;
+  info(`[${stamp}] wiki-librarian: ${headline}`);
+}
+
+// Run the scheduled routes sequentially, cheapest first, so the heavy
+// LLM sweeps never queue the backfill tick behind them.
 async function tick(apiUrl, serviceRoleKey) {
   await tickBackfill(apiUrl, serviceRoleKey);
   await tickWikiSweep(apiUrl, serviceRoleKey);
+  await tickWikiLibrarianSweep(apiUrl, serviceRoleKey);
 }
 
 async function main() {
   const intervalSeconds = parseInterval();
-  banner('Venice cron shim (DEV): backfill + wiki-sweep');
+  banner('Venice cron shim (DEV): backfill + wiki sweeps');
   const { apiUrl, serviceRoleKey } = await readLocalStack();
   ok(`Targeting ${style.cyan(apiUrl)} every ${style.bold(intervalSeconds + 's')}. Ctrl-C to stop.`);
-  info(style.dim('Local stand-in for the hosted pg_cron jobs (prod: backfill every 5 min, wiki sweep hourly).'));
+  info(style.dim('Local stand-in for the hosted pg_cron jobs (prod: backfill every 5 min, wiki + librarian sweeps hourly).'));
 
   // Fire once immediately so you do not wait a full interval for the first run.
   await tick(apiUrl, serviceRoleKey);

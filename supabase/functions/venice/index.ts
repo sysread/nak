@@ -49,6 +49,11 @@ import {
 import { streamChannelName } from '../_shared/venice-stream.ts';
 import { getStreamingResponse } from './getStreamingResponse.ts';
 import { retryWikiThread, runWikiSweepTick } from './agents/wiki.ts';
+import {
+  runWikiLibrarianManual,
+  runWikiLibrarianSweepTick,
+} from './agents/wiki_librarian.ts';
+import { createAgentProgressPublisher } from '../_shared/agent-progress.ts';
 // Side-effect import: every tool module under ./tools/ calls
 // registerTool() at module-load via this barrel, populating the
 // performToolCall registry before the first /stream request lands.
@@ -617,6 +622,68 @@ async function handleWikiRetry(req: Request): Promise<Response> {
   return json(result);
 }
 
+/**
+ * Cron-driven scheduled wiki-librarian sweep. Claims the most-overdue
+ * eligible user (the claim RPC enforces the 12h minimum interval and
+ * the Settings toggle) and runs the standard librarian review for
+ * them. One user per tick; runs synchronously and returns the
+ * outcome - pg_net ignores it, the dev shim prints it.
+ */
+async function handleWikiLibrarianSweep(req: Request): Promise<Response> {
+  if (!isServiceRole(req)) return json({ error: 'forbidden' }, 403);
+
+  const admin = adminClient();
+  if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
+
+  const summary = await runWikiLibrarianSweepTick(admin);
+  return json(summary);
+}
+
+/**
+ * User-triggered librarian run (the Wiki panel's sparkles button).
+ * Body: { instructions?: string|null, runId?: string }. The browser
+ * generates the runId and subscribes to its agent-runs channel BEFORE
+ * posting, so the step events published here are never raced; a
+ * missing runId just means no progress publishing (the result body
+ * still carries the outcome). Agent-level failures and the
+ * in-flight-collision case come back inside the result union, not as
+ * transport errors.
+ */
+async function handleWikiLibrarianRun(req: Request): Promise<Response> {
+  const userId = userIdFromJwt(req);
+  if (!userId) return json({ error: 'unauthorized' }, 401);
+
+  const admin = adminClient();
+  if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
+
+  let body: { instructions?: unknown; runId?: unknown };
+  try {
+    body = await req.json();
+  } catch {
+    return json({ error: 'invalid JSON body' }, 400);
+  }
+  const instructions =
+    typeof body.instructions === 'string' ? body.instructions : null;
+  // Cap the client-minted id so a hostile body can't bloat every
+  // broadcast payload; the id is an opaque demux key, not identity.
+  const runId =
+    typeof body.runId === 'string' && body.runId.length > 0 && body.runId.length <= 64
+      ? body.runId
+      : null;
+
+  const publisher = runId ? createAgentProgressPublisher(userId, runId) : null;
+  const result = await runWikiLibrarianManual(
+    admin,
+    userId,
+    instructions,
+    publisher ? (event) => publisher.publish(event) : undefined,
+  );
+  // Flush before responding so the 'done' event lands no later than
+  // the response body that also announces completion.
+  if (publisher) await publisher.flush();
+  return json(result);
+}
+
 interface StreamRequestBody {
   threadId?: string;
   userMessageId?: string;
@@ -892,6 +959,8 @@ Deno.serve(async (req: Request): Promise<Response> => {
   if (route === 'backfill' && req.method === 'POST') return handleBackfill(req);
   if (route === 'wiki-sweep' && req.method === 'POST') return handleWikiSweep(req);
   if (route === 'wiki-retry' && req.method === 'POST') return handleWikiRetry(req);
+  if (route === 'wiki-librarian-sweep' && req.method === 'POST') return handleWikiLibrarianSweep(req);
+  if (route === 'wiki-librarian-run' && req.method === 'POST') return handleWikiLibrarianRun(req);
   if (route === 'text-parser' && req.method === 'POST') return handleTextParser(req);
   if (route === 'image-generate' && req.method === 'POST') return handleImageGenerate(req);
   if (route === 'complete' && req.method === 'POST') return handleComplete(req);

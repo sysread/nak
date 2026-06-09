@@ -15,7 +15,11 @@
 // functions are easier to read and easier to evolve independently.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { toolComplete } from '../tools/_venice_complete.ts';
+import {
+  toolComplete,
+  type ToolCompletionOptions,
+  type ToolCompletionResult,
+} from '../tools/_venice_complete.ts';
 import {
   encodeToolContent,
   parseToolArguments,
@@ -83,10 +87,62 @@ export interface AgentToolContext {
   depth: number;
 }
 
+/**
+ * Schema for the `activity` parameter injected into every tool's
+ * arguments when a progress listener is attached. The model fills it
+ * with a short present-tense sentence narrating what this specific
+ * call is doing; the listener surfaces the sentence in a live step
+ * list (the Wiki librarian strip is the motivating consumer). Mirror
+ * of the browser dispatch layer's ACTIVITY_PARAM_SCHEMA so the model
+ * sees the same contract whichever side drives the loop.
+ */
+const ACTIVITY_PARAM_SCHEMA = {
+  type: 'string',
+  description:
+    'REQUIRED. One short present-tense sentence, addressed to the user, ' +
+    'narrating what you are doing with this specific call - e.g. ' +
+    '"Searching your memories for notes about the dishwasher", ' +
+    '"Saving that pancake recipe to your cookbook". Keep it under ' +
+    '100 characters. Surfaced prominently in the UI above the tool ' +
+    "name so the user can see what's happening without opening the " +
+    'call details.',
+} as const;
+
+/**
+ * Merge the shared `activity` property into a tool's wire schema
+ * without mutating the original. Injected at the wire-projection
+ * layer (not per-ToolDef) so tools never have to know the convention;
+ * every execute() reads specific keys and ignores the extra one.
+ */
+function injectActivityParam(
+  wire: AgentTool['wire'],
+): AgentTool['wire'] {
+  const parameters: Record<string, unknown> = { ...(wire.function.parameters ?? {}) };
+  const existing = (parameters.properties as Record<string, unknown> | undefined) ?? {};
+  parameters.properties = { ...existing, activity: ACTIVITY_PARAM_SCHEMA };
+  const required = Array.isArray(parameters.required)
+    ? [...(parameters.required as unknown[])]
+    : [];
+  if (!required.includes('activity')) required.push('activity');
+  parameters.required = required;
+  if (parameters.type === undefined) parameters.type = 'object';
+  return {
+    type: wire.type,
+    function: { ...wire.function, parameters },
+  };
+}
+
+/**
+ * `withActivity` is true only when the caller attached an onProgress
+ * listener: narration costs the model a few output tokens per call,
+ * so agents nobody is watching live (reflection, the wiki sweep)
+ * keep their wire bytes free of it.
+ */
 function buildToolboxWireList(
   toolbox: Toolbox,
+  withActivity: boolean,
 ): AgentTool['wire'][] {
-  return toolbox.tools.map((t) => t.wire);
+  return toolbox.tools.map((t) => (withActivity ? injectActivityParam(t.wire) : t.wire));
 }
 
 async function executeToolboxCall(
@@ -113,6 +169,31 @@ interface VeniceMessage {
   tool_calls?: OpenAIToolCall[];
 }
 
+/**
+ * Live-progress events emitted when the caller supplies onProgress.
+ * Mirror of the browser runHeadlessToolLoop's HeadlessToolLoopEvent:
+ *   - `thinking`: a new Venice round is about to start (1-based).
+ *   - `tool`: a single tool call settled. `activity` is the
+ *     model-emitted narration (see ACTIVITY_PARAM_SCHEMA); empty when
+ *     the args failed to parse.
+ * No `done` event - the caller already knows the loop returned when
+ * the Promise resolves.
+ */
+export type AgentProgressEvent =
+  | { kind: 'thinking'; round: number }
+  | { kind: 'tool'; name: string; activity: string; ok: boolean; ms: number };
+
+/**
+ * The completion call the loop drives each round with. Injectable so
+ * unit tests can script model rounds (tool_calls then a terminal
+ * text) without a network seam - the browser agents took this through
+ * SupabaseService.complete and lost the seam in the migration; this
+ * restores it at the runner.
+ */
+export type AgentCompleteFn = (
+  opts: ToolCompletionOptions,
+) => Promise<ToolCompletionResult>;
+
 export interface RunHeadlessAgentOptions {
   /** Concrete Venice model id sent as `model` on every round. */
   model: string;
@@ -138,6 +219,15 @@ export interface RunHeadlessAgentOptions {
   reasoningEffort?: 'low' | 'medium' | 'high';
   /** Optional Venice-specific disable_thinking kill switch. */
   disableThinking?: boolean;
+  /** Test seam; defaults to toolComplete (the live Venice call). */
+  complete?: AgentCompleteFn;
+  /**
+   * Optional live-progress hook. Attaching it also injects the
+   * `activity` narration parameter into every tool's wire schema -
+   * see buildToolboxWireList. Best-effort: a listener that throws
+   * does not abort the loop.
+   */
+  onProgress?: (event: AgentProgressEvent) => void;
 }
 
 export interface RunHeadlessAgentResult {
@@ -196,11 +286,25 @@ export async function runHeadlessAgent(
   let toolCalls = 0;
   let stoppedByLimit = false;
 
+  const complete = opts.complete ?? toolComplete;
+  // Best-effort progress dispatch - a listener that throws must not
+  // perturb the loop (we own the contract, not the listener).
+  const emit = (event: AgentProgressEvent): void => {
+    if (!opts.onProgress) return;
+    try {
+      opts.onProgress(event);
+    } catch {
+      // swallow; progress is observability, not control flow.
+    }
+  };
+  const wireList = buildToolboxWireList(toolbox, opts.onProgress !== undefined);
+
   for (let round = 0; round < maxRounds; round += 1) {
     if (signal.aborted) break;
     rounds += 1;
+    emit({ kind: 'thinking', round: rounds });
 
-    const completion = await toolComplete({
+    const completion = await complete({
       apiKey,
       model,
       // VeniceMessage's optional content vs ToolCompletionMessage's
@@ -208,7 +312,7 @@ export async function runHeadlessAgent(
       // tool_calls has content null. Coerce here so the wire body the
       // helper builds carries a real string field for every row.
       messages: messages.map((m) => ({ ...m, content: m.content ?? '' })),
-      tools: buildToolboxWireList(toolbox),
+      tools: wireList,
       reasoningEffort: opts.reasoningEffort,
       disableThinking: opts.disableThinking,
     });
@@ -234,18 +338,44 @@ export async function runHeadlessAgent(
         signal: ctl.signal,
         depth: effectiveDepth,
       };
+      const startedAt = performance.now();
       let args: Record<string, unknown>;
       try {
         args = parseToolArguments(call.function.arguments);
       } catch (err) {
         const error = err instanceof Error ? err : new Error(String(err));
+        emit({
+          kind: 'tool',
+          name: call.function.name,
+          activity: '',
+          ok: false,
+          ms: performance.now() - startedAt,
+        });
         return { call, ok: false as const, error };
       }
+      // The model-emitted narration the wire schema requires when a
+      // progress listener is attached; absent otherwise. Tools read
+      // specific keys and never see it.
+      const activity = typeof args.activity === 'string' ? args.activity : '';
       try {
         const value = await executeToolboxCall(toolbox, call.function.name, args, ctx);
+        emit({
+          kind: 'tool',
+          name: call.function.name,
+          activity,
+          ok: true,
+          ms: performance.now() - startedAt,
+        });
         return { call, ok: true as const, value };
       } catch (err) {
         const error = err instanceof Error ? err : new Error(String(err));
+        emit({
+          kind: 'tool',
+          name: call.function.name,
+          activity,
+          ok: false,
+          ms: performance.now() - startedAt,
+        });
         return { call, ok: false as const, error };
       }
     });

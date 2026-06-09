@@ -59,6 +59,7 @@ import {
   runHeadlessAgent,
   type AgentTool,
   type AgentToolContext,
+  type AgentCompleteFn,
   type RunHeadlessAgentResult,
   type Toolbox,
 } from './_run.ts';
@@ -797,6 +798,7 @@ async function runWikiAgentOnThread(
   threadId: string,
   terminalMsgId: string,
   log: EdgeLogger,
+  complete?: AgentCompleteFn,
 ): Promise<WikiRunOutcome> {
   let convo: VeniceWireMessage[];
   let messageCount: number;
@@ -853,6 +855,7 @@ async function runWikiAgentOnThread(
           // detached from any live stream. A never-aborting signal lets
           // runHeadlessAgent run to its own maxRounds backstop.
           signal: new AbortController().signal,
+          complete,
           // 'medium', not 'low': production traffic showed the agent
           // surface-pattern-matching its way through conversations -
           // extracting every named entity into a separate article
@@ -965,6 +968,8 @@ async function recordWikiFailureOrSkip(
 export interface WikiSweepOptions {
   /** Threads to process this invocation; defaults to DEFAULT_SWEEP_MAX_THREADS. */
   maxThreads?: number;
+  /** Test seam, forwarded to runHeadlessAgent (defaults to the live call). */
+  complete?: AgentCompleteFn;
 }
 
 /** Per-tick counters returned to the /wiki-sweep caller (and the dev shim). */
@@ -1037,6 +1042,7 @@ export async function runWikiSweepTick(
         threadId,
         terminalMsgId,
         log,
+        opts.complete,
       );
 
       if (outcome.kind === 'empty-slice') {
@@ -1172,6 +1178,7 @@ export async function retryWikiThread(
   adminClient: SupabaseClient,
   userId: string,
   threadId: string,
+  opts: { complete?: AgentCompleteFn } = {},
 ): Promise<WikiRetryResult> {
   const log = createEdgeLogger(userId, 'wiki');
   try {
@@ -1188,7 +1195,14 @@ export async function retryWikiThread(
     }
 
     log.info(`manual retry on thread ${threadId} @ msg ${terminalMsgId}`);
-    const outcome = await runWikiAgentOnThread(adminClient, userId, threadId, terminalMsgId, log);
+    const outcome = await runWikiAgentOnThread(
+      adminClient,
+      userId,
+      threadId,
+      terminalMsgId,
+      log,
+      opts.complete,
+    );
     if (outcome.kind === 'error') {
       log.warn(`manual retry failed on thread ${threadId}: ${outcome.error}`);
       return { kind: 'error', error: outcome.error };
