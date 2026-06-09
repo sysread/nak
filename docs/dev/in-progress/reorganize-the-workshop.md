@@ -274,11 +274,12 @@ both. Toolbox/sentinel/prompt invariants live in
 **Production verification still owed** per the Phase 2 gate (watch a
 hosted cron tick claim and process an eligible thread; confirm the
 drawer shows the `wiki` source lines and the Skipped panel's Retry
-round-trips). Known unit-coverage gap, accepted: the in-run
-content-filter fallback ordering and the retry pointer semantics
-have no injection seam server-side (`runHeadlessAgent` calls
-`toolComplete` directly) - live verification covers them until the
-runner grows one.
+round-trips). Known unit-coverage gap: the in-run content-filter
+fallback ordering and the retry pointer semantics have no injection
+seam server-side (`runHeadlessAgent` calls `toolComplete` directly).
+Restoring that seam is a MANDATORY Phase 3 item (see "restore the
+agent-loop test seam" there); live verification covers these
+behaviors only until then.
 
 **Trigger: pg_cron, per the original table.** The reflection-style
 chat-turn piggyback was considered (wiki's queue is the same
@@ -415,9 +416,29 @@ becomes orphaned. Drop in one cleanup PR:
   deliberately - `WikiAgent` now carries only the manual `updateOne`
   flow (a no-tool completion, outside the dispatcher split).
 
+**Also in this phase - NOT optional: restore the agent-loop test
+seam.** The fleet migrations traded away a class of unit coverage:
+the browser agents took their completion function through
+`SupabaseService.complete`, so tests scripted model rounds by
+injection; `runHeadlessAgent` calls `toolComplete` (and through it,
+live `fetch`) directly, so the ported agents' in-run behaviors -
+the wiki agent's primary-then-fallback model ordering, the retry
+flow's pointer/skip-marker semantics, reflection's mark-after-run
+discipline - currently have NO unit tests, only live verification.
+Give the runner an injectable completion seam (an optional override
+in `RunHeadlessAgentOptions`, defaulting to `toolComplete`, the same
+shape `CreateEdgeLoggerOpts.fetchImpl` uses) and reinstate the
+behavioral tests the browser suites used to carry (the deleted
+`tests/wiki-agent.test.ts` is the inventory of what to port). This
+gates project completion; it does not have to wait for demolition -
+landing the seam alongside the NEXT fleet port (wiki-librarian) is
+the stronger play, since every remaining migration repeats the same
+coverage loss until the seam exists.
+
 **Done when:** `src/lib/tools/` contains only `.schema.ts` files +
-`types.ts` + `wire.ts` + `index.ts` (now a schema-only catalog). One
-dispatcher, one registry, end of split.
+`types.ts` + `wire.ts` + `index.ts` (now a schema-only catalog), and
+the server-side agents' in-run behaviors are unit-tested through the
+runner's injection seam. One dispatcher, one registry, end of split.
 
 ### PHASE 4 - edge-to-drawer log streaming [LANDED, pending prod verify]
 
@@ -514,6 +535,25 @@ half-alive" never reads as intentional.
 
 **Open items:**
 
+- **Pre-existing Deno type errors, surfaced by a Deno upgrade.**
+  `deno check venice/index.ts` fails on three errors in files this
+  migration never touched (found 2026-06-09 while checking the wiki
+  port; a brew-upgraded Deno tightened the checks):
+  - `venice/getStreamingCompletion.ts:299` and `:519` - the code
+    compares/constructs a `VeniceError` with kind `'truncated'`, but
+    `'truncated'` is not a member of the `VeniceErrorKind` union in
+    `_shared/venice.ts`. Either the union is missing a legitimate
+    kind or the truncation path can never match - both readings are
+    a bug; figure out which behavior is intended.
+  - `venice/tools/recipe_photos.ts:39` - `crypto.subtle.digest`
+    rejects `Uint8Array<ArrayBufferLike>` under the newer
+    `BufferSource` typing (the SharedArrayBuffer-aware split).
+  Latent because nothing in the gate runs `deno check` over these
+  files - `deno test` only type-checks what the test files import,
+  and the deploy bundles with esbuild, no type check. Worth deciding
+  whether the functions tree should get a `deno check` gate once the
+  errors are fixed, so the next strictness bump surfaces in CI
+  instead of mid-task.
 - **Cookbook-change event bus lost its publisher.**
   `src/lib/cookbook-events.ts` exposes `onCookbookChange` (subscribe)
   and used to expose `notifyCookbookChanged` (a `window` CustomEvent
