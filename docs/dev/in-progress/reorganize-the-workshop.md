@@ -535,6 +535,19 @@ half-alive" never reads as intentional.
 
 **Open items:**
 
+- **Re-inspect the no-tool completion agents after Phase 3.** The
+  "What stays browser-side" list excludes the plain-completion agents
+  (`auto_title`, `summary`, `topics`, `memory_topics`,
+  `recipe_topics`, `bias`, `intuition`, `samskara`) from the
+  dispatcher split on the grounds that they dispatch no tools. Once
+  the split closes, revisit each: whether the server-side patterns
+  the migration established (cron sweep / waitUntil tail / edge
+  logger) now make a server port cheap enough to justify, and whether
+  any browser-only assumptions in them have quietly become
+  anti-patterns next to the migrated fleets. Sequencing constraint:
+  samskara has an upstream change landing shortly - after it lands
+  and the branch rebases, that whole area needs a fresh read before
+  any plan touches it.
 - **Pre-existing Deno type errors, surfaced by a Deno upgrade.**
   `deno check venice/index.ts` fails on three errors in files this
   migration never touched (found 2026-06-09 while checking the wiki
@@ -613,7 +626,11 @@ case justifies migration:
   `memory_topics`, `recipe_topics`, `bias`, `intuition`, `samskara`.
   These are plain Venice completions, not tool loops. They're
   candidates for the same waitUntil pattern eventually, but they don't
-  block the dispatcher consolidation.
+  block the dispatcher consolidation. **Marked for re-inspection once
+  Phase 3 closes** (user directive, 2026-06-09) - see the Phase 5
+  ledger entry. Samskara in particular has an upstream change landing
+  shortly; whatever the re-inspection decides for it must wait for
+  that rebase and a fresh read of the area.
 - **The composer popover + thread state UI** - reads
   `thread.toolboxes_enabled` directly, writes via
   `setThreadToolboxesEnabled`. No dispatcher coupling.
