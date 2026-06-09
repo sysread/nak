@@ -6136,7 +6136,13 @@ export class SupabaseService {
       .on('broadcast', { event: 'nak-log' }, ({ payload }) => {
         onEntry(payload as SerializableLogEntry);
       })
-      .subscribe();
+      // Surface the channel lifecycle at debug so a future "edge logs
+      // aren't reaching the drawer" report can confirm whether the
+      // private subscribe reached SUBSCRIBED (vs CHANNEL_ERROR /
+      // TIMED_OUT). Drawer-only; not console noise.
+      .subscribe((status, err) => {
+        log.debug(`logs channel subscribe status: ${status}`, err ?? '');
+      });
     return () => {
       void this.client.removeChannel(channel);
     };

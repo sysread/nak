@@ -150,11 +150,16 @@ export function createEdgeLogger(
         ],
       }),
     })
-      .then(() => undefined)
-      // Best-effort: a failed broadcast still survives in the console
-      // mirror. Swallow so a logging hiccup never propagates into the
-      // agent's own control flow.
-      .catch(() => undefined);
+      // Log a failed broadcast but never propagate it - the entry
+      // already survives in this function's own console mirror, and a
+      // logging hiccup must not perturb the agent's control flow. The
+      // failure IS logged (not silently swallowed) so a future "edge
+      // logs aren't reaching the drawer" report has a server-side
+      // breadcrumb instead of a dead end.
+      .then((r) => {
+        if (!r.ok) console.error(`[edge-log] broadcast HTTP ${r.status} topic=${topic} endpoint=${endpoint}`);
+      })
+      .catch((e) => console.error(`[edge-log] broadcast fetch failed endpoint=${endpoint}:`, e instanceof Error ? e.message : String(e)));
     pending.push(p);
   }
 
