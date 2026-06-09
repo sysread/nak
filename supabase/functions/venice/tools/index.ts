@@ -33,6 +33,7 @@ import '../agents/conversation_recall.ts';
 import '../agents/recall.ts';
 import '../agents/wiki_librarian.ts';
 import '../agents/wiki_recall.ts';
+import './memory_consolidate.ts';
 import './memory_create.ts';
 import './memory_delete.ts';
 import './memory_doubt.ts';

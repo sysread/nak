@@ -1179,10 +1179,11 @@ create policy "memory_relations are self-deletable"
 --     librarian looks for missed relations and hidden duplicates that
 --     only surface when memories appear together in conversation.
 --
--- Both agents acquire the SAME lease partition ('memory-librarian'),
--- which is the cross-device mutex - only one of them can run at a time
--- per user. Cadence drift naturally separates them most of the time;
--- the lease catches the rare overlap.
+-- Both agents share ONE in-flight guard (the holder+TTL pair below) -
+-- only one of them can run at a time per user, across every entry
+-- path (the two cron sweeps and the two manual-run routes). Cadence
+-- drift naturally separates the scheduled runs most of the time; the
+-- guard catches the rare overlap.
 --
 -- Schema additions for this feature, applied here:
 --
@@ -1192,14 +1193,17 @@ create policy "memory_relations are self-deletable"
 --     referenced during recall on a conversation. last_seen_at /
 --     last_processed_at gate the eligibility predicate.
 --   - profiles.deep_sleep_last_run_at, profiles.rem_last_run_at:
---     cross-device cadence gates, modelled on
+--     per-user cadence gates, modelled on
 --     profiles.wiki_librarian_last_run_at.
---   - claim_deep_sleep_run / claim_rem_run: atomic per-user claim
---     RPCs (UPDATE-with-WHERE cadence stamps).
+--   - claim_next_user_for_deep_sleep / claim_next_user_for_rem:
+--     global SECURITY DEFINER sweeps for the cron-driven venice
+--     routes (stamp-before-run, most-overdue user first).
+--   - claim_memory_librarian_inflight / release: the shared run
+--     mutex described above.
 --   - consolidate_memories: the agent's content-write primitive. Single
 --     RPC so the (survivor confidence, loser invalidate, memory_conversation
 --     redirect, memory_relations redirect) sequence is one atomic
---     transaction - the agent dispatch happens client-side; this is
+--     transaction - the agent loop runs in the venice function; this is
 --     just the bookkeeping the agent doesn't need to think about.
 
 alter table public.memories
@@ -1290,63 +1294,151 @@ drop policy if exists "memory_conversation is self-deletable" on public.memory_c
 create policy "memory_conversation is self-deletable" on public.memory_conversation
   for delete using (auth.uid() = user_id);
 
--- Cadence gates for the two librarian workers. Modelled on
--- profiles.wiki_librarian_last_run_at - same UPDATE-with-WHERE
--- atomic claim, same 12h default interval enforced by the RPC.
+-- Cadence gates + run coordination for the two librarian agents.
+-- Same machinery as the wiki librarian's (see that section for the
+-- full rationale): a per-pass cadence stamp claimed by a global
+-- SECURITY DEFINER sweep (stamp lands BEFORE the run so a crashed
+-- run waits out the interval instead of retrying hot), plus ONE
+-- shared holder+TTL in-flight guard covering both passes - the
+-- server-side successor to the browser workers' shared
+-- 'memory-librarian' lease. All four entry paths (the rem and
+-- deep-sleep cron sweeps, and both Memories-panel manual-run
+-- routes) take the guard; manual runs take ONLY the guard, never
+-- the cadence stamp (user-driven runs don't reset the 12h clock).
 
 alter table public.profiles
   add column if not exists deep_sleep_last_run_at timestamptz,
-  add column if not exists rem_last_run_at timestamptz;
+  add column if not exists rem_last_run_at timestamptz,
+  add column if not exists memory_librarian_inflight_holder text,
+  add column if not exists memory_librarian_inflight_expires_at timestamptz;
 
--- Atomic claim for the deep-sleep agent: an UPDATE-with-WHERE on the
--- per-user cadence stamp, so concurrent callers either both miss the
--- predicate or exactly one wins. The wiki librarian section below
--- carries the global (cron-driven) evolution of this shape.
+-- Claim the next user due for a scheduled deep-sleep run, across ALL
+-- users. Gated on the memory-librarian Settings toggle (only the
+-- literal string 'false' disables - matching the client's `?? true`
+-- default, and a cast could wedge the global sweep on one malformed
+-- value). Most-overdue user first; returns their user_id or no row
+-- when nobody is due. EXECUTE locked to service_role: the only
+-- caller is the cron-driven venice route.
 drop function if exists public.claim_deep_sleep_run(int);
-create or replace function public.claim_deep_sleep_run(
+drop function if exists public.claim_next_user_for_deep_sleep(int);
+create or replace function public.claim_next_user_for_deep_sleep(
   p_min_interval_seconds int
+) returns uuid
+language sql security definer
+set search_path = public as $$
+  with candidate as (
+    select p.user_id
+      from public.profiles p
+     where (p.settings->>'memoryLibrarianEnabled') is distinct from 'false'
+       and (
+         p.deep_sleep_last_run_at is null
+         or p.deep_sleep_last_run_at
+              < now() - make_interval(secs => p_min_interval_seconds)
+       )
+     order by p.deep_sleep_last_run_at asc nulls first
+     limit 1
+     for update of p skip locked
+  )
+  update public.profiles p
+     set deep_sleep_last_run_at = now()
+    from candidate c
+   where p.user_id = c.user_id
+  returning p.user_id;
+$$;
+
+revoke all on function public.claim_next_user_for_deep_sleep(int)
+  from public, anon, authenticated;
+grant execute on function public.claim_next_user_for_deep_sleep(int)
+  to service_role;
+
+-- Rem's twin of the claim above. Independent cadence column so the
+-- two passes drift apart on their own 12h clocks; same toggle, same
+-- posture.
+drop function if exists public.claim_rem_run(int);
+drop function if exists public.claim_next_user_for_rem(int);
+create or replace function public.claim_next_user_for_rem(
+  p_min_interval_seconds int
+) returns uuid
+language sql security definer
+set search_path = public as $$
+  with candidate as (
+    select p.user_id
+      from public.profiles p
+     where (p.settings->>'memoryLibrarianEnabled') is distinct from 'false'
+       and (
+         p.rem_last_run_at is null
+         or p.rem_last_run_at
+              < now() - make_interval(secs => p_min_interval_seconds)
+       )
+     order by p.rem_last_run_at asc nulls first
+     limit 1
+     for update of p skip locked
+  )
+  update public.profiles p
+     set rem_last_run_at = now()
+    from candidate c
+   where p.user_id = c.user_id
+  returning p.user_id;
+$$;
+
+revoke all on function public.claim_next_user_for_rem(int)
+  from public, anon, authenticated;
+grant execute on function public.claim_next_user_for_rem(int)
+  to service_role;
+
+-- Take the shared memory-librarian in-flight guard. Returns true
+-- when this holder acquired it (no current holder, or the previous
+-- holder's TTL lapsed - a crashed run must not wedge both librarians
+-- forever). One guard for BOTH passes on purpose: rem and deep-sleep
+-- reason over the same memory rows, and two agents consolidating the
+-- same neighborhood concurrently would make conflicting decisions.
+-- b-strict: the venice function calls with the service-role client
+-- and passes the owner id explicitly; coalesce keeps a hypothetical
+-- browser caller correct.
+drop function if exists public.claim_memory_librarian_inflight(text, int, uuid);
+create or replace function public.claim_memory_librarian_inflight(
+  p_holder_id text,
+  p_ttl_seconds int,
+  p_user_id uuid default null
 ) returns boolean
 language plpgsql security invoker as $$
 declare
   updated int;
 begin
-  if auth.uid() is null then
-    return false;
-  end if;
   update public.profiles
-     set deep_sleep_last_run_at = now()
-   where user_id = auth.uid()
+     set memory_librarian_inflight_holder = p_holder_id,
+         memory_librarian_inflight_expires_at = now() + make_interval(secs => p_ttl_seconds)
+   where user_id = coalesce(p_user_id, auth.uid())
      and (
-       deep_sleep_last_run_at is null
-       or deep_sleep_last_run_at
-            < now() - make_interval(secs => p_min_interval_seconds)
+       memory_librarian_inflight_holder is null
+       or memory_librarian_inflight_expires_at is null
+       or memory_librarian_inflight_expires_at < now()
      );
   get diagnostics updated = row_count;
   return updated > 0;
 end $$;
 
-drop function if exists public.claim_rem_run(int);
-create or replace function public.claim_rem_run(
-  p_min_interval_seconds int
-) returns boolean
-language plpgsql security invoker as $$
-declare
-  updated int;
-begin
-  if auth.uid() is null then
-    return false;
-  end if;
+grant execute on function
+  public.claim_memory_librarian_inflight(text, int, uuid) to service_role;
+
+-- Release the in-flight guard IF it is still ours. A lapsed-and-
+-- stolen guard is left alone (the thief owns it now). No-op when
+-- the holder doesn't match.
+drop function if exists public.release_memory_librarian_inflight(text, uuid);
+create or replace function public.release_memory_librarian_inflight(
+  p_holder_id text,
+  p_user_id uuid default null
+) returns void
+language sql security invoker as $$
   update public.profiles
-     set rem_last_run_at = now()
-   where user_id = auth.uid()
-     and (
-       rem_last_run_at is null
-       or rem_last_run_at
-            < now() - make_interval(secs => p_min_interval_seconds)
-     );
-  get diagnostics updated = row_count;
-  return updated > 0;
-end $$;
+     set memory_librarian_inflight_holder = null,
+         memory_librarian_inflight_expires_at = null
+   where user_id = coalesce(p_user_id, auth.uid())
+     and memory_librarian_inflight_holder = p_holder_id;
+$$;
+
+grant execute on function
+  public.release_memory_librarian_inflight(text, uuid) to service_role;
 
 -- pick_rem_eligible_conversations: the conversation queue rem pulls
 -- from. Returns up to p_limit conversation ids that still have
@@ -1364,22 +1456,31 @@ end $$;
 -- SQL, so the query lives here. Predicate matches the partial index
 -- memory_conversation_eligible_idx.
 --
--- security invoker + the explicit user_id = auth.uid() filter scope the
--- read to the caller and let the (user_id, conversation_id,
--- last_seen_at) index serve the query.
+-- security invoker + the explicit user filter scope the read to the
+-- caller and let the (user_id, conversation_id, last_seen_at) index
+-- serve the query.
+--
+-- p_user_id: b-strict escape hatch; see search_memories_by_embedding.
+-- The rem agent runs in the venice function under the service role
+-- (no auth.uid()) and passes the claimed user explicitly.
 drop function if exists public.pick_rem_eligible_conversations(int);
+drop function if exists public.pick_rem_eligible_conversations(int, uuid);
 create or replace function public.pick_rem_eligible_conversations(
-  p_limit int
+  p_limit int,
+  p_user_id uuid default null
 ) returns table (conversation_id uuid)
 language sql security invoker as $$
   select mc.conversation_id
     from public.memory_conversation mc
-   where mc.user_id = auth.uid()
+   where mc.user_id = coalesce(p_user_id, auth.uid())
      and (mc.last_processed_at is null or mc.last_processed_at < mc.last_seen_at)
    group by mc.conversation_id
    order by min(mc.last_seen_at) asc
    limit p_limit;
 $$;
+
+grant execute on function
+  public.pick_rem_eligible_conversations(int, uuid) to service_role;
 
 -- consolidate_memories: the deep-sleep / rem agents' single content-
 -- write primitive. The agent decides "memories A and B are the same
@@ -1418,44 +1519,50 @@ $$;
 --   5. Touches survivor.last_librarian_visit_at so the survivor
 --      doesn't immediately re-enter the deep-sleep candidate pool.
 --
--- security invoker so RLS scopes every write to the calling user.
--- Both memories rows must belong to the caller or the function
--- raises (RLS catches the read, not the update; we re-check in
--- application code via the row count).
+-- security invoker; the explicit per-row ownership checks below are
+-- what gate the writes. For a browser caller RLS additionally scopes
+-- every read and write; for the venice function's service-role
+-- client (which bypasses RLS) the ownership checks against the
+-- b-strict p_user_id are the whole guarantee - both memories rows
+-- must belong to that user or the function raises.
 --
 -- Returns the survivor's post-update confidence so the tool can echo
 -- it to the LLM.
 
 drop function if exists public.consolidate_memories(uuid, uuid, text, text);
+drop function if exists public.consolidate_memories(uuid, uuid, text, text, uuid);
 create or replace function public.consolidate_memories(
   p_survivor_id uuid,
   p_loser_id uuid,
   p_new_label text,
-  p_new_data text
+  p_new_data text,
+  p_user_id uuid default null
 ) returns real
 language plpgsql security invoker as $$
 declare
+  v_caller uuid := coalesce(p_user_id, auth.uid());
   v_survivor_confidence real;
   v_loser_confidence real;
   v_max_confidence real;
   v_owner uuid;
 begin
-  if auth.uid() is null then
+  if v_caller is null then
     raise exception 'not authenticated';
   end if;
   if p_survivor_id = p_loser_id then
     raise exception 'survivor_id and loser_id must differ';
   end if;
 
-  -- Read both rows and confirm ownership. RLS scopes the select to
-  -- the caller; a row for another user returns null, which we treat
-  -- as "not found."
+  -- Read both rows and confirm ownership. For browser callers RLS
+  -- scopes the select; a row for another user returns null, which we
+  -- treat as "not found." For the service-role caller the explicit
+  -- v_owner comparison is the gate.
   select confidence, user_id into v_survivor_confidence, v_owner
     from public.memories where id = p_survivor_id;
   if v_owner is null then
     raise exception 'survivor memory % not found or not owned by caller', p_survivor_id;
   end if;
-  if v_owner <> auth.uid() then
+  if v_owner <> v_caller then
     raise exception 'survivor memory % is not owned by the caller', p_survivor_id;
   end if;
 
@@ -1464,7 +1571,7 @@ begin
   if v_owner is null then
     raise exception 'loser memory % not found or not owned by caller', p_loser_id;
   end if;
-  if v_owner <> auth.uid() then
+  if v_owner <> v_caller then
     raise exception 'loser memory % is not owned by the caller', p_loser_id;
   end if;
 
@@ -1545,6 +1652,10 @@ begin
 
   return v_max_confidence;
 end $$;
+
+grant execute on function
+  public.consolidate_memories(uuid, uuid, text, text, uuid)
+  to service_role;
 
 -- recipes ----------------------------------------------------------------
 --
@@ -3384,10 +3495,15 @@ $$;
 -- anything the user's memories cover. Kept as a separate function so
 -- the main memory_search path (and the Memories browser) stays on the
 -- unscored RPC and doesn't have to care about a column it never uses.
+-- Also used by the deep-sleep librarian's neighbor fetch in the venice
+-- function, which is why it carries the p_user_id b-strict escape
+-- hatch (see search_memories_by_embedding above).
 drop function if exists public.search_memories_by_embedding_scored(vector, int);
+drop function if exists public.search_memories_by_embedding_scored(vector, int, uuid);
 create or replace function public.search_memories_by_embedding_scored(
   query_embedding vector(2048),
-  match_limit int
+  match_limit int,
+  p_user_id uuid default null
 ) returns table (
   id uuid,
   label text,
@@ -3400,13 +3516,17 @@ language sql stable security invoker as $$
          ((1 - (embedding <=> query_embedding))
            * (1 + 0.15 * ln(1 + confidence)))::real as similarity
     from public.memories
-   where user_id = auth.uid()
+   where user_id = coalesce(p_user_id, auth.uid())
      and embedding is not null
      and confidence >= 0.05
    order by (1 - (embedding <=> query_embedding))
           * (1 + 0.15 * ln(1 + confidence)) desc
    limit match_limit
 $$;
+
+grant execute on function
+  public.search_memories_by_embedding_scored(vector, int, uuid)
+  to service_role;
 
 -- Neighbours of one memory: the top-k other memories most similar to a
 -- given source row, used by the Memories detail panel's "Similar
@@ -8784,6 +8904,19 @@ begin
   ) then
     alter publication supabase_realtime add table public.wiki_articles;
   end if;
+  -- memories feeds the browser's emitMemoryChange refresh the same
+  -- way wiki_articles feeds emitWikiChange: the memory librarians
+  -- (rem, deep-sleep) and reflection all write memories server-side
+  -- now, so an open Memories panel learns about changes through a
+  -- user-scoped postgres_changes subscription.
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'memories'
+  ) then
+    alter publication supabase_realtime add table public.memories;
+  end if;
 end $$;
 
 -- ---------------------------------------------------------------------------
@@ -9412,6 +9545,139 @@ begin
   end if;
 exception when others then
   raise notice 'wiki librarian sweep cron setup skipped: %', sqlerrm;
+end
+$cron$;
+
+-- ---------------------------------------------------------------------------
+-- Scheduled memory-librarian sweeps (pg_cron -> pg_net -> venice function)
+--
+-- Drives the scheduled halves of the two server-side memory
+-- librarians. Each route claims the most-overdue eligible user
+-- (claim_next_user_for_rem / claim_next_user_for_deep_sleep; the 12h
+-- minimum interval is enforced by those claims, not by these
+-- schedules) and runs that pass for them. Hourly tick, one user per
+-- tick, two separate jobs so the passes keep independent cadences.
+-- Same Vault-secret custody and no-op-until-seeded behavior as the
+-- embed backfill trigger above.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.nak_trigger_rem_sweep()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $fn$
+declare
+  v_url text;
+  v_key text;
+begin
+  begin
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'project_url' $q$ into v_url;
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'service_role_key' $q$ into v_key;
+  exception when others then
+    return;  -- vault not installed or unreadable; nothing to dispatch
+  end;
+  if v_url is null or v_key is null then
+    return;  -- secrets not seeded yet
+  end if;
+  begin
+    execute format(
+      $q$ select net.http_post(
+            url := %L,
+            headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', %L),
+            body := '{}'::jsonb
+          ) $q$,
+      v_url || '/functions/v1/venice/rem-sweep',
+      'Bearer ' || v_key
+    );
+  exception when others then
+    raise notice 'nak_trigger_rem_sweep: dispatch failed: %', sqlerrm;
+  end;
+end;
+$fn$;
+
+revoke all on function public.nak_trigger_rem_sweep() from public, anon, authenticated;
+
+do $cron$
+begin
+  if exists (select 1 from pg_available_extensions where name = 'pg_cron')
+     and exists (select 1 from pg_available_extensions where name = 'pg_net') then
+    create extension if not exists pg_cron;
+    create extension if not exists pg_net;
+    if exists (select 1 from cron.job where jobname = 'nak-rem-sweep') then
+      perform cron.unschedule('nak-rem-sweep');
+    end if;
+    -- Minute 17: offset from the embed backfill's */5 grid, the wiki
+    -- sweep's minute 7, the wiki librarian's minute 37, and the
+    -- deep-sleep sweep's minute 47, so the heavy agent dispatches
+    -- never share a tick.
+    perform cron.schedule(
+      'nak-rem-sweep',
+      '17 * * * *',
+      $job$ select public.nak_trigger_rem_sweep(); $job$
+    );
+  end if;
+exception when others then
+  raise notice 'rem sweep cron setup skipped: %', sqlerrm;
+end
+$cron$;
+
+create or replace function public.nak_trigger_deep_sleep_sweep()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $fn$
+declare
+  v_url text;
+  v_key text;
+begin
+  begin
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'project_url' $q$ into v_url;
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'service_role_key' $q$ into v_key;
+  exception when others then
+    return;  -- vault not installed or unreadable; nothing to dispatch
+  end;
+  if v_url is null or v_key is null then
+    return;  -- secrets not seeded yet
+  end if;
+  begin
+    execute format(
+      $q$ select net.http_post(
+            url := %L,
+            headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', %L),
+            body := '{}'::jsonb
+          ) $q$,
+      v_url || '/functions/v1/venice/deep-sleep-sweep',
+      'Bearer ' || v_key
+    );
+  exception when others then
+    raise notice 'nak_trigger_deep_sleep_sweep: dispatch failed: %', sqlerrm;
+  end;
+end;
+$fn$;
+
+revoke all on function public.nak_trigger_deep_sleep_sweep() from public, anon, authenticated;
+
+do $cron$
+begin
+  if exists (select 1 from pg_available_extensions where name = 'pg_cron')
+     and exists (select 1 from pg_available_extensions where name = 'pg_net') then
+    create extension if not exists pg_cron;
+    create extension if not exists pg_net;
+    if exists (select 1 from cron.job where jobname = 'nak-deep-sleep-sweep') then
+      perform cron.unschedule('nak-deep-sleep-sweep');
+    end if;
+    -- Minute 47: see the rem sweep's minute-17 comment for the
+    -- spacing scheme.
+    perform cron.schedule(
+      'nak-deep-sleep-sweep',
+      '47 * * * *',
+      $job$ select public.nak_trigger_deep_sleep_sweep(); $job$
+    );
+  end if;
+exception when others then
+  raise notice 'deep-sleep sweep cron setup skipped: %', sqlerrm;
 end
 $cron$;
 

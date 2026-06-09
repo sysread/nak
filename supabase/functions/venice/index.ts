@@ -53,6 +53,11 @@ import {
   runWikiLibrarianManual,
   runWikiLibrarianSweepTick,
 } from './agents/wiki_librarian.ts';
+import { runRemManual, runRemSweepTick } from './agents/rem.ts';
+import {
+  runDeepSleepManual,
+  runDeepSleepSweepTick,
+} from './agents/deep_sleep.ts';
 import { createAgentProgressPublisher } from '../_shared/agent-progress.ts';
 // Side-effect import: every tool module under ./tools/ calls
 // registerTool() at module-load via this barrel, populating the
@@ -684,6 +689,108 @@ async function handleWikiLibrarianRun(req: Request): Promise<Response> {
   return json(result);
 }
 
+/**
+ * Cron-driven scheduled rem sweep. Claims the most-overdue eligible
+ * user (the claim RPC enforces the 12h minimum interval and the
+ * memory-librarian Settings toggle) and drains up to three of their
+ * recall-co-occurrence conversations. One user per tick; runs
+ * synchronously and returns the outcome - pg_net ignores it, the dev
+ * shim prints it.
+ */
+async function handleRemSweep(req: Request): Promise<Response> {
+  if (!isServiceRole(req)) return json({ error: 'forbidden' }, 403);
+
+  const admin = adminClient();
+  if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
+
+  const summary = await runRemSweepTick(admin);
+  return json(summary);
+}
+
+/**
+ * Cron-driven scheduled deep-sleep sweep. Same posture as the rem
+ * sweep; the work unit is one seed-neighborhood review instead of a
+ * conversation batch.
+ */
+async function handleDeepSleepSweep(req: Request): Promise<Response> {
+  if (!isServiceRole(req)) return json({ error: 'forbidden' }, 403);
+
+  const admin = adminClient();
+  if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
+
+  const summary = await runDeepSleepSweepTick(admin);
+  return json(summary);
+}
+
+/**
+ * User-triggered rem run (the Memories panel). Body: { runId?: string }.
+ * Same runId contract as the wiki-librarian run: the browser mints it
+ * and subscribes to its agent-runs channel BEFORE posting; a missing
+ * runId just means no progress publishing. Agent-level failures and
+ * the in-flight-collision case come back inside the result union, not
+ * as transport errors.
+ */
+async function handleRemRun(req: Request): Promise<Response> {
+  const userId = userIdFromJwt(req);
+  if (!userId) return json({ error: 'unauthorized' }, 401);
+
+  const admin = adminClient();
+  if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
+
+  let body: { runId?: unknown };
+  try {
+    body = await req.json();
+  } catch {
+    return json({ error: 'invalid JSON body' }, 400);
+  }
+  // Cap the client-minted id so a hostile body can't bloat every
+  // broadcast payload; the id is an opaque demux key, not identity.
+  const runId =
+    typeof body.runId === 'string' && body.runId.length > 0 && body.runId.length <= 64
+      ? body.runId
+      : null;
+
+  const publisher = runId ? createAgentProgressPublisher(userId, runId) : null;
+  const result = await runRemManual(
+    admin,
+    userId,
+    publisher ? (event) => publisher.publish(event) : undefined,
+  );
+  // Flush before responding so the 'done' event lands no later than
+  // the response body that also announces completion.
+  if (publisher) await publisher.flush();
+  return json(result);
+}
+
+/** User-triggered deep-sleep run. Same contract as the rem run route. */
+async function handleDeepSleepRun(req: Request): Promise<Response> {
+  const userId = userIdFromJwt(req);
+  if (!userId) return json({ error: 'unauthorized' }, 401);
+
+  const admin = adminClient();
+  if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
+
+  let body: { runId?: unknown };
+  try {
+    body = await req.json();
+  } catch {
+    return json({ error: 'invalid JSON body' }, 400);
+  }
+  const runId =
+    typeof body.runId === 'string' && body.runId.length > 0 && body.runId.length <= 64
+      ? body.runId
+      : null;
+
+  const publisher = runId ? createAgentProgressPublisher(userId, runId) : null;
+  const result = await runDeepSleepManual(
+    admin,
+    userId,
+    publisher ? (event) => publisher.publish(event) : undefined,
+  );
+  if (publisher) await publisher.flush();
+  return json(result);
+}
+
 interface StreamRequestBody {
   threadId?: string;
   userMessageId?: string;
@@ -961,6 +1068,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
   if (route === 'wiki-retry' && req.method === 'POST') return handleWikiRetry(req);
   if (route === 'wiki-librarian-sweep' && req.method === 'POST') return handleWikiLibrarianSweep(req);
   if (route === 'wiki-librarian-run' && req.method === 'POST') return handleWikiLibrarianRun(req);
+  if (route === 'rem-sweep' && req.method === 'POST') return handleRemSweep(req);
+  if (route === 'rem-run' && req.method === 'POST') return handleRemRun(req);
+  if (route === 'deep-sleep-sweep' && req.method === 'POST') return handleDeepSleepSweep(req);
+  if (route === 'deep-sleep-run' && req.method === 'POST') return handleDeepSleepRun(req);
   if (route === 'text-parser' && req.method === 'POST') return handleTextParser(req);
   if (route === 'image-generate' && req.method === 'POST') return handleImageGenerate(req);
   if (route === 'complete' && req.method === 'POST') return handleComplete(req);

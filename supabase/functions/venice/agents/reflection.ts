@@ -35,7 +35,11 @@ import { readVeniceKey } from '../tools/_venice_key.ts';
 import {
   asAgentTool,
   loadThreadSliceUpTo,
+  MEMORY_DOUBT_WIRE_SCHEMA,
+  MEMORY_INVALIDATE_WIRE_SCHEMA,
+  MEMORY_RELATE_WIRE_SCHEMA,
   MEMORY_SEARCH_WIRE_SCHEMA,
+  MEMORY_UNRELATE_WIRE_SCHEMA,
 } from './_agent_tools.ts';
 import { memorySearch } from '../tools/memory_search.ts';
 import { memoryCreate } from '../tools/memory_create.ts';
@@ -70,20 +74,23 @@ const REFLECTION_CLAIM_TTL_SECONDS = 120;
 
 // Schema caps mirror supabase/functions/venice/tools/memory_*.ts so the
 // wire schemas the agent's model sees match the server-side validators'
-// limits. (8000 / 200 / 80 / 500 are the same numbers those tools
-// enforce on execute.)
+// limits. (8000 / 200 / 80 are the same numbers those tools enforce on
+// execute.)
 const MAX_MEMORY_DATA_CHARS = 8000;
 const MAX_MEMORY_CHANGELOG_MESSAGE_CHARS = 200;
 const MAX_MEMORY_LABEL_CHARS = 80;
-const MEMORY_RELATE_MAX_NOTE_CHARS = 500;
 
 // ---------------------------------------------------------------------------
-// Wire schemas for the agent-only memory toolbox. Ported from the
-// browser src/lib/tools/memory_*.schema.ts so the reflection model gets
-// the same tool contracts regardless of which path drove it. This is the
-// soft-decay set: memory_invalidate (halve confidence) stands in for
-// memory_delete (hard erase) so a background agent can never destroy a
-// memory row on its own authority.
+// Wire schemas for the reflection-only third of the memory toolbox.
+// Ported from the browser src/lib/tools/memory_*.schema.ts so the
+// reflection model gets the same tool contracts regardless of which
+// path drove it. The invalidate/doubt/relate/unrelate wires live in
+// _agent_tools.ts (the memory librarians share them); create/update/
+// reaffirm stay here because reflection is the only agent allowed to
+// generate or bump - "librarian collapses, reflection generates."
+// This is the soft-decay set: memory_invalidate (halve confidence)
+// stands in for memory_delete (hard erase) so a background agent can
+// never destroy a memory row on its own authority.
 // ---------------------------------------------------------------------------
 
 const MEMORY_CREATE_WIRE_SCHEMA: AgentTool['wire'] = {
@@ -172,26 +179,6 @@ const MEMORY_UPDATE_WIRE_SCHEMA: AgentTool['wire'] = {
   },
 };
 
-const MEMORY_INVALIDATE_WIRE_SCHEMA: AgentTool['wire'] = {
-  type: 'function',
-  function: {
-    name: 'memory_invalidate',
-    description:
-      'Mark a memory as contradicted/outdated, halving its confidence ' +
-      'so it stops surfacing in search. Repeated invalidation hides it ' +
-      "entirely; the row isn't hard-deleted, so memory_update / " +
-      'memory_create can restore confidence later. Returns ' +
-      '{id, confidence} post-decay.',
-    parameters: {
-      type: 'object',
-      properties: {
-        id: { type: 'string', description: 'UUID of the memory.' },
-      },
-      required: ['id'],
-      additionalProperties: false,
-    },
-  },
-};
 
 const MEMORY_REAFFIRM_WIRE_SCHEMA: AgentTool['wire'] = {
   type: 'function',
@@ -212,91 +199,8 @@ const MEMORY_REAFFIRM_WIRE_SCHEMA: AgentTool['wire'] = {
   },
 };
 
-const MEMORY_DOUBT_WIRE_SCHEMA: AgentTool['wire'] = {
-  type: 'function',
-  function: {
-    name: 'memory_doubt',
-    description:
-      "Multiply a memory's confidence by 0.7 when the current exchange " +
-      'weakens it without fully contradicting it (no floor; below 0.05 ' +
-      'the memory hides from search but is recoverable). For outright ' +
-      'contradictions prefer memory_update with corrected text or ' +
-      'memory_invalidate. Returns {id, confidence} post-doubt.',
-    parameters: {
-      type: 'object',
-      properties: {
-        id: { type: 'string', description: 'UUID of the memory.' },
-      },
-      required: ['id'],
-      additionalProperties: false,
-    },
-  },
-};
 
-const MEMORY_RELATE_WIRE_SCHEMA: AgentTool['wire'] = {
-  type: 'function',
-  function: {
-    name: 'memory_relate',
-    description:
-      'Link two memories with a directed edge (supports / contradicts / ' +
-      'generalises / specialises). Optional note (up to ' +
-      `${MEMORY_RELATE_MAX_NOTE_CHARS} chars) records the rationale. ` +
-      'Relations surface next to their source memory in retrieval. ' +
-      'Self-loops rejected; duplicate edges (same from/to/kind) collapse ' +
-      'to no-op. Returns {id, kind}.',
-    parameters: {
-      type: 'object',
-      properties: {
-        from_id: {
-          type: 'string',
-          description: 'UUID of the source memory (edge originates here).',
-        },
-        to_id: {
-          type: 'string',
-          description: 'UUID of the target memory (edge points here).',
-        },
-        kind: {
-          type: 'string',
-          enum: ['supports', 'contradicts', 'generalises', 'specialises'],
-          description:
-            'supports = target reinforces source; contradicts = target ' +
-            'disagrees; generalises = target is broader; specialises = ' +
-            'target is narrower.',
-        },
-        note: {
-          type: 'string',
-          maxLength: MEMORY_RELATE_MAX_NOTE_CHARS,
-          description: 'Optional rationale for the link.',
-        },
-      },
-      required: ['from_id', 'to_id', 'kind'],
-      additionalProperties: false,
-    },
-  },
-};
 
-const MEMORY_UNRELATE_WIRE_SCHEMA: AgentTool['wire'] = {
-  type: 'function',
-  function: {
-    name: 'memory_unrelate',
-    description:
-      'Remove a directed edge between two memories. Hard-delete; no ' +
-      "soft version. id is the relation row's UUID (not a memory id) - " +
-      'surfaced when the relation appears in search. Returns ' +
-      '{deleted: true}.',
-    parameters: {
-      type: 'object',
-      properties: {
-        id: {
-          type: 'string',
-          description: 'UUID of the relation row (NOT a memory id).',
-        },
-      },
-      required: ['id'],
-      additionalProperties: false,
-    },
-  },
-};
 
 // Reflection's user-turn instruction. Verbatim port of REFLECTION_PROMPT
 // in src/lib/agents/reflection/prompt.ts so the model gets identical

@@ -47,15 +47,19 @@ interface MemoryRelationRow {
   to_confidence: number | null;
 }
 
-// Mirror of classifyMemoryConfidence in src/lib/memories.ts. The
-// thresholds were stable enough that re-deriving here is cheaper than
-// piping the browser file in.
-function classifyMemoryConfidence(confidence: number | null): string | null {
+// Mirror of classifyMemoryConfidence in src/lib/memories.ts: the
+// [1.5, 5.0) band is deliberately untagged (neutral) so ordinary
+// memories read as plain facts, and anything below 0.5 is 'shaky'
+// all the way down. An earlier version of this mirror drifted from
+// the browser bands (it tagged the neutral band 'hedged'); keep the
+// two in lockstep when either changes. Exported for the memory
+// librarians' batch renderers, which prefix each row with its tag.
+export function classifyMemoryConfidence(confidence: number | null): string | null {
   if (confidence === null || !Number.isFinite(confidence)) return null;
   if (confidence >= 5.0) return 'corroborated';
+  if (confidence >= 1.5) return null;
   if (confidence >= 0.5) return 'hedged';
-  if (confidence >= 0.05) return 'shaky';
-  return null;
+  return 'shaky';
 }
 
 // ILIKE pattern helper. Same shape as src/lib/supabase.ts
