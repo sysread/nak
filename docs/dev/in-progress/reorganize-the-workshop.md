@@ -253,6 +253,109 @@ register it in `tools/index.ts`.
    only consumer. `runHeadlessToolLoop` STAYS (wiki / wiki-librarian
    / rem / deep-sleep still use it). -> Phase 3 demolition list.
 
+#### Wiki (autonomous): concrete design (from the migration research)
+
+**Trigger: pg_cron, per the original table.** The reflection-style
+chat-turn piggyback was considered (wiki's queue is the same
+day-gated drain-older-threads shape) and rejected in favor of the
+planned cron drive - wiki should drain even when the user isn't
+chatting, and the cron surface is needed for the remaining three
+fleets regardless, so it gets built here against the simplest
+consumer. The infrastructure is a clone of the embed-backfill
+pattern, NOT new framework work: a `nak_trigger_wiki_sweep()`
+SECURITY DEFINER function reads the `project_url` /
+`service_role_key` Vault secrets and `net.http_post`s to
+`/functions/v1/venice/wiki-sweep`; a guarded `cron.schedule` block
+runs it hourly (wiki eligibility only changes at day boundaries
+per user, so the embed backfill's 5-minute cadence would be
+wasted LLM-budget polling). Each tick processes a bounded number
+of threads; the schedule resumes the drain.
+
+**Claim redesign - the cron has no user JWT.** The current
+`claim_next_thread_for_wiki(p_holder_id, p_ttl, p_timezone)` is
+`security invoker` gated on `auth.uid()`, and the *caller* supplies
+the timezone. A cron-driven sweep has neither a user identity nor a
+single timezone. The redesign follows the embeddings-backfill
+precedent (`claim_next_pending_wiki_article`: global SECURITY
+DEFINER sweep, EXECUTE locked to `service_role`): the claim joins
+`profiles` per candidate thread to read
+`settings->>'displayTimezone'` (UTC fallback) for the day-gate AND
+to gate on `coalesce((settings->>'wikiAutomaticEnabled')::boolean,
+true)` - the Settings toggle keeps working, it just becomes a
+DB-read on the server instead of a worker start/stop on the client.
+The claim returns `user_id` alongside the thread columns so the
+agent can scope its run. The mark / failure / retry RPCs
+(`mark_thread_wiki_processed_if_claimed`,
+`record_wiki_failure_or_skip`, `compute_wiki_terminal_msg_id`,
+`manual_advance_wiki_pointer`) get the same `p_user_id` b-strict
+overload treatment reflection's RPCs got; the old invoker-only
+signatures die with the browser worker.
+
+**The Skipped-panel Retry button forces a second endpoint.** The
+browser `WikiAgent` carries three flows: the autonomous loop (this
+migration), `retrySkippedThread()` (the Wiki Skipped panel's Retry
+button - runs the SAME tool loop, on the main thread), and
+`updateOne()` (the per-article "ask agent to update" flow - a
+single `response_format=json_object` completion, NO tool loop). The
+retry flow must move in this PR too, or the browser wiki tool impls
+can't die and the two-dispatcher state survives. It becomes a
+user-JWT `POST /wiki-retry` route (the "HTTP POST for run now"
+shape the plan table assigns wiki-librarian) returning the same
+`{toolCalls, reasoning} | no-op | error` union the panel already
+renders. `updateOne()` stays browser-side - it's a no-tool
+completion, same category as auto_title/summary.
+
+**Agent port shape** (`agents/wiki.ts`, template
+`agents/reflection.ts`): autonomous prompt + user-profile block
+ported verbatim (the profile block's HARD anti-name-fabrication
+wording is load-bearing - see the prompt.ts preamble history);
+profile fields read from `profiles.settings.userName/userLocation`;
+5-tool toolbox (wiki CRUD + read-only `memory_search`) via the
+`asAgentTool` adapter; model hardcoded `deepseek-v4-flash`
+(static `AGENT_MODELS.wiki` slot) with the single
+content-filter-fallback retry on `arcee-trinity-large-thinking`
+(the Venice classifier sentinel survives the port - VeniceError
+messages embed the response body); `reasoningEffort: 'medium'`;
+per-thread failure counter (cap 3) through
+`record_wiki_failure_or_skip`. Progress logs through
+`createEdgeLogger(userId, 'wiki')` + flush, so the drawer keeps
+its picked-up/finished/skipped lines.
+
+**Prerequisite tool ports.** The edge registry has `wiki_search` /
+`wiki_get` / `wiki_list` / `memory_search` but not the write
+tools. Port `wiki_create` / `wiki_update` / `wiki_delete`
+faithfully: char caps, best-effort changelog rows, source
+attribution (auto-attach `ctx.threadId`; validate
+`source_thread_ids` against the threads table), and create's
+unique-violation rephrasing ("already exists -> wiki_search +
+wiki_update").
+
+**Browser cutover + what survives.** Delete
+`agents/wiki/{worker,manager,loop,types}.ts`, `wiki_toolbox.ts`,
+and the autonomous half of `prompt.ts`; `agent.ts` shrinks to the
+manual `updateOne` flow. Only the `wiki_create` browser impl falls
+dead (repoint to `serverSideTool`) - `wiki_update` / `wiki_delete`
+/ `wiki_search` impls stay alive because the still-browser
+**wiki-librarian** toolbox uses them; they die with that fleet.
+`state.svelte.ts` drops the wiki manager wiring (start/stop/
+setProfile/setTimezone); the Settings toggle becomes a plain
+settings write.
+
+**UI refresh - the worker's `processed` event dies.** The Wiki
+drawer/panel refreshed via `emitWikiChange()`, fired from the
+browser tool impls and the manager's progress handler. Server-side
+writes can't reach a window event bus - the same blind spot as the
+Phase 5 cookbook-events item, fixed here with the shape that item
+prescribes: a user-scoped Realtime `postgres_changes` subscription
+on `wiki_articles` that fires `emitWikiChange()`. (The cookbook
+item stays open - recipes are a different table - but this PR
+establishes the pattern it wants.)
+
+**Local verification.** The dev stack has no pg_cron/pg_net;
+`scripts/dev-backfill-cron.mjs` grows a wiki-sweep tick alongside
+the backfill one (same loopback-only guard, same service-role
+bearer).
+
 **Why wiki-related agents before memory librarians.** wiki/
 wiki-librarian touch a much smaller live data shape than rem/
 deep-sleep; mis-migrations there are easier to roll back without user
