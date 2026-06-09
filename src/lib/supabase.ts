@@ -4398,9 +4398,10 @@ export class SupabaseService {
   }
 
   /**
-   * Atomic claim for one deep-sleep run. Same shape as
-   * claimWikiLibrarianRun - cross-device coordination via an UPDATE-
-   * with-WHERE on profiles.deep_sleep_last_run_at. Deep-sleep and rem
+   * Atomic claim for one deep-sleep run: cross-device coordination
+   * via an UPDATE-with-WHERE on profiles.deep_sleep_last_run_at
+   * (the same per-user cadence-stamp shape the server-side wiki
+   * librarian uses). Deep-sleep and rem
    * share the 'memory-librarian' lease partition (mutex), but the
    * cadence gates are independent so the two agents can run on
    * staggered schedules.

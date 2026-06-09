@@ -267,7 +267,9 @@ anything - that's the steady state.
 ## The librarian
 
 A second background agent - the wiki **librarian** - runs every 12
-hours or so. Its job is different from the per-conversation agent:
+hours or so, on your Supabase project like the per-conversation
+agent (no tab needs to be open). Its job is different from the
+per-conversation agent:
 instead of reading a single conversation and adding to the wiki, the
 librarian looks at the wiki as a whole and tries to make it more
 coherent. It can:
@@ -316,9 +318,9 @@ it's conservative - if it isn't confident two articles overlap
 enough to merge, or that a title has drifted far enough to need a
 rename, it leaves them alone.
 
-The 12-hour minimum interval is enforced atomically across devices
-(via a Postgres claim); only one run happens per cycle even if you
-have the app open on multiple devices.
+The 12-hour minimum interval is enforced server-side (via an atomic
+Postgres claim); exactly one scheduled run happens per cycle no
+matter how many devices you have the app open on - or none.
 
 You can disable the librarian independently from the per-conversation
 agent in **Settings -> Wiki**. The two toggles are independent: you
@@ -352,8 +354,10 @@ step. The confirmation strip surfaces this before you commit.
 A manual run does **not** reset the 12-hour cadence for the next
 background run. Manual and scheduled runs are independent.
 
-The button is grayed out while a scheduled librarian run is in
-flight - the two paths never write to the wiki at the same time.
+The three ways a librarian run can start (scheduled, this button,
+and the chat-driven path below) are mutually exclusive: starting one
+while another is in flight shows a "try again in a moment" message
+instead of racing two passes over the wiki.
 
 ### Asking Nak to run the librarian from the chat
 

@@ -119,7 +119,8 @@ agent-side toolbox aggregators).
 **Five fleets to move.** Each one is a self-contained PR:
 **reflection** (simplest) [DONE - see concrete design below],
 **wiki** (autonomous) [DONE - see concrete design below],
-**wiki-librarian**, **rem**, **deep-sleep**.
+**wiki-librarian** [DONE - see concrete design below],
+**rem**, **deep-sleep**.
 After each one lands, the browser impls of its tools may newly fall
 dead - drop them alongside the migration PR (not a separate cleanup).
 
@@ -382,7 +383,27 @@ establishes the pattern it wants.)
 the backfill one (same loopback-only guard, same service-role
 bearer).
 
-#### Wiki-librarian: concrete design (from the migration research)
+#### Wiki-librarian: concrete design [LANDED, pending prod verify]
+
+**Status.** Shipped across two commits (server, then browser
+cutover): the runner's injectable completion seam + onProgress hook
+(the Phase 3 gate item - landed here as planned), the global
+`claim_next_user_for_wiki_librarian` with the per-user in-flight
+guard pair and hourly `nak-wiki-librarian-sweep` cron, the converged
+`agents/wiki_librarian.ts` (full two-variant prompt, registered-tool
+toolbox - killing the drifted inline caps - and all three entry
+points sharing the guard), the `/wiki-librarian-sweep` +
+`/wiki-librarian-run` routes with per-run step events on the
+`agent-runs:<userId>` Broadcast channel (per-USER topic with the
+runId in the payload, NOT the per-run topic the open question below
+recommended - the per-user shape gets channel auth for free from one
+literal-equality policy), the dev-shim tick, and the full browser
+cutover (librarian fleet deleted; Wiki strip on subscribe-then-POST;
+the last setProfile/worker-push plumbing gone from state.svelte.ts).
+Behavioral tests restored through the seam
+(`supabase/functions/tests/{agent_run,wiki_behavior,wiki_librarian}.test.ts`).
+Gate + Deno (96) + knip green. **Production verification still owed**
+per the Phase 2 gate.
 
 **This fleet is a CONVERGENCE, not just a port.** The librarian
 already runs server-side for one of its three trigger paths: the
@@ -488,15 +509,16 @@ becomes orphaned. Drop in one cleanup PR:
   projector stays - it serves `buildToolList`).
 - `src/lib/tools/index.ts`'s `executeToolCall` export and the agent-
   side toolbox re-exports.
-- The 2 surviving agent-side toolbox aggregators
-  (`memory_librarian_toolbox.ts`, `wiki_librarian_toolbox.ts`).
-  `memory_toolbox.ts` and `wiki_toolbox.ts` already went in Phase 2 -
-  each was exclusive to its fleet, so it died with that fleet's
-  cutover rather than waiting for demolition.
-- The remaining 12 browser tool impl files (memory CRUD, wiki
-  search/update/delete, conversation_search). `wiki_create` already
-  died with the wiki cutover (the librarian toolbox never had it).
-  Schemas stay - `buildToolList` still uses them.
+- The 1 surviving agent-side toolbox aggregator
+  (`memory_librarian_toolbox.ts`). The other three
+  (`memory_toolbox.ts`, `wiki_toolbox.ts`,
+  `wiki_librarian_toolbox.ts`) already went in Phase 2 - each was
+  exclusive to its fleet, so it died with that fleet's cutover
+  rather than waiting for demolition.
+- The remaining 10 browser tool impl files (the 9 memory tools +
+  `conversation_search`), all owned by the memory-librarian fleet.
+  The wiki impls already died with their fleets' cutovers. Schemas
+  stay - `buildToolList` still uses them.
 - `src/lib/tools/lazy.ts` if it has no remaining caller.
 - The agent class shells in `src/lib/agents/{wiki-
   librarian,rem,deep-sleep}/agent.ts` if their last reader was the
@@ -506,23 +528,16 @@ becomes orphaned. Drop in one cleanup PR:
   flow (a no-tool completion, outside the dispatcher split).
 
 **Also in this phase - NOT optional: restore the agent-loop test
-seam.** The fleet migrations traded away a class of unit coverage:
-the browser agents took their completion function through
-`SupabaseService.complete`, so tests scripted model rounds by
-injection; `runHeadlessAgent` calls `toolComplete` (and through it,
-live `fetch`) directly, so the ported agents' in-run behaviors -
-the wiki agent's primary-then-fallback model ordering, the retry
-flow's pointer/skip-marker semantics, reflection's mark-after-run
-discipline - currently have NO unit tests, only live verification.
-Give the runner an injectable completion seam (an optional override
-in `RunHeadlessAgentOptions`, defaulting to `toolComplete`, the same
-shape `CreateEdgeLoggerOpts.fetchImpl` uses) and reinstate the
-behavioral tests the browser suites used to carry (the deleted
-`tests/wiki-agent.test.ts` is the inventory of what to port). This
-gates project completion; it does not have to wait for demolition -
-landing the seam alongside the NEXT fleet port (wiki-librarian) is
-the stronger play, since every remaining migration repeats the same
-coverage loss until the seam exists.
+seam.** [DONE - landed with the wiki-librarian fleet, as
+recommended.] `RunHeadlessAgentOptions.complete` is the injectable
+completion override (default `toolComplete`); the behavioral tests
+the browser suites used to carry are back through it -
+`supabase/functions/tests/wiki_behavior.test.ts` restores the wiki
+agent's primary-then-fallback ordering and the retry flow's
+pointer/skip-marker semantics, and `agent_run.test.ts` covers the
+seam + progress hook themselves. The rem/deep-sleep ports must use
+the seam from day one so their browser test inventories migrate
+instead of dying.
 
 **Done when:** `src/lib/tools/` contains only `.schema.ts` files +
 `types.ts` + `wire.ts` + `index.ts` (now a schema-only catalog), and

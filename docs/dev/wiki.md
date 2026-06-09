@@ -9,14 +9,16 @@ tab; two distinct background agents keep them healthy:
   message at least one full calendar day old in the user's timezone)
   across ALL users and updates / creates articles based on topics
   that came up.
-- The **wiki librarian** is a browser Web Worker fleet, runs every
-  12 hours, reads the wiki as a whole, and consolidates duplicates /
+- The **wiki librarian** also runs server-side in the venice edge
+  function. It reads the wiki as a whole and consolidates duplicates /
   fact-checks claims against conversation history. It cannot create
-  new articles; only update and delete. Cross-device coordination via
-  an atomic claim RPC (`claim_wiki_librarian_run`). The librarian has
-  NOT migrated server-side; it is the remaining browser fleet in this
-  feature, and its toolbox is what keeps the browser
-  `wiki_search` / `wiki_update` / `wiki_delete` implementations alive.
+  new articles; only update and delete. Three trigger paths share one
+  prompt builder and one toolbox: an hourly pg_cron sweep that claims
+  the most-overdue eligible user on a 12h cadence, the Wiki panel's
+  manual-run (sparkles) button, and the chat-dispatched
+  `wiki_librarian` tool. A per-user in-flight guard makes the three
+  paths mutually exclusive. No wiki feature code runs in the browser
+  except the Wiki UI itself and the manual `updateOne` flow.
 
 Both agents share the encyclopedic-third-person voice and the
 "preserve facts unless explicitly contradicted" discipline.
@@ -70,9 +72,30 @@ Schema (`supabase/schema.sql`):
 - Realtime: `wiki_articles` is a member of the `supabase_realtime`
   publication so the browser's refresh subscription (below) sees
   server-side writes.
-- For the librarian: `profiles.wiki_librarian_last_run_at` and the
-  atomic-claim RPC `claim_wiki_librarian_run(int)`, which returns
-  true at most once per `min_interval_seconds` across all devices.
+- For the librarian: the cadence column
+  `profiles.wiki_librarian_last_run_at` plus the in-flight guard
+  columns (`wiki_librarian_inflight_holder`,
+  `wiki_librarian_inflight_expires_at`).
+  `claim_next_user_for_wiki_librarian(int)` is a global SECURITY
+  DEFINER claim (EXECUTE locked to `service_role`) that stamps the
+  cadence column for the most-overdue eligible user inside the
+  claiming UPDATE - stamp-before-run, so a crashed run waits out the
+  12h interval. Eligibility gates on
+  `settings->>'wikiLibrarianEnabled' is distinct from 'false'`, the
+  same string-compare-on-purpose shape as the wiki sweep's toggle.
+  The guard pair `claim_wiki_librarian_inflight` /
+  `release_wiki_librarian_inflight` (atomic holder + TTL on profiles;
+  b-strict `coalesce(p_user_id, auth.uid())`) is what makes the three
+  trigger paths mutually exclusive. Cron dispatch:
+  `nak_trigger_wiki_librarian_sweep()` POSTs `/wiki-librarian-sweep`
+  via pg_net; the `nak-wiki-librarian-sweep` job fires it hourly at
+  minute 37 (offset from the wiki sweep's minute 7 and the backfill's
+  `*/5` grid so the heavy dispatches never share a tick).
+- Realtime authorization for live librarian runs: the "agent-run
+  channel: owner subscribe" policy on `realtime.messages` admits the
+  signed-in user to their private `agent-runs:<userId>` Broadcast
+  topic. Per-USER topic, not per-run - one literal-equality policy
+  covers every run; payloads carry the runId for client-side demux.
 - For the changelog: a `wiki_changelog` table (one row per
   create/update/delete; `article_id` is `on delete set null` so a
   deleted article doesn't take its history with it; `title_at_change`
@@ -106,7 +129,17 @@ Edge function (`supabase/functions/venice/`):
   schema so agent writes stay byte-identical to the chat-side
   tools), `loadThreadSliceUpTo` (history slice at the claimed
   terminal message), and `MEMORY_SEARCH_WIRE_SCHEMA`. Shared with
-  the reflection agent.
+  the reflection agent and the librarian.
+- `agents/_run.ts` - `runHeadlessAgent`, the headless tool loop every
+  server-side agent (reflection, wiki, librarian) drives. Two seams:
+  the injectable completion call (`RunHeadlessAgentOptions.complete`;
+  defaults to `toolComplete`, the live Venice call) is how the Deno
+  suites script model rounds without a network, and the optional
+  `onProgress` hook emits `thinking` / `tool` step events. Attaching
+  `onProgress` also injects a required `activity` narration
+  parameter into every tool's wire schema; without a listener the
+  wire bytes carry no narration (reflection and both wiki sweeps
+  stay narration-free).
 - `tools/wiki_create.ts`, `tools/wiki_update.ts`,
   `tools/wiki_delete.ts` - the write tools (char caps, best-effort
   changelog + source attribution, unique-violation rephrasing).
@@ -119,13 +152,36 @@ Edge function (`supabase/functions/venice/`):
   `user_id` filter is what RLS would otherwise provide).
 - `tools/wiki_search.ts`, `tools/wiki_get.ts`, `tools/wiki_list.ts` -
   the chat-facing read surfaces.
-- `agents/wiki_librarian.ts` - the main-chat `wiki_librarian`
-  delegation tool (the chat model's only path to wiki writes; it
-  inlines its own update/delete wrappers rather than using the
-  registry).
-- `index.ts` - routes: `POST /wiki-sweep` (gated by `isServiceRole`)
-  and `POST /wiki-retry` (user JWT; the gateway-validated id scopes
-  every RPC the retry makes).
+- `agents/wiki_librarian.ts` - the librarian, all three trigger
+  paths: `runWikiLibrarianSweepTick` (scheduled; claims one user per
+  tick via `claim_next_user_for_wiki_librarian` and skips post-claim
+  when the wiki is under `LIBRARIAN_MIN_ARTICLES = 3`),
+  `runWikiLibrarianManual` (the Wiki panel's sparkles button; never
+  touches the cadence stamp), and the registered `wiki_librarian`
+  ToolDef (the chat model's only path to wiki writes; always the
+  custom-instructions prompt variant). One prompt builder
+  (`buildWikiLibrarianPrompt` - standard five-step sweep body or the
+  bounded custom-instructions variant, parameterised on the invoking
+  surface) and one toolbox (`buildLibrarianToolbox`) built from the
+  REGISTERED tool ports via `asAgentTool` /
+  `asAgentToolNoThread`. Per-run knobs: model
+  `deepseek-v4-flash` (mirror of `agentModel('wikiLibrarian')`),
+  400-char article excerpts, 500-article fetch cap, 12h cadence,
+  600s in-flight TTL. Test-only invariants exported via `__test`.
+- `supabase/functions/_shared/agent-progress.ts` -
+  `createAgentProgressPublisher`, the run-scoped publisher behind
+  the manual route's live step events. Publishes each event to the
+  private `agent-runs:<userId>` Broadcast topic with the runId folded
+  into the payload; same fire-and-forget transport and
+  flush-before-respond contract as `edge-log.ts`.
+- `index.ts` - routes: `POST /wiki-sweep` and
+  `POST /wiki-librarian-sweep` (both gated by `isServiceRole`);
+  `POST /wiki-retry` and `POST /wiki-librarian-run` (user JWT; the
+  gateway-validated id scopes every RPC). The librarian-run route
+  takes `{ instructions, runId }`, builds the progress publisher
+  when a runId is present (capped at 64 chars - an opaque demux key,
+  not identity), and awaits `publisher.flush()` before responding so
+  the `done` event can't be dropped behind the response body.
 - `supabase/functions/_shared/embed-input.ts` - the `wiki` entry in
   `EMBED_SOURCES` builds the embed input for the server-side
   backfill.
@@ -133,8 +189,9 @@ Edge function (`supabase/functions/venice/`):
 Dev shim:
 
 - `scripts/dev-backfill-cron.mjs` - the local stack has no pg_cron /
-  pg_net, so this shim ticks `POST /wiki-sweep` alongside
-  `POST /backfill` and prints each tick's `WikiSweepSummary`.
+  pg_net, so this shim ticks `POST /wiki-sweep` and
+  `POST /wiki-librarian-sweep` alongside `POST /backfill` and prints
+  each tick's `WikiSweepSummary` / librarian sweep outcome.
 
 Browser data layer:
 
@@ -147,9 +204,13 @@ Browser data layer:
   POST to `/wiki-retry`; boundary-validates the result union),
   `subscribeToWikiArticleChanges` (user-scoped `postgres_changes`
   subscription on `wiki_articles`; coarse "something changed"
-  notification, no per-event payloads), `claimWikiLibrarianRun`, and
-  the changelog pair `createWikiChangelogEntry` /
-  `listWikiChangelog`. The `UserSettings` interface carries
+  notification, no per-event payloads), `runWikiLibrarian` (a thin
+  authenticated POST to `/wiki-librarian-run`; boundary-validates the
+  `WikiLibrarianRunResult` union - `ok` / `busy` / `error`),
+  `subscribeToAgentRunProgress` (private `agent-runs:<userId>`
+  Broadcast subscription delivering `AgentRunProgressEvent`s; callers
+  filter on runId), and the changelog pair `createWikiChangelogEntry`
+  / `listWikiChangelog`. The `UserSettings` interface carries
   `wikiAutomaticEnabled?: boolean` and
   `wikiLibrarianEnabled?: boolean`.
 - `src/lib/wiki.ts` - the search helper
@@ -170,32 +231,21 @@ Browser data layer:
   next offset page.
 - `src/lib/wiki-events.ts` - the `WIKI_CHANGE_EVENT` window-event
   bus parallel to `journal-events.ts` / `cookbook-events.ts`. Fired
-  by user edits via Wiki.svelte, by the librarian's browser tools,
-  and by the realtime subscription relaying a server-side write.
+  by user edits via Wiki.svelte, by the manual librarian strip on a
+  successful run, and by the realtime subscription relaying a
+  server-side agent write.
 
 Browser tools:
 
-- `src/lib/tools/wiki_search.{schema.,}ts` - the always-on recall
-  tool (registered in `src/lib/tools/index.ts`'s `alwaysOnToolbox`).
-- `src/lib/tools/wiki_list.schema.ts`, `wiki_get.schema.ts`,
-  `wiki_recall.schema.ts` - server-side read tools (schema-only on
-  the browser side).
-- `src/lib/tools/wiki_update.{schema.,}ts`,
-  `wiki_delete.{schema.,}ts` - browser write impls used ONLY by the
-  librarian's toolbox. Each takes a required `message` param (the
-  git-commit-style one-line summary that lands in the wiki
-  changelog) and appends a `wiki_changelog` row after the underlying
-  mutation; best-effort, so a failed changelog write does not roll
-  back the mutation. There is no browser `wiki_create` - the
-  librarian cannot create, and the autonomous agent's create runs
-  server-side.
-- `src/lib/tools/wiki_librarian_toolbox.ts` - the browser
-  librarian's toolbox; bundles wiki_search + wiki_update +
-  wiki_delete + conversation_search + memory_search. **No
-  wiki_create** and no memory writes - the librarian consolidates /
-  fact-checks read-only. This toolbox is what keeps the browser
-  wiki write impls above alive; when the librarian fleet migrates
-  server-side, they go with it.
+- `src/lib/tools/wiki_search.schema.ts`, `wiki_list.schema.ts`,
+  `wiki_get.schema.ts`, `wiki_recall.schema.ts` - server-side read
+  tools, schema-only on the browser side (`wiki_search` rides in
+  `src/lib/tools/index.ts`'s `alwaysOnToolbox` via `serverSideTool`).
+  There are no browser wiki tool implementations - every wiki tool
+  executes in the venice function. The browser
+  `conversation_search` / `memory_search` impls that remain in
+  `src/lib/tools/` belong to the memory-librarian fleet
+  (deep-sleep / rem), not to any wiki feature.
 - `src/lib/tools/wiki_librarian.schema.ts` + the `wikiToolbox`
   entry in `src/lib/tools/index.ts` - the main-chat delegation
   surface (see "Tool toolbox split" below).
@@ -214,15 +264,9 @@ Browser agents:
   `supabase/functions/venice/agents/wiki.ts`; the two share the
   encyclopedic voice and the anti-name-fabrication rules but differ
   in framing (autonomous reads a conversation and decides per-topic;
-  manual applies explicit instructions to one article).
-- `src/lib/agents/wiki-librarian/` (types, prompt, agent, loop,
-  worker, manager, runner) - the librarian fleet, browser-side and
-  structurally a `BaseWorkerManager` Web Worker like the other
-  browser fleets. Lock name `nak:wiki-librarian-worker`, logger
-  source `wiki-librarian-worker`, 12h min-interval, 1h idle nap;
-  bubbles `progress: 'reviewed'` to `emitWikiChange()`. Snapshot
-  input (id, title, 400-char excerpt per article;
-  `LIBRARIAN_MIN_ARTICLES = 3`), no per-thread context.
+  manual applies explicit instructions to one article). The
+  librarian has no browser agent code at all - its prompt and runner
+  live entirely in `supabase/functions/venice/agents/wiki_librarian.ts`.
 
 Model registry:
 
@@ -230,20 +274,26 @@ Model registry:
   `'wikiLibrarian'`; `AGENT_MODELS.wiki` and
   `AGENT_MODELS.wikiLibrarian` both pinned to `deepseek-v4-flash`
   (rationale documented inline above the table). The manual flow
-  resolves `agentModel('wiki')` at runtime; the edge agent hardcodes
-  the mirror constant `WIKI_MODEL` - keep them in sync.
+  resolves `agentModel('wiki')` at runtime; the edge agents hardcode
+  the mirror constants `WIKI_MODEL` (agents/wiki.ts) and
+  `WIKI_LIBRARIAN_MODEL` (agents/wiki_librarian.ts) - keep them in
+  sync with the registry.
 
 Main-thread plumbing:
 
-- `src/lib/state.svelte.ts` - lazy-imports the librarian manager
-  only; the autonomous agent has no browser manager.
-  `app.wikiAutomaticEnabled` is a plain persisted setting - the live
-  switch is `profiles.settings.wikiAutomaticEnabled`, which the
-  sweep's claim predicate reads per row, so flipping the Settings
-  toggle is just a settings write with no worker to start or stop.
-  `setDisplayTimezone` persists only - the day-gated server agents
-  (reflection, wiki) read `profiles.settings.displayTimezone`
-  server-side, so there is no live timezone push to any worker.
+- `src/lib/state.svelte.ts` - no wiki workers or managers at all;
+  both wiki agents run server-side. `app.wikiAutomaticEnabled` and
+  `app.wikiLibrarianEnabled` are plain persisted settings - the live
+  switches are `profiles.settings.wikiAutomaticEnabled` (read by the
+  wiki sweep's claim predicate) and
+  `profiles.settings.wikiLibrarianEnabled` (read by the librarian
+  sweep's claim), so flipping a Settings toggle is just a settings
+  write with no worker to start or stop. There is no
+  worker-push plumbing for profile fields either - every prompt that
+  renders an "About the user" block reads `profiles.settings`
+  server-side per run. `setDisplayTimezone` persists only - the
+  day-gated server agents (reflection, wiki) read
+  `profiles.settings.displayTimezone` server-side.
 - `src/lib/routing.svelte.ts` - extends `DrawerTab` with `'wiki'`
   and `Route` with `wiki_article_id`.
 - `src/lib/chat-prompt.ts` - `WIKI_BLOCK` after `JOURNAL_BLOCK` in
@@ -297,6 +347,17 @@ UI:
   is to navigate elsewhere); the done-state "Close" survives because
   dismissing the run result is a different operation from navigating
   away.
+  **Librarian strip.** The manual run is subscribe-then-POST: the
+  strip mints a `runId`, subscribes via
+  `SupabaseService.subscribeToAgentRunProgress` filtering events on
+  that id, then POSTs through `SupabaseService.runWikiLibrarian`.
+  While the run executes server-side, the step events (preparing /
+  thinking / tool / done; tool events carry the model-emitted
+  `activity` narration) render as a live step list with a spinner on
+  the pending row. A `busy` result (the shared server-side in-flight
+  guard) renders a try-again message; an `ok` result fires
+  `emitWikiChange` locally so the panel refreshes ahead of the
+  realtime echo.
   Renders a nested **table of contents** at the top of the article
   (between the title header and the body) for articles with two or
   more Markdown headings. ToC entries link to `#slug` anchors; a
@@ -348,7 +409,11 @@ UI:
   rather than navigating directly - the librarian's open/closed
   state is a local flag in `Wiki.svelte`, and a clock-button click
   while the librarian is open has to touch both the route AND that
-  flag. Wiki.svelte resets each flag after consuming it.
+  flag. Wiki.svelte resets each flag after consuming it. The
+  librarian button has no preemptive busy gray-out: the browser has
+  no live view of the scheduled sweep or a chat-dispatched run, so
+  the server-side in-flight guard's `busy` result is the collision
+  surface instead.
 - `src/screens/Settings.svelte` - the "Wiki" group with the
   `wikiAutomaticEnabled` and `wikiLibrarianEnabled` toggles.
 
@@ -359,9 +424,22 @@ Tests:
   memory_search, no memory writes, no ask_user), the content-filter
   sentinel match staying narrow, and the prompt invariants
   (anti-name-fabrication, profile-block rendering rules).
-- `tests/wiki-tools.test.ts` - the browser `wiki_update`
-  source-attribution coverage (the one wiki write impl still
-  dispatched browser-side, by the librarian).
+- `supabase/functions/tests/wiki_librarian.test.ts` - the
+  librarian's composition guards: toolbox membership (the three
+  reads plus wiki_update / wiki_delete; no `wiki_create`, no memory
+  writes, no `ask_user`), the prompt's variant selection (custom
+  instructions swap in the bounded body; whitespace falls back to
+  the standard five-step sweep), and the corrective profile-block
+  rules.
+- `supabase/functions/tests/wiki_behavior.test.ts` - behavioral
+  coverage for the wiki agent's retry path, driven through the
+  runner's completion seam: primary-then-fallback ordering, the
+  "only the classifier sentinel triggers the fallback" branch, and
+  the pointer / skip-marker semantics around it.
+- `supabase/functions/tests/agent_run.test.ts` - the runner itself:
+  the completion seam scripting model rounds, the progress hook's
+  event stream, and the `activity` param injection staying
+  conditional on an attached listener.
 
 Docs:
 
@@ -380,6 +458,22 @@ Docs:
 - **Manual retry**: the Skipped panel's Retry button ->
   `SupabaseService.retryWikiThread(threadId)` -> `POST /wiki-retry`
   (user JWT) -> `retryWikiThread(adminClient, userId, threadId)`.
+- **Librarian cron sweep**: pg_cron job `nak-wiki-librarian-sweep`
+  (hourly, minute 37) -> `nak_trigger_wiki_librarian_sweep()` ->
+  pg_net `POST /wiki-librarian-sweep` with the service-role bearer ->
+  `runWikiLibrarianSweepTick(adminClient)`. One user per tick:
+  `claim_next_user_for_wiki_librarian` stamps the cadence column for
+  the most-overdue eligible user and the tick runs the standard
+  five-step review for them. The dev shim ticks this route too.
+- **Librarian manual run**: the Wiki panel's sparkles button ->
+  `SupabaseService.runWikiLibrarian({ instructions, runId })` ->
+  `POST /wiki-librarian-run` (user JWT) -> `runWikiLibrarianManual`.
+  Live step events publish to `agent-runs:<userId>`; the browser
+  subscribes BEFORE posting. Never touches the cadence stamp, and
+  skips the min-articles check - the user explicitly asked.
+- **Librarian chat dispatch**: the gated `wikiToolbox`'s registered
+  `wiki_librarian` ToolDef, always the custom-instructions prompt
+  variant, run inline in the chat round's tool call.
 - `WikiAgent.updateOne({ articleId, currentTitle, currentContent,
   userInstructions, signal })` - the main-thread per-article manual
   entry. Single Venice completion with
@@ -647,9 +741,63 @@ two agent runs whose tool-level writes are idempotent at the
 contract level - `wiki_create` collides on the unique title and
 falls through to `wiki_update`.
 
+### Librarian cadence and mutual exclusion
+
+Two independent coordination mechanisms, deliberately separate
+because the cadence stamp cannot express "running right now":
+
+- **Cadence** (scheduled path only).
+  `claim_next_user_for_wiki_librarian` stamps
+  `profiles.wiki_librarian_last_run_at` inside the claiming UPDATE -
+  BEFORE the run - so a run that dies mid-flight waits out the 12h
+  interval instead of retrying hot against whatever killed it. The
+  same stamp-before-run shape means a tick that ends in `too-small`
+  (the post-claim `LIBRARIAN_MIN_ARTICLES` check) or
+  `inflight-blocked` deliberately consumes that user's 12h slot: a
+  tiny wiki is rechecked next interval rather than re-probed every
+  tick, and the run that holds the guard IS that cycle's librarian
+  activity. Manual and chat runs never touch the stamp - user-driven
+  runs don't reset the scheduled clock.
+- **In-flight guard** (all three paths).
+  `claim_wiki_librarian_inflight` /
+  `release_wiki_librarian_inflight` - an atomic holder + TTL pair
+  (600s) on profiles, taken before any review and released in each
+  entry point's `finally`. A collision surfaces as the `busy` result
+  on the manual route and as a tool error the chat model can relay
+  ("try again in a moment"). The TTL unwedges a guard a crashed run
+  left behind; release is holder-checked, so a lapsed-and-stolen
+  guard is left to its new owner.
+
+`runWikiLibrarianSweepTick` and `runWikiLibrarianManual` are
+non-throwing by contract: the sweep returns a
+`WikiLibrarianSweepSummary` outcome (`no-user` / `inflight-blocked`
+/ `too-small` / `reviewed` / `error`) that pg_net ignores and the
+dev shim prints; the manual route returns the
+`WikiLibrarianManualResult` union (`ok` / `busy` / `error`).
+
+### Librarian live progress
+
+The manual run is the only librarian path a user watches in real
+time, so it is the only one that pays for narration. The route
+builds `createAgentProgressPublisher` bound to the user plus the
+client-minted runId and forwards every `LibrarianProgressEvent`
+(`preparing` with the article-snapshot count, the runner's
+`thinking` / `tool`, a closing `done`) to the private
+`agent-runs:<userId>` Broadcast topic. The browser subscribes
+BEFORE the POST (the pre-subscribe rule streaming chat established)
+and filters on runId - the topic is per-user, not per-run, so the
+one literal-equality policy on `realtime.messages` covers every run
+and the payload's runId is the demux key. Attaching the runner's
+`onProgress` hook is also what injects the required `activity`
+narration parameter into every tool's wire schema; the scheduled and
+chat-dispatched paths attach no listener, so their wire bytes stay
+narration-free. The route awaits `publisher.flush()` before
+responding so the `done` event (the one the UI needs to stop its
+spinner) lands no later than the response body.
+
 ### UI refresh for server-side writes
 
-The autonomous agent runs where the browser's `emitWikiChange` event
+Both wiki agents run where the browser's `emitWikiChange` event
 bus is unreachable, so an open Wiki panel learns about background
 writes through `SupabaseService.subscribeToWikiArticleChanges` - a
 user-scoped `postgres_changes` subscription on `wiki_articles`
@@ -657,9 +805,12 @@ user-scoped `postgres_changes` subscription on `wiki_articles`
 `emitWikiChange`. Coarse on purpose: no per-event payloads, just
 "something changed" - the wiki surfaces refetch their own lists, and
 pushing row deltas through would duplicate their loaders for no win.
-User edits and librarian writes still fire the bus directly; the
-subscription means those surfaces also see their own writes echoed
-back, which is harmless (the refetch is idempotent).
+User edits fire the bus directly, and the manual librarian strip
+fires it once on a successful run so the panel refreshes ahead of
+the realtime echo; the subscription means those surfaces also see
+their own writes echoed back, which is harmless (the refetch is
+idempotent). The librarian's tool writes themselves are server-side
+and reach the panel only through this subscription.
 
 ### Edge logging
 
@@ -670,8 +821,10 @@ mirrors every line to the in-app Logs drawer over the
 thread's OWNER, so each user only sees their own wiki activity, and
 flushes per thread so a later infrastructure failure can't drop
 lines an earlier thread earned. Drawer source tag: `wiki`. The
-browser-side manual flow logs as `wiki-manual`; the librarian as
-`wiki-librarian-worker`.
+librarian logs as `wiki-librarian` on all three of its trigger paths
+(each entry point binds `createEdgeLogger(userId, 'wiki-librarian')`
+and flushes in its `finally`); the browser-side manual article flow
+logs as `wiki-manual`.
 
 ### Embedding pipeline
 
@@ -736,44 +889,70 @@ explicit instructions), and output shape (tool calls vs JSON).
   facts the reflection agent already extracted; the wiki agent never
   gets memory write tools. Composition is asserted in
   `supabase/functions/tests/wiki.test.ts`.
+- The librarian's toolbox (`buildLibrarianToolbox` in
+  `agents/wiki_librarian.ts`) bundles three reads (wiki_search,
+  conversation_search, memory_search) plus wiki_update +
+  wiki_delete - **no wiki_create** (the librarian consolidates what
+  exists, it never invents) and no memory writes. The write tools
+  are the registered ports wrapped via `asAgentToolNoThread`, which
+  blanks the context's threadId before the registered execute()
+  sees it: the registered write tools auto-attach a non-empty
+  `ctx.threadId` to the article's bibliography (correct for the
+  per-conversation agent, which processes exactly that thread), but
+  a librarian dispatched from a chat thread must not auto-attach the
+  delegating conversation as a source - the librarian attributes
+  only through model-supplied `source_thread_ids`, on every path.
+  Composition is asserted in
+  `supabase/functions/tests/wiki_librarian.test.ts`.
 
 ## Interactions
 
 - **Memory** (`docs/dev/memory.md`) - the wiki agent grounds article
   content via read-only `memory_search`; the wiki's embedding shape
   and claim-protocol columns are clones of memories.
-- **Reflection** (`docs/dev/memory.md`) - the two server-side
-  thread-pointer agents share `agents/_agent_tools.ts` (`asAgentTool`,
-  `loadThreadSliceUpTo`, `MEMORY_SEARCH_WIRE_SCHEMA`) and the same
-  no-lease claim+TTL posture. The eligibility predicate in
+- **Reflection** (`docs/dev/memory.md`) - the server-side agents
+  share `agents/_agent_tools.ts` (`asAgentTool`,
+  `loadThreadSliceUpTo`, `MEMORY_SEARCH_WIRE_SCHEMA`), the
+  `runHeadlessAgent` runner in `agents/_run.ts` (including its
+  completion seam and `onProgress` hook), and the same no-lease
+  claim+TTL posture. The eligibility predicate in
   `claim_next_thread_for_wiki` is the deliberate divergence (global
   profile join, day-gate, recovery branch).
 - **Embeddings** (`docs/dev/embeddings.md`) - the
   `clear_wiki_embedding_on_change` trigger nulls the embedding on
   every article change; the server-side backfill re-embeds. The wiki
   sweep's cron dispatch (`nak_trigger_wiki_sweep`) is a clone of the
-  backfill's vault + pg_net pattern, offset to minute 7.
-- **Logging** (`docs/dev/logging.md`) - the agent's edge logger
-  relays to the in-app Logs drawer over the `logs:<userId>`
-  Broadcast channel; drawer source tag `wiki` (edge), `wiki-manual`
-  (browser manual flow), `wiki-librarian-worker` (browser
-  librarian).
+  backfill's vault + pg_net pattern, offset to minute 7; the
+  librarian's (`nak_trigger_wiki_librarian_sweep`) to minute 37.
+- **Logging** (`docs/dev/logging.md`) - the agents' edge loggers
+  relay to the in-app Logs drawer over the `logs:<userId>`
+  Broadcast channel; drawer source tags `wiki` (autonomous agent),
+  `wiki-librarian` (librarian, all three paths), `wiki-manual`
+  (browser manual flow). The librarian's manual run additionally
+  publishes live step events over the sibling `agent-runs:<userId>`
+  Broadcast topic (`_shared/agent-progress.ts`), which follows the
+  same transport + flush-before-respond contract as the log relay.
 - **Chat / tools** (`docs/dev/chat.md`, `docs/dev/tools.md`) -
   `wiki_search` and the other read tools are always-on in every chat
   request; the gated `wikiToolbox` delegates writes to the
   `wiki_librarian` sub-agent.
 - **Edge function auth** (`docs/dev/edge-function-auth.md`) - the
-  venice function is b-strict: `/wiki-sweep` is gated on
-  `isServiceRole`, `/wiki-retry` on the gateway-validated user JWT,
-  and every wiki tool / helper / RPC carries explicit `user_id`
-  scoping because the service-role client bypasses RLS.
+  venice function is b-strict: `/wiki-sweep` and
+  `/wiki-librarian-sweep` are gated on `isServiceRole`;
+  `/wiki-retry` and `/wiki-librarian-run` on the gateway-validated
+  user JWT. `claim_next_user_for_wiki_librarian` is a SECURITY
+  DEFINER global sweep locked to `service_role`; the in-flight guard
+  pair carries the `coalesce(p_user_id, auth.uid())` b-strict escape
+  hatch; and every wiki tool / helper / RPC carries explicit
+  `user_id` scoping because the service-role client bypasses RLS.
 - **Settings** (`docs/dev/settings.md`) - the `wiki` group exposes
-  the two toggles. `wikiAutomaticEnabled` is consumed server-side by
-  the sweep's SQL predicate; `displayTimezone` (owned by the journal
+  the two toggles, both consumed server-side by claim predicates:
+  `wikiAutomaticEnabled` by the wiki sweep, `wikiLibrarianEnabled`
+  by the librarian sweep. `displayTimezone` (owned by the journal
   pane) is consumed server-side by the day-gate.
 - **Local stack** (`docs/dev/local-stack.md`) - no pg_cron / pg_net
-  locally; `scripts/dev-backfill-cron.mjs` ticks `/wiki-sweep`
-  alongside `/backfill`.
+  locally; `scripts/dev-backfill-cron.mjs` ticks `/wiki-sweep` and
+  `/wiki-librarian-sweep` alongside `/backfill`.
 
 ## Gotchas
 
@@ -806,6 +985,9 @@ explicit instructions), and output shape (tool calls vs JSON).
   matching the client's `?? true` default. A `::boolean` cast would
   raise on one malformed value and wedge the global sweep, same
   failure shape as the timezone case above.
+  `claim_next_user_for_wiki_librarian` gates on
+  `wikiLibrarianEnabled` with the identical shape, for the identical
+  reason.
 - **Wiki write tools are registered but not chat-reachable.**
   `wiki_create` / `wiki_update` / `wiki_delete` live in
   performToolCall's global registry (the barrel imports in
@@ -816,17 +998,53 @@ explicit instructions), and output shape (tool calls vs JSON).
   If you add a registry-wide dispatch path that skips the wire-array
   gate, these tools become a write surface the chat model was never
   supposed to have.
-- **No unit seam for the in-run fallback ordering or the retry
-  pointer semantics.** `runWikiAgentOnThread` calls
-  `runHeadlessAgent`, which drives Venice directly - there is no
-  injection point to stub the completion call, so the
-  primary-then-fallback ordering, the "only the sentinel triggers
-  the fallback" branch, and `retryWikiThread`'s
-  advance-clears-the-skip-marker flow have no unit coverage
-  server-side. The sentinel MATCH and the toolbox/prompt invariants
-  are covered in `supabase/functions/tests/wiki.test.ts`; the
-  orchestration is covered by live verification only, until the
-  runner grows an injection point.
+- **The runner's completion seam is the unit-test path for
+  orchestration.** `runHeadlessAgent` takes an injectable completion
+  call (`RunHeadlessAgentOptions.complete`; defaults to
+  `toolComplete`, the live Venice call), so behavior that lives
+  between model rounds - the primary-then-fallback ordering, the
+  "only the sentinel triggers the fallback" branch,
+  `retryWikiThread`'s advance-clears-the-skip-marker flow - is
+  covered without a network in
+  `supabase/functions/tests/wiki_behavior.test.ts` (the seam itself
+  in `agent_run.test.ts`). New agent-side orchestration behavior
+  should land with seam-driven coverage, not live verification.
+- **Build agent toolboxes from the registered tool ports; never
+  inline private copies.** The librarian's write tools are the
+  registered `wiki_update` / `wiki_delete` executes wrapped via
+  `asAgentToolNoThread`. An inlined copy drifts silently: an earlier
+  inlined pair carried validation caps of 300 title / 50000 content
+  chars while the real tools enforce 200 / 16000, so the same write
+  validated in one path and rejected in another. Sharing the
+  registered execute() is what keeps every writer byte-identical;
+  when an agent needs a context tweak (the librarian's blanked
+  threadId), wrap the context, don't fork the tool.
+- **The librarian cadence stamp lands at claim time, before the
+  run.** `claim_next_user_for_wiki_librarian` stamps
+  `wiki_librarian_last_run_at` inside the claiming UPDATE, so a run
+  that crashes mid-flight waits out the 12h interval rather than
+  retrying hot. Deliberate consequences: a tick whose post-claim
+  checks end in `too-small` (under `LIBRARIAN_MIN_ARTICLES`) or
+  `inflight-blocked` still consumes that user's 12h slot - a tiny
+  wiki is rechecked next interval instead of being re-probed every
+  hour, and a blocked tick means another run already IS this cycle's
+  librarian activity. Don't "fix" the stamp to land after a
+  successful review without rethinking the crash-retry shape.
+- **The progress channel is per-USER, not per-run.** Live step
+  events publish to `agent-runs:<userId>` with the runId inside the
+  payload; consumers demux client-side. One literal-equality policy
+  on `realtime.messages` covers every run - per-run topics would
+  need a policy that parses the topic string. Consequence: a
+  subscriber MUST filter on runId, or events from a concurrent or
+  stale run bleed into its step list.
+- **No preemptive busy gray-out on the librarian button.** The
+  in-flight guard lives on profiles, server-side, and the browser
+  has no live view of the scheduled sweep or a chat-dispatched run -
+  so the top-bar sparkles button stays enabled and a collision
+  surfaces as the guard's `busy` result with a try-again message in
+  the strip. A client-side gray-out could only cover runs this tab
+  started and would imply a safety the server guard already
+  provides.
 - **Use `messages.created_at` for the day-gate, not
   `threads.updated_at`.** The journal RPC reads `threads.updated_at`
   because journals fire on a same-day cooldown predicate that
@@ -867,13 +1085,16 @@ explicit instructions), and output shape (tool calls vs JSON).
   X" by reading those summaries in the log drawer, and the
   librarian's "two articles I considered merging but left alone"
   case is only visible there.
-- **Two prompt copies, two model constants.** The manual prompt
-  (browser) and the autonomous prompt (edge) live in different
-  runtimes and cannot share an import; same for `agentModel('wiki')`
-  vs the edge agent's `WIKI_MODEL`, and the char caps in
-  `src/lib/wiki.ts` vs the mirrors in the function tools. A change
-  to the voice rules, the anti-name-fabrication block, the model
-  pin, or the caps has to land on both sides.
+- **Two prompt copies, two pairs of model constants.** The manual
+  prompt (browser) and the autonomous prompt (edge) live in
+  different runtimes and cannot share an import; same for
+  `agentModel('wiki')` / `agentModel('wikiLibrarian')` vs the edge
+  mirrors `WIKI_MODEL` / `WIKI_LIBRARIAN_MODEL`, and the char caps
+  in `src/lib/wiki.ts` vs the mirrors in the function tools. A
+  change to the voice rules, the anti-name-fabrication block, a
+  model pin, or the caps has to land on both sides. (The librarian
+  prompt itself has a single copy - it lives only in
+  `agents/wiki_librarian.ts`.)
 - **`embedding_claim_expires` (no `_at`).** Schema convention for
   the embedding-side claim columns matches memories and
   journal_entries. The thread-side claim columns
@@ -888,7 +1109,10 @@ End-to-end manual smoke test:
 1. `mise run sync` against a dev Supabase. Confirm `wiki_articles`,
    the trigger, the wiki RPCs (claim / mark / failure / skipped-list
    / compute-terminal / manual-advance / `nak_safe_timezone` /
-   `nak_trigger_wiki_sweep`), the `threads` columns, and the
+   `nak_trigger_wiki_sweep`), the librarian RPCs
+   (`claim_next_user_for_wiki_librarian`, the in-flight guard pair,
+   `nak_trigger_wiki_librarian_sweep`), the `threads` and `profiles`
+   columns, the "agent-run channel: owner subscribe" policy, and the
    `supabase_realtime` membership land. Re-run for idempotency.
 2. **Drawer alphabetical sort.** Add "Zebra", "Apple", "Mango" via
    the panel. Tab reads Apple, Mango, Zebra (server `title ASC`,
@@ -931,14 +1155,31 @@ End-to-end manual smoke test:
     click Retry. The row shows the tool-call count + reasoning, and
     the marker clears (row drains) on success; on failure the error
     renders inline and the marker stays.
-13. **Recall tool.** Ask the chat "what do you know about my green
+13. **Manual librarian run.** Sparkles button -> confirmation strip;
+    Run -> the live step list populates while the run executes
+    server-side ("Loading N articles", thinking rounds, tool rows
+    carrying the model's `activity` narration), then the result
+    paragraph renders the final text and the changelog gains one row
+    per edit. The Logs drawer shows the `wiki-librarian`-tagged
+    lines.
+14. **Librarian busy collision.** While a manual run is in flight,
+    start a second one (another tab, or ask the chat to dispatch
+    `wiki_librarian`) - the second surfaces the busy / try-again
+    message instead of running concurrently.
+15. **Scheduled librarian sweep.** With `mise run dev-start` (the
+    shim ticks `/wiki-librarian-sweep`): an eligible user (toggle
+    on, stale or null `wiki_librarian_last_run_at`, at least 3
+    articles) gets a `reviewed` outcome with a tool-call count; a
+    freshly-stamped user yields `no-user` on the next tick.
+16. **Recall tool.** Ask the chat "what do you know about my green
     tea preference?" - the model issues `wiki_search` and grounds
     its answer.
-14. **Embeddings filled.** New article -> `embedding is null`
+17. **Embeddings filled.** New article -> `embedding is null`
     initially, populates after the next backfill tick.
-15. **Settings toggle.** Disable "Automatic wiki" -> the sweep
-    claims nothing for this user (the predicate reads the persisted
-    setting). Enable -> resumes. No worker starts or stops; it is a
-    plain settings write.
-16. `mise run check` green; no `(!)` build warnings or
+18. **Settings toggles.** Disable "Automatic wiki" -> the wiki sweep
+    claims nothing for this user; disable the librarian toggle ->
+    the librarian sweep's claim skips them. Enable -> resumes. No
+    worker starts or stops; both are plain settings writes read by
+    the server-side claim predicates.
+19. `mise run check` green; no `(!)` build warnings or
     `plugin:vite:reporter` chunking warnings introduced.

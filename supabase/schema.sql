@@ -1194,8 +1194,8 @@ create policy "memory_relations are self-deletable"
 --   - profiles.deep_sleep_last_run_at, profiles.rem_last_run_at:
 --     cross-device cadence gates, modelled on
 --     profiles.wiki_librarian_last_run_at.
---   - claim_deep_sleep_run / claim_rem_run: atomic claim RPCs, same
---     shape as claim_wiki_librarian_run.
+--   - claim_deep_sleep_run / claim_rem_run: atomic per-user claim
+--     RPCs (UPDATE-with-WHERE cadence stamps).
 --   - consolidate_memories: the agent's content-write primitive. Single
 --     RPC so the (survivor confidence, loser invalidate, memory_conversation
 --     redirect, memory_relations redirect) sequence is one atomic
@@ -1298,10 +1298,10 @@ alter table public.profiles
   add column if not exists deep_sleep_last_run_at timestamptz,
   add column if not exists rem_last_run_at timestamptz;
 
--- Atomic claim for the deep-sleep agent. Mirrors
--- claim_wiki_librarian_run exactly; see the wiki librarian section
--- below for the rationale on the UPDATE-with-WHERE shape and why
--- this is the cross-device coordination primitive.
+-- Atomic claim for the deep-sleep agent: an UPDATE-with-WHERE on the
+-- per-user cadence stamp, so concurrent callers either both miss the
+-- predicate or exactly one wins. The wiki librarian section below
+-- carries the global (cron-driven) evolution of this shape.
 drop function if exists public.claim_deep_sleep_run(int);
 create or replace function public.claim_deep_sleep_run(
   p_min_interval_seconds int
