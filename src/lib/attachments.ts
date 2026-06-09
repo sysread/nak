@@ -406,7 +406,16 @@ export function buildUserVeniceContent(
 
   if (inlineImages.length === 0) return composedText;
 
-  const parts: WireContentPart[] = [{ type: 'text', text: composedText }];
+  // Only emit a text part when there's actually text to carry. An
+  // image-only user turn (no typed words, no extracted-text blocks, and
+  // imageNote null on a vision tier) leaves composedText empty; Venice
+  // rejects an empty text part in a content array with HTTP 400 "Text
+  // content cannot be empty". Image_url parts can stand alone, so drop
+  // the text part entirely in that case rather than ship "".
+  const parts: WireContentPart[] = [];
+  if (composedText.length > 0) {
+    parts.push({ type: 'text', text: composedText });
+  }
   for (const img of inlineImages) {
     parts.push({
       type: 'image_url',

@@ -201,3 +201,10 @@ parent - `messages.thread_id -> threads.user_id = auth.uid()`.
 - **Non-vision tier + image in history**: history replay skips images on
   a non-vision tier silently (the model can't render them); the pre-send
   guard only judges the pending message, which is correct.
+- **No empty text part in a multimodal content array**:
+  `buildUserVeniceContent` only emits the leading `{type:'text'}` part
+  when `composedText` is non-empty. An image-only turn (no typed words,
+  no extracted-text blocks, no analyze_image note on a vision tier)
+  leaves `composedText` empty; Venice 400s with "Text content cannot be
+  empty" if that empty part ships. Image_url parts stand alone, so the
+  array carries only the image part in that case.

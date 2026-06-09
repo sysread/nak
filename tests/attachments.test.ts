@@ -186,6 +186,32 @@ describe('buildUserVeniceContent', () => {
     expect(arr[1].image_url?.url).toBe('https://signed.example/a.png');
   });
 
+  it('omits the text part for an image-only turn on a vision tier', () => {
+    // No typed text, an image, and a vision tier: composedText is empty
+    // (no user words, no extracted-text blocks, no analyze_image note).
+    // Venice 400s on an empty text part in a content array, so the array
+    // must carry only the image_url part.
+    const parts = buildUserVeniceContent(
+      '',
+      [
+        {
+          id: 'img1',
+          mime_type: 'image/png',
+          filename: 'a.png',
+          extracted_text: null,
+          storage_path: 'u/img1/a.png',
+        },
+      ],
+      vision,
+      new Map([['img1', 'https://signed.example/a.png']])
+    );
+    expect(Array.isArray(parts)).toBe(true);
+    const arr = parts as Array<{ type: string; image_url?: { url: string } }>;
+    expect(arr).toHaveLength(1);
+    expect(arr[0].type).toBe('image_url');
+    expect(arr[0].image_url?.url).toBe('https://signed.example/a.png');
+  });
+
   it('skips an image whose signed URL could not be resolved', () => {
     // Live (storage_path set) but absent from the imageUrls map - e.g. the
     // batch signing dropped it. Defensive: no image_url part, no throw.
