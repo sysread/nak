@@ -28,9 +28,11 @@ for that round only; the rest of the loop is unchanged.
 
 Everything else - assimilating substrate into structured fields,
 embedding it, labelling pairs, minting tier-1 samskaras from
-clusters, classifying reactions, decaying stale or disconfirmed
-samskaras, regenerating the compound summary - runs in a
-dedicated background worker between user messages. The worker
+clusters, minting tier-2 compounds from recurring co-fire
+constellations of tier-1 samskaras, classifying reactions,
+decaying stale or disconfirmed samskaras, regenerating the
+compound summary - runs in a dedicated background worker between
+user messages. The worker
 uses the project's fast-model tier for all LLM calls. Async-
 friendly: nak chat is SMS-shaped (the user can wander off for an
 hour and come back), so formation has time to catch up between
@@ -159,7 +161,7 @@ toast is just a glance cue that the bias model is forming.
   `runOneCycle(ctx)` acquires the lease if needed, then
   advances exactly one phase per cycle. The outer worker
   rotates through `PHASES` (assimilate, pair-relate,
-  mint-tier1, mint-tier2 [stubbed], reaction-classify, decay,
+  mint-tier1, mint-tier2, reaction-classify, decay,
   dedup, compound-regen) and treats an all-empty rotation as
   the idle signal.
 - `src/lib/agents/samskara/worker.ts` - the Web Worker entry
@@ -179,8 +181,13 @@ toast is just a glance cue that the bias model is forming.
   RLS, the `worker_kind='samskara'` lease partition, and the
   RPC surface covering fire, cohort log, reaction apply,
   substrate record, assimilate claim/save, substrate-embed
-  claim/save, decay, co-firing-based dedup collapse, the
-  three compound-regen coordinators, and the diagnostics-only
+  claim/save, decay, co-firing-based dedup collapse,
+  `samskara_tier2_candidate(...)` (the co-fire-group detector the
+  mint-tier2 phase reads - the inverse of dedup; see the Tier-2
+  detection formula below), `samskara_nearest_by_prediction(embed,
+  k, tier)` whose optional tier filter the tier-2 dedup guard
+  passes `2`, the three compound-regen coordinators, and the
+  diagnostics-only
   `samskara_cluster_thread_fires(thread, threshold)` that
   greedy-clusters a thread's fires by cosine similarity on
   their samskaras' prediction embeddings (per-cohort, in score
@@ -307,9 +314,9 @@ phase.
 ### `samskaras`
 
 The unit. Tier 1 is minted from substrate-cluster mints; tier
-2 is minted from cohort-fire patterns of tier-1 samskaras
-(currently a stub, see Gotchas). Cap is `tier in (1, 2)` - no
-tier 3.
+2 is minted from recurring co-fire constellations of tier-1
+samskaras (the mint-tier2 phase, see Contracts). Cap is `tier in
+(1, 2)` - no tier 3.
 
 - `id`, `user_id`, `tier int check in (1, 2)`.
 - `prediction text not null` - the minter agent's one-or-two-
@@ -342,9 +349,9 @@ if the underlying substrate or association is deleted (no FK on
   `weight real default 1.0`.
 - Primary key `(samskara_id, kind, ref_id)`.
 - Tier-1 samskaras carry `'substrate'` and `'association'`
-  provenance; tier-2 samskaras would carry `'samskara'`
-  provenance pointing at their tier-1 children (schema ready;
-  the tier-2 mint phase itself is stubbed).
+  provenance; tier-2 samskaras carry `'samskara'` provenance
+  pointing at their tier-1 children, with `weight` set to each
+  child's in-group co-fire count.
 
 ### `samskara_fires`
 
@@ -357,8 +364,8 @@ reinforcement and cohort detection.
 - `cohort_id` is shared across the set of samskaras fired
   together on the same turn, generated client-side when the
   chat loop assembles the fire. Lets the reaction classifier
-  and (eventually) the tier-2 mint phase operate on the cohort
-  as a unit.
+  and the tier-2 mint phase's co-fire self-join operate on the
+  cohort as a unit.
 - `user_round` is the 1-based index of the user message that
   triggered this cohort, counted by `countUserRounds(history)`
   in the chat loop at fire time. The inline `CohortPanel` in
@@ -492,10 +499,24 @@ sleep (60s).
   background dedup phase runs each rotation (see below); the
   diagnostics modal exposes it as a "Consolidate" button for
   on-demand triggering. Idempotent.
-- **Mint-tier2** - stubbed for v1. Returns `'empty-phase'` so
-  the rotation drains past it cheaply. Schema and provenance
-  `kind='samskara'` support it; real cohort patterns need to
-  exist first before the implementation is useful to test.
+- **Mint-tier2** - `SamskaraAgent.mintTier2(children, signal) ->
+  {confirm, prediction, inner_voice, valence, confidence} | null`.
+  Detects one recurring co-fire constellation of tier-1 samskaras
+  via `samskara_tier2_candidate` (a co-fire group, not a substrate
+  cluster), hands the child predictions to the minter agent, and -
+  if the agent confirms - inserts a `tier=2` row whose provenance
+  points at the children with `kind='samskara'`. Two dedup guards:
+  the candidate RPC skips groups an existing tier-2 already covers by
+  child-set overlap (same children), and after the compound is
+  embedded the loop checks the nearest existing tier-2 by cosine
+  (`samskara_nearest_by_prediction` with `p_tier=2`), reinforcing it
+  via `samskara_reinforce_existing` when cosine >= `MINT_DEDUP_COSINE`
+  (0.85) instead of minting a twin (the different-children-same-claim
+  case). Throttled at 5 minutes - longer than mint-tier1's 60s
+  because compound patterns form slowly and the detection self-join
+  is the heaviest query in the worker. Successful mints fire `onMint`
+  with `tier: 2`; the mood pill renders them through the same
+  valence->emoji path as tier-1, so there is no UI special-case.
 - **Reaction-classify** -
   `SamskaraAgent.classifyReaction(cohort, assistantMsg,
   nextUserMsg, signal) -> {confirm[], disconfirm[], neutral[]}
@@ -652,6 +673,39 @@ Spirit note: co-firing as the primary signal maps onto Hebbian
 binding - habits that reliably co-activate consolidate into one
 habit, regardless of how similar their descriptions sound. Text
 embedding becomes a sanity floor, not the primary gate.
+
+### Tier-2 detection formula
+
+`samskara_tier2_candidate` returns at most one co-fire
+constellation per call. The eligible edge set is the tier-1
+co-fire self-join, filtered:
+
+```text
+eligible(A, B) when:
+  cofires(A, B) >= p_min_cofires             -- default 4
+  p_cosine_lo <= cosine(embed_A, embed_B)    -- default 0.30
+  cosine(embed_A, embed_B) < p_cosine_hi     -- default 0.68 (< dedup floor 0.70)
+```
+
+The half-open top end is the whole point: tier-2 only ever
+groups pairs whose embedding similarity sits *below* dedup's
+merge floor, so it claims the "related but distinct" band dedup
+deliberately leaves alone (see the dedup-coupling Gotcha). The
+group is the strongest eligible edge plus every node sharing an
+eligible edge with BOTH seed members (not either - co-firing
+with one seed member is adjacent, not part of the constellation),
+strongest combined co-fire first, capped at `p_max_group_size`
+(default 6). A group smaller than `p_min_group_size` (default 3)
+is rejected - a 2-member group is a dedup candidate, not a
+compound. Finally the coverage skip: if any existing tier-2's
+child-set overlaps the candidate by Jaccard >= `p_overlap_skip`
+(default 0.60), return empty. A cheap precondition (at least 8
+tier-1 samskaras with `fire_count > 0`) gates the whole thing
+before the expensive self-join runs.
+
+Per-member `cofire_weight` (summed co-fire count of that
+member's in-group edges) rides back on the result and becomes
+the provenance `weight`.
 
 ### Compound-regen trigger
 
@@ -820,13 +874,43 @@ summarizer reads samskaras to feed the agent.
   failures still return null and fall to the short error
   back-off (15s). Without this distinction the long back-off
   path would be unreachable.
-- **Tier-2 mint is a stub.** `runMintTier2Phase` currently
-  returns `'empty-phase'`; the phase is in the rotation so the
-  wiring exists, but no real cohort-of-cohorts minting
-  happens. Schema and provenance `kind='samskara'` already
-  support it. The `tier in (1, 2)` check on `samskaras` is
-  load-bearing; lifting it to tier-3+ should be a deliberate
-  design change, not an oversight.
+- **Tier-2 detection and dedup read the same co-fire self-join
+  and must not overlap.** `samskara_tier2_candidate` and
+  `samskara_collapse_by_cofiring` both self-join `samskara_fires`
+  on `cohort_id`, but they are opposites: dedup MERGES pairs that
+  are the same claim (high co-fire AND embedding cosine >= its
+  `p_cosine_floor` 0.70, loser deleted); tier-2 GROUPS claims that
+  co-activate but stay distinct (high co-fire, cosine strictly
+  below that floor, parent added). The tier-2 cosine band
+  `[p_cosine_lo, p_cosine_hi)` defaults to `[0.30, 0.68)` - its
+  top end sits below dedup's floor on purpose. If you raise
+  `p_cosine_hi` to or past 0.70 the two phases fight over the same
+  pairs (dedup deleting what tier-2 just grouped); the symptom is
+  tier-2 rows that keep vanishing a cycle after they mint. Keep
+  the band below the floor.
+- **Tier-2 re-mint storm without the coverage skip.** Once a
+  tier-2 covers a constellation, that group still co-fires every
+  cycle, so detection would re-surface it forever. Two guards stop
+  the loop: `samskara_tier2_candidate`'s Jaccard `p_overlap_skip`
+  (skip a group an existing tier-2's child-set already covers) and
+  the mint phase's tier-scoped embedding dedup (reinforce the
+  nearest existing tier-2 instead of inserting when cosine >=
+  `MINT_DEDUP_COSINE`). The first catches the same-children case,
+  the second a different child set the agent synthesized into the
+  same claim. Neither is optional.
+- **Tier-2 rides the unchanged hot path; orphans are fine.**
+  `samskara_fire_top_k`, `samskara_apply_reaction`, and
+  `samskara_decay` have no tier filter, so a tier-2 fires, gets
+  confirmed/disconfirmed, and decays exactly like a tier-1 the
+  moment it exists - no chat-loop or UI change was needed to ship
+  it. Because provenance has no FK on `ref_id`, a tier-2 whose
+  children dedup later merges or deletes simply keeps standing on
+  its own embedding and fire history. That is intended - a
+  compound that earned its confidence does not need its
+  scaffolding. The `tier in (1, 2)` check on `samskaras` is
+  load-bearing; lifting it to tier-3+ (a compound-of-compounds
+  noise amplifier) should be a deliberate design change, not an
+  oversight.
 - **Pair-relate uses a naive seed-most-recent approach.**
   One pair per cycle: seed on the most recent embedded
   substrate row, pick its closest neighbour by cosine in JS,

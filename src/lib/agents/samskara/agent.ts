@@ -21,6 +21,7 @@ import {
   ASSIMILATOR_PROMPT,
   RELATOR_PROMPT,
   MINTER_PROMPT,
+  TIER2_MINTER_PROMPT,
   REACTION_PROMPT,
   COMPOUND_SUMMARY_PROMPT,
 } from './prompts';
@@ -233,6 +234,50 @@ export class SamskaraAgent {
       // (15s). Other Venice failures are transient and treated as
       // a parse-failure equivalent (the row stays claimed; the TTL
       // releases it; the next pass retries).
+      if (err instanceof VeniceError && err.kind === 'rate_limit') throw err;
+      return null;
+    }
+    const parsed = tryParseJson<{
+      confirm?: unknown;
+      prediction?: unknown;
+      inner_voice?: unknown;
+      valence?: unknown;
+      confidence?: unknown;
+    }>(raw);
+    if (!parsed || parsed.confirm !== true) return null;
+    if (typeof parsed.prediction !== 'string' || parsed.prediction.length === 0) {
+      return null;
+    }
+    return {
+      confirm: true,
+      prediction: parsed.prediction,
+      innerVoice: typeof parsed.inner_voice === 'string' ? parsed.inner_voice : '',
+      valence: typeof parsed.valence === 'number' ? clamp(parsed.valence, -1, 1) : 0,
+      confidence:
+        typeof parsed.confidence === 'number' ? clamp(parsed.confidence, 0, 1) : 0.5,
+    };
+  }
+
+  /**
+   * Mint a tier-2 (compound) samskara from a set of co-firing tier-1
+   * children. Same MintResult shape as `mint` so the worker path is
+   * uniform; the difference is the prompt (generalize finished claims
+   * vs observe raw substrate) and the payload (child predictions).
+   * Returns null on parse failure or when confirm:false comes back.
+   */
+  async mintTier2(
+    children: { prediction: string; valence: number | null }[],
+    signal: AbortSignal
+  ): Promise<MintResult | null> {
+    const payload = JSON.stringify({ children });
+    let raw: string;
+    try {
+      raw = await callOnce(this.supabase, this.model, TIER2_MINTER_PROMPT, payload, signal, 2048);
+    } catch (err) {
+      // Rate-limit re-throws so the cycle driver can map to its long
+      // back-off; other Venice failures are transient and treated as a
+      // parse-failure equivalent (the phase rotates past, retries next
+      // time the throttle opens).
       if (err instanceof VeniceError && err.kind === 'rate_limit') throw err;
       return null;
     }

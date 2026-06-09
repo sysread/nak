@@ -161,6 +161,14 @@ export interface CycleContext {
   phaseThrottle: {
     lastRunMs: Map<SamskaraPhase, number>;
     minIntervalMs: number;
+    /**
+     * Per-phase interval overrides. mint-tier2 sets a longer interval
+     * than the shared default: compound patterns form over many turns,
+     * and its detection self-join is heavier than the substrate fetches
+     * the tier-1/pair-relate phases throttle. A phase absent from this
+     * map falls back to `minIntervalMs`.
+     */
+    intervalOverridesMs?: Partial<Record<SamskaraPhase, number>>;
   };
 }
 
@@ -216,12 +224,14 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
 function isPhaseThrottled(ctx: CycleContext, phase: SamskaraPhase): boolean {
   const last = ctx.phaseThrottle.lastRunMs.get(phase);
   if (!last) return false;
+  const interval =
+    ctx.phaseThrottle.intervalOverridesMs?.[phase] ?? ctx.phaseThrottle.minIntervalMs;
   const sinceLast = Date.now() - last;
-  if (sinceLast >= ctx.phaseThrottle.minIntervalMs) return false;
+  if (sinceLast >= interval) return false;
   log.trace(
     `${phase}: throttled ` +
       `(last run ${Math.round(sinceLast / 1000)}s ago, ` +
-      `min interval ${Math.round(ctx.phaseThrottle.minIntervalMs / 1000)}s)`
+      `min interval ${Math.round(interval / 1000)}s)`
   );
   return true;
 }
@@ -614,13 +624,155 @@ async function runMintTier1Phase(ctx: CycleContext): Promise<CycleResult> {
 }
 
 /**
- * Mint a tier-2 (compound) samskara from a co-firing cohort pattern.
- * Stub for v1: defers actual cohort-clustering until tier-1 mints are
- * producing real cohorts. Returns empty-phase so the worker rotates
- * past it cheaply.
+ * Mint a tier-2 (compound) samskara from a recurring co-fire
+ * constellation of tier-1 samskaras. Mirrors runMintTier1Phase: detect
+ * the candidate (here a co-fire group rather than a substrate cluster),
+ * ask the agent, embed, dedup-guard, insert + provenance, fire onMint.
+ *
+ * Two dedup guards, not one. The detection RPC already skips groups an
+ * existing tier-2 covers by child-set overlap (same children); the
+ * embedding guard below catches the orthogonal case - a DIFFERENT child
+ * set that the agent synthesized into the same claim text.
  */
-async function runMintTier2Phase(_ctx: CycleContext): Promise<CycleResult> {
-  return 'empty-phase';
+async function runMintTier2Phase(ctx: CycleContext): Promise<CycleResult> {
+  if (isPhaseThrottled(ctx, 'mint-tier2')) return 'empty-phase';
+  let candidate;
+  try {
+    candidate = await ctx.supabase.samskaraTier2Candidate();
+  } catch (err) {
+    log.debug('mint-tier2: candidate RPC failed', err);
+    return 'error';
+  }
+  // Stamp the throttle clock after the expensive detection self-join,
+  // same as the tier-1/pair-relate phases. An empty result still
+  // stamps - we don't want to re-run the self-join every rotation when
+  // there's no eligible group.
+  ctx.phaseThrottle.lastRunMs.set('mint-tier2', Date.now());
+  if (candidate.length < 3) {
+    log.trace('mint-tier2: no candidate group', { size: candidate.length });
+    return 'empty-phase';
+  }
+  log.info(`mint-tier2: candidate group of ${candidate.length} tier-1 samskaras`);
+
+  const minted = await ctx.agent.mintTier2(
+    candidate.map((c) => ({ prediction: c.prediction, valence: c.valence })),
+    ctx.signal
+  );
+  if (!minted) {
+    log.trace('mint-tier2: agent declined');
+    return 'empty-phase';
+  }
+
+  // Embed the compound prediction so it fires by cosine like any
+  // samskara. Same pad-to-storage-width path as tier-1.
+  let predEmbedding: number[];
+  try {
+    const resp = await ctx.supabase.embed({
+      model: VENICE_EMBEDDING_MODEL,
+      input: minted.prediction,
+      signal: ctx.signal,
+    });
+    const raw = resp.data[0]?.embedding;
+    if (!raw || raw.length === 0) return 'error';
+    predEmbedding = padEmbeddingForStorage(raw);
+  } catch {
+    return 'error';
+  }
+
+  // Embedding dedup against existing tier-2s only (p_tier=2). A hit
+  // means the agent re-derived an existing compound from a different
+  // child set; bump its health rather than minting a twin. No
+  // substrate provenance to append here - the reinforcing evidence is
+  // tier-1 children, not substrate rows - so pass an empty id list and
+  // let the RPC just nudge health.
+  try {
+    const nearest = await ctx.supabase.samskaraNearestByPrediction(predEmbedding, 1, 2);
+    if (nearest.length > 0 && nearest[0].cosine >= MINT_DEDUP_COSINE) {
+      await ctx.supabase.samskaraReinforceExisting(nearest[0].id, [], MINT_DEDUP_HEALTH_BUMP);
+      log.debug('mint-tier2: dedup-reinforced existing compound', {
+        id: nearest[0].id,
+        cosine: nearest[0].cosine,
+        candidate: shorten(minted.prediction),
+      });
+      return 'progress';
+    }
+  } catch (err) {
+    log.debug('mint-tier2: dedup check failed, proceeding with mint', err);
+  }
+
+  // Insert the tier-2 row, then provenance pointing at the tier-1
+  // children with kind='samskara'. Raw client to write both in the same
+  // round trip, matching the tier-1 mint path in this file.
+  let samskaraId = '';
+  try {
+    const client = (ctx.supabase as unknown as {
+      client: {
+        from: (t: string) => {
+          insert: (row: Record<string, unknown>) => {
+            select: (cols: string) => {
+              single: () => Promise<{
+                data: { id: string } | null;
+                error: { message: string } | null;
+              }>;
+            };
+          };
+        };
+      };
+    }).client;
+    const { data, error } = await client
+      .from('samskaras')
+      .insert({
+        tier: 2,
+        prediction: minted.prediction,
+        prediction_embedding: predEmbedding,
+        inner_voice: minted.innerVoice.length > 0 ? minted.innerVoice : null,
+        valence: minted.valence,
+        confidence: minted.confidence,
+      })
+      .select('id')
+      .single();
+    if (error || !data) {
+      log.debug('mint-tier2: samskaras insert failed', error);
+      return 'error';
+    }
+    samskaraId = data.id;
+    const provRows = candidate.map((c) => ({
+      samskara_id: data.id,
+      kind: 'samskara' as const,
+      ref_id: c.samskaraId,
+      weight: c.cofireWeight,
+    }));
+    const provClient = (ctx.supabase as unknown as {
+      client: {
+        from: (t: string) => {
+          upsert: (
+            rows: Record<string, unknown>[],
+            opts: Record<string, unknown>
+          ) => Promise<{ error: { message: string } | null }>;
+        };
+      };
+    }).client;
+    await provClient.from('samskara_provenance').upsert(provRows, {
+      onConflict: 'samskara_id,kind,ref_id',
+      ignoreDuplicates: true,
+    });
+  } catch (err) {
+    log.debug('mint-tier2: insert threw', err);
+    return 'error';
+  }
+  log.info('mint-tier2: minted compound samskara', {
+    id: samskaraId,
+    children: candidate.length,
+    prediction: shorten(minted.prediction),
+    valence: minted.valence,
+    confidence: minted.confidence,
+  });
+  ctx.onMint?.({
+    tier: 2,
+    valence: minted.valence,
+    confidence: minted.confidence,
+  });
+  return 'progress';
 }
 
 /**

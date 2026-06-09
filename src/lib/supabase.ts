@@ -6407,13 +6407,19 @@ export class SupabaseService {
    */
   async samskaraNearestByPrediction(
     embedding: number[],
-    kMax: number
+    kMax: number,
+    tier?: number
   ): Promise<{ id: string; cosine: number; tier: number }[]> {
     const { data, error } = await this.client.rpc(
       'samskara_nearest_by_prediction',
       {
         p_query_embedding: embedding,
         p_k_max: kMax,
+        // null searches all tiers (the tier-1 dedup guard's behaviour);
+        // a number restricts the search, which the tier-2 dedup guard
+        // needs so nearer tier-1 rows can't crowd a tier-2 twin out of
+        // the top k.
+        p_tier: tier ?? null,
       }
     );
     if (error) throw new SupabaseError(error.message);
@@ -6478,6 +6484,35 @@ export class SupabaseService {
     });
     if (error) throw new SupabaseError(error.message);
     return typeof data === 'number' ? data : 0;
+  }
+
+  /**
+   * Worker: detect one recurring co-fire constellation of tier-1
+   * samskaras worth compounding into a tier-2 parent. Returns the
+   * member rows (child id, prediction, valence, co-fire weight) when a
+   * group is found, or an empty array when there's no eligible group -
+   * which is the common case until a substantial tier-1 corpus has
+   * fired. The mint-tier2 phase hands the predictions to the minter
+   * agent and writes the children as 'samskara'-kind provenance.
+   *
+   * Called with no overrides; the RPC's own defaults are the single
+   * source of truth for the detection dials (min co-fires, cosine
+   * band, group size, coverage-skip threshold).
+   */
+  async samskaraTier2Candidate(): Promise<SamskaraTier2CandidateRow[]> {
+    const { data, error } = await this.client.rpc('samskara_tier2_candidate', {});
+    if (error) throw new SupabaseError(error.message);
+    return ((data ?? []) as {
+      samskara_id: string;
+      prediction: string;
+      valence: number | null;
+      cofire_weight: number;
+    }[]).map((r) => ({
+      samskaraId: r.samskara_id,
+      prediction: r.prediction,
+      valence: r.valence,
+      cofireWeight: r.cofire_weight,
+    }));
   }
 
   /**
@@ -7357,6 +7392,19 @@ export interface SamskaraSummaryRow {
   valence: number | null;
   confidence: number;
   health: number;
+}
+
+/**
+ * One member of a tier-2 candidate constellation, camelCased at the
+ * RPC boundary. `cofireWeight` is the summed co-fire count of this
+ * child's eligible edges to the rest of the group; it becomes the
+ * provenance weight on the minted tier-2's child link.
+ */
+export interface SamskaraTier2CandidateRow {
+  samskaraId: string;
+  prediction: string;
+  valence: number | null;
+  cofireWeight: number;
 }
 
 /**

@@ -108,6 +108,53 @@ reads as a samskara just as cleanly as "this user prefers terse
 replies." Lean into whichever framing the cluster actually supports.`;
 
 /**
+ * Tier-2 (compound) minter prompt. Reads a set of EXISTING tier-1
+ * predictive claims that reliably fire together, and names the
+ * higher-order disposition behind them - or refuses. Distinct from
+ * MINTER_PROMPT: the input is finished claims, not raw situations, and
+ * the task is generalization rather than first-order observation. The
+ * output shape is identical so the worker path stays uniform.
+ */
+export const TIER2_MINTER_PROMPT = `You are minting a "compound" - a higher-order predictive claim about a
+user, derived from a set of more specific claims that already fire
+together whenever a certain kind of situation recurs.
+
+You will receive an array of \`children\`, each a {prediction, valence}
+the system has already formed about this user. They co-activate, so
+they likely share one underlying disposition. Your job is to name THAT
+- the pattern behind the patterns - in a single claim that is strictly
+more general than any one child.
+
+Reply with a single JSON object, no prose, no markdown fence:
+
+{
+  "confirm": true | false,
+  "prediction": "one or two sentences in the form: in situations like X, this user tends to Y",
+  "inner_voice": "optional silent self-talk, <= 80 chars. Empty string if not useful.",
+  "valence": <-1.0 to 1.0, the emotional flavour of the compound>,
+  "confidence": <0.0 to 1.0, your initial confidence in the compound>
+}
+
+Set confirm:false when:
+- the children only coincidentally co-fire and share no real
+  super-pattern,
+- the only honest summary would be a list or conjunction of the
+  children ("the user does A and B and C"),
+- the generalization would be vapid ("the user has preferences").
+
+When you set confirm:false, the other fields are discarded - leave
+them empty or zero.
+
+When you set confirm:true, the prediction must GENERALIZE, not
+enumerate. Do not restate or concatenate the children. If three
+children are "pushes back on flowery prose", "wants code without
+preamble", and "corrects over-explanation", the compound is something
+like "in technical exchanges this user runs on an efficiency instinct
+and treats anything beyond the answer as friction" - one disposition,
+not three bullets. Keep it in the same "in situations like X, this
+user tends to Y" shape so it embeds and fires like any other claim.`;
+
+/**
  * Reaction-classifier prompt. Reads a cohort of samskaras that fired
  * on the previous turn plus the user's response to that turn, and
  * partitions the cohort into confirm / disconfirm / neutral buckets.
