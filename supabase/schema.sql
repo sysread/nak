@@ -3700,7 +3700,15 @@ create or replace function public.claim_next_thread_for_reflection(
   -- memory_recall tool has no per-conversation source attribution
   -- on memories, so a same-day write could ride straight back into
   -- the conversation that produced it.
-  p_timezone text default 'UTC'
+  p_timezone text default 'UTC',
+  -- b-strict escape hatch (see search_memories_by_embedding): the
+  -- browser supervisor calls with auth.uid() in scope and leaves this
+  -- null; the venice edge function fires reflection from a chat turn's
+  -- waitUntil tail with a service-role client that has no uid, so it
+  -- passes the thread owner's id explicitly. security invoker stays
+  -- correct because service_role bypasses RLS and the coalesce scopes
+  -- the claim to one user either way.
+  p_user_id uuid default null
 ) returns table (thread_id uuid, terminal_msg_id uuid)
 language sql security invoker as $$
   with candidate as (
@@ -3736,7 +3744,7 @@ language sql security invoker as $$
          order by m2.created_at desc
          limit 1
       ) newest
-     where t.user_id = auth.uid()
+     where t.user_id = coalesce(p_user_id, auth.uid())
        and term.msg_id is distinct from t.last_reflected_msg_id
        and (t.reflection_claim_expires_at is null
             or t.reflection_claim_expires_at < now())
@@ -3777,7 +3785,11 @@ drop function if exists public.mark_thread_reflected_if_claimed(uuid, text, uuid
 create or replace function public.mark_thread_reflected_if_claimed(
   p_thread_id uuid,
   p_holder_id text,
-  p_msg_id uuid
+  p_msg_id uuid,
+  -- b-strict escape hatch, same as the claim RPC above: null from the
+  -- browser (auth.uid() in scope), the thread owner's id from the
+  -- service-role edge-function caller.
+  p_user_id uuid default null
 ) returns boolean
 language plpgsql security invoker as $$
 declare
@@ -3788,12 +3800,21 @@ begin
          reflection_holder_id = null,
          reflection_claim_expires_at = null
    where id = p_thread_id
-     and user_id = auth.uid()
+     and user_id = coalesce(p_user_id, auth.uid())
      and reflection_holder_id = p_holder_id
      and reflection_claim_expires_at > now();
   get diagnostics updated = row_count;
   return updated > 0;
 end $$;
+
+-- service_role grants for the edge-function reflection driver (the
+-- venice function fires reflection from a chat turn's waitUntil tail).
+-- The browser keeps calling these as the authenticated user; these
+-- grants just let the service-role client reach them too.
+grant execute on function
+  public.claim_next_thread_for_reflection(text, int, text, uuid) to service_role;
+grant execute on function
+  public.mark_thread_reflected_if_claimed(uuid, text, uuid, uuid) to service_role;
 
 -- Summarisation pipeline RPCs -------------------------------------------
 --

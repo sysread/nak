@@ -164,11 +164,71 @@ Smallest first. Each agent's trigger shape decides the surface:
 | **rem** | memory librarian set | scheduled batch | pg_cron + claim/save RPC |
 | **deep-sleep** | memory librarian set | scheduled batch + user-triggered | pg_cron + HTTP POST |
 
-**Why reflection first.** Single thread, no scheduling, no claim/save
-RPCs to author. It's just "after this turn's chat completion lands,
-also run this prompt with this toolbox in a headless loop." That
-isolates the per-agent port work without the cron / claim machinery
-complexity. Land it, learn the shape, repeat.
+**Why reflection first.** No cron - it piggybacks on the streaming
+tail instead of a scheduled poll, so it isolates the per-agent port
+work without standing up pg_cron. Land it, learn the shape, repeat.
+
+(Correction from research: reflection is NOT "no claim/save RPCs" as
+an earlier draft of this line claimed. It reuses the existing
+day-gated `claim_next_thread_for_reflection` /
+`mark_thread_reflected_if_claimed` queue - see the concrete design
+below. It's still the simplest fleet because the cron half is
+replaced by a `waitUntil` off the chat turn, but it does touch the
+claim RPCs.)
+
+#### Reflection: concrete design (from the migration research)
+
+**Trigger reframe - it drains *older* threads, not "this" one.** The
+claim RPC only claims threads whose newest message lands on a
+**prior calendar day** in the user's timezone (so a memory derived
+from a half-finished thought can't ride straight back into the same
+conversation via `memory_recall`, which has no per-conversation
+source attribution) and that carry **>= 2 user messages** (a one-shot
+Q&A isn't worth reflecting). So firing reflection from the terminal
+round's `waitUntil` tail does NOT reflect the thread that just
+completed - it **opportunistically drains one reflection-eligible
+thread from the existing queue** on each turn completion. Faithful to
+today's behavior (same queue, same gate); only the *driver* changes
+from a supervisor poll to a chat-activity piggyback.
+
+**Auth - the claim/mark RPCs need SECURITY DEFINER variants.** The
+current `claim_next_thread_for_reflection` /
+`mark_thread_reflected_if_claimed` are `security invoker`, gated on
+`auth.uid()`. The edge function holds a service-role admin client
+where `auth.uid()` is null (the embeddings-403 trap). Add
+`security definer` overloads that take an explicit `p_user_id`
+(matching the plan's "SECURITY DEFINER for any cross-row claim/save
+RPC" rule) and filter on it instead of `auth.uid()`. The browser
+keeps calling the invoker versions until the cutover; the overloads
+are additive (idempotent `schema.sql` edits).
+
+**Prerequisite - port `memory_invalidate` server-side.** The
+reflection toolbox is the agent-only set (soft-decay, NOT hard
+delete): `memory_search/create/update/invalidate/reaffirm/doubt/
+relate/unrelate`. The edge function registers all of those EXCEPT
+`memory_invalidate` (it has `memory_delete` instead, which agents
+must never get). Port `tools/memory_invalidate.ts` (wraps the
+`decayMemoryConfidence` RPC; template: `tools/memory_doubt.ts`) and
+register it in `tools/index.ts`.
+
+**Shape:**
+
+1. Port `memory_invalidate` + register it (additive, no behavior
+   change). `[prereq]`
+2. Add `SECURITY DEFINER` `p_user_id` overloads of the two reflection
+   RPCs to `schema.sql` (additive). `[prereq]`
+3. Write `agents/reflection.ts`: gather the thread slice up to
+   `terminal_msg_id`, build the reflection prompt (port from
+   `src/lib/agents/reflection/prompt.ts`), assemble the 8-tool memory
+   toolbox, run `runHeadlessAgent`. Template: `agents/recall.ts`.
+4. Hook it into `getStreamingResponse`'s terminal tail via
+   `edgeWaitUntil`: claim (definer, `p_user_id`) -> run -> mark. One
+   cycle per turn completion.
+5. Browser cutover: drop the supervisor's `reflection` unit (the
+   other 5 units stay), delete `src/lib/agents/reflection/`, and
+   delete `memoryToolbox` (`memory_toolbox.ts`) - reflection is its
+   only consumer. `runHeadlessToolLoop` STAYS (wiki / wiki-librarian
+   / rem / deep-sleep still use it). -> Phase 3 demolition list.
 
 **Why wiki-related agents before memory librarians.** wiki/
 wiki-librarian touch a much smaller live data shape than rem/

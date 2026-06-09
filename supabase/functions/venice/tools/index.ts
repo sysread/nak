@@ -36,6 +36,7 @@ import '../agents/wiki_recall.ts';
 import './memory_create.ts';
 import './memory_delete.ts';
 import './memory_doubt.ts';
+import './memory_invalidate.ts';
 import './memory_reaffirm.ts';
 import './memory_relate.ts';
 import './memory_search.ts';
