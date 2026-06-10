@@ -286,6 +286,14 @@ export interface ChatRequest {
   streamCtx?: {
     threadId: string;
     userMessageId: string;
+    /**
+     * Regenerate-from-here replace range: DB row ids the new
+     * completion replaces. The /stream function forwards them to the
+     * terminal commit RPC, which excludes them from its cross-device
+     * conflict check and deletes them atomically with the commit.
+     * Omitted on plain sends.
+     */
+    supersededIds?: readonly string[];
   };
 }
 
@@ -1093,6 +1101,12 @@ async function* streamChatViaFunction(
         body: {
           threadId: ctx.threadId,
           userMessageId: ctx.userMessageId,
+          // Spread-omitted (not sent as an empty array) on plain
+          // sends - the field appears on the wire only when a
+          // regenerate is actually replacing rows.
+          ...(ctx.supersededIds && ctx.supersededIds.length > 0
+            ? { supersededIds: ctx.supersededIds }
+            : {}),
           body,
         },
       },

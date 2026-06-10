@@ -162,6 +162,13 @@ export interface OrchestratorOpts {
   /** Authoritative user id from the gateway-verified JWT. */
   userId: string;
   /**
+   * Regenerate-from-here replace range (uuid-validated by the /stream
+   * handler). Rides into the terminal commit RPC, which excludes these
+   * rows from its newer-user-message conflict check and deletes them
+   * atomically with the commit. Empty/absent on plain sends.
+   */
+  supersededIds?: readonly string[];
+  /**
    * Full Venice wire body for the first round. Already shaped by the
    * browser via buildChatBody; the orchestrator copies it round-to-
    * round, mutating only `messages` between rounds.
@@ -845,6 +852,10 @@ export async function getStreamingResponse(
             p_usage: accum.usage,
             p_reasoning: accum.reasoning,
             p_citations: finalCitations,
+            p_superseded_ids:
+              opts.supersededIds && opts.supersededIds.length > 0
+                ? opts.supersededIds
+                : null,
           },
         );
         if (error) {

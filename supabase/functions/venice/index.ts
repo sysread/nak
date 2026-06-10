@@ -586,7 +586,23 @@ interface StreamRequestBody {
    * subscribe and observe. Set on reopen-thread / cross-device-ape paths.
    */
   reconnectOnly?: boolean;
+  /**
+   * Regenerate-from-here replace range: ids of the rows the new
+   * completion replaces (the old assistant turn plus everything after
+   * it, later user turns included). Forwarded to the terminal commit
+   * RPC, which excludes them from its newer-user-message conflict
+   * check and deletes them atomically with the commit. Absent on
+   * plain sends.
+   */
+  supersededIds?: string[];
 }
+
+// Boundary check for StreamRequestBody.supersededIds entries. The
+// commit RPC takes uuid[]; a non-uuid id slipping through would not
+// fail here but minutes later, as a cast error that kills an
+// otherwise-good turn at terminal commit.
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 interface StreamEnvelope {
   channelName: string;
@@ -787,11 +803,21 @@ async function handleStream(req: Request): Promise<Response> {
   if (typeof body.userMessageId !== 'string') {
     return json({ error: 'body.userMessageId is required' }, 400);
   }
+  // Silently drop malformed entries rather than 400ing the whole
+  // request: the browser filters synthetic-row sentinels before
+  // sending, so anything non-uuid here is a stray, and failing the
+  // turn over it punishes the user for a value they never typed.
+  const supersededIds = Array.isArray(body.supersededIds)
+    ? body.supersededIds.filter(
+        (id): id is string => typeof id === 'string' && UUID_RE.test(id),
+      )
+    : [];
   const promise = getStreamingResponse({
     apiKey,
     threadId: body.threadId,
     userMessageId: body.userMessageId,
     userId,
+    supersededIds,
     bodyTemplate: body.body as Record<string, unknown>,
     adminClient: admin,
   });

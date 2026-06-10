@@ -1,4 +1,4 @@
-// UI-behavior primitive for the Regenerate button's "what gets
+// UI-behavior primitives for the Regenerate button's "what gets
 // replaced" computation.
 //
 // Walks the messages array backward from the clicked assistant row
@@ -49,4 +49,24 @@ export function computeRegenerateRangeIds(
   if (userIdx === -1) return [];
   const replaceRange = messages.slice(userIdx + 1);
   return replaceRange.map((m) => m.id);
+}
+
+/**
+ * Narrow a replace range to the ids that exist as DB rows. Synthetic
+ * recovery rows (materialized in memory by listMessages for an
+ * interrupted tail; their ids are sentinels like
+ * "synthetic-recovery-asst-0", not uuids) were never persisted, so
+ * they must not ride the /stream supersededIds list - the commit RPC
+ * takes uuid[] and would reject the whole call on a sentinel. They
+ * still belong in the in-memory replace range (pendingDeleteIds) so
+ * the view drops them when the new turn lands.
+ */
+export function persistedRowIds(
+  messages: readonly Message[],
+  ids: readonly string[],
+): string[] {
+  const synthetic = new Set(
+    messages.filter((m) => m.synthetic).map((m) => m.id),
+  );
+  return ids.filter((id) => !synthetic.has(id));
 }

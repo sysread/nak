@@ -791,6 +791,17 @@ export interface ChatLoopOptions {
    */
   userMessageId: string;
   /**
+   * Regenerate-from-here replace range: DB row ids the new completion
+   * replaces (the clicked assistant turn plus everything after it).
+   * Rides the /stream request into the commit_assistant_message RPC,
+   * which excludes these rows from its newer-user-message conflict
+   * check - they are still in the DB while the replacement streams -
+   * and deletes them atomically with the terminal commit. Omitted on
+   * plain sends; the caller filters out synthetic recovery rows
+   * (never persisted, sentinel ids) before passing.
+   */
+  supersededIds?: readonly string[];
+  /**
    * Concrete Venice model id used by the intuition pipeline (perception
    * + 5 drives + synthesis). Caller resolves the fast tier. Omitted /
    * undefined disables the intuition feature entirely on this turn -
@@ -989,6 +1000,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     displayTimezone,
     lastAssistantTimestamp,
     userMessageId,
+    supersededIds,
     userName,
     userLocation,
     intuitionModelId,
@@ -1413,7 +1425,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       reasoningEffort,
       disableThinking,
       verbosity,
-      streamCtx: { threadId: thread.id, userMessageId },
+      streamCtx: { threadId: thread.id, userMessageId, supersededIds },
     }),
     signal,
     supabase,
