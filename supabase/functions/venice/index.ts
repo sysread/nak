@@ -60,6 +60,7 @@ import {
   runDeepSleepSweepTick,
 } from './agents/deep_sleep.ts';
 import { createAgentProgressPublisher } from '../_shared/agent-progress.ts';
+import { createEdgeLogger } from '../_shared/edge-log.ts';
 // Side-effect import: every tool module under ./tools/ calls
 // registerTool() at module-load via this barrel, populating the
 // performToolCall registry before the first /stream request lands.
@@ -614,7 +615,19 @@ function sweepHandler(
     if (!isServiceRole(req)) return json({ error: 'forbidden' }, 403);
     const admin = requireAdmin();
     if (admin instanceof Response) return admin;
-    edgeWaitUntil(tick(admin));
+    // Ticks are non-throwing by contract (each fleet catches and
+    // folds failures into its summary), so a rejection here is an
+    // infrastructure bug. No user has been claimed yet at this layer,
+    // so there is no drawer to notify - the function log is the
+    // surface.
+    edgeWaitUntil(
+      tick(admin).catch((err) => {
+        console.error(
+          '[sweep] tick rejected:',
+          err instanceof Error ? err.message : String(err),
+        );
+      }),
+    );
     return json({ accepted: true });
   };
 }
@@ -631,6 +644,7 @@ function sweepHandler(
  * `run` adapter pulls any fleet-specific fields off the parsed body.
  */
 function manualRunHandler(
+  logSource: string,
   run: (
     admin: SupabaseClient,
     userId: string,
@@ -658,12 +672,26 @@ function manualRunHandler(
         : null;
 
     const publisher = runId ? createAgentProgressPublisher(userId, runId) : null;
-    const result = await run(
-      admin,
-      userId,
-      body,
-      publisher ? (event) => publisher.publish(event) : undefined,
-    );
+    let result: unknown;
+    try {
+      result = await run(
+        admin,
+        userId,
+        body,
+        publisher ? (event) => publisher.publish(event) : undefined,
+      );
+    } catch (err) {
+      // The run functions fold expected failures into their result
+      // unions, so a throw here is an infrastructure bug. The
+      // requesting user is known, so their drawer gets the line.
+      const log = createEdgeLogger(userId, logSource);
+      log.error(
+        'manual run failed unexpectedly',
+        err instanceof Error ? err : new Error(String(err)),
+      );
+      await log.flush();
+      return json({ error: 'internal error during manual run' }, 500);
+    }
     // Flush before responding so the 'done' event lands no later than
     // the response body that also announces completion.
     if (publisher) await publisher.flush();
@@ -684,7 +712,7 @@ const handleDeepSleepSweep = sweepHandler(runDeepSleepSweepTick);
 // reflection's trigger surface is visible in this routing table like
 // every other fleet's.
 const handleReflectionSweep = sweepHandler(runReflectionSweepTick);
-const handleWikiLibrarianRun = manualRunHandler((admin, userId, body, onProgress) =>
+const handleWikiLibrarianRun = manualRunHandler('wiki-librarian', (admin, userId, body, onProgress) =>
   runWikiLibrarianManual(
     admin,
     userId,
@@ -692,10 +720,10 @@ const handleWikiLibrarianRun = manualRunHandler((admin, userId, body, onProgress
     onProgress,
   ),
 );
-const handleRemRun = manualRunHandler((admin, userId, _body, onProgress) =>
+const handleRemRun = manualRunHandler('rem', (admin, userId, _body, onProgress) =>
   runRemManual(admin, userId, onProgress),
 );
-const handleDeepSleepRun = manualRunHandler((admin, userId, _body, onProgress) =>
+const handleDeepSleepRun = manualRunHandler('deep-sleep', (admin, userId, _body, onProgress) =>
   runDeepSleepManual(admin, userId, onProgress),
 );
 
