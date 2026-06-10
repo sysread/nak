@@ -58,4 +58,4 @@ what changed).
 | Date | Env | Commit | Result | Notes |
 | ---- | --- | ------ | ------ | ----- |
 | 2026-06-10 | local | be54771 | pass (1,2,5) | insert appeared live; delete dropped silently until the replident index landed, then delivered; identities 'i' |
-| pending | local | - | - | (3),(4) not yet explicitly exercised via psql with the panel open (covered implicitly by librarian runs refreshing the Memories list) |
+| 2026-06-10 | local | 9cd3508 | pass (3,4) | psql label/title edits appeared live in the open Memories and Wiki panels within ~1s; QA renames reverted afterward |
