@@ -126,22 +126,26 @@
     </select>
   </div>
 
-  <label class="samskara-hide-similar">
-    <input type="checkbox" bind:checked={samskaraBrowseStore.hideSimilar} />
-    <span>Hide similar</span>
+  <div class="samskara-hide-similar">
+    <label class="samskara-hide-similar-toggle">
+      <input type="checkbox" bind:checked={samskaraBrowseStore.hideSimilar} />
+      <span>Hide similar</span>
+    </label>
     {#if samskaraBrowseStore.hideSimilar}
-      <input
-        type="range"
-        min="0.5"
-        max="0.95"
-        step="0.01"
-        bind:value={samskaraBrowseStore.hideSimilarThreshold}
-        aria-label="Similarity threshold"
-        title="Higher hides only near-duplicates; lower folds loosely-related claims together"
-      />
-      <span class="samskara-threshold-readout">{samskaraBrowseStore.hideSimilarThreshold.toFixed(2)}</span>
+      <div class="samskara-threshold-row">
+        <input
+          type="range"
+          min="0.5"
+          max="0.95"
+          step="0.01"
+          bind:value={samskaraBrowseStore.hideSimilarThreshold}
+          aria-label="Similarity threshold"
+          title="Higher hides only near-duplicates; lower folds loosely-related claims together"
+        />
+        <span class="samskara-threshold-readout">{samskaraBrowseStore.hideSimilarThreshold.toFixed(2)}</span>
+      </div>
     {/if}
-  </label>
+  </div>
 
   {#if samskaraBrowseStore.loading && samskaraBrowseStore.results.length === 0}
     <p class="subtle" style="padding:0.75rem">Loading samskaras…</p>
@@ -230,19 +234,35 @@
     font-size: 0.78rem;
     padding: 0.2rem 0.3rem;
   }
+  /* Stack the toggle and the threshold slider on separate lines - the
+     sidebar is too narrow to fit the checkbox, label, slider, and value
+     on one row without the slider getting crushed. */
   .samskara-hide-similar {
     display: flex;
-    align-items: center;
-    gap: 0.4rem;
+    flex-direction: column;
+    gap: 0.35rem;
     margin: 0 0.6rem 0.5rem;
     font-size: 0.78rem;
     color: var(--muted);
   }
-  .samskara-hide-similar input[type='range'] {
+  .samskara-hide-similar-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  /* Slider gets its own full-width line; the value label sits at the end
+     and doesn't shrink, so the track takes whatever's left. */
+  .samskara-threshold-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .samskara-threshold-row input[type='range'] {
     flex: 1;
     min-width: 0;
   }
   .samskara-threshold-readout {
+    flex-shrink: 0;
     font-variant-numeric: tabular-nums;
   }
   .samskara-row-btn {
