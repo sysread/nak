@@ -19,7 +19,7 @@
 // not surface as a chat-turn failure.
 
 import { createEdgeLogger } from '../../_shared/edge-log.ts';
-import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
+import { requireThreadId, registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { memorySearch } from '../tools/memory_search.ts';
 import { conversationSearch } from '../tools/conversation_search.ts';
 import { wikiSearch } from '../tools/wiki_search.ts';
@@ -133,7 +133,7 @@ export const contextTool: ToolDef = {
         const { data: msgs, error: msgErr } = await ctx.adminClient
           .from('messages')
           .select('role, content')
-          .eq('thread_id', ctx.threadId)
+          .eq('thread_id', requireThreadId(ctx))
           .order('created_at', { ascending: true });
         if (msgErr) {
           // Degrade quietly - we cannot derive a query without the

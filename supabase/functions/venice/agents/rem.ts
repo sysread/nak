@@ -359,11 +359,11 @@ async function processOneConversation(args: {
 
   // The librarians are not thread-scoped: memory tools ignore
   // threadId, and conversation_search's self-exclude doesn't apply to
-  // a background pass. Empty string matches the browser agents.
+  // a background pass.
   const baseCtx: Omit<AgentToolContext, 'signal' | 'depth'> = {
     adminClient,
     userId,
-    threadId: '',
+    threadId: null,
   };
 
   let result;

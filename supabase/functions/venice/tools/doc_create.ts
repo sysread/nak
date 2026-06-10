@@ -21,7 +21,7 @@
 // documents row carries an explicit user_id so the Library reads
 // (which DO go through RLS) see only the caller's docs.
 
-import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
+import { requireThreadId, registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 
 // Mirror of src/lib/documents.ts. Keep in sync deliberately - the
 // browser-side schema and the user-facing copy expect the same limits.
@@ -64,7 +64,7 @@ export const docCreate: ToolDef = {
       .select(
         'id, filename, mime_type, size_bytes, storage_path, extracted_text, messages!inner(thread_id)',
       )
-      .eq('messages.thread_id', ctx.threadId)
+      .eq('messages.thread_id', requireThreadId(ctx))
       .eq('filename', filename)
       .order('created_at', { ascending: false })
       .limit(1)

@@ -11,7 +11,7 @@
 // can search but never mutate articles.
 
 import { createEdgeLogger } from '../../_shared/edge-log.ts';
-import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
+import { registerTool, requireThreadId, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { readVeniceKey } from '../tools/_venice_key.ts';
 import { wikiSearch } from '../tools/wiki_search.ts';
 import {
@@ -137,7 +137,7 @@ async function runWikiRecall(
   // the run - and the finally-flush below - is bounded by the turn.
   const log = createEdgeLogger(ctx.userId, 'wiki-recall');
   try {
-    const slice = await loadThreadSlice(ctx.adminClient, ctx.threadId);
+    const slice = await loadThreadSlice(ctx.adminClient, requireThreadId(ctx));
     if (slice.length === 0) {
       return { kind: 'none', reason: 'thread has no user turn yet' };
     }

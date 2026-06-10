@@ -14,7 +14,7 @@
 //   - Autonomous agent (ctx.threadId is a real thread id): the
 //     current thread is attached automatically. The model does not
 //     handle source ids.
-//   - Librarian (ctx.threadId is empty): the `source_thread_ids`
+//   - Librarian (ctx.threadId is null): the `source_thread_ids`
 //     parameter carries the ids the librarian believes informed this
 //     update. Each id is validated against the user's own threads
 //     before attaching - the librarian sees many ids in

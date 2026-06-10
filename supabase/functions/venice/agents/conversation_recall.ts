@@ -11,7 +11,7 @@
 // gets the live conversation echoed back as "recall context."
 
 import { createEdgeLogger } from '../../_shared/edge-log.ts';
-import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
+import { registerTool, requireThreadId, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { readVeniceKey } from '../tools/_venice_key.ts';
 import { conversationSearch } from '../tools/conversation_search.ts';
 import {
@@ -161,7 +161,7 @@ async function runConversationRecall(
   // the run - and the finally-flush below - is bounded by the turn.
   const log = createEdgeLogger(ctx.userId, 'conversation-recall');
   try {
-    const slice = await loadThreadSlice(ctx.adminClient, ctx.threadId);
+    const slice = await loadThreadSlice(ctx.adminClient, requireThreadId(ctx));
     if (slice.length === 0) {
       return { kind: 'none', reason: 'thread has no user turn yet' };
     }

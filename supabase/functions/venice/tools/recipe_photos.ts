@@ -19,7 +19,7 @@
 // recipe_image_upsert, then link the resulting image ids onto the
 // recipe.
 
-import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
+import { requireThreadId, registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 
 interface AttachmentRow {
   id: string;
@@ -116,7 +116,7 @@ export const recipePhotosAttach: ToolDef = {
         .select(
           'id, filename, mime_type, size_bytes, storage_path, messages!inner(thread_id)',
         )
-        .eq('messages.thread_id', ctx.threadId)
+        .eq('messages.thread_id', requireThreadId(ctx))
         .eq('filename', filename)
         .like('mime_type', 'image/%')
         .order('created_at', { ascending: false })

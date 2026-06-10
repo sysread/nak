@@ -225,7 +225,7 @@ function asAgentToolNoThread(tool: ToolDef, wire: AgentTool['wire']): AgentTool 
       tool.execute(args, {
         adminClient: agentCtx.adminClient,
         userId: agentCtx.userId,
-        threadId: '',
+        threadId: null,
         signal: agentCtx.signal,
         depth: agentCtx.depth,
       }),
@@ -966,7 +966,7 @@ async function runLibrarianReview(args: LibrarianReviewArgs): Promise<LibrarianR
     // asAgentToolNoThread - chat threads are not article sources, and
     // conversation_search's self-exclude matters less than attribution
     // hygiene here).
-    threadId: '',
+    threadId: null,
   };
 
   const result = await runHeadlessAgent(

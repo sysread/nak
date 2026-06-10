@@ -467,7 +467,7 @@ async function runReview(args: {
   const baseCtx: Omit<AgentToolContext, 'signal' | 'depth'> = {
     adminClient,
     userId,
-    threadId: '',
+    threadId: null,
   };
 
   const result = await runHeadlessAgent(

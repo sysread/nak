@@ -24,7 +24,7 @@
 //     signal. Best-effort: a transient DB error doesn't fail recall.
 
 import { createEdgeLogger } from '../../_shared/edge-log.ts';
-import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
+import { registerTool, requireThreadId, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { readVeniceKey } from '../tools/_venice_key.ts';
 import { memorySearch } from '../tools/memory_search.ts';
 import {
@@ -186,7 +186,7 @@ async function runRecall(ctx: ToolContext): Promise<RecallNote> {
   // flushing here cannot stall anything past the response.
   const log = createEdgeLogger(ctx.userId, 'recall');
   try {
-    const slice = await loadThreadSlice(ctx.adminClient, ctx.threadId);
+    const slice = await loadThreadSlice(ctx.adminClient, requireThreadId(ctx));
     if (slice.length === 0) {
       return { kind: 'none', reason: 'thread has no user turn yet' };
     }

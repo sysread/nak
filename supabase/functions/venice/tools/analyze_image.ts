@@ -20,7 +20,7 @@
 // which the orchestrator's threadId already validated at /stream
 // entry.
 
-import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
+import { requireThreadId, registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { readVeniceKey } from './_venice_key.ts';
 import { toolComplete } from './_venice_complete.ts';
 
@@ -112,7 +112,7 @@ export const analyzeImage: ToolDef = {
     const { data, error } = await ctx.adminClient
       .from('message_attachments')
       .select('id, filename, storage_path, mime_type, messages!inner(thread_id)')
-      .eq('messages.thread_id', ctx.threadId)
+      .eq('messages.thread_id', requireThreadId(ctx))
       .eq('filename', filename)
       .like('mime_type', 'image/%')
       .order('created_at', { ascending: false })

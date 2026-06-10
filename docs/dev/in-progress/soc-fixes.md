@@ -7,8 +7,7 @@ plus the detached sweepHandler dispatch and the reflection
 claim-TTL fix), A3 (withProgressNarration), A5 (handleStream
 split), A7 (dead title trigger), and A8 (ask_user parsing) are all
 committed on the branch. **Open: A6** (subconscious fire-policy into the pipelines -
-not started) and **A4** (deferred; see its scoping note below - it
-is a self-contained PR). First of the three
+not started). A4 landed after the initial defer; see its item. First of the three
 [tighten-the-control-surfaces](./tighten-the-control-surfaces.md)
 milestones. Source material: the 2026-06-10 separation-of-concerns
 audit of the agent fleet and tool-call layers (findings summarized
@@ -47,17 +46,17 @@ and should land on the collapsed shape.
   must know empty-means-no-current-thread. Make it
   `threadId: string | null` (or a named discriminant) so the two
   caller modes are explicit at the type level.
-  [Scoping note, 2026-06-10: this ripples further than the audit
-  guessed. The registered ToolDefs that branch on the sentinel
-  consume the CHAT-side `ToolContext` (the agent adapters construct
-  that shape), so `string | null` has to land on both interfaces -
-  which means the ~6 chat-only tools that use `ctx.threadId`
-  directly in queries (update_title, toggle_tools, analyze_image,
-  doc_create, recipe_photos) each need a require-thread guard. Doing
-  only the agent side would just re-encode the sentinel at the
-  adapter boundary. It is a self-contained PR, not a rider; the
-  guard helper should throw loudly, which is strictly better than
-  today's silent no-match query on ''.]
+  [DONE 2026-06-10, second pass. `threadId: string | null` landed
+  on BOTH interfaces (ToolContext + AgentToolContext); the
+  librarians pass null; `requireThreadId(ctx)` throws loudly at the
+  thread-requiring sites (update_title, toggle_tools,
+  analyze_image, doc_create, recipe_photos, the three recall
+  agents, and context). Caution for future fields: supabase-js `.eq()` accepts
+  `string | null` silently, so the type system does NOT force the
+  guards - they are a manual discipline, which is why each
+  null-tolerant site (wiki_create/wiki_update attribution,
+  conversation_search self-exclusion) carries a comment saying null
+  is handled on purpose.]
 - **A5. Split `handleStream`'s `reconnectOnly` mode** into two
   handlers behind the route (rides A1). Fresh-stream and reconnect
   share the JWT/ownership preamble and then diverge completely -

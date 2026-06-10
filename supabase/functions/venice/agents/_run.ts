@@ -81,7 +81,13 @@ export interface Toolbox {
 export interface AgentToolContext {
   adminClient: SupabaseClient;
   userId: string;
-  threadId: string;
+  /**
+   * Thread the agent is working on, or null for the cross-thread
+   * librarians (rem, deep-sleep, wiki-librarian), which have no
+   * current thread. Mirrors ToolContext.threadId - see its docblock
+   * in performToolCall.ts for the consumer contract.
+   */
+  threadId: string | null;
   signal: AbortSignal;
   /** Agent depth this call runs at. Set by the driver per-call. */
   depth: number;
