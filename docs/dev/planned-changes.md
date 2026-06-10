@@ -13,17 +13,21 @@ investigation cycles and the lessons learned are worth saving.
 ## Contents
 
 - [Retire the browser supervisor](#retire-the-browser-supervisor)
-  (scoped 2026-06-10 by the no-tool agents re-inspection; not started)
+  (scoped 2026-06-10; adopted as item C1 of the
+  [de-browser-background-jobs](./in-progress/de-browser-background-jobs.md)
+  milestone)
 - [Biometric unlock for the master password](#biometric-unlock-for-the-master-password)
   (obsolete - the master-password layer was removed; kept as WebAuthn PRF reference)
 
 ## Retire the browser supervisor
 
-**Status:** scoped, not started. Output of the no-tool agents
-re-inspection the reorganize-the-workshop plan mandated after its
-Phase 3 closed (see that plan doc's Phase 5 ledger). The
-re-inspection covered all eight plain-completion agents; this entry
-records the verdicts and the one follow-on project they point at.
+**Status:** scoped, adopted as item C1 of the
+[de-browser-background-jobs](./in-progress/de-browser-background-jobs.md)
+milestone (2026-06-10). Output of the no-tool agents re-inspection
+the reorganize-the-workshop plan mandated after its Phase 3 closed
+(see that plan doc's Phase 5 ledger). The re-inspection covered all
+eight plain-completion agents; this entry records the verdicts and
+the follow-on project they point at.
 
 ### The structural finding
 

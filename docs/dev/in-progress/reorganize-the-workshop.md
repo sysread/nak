@@ -18,6 +18,10 @@ realtime relay landed (and surfaced a DELETE-delivery gap fixed for
 all three relays); the no-tool agents re-inspection is recorded in
 `../planned-changes.md` under "Retire the browser supervisor."
 
+Successor milestones (cleaning up the seams this project left) are
+indexed in
+[tighten-the-control-surfaces](./tighten-the-control-surfaces.md).
+
 ## SYNOPSIS
 
 **Collapse the tool-dispatch split.** Tools used to live in two
