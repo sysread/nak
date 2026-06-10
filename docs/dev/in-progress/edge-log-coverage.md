@@ -1,9 +1,13 @@
 # Edge log coverage: every function reaches the drawer
 
-## STATUS (2026-06-10)
+## STATUS (2026-06-10, end of day)
 
-**Planned; starts after the SoC route-layer collapse** (B6 rides the
-collapsed handler shape). Second of the three
+**Landed except B4 (deferred, see its item) and B6 (the shared
+handler wrapper does not yet log handler-level errors - small
+follow-up).** The streaming orchestrator ('stream' source), the
+four mid-turn agents, and the two GC functions all reach the drawer;
+verified live for the orchestrator (a dev chat turn rendered its
+operational lines). Second of the three
 [tighten-the-control-surfaces](./tighten-the-control-surfaces.md)
 milestones.
 

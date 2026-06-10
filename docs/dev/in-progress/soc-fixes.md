@@ -1,8 +1,14 @@
 # SoC fixes: collapse the dispatch-layer seams
 
-## STATUS (2026-06-10)
+## STATUS (2026-06-10, end of day)
 
-**Active milestone.** First of the three
+**Mostly landed.** A1 (route-layer collapse), A2 (/reflection-sweep
+plus the detached sweepHandler dispatch and the reflection
+claim-TTL fix), A3 (withProgressNarration), A5 (handleStream
+split), A7 (dead title trigger), and A8 (ask_user parsing) are all
+committed on the branch. **Open: A6** (subconscious fire-policy into the pipelines -
+not started) and **A4** (deferred; see its scoping note below - it
+is a self-contained PR). First of the three
 [tighten-the-control-surfaces](./tighten-the-control-surfaces.md)
 milestones. Source material: the 2026-06-10 separation-of-concerns
 audit of the agent fleet and tool-call layers (findings summarized
