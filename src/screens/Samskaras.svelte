@@ -15,9 +15,10 @@
    * Samskara diagnostics modal; folding those in as a third sub-view and
    * retiring the modal is a follow-up.
    */
+  import { onMount } from 'svelte';
   import { app } from '$lib/state.svelte';
   import { route } from '$lib/routing.svelte';
-  import { samskaraBrowseStore } from '$lib/samskara-browse-store.svelte';
+  import { samskaraBrowseStore, samskaraView } from '$lib/samskara-browse-store.svelte';
   import {
     tierBadge,
     formatValence,
@@ -25,9 +26,23 @@
   } from '$lib/ui/samskara-browse';
   import type { SamskaraProvenanceRow } from '$lib/supabase';
   import SamskaraHealthPanel from '../components/SamskaraHealthPanel.svelte';
+  import SamskaraMoodLegend from '../components/SamskaraMoodLegend.svelte';
 
-  type SubView = 'corpus' | 'health';
-  let subView = $state<SubView>('corpus');
+  // Compound summary for the Summary sub-view - the always-on prose block
+  // that rides in every system prompt. Fetched once on mount; the modal
+  // this replaced did the same.
+  let compound = $state<{ summary: string | null; lastRegenAt: string | null; samskaraCountAtRegen: number } | null>(null);
+  let compoundLoading = $state(false);
+
+  onMount(() => {
+    if (!app.supabase) return;
+    compoundLoading = true;
+    void app.supabase
+      .samskaraGetCompoundSummary()
+      .then((c) => (compound = c))
+      .catch(() => (compound = null))
+      .finally(() => (compoundLoading = false));
+  });
 
   const selected = $derived(
     route.samskara_id
@@ -77,24 +92,59 @@
     <button
       type="button"
       class="samskara-subnav-btn"
-      class:active={subView === 'corpus'}
+      class:active={samskaraView.sub === 'corpus'}
       role="tab"
-      aria-selected={subView === 'corpus'}
-      onclick={() => (subView = 'corpus')}
+      aria-selected={samskaraView.sub === 'corpus'}
+      onclick={() => (samskaraView.sub = 'corpus')}
     >Corpus</button>
     <button
       type="button"
       class="samskara-subnav-btn"
-      class:active={subView === 'health'}
+      class:active={samskaraView.sub === 'health'}
       role="tab"
-      aria-selected={subView === 'health'}
-      onclick={() => (subView = 'health')}
+      aria-selected={samskaraView.sub === 'health'}
+      onclick={() => (samskaraView.sub = 'health')}
     >Health</button>
+    <button
+      type="button"
+      class="samskara-subnav-btn"
+      class:active={samskaraView.sub === 'summary'}
+      role="tab"
+      aria-selected={samskaraView.sub === 'summary'}
+      onclick={() => (samskaraView.sub = 'summary')}
+    >Summary &amp; mood</button>
   </div>
 
   <div class="samskara-panel-body">
-    {#if subView === 'health'}
+    {#if samskaraView.sub === 'health'}
       <SamskaraHealthPanel />
+    {:else if samskaraView.sub === 'summary'}
+      <!-- Summary sub-view: the always-on compound block + the mood
+           legend, migrated from the retired diagnostics modal. The mood
+           pill deep-links here so "what did that emoji mean" still has a
+           home. -->
+      <section class="samskara-summary">
+        <h3 class="samskara-summary-head">Compound summary (always on in system prompt)</h3>
+        <p class="subtle samskara-summary-help">
+          A background worker rebuilds this once enough new samskaras have
+          been minted since the last regen, so it drifts between
+          conversations rather than mid-thread.
+        </p>
+        {#if compoundLoading}
+          <p class="subtle">Loading summary…</p>
+        {:else if compound?.summary}
+          <div class="samskara-compound-block">
+            <pre class="samskara-compound-text">{compound.summary}</pre>
+            <p class="subtle samskara-compound-meta">
+              Covers {compound.samskaraCountAtRegen} samskara{compound.samskaraCountAtRegen === 1 ? '' : 's'} ·
+              regenerated {relativeTime(compound.lastRegenAt)}
+            </p>
+          </div>
+        {:else}
+          <p class="subtle">No compound summary yet - the worker builds one once you have ~5 samskaras.</p>
+        {/if}
+        <SamskaraMoodLegend />
+      </section>
     {:else if !selected}
       <p class="subtle samskara-empty">
         Pick a samskara from the list to inspect what the model believes,
@@ -178,6 +228,37 @@
   .samskara-empty {
     max-width: 32rem;
     line-height: 1.5;
+  }
+  .samskara-summary-head {
+    font-size: 0.74rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    margin: 0 0 0.3rem;
+  }
+  .samskara-summary-help {
+    margin: 0 0 0.6rem;
+    font-size: 0.85rem;
+    line-height: 1.4;
+  }
+  .samskara-compound-block {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    padding: 0.6rem 0.75rem;
+  }
+  .samskara-compound-text {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: inherit;
+    font-size: 0.88rem;
+    line-height: 1.45;
+  }
+  .samskara-compound-meta {
+    margin: 0.5rem 0 0;
+    font-size: 0.75rem;
   }
   .samskara-detail-head {
     display: flex;

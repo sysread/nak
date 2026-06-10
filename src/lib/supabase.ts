@@ -6534,11 +6534,11 @@ export class SupabaseService {
 
   // Diagnostics reads --------------------------------------------------
   //
-  // These power the Samskara diagnostics screen (src/screens/Samskara.svelte).
-  // They're pure selects against the user's own rows (RLS handles the
-  // scoping) so they're safe to call from the main thread whenever the
-  // user opens the diagnostics modal. None of them are on the chat-
-  // loop hot path; they only run when a human asks to see them.
+  // These power the inline CohortPanel in the chat transcript and the
+  // mood pill's history seed. Pure selects against the user's own rows
+  // (RLS handles the scoping), safe to call from the main thread. None
+  // are on the chat-loop hot path; they only run when a human asks to
+  // see them.
 
   /**
    * All substrate rows anchored to a thread, newest first. Used by the
@@ -6742,71 +6742,6 @@ export class SupabaseService {
       });
     }
     return map;
-  }
-
-  /**
-   * Corpus-level counters for the diagnostics overview. Six head-only
-   * count queries, awaited sequentially on purpose. Parallel Promise.all
-   * here produced 6 concurrent auth-lock acquisitions in
-   * `@supabase/gotrue-js`, which - stacked with the main-thread
-   * refreshSettings and five worker clients on a cold-load path -
-   * tripped the 5s lock timeout and failed every in-flight fetch.
-   * Running sequentially takes ~300ms total warm, which is fine for a
-   * diagnostics-only call. If this ever matters for UX, fold the six
-   * counts into a single Postgres RPC instead.
-   */
-  async samskaraDiagnosticsCounts(threadId: string): Promise<{
-    totalSamskaras: number;
-    tier1Samskaras: number;
-    tier2Samskaras: number;
-    substrateInThread: number;
-    firesInThread: number;
-    associations: number;
-  }> {
-    const client = this.client;
-
-    const totalR = await client
-      .from('samskaras')
-      .select('id', { count: 'exact', head: true });
-    if (totalR.error) throw new SupabaseError(totalR.error.message);
-
-    const t1R = await client
-      .from('samskaras')
-      .select('id', { count: 'exact', head: true })
-      .eq('tier', 1);
-    if (t1R.error) throw new SupabaseError(t1R.error.message);
-
-    const t2R = await client
-      .from('samskaras')
-      .select('id', { count: 'exact', head: true })
-      .eq('tier', 2);
-    if (t2R.error) throw new SupabaseError(t2R.error.message);
-
-    const subR = await client
-      .from('samskara_substrate')
-      .select('id', { count: 'exact', head: true })
-      .eq('thread_id', threadId);
-    if (subR.error) throw new SupabaseError(subR.error.message);
-
-    const fireR = await client
-      .from('samskara_fires')
-      .select('id', { count: 'exact', head: true })
-      .eq('thread_id', threadId);
-    if (fireR.error) throw new SupabaseError(fireR.error.message);
-
-    const assocR = await client
-      .from('samskara_associations')
-      .select('id', { count: 'exact', head: true });
-    if (assocR.error) throw new SupabaseError(assocR.error.message);
-
-    return {
-      totalSamskaras: totalR.count ?? 0,
-      tier1Samskaras: t1R.count ?? 0,
-      tier2Samskaras: t2R.count ?? 0,
-      substrateInThread: subR.count ?? 0,
-      firesInThread: fireR.count ?? 0,
-      associations: assocR.count ?? 0,
-    };
   }
 
   // Observability tab reads ----------------------------------------------

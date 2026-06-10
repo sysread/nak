@@ -53,6 +53,7 @@
     type SamskaraMintEventDetail,
   } from '$lib/samskara/events';
   import { moodState } from '$lib/samskara/mood.svelte';
+  import { samskaraView } from '$lib/samskara-browse-store.svelte';
   import {
     DEFAULT_EMOJI,
     defaultMood,
@@ -211,7 +212,12 @@
         aria-label={current.isDefault
           ? 'Open Samskara diagnostics. No mood data yet for this conversation.'
           : `Samskara mood: ${current.label} (tier ${current.tier}). Open diagnostics.`}
-        onclick={() => navigate({ modal: 'samskara' })}
+        onclick={() => {
+          // Deep-link to the Summary & mood sub-view of the Samskara tab
+          // so the legend explaining this emoji is what opens.
+          samskaraView.sub = 'summary';
+          navigate({ drawer: 'samskara' });
+        }}
         in:fly={{ x: 24, duration: FLY_IN_MS, easing: cubicOut }}
         out:fly={{ x: 24, duration: FLY_OUT_MS, easing: cubicOut }}
       >

@@ -61,6 +61,17 @@ export const samskaraBrowseStore = $state<SamskaraBrowseStore>({
   error: null,
 });
 
+/** Which sub-view of the Samskara tab is showing. */
+export type SamskaraSubView = 'corpus' | 'health' | 'summary';
+
+/**
+ * Shared sub-view selection for the Samskara tab. Lifted out of the
+ * screen so the mood pill can deep-link straight to the Summary sub-view
+ * (where the mood legend explains the emoji the user just clicked)
+ * before navigating to the tab.
+ */
+export const samskaraView = $state<{ sub: SamskaraSubView }>({ sub: 'corpus' });
+
 // Cancel an in-flight semantic search when the user keeps typing.
 let currentAbort: AbortController | null = null;
 

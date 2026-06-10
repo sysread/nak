@@ -49,3 +49,12 @@ otherwise be invisible:
 
 A green dot means healthy; amber means worth a look; red means something
 is stuck.
+
+## Summary & mood
+
+The always-on **summary** - a short paragraph capturing Nak's current
+read on who you are, which rides along in every reply - plus the **mood
+legend** that explains the little emoji in the bottom-right pill. Each
+samskara carries a warmth (valence) and a confidence; the legend maps
+those to the emoji, and a dot shows where the current mood sits.
+Clicking the mood pill brings you straight here.
