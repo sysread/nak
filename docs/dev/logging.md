@@ -112,6 +112,14 @@ Pick a short, stable source tag. Existing tags:
   and the two memory-librarian passes, which run in the venice edge
   function and reach the drawer over the Broadcast log channel (see
   "Edge-to-main relay"), not via a Web Worker
+- `stream` - the streaming chat orchestrator
+  (getStreamingResponse), also edge-side. The browser renders the
+  turn's content off the stream channel; this source carries the
+  operational layer: tool dispatch and outcomes per round (info),
+  the turn's terminal kind (info), retry signals - rate-limit
+  waits, truncated-stream re-rolls, output-guard retries - (warn),
+  and failures (error). Round transitions and event tallies ride at
+  debug. Each line starts with the per-turn runId correlator.
 - `wiki-manual` - the browser-side per-article "Ask agent to
   update" flow (a main-thread completion, not a worker)
 - `samskara` - chat-loop-side samskara helpers

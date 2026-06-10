@@ -71,6 +71,7 @@ import {
   type GeneratedImagePayload,
 } from './tools/_generated_image.ts';
 import { reflectOneThread } from './agents/reflection.ts';
+import { createEdgeLogger } from '../_shared/edge-log.ts';
 
 // Magic flag the ask_user tool returns to suspend the round chain
 // pending a user answer. Mirrors src/lib/tools/ask_user.ts'
@@ -199,8 +200,18 @@ export async function getStreamingResponse(
   // them when the local isolate gets recycled out from under
   // EdgeRuntime.waitUntil).
   const runId = `${opts.threadId.slice(0, 8)}/${Date.now().toString(36)}`;
-  console.log(
-    `[orchestrator ${runId}] start model=${opts.bodyTemplate.model ?? 'unknown'} toolsLen=${Array.isArray(opts.bodyTemplate.tools) ? opts.bodyTemplate.tools.length : 0}`,
+  // Drawer-visible operational log for the turn. The browser already
+  // renders the CONTENT events off the stream channel; this logger
+  // carries the operational layer (rounds, tool dispatch, retries,
+  // terminal kind) to the Logs drawer under the 'stream' source -
+  // named for the /stream route, and distinct from the browser-side
+  // 'chat' source's main-screen one-offs. The console mirror inside
+  // the logger keeps the local-dev terminal breadcrumbs these lines
+  // used to be. runId stays in each message as the per-turn
+  // correlator.
+  const log = createEdgeLogger(opts.userId, 'stream');
+  log.debug(
+    `${runId} start model=${opts.bodyTemplate.model ?? 'unknown'} toolsLen=${Array.isArray(opts.bodyTemplate.tools) ? opts.bodyTemplate.tools.length : 0}`,
   );
   // Optional raw-SSE-frame dump for dev. When NAK_DUMP_STREAM is set,
   // each round's frames + parsed deltas land at /tmp/nak-venice-
@@ -213,7 +224,7 @@ export async function getStreamingResponse(
       ? `/tmp/nak-venice-${runId.replace('/', '-')}.log`
       : null;
   if (dumpPath !== null) {
-    console.log(`[orchestrator ${runId}] dumping raw SSE to ${dumpPath}`);
+    log.debug(`${runId} dumping raw SSE to ${dumpPath}`);
   }
   // Shared abort controller. Two sources can fire it: the wall-deadline
   // timer (this turn ran out of wall-clock budget) and the control
@@ -378,9 +389,7 @@ export async function getStreamingResponse(
         break;
       }
       body = { ...body, messages: history };
-      console.log(
-        `[orchestrator ${runId}] round ${round} historyLen=${history.length}`,
-      );
+      log.debug(`${runId} round ${round} historyLen=${history.length}`);
 
       let roundHadToolCalls = false;
       const roundToolCalls: ToolCallRequest[] = [];
@@ -457,9 +466,15 @@ export async function getStreamingResponse(
               kind: isGuardExhausted ? 'guard_exhausted' : (ev.kind as TranslatedErrorKind),
               rawMessage: ev.message,
             };
+            log.error(
+              `${runId} round ${round} venice error kind=${ev.kind}: ${ev.message}`,
+            );
             break roundLoop;
           }
           case 'stream_retry': {
+            log.warn(
+              `${runId} round ${round} truncated stream, retry attempt ${ev.attempt}`,
+            );
             // Transport-layer retry from withRateLimitRetry's
             // truncation branch: the upstream SSE cut without a
             // [DONE] sentinel and the wrapper is re-issuing. Reset
@@ -486,10 +501,19 @@ export async function getStreamingResponse(
           }
           default:
             // BEGIN / DONE / rate_limit_* / guard_retry pass-through;
-            // no orchestrator state to update. DONE carries the
-            // finish_reason from the SSE stream; capture it for the
-            // round summary log below.
+            // no orchestrator state to update beyond the drawer
+            // breadcrumbs for the retry-shaped signals. DONE carries
+            // the finish_reason from the SSE stream; capture it for
+            // the round summary log below.
             if (ev.type === 'DONE') roundFinishReason = ev.finishReason;
+            if (ev.type === 'rate_limit_wait') {
+              log.warn(
+                `${runId} round ${round} rate-limited, retrying in ${ev.retryAfterMs}ms (attempt ${ev.attempt})`,
+              );
+            }
+            if (ev.type === 'guard_retry') {
+              log.warn(`${runId} round ${round} output-guard retry: ${ev.reason}`);
+            }
             break;
         }
       }
@@ -498,8 +522,8 @@ export async function getStreamingResponse(
         accum.reasoning.length > 0
           ? ` reasoningHead=${JSON.stringify(accum.reasoning.slice(0, 200))}`
           : '';
-      console.log(
-        `[orchestrator ${runId}] round ${round} events: ${Object.entries(eventTally).map(([k, v]) => `${k}=${v}`).join(' ')} contentLen=${accum.content.length} reasoningLen=${accum.reasoning.length} finishReason=${roundFinishReason ?? 'null'}${reasoningPreview}`,
+      log.debug(
+        `${runId} round ${round} events: ${Object.entries(eventTally).map(([k, v]) => `${k}=${v}`).join(' ')} contentLen=${accum.content.length} reasoningLen=${accum.reasoning.length} finishReason=${roundFinishReason ?? 'null'}${reasoningPreview}`,
       );
 
       if (ctl.signal.aborted) {
@@ -564,15 +588,25 @@ export async function getStreamingResponse(
         depth: 0,
       };
 
-      console.log(
-        `[orchestrator ${runId}] round ${round} dispatching ${roundToolCalls.length} tool call(s): ${roundToolCalls.map((tc) => tc.name).join(', ')}`,
+      // Tool dispatch is the operational heart of the turn - these two
+      // lines ride at info so the drawer's default level shows which
+      // tools each round ran and how they fared.
+      log.info(
+        `${runId} round ${round} dispatching ${roundToolCalls.length} tool call(s): ${roundToolCalls.map((tc) => tc.name).join(', ')}`,
       );
       const outcomes = await Promise.all(
         roundToolCalls.map((tc) => runOneToolCall(tc, ctx)),
       );
-      console.log(
-        `[orchestrator ${runId}] round ${round} outcomes: ${outcomes.map((o) => `${o.request.name}=${o.ok ? 'ok' : 'err'}`).join(', ')}`,
+      log.info(
+        `${runId} round ${round} outcomes: ${outcomes.map((o) => `${o.request.name}=${o.ok ? 'ok' : 'err'}`).join(', ')}`,
       );
+      // Failed dispatches get their reason in the drawer; the model
+      // sees the same text in its tool-result row next round.
+      for (const o of outcomes) {
+        if (!o.ok) {
+          log.error(`${runId} round ${round} ${o.request.name} failed: ${o.errorMessage}`);
+        }
+      }
 
       // Harvest generated-image payloads off any tool result before
       // persistRoundToolResults strips them at encode time. Failed
@@ -798,15 +832,11 @@ export async function getStreamingResponse(
         };
       }
     }
-    // Local-dev diagnostic. Production telemetry already routes this
-    // through the END event's terminalKind, but local supabase
-    // functions serve has no other surface to see what failed - the
-    // orchestrator's catch is otherwise silent.
-    console.error(
-      '[getStreamingResponse] caught:',
-      err instanceof Error ? err.message : String(err),
-      err instanceof Error ? err.stack : undefined,
-    );
+    // The END event's terminalKind tells the browser the turn failed;
+    // this line is the diagnostic detail (message + stack) for the
+    // drawer and the function log - the orchestrator's catch is
+    // otherwise silent about WHY.
+    log.error(`${runId} orchestrator caught:`, err);
   } finally {
     clearTimeout(wallTimer);
     if (rowUpdateTimer !== null) clearTimeout(rowUpdateTimer);
@@ -949,10 +979,7 @@ export async function getStreamingResponse(
           .update({ last_error: payload })
           .eq('id', opts.threadId);
       } catch (err) {
-        console.error(
-          `[orchestrator ${runId}] failed to write threads.last_error:`,
-          err instanceof Error ? err.message : String(err),
-        );
+        log.error(`${runId} failed to write threads.last_error:`, err);
       }
     }
 
@@ -987,8 +1014,10 @@ export async function getStreamingResponse(
     // terminalDetail is captured in terminalKind + the END event;
     // referenced for future telemetry hookup.
     void terminalDetail;
-    console.log(
-      `[orchestrator ${runId}] end terminalKind=${terminalKind} persistedId=${persistedId || 'none'}`,
+    // The one per-turn info line: how the turn ended. Non-'completed'
+    // kinds are the drawer's first clue that a turn aborted or errored.
+    log.info(
+      `${runId} end terminalKind=${terminalKind} persistedId=${persistedId || 'none'}`,
     );
 
     // Reflection piggyback. A completed chat turn is the trigger that
@@ -1005,12 +1034,14 @@ export async function getStreamingResponse(
       try {
         await reflectOneThread(opts.adminClient, opts.userId);
       } catch (err) {
-        console.error(
-          `[orchestrator ${runId}] reflection tail failed:`,
-          err instanceof Error ? err.message : String(err),
-        );
+        log.error(`${runId} reflection tail failed:`, err);
       }
     }
+
+    // Drain pending drawer broadcasts before the waitUntil promise
+    // resolves - the isolate can be recycled the moment it settles,
+    // and an unflushed publish would be lost (see edge-log.ts header).
+    await log.flush();
   }
 }
 
