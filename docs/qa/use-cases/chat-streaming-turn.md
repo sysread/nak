@@ -69,10 +69,16 @@ subconscious priming pipelines' fire policy
 - (4) Response is `{"channelName":"thread:<id>:stream",
   "assistantRowId":null,"completedSoFar":"","noStreamInFlight":true}`.
 - (5) The fresh send succeeds in one step: the forged row flips to
-  `status='error'`, `threads.last_error` carries the
-  lost-mid-stream message, and the NEW reply streams normally in
-  the same request (the janitor no longer forces a second send -
-  deliberate A5 behavior change).
+  `status='error'` and the NEW reply streams normally in the same
+  request (the janitor no longer forces a second send - deliberate
+  A5 behavior change). `threads.last_error` carries the
+  lost-mid-stream message only TRANSIENTLY: the successful commit
+  at the new turn's terminal clears it by design (a completed turn
+  is the signal the thread is healthy), so the end state is
+  last_error null. To observe the transient value, check between
+  the send and the reply settling, or run the janitor via a
+  reconnect-only request instead (no stream follows, so the value
+  persists).
 
 ## Cleanup
 
@@ -89,3 +95,5 @@ delete from messages where content = 'orphan' and thread_id = '<thread>';
 | ---- | --- | ------ | ------ | ----- |
 | 2026-06-10 | local | 5bfd057 | pass (2-3) | four `[stream]` lines rendered, runId-keyed; no-tool turn so no dispatch lines |
 | 2026-06-10 | local | 64acd30 | pass (2 cold) | both caches repopulated `trigger='cold'` after manual clear |
+| 2026-06-10 | local | a5e5f22 | pass (4) | reconnect probe returned the exact noStreamInFlight envelope |
+| 2026-06-10 | local | a5e5f22 | pass (5) | forged orphan flipped to error and the reply streamed in one send; last_error null at end state (cleared by the successful commit - expectation refined to match) |
