@@ -6534,11 +6534,11 @@ export class SupabaseService {
 
   // Diagnostics reads --------------------------------------------------
   //
-  // These power the Samskara diagnostics screen (src/screens/Samskara.svelte).
-  // They're pure selects against the user's own rows (RLS handles the
-  // scoping) so they're safe to call from the main thread whenever the
-  // user opens the diagnostics modal. None of them are on the chat-
-  // loop hot path; they only run when a human asks to see them.
+  // These power the inline CohortPanel in the chat transcript and the
+  // mood pill's history seed. Pure selects against the user's own rows
+  // (RLS handles the scoping), safe to call from the main thread. None
+  // are on the chat-loop hot path; they only run when a human asks to
+  // see them.
 
   /**
    * All substrate rows anchored to a thread, newest first. Used by the
@@ -6744,69 +6744,226 @@ export class SupabaseService {
     return map;
   }
 
+  // Observability tab reads ----------------------------------------------
+  //
+  // Power the Samskara diagnostics tab (Corpus + Health panels). All
+  // read-only and RLS-scoped; none write or shape anything. See
+  // docs/dev/samskara.md's observability section.
+
   /**
-   * Corpus-level counters for the diagnostics overview. Six head-only
-   * count queries, awaited sequentially on purpose. Parallel Promise.all
-   * here produced 6 concurrent auth-lock acquisitions in
-   * `@supabase/gotrue-js`, which - stacked with the main-thread
-   * refreshSettings and five worker clients on a cold-load path -
-   * tripped the 5s lock timeout and failed every in-flight fetch.
-   * Running sequentially takes ~300ms total warm, which is fine for a
-   * diagnostics-only call. If this ever matters for UX, fold the six
-   * counts into a single Postgres RPC instead.
+   * One offset page of the samskara corpus for the Corpus panel's
+   * browse list (empty-query regime). `prediction_embedding` is
+   * deliberately omitted - 2048 floats x a page of rows is far too fat
+   * for a list. Sort maps to a deterministic order; `id` tiebreak keeps
+   * cross-page order stable. Optional tier filter.
    */
-  async samskaraDiagnosticsCounts(threadId: string): Promise<{
-    totalSamskaras: number;
-    tier1Samskaras: number;
-    tier2Samskaras: number;
-    substrateInThread: number;
-    firesInThread: number;
-    associations: number;
-  }> {
-    const client = this.client;
-
-    const totalR = await client
+  async listSamskarasPage(opts: {
+    offset: number;
+    pageSize: number;
+    tier?: number | null;
+    sort: SamskaraBrowseSort;
+  }): Promise<OffsetPage<SamskaraCorpusRow>> {
+    let q = this.client
       .from('samskaras')
-      .select('id', { count: 'exact', head: true });
-    if (totalR.error) throw new SupabaseError(totalR.error.message);
+      .select(
+        'id, tier, prediction, inner_voice, valence, confidence, health, fire_count, confirm_count, disconfirm_count, last_fired_at, created_at'
+      );
+    if (opts.tier != null) q = q.eq('tier', opts.tier);
+    // Order columns per sort key. last_fired_at is nullable, so
+    // recently-fired pushes never-fired rows to the bottom.
+    switch (opts.sort) {
+      case 'strongest':
+        q = q.order('health', { ascending: false }).order('confidence', { ascending: false });
+        break;
+      case 'most_fired':
+        q = q.order('fire_count', { ascending: false });
+        break;
+      case 'recently_fired':
+        q = q.order('last_fired_at', { ascending: false, nullsFirst: false });
+        break;
+      case 'recent':
+      default:
+        q = q.order('created_at', { ascending: false });
+        break;
+    }
+    q = q.order('id', { ascending: false });
+    q = q.range(opts.offset, opts.offset + opts.pageSize);
+    const { data, error } = await q;
+    if (error) throw new SupabaseError(error.message);
+    const rows = (data ?? []).map(mapSamskaraCorpusRow);
+    const hasMore = rows.length > opts.pageSize;
+    return { rows: hasMore ? rows.slice(0, opts.pageSize) : rows, hasMore };
+  }
 
-    const t1R = await client
+  /**
+   * Corpus semantic search: nearest samskaras by cosine on
+   * `prediction_embedding`. Plain cosine, NOT the fire-ranking formula -
+   * browse wants closest-to-query, not most-likely-to-fire. Optional
+   * tier filter. Returns the same shape as the browse list plus a
+   * `cosine` relevance score.
+   */
+  async searchSamskarasByEmbedding(
+    embedding: number[],
+    kMax: number,
+    tier?: number | null
+  ): Promise<SamskaraCorpusRow[]> {
+    const { data, error } = await this.client.rpc('samskara_search_by_prediction', {
+      p_query_embedding: embedding,
+      p_k_max: kMax,
+      p_tier: tier ?? null,
+    });
+    if (error) throw new SupabaseError(error.message);
+    return ((data ?? []) as SamskaraCorpusRpcRow[]).map(mapSamskaraCorpusRow);
+  }
+
+  /**
+   * Substring fallback for corpus search: ILIKE on prediction text.
+   * Every samskara is embedded (the column is NOT NULL), so unlike
+   * memories there is no disjoint unembedded set - this is purely to
+   * surface exact-phrase matches a cosine ranking might bury. Optional
+   * tier filter.
+   */
+  async searchSamskarasByText(
+    query: string,
+    limit: number,
+    tier?: number | null
+  ): Promise<SamskaraCorpusRow[]> {
+    let q = this.client
       .from('samskaras')
-      .select('id', { count: 'exact', head: true })
-      .eq('tier', 1);
-    if (t1R.error) throw new SupabaseError(t1R.error.message);
+      .select(
+        'id, tier, prediction, inner_voice, valence, confidence, health, fire_count, confirm_count, disconfirm_count, last_fired_at, created_at'
+      )
+      .ilike('prediction', `%${query}%`)
+      .order('health', { ascending: false })
+      .limit(limit);
+    if (tier != null) q = q.eq('tier', tier);
+    const { data, error } = await q;
+    if (error) throw new SupabaseError(error.message);
+    return (data ?? []).map(mapSamskaraCorpusRow);
+  }
 
-    const t2R = await client
-      .from('samskaras')
-      .select('id', { count: 'exact', head: true })
-      .eq('tier', 2);
-    if (t2R.error) throw new SupabaseError(t2R.error.message);
+  /**
+   * Greedy cosine clustering of the corpus for the "hide similar"
+   * slider. Returns a map keyed by samskara id; each entry names the
+   * cluster sequence (representative shares the lowest seq) and the
+   * cluster's size so the UI can render "+N similar". Optional tier
+   * filter must match the list's filter so the assignments line up.
+   */
+  async samskaraClusterCorpus(
+    threshold: number,
+    tier?: number | null
+  ): Promise<Map<string, { seq: number; size: number }>> {
+    const { data, error } = await this.client.rpc('samskara_cluster_corpus', {
+      p_threshold: threshold,
+      p_tier: tier ?? null,
+    });
+    if (error) throw new SupabaseError(error.message);
+    const map = new Map<string, { seq: number; size: number }>();
+    for (const r of (data ?? []) as {
+      samskara_id: string;
+      cluster_seq: number;
+      cluster_size: number;
+    }[]) {
+      map.set(r.samskara_id, { seq: r.cluster_seq, size: r.cluster_size });
+    }
+    return map;
+  }
 
-    const subR = await client
-      .from('samskara_substrate')
-      .select('id', { count: 'exact', head: true })
-      .eq('thread_id', threadId);
-    if (subR.error) throw new SupabaseError(subR.error.message);
+  /**
+   * Resolve a samskara's provenance to labelled rows for the detail
+   * view. For a tier-2 compound these are its tier-1 children (label =
+   * child prediction); for a tier-1 they're substrate situations and
+   * association labels. A null label means the target was deleted since
+   * minting - the UI renders that as "(removed)".
+   */
+  async samskaraProvenanceDetail(samskaraId: string): Promise<SamskaraProvenanceRow[]> {
+    const { data, error } = await this.client.rpc('samskara_provenance_detail', {
+      p_samskara_id: samskaraId,
+    });
+    if (error) throw new SupabaseError(error.message);
+    return ((data ?? []) as {
+      kind: string;
+      ref_id: string;
+      weight: number;
+      label: string | null;
+      ref_tier: number | null;
+    }[]).map((r) => ({
+      kind: r.kind as SamskaraProvenanceRow['kind'],
+      refId: r.ref_id,
+      weight: r.weight,
+      label: r.label,
+      refTier: r.ref_tier,
+    }));
+  }
 
-    const fireR = await client
-      .from('samskara_fires')
-      .select('id', { count: 'exact', head: true })
-      .eq('thread_id', threadId);
-    if (fireR.error) throw new SupabaseError(fireR.error.message);
-
-    const assocR = await client
-      .from('samskara_associations')
-      .select('id', { count: 'exact', head: true });
-    if (assocR.error) throw new SupabaseError(assocR.error.message);
-
+  /**
+   * One-row corpus-wide health snapshot for the Health panel: backlog
+   * depths, lost-signal counts, inconsistency counts, corpus-quality
+   * counts. Computed live; no stored history.
+   */
+  async samskaraHealthSnapshot(): Promise<SamskaraHealthSnapshot> {
+    const { data, error } = await this.client.rpc('samskara_health_snapshot');
+    if (error) throw new SupabaseError(error.message);
+    // The RPC returns a single-row table; supabase-js hands it back as a
+    // one-element array.
+    const r = (Array.isArray(data) ? data[0] : data) as Record<string, number> | null;
     return {
-      totalSamskaras: totalR.count ?? 0,
-      tier1Samskaras: t1R.count ?? 0,
-      tier2Samskaras: t2R.count ?? 0,
-      substrateInThread: subR.count ?? 0,
-      firesInThread: fireR.count ?? 0,
-      associations: assocR.count ?? 0,
+      totalSamskaras: r?.total_samskaras ?? 0,
+      tier1: r?.tier1 ?? 0,
+      tier2: r?.tier2 ?? 0,
+      nearDead: r?.near_dead ?? 0,
+      neverFired: r?.never_fired ?? 0,
+      associations: r?.associations ?? 0,
+      substrateTotal: r?.substrate_total ?? 0,
+      pendingAssimilate: r?.pending_assimilate ?? 0,
+      pendingEmbed: r?.pending_embed ?? 0,
+      firesTotal: r?.fires_total ?? 0,
+      firesUnresolvedWindow: r?.fires_unresolved_window ?? 0,
+      firesAgedOut: r?.fires_aged_out ?? 0,
+      orphanFires: r?.orphan_fires ?? 0,
+      stuckAssimilateClaims: r?.stuck_assimilate_claims ?? 0,
+      stuckEmbedClaims: r?.stuck_embed_claims ?? 0,
     };
+  }
+
+  /**
+   * Windowed activity rates (mints/fires/resolution over the last N
+   * days) for the Health panel, computed from existing timestamps.
+   */
+  async samskaraRates(days: number): Promise<SamskaraRates> {
+    const { data, error } = await this.client.rpc('samskara_rates', { p_days: days });
+    if (error) throw new SupabaseError(error.message);
+    const r = (Array.isArray(data) ? data[0] : data) as Record<string, number> | null;
+    return {
+      windowDays: r?.window_days ?? days,
+      mints: r?.mints ?? 0,
+      fires: r?.fires ?? 0,
+      resolved: r?.resolved ?? 0,
+      unresolved: r?.unresolved ?? 0,
+      resolutionPct: r?.resolution_pct ?? 0,
+    };
+  }
+
+  /**
+   * Current worker-lease rows (self-selectable via RLS). The Health
+   * panel reads the `samskara` and `embedding` kinds and compares
+   * `expiresAt` to now: a lapsed lease means no live worker is holding
+   * it, so formation/embedding is silently stopped.
+   */
+  async samskaraWorkerLeases(): Promise<SamskaraWorkerLease[]> {
+    const { data, error } = await this.client
+      .from('worker_leases')
+      .select('worker_kind, holder_id, expires_at');
+    if (error) throw new SupabaseError(error.message);
+    return ((data ?? []) as {
+      worker_kind: string;
+      holder_id: string;
+      expires_at: string;
+    }[]).map((r) => ({
+      workerKind: r.worker_kind,
+      holderId: r.holder_id,
+      expiresAt: r.expires_at,
+    }));
   }
 
   // --- Bias profile ------------------------------------------------------
@@ -7405,6 +7562,114 @@ export interface SamskaraTier2CandidateRow {
   prediction: string;
   valence: number | null;
   cofireWeight: number;
+}
+
+/** Sort keys for the Corpus browse list. */
+export type SamskaraBrowseSort = 'recent' | 'strongest' | 'most_fired' | 'recently_fired';
+
+/**
+ * A samskara as rendered in the Corpus panel's list and detail views.
+ * camelCased at the boundary so the UI never sees snake_case. `cosine`
+ * is present only on search results (the browse list omits it). No
+ * embedding - too fat for a list.
+ */
+export interface SamskaraCorpusRow {
+  id: string;
+  tier: number;
+  prediction: string;
+  innerVoice: string | null;
+  valence: number | null;
+  confidence: number;
+  health: number;
+  fireCount: number;
+  confirmCount: number;
+  disconfirmCount: number;
+  lastFiredAt: string | null;
+  createdAt: string;
+  cosine?: number;
+}
+
+/** Snake-case shape of a corpus row as it arrives from a select or RPC. */
+interface SamskaraCorpusRpcRow {
+  id: string;
+  tier: number;
+  prediction: string;
+  inner_voice: string | null;
+  valence: number | null;
+  confidence: number;
+  health: number;
+  fire_count: number;
+  confirm_count: number;
+  disconfirm_count: number;
+  last_fired_at: string | null;
+  created_at: string;
+  cosine?: number;
+}
+
+/** One labelled provenance edge of a samskara, for the detail view. */
+export interface SamskaraProvenanceRow {
+  kind: 'substrate' | 'association' | 'samskara';
+  refId: string;
+  weight: number;
+  /** Resolved label (child prediction / situation / relation), or null if the target was deleted. */
+  label: string | null;
+  /** Tier of the referenced samskara, present only for kind='samskara'. */
+  refTier: number | null;
+}
+
+/** Corpus-wide live health snapshot for the Health panel. */
+export interface SamskaraHealthSnapshot {
+  totalSamskaras: number;
+  tier1: number;
+  tier2: number;
+  nearDead: number;
+  neverFired: number;
+  associations: number;
+  substrateTotal: number;
+  pendingAssimilate: number;
+  pendingEmbed: number;
+  firesTotal: number;
+  firesUnresolvedWindow: number;
+  firesAgedOut: number;
+  orphanFires: number;
+  stuckAssimilateClaims: number;
+  stuckEmbedClaims: number;
+}
+
+/** Windowed activity rates for the Health panel. */
+export interface SamskaraRates {
+  windowDays: number;
+  mints: number;
+  fires: number;
+  resolved: number;
+  unresolved: number;
+  resolutionPct: number;
+}
+
+/** A worker-lease row, for the Health panel's worker-liveness readout. */
+export interface SamskaraWorkerLease {
+  workerKind: string;
+  holderId: string;
+  expiresAt: string;
+}
+
+/** Map a snake-case corpus row (select or RPC) to the camelCase UI shape. */
+function mapSamskaraCorpusRow(r: SamskaraCorpusRpcRow): SamskaraCorpusRow {
+  return {
+    id: r.id,
+    tier: r.tier,
+    prediction: r.prediction,
+    innerVoice: r.inner_voice,
+    valence: r.valence,
+    confidence: r.confidence,
+    health: r.health,
+    fireCount: r.fire_count,
+    confirmCount: r.confirm_count,
+    disconfirmCount: r.disconfirm_count,
+    lastFiredAt: r.last_fired_at,
+    createdAt: r.created_at,
+    ...(typeof r.cosine === 'number' ? { cosine: r.cosine } : {}),
+  };
 }
 
 /**

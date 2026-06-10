@@ -138,13 +138,15 @@
   type MemoriesComponent = typeof import('./Memories.svelte').default;
   type WikiComponent = typeof import('./Wiki.svelte').default;
   type LibraryComponent = typeof import('./Library.svelte').default;
+  type SamskarasComponent = typeof import('./Samskaras.svelte').default;
   type SettingsComponent = typeof import('./Settings.svelte').default;
   type HelpComponent = typeof import('./Help.svelte').default;
-  type SamskaraComponent = typeof import('./Samskara.svelte').default;
   type IntuitionComponent = typeof import('./Intuition.svelte').default;
   type BiasProfileComponent = typeof import('./BiasProfile.svelte').default;
   type RecallComponent = typeof import('./Recall.svelte').default;
   import WikiList from '../components/WikiList.svelte';
+  import SamskaraBrowseList from '../components/SamskaraBrowseList.svelte';
+  import { samskaraView } from '$lib/samskara-browse-store.svelte';
   import LibraryList from '../components/LibraryList.svelte';
   import IntuitionPill from '../components/IntuitionPill.svelte';
   import BiasPill from '../components/BiasPill.svelte';
@@ -260,7 +262,6 @@
   // explicit per call site.
   const showSettings = $derived(route.modal === 'settings');
   const showHelp = $derived(route.modal === 'help');
-  const showSamskara = $derived(route.modal === 'samskara');
   const showIntuition = $derived(route.modal === 'intuition');
   const showBiasProfile = $derived(route.modal === 'bias-profile');
   const showRecall = $derived(route.modal === 'recall');
@@ -283,9 +284,9 @@
   let MemoriesComp: MemoriesComponent | null = $state(null);
   let WikiComp: WikiComponent | null = $state(null);
   let LibraryComp: LibraryComponent | null = $state(null);
+  let SamskarasComp: SamskarasComponent | null = $state(null);
   let SettingsComp: SettingsComponent | null = $state(null);
   let HelpComp: HelpComponent | null = $state(null);
-  let SamskaraComp: SamskaraComponent | null = $state(null);
   let IntuitionComp: IntuitionComponent | null = $state(null);
   let BiasProfileComp: BiasProfileComponent | null = $state(null);
   let RecallComp: RecallComponent | null = $state(null);
@@ -325,6 +326,9 @@
     if (drawerTab === 'library' && !LibraryComp) {
       void import('./Library.svelte').then((m) => (LibraryComp = m.default));
     }
+    if (drawerTab === 'samskara' && !SamskarasComp) {
+      void import('./Samskaras.svelte').then((m) => (SamskarasComp = m.default));
+    }
   });
   $effect(() => {
     if (showSettings && !SettingsComp) {
@@ -334,11 +338,6 @@
   $effect(() => {
     if (showHelp && !HelpComp) {
       void import('./Help.svelte').then((m) => (HelpComp = m.default));
-    }
-  });
-  $effect(() => {
-    if (showSamskara && !SamskaraComp) {
-      void import('./Samskara.svelte').then((m) => (SamskaraComp = m.default));
     }
   });
   $effect(() => {
@@ -449,7 +448,7 @@
    * replaceState so a tab flip doesn't fill history with UI-chrome
    * entries.
    */
-  const drawerTab = $derived<'chats' | 'recipes' | 'memories' | 'wiki' | 'library'>(
+  const drawerTab = $derived<'chats' | 'recipes' | 'memories' | 'wiki' | 'library' | 'samskara'>(
     route.drawer ?? 'chats'
   );
   // Recipe and memory search/listing state has moved to the
@@ -496,6 +495,15 @@
     if (app.supabase && !documentStore.loaded && !documentStore.loading) {
       void runDocumentSearch(app.supabase);
     }
+  }
+
+  // Samskara diagnostics tab. The SamskaraBrowseList sidebar loads its
+  // own corpus on mount (its tier/sort/query effects fire once the
+  // component renders), so this only has to flip the route - whether the
+  // user clicks the tab or lands on ?drawer=samskara directly, mounting
+  // the list is what triggers the fetch.
+  function onPickSamskaraTab(): void {
+    navigate({ drawer: 'samskara' }, { replace: true });
   }
 
   // When the user (or a popstate pop) lands on `?drawer=recipes`
@@ -5993,6 +6001,17 @@
               onclick={() => onPickLibraryTab()}
             >Library</button>
           </div>
+          <div class="row thread-row">
+            <button
+              type="button"
+              role="tab"
+              class="thread grow"
+              class:active={drawerTab === 'samskara'}
+              aria-selected={drawerTab === 'samskara'}
+              onclick={() => onPickSamskaraTab()}
+              title="Samskara diagnostics - what the model has formed about you, and pipeline health"
+            >Samskara</button>
+          </div>
         </div>
       </header>
       {#if drawerTab === 'chats'}
@@ -6234,6 +6253,11 @@
              listing. Clicking an article surfaces it in the main
              panel. onSelect mirrors the other tabs on mobile. -->
         <WikiList onSelect={closeDrawerOnMobile} />
+      {:else if drawerTab === 'samskara'}
+        <!-- Samskara diagnostics tab. SamskaraBrowseList owns the
+             search, the tier/sort/hide-similar controls, and selection.
+             onSelect mirrors the other tabs on mobile. -->
+        <SamskaraBrowseList onSelect={closeDrawerOnMobile} />
       {:else}
         <!-- Library tab. LibraryList owns the search and newest-first
              listing. Clicking a document surfaces it in the main panel.
@@ -6553,6 +6577,12 @@
           <TopBarActions {actions} menuLabel="Wiki actions" />
           <div class="title-wrap">
             <span class="title-btn panel-section-label">Wiki</span>
+          </div>
+        {:else if drawerTab === 'samskara'}
+          <!-- Samskara diagnostics top-bar. Read-only surface, so no
+               action buttons - just the static section label. -->
+          <div class="title-wrap">
+            <span class="title-btn panel-section-label">Samskara</span>
           </div>
         {:else}
           <!-- Library top-bar. The upload affordance lives inline in
@@ -7430,18 +7460,17 @@
                 <button
                   type="button"
                   class="diag-tile"
-                  disabled={route.cid === null}
-                  title={route.cid !== null
-                    ? (moodState.current
-                        ? `feelin' ${valenceToMoodLabel(moodState.current.valence, moodState.current.confidence)} - open Samskara diagnostics`
-                        : 'Samskara diagnostics - no mood data yet')
-                    : 'Samskara - no conversation selected'}
-                  aria-label={route.cid !== null
-                    ? 'Open Samskara diagnostics'
-                    : 'Samskara diagnostics (no conversation selected)'}
+                  title={moodState.current
+                    ? `feelin' ${valenceToMoodLabel(moodState.current.valence, moodState.current.confidence)} - open Samskara diagnostics`
+                    : 'Open Samskara diagnostics'}
+                  aria-label="Open Samskara diagnostics"
                   onclick={() => {
+                    // Corpus-wide diagnostics tab - no longer thread-gated
+                    // (the retired modal needed route.cid for per-thread
+                    // counts; the Health panel is corpus-wide).
                     closeMenus();
-                    if (route.cid !== null) navigate({ modal: 'samskara' });
+                    samskaraView.sub = 'summary';
+                    navigate({ drawer: 'samskara' });
                   }}
                 >
                   <span class="emoji" aria-hidden="true">
@@ -7886,6 +7915,13 @@
             bind:triggerSkippedView={wikiSkippedTrigger}
           />
         {/if}
+      {:else if drawerTab === 'samskara'}
+        <!-- Samskara diagnostics panel. Read-only Corpus + Health
+             sub-views; the sidebar SamskaraBrowseList drives
+             route.samskara_id for the Corpus detail. -->
+        {#if SamskarasComp}
+          <SamskarasComp />
+        {/if}
       {:else}
         <!-- Library panel. Inline, no modal chrome. The sidebar LibraryList
              shares the same `documentStore` so a search keystroke filters
@@ -7936,9 +7972,6 @@
   {/if}
   {#if showHelp && HelpComp}
     <HelpComp onClose={() => navigate({ modal: null, doc: null })} />
-  {/if}
-  {#if showSamskara && SamskaraComp}
-    <SamskaraComp onClose={() => navigate({ modal: null })} />
   {/if}
   {#if showIntuition && IntuitionComp}
     <IntuitionComp
