@@ -38,17 +38,21 @@ A live snapshot that makes silent failures visible - because the
 instinct-forming pipeline runs entirely in the background, a stall would
 otherwise be invisible:
 
-- **Workers** - whether the background workers are alive.
-- **Backlog & lost signal** - work waiting to be processed, and learning
-  signal that aged out before it could be used.
+- **Workers** - whether a background worker is running right now. They
+  only run while the app is open, so "idle" is normal, not a problem.
+- **Backlog** - work waiting to be processed. A few items is normal; a
+  large, persistent pile means a worker isn't keeping up.
 - **Inconsistencies** - internal bookkeeping problems that should stay
   near zero.
 - **Staleness** - how long since the always-on summary was rebuilt.
 - **Activity** - how many instincts formed and fired recently, and how
-  often Nak managed to learn from them.
+  often Nak learned from them. A low "reaction resolution" is expected -
+  only the turn right after an instinct fires can confirm it.
 
-A green dot means healthy; amber means worth a look; red means something
-is stuck.
+The dot at the top is green when healthy, amber when worth a look, and
+red when something genuinely needs attention - the backlog, the
+bookkeeping, or a long-stale summary. An idle worker on its own won't
+turn it red.
 
 ## Summary
 

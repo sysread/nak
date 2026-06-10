@@ -74,7 +74,6 @@
       ? [
           { label: 'Pending assimilation', value: snap.pendingAssimilate, sev: severityFor(snap.pendingAssimilate, HEALTH_THRESHOLDS.pendingAssimilate) },
           { label: 'Pending embedding', value: snap.pendingEmbed, sev: severityFor(snap.pendingEmbed, HEALTH_THRESHOLDS.pendingEmbed) },
-          { label: 'Fires aged out unresolved', value: snap.firesAgedOut, sev: severityFor(snap.firesAgedOut, HEALTH_THRESHOLDS.firesAgedOut) },
         ]
       : []
   );
@@ -92,14 +91,16 @@
   const workers = $derived(leaseLiveness(leases, SAMSKARA_WORKER_KINDS));
   const compoundSev = $derived<Severity>(compoundStaleness(compoundRegenAt));
 
-  // Panel headline dot: the worst of every signal so a glance tells you
-  // whether anything needs attention.
+  // Panel headline dot: the worst of the ACTIONABLE signals - backlog
+  // depth, internal inconsistencies, compound staleness. Worker liveness
+  // is deliberately excluded: a lapsed lease is the normal away state
+  // (workers run only while a tab is open), so an idle worker is not a
+  // failure and must not turn the headline red.
   const overall = $derived<Severity>(
     worstSeverity([
       ...backlog.map((b) => b.sev),
       ...inconsistencies.map((i) => i.sev),
       compoundSev,
-      ...workers.map((w): Severity => (w.live ? 'ok' : 'alarm')),
     ])
   );
 </script>
@@ -120,14 +121,16 @@
     <div class="health-card">
       {#each workers as w (w.workerKind)}
         <div class="health-row">
-          <span class="sev-dot sev-{w.live ? 'ok' : 'alarm'}" aria-hidden="true"></span>
+          <!-- Live -> green; idle -> neutral grey, NOT red. Workers run
+               client-side only while a tab is open, so idle is normal. -->
+          <span class="sev-dot" class:sev-ok={w.live} aria-hidden="true"></span>
           <span class="health-label">{w.workerKind}</span>
-          <span class="health-value">{w.live ? `live, expires ${relativeTime(w.expiresAt)}` : 'no live holder'}</span>
+          <span class="health-value">{w.detail}</span>
         </div>
       {/each}
     </div>
 
-    <h3 class="health-group">Backlog &amp; lost signal</h3>
+    <h3 class="health-group">Backlog</h3>
     <div class="health-card">
       {#each backlog as row (row.label)}
         <div class="health-row">
@@ -176,6 +179,11 @@
           </span>
         </div>
       </div>
+      <p class="health-note subtle">
+        A low resolution rate is normal - only the turn right after a fire
+        can confirm or disconfirm it, so most fires never get an explicit
+        reaction.
+      </p>
     {/if}
 
     <h3 class="health-group">Corpus</h3>
@@ -220,6 +228,11 @@
     letter-spacing: 0.06em;
     color: var(--muted);
     margin: 1rem 0 0.35rem;
+  }
+  .health-note {
+    margin: 0.35rem 0 0;
+    font-size: 0.78rem;
+    line-height: 1.4;
   }
   .health-card {
     border: 1px solid var(--border);

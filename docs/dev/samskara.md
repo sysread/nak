@@ -992,9 +992,13 @@ diagnostics modal (whose per-conversation mood graph moved to
   `src/lib/samskara-browse-store.svelte.ts`,
   `src/lib/ui/samskara-browse.ts`.
 - **Health** - silent-failure detection computed live (no stored
-  history): backlog depths, fires aged out unresolved, worker-lease
-  liveness, compound-summary staleness, orphan fires / stuck claims,
-  and windowed mint/fire/resolution rates. Backed by
+  history). The headline severity is the worst of the ACTIONABLE
+  signals only: backlog depth (pending assimilate / embed, loose
+  `[50, 500]` bars - a snapshot of a few is normal since workers run
+  client-side), internal inconsistencies (orphan fires, stuck claims -
+  tight bars, should be ~0), and compound-summary staleness. Worker
+  liveness and the windowed mint/fire/resolution rates are shown but
+  NOT severity-bearing (see the gotcha below on why). Backed by
   `samskara_health_snapshot`, `samskara_rates`, the `worker_leases`
   read, and the severity thresholds in `src/lib/ui/samskara-browse.ts`
   (named constants, tune against observed behaviour). Piece:
@@ -1017,6 +1021,25 @@ Search ranks by plain cosine (`samskara_search_by_prediction`), NOT
 the `samskara_fire_top_k` formula - browse wants closest-to-query, not
 most-likely-to-fire, so health/confidence are deliberately left out of
 the ranking.
+
+**Health-metric calibration (a fixed false alarm).** Two signals look
+like failures but aren't, and an early version of the panel turned the
+headline permanently red on them:
+
+- **Fires aged out unresolved** grows unbounded by design.
+  Reaction-classify only resolves the cohort whose follow-up landed in
+  the 1-10min window, so ~95% of fires never get an explicit reaction
+  (the resolution rate is *meant* to be low). This is not surfaced as a
+  severity bar at all; the windowed resolution rate is shown with a note
+  that low is normal.
+- **Worker liveness** is informational, never an alarm. The formation
+  and embedding workers run client-side only while a tab is open, so a
+  lapsed lease ("idle") is the normal away state, not a stall. The
+  expiry is a future timestamp, so it's rendered "expires in Ns", not
+  through the past-tense "N ago" formatter. A genuinely stuck worker
+  shows up as a deep, persistent backlog instead - which IS a severity
+  bar. The headline severity therefore considers only backlog,
+  inconsistencies, and compound staleness.
 
 ## Where to go next
 
