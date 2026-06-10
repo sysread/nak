@@ -6414,6 +6414,298 @@ begin
        and s.user_id = v_uid;
 end $$;
 
+-- Observability reads -----------------------------------------------------
+--
+-- Read-only surface for the Samskara diagnostics tab (Corpus + Health
+-- panels). None of these write or shape anything; they exist so the
+-- operator can see what the pipeline has formed and whether it's still
+-- working. The in-chat surface stays opaque - these are deliberately
+-- opened, like reading logs.
+
+-- Corpus browse-time semantic search. Plain cosine on
+-- prediction_embedding, NOT the fire-ranking formula (cosine^1.3 *
+-- sqrt(health*confidence) * sample-size that samskara_fire_top_k uses).
+-- Browse wants "closest to what I typed"; folding health/confidence in
+-- would bury the weak-but-relevant samskaras the operator most wants to
+-- find. Optional tier filter. Returns the display fields the list and
+-- detail views render, plus cosine for an optional relevance readout.
+create or replace function public.samskara_search_by_prediction(
+  p_query_embedding vector(2048),
+  p_k_max int,
+  p_tier int default null
+) returns table (
+  id uuid,
+  tier int,
+  prediction text,
+  inner_voice text,
+  valence real,
+  confidence real,
+  health real,
+  fire_count int,
+  confirm_count int,
+  disconfirm_count int,
+  last_fired_at timestamptz,
+  created_at timestamptz,
+  cosine real
+)
+language sql stable security invoker as $$
+  select s.id, s.tier, s.prediction, s.inner_voice, s.valence,
+         s.confidence, s.health, s.fire_count, s.confirm_count,
+         s.disconfirm_count, s.last_fired_at, s.created_at,
+         (1 - (s.prediction_embedding <=> p_query_embedding))::real as cosine
+    from public.samskaras s
+   where s.user_id = auth.uid()
+     and s.prediction_embedding is not null
+     and (p_tier is null or s.tier = p_tier)
+   order by s.prediction_embedding <=> p_query_embedding asc
+   limit p_k_max
+$$;
+
+-- Greedy cosine clustering of the whole samskara corpus by
+-- prediction_embedding. The corpus analog of
+-- samskara_cluster_thread_fires (same greedy algorithm) minus the
+-- per-cohort scoping. Powers the Corpus panel's "hide similar" slider:
+-- the UI shows one representative per cluster (the seed, which is the
+-- strongest member because we walk health-then-confidence first) and
+-- folds the rest under a "+N similar" affordance. Seeds are never
+-- re-evaluated, so cluster_seq is deterministic across calls at a given
+-- threshold and the renderer can cache by it. Optional tier filter.
+--
+-- Cost is O(n * seeds) from the per-(row, seed) embedding reload, same
+-- as the thread version. The corpus is small by design (dedup targets
+-- ~150 tier-1), and this only runs when the slider is engaged, so the
+-- naive reload is fine - not on any hot path.
+create or replace function public.samskara_cluster_corpus(
+  p_threshold real,
+  p_tier int default null
+) returns table (
+  samskara_id uuid,
+  cluster_seq int,
+  cluster_size int
+)
+language plpgsql stable security invoker as $$
+declare
+  v_uid uuid := auth.uid();
+  v_next_seq int := 0;
+  v_seed_ids uuid[] := array[]::uuid[];
+  v_seed_seqs int[] := array[]::int[];
+  v_assignments jsonb := '{}'::jsonb;
+  v_best_cos real;
+  v_best_seq int;
+  v_cos real;
+  v_seed_emb vector(2048);
+  v_emb vector(2048);
+  i int;
+  rec record;
+begin
+  for rec in
+    select s.id, s.prediction_embedding as embedding
+      from public.samskaras s
+     where s.user_id = v_uid
+       and s.prediction_embedding is not null
+       and (p_tier is null or s.tier = p_tier)
+     order by s.health desc, s.confidence desc, s.id
+  loop
+    v_emb := rec.embedding;
+    v_best_cos := -1.0;
+    v_best_seq := 0;
+    for i in 1..coalesce(array_length(v_seed_ids, 1), 0) loop
+      select s.prediction_embedding into v_seed_emb
+        from public.samskaras s where s.id = v_seed_ids[i];
+      if v_seed_emb is null then
+        continue;
+      end if;
+      v_cos := (1 - (v_seed_emb <=> v_emb))::real;
+      if v_cos > v_best_cos then
+        v_best_cos := v_cos;
+        v_best_seq := v_seed_seqs[i];
+      end if;
+    end loop;
+    if v_best_cos >= p_threshold then
+      v_assignments := v_assignments
+        || jsonb_build_object(rec.id::text, v_best_seq);
+    else
+      v_next_seq := v_next_seq + 1;
+      v_seed_ids := array_append(v_seed_ids, rec.id);
+      v_seed_seqs := array_append(v_seed_seqs, v_next_seq);
+      v_assignments := v_assignments
+        || jsonb_build_object(rec.id::text, v_next_seq);
+    end if;
+  end loop;
+
+  return query
+    with assigned as (
+      select s.id as a_id,
+             ((v_assignments ->> (s.id::text))::int) as a_seq
+        from public.samskaras s
+       where s.user_id = v_uid
+         and s.prediction_embedding is not null
+         and (p_tier is null or s.tier = p_tier)
+    ),
+    sizes as (
+      select a_seq, count(*)::int as a_size
+        from assigned
+       where a_seq is not null
+       group by a_seq
+    )
+    select a.a_id, a.a_seq, sz.a_size
+      from assigned a
+      join sizes sz on sz.a_seq = a.a_seq;
+end $$;
+
+-- Resolve a samskara's provenance rows to human-readable labels for the
+-- Corpus detail view. Tier-2 compounds carry kind='samskara' rows
+-- pointing at their tier-1 children (label = child prediction, plus the
+-- child's tier); tier-1 carry 'substrate' (label = situation) and
+-- 'association' (label = articulated_relation). ref_id has no FK, so a
+-- target deleted since minting yields a null label - the UI renders
+-- that as "(removed)". `asc2` alias because `asc` is reserved.
+create or replace function public.samskara_provenance_detail(
+  p_samskara_id uuid
+) returns table (
+  kind text,
+  ref_id uuid,
+  weight real,
+  label text,
+  ref_tier int
+)
+language sql stable security invoker as $$
+  select p.kind,
+         p.ref_id,
+         p.weight,
+         case p.kind
+           when 'samskara' then cs.prediction
+           when 'substrate' then sub.situation
+           when 'association' then asc2.articulated_relation
+         end as label,
+         cs.tier as ref_tier
+    from public.samskara_provenance p
+    left join public.samskaras cs
+      on p.kind = 'samskara' and cs.id = p.ref_id and cs.user_id = auth.uid()
+    left join public.samskara_substrate sub
+      on p.kind = 'substrate' and sub.id = p.ref_id and sub.user_id = auth.uid()
+    left join public.samskara_associations asc2
+      on p.kind = 'association' and asc2.id = p.ref_id and asc2.user_id = auth.uid()
+   where p.samskara_id = p_samskara_id
+     and p.user_id = auth.uid()
+   order by p.weight desc;
+$$;
+
+-- One-row corpus-wide health snapshot for the Health panel. Each column
+-- maps to a pipeline pathology the operator otherwise can't see:
+--   - pending_assimilate / pending_embed: backlog the formation/embed
+--     workers haven't drained (growing = a worker is down or starving).
+--   - fires_unresolved_window: fires awaiting reaction-classify inside
+--     the 1-10min window (in-flight, normal in small numbers).
+--   - fires_aged_out: unresolved fires past the 10min window - signal
+--     the assistant was shaped by but the model never learned from.
+--   - orphan_fires: fires pointing at a deleted samskara (merge/delete
+--     bug smell).
+--   - stuck_*_claims: rows a worker claimed then died on (holder set,
+--     expiry past). TTL releases them on the next claim, so a high
+--     count means workers are crashing mid-claim, not just idle.
+--   - near_dead / never_fired: corpus-quality signals (decay working,
+--     mints that never match anything).
+-- One round trip beats a dozen head-counts from the client.
+create or replace function public.samskara_health_snapshot()
+returns table (
+  total_samskaras int,
+  tier1 int,
+  tier2 int,
+  near_dead int,
+  never_fired int,
+  associations int,
+  substrate_total int,
+  pending_assimilate int,
+  pending_embed int,
+  fires_total int,
+  fires_unresolved_window int,
+  fires_aged_out int,
+  orphan_fires int,
+  stuck_assimilate_claims int,
+  stuck_embed_claims int
+)
+language sql stable security invoker as $$
+  select
+    (select count(*) from public.samskaras s
+      where s.user_id = auth.uid())::int,
+    (select count(*) from public.samskaras s
+      where s.user_id = auth.uid() and s.tier = 1)::int,
+    (select count(*) from public.samskaras s
+      where s.user_id = auth.uid() and s.tier = 2)::int,
+    (select count(*) from public.samskaras s
+      where s.user_id = auth.uid() and s.health < 0.2)::int,
+    (select count(*) from public.samskaras s
+      where s.user_id = auth.uid() and s.fire_count = 0)::int,
+    (select count(*) from public.samskara_associations a
+      where a.user_id = auth.uid())::int,
+    (select count(*) from public.samskara_substrate sub
+      where sub.user_id = auth.uid())::int,
+    (select count(*) from public.samskara_substrate sub
+      where sub.user_id = auth.uid() and sub.situation is null)::int,
+    (select count(*) from public.samskara_substrate sub
+      where sub.user_id = auth.uid()
+        and sub.situation_embedding is null
+        and sub.situation is not null)::int,
+    (select count(*) from public.samskara_fires f
+      where f.user_id = auth.uid())::int,
+    (select count(*) from public.samskara_fires f
+      where f.user_id = auth.uid()
+        and f.was_confirmed is null
+        and f.fired_at <= now() - interval '1 minute'
+        and f.fired_at >= now() - interval '10 minutes')::int,
+    (select count(*) from public.samskara_fires f
+      where f.user_id = auth.uid()
+        and f.was_confirmed is null
+        and f.fired_at < now() - interval '10 minutes')::int,
+    (select count(*) from public.samskara_fires f
+      where f.user_id = auth.uid()
+        and not exists (
+          select 1 from public.samskaras s where s.id = f.samskara_id
+        ))::int,
+    (select count(*) from public.samskara_substrate sub
+      where sub.user_id = auth.uid()
+        and sub.assimilate_claim_holder is not null
+        and sub.assimilate_claim_expires < now())::int,
+    (select count(*) from public.samskara_substrate sub
+      where sub.user_id = auth.uid()
+        and sub.embedding_claim_holder is not null
+        and sub.embedding_claim_expires < now())::int
+$$;
+
+-- Windowed activity rates for the Health panel. Computed from existing
+-- timestamps over the last p_days - no metrics table, no cron. Answers
+-- "is the pipeline alive and converging" (mints flowing, fires
+-- happening, reactions actually resolving) without storing history.
+create or replace function public.samskara_rates(p_days int default 7)
+returns table (
+  window_days int,
+  mints int,
+  fires int,
+  resolved int,
+  unresolved int,
+  resolution_pct real
+)
+language sql stable security invoker as $$
+  with w as (
+    select f.was_confirmed
+      from public.samskara_fires f
+     where f.user_id = auth.uid()
+       and f.fired_at >= now() - make_interval(days => p_days)
+  )
+  select
+    p_days,
+    (select count(*) from public.samskaras s
+      where s.user_id = auth.uid()
+        and s.created_at >= now() - make_interval(days => p_days))::int,
+    (select count(*) from w)::int,
+    (select count(*) from w where was_confirmed is not null)::int,
+    (select count(*) from w where was_confirmed is null)::int,
+    (case when (select count(*) from w) = 0 then 0::real
+          else ((select count(*) from w where was_confirmed is not null)::real
+                / (select count(*) from w)::real * 100.0) end)::real
+$$;
+
 -- Journal feature removed -------------------------------------------------
 --
 -- The daily-journal subsystem (entries, spam-filter classifier, thread

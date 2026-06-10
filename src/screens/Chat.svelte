@@ -138,6 +138,7 @@
   type MemoriesComponent = typeof import('./Memories.svelte').default;
   type WikiComponent = typeof import('./Wiki.svelte').default;
   type LibraryComponent = typeof import('./Library.svelte').default;
+  type SamskarasComponent = typeof import('./Samskaras.svelte').default;
   type SettingsComponent = typeof import('./Settings.svelte').default;
   type HelpComponent = typeof import('./Help.svelte').default;
   type SamskaraComponent = typeof import('./Samskara.svelte').default;
@@ -145,6 +146,7 @@
   type BiasProfileComponent = typeof import('./BiasProfile.svelte').default;
   type RecallComponent = typeof import('./Recall.svelte').default;
   import WikiList from '../components/WikiList.svelte';
+  import SamskaraBrowseList from '../components/SamskaraBrowseList.svelte';
   import LibraryList from '../components/LibraryList.svelte';
   import IntuitionPill from '../components/IntuitionPill.svelte';
   import BiasPill from '../components/BiasPill.svelte';
@@ -283,6 +285,7 @@
   let MemoriesComp: MemoriesComponent | null = $state(null);
   let WikiComp: WikiComponent | null = $state(null);
   let LibraryComp: LibraryComponent | null = $state(null);
+  let SamskarasComp: SamskarasComponent | null = $state(null);
   let SettingsComp: SettingsComponent | null = $state(null);
   let HelpComp: HelpComponent | null = $state(null);
   let SamskaraComp: SamskaraComponent | null = $state(null);
@@ -324,6 +327,9 @@
     }
     if (drawerTab === 'library' && !LibraryComp) {
       void import('./Library.svelte').then((m) => (LibraryComp = m.default));
+    }
+    if (drawerTab === 'samskara' && !SamskarasComp) {
+      void import('./Samskaras.svelte').then((m) => (SamskarasComp = m.default));
     }
   });
   $effect(() => {
@@ -449,7 +455,7 @@
    * replaceState so a tab flip doesn't fill history with UI-chrome
    * entries.
    */
-  const drawerTab = $derived<'chats' | 'recipes' | 'memories' | 'wiki' | 'library'>(
+  const drawerTab = $derived<'chats' | 'recipes' | 'memories' | 'wiki' | 'library' | 'samskara'>(
     route.drawer ?? 'chats'
   );
   // Recipe and memory search/listing state has moved to the
@@ -496,6 +502,15 @@
     if (app.supabase && !documentStore.loaded && !documentStore.loading) {
       void runDocumentSearch(app.supabase);
     }
+  }
+
+  // Samskara diagnostics tab. The SamskaraBrowseList sidebar loads its
+  // own corpus on mount (its tier/sort/query effects fire once the
+  // component renders), so this only has to flip the route - whether the
+  // user clicks the tab or lands on ?drawer=samskara directly, mounting
+  // the list is what triggers the fetch.
+  function onPickSamskaraTab(): void {
+    navigate({ drawer: 'samskara' }, { replace: true });
   }
 
   // When the user (or a popstate pop) lands on `?drawer=recipes`
@@ -5993,6 +6008,17 @@
               onclick={() => onPickLibraryTab()}
             >Library</button>
           </div>
+          <div class="row thread-row">
+            <button
+              type="button"
+              role="tab"
+              class="thread grow"
+              class:active={drawerTab === 'samskara'}
+              aria-selected={drawerTab === 'samskara'}
+              onclick={() => onPickSamskaraTab()}
+              title="Samskara diagnostics - what the model has formed about you, and pipeline health"
+            >Samskara</button>
+          </div>
         </div>
       </header>
       {#if drawerTab === 'chats'}
@@ -6234,6 +6260,11 @@
              listing. Clicking an article surfaces it in the main
              panel. onSelect mirrors the other tabs on mobile. -->
         <WikiList onSelect={closeDrawerOnMobile} />
+      {:else if drawerTab === 'samskara'}
+        <!-- Samskara diagnostics tab. SamskaraBrowseList owns the
+             search, the tier/sort/hide-similar controls, and selection.
+             onSelect mirrors the other tabs on mobile. -->
+        <SamskaraBrowseList onSelect={closeDrawerOnMobile} />
       {:else}
         <!-- Library tab. LibraryList owns the search and newest-first
              listing. Clicking a document surfaces it in the main panel.
@@ -6553,6 +6584,12 @@
           <TopBarActions {actions} menuLabel="Wiki actions" />
           <div class="title-wrap">
             <span class="title-btn panel-section-label">Wiki</span>
+          </div>
+        {:else if drawerTab === 'samskara'}
+          <!-- Samskara diagnostics top-bar. Read-only surface, so no
+               action buttons - just the static section label. -->
+          <div class="title-wrap">
+            <span class="title-btn panel-section-label">Samskara</span>
           </div>
         {:else}
           <!-- Library top-bar. The upload affordance lives inline in
@@ -7885,6 +7922,13 @@
             bind:triggerChangelogView={wikiChangelogTrigger}
             bind:triggerSkippedView={wikiSkippedTrigger}
           />
+        {/if}
+      {:else if drawerTab === 'samskara'}
+        <!-- Samskara diagnostics panel. Read-only Corpus + Health
+             sub-views; the sidebar SamskaraBrowseList drives
+             route.samskara_id for the Corpus detail. -->
+        {#if SamskarasComp}
+          <SamskarasComp />
         {/if}
       {:else}
         <!-- Library panel. Inline, no modal chrome. The sidebar LibraryList

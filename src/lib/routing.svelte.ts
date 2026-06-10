@@ -54,7 +54,7 @@ export type Modal =
   | 'intuition'
   | 'bias-profile'
   | 'recall';
-export type DrawerTab = 'chats' | 'recipes' | 'memories' | 'wiki' | 'library';
+export type DrawerTab = 'chats' | 'recipes' | 'memories' | 'wiki' | 'library' | 'samskara';
 
 export interface Route {
   cid: string | null;
@@ -83,6 +83,13 @@ export interface Route {
    * mirrors the Wiki tab's "list in drawer, single item in panel" pattern.
    */
   document_id: string | null;
+  /**
+   * Samskara id for the focused samskara in the Corpus panel of the
+   * Samskara diagnostics tab. Absent means the panel shows the Health
+   * or Summary sub-view, or the Corpus empty-state. Same "list in
+   * drawer, detail in panel" shape as `memory` / `wiki_article_id`.
+   */
+  samskara_id: string | null;
 }
 
 const ROUTED_KEYS = [
@@ -94,6 +101,7 @@ const ROUTED_KEYS = [
   'memory',
   'wiki_article_id',
   'document_id',
+  'samskara_id',
 ] as const;
 const MODAL_VALUES: readonly Modal[] = [
   'settings',
@@ -109,6 +117,7 @@ const DRAWER_VALUES: readonly DrawerTab[] = [
   'memories',
   'wiki',
   'library',
+  'samskara',
 ];
 
 export const route = $state<Route>({
@@ -120,6 +129,7 @@ export const route = $state<Route>({
   memory: null,
   wiki_article_id: null,
   document_id: null,
+  samskara_id: null,
 });
 
 function readEnum<T extends string>(
@@ -148,6 +158,7 @@ export function parseUrl(search: string = typeof location !== 'undefined' ? loca
     memory: readString(params, 'memory'),
     wiki_article_id: readString(params, 'wiki_article_id'),
     document_id: readString(params, 'document_id'),
+    samskara_id: readString(params, 'samskara_id'),
   };
 }
 
@@ -171,6 +182,7 @@ export function buildSearch(
   if (r.memory) params.set('memory', r.memory);
   if (r.wiki_article_id) params.set('wiki_article_id', r.wiki_article_id);
   if (r.document_id) params.set('document_id', r.document_id);
+  if (r.samskara_id) params.set('samskara_id', r.samskara_id);
   const s = params.toString();
   return s ? `?${s}` : '';
 }
@@ -220,6 +232,10 @@ function applyPatch(patch: Partial<Route>): boolean {
   }
   if (patch.document_id !== undefined && patch.document_id !== route.document_id) {
     route.document_id = patch.document_id;
+    changed = true;
+  }
+  if (patch.samskara_id !== undefined && patch.samskara_id !== route.samskara_id) {
+    route.samskara_id = patch.samskara_id;
     changed = true;
   }
   return changed;
@@ -288,6 +304,7 @@ export const __test = {
     route.memory = null;
     route.wiki_article_id = null;
     route.document_id = null;
+    route.samskara_id = null;
   },
   syncFromUrl,
 };

@@ -936,15 +936,59 @@ summarizer reads samskaras to feed the agent.
   whatever's currently in the database and proceeds. If the
   formation worker is hours behind, the model just operates on
   staler bias.
-- **Samskara is almost-opaque to the user.** The only UI
-  surface is the bottom-right mood pill showing one valence-
-  mapped emoji per mint. No prediction text leaks; showing it
-  would invite the user to reason about their own bias model
-  and collapses the "absorption over disclaimer" framing. Deep
-  visibility remains log-only (every fire with score/cohort,
-  every mint, every reaction decision, every decay event) -
-  the toasts are a glance cue, not a debugging surface. Keep
-  the logs dense and stable.
+- **The CONVERSATION is opaque; the operator is not.** The
+  "almost-opaque to the user" principle protects two things: the
+  in-chat experience (no prediction text leaks inline - the only
+  chat-surface cue is the bottom-right mood pill, one valence-mapped
+  emoji per mint) and the model itself (no samskara tool, so it can't
+  reason about or game its own bias). Both targets are about the
+  conversation. They do NOT forbid a deliberately-opened, read-only
+  operator surface - that's the same category as the Logs drawer. nak
+  is single-user; the person who opens such a surface is the operator
+  inspecting their own system, not a chat subject being shown their
+  bias model mid-conversation. So prediction text appears in the
+  cohort dropdown, the diagnostics modal, and the Samskara diagnostics
+  tab (below) - all operator surfaces - while the chat stays
+  mood-pill-only. When you touch this, keep the line crisp: nothing in
+  an operator surface may bleed prediction text into the chat
+  transcript or hand the model a way to read its own corpus.
+
+## Observability tab
+
+A first-class drawer tab (sibling to chats/memories/wiki/recipes,
+`drawer=samskara`) is the operator's read-only window into the
+pipeline. Two sub-views today:
+
+- **Corpus** - browse/search/filter/sort the samskara corpus, with a
+  tier filter and a "hide similar" cosine slider (the corpus analog of
+  the cohort dropdown's cluster slider). Selecting a row shows its
+  detail + provenance; for a tier-2 the provenance is its tier-1
+  children. Backed by `listSamskarasPage`,
+  `searchSamskarasByEmbedding` / `searchSamskarasByText`,
+  `samskara_cluster_corpus`, and `samskara_provenance_detail`.
+  Pieces: `src/screens/Samskaras.svelte`,
+  `src/components/SamskaraBrowseList.svelte`,
+  `src/lib/samskara-browse-store.svelte.ts`,
+  `src/lib/ui/samskara-browse.ts`.
+- **Health** - silent-failure detection computed live (no stored
+  history): backlog depths, fires aged out unresolved, worker-lease
+  liveness, compound-summary staleness, orphan fires / stuck claims,
+  and windowed mint/fire/resolution rates. Backed by
+  `samskara_health_snapshot`, `samskara_rates`, the `worker_leases`
+  read, and the severity thresholds in `src/lib/ui/samskara-browse.ts`
+  (named constants, tune against observed behaviour). Piece:
+  `src/components/SamskaraHealthPanel.svelte`.
+
+Read-only by design - no delete/pin/edit. Curation would re-open the
+"operator games the bias model" question; if it's ever wanted it's a
+deliberate separate decision. The compound-summary + mood-legend still
+live in the standalone diagnostics modal (`Samskara.svelte`); folding
+those in as a third sub-view and retiring the modal is a follow-up.
+
+Search ranks by plain cosine (`samskara_search_by_prediction`), NOT
+the `samskara_fire_top_k` formula - browse wants closest-to-query, not
+most-likely-to-fire, so health/confidence are deliberately left out of
+the ranking.
 
 ## Where to go next
 

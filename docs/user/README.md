@@ -58,6 +58,9 @@ You can reach these pages two ways:
   and how to inspect what it has on you.
 - [Cookbook](./cookbook.md) — a personal store for Cooklang recipes,
   with a dedicated modal and a tab in the conversation drawer.
+- [Samskara](./samskara.md) — the Samskara tab in the conversation
+  drawer: a read-only window into the instincts Nak has formed about
+  you, plus a health readout that surfaces silent pipeline failures.
 - [Search](./search.md) — finding a thread, recipe, or wiki article
   by meaning across your history.
 - [Keyboard shortcuts](./shortcuts.md) — the keys that save you the
