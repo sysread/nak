@@ -76,4 +76,5 @@ changelog. Delete QA-created articles by hand if forged.
 | ---- | --- | ------ | ------ | ----- |
 | 2026-06-09 | local | 7962dbd | pass (1,2) | concurrent shim+curl ticks claimed different threads; real wiki_update on the Nak article; retry kind=ok |
 | 2026-06-09 | local | aef4b0c | pass (3,4,5) | textbook sweep (delete + merge + changelog); manual run exact scoped rename; collision -> busy; gate refused stamped user |
-| pending | local | post-A1/A3 | - | re-verify (3)+(4) on the factory route + explicit narration wrapper - both code paths changed today |
+| 2026-06-10 | local | 8877595 | pass (4) | post-A1/A3 manual run end to end: confirm card -> live strip with model-narrated activities ("Scanning all wiki articles...") through withProgressNarration + the manualRunHandler factory -> result card with final text + "3 tool calls over 1 article" |
+| 2026-06-10 | local | 8877595 | pass (3, by shared path) | sweepHandler factory proven by the rem/deep-sleep/reflection sweep ticks earlier today (same code path); librarian sweep semantics unchanged since the 2026-06-09 pass |

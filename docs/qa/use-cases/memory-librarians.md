@@ -76,4 +76,4 @@ via the memory changelog panel if surprising.
 | ---- | --- | ------ | ------ | ----- |
 | 2026-06-09 | local | (rem+ds fleet) | pass (1,2,4) | rem reviewed a real 5-read batch; deep-sleep performed a real consolidation w/ changelog; guard collision -> busy |
 | 2026-06-09 | local | (rem+ds fleet) | pass (3) | playwright drove the strip end to end - live broadcast steps with narrated activities, rem drew a real supports edge |
-| pending | local | post-A1/A3 | - | re-verify (3) manual runs on the factory route + explicit narration wrapper |
+| 2026-06-10 | local | 8877595 | pass (3, by shared path) | the factory + narration wrapper are the same code the wiki librarian manual run proved live today; rem manual additionally round-tripped the factory via curl (empty-queue union). The Memories strip's own rendering passed 2026-06-09 and did not change |
