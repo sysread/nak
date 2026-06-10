@@ -556,14 +556,22 @@ every gate task `depends = ["deps"]`, which runs `pnpm install
 up-to-date tree.
 
 ```sh
-mise run check        # full local gate: deps + test + svelte-check + lint + build
-mise run test         # vitest run
-mise run markdownlint # markdownlint-cli2 only
-mise run knip         # dead-code scan; NOT in the gate by design
-mise run dev-frontend # Vite dev server only, no backend
-mise run dev-start    # isolated local dev: local Supabase stack + Vite
-mise run build        # production PWA build
+mise run check           # full local gate: deps + test + deno check/test + svelte-check + lint + build
+mise run test            # vitest run
+mise run functions-test  # Deno unit tests for the edge functions
+mise run functions-check # deno check over every edge-function entrypoint
+mise run markdownlint    # markdownlint-cli2 only
+mise run knip            # dead-code scan; NOT in the gate by design
+mise run dev-frontend    # Vite dev server only, no backend
+mise run dev-start       # isolated local dev: local Supabase stack + Vite
+mise run build           # production PWA build
 ```
+
+The Deno island (functions-check + functions-test) rides the gate
+because nothing else covers it: `supabase functions deploy` bundles
+with esbuild and never type-checks, vitest never sees Deno code, and
+`deno test` only type-checks what the tests import - functions-check
+covers the full import graph each function deploys with.
 
 If you prefer raw pnpm (or mise isn't available - ephemeral
 sandboxes, first-time checkouts), the manual sequence is

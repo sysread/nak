@@ -9,22 +9,25 @@
 // a thin shell around this, so the request-shaping and response-parsing logic
 // is unit-testable with a fake fetch and no network (see tests/).
 
+// The error-kind vocabulary is owned by venice-stream.ts: kinds are
+// wire contract (the browser maps them to UI affordances), and the
+// streaming consumer constructs kinds ('truncated', 'auth') this
+// module's helpers never produce. A type-only import keeps this file
+// runtime-pure while guaranteeing the class and the wire union cannot
+// drift apart.
+import type { VeniceErrorKind } from './venice-stream.ts';
+
 export interface EmbeddingResponse {
   data: { index: number; embedding: number[] }[];
 }
 
-// The 'auth' kind covers Venice 401/403 - bad or missing key. Added
-// when the streaming-root migration started classifying Venice
-// auth failures distinctly so the function can surface them as a
-// terminal error event rather than collapsing to generic http.
-// The streaming SSE consumer in venice/getStreamingCompletion.ts is
-// the first caller that constructs a VeniceError with this kind; the
-// existing non-streaming helpers below have always collapsed 401/403
-// to 'http' and continue to do so (the function-side handlers route
-// non-OK Venice responses to 502 either way, and changing the kind
-// the embed/usage/complete/etc paths surface would change their
-// handler error mapping unrelated to streaming).
-export type VeniceErrorKind = 'rate_limit' | 'auth' | 'http' | 'network' | 'parse';
+// Kind discipline within this file: the non-streaming helpers below
+// collapse ALL non-OK Venice responses - including 401/403 - to
+// 'http' on purpose. Their function-side handlers route every non-OK
+// to 502 either way; surfacing a finer kind from the embed/usage/
+// complete paths would change their handler error mapping with no
+// consumer asking for it. Only the streaming SSE consumer
+// (venice/getStreamingCompletion.ts) uses the finer-grained kinds.
 
 export class VeniceError extends Error {
   readonly kind: VeniceErrorKind;

@@ -111,6 +111,20 @@ function writeConsole(entry: SerializableLogEntry): void {
   }
 }
 
+// Deno.env.get THROWS NotCapable when the process was started without
+// env permission - `deno test` runs sandboxed by default, so every
+// agent test that reaches createEdgeLogger would die on the read
+// rather than degrade to console-only logging. For this logger a
+// denied read and an unset variable mean the same thing: no broadcast
+// endpoint, console mirror only.
+function envOrUndefined(name: string): string | undefined {
+  try {
+    return Deno.env.get(name);
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Build a logger bound to one user + subsystem. `source` is the drawer's
  * grouping tag (e.g. 'reflection'), matching the browser createLogger
@@ -125,9 +139,9 @@ export function createEdgeLogger(
   opts: CreateEdgeLoggerOpts = {},
 ): EdgeLogger {
   const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
-  const url = opts.supabaseUrl ?? Deno.env.get('SUPABASE_URL') ?? '';
+  const url = opts.supabaseUrl ?? envOrUndefined('SUPABASE_URL') ?? '';
   const serviceKey =
-    opts.serviceKey ?? Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+    opts.serviceKey ?? envOrUndefined('SUPABASE_SERVICE_ROLE_KEY') ?? '';
   const now = opts.now ?? (() => Date.now());
   const endpoint = url ? `${url}/realtime/v1/api/broadcast` : '';
   const topic = `logs:${userId}`;

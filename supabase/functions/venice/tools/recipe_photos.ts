@@ -35,7 +35,12 @@ interface PhotoMetaRow {
   label: string | null;
 }
 
-async function sha256Hex(bytes: Uint8Array): Promise<string> {
+// The parameter is ArrayBuffer-backed by declaration because
+// crypto.subtle.digest rejects SharedArrayBuffer-backed views, and
+// TypeScript's generic Uint8Array<ArrayBufferLike> default would admit
+// them. Callers construct fresh views over blob.arrayBuffer(), so the
+// narrower type costs nothing.
+async function sha256Hex(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', bytes);
   const view = new Uint8Array(digest);
   let out = '';

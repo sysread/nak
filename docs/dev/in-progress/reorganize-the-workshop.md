@@ -832,24 +832,27 @@ half-alive" never reads as intentional.
   and the branch rebases, that whole area needs a fresh read before
   any plan touches it.
 - **Pre-existing Deno type errors, surfaced by a Deno upgrade.**
-  `deno check venice/index.ts` fails on three errors in files this
-  migration never touched (found 2026-06-09 while checking the wiki
-  port; a brew-upgraded Deno tightened the checks):
-  - `venice/getStreamingCompletion.ts:299` and `:519` - the code
-    compares/constructs a `VeniceError` with kind `'truncated'`, but
-    `'truncated'` is not a member of the `VeniceErrorKind` union in
-    `_shared/venice.ts`. Either the union is missing a legitimate
-    kind or the truncation path can never match - both readings are
-    a bug; figure out which behavior is intended.
-  - `venice/tools/recipe_photos.ts:39` - `crypto.subtle.digest`
-    rejects `Uint8Array<ArrayBufferLike>` under the newer
-    `BufferSource` typing (the SharedArrayBuffer-aware split).
-  Latent because nothing in the gate runs `deno check` over these
-  files - `deno test` only type-checks what the test files import,
-  and the deploy bundles with esbuild, no type check. Worth deciding
-  whether the functions tree should get a `deno check` gate once the
-  errors are fixed, so the next strictness bump surfaces in CI
-  instead of mid-task.
+  [CLOSED 2026-06-10.] All three fixed, and the gap that hid them is
+  closed:
+  - The `'truncated'` errors were type-level drift between two
+    parallel `VeniceErrorKind` unions - `_shared/venice.ts` (owning
+    the `VeniceError` class, 5 kinds) and `_shared/venice-stream.ts`
+    (the wire contract, 7 kinds). Runtime behavior was fine (the
+    throw and the catch agreed on the string); the class union was
+    just stale. Fix: venice.ts now type-imports the union from
+    venice-stream.ts - one vocabulary, no second copy to drift.
+  - `recipe_photos.ts` - `sha256Hex` now takes
+    `Uint8Array<ArrayBuffer>`; its only caller constructs a fresh
+    ArrayBuffer-backed view.
+  - The gate decision: YES. New `functions-check` task runs
+    `deno check` over all three function entrypoints (full deploy
+    import graph), and the `check` gate now depends on both
+    `functions-check` and `functions-test` - so the Deno island
+    gates PRs and CI like the rest of the tree. Fixing this also
+    surfaced that `createEdgeLogger`'s env reads threw `NotCapable`
+    under deno test's default sandbox; the logger now treats a
+    denied env read as "unset" (console-only logging), keeping the
+    test suite permission-free.
 - **Cookbook-change event bus lost its publisher.**
   `src/lib/cookbook-events.ts` exposes `onCookbookChange` (subscribe)
   and used to expose `notifyCookbookChanged` (a `window` CustomEvent
