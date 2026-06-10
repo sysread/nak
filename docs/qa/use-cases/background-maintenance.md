@@ -59,4 +59,4 @@ state is a no-op.
 | Date | Env | Commit | Result | Notes |
 | ---- | --- | ------ | ------ | ----- |
 | 2026-06-10 | local | b66385f | pass (1) | nulled memory re-embedded, summary embedded=1, per-user tally fed the drawer publish |
-| pending | local | - | - | (2),(3) not yet exercised live - the unit suites cover the drivers; the drawer lines and the user_id-bearing RPC columns want one live pass |
+| 2026-06-10 | local | 7da4293 | pass (2,3) | forged 40-day-dormant attachment expired (storage_path nulled, expired=1); forged orphan recipe image reclaimed (row + object delete, reclaimed=1); per-user tallies non-empty so both drawer publishes fired |
