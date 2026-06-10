@@ -43,6 +43,7 @@ import {
   type AgentCompleteFn,
   type AgentProgressEvent,
   type AgentToolContext,
+  withProgressNarration,
 } from './_run.ts';
 
 // Mirror of agentModel('deepSleep').id in src/lib/models/index.ts - a
@@ -473,7 +474,12 @@ async function runReview(args: {
     {
       model: DEEP_SLEEP_MODEL,
       messages: [{ role: 'system', content: promptText }],
-      toolbox: buildMemoryLibrarianToolbox(),
+      // Narration params only when someone is watching live (the
+      // manual run's progress strip); the cron sweep keeps the wire
+      // bytes free of them.
+      toolbox: args.onProgress
+        ? withProgressNarration(buildMemoryLibrarianToolbox())
+        : buildMemoryLibrarianToolbox(),
       baseCtx,
       apiKey,
       signal: new AbortController().signal,

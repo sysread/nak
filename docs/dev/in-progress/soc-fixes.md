@@ -41,6 +41,17 @@ and should land on the collapsed shape.
   must know empty-means-no-current-thread. Make it
   `threadId: string | null` (or a named discriminant) so the two
   caller modes are explicit at the type level.
+  [Scoping note, 2026-06-10: this ripples further than the audit
+  guessed. The registered ToolDefs that branch on the sentinel
+  consume the CHAT-side `ToolContext` (the agent adapters construct
+  that shape), so `string | null` has to land on both interfaces -
+  which means the ~6 chat-only tools that use `ctx.threadId`
+  directly in queries (update_title, toggle_tools, analyze_image,
+  doc_create, recipe_photos) each need a require-thread guard. Doing
+  only the agent side would just re-encode the sentinel at the
+  adapter boundary. It is a self-contained PR, not a rider; the
+  guard helper should throw loudly, which is strictly better than
+  today's silent no-match query on ''.]
 - **A5. Split `handleStream`'s `reconnectOnly` mode** into two
   handlers behind the route (rides A1). Fresh-stream and reconnect
   share the JWT/ownership preamble and then diverge completely -

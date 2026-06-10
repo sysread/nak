@@ -133,16 +133,23 @@ function injectActivityParam(
 }
 
 /**
- * `withActivity` is true only when the caller attached an onProgress
- * listener: narration costs the model a few output tokens per call,
- * so agents nobody is watching live (reflection, the wiki sweep)
- * keep their wire bytes free of it.
+ * Wrap a toolbox so every tool's wire schema carries the `activity`
+ * narration parameter. Callers apply this EXPLICITLY on runs a user
+ * watches live (the manual-run routes); narration costs the model a
+ * few output tokens per call, so agents nobody is watching (the cron
+ * sweeps, reflection) pass their toolbox bare. The runner itself
+ * never alters schemas - attaching onProgress without this wrapper
+ * just means tool events arrive with an empty `activity` string.
  */
-function buildToolboxWireList(
-  toolbox: Toolbox,
-  withActivity: boolean,
-): AgentTool['wire'][] {
-  return toolbox.tools.map((t) => (withActivity ? injectActivityParam(t.wire) : t.wire));
+export function withProgressNarration(toolbox: Toolbox): Toolbox {
+  return {
+    name: toolbox.name,
+    tools: toolbox.tools.map((t) => ({ ...t, wire: injectActivityParam(t.wire) })),
+  };
+}
+
+function buildToolboxWireList(toolbox: Toolbox): AgentTool['wire'][] {
+  return toolbox.tools.map((t) => t.wire);
 }
 
 async function executeToolboxCall(
@@ -222,10 +229,10 @@ export interface RunHeadlessAgentOptions {
   /** Test seam; defaults to toolComplete (the live Venice call). */
   complete?: AgentCompleteFn;
   /**
-   * Optional live-progress hook. Attaching it also injects the
-   * `activity` narration parameter into every tool's wire schema -
-   * see buildToolboxWireList. Best-effort: a listener that throws
-   * does not abort the loop.
+   * Optional live-progress hook. Events only - the hook never alters
+   * what the model sees; pair it with withProgressNarration() on the
+   * toolbox when the run should also narrate its tool calls.
+   * Best-effort: a listener that throws does not abort the loop.
    */
   onProgress?: (event: AgentProgressEvent) => void;
 }
@@ -297,7 +304,7 @@ export async function runHeadlessAgent(
       // swallow; progress is observability, not control flow.
     }
   };
-  const wireList = buildToolboxWireList(toolbox, opts.onProgress !== undefined);
+  const wireList = buildToolboxWireList(toolbox);
 
   for (let round = 0; round < maxRounds; round += 1) {
     if (signal.aborted) break;

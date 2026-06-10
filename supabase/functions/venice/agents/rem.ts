@@ -45,6 +45,7 @@ import {
   type AgentCompleteFn,
   type AgentProgressEvent,
   type AgentToolContext,
+  withProgressNarration,
 } from './_run.ts';
 
 // Mirror of agentModel('rem').id in src/lib/models/index.ts - a static
@@ -371,7 +372,12 @@ async function processOneConversation(args: {
       {
         model: REM_MODEL,
         messages: [{ role: 'system', content: promptText }],
-        toolbox: buildMemoryLibrarianToolbox(),
+        // Narration params only when someone is watching live (the
+        // manual run's progress strip); the cron sweep keeps the wire
+        // bytes free of them.
+        toolbox: args.onProgress
+          ? withProgressNarration(buildMemoryLibrarianToolbox())
+          : buildMemoryLibrarianToolbox(),
         baseCtx,
         apiKey,
         signal: new AbortController().signal,

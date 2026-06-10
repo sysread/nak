@@ -59,6 +59,7 @@ import {
   type AgentTool,
   type AgentToolContext,
   type Toolbox,
+  withProgressNarration,
 } from './_run.ts';
 
 // Mirror of agentModel('wikiLibrarian').id in src/lib/models/index.ts
@@ -972,7 +973,12 @@ async function runLibrarianReview(args: LibrarianReviewArgs): Promise<LibrarianR
     {
       model: WIKI_LIBRARIAN_MODEL,
       messages: [{ role: 'system', content: promptText }],
-      toolbox: buildLibrarianToolbox(),
+      // Narration params only when someone is watching live (the
+      // manual run's progress strip); the scheduled sweep and the
+      // chat-dispatched tool keep the wire bytes free of them.
+      toolbox: args.onProgress
+        ? withProgressNarration(buildLibrarianToolbox())
+        : buildLibrarianToolbox(),
       baseCtx,
       apiKey,
       signal: args.signal,

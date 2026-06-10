@@ -10,6 +10,7 @@ import {
   runHeadlessAgent,
   type AgentProgressEvent,
   type Toolbox,
+  withProgressNarration,
 } from '../venice/agents/_run.ts';
 import type { ToolCompletionResult } from '../venice/tools/_venice_complete.ts';
 
@@ -89,7 +90,7 @@ Deno.test('scripted rounds drive the loop: tool round then terminal text', async
   assertEquals(calls.length, 2);
 });
 
-Deno.test('onProgress emits thinking/tool events and injects the activity param', async () => {
+Deno.test('onProgress emits thinking/tool events; withProgressNarration injects the activity param', async () => {
   const events: AgentProgressEvent[] = [];
   // deno-lint-ignore no-explicit-any
   let wireSeen: any[] = [];
@@ -98,7 +99,7 @@ Deno.test('onProgress emits thinking/tool events and injects the activity param'
     {
       model: 'm',
       messages: [{ role: 'user', content: 'go' }],
-      toolbox: ECHO_TOOLBOX,
+      toolbox: withProgressNarration(ECHO_TOOLBOX),
       baseCtx: FAKE_BASE_CTX,
       apiKey: 'k',
       signal: new AbortController().signal,
@@ -147,7 +148,7 @@ Deno.test('onProgress emits thinking/tool events and injects the activity param'
   assertEquals(params.required.includes('activity'), true);
 });
 
-Deno.test('without onProgress the wire schemas carry no activity param', async () => {
+Deno.test('a bare toolbox carries no activity param even with onProgress attached', async () => {
   // deno-lint-ignore no-explicit-any
   let wireSeen: any[] = [];
   await runHeadlessAgent(
@@ -158,6 +159,9 @@ Deno.test('without onProgress the wire schemas carry no activity param', async (
       baseCtx: FAKE_BASE_CTX,
       apiKey: 'k',
       signal: new AbortController().signal,
+      // The hook alone must not alter what the model sees - schema
+      // narration is opt-in via withProgressNarration only.
+      onProgress: () => {},
       // deno-lint-ignore require-await
       complete: async (opts) => {
         // deno-lint-ignore no-explicit-any
