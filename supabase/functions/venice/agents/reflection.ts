@@ -66,11 +66,15 @@ import {
 // hardcoding it here stays faithful after the cutover.
 const REFLECTION_MODEL = 'deepseek-v4-flash';
 
-// Mirror of the supervisor's threadClaimTtlSeconds (src/lib/agents/
-// supervisor/manager.ts). Generous enough to cover a reflection's
-// several Venice round-trips; if it lapses mid-run the mark RPC returns
-// false and the run is discarded (the thread re-queues for next time).
-const REFLECTION_CLAIM_TTL_SECONDS = 120;
+// 600s matches the other fleets' claim TTLs (wiki, librarian). The
+// browser-era 120s looked generous but a substantial thread's
+// reflection (several Venice round-trips plus memory tool calls)
+// routinely outlives it - and a run that outlives its claim ALWAYS
+// finishes claim-lost, so the thread re-reflects every cycle and
+// never marks. The TTL must comfortably exceed the slowest plausible
+// run; the only cost of a long TTL is how late a crashed run's
+// thread becomes claimable again.
+const REFLECTION_CLAIM_TTL_SECONDS = 600;
 
 // Schema caps mirror supabase/functions/venice/tools/memory_*.ts so the
 // wire schemas the agent's model sees match the server-side validators'
@@ -353,72 +357,14 @@ export async function reflectOneThread(
     }
     const threadId = claim.thread_id as string;
     const terminalMsgId = claim.terminal_msg_id as string;
-    log.info(`picked up thread ${threadId} @ msg ${terminalMsgId}`);
-
-    const slice = await loadThreadSliceUpTo(adminClient, threadId, terminalMsgId);
-
-    // Pathological empty thread: mark it done so the queue advances
-    // rather than re-claiming the same row forever. Skip the Venice
-    // round-trip.
-    if (slice.length > 0) {
-      const apiKey = await readVeniceKey(adminClient);
-      if (!apiKey) throw new Error('no Venice key configured (app_config unseeded)');
-
-      const convo: VeniceWireMessage[] = slice.map(messageToVenice);
-      // Reflection instruction as the final user turn - the "switch
-      // modes" idiom. The model sees the whole prior conversation in its
-      // native shape and reads this as "now do this different task."
-      convo.push({ role: 'user', content: REFLECTION_PROMPT });
-
-      const baseCtx: Omit<AgentToolContext, 'signal' | 'depth'> = {
-        adminClient,
-        userId,
-        threadId,
-      };
-
-      const result = await runHeadlessAgent(
-        {
-          model: REFLECTION_MODEL,
-          messages: convo,
-          toolbox: buildReflectionToolbox(),
-          baseCtx,
-          apiKey,
-          // No outer turn to cancel - reflection runs in the background
-          // tail after the chat response already shipped. A never-
-          // aborting signal lets runHeadlessAgent run to its own
-          // maxRounds backstop.
-          signal: new AbortController().signal,
-        },
-        // parentDepth 0: reflection is a top-level agent (depth 1), same
-        // as the main chat's tool-dispatched agents.
-        0,
-      );
-
-      // Mark only after the agent finished. A false return means the
-      // claim expired or was stolen mid-run (claim-lost): any memory
-      // writes the agent already made stay - they're owned by the user,
-      // not the claim - and the next cycle re-reflects, finding its own
-      // writes via memory_search rather than duplicating.
-      const marked = await markReflected(adminClient, threadId, holderId, terminalMsgId, userId);
-      if (marked) {
-        log.info(
-          `finished thread ${threadId} (${result.toolCalls} tool calls over ${slice.length} messages)`,
-        );
-      } else {
-        log.warn(
-          `claim lost on thread ${threadId} - another run took over mid-reflection; any memories already written stay`,
-        );
-      }
-      return {
-        outcome: marked ? 'reflected' : 'claim-lost',
-        threadId,
-        toolCalls: result.toolCalls,
-      };
-    }
-
-    const marked = await markReflected(adminClient, threadId, holderId, terminalMsgId, userId);
-    log.debug(`thread ${threadId} had no messages to reflect on; marked to advance the queue`);
-    return { outcome: marked ? 'empty-slice' : 'claim-lost', threadId };
+    return await reflectClaimedThread(
+      adminClient,
+      userId,
+      log,
+      threadId,
+      terminalMsgId,
+      holderId,
+    );
   } catch (err) {
     log.error(
       'reflection cycle failed',
@@ -428,6 +374,148 @@ export async function reflectOneThread(
   } finally {
     // Flush before the waitUntil tail settles so the outcome line (the
     // one worth seeing) isn't dropped as an un-awaited broadcast.
+    await log.flush();
+  }
+}
+
+/**
+ * The run half shared by both reflection drivers (the chat-turn tail
+ * and the cron catch-up sweep): the caller already holds the
+ * per-thread claim; this reflects the thread and marks it done.
+ * Throws on infrastructure failure - each driver owns its own
+ * catch/log/flush posture.
+ */
+async function reflectClaimedThread(
+  adminClient: SupabaseClient,
+  userId: string,
+  log: ReturnType<typeof createEdgeLogger>,
+  threadId: string,
+  terminalMsgId: string,
+  holderId: string,
+): Promise<ReflectionCycleResult> {
+  log.info(`picked up thread ${threadId} @ msg ${terminalMsgId}`);
+
+  const slice = await loadThreadSliceUpTo(adminClient, threadId, terminalMsgId);
+
+  // Pathological empty thread: mark it done so the queue advances
+  // rather than re-claiming the same row forever. Skip the Venice
+  // round-trip.
+  if (slice.length > 0) {
+    const apiKey = await readVeniceKey(adminClient);
+    if (!apiKey) throw new Error('no Venice key configured (app_config unseeded)');
+
+    const convo: VeniceWireMessage[] = slice.map(messageToVenice);
+    // Reflection instruction as the final user turn - the "switch
+    // modes" idiom. The model sees the whole prior conversation in its
+    // native shape and reads this as "now do this different task."
+    convo.push({ role: 'user', content: REFLECTION_PROMPT });
+
+    const baseCtx: Omit<AgentToolContext, 'signal' | 'depth'> = {
+      adminClient,
+      userId,
+      threadId,
+    };
+
+    const result = await runHeadlessAgent(
+      {
+        model: REFLECTION_MODEL,
+        messages: convo,
+        toolbox: buildReflectionToolbox(),
+        baseCtx,
+        apiKey,
+        // No outer turn to cancel - reflection runs in a background
+        // tail or a cron tick, after any user-visible work already
+        // shipped. A never-aborting signal lets runHeadlessAgent run
+        // to its own maxRounds backstop.
+        signal: new AbortController().signal,
+      },
+      // parentDepth 0: reflection is a top-level agent (depth 1), same
+      // as the main chat's tool-dispatched agents.
+      0,
+    );
+
+    // Mark only after the agent finished. A false return means the
+    // claim expired or was stolen mid-run (claim-lost): any memory
+    // writes the agent already made stay - they're owned by the user,
+    // not the claim - and the next cycle re-reflects, finding its own
+    // writes via memory_search rather than duplicating.
+    const marked = await markReflected(adminClient, threadId, holderId, terminalMsgId, userId);
+    if (marked) {
+      log.info(
+        `finished thread ${threadId} (${result.toolCalls} tool calls over ${slice.length} messages)`,
+      );
+    } else {
+      log.warn(
+        `claim lost on thread ${threadId} - another run took over mid-reflection; any memories already written stay`,
+      );
+    }
+    return {
+      outcome: marked ? 'reflected' : 'claim-lost',
+      threadId,
+      toolCalls: result.toolCalls,
+    };
+  }
+
+  const marked = await markReflected(adminClient, threadId, holderId, terminalMsgId, userId);
+  log.debug(`thread ${threadId} had no messages to reflect on; marked to advance the queue`);
+  return { outcome: marked ? 'empty-slice' : 'claim-lost', threadId };
+}
+
+/**
+ * One cron catch-up tick: claim the most-overdue reflection-eligible
+ * thread across ALL users and reflect on it. The chat-turn tail is
+ * reflection's primary driver but only fires when its owner
+ * converses; this sweep drains queues the tail can't reach. One
+ * thread per tick - the hourly schedule resumes the drain, matching
+ * the other fleets' pacing. Double-driving with the tail is safe:
+ * the per-thread claim columns are the mutual exclusion, so
+ * whichever driver claims first wins. Non-throwing, same contract
+ * as reflectOneThread.
+ */
+export async function runReflectionSweepTick(
+  adminClient: SupabaseClient,
+): Promise<ReflectionCycleResult> {
+  const holderId = crypto.randomUUID();
+  let claim: { thread_id?: unknown; terminal_msg_id?: unknown; user_id?: unknown } | null;
+  try {
+    const { data, error } = await adminClient.rpc(
+      'claim_next_thread_for_reflection_sweep',
+      { p_holder_id: holderId, p_ttl_seconds: REFLECTION_CLAIM_TTL_SECONDS },
+    );
+    if (error) {
+      throw new Error(`claim_next_thread_for_reflection_sweep failed: ${error.message}`);
+    }
+    claim = Array.isArray(data) ? data[0] : data;
+  } catch (err) {
+    console.error(
+      '[reflection-sweep] claim failed:',
+      err instanceof Error ? err.message : String(err),
+    );
+    return { outcome: 'error' };
+  }
+  if (!claim || typeof claim.thread_id !== 'string' || typeof claim.user_id !== 'string') {
+    return { outcome: 'no-thread' };
+  }
+
+  // The logger exists only from here - a claim is what tells us WHOSE
+  // drawer the lines belong in.
+  const log = createEdgeLogger(claim.user_id, 'reflection');
+  try {
+    return await reflectClaimedThread(
+      adminClient,
+      claim.user_id,
+      log,
+      claim.thread_id,
+      claim.terminal_msg_id as string,
+      holderId,
+    );
+  } catch (err) {
+    log.error(
+      'reflection sweep cycle failed',
+      err instanceof Error ? err : new Error(String(err)),
+    );
+    return { outcome: 'error' };
+  } finally {
     await log.flush();
   }
 }

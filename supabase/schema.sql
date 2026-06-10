@@ -3937,6 +3937,83 @@ grant execute on function
 grant execute on function
   public.mark_thread_reflected_if_claimed(uuid, text, uuid, uuid) to service_role;
 
+-- Global reflection sweep claim: the cron catch-up drain's variant of
+-- claim_next_thread_for_reflection. Same candidate predicate, but
+-- across ALL users - the timezone comes off each owner's profile
+-- (nak_safe_timezone, UTC fallback) instead of a parameter. The
+-- per-turn waitUntil tail only drains when its owner converses, so
+-- without this sweep a dormant account's reflection queue never
+-- moves. Tail + sweep double-driving is safe by construction: the
+-- per-thread claim columns are the mutual exclusion, so whichever
+-- driver claims first wins and the other sees no candidate.
+drop function if exists public.claim_next_thread_for_reflection_sweep(text, int);
+create or replace function public.claim_next_thread_for_reflection_sweep(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns table (thread_id uuid, terminal_msg_id uuid, user_id uuid)
+language sql security definer
+set search_path = public as $$
+  with candidate as (
+    select t.id as thread_id, term.msg_id as terminal_msg_id, t.user_id as user_id
+      from public.threads t
+      inner join public.profiles p on p.user_id = t.user_id
+      cross join lateral (
+        -- One safe-timezone resolution per candidate row, shared by
+        -- both sides of the day-gate comparison below.
+        select public.nak_safe_timezone(p.settings->>'displayTimezone') as tz
+      ) usertz
+      cross join lateral (
+        select m.id as msg_id
+          from public.messages m
+         where m.thread_id = t.id
+           and m.role = 'assistant'
+           and (m.tool_calls is null
+                or jsonb_typeof(m.tool_calls) <> 'array'
+                or jsonb_array_length(m.tool_calls) = 0)
+           and m.content is not null
+           and length(m.content) > 0
+         order by m.created_at desc
+         limit 1
+      ) term
+      cross join lateral (
+        select m2.created_at
+          from public.messages m2
+         where m2.thread_id = t.id
+         order by m2.created_at desc
+         limit 1
+      ) newest
+     where term.msg_id is distinct from t.last_reflected_msg_id
+       and (t.reflection_claim_expires_at is null
+            or t.reflection_claim_expires_at < now())
+       and (newest.created_at at time zone usertz.tz)::date
+             < (now() at time zone usertz.tz)::date
+       and (
+         -- Same substance bar as the per-user claim: at least one
+         -- follow-up user message.
+         select count(*)
+           from public.messages m3
+          where m3.thread_id = t.id
+            and m3.role = 'user'
+       ) >= 2
+     order by t.updated_at asc
+     limit 1
+     for update of t skip locked
+  )
+  update public.threads t
+     set reflection_holder_id = p_holder_id,
+         reflection_claim_expires_at = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c
+   where t.id = c.thread_id
+  returning t.id as thread_id, c.terminal_msg_id, t.user_id;
+$$;
+
+-- Global sweep, owner-privileged: only the cron-driven service role
+-- may claim across users.
+revoke all on function public.claim_next_thread_for_reflection_sweep(text, int)
+  from public, anon, authenticated;
+grant execute on function public.claim_next_thread_for_reflection_sweep(text, int)
+  to service_role;
+
 -- Summarisation pipeline RPCs -------------------------------------------
 --
 -- Mirror of the reflection pair, but the predicate is "needs a new
@@ -9716,6 +9793,80 @@ begin
   end if;
 exception when others then
   raise notice 'deep-sleep sweep cron setup skipped: %', sqlerrm;
+end
+$cron$;
+
+-- ---------------------------------------------------------------------------
+-- Scheduled reflection catch-up sweep (pg_cron -> pg_net -> venice function)
+--
+-- Reflection's primary driver is the chat turn's waitUntil tail in
+-- getStreamingResponse - one eligible older thread drains per
+-- completed turn. This hourly sweep is the catch-up path for queues
+-- the tail can't reach: a user who stops conversing leaves eligible
+-- threads stranded (no turns -> no draining). One thread per tick,
+-- claimed across all users by claim_next_thread_for_reflection_sweep;
+-- the per-thread claim columns make tail + sweep double-driving safe.
+-- Same Vault-secret custody and no-op-until-seeded behavior as the
+-- other sweep triggers above.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.nak_trigger_reflection_sweep()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $fn$
+declare
+  v_url text;
+  v_key text;
+begin
+  begin
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'project_url' $q$ into v_url;
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'service_role_key' $q$ into v_key;
+  exception when others then
+    return;  -- vault not installed or unreadable; nothing to dispatch
+  end;
+  if v_url is null or v_key is null then
+    return;  -- secrets not seeded yet
+  end if;
+  begin
+    execute format(
+      $q$ select net.http_post(
+            url := %L,
+            headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', %L),
+            body := '{}'::jsonb
+          ) $q$,
+      v_url || '/functions/v1/venice/reflection-sweep',
+      'Bearer ' || v_key
+    );
+  exception when others then
+    raise notice 'nak_trigger_reflection_sweep: dispatch failed: %', sqlerrm;
+  end;
+end;
+$fn$;
+
+revoke all on function public.nak_trigger_reflection_sweep() from public, anon, authenticated;
+
+do $cron$
+begin
+  if exists (select 1 from pg_available_extensions where name = 'pg_cron')
+     and exists (select 1 from pg_available_extensions where name = 'pg_net') then
+    create extension if not exists pg_cron;
+    create extension if not exists pg_net;
+    if exists (select 1 from cron.job where jobname = 'nak-reflection-sweep') then
+      perform cron.unschedule('nak-reflection-sweep');
+    end if;
+    -- Minute 27: see the rem sweep's minute-17 comment for the
+    -- spacing scheme (embed */5, wiki 7, rem 17, librarian 37,
+    -- deep-sleep 47).
+    perform cron.schedule(
+      'nak-reflection-sweep',
+      '27 * * * *',
+      $job$ select public.nak_trigger_reflection_sweep(); $job$
+    );
+  end if;
+exception when others then
+  raise notice 'reflection sweep cron setup skipped: %', sqlerrm;
 end
 $cron$;
 

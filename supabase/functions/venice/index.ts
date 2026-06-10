@@ -49,6 +49,7 @@ import {
 import { streamChannelName } from '../_shared/venice-stream.ts';
 import { getStreamingResponse } from './getStreamingResponse.ts';
 import { retryWikiThread, runWikiSweepTick } from './agents/wiki.ts';
+import { runReflectionSweepTick } from './agents/reflection.ts';
 import {
   runWikiLibrarianManual,
   runWikiLibrarianSweepTick,
@@ -597,9 +598,14 @@ async function handleBackfill(req: Request): Promise<Response> {
 
 /**
  * Cron-driven sweep route: service-role only (pg_cron -> pg_net sends
- * the service JWT). Runs the tick synchronously and returns its
- * summary - pg_net ignores the body, but the local dev shim
- * (scripts/dev-backfill-cron.mjs) prints it.
+ * the service JWT). The tick runs DETACHED under EdgeRuntime.waitUntil
+ * and the response is an immediate `{accepted: true}`: an agent sweep
+ * can outlive the HTTP window (pg_net's timeout is seconds; the local
+ * gateway's is ~2.5 minutes), and a synchronous handler gets killed
+ * with the dropped request - observed locally as a sweep that claimed
+ * its row and died before reflecting it. Nothing reads the response
+ * body anyway: pg_net ignores it, and tick outcomes reach the user's
+ * Logs drawer through each fleet's edge logger.
  */
 function sweepHandler(
   tick: (admin: SupabaseClient) => Promise<unknown>,
@@ -608,7 +614,8 @@ function sweepHandler(
     if (!isServiceRole(req)) return json({ error: 'forbidden' }, 403);
     const admin = requireAdmin();
     if (admin instanceof Response) return admin;
-    return json(await tick(admin));
+    edgeWaitUntil(tick(admin));
+    return json({ accepted: true });
   };
 }
 
@@ -671,6 +678,12 @@ const handleWikiSweep = sweepHandler(runWikiSweepTick);
 const handleWikiLibrarianSweep = sweepHandler(runWikiLibrarianSweepTick);
 const handleRemSweep = sweepHandler(runRemSweepTick);
 const handleDeepSleepSweep = sweepHandler(runDeepSleepSweepTick);
+// Reflection's catch-up drain. The primary driver stays the chat
+// turn's waitUntil tail in getStreamingResponse; this route exists so
+// a user who stops conversing still gets their queue drained, and so
+// reflection's trigger surface is visible in this routing table like
+// every other fleet's.
+const handleReflectionSweep = sweepHandler(runReflectionSweepTick);
 const handleWikiLibrarianRun = manualRunHandler((admin, userId, body, onProgress) =>
   runWikiLibrarianManual(
     admin,
@@ -1045,6 +1058,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
   if (route === 'models' && req.method === 'POST') return handleModels();
   if (route === 'backfill' && req.method === 'POST') return handleBackfill(req);
   if (route === 'wiki-sweep' && req.method === 'POST') return handleWikiSweep(req);
+  if (route === 'reflection-sweep' && req.method === 'POST') return handleReflectionSweep(req);
   if (route === 'wiki-retry' && req.method === 'POST') return handleWikiRetry(req);
   if (route === 'wiki-librarian-sweep' && req.method === 'POST') return handleWikiLibrarianSweep(req);
   if (route === 'wiki-librarian-run' && req.method === 'POST') return handleWikiLibrarianRun(req);

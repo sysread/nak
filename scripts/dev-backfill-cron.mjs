@@ -5,7 +5,7 @@
 // Stands in for the hosted pg_cron jobs that drive the venice
 // function's scheduled routes.
 //
-// In production, supabase/schema.sql schedules five pg_net dispatches:
+// In production, supabase/schema.sql schedules six pg_net dispatches:
 //   - `nak_trigger_embed_backfill()` every 5 minutes -> POST /backfill
 //     (drains pending embeddings server-side);
 //   - `nak_trigger_wiki_sweep()` hourly -> POST /wiki-sweep (runs the
@@ -16,7 +16,10 @@
 //   - `nak_trigger_rem_sweep()` hourly -> POST /rem-sweep and
 //     `nak_trigger_deep_sleep_sweep()` hourly -> POST /deep-sleep-sweep
 //     (the two memory librarians; same most-overdue-user claim shape
-//     with their own 12h cadences).
+//     with their own 12h cadences);
+//   - `nak_trigger_reflection_sweep()` hourly -> POST /reflection-sweep
+//     (reflection's catch-up drain - the chat-turn tail is the primary
+//     driver, this reaches queues whose owners stopped conversing).
 // The local Supabase stack (`mise run dev-start`) ships neither pg_cron
 // nor pg_net, so those schedules are guarded to no-op locally - nothing
 // drains any queue without this shim (the browser workers that used
@@ -104,6 +107,14 @@ async function postRoute(apiUrl, serviceRoleKey, route, stamp) {
     const body = await res.json().catch(() => ({}));
     if (!res.ok) {
       warn(`[${stamp}] ${route} HTTP ${res.status}: ${JSON.stringify(body)}`);
+      return null;
+    }
+    // Agent sweeps run detached server-side (EdgeRuntime.waitUntil) and
+    // acknowledge immediately - their outcomes land in the in-app Logs
+    // drawer, not this response. Print the dispatch and stop here so
+    // the per-route printers don't render an "unknown" summary.
+    if (body && body.accepted === true) {
+      info(`[${stamp}] ${route}: dispatched (runs async; outcome in the Logs drawer)`);
       return null;
     }
     return body;
@@ -195,6 +206,21 @@ async function tickDeepSleepSweep(apiUrl, serviceRoleKey) {
   info(`[${stamp}] deep-sleep: ${headline}`);
 }
 
+// One cron tick: POST /reflection-sweep and report the cycle result.
+async function tickReflectionSweep(apiUrl, serviceRoleKey) {
+  const stamp = new Date().toISOString().slice(11, 19);
+  const body = await postRoute(apiUrl, serviceRoleKey, 'reflection-sweep', stamp);
+  if (!body) return;
+  const { outcome = 'unknown', threadId = '', toolCalls = 0 } = body;
+  const headline =
+    outcome === 'reflected'
+      ? style.green(`reflected thread ${threadId} (${toolCalls} tool calls)`)
+      : outcome === 'no-thread'
+        ? style.dim('nothing eligible')
+        : outcome;
+  info(`[${stamp}] reflection: ${headline}`);
+}
+
 // Run the scheduled routes sequentially, cheapest first, so the heavy
 // LLM sweeps never queue the backfill tick behind them.
 async function tick(apiUrl, serviceRoleKey) {
@@ -203,11 +229,12 @@ async function tick(apiUrl, serviceRoleKey) {
   await tickWikiLibrarianSweep(apiUrl, serviceRoleKey);
   await tickRemSweep(apiUrl, serviceRoleKey);
   await tickDeepSleepSweep(apiUrl, serviceRoleKey);
+  await tickReflectionSweep(apiUrl, serviceRoleKey);
 }
 
 async function main() {
   const intervalSeconds = parseInterval();
-  banner('Venice cron shim (DEV): backfill + wiki + memory-librarian sweeps');
+  banner('Venice cron shim (DEV): backfill + wiki + memory-librarian + reflection sweeps');
   const { apiUrl, serviceRoleKey } = await readLocalStack();
   ok(`Targeting ${style.cyan(apiUrl)} every ${style.bold(intervalSeconds + 's')}. Ctrl-C to stop.`);
   info(style.dim('Local stand-in for the hosted pg_cron jobs (prod: backfill every 5 min, agent sweeps hourly).'));

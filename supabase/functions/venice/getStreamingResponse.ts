@@ -1022,9 +1022,10 @@ export async function getStreamingResponse(
 
     // Reflection piggyback. A completed chat turn is the trigger that
     // drains ONE day-gate-eligible OLDER thread from the reflection
-    // queue (not this thread - see agents/reflection.ts for why). This
-    // is the server-side replacement for the browser supervisor's
-    // reflection poll. Runs here in the already-detached waitUntil tail,
+    // queue (not this thread - see agents/reflection.ts for why). The
+    // hourly /reflection-sweep cron route is the catch-up sibling for
+    // users who stopped conversing; the per-thread claim makes the two
+    // drivers safe together. Runs here in the already-detached waitUntil tail,
     // after the response shipped and the channels tore down, so it never
     // delays the user-visible turn. reflectOneThread is non-throwing and
     // logs its own outcome (to the function log + the user's Logs

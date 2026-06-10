@@ -275,6 +275,16 @@ in `docs/user/memory.md`. The dev side has five moving parts:
   necessarily the thread that just finished. Claim mutual exclusion
   is the per-thread claim RPC (each call uses a fresh random holder
   id); no `worker_leases` row is involved.
+- **Reflection catch-up sweep** — pg_cron job
+  `nak-reflection-sweep` (hourly, minute 27) pg_net-POSTs
+  `/reflection-sweep` -> `runReflectionSweepTick`, which claims the
+  most-overdue eligible thread across ALL users
+  (`claim_next_thread_for_reflection_sweep`, SECURITY DEFINER,
+  per-owner timezone off the profile) and runs the same shared
+  reflect body. Exists because the tail only fires when its owner
+  converses - without it a dormant account's queue never moves. The
+  per-thread claim makes tail + sweep double-driving safe. The dev
+  shim ticks this route too.
 - **Librarian cron sweeps** — pg_cron jobs `nak-rem-sweep`
   (hourly, minute 17) and `nak-deep-sleep-sweep` (hourly, minute
   47) read vault secrets and pg_net-POST `/rem-sweep` /
