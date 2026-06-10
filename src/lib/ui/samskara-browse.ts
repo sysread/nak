@@ -130,14 +130,23 @@ export type Severity = 'ok' | 'warn' | 'alarm';
  * Thresholds for the Health panel's severity classification. Starting
  * defaults - tune against observed pipeline behaviour. Each pair is
  * [warn-at, alarm-at]: a value >= alarm-at is 'alarm', >= warn-at is
- * 'warn', else 'ok'. Backlogs tolerate a little depth (the worker
- * drains between turns); orphans and stuck claims should be ~0, so their
- * bars are tight.
+ * 'warn', else 'ok'.
+ *
+ * Backlogs only matter when they're DEEP and persistent: the workers run
+ * client-side, so a backlog accumulates while no tab is open and drains
+ * when one is - a snapshot of a few pending rows is normal, not a stall.
+ * Hence the loose [50, 500] bars. Orphans and stuck claims, by contrast,
+ * should be ~0 regardless of worker scheduling, so their bars are tight.
+ *
+ * Deliberately NOT here: a "fires aged out unresolved" bar. That count
+ * grows unbounded by design - reaction-classify only ever resolves the
+ * cohort whose follow-up landed in the 1-10min window, so ~95% of fires
+ * age out unresolved forever. Flagging it as a failure is a false alarm
+ * (it was the original cause of a permanent "something is stuck").
  */
 export const HEALTH_THRESHOLDS = {
-  pendingAssimilate: [10, 50],
-  pendingEmbed: [10, 50],
-  firesAgedOut: [5, 25],
+  pendingAssimilate: [50, 500],
+  pendingEmbed: [50, 500],
   orphanFires: [1, 5],
   stuckClaims: [1, 3],
 } as const satisfies Record<string, readonly [number, number]>;
@@ -161,17 +170,24 @@ export function compoundStaleness(lastRegenAt: string | null, now: number = Date
 
 export interface LeaseLiveness {
   workerKind: string;
-  /** True when the lease has not lapsed - a worker is actively holding it. */
+  /** True when the lease has not lapsed - a tab is actively running it. */
   live: boolean;
-  expiresAt: string;
+  /**
+   * Human detail. "live, expires in 38s" when held; "idle - not
+   * currently running" when lapsed or absent. NOT an alarm: workers run
+   * client-side only while a tab is open, so a lapsed lease is the normal
+   * away state, not a failure - the panel renders idle neutrally and
+   * leaves it out of the overall severity.
+   */
+  detail: string;
 }
 
 /**
  * Resolve worker liveness for the kinds the samskara pipeline depends
- * on. A kind with no lease row, or a lapsed one, is not live - formation
- * (or substrate embedding) is silently stopped. Returns one entry per
- * requested kind, in the requested order, so the panel always renders a
- * fixed set of rows.
+ * on. Returns one entry per requested kind, in the requested order, so
+ * the panel always renders a fixed set of rows. The expiry is a FUTURE
+ * timestamp while live, so it's reported as "expires in Ns" rather than
+ * run through a past-tense "N ago" formatter.
  */
 export function leaseLiveness(
   leases: readonly SamskaraWorkerLease[],
@@ -180,9 +196,25 @@ export function leaseLiveness(
 ): LeaseLiveness[] {
   return kinds.map((kind) => {
     const lease = leases.find((l) => l.workerKind === kind);
-    const live = lease ? new Date(lease.expiresAt).getTime() > now : false;
-    return { workerKind: kind, live, expiresAt: lease?.expiresAt ?? '' };
+    if (!lease) return { workerKind: kind, live: false, detail: 'idle - not currently running' };
+    const secsToExpiry = Math.round((new Date(lease.expiresAt).getTime() - now) / 1000);
+    const live = secsToExpiry > 0;
+    return {
+      workerKind: kind,
+      live,
+      detail: live ? `live, expires in ${secsToExpiry}s` : 'idle - not currently running',
+    };
   });
+}
+
+/**
+ * One-line summary of the hide-similar collapse for the muted label
+ * under the slider: how many distinct samskaras remain after folding
+ * near-duplicates, out of the full loaded set.
+ */
+export function matchSummary(shown: number, total: number): string {
+  const hidden = Math.max(total - shown, 0);
+  return `Showing ${shown} of ${total} - ${hidden} folded as similar`;
 }
 
 /** Worker kinds the samskara pipeline depends on, in panel display order. */

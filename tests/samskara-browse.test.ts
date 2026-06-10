@@ -9,6 +9,7 @@ import {
   severityFor,
   compoundStaleness,
   leaseLiveness,
+  matchSummary,
   worstSeverity,
   relativeTime,
   formatValence,
@@ -75,9 +76,9 @@ describe('severityFor', () => {
     expect(severityFor(0, HEALTH_THRESHOLDS.orphanFires)).toBe('ok');
     expect(severityFor(1, HEALTH_THRESHOLDS.orphanFires)).toBe('warn');
     expect(severityFor(5, HEALTH_THRESHOLDS.orphanFires)).toBe('alarm');
-    expect(severityFor(9, HEALTH_THRESHOLDS.pendingAssimilate)).toBe('ok');
-    expect(severityFor(10, HEALTH_THRESHOLDS.pendingAssimilate)).toBe('warn');
-    expect(severityFor(50, HEALTH_THRESHOLDS.pendingAssimilate)).toBe('alarm');
+    expect(severityFor(49, HEALTH_THRESHOLDS.pendingAssimilate)).toBe('ok');
+    expect(severityFor(50, HEALTH_THRESHOLDS.pendingAssimilate)).toBe('warn');
+    expect(severityFor(500, HEALTH_THRESHOLDS.pendingAssimilate)).toBe('alarm');
   });
 });
 
@@ -99,16 +100,23 @@ describe('leaseLiveness', () => {
     { workerKind: 'samskara', holderId: 'h1', expiresAt: '2026-06-10T12:00:30Z' },
     { workerKind: 'embedding', holderId: 'h2', expiresAt: '2026-06-10T11:59:00Z' },
   ];
-  it('marks future-expiry leases live and lapsed ones dead', () => {
+  it('reports a future expiry as "in Ns" (not a past-tense "ago")', () => {
     const out = leaseLiveness(leases, ['samskara', 'embedding'], now);
     expect(out).toEqual([
-      { workerKind: 'samskara', live: true, expiresAt: '2026-06-10T12:00:30Z' },
-      { workerKind: 'embedding', live: false, expiresAt: '2026-06-10T11:59:00Z' },
+      { workerKind: 'samskara', live: true, detail: 'live, expires in 30s' },
+      { workerKind: 'embedding', live: false, detail: 'idle - not currently running' },
     ]);
   });
-  it('reports a missing lease as not live with empty expiry', () => {
+  it('reports a missing lease as idle, not a failure', () => {
     const out = leaseLiveness([], ['samskara'], now);
-    expect(out).toEqual([{ workerKind: 'samskara', live: false, expiresAt: '' }]);
+    expect(out).toEqual([{ workerKind: 'samskara', live: false, detail: 'idle - not currently running' }]);
+  });
+});
+
+describe('matchSummary', () => {
+  it('reports shown / total and how many were folded', () => {
+    expect(matchSummary(47, 120)).toBe('Showing 47 of 120 - 73 folded as similar');
+    expect(matchSummary(120, 120)).toBe('Showing 120 of 120 - 0 folded as similar');
   });
 });
 

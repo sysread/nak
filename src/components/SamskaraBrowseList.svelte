@@ -27,6 +27,7 @@
     emptyMessage,
     tierBadge,
     collapseSimilar,
+    matchSummary,
     type CollapsedRow,
   } from '$lib/ui/samskara-browse';
   import { infiniteScroll } from '$lib/actions/infinite-scroll';
@@ -144,6 +145,9 @@
         />
         <span class="samskara-threshold-readout">{samskaraBrowseStore.hideSimilarThreshold.toFixed(2)}</span>
       </div>
+      <p class="samskara-match-count">
+        {matchSummary(displayRows.length, samskaraBrowseStore.results.length)}
+      </p>
     {/if}
   </div>
 
@@ -249,6 +253,22 @@
     display: flex;
     align-items: center;
     gap: 0.4rem;
+    white-space: nowrap;
+  }
+  /* The global `input { width: 100% }` rule stretches a bare checkbox to
+     fill the flex row - which floats the box into the middle and shoves
+     the label to the edge (see the .toggle-row override in styles.css).
+     Pin it to its intrinsic size so checkbox + label read as one
+     left-aligned unit. */
+  .samskara-hide-similar-toggle input[type='checkbox'] {
+    width: auto;
+    flex-shrink: 0;
+    margin: 0;
+  }
+  .samskara-match-count {
+    margin: 0.1rem 0 0;
+    font-size: 0.72rem;
+    color: var(--muted);
   }
   /* Slider gets its own full-width line; the value label sits at the end
      and doesn't shrink, so the track takes whatever's left. */
