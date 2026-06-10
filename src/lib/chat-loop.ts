@@ -91,18 +91,15 @@ import { createLogger } from './logger.svelte';
 import {
   buildIntuitionThinkMessage,
   countUserRounds,
-  evaluatePreRoundTrigger,
+  maybeRunIntuitionPipeline,
   readIntuitionCache,
-  runIntuitionPipeline,
-  withIntuitionInflight,
   writeIntuitionCache,
   type IntuitionPayload,
 } from './intuition';
 import {
   buildContextRecallThinkMessage,
+  maybeRunContextRecallPipeline,
   readContextRecallCache,
-  runContextRecallPipeline,
-  withContextRecallInflight,
   writeContextRecallCache,
   type ContextRecallPayload,
 } from './context-recall';
@@ -1200,95 +1197,76 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   let contextRecallCache: ContextRecallPayload | null =
     readContextRecallCache(thread);
 
-  const intuitionPreTrigger =
-    intuitionModelId !== undefined
-      ? evaluatePreRoundTrigger({
-          cache: intuitionCache,
-          round: currentUserRound,
-          mood: intuitionMood ?? null,
-        })
-      : null;
-  const contextRecallPreTrigger = contextRecallEnabled
-    ? evaluatePreRoundTrigger({
-        // ContextRecallPayload satisfies RoundCacheSnapshot
-        // structurally - the trigger evaluator only reads the round
-        // and mood-snapshot fields, both shared between payloads.
-        cache: contextRecallCache,
-        round: currentUserRound,
-        mood: intuitionMood ?? null,
-      })
-    : null;
+  // Fire-policy (the feature gates, trigger evaluation, and inflight
+  // dedup) lives inside each pipeline's maybeRun entry point - the
+  // loop supplies inputs and owns sequencing only. The onWillRun
+  // hooks are where the UI status signals attach: they fire at the
+  // moment a pipeline commits to running, so a no-trigger turn never
+  // flashes a status chip.
+  let intuitionStarted = false;
+  let contextRecallStarted = false;
+  const [freshIntuition, freshContextRecall] = await Promise.all([
+    maybeRunIntuitionPipeline({
+      supabase,
+      threadId: thread.id,
+      modelId: intuitionModelId,
+      cache: intuitionCache,
+      history,
+      signal,
+      round: currentUserRound,
+      mood: intuitionMood ?? null,
+      onWillRun: () => {
+        intuitionStarted = true;
+        handlers?.onSubconsciousStart?.('intuition');
+      },
+    }).finally(() => {
+      if (intuitionStarted) handlers?.onSubconsciousEnd?.('intuition');
+    }),
+    maybeRunContextRecallPipeline({
+      supabase,
+      threadId: thread.id,
+      userId,
+      enabled: contextRecallEnabled,
+      cache: contextRecallCache,
+      signal,
+      round: currentUserRound,
+      mood: intuitionMood ?? null,
+      onWillRun: () => {
+        contextRecallStarted = true;
+        handlers?.onSubconsciousStart?.('recall');
+      },
+    }).finally(() => {
+      if (contextRecallStarted) handlers?.onSubconsciousEnd?.('recall');
+    }),
+  ]);
 
-  if (intuitionPreTrigger || contextRecallPreTrigger) {
-    // Fire both pipelines in parallel. Each side resolves to either a
-    // fresh payload or null (the agent failed, OR its trigger was
-    // null and we short-circuited). Promise.all preserves the parallel
-    // latency win even when one side short-circuits.
-    const [freshIntuition, freshContextRecall] = await Promise.all([
-      intuitionPreTrigger && intuitionModelId
-        ? trackSubconscious(
-            'intuition',
-            withIntuitionInflight(thread.id, () =>
-              runIntuitionPipeline({
-                supabase,
-                model: intuitionModelId,
-                history,
-                signal,
-                round: currentUserRound,
-                mood: intuitionMood ?? null,
-                trigger: intuitionPreTrigger,
-              })
-            )
-          )
-        : Promise.resolve<IntuitionPayload | null>(null),
-      contextRecallPreTrigger
-        ? trackSubconscious(
-            'recall',
-            withContextRecallInflight(thread.id, () =>
-              runContextRecallPipeline({
-                supabase,
-                threadId: thread.id,
-                userId,
-                signal,
-                round: currentUserRound,
-                mood: intuitionMood ?? null,
-                trigger: contextRecallPreTrigger,
-              })
-            )
-          )
-        : Promise.resolve<ContextRecallPayload | null>(null),
-    ]);
-
-    // Persist both writes in parallel. The await-before-continuing
-    // rationale on the existing intuition write applies symmetrically
-    // to context-recall: a race against an unrelated thread UPDATE
-    // (an update_title call mid-turn, a samskara-worker bump, a
-    // cross-tab edit) could otherwise strand a fresh payload behind a
-    // stale realtime echo. Cost is ~50-200ms of one Supabase UPDATE
-    // each, parallel-merged into one wait.
-    const persistOps: Promise<void>[] = [];
-    if (freshIntuition) {
-      intuitionCache = freshIntuition;
-      persistOps.push(
-        writeIntuitionCache(supabase, thread.id, freshIntuition)
-      );
-    }
-    if (freshContextRecall) {
-      contextRecallCache = freshContextRecall;
-      persistOps.push(
-        writeContextRecallCache(supabase, thread.id, freshContextRecall)
-      );
-    }
-    if (persistOps.length > 0) await Promise.all(persistOps);
-
-    // UI handlers fire AFTER the writes settle - same ordering the
-    // prior intuition-only path enforced, for the same reason: a
-    // realtime echo that arrives between the patch and the write must
-    // see the persisted payload, not a transient null.
-    if (freshIntuition) handlers?.onIntuitionUpdate?.(freshIntuition);
-    if (freshContextRecall)
-      handlers?.onContextRecallUpdate?.(freshContextRecall);
+  // Persist both writes in parallel. The await-before-continuing
+  // rationale on the existing intuition write applies symmetrically
+  // to context-recall: a race against an unrelated thread UPDATE
+  // (an update_title call mid-turn, a samskara-worker bump, a
+  // cross-tab edit) could otherwise strand a fresh payload behind a
+  // stale realtime echo. Cost is ~50-200ms of one Supabase UPDATE
+  // each, parallel-merged into one wait.
+  const persistOps: Promise<void>[] = [];
+  if (freshIntuition) {
+    intuitionCache = freshIntuition;
+    persistOps.push(writeIntuitionCache(supabase, thread.id, freshIntuition));
   }
+  if (freshContextRecall) {
+    contextRecallCache = freshContextRecall;
+    persistOps.push(
+      writeContextRecallCache(supabase, thread.id, freshContextRecall)
+    );
+  }
+  if (persistOps.length > 0) await Promise.all(persistOps);
+
+  // UI handlers fire AFTER the writes settle - same ordering the
+  // prior intuition-only path enforced, for the same reason: a
+  // realtime echo that arrives between the patch and the write must
+  // see the persisted payload, not a transient null.
+  if (freshIntuition) handlers?.onIntuitionUpdate?.(freshIntuition);
+  if (freshContextRecall)
+    handlers?.onContextRecallUpdate?.(freshContextRecall);
 
   // Inject the synthetic `<think>` priming chain. Order matters for how
   // the model reads its own internal layers, from broadest to most

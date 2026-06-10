@@ -48,6 +48,8 @@ import { createLogger } from '../logger.svelte';
 // pipeline. Dynamic-importing them inside runIntuitionPipeline keeps
 // the ~10 kB raw prompt module out of the main chunk - chat-loop's
 // static import of `runIntuitionPipeline` itself stays cheap.
+import { evaluatePreRoundTrigger } from './triggers';
+import { withIntuitionInflight } from './cache';
 import type { DriveName } from './prompts';
 import type { IntuitionPayload, IntuitionTrigger } from './types';
 
@@ -368,4 +370,60 @@ export async function runIntuitionPipeline(
     elapsedMs: Date.now() - startedAt,
   });
   return payload;
+}
+
+/**
+ * Inputs for maybeRunIntuitionPipeline - the run inputs minus the
+ * fields the policy derives itself (model comes from the gate,
+ * trigger from the evaluation).
+ */
+export interface MaybeRunIntuitionInputs
+  extends Omit<RunIntuitionInputs, 'model' | 'trigger'> {
+  /** Thread whose cache and inflight slot this run belongs to. */
+  threadId: string;
+  /** Concrete model id, or undefined when the feature is off this
+   *  turn (the chat-loop's intuitionModelId option). */
+  modelId: string | undefined;
+  /** Current cached payload off the thread row; null = cold start. */
+  cache: IntuitionPayload | null;
+  /**
+   * Fires at the moment the pipeline commits to running, before the
+   * first model call - the caller hangs its UI status signal here.
+   * Never called on a no-trigger or feature-off turn.
+   */
+  onWillRun?: (trigger: IntuitionTrigger) => void;
+}
+
+/**
+ * The chat-loop's entry point: decide whether this turn should
+ * refresh the intuition payload, and run the pipeline when it
+ * should. Owns the feature gate, the trigger evaluation, and the
+ * per-thread inflight dedup, so the fire policy lives with the
+ * pipeline it gates - the caller supplies inputs and sequencing
+ * only. Resolves null on feature-off, no-trigger, and pipeline
+ * failure alike; the caller persists nothing for null.
+ */
+export function maybeRunIntuitionPipeline(
+  inputs: MaybeRunIntuitionInputs
+): Promise<IntuitionPayload | null> {
+  const { modelId } = inputs;
+  if (modelId === undefined) return Promise.resolve(null);
+  const trigger = evaluatePreRoundTrigger({
+    cache: inputs.cache,
+    round: inputs.round,
+    mood: inputs.mood,
+  });
+  if (!trigger) return Promise.resolve(null);
+  inputs.onWillRun?.(trigger);
+  return withIntuitionInflight(inputs.threadId, () =>
+    runIntuitionPipeline({
+      supabase: inputs.supabase,
+      model: modelId,
+      history: inputs.history,
+      signal: inputs.signal,
+      round: inputs.round,
+      mood: inputs.mood,
+      trigger,
+    })
+  );
 }

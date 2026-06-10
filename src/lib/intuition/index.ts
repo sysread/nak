@@ -26,13 +26,9 @@ export {
   type IntuitionPayload,
 } from './types';
 
-export { runIntuitionPipeline } from './pipeline';
+export { maybeRunIntuitionPipeline } from './pipeline';
 
-export {
-  readIntuitionCache,
-  writeIntuitionCache,
-  withIntuitionInflight,
-} from './cache';
+export { readIntuitionCache, writeIntuitionCache } from './cache';
 
 export { evaluatePreRoundTrigger } from './triggers';
 

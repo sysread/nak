@@ -2,12 +2,12 @@
 
 ## STATUS (2026-06-10, end of day)
 
-**Mostly landed.** A1 (route-layer collapse), A2 (/reflection-sweep
-plus the detached sweepHandler dispatch and the reflection
-claim-TTL fix), A3 (withProgressNarration), A5 (handleStream
-split), A7 (dead title trigger), and A8 (ask_user parsing) are all
-committed on the branch. **Open: A6** (subconscious fire-policy into the pipelines -
-not started). A4 landed after the initial defer; see its item. First of the three
+**All items landed.** A1 (route-layer collapse), A2
+(/reflection-sweep plus the detached sweepHandler dispatch and the
+reflection claim-TTL fix), A3 (withProgressNarration), A4 (nullable
+threadId + requireThreadId guards), A5 (handleStream split), A6
+(subconscious fire-policy into the pipelines), A7 (dead title
+trigger), and A8 (ask_user parsing). First of the three
 [tighten-the-control-surfaces](./tighten-the-control-surfaces.md)
 milestones. Source material: the 2026-06-10 separation-of-concerns
 audit of the agent fleet and tool-call layers (findings summarized
@@ -67,6 +67,14 @@ and should land on the collapsed shape.
   whether each fires (`chat-loop.ts` ~1161-1279). Push the
   fire-decision into the pipeline entry points; the chat-loop
   supplies inputs and owns sequencing only.
+  [DONE 2026-06-10. Each pipeline exports a maybeRun entry
+  (maybeRunIntuitionPipeline / maybeRunContextRecallPipeline) owning
+  the feature gate, the trigger evaluation, and the per-thread
+  inflight dedup; the chat-loop supplies inputs and sequencing. The
+  onWillRun hook fires when a pipeline commits to running - that is
+  where the chat-loop hangs its UI status signals, so a no-trigger
+  turn never flashes a status chip. Verified live: a cold-cleared
+  thread repopulated both caches with trigger='cold'.]
 - **A7. Delete the dead `evaluateTitleTrigger`** (zero callers,
   grep-verified) and fix `docs/dev/intuition.md`, which still
   describes the disconnected mid-turn title-trigger / ephemeral-
