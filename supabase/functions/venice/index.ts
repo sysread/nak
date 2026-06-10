@@ -116,6 +116,32 @@ async function readVeniceKey(admin: SupabaseClient): Promise<string | null> {
   return typeof key === 'string' && key.length > 0 ? key : null;
 }
 
+// Handler preambles. Every route needs the admin client, and the
+// Venice-proxy routes additionally need the shared key; both
+// failures map to the same 503s everywhere. The `| Response` return
+// lets call sites stay two lines (`if (x instanceof Response) return
+// x`) instead of repeating the error mapping per handler.
+
+/** Admin client or the 503 every handler returns when env is missing. */
+function requireAdmin(): SupabaseClient | Response {
+  const admin = adminClient();
+  if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
+  return admin;
+}
+
+/** Admin client + shared Venice key, or the matching 503. */
+async function requireVeniceEnv(): Promise<
+  { admin: SupabaseClient; apiKey: string } | Response
+> {
+  const admin = requireAdmin();
+  if (admin instanceof Response) return admin;
+  const apiKey = await readVeniceKey(admin);
+  if (!apiKey) {
+    return json({ error: 'no Venice key configured (app_config unseeded)' }, 503);
+  }
+  return { admin, apiKey };
+}
+
 /**
  * True when the request is authenticated as the service role. The cron job
  * (pg_net) sends the project's service-role JWT as the bearer (the gateway
@@ -215,12 +241,9 @@ async function handleEmbed(req: Request): Promise<Response> {
     return json({ error: 'body must include `input` and `model`' }, 400);
   }
 
-  const admin = adminClient();
-  if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
-  const apiKey = await readVeniceKey(admin);
-  if (!apiKey) {
-    return json({ error: 'no Venice key configured (app_config unseeded)' }, 503);
-  }
+  const env = await requireVeniceEnv();
+  if (env instanceof Response) return env;
+  const { apiKey } = env;
 
   try {
     const result = await veniceEmbed({ apiKey, model: body.model, input: body.input });
@@ -265,12 +288,9 @@ async function handleUsage(req: Request): Promise<Response> {
     return json({ error: 'invalid JSON body' }, 400);
   }
 
-  const admin = adminClient();
-  if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
-  const apiKey = await readVeniceKey(admin);
-  if (!apiKey) {
-    return json({ error: 'no Venice key configured (app_config unseeded)' }, 503);
-  }
+  const env = await requireVeniceEnv();
+  if (env instanceof Response) return env;
+  const { apiKey } = env;
 
   try {
     const result = await veniceFetchUsagePage({
@@ -309,12 +329,9 @@ async function handleUsage(req: Request): Promise<Response> {
  * is always POST) even though the upstream call is a GET.
  */
 async function handleModels(): Promise<Response> {
-  const admin = adminClient();
-  if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
-  const apiKey = await readVeniceKey(admin);
-  if (!apiKey) {
-    return json({ error: 'no Venice key configured (app_config unseeded)' }, 503);
-  }
+  const env = await requireVeniceEnv();
+  if (env instanceof Response) return env;
+  const { apiKey } = env;
 
   try {
     const result = await veniceFetchModels({ apiKey });
@@ -355,12 +372,9 @@ async function handleComplete(req: Request): Promise<Response> {
     return json({ error: 'body must be a JSON object' }, 400);
   }
 
-  const admin = adminClient();
-  if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
-  const apiKey = await readVeniceKey(admin);
-  if (!apiKey) {
-    return json({ error: 'no Venice key configured (app_config unseeded)' }, 503);
-  }
+  const env = await requireVeniceEnv();
+  if (env instanceof Response) return env;
+  const { apiKey } = env;
 
   try {
     const result = await veniceComplete({
@@ -437,12 +451,9 @@ async function handleImageGenerate(req: Request): Promise<Response> {
     return json({ error: 'body must include `model` and `prompt`' }, 400);
   }
 
-  const admin = adminClient();
-  if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
-  const apiKey = await readVeniceKey(admin);
-  if (!apiKey) {
-    return json({ error: 'no Venice key configured (app_config unseeded)' }, 503);
-  }
+  const env = await requireVeniceEnv();
+  if (env instanceof Response) return env;
+  const { apiKey } = env;
 
   try {
     const result = await veniceGenerateImage({
@@ -502,12 +513,9 @@ async function handleTextParser(req: Request): Promise<Response> {
   const filename =
     filePart instanceof File && filePart.name ? filePart.name : 'attachment';
 
-  const admin = adminClient();
-  if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
-  const apiKey = await readVeniceKey(admin);
-  if (!apiKey) {
-    return json({ error: 'no Venice key configured (app_config unseeded)' }, 503);
-  }
+  const env = await requireVeniceEnv();
+  if (env instanceof Response) return env;
+  const { apiKey } = env;
 
   try {
     const text = await veniceExtractText({ apiKey, file: filePart, filename });
@@ -529,12 +537,9 @@ async function handleTextParser(req: Request): Promise<Response> {
 async function handleBackfill(req: Request): Promise<Response> {
   if (!isServiceRole(req)) return json({ error: 'forbidden' }, 403);
 
-  const admin = adminClient();
-  if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
-  const apiKey = await readVeniceKey(admin);
-  if (!apiKey) {
-    return json({ error: 'no Venice key configured (app_config unseeded)' }, 503);
-  }
+  const env = await requireVeniceEnv();
+  if (env instanceof Response) return env;
+  const { admin, apiKey } = env;
 
   // One holder id per invocation. The claim/save RPCs guard on it so an
   // overlapping invocation (a slow tick still running when the next fires)
@@ -580,39 +585,122 @@ async function handleBackfill(req: Request): Promise<Response> {
   return json(summary);
 }
 
+// ---------------------------------------------------------------------------
+// Fleet route factories. Every agent fleet exposes the same two route
+// shapes - a cron-driven sweep and (for some) a user-triggered manual
+// run - and the per-fleet variation is which tick/run function to
+// call, not handler structure. The factories own the structure; each
+// fleet contributes one line per route below. Fleet SEMANTICS
+// (claim cadence, work-unit bounds, toggles) live with the tick/run
+// functions in agents/*.ts, not here.
+// ---------------------------------------------------------------------------
+
 /**
- * Cron-driven autonomous wiki sweep. Claims day-gate-eligible threads
- * across every member (the claim RPC reads each user's timezone +
- * "automatic wiki updates" toggle off their profile) and runs the
- * wiki agent's tool loop on each. Bounded per invocation inside
- * runWikiSweepTick; the hourly schedule resumes the drain. Runs
- * synchronously and returns the tick summary - pg_net ignores it, but
- * the local dev shim (scripts/dev-backfill-cron.mjs) prints it.
+ * Cron-driven sweep route: service-role only (pg_cron -> pg_net sends
+ * the service JWT). Runs the tick synchronously and returns its
+ * summary - pg_net ignores the body, but the local dev shim
+ * (scripts/dev-backfill-cron.mjs) prints it.
  */
-async function handleWikiSweep(req: Request): Promise<Response> {
-  if (!isServiceRole(req)) return json({ error: 'forbidden' }, 403);
-
-  const admin = adminClient();
-  if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
-
-  const summary = await runWikiSweepTick(admin);
-  return json(summary);
+function sweepHandler(
+  tick: (admin: SupabaseClient) => Promise<unknown>,
+): (req: Request) => Promise<Response> {
+  return async (req) => {
+    if (!isServiceRole(req)) return json({ error: 'forbidden' }, 403);
+    const admin = requireAdmin();
+    if (admin instanceof Response) return admin;
+    return json(await tick(admin));
+  };
 }
 
 /**
+ * User-triggered manual-run route. Body: { runId?: string, ...fleet
+ * extras }. The browser mints the runId and subscribes to its
+ * agent-runs channel BEFORE posting, so the step events published
+ * here are never raced; a missing runId just means no progress
+ * publishing (the result body still carries the outcome).
+ * Agent-level failures and in-flight collisions come back inside the
+ * fleet's result union, not as transport errors. The factory owns
+ * auth, body parse, the runId cap, and the publisher lifecycle; the
+ * `run` adapter pulls any fleet-specific fields off the parsed body.
+ */
+function manualRunHandler(
+  run: (
+    admin: SupabaseClient,
+    userId: string,
+    body: Record<string, unknown>,
+    onProgress: ((event: Record<string, unknown>) => void) | undefined,
+  ) => Promise<unknown>,
+): (req: Request) => Promise<Response> {
+  return async (req) => {
+    const userId = userIdFromJwt(req);
+    if (!userId) return json({ error: 'unauthorized' }, 401);
+    const admin = requireAdmin();
+    if (admin instanceof Response) return admin;
+
+    let body: Record<string, unknown>;
+    try {
+      body = (await req.json()) as Record<string, unknown>;
+    } catch {
+      return json({ error: 'invalid JSON body' }, 400);
+    }
+    // Cap the client-minted id so a hostile body can't bloat every
+    // broadcast payload; the id is an opaque demux key, not identity.
+    const runId =
+      typeof body.runId === 'string' && body.runId.length > 0 && body.runId.length <= 64
+        ? body.runId
+        : null;
+
+    const publisher = runId ? createAgentProgressPublisher(userId, runId) : null;
+    const result = await run(
+      admin,
+      userId,
+      body,
+      publisher ? (event) => publisher.publish(event) : undefined,
+    );
+    // Flush before responding so the 'done' event lands no later than
+    // the response body that also announces completion.
+    if (publisher) await publisher.flush();
+    return json(result);
+  };
+}
+
+// The fleet routing table. One line per route; the referenced
+// tick/run functions carry the fleet semantics and their doc
+// comments.
+const handleWikiSweep = sweepHandler(runWikiSweepTick);
+const handleWikiLibrarianSweep = sweepHandler(runWikiLibrarianSweepTick);
+const handleRemSweep = sweepHandler(runRemSweepTick);
+const handleDeepSleepSweep = sweepHandler(runDeepSleepSweepTick);
+const handleWikiLibrarianRun = manualRunHandler((admin, userId, body, onProgress) =>
+  runWikiLibrarianManual(
+    admin,
+    userId,
+    typeof body.instructions === 'string' ? body.instructions : null,
+    onProgress,
+  ),
+);
+const handleRemRun = manualRunHandler((admin, userId, _body, onProgress) =>
+  runRemManual(admin, userId, onProgress),
+);
+const handleDeepSleepRun = manualRunHandler((admin, userId, _body, onProgress) =>
+  runDeepSleepManual(admin, userId, onProgress),
+);
+
+/**
  * User-triggered retry of a wiki-skipped thread (the Wiki Skipped
- * panel's Retry button). Authenticated as the calling user; the
- * gateway-validated id scopes every RPC the retry makes. Responds
- * with the WikiRetryResult union - agent-level failures are an
- * application outcome (kind: 'error'), not a transport error, so the
- * panel can render them without sniffing status codes.
+ * panel's Retry button). Not a manual-run route: it has a required
+ * threadId, no runId, and no progress channel. Authenticated as the
+ * calling user; the gateway-validated id scopes every RPC the retry
+ * makes. Responds with the WikiRetryResult union - agent-level
+ * failures are an application outcome (kind: 'error'), not a
+ * transport error, so the panel can render them without sniffing
+ * status codes.
  */
 async function handleWikiRetry(req: Request): Promise<Response> {
   const userId = userIdFromJwt(req);
   if (!userId) return json({ error: 'unauthorized' }, 401);
-
-  const admin = adminClient();
-  if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
+  const admin = requireAdmin();
+  if (admin instanceof Response) return admin;
 
   let body: { threadId?: unknown };
   try {
@@ -624,170 +712,6 @@ async function handleWikiRetry(req: Request): Promise<Response> {
   if (!threadId) return json({ error: 'threadId is required' }, 400);
 
   const result = await retryWikiThread(admin, userId, threadId);
-  return json(result);
-}
-
-/**
- * Cron-driven scheduled wiki-librarian sweep. Claims the most-overdue
- * eligible user (the claim RPC enforces the 12h minimum interval and
- * the Settings toggle) and runs the standard librarian review for
- * them. One user per tick; runs synchronously and returns the
- * outcome - pg_net ignores it, the dev shim prints it.
- */
-async function handleWikiLibrarianSweep(req: Request): Promise<Response> {
-  if (!isServiceRole(req)) return json({ error: 'forbidden' }, 403);
-
-  const admin = adminClient();
-  if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
-
-  const summary = await runWikiLibrarianSweepTick(admin);
-  return json(summary);
-}
-
-/**
- * User-triggered librarian run (the Wiki panel's sparkles button).
- * Body: { instructions?: string|null, runId?: string }. The browser
- * generates the runId and subscribes to its agent-runs channel BEFORE
- * posting, so the step events published here are never raced; a
- * missing runId just means no progress publishing (the result body
- * still carries the outcome). Agent-level failures and the
- * in-flight-collision case come back inside the result union, not as
- * transport errors.
- */
-async function handleWikiLibrarianRun(req: Request): Promise<Response> {
-  const userId = userIdFromJwt(req);
-  if (!userId) return json({ error: 'unauthorized' }, 401);
-
-  const admin = adminClient();
-  if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
-
-  let body: { instructions?: unknown; runId?: unknown };
-  try {
-    body = await req.json();
-  } catch {
-    return json({ error: 'invalid JSON body' }, 400);
-  }
-  const instructions =
-    typeof body.instructions === 'string' ? body.instructions : null;
-  // Cap the client-minted id so a hostile body can't bloat every
-  // broadcast payload; the id is an opaque demux key, not identity.
-  const runId =
-    typeof body.runId === 'string' && body.runId.length > 0 && body.runId.length <= 64
-      ? body.runId
-      : null;
-
-  const publisher = runId ? createAgentProgressPublisher(userId, runId) : null;
-  const result = await runWikiLibrarianManual(
-    admin,
-    userId,
-    instructions,
-    publisher ? (event) => publisher.publish(event) : undefined,
-  );
-  // Flush before responding so the 'done' event lands no later than
-  // the response body that also announces completion.
-  if (publisher) await publisher.flush();
-  return json(result);
-}
-
-/**
- * Cron-driven scheduled rem sweep. Claims the most-overdue eligible
- * user (the claim RPC enforces the 12h minimum interval and the
- * memory-librarian Settings toggle) and drains up to three of their
- * recall-co-occurrence conversations. One user per tick; runs
- * synchronously and returns the outcome - pg_net ignores it, the dev
- * shim prints it.
- */
-async function handleRemSweep(req: Request): Promise<Response> {
-  if (!isServiceRole(req)) return json({ error: 'forbidden' }, 403);
-
-  const admin = adminClient();
-  if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
-
-  const summary = await runRemSweepTick(admin);
-  return json(summary);
-}
-
-/**
- * Cron-driven scheduled deep-sleep sweep. Same posture as the rem
- * sweep; the work unit is one seed-neighborhood review instead of a
- * conversation batch.
- */
-async function handleDeepSleepSweep(req: Request): Promise<Response> {
-  if (!isServiceRole(req)) return json({ error: 'forbidden' }, 403);
-
-  const admin = adminClient();
-  if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
-
-  const summary = await runDeepSleepSweepTick(admin);
-  return json(summary);
-}
-
-/**
- * User-triggered rem run (the Memories panel). Body: { runId?: string }.
- * Same runId contract as the wiki-librarian run: the browser mints it
- * and subscribes to its agent-runs channel BEFORE posting; a missing
- * runId just means no progress publishing. Agent-level failures and
- * the in-flight-collision case come back inside the result union, not
- * as transport errors.
- */
-async function handleRemRun(req: Request): Promise<Response> {
-  const userId = userIdFromJwt(req);
-  if (!userId) return json({ error: 'unauthorized' }, 401);
-
-  const admin = adminClient();
-  if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
-
-  let body: { runId?: unknown };
-  try {
-    body = await req.json();
-  } catch {
-    return json({ error: 'invalid JSON body' }, 400);
-  }
-  // Cap the client-minted id so a hostile body can't bloat every
-  // broadcast payload; the id is an opaque demux key, not identity.
-  const runId =
-    typeof body.runId === 'string' && body.runId.length > 0 && body.runId.length <= 64
-      ? body.runId
-      : null;
-
-  const publisher = runId ? createAgentProgressPublisher(userId, runId) : null;
-  const result = await runRemManual(
-    admin,
-    userId,
-    publisher ? (event) => publisher.publish(event) : undefined,
-  );
-  // Flush before responding so the 'done' event lands no later than
-  // the response body that also announces completion.
-  if (publisher) await publisher.flush();
-  return json(result);
-}
-
-/** User-triggered deep-sleep run. Same contract as the rem run route. */
-async function handleDeepSleepRun(req: Request): Promise<Response> {
-  const userId = userIdFromJwt(req);
-  if (!userId) return json({ error: 'unauthorized' }, 401);
-
-  const admin = adminClient();
-  if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
-
-  let body: { runId?: unknown };
-  try {
-    body = await req.json();
-  } catch {
-    return json({ error: 'invalid JSON body' }, 400);
-  }
-  const runId =
-    typeof body.runId === 'string' && body.runId.length > 0 && body.runId.length <= 64
-      ? body.runId
-      : null;
-
-  const publisher = runId ? createAgentProgressPublisher(userId, runId) : null;
-  const result = await runDeepSleepManual(
-    admin,
-    userId,
-    publisher ? (event) => publisher.publish(event) : undefined,
-  );
-  if (publisher) await publisher.flush();
   return json(result);
 }
 
@@ -891,8 +815,8 @@ async function handleStream(req: Request): Promise<Response> {
     return json({ error: 'unauthenticated' }, 401);
   }
 
-  const admin = adminClient();
-  if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
+  const admin = requireAdmin();
+  if (admin instanceof Response) return admin;
 
   // Ownership gate. The thread row's user_id is authoritative; we
   // never trust the body. Without this, a forged threadId in the
