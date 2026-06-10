@@ -2063,15 +2063,16 @@ set search_path = public as $$
 $$;
 
 -- Delete the given recipe_images rows that are STILL orphaned, returning
--- the bucket keys actually removed so the caller deletes those objects.
--- The re-check (no link) closes the race where a row listed as orphan
--- gets re-linked before we delete it - that row is skipped and its object
--- kept. Content addressing makes it self-healing anyway: a re-attach
--- re-uploads the same <uid>/<sha256> key. Idempotent: already-deleted ids
--- return nothing.
+-- the bucket keys actually removed so the caller deletes those objects,
+-- plus each row's user_id so the caller can attribute the per-user GC
+-- summary in the owner's Logs drawer. The re-check (no link) closes the
+-- race where a row listed as orphan gets re-linked before we delete it -
+-- that row is skipped and its object kept. Content addressing makes it
+-- self-healing anyway: a re-attach re-uploads the same <uid>/<sha256>
+-- key. Idempotent: already-deleted ids return nothing.
 drop function if exists public.delete_orphan_recipe_images(uuid[]);
 create or replace function public.delete_orphan_recipe_images(p_ids uuid[])
-returns table (id uuid, storage_path text)
+returns table (id uuid, storage_path text, user_id uuid)
 language sql security definer
 set search_path = public as $$
   delete from public.recipe_images ri
@@ -2079,7 +2080,7 @@ set search_path = public as $$
      and not exists (
        select 1 from public.recipe_version_images rvi where rvi.image_id = ri.id
      )
-  returning ri.id, ri.storage_path
+  returning ri.id, ri.storage_path, ri.user_id
 $$;
 
 revoke all on function public.list_orphan_recipe_images(int) from public, anon, authenticated;
@@ -9777,19 +9778,21 @@ $cron$;
 
 -- Select a bounded batch of live attachments eligible for expiry: object still
 -- present (storage_path not null) and the owning thread dormant for p_days.
--- Returns (id, storage_path) so the function knows which objects to delete and
--- which rows to mark. No claim/TTL: deletion + marking are idempotent (removing
--- an already-gone object is a no-op, re-marking an expired row is a no-op), so
--- two overlapping ticks can't corrupt anything - the FOR UPDATE SKIP LOCKED
--- just keeps them from contending on the same rows within a tick.
+-- Returns (id, storage_path, user_id) so the function knows which objects to
+-- delete, which rows to mark, and which user's Logs drawer to notify (the
+-- per-user expiry summary; attachments carry no user_id column, so the owner
+-- comes off the thread join). No claim/TTL: deletion + marking are idempotent
+-- (removing an already-gone object is a no-op, re-marking an expired row is a
+-- no-op), so two overlapping ticks can't corrupt anything - the FOR UPDATE
+-- SKIP LOCKED just keeps them from contending on the same rows within a tick.
 drop function if exists public.list_expirable_attachments(int, int);
 create or replace function public.list_expirable_attachments(
   p_days int,
   p_limit int
-) returns table (id uuid, storage_path text)
+) returns table (id uuid, storage_path text, user_id uuid)
 language sql security definer
 set search_path = public as $$
-  select a.id, a.storage_path
+  select a.id, a.storage_path, t.user_id
     from public.message_attachments a
     join public.messages m on m.id = a.message_id
     join public.threads t on t.id = m.thread_id

@@ -10,6 +10,7 @@
 // unconditionally excludes the current thread, so the agent never
 // gets the live conversation echoed back as "recall context."
 
+import { createEdgeLogger } from '../../_shared/edge-log.ts';
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { readVeniceKey } from '../tools/_venice_key.ts';
 import { conversationSearch } from '../tools/conversation_search.ts';
@@ -21,6 +22,7 @@ import {
 } from './_run.ts';
 import {
   loadThreadSlice,
+  logPreview,
   messageToVenice,
   parseRecallOutput,
   type RecallNote,
@@ -155,58 +157,85 @@ async function runConversationRecall(
   ctx: ToolContext,
   topic: string,
 ): Promise<RecallNote> {
-  const slice = await loadThreadSlice(ctx.adminClient, ctx.threadId);
-  if (slice.length === 0) {
-    return { kind: 'none', reason: 'thread has no user turn yet' };
+  // Drawer logging. Runs mid-turn inside the chat tool dispatch, so
+  // the run - and the finally-flush below - is bounded by the turn.
+  const log = createEdgeLogger(ctx.userId, 'conversation-recall');
+  try {
+    const slice = await loadThreadSlice(ctx.adminClient, ctx.threadId);
+    if (slice.length === 0) {
+      return { kind: 'none', reason: 'thread has no user turn yet' };
+    }
+
+    // The slice ends at the user turn the agent is recalling for
+    // (trimToLastUserTurn), so its tail is the input worth previewing.
+    log.debug(
+      `conversation recall start: ` +
+        `${topic.trim().length > 0 ? `topic "${logPreview(topic)}"` : 'no topic flagged'}, ` +
+        `latest user turn "${logPreview(slice[slice.length - 1].content ?? '')}"`,
+    );
+
+    const convo: VeniceWireMessage[] = slice.map(messageToVenice);
+    convo.push({ role: 'user', content: buildPrompt(topic) });
+
+    // Wrap the registered conversation_search ToolDef as an AgentTool.
+    // The function-side conversation_search already excludes the
+    // current thread unconditionally, so we don't need to pass a flag.
+    const recallSearch: AgentTool = {
+      name: 'conversation_search',
+      wire: CONVERSATION_SEARCH_WIRE_SCHEMA,
+      async execute(args, agentCtx) {
+        return await conversationSearch.execute(args, {
+          adminClient: agentCtx.adminClient,
+          userId: agentCtx.userId,
+          threadId: agentCtx.threadId,
+          signal: agentCtx.signal,
+          depth: agentCtx.depth,
+        });
+      },
+    };
+
+    const toolbox: Toolbox = {
+      name: 'conversationRecall',
+      tools: [recallSearch],
+    };
+
+    const apiKey = await readVeniceKey(ctx.adminClient);
+    if (!apiKey) throw new Error('no Venice key configured (app_config unseeded)');
+
+    const baseCtx: Omit<AgentToolContext, 'signal' | 'depth'> = {
+      adminClient: ctx.adminClient,
+      userId: ctx.userId,
+      threadId: ctx.threadId,
+    };
+
+    const result = await runHeadlessAgent(
+      {
+        model: CONVERSATION_RECALL_MODEL,
+        messages: convo,
+        toolbox,
+        baseCtx,
+        apiKey,
+        signal: ctx.signal,
+      },
+      ctx.depth ?? 0,
+    );
+
+    const note = parseRecallOutput(result.finalText);
+    log.info(
+      `conversation recall finished (${result.toolCalls} tool call(s), outcome=${note.kind})`,
+    );
+    return note;
+  } catch (err) {
+    // Logging only - the failure still propagates to the tool
+    // dispatcher unchanged; this line is the drawer-visible reason.
+    log.error(
+      'conversation recall failed',
+      err instanceof Error ? err : new Error(String(err)),
+    );
+    throw err;
+  } finally {
+    await log.flush();
   }
-
-  const convo: VeniceWireMessage[] = slice.map(messageToVenice);
-  convo.push({ role: 'user', content: buildPrompt(topic) });
-
-  // Wrap the registered conversation_search ToolDef as an AgentTool.
-  // The function-side conversation_search already excludes the
-  // current thread unconditionally, so we don't need to pass a flag.
-  const recallSearch: AgentTool = {
-    name: 'conversation_search',
-    wire: CONVERSATION_SEARCH_WIRE_SCHEMA,
-    async execute(args, agentCtx) {
-      return await conversationSearch.execute(args, {
-        adminClient: agentCtx.adminClient,
-        userId: agentCtx.userId,
-        threadId: agentCtx.threadId,
-        signal: agentCtx.signal,
-        depth: agentCtx.depth,
-      });
-    },
-  };
-
-  const toolbox: Toolbox = {
-    name: 'conversationRecall',
-    tools: [recallSearch],
-  };
-
-  const apiKey = await readVeniceKey(ctx.adminClient);
-  if (!apiKey) throw new Error('no Venice key configured (app_config unseeded)');
-
-  const baseCtx: Omit<AgentToolContext, 'signal' | 'depth'> = {
-    adminClient: ctx.adminClient,
-    userId: ctx.userId,
-    threadId: ctx.threadId,
-  };
-
-  const result = await runHeadlessAgent(
-    {
-      model: CONVERSATION_RECALL_MODEL,
-      messages: convo,
-      toolbox,
-      baseCtx,
-      apiKey,
-      signal: ctx.signal,
-    },
-    ctx.depth ?? 0,
-  );
-
-  return parseRecallOutput(result.finalText);
 }
 
 export const conversationRecall: ToolDef = {

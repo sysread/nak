@@ -33,8 +33,12 @@ function logs, invisible to the in-app Logs drawer.
 - **B3. The mid-turn recall agents** (`recall.ts`,
   `conversation_recall.ts`, `wiki_recall.ts`, `context.ts`) -
   console-only today. Sources named after each agent.
-- **B4. Embed backfill sweep** - per-row user attribution exists;
-  `embeddings` source.
+- **B4. Embed backfill sweep** - [DEFERRED 2026-06-10.] Per-row
+  attribution turned out to mean extending all five claim RPCs to
+  return user_id, and logging.md already records "backfill logs in
+  Supabase, not the drawer" as the accepted posture. Low value,
+  highest cost of the batch; revisit only if embedding
+  troubleshooting ever actually wants the drawer.
 - **B5. The two non-venice functions** (`expire-attachments`,
   `recipe-image-gc`) - currently fully silent, and they are
   deletion jobs, exactly the kind of thing you want visibility on.

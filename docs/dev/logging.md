@@ -103,10 +103,9 @@ log.debug('payload', { foo, bar });
 Pick a short, stable source tag. Existing tags:
 
 - `update` - service-worker update lifecycle
-- `summary-worker`, `attachment-expiry-worker`,
-  `samskara-worker` - browser background loop drivers (embedding
-  backfill runs server-side now, so it logs in Supabase, not this
-  drawer)
+- `summary-worker`, `samskara-worker` - browser background loop
+  drivers (embedding backfill runs server-side now, so it logs in
+  Supabase, not this drawer)
 - `reflection`, `wiki`, `wiki-librarian`, `rem`, `deep-sleep` - the
   reflection agent, the autonomous wiki agent, the wiki librarian,
   and the two memory-librarian passes, which run in the venice edge
@@ -120,6 +119,17 @@ Pick a short, stable source tag. Existing tags:
   waits, truncated-stream re-rolls, output-guard retries - (warn),
   and failures (error). Round transitions and event tallies ride at
   debug. Each line starts with the per-turn runId correlator.
+- `recall`, `conversation-recall`, `wiki-recall` - the mid-turn
+  recall agents (edge-side, spawned by chat tool calls): input
+  preview at debug, run summary at info, failures at error
+- `context` - the umbrella context-gather tool (edge-side): derived
+  query at debug, per-layer counts at info, layer failures at error
+- `attachment-expiry` - the cron attachment-expiry sweep's per-user
+  "expired N dormant attachment(s)" summary (edge-side); restores
+  the visibility the retired browser `attachment-expiry-worker`
+  source provided before the server move
+- `recipe-image-gc` - the cron recipe-image GC sweep's per-user
+  "reclaimed N orphaned recipe image(s)" summary (edge-side)
 - `wiki-manual` - the browser-side per-article "Ask agent to
   update" flow (a main-thread completion, not a worker)
 - `samskara` - chat-loop-side samskara helpers
@@ -149,9 +159,9 @@ position stays meaningful across bursts.
 
 ## Worker-to-main relay
 
-The browser background workers (summary, attachment-expiry,
-samskara, and the supervised auto_title / topics / memory_topics /
-recipe_topics units) import the logger from their loop drivers.
+The browser background workers (summary, samskara, and the
+supervised auto_title / topics / memory_topics / recipe_topics
+units) import the logger from their loop drivers.
 Reflection and the autonomous wiki agent are NOT among them - they
 run server-side and use the edge-to-main relay below. Worker-context
 calls detect `WorkerGlobalScope` at module init and:

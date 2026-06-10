@@ -146,6 +146,16 @@ export function parseRecallOutput(text: string): RecallNote {
 }
 
 /**
+ * Single-line preview of free text for log breadcrumbs: collapse
+ * whitespace and cap the length so a long user turn or derived query
+ * doesn't flood the drawer entry it rides on.
+ */
+export function logPreview(text: string, max = 120): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length <= max ? flat : flat.slice(0, max) + '...';
+}
+
+/**
  * Load the thread's messages from Supabase, trim to last user turn,
  * trim to char budget. Used by every recall agent as the first step
  * before composing the prompt + running the headless tool loop.

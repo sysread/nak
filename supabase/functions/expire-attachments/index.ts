@@ -13,6 +13,10 @@
 // ../_shared/expire-attachments.ts; this file owns only the glue: auth, the
 // service-role client, and wiring the RPC + Storage I/O into the deps.
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+// edge-log is a _shared module like the expiry driver itself, so importing it
+// here doesn't breach the "no helpers shared with venice/index.ts" stance in
+// the header - that stance is about the auth/client glue, not _shared.
+import { createEdgeLogger } from '../_shared/edge-log.ts';
 import { runExpiry, type ExpireDeps } from '../_shared/expire-attachments.ts';
 
 const CORS_HEADERS: Record<string, string> = {
@@ -69,6 +73,16 @@ async function handleExpire(req: Request): Promise<Response> {
   const admin = adminClient();
   if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
 
+  // Per-user attribution for the Logs drawer: listBatch records each row's
+  // owner; markExpired tallies the ids it successfully submits against that
+  // map. The pure driver stays attribution-blind on purpose - it summarizes
+  // counts, not ids - so the glue carries the ownership context. The
+  // mark_attachments_expired RPC returns only an aggregate count, so the
+  // per-user numbers count rows submitted for marking: exact unless a row
+  // vanished between list and mark, in which case they over-count by that row.
+  const ownerByRowId = new Map<string, string>();
+  const expiredByUser = new Map<string, number>();
+
   const deps: ExpireDeps = {
     listBatch: async (batchSize) => {
       const { data, error } = await admin.rpc('list_expirable_attachments', {
@@ -76,10 +90,12 @@ async function handleExpire(req: Request): Promise<Response> {
         p_limit: batchSize,
       });
       if (error) throw error;
-      return ((data ?? []) as Array<{ id: string; storage_path: string }>).map((r) => ({
-        id: r.id,
-        storagePath: r.storage_path,
-      }));
+      return (
+        (data ?? []) as Array<{ id: string; storage_path: string; user_id: string }>
+      ).map((r) => {
+        ownerByRowId.set(r.id, r.user_id);
+        return { id: r.id, storagePath: r.storage_path };
+      });
     },
     deleteObjects: async (paths) => {
       if (paths.length === 0) return;
@@ -90,6 +106,10 @@ async function handleExpire(req: Request): Promise<Response> {
       if (ids.length === 0) return 0;
       const { data, error } = await admin.rpc('mark_attachments_expired', { p_ids: ids });
       if (error) throw error;
+      for (const id of ids) {
+        const owner = ownerByRowId.get(id);
+        if (owner) expiredByUser.set(owner, (expiredByUser.get(owner) ?? 0) + 1);
+      }
       return typeof data === 'number' ? data : 0;
     },
   };
@@ -103,6 +123,16 @@ async function handleExpire(req: Request): Promise<Response> {
     return json(summary);
   } catch (err) {
     return json({ error: (err as Error).message }, 500);
+  } finally {
+    // One drawer line per affected user, emitted even when the sweep died
+    // mid-run (earlier batches were already marked). The finally block runs
+    // before the returned Response settles, so every broadcast is flushed
+    // before the function resolves (see edge-log.ts header).
+    for (const [userId, count] of expiredByUser) {
+      const log = createEdgeLogger(userId, 'attachment-expiry');
+      log.info(`expired ${count} dormant attachment(s)`);
+      await log.flush();
+    }
   }
 }
 
