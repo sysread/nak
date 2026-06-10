@@ -76,8 +76,12 @@ thread by the first response.
   `STALE_FUSE_ROUNDS`, and `countUserRounds` (the round-id
   counter). Schema-versioned (`v: 1`); a drift / unknown-version
   row reads as null and triggers a fresh refresh.
-- `src/lib/intuition/pipeline.ts` - `runIntuitionPipeline`. Each
-  stage hits Venice's non-streaming `completeChat` and reads the
+- `src/lib/intuition/pipeline.ts` - `runIntuitionPipeline` plus
+  `maybeRunIntuitionPipeline`, the chat-loop's entry point: it owns
+  the feature gate (no model id = off), the trigger evaluation, and
+  the per-thread inflight dedup, and exposes an `onWillRun` hook the
+  chat-loop hangs its UI status signal on. Each pipeline stage hits
+  Venice's non-streaming `completeChat` and reads the
   single text response, the same pattern the samskara and summary
   agents use. Per-drive failures are tolerated (the drive is
   omitted from `payload.drives` and synthesis runs against the
@@ -189,8 +193,8 @@ demand.
 ## Interactions
 
 - **Chat ([./chat.md](./chat.md))** - the chat-loop is the only
-  caller of `runIntuitionPipeline`. The trigger site lives
-  inside `runChatLoop`; the `intuitionModelId` and
+  caller of `maybeRunIntuitionPipeline`, which owns the fire
+  decision; the call site lives inside `runChatLoop`; the `intuitionModelId` and
   `intuitionMood` options on `ChatLoopOptions` are how the
   caller wires the feature on. The synthesis lands as a
   `<think>` block on a synthetic assistant message in the

@@ -591,6 +591,16 @@ markdown-only changes. The test suite includes a postcss parse of
 every stylesheet under `src/` (`tests/styles.test.ts`) and a
 markdownlint pass over the doc tree (`tests/markdownlint.test.ts`).
 
+### Check exit codes, not piped output
+
+Piping a gate command (`mise run check 2>&1 | tail -2`) replaces
+its exit code with the pipe tail's - a failed gate reads as success
+and the next `&&` step (often `git commit`) runs anyway. This has
+shipped lint-broken and type-broken commits that needed amending.
+When chaining on success, capture the status explicitly
+(`mise run check > /tmp/out 2>&1; echo "GATE=$?"`) or run the gate
+as its own un-piped command before the commit step.
+
 ### Read the warnings, not just the exit code
 
 Exit 0 from `mise run check` is necessary but not sufficient.

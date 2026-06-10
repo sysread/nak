@@ -186,9 +186,14 @@ Edge dispatch (`supabase/functions/venice/`):
 - `performToolCall.ts` - the function-side single-tool dispatcher:
   the module-scoped registry, `registerTool` (throws on duplicate
   names at module load), `listRegisteredTools`, the function-side
-  `ToolContext` (`adminClient`, `userId`, `threadId`, `signal`,
-  `depth?`), and the dispatch the streaming orchestrator calls per
-  tool-call request.
+  `ToolContext` (`adminClient`, `userId`, `threadId` - a string for
+  chat dispatch, null for the cross-thread librarian agents -
+  `signal`, `depth?`), `requireThreadId` (the loud guard
+  thread-requiring tools call instead of trusting the field), and
+  the dispatch the streaming orchestrator calls per tool-call
+  request. NOTE: supabase-js `.eq()` accepts `string | null`
+  silently, so the null-safety of each tool is a reviewed manual
+  discipline, not a compiler guarantee.
 - `tools/index.ts` - side-effect barrel: importing it registers
   every tool implementation. New tool ports add one import line.
 - `tools/<name>.ts` - the implementations. Direct queries run on
@@ -281,9 +286,9 @@ Edge dispatch (`supabase/functions/venice/`):
     chat-tool implementations actually receive: service-role
     `adminClient`, the gateway-verified `userId`, `threadId`,
     `signal`, and the agent-recursion `depth`.
-  - `AgentToolContext` (`agents/_run.ts`) is the same minus any
-    thread/realtime surface - admin DB access + userId + cancel +
-    depth. `asAgentTool` adapts between the latter two so agents
+  - `AgentToolContext` (`agents/_run.ts`) is the same shape with
+    the same nullable `threadId` (null for the cross-thread
+    librarians). `asAgentTool` adapts between the latter two so agents
     reuse registered implementations.
 
 ## Contracts
