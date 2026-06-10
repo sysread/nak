@@ -104,8 +104,7 @@ Pick a short, stable source tag. Existing tags:
 
 - `update` - service-worker update lifecycle
 - `summary-worker`, `samskara-worker` - browser background loop
-  drivers (embedding backfill runs server-side now, so it logs in
-  Supabase, not this drawer)
+  drivers
 - `reflection`, `wiki`, `wiki-librarian`, `rem`, `deep-sleep` - the
   reflection agent, the autonomous wiki agent, the wiki librarian,
   and the two memory-librarian passes, which run in the venice edge
@@ -130,6 +129,9 @@ Pick a short, stable source tag. Existing tags:
   source provided before the server move
 - `recipe-image-gc` - the cron recipe-image GC sweep's per-user
   "reclaimed N orphaned recipe image(s)" summary (edge-side)
+- `embeddings` - the cron embed backfill's per-user "embedded N
+  item(s)" summary (edge-side); ticks that drain nothing emit
+  nothing
 - `wiki-manual` - the browser-side per-article "Ask agent to
   update" flow (a main-thread completion, not a worker)
 - `samskara` - chat-loop-side samskara helpers

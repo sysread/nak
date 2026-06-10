@@ -3124,7 +3124,7 @@ drop function if exists public.claim_next_pending_recipe(text, int);
 create or replace function public.claim_next_pending_recipe(
   p_holder_id text,
   p_ttl_seconds int
-) returns table (id uuid, title text, source text, cooklang text)
+) returns table (id uuid, title text, source text, cooklang text, user_id uuid)
 language sql security definer
 set search_path = public as $$
   with candidate as (
@@ -3142,7 +3142,7 @@ set search_path = public as $$
          embedding_claim_expires = now() + make_interval(secs => p_ttl_seconds)
     from candidate c
    where r.id = c.id
-  returning r.id, r.title, r.source, r.cooklang;
+  returning r.id, r.title, r.source, r.cooklang, r.user_id;
 $$;
 
 drop function if exists public.save_recipe_embedding_if_claimed(uuid, text, vector, text);
@@ -3374,7 +3374,7 @@ drop function if exists public.claim_next_pending_memory(text, int);
 create or replace function public.claim_next_pending_memory(
   p_holder_id text,
   p_ttl_seconds int
-) returns table (id uuid, label text, data text)
+) returns table (id uuid, label text, data text, user_id uuid)
 language sql security definer
 set search_path = public as $$
   with candidate as (
@@ -3392,7 +3392,7 @@ set search_path = public as $$
          embedding_claim_expires = now() + make_interval(secs => p_ttl_seconds)
     from candidate c
    where m.id = c.id
-  returning m.id, m.label, m.data;
+  returning m.id, m.label, m.data, m.user_id;
 $$;
 
 -- Save the embedding IF our claim is still valid. Returns true on
@@ -4691,7 +4691,7 @@ drop function if exists public.claim_next_pending_thread_for_embedding(text, int
 create or replace function public.claim_next_pending_thread_for_embedding(
   p_holder_id text,
   p_ttl_seconds int
-) returns table (id uuid, title text, summary text)
+) returns table (id uuid, title text, summary text, user_id uuid)
 language sql security definer
 set search_path = public as $$
   with candidate as (
@@ -4710,7 +4710,7 @@ set search_path = public as $$
          embedding_claim_expires = now() + make_interval(secs => p_ttl_seconds)
     from candidate c
    where t.id = c.id
-  returning t.id, t.title, t.summary;
+  returning t.id, t.title, t.summary, t.user_id;
 $$;
 
 -- Save the thread embedding IF our claim is still valid. Same shape
@@ -5915,7 +5915,7 @@ drop function if exists public.samskara_claim_next_substrate_embed(text, int);
 create or replace function public.samskara_claim_next_substrate_embed(
   p_holder_id text,
   p_ttl_seconds int
-) returns table (id uuid, situation text, outcome text)
+) returns table (id uuid, situation text, outcome text, user_id uuid)
 language sql security definer
 set search_path = public as $$
   with candidate as (
@@ -5934,7 +5934,7 @@ set search_path = public as $$
          embedding_claim_expires = now() + make_interval(secs => p_ttl_seconds)
     from candidate c
    where s.id = c.id
-  returning s.id, s.situation, s.outcome;
+  returning s.id, s.situation, s.outcome, s.user_id;
 $$;
 
 drop function if exists public.samskara_save_substrate_embedding_if_claimed(
@@ -7598,7 +7598,7 @@ drop function if exists public.claim_next_pending_wiki_article(text, int);
 create or replace function public.claim_next_pending_wiki_article(
   p_holder_id text,
   p_ttl_seconds int
-) returns table (id uuid, title text, content text)
+) returns table (id uuid, title text, content text, user_id uuid)
 language sql security definer
 set search_path = public as $$
   with candidate as (
@@ -7616,7 +7616,7 @@ set search_path = public as $$
          embedding_claim_expires = now() + make_interval(secs => p_ttl_seconds)
     from candidate c
    where w.id = c.id
-  returning w.id, w.title, w.content;
+  returning w.id, w.title, w.content, w.user_id;
 $$;
 
 drop function if exists public.save_wiki_article_embedding_if_claimed(uuid, text, vector, text);

@@ -548,6 +548,14 @@ async function handleBackfill(req: Request): Promise<Response> {
   // can't save over a row this one claimed.
   const holderId = crypto.randomUUID();
 
+  // Per-user drawer attribution. The claim RPCs return each row's
+  // user_id; saves tally per owner so the tick can emit one
+  // "embedded N item(s)" summary into each affected user's Logs
+  // drawer. Keyed per source+id because ids are only unique within
+  // a table.
+  const rowOwner = new Map<string, string>();
+  const embeddedByUser = new Map<string, number>();
+
   const deps: BackfillDeps = {
     claim: async (sourceIndex) => {
       const source = EMBED_SOURCES[sourceIndex];
@@ -558,6 +566,9 @@ async function handleBackfill(req: Request): Promise<Response> {
       if (error) throw error;
       const row = (Array.isArray(data) ? data[0] : data) as Record<string, unknown> | undefined;
       if (!row) return null;
+      if (typeof row.user_id === 'string') {
+        rowOwner.set(`${sourceIndex}:${String(row.id)}`, row.user_id);
+      }
       return { id: String(row.id), input: source.buildInput(row) };
     },
     embed: async (input) => {
@@ -573,7 +584,14 @@ async function handleBackfill(req: Request): Promise<Response> {
         p_embedding_model: VENICE_EMBEDDING_MODEL,
       });
       if (error) throw error;
-      return data === true;
+      const saved = data === true;
+      if (saved) {
+        const owner = rowOwner.get(`${sourceIndex}:${id}`);
+        if (owner) {
+          embeddedByUser.set(owner, (embeddedByUser.get(owner) ?? 0) + 1);
+        }
+      }
+      return saved;
     },
   };
 
@@ -583,6 +601,14 @@ async function handleBackfill(req: Request): Promise<Response> {
     timeBudgetMs: BACKFILL_TIME_BUDGET_MS,
     isRateLimit: (err) => err instanceof VeniceError && err.kind === 'rate_limit',
   });
+
+  // One drawer line per affected user, after the drain settles. Most
+  // ticks touch nobody (queues run empty) and emit nothing.
+  for (const [userId, count] of embeddedByUser) {
+    const log = createEdgeLogger(userId, 'embeddings');
+    log.info(`embedded ${count} item(s) in the background`);
+    await log.flush();
+  }
 
   return json(summary);
 }

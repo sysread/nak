@@ -2,9 +2,7 @@
 
 ## STATUS (2026-06-10, end of day)
 
-**Landed except B4 (deferred, see its item) and B6 (the shared
-handler wrapper does not yet log handler-level errors - small
-follow-up).** The streaming orchestrator ('stream' source), the
+**Fully landed.** The streaming orchestrator ('stream' source), the
 four mid-turn agents, and the two GC functions all reach the drawer;
 verified live for the orchestrator (a dev chat turn rendered its
 operational lines). Second of the three
@@ -37,12 +35,12 @@ function logs, invisible to the in-app Logs drawer.
 - **B3. The mid-turn recall agents** (`recall.ts`,
   `conversation_recall.ts`, `wiki_recall.ts`, `context.ts`) -
   console-only today. Sources named after each agent.
-- **B4. Embed backfill sweep** - [DEFERRED 2026-06-10.] Per-row
-  attribution turned out to mean extending all five claim RPCs to
-  return user_id, and logging.md already records "backfill logs in
-  Supabase, not the drawer" as the accepted posture. Low value,
-  highest cost of the batch; revisit only if embedding
-  troubleshooting ever actually wants the drawer.
+- **B4. Embed backfill sweep** - [DONE 2026-06-10, second pass -
+  the user overrode the initial defer for drawer consistency.] All
+  five claim RPCs return user_id; the backfill tallies successful
+  saves per owner and emits one 'embedded N item(s)' summary per
+  affected user under the `embeddings` source. Empty ticks emit
+  nothing.
 - **B5. The two non-venice functions** (`expire-attachments`,
   `recipe-image-gc`) - currently fully silent, and they are
   deletion jobs, exactly the kind of thing you want visibility on.
