@@ -496,10 +496,11 @@ sleep (60s).
 
   A third tool - `samskara_collapse_by_cofiring(...)` - handles
   ongoing redundancy consolidation. It's the same RPC the
-  background dedup phase runs each rotation (see below). The retired
-  diagnostics modal exposed it as a manual "Consolidate" button; that
-  affordance was not carried into the Samskara tab (the worker runs it
-  automatically), so the RPC currently has no UI trigger. Idempotent.
+  background dedup phase runs each rotation (see below). A manual
+  "Consolidate" button existed as build-time scaffolding in the
+  now-retired diagnostics modal; it was intentionally not migrated to
+  the Samskara tab (the worker runs the dedup automatically), so the
+  RPC currently has no UI trigger. Idempotent.
 - **Mint-tier2** - `SamskaraAgent.mintTier2(children, signal) ->
   {confirm, prediction, inner_voice, valence, confidence} | null`.
   Detects one recurring co-fire constellation of tier-1 samskaras
@@ -992,9 +993,10 @@ modal entirely. Three sub-views:
 Read-only by design - no delete/pin/edit. Curation would re-open the
 "operator games the bias model" question; if it's ever wanted it's a
 deliberate separate decision. The modal's manual "Consolidate" and
-"Copy snapshot" affordances were NOT carried over - dedup runs
-automatically in the worker's dedup phase every rotation, so the manual
-trigger was pure convenience; re-add if it's missed.
+"Copy snapshot" buttons were build-time scaffolding from the original
+samskara work - never intended as permanent operator features - so they
+were intentionally not migrated. Dedup runs automatically in the
+worker's dedup phase every rotation regardless.
 
 Search ranks by plain cosine (`samskara_search_by_prediction`), NOT
 the `samskara_fire_top_k` formula - browse wants closest-to-query, not
