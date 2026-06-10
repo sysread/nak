@@ -1,32 +1,48 @@
 # Reorganize the workshop: collapse the tool-dispatch split
 
+## STATUS (2026-06-10)
+
+**Phases 1-4 are all landed; the end state below is the actual state
+of the tree.** What remains:
+
+- **Production verification** for everything that landed local-only:
+  reflection, the edge-to-drawer log streaming, wiki, wiki-librarian,
+  and rem + deep-sleep. Per-fleet checklists live in each fleet's
+  Status block; the bar is the Phase 2 verification gate (watch a
+  hosted cron tick claim and process real work, confirm the drawer
+  sources, round-trip the manual runs).
+- **The Phase 5 ledger** - independent, opportunistic items; none
+  gate anything.
+
 ## SYNOPSIS
 
-**Collapse the tool-dispatch split.** All tools currently live in two
+**Collapse the tool-dispatch split.** Tools used to live in two
 places - the venice edge function's `performToolCall` registry, and the
 browser's `executeToolCall` / `executeToolboxCall`. The streaming-root
-migration moved main-chat dispatch server-side; what's left is the
+migration moved main-chat dispatch server-side; this project moved the
 **agent fleet** (reflection, rem, deep-sleep, wiki, wiki-librarian)
-still driving its tool loops in Web Workers. End state: **one
-dispatcher, one registry**, both living in the edge function. Browser
-becomes purely "express user intent, render system state."
+out of its Web Workers to finish the job. End state, now reached:
+**one dispatcher, one registry**, both living in the edge function.
+Browser is purely "express user intent, render system state."
 
 ## PURPOSE
 
-Right now the **same tool name** (e.g. `memory_search`) has **two live
-implementations** - one in `src/lib/tools/memory_search.ts` for the
-agents, one in `supabase/functions/venice/tools/memory_search.ts` for
-main chat. They're independently maintained and the schemas drift on
-their own. The browser `execute()` paths are also a mix of "alive" and
-"dead-because-chat-loop-moved" - the live-or-dead split is invisible
-without grepping. This is the kind of state-shape you can only hold in
-your head while it's fresh, and which the next session will get wrong.
+Before this project, the **same tool name** (e.g. `memory_search`) had
+**two live implementations** - one in `src/lib/tools/memory_search.ts`
+for the agents, one in `supabase/functions/venice/tools/
+memory_search.ts` for main chat. They were independently maintained
+and the schemas drifted on their own (the wiki librarian's inline
+copies were caught carrying wrong caps; the edge confidence-band
+mirror had drifted bands - both found and fixed mid-migration, both
+instances of exactly this disease). The browser `execute()` paths
+were also a mix of "alive" and "dead-because-chat-loop-moved" - the
+live-or-dead split was invisible without grepping.
 
 **Two dispatchers for one contract is the anti-attractor.** Until both
-halves collapse into the function side, the cleanup work after every
-edge-function feature has a parallel-impl tax: write the tool, write
-its browser twin, hope they stay in sync. The remaining browser-side
-agent fleets are what keep that tax alive.
+halves collapsed into the function side, the cleanup work after every
+edge-function feature had a parallel-impl tax: write the tool, write
+its browser twin, hope they stay in sync. The browser-side agent
+fleets were what kept that tax alive.
 
 ## END STATE
 
@@ -896,9 +912,11 @@ case justifies migration:
   candidates for the same waitUntil pattern eventually, but they don't
   block the dispatcher consolidation. **Marked for re-inspection once
   Phase 3 closes** (user directive, 2026-06-09) - see the Phase 5
-  ledger entry. Samskara in particular has an upstream change landing
-  shortly; whatever the re-inspection decides for it must wait for
-  that rebase and a fresh read of the area.
+  ledger entry; Phase 3 has closed, so this is actionable. Samskara's
+  upstream change (the tier-2 compound mint phase) has landed and the
+  branch is rebased onto it; the re-inspection still owes that area a
+  fresh full read before deciding anything - it is a six-phase loop
+  with new schema machinery now, not the shape prior plans knew.
 - **The composer popover + thread state UI** - reads
   `thread.toolboxes_enabled` directly, writes via
   `setThreadToolboxesEnabled`. No dispatcher coupling.
@@ -906,9 +924,8 @@ case justifies migration:
   browser; runs per chat turn against `thread.toolboxes_enabled`.
 - **`ask_user` parse/build helpers** - `parseAskUserContent`,
   `buildAskUserAnswerContent`, the `ASK_USER_*_FLAG` constants.
-  Consumed by `Chat.svelte` for the UI suspend/resume flow. Move to a
-  non-tool location during Phase 1 if `ask_user.ts` is otherwise
-  deletable.
+  Consumed by `Chat.svelte` for the UI suspend/resume flow. [Moved to
+  `src/lib/ask-user.ts` during Phase 1, as planned.]
 
 ## Verification gates
 
@@ -951,33 +968,35 @@ nice-to-haves.
   resolves a result. A demolition PR that breaks one quietly is
   exactly the failure mode this whole exercise exists to prevent.
 
-## Open questions
+## Open questions [all resolved]
 
-Surfaced now so they don't bite mid-migration.
+Surfaced before the migration so they wouldn't bite mid-flight; kept
+with their outcomes since the reasoning is reusable.
 
 - **Should the agent's progress channel be per-run or per-thread?**
-  Streaming chat uses per-thread (one stream per response holder).
-  An agent run is per-user-per-agent. A `nak-agent:<runId>` channel
-  matches the run lifecycle cleanly; per-thread would couple agent
-  progress to thread state for no obvious win. Recommend per-run.
+  [Resolved: NEITHER - per-USER.] The recommendation here was per-run
+  (`nak-agent:<runId>`), but the wiki-librarian fleet landed a
+  per-user `agent-runs:<userId>` topic with the client-minted runId
+  in the payload for demux: one literal-equality `realtime.messages`
+  policy covers every run, where per-run topics would have needed
+  pattern-matched channel auth. All three manual-run strips (wiki
+  librarian, rem, deep-sleep) share it.
 - **Where does the supervisor's scheduling state live after cutover?**
-  Reflection's trigger is currently "supervisor decides after a thread
-  turn ends." If the function fires reflection inline via waitUntil,
-  the supervisor's role for reflection ends - it just decides
-  scheduling for the no-tool agents (auto_title, summary, topics). The
-  supervisor shrinks; doesn't disappear.
+  [Resolved as predicted: the supervisor shrank.] Reflection's unit
+  was dropped when its trigger moved to the chat-turn waitUntil tail;
+  the supervisor now schedules only the no-tool units (auto_title,
+  summary, topics, memory_topics, recipe_topics, attachment_expiry).
 - **Do we need a generic `/venice/agents/run` dispatcher or one
-  endpoint per agent?** Per-endpoint is more explicit and easier to
-  reason about; generic is fewer files. Recommend per-endpoint until
-  we have 5+ agents and the boilerplate ratio justifies the
-  abstraction. Premature consolidation is the same anti-pattern we're
-  fixing here in a different layer.
-- **Reflection inline vs separate endpoint?** Inline (after the
-  terminal chat round, inside getStreamingResponse's
-  waitUntil-protected tail) is simpler - one function, one transaction
-  shape. Separate endpoint costs an HTTP hop and gains testability
-  isolation. Recommend inline first; refactor out if it complicates
-  the orchestrator's error handling.
+  endpoint per agent?** [Resolved: per-endpoint, as recommended.]
+  Nine agent routes exist (`/wiki-sweep`, `/wiki-retry`,
+  `/wiki-librarian-sweep`, `/wiki-librarian-run`, `/rem-sweep`,
+  `/rem-run`, `/deep-sleep-sweep`, `/deep-sleep-run`, plus
+  reflection's inline tail) and the per-route boilerplate stayed
+  small enough that the generic dispatcher never earned its keep.
+- **Reflection inline vs separate endpoint?** [Resolved: inline.]
+  Fires from `getStreamingResponse`'s terminal tail via
+  `edgeWaitUntil`; the testability isolation worry was answered by
+  the runner's `complete` seam instead of an HTTP boundary.
 
 ## Where to go next
 
@@ -989,6 +1008,5 @@ Surfaced now so they don't bite mid-migration.
 - [`../edge-function-auth.md`](../edge-function-auth.md) - the
   b-strict admin-client + SECURITY DEFINER pattern every Phase 2
   migration uses.
-- [`../tools.md`](../tools.md) - the current tools subsystem doc.
-  Will need updates as each phase lands (start with Phase 1: the
-  dispatcher section needs to drop browser execution from its claims).
+- [`../tools.md`](../tools.md) - the tools subsystem doc, rewritten
+  at project close to describe the single-dispatcher reality.

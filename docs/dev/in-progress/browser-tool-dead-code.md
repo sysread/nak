@@ -9,7 +9,13 @@ helper relocations described in the plan landed too: ask_user content
 helpers -> `src/lib/ask-user.ts`, `sanitizeTitle` -> `src/lib/title-gen.ts`.
 This file is retained as the record of *what* was dead and *why* the
 per-file checklist mattered (live and dead tools were interleaved inside
-the same toolboxes) - useful when Phase 2/3 touch the same area.
+the same toolboxes). Phases 2 and 3 have since closed too: every "live
+via agent" tool below is ALSO gone now - the agents migrated
+server-side and the whole browser dispatch layer
+(`executeToolboxCall`, `runHeadlessToolLoop`, `lazyTool`, the toolbox
+aggregators) went with the last fleet. The present-tense "still
+dispatches browser-side" framing below describes the state at Phase 1
+time; read it as history.
 
 ## One-paragraph summary
 
