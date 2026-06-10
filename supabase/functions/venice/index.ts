@@ -772,44 +772,27 @@ interface StreamEnvelope {
 }
 
 /**
- * Browser-triggered streaming chat completion. POSTs body with
- * threadId, userMessageId, and a Venice wire body; the function
- * returns the envelope synchronously and runs the round chain in
- * the background via EdgeRuntime.waitUntil. Live events publish to
- * the thread:<id>:stream Broadcast channel; the row persistence
- * happens server-side so a backgrounded mobile PWA returns to find
- * the assistant turn either complete or still in flight regardless
- * of whether the tab survived.
- *
- * Auth model: b-strict. Gateway's verify_jwt validates the session
- * JWT and the function extracts userId from the `sub` claim. Every
- * DB write is service-role; ownership is gated by the explicit
- * userId comparison against the thread row before anything starts.
+ * Shared front half of both stream handlers: thread ownership, the
+ * channel name, and the in-flight probe (with its stale-row
+ * janitor). Returns a Response on any early exit; otherwise the
+ * resolved context plus `inFlight` - the envelope of an existing
+ * stream when one is running, null when the thread is quiet. Both
+ * callers branch on `inFlight` rather than re-probing, so the
+ * duplicate-completion guard and the reconnect answer stay one
+ * code path.
  */
-async function handleStream(req: Request): Promise<Response> {
-  let body: StreamRequestBody;
-  try {
-    body = (await req.json()) as StreamRequestBody;
-  } catch {
-    return json({ error: 'invalid JSON body' }, 400);
+async function resolveStreamContext(
+  req: Request,
+  threadId: string,
+): Promise<
+  | Response
+  | {
+    userId: string;
+    admin: SupabaseClient;
+    channelName: string;
+    inFlight: StreamEnvelope | null;
   }
-  if (typeof body.threadId !== 'string' || body.threadId.length === 0) {
-    return json({ error: 'body.threadId is required' }, 400);
-  }
-  // userMessageId anchors the terminal commit's conflict check, so a
-  // fresh stream must carry it. A reconnect-only request observes
-  // someone else's in-flight turn (same tab after refresh, another
-  // device opening the thread) and the caller can't be expected to
-  // know which user message the original sender anchored on - so the
-  // requirement only applies to fresh streams.
-  if (
-    body.reconnectOnly !== true &&
-    (typeof body.userMessageId !== 'string' ||
-      body.userMessageId.length === 0)
-  ) {
-    return json({ error: 'body.userMessageId is required' }, 400);
-  }
-
+> {
   const userId = userIdFromJwt(req);
   if (!userId) {
     return json({ error: 'unauthenticated' }, 401);
@@ -825,7 +808,7 @@ async function handleStream(req: Request): Promise<Response> {
   const { data: thread, error: threadErr } = await admin
     .from('threads')
     .select('user_id')
-    .eq('id', body.threadId)
+    .eq('id', threadId)
     .maybeSingle();
   if (threadErr) {
     return json({ error: `thread lookup failed: ${threadErr.message}` }, 502);
@@ -836,21 +819,22 @@ async function handleStream(req: Request): Promise<Response> {
     return json({ error: 'thread not found' }, 404);
   }
 
-  const channelName = streamChannelName(body.threadId);
+  const channelName = streamChannelName(threadId);
 
-  // Reconnect probe: is there an in-flight streaming row on this
-  // thread? Same answer drives same-device-reload, cross-device
-  // ape-mode, and the explicit reconnectOnly path. Returning the
-  // existing envelope short-circuits a duplicate completion.
+  // In-flight probe: is there a streaming row on this thread? The
+  // same answer drives same-device-reload, cross-device ape-mode,
+  // and the explicit reconnect route. Surfacing the existing
+  // envelope short-circuits a duplicate completion.
   const { data: streamingRow } = await admin
     .from('messages')
     .select('id, content, created_at')
-    .eq('thread_id', body.threadId)
+    .eq('thread_id', threadId)
     .eq('status', 'streaming')
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle();
 
+  let inFlight: StreamEnvelope | null = null;
   if (streamingRow) {
     const row = streamingRow as {
       id: string;
@@ -877,8 +861,8 @@ async function handleStream(req: Request): Promise<Response> {
     const STALE_THRESHOLD_MS = 2 * 380_000; // 760 seconds (~12.7 min)
     const ageMs = Date.now() - new Date(row.created_at).getTime();
     if (ageMs > STALE_THRESHOLD_MS) {
-      // Best-effort cleanup. If either UPDATE fails we still return
-      // noStreamInFlight - leaving the row in 'streaming' is the
+      // Best-effort cleanup. If either UPDATE fails we still report
+      // no stream in flight - leaving the row in 'streaming' is the
       // worst case but the next reconnect will retry the same
       // janitor pass.
       try {
@@ -901,41 +885,67 @@ async function handleStream(req: Request): Promise<Response> {
               occurred_at: new Date().toISOString(),
             },
           })
-          .eq('id', body.threadId);
+          .eq('id', threadId);
       } catch {
         // Swallowed by design - see jsdoc.
       }
-      const envelope: StreamEnvelope = {
+      // inFlight stays null: the janitored row no longer counts as a
+      // running stream.
+    } else {
+      inFlight = {
         channelName,
-        assistantRowId: null,
-        completedSoFar: '',
-        noStreamInFlight: true,
+        assistantRowId: row.id,
+        completedSoFar: row.content ?? '',
       };
-      return json(envelope);
     }
-    const envelope: StreamEnvelope = {
-      channelName,
-      assistantRowId: row.id,
-      completedSoFar: row.content ?? '',
-    };
-    return json(envelope);
   }
 
-  if (body.reconnectOnly === true) {
-    const envelope: StreamEnvelope = {
-      channelName,
-      assistantRowId: null,
-      completedSoFar: '',
-      noStreamInFlight: true,
-    };
-    return json(envelope);
-  }
+  return { userId, admin, channelName, inFlight };
+}
 
+/**
+ * Browser-triggered streaming chat completion (the fresh-stream half
+ * of /stream). POSTs threadId, userMessageId, and a Venice wire
+ * body; the function returns the envelope synchronously and runs
+ * the round chain in the background via EdgeRuntime.waitUntil. Live
+ * events publish to the thread:<id>:stream Broadcast channel; the
+ * row persistence happens server-side so a backgrounded mobile PWA
+ * returns to find the assistant turn either complete or still in
+ * flight regardless of whether the tab survived.
+ *
+ * Auth model: b-strict. Gateway's verify_jwt validates the session
+ * JWT and the function extracts userId from the `sub` claim. Every
+ * DB write is service-role; ownership is gated by the explicit
+ * userId comparison against the thread row before anything starts.
+ */
+async function handleStreamFresh(
+  req: Request,
+  body: StreamRequestBody,
+): Promise<Response> {
+  if (typeof body.threadId !== 'string' || body.threadId.length === 0) {
+    return json({ error: 'body.threadId is required' }, 400);
+  }
+  // userMessageId anchors the terminal commit's conflict check, so a
+  // fresh stream must carry it.
+  if (
+    typeof body.userMessageId !== 'string' ||
+    body.userMessageId.length === 0
+  ) {
+    return json({ error: 'body.userMessageId is required' }, 400);
+  }
   if (!body.body || typeof body.body !== 'object') {
     return json({ error: 'body.body is required for fresh streams' }, 400);
   }
 
-  const apiKey = await readVeniceKey(admin);
+  const ctx = await resolveStreamContext(req, body.threadId);
+  if (ctx instanceof Response) return ctx;
+
+  // A stream is already running on this thread (double-send, or a
+  // second device racing the first). Hand back its envelope instead
+  // of spawning a duplicate completion.
+  if (ctx.inFlight) return json(ctx.inFlight);
+
+  const apiKey = await readVeniceKey(ctx.admin);
   if (!apiKey) {
     return json({ error: 'no Venice key configured (app_config unseeded)' }, 503);
   }
@@ -944,11 +954,6 @@ async function handleStream(req: Request): Promise<Response> {
   // wall deadline + the control channel cancel) - the request signal
   // is NOT passed in because the request returns immediately after
   // this envelope and the orchestrator must survive that disconnect.
-  // The validation above guarantees userMessageId is a non-empty string
-  // when reconnectOnly is not set; assert here so TS narrows below.
-  if (typeof body.userMessageId !== 'string') {
-    return json({ error: 'body.userMessageId is required' }, 400);
-  }
   // Silently drop malformed entries rather than 400ing the whole
   // request: the browser filters synthetic-row sentinels before
   // sending, so anything non-uuid here is a stray, and failing the
@@ -962,19 +967,70 @@ async function handleStream(req: Request): Promise<Response> {
     apiKey,
     threadId: body.threadId,
     userMessageId: body.userMessageId,
-    userId,
+    userId: ctx.userId,
     supersededIds,
     bodyTemplate: body.body as Record<string, unknown>,
-    adminClient: admin,
+    adminClient: ctx.admin,
   });
   edgeWaitUntil(promise);
 
   const envelope: StreamEnvelope = {
-    channelName,
+    channelName: ctx.channelName,
     assistantRowId: null,
     completedSoFar: '',
   };
   return json(envelope);
+}
+
+/**
+ * The reconnect-only half of /stream: observe an in-flight turn
+ * without starting one. Drives reopen-thread and cross-device
+ * ape-mode - the caller can't know which user message the original
+ * sender anchored on, so no userMessageId (or wire body) is
+ * required. Returns the in-flight envelope when a stream is
+ * running, or the noStreamInFlight marker so the browser renders
+ * terminal state from the row instead of subscribing to a topic no
+ * publisher feeds.
+ */
+async function handleStreamReconnect(
+  req: Request,
+  body: StreamRequestBody,
+): Promise<Response> {
+  if (typeof body.threadId !== 'string' || body.threadId.length === 0) {
+    return json({ error: 'body.threadId is required' }, 400);
+  }
+
+  const ctx = await resolveStreamContext(req, body.threadId);
+  if (ctx instanceof Response) return ctx;
+
+  if (ctx.inFlight) return json(ctx.inFlight);
+  const envelope: StreamEnvelope = {
+    channelName: ctx.channelName,
+    assistantRowId: null,
+    completedSoFar: '',
+    noStreamInFlight: true,
+  };
+  return json(envelope);
+}
+
+/**
+ * Wire-compat dispatcher for /stream. Fresh streams and reconnects
+ * share the route (the browser flags reconnects with
+ * `reconnectOnly: true` in the body), but they are two different
+ * operations with different required fields and different return
+ * semantics - so they are two handlers, and this shim only parses
+ * the body once and picks one.
+ */
+async function handleStream(req: Request): Promise<Response> {
+  let body: StreamRequestBody;
+  try {
+    body = (await req.json()) as StreamRequestBody;
+  } catch {
+    return json({ error: 'invalid JSON body' }, 400);
+  }
+  return body.reconnectOnly === true
+    ? handleStreamReconnect(req, body)
+    : handleStreamFresh(req, body);
 }
 
 Deno.serve(async (req: Request): Promise<Response> => {
