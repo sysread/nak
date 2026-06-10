@@ -142,11 +142,11 @@
   type SettingsComponent = typeof import('./Settings.svelte').default;
   type HelpComponent = typeof import('./Help.svelte').default;
   type IntuitionComponent = typeof import('./Intuition.svelte').default;
+  type SamskaraMoodComponent = typeof import('./SamskaraMood.svelte').default;
   type BiasProfileComponent = typeof import('./BiasProfile.svelte').default;
   type RecallComponent = typeof import('./Recall.svelte').default;
   import WikiList from '../components/WikiList.svelte';
   import SamskaraBrowseList from '../components/SamskaraBrowseList.svelte';
-  import { samskaraView } from '$lib/samskara-browse-store.svelte';
   import LibraryList from '../components/LibraryList.svelte';
   import IntuitionPill from '../components/IntuitionPill.svelte';
   import BiasPill from '../components/BiasPill.svelte';
@@ -263,6 +263,7 @@
   const showSettings = $derived(route.modal === 'settings');
   const showHelp = $derived(route.modal === 'help');
   const showIntuition = $derived(route.modal === 'intuition');
+  const showSamskaraMood = $derived(route.modal === 'samskara-mood');
   const showBiasProfile = $derived(route.modal === 'bias-profile');
   const showRecall = $derived(route.modal === 'recall');
 
@@ -288,6 +289,7 @@
   let SettingsComp: SettingsComponent | null = $state(null);
   let HelpComp: HelpComponent | null = $state(null);
   let IntuitionComp: IntuitionComponent | null = $state(null);
+  let SamskaraMoodComp: SamskaraMoodComponent | null = $state(null);
   let BiasProfileComp: BiasProfileComponent | null = $state(null);
   let RecallComp: RecallComponent | null = $state(null);
   $effect(() => {
@@ -343,6 +345,9 @@
   $effect(() => {
     if (showIntuition && !IntuitionComp) {
       void import('./Intuition.svelte').then((m) => (IntuitionComp = m.default));
+    }
+    if (showSamskaraMood && !SamskaraMoodComp) {
+      void import('./SamskaraMood.svelte').then((m) => (SamskaraMoodComp = m.default));
     }
   });
   $effect(() => {
@@ -7461,16 +7466,16 @@
                   type="button"
                   class="diag-tile"
                   title={moodState.current
-                    ? `feelin' ${valenceToMoodLabel(moodState.current.valence, moodState.current.confidence)} - open Samskara diagnostics`
-                    : 'Open Samskara diagnostics'}
-                  aria-label="Open Samskara diagnostics"
+                    ? `feelin' ${valenceToMoodLabel(moodState.current.valence, moodState.current.confidence)} - open this conversation's mood`
+                    : "Open this conversation's mood"}
+                  aria-label="Open conversation mood"
                   onclick={() => {
-                    // Corpus-wide diagnostics tab - no longer thread-gated
-                    // (the retired modal needed route.cid for per-thread
-                    // counts; the Health panel is corpus-wide).
+                    // The mood is per-conversation, so it opens a modal -
+                    // not the corpus-global Samskara tab. (Global corpus +
+                    // health live on the tab; per-round triggered
+                    // predictions live in the inline cohort dropdown.)
                     closeMenus();
-                    samskaraView.sub = 'summary';
-                    navigate({ drawer: 'samskara' });
+                    navigate({ modal: 'samskara-mood' });
                   }}
                 >
                   <span class="emoji" aria-hidden="true">
@@ -7972,6 +7977,9 @@
   {/if}
   {#if showHelp && HelpComp}
     <HelpComp onClose={() => navigate({ modal: null, doc: null })} />
+  {/if}
+  {#if showSamskaraMood && SamskaraMoodComp}
+    <SamskaraMoodComp onClose={() => navigate({ modal: null })} />
   {/if}
   {#if showIntuition && IntuitionComp}
     <IntuitionComp

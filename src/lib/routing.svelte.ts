@@ -50,6 +50,7 @@
 export type Modal =
   | 'settings'
   | 'help'
+  | 'samskara-mood'
   | 'intuition'
   | 'bias-profile'
   | 'recall';
@@ -105,6 +106,7 @@ const ROUTED_KEYS = [
 const MODAL_VALUES: readonly Modal[] = [
   'settings',
   'help',
+  'samskara-mood',
   'intuition',
   'bias-profile',
   'recall',

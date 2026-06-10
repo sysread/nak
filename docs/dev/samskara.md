@@ -75,9 +75,10 @@ toast is just a glance cue that the bias model is forming.
   `CONFIDENCE_CUT`, default 0.5) and a tentative column (below
   the cut). Separate from the Svelte component so the manager can
   import without pulling Svelte runtime into the worker bundle.
-  `SamskaraMoodLegend.svelte` (the Summary & mood sub-view of the
-  Samskara tab) renders the same `MOOD_TABLE` as a fold-away legend so
-  the user-visible documentation can never drift from the live mapping.
+  `SamskaraMoodLegend.svelte` (mounted in the conversation-mood modal,
+  `SamskaraMood.svelte`) renders the same `MOOD_TABLE` as a fold-away
+  legend so the user-visible documentation can never drift from the live
+  mapping.
 - `src/lib/samskara/mood.svelte.ts` - shared current-mood state
   (`moodState`) read by both `SamskaraToasts.svelte` and
   `SamskaraMoodLegend.svelte`. Holds the raw `{ valence, confidence, tier
@@ -107,8 +108,9 @@ toast is just a glance cue that the bias model is forming.
   report" placeholder. A monotonic generation counter guards the
   seed fetch against thread-switch races. The pill is only
   suppressed on the brand-new-chat screen where `route.cid` is
-  null. Click opens the Samskara diagnostics tab on its Summary &
-  mood sub-view regardless of state. Mounted once in `Chat.svelte`. Composition
+  null. Click opens the conversation-mood modal (`SamskaraMood.svelte`)
+  regardless of state - the mood is per-conversation, so it is a modal,
+  not part of the corpus-global tab. Mounted once in `Chat.svelte`. Composition
   only: every mood-shape transition (dedup-on-same-band,
   placeholder factory, seed-vs-mint race resolution) lives in the
   primitives module next door.
@@ -955,12 +957,28 @@ summarizer reads samskaras to feed the agent.
   an operator surface may bleed prediction text into the chat
   transcript or hand the model a way to read its own corpus.
 
+## Three-way scope split
+
+The samskara UI is partitioned by what each surface's data is scoped to:
+
+- **Per-conversation -> a modal.** The mood graph (where this
+  conversation's latest fire sits on the `(valence x confidence) ->
+  emoji` map) is inherently per-conversation, so it lives in the
+  `SamskaraMood.svelte` modal opened from the mood pill / footer tile,
+  not on the corpus-global tab.
+- **Per-round -> the inline cohort dropdown.** The samskaras a single
+  user turn triggered (the `CohortPanel` under each user message).
+- **Global -> the Samskara tab.** Everything corpus-wide: the corpus
+  browse, pipeline health, and the always-on compound summary
+  (per-user, one row).
+
 ## Observability tab
 
 A first-class drawer tab (sibling to chats/memories/wiki/recipes,
-`drawer=samskara`) is the operator's read-only window into the
-pipeline. It replaced the old `route.modal='samskara'` diagnostics
-modal entirely. Three sub-views:
+`drawer=samskara`) is the operator's read-only window into the global
+pipeline state. It replaced the old `route.modal='samskara'`
+diagnostics modal (whose per-conversation mood graph moved to
+`SamskaraMood.svelte`). Three sub-views:
 
 - **Corpus** - browse/search/filter/sort the samskara corpus, with a
   tier filter and a "hide similar" cosine slider (the corpus analog of
@@ -982,13 +1000,10 @@ modal entirely. Three sub-views:
   (named constants, tune against observed behaviour). Piece:
   `src/components/SamskaraHealthPanel.svelte`.
 
-- **Summary & mood** - the always-on compound summary block plus the
-  `(valence x confidence) -> emoji` mood legend, moved verbatim out of
-  the retired modal. The bottom-right mood pill deep-links straight
-  here (via the shared `samskaraView.sub` state in the browse store) so
-  "what did that emoji mean" still has a home. Pieces:
-  `src/components/SamskaraMoodLegend.svelte` + the compound fetch in
-  `Samskaras.svelte`.
+- **Summary** - the always-on compound summary block (per-user, global,
+  hence on the tab). Fetched via `samskaraGetCompoundSummary` in
+  `Samskaras.svelte`. The mood legend that used to share this sub-view
+  moved to the conversation-mood modal (see the scope split above).
 
 Read-only by design - no delete/pin/edit. Curation would re-open the
 "operator games the bias model" question; if it's ever wanted it's a
