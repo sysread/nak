@@ -13,12 +13,23 @@ against a named environment.
 
 ## When to execute
 
+- **Before changing an existing feature**: if the feature has a
+  use-case, execute it against the UNCHANGED code first - that pass
+  is the baseline the post-change run is compared against. If it
+  has no use-case yet, backfill one and execute it before touching
+  the feature (see CLAUDE.md, "QA use-cases").
+- **After the change**: re-execute and log both runs. The
+  before/after pair is the regression evidence; a lone post-change
+  pass only proves the new behavior is self-consistent.
 - **Before a release-shaped merge**: run the use-cases touching the
   changed subsystems against the local stack (`mise run dev-start`).
 - **After a production deploy**: run the same cases against the
   hosted project. Several behaviors (pg_cron scheduling, hosted
   waitUntil lifetime, private-channel broadcast delivery) only
   exist hosted - local passes do not cover them.
+
+New features ship their use-case in the same PR - a feature without
+a walkthrough has no repeatable proof.
 
 ## Format
 

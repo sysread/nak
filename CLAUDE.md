@@ -413,7 +413,38 @@ placeholder H2s. Fleshing them out is its own work; what matters
 per-PR is that the relevant page moves forward by the section the
 PR introduces.
 
-## Commit / branch / merge conventions
+## QA use-cases (docs/qa/)
+
+`docs/qa/use-cases/` holds manual-verification walkthroughs in a
+fixed format (covers / preconditions / steps / expected / cleanup /
+append-only results log) - see `docs/qa/README.md` for the format.
+They are the executable record of "how do we prove this feature
+works end to end," aimed at the seams unit tests can't reach.
+
+**Keep them current, in this order:**
+
+1. **New feature ships -> its use-case ships in the same PR.** A
+   feature without a walkthrough has no repeatable proof.
+2. **Changing an existing feature that has no use-case? Backfill
+   the use-case FIRST and execute it against the unchanged code.**
+   The pre-change pass is the baseline; without it, a post-change
+   pass only proves the new behavior is self-consistent, not that
+   the change preserved what mattered.
+3. **After the change, re-execute and log both runs** in the
+   results table. The before/after pair is the regression
+   evidence.
+
+This ordering exists so a session can spawn a QA agent at the
+START of a change (execute the relevant cases, log the baseline)
+and again at the END (re-execute, diff against the baseline) -
+AI-driven regression testing over the walkthroughs. The agent only
+needs the use-case file and a running stack; if it also needs
+tribal knowledge, the use-case is missing a precondition - fix the
+doc.
+
+Results-log discipline: append, never overwrite; every row carries
+date, environment, and commit. Expectations marked **[hosted]**
+only count when run against the hosted project.
 
 See standing instructions at session start for branch names. In
 short: develop on the designated feature branch, push when done,
