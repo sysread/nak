@@ -550,7 +550,7 @@ function splitSystemPreamble(
 /**
  * Which subconscious-priming pipeline a status signal refers to. These
  * are the three pre-response background jobs the chat-loop runs before
- * (and, for the title trigger, during) a turn:
+ * a turn:
  *
  *   'samskara'  - situational fire (top-k predictions for this turn).
  *   'intuition' - perception + drives + synthesis.
@@ -611,8 +611,8 @@ export interface ChatLoopHandlers {
    */
   onTitleChange?(title: string): void;
   /**
-   * A fresh intuition payload was computed for this thread (pre-round
-   * trigger, title trigger, or stale-fuse). Fires with the new payload
+   * A fresh intuition payload was computed for this thread (the
+   * pre-round trigger or stale-fuse). Fires with the new payload
    * so the UI can update the modal / inline indicator without waiting
    * for the next thread re-fetch. Skipped on rounds where the cache is
    * reused as-is - we only signal *changes*.
@@ -620,8 +620,8 @@ export interface ChatLoopHandlers {
   onIntuitionUpdate?(payload: IntuitionPayload): void;
   /**
    * A fresh context-recall payload was computed for this thread (the
-   * pre-round trigger, title trigger, or stale fuse fired and the
-   * pipeline produced a payload). Sibling of onIntuitionUpdate -
+   * pre-round trigger or stale fuse fired and the pipeline produced a
+   * payload). Sibling of onIntuitionUpdate -
    * fires once per refresh, with the freshly-computed payload, so the
    * UI can patch the in-memory thread row without waiting for the
    * next thread re-fetch. Skipped on rounds where the cache is reused
@@ -816,8 +816,8 @@ export interface ChatLoopOptions {
    * Mood snapshot at turn-entry. The chat-loop compares it against the
    * cached payload's mood snapshot to decide whether the band /
    * confidence column has shifted enough to warrant a refresh. Null /
-   * undefined disables the mood-shift trigger - the title trigger and
-   * stale fuse still operate. Both bands and column come from the same
+   * undefined disables the mood-shift trigger - the cold-start and
+   * stale-fuse triggers still operate. Both bands and column come from the same
    * MOOD_TABLE the samskara mood pill renders against (see
    * src/lib/samskara/events.ts).
    */

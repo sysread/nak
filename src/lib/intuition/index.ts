@@ -34,9 +34,6 @@ export {
   withIntuitionInflight,
 } from './cache';
 
-export {
-  evaluatePreRoundTrigger,
-  evaluateTitleTrigger,
-} from './triggers';
+export { evaluatePreRoundTrigger } from './triggers';
 
 export { buildIntuitionThinkMessage } from './ephemeral';

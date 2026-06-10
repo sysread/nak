@@ -71,7 +71,11 @@ export interface IntuitionPayload {
 
 /** Why an intuition refresh ran. Persisted on the payload for
  *  observability; also returned from the trigger evaluator so
- *  the chat-loop can log the cause. */
+ *  the chat-loop can log the cause. 'title' is legacy-only: the
+ *  mid-turn title trigger died when tool dispatch moved server-side
+ *  (the browser no longer sees update_title results mid-turn), but
+ *  payloads persisted before that still carry it, so the coercion
+ *  below keeps accepting it. */
 export type IntuitionTrigger = 'title' | 'mood' | 'stale' | 'cold';
 
 /** Configurable cap on the staleness fuse. Forces a refresh after

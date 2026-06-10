@@ -28,21 +28,23 @@ history right after the user's turn. The next streamChat call sees
 the `<think>` block as if it were the assistant's own prior
 thought.
 
-Two trigger sites:
+One trigger site: **pre-round** (start of `runChatLoop`). On cold
+cache (no payload yet on this thread) it fires unconditionally with
+reason `cold`. Otherwise it compares the cached payload's mood
+snapshot against the current mood and refreshes if the valence band
+index or the confidence column changed. The staleness fuse refreshes
+after `STALE_FUSE_ROUNDS` user rounds without one.
 
-1. **Pre-round** (start of `runChatLoop`). On cold cache (no
-   payload yet on this thread) fires unconditionally with reason
-   `cold`. Otherwise compares the cached payload's mood snapshot
-   against the current mood; refreshes if the valence band index
-   or the confidence column changed. Also the staleness fuse:
-   refreshes after `STALE_FUSE_ROUNDS` user rounds without one.
-2. **Mid-turn** (after a successful `update_title` tool result is
-   appended to the history). A title rename means the topic
-   shifted; the pipeline runs and the new payload replaces the
-   pre-round ephemeral message in-place so the model never sees
-   two competing `<think>` blocks. The mid-turn trigger no-ops
-   when the pre-round trigger already wrote a payload this round
-   (the `computed_at_round` debounce primitive).
+There used to be a second, mid-turn trigger (refresh after a
+successful `update_title` tool result, splicing the replacement
+payload over the pre-round ephemeral message). It died when tool
+dispatch moved server-side - the browser no longer sees
+`update_title` results mid-turn, so there is nothing to hook. The
+`'title'` member of `IntuitionTrigger` survives only because
+payloads persisted before the migration still carry it (the
+coercion in `types.ts` keeps accepting it). If a topic-shift
+trigger ever comes back, it has to ride a server-side signal (the
+stream channel's tool events), not the browser history array.
 
 A round id is the count of user messages in `history`. Tool-using
 turns inflate the chat-loop's own `round` counter but do not
@@ -83,13 +85,11 @@ thread by the first response.
   returns null so the caller leaves the prior cache in place.
 - `src/lib/intuition/cache.ts` - `readIntuitionCache` /
   `writeIntuitionCache` plus `withIntuitionInflight`, a tab-local
-  registry that collapses two near-simultaneous triggers (e.g.
-  mood + title in the same turn) onto one Promise.
-- `src/lib/intuition/triggers.ts` -
-  `evaluatePreRoundTrigger` and `evaluateTitleTrigger`. Both
-  share the same `computed_at_round` debounce primitive: a
-  trigger that lands in the same round as the last cache write
-  no-ops.
+  registry that collapses two near-simultaneous triggers onto
+  one Promise.
+- `src/lib/intuition/triggers.ts` - `evaluatePreRoundTrigger`,
+  built on the `computed_at_round` debounce primitive: a trigger
+  that lands in the same round as the last cache write no-ops.
 - `src/lib/intuition/ephemeral.ts` -
   `buildIntuitionThinkMessage`, the wire-shape projection from
   cached payload to ephemeral assistant message
@@ -115,10 +115,8 @@ thread by the first response.
 ## Entry points
 
 - **Pipeline runtime**: `runChatLoop` in `src/lib/chat-loop.ts`.
-  Pre-round trigger lives directly after the opening-recall
-  `<think>` push; mid-turn trigger lives at the end of each
-  iteration's tool-result for-loop, gated on a successful
-  `update_title` call appearing in `settled`.
+  The pre-round trigger lives directly after the opening-recall
+  `<think>` push.
 - **UI mount**: `Chat.svelte`. The Pill mounts inside
   `.messages-wrap` above `SamskaraToasts` and the
   `.scroll-to-bottom` arrow; the modal mounts in the
@@ -156,7 +154,7 @@ Shape (see `IntuitionPayload` in
   computed_at_band: number | null,                    // 0..4 in MOOD_TABLE order
   computed_at_column: 'confident' | 'tentative' | null,
   computed_at_at: number,                             // ms since epoch
-  trigger: 'title' | 'mood' | 'stale' | 'cold',
+  trigger: 'title' | 'mood' | 'stale' | 'cold',  // 'title' legacy-only (pre-migration payloads)
 }
 ```
 
@@ -185,14 +183,13 @@ demand.
   regeneration is rare on threads where intuition has had time
   to populate; revisit if it becomes friction.
 - **Trigger debounce primitive is `computed_at_round`.** Same-
-  round writes no-op every trigger. This is the only mechanism
-  preventing duplicate runs in a turn where mood AND title
-  both shifted; do not introduce a parallel debounce.
+  round writes no-op the trigger. This is the only duplicate-run
+  prevention; do not introduce a parallel debounce.
 
 ## Interactions
 
 - **Chat ([./chat.md](./chat.md))** - the chat-loop is the only
-  caller of `runIntuitionPipeline`. The two trigger sites live
+  caller of `runIntuitionPipeline`. The trigger site lives
   inside `runChatLoop`; the `intuitionModelId` and
   `intuitionMood` options on `ChatLoopOptions` are how the
   caller wires the feature on. The synthesis lands as a
@@ -207,15 +204,9 @@ demand.
   to `SAMSKARA_MINT_EVENT` directly - it just compares the
   current mood snapshot at turn-entry against the cache's
   snapshot.
-- **Tools / `update_title` ([./tools.md](./tools.md))** - the
-  title trigger gates on `call.function.name === updateTitle.name`
-  in the chat-loop's tool-result for-loop. A future tool that
-  wants to participate in the trigger surface would add a
-  similar check (e.g. a "topic_shift" tool the model can call
-  explicitly).
 - **Context recall ([./context-recall.md](./context-recall.md))** -
   parallel pipeline that rides the SAME trigger evaluator and
-  fires alongside intuition on every cold-start / title / mood /
+  fires alongside intuition on every cold-start / mood /
   stale fire. The two pipelines run in `Promise.all` so wall-clock
   cost is bounded by the slower of the two; their caches and
   inflight registries are sibling-but-separate. The shared
