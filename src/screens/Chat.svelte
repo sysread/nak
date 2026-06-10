@@ -157,7 +157,7 @@
     cookbook,
     loadRecipes,
   } from '$lib/cookbook-store.svelte';
-  import { onCookbookChange } from '$lib/cookbook-events';
+  import { onCookbookChange, emitCookbookChange } from '$lib/cookbook-events';
   import {
     memoriesStore,
     runMemoriesSearch,
@@ -1823,6 +1823,15 @@
   $effect(() => {
     if (!app.supabase || !session) return;
     return app.supabase.subscribeToMemoryChanges(session.user.id, emitMemoryChange);
+  });
+
+  // Realtime: the recipes leg of the same family. The recipe_* tools
+  // dispatch in the venice function, so a model-driven recipe write
+  // reaches the Cookbook modal and the drawer's Recipes tab through
+  // this relay into the cookbook event bus.
+  $effect(() => {
+    if (!app.supabase || !session) return;
+    return app.supabase.subscribeToRecipeChanges(session.user.id, emitCookbookChange);
   });
 
   // Inline title rename state.

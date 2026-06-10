@@ -587,6 +587,16 @@ from the same ports); the browser carries only the wire schemas.
 
 ## Gotchas
 
+- **DELETE events need the (id, user_id) replica identity.** The
+  `subscribeToMemoryChanges` relay filters on `user_id`, but a
+  DELETE's WAL record carries only the table's replica identity -
+  with the default primary-key identity, realtime can't match the
+  filter and silently drops the event, so a chat-driven
+  `memory_delete` never refreshes an open Memories panel.
+  `memories_replident_idx` in `schema.sql` exists solely to put
+  `user_id` into the old tuple; dropping it silently degrades the
+  identity to NOTHING and breaks DELETE replication. Full rationale
+  on the schema block.
 - **Invalidate vs delete is load-bearing.** The reflection
   agent's prompt explicitly tells it "use memory_invalidate,
   not memory_delete" and its toolbox doesn't even

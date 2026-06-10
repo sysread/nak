@@ -5992,6 +5992,36 @@ export class SupabaseService {
   }
 
   /**
+   * Subscribe to any change on the signed-in user's recipes. Third of
+   * the wiki-articles / memories family: the chat-reachable recipe
+   * writers (the recipe_* tools) all run server-side, so this is how
+   * an open Cookbook modal or the drawer's Recipes tab learns a
+   * model-driven recipe write landed. The caller (Chat.svelte) routes
+   * the notification into emitCookbookChange. Same coarse contract -
+   * "something changed", no row deltas.
+   */
+  subscribeToRecipeChanges(userId: string, onChange: () => void): () => void {
+    const channel = this.client
+      .channel(`recipes:${userId}`)
+      .on(
+        'postgres_changes' as never,
+        {
+          event: '*',
+          schema: 'public',
+          table: 'recipes',
+          filter: `user_id=eq.${userId}`,
+        },
+        () => {
+          onChange();
+        }
+      )
+      .subscribe();
+    return () => {
+      void this.client.removeChannel(channel);
+    };
+  }
+
+  /**
    * Subscribe to the signed-in user's agent-run progress channel. The
    * venice function publishes live step events (model rounds, tool
    * calls with their narration) for user-triggered agent runs - the

@@ -12,19 +12,16 @@
  * to parse cookbook-specific concerns to understand the phase machine.
  *
  * Refresh cadence: surfaces call `loadRecipes()` on mount and after
- * any local mutation. The tool-layer dispatches `COOKBOOK_CHANGE_EVENT`
- * on `window` after any successful `recipe_*` tool call, so a model-
- * driven save updates the drawer list the next animation frame even
- * when the user never leaves the chat canvas. The event is the only
- * bridge from the tools layer to the UI; no direct import the other
- * way.
+ * any local mutation. Model-driven recipe writes happen server-side
+ * (the recipe_* tools dispatch in the venice function); the
+ * recipes-table realtime relay in Chat.svelte fires
+ * `COOKBOOK_CHANGE_EVENT` when one lands, so a model-driven save
+ * updates the drawer list even when the user never leaves the chat
+ * canvas. The event is the only bridge into the UI; no direct import
+ * the other way.
  *
- * The event name lives in the plain-`.ts` sibling
- * `cookbook-events.ts`. The bus currently has subscribers but no
- * browser-side publisher - the `recipe_*` tools that used to fire it
- * dispatch server-side now; see the reorganize-the-workshop plan
- * doc's Phase 5 ledger for the recipes-table realtime subscription
- * that should re-drive it.
+ * The event name and both bus halves (emit + subscribe) live in the
+ * plain-`.ts` sibling `cookbook-events.ts`.
  */
 import {
   DEFAULT_LIST_PAGE_SIZE,

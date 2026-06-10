@@ -8,17 +8,22 @@
  * Keep any `$state` / `$derived` / `$effect` rune code OUT of this
  * file.
  *
- * Publisher gap: recipe writes now run in the venice edge function
- * (the browser `recipe_*` tools that used to dispatch this event on a
- * successful write moved server-side), so there is currently no
- * browser-side publisher of COOKBOOK_CHANGE_EVENT. `onCookbookChange`
- * stays because the Cookbook modal and the drawer's Recipes tab still
- * subscribe; re-driving a refresh after a chat-driven recipe write
- * wants a server-aware trigger (e.g. a recipes-table Realtime
- * subscription), which is separate work.
+ * The publisher is the recipes-table realtime relay in Chat.svelte
+ * (SupabaseService.subscribeToRecipeChanges -> emitCookbookChange):
+ * every recipe writer reachable from chat lives in the venice edge
+ * function now, so the replication stream is how the browser learns a
+ * write landed. Direct UI edits in Cookbook.svelte refresh their own
+ * local state and never used this bus; their writes also echo back
+ * through the relay, which is harmless - subscribers refetch
+ * idempotently.
  */
 
 const COOKBOOK_CHANGE_EVENT = 'nak:recipes:changed';
+
+export function emitCookbookChange(): void {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent(COOKBOOK_CHANGE_EVENT));
+}
 
 /**
  * Subscribe to COOKBOOK_CHANGE_EVENT. Returns an `off` callback that

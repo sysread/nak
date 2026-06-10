@@ -956,6 +956,15 @@ explicit instructions), and output shape (tool calls vs JSON).
 
 ## Gotchas
 
+- **DELETE events need the (id, user_id) replica identity.** The
+  `subscribeToWikiArticleChanges` relay filters on `user_id`, but a
+  DELETE's WAL record carries only the table's replica identity -
+  with the default primary-key identity, realtime can't match the
+  filter and silently drops the event, so a librarian delete never
+  refreshes an open Wiki panel. `wiki_articles_replident_idx` in
+  `schema.sql` exists solely to put `user_id` into the old tuple;
+  dropping it silently degrades the identity to NOTHING and breaks
+  DELETE replication. Full rationale on the schema block.
 - **The wiki is user-centric, not a general encyclopedia.** The
   per-conversation prompt has historically slipped on this - a
   brainstorm about app naming that mentioned the 1980s "Kermit"

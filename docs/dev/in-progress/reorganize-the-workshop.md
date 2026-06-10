@@ -872,6 +872,20 @@ half-alive" never reads as intentional.
   (wiki fleet) and `subscribeToMemoryChanges` (rem + deep-sleep
   fleet), both publication members + a Chat.svelte effect relaying
   into the feature's event bus. Recipes is a copy of either.
+  [CLOSED 2026-06-10.] Landed exactly as the fix shape describes:
+  `recipes` publication member, `subscribeToRecipeChanges`,
+  Chat.svelte relay into a resurrected `emitCookbookChange`.
+  Verified live (SQL insert/delete as the dev user refreshed an open
+  Recipes tab with no reload). The live test caught a gap the
+  INSERT/UPDATE-only verification of the first two relays missed: a
+  DELETE's WAL record carries only the replica identity (pkey by
+  default), so realtime can't match the `user_id` filter and drops
+  the event - server-side deletes never refreshed any of the three
+  panels. Fixed for all three tables with a unique `(id, user_id)`
+  index as the replica identity (REPLICA IDENTITY FULL would have
+  worked too, but writes whole old rows - including vector(2048)
+  embeddings - into WAL on every update/delete). Gotcha recorded in
+  cookbook.md, wiki.md, and memory.md.
 
 ## toggle_toolbox: not actually an exception
 

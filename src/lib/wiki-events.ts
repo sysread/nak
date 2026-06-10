@@ -2,9 +2,9 @@
  * Window-level event bus for cross-surface notification of wiki
  * writes. Parallel to `cookbook-events.ts`. Fired whenever a wiki
  * article is created/updated/deleted - by the user via Wiki.svelte,
- * by the still-browser wiki librarian's tools, or by the
- * wiki_articles realtime subscription relaying a server-side write
- * (the autonomous wiki agent runs in the venice function now; see
+ * or by the wiki_articles realtime subscription relaying a
+ * server-side write (the autonomous wiki agent and the wiki
+ * librarian both run in the venice function; see
  * SupabaseService.subscribeToWikiArticleChanges and its wiring in
  * Chat.svelte). The drawer listing and the open article panel both
  * listen and refetch.

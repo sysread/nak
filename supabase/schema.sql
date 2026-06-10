@@ -8917,7 +8917,44 @@ begin
   ) then
     alter publication supabase_realtime add table public.memories;
   end if;
+  -- recipes feeds the browser's emitCookbookChange refresh, third of
+  -- the wiki_articles / memories family: the chat-reachable recipe
+  -- writers (the recipe_* tools) run server-side, so the Cookbook
+  -- modal and the drawer's Recipes tab learn about model-driven
+  -- writes through a user-scoped postgres_changes subscription.
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'recipes'
+  ) then
+    alter publication supabase_realtime add table public.recipes;
+  end if;
 end $$;
+
+-- DELETE delivery for the user-filtered postgres_changes relays above.
+-- A DELETE's WAL record carries only the table's replica identity (the
+-- primary key by default), so realtime cannot match a user_id filter
+-- against it and silently drops the event - an open panel keeps
+-- showing a row a server-side tool already deleted. REPLICA IDENTITY
+-- FULL would fix delivery but writes the entire old row into WAL on
+-- every update/delete, and memories + recipes carry vector(2048)
+-- embeddings - a bulk confidence sweep would amplify WAL by ~10KB per
+-- row. A unique (id, user_id) index as the replica identity puts
+-- exactly the filter column into the old tuple at near-zero WAL cost.
+-- NOTE: dropping one of these indexes silently degrades the table's
+-- replica identity to NOTHING, which breaks DELETE replication
+-- entirely - they look redundant next to the pkey but are
+-- load-bearing for realtime.
+create unique index if not exists recipes_replident_idx
+  on public.recipes (id, user_id);
+alter table public.recipes replica identity using index recipes_replident_idx;
+create unique index if not exists wiki_articles_replident_idx
+  on public.wiki_articles (id, user_id);
+alter table public.wiki_articles replica identity using index wiki_articles_replident_idx;
+create unique index if not exists memories_replident_idx
+  on public.memories (id, user_id);
+alter table public.memories replica identity using index memories_replident_idx;
 
 -- ---------------------------------------------------------------------------
 -- Realtime Broadcast authorization (streaming-root channels)
