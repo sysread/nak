@@ -1,6 +1,18 @@
 # Samskara Observability Section Plan
 
-Status: proposal. Nothing here is built yet.
+Status: IMPLEMENTED and superseded - this is a historical proposal, kept
+for the design rationale. The shipped feature is the living reference:
+[`../samskara.md`](../samskara.md). Where the implementation diverged
+from this plan, samskara.md wins. Notable divergences:
+
+- The Health panel's "Lost signal" bar (fires aged out unresolved,
+  below) was NOT shipped: aging out is by-design (~95% of fires never
+  resolve), so it was a permanent false alarm. Worker liveness shipped
+  as informational, not a severity bar, for the same reason. See the
+  "Health-metric calibration" note in samskara.md.
+- The per-conversation mood graph lives in a modal (`SamskaraMood.svelte`),
+  not on the tab - the tab is global-only. See samskara.md's three-way
+  scope split.
 
 Read [`../samskara.md`](../samskara.md) first - this plan assumes its
 data model, worker phases, and the opacity principle it documents.
