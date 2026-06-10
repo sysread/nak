@@ -18,7 +18,7 @@
   import { onMount } from 'svelte';
   import { app } from '$lib/state.svelte';
   import { route } from '$lib/routing.svelte';
-  import { samskaraBrowseStore, samskaraView } from '$lib/samskara-browse-store.svelte';
+  import { samskaraBrowseStore } from '$lib/samskara-browse-store.svelte';
   import {
     tierBadge,
     formatValence,
@@ -26,11 +26,15 @@
   } from '$lib/ui/samskara-browse';
   import type { SamskaraProvenanceRow } from '$lib/supabase';
   import SamskaraHealthPanel from '../components/SamskaraHealthPanel.svelte';
-  import SamskaraMoodLegend from '../components/SamskaraMoodLegend.svelte';
+
+  // The tab is corpus-global by design: Corpus, Health, and the always-on
+  // compound Summary. The per-conversation mood graph lives in its own
+  // modal (opened from the mood pill), not here.
+  type SubView = 'corpus' | 'health' | 'summary';
+  let subView = $state<SubView>('corpus');
 
   // Compound summary for the Summary sub-view - the always-on prose block
-  // that rides in every system prompt. Fetched once on mount; the modal
-  // this replaced did the same.
+  // that rides in every system prompt (per-user, global - hence the tab).
   let compound = $state<{ summary: string | null; lastRegenAt: string | null; samskaraCountAtRegen: number } | null>(null);
   let compoundLoading = $state(false);
 
@@ -92,37 +96,36 @@
     <button
       type="button"
       class="samskara-subnav-btn"
-      class:active={samskaraView.sub === 'corpus'}
+      class:active={subView === 'corpus'}
       role="tab"
-      aria-selected={samskaraView.sub === 'corpus'}
-      onclick={() => (samskaraView.sub = 'corpus')}
+      aria-selected={subView === 'corpus'}
+      onclick={() => (subView = 'corpus')}
     >Corpus</button>
     <button
       type="button"
       class="samskara-subnav-btn"
-      class:active={samskaraView.sub === 'health'}
+      class:active={subView === 'health'}
       role="tab"
-      aria-selected={samskaraView.sub === 'health'}
-      onclick={() => (samskaraView.sub = 'health')}
+      aria-selected={subView === 'health'}
+      onclick={() => (subView = 'health')}
     >Health</button>
     <button
       type="button"
       class="samskara-subnav-btn"
-      class:active={samskaraView.sub === 'summary'}
+      class:active={subView === 'summary'}
       role="tab"
-      aria-selected={samskaraView.sub === 'summary'}
-      onclick={() => (samskaraView.sub = 'summary')}
-    >Summary &amp; mood</button>
+      aria-selected={subView === 'summary'}
+      onclick={() => (subView = 'summary')}
+    >Summary</button>
   </div>
 
   <div class="samskara-panel-body">
-    {#if samskaraView.sub === 'health'}
+    {#if subView === 'health'}
       <SamskaraHealthPanel />
-    {:else if samskaraView.sub === 'summary'}
-      <!-- Summary sub-view: the always-on compound block + the mood
-           legend, migrated from the retired diagnostics modal. The mood
-           pill deep-links here so "what did that emoji mean" still has a
-           home. -->
+    {:else if subView === 'summary'}
+      <!-- Summary sub-view: the always-on compound block. Global
+           (per-user), so it belongs on the tab. The per-conversation
+           mood graph lives in the mood modal, not here. -->
       <section class="samskara-summary">
         <h3 class="samskara-summary-head">Compound summary (always on in system prompt)</h3>
         <p class="subtle samskara-summary-help">
@@ -143,7 +146,6 @@
         {:else}
           <p class="subtle">No compound summary yet - the worker builds one once you have ~5 samskaras.</p>
         {/if}
-        <SamskaraMoodLegend />
       </section>
     {:else if !selected}
       <p class="subtle samskara-empty">
