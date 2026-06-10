@@ -72,6 +72,9 @@ One file per use-case under [`use-cases/`](./use-cases/), named
 - [chat-recall-agents](./use-cases/chat-recall-agents.md) - the
   mid-turn recall agents (memory_recall and siblings), their drawer
   sources, and memory_conversation seeding.
+- [chat-ask-user](./use-cases/chat-ask-user.md) - the ask_user
+  tool's suspend/resume lifecycle and the AskUserCard's
+  pre-populated question/options.
 - [reflection-drain](./use-cases/reflection-drain.md) - the
   chat-tail drain, the hourly catch-up sweep, and the attempt cap.
 - [wiki-fleet](./use-cases/wiki-fleet.md) - autonomous wiki sweep,
