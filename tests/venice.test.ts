@@ -971,6 +971,44 @@ describe('streamChat (streaming-root transport)', () => {
     expect(body.body.model).toBe('kimi-k2-5');
     expect(body.body.stream).toBe(true);
     expect(body.body.messages).toEqual([{ role: 'user', content: 'hi' }]);
+    // Plain send: the regenerate-only field stays off the wire
+    // entirely (not an empty array).
+    expect('supersededIds' in body).toBe(false);
+  });
+
+  it('ships streamCtx.supersededIds on the envelope for regenerate turns', async () => {
+    const channel = makeChannel('thread:T1:stream');
+    const channels = new Map([[channel.name, channel]]);
+    const { client, invokeCalls } = makeSupabase({
+      envelope: {
+        channelName: channel.name,
+        assistantRowId: null,
+        completedSoFar: '',
+      },
+      channels,
+    });
+    const venice = new VeniceClient({ supabase: client });
+    const consumer = venice.streamChat({
+      model: 'kimi-k2-5',
+      messages: [{ role: 'user', content: 'hi' }],
+      streamCtx: {
+        threadId: 'T1',
+        userMessageId: 'U1',
+        supersededIds: ['A-old', 'T-old'],
+      },
+    });
+    const drained = collectFirst(consumer);
+    await Promise.resolve();
+    await Promise.resolve();
+    channel.emit('END', {
+      persistedAssistantId: 'A1',
+      terminalKind: 'completed',
+    });
+    await drained;
+
+    expect(invokeCalls).toHaveLength(1);
+    const body = invokeCalls[0].body as { supersededIds?: string[] };
+    expect(body.supersededIds).toEqual(['A-old', 'T-old']);
   });
 
   it('translates response_text/reasoning_text/END broadcasts into StreamEvents in order', async () => {

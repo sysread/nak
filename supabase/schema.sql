@@ -7766,6 +7766,19 @@ $$;
 -- the round (the browser-side chat-loop, pre-migration); this one is the
 -- UPDATE-the-existing-streaming-row variant.
 --
+-- p_superseded_ids carries the regenerate-from-here replace range: the
+-- rows the new completion replaces (the old assistant turn plus every
+-- later row, including later user turns). They are excluded from the
+-- newer-user-message conflict check - they are still in the DB while
+-- the replacement streams, and without the exclusion every mid-thread
+-- regenerate would false-positive as a cross-device race - and deleted
+-- here, in the same transaction as the commit. Deleting at commit
+-- rather than browser-side after the END event means a turn that never
+-- commits (error, abort, conflict, wall timeout) leaves the original
+-- rows untouched, and a browser that dies right after the commit
+-- cannot strand superseded rows in the thread. Null/empty on plain
+-- sends.
+--
 -- security definer because the function calls this through the service-
 -- role admin client (b-strict; see docs/dev/edge-function-auth.md). The
 -- caller's session JWT may have expired by the time the round chain
@@ -7782,7 +7795,8 @@ create or replace function public.commit_assistant_message(
   p_model                text,
   p_usage                jsonb,
   p_reasoning            text,
-  p_citations            jsonb
+  p_citations            jsonb,
+  p_superseded_ids       uuid[] default null
 ) returns jsonb
 language plpgsql
 security definer
@@ -7836,18 +7850,46 @@ begin
 
   -- Any user message newer than our anchor means a competing send
   -- landed while the function was streaming. The response was computed
-  -- without that context, so we discard it. The cross-device-race-ui
-  -- v1+ plan covers the loser-UI affordance and the soft-delete
-  -- 'superseded' transition; for v1 we just return conflict and the
-  -- function persists status='error' on the row.
+  -- without that context, so we discard it. Rows in p_superseded_ids
+  -- are exempt: a regenerate anchored mid-thread is REPLACING the later
+  -- turns, so their user rows are stale context slated for the delete
+  -- below, not competing sends. The cross-device-race-ui v1+ plan
+  -- covers the loser-UI affordance and the soft-delete 'superseded'
+  -- transition; for v1 we just return conflict and the function
+  -- persists status='error' on the row. The check must run BEFORE the
+  -- superseded delete: returning a conflict object does not roll the
+  -- transaction back, so a delete-first ordering would destroy the
+  -- rows of a turn we then refuse to commit.
   if exists (
     select 1 from public.messages
       where thread_id = v_thread_id
         and role = 'user'
         and id <> p_user_message_id
         and created_at > v_anchor_ts
+        and (p_superseded_ids is null or id <> all(p_superseded_ids))
   ) then
     return jsonb_build_object('conflict', true, 'reason', 'newer_user_message');
+  end if;
+
+  -- Regenerate-from-here: drop the replaced rows atomically with the
+  -- commit (see the function preamble for why server-side). The
+  -- empty-content guard mirrors the browser's own rule: a completion
+  -- with no replaceable text (a reasoning-only turn) keeps the old
+  -- rows rather than replacing them with nothing. The anchor user
+  -- message and the streaming row itself are excluded defensively -
+  -- callers never include them, but deleting either would corrupt the
+  -- turn being committed. message_attachments rows cascade via their
+  -- FK's ON DELETE CASCADE; samskara_substrate does NOT cascade by
+  -- design - an orphan substrate row still carries training signal
+  -- for the formation pipeline, so it stays.
+  if p_superseded_ids is not null
+     and array_length(p_superseded_ids, 1) > 0
+     and trim(p_content) <> '' then
+    delete from public.messages
+      where thread_id = v_thread_id
+        and id = any(p_superseded_ids)
+        and id <> p_user_message_id
+        and id <> p_assistant_message_id;
   end if;
 
   update public.messages
@@ -7884,9 +7926,9 @@ $$;
 -- streaming function calls this through the admin client; no
 -- authenticated or anon user should be able to commit terminal state
 -- on an assistant row.
-revoke all on function public.commit_assistant_message(uuid, uuid, uuid, text, text, jsonb, text, jsonb)
+revoke all on function public.commit_assistant_message(uuid, uuid, uuid, text, text, jsonb, text, jsonb, uuid[])
   from public, anon, authenticated;
-grant execute on function public.commit_assistant_message(uuid, uuid, uuid, text, text, jsonb, text, jsonb)
+grant execute on function public.commit_assistant_message(uuid, uuid, uuid, text, text, jsonb, text, jsonb, uuid[])
   to service_role;
 
 -- Bias profile ----------------------------------------------------------

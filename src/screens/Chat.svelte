@@ -200,7 +200,7 @@
   import { formatMessageStamp } from '$lib/ui/message-timestamp';
   import { isReasoningOnlyStall } from '$lib/ui/incomplete-turn';
   import { headingFor, parseLastError } from '$lib/ui/last-error';
-  import { computeRegenerateRangeIds } from '$lib/ui/regenerate';
+  import { computeRegenerateRangeIds, persistedRowIds } from '$lib/ui/regenerate';
   import {
     orderedSubconsciousRows,
     subconsciousLabel,
@@ -3057,6 +3057,17 @@
      * row written at end-of-turn.
      */
     userMessageId: string;
+    /**
+     * DB row ids this exchange replaces (regenerate-from-here and the
+     * dead-tail retry). Rides the /stream request into the terminal
+     * commit RPC, which excludes these rows from its cross-device
+     * conflict check and deletes them atomically with the commit -
+     * the browser side only animates and prunes the view. Already
+     * filtered to persisted rows (see persistedRowIds); synthetic
+     * recovery rows stay in pendingDeleteIds for the in-memory prune
+     * only. Omitted on plain sends.
+     */
+    supersededIds?: string[];
   }
 
   /**
@@ -3396,6 +3407,7 @@
           history: buildHistoryOnWire(),
           signal: slot.abortCtl!.signal,
           userMessageId: ctx.userMessageId,
+          supersededIds: ctx.supersededIds,
           reasoningEffort: ctx.sendReasoning,
           disableThinking: ctx.sendDisableThinking,
           verbosity: ctx.sendVerbosity,
@@ -3703,10 +3715,23 @@
           pendingReasoning = null;
         }
       }
-      // Regenerate-from-here commit. Runs only when a real reply
-      // landed - a stopped-by-limit-with-no-text outcome is treated
-      // as a failure (handled below + by the catch on the outer try)
-      // so the greyed rows can be restored.
+      // Regenerate-from-here view-side exit. The DB delete of the
+      // replaced rows is NOT done here: the terminal commit RPC
+      // (commit_assistant_message, supabase/schema.sql) deleted them
+      // in the same transaction that flipped the new row to
+      // 'complete', so a turn that never commits leaves the originals
+      // untouched and a browser that dies after the commit cannot
+      // strand them. What remains browser-side is the fade-out
+      // animation and the in-memory prune.
+      //
+      // The branch condition mirrors the RPC's own delete guard, so
+      // the view never drops rows the server kept:
+      //   - trimmed finalText non-empty: the RPC skips the delete
+      //     when the committed content trims to empty (reasoning-only
+      //     re-roll), and a stopped-by-limit-with-no-text outcome is
+      //     treated as a failure so the greyed rows can be restored.
+      //   - no conflict: on a commit conflict the response was
+      //     discarded server-side and the superseded rows kept.
       //
       // Sequence:
       //   1. Compute a per-row animation-delay, staggered newest
@@ -3714,44 +3739,21 @@
       //      older row gets +250ms. This makes the tail visibly
       //      unwind back toward the user's prompt rather than
       //      collapsing all at once.
-      //   2. Kick off the DB delete in parallel with the fade so
-      //      the wall-clock cost of the two overlaps.
-      //   3. Wait for the total animation runtime, then prune the
+      //   2. Wait for the total animation runtime, then prune the
       //      rows from `messages` (which drops them from the DOM)
       //      and clear both the fade delays and the pending-delete
       //      id list in one state flip.
-      //
-      // A delete failure propagates to the outer catch. The new
-      // completion is already safely persisted by the chat loop's
-      // per-row writes; the only user-visible effect is that the
-      // old rows linger in the DB until the next refresh (the DOM
-      // has already moved on).
-      if (pendingDeleteIds.length > 0 && loopResult.finalText.length > 0) {
+      if (
+        pendingDeleteIds.length > 0 &&
+        loopResult.finalText.trim().length > 0 &&
+        !loopResult.conflictDetected
+      ) {
         const idsToDelete = pendingDeleteIds;
-        // The DB delete is correctness work - the old rows are stale
-        // regardless of which thread the user is currently viewing -
-        // so always fire it. The fade-out animation + `messages`
-        // filter, by contrast, are visible only when the user is
-        // actually looking at this thread; for a background exchange
-        // we skip the animation and let the next selectThread reload
-        // see the deleted rows missing from listMessages.
-        //
-        // Exclude synthetic recovery rows from the DB delete. When the
-        // regenerated turn's tail was an interrupted exchange,
-        // listMessages synthesized in-memory recovery rows whose ids
-        // are sentinels ("synthetic-recovery-asst-0"), not uuids - they
-        // were never written to the DB (regenerate replaces the turn,
-        // so unlike the send path it never persists them first).
-        // Passing a sentinel id to `.in('id', ...)` makes Postgres
-        // reject the whole delete with `invalid input syntax for type
-        // uuid`. They still need to leave the in-memory view below, so
-        // only the DB id list is narrowed; `idsToDelete` stays whole
-        // for the fade-out and the `messages` filter.
-        const syntheticIds = new Set(
-          messages.filter((m) => m.synthetic).map((m) => m.id)
-        );
-        const dbIdsToDelete = idsToDelete.filter((id) => !syntheticIds.has(id));
-        const deletePromise = app.supabase.deleteMessages(dbIdsToDelete);
+        // The fade-out animation + `messages` filter are visible only
+        // when the user is actually looking at this thread; for a
+        // background exchange we skip the animation and let the next
+        // selectThread reload see the deleted rows missing from
+        // listMessages.
         if (ctx.threadId === activeThreadId) {
           const indexOfId = new Map(
             idsToDelete.map((id) => [id, messages.findIndex((m) => m.id === id)] as const)
@@ -3774,13 +3776,15 @@
           fadeOutDelays = {};
         }
         pendingDeleteIds = [];
-        await deletePromise;
       } else if (pendingDeleteIds.length > 0) {
-        // The re-roll produced no replaceable text (e.g. a reasoning-
-        // only completion, or a turn that suspended on ask_user). The
-        // delete above is skipped on purpose - we don't drop the old
-        // rows when nothing landed to replace them. But the regenerate
-        // greying (.regen-target + disabled action buttons, keyed off
+        // No replacement landed: the re-roll produced no replaceable
+        // text (a reasoning-only completion, or a turn that suspended
+        // on ask_user), or the commit was discarded as a conflict (a
+        // genuinely-foreign user message landed mid-stream - the RPC
+        // excludes the superseded rows themselves from that check).
+        // In every case the server kept the old rows, so don't prune
+        // them from the view. But the regenerate greying
+        // (.regen-target + disabled action buttons, keyed off
         // pendingDeleteSet) has to clear regardless, or the old rows
         // sit frozen and uninteractable until a thread reload.
         pendingDeleteIds = [];
@@ -3790,10 +3794,13 @@
         error = { text: 'Stopped: the tool-call loop hit its round limit.' };
       }
       // Conflict: another device inserted a user message while we were
-      // streaming. The generated assistant row was discarded server-side.
-      // Show an inline error so the user knows to look at the other
-      // device for the new context - no retry closure because the right
-      // action is to navigate away and back once the other turn lands.
+      // streaming. The generated assistant row was discarded server-side
+      // (and on a regenerate, the rows marked for replacement were kept;
+      // the commit RPC exempts those from this check, so a conflict here
+      // means a genuinely-foreign send). Show an inline error so the
+      // user knows to look at the other device for the new context - no
+      // retry closure because the right action is to navigate away and
+      // back once the other turn lands.
       if (loopResult.conflictDetected) {
         slot.streamingError = {
           text: 'This conversation was updated on another device while a response was generating. The response was discarded - refresh this thread to see the latest.',
@@ -3888,6 +3895,14 @@
         await claim.release();
         slot.sending = false;
         slot.abortCtl = null;
+        // A regenerate's superseded rows are deleted server-side (the
+        // commit RPC drops them atomically with the terminal commit),
+        // and the reconnect path's listMessages refetch is what
+        // reconciles the view - so the greying must not outlive this
+        // handoff. If the turn ends up not committing, the rows are
+        // still in the DB and the refetch restores them ungreyed.
+        pendingDeleteIds = [];
+        fadeOutDelays = {};
         await reconnectInflightTurn(ctx.threadId, seedPartial);
         return;
       }
@@ -4266,6 +4281,7 @@
       sendUserLocation: app.userLocation,
       originalText: userMessage.content,
       userMessageId: userMessage.id,
+      supersededIds: persistedRowIds(messages, rangeIds),
     });
   }
 
@@ -4308,15 +4324,18 @@
     // re-roll to build on, so mark it for replacement the way
     // regenerateFrom marks its range. Without this the dead bubble
     // lingers above the fresh answer once the retry lands (the
-    // pendingDeleteSet filter keeps it off the wire, and the post-loop
-    // delete in runExchange prunes it once finalText arrives). The
+    // pendingDeleteSet filter keeps it off the wire, the commit RPC
+    // deletes the row atomically with the new turn's commit, and the
+    // post-loop fade in runExchange prunes it from the view). The
     // other incomplete-tail shapes (orphaned tool rows, a bare user
     // message) ARE genuine continuation points - their persisted rows
     // are exactly what the model needs to pick up - so they keep the
     // no-delete behavior.
     const tail = messages[messages.length - 1];
+    let supersededIds: string[] | undefined;
     if (isReasoningOnlyStall(tail)) {
       pendingDeleteIds = [tail.id];
+      supersededIds = persistedRowIds(messages, [tail.id]);
     }
 
     const tier = resolveTier(active.model ?? null, defaultTier);
@@ -4350,6 +4369,7 @@
       sendUserLocation: app.userLocation,
       originalText: userMessage.content,
       userMessageId: userMessage.id,
+      supersededIds,
     });
   }
 

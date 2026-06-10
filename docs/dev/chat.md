@@ -26,8 +26,9 @@ A chat turn goes:
    per-turn metadata), and issues a single `venice.streamChat` call.
 4. The venice edge function takes over. Its round loop streams
    from Venice, dispatches tool calls server-side, persists each
-   round (assistant row via `commit_assistant_message`, then one
-   `role='tool'` row per call) before looping, and broadcasts
+   non-terminal round (the tool-using assistant row, then one
+   `role='tool'` row per call) before looping, commits the terminal
+   round via the `commit_assistant_message` RPC, and broadcasts
    typed events on `thread:<id>:stream` so the browser's UI stays
    live.
 5. `chat-loop.ts` consumes those events and routes them to the
@@ -443,6 +444,27 @@ A chat turn goes:
   chronologically after them. If you stop reusing the streaming row
   across rounds, or move the commit off that row id, this re-stamp is
   the thing that was holding the card order together.
+- **Regenerate's replaced rows are deleted by the commit RPC, not
+  the browser.** Regenerate-from-here anchors the new stream on the
+  turn's original user message while the replace range - the old
+  assistant turn plus every later row, later user turns included -
+  stays in the DB so a failed re-roll can un-grey it without data
+  loss. Those ids ride the `/stream` request as `supersededIds`
+  (`ExchangeContext` -> `runChatLoop` -> `streamCtx` -> the request
+  body, uuid-validated in `handleStream`) into
+  `commit_assistant_message`, which excludes them from its
+  newer-user-message conflict check and deletes them in the same
+  transaction that flips the new row to 'complete'. Without the
+  exclusion, every mid-thread regenerate false-positives as a
+  cross-device race at terminal commit ("This conversation was
+  updated on another device...") because the slated-for-delete user
+  rows are newer than the anchor. Browser-side, `runExchange`'s
+  post-loop block only animates and prunes the view; its branch
+  condition (non-empty trimmed text, no conflict) mirrors the RPC's
+  own delete guard so the view never drops rows the server kept.
+  Synthetic recovery rows never ride `supersededIds` (they have no
+  DB row; see `persistedRowIds` in `src/lib/ui/regenerate.ts`) but
+  stay in `pendingDeleteIds` for the in-memory prune.
 - **Reconnect POLLS the DB row; it does NOT resume the live stream.**
   When `selectThread` finds the transcript tail is a
   `status='streaming'` assistant row and no local slot is producing it
