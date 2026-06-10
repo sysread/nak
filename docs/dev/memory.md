@@ -285,6 +285,18 @@ in `docs/user/memory.md`. The dev side has five moving parts:
   converses - without it a dormant account's queue never moves. The
   per-thread claim makes tail + sweep double-driving safe. The dev
   shim ticks this route too.
+- **Reflection attempt cap** — both reflection claims count
+  ATTEMPTS at claim time (`threads.reflection_attempt_msg_id` +
+  `reflection_attempt_count`): three claims against the same
+  terminal message and the thread stops being offered, until a new
+  conversation turn changes the terminal message and refreshes the
+  budget. Counting attempts rather than failures is load-bearing: a
+  run killed by the invocation wall clock never reaches an error
+  handler, so a failure counter would miss exactly the deaths that
+  need bounding (a measured ~9-minute reflection cannot fit the
+  hosted ~400s window; without the cap the hourly sweep would
+  re-claim such a thread forever). A successful mark resets the
+  count.
 - **Librarian cron sweeps** — pg_cron jobs `nak-rem-sweep`
   (hourly, minute 17) and `nak-deep-sleep-sweep` (hourly, minute
   47) read vault secrets and pg_net-POST `/rem-sweep` /

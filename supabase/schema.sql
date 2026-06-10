@@ -687,7 +687,17 @@ drop function if exists public.expire_old_attachments(int);
 alter table public.threads
   add column if not exists last_reflected_msg_id uuid references public.messages(id) on delete set null,
   add column if not exists reflection_holder_id text,
-  add column if not exists reflection_claim_expires_at timestamptz;
+  add column if not exists reflection_claim_expires_at timestamptz,
+  -- Attempt accounting, stamped AT CLAIM TIME by both reflection
+  -- claims. Counting attempts (not failures) is deliberate: a run
+  -- that dies to the invocation wall clock never reaches an error
+  -- handler, so a failure counter would miss exactly the deaths that
+  -- need bounding. Three attempts at the same terminal message and
+  -- the claims stop offering the thread; a new conversation turn
+  -- changes the terminal message and refreshes the budget. A
+  -- successful mark resets the count.
+  add column if not exists reflection_attempt_msg_id uuid,
+  add column if not exists reflection_attempt_count int not null default 0;
 
 -- Claim-lookup index. Partial on `reflection_holder_id is not null` so
 -- the index only carries live claims — the common case is 0 rows
@@ -3867,6 +3877,12 @@ language sql security invoker as $$
       ) newest
      where t.user_id = coalesce(p_user_id, auth.uid())
        and term.msg_id is distinct from t.last_reflected_msg_id
+       -- Attempt cap: stop offering a terminal message that has
+       -- already burned three claims (see the column comment on
+       -- reflection_attempt_count). A different terminal message
+       -- means new conversation turns landed - fresh budget.
+       and (term.msg_id is distinct from t.reflection_attempt_msg_id
+            or t.reflection_attempt_count < 3)
        and (t.reflection_claim_expires_at is null
             or t.reflection_claim_expires_at < now())
        and (newest.created_at at time zone p_timezone)::date
@@ -3888,7 +3904,12 @@ language sql security invoker as $$
   )
   update public.threads t
      set reflection_holder_id = p_holder_id,
-         reflection_claim_expires_at = now() + make_interval(secs => p_ttl_seconds)
+         reflection_claim_expires_at = now() + make_interval(secs => p_ttl_seconds),
+         reflection_attempt_count = case
+           when t.reflection_attempt_msg_id is distinct from c.terminal_msg_id then 1
+           else t.reflection_attempt_count + 1
+         end,
+         reflection_attempt_msg_id = c.terminal_msg_id
     from candidate c
    where t.id = c.thread_id
   returning t.id as thread_id, c.terminal_msg_id;
@@ -3919,7 +3940,8 @@ begin
   update public.threads
      set last_reflected_msg_id = p_msg_id,
          reflection_holder_id = null,
-         reflection_claim_expires_at = null
+         reflection_claim_expires_at = null,
+         reflection_attempt_count = 0
    where id = p_thread_id
      and user_id = coalesce(p_user_id, auth.uid())
      and reflection_holder_id = p_holder_id
@@ -3983,6 +4005,10 @@ set search_path = public as $$
          limit 1
       ) newest
      where term.msg_id is distinct from t.last_reflected_msg_id
+       -- Same attempt cap as the per-user claim; see the column
+       -- comment on reflection_attempt_count.
+       and (term.msg_id is distinct from t.reflection_attempt_msg_id
+            or t.reflection_attempt_count < 3)
        and (t.reflection_claim_expires_at is null
             or t.reflection_claim_expires_at < now())
        and (newest.created_at at time zone usertz.tz)::date
@@ -4001,7 +4027,12 @@ set search_path = public as $$
   )
   update public.threads t
      set reflection_holder_id = p_holder_id,
-         reflection_claim_expires_at = now() + make_interval(secs => p_ttl_seconds)
+         reflection_claim_expires_at = now() + make_interval(secs => p_ttl_seconds),
+         reflection_attempt_count = case
+           when t.reflection_attempt_msg_id is distinct from c.terminal_msg_id then 1
+           else t.reflection_attempt_count + 1
+         end,
+         reflection_attempt_msg_id = c.terminal_msg_id
     from candidate c
    where t.id = c.thread_id
   returning t.id as thread_id, c.terminal_msg_id, t.user_id;
