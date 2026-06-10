@@ -62,3 +62,4 @@ None - seeded hint rows are rem's normal diet.
 | ---- | --- | ------ | ------ | ----- |
 | 2026-06-10 | local | 06e9271 | pass (2) | three direct-tool rounds (memory_search, conversation_search, conversation_get) each rendered dispatching/outcomes=ok in `stream` |
 | 2026-06-10 | local | 06e9271 | pass (3,4) | forced memory_recall: `[recall]` start preview + `recall finished (7 tool call(s), 12 memories surfaced, outcome=none)` + outcomes=ok; 12 memory_conversation rows seeded |
+| 2026-06-10 | local | 1faf031 | pass (web_search) | always-on web tool ran live: narrated activity card ("Searching the live web for..." 8.4s), tool row carried the {answer, citations} payload, 10 citations persisted on the reply. Note: older [stream] entry text virtualizes out of snapshot reach in a busy drawer - use the level/search filters when checking past turns |
