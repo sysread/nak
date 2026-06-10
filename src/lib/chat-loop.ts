@@ -68,7 +68,7 @@ import {
 } from './tools';
 import { buildSystemPrompt, buildToolboxStateBlock } from './chat-prompt';
 import { askUserSchema } from './tools/ask_user.schema';
-import type { AskUserOption } from './ask-user';
+import { extractAskUserPrompt } from './ask-user';
 import {
   parseToolArguments,
   sanitizeToolCallIdForWire,
@@ -1604,22 +1604,9 @@ async function consumeStreamEvents(opts: {
               const a = parseToolArguments(
                 ev.toolCall.function.arguments,
               ) as Record<string, unknown>;
-              const question =
-                typeof a.question === 'string' ? a.question : '';
-              const rawOptions = Array.isArray(a.options) ? a.options : [];
-              const options: AskUserOption[] = rawOptions
-                .filter((o): o is { label: string; description: string } =>
-                  !!o &&
-                  typeof o === 'object' &&
-                  typeof (o as { label?: unknown }).label === 'string' &&
-                  typeof (o as { description?: unknown }).description ===
-                    'string',
-                )
-                .map((o) => ({ label: o.label, description: o.description }));
               pendingAskUser = {
                 toolCallId: ev.toolCall.id,
-                question,
-                options,
+                ...extractAskUserPrompt(a),
               };
             } catch {
               // Malformed args from the model. The server will surface

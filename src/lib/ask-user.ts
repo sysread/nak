@@ -73,6 +73,35 @@ export interface AskUserAnsweredContent {
 }
 
 /**
+ * Lenient shape extraction for an ask_user tool CALL's arguments (the
+ * model-authored side, vs the persisted tool-result content the
+ * parsers below handle). The model's args are untrusted: question may
+ * be missing, options may be absent or carry junk entries. Junk
+ * options are dropped rather than failing the whole call - the
+ * AskUserCard renders a question with however many valid options
+ * survived, and free-form answering covers the rest. Used by
+ * chat-loop.ts to pre-populate the card from the in-flight tool_call
+ * event without waiting for the persisted row.
+ */
+export function extractAskUserPrompt(args: Record<string, unknown>): {
+  question: string;
+  options: AskUserOption[];
+} {
+  const question = typeof args.question === 'string' ? args.question : '';
+  const rawOptions = Array.isArray(args.options) ? args.options : [];
+  const options: AskUserOption[] = rawOptions
+    .filter(
+      (o): o is { label: string; description: string } =>
+        !!o &&
+        typeof o === 'object' &&
+        typeof (o as { label?: unknown }).label === 'string' &&
+        typeof (o as { description?: unknown }).description === 'string',
+    )
+    .map((o) => ({ label: o.label, description: o.description }));
+  return { question, options };
+}
+
+/**
  * Type guards + content parser. Used by chat-loop.ts (to detect the
  * suspended state on a tool-result row) and by Chat.svelte (to project
  * the message into an AskUserCard block). Returns null for any other
