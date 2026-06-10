@@ -11,8 +11,12 @@ of the tree.** What remains:
   Status block; the bar is the Phase 2 verification gate (watch a
   hosted cron tick claim and process real work, confirm the drawer
   sources, round-trip the manual runs).
-- **The Phase 5 ledger** - independent, opportunistic items; none
-  gate anything.
+
+The Phase 5 ledger closed 2026-06-10: the Deno type errors are fixed
+and the Deno island joined the `mise run check` gate; the cookbook
+realtime relay landed (and surfaced a DELETE-delivery gap fixed for
+all three relays); the no-tool agents re-inspection is recorded in
+`../planned-changes.md` under "Retire the browser supervisor."
 
 ## SYNOPSIS
 
@@ -817,20 +821,21 @@ half-alive" never reads as intentional.
 
 **Open items:**
 
-- **Re-inspect the no-tool completion agents after Phase 3.** [Phase
-  3 is closed - this item is now actionable.] The
-  "What stays browser-side" list excludes the plain-completion agents
-  (`auto_title`, `summary`, `topics`, `memory_topics`,
-  `recipe_topics`, `bias`, `intuition`, `samskara`) from the
-  dispatcher split on the grounds that they dispatch no tools. Now
-  that the split has closed, revisit each: whether the server-side patterns
-  the migration established (cron sweep / waitUntil tail / edge
-  logger) now make a server port cheap enough to justify, and whether
-  any browser-only assumptions in them have quietly become
-  anti-patterns next to the migrated fleets. Sequencing constraint:
-  samskara has an upstream change landing shortly - after it lands
-  and the branch rebases, that whole area needs a fresh read before
-  any plan touches it.
+- **Re-inspect the no-tool completion agents after Phase 3.**
+  [CLOSED 2026-06-10.] All eight plain-completion agents
+  re-inspected (samskara got its mandated fresh read of the tier-2
+  area first). Full assessment recorded in
+  `../planned-changes.md` under "Retire the browser supervisor";
+  the verdict in one breath: the five supervisor units should port
+  (the migration turned memory_topics / recipe_topics into a
+  server-writes/browser-drains anti-pattern - rem rewrites a
+  memory's label at 3am and the tags wait for a browser tab; the
+  three thread-shaped units ride the reflection-style waitUntil
+  tail), which deletes the supervisor worker and its whole lease
+  apparatus; bias is portable but optional (no structural gap);
+  intuition is turn-coupled, not a fleet - it only moves if
+  context-recall ever folds into /stream; samskara stays
+  browser-side until tier-2 bakes.
 - **Pre-existing Deno type errors, surfaced by a Deno upgrade.**
   [CLOSED 2026-06-10.] All three fixed, and the gap that hid them is
   closed:
