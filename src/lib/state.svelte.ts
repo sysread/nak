@@ -111,15 +111,11 @@ function lazyManager<
 // docs/dev/embeddings.md). Search-query embeds go through the function too
 // (SupabaseService.embed), so nothing in the browser holds a Venice key for
 // the embeddings path.
-// Six formerly-standalone workers (auto_title, summary, reflection,
-// topics, memory_topics, recipe_topics) are
-// consolidated under one supervisor worker. The supervisor owns one
-// lease, one heartbeat, one Supabase client, and one auth setup -
-// see src/lib/agents/supervisor/loop.ts for the rationale and which
-// workers stayed standalone.
-const supervisor = lazyManager(() =>
-  import('./agents/supervisor/manager').then((m) => m.supervisorManager)
-);
+// The five curation units (auto_title, summary, topics,
+// memory_topics, recipe_topics) and reflection have no browser
+// workers: they run server-side in the venice edge function
+// (supabase/functions/venice/agents/), driven by pg_cron sweeps.
+// Samskara and bias are the remaining browser workers.
 const samskara = lazyManager(() =>
   import('./agents/samskara/manager').then((m) => m.samskaraManager)
 );
@@ -736,27 +732,16 @@ function startBackgroundWorkers(config: AppConfig): void {
   // unlock / sign-in will call `activate()` again.
   //
   // The workers run concurrently and partition the shared
-  // `worker_leases` table on `worker_kind` ('summary' / 'topics' /
-  // 'memory-topics' / 'recipe-topics' / 'auto_title' / 'samskara')
-  // so one device can hold every lease simultaneously without
-  // contention. The summary worker feeds
-  // the drawer's search feature - it writes `threads.summary`, which the
-  // server-side cron backfill then picks up to build the searchable
-  // vector (see docs/dev/embeddings.md).
-  // The topics worker writes `threads.topics` which the drawer reads
-  // to populate the topic-filter dropdown; see docs/dev/topics.md.
-  // The memory-topics and recipe-topics workers are siblings that
-  // tag `memories.topics` and `recipes.topics` for the Memories and
-  // Recipes tabs' own topic filters. The attachment-expiry worker
-  // reclaims binaries from attachments on threads quieter than 30
-  // days. The auto-title worker fills in titles for threads still
-  // on the 'New conversation' placeholder; see docs/dev/auto-title.md.
+  // `worker_leases` table on `worker_kind` so one device can hold
+  // every lease simultaneously without contention. Only two browser
+  // workers remain: samskara and bias. The five curation units
+  // (auto-title, summary, topics, memory-topics, recipe-topics) run
+  // server-side in the venice edge function alongside embeddings,
+  // reflection, the wiki agents, and the memory librarians - their
+  // output (titles, summaries, topic tags) still lands in the same
+  // tables the drawer's search and topic-filter dropdowns read.
   // The samskara worker forms the chat model's progressively-built
   // predictive model of the user; see docs/dev/samskara.md.
-  supervisor.start({
-    supabase: app.supabase,
-    config,
-  });
   samskara.start({ supabase: app.supabase, config });
   // Bias-observer worker silently analyzes processed conversations
   // for cognitive-bias / System-1-heuristic evidence; the aggregated
@@ -858,7 +843,6 @@ async function loadSettingsThenStartWorkers(config: AppConfig): Promise<void> {
  * sign-in-as-someone-else into the Settings panes' caches.
  */
 function stopBackgroundWorkers(): void {
-  supervisor.stop();
   samskara.stop();
   bias.stop();
   resetUsage();

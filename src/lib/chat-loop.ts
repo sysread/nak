@@ -360,10 +360,11 @@ interface MetadataSystemMessageOptions {
   titleManuallySet: boolean;
   /**
    * 1-based count of user messages in this thread including the
-   * current one. Title nudges are skipped on round 1 - the auto-title
-   * worker (see `src/lib/agents/auto_title/`) handles naming there;
-   * the metadata-message nudges only fire from round 2 onward as a
-   * safety net for the case where the worker hasn't polled yet.
+   * current one. Title nudges are skipped on round 1 - the server-side
+   * auto-title agent (supabase/functions/venice/agents/auto_title.ts)
+   * handles naming there; the metadata-message nudges only fire from
+   * round 2 onward as a safety net for the case where the agent
+   * hasn't polled yet.
    */
   currentUserRound: number;
 }
@@ -475,12 +476,12 @@ function buildMetadataSystemMessage(
     );
   }
 
-  // Title nudges are silent on round 1 - the auto-title worker
-  // (src/lib/agents/auto_title/*) polls the threads table for rows
-  // still on the placeholder and titles them in the background, so
-  // the model never has to. From round 2 on, if the worker hasn't
-  // landed yet (it may not have polled, or the user is on a brand-
-  // new device that hasn't taken the lease) the loud nag below
+  // Title nudges are silent on round 1 - the server-side auto-title
+  // agent (supabase/functions/venice/agents/auto_title.ts) polls the
+  // threads table for rows still on the placeholder and titles them
+  // in the background, so the model never has to. From round 2 on,
+  // if the agent hasn't landed yet (it may not have polled the row)
+  // the loud nag below
   // fires to recover; if a model-set title is already in place but
   // the topic may have drifted, the soft drift hint fires instead.
   // Manually-named threads suppress both nudges - the user

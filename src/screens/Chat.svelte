@@ -3408,15 +3408,14 @@
     // flight. Best-effort: absence of the lock is not fatal.
     await acquireWakeLock();
 
-    // Auto-titling no longer fires from here. The auto-title worker
-    // (src/lib/agents/auto_title/*) polls the threads table for rows
-    // still on the 'New conversation' placeholder and titles them in
-    // the background, surviving page closes / refreshes that the
-    // old in-Chat fire-and-forget pipeline lost work to. The chat-
-    // loop's metadata message stays silent about titles on round 1
-    // (the worker owns naming there) and falls back to the loud nag
-    // on round 2+ if the worker hasn't landed yet. See
-    // docs/dev/auto-title.md for the full pipeline.
+    // Auto-titling does not fire from here. The server-side auto-title
+    // agent (supabase/functions/venice/agents/auto_title.ts) polls the
+    // threads table for rows still on the 'New conversation'
+    // placeholder and titles them in the background, surviving page
+    // closes / refreshes. The chat-loop's metadata message stays
+    // silent about titles on round 1 (the agent owns naming there)
+    // and falls back to the loud nag on round 2+ if the agent hasn't
+    // landed yet. See docs/dev/auto-title.md for the full pipeline.
 
     try {
       let loopResult;
@@ -5729,8 +5728,9 @@
   //
   // The search box at the top of the drawer runs both an exact ILIKE
   // match on the title and a semantic cosine-similarity search against
-  // `title + summary` embeddings (see src/lib/agents/summary/* and the
-  // threads EmbeddingSource). Exact hits always rank above semantic
+  // `title + summary` embeddings; the server-side summary agent
+  // (supabase/functions/venice/agents/summary.ts) writes
+  // `threads.summary`. Exact hits always rank above semantic
   // hits — the merge in SupabaseService.searchThreads enforces that.
   //
   // The paginated list is hidden entirely while a query is active; the

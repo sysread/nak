@@ -19,7 +19,7 @@
  * server-side via pg_cron + the venice edge function - see
  * docs/dev/embeddings.md), but this coordinator is now shared
  * infrastructure: every worker under
- * `src/lib/agents/` (supervisor, samskara, bias) constructs one,
+ * `src/lib/agents/` (samskara, bias) constructs one,
  * partitioned by `workerKind`. The
  * directory name is a vestige; the code is fleet-wide.
  *

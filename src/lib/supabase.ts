@@ -153,10 +153,11 @@ export interface Thread {
    */
   context_recall_payload: unknown;
   /**
-   * Topic tags assigned by the background topics worker
-   * (src/lib/agents/topics/*). Flat list; the drawer's topic-filter
-   * dropdown uses these to narrow the conversation list by `topics &&`
-   * predicate. Empty array means "untagged" - either the worker hasn't
+   * Topic tags assigned by the server-side topics agent
+   * (supabase/functions/venice/agents/thread_topics.ts). Flat list;
+   * the drawer's topic-filter dropdown uses these to narrow the
+   * conversation list by `topics &&` predicate. Empty array means
+   * "untagged" - either the agent hasn't
    * reached this thread yet, or it ran and chose to emit no topics.
    * The UI treats the two cases the same: filterable as "(untagged)".
    */
@@ -291,12 +292,13 @@ export interface Memory {
   data: string;
   confidence: number;
   /**
-   * Topic tags written by the memory-topics worker
-   * (src/lib/agents/memory_topics/*). Empty array means "untagged" -
-   * either the worker hasn't reached the row yet, the agent ran and
+   * Topic tags written by the server-side memory-topics agent
+   * (supabase/functions/venice/agents/memory_topics.ts). Empty array
+   * means "untagged" -
+   * either the agent hasn't reached the row yet, it ran and
    * chose to emit nothing, or the user just edited the row (the
    * `clear_memory_topics_on_change` trigger nulls last_topics_at on
-   * content change and the next worker cycle re-tags). The
+   * content change and the next sweep re-tags). The
    * UNTAGGED_TOPIC_SENTINEL is a UI-only primitive and never lands
    * in this column.
    */
@@ -538,12 +540,13 @@ export interface Recipe {
    */
   favorite: boolean;
   /**
-   * Topic tags written by the recipe-topics worker
-   * (src/lib/agents/recipe_topics/*). Empty array means "untagged" -
-   * either the worker hasn't reached the row, the agent ran and
+   * Topic tags written by the server-side recipe-topics agent
+   * (supabase/functions/venice/agents/recipe_topics.ts). Empty array
+   * means "untagged" -
+   * either the agent hasn't reached the row, it ran and
    * chose to emit nothing, or the user just edited title/cooklang
    * (the `clear_recipe_topics_on_change` trigger nulls
-   * `last_topics_at` on content change and the next worker cycle
+   * `last_topics_at` on content change and the next sweep
    * re-tags). The UNTAGGED_TOPIC_SENTINEL is a UI-only primitive
    * and never lands in this column. Cap of 6 tags per row vs the
    * 4 used on threads/memories - recipes legitimately span more
@@ -4651,240 +4654,10 @@ export class SupabaseService {
   }
 
   /**
-   * Atomically claim the oldest thread in need of reflection. Returns
-   * null when no thread qualifies (already-reflected, under the token
-   * threshold, currently claimed by another device, or lands on
-   * today in the user's timezone - the day-gate lets in-flight
-   * conversations settle before the autonomous agent reads them).
-   * The returned `terminalMsgId` is the specific assistant message
-   * we should reflect up to; we pass it back to
-   * `markThreadReflectedIfClaimed` after a successful run so a race
-   * where the user adds more turns mid-reflection simply queues the
-   * thread for the next cycle.
-   *
-   * `timezone` is the user's display timezone (Settings -> AI ->
-   * About you); when null/omitted the SQL falls back to UTC. The
-   * caller is responsible for normalising input to a valid IANA name.
-   */
-  async claimNextThreadForReflection(
-    holderId: string,
-    ttlSeconds: number,
-    timezone: string | null
-  ): Promise<{ threadId: string; terminalMsgId: string } | null> {
-    const { data, error } = await this.client.rpc('claim_next_thread_for_reflection', {
-      p_holder_id: holderId,
-      p_ttl_seconds: ttlSeconds,
-      p_timezone: timezone ?? 'UTC',
-    });
-    if (error) throw new SupabaseError(error.message);
-    const rows = (data ?? []) as { thread_id: string; terminal_msg_id: string }[];
-    if (rows.length === 0) return null;
-    const row = rows[0];
-    return { threadId: row.thread_id, terminalMsgId: row.terminal_msg_id };
-  }
-
-  /**
-   * Stamp `last_reflected_msg_id` IF our claim is still valid. Returns
-   * false when the claim expired or another device took over. Callers
-   * treat false as "skip, loop to next"; any memory writes the agent
-   * made during the run stay, because memories are owned by the user,
-   * not the claim — re-reflection on the same thread just finds them
-   * via memory_search and memory_update rather than duplicate.
-   */
-  async markThreadReflectedIfClaimed(
-    threadId: string,
-    holderId: string,
-    msgId: string
-  ): Promise<boolean> {
-    const { data, error } = await this.client.rpc('mark_thread_reflected_if_claimed', {
-      p_thread_id: threadId,
-      p_holder_id: holderId,
-      p_msg_id: msgId,
-    });
-    if (error) throw new SupabaseError(error.message);
-    return data === true;
-  }
-
-  /**
-   * Atomically claim the oldest thread that hasn't been summarised
-   * through its latest terminal assistant message. Returns null when
-   * nothing qualifies. The returned `terminalMsgId` is the specific
-   * message we should summarise up to — passed back to
-   * `saveThreadSummaryIfClaimed` so a race where the user adds more
-   * turns mid-summary simply queues the thread for the next cycle.
-   */
-  async claimNextThreadForSummary(
-    holderId: string,
-    ttlSeconds: number
-  ): Promise<{ threadId: string; terminalMsgId: string } | null> {
-    const { data, error } = await this.client.rpc('claim_next_thread_for_summary', {
-      p_holder_id: holderId,
-      p_ttl_seconds: ttlSeconds,
-    });
-    if (error) throw new SupabaseError(error.message);
-    const rows = (data ?? []) as { thread_id: string; terminal_msg_id: string }[];
-    if (rows.length === 0) return null;
-    const row = rows[0];
-    return { threadId: row.thread_id, terminalMsgId: row.terminal_msg_id };
-  }
-
-  /**
-   * Save the generated summary IF our claim is still valid. The RPC
-   * guards on holder + TTL + user_id. A false return means the claim
-   * expired or another device took over — caller drops the work.
-   */
-  async saveThreadSummaryIfClaimed(
-    threadId: string,
-    holderId: string,
-    summary: string,
-    msgId: string
-  ): Promise<boolean> {
-    const { data, error } = await this.client.rpc('save_thread_summary_if_claimed', {
-      p_thread_id: threadId,
-      p_holder_id: holderId,
-      p_summary: summary,
-      p_msg_id: msgId,
-    });
-    if (error) throw new SupabaseError(error.message);
-    return data === true;
-  }
-
-  /**
-   * Atomically claim the oldest thread that's still on the placeholder
-   * title and hasn't been manually pinned. Returns null when nothing
-   * qualifies. The returned `userText` is the first user message on the
-   * thread - the worker passes it straight to title-gen without a
-   * follow-up SELECT.
-   */
-  async claimNextThreadForAutoTitle(
-    holderId: string,
-    ttlSeconds: number
-  ): Promise<{ threadId: string; userText: string } | null> {
-    const { data, error } = await this.client.rpc('claim_next_thread_for_auto_title', {
-      p_holder_id: holderId,
-      p_ttl_seconds: ttlSeconds,
-    });
-    if (error) throw new SupabaseError(error.message);
-    const rows = (data ?? []) as { thread_id: string; user_text: string }[];
-    if (rows.length === 0) return null;
-    const row = rows[0];
-    return { threadId: row.thread_id, userText: row.user_text };
-  }
-
-  /**
-   * Save the generated title IF the row is still eligible AND our claim
-   * is still valid. The RPC's predicate also re-checks that the title
-   * is still the default and the user hasn't manually pinned one mid-
-   * flight, so a manual rename or model-driven update_title beats us
-   * silently rather than clobbering. False return = a race; caller
-   * drops the work and the next cycle simply skips the row.
-   */
-  async saveThreadTitleIfClaimed(
-    threadId: string,
-    holderId: string,
-    title: string
-  ): Promise<boolean> {
-    const { data, error } = await this.client.rpc('save_thread_title_if_claimed', {
-      p_thread_id: threadId,
-      p_holder_id: holderId,
-      p_title: title,
-    });
-    if (error) throw new SupabaseError(error.message);
-    return data === true;
-  }
-
-  /**
-   * Release the auto-title claim without writing a title. Used when
-   * title-gen returned null (model emitted whitespace, abort fired) so
-   * the row goes back to the queue immediately rather than waiting for
-   * the per-thread claim TTL to expire. Best-effort; the TTL is the
-   * authority on stuck claims.
-   */
-  async clearAutoTitleClaim(threadId: string, holderId: string): Promise<void> {
-    const { error } = await this.client.rpc('clear_auto_title_claim', {
-      p_thread_id: threadId,
-      p_holder_id: holderId,
-    });
-    if (error) throw new SupabaseError(error.message);
-  }
-
-  /**
-   * Atomically claim the next thread that's settled past its last
-   * topics-tagging snapshot. Returns null when nothing qualifies. The
-   * `terminalMsgId` is the assistant message we should tag against;
-   * `existingTopics` is the user's current topic vocabulary, fetched
-   * in the same round trip so the agent can prompt the model with
-   * "reuse these names if they fit" without a second SELECT.
-   */
-  async claimNextThreadForTopics(
-    holderId: string,
-    ttlSeconds: number
-  ): Promise<{
-    threadId: string;
-    terminalMsgId: string;
-    existingTopics: string[];
-  } | null> {
-    const { data, error } = await this.client.rpc('claim_next_thread_for_topics', {
-      p_holder_id: holderId,
-      p_ttl_seconds: ttlSeconds,
-    });
-    if (error) throw new SupabaseError(error.message);
-    const rows = (data ?? []) as {
-      thread_id: string;
-      terminal_msg_id: string;
-      existing_topics: string[] | null;
-    }[];
-    if (rows.length === 0) return null;
-    const row = rows[0];
-    return {
-      threadId: row.thread_id,
-      terminalMsgId: row.terminal_msg_id,
-      existingTopics: Array.isArray(row.existing_topics)
-        ? row.existing_topics.filter((t): t is string => typeof t === 'string')
-        : [],
-    };
-  }
-
-  /**
-   * Save the agent-produced topics IF our claim is still valid. RPC
-   * guards on holder + TTL + user_id. False return = a race; caller
-   * drops the work and the next cycle will re-pick the row.
-   */
-  async saveThreadTopicsIfClaimed(
-    threadId: string,
-    holderId: string,
-    topics: string[],
-    msgId: string
-  ): Promise<boolean> {
-    const { data, error } = await this.client.rpc('save_thread_topics_if_claimed', {
-      p_thread_id: threadId,
-      p_holder_id: holderId,
-      p_topics: topics,
-      p_msg_id: msgId,
-    });
-    if (error) throw new SupabaseError(error.message);
-    return data === true;
-  }
-
-  /**
-   * Release the topics claim without writing topics. Used when the
-   * agent returned no usable output (model emitted garbage, abort
-   * fired) so the row re-enters the queue immediately rather than
-   * waiting for the per-thread TTL.
-   */
-  async clearTopicsClaim(threadId: string, holderId: string): Promise<void> {
-    const { error } = await this.client.rpc('clear_topics_claim', {
-      p_thread_id: threadId,
-      p_holder_id: holderId,
-    });
-    if (error) throw new SupabaseError(error.message);
-  }
-
-  /**
    * Topic vocabulary + per-topic counts for the current user. Backs the
    * drawer's topic-filter dropdown; called on drawer mount and
    * refreshed after a tagging event. Returns the alphabetised topics
-   * the worker has assigned across all threads, each with its corpus
+   * the server-side topics agent has assigned across all threads, each with its corpus
    * count, plus the count of zero-topic threads (the "(untagged)"
    * dropdown row the UI synthesises - never a member of `topics`).
    */
@@ -4892,87 +4665,6 @@ export class SupabaseService {
     const { data, error } = await this.client.rpc('list_user_topics');
     if (error) throw new SupabaseError(error.message);
     return parseTopicVocabulary(data);
-  }
-
-  /**
-   * Memory-topics sibling of `claimNextThreadForTopics`. The RPC
-   * returns the memory's label + data (so the agent doesn't need a
-   * second SELECT) plus the user's existing memory-topic vocabulary.
-   * Eligibility predicate inside the RPC is `last_topics_at is null` -
-   * a fresh row (never tagged) or a content-edited row (the trigger
-   * nulls last_topics_at on label/data change) both qualify.
-   */
-  async claimNextMemoryForTopics(
-    holderId: string,
-    ttlSeconds: number
-  ): Promise<{
-    memoryId: string;
-    label: string;
-    data: string;
-    existingTopics: string[];
-  } | null> {
-    const { data, error } = await this.client.rpc('claim_next_memory_for_topics', {
-      p_holder_id: holderId,
-      p_ttl_seconds: ttlSeconds,
-    });
-    if (error) throw new SupabaseError(error.message);
-    const rows = (data ?? []) as {
-      memory_id: string;
-      label: string;
-      data: string;
-      existing_topics: string[] | null;
-    }[];
-    if (rows.length === 0) return null;
-    const row = rows[0];
-    return {
-      memoryId: row.memory_id,
-      label: row.label,
-      data: row.data,
-      existingTopics: Array.isArray(row.existing_topics)
-        ? row.existing_topics.filter((t): t is string => typeof t === 'string')
-        : [],
-    };
-  }
-
-  /**
-   * Save the agent-produced topics IF our claim is still valid. RPC
-   * stamps `last_topics_at = now()` so the row drops out of the
-   * eligibility queue until its content changes again. False return =
-   * a race (TTL expired, another holder stole the claim, or the user
-   * edited the memory and the trigger nulled our claim mid-run).
-   * Caller drops the work in that case.
-   */
-  async saveMemoryTopicsIfClaimed(
-    memoryId: string,
-    holderId: string,
-    topics: string[]
-  ): Promise<boolean> {
-    const { data, error } = await this.client.rpc(
-      'save_memory_topics_if_claimed',
-      {
-        p_memory_id: memoryId,
-        p_holder_id: holderId,
-        p_topics: topics,
-      }
-    );
-    if (error) throw new SupabaseError(error.message);
-    return data === true;
-  }
-
-  /**
-   * Release the memory-topics claim without writing topics. Used when
-   * the agent returned no usable output so the row re-enters the
-   * queue immediately rather than waiting for the per-row TTL.
-   */
-  async clearMemoryTopicsClaim(
-    memoryId: string,
-    holderId: string
-  ): Promise<void> {
-    const { error } = await this.client.rpc('clear_memory_topics_claim', {
-      p_memory_id: memoryId,
-      p_holder_id: holderId,
-    });
-    if (error) throw new SupabaseError(error.message);
   }
 
   /**
@@ -4987,85 +4679,6 @@ export class SupabaseService {
     const { data, error } = await this.client.rpc('list_user_memory_topics');
     if (error) throw new SupabaseError(error.message);
     return parseTopicVocabulary(data);
-  }
-
-  /**
-   * Recipe-topics sibling of `claimNextMemoryForTopics`. The RPC
-   * returns the recipe's title + cooklang (the agent input) plus
-   * the user's existing recipe-topic vocabulary in one round trip.
-   * Eligibility predicate inside the RPC is `last_topics_at is
-   * null` - a fresh row or a content-edited row (title or
-   * cooklang) both qualify; bookmark / rating-only edits do not.
-   */
-  async claimNextRecipeForTopics(
-    holderId: string,
-    ttlSeconds: number
-  ): Promise<{
-    recipeId: string;
-    title: string;
-    cooklang: string;
-    existingTopics: string[];
-  } | null> {
-    const { data, error } = await this.client.rpc('claim_next_recipe_for_topics', {
-      p_holder_id: holderId,
-      p_ttl_seconds: ttlSeconds,
-    });
-    if (error) throw new SupabaseError(error.message);
-    const rows = (data ?? []) as {
-      recipe_id: string;
-      title: string;
-      cooklang: string;
-      existing_topics: string[] | null;
-    }[];
-    if (rows.length === 0) return null;
-    const row = rows[0];
-    return {
-      recipeId: row.recipe_id,
-      title: row.title,
-      cooklang: row.cooklang,
-      existingTopics: Array.isArray(row.existing_topics)
-        ? row.existing_topics.filter((t): t is string => typeof t === 'string')
-        : [],
-    };
-  }
-
-  /**
-   * Save the agent-produced topics IF our claim is still valid.
-   * RPC stamps `last_topics_at = now()` and guards on holder + TTL.
-   * False return = a race (TTL expired, holder stolen, or the user
-   * edited title/cooklang and the trigger nulled our claim mid-run).
-   */
-  async saveRecipeTopicsIfClaimed(
-    recipeId: string,
-    holderId: string,
-    topics: string[]
-  ): Promise<boolean> {
-    const { data, error } = await this.client.rpc(
-      'save_recipe_topics_if_claimed',
-      {
-        p_recipe_id: recipeId,
-        p_holder_id: holderId,
-        p_topics: topics,
-      }
-    );
-    if (error) throw new SupabaseError(error.message);
-    return data === true;
-  }
-
-  /**
-   * Release the recipe-topics claim without writing topics. Used
-   * when the agent returned no usable output so the row re-enters
-   * the queue immediately rather than waiting for the per-row TTL.
-   */
-  async clearRecipeTopicsClaim(
-    recipeId: string,
-    holderId: string
-  ): Promise<void> {
-    const { error } = await this.client.rpc('clear_recipe_topics_claim', {
-      p_recipe_id: recipeId,
-      p_holder_id: holderId,
-    });
-    if (error) throw new SupabaseError(error.message);
   }
 
   /**

@@ -140,18 +140,18 @@ describe('AGENT_MODELS (background agents)', () => {
     expect(AGENT_MODELS.recall).toBe('deepseek-v4-flash');
     expect(AGENT_MODELS.conversationRecall).toBe('deepseek-v4-flash');
     expect(AGENT_MODELS.wikiRecall).toBe('deepseek-v4-flash');
-    // Three mistral-small slots: intuition, summary, samskara.
+    // Three mistral-small slots: intuition, samskara, bias.
     expect(AGENT_MODELS.intuition).toBe('mistral-small-3-2-24b-instruct');
-    expect(AGENT_MODELS.summary).toBe('mistral-small-3-2-24b-instruct');
     expect(AGENT_MODELS.samskara).toBe('mistral-small-3-2-24b-instruct');
+    expect(AGENT_MODELS.bias).toBe('mistral-small-3-2-24b-instruct');
     // No vision slot here: analyze_image's vision sub-call runs
     // server-side in the venice edge function, which holds the primary
     // (e2ee-qwen3-vl-30b-a3b-p) and uncensored-fallback
     // (venice-uncensored-1-2) ids directly - AGENT_MODELS is the
-    // browser-side agent registry and doesn't drive it.
-    // Auto-title: Chat.svelte's parallel background completion that
-    // names a fresh thread before the main reply finishes streaming.
-    expect(AGENT_MODELS.autoTitle).toBe('e2ee-gpt-oss-20b-p');
+    // browser-side agent registry and doesn't drive it. The five
+    // curation agents (auto-title, summary, thread/memory/recipe
+    // topics) are likewise absent: they run server-side in the venice
+    // edge function, which holds their model ids directly.
   });
 });
 
