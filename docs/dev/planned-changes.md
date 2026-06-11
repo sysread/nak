@@ -27,7 +27,10 @@ milestone, on the `claude/reorganize-the-workshop` branch. The five
 units now run in the venice function off the chat-turn tail and the
 hourly curation sweep; the browser supervisor and its lease
 apparatus are deleted. The analysis below stands as the historical
-record of the scoping (2026-06-10). Output of the no-tool agents re-inspection
+record of the scoping (2026-06-10) - note its per-agent verdicts
+were later overtaken: bias (C2) and samskara (C3) shipped
+server-side in the same milestone, and only intuition remains
+browser-side, as ongoing-chat-scoped work. Output of the no-tool agents re-inspection
 the reorganize-the-workshop plan mandated after its Phase 3 closed
 (see that plan doc's Phase 5 ledger). The re-inspection covered all
 eight plain-completion agents; this entry records the verdicts and
