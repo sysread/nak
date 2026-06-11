@@ -643,8 +643,8 @@ Three paths per `samskara_decay()` pass. Health is clamped to
 
 ```text
 stale-fire decay:
-  health -= 0.02 where last_fired_at is null
-                    or last_fired_at < now() - interval '60 days'
+  health -= 0.02 where coalesce(last_fired_at, created_at)
+                         < now() - interval '60 days'
 disconfirm decay:
   health -= 0.10 where disconfirm_count > confirm_count
                     and disconfirm_count + confirm_count >= 1.0
@@ -658,6 +658,17 @@ where a samskara fires constantly but never gets explicit
 confirm or disconfirm (neutrals only). The existing two paths
 never touch it; this gentle nudge crowds it out without
 artificially perturbing user-facing behaviour.
+
+The stale-fire path coalesces `last_fired_at` to `created_at`
+so a never-yet-fired samskara is judged by its AGE, not punished
+for the gap before its first fire. A bare `last_fired_at is
+null` clause docked every newborn 0.02/pass until it first fired
+(live data: health tracked the mint-to-first-fire delay in exact
+0.02 steps), and under frequent decay a niche claim could reach
+health 0 before ever firing - then it sits below the fire score
+floor and never fires again, a stillbirth spiral. Coalescing
+gives newborns the full 60-day window to establish while still
+pruning claims that genuinely never fire.
 
 Both feedback thresholds are ABSOLUTE accumulated weight, not
 raw counts or a fraction of fire_count. They were originally

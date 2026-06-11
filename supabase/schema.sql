@@ -5733,12 +5733,24 @@ declare
   v_disconfirm int;
   v_unreinforced int;
 begin
+  -- Stale-fire decay. Staleness is measured from the last fire, OR
+  -- from creation for a samskara that has never fired - that's what
+  -- `coalesce(last_fired_at, created_at)` buys. A bare `last_fired_at
+  -- is null` clause docked every BRAND-NEW samskara 0.02 per pass
+  -- during the gap between mint and first fire: a newborn hasn't had
+  -- the chance to fire yet, so treating null-last-fired as "stale,
+  -- never fires" is wrong. Worse, under frequent decay a niche claim
+  -- that doesn't match a turn for a while could decay to health 0
+  -- before ever firing, drop below the fire score floor, and then
+  -- never fire again - a stillbirth spiral. Coalescing to created_at
+  -- gives every newborn the full 60-day window to establish itself
+  -- while still pruning rows that genuinely never fire across that
+  -- window.
   update public.samskaras
      set health = greatest(0.0, health - 0.02),
          updated_at = now()
    where user_id = v_uid
-     and (last_fired_at is null
-          or last_fired_at < now() - interval '60 days');
+     and coalesce(last_fired_at, created_at) < now() - interval '60 days';
   get diagnostics v_stale = row_count;
 
   -- Net-disconfirmed decay. Evidence bar is 1.0 of accumulated
