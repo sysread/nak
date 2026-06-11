@@ -4,18 +4,13 @@
  * the heartbeat interval so the chat-loop can call `acquire()`, start
  * the heartbeat, and ignore the timer plumbing.
  *
- * Distinct from `LeaseCoordinator` (src/lib/embeddings/lease.ts): that
- * one partitions by `workerKind` and holds a USER-level singleton (at
- * most one of "embedding" can run across all the user's devices). This
- * one partitions by `threadId` and holds a per-THREAD claim - multiple
- * threads can be responding in parallel (different rows). The
- * heartbeat / TTL pattern is identical, hence the structural parallel.
+ * Partitions by `threadId` and holds a per-THREAD claim - multiple
+ * threads can be responding in parallel (different rows).
  *
  * Heartbeat timing: default TTL is 60s and we beat every 20s. Three
  * attempts per expiry window; two missed beats are still inside the TTL
  * margin. A device that crashes mid-turn frees its claim within 60s -
- * longer than worker_leases (45s) because chat turns legitimately run
- * longer than background agents on slow models.
+ * generous because chat turns legitimately run long on slow models.
  *
  * Only a false return from the heartbeat RPC is decisive - a thrown
  * error just means "couldn't check, try again," and the server-side TTL
@@ -25,10 +20,7 @@ import type { SupabaseService } from '../supabase';
 
 /**
  * Injectable timer functions so tests can drive the heartbeat interval
- * deterministically without `vi.useFakeTimers()`. Same shape as
- * `LeaseTimers` in src/lib/embeddings/lease.ts - kept as a sibling type
- * here rather than re-exported because the two timers are independent
- * (a test that swaps one shouldn't see the other change).
+ * deterministically without `vi.useFakeTimers()`.
  */
 export interface ThreadClaimTimers {
   setInterval: (fn: () => void, ms: number) => ReturnType<typeof setInterval>;
@@ -48,9 +40,8 @@ interface ThreadClaimConfig {
 }
 
 /**
- * Default TTL / heartbeat. Chat turns can legitimately exceed the
- * 45s/20s worker-lease window on slow models, so we give ourselves
- * three heartbeat attempts per TTL expiry rather than the lease's two.
+ * Default TTL / heartbeat: three heartbeat attempts per TTL expiry,
+ * sized for chat turns that legitimately run long on slow models.
  */
 export const DEFAULT_THREAD_CLAIM_CONFIG: ThreadClaimConfig = {
   ttlSeconds: 60,
