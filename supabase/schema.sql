@@ -9046,17 +9046,24 @@ begin
         p_exclude_ids is null
         or not (t.id = any(p_exclude_ids))
       )
-    -- Defer the user-message count check to a HAVING-style filter
-    -- below; computing it inline keeps the index-friendly filters
-    -- doing the heavy work.
+      -- The count check MUST live in the WHERE, not as a post-SELECT
+      -- early return: this query takes one candidate (LIMIT 1, oldest
+      -- updated_at first), so a rejected candidate has to be excluded
+      -- BEFORE the limit or it stays the queue head and starves every
+      -- thread behind it. A one-shot Q&A thread at the head of the
+      -- queue once wedged the analyze pipeline this way for weeks -
+      -- the worker logged "no eligible threads" while eligible
+      -- multi-message threads sat unprocessed behind it. Same inline
+      -- shape as claim_next_thread_for_reflection's substance bar.
+      and (
+        select count(*) from public.messages m
+          where m.thread_id = t.id and m.role = 'user'
+      ) >= p_min_user_messages
     order by t.updated_at asc
     limit 1
     for update skip locked;
 
   if v_id is null then
-    return;
-  end if;
-  if v_msg_count < p_min_user_messages then
     return;
   end if;
 
