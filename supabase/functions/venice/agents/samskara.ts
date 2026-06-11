@@ -757,10 +757,14 @@ async function assimilateClaimed(
   );
   let userMsg = '';
   let assistantMsg = '';
+  // Ownership scoping rides thread_id: `messages` has no user_id
+  // column (ownership routes through threads.user_id), and the claim
+  // RPC already proved the substrate row - and therefore its thread -
+  // belongs to this user.
   const { data: messages, error: msgErr } = await admin
     .from('messages')
     .select('id, content')
-    .eq('user_id', userId)
+    .eq('thread_id', claim.threadId)
     .in('id', wantedIds);
   if (msgErr) throw new Error(`assimilate: message read failed: ${msgErr.message}`);
   for (const m of messages ?? []) {
@@ -1152,11 +1156,13 @@ async function reactionClassifyProbe(
   if (cohort.length === 0) return;
 
   // The assistant message sent after the fire (no tool_calls, real
-  // content), then the user message that followed it.
+  // content), then the user message that followed it. thread_id is
+  // the ownership scope - `messages` has no user_id column, and the
+  // fire row this candidate came from is anchored to the user's own
+  // thread.
   const { data: messages, error: msgErr } = await admin
     .from('messages')
     .select('role, content, tool_calls, created_at')
-    .eq('user_id', userId)
     .eq('thread_id', candidate.thread_id)
     .gte('created_at', candidate.fired_at)
     .order('created_at', { ascending: true });
