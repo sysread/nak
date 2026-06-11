@@ -112,15 +112,12 @@ function lazyManager<
 // (SupabaseService.embed), so nothing in the browser holds a Venice key for
 // the embeddings path.
 // The five curation units (auto_title, summary, topics,
-// memory_topics, recipe_topics) and reflection have no browser
-// workers: they run server-side in the venice edge function
-// (supabase/functions/venice/agents/), driven by pg_cron sweeps.
-// Samskara and bias are the remaining browser workers.
+// memory_topics, recipe_topics), reflection, and the bias pipeline
+// have no browser workers: they run server-side in the venice edge
+// function (supabase/functions/venice/agents/), driven by pg_cron
+// sweeps. Samskara is the last remaining browser worker.
 const samskara = lazyManager(() =>
   import('./agents/samskara/manager').then((m) => m.samskaraManager)
-);
-const bias = lazyManager(() =>
-  import('./agents/bias/manager').then((m) => m.biasManager)
 );
 // The wiki agents (autonomous + librarian) and the two memory
 // librarians (deep-sleep, rem) are no longer workers here: they run
@@ -731,24 +728,17 @@ function startBackgroundWorkers(config: AppConfig): void {
   // cleanly and state.svelte.ts doesn't need to retry; the next
   // unlock / sign-in will call `activate()` again.
   //
-  // The workers run concurrently and partition the shared
-  // `worker_leases` table on `worker_kind` so one device can hold
-  // every lease simultaneously without contention. Only two browser
-  // workers remain: samskara and bias. The five curation units
-  // (auto-title, summary, topics, memory-topics, recipe-topics) run
-  // server-side in the venice edge function alongside embeddings,
-  // reflection, the wiki agents, and the memory librarians - their
-  // output (titles, summaries, topic tags) still lands in the same
-  // tables the drawer's search and topic-filter dropdowns read.
+  // The worker partitions the shared `worker_leases` table on
+  // `worker_kind`. Only one browser worker remains: samskara. The
+  // five curation units (auto-title, summary, topics, memory-topics,
+  // recipe-topics) run server-side in the venice edge function
+  // alongside embeddings, reflection, the bias pipeline, the wiki
+  // agents, and the memory librarians - their output (titles,
+  // summaries, topic tags, bias_summary rows) still lands in the
+  // same tables the drawer's dropdowns and the chat prompt read.
   // The samskara worker forms the chat model's progressively-built
   // predictive model of the user; see docs/dev/samskara.md.
   samskara.start({ supabase: app.supabase, config });
-  // Bias-observer worker silently analyzes processed conversations
-  // for cognitive-bias / System-1-heuristic evidence; the aggregated
-  // posterior feeds the system-prompt "User profile - observed
-  // patterns" block when biases clear a tier. See
-  // docs/dev/bias-profile.md.
-  bias.start({ supabase: app.supabase, config });
   // The wiki agents and the memory librarians have no browser workers
   // to start: the server-side cron sweeps read the persisted toggles
   // (profiles.settings.wikiAutomaticEnabled / wikiLibrarianEnabled /
@@ -844,7 +834,6 @@ async function loadSettingsThenStartWorkers(config: AppConfig): Promise<void> {
  */
 function stopBackgroundWorkers(): void {
   samskara.stop();
-  bias.stop();
   resetUsage();
   resetCatalog();
 }
@@ -867,18 +856,6 @@ export function haltBackgroundWork(): void {
   if (workersHalted) return;
   workersHalted = true;
   stopBackgroundWorkers();
-}
-
-/**
- * Forward the set of "currently open" conversation ids to the
- * bias-observer worker so it skips analyzing threads the user
- * might still be typing in. Called from Chat.svelte whenever
- * the active thread changes (opens, closes, or switches). Safe
- * to call before the worker is loaded; the manager caches the
- * value and folds it into the next start payload.
- */
-export function notifyBiasActiveConvIds(ids: readonly string[]): void {
-  bias.whenLoaded((m) => m.setActiveConvIds(ids));
 }
 
 /**

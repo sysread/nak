@@ -140,10 +140,11 @@ describe('AGENT_MODELS (background agents)', () => {
     expect(AGENT_MODELS.recall).toBe('deepseek-v4-flash');
     expect(AGENT_MODELS.conversationRecall).toBe('deepseek-v4-flash');
     expect(AGENT_MODELS.wikiRecall).toBe('deepseek-v4-flash');
-    // Three mistral-small slots: intuition, samskara, bias.
+    // Two mistral-small slots: intuition, samskara. (The bias agent
+    // also runs mistral-small, but it lives server-side now - see
+    // BIAS_MODEL in supabase/functions/venice/agents/bias.ts.)
     expect(AGENT_MODELS.intuition).toBe('mistral-small-3-2-24b-instruct');
     expect(AGENT_MODELS.samskara).toBe('mistral-small-3-2-24b-instruct');
-    expect(AGENT_MODELS.bias).toBe('mistral-small-3-2-24b-instruct');
     // No vision slot here: analyze_image's vision sub-call runs
     // server-side in the venice edge function, which holds the primary
     // (e2ee-qwen3-vl-30b-a3b-p) and uncensored-fallback

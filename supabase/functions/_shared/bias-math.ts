@@ -1,53 +1,66 @@
-/**
- * Pure math for bias aggregation. No Supabase, no Venice, no Svelte
- * runes - everything in here is unit-tested directly in
- * `tests/bias-math.test.ts`.
- *
- * Pipeline shape (computed per (user_id, bias) by the worker's
- * aggregate phase):
- *
- *   1. For each processed conversation, collapse same-bias
- *      observations within it via noisy-OR, then cap at PER_CONV_CAP
- *      (the per-conversation ceiling matches the per-observation
- *      ceiling because repeated finds by the same agent on the same
- *      pass are correlated signals, not independent ones).
- *
- *   2. Across all processed conversations (including those that did
- *      NOT exhibit the bias - those contribute (1 - 0) on the beta
- *      side), apply an exponential recency weight with half-life of
- *      HALF_LIFE_DAYS, and accumulate into a weighted Beta-Binomial
- *      posterior: alpha = ALPHA_PRIOR + sum(w * p), beta = BETA_PRIOR
- *      + sum(w * (1 - p)).
- *
- *   3. Compute the 90% one-sided credible interval lower bound via
- *      the inverse regularized incomplete beta function. Normal-
- *      approximation alternatives (mean - 1.2816 * sd) consistently
- *      overstate uncertainty in the small-alpha/beta regime where we
- *      live for the first dozen conversations, which silently
- *      suppresses real signal. The exact routine here is ~150 lines
- *      of numerical code and adds no external dependency. At very
- *      large samples (alpha + beta > ~200) the normal approximation
- *      becomes accurate enough to swap in for speed; not worth doing
- *      until then.
- *
- *   4. Tier the result by N_eff floor + ciLower thresholds.
- *
- * See docs/dev/bias-profile.md for the rationale behind each
- * constant.
- */
-import {
-  ALPHA_PRIOR,
-  BETA_PRIOR,
-  CI_LB_SOFT,
-  CI_LB_STRONG,
-  FEEDBACK_HALF_LIFE_DAYS,
-  FEEDBACK_PRIOR_WEIGHT,
-  FEEDBACK_THRESHOLD_DELTA,
-  HALF_LIFE_DAYS,
-  N_EFF_FLOOR,
-  PER_CONV_CAP,
-  type Tier,
-} from './types';
+// Pure math for bias aggregation - the server-side home, fed by the
+// venice function's bias-sweep aggregate pass. MOVED from
+// src/lib/bias/math.ts when the browser bias worker retired (the
+// browser runs no bias math; the modal and chat path only read the
+// bias_summary rows this math produces). Self-contained (no relative
+// imports) so the Deno island, vitest (tests/bias-math.test.ts), and
+// tsc can all load it.
+//
+// The tuning constants below MIRROR src/lib/bias/types.ts, where the
+// BiasProfile screen reads the same values for display.
+// tests/bias-catalog-parity.test.ts compares the two sides - a
+// one-sided edit fails the gate.
+//
+// Pipeline shape (computed per (user_id, bias) by the aggregate
+// pass):
+//
+//   1. For each processed conversation, collapse same-bias
+//      observations within it via noisy-OR, then cap at PER_CONV_CAP
+//      (the per-conversation ceiling matches the per-observation
+//      ceiling because repeated finds by the same agent on the same
+//      pass are correlated signals, not independent ones).
+//
+//   2. Across all processed conversations (including those that did
+//      NOT exhibit the bias - those contribute (1 - 0) on the beta
+//      side), apply an exponential recency weight with half-life of
+//      HALF_LIFE_DAYS, and accumulate into a weighted Beta-Binomial
+//      posterior: alpha = ALPHA_PRIOR + sum(w * p), beta = BETA_PRIOR
+//      + sum(w * (1 - p)).
+//
+//   3. Compute the 90% one-sided credible interval lower bound via
+//      the inverse regularized incomplete beta function. Normal-
+//      approximation alternatives (mean - 1.2816 * sd) consistently
+//      overstate uncertainty in the small-alpha/beta regime where we
+//      live for the first dozen conversations, which silently
+//      suppresses real signal. The exact routine here is ~150 lines
+//      of numerical code and adds no external dependency. At very
+//      large samples (alpha + beta > ~200) the normal approximation
+//      becomes accurate enough to swap in for speed; not worth doing
+//      until then.
+//
+//   4. Tier the result by N_eff floor + ciLower thresholds.
+//
+// See docs/dev/bias-profile.md for the rationale behind each
+// constant.
+
+/** Tier vocabulary for bias_summary rows. Mirror of src/lib/bias/types.ts. */
+export type Tier = 'elided' | 'soft' | 'strong';
+
+// Tuning constants - mirrors of src/lib/bias/types.ts; see the prose
+// there (and docs/dev/bias-profile.md) for each value's rationale.
+export const ALPHA_PRIOR = 2;
+export const BETA_PRIOR = 8;
+export const HALF_LIFE_DAYS = 60;
+export const N_EFF_FLOOR = 5;
+export const CI_LB_SOFT = 0.15;
+export const CI_LB_STRONG = 0.30;
+export const CONFIDENCE_FLOOR = 0.40;
+export const CONFIDENCE_CAP = 0.85;
+export const PER_CONV_CAP = 0.85;
+export const MIN_USER_MESSAGES = 2;
+export const FEEDBACK_HALF_LIFE_DAYS = 30;
+export const FEEDBACK_THRESHOLD_DELTA = 0.10;
+export const FEEDBACK_PRIOR_WEIGHT = 3;
 
 /**
  * Combine multiple same-bias observations within ONE conversation

@@ -27,14 +27,14 @@ must not depend on a browser tab being open.
   migration created), and delete the supervisor worker plus its
   whole lease apparatus. All five together or not at all - a
   partial port keeps the apparatus alive.
-- **C2. Port bias.** Qualifies under the rule (not UI-scoped).
-  Fleet pattern applies: lease becomes cron, per-thread claim RPCs
-  stay as the mutual exclusion. Two design questions from the
-  re-inspection: the active-conversation exclusion set becomes
-  recency-based ("updated in the last N minutes") instead of
-  postMessage'd tab state, and the in-memory aggregate
-  dirty/throttle state needs a persistent home (or the cron cadence
-  becomes the throttle, as it did for the fleets).
+- **C2. Port bias. Implemented 2026-06-11** (design + outcomes in
+  the "C2 design" section below). Lease became the hourly
+  `nak-bias-sweep` cron; the per-thread claim columns stay as the
+  mutual exclusion. The two open design questions resolved harder
+  than the re-inspection guessed: the exclusion set was deleted
+  outright (the day-gate subsumes it), and the aggregate
+  dirty/throttle state collapsed into the cron cadence plus a 24h
+  freshness floor.
 - **C3. Samskara formation loop: deferred, user-confirmed
   (2026-06-10).** The one standing exception to the rule. Deferred
   until a concurrent session's samskara changes land - it is

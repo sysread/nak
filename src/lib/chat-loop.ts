@@ -1150,19 +1150,18 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
 
   // Bias-profile invalidation. Each chat-loop invocation corresponds
   // to one new user message on this thread. If the thread had been
-  // processed by the bias worker before, the worker's prior
-  // observations are now based on a stale view of the conversation;
-  // clear them. The RPC is a no-op when the thread was never
-  // processed, so calling unconditionally is correct and cheap.
-  // Fire-and-forget: bias worker plumbing must never block a chat
-  // turn.
+  // analyzed by the bias sweep before, the prior observations are
+  // now based on a stale view of the conversation; clear them. The
+  // RPC is a no-op when the thread was never processed, so calling
+  // unconditionally is correct and cheap. Fire-and-forget: bias
+  // plumbing must never block a chat turn.
   void notifyBiasNewUserMessage(supabase, thread.id);
 
   // Bias-profile active-set snapshot (v2). Persist the bias keys
   // that just rendered into the system prompt to
-  // threads.bias_active_at_turn so the worker's reactor pass knows
-  // which biases the user's messages on this turn could have been
-  // reacting to. Empty array is a valid write and means "no
+  // threads.bias_active_at_turn so the bias sweep's reactor pass
+  // knows which biases the user's messages on this turn could have
+  // been reacting to. Empty array is a valid write and means "no
   // compensation guidance was active this turn" - the reactor
   // pass produces zero rows and the feedback EMA stays unchanged.
   // Fire-and-forget; errors swallowed inside the helper.

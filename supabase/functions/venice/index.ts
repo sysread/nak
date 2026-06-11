@@ -51,6 +51,7 @@ import { getStreamingResponse } from './getStreamingResponse.ts';
 import { retryWikiThread, runWikiSweepTick } from './agents/wiki.ts';
 import { runReflectionSweepTick } from './agents/reflection.ts';
 import { runCurationSweepTick } from './agents/curation.ts';
+import { runBiasSweepTick } from './agents/bias.ts';
 import {
   runWikiLibrarianManual,
   runWikiLibrarianSweepTick,
@@ -746,6 +747,7 @@ const handleReflectionSweep = sweepHandler(runReflectionSweepTick);
 // server-side (rem / deep-sleep consolidations re-queue memory tags)
 // or left behind by a failed tail attempt.
 const handleCurationSweep = sweepHandler(runCurationSweepTick);
+const handleBiasSweep = sweepHandler(runBiasSweepTick);
 const handleWikiLibrarianRun = manualRunHandler('wiki-librarian', (admin, userId, body, onProgress) =>
   runWikiLibrarianManual(
     admin,
@@ -1122,6 +1124,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
   if (route === 'wiki-sweep' && req.method === 'POST') return handleWikiSweep(req);
   if (route === 'reflection-sweep' && req.method === 'POST') return handleReflectionSweep(req);
   if (route === 'curation-sweep' && req.method === 'POST') return handleCurationSweep(req);
+  if (route === 'bias-sweep' && req.method === 'POST') return handleBiasSweep(req);
   if (route === 'wiki-retry' && req.method === 'POST') return handleWikiRetry(req);
   if (route === 'wiki-librarian-sweep' && req.method === 'POST') return handleWikiLibrarianSweep(req);
   if (route === 'wiki-librarian-run' && req.method === 'POST') return handleWikiLibrarianRun(req);

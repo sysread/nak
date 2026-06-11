@@ -1,7 +1,7 @@
 /**
  * Pure formatter for the "User profile - observed patterns" block
  * that rides in the main chat LLM's system prompt. Reads the
- * worker-maintained bias_summary cache, takes only the rows
+ * sweep-maintained bias_summary cache, takes only the rows
  * tiered 'soft' or 'strong', and renders the block as ASCII.
  *
  * Two pieces of static prompt copy live here:

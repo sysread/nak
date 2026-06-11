@@ -14,15 +14,16 @@
  *   - `notifyBiasNewUserMessage(supabase, threadId)` - fire-and-
  *     forget call after a user message inserts on a previously-
  *     processed thread. The RPC deletes the thread's existing
- *     bias_observations and clears bias_processed_at so the worker
- *     picks the thread up again with the fresh state. The
- *     aggregate cache stays as-is; the worker's next aggregate
+ *     bias_observations and clears bias_processed_at so the bias
+ *     sweep picks the thread up again with the fresh state. The
+ *     aggregate cache stays as-is; the sweep's next aggregate
  *     pass catches up.
  *
  * Plus `formatBiasProfileBlock` re-exported from `./format` for
  * tests and the debug modal. The module is deliberately small:
- * the math kernel, the worker, and the agent are under
- * `src/lib/bias/math.ts` and `src/lib/agents/bias/` respectively.
+ * the analyze/aggregate pipeline (observer agent, math kernel)
+ * runs server-side in the venice edge function
+ * (supabase/functions/venice/agents/bias.ts).
  */
 import type { SupabaseService } from '../supabase';
 import { isBiasKey, type BiasKey } from './catalog-keys';
@@ -40,7 +41,7 @@ export type { BiasSummaryRow, Tier } from './types';
  * rides in the system prompt; `activeBiases` is the catalog-key
  * list of biases that actually rendered (post render-cap) so the
  * chat-loop can snapshot the set into threads.bias_active_at_turn
- * for the worker's reactor pass to read later. The two come from
+ * for the sweep's reactor pass to read later. The two come from
  * one bias_summary read so they cannot drift.
  */
 export interface BiasProfileResult {
@@ -103,9 +104,9 @@ export async function getBiasProfileBlock(
 }
 
 /**
- * Clear the worker's processed state on a thread after a new user
+ * Clear the sweep's processed state on a thread after a new user
  * message lands. Best-effort; swallows errors so a failed clear
- * does not fail the chat turn. The worker's next scan picks the
+ * does not fail the chat turn. The sweep's next scan picks the
  * thread up because its bias_processed_at is null (or older than
  * threads.updated_at, which the message insert just bumped).
  */
@@ -123,11 +124,11 @@ export async function notifyBiasNewUserMessage(
 
 /**
  * Snapshot the set of bias keys that just rendered into the system
- * prompt to threads.bias_active_at_turn. The worker reads this
+ * prompt to threads.bias_active_at_turn. The sweep reads this
  * snapshot when claiming the thread for analysis so the merged
  * observer/reactor agent knows which biases the user's messages
  * could have been reacting to. Best-effort; errors swallowed so a
- * failed snapshot does not fail the chat turn - the worker will
+ * failed snapshot does not fail the chat turn - the sweep will
  * see whatever the previous turn wrote (or an empty set on a
  * fresh thread), which just means "no reactions to classify" -
  * the feedback EMA stays at 0 and tier thresholds stay at the v1

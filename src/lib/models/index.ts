@@ -492,7 +492,6 @@ export type AgentRole =
   | 'researchDocs'
   | 'intuition'
   | 'samskara'
-  | 'bias'
   | 'recall'
   | 'conversationRecall'
   | 'wikiRecall';
@@ -621,7 +620,6 @@ export const AGENT_MODELS = {
   researchDocs:       'deepseek-v4-flash',
   intuition:          'mistral-small-3-2-24b-instruct',
   samskara:           'mistral-small-3-2-24b-instruct',
-  bias:               'mistral-small-3-2-24b-instruct',
   recall:             'deepseek-v4-flash',
   conversationRecall: 'deepseek-v4-flash',
   wikiRecall:         'deepseek-v4-flash',

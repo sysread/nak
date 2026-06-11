@@ -103,13 +103,17 @@ log.debug('payload', { foo, bar });
 Pick a short, stable source tag. Existing tags:
 
 - `update` - service-worker update lifecycle
-- `samskara-worker`, `bias-worker` - browser background loop
-  drivers
-- `reflection`, `wiki`, `wiki-librarian`, `rem`, `deep-sleep` - the
-  reflection agent, the autonomous wiki agent, the wiki librarian,
-  and the two memory-librarian passes, which run in the venice edge
-  function and reach the drawer over the Broadcast log channel (see
-  "Edge-to-main relay"), not via a Web Worker
+- `samskara-worker` - the one remaining browser background loop
+  driver
+- `reflection`, `wiki`, `wiki-librarian`, `rem`, `deep-sleep`,
+  `bias` - the reflection agent, the autonomous wiki agent, the
+  wiki librarian, the two memory-librarian passes, and the bias
+  pipeline (analyze + aggregate), which run in the venice edge
+  function and reach the drawer over the Broadcast log channel
+  (see "Edge-to-main relay"), not via a Web Worker. The `bias`
+  tag is deliberately shared with the browser chat-loop's
+  profile-block helpers (src/lib/bias/index.ts) - both halves of
+  the feature group under one drawer filter
 - `auto-title`, `topics`, `summary`, `memory-topics`,
   `recipe-topics` - the five curation units (also edge-side, in the
   venice function), driven by the chat-turn tail and the hourly
@@ -166,10 +170,11 @@ position stays meaningful across bursts.
 
 ## Worker-to-main relay
 
-The browser background workers (samskara and bias) import the
-logger from their loop drivers. The other agents - reflection, the
-wiki pair, the memory librarian, and the five curation units - run
-server-side and use the edge-to-main relay below. Worker-context
+The one browser background worker (samskara) imports the logger
+from its loop driver. The other agents - reflection, the wiki
+pair, the memory librarian, the bias pipeline, and the five
+curation units - run server-side and use the edge-to-main relay
+below. Worker-context
 calls detect `WorkerGlobalScope` at module init and:
 
 1. Mirror the actionable tiers (`info` / `warn` / `error`) to

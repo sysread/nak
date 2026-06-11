@@ -1,3 +1,47 @@
+// MIRROR of src/lib/bias/catalog-keys.ts + src/lib/bias/catalog.ts,
+// concatenated and self-contained (no relative imports) so both the
+// Deno island and vitest can load it. The browser copies stay the
+// canonical edit surface for the chat path and the BiasProfile
+// screen; this mirror feeds the server-side bias observer agent's
+// prompt and ingest validation. tests/bias-catalog-parity.test.ts
+// deep-compares the two - an edit to either side without the other
+// fails the gate, so the mirror cannot drift silently.
+
+export const BIAS_KEYS = [
+  'confirmation_bias',
+  'sunk_cost_fallacy',
+  'anchoring',
+  'availability_heuristic',
+  'representativeness_heuristic',
+  'base_rate_neglect',
+  'affect_heuristic',
+  'substitution',
+  'framing_effect',
+  'loss_aversion',
+  'hindsight_bias',
+  'overconfidence',
+  'WYSIATI',
+  'narrative_fallacy',
+  'recency_bias',
+  'fundamental_attribution_error',
+  'negativity_bias',
+  'black_and_white_thinking',
+  'planning_fallacy',
+] as const;
+
+export type BiasKey = (typeof BIAS_KEYS)[number];
+
+const KEY_SET: ReadonlySet<string> = new Set(BIAS_KEYS);
+
+/**
+ * Type-narrowing guard. The observer agent emits strings; this is
+ * how we validate them at ingest before they hit the DB enum check.
+ * Unknown strings are dropped with a debug log; never coerced.
+ */
+export function isBiasKey(s: string): s is BiasKey {
+  return KEY_SET.has(s);
+}
+
 /**
  * The fixed catalog of cognitive biases and System-1 heuristics the
  * observer agent reports against. Closed enum on purpose: free-form
@@ -6,12 +50,9 @@
  * aggregation works. Adding a catalog entry is a deliberate code
  * change, not an agent decision.
  *
- * The closed enum (BIAS_KEYS, BiasKey, isBiasKey) lives in the
- * sibling `./catalog-keys` so the chat-loop side can validate
- * incoming bias strings without pulling this prose-heavy module
- * into the main chunk. The `Record<BiasKey, BiasEntry>` type on
- * BIAS_CATALOG below makes TS error if the keys here drift from
- * `BIAS_KEYS` - missing or extra keys both surface at compile time.
+ * The `Record<BiasKey, BiasEntry>` type on BIAS_CATALOG below makes
+ * TS error if the keys here drift from `BIAS_KEYS` above - missing
+ * or extra keys both surface at compile time.
  *
  * Each entry ships four pieces:
  *
@@ -31,7 +72,7 @@
  * black_and_white_thinking that aren't in TFAS by name but are
  * what shows up in actual user conversations. We deliberately do
  * NOT split heuristics from their failure modes (e.g. availability
- * heuristic vs availability bias) - the observer can only see
+ * heuristic vs availability bias) - the worker can only see
  * observable behavior, and the underlying mechanism is the same.
  *
  * survivorship_bias is intentionally absent - it's almost never
@@ -40,7 +81,6 @@
  * surface from a transcript.
  */
 
-import type { BiasKey } from './catalog-keys';
 
 export interface BiasEntry {
   label: string;

@@ -93,7 +93,7 @@ One file per use-case under [`use-cases/`](./use-cases/), named
   function's five curation units (auto-title, thread topics, memory
   topics, recipe topics, summary) on both drivers: chat-turn tail
   and hourly sweep.
-- [bias-pipeline](./use-cases/bias-pipeline.md) - the bias worker's
+- [bias-pipeline](./use-cases/bias-pipeline.md) - the bias sweep's
   analyze and aggregate phases, their DB writes, and the
   diagnostics modal + prompt-block readers.
 - [samskara-decay](./use-cases/samskara-decay.md) - the decay

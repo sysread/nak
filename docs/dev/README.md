@@ -103,8 +103,9 @@ changing a contract that other features depend on.
   produces a `<think>`-tagged internal monologue, injected
   ahead of the next completion. Cached per-thread; refreshed
   on title changes, mood-band shifts, and a staleness fuse.
-- [Bias profile](./bias-profile.md) — silent background worker
-  that analyzes past conversations for cognitive biases and
+- [Bias profile](./bias-profile.md) — silent server-side pipeline
+  (hourly cron sweep in the venice function) that analyzes past
+  conversations for cognitive biases and
   System-1 heuristics, aggregates evidence via a Bayesian
   Beta-Binomial posterior with recency decay, and injects
   compensation guidance for the strongest-evidence biases into

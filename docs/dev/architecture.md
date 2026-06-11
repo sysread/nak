@@ -268,15 +268,16 @@ search costs.
 
 ## Worker model
 
-Background Web Workers run while the app is unlocked. Two
-browser-side workers remain - samskara and the bias observer
-(`src/lib/agents/{samskara,bias}/`). Everything else moved
+Background Web Workers run while the app is unlocked. One
+browser-side worker remains - samskara
+(`src/lib/agents/samskara/`). Everything else moved
 server-side: embedding backfill via `pg_cron` (see
 `./embeddings.md`), reflection / wiki / memory-librarian via cron
-sweeps and the chat-turn tail, and the five curation units
+sweeps and the chat-turn tail, the five curation units
 (auto-title, thread topics, summaries, memory topics, recipe
 topics) via the curation tail + hourly sweep in the venice
-function. One representative of each side:
+function, and the bias pipeline via the hourly `nak-bias-sweep`
+cron (see `./bias-profile.md`). One representative of each side:
 
 - `src/lib/agents/samskara/worker.ts` - the browser shape: a Web
   Worker that polls for work while the app is unlocked. Covered in
@@ -338,15 +339,15 @@ Three categories of work:
    triggered it.
 
 3. **Background derivation the user controls in-session — browser
-   owns today.** Intuition, samskara, the bias observer. Run while
+   owns today.** Intuition and samskara. Run while
    the app is unlocked. Losing them on tab close isn't a
    correctness problem, just a "work resumes next session."
    Long-term candidates for the function side as the cron +
    waitUntil pattern matures - the wiki agents, the memory
-   librarian (rem + deep-sleep), and the five curation units
-   (auto-title, topic tagging, summaries) have already made that
-   move and now run in the venice function off the chat-turn tail
-   and cron sweeps.
+   librarian (rem + deep-sleep), the five curation units
+   (auto-title, topic tagging, summaries), and the bias observer
+   have already made that move and now run in the venice function
+   off the chat-turn tail and cron sweeps.
 
 Each row in the database has exactly **one writer-of-record**, set
 by which production path birthed it. The shared table is fine
