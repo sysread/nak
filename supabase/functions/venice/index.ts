@@ -50,6 +50,7 @@ import { streamChannelName } from '../_shared/venice-stream.ts';
 import { getStreamingResponse } from './getStreamingResponse.ts';
 import { retryWikiThread, runWikiSweepTick } from './agents/wiki.ts';
 import { runReflectionSweepTick } from './agents/reflection.ts';
+import { runCurationSweepTick } from './agents/curation.ts';
 import {
   runWikiLibrarianManual,
   runWikiLibrarianSweepTick,
@@ -738,6 +739,13 @@ const handleDeepSleepSweep = sweepHandler(runDeepSleepSweepTick);
 // reflection's trigger surface is visible in this routing table like
 // every other fleet's.
 const handleReflectionSweep = sweepHandler(runReflectionSweepTick);
+// Curation catch-up drain (auto-title, thread topics, summaries,
+// memory topics, recipe topics). The primary driver is the chat
+// turn's waitUntil tail in getStreamingResponse, same dual-driver
+// shape as reflection; this route is what drains work created
+// server-side (rem / deep-sleep consolidations re-queue memory tags)
+// or left behind by a failed tail attempt.
+const handleCurationSweep = sweepHandler(runCurationSweepTick);
 const handleWikiLibrarianRun = manualRunHandler('wiki-librarian', (admin, userId, body, onProgress) =>
   runWikiLibrarianManual(
     admin,
@@ -1113,6 +1121,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
   if (route === 'backfill' && req.method === 'POST') return handleBackfill(req);
   if (route === 'wiki-sweep' && req.method === 'POST') return handleWikiSweep(req);
   if (route === 'reflection-sweep' && req.method === 'POST') return handleReflectionSweep(req);
+  if (route === 'curation-sweep' && req.method === 'POST') return handleCurationSweep(req);
   if (route === 'wiki-retry' && req.method === 'POST') return handleWikiRetry(req);
   if (route === 'wiki-librarian-sweep' && req.method === 'POST') return handleWikiLibrarianSweep(req);
   if (route === 'wiki-librarian-run' && req.method === 'POST') return handleWikiLibrarianRun(req);

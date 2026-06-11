@@ -71,6 +71,7 @@ import {
   type GeneratedImagePayload,
 } from './tools/_generated_image.ts';
 import { reflectOneThread } from './agents/reflection.ts';
+import { curateOnTurnTail } from './agents/curation.ts';
 import { createEdgeLogger } from '../_shared/edge-log.ts';
 
 // Magic flag the ask_user tool returns to suspend the round chain
@@ -1032,6 +1033,18 @@ export async function getStreamingResponse(
     // drawer); the catch is a defensive backstop so a reflection bug
     // still can't disturb this turn's already-committed row.
     if (terminalKind === 'completed') {
+      // Curation piggyback, BEFORE reflection on purpose: the chain is
+      // sequential and reflection can span minutes of tool rounds,
+      // while curation is a handful of quick completions whose first
+      // unit (auto-title) is the user-visible one - a brand-new
+      // conversation sits on the 'New conversation' placeholder until
+      // it runs. Same non-throwing contract and hourly catch-up
+      // sibling (/curation-sweep) as reflection below.
+      try {
+        await curateOnTurnTail(opts.adminClient, opts.userId);
+      } catch (err) {
+        log.error(`${runId} curation tail failed:`, err);
+      }
       try {
         await reflectOneThread(opts.adminClient, opts.userId);
       } catch (err) {
