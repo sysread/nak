@@ -6,18 +6,27 @@
    * deliberately-opened window into what the pipeline has formed and
    * whether it's working.
    *
-   * Two sub-views: Corpus (detail of the samskara selected in the
-   * sidebar, including its provenance - for a tier-2 that's its tier-1
-   * children) and Health (the SamskaraHealthPanel). The sidebar
-   * (SamskaraBrowseList) drives `route.samskara_id`.
+   * Three surfaces, but NOT three peer sub-tabs:
    *
-   * The compound-summary + mood-legend still live in the standalone
-   * Samskara diagnostics modal; folding those in as a third sub-view and
-   * retiring the modal is a follow-up.
+   *   - Summary - the DEFAULT landing page. The global, always-on
+   *     compound prose block (per-user, not per-samskara), plus a short
+   *     orientation on what samskara is. Reached on tab-open and via the
+   *     top-bar Summary button (Chat.svelte), NOT the sub-nav - it sat
+   *     next to Corpus/Health as a sub-tab once, which wrongly implied
+   *     it was per-samskara.
+   *   - Corpus - detail of the samskara selected in the sidebar,
+   *     including its provenance (for a tier-2, its tier-1 children).
+   *   - Health - the SamskaraHealthPanel.
+   *
+   * Corpus and Health are the two sub-nav tabs. The sidebar
+   * (SamskaraBrowseList) drives `route.samskara_id`; selecting a row
+   * switches into Corpus so the detail shows. The top-bar Summary
+   * button flips `triggerSummaryView` to return to the landing page
+   * (and clears the selection so the sidebar deselects).
    */
   import { onMount } from 'svelte';
   import { app } from '$lib/state.svelte';
-  import { route } from '$lib/routing.svelte';
+  import { route, navigate } from '$lib/routing.svelte';
   import { samskaraBrowseStore } from '$lib/samskara-browse-store.svelte';
   import {
     tierBadge,
@@ -27,11 +36,48 @@
   import type { SamskaraProvenanceRow } from '$lib/supabase';
   import SamskaraHealthPanel from '../components/SamskaraHealthPanel.svelte';
 
-  // The tab is corpus-global by design: Corpus, Health, and the always-on
-  // compound Summary. The per-conversation mood graph lives in its own
+  interface Props {
+    /**
+     * Top-bar Summary button in Chat.svelte flips this to true to jump
+     * back to the global compound-summary landing page. The panel
+     * switches to the Summary surface, clears any selected samskara so
+     * the sidebar deselects, and resets the flag. `$bindable` so the
+     * reset is visible to the parent without a dedicated callback prop -
+     * same pattern as the wiki changelog trigger.
+     */
+    triggerSummaryView?: boolean;
+  }
+  let { triggerSummaryView = $bindable(false) }: Props = $props();
+
+  // Summary is the default surface (global, per-user). Corpus and Health
+  // are the two sub-nav tabs; Summary is reached via the top-bar button,
+  // not the sub-nav. The per-conversation mood graph lives in its own
   // modal (opened from the mood pill), not here.
-  type SubView = 'corpus' | 'health' | 'summary';
-  let subView = $state<SubView>('corpus');
+  type SubView = 'summary' | 'corpus' | 'health';
+  let subView = $state<SubView>('summary');
+
+  // Selecting a samskara in the sidebar means "show me this one" - switch
+  // into Corpus so its detail renders rather than leaving the user on
+  // Summary/Health wondering why their click did nothing. Guarded on a
+  // truthy id so clearing the selection (e.g. the Summary button below)
+  // doesn't yank the view back to Corpus. Fires on a deep link with a
+  // samskara_id already in the URL too, which correctly lands on Corpus.
+  $effect(() => {
+    if (route.samskara_id) subView = 'corpus';
+  });
+
+  // Top-bar Summary button -> the landing page. Clear the selection so
+  // the sidebar deselects and a later re-click of the same row is seen
+  // as a fresh selection (it re-sets samskara_id, re-tripping the effect
+  // above). Clearing to null is guarded out of that effect, so the two
+  // don't fight.
+  $effect(() => {
+    if (triggerSummaryView) {
+      subView = 'summary';
+      if (route.samskara_id) navigate({ samskara_id: null });
+      triggerSummaryView = false;
+    }
+  });
 
   // Compound summary for the Summary sub-view - the always-on prose block
   // that rides in every system prompt (per-user, global - hence the tab).
@@ -109,29 +155,35 @@
       aria-selected={subView === 'health'}
       onclick={() => (subView = 'health')}
     >Health</button>
-    <button
-      type="button"
-      class="samskara-subnav-btn"
-      class:active={subView === 'summary'}
-      role="tab"
-      aria-selected={subView === 'summary'}
-      onclick={() => (subView = 'summary')}
-    >Summary</button>
   </div>
 
   <div class="samskara-panel-body">
     {#if subView === 'health'}
       <SamskaraHealthPanel />
     {:else if subView === 'summary'}
-      <!-- Summary sub-view: the always-on compound block. Global
-           (per-user), so it belongs on the tab. The per-conversation
-           mood graph lives in the mood modal, not here. -->
+      <!-- Summary surface: the always-on compound block plus a short
+           orientation on the feature. The default landing page because
+           it's global (per-user) - the place to answer "what does Nak
+           think of me, overall?" The per-conversation mood graph lives
+           in the mood modal, not here. -->
       <section class="samskara-summary">
+        <p class="samskara-summary-intro">
+          As you chat, Nak quietly forms <strong>samskaras</strong> -
+          one-line predictive instincts about you, each of the shape "in
+          situations like X, this user tends to Y." They're distilled in
+          the background from your conversations; when a new message
+          resembles a samskara's situation, it fires and nudges Nak's
+          reply. Browse the individual instincts under
+          <strong>Corpus</strong>, and watch the forming pipeline under
+          <strong>Health</strong>.
+        </p>
         <h3 class="samskara-summary-head">Compound summary (always on in system prompt)</h3>
         <p class="subtle samskara-summary-help">
-          A background worker rebuilds this once enough new samskaras have
-          been minted since the last regen, so it drifts between
-          conversations rather than mid-thread.
+          This is the global read: a single paragraph distilled from the
+          whole corpus that rides in every system prompt. A background
+          worker rebuilds it once enough new samskaras have been minted
+          since the last regen, so it drifts between conversations rather
+          than mid-thread.
         </p>
         {#if compoundLoading}
           <p class="subtle">Loading summary…</p>
@@ -230,6 +282,12 @@
   .samskara-empty {
     max-width: 32rem;
     line-height: 1.5;
+  }
+  .samskara-summary-intro {
+    max-width: 42rem;
+    margin: 0 0 1.1rem;
+    line-height: 1.55;
+    font-size: 0.9rem;
   }
   .samskara-summary-head {
     font-size: 0.74rem;

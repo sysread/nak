@@ -32,7 +32,19 @@ is:
 ## The Samskara tab
 
 A tab in the conversation drawer (alongside Chats, Memories, Wiki, and
-so on). It has three views.
+so on). It opens on the **Summary** - the global, always-on read - with
+**Corpus** and **Health** as tabs across the top of the panel.
+
+### Summary
+
+The tab's home page, and what you land on when you open it. The always-on
+**summary** is a short paragraph capturing Nak's current read on who you
+are, which rides along in every reply. It's built across all your
+conversations, so it's global - which is why it's the landing page rather
+than sitting next to Corpus and Health (where it looked like it belonged
+to one instinct). A short note above it orients you on what samskara is.
+Jump back here any time with the **Summary button** in the top row of the
+panel.
 
 ### Corpus
 
@@ -69,12 +81,6 @@ The dot at the top is green when healthy, amber when worth a look, and
 red when something genuinely needs attention - a deep backlog, a
 bookkeeping problem, or a long-stale summary. An idle worker on its own
 won't turn it red.
-
-### Summary
-
-The always-on **summary** - a short paragraph capturing Nak's current
-read on who you are, which rides along in every reply. It's built across
-all your conversations, so it's global and lives here on the tab.
 
 ## Mood (per conversation)
 
