@@ -125,6 +125,26 @@ observable contract - claims, writes, toasts - is the same.
           length(summary) from samskara_compound_summary;
    ```
 
+9. Mint toast relay, deterministically: with the app open on a
+   thread, insert a fake samskara directly (the INSERT itself is
+   the toast signal via the realtime relay; `prediction_embedding`
+   is NOT NULL, hence the zero vector):
+
+   ```sql
+   insert into samskaras
+          (user_id, tier, prediction, prediction_embedding,
+           valence, confidence)
+   select id, 1, 'QA toast probe',
+          array_fill(0::real, array[2048])::vector, 0.8, 0.9
+     from auth.users where email = 'dev@nak.local';
+   ```
+
+   Watch the mood pill, then clean up:
+
+   ```sql
+   delete from samskaras where prediction = 'QA toast probe';
+   ```
+
 ## Expected
 
 - (1-2) The forged stub is claimed within one active rotation
@@ -154,6 +174,10 @@ observable contract - claims, writes, toasts - is the same.
 - (8) The summary regenerates: `last_regen_at` bumps to now,
   `samskara_count_at_regen` matches the current corpus count,
   and the prose changes only if the corpus did.
+- (9) The mood pill updates within a few seconds of the insert
+  (valence 0.8 / confidence 0.9 maps to the warm + confident cell);
+  the probe row's deletion does not revert the pill (mood state is
+  sticky by design).
 - **[hosted]** post-port only: the `nak-samskara-sweep` cron tick
   fires at :23 (check `cron.job_run_details` after a deploy).
 
@@ -170,3 +194,5 @@ feature output and stay.
 | Date | Env | Commit | Result | Notes |
 | ---- | --- | ------ | ------ | ----- |
 | 2026-06-11 | local | 87105f2 | pass (8/8; 5 = expected FAIL) | browser-worker baseline. Assimilate: forged stub b155acfa claimed and saved in ~1.2s (retained per cleanup rule - a mint's provenance points at it). Pair-relate: wrote the corpus's FIRST association rows (0 -> 2); the weeks-at-zero count is explained - the probe has no memory of declined pairs, so a static corpus re-selects the same closest pair every 60s and the agent declines it every time (one wasted Venice call/min); fresh substrate immediately produced accepted pairs. Also: re-accepting an existing pair bumps last_reinforced_at but `reinforcement` stays 1 (the upsert overwrites it with the literal 1). Mint-tier1: minted 9490bd4e (3 provenance rows) plus 4 dedup-reinforces; mood pill rendered post-mint but was already visible at pageload, so causality unproven. Mint-tier2: the documented every-cycle 21000 failure, direct RPC repro identical; tier-2 corpus still 0. Reaction-classify: cohort fd0458ea applied ~2 min after fire; 2/4 rows confirmed, 2 left NULL - initially flagged as a classifier gap, but NULL-with-backdated-fired_at is exactly how samskara_apply_reaction marks NEUTRAL verdicts (there is no neutral boolean state; the backdate ages them out of the unresolved window), so this is the designed shape. Dedup: 0 collapses, steady state. Compound-regen: forced via 7h backdate; count_at_regen 12 -> 14, prose updated |
+| 2026-06-11 | local | a5eb802 | FAIL (1-2, 6; rest pass) | post-port run. Blocking regression: both messages-table reads filtered on a nonexistent `messages.user_id` column (ownership routes through threads.user_id) - every assimilate and reaction-classify threw `column messages.user_id does not exist`; the substrate queue only grew, the sweep drain aborted at assimilated=0, and cohorts could not resolve (cohort 4c275558 left 5 rows NULL with un-backdated fired_at - genuine failure, not the neutral shape). Claim/scheduling machinery and runPhase isolation worked (a failing phase never took down the rotation). PASSING: pair-relate (associations 6 -> 7; reinforcement-stuck-at-1 quirk persists), mint-tier1 (3x dedup-reinforce), mint-tier2 POST-FIX CONFIRMED (direct RPC returns a result set, no 21000; the corpus minted its first-ever local tier-2), dedup (first nonzero collapse, tier-1 14 -> 13), compound-regen (7h backdate -> fresh 1175-char summary, count 14), step 9 toast relay (pill content -> cheerful within ~5s of the SQL insert), drawer relay under the `samskara` source tag, tail phase ordering as designed |
+| 2026-06-11 | local | c618678 | pass (1-2, 6 re-run; rest pass per prior row) | fix verification: the messages reads scope by thread_id. Assimilate: a sweep tick drained all three stuck stubs claim -> agent -> save (`assimilated=3`, pending queue 0) after their stale failed-attempt claims were released manually. Reaction-classify, live two-turn run: cohort 202a1cc5 (5 fires) resolved by the second turn's tail ~30s after the reply - 2 rows confirmed true (fired_at intact), 3 NEUTRAL (was_confirmed NULL, fired_at backdated ~13 min - the designed shape); zero `failed` / `message read failed` lines across the window. The feedback loop is closed end to end on the ported pipeline |
