@@ -1102,7 +1102,12 @@ A first-class drawer tab (sibling to chats/memories/wiki/recipes,
 `drawer=samskara`) is the operator's read-only window into the global
 pipeline state. It replaced the old `route.modal='samskara'`
 diagnostics modal (whose per-conversation mood graph moved to
-`SamskaraMood.svelte`). Three sub-views:
+`SamskaraMood.svelte`). Three surfaces, but only two are sub-nav tabs:
+**Summary** is the default landing page reached via a top-bar button
+(not the sub-nav), while **Corpus** and **Health** are the two tabs in
+the sub-nav. Summary sat as a third sub-tab once, which wrongly implied
+it was per-samskara like the Corpus detail; it's per-user/global, so it
+was lifted out to the top row and made the default.
 
 - **Corpus** - browse/search/filter/sort the samskara corpus, with a
   tier filter and a "hide similar" cosine slider (the corpus analog of
@@ -1128,10 +1133,19 @@ diagnostics modal (whose per-conversation mood graph moved to
   (named constants, tune against observed behaviour). Piece:
   `src/components/SamskaraHealthPanel.svelte`.
 
-- **Summary** - the always-on compound summary block (per-user, global,
-  hence on the tab). Fetched via `samskaraGetCompoundSummary` in
-  `Samskaras.svelte`. The mood legend that used to share this sub-view
-  moved to the conversation-mood modal (see the scope split above).
+- **Summary** - the default landing page: the always-on compound summary
+  block (per-user, global) plus a short orientation paragraph on what
+  samskara is. Fetched via `samskaraGetCompoundSummary` in
+  `Samskaras.svelte`. Reached on tab-open and via the top-bar **Summary**
+  button (an `align-left` icon in `Chat.svelte`'s samskara `TopBarActions`
+  cluster), which flips the `triggerSummaryView` `$bindable` prop;
+  `Samskaras.svelte` watches it, switches `subView` to `summary`, and
+  clears `route.samskara_id` so the sidebar deselects. The inverse wiring
+  is a `$effect` that flips `subView` to `corpus` whenever
+  `route.samskara_id` becomes truthy (sidebar row click or deep link), so
+  selecting a samskara always lands on its detail. The mood legend that
+  used to share this surface moved to the conversation-mood modal (see the
+  scope split above).
 
 Read-only by design - no delete/pin/edit. Curation would re-open the
 "operator games the bias model" question; if it's ever wanted it's a
