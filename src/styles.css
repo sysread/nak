@@ -1012,6 +1012,16 @@ label {
   font-style: italic;
 }
 
+/* In the totals strip the pills render per currency as a
+   [total][per-day] pair inside an each-block. Svelte trims the
+   whitespace at the iteration boundary, so without this rule the
+   per-day pill of one currency sits border-to-border against the
+   total pill of the next. A non-per-day pill directly following a
+   per-day pill is exactly that group boundary. */
+.usage-totals .usage-pill.per-day + .usage-pill:not(.per-day) {
+  margin-left: 0.4rem;
+}
+
 .usage-pill-head,
 .usage-bar-head {
   text-align: end;
