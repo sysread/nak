@@ -690,6 +690,30 @@ pass - many times a minute during an active session - and at
 rates are a per-pass nudge; the 30-minute throttle is what makes
 "per pass" mean what the rates assume.
 
+> **Migration note - decay is a strong cron candidate.** The
+> 30-minute throttle is enforced *in memory, per worker process*,
+> so it resets on every worker restart: page reload, tab switch,
+> lease loss, redeploy. During active use decay therefore runs far
+> more often than 30 minutes (observed ~every 3 minutes while the
+> log drawer was being watched). The newborn-decay fix
+> (`coalesce(last_fired_at, created_at)` in the stale path) removed
+> the *harm* of over-frequent decay, so today this is a robustness
+> nicety, not a bug - but it is fragile by construction.
+>
+> When the formation pipeline migrates from the client Web Worker
+> to edge functions + `pg_cron`, **decay is the single cleanest
+> phase to lift out first**: it is pure SQL, no LLM, no in-worker
+> consumer, and no per-row claim/lease coordination. Run
+> `samskara_decay()` as a scheduled `pg_cron` job (every ~30 min)
+> and the cadence becomes a true server-side wall clock with no
+> restart-reset failure mode - which makes the in-memory throttle
+> obsolete. At that point: drop `DECAY_THROTTLE_INTERVAL_MS` and
+> the throttle gate in `runDecayPhase`, and remove `'decay'` from
+> the client `PHASES` rotation (or leave it as a no-op) so the two
+> don't double-run. The same lift-to-cron reasoning extends to the
+> other LLM-free maintenance phase, `dedup`
+> (`samskara_collapse_by_cofiring`), for the same reasons.
+
 ### Dedup formula
 
 Two passes per `samskara_collapse_by_cofiring()` call.
