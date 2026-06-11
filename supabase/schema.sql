@@ -5932,11 +5932,12 @@ create or replace function public.samskara_apply_reaction(
   p_cohort_id uuid,
   p_confirm_ids uuid[],
   p_disconfirm_ids uuid[],
-  p_neutral_ids uuid[]
+  p_neutral_ids uuid[],
+  p_user_id uuid default null
 ) returns void
 language plpgsql security invoker as $$
 declare
-  v_uid uuid := auth.uid();
+  v_uid uuid := coalesce(p_user_id, auth.uid());
   v_cohort_n int;
   v_weight real;
   v_inc real;
@@ -6182,9 +6183,15 @@ end $$;
 -- `claim_next_pending_memory`: `for update skip locked` plus a
 -- holder/expiry stamp lets concurrent workers walk past locked rows.
 drop function if exists public.samskara_claim_next_assimilate(text, int);
+-- p_user_id overload: the venice function's turn tail claims with the
+-- service-role client, which has no auth.uid(). Trailing default keeps
+-- the function role-agnostic. The old 2-arg signature is dropped so
+-- PostgREST resolves the call unambiguously.
+drop function if exists public.samskara_claim_next_assimilate(text, int);
 create or replace function public.samskara_claim_next_assimilate(
   p_holder_id text,
-  p_ttl_seconds int
+  p_ttl_seconds int,
+  p_user_id uuid default null
 ) returns table (
   id uuid,
   thread_id uuid,
@@ -6195,7 +6202,7 @@ language sql security invoker as $$
   with candidate as (
     select s.id
       from public.samskara_substrate s
-     where s.user_id = auth.uid()
+     where s.user_id = coalesce(p_user_id, auth.uid())
        and s.situation is null
        and (s.assimilate_claim_expires is null
             or s.assimilate_claim_expires < now())
@@ -6211,6 +6218,67 @@ language sql security invoker as $$
   returning s.id, s.thread_id, s.user_message_id, s.assistant_message_id;
 $$;
 
+-- Global sweep variant for the hourly samskara sweep: no user filter,
+-- owner-privileged, returns user_id so the sweep can scope the
+-- follow-up reads and attribute drawer logs. The per-row claim
+-- columns are the mutual exclusion between this and the turn tail.
+-- EXECUTE locked to service_role below.
+create or replace function public.samskara_claim_next_assimilate_for_sweep(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns table (
+  id uuid,
+  thread_id uuid,
+  user_message_id uuid,
+  assistant_message_id uuid,
+  user_id uuid
+)
+language sql security definer
+set search_path = public as $$
+  with candidate as (
+    select s.id
+      from public.samskara_substrate s
+     where s.situation is null
+       and (s.assimilate_claim_expires is null
+            or s.assimilate_claim_expires < now())
+     order by s.created_at asc
+     limit 1
+     for update skip locked
+  )
+  update public.samskara_substrate s
+     set assimilate_claim_holder = p_holder_id,
+         assimilate_claim_expires = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c
+   where s.id = c.id
+  returning s.id, s.thread_id, s.user_message_id, s.assistant_message_id, s.user_id;
+$$;
+
+revoke all on function public.samskara_claim_next_assimilate_for_sweep(text, int) from public, anon, authenticated;
+grant execute on function public.samskara_claim_next_assimilate_for_sweep(text, int) to service_role;
+
+-- Sweep user discovery: users with recent samskara activity get the
+-- per-user maintenance rotation (pair-relate, mints, dedup, regen)
+-- each tick. Substrate creation and fires are the two activity
+-- signals; union dedups. The probes themselves are self-limiting
+-- (regen has its own predicate, dedup self-caps), so a user the
+-- window over-includes costs a few cheap reads.
+create or replace function public.samskara_sweep_users(
+  p_window_hours int default 2
+) returns table (user_id uuid)
+language sql security definer
+set search_path = public as $$
+  select s.user_id
+    from public.samskara_substrate s
+   where s.created_at > now() - make_interval(hours => p_window_hours)
+  union
+  select f.user_id
+    from public.samskara_fires f
+   where f.fired_at > now() - make_interval(hours => p_window_hours);
+$$;
+
+revoke all on function public.samskara_sweep_users(int) from public, anon, authenticated;
+grant execute on function public.samskara_sweep_users(int) to service_role;
+
 -- Save assimilator output IF our claim is still valid. Returns false
 -- when the row was deleted, the claim expired, or another holder
 -- took over — the worker treats false as "skip and move on".
@@ -6222,7 +6290,8 @@ create or replace function public.samskara_save_assimilation_if_claimed(
   p_holder_id text,
   p_situation text,
   p_outcome text,
-  p_valence real
+  p_valence real,
+  p_user_id uuid default null
 ) returns boolean
 language plpgsql security invoker as $$
 declare
@@ -6235,7 +6304,7 @@ begin
          assimilate_claim_holder = null,
          assimilate_claim_expires = null
    where id = p_id
-     and user_id = auth.uid()
+     and user_id = coalesce(p_user_id, auth.uid())
      and assimilate_claim_holder = p_holder_id
      and assimilate_claim_expires > now();
   get diagnostics updated = row_count;
@@ -6413,7 +6482,12 @@ grant execute on function public.samskara_decay_sweep() to service_role;
 -- claim/save RPCs follow the standard claim-then-save shape so
 -- multiple devices coordinate.
 drop function if exists public.samskara_should_regen_compound();
-create or replace function public.samskara_should_regen_compound()
+-- p_user_id overload for the sweep's service-role probe; the old
+-- 0-arg signature is dropped so PostgREST resolves the call cleanly.
+drop function if exists public.samskara_should_regen_compound();
+create or replace function public.samskara_should_regen_compound(
+  p_user_id uuid default null
+)
 returns table (
   should_regen boolean,
   samskara_count int,
@@ -6421,7 +6495,7 @@ returns table (
 )
 language plpgsql stable security invoker as $$
 declare
-  v_uid uuid := auth.uid();
+  v_uid uuid := coalesce(p_user_id, auth.uid());
   v_count int;
   v_last_regen timestamptz;
   v_count_at_regen int;
@@ -6473,11 +6547,12 @@ end $$;
 drop function if exists public.samskara_claim_compound_regen(text, int);
 create or replace function public.samskara_claim_compound_regen(
   p_holder_id text,
-  p_ttl_seconds int
+  p_ttl_seconds int,
+  p_user_id uuid default null
 ) returns boolean
 language plpgsql security invoker as $$
 declare
-  v_uid uuid := auth.uid();
+  v_uid uuid := coalesce(p_user_id, auth.uid());
   v_changed int;
 begin
   -- Insert-or-update with claim guard. The compound row is
@@ -6504,11 +6579,12 @@ drop function if exists public.samskara_save_compound_summary_if_claimed(
 create or replace function public.samskara_save_compound_summary_if_claimed(
   p_holder_id text,
   p_summary text,
-  p_samskara_count int
+  p_samskara_count int,
+  p_user_id uuid default null
 ) returns boolean
 language plpgsql security invoker as $$
 declare
-  v_uid uuid := auth.uid();
+  v_uid uuid := coalesce(p_user_id, auth.uid());
   v_changed int;
 begin
   update public.samskara_compound_summary
@@ -6544,10 +6620,12 @@ end $$;
 -- drop the old signature so the 3-arg version doesn't create an
 -- overload that PostgREST can't disambiguate.
 drop function if exists public.samskara_nearest_by_prediction(vector, int);
+drop function if exists public.samskara_nearest_by_prediction(vector, int, int);
 create or replace function public.samskara_nearest_by_prediction(
   p_query_embedding vector(2048),
   p_k_max int,
-  p_tier int default null
+  p_tier int default null,
+  p_user_id uuid default null
 ) returns table (
   id uuid,
   cosine real,
@@ -6570,7 +6648,7 @@ language sql stable security invoker as $$
          (1 - (s.prediction_embedding <=> p_query_embedding))::real as cosine,
          s.tier
     from public.samskaras s
-   where s.user_id = auth.uid()
+   where s.user_id = coalesce(p_user_id, auth.uid())
      and s.prediction_embedding is not null
      and (p_tier is null or s.tier = p_tier)
    order by s.prediction_embedding <=> p_query_embedding asc
@@ -6598,13 +6676,15 @@ $$;
 -- The earlier signature carried a `p_substrate_ids uuid[]` arg for the
 -- append; drop it so PostgREST resolves the new 2-arg shape cleanly.
 drop function if exists public.samskara_reinforce_existing(uuid, uuid[], real);
+drop function if exists public.samskara_reinforce_existing(uuid, real);
 create or replace function public.samskara_reinforce_existing(
   p_samskara_id uuid,
-  p_health_bump real
+  p_health_bump real,
+  p_user_id uuid default null
 ) returns boolean
 language plpgsql security invoker as $$
 declare
-  v_uid uuid := auth.uid();
+  v_uid uuid := coalesce(p_user_id, auth.uid());
   v_exists boolean;
 begin
   -- Ownership check yields an explicit boolean to the caller so
@@ -6748,17 +6828,19 @@ end $$;
 -- Idempotent under repeated calls. Safe to run while the worker is
 -- live: a concurrent mint-tier1 could at worst re-create a twin
 -- this call just removed, which the next invocation catches.
+drop function if exists public.samskara_collapse_by_cofiring(int, real, real, int, real, int);
 create or replace function public.samskara_collapse_by_cofiring(
   p_min_cofires int default 3,
   p_min_cofire_ratio real default 0.5,
   p_cosine_floor real default 0.70,
   p_target_count int default 150,
   p_cap_cosine_floor real default 0.60,
-  p_max_collapses int default 20
+  p_max_collapses int default 20,
+  p_user_id uuid default null
 ) returns int
 language plpgsql security invoker as $$
 declare
-  v_uid uuid := auth.uid();
+  v_uid uuid := coalesce(p_user_id, auth.uid());
   v_collapsed int := 0;
   v_pair record;
   v_winner uuid;
@@ -6924,13 +7006,15 @@ end $$;
 -- neighbour scan, and the per-member weight read all hit the eligible
 -- self-join once rather than three times. `on commit drop` scopes it to
 -- the PostgREST call's transaction.
+drop function if exists public.samskara_tier2_candidate(int, real, real, int, int, real);
 create or replace function public.samskara_tier2_candidate(
   p_min_cofires    int  default 4,
   p_cosine_lo      real default 0.30,
   p_cosine_hi      real default 0.68,
   p_min_group_size int  default 3,
   p_max_group_size int  default 6,
-  p_overlap_skip   real default 0.60
+  p_overlap_skip   real default 0.60,
+  p_user_id        uuid default null
 ) returns table (
   samskara_id uuid,
   prediction text,
@@ -6939,7 +7023,7 @@ create or replace function public.samskara_tier2_candidate(
 )
 language plpgsql security invoker as $$
 declare
-  v_uid uuid := auth.uid();
+  v_uid uuid := coalesce(p_user_id, auth.uid());
   v_active int;
   v_seed_a uuid;
   v_seed_b uuid;
@@ -6968,7 +7052,13 @@ begin
     b_id uuid,
     cofires int
   ) on commit drop;
-  delete from _tier2_edges;
+  -- TRUNCATE, not an unqualified DELETE: PostgREST connections can
+  -- preload pg-safeupdate (the local stack does), which rejects
+  -- DELETE without a WHERE clause even inside function bodies -
+  -- SQLSTATE 21000 on every call, which is how this function spent
+  -- weeks never running locally. TRUNCATE is a different command
+  -- class safeupdate doesn't hook, and is faster besides.
+  truncate _tier2_edges;
   insert into _tier2_edges (a_id, b_id, cofires)
   with pair_cofires as (
     select least(f1.samskara_id, f2.samskara_id) as a_id,
@@ -9433,6 +9523,20 @@ begin
   ) then
     alter publication supabase_realtime add table public.recipes;
   end if;
+  -- samskaras feeds the mint toast: the formation pipeline runs in
+  -- the venice function now, so the browser learns about a fresh
+  -- mint through a user-scoped postgres_changes INSERT subscription
+  -- that maps the new row's (tier, valence, confidence) into the
+  -- mood pill. INSERT-only - no replica-identity index needed (that
+  -- requirement is specific to DELETE delivery, see below).
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'samskaras'
+  ) then
+    alter publication supabase_realtime add table public.samskaras;
+  end if;
 end $$;
 
 -- DELETE delivery for the user-filtered postgres_changes relays above.
@@ -10443,6 +10547,69 @@ begin
   end if;
 exception when others then
   raise notice 'bias sweep cron setup skipped: %', sqlerrm;
+end
+$cron$;
+
+-- Hourly samskara formation sweep: the catch-up driver behind the
+-- chat-turn tail (and the ONLY driver for mint-tier2, dedup, and
+-- compound-regen). Same vault -> pg_net dispatch shape as the other
+-- sweep triggers.
+create or replace function public.nak_trigger_samskara_sweep()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $fn$
+declare
+  v_url text;
+  v_key text;
+begin
+  begin
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'project_url' $q$ into v_url;
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'service_role_key' $q$ into v_key;
+  exception when others then
+    return;  -- vault not installed or unreadable; nothing to dispatch
+  end;
+  if v_url is null or v_key is null then
+    return;  -- secrets not seeded yet
+  end if;
+  begin
+    execute format(
+      $q$ select net.http_post(
+            url := %L,
+            headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', %L),
+            body := '{}'::jsonb
+          ) $q$,
+      v_url || '/functions/v1/venice/samskara-sweep',
+      'Bearer ' || v_key
+    );
+  exception when others then
+    raise notice 'nak_trigger_samskara_sweep: dispatch failed: %', sqlerrm;
+  end;
+end;
+$fn$;
+
+revoke all on function public.nak_trigger_samskara_sweep() from public, anon, authenticated;
+
+do $cron$
+begin
+  if exists (select 1 from pg_available_extensions where name = 'pg_cron')
+     and exists (select 1 from pg_available_extensions where name = 'pg_net') then
+    create extension if not exists pg_cron;
+    create extension if not exists pg_net;
+    if exists (select 1 from cron.job where jobname = 'nak-samskara-sweep') then
+      perform cron.unschedule('nak-samskara-sweep');
+    end if;
+    -- Minute 23: the x3 column after bias's :03 and the :13/:43
+    -- decay pair, clear of the x7 ladder and the */5 embed ticks.
+    perform cron.schedule(
+      'nak-samskara-sweep',
+      '23 * * * *',
+      $job$ select public.nak_trigger_samskara_sweep(); $job$
+    );
+  end if;
+exception when others then
+  raise notice 'samskara sweep cron setup skipped: %', sqlerrm;
 end
 $cron$;
 
