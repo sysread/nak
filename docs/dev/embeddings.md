@@ -124,14 +124,12 @@ browser worker wrote historically.
 ## Worker-fleet coordination (retired)
 
 The cross-tab Web Lock + Supabase `worker_leases` + heartbeat
-model has no live tenants: the browser worker fleet is gone, and
-every background job coordinates through per-row claims instead
-(see [`./architecture.md`](./architecture.md), "Background-job
-model"). The `worker_leases` table and its
-`acquire`/`heartbeat`/`release` RPCs are still in the schema, plus
-their orphaned `SupabaseService` wrappers; removing that surface
-is a tracked follow-up of the de-browser-background-jobs
-migration.
+model is gone: the browser worker fleet retired, and every
+background job coordinates through per-row claims instead (see
+[`./architecture.md`](./architecture.md), "Background-job model").
+The schema keeps only an idempotent teardown block that drops the
+`worker_leases` table and its RPCs on databases that synced the
+lease era.
 
 ## Contracts
 

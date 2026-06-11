@@ -2,12 +2,14 @@
 
 ## STATUS (2026-06-11)
 
-**C1, C2, and C3 are all implemented** (dates in the Items list;
-designs below). Third of the three
+**C1, C2, and C3 are all implemented, and the milestone is
+closed** (dates in the Items list; designs below). Third of the
+three
 [tighten-the-control-surfaces](./tighten-the-control-surfaces.md)
-milestones. Remaining follow-up: drop the `worker_leases` table,
-its RPCs, and the orphaned `SupabaseService` lease wrappers - the
-browser-side lease apparatus files are already deleted.
+milestones. The lease apparatus is gone end to end: the
+browser-side files, the orphaned `SupabaseService` wrappers, and
+the `worker_leases` table + its RPCs (replaced in the schema by an
+idempotent teardown block).
 
 **The rule:** a job that is not UI-scoped or ongoing-chat-scoped
 must not depend on a browser tab being open. **Satisfied** - zero
@@ -44,12 +46,11 @@ Web Workers and zero browser background jobs remain.
   `samskaras`. The chat-scoped half (fire, substrate stub,
   compound-summary read, priming format, mood pill) stayed
   browser-side as planned. Samskara was the last lease tenant, so
-  the browser lease apparatus (`base-manager.ts`, `holder.ts`,
-  `embeddings/lease.ts`, the manager wiring, the logger's
-  worker postMessage relay) went with it; only the
-  `worker_leases` table + its schema/RPC surface (and the
-  orphaned `SupabaseService` lease wrappers) remain as the
-  follow-up above.
+  the lease apparatus went with it end to end: the browser files
+  (`base-manager.ts`, `holder.ts`, `embeddings/lease.ts`, the
+  manager wiring, the logger's worker postMessage relay), the
+  orphaned `SupabaseService` wrappers, and the `worker_leases`
+  table + RPCs (idempotent teardown block in schema.sql).
 
   **Decay lifted early (2026-06-11).** Upstream 13ef213 flagged
   the decay phase as the cleanest pre-port lift (pure SQL, no LLM,

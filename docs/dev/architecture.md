@@ -94,10 +94,6 @@ hit the user's Supabase project. Scope covers:
   `memory_*` tools).
 - Settings (`getSettings`, `updateSettings`, `updateSystemPrompts`) —
   the `profiles.settings` JSONB blob.
-- Legacy worker-lease wrappers (`acquireWorkerLease`,
-  `heartbeatWorkerLease`, `releaseWorkerLease`) - zero callers
-  since the browser worker fleet retired; they go when the
-  `worker_leases` table does.
 
 The file is large (~1300 lines). Everything is well-commented; its
 size is not complexity, just the number of narrow method wrappers
