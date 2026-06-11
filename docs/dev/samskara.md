@@ -2,7 +2,7 @@
 
 The chat model's progressively-built predictive model of the
 user. Per-round observations (substrate) compound through a
-background formation worker into emergent predictive claims
+server-side formation pipeline into emergent predictive claims
 (samskaras); those samskaras fire by cosine similarity on every
 turn and a compound prose summary of the strongest ones rides in
 every system prompt as always-on calibration. The intent is the
@@ -31,12 +31,15 @@ embedding it, labelling pairs, minting tier-1 samskaras from
 clusters, minting tier-2 compounds from recurring co-fire
 constellations of tier-1 samskaras, classifying reactions,
 decaying stale or disconfirmed samskaras, regenerating the
-compound summary - runs in a dedicated background worker between
-user messages. The worker
-uses the project's fast-model tier for all LLM calls. Async-
-friendly: nak chat is SMS-shaped (the user can wander off for an
-hour and come back), so formation has time to catch up between
-turns without blocking anything.
+compound summary - runs server-side. The formation pipeline
+lives in the venice edge function
+(`supabase/functions/venice/agents/samskara.ts`), driven by the
+completed-turn tail and an hourly cron sweep; decay rides its
+own pg_cron job. Every LLM phase uses the hardcoded
+`SAMSKARA_MODEL` (mistral-small). No tab needs to stay open.
+Async-friendly: nak chat is SMS-shaped (the user can wander off
+for an hour and come back), so formation has time to catch up
+between turns without blocking anything.
 
 Mints surface to the user through a minimal UI: a subtle top-
 right toast stack shows a single valence-mapped emoji per new
@@ -73,8 +76,8 @@ toast is just a glance cue that the bias model is forming.
   `{ tier, valence, confidence }`; the lookup splits each of five
   valence bands into a confident column (confidence >=
   `CONFIDENCE_CUT`, default 0.5) and a tentative column (below
-  the cut). Separate from the Svelte component so the manager can
-  import without pulling Svelte runtime into the worker bundle.
+  the cut). Kept rune-free on purpose - plain TS that components
+  and non-Svelte modules can both import.
   `SamskaraMoodLegend.svelte` (mounted in the conversation-mood modal,
   `SamskaraMood.svelte`) renders the same `MOOD_TABLE` as a fold-away
   legend so the user-visible documentation can never drift from the live
@@ -89,8 +92,8 @@ toast is just a glance cue that the bias model is forming.
   out of the pill keeps the dot perfectly aligned with the pill
   the user clicked to open the tab - no separate fetch, no
   listener race. Lives in its own .svelte.ts module rather than
-  `events.ts` because `events.ts` is shared with the worker
-  bundle, which cannot import Svelte runes.
+  `events.ts` because `events.ts` stays rune-free plain TS and
+  the shared mood triple needs `$state`.
 - `src/components/SamskaraToasts.svelte` - the persistent
   mood-pill UI. Listens for `SAMSKARA_MINT_EVENT` on `window`,
   renders the latest mint's emoji as a pill in the bottom-right
@@ -146,44 +149,23 @@ toast is just a glance cue that the bias model is forming.
   `samskara_substrate where situation_embedding is null and situation
   is not null` (via `samskara_claim_next_substrate_embed`), embeds via
   Venice, and saves under a guard. Mirrors the memories source entry.
-- `src/lib/agents/samskara/agent.ts` - `SamskaraAgent`, a single
-  class whose methods correspond to the worker phases:
-  `assimilate`, `relate`, `mint`, `classifyReaction`,
-  `summarizeCompound`. Each method makes one fast-model Venice
-  call, parses a JSON envelope the prompt names explicitly, and
-  returns a typed result (or null on parse failure). Rate-limit
-  errors re-throw so the cycle driver can map them to the long
-  back-off.
-- `src/lib/agents/samskara/prompts.ts` - the five agent prompts
-  (`ASSIMILATOR_PROMPT`, `RELATOR_PROMPT`, `MINTER_PROMPT`,
-  `REACTION_PROMPT`, `COMPOUND_SUMMARY_PROMPT`). Each is terse
-  on purpose; the fast-model tier has a smaller context window
-  and we'd rather pay tokens for inputs than instructions.
-- `src/lib/agents/samskara/loop.ts` - the testable cycle driver.
-  `runOneCycle(ctx)` acquires the lease if needed, then
-  advances exactly one phase per cycle. The outer worker
-  rotates through `PHASES` (assimilate, pair-relate,
-  mint-tier1, mint-tier2, reaction-classify,
-  dedup, compound-regen) and treats an all-empty rotation as
-  the idle signal. Decay is not in the rotation - it runs
-  server-side on pg_cron (see the Decay formula below).
-- `src/lib/agents/samskara/worker.ts` - the Web Worker entry
-  point. Builds its own Supabase + Venice clients from the
-  `start` message (class instances don't structured-clone),
-  instantiates the agent, and drives `runOneCycle` until abort.
-  Forwards `mint` payloads back through `postMessage` so the
-  manager can re-emit them on the main thread.
-- `src/lib/agents/samskara/manager.ts` - main-thread supervisor,
-  same shape as `EmbeddingManager` / `ReflectionManager` /
-  `SummaryManager`. Owns the `navigator.locks.request(
-  'nak:samskara-worker')` Web Lock, the per-device `holderId`,
-  and the auth-change forwarding. Translates inbound `mint`
-  worker messages into `SAMSKARA_MINT_EVENT` CustomEvents on
-  `window`.
+- `supabase/functions/venice/agents/samskara.ts` - the formation
+  pipeline. The six agent prompts (`ASSIMILATOR_PROMPT`,
+  `RELATOR_PROMPT`, `MINTER_PROMPT`, `TIER2_MINTER_PROMPT`,
+  `REACTION_PROMPT`, `COMPOUND_SUMMARY_PROMPT` - terse on
+  purpose: the fast tier pays tokens for inputs, not
+  instructions), one non-streaming `toolComplete` call per
+  phase, the math helpers (`cosine`, `buildTopicalCluster`,
+  `parseVector`) and tuning constants, and the two exported
+  drivers: `samskaraOnTurnTail(admin, userId)` for the
+  completed-turn tail and `runSamskaraSweepTick(admin)` for the
+  hourly cron sweep (see Entry points). Prompts and constants
+  are pinned by the Deno suite at
+  `supabase/functions/tests/samskara.test.ts` via the `__test`
+  namespace export.
 - `supabase/schema.sql` (samskara section) - six tables with
-  RLS, the `worker_kind='samskara'` lease partition, and the
-  RPC surface covering fire, cohort log, reaction apply,
-  substrate record, assimilate claim/save, substrate-embed
+  RLS and the RPC surface covering fire, cohort log, reaction
+  apply, substrate record, assimilate claim/save, substrate-embed
   claim/save, the cron-driven decay sweep, co-firing-based
   dedup collapse,
   `samskara_tier2_candidate(...)` (the co-fire-group detector the
@@ -200,7 +182,19 @@ toast is just a glance cue that the bias model is forming.
   higher reads as "near-duplicate sentence", lower reads as
   "loosely related"). A private
   `_samskara_merge_pair(winner, loser, user)` helper backs the
-  dedup RPC; underscore-prefixed to signal internal-only. Follows
+  dedup RPC; underscore-prefixed to signal internal-only. The
+  formation RPCs all carry a b-strict trailing `p_user_id uuid
+  default null` parameter (`coalesce(p_user_id, auth.uid())`) so
+  the edge drivers' service-role client can scope them
+  explicitly while RLS-scoped callers keep working unchanged.
+  Two service_role-only `security definer` functions back the
+  sweep: `samskara_claim_next_assimilate_for_sweep` (cross-user
+  queue claim returning `user_id`) and `samskara_sweep_users`
+  (users with substrate/fire activity inside a lookback window).
+  `nak_trigger_samskara_sweep()` + the `nak-samskara-sweep`
+  pg_cron job (`23 * * * *`) drive the sweep route, and
+  `samskaras` is a member of the `supabase_realtime` publication
+  so mint INSERTs reach the browser (the toast signal). Follows
   the project's idempotent-apply conventions (`if not exists`,
   drop-then-create for policies and functions).
 
@@ -209,7 +203,7 @@ toast is just a glance cue that the bias model is forming.
 - **`runChatLoop` round-1 entry** - in `src/lib/chat-loop.ts`,
   before the first round's `requestMessages` is assembled, the
   loop races `getCompoundSummary(supabase)` and
-  `fireSamskaras(supabase, venice, threadId, currentUserRound,
+  `fireSamskaras(supabase, threadId, currentUserRound,
   userText, signal)` in parallel under a
   `SAMSKARA_PRIMING_TIMEOUT_MS` (1500ms) cap. `currentUserRound`
   is hoisted up to fire time from `countUserRounds(history)` so
@@ -219,7 +213,7 @@ toast is just a glance cue that the bias model is forming.
   compound + fire signal (one cohort id per user turn, not per
   round). Underlying Promises keep running on timeout; the
   worst case is one cohort logged but never reaction-classified,
-  which the worker's resolution-window drops naturally.
+  which the classifier's resolution window drops naturally.
 - **Inline `CohortPanel` in `Chat.svelte`** - on thread load,
   `Chat.svelte` calls `samskaraListFiresForThread`,
   `samskaraListSubstrateForThread`, and
@@ -229,31 +223,46 @@ toast is just a glance cue that the bias model is forming.
   action row; click it to expand a `CohortPanel` anchored to
   that turn. End-of-turn the loader is invoked again so the
   just-fired cohort appears under its triggering message
-  without a manual refresh. The Samskara diagnostics modal no
-  longer carries per-message detail - cohort fires + substrate
-  for one round are exclusively the inline panel's domain.
+  without a manual refresh. Cohort fires + substrate for one
+  round are exclusively the inline panel's domain - neither the
+  Samskara tab nor the mood modal carries per-message detail.
 - **`runChatLoop` end of turn** - after the terminal assistant
   row persists, the loop calls
   `recordSubstrateStub(supabase, threadId, userMessageId,
   assistantMessageId)` as a fire-and-forget write. The
   assimilator phase enriches the stub later; this call does no
   LLM work.
-- **`samskaraManager.start(opts)`** - called from `activate()`
-  in `state.svelte.ts` alongside the other worker managers.
-  Acquires the `nak:samskara-worker` Web Lock, posts the
-  worker a `start` message carrying the per-device holderId
-  and the fast-model id, and subscribes to main-thread auth
-  changes so the worker can re-pin rotated tokens.
-  `samskaraManager.stop()` in `lock()` tears it down.
+- **`samskaraOnTurnTail(admin, userId)`** - fired from
+  `getStreamingResponse`'s `EdgeRuntime.waitUntil` tail on
+  completed turns, sequenced curation -> samskara -> reflection.
+  Samskara runs before reflection because reflection can span
+  minutes and samskara carries the fleet's only hard timing
+  window (the reaction-classify resolution window). Runs
+  reaction-classify first, then a capped assimilate drain, then
+  one pair-relate probe, then one mint-tier1 probe.
+- **`runSamskaraSweepTick(admin)`** - the hourly
+  `nak-samskara-sweep` pg_cron job (`23 * * * *`) pg_net-POSTs
+  `/venice/samskara-sweep` (a `sweepHandler` route, service-role
+  gated). Drains the cross-user assimilate queue, then runs the
+  per-user maintenance probes (pair-relate, mint-tier1,
+  mint-tier2, dedup, compound-regen) for every user with recent
+  samskara activity. The catch-up driver, and the only driver
+  for the heavy timing-insensitive phases.
 - **Embeddings backfill** - the server-side backfill's round-robin
   picks up the `samskara-substrate` source automatically. No
   samskara-specific entry point on that side; the `EMBED_SOURCES`
   registry entry shapes the same claim/build/save flow memories and
   threads do.
-- **`SAMSKARA_MINT_EVENT` listener** - the `SamskaraToasts`
-  component mounted inside `Chat.svelte` listens on `window`
-  for `CustomEvent<SamskaraMintEventDetail>` and renders a
-  valence-mapped emoji pill.
+- **Mint relay** - the INSERT into `samskaras` is itself the
+  toast notification. `Chat.svelte` subscribes to user-filtered
+  postgres_changes INSERTs via
+  `SupabaseService.subscribeToSamskaraInserts` and routes the new
+  row's `(tier, valence, confidence)` into `notifySamskaraMint`,
+  which dispatches `SAMSKARA_MINT_EVENT` on `window`; the
+  `SamskaraToasts` component mounted inside `Chat.svelte` listens
+  for it and renders the valence-mapped emoji pill. INSERT-only
+  by design: dedup-reinforce hits update an existing row and
+  therefore stay silent.
 
 ## Data model
 
@@ -288,8 +297,8 @@ chat time; enriched in the background.
   times so they need independent claims.
 - Partial indexes on `(user_id, created_at) where situation is
   null` and `(user_id, created_at) where situation_embedding is
-  null and situation is not null` keep the workers' poll
-  queries cheap as the substrate table grows.
+  null and situation is not null` keep the claim queries cheap
+  as the substrate table grows.
 
 ### `samskara_associations`
 
@@ -309,10 +318,11 @@ phase.
   'consequence')` - the relator's taxonomy. The fifth scratch
   category `'orthogonal'` is filtered at agent boundary and
   never written.
-- `reinforcement integer default 1` - bumped by `on conflict
-  (user_id, a_id, b_id, articulated_relation) do update`, so
-  re-encountering the same pair with the same label lifts
-  reinforcement instead of duplicating.
+- `reinforcement integer default 1` - intended as an on-conflict
+  bump, but the formation upsert's payload always carries
+  `reinforcement: 1`, so re-accepting the same pair+label
+  refreshes `last_reinforced_at` without ever incrementing the
+  counter (see Gotchas).
 - `last_reinforced_at`, `created_at` timestamps.
 
 ### `samskaras`
@@ -413,14 +423,6 @@ at the top of every system prompt.
 - Per-row claim so multiple devices coordinate regeneration
   instead of duplicating the fast-model call.
 
-### Lease
-
-`worker_leases` row with `worker_kind='samskara'`. New
-partition, holds independently of `'embedding'`, `'reflection'`,
-and `'summary'`; one device can hold all four leases
-simultaneously. Same TTL and heartbeat numbers as the other
-workers (45s / 20s).
-
 ## Contracts
 
 ### Chat-loop side (synchronous, no LLM)
@@ -431,7 +433,7 @@ workers (45s / 20s).
   than `STALE_CEILING_HOURS` (24h). Network errors are
   swallowed and surface as null so a transient offline moment
   doesn't propagate into the chat-loop's error path.
-- `fireSamskaras(supabase, venice, threadId, userText,
+- `fireSamskaras(supabase, threadId, userRound, userText,
   signal?): Promise<FireResult | null>` - embeds `userText` via
   Venice, pads the query, runs `samskara_fire_top_k`, and
   persists a `samskara_fires` row per hit via
@@ -443,8 +445,8 @@ workers (45s / 20s).
 - `recordSubstrateStub(supabase, threadId, userMessageId,
   assistantMessageId | null): Promise<void>` - one INSERT via
   `samskara_record_substrate`. `situation` / `outcome` /
-  `valence` / `situation_embedding` all null; the worker fills
-  them. Errors swallowed; fire-and-forget.
+  `valence` / `situation_embedding` all null; the formation
+  pipeline fills them. Errors swallowed; fire-and-forget.
 - `formatPriming({ compoundSummary, fire }): string` - pure.
   Renders the appendix block with the compound paragraph first
   and the fire bullets below, sorted by score descending. Keeps
@@ -457,34 +459,68 @@ workers (45s / 20s).
   `topKForCorpusSize(100, K_BASE) * 2 = 22` as a generous upper
   bound; the formatter does the budget trim.
 
-### Worker side (async, fast-model agent calls)
+### Formation side (edge function, fast-model agent calls)
 
-Each phase is a one-row-at-a-time cycle that mirrors the
-embeddings backfill's claim -> process -> save shape. Phase
-rotation via `PHASES`: each cycle of the outer worker advances
-exactly one phase; an all-empty rotation triggers the idle
-sleep (60s).
+Each phase is a one-row-at-a-time probe that mirrors the
+embeddings backfill's claim -> process -> save shape. Two
+drivers run the phases, split by timing sensitivity:
 
-- **Assimilate** - `SamskaraAgent.assimilate(userMsg,
-  assistantMsg, signal) -> {situation, outcome, valence} |
-  null`. Reads the raw exchange, returns structured substrate
-  fields. Claim RPC `samskara_claim_next_assimilate`; save RPC
-  `samskara_save_assimilation_if_claimed`.
-- **Pair-relate** - `SamskaraAgent.relate(a, b, signal) ->
-  {kind, label} | null`. The phase reads recent embedded
-  substrate, seeds on the most recent row, finds its closest
-  embedded neighbour by cosine in JS, and calls the relator
-  agent. v1 uses that naive "seed = most recent" approach; one
-  pair per cycle keeps LLM call rate bounded. Orthogonal
-  verdicts skip the write. Associations are upserted via a
-  direct `client.from('samskara_associations').upsert(...)`
-  with `onConflict` on the unique key, not an RPC. The
-  JS-cosine here depends on `samskaraRecentEmbeddedSubstrate`
-  parsing pgvector text into a real array; see the embeddings
-  gotcha below.
-- **Mint-tier1** - `SamskaraAgent.mint({sample_labels,
-  sample_situations, reinforcement}, signal) -> {confirm,
-  prediction, inner_voice, valence, confidence} | null`. The
+- **Turn tail** (`samskaraOnTurnTail`) - reaction-classify
+  first (the only hard timing window in the loop), then an
+  assimilate drain capped at `TAIL_ASSIMILATE_CAP` (3) so the
+  chain never delays reflection behind it, then one pair-relate
+  probe, then one mint-tier1 probe (the in-session toast
+  surface).
+- **Hourly sweep** (`runSamskaraSweepTick`) - a cross-user
+  assimilate drain capped at `SWEEP_ASSIMILATE_CAP` (10) via
+  the definer claim `samskara_claim_next_assimilate_for_sweep`,
+  then for every user with recent activity
+  (`samskara_sweep_users`, a 2h window of substrate or fires)
+  the pair-relate, mint-tier1, mint-tier2, dedup, and
+  compound-regen probes.
+
+Mint-tier2, dedup, and compound-regen are cron-only: the tier-2
+detection self-join is the heaviest query in the feature, dedup
+is population maintenance, and the compound summary tolerates a
+day of staleness in the priming block. Reaction-classify is
+tail-only: classification needs the next user message, which
+implies a turn, which implies the tail already ran at the right
+moment - an hourly tick misses the 1-10 minute resolution window
+by construction.
+
+There are no per-phase throttles. One trigger runs one rotation,
+so the trigger cadence (turn or tick) IS the rate limit -
+nothing rotates continuously. A Venice rate-limit re-throws out
+of any phase and abandons the rest of the rotation (the next
+turn or tick retries with fresh budget); any other phase failure
+logs and yields to the next phase.
+
+- **Assimilate** - `agentAssimilate(apiKey, userMsg,
+  assistantMsg) -> {situation, outcome, valence} | null`. Reads
+  the raw exchange, returns structured substrate fields. Claim
+  RPC `samskara_claim_next_assimilate` (per-user, tail) or
+  `samskara_claim_next_assimilate_for_sweep` (cross-user,
+  sweep); save RPC `samskara_save_assimilation_if_claimed`. Cap
+  hits are logged, never silently truncated - the next trigger
+  continues the drain.
+- **Pair-relate** - `agentRelate(apiKey, a, b) -> {kind, label}
+  | null`. The phase reads recent embedded substrate, seeds on
+  the most recent row, finds its closest embedded neighbour by
+  cosine in JS, and calls the relator agent. v1 uses that naive
+  "seed = most recent" approach; one pair per probe keeps the
+  LLM call rate bounded. Orthogonal verdicts skip the write.
+  Associations are upserted via a direct
+  `admin.from('samskara_associations').upsert(...)` with
+  `onConflict` on the unique key and an explicit `user_id`
+  (the column default is `auth.uid()`, NULL under the service
+  role), not an RPC. The JS-cosine here depends on the module's
+  `parseVector` turning PostgREST's pgvector text form into a
+  real array; see the embeddings gotcha below.
+- **Mint-tier1** - `agentMint(apiKey, MINTER_PROMPT,
+  {sample_labels, sample_situations, reinforcement}) ->
+  {prediction, inner_voice, valence, confidence} | null` (null
+  covers both parse failure and an explicit `confirm: false`
+  refusal). The
   phase fetches the recent embedded substrate window, then
   builds a **topical cluster**: it seeds on the most recent row
   and keeps only the later rows whose situation embedding is
@@ -512,23 +548,23 @@ sleep (60s).
   ("user tends to NOT do Y") and assistant-behaviour
   predictions ("user expects the assistant to ask before
   suggesting code") alongside the standard positive shape.
-  Successful mints fire an `onMint` callback into the worker
-  loop context; the worker forwards to the manager via
-  `postMessage`, and the manager re-emits as
-  `SAMSKARA_MINT_EVENT` for the toast UI to pick up. Dedup-
-  reinforcement does NOT fire `onMint` (no new samskara
-  landed), though it does log at info-level so the Logs drawer
-  shows "dedup-reinforced existing" breadcrumbs.
+  The insert goes through the admin client with an explicit
+  `user_id` (the column default is `auth.uid()`, NULL under the
+  service role). The INSERT itself is the toast signal: it rides
+  the `supabase_realtime` publication to `Chat.svelte`'s
+  subscription, which re-emits `SAMSKARA_MINT_EVENT` for the
+  mood pill. Dedup-reinforcement inserts nothing and therefore
+  toasts nothing - the intended semantics - though it logs so
+  the Logs drawer shows "dedup-reinforced existing" breadcrumbs.
 
   A third tool - `samskara_collapse_by_cofiring(...)` - handles
   ongoing redundancy consolidation. It's the same RPC the
-  background dedup phase runs each rotation (see below). A manual
-  "Consolidate" button existed as build-time scaffolding in the
-  now-retired diagnostics modal; it was intentionally not migrated to
-  the Samskara tab (the worker runs the dedup automatically), so the
-  RPC currently has no UI trigger. Idempotent.
-- **Mint-tier2** - `SamskaraAgent.mintTier2(children, signal) ->
-  {confirm, prediction, inner_voice, valence, confidence} | null`.
+  sweep's dedup probe runs each tick (see below); it has no
+  manual UI trigger - dedup runs autonomically. Idempotent.
+- **Mint-tier2** - `agentMint(apiKey, TIER2_MINTER_PROMPT,
+  {children}) -> {prediction, inner_voice, valence, confidence}
+  | null` (same parse, different prompt - the input is finished
+  tier-1 claims, not raw situations).
   Detects one recurring co-fire constellation of tier-1 samskaras
   via `samskara_tier2_candidate` (a co-fire group, not a substrate
   cluster), hands the child predictions to the minter agent, and -
@@ -540,22 +576,25 @@ sleep (60s).
   (`samskara_nearest_by_prediction` with `p_tier=2`), reinforcing it
   via `samskara_reinforce_existing` (health bump only, no provenance)
   when cosine >= `MINT_DEDUP_COSINE` (0.85) instead of minting a twin
-  (the different-children-same-claim case). Throttled at 5 minutes - longer than mint-tier1's 60s
-  because compound patterns form slowly and the detection self-join
-  is the heaviest query in the worker. Successful mints fire `onMint`
-  with `tier: 2`; the mood pill renders them through the same
-  valence->emoji path as tier-1, so there is no UI special-case.
-- **Reaction-classify** -
-  `SamskaraAgent.classifyReaction(cohort, assistantMsg,
-  nextUserMsg, signal) -> {confirm[], disconfirm[], neutral[]}
-  | null`. Reads the most recent unresolved cohort whose
-  follow-up user message has landed (fires aged 1-10 minutes
-  ago, older fires age out via decay), the assistant's reply,
-  and the next user message; partitions the cohort into three
-  buckets and applies via `samskara_apply_reaction`. Neutrals
-  get `fired_at` nudged 15 minutes back so the unresolved-poll
-  skips them on subsequent passes.
+  (the different-children-same-claim case). Cron-only: compound
+  patterns form over days and the detection self-join is the
+  heaviest query in the feature, so the probe runs once per
+  active user per hourly tick, never on the tail. A tier-2
+  insert reaches the mood pill through the same realtime relay
+  and valence->emoji path as tier-1, so there is no UI
+  special-case.
+- **Reaction-classify** - `agentClassifyReaction(apiKey, cohort,
+  assistantMsg, nextUserMsg) -> {confirm[], disconfirm[],
+  neutral[]} | null`. Tail-only. Reads the oldest unresolved
+  cohort inside the resolution window (fires aged 1-10 minutes;
+  older fires age out via decay), the assistant's reply, and the
+  next user message; partitions the cohort into three buckets
+  and applies via `samskara_apply_reaction`. There is no neutral
+  boolean state: a neutral leaves `was_confirmed` NULL and gets
+  `fired_at` backdated 15 minutes, pushing the row out of the
+  window so the unresolved poll skips it on subsequent passes.
 - **Dedup** - `samskara_collapse_by_cofiring(...)` RPC, no LLM.
+  Cron-only.
   Two-pass: a primary co-firing-based pass merges tier-1 pairs
   that reliably activate in the same cohort (Hebbian
   redundancy), and a population-count safety cap falls through
@@ -563,18 +602,19 @@ sleep (60s).
   exceeds target. Each pass preserves the older row as winner,
   retargets fires + provenance, folds counters, deletes the
   loser. Per-call capped at 20 merges so one RPC never runs
-  unboundedly; repeated rotations drain any backlog.
+  unboundedly; repeated ticks drain any backlog.
   See the Dedup formula below for parameters and rationale.
-- **Compound-regen** - three-step dance. First
+- **Compound-regen** - cron-only; three-step dance. First
   `samskara_should_regen_compound()` returns a decision payload
   (cheap). If `should_regen`, try to claim via
   `samskara_claim_compound_regen(holderId, 180s)`. If claimed,
   read the top `max(8, ceil(5 * log10(N + 10)))` samskaras
-  ranked by `(health desc, confidence desc)`, call
-  `SamskaraAgent.summarizeCompound`, and save via
+  ranked by `(health desc, confidence desc)` (a direct
+  admin-client table read - no RPC exists for it), call
+  `agentSummarizeCompound`, and save via
   `samskara_save_compound_summary_if_claimed`. The 180s claim
   TTL means a failed regen unblocks the slot within 3 minutes
-  rather than parking other devices for 20.
+  rather than parking the next tick for 20.
 
 ### Fire ranking formula
 
@@ -684,28 +724,16 @@ job, not decay's, so these bars can be lenient.
 Cadence matters as much as the thresholds: the decay rates are a
 per-PASS nudge calibrated for a ~30-minute interval. Run more
 often, they compound - an unthrottled per-rotation pass once
-drove the whole corpus to health 0 at -0.03/pass, and the
-worker's later in-memory throttle reset on every restart (page
-reload, tab switch, lease loss) so it still over-ran the target
-under active use. The pass therefore runs **server-side as the
-`nak-samskara-decay` pg_cron job** (`13,43 * * * *`, pure SQL, no
-pg_net - same shape as the stream janitor): a wall clock that no
-client lifecycle can reset. `samskara_decay_sweep()` is
+drove the whole corpus to health 0 at -0.03/pass, and any
+client-lifecycle-scoped throttle resets on reload or tab switch,
+so the cadence has to be owned by a wall clock. The pass
+therefore runs **server-side as the `nak-samskara-decay` pg_cron
+job** (`13,43 * * * *`, pure SQL, no pg_net - same shape as the
+stream janitor). `samskara_decay_sweep()` is
 `security definer` with no `auth.uid()` filter - cron has no user
 session, and every predicate is row-local, so one cross-user pass
-is exactly the union of the per-user passes. The browser worker
-has no decay phase.
-
-> **Migration note - dedup is the remaining cron candidate.** The
-> same lift-to-cron reasoning that moved decay applies to the
-> other LLM-free maintenance phase, `dedup`
-> (`samskara_collapse_by_cofiring`): SQL-only, no in-worker
-> consumer. It is NOT row-local though - the co-fire pair
-> enumeration and the population cap are scoped per user - so a
-> sweep variant needs a per-user loop rather than a dropped
-> filter. Parked for the samskara leg of the
-> de-browser-background-jobs migration
-> (`docs/dev/in-progress/de-browser-background-jobs.md`).
+is exactly the union of the per-user passes. Decay is not part of
+the formation rotation; the cron job is its only driver.
 
 ### Dedup formula
 
@@ -741,11 +769,9 @@ diverse-but-overflowing pool where no pair meets the co-firing
 bar but the count is still growing without bound.
 
 **Per-call cap.** `p_max_collapses` (default 20) bounds work per
-invocation. The background dedup phase calls the RPC each
-rotation; a genuinely over-populated pool drains across many
-cycles rather than one giant transaction. The manual "Collapse
-redundant" button in the diagnostics modal is the same RPC; click
-repeatedly to drain further.
+invocation. The hourly sweep's dedup probe calls the RPC once
+per active user per tick; a genuinely over-populated pool drains
+across ticks rather than one giant transaction.
 
 **Winner selection.** Always the older row, matching the
 mint-tier1 dedup-reinforce semantics. Fires, provenance, and
@@ -808,42 +834,51 @@ summarizer reads samskaras to feed the agent.
 
 ## Interactions with other features
 
-- **Chat** - the chat loop is the only synchronous reader of
-  samskara state. `runChatLoop` reads compound + fire at
-  round-1 entry (under a 1500ms race) and writes a substrate
-  stub at end-of-turn. The `buildSystemPrompt` change adds
-  `promptAppendix` to its options struct; samskara is currently
-  the only caller. `Chat.svelte` mounts the single
-  `<SamskaraToasts />` component that listens for mint events.
-  See `./chat.md`.
-- **Embeddings** - `samskara-substrate` registers as a third
-  source in the embeddings backfill alongside memories
-  and threads. Pure embed work; no LLM calls on that path. The
-  backfill's round-robin handles it automatically. See
-  `./embeddings.md`.
+- **Chat** - two seams. Browser side, the chat loop is the only
+  synchronous reader of samskara state: `runChatLoop` reads
+  compound + fire at round-1 entry (under a 1500ms race) and
+  writes a substrate stub at end-of-turn; the
+  `buildSystemPrompt` change adds `promptAppendix` to its
+  options struct, and samskara is currently the only caller.
+  Function side, `getStreamingResponse`'s waitUntil tail drives
+  `samskaraOnTurnTail` on every completed turn, sequenced
+  curation -> samskara -> reflection. `Chat.svelte` mounts the
+  single `<SamskaraToasts />` component and owns the
+  `subscribeToSamskaraInserts` realtime subscription that turns
+  mint INSERTs into `SAMSKARA_MINT_EVENT`. See `./chat.md`.
+- **Embeddings** - `samskara-substrate` registers as a source
+  in the server-side embed backfill (`_shared/embed-input.ts`)
+  alongside memories and threads. Pure embed work; no LLM calls
+  on that path. The backfill's round-robin (cron, every 5
+  minutes) handles it automatically - mint latency inherits
+  this lag, since a substrate row can't cluster until its
+  situation embedding lands. See `./embeddings.md`.
 - **Memory** - distinct system. Memories are facts the
   user/assistant chose to commit; samskaras are emergent
   predictive bias the model formed on its own. No data flows
   between them. The reflection agent reads thread transcripts
   and writes memories; the samskara assimilator reads
-  individual exchanges and writes substrate. Separate workers
-  with separate leases. See `./memory.md`.
-- **Bias profile** - sibling background worker, no data flow.
+  individual exchanges and writes substrate. Both ride the same
+  waitUntil tail, samskara first (reflection can span minutes
+  and samskara carries the fleet's only hard timing window).
+  See `./memory.md`.
+- **Bias profile** - sibling server-side pipeline, no data flow.
   Bias profile aggregates cognitive-bias observations across
   conversations into a per-turn system-prompt section;
   samskara aggregates emergent predictive claims into the
   compound summary `<think>` block. Both ride in every turn
   but in different parts of the prompt - bias at the end of
   the baseline system prompt, samskara as a `<think>` block
-  after the user turn - so they don't conflict. Both use the
-  LeaseCoordinator pattern with separate `worker_kind`
-  partitions. See `./bias-profile.md`.
-- **Reflection / summary workers** - peer workers, separate
-  `worker_kind` values, separate leases. Samskara assimilation
-  looks at one exchange at a time and writes substrate;
-  reflection looks at settled threads end-to-end and writes
-  memories; summary produces thread-level prose. Three
-  different granularities, three different stores.
+  after the user turn - so they don't conflict. Both run in the
+  venice function with per-row claims as the mutual exclusion;
+  bias is cron-only while samskara is dual-driver. See
+  `./bias-profile.md`.
+- **Reflection / summaries** - peer fleets in the venice
+  function. Samskara assimilation looks at one exchange at a
+  time and writes substrate; reflection looks at settled
+  threads end-to-end and writes memories; the summary curation
+  unit produces thread-level prose. Three different
+  granularities, three different stores.
 - **Tools** - none. Samskara is intentionally not exposed as a
   tool (no `samskara_search`, no `samskara_invalidate`). It's
   an autonomic system; if the user wants to forget something,
@@ -853,13 +888,20 @@ summarizer reads samskaras to feed the agent.
 - **Settings** - no samskara controls in v1 (no enable/disable,
   no thresholds, no vocab knobs). The system is on or it's
   removed; no middle ground.
-- **Auth-session** - same as every worker. The samskara worker
-  requires a live session; `lock()` releases the lease.
-- **Logging** - the formation worker emits `log` and
-  `progress` messages on every cycle; `SamskaraManager` routes
-  them through `console.*`, which flows into the in-app log
-  drawer. Deep visibility into what the worker is doing lives
-  there, not in any UI chrome.
+- **Auth-session** - the chat-scoped half (fire, stub,
+  compound read, the diagnostics surfaces) requires a live
+  session like any browser feature. The formation pipeline runs
+  under the service role and has no session dependency at all -
+  formation continues with every tab closed.
+- **Logging** - the formation drivers log through
+  `createEdgeLogger(userId, 'samskara')`, which mirrors to the
+  function log and broadcasts to the user's `logs:<userId>`
+  Realtime topic; the browser's `subscribeToUserLogs` lands the
+  entries in the in-app Logs drawer. The `samskara` source tag
+  is deliberately shared with the browser chat-loop helpers
+  (`src/lib/samskara/`), so both halves group under one drawer
+  filter. Deep visibility into what the pipeline is doing lives
+  there, not in any UI chrome. See `./logging.md`.
 
 ## Gotchas
 
@@ -868,8 +910,8 @@ summarizer reads samskaras to feed the agent.
   `health < X` from the fire query; that defeats the design.
   Three near-dead samskaras co-firing is exactly the signal we
   want to surface, because cohort reinforcement can pull them
-  back from the brink and the formation worker can mint a tier-2
-  compound from the cohort later. The fire RPC ranks by
+  back from the brink and the formation pipeline can mint a
+  tier-2 compound from the cohort later. The fire RPC ranks by
   `cosine^1.3 * sqrt(health * confidence) * (1 + 0.1 * ln(1 +
   N))` so weak-but-relevant samskaras break through (the 1.3
   power on the cosine factor is a relevance nudge, not a
@@ -885,18 +927,18 @@ summarizer reads samskaras to feed the agent.
   and poison co-fire dedup / tier-2 detection with spurious
   Hebbian binding. Live-but-weak matches (the long tail) all sit
   above it.
-- **pgvector reads back as a string, not an array.** supabase-js
+- **pgvector reads back as a string, not an array.** PostgREST
   has no type mapping for `vector`/`halfvec`, so a selected
   embedding column arrives as its bracketed text literal
-  (`"[0.1,...]"`). Any client-side cosine that treats it as an
+  (`"[0.1,...]"`). Any JS-side cosine that treats it as an
   array multiplies characters into NaN. This silently broke
   pair-relate for weeks (zero associations - every similarity was
-  NaN, no pair cleared the threshold). `samskaraRecentEmbedded
-  Substrate` runs every row through `parseEmbeddingColumn`; any
+  NaN, no pair cleared the threshold). `recentEmbeddedSubstrate`
+  in the edge module runs every row through `parseVector`; any
   new code path that reads an embedding column for JS-side math
   must do the same. RPCs that do the cosine in SQL (the fire,
   search, nearest, and cluster RPCs) are unaffected - this only
-  bites client-side vector math.
+  bites JS-side vector math.
 - **Reaction counts are `real`; decay cadence is load-bearing.**
   Two coupled traps that together euthanized the entire corpus
   to health 0 once. (1) `confirm_count`/`disconfirm_count` MUST
@@ -923,12 +965,12 @@ summarizer reads samskaras to feed the agent.
   fire in the same cohort, a naive UPDATE creates a duplicate
   row with a different score (the original loser's cosine to the
   query). The merge helper drops colliding loser-fires before
-  retargeting; the constraint is belt-and-braces. The diagnostics
-  modal's clustered-by-theme view assumes one fire per (cohort,
-  samskara) — duplicates show up there as identical-looking
-  expanded siblings under one cluster. If you ever see that
-  symptom return, look at the merge helper, not the cluster
-  RPC.
+  retargeting; the constraint is belt-and-braces. The inline
+  cohort panel's clustered-by-theme view assumes one fire per
+  (cohort, samskara) - duplicates show up there as
+  identical-looking expanded siblings under one cluster. If you
+  ever see that symptom return, look at the merge helper, not
+  the cluster RPC.
 - **Priming is raced, not awaited without a timeout.** The
   chat-loop wraps the `Promise.all` of compound + fire in a
   `Promise.race` against `SAMSKARA_PRIMING_TIMEOUT_MS`
@@ -964,8 +1006,8 @@ summarizer reads samskaras to feed the agent.
   `log10(N + 10)` so a fresh user with N=0 still lands on a
   sensible value.
 - **Postgres `log(x)` is base-10, not natural log.** Cross-
-  checking `samskara_should_regen_compound` against the
-  worker's `Math.log10` is confusing if you're used to JS/C
+  checking `samskara_should_regen_compound` against the edge
+  module's `Math.log10` is confusing if you're used to JS/C
   where `log` means natural. Natural log in Postgres is
   `ln(x)`; `log(x)` is `log10(x)`; `log(b, x)` is arbitrary
   base. The inline comment on the threshold formula names this
@@ -976,7 +1018,17 @@ summarizer reads samskaras to feed the agent.
   turn T+1's user input (responding to the assistant's turn-T
   reply). 10-minute resolution window - fires older than that
   age out via decay rather than being force-classified by
-  stale signal.
+  stale signal. This is why reaction-classify is tail-only and
+  runs FIRST in the tail: the tail of turn N+1 lands exactly
+  when turn N's cohort becomes classifiable, and it is the only
+  hard timing window in the whole pipeline.
+- **Neutral has no boolean state.** `was_confirmed` is
+  true/false/NULL, and a classified-neutral fire stays NULL -
+  it is marked only by `fired_at` being backdated 15 minutes,
+  which pushes it out of the resolution window. A query that
+  treats `was_confirmed is null` as "not yet classified" is
+  counting neutrals too; there is no way to distinguish a
+  neutral from an aged-out unresolved fire after the fact.
 - **`samskara_record_fires` thread-ownership guard is silent-
   skip.** The RPC verifies the supplied `thread_id` belongs to
   `auth.uid()` before inserting fire rows (RLS hides reads but
@@ -986,14 +1038,25 @@ summarizer reads samskaras to feed the agent.
   `save_thread_summary_if_claimed`. A bug calling this with
   the wrong thread_id therefore does nothing, rather than
   surfacing a Postgrest exception through the chat loop.
-- **Rate-limit propagates through the agent contract.**
-  `SamskaraAgent` methods re-throw `VeniceError` with
-  `kind='rate_limit'` rather than swallowing to null, so the
-  loop's try-catch in `runOneCycle` can map them to the
-  `'rate-limited'` cycle result (60s back-off). Other Venice
-  failures still return null and fall to the short error
-  back-off (15s). Without this distinction the long back-off
-  path would be unreachable.
+- **Rate-limit propagates through the agent contract.** The
+  agent helpers (via `callOnce`) re-throw `VeniceError` with
+  `kind='rate_limit'` rather than swallowing to null, and
+  `runPhase` re-throws it past the per-phase catch, so the
+  driver abandons the rest of the rotation - the next turn or
+  tick retries with fresh budget. Every other Venice failure
+  returns null and folds into the phase's no-result path.
+  Without this distinction a rate-limited rotation would keep
+  hammering Venice phase after phase.
+- **The trigger cadence is the only rate limit.** There are no
+  per-phase throttles anywhere in the pipeline; one trigger
+  (turn or tick) runs one rotation and stops. Adding a phase to
+  the tail therefore adds its cost to EVERY completed turn, and
+  adding one to the sweep adds it per active user per hour -
+  budget accordingly. The tail/sweep phase split is the design,
+  not an accident: reaction-classify is tail-only (timing
+  window), mint-tier2 / dedup / compound-regen are cron-only
+  (heavy or timing-insensitive), and moving a phase across that
+  line should be a deliberate decision.
 - **Tier-2 detection and dedup read the same co-fire self-join
   and must not overlap.** `samskara_tier2_candidate` and
   `samskara_collapse_by_cofiring` both self-join `samskara_fires`
@@ -1006,11 +1069,11 @@ summarizer reads samskaras to feed the agent.
   top end sits below dedup's floor on purpose. If you raise
   `p_cosine_hi` to or past 0.70 the two phases fight over the same
   pairs (dedup deleting what tier-2 just grouped); the symptom is
-  tier-2 rows that keep vanishing a cycle after they mint. Keep
+  tier-2 rows that keep vanishing a tick after they mint. Keep
   the band below the floor.
 - **Tier-2 re-mint storm without the coverage skip.** Once a
-  tier-2 covers a constellation, that group still co-fires every
-  cycle, so detection would re-surface it forever. Two guards stop
+  tier-2 covers a constellation, that group keeps co-firing, so
+  detection would re-surface it every probe. Two guards stop
   the loop: `samskara_tier2_candidate`'s Jaccard `p_overlap_skip`
   (skip a group an existing tier-2's child-set already covers) and
   the mint phase's tier-scoped embedding dedup (reinforce the
@@ -1031,18 +1094,42 @@ summarizer reads samskaras to feed the agent.
   load-bearing; lifting it to tier-3+ (a compound-of-compounds
   noise amplifier) should be a deliberate design change, not an
   oversight.
+- **`samskara_tier2_candidate` clears its temp table with
+  TRUNCATE, not DELETE.** The local stack's PostgREST
+  connections preload pg-safeupdate, which rejects an
+  unqualified `delete from _tier2_edges` with `DELETE requires
+  a WHERE clause` (SQLSTATE 21000) - so a "simpler" unqualified
+  DELETE breaks every tier-2 probe against the local stack
+  while passing hosted. Keep the TRUNCATE.
 - **Pair-relate uses a naive seed-most-recent approach.**
-  One pair per cycle: seed on the most recent embedded
+  One pair per probe: seed on the most recent embedded
   substrate row, pick its closest neighbour by cosine in JS,
   call the relator once. Good enough at substrate-corpus
   scale; expect to replace with a smarter multi-pair sampler
   once the corpus grows past a few hundred rows per user.
+- **Pair-relate has no memory of declined pairs.** The probe
+  always selects the closest pair to the most recent row, and a
+  relator "orthogonal" verdict writes nothing - so on a static
+  corpus every probe re-selects the same closest pair and the
+  relator declines it every time. Association counts only grow
+  when fresh substrate arrives and changes the selection. A
+  flat associations count during a quiet stretch is this, not a
+  stall.
+- **The associations upsert never increments reinforcement.**
+  The upsert payload always carries `reinforcement: 1`, and the
+  on-conflict update overwrites with the payload - so
+  re-accepting an existing pair+label bumps `last_reinforced_at`
+  but `reinforcement` stays 1 forever. Anything that wants to
+  rank associations by reinforcement is reading a constant
+  column until this is fixed (an `excluded.reinforcement + 1`
+  style conflict clause, or an RPC).
 - **Writes that bypass the RPC boundary.** Pair-relate's
-  association upsert and tier-1 mint's samskara insert +
-  provenance upsert use the raw Supabase client rather than an
-  RPC. RLS still enforces row access, but future policy that
-  wants to encapsulate those writes (soft-uniqueness, merge
-  jobs) should wrap them in RPCs first.
+  association upsert and the mint inserts + provenance upserts
+  use the raw admin client rather than an RPC, with `user_id`
+  set explicitly on every row (the column defaults are
+  `auth.uid()`, which is NULL under the service role). Future
+  policy that wants to encapsulate those writes
+  (soft-uniqueness, merge jobs) should wrap them in RPCs first.
 - **`samskara_compound_summary.summary` is NULL on cold start
   and can be NULL after a stale-ceiling trip.** The chat-loop
   reader (`getCompoundSummary`) handles both by returning null,
@@ -1053,9 +1140,19 @@ summarizer reads samskaras to feed the agent.
   a message before the assimilator has caught up, before
   reaction classification has run, before the next regen has
   fired. None of this is an error: the chat loop reads
-  whatever's currently in the database and proceeds. If the
-  formation worker is hours behind, the model just operates on
+  whatever's currently in the database and proceeds. If
+  formation is hours behind, the model just operates on
   staler bias.
+- **The assimilate drain works one turn behind, by
+  construction.** The browser records turn N's substrate stub
+  at roughly the same moment turn N's tail runs, so the tail
+  usually assimilates turn N-1's stub; the sweep catches
+  strays. The full in-session path for a new claim is: stub
+  (browser, end of turn N) -> assimilate (tail of N+1) ->
+  situation embedding (the */5 embed backfill) -> mint probe
+  (tail of N+2). A few minutes and a couple of turns is the
+  expected mint latency - a toast that doesn't appear on the
+  very turn that earned it is normal, not a bug.
 - **The CONVERSATION is opaque; the operator is not.** The
   "almost-opaque to the user" principle protects two things: the
   in-chat experience (no prediction text leaks inline - the only
@@ -1115,13 +1212,15 @@ was lifted out to the top row and made the default.
 - **Health** - silent-failure detection computed live (no stored
   history). The headline severity is the worst of the ACTIONABLE
   signals only: backlog depth (pending assimilate / embed, loose
-  `[50, 500]` bars - a snapshot of a few is normal since workers run
-  client-side), internal inconsistencies (orphan fires, stuck claims -
-  tight bars, should be ~0), and compound-summary staleness. Worker
-  liveness and the windowed mint/fire/resolution rates are shown but
-  NOT severity-bearing (see the gotcha below on why). Backed by
-  `samskara_health_snapshot`, `samskara_rates`, the `worker_leases`
-  read, and the severity thresholds in `src/lib/ui/samskara-browse.ts`
+  `[50, 500]` bars - a snapshot of a few is normal, since the
+  tail drains small caps per turn and the sweep is hourly),
+  internal inconsistencies (orphan fires, stuck claims -
+  tight bars, should be ~0), and compound-summary staleness. The
+  windowed mint/fire/resolution rates and the corpus counters
+  are shown but NOT severity-bearing (see the calibration note
+  below). Backed by
+  `samskara_health_snapshot`, `samskara_rates`, and the severity
+  thresholds in `src/lib/ui/samskara-browse.ts`
   (named constants, tune against observed behaviour). Piece:
   `src/components/SamskaraHealthPanel.svelte`.
 
@@ -1145,42 +1244,35 @@ deliberate separate decision. The modal's manual "Consolidate" and
 "Copy snapshot" buttons were build-time scaffolding from the original
 samskara work - never intended as permanent operator features - so they
 were intentionally not migrated. Dedup runs automatically in the
-worker's dedup phase every rotation regardless.
+hourly sweep regardless.
 
 Search ranks by plain cosine (`samskara_search_by_prediction`), NOT
 the `samskara_fire_top_k` formula - browse wants closest-to-query, not
 most-likely-to-fire, so health/confidence are deliberately left out of
 the ranking.
 
-**Health-metric calibration (a fixed false alarm).** Two signals look
-like failures but aren't, and an early version of the panel turned the
-headline permanently red on them:
-
-- **Fires aged out unresolved** grows unbounded by design.
-  Reaction-classify only resolves the cohort whose follow-up landed in
-  the 1-10min window, so ~95% of fires never get an explicit reaction
-  (the resolution rate is *meant* to be low). This is not surfaced as a
-  severity bar at all; the windowed resolution rate is shown with a note
-  that low is normal.
-- **Worker liveness** is informational, never an alarm. The formation
-  and embedding workers run client-side only while a tab is open, so a
-  lapsed lease ("idle") is the normal away state, not a stall. The
-  expiry is a future timestamp, so it's rendered "expires in Ns", not
-  through the past-tense "N ago" formatter. A genuinely stuck worker
-  shows up as a deep, persistent backlog instead - which IS a severity
-  bar. The headline severity therefore considers only backlog,
-  inconsistencies, and compound staleness.
+**Health-metric calibration (a fixed false alarm).** One signal looks
+like a failure but isn't, and an early version of the panel turned the
+headline permanently red on it: **fires aged out unresolved** grows
+unbounded by design. Reaction-classify only resolves the cohort whose
+follow-up landed in the 1-10min window, so ~95% of fires never get an
+explicit reaction (the resolution rate is *meant* to be low). This is
+not surfaced as a severity bar at all; the windowed resolution rate is
+shown with a note that low is normal. A genuinely stuck pipeline shows
+up as a deep, persistent backlog instead - which IS a severity bar.
+The headline severity therefore considers only backlog,
+inconsistencies, and compound staleness.
 
 ## Where to go next
 
 - `./chat.md` - the seam where samskara plugs into the per-turn
   flow.
-- `./embeddings.md` - the worker pattern the substrate source
-  mirrors.
+- `./embeddings.md` - the server-side backfill the substrate
+  source rides.
 - `./memory.md` - the closest sibling system; useful for
   understanding why samskara is structured differently
   (emergent vs declared, opaque vs user-facing, autonomic vs
   tool-driven).
-- `./logging.md` - where the worker's `log` messages surface
-  for debugging.
-- `./architecture.md` - the worker model in context.
+- `./logging.md` - how the edge loggers' entries reach the
+  in-app Logs drawer.
+- `./architecture.md` - the background-fleet model in context.

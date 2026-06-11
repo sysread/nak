@@ -3,7 +3,8 @@
    * Sticky mood indicator for samskara-formation events.
    *
    * Listens on `window` for `SAMSKARA_MINT_EVENT` (dispatched by
-   * SamskaraManager when the worker reports a mint commit). Renders
+   * Chat.svelte's realtime relay when the server-side formation
+   * pipeline INSERTs a fresh samskara row). Renders
    * a single emoji that reflects the most recent mint's valence and
    * stays visible for the duration of the current conversation.
    * Swaps to the newer emoji when another mint fires.

@@ -502,10 +502,10 @@ closes the block.
   a `<think>` block AFTER the user turn. Both are always-on
   contributions to the model's view of the user, but they sit
   in different parts of the prompt so they don't conflict.
-  Different runtimes: samskara's formation loop is a browser
-  Web Worker on a `worker_leases` lease; bias runs server-side
-  from cron with the per-thread claim columns as its only
-  mutual exclusion.
+  Both run server-side in the venice function with per-row
+  claims as the mutual exclusion; bias is cron-only while
+  samskara's formation pipeline is dual-driver (turn tail +
+  hourly sweep).
 - **Intuition ([./intuition.md](./intuition.md))** - sibling
   feature, no data flow. Intuition fires per-thread on title /
   mood / staleness triggers and produces a `<think>` block.
@@ -747,8 +747,8 @@ to retune; one constant edit.
 
 - `./chat.md` - the seam where the bias-profile block plugs
   into the per-turn system prompt.
-- `./samskara.md` - sibling background feature; still a browser
-  worker, different aggregation shape.
+- `./samskara.md` - sibling background feature; same
+  server-side fleet, different aggregation shape.
 - `./intuition.md` - sibling subconscious-layer pattern; bias
   is its slower-moving cross-conversation counterpart.
 - `./logging.md` - where the sweep's edge-log lines surface

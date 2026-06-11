@@ -33,7 +33,7 @@ changing a contract that other features depend on.
 ### Overview
 
 - [Architecture](./architecture.md) — boot flow, phase state
-  machine, worker model, data-layer conventions, Venice
+  machine, background-job model, data-layer conventions, Venice
   adapter. The one doc to read first.
 - [Frontend organization](./frontend-organization.md) — how
   UI logic splits between pure primitives in `src/lib/ui/`
@@ -90,9 +90,9 @@ changing a contract that other features depend on.
   memories, recipes) plus the drawer's topic-filter dropdown.
 - [Auto-title](./auto-title.md) - server-side curation unit
   that fills in titles for threads still on the placeholder.
-- [Embeddings](./embeddings.md) — the Web-Worker embedding
-  pipeline plus the canonical cross-tab-lock + claim-RPC
-  pattern.
+- [Embeddings](./embeddings.md) — the server-side embed
+  backfill (pg_cron + the venice function) plus the canonical
+  claim-RPC pattern.
 - [Samskara](./samskara.md) — the chat model's progressively-
   built predictive model of the user. Substrate compounds into
   samskaras compounds into a prose summary that lives
@@ -114,7 +114,7 @@ changing a contract that other features depend on.
   `profiles.settings` JSONB + theme.
 - [Help](./help.md) — in-app rendering of `docs/user/`.
 - [Logging](./logging.md) — the `createLogger` surface, the
-  in-app log drawer, and the worker-to-main log relay.
+  in-app log drawer, and the edge-to-main log relay.
 
 ### Build & deploy
 

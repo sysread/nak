@@ -6,7 +6,7 @@ five-method surface (`trace` / `debug` / `info` / `warn` / `error`)
 that feeds an in-app log drawer and, for the actionable tiers,
 also writes to the browser console. `trace` and `debug` are
 drawer-only - they don't mirror to the console at all, because
-the per-cycle worker breadcrumbs that ride those tiers were
+the per-cycle pipeline breadcrumbs that ride those tiers were
 drowning devtools even with Verbose off. `info` / `warn` /
 `error` still mirror through `console.log` / `console.warn` /
 `console.error`. No call site in `src/` talks to `console.*`
@@ -15,16 +15,17 @@ is allowlisted in `eslint.config.js`.
 
 ## Level guidance
 
-- `trace` - per-cycle worker breadcrumbs that fire whether or not
-  the worker found work to do. The samskara worker's phase rotation
-  produces several of these per cycle; embeddings/reflection/summary
-  workers add their own. They sit below `debug` and the drawer
+- `trace` - per-rotation breadcrumbs that fire whether or not a
+  pipeline found work to do ("probe found nothing", "no coherent
+  cluster"). The edge agent fleets produce several of these per
+  trigger. They sit below `debug` and the drawer
   filters them out at the default tier.
 - `debug` - decisions worth keeping visible whenever the drawer is
   at its default tier. Phase actually claimed a row, agent returned a
   result, save was rejected.
 - `info` - one-shot lifecycle events worth seeing at a quieter tier:
-  worker startup, a new samskara minted, a compound summary saved.
+  a new samskara minted, a compound summary saved, a tool
+  dispatched.
 - `warn` / `error` - actionable problems. Routed through
   `console.warn` / `console.error`.
 
@@ -42,7 +43,7 @@ Two jobs, one module:
    `console.warn`, and `error` on `console.error`. `trace` and
    `debug` skip the console mirror entirely and live only in the
    in-app drawer, where level filtering and search keep the
-   high-volume worker breadcrumbs usable.
+   high-volume pipeline breadcrumbs usable.
 2. **Feed a capped in-app ring buffer.** The `logs` rune store
    exposes an `entries` array read by `LogsDrawer.svelte`. The
    drawer sits on the right edge of the Chat screen (same side
@@ -59,9 +60,10 @@ Two jobs, one module:
 ## Files
 
 - `src/lib/logger.svelte.ts` - the logger module. Holds the
-  reactive buffer, the drawer open/close singleton, the
-  worker-to-main relay (`appendFromWorker`), and the edge-to-main
-  relay ingress (`appendFromEdge`).
+  reactive buffer, the drawer open/close singleton, and the
+  edge-to-main relay ingress (`appendFromEdge`). Two ingestion
+  paths only: direct main-thread `createLogger` calls and
+  `appendFromEdge`.
 - `supabase/functions/_shared/edge-log.ts` - the edge-side
   `createEdgeLogger`. Mirrors the browser logger API but publishes
   each entry to the user's `logs:<id>` Realtime Broadcast topic (see
@@ -93,24 +95,22 @@ Two jobs, one module:
 ```ts
 import { createLogger } from '$lib/logger.svelte';
 
-const log = createLogger('samskara-worker');
+const log = createLogger('samskara');
 
-log.info('picked up thread', threadId);
-log.warn('poll failed', err);
+log.info('fire: recorded cohort', cohortId);
+log.warn('fire: embed failed', err);
 log.debug('payload', { foo, bar });
 ```
 
 Pick a short, stable source tag. Existing tags:
 
 - `update` - service-worker update lifecycle
-- `samskara-worker` - the one remaining browser background loop
-  driver
 - `reflection`, `wiki`, `wiki-librarian`, `rem`, `deep-sleep`,
   `bias` - the reflection agent, the autonomous wiki agent, the
   wiki librarian, the two memory-librarian passes, and the bias
   pipeline (analyze + aggregate), which run in the venice edge
   function and reach the drawer over the Broadcast log channel
-  (see "Edge-to-main relay"), not via a Web Worker. The `bias`
+  (see "Edge-to-main relay"). The `bias`
   tag is deliberately shared with the browser chat-loop's
   profile-block helpers (src/lib/bias/index.ts) - both halves of
   the feature group under one drawer filter
@@ -142,8 +142,13 @@ Pick a short, stable source tag. Existing tags:
   item(s)" summary (edge-side); ticks that drain nothing emit
   nothing
 - `wiki-manual` - the browser-side per-article "Ask agent to
-  update" flow (a main-thread completion, not a worker)
-- `samskara` - chat-loop-side samskara helpers
+  update" flow (a main-thread completion)
+- `samskara` - the samskara formation pipeline (edge-side, turn
+  tail + hourly sweep, via the Broadcast log channel) plus the
+  browser chat-loop helpers in `src/lib/samskara/` (fire, stub,
+  compound read). Deliberately one tag for both halves so the
+  feature groups under a single drawer filter, same pattern as
+  `bias`
 - `chat` - main screen one-offs (e.g. attachment persist failures)
 
 Rest arguments after the message string are "details". The drawer
@@ -168,43 +173,14 @@ The buffer is capped at `MAX_ENTRIES` (2000). When exceeded, the
 oldest entries are dropped from the head so the drawer's scroll
 position stays meaningful across bursts.
 
-## Worker-to-main relay
-
-The one browser background worker (samskara) imports the logger
-from its loop driver. The other agents - reflection, the wiki
-pair, the memory librarian, the bias pipeline, and the five
-curation units - run server-side and use the edge-to-main relay
-below. Worker-context
-calls detect `WorkerGlobalScope` at module init and:
-
-1. Mirror the actionable tiers (`info` / `warn` / `error`) to
-   the worker's own console. `trace` and `debug` skip this step,
-   matching the main-thread policy.
-2. Serialize the entry (Error -> `{name, message, stack}`,
-   non-clone-safe values -> string repr) and `postMessage` it to
-   the main thread as `{ type: 'nak-log', entry }`.
-
-Each worker manager's `message` handler checks for
-`isWorkerLogMessage(evt.data)` and calls `appendFromWorker(entry)`
-to land the entry in the main-thread buffer. The entry keeps its
-original source tag, so a `reflection-worker` breadcrumb shows up
-in the drawer indistinguishable from a main-thread `reflection-
-worker` entry.
-
-Each manager also keeps a small legacy path for the
-`{type: 'log', level, message}` wire format the worker entry files
-still use directly (e.g. the `setSession failed` message emitted
-before the loop can import the logger). Those go through a local
-`createLogger('<worker-name>')` in the manager so they land in the
-drawer too.
-
 ## Edge-to-main relay
 
 Background work that runs in the venice edge function (reflection,
 the wiki agents, the memory-librarian passes, the five curation
-units, the mid-turn recall agents, and the streaming orchestrator
-itself) has no Web Worker postMessage path to the drawer - its
-`console.log` lands only in Supabase's function logs.
+units, the samskara formation pipeline, the mid-turn recall
+agents, and the streaming orchestrator itself) has no direct path
+to the drawer - its `console.log` lands only in Supabase's
+function logs.
 `createEdgeLogger(userId,
 source)` in `supabase/functions/_shared/edge-log.ts` restores the
 drawer as the single observability surface. It mirrors the browser
@@ -215,13 +191,13 @@ and, for each entry:
    log has no devtools-noise problem, so it keeps a complete record
    even when the drawer is closed or disconnected).
 2. Serializes the entry to the **same `SerializableLogEntry` shape**
-   the worker relay uses and POSTs it to the Realtime broadcast HTTP
-   endpoint on the private `logs:<userId>` topic.
+   the browser buffer stores and POSTs it to the Realtime broadcast
+   HTTP endpoint on the private `logs:<userId>` topic.
 
 The browser subscribes via `SupabaseService.subscribeToUserLogs`
 (wired in `Chat.svelte` on the same auth lifecycle as the thread
 subscription) and feeds each payload to `appendFromEdge`, which
-lands it in the same ring buffer as worker logs - a server-side
+lands it in the same ring buffer as local logs - a server-side
 `reflection` entry renders indistinguishably from a browser one.
 Authorization is the "log channel: owner subscribe" policy on
 `realtime.messages` (the topic name carries the owner id, so a user
@@ -230,7 +206,8 @@ service_role and bypasses it.
 
 `createEdgeLogger` exposes a `flush()` that awaits every in-flight
 broadcast POST. A caller running under `EdgeRuntime.waitUntil`
-(the chat-turn curation + reflection tail) MUST `await log.flush()` before
+(the chat-turn curation + samskara + reflection tail) MUST
+`await log.flush()` before
 settling, or the runtime can tear down the last un-awaited send -
 typically the outcome line, the one most worth seeing. The wiki
 sweep flushes per processed thread for the same reason, even though
@@ -244,11 +221,11 @@ so flush is about drawer fidelity, not data safety.
   `no-console` ESLint rule; overridden only for
   `src/lib/logger.svelte.ts`.
 - **Logger writes are synchronous and fire-and-forget.** The
-  worker postMessage path swallows failures. For info/warn/error
-  the console mirror above it has already carried the log, so a
-  failed post doesn't lose information; for trace/debug the entry
-  is dropped, since those tiers are drawer-only and have no
-  console fallback.
+  edge broadcast path swallows failures (logged to the function
+  console). The console mirror has already carried the entry on
+  both sides, so a dropped broadcast loses drawer fidelity, not
+  information - except trace/debug in the browser, which are
+  drawer-only and have no console fallback.
 - **The ring buffer is capped.** Code that spins in a tight error
   loop can't OOM the tab through logging.
 - **`logs.clear()` is destructive.** Bound to the drawer's Clear
@@ -265,9 +242,9 @@ so flush is about drawer fidelity, not data safety.
   `docs/dev/build-deploy.md`.
 - **Embeddings**, **Memory**, **Summaries**, **Topics**,
   **Auto-title**, **Attachments**, **Samskara** - each background
-  pipeline emits progress breadcrumbs, browser workers through
-  `createLogger` and edge-side agents through `createEdgeLogger`.
-  See the respective feature docs for which cycle transitions log
+  pipeline emits progress breadcrumbs through `createEdgeLogger`;
+  browser-side helpers use `createLogger`.
+  See the respective feature docs for which transitions log
   what.
 
 ## Gotchas
@@ -276,18 +253,13 @@ so flush is about drawer fidelity, not data safety.
   runes for the buffer and the drawer open/close singleton; the
   Svelte transformer only runs on files matching `*.svelte` or
   `*.svelte.ts`.
-- **Worker-context detection uses `WorkerGlobalScope`.** jsdom
-  (vitest) does not define it, so tests that import the logger
-  always land on the main-thread path. If you add a test-time
-  worker harness, you'll need to stub the detection.
-- **Error instances don't survive postMessage.** The worker
-  serializer flattens them into `{name, message, stack}` and the
-  main-thread deserializer reconstructs a plain Error-like object.
+- **Error instances don't survive the Broadcast channel.** The
+  edge serializer flattens them into `{name, message, stack}` and
+  `appendFromEdge` reconstructs a plain Error-like object.
   The drawer's renderer reads `.stack` off whatever it gets, so
-  the two paths are indistinguishable to the UI - but a downstream
-  consumer that wanted a real `Error` instance would need to
-  reconstruct it. The edge relay flattens Errors the same way, so
-  `appendFromEdge` and `appendFromWorker` reconstitute identically.
+  local and relayed entries are indistinguishable to the UI - but
+  a downstream consumer that wanted a real `Error` instance would
+  need to reconstruct it.
 - **Edge logs are ephemeral in the drawer.** Broadcast has no
   backlog: an entry published while the browser isn't subscribed
   (drawer-bearing tab closed, or before the `subscribeToUserLogs`

@@ -72,6 +72,7 @@ import {
 } from './tools/_generated_image.ts';
 import { reflectOneThread } from './agents/reflection.ts';
 import { curateOnTurnTail } from './agents/curation.ts';
+import { samskaraOnTurnTail } from './agents/samskara.ts';
 import { createEdgeLogger } from '../_shared/edge-log.ts';
 
 // Magic flag the ask_user tool returns to suspend the round chain
@@ -1044,6 +1045,17 @@ export async function getStreamingResponse(
         await curateOnTurnTail(opts.adminClient, opts.userId);
       } catch (err) {
         log.error(`${runId} curation tail failed:`, err);
+      }
+      // Samskara before reflection: reflection can span minutes of
+      // tool rounds, and the samskara rotation carries the fleet's
+      // only hard timing window (reaction-classify must catch a fired
+      // cohort 1-10 minutes after the fire - this turn's user message
+      // is what resolves the PREVIOUS turn's cohort). The hourly
+      // /samskara-sweep cron is the catch-up sibling.
+      try {
+        await samskaraOnTurnTail(opts.adminClient, opts.userId);
+      } catch (err) {
+        log.error(`${runId} samskara tail failed:`, err);
       }
       try {
         await reflectOneThread(opts.adminClient, opts.userId);

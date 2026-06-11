@@ -230,8 +230,9 @@ export const MODELS = {
     id: 'mistral-small-3-2-24b-instruct',
     contextWindow: 256_000,
     // Venice's mistral-small does NOT accept reasoning_effort. Sending
-    // the field returns a 4xx, so the agents pinned to this id
-    // (intuition, samskara, bias) all omit it on the wire.
+    // the field returns a 4xx, so every agent pinned to this id
+    // (intuition browser-side; samskara and bias server-side) omits
+    // it on the wire.
     supportsReasoning: false,
     supportsVision: false,
     supportsResponseFormat: true,
@@ -491,7 +492,6 @@ export type AgentRole =
   | 'webSearch'
   | 'researchDocs'
   | 'intuition'
-  | 'samskara'
   | 'recall'
   | 'conversationRecall'
   | 'wikiRecall';
@@ -576,10 +576,6 @@ export type AgentRole =
  *     matches the call site's disable_thinking pin and avoids any
  *     CoT overhead per call.
  *
- *   samskara - mistral-small-3-2-24b-instruct. Five short JSON-out
- *     phases (assimilate, relate, mint, classify, compound summary)
- *     with maxTokens 200-500 per phase. Structured output on bounded
- *     context; mistral-small handles it comfortably.
  *
  *   recall - deepseek-v4-flash. Memory-recall agent: read the live
  *     conversation, search memories, produce a short JSON note.
@@ -605,10 +601,10 @@ export type AgentRole =
  *     independently if one regresses.
  *
  * The five curation agents (auto-title, summary, thread topics,
- * memory topics, recipe topics) have no slots here: they run
- * server-side in the venice edge function
- * (supabase/functions/venice/agents/), which holds their model ids
- * directly - it cannot import from src/lib.
+ * memory topics, recipe topics), the bias pipeline, and the samskara
+ * formation agents have no slots here: they run server-side in the
+ * venice edge function (supabase/functions/venice/agents/), which
+ * holds their model ids directly - it cannot import from src/lib.
  */
 export const AGENT_MODELS = {
   reflection:         'deepseek-v4-flash',
@@ -619,7 +615,6 @@ export const AGENT_MODELS = {
   webSearch:          'deepseek-v4-flash',
   researchDocs:       'deepseek-v4-flash',
   intuition:          'mistral-small-3-2-24b-instruct',
-  samskara:           'mistral-small-3-2-24b-instruct',
   recall:             'deepseek-v4-flash',
   conversationRecall: 'deepseek-v4-flash',
   wikiRecall:         'deepseek-v4-flash',
@@ -697,32 +692,6 @@ export function padEmbeddingForStorage(embedding: readonly number[]): number[] {
   for (let i = 0; i < embedding.length; i++) padded[i] = embedding[i];
   for (let i = embedding.length; i < EMBEDDING_STORAGE_DIMS; i++) padded[i] = 0;
   return padded;
-}
-
-/**
- * Parse a pgvector column value read back through PostgREST into a
- * plain number array. supabase-js has no type mapping for pgvector, so
- * a `vector`/`halfvec` column arrives as its text literal - a bracketed
- * string like "[0.1,0.2,...]" - NOT a JS array. Any client-side cosine
- * math that treats that string as an array multiplies characters and
- * silently yields NaN (this is exactly why the samskara pair-relate
- * phase produced zero associations for weeks: every similarity came
- * back NaN, so no pair ever cleared the threshold). Returns null when
- * the value is absent or unparseable so callers can skip the row rather
- * than feed NaN downstream. Already-array inputs pass through untouched
- * for forward-compatibility if supabase-js ever maps the type.
- */
-export function parseEmbeddingColumn(value: unknown): number[] | null {
-  if (Array.isArray(value)) return value as number[];
-  if (typeof value !== 'string') return null;
-  const trimmed = value.trim();
-  if (trimmed.length === 0) return null;
-  try {
-    const parsed = JSON.parse(trimmed);
-    return Array.isArray(parsed) ? (parsed as number[]) : null;
-  } catch {
-    return null;
-  }
 }
 
 // --- Helpers ---------------------------------------------------------------

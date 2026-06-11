@@ -179,6 +179,7 @@
     columnFor,
     valenceToEmoji,
     valenceToMoodLabel,
+    notifySamskaraMint,
   } from '$lib/samskara/events';
   import {
     coerceIntuitionPayload,
@@ -1821,6 +1822,16 @@
   $effect(() => {
     if (!app.supabase || !session) return;
     return app.supabase.subscribeToRecipeChanges(session.user.id, emitCookbookChange);
+  });
+
+  // Realtime: mint toasts. The samskara formation pipeline runs in the
+  // venice function (turn tail + hourly sweep), so a fresh mint reaches
+  // the mood pill as a user-scoped INSERT on `samskaras`, relayed into
+  // the same window event the old in-tab worker dispatched.
+  // SamskaraToasts.svelte is the unchanged consumer.
+  $effect(() => {
+    if (!app.supabase || !session) return;
+    return app.supabase.subscribeToSamskaraInserts(session.user.id, notifySamskaraMint);
   });
 
   // Inline title rename state.

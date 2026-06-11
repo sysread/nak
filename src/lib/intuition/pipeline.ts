@@ -19,8 +19,8 @@
  * The pipeline is non-streaming. Each stage hits Venice's one-shot
  * completion endpoint via `SupabaseService.complete` (the
  * venice/complete edge function) and reads the single text result,
- * mirroring the same pattern the samskara agent uses (see
- * src/lib/agents/samskara/agent.ts).
+ * the same one-shot completion pattern the server-side samskara
+ * agents use (supabase/functions/venice/agents/samskara.ts).
  *
  * Failure model:
  *   - Perception failure aborts the pipeline. Returns null so the

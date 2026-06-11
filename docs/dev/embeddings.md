@@ -50,11 +50,6 @@ call site is which client handle they hold.
   kept in TS so truncation stays byte-identical to historical rows.
 - `supabase/functions/_shared/venice.ts` - the Venice `/embeddings`
   wire shape (request/response, error mapping), fetch-injectable.
-- `src/lib/embeddings/lease.ts` - `LeaseCoordinator`: wraps the
-  Supabase lease RPCs plus the heartbeat interval. No longer used by
-  embeddings backfill (that's server-side now), but every worker in
-  the agent fleet imports it - the directory name is a vestige. See
-  [Worker-fleet coordination](#worker-fleet-coordination).
 - `supabase/schema.sql` - the `claim_next_pending_*` /
   `save_*_embedding_if_claimed` RPCs (now `security definer` global
   sweeps; see below), the `clear_*_embedding_on_change` triggers,
@@ -126,22 +121,17 @@ browser worker wrote historically.
 - Row claim TTL: 120s. Rate-limit back-off: the invocation bails and
   the next tick resumes.
 
-## Worker-fleet coordination
+## Worker-fleet coordination (retired)
 
-The cross-tab Web Lock + Supabase `worker_leases` + heartbeat model
-documented here used to be the embeddings worker's, and embeddings
-was its canonical example. Backfill no longer uses any of it - but
-the two remaining browser workers (samskara and bias) still do,
-importing `LeaseCoordinator` from `embeddings/lease.ts`. For the
-live worker model see [`./architecture.md`](./architecture.md) and
-`src/lib/agents/{samskara,bias}/worker.ts`. The short version:
-
-- **`navigator.locks.request(...)`** - cross-tab, device-local;
-  Web Locks queue natively.
-- **`worker_leases` row** - cross-device, keyed on
-  `(user_id, worker_kind)`. `acquire`/`heartbeat`/`release` RPCs; a
-  `false` heartbeat means the lease lapsed and someone else took
-  over, so the worker stops immediately.
+The cross-tab Web Lock + Supabase `worker_leases` + heartbeat
+model has no live tenants: the browser worker fleet is gone, and
+every background job coordinates through per-row claims instead
+(see [`./architecture.md`](./architecture.md), "Background-job
+model"). The `worker_leases` table and its
+`acquire`/`heartbeat`/`release` RPCs are still in the schema, plus
+their orphaned `SupabaseService` wrappers; removing that surface
+is a tracked follow-up of the de-browser-background-jobs
+migration.
 
 ## Contracts
 

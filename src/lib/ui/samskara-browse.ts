@@ -11,11 +11,7 @@
  * thresholds, label/pluralization/relative-time helpers - lives here
  * and is unit-tested directly.
  */
-import type {
-  SamskaraBrowseSort,
-  SamskaraCorpusRow,
-  SamskaraWorkerLease,
-} from '../supabase';
+import type { SamskaraBrowseSort, SamskaraCorpusRow } from '../supabase';
 
 /** Debounce window between the last keystroke and the search round trip. Matches the other drawer tabs. */
 export const SEARCH_DEBOUNCE_MS = 200;
@@ -168,45 +164,6 @@ export function compoundStaleness(lastRegenAt: string | null, now: number = Date
   return 'ok';
 }
 
-export interface LeaseLiveness {
-  workerKind: string;
-  /** True when the lease has not lapsed - a tab is actively running it. */
-  live: boolean;
-  /**
-   * Human detail. "live, expires in 38s" when held; "idle - not
-   * currently running" when lapsed or absent. NOT an alarm: workers run
-   * client-side only while a tab is open, so a lapsed lease is the normal
-   * away state, not a failure - the panel renders idle neutrally and
-   * leaves it out of the overall severity.
-   */
-  detail: string;
-}
-
-/**
- * Resolve worker liveness for the kinds the samskara pipeline depends
- * on. Returns one entry per requested kind, in the requested order, so
- * the panel always renders a fixed set of rows. The expiry is a FUTURE
- * timestamp while live, so it's reported as "expires in Ns" rather than
- * run through a past-tense "N ago" formatter.
- */
-export function leaseLiveness(
-  leases: readonly SamskaraWorkerLease[],
-  kinds: readonly string[],
-  now: number = Date.now()
-): LeaseLiveness[] {
-  return kinds.map((kind) => {
-    const lease = leases.find((l) => l.workerKind === kind);
-    if (!lease) return { workerKind: kind, live: false, detail: 'idle - not currently running' };
-    const secsToExpiry = Math.round((new Date(lease.expiresAt).getTime() - now) / 1000);
-    const live = secsToExpiry > 0;
-    return {
-      workerKind: kind,
-      live,
-      detail: live ? `live, expires in ${secsToExpiry}s` : 'idle - not currently running',
-    };
-  });
-}
-
 /**
  * One-line summary of the hide-similar collapse for the muted label
  * under the slider: how many distinct samskaras remain after folding
@@ -216,9 +173,6 @@ export function matchSummary(shown: number, total: number): string {
   const hidden = Math.max(total - shown, 0);
   return `Showing ${shown} of ${total} - ${hidden} folded as similar`;
 }
-
-/** Worker kinds the samskara pipeline depends on, in panel display order. */
-export const SAMSKARA_WORKER_KINDS = ['samskara', 'embedding'] as const;
 
 /**
  * Worst severity across a set - for a single panel-level headline dot.

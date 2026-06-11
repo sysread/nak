@@ -11,9 +11,9 @@ production-path ownership, not by which table each side touches (see
 "Production-path ownership" below).
 
 This page frames the top-level pieces - the boot flow, the phase
-state machine, the data layer, the Venice adapter, the worker model,
-and the row-ownership split - so individual feature docs have a
-shared vocabulary to refer back to.
+state machine, the data layer, the Venice adapter, the
+background-job model, and the row-ownership split - so individual
+feature docs have a shared vocabulary to refer back to.
 
 ## Framework and build
 
@@ -44,13 +44,13 @@ every screen reads. Three phases:
 - `setup` - no `nak:config:v2` key in localStorage. Renders
   `Setup.svelte` to collect the Supabase URL + publishable key.
 - `unlocked` - config is in memory, `SupabaseService` and
-  `VeniceClient` are instantiated, background workers are running.
+  `VeniceClient` are instantiated.
   Renders `Chat.svelte` which gates an internal `<Auth />` screen
   until the Supabase session lands.
 
 `activate(config)` is the load-bearing transition: it stores the
-config, news up the services, flips phase to `unlocked`, and starts
-the background-worker fleet. Sign-out doesn't leave `unlocked` -
+config, news up the services, seeds the settings defaults, and
+flips phase to `unlocked`. Sign-out doesn't leave `unlocked` -
 the screen renders `<Auth />` until the next sign-in - so there's
 no separate "locked" phase any more. `resetForSignOut()` clears the
 in-memory profile/system-prompt state so the previous account's
@@ -94,9 +94,10 @@ hit the user's Supabase project. Scope covers:
   `memory_*` tools).
 - Settings (`getSettings`, `updateSettings`, `updateSystemPrompts`) —
   the `profiles.settings` JSONB blob.
-- Worker coordination (`acquireWorkerLease`,
-  `heartbeatWorkerLease`, `releaseWorkerLease`; per-source claim
-  RPCs for memories + threads).
+- Legacy worker-lease wrappers (`acquireWorkerLease`,
+  `heartbeatWorkerLease`, `releaseWorkerLease`) - zero callers
+  since the browser worker fleet retired; they go when the
+  `worker_leases` table does.
 
 The file is large (~1300 lines). Everything is well-commented; its
 size is not complexity, just the number of narrow method wrappers
@@ -154,8 +155,9 @@ pins the false-positive guards as load-bearing.
 The chat-loop's send path (in `Chat.svelte`) calls
 `persistSyntheticRecovery` ahead of the next user-message insert,
 which writes the in-memory recovery rows to the DB so the
-conversation heals permanently. Background workers don't write -
-they regenerate the synthesis each cycle until the user revisits.
+conversation heals permanently. No other reader persists the
+synthesis - it is regenerated on each read until the user
+revisits and sends.
 
 The `summary` agent's `condenseHistory` additionally trims its
 head/tail seam via `trimToCompleteTurn` /
@@ -180,7 +182,7 @@ Load-bearing patterns the schema uses repeatedly:
   grown `toolboxes_enabled`, `archived`, `summary`, `embedding`, plus
   reflection/summary/embedding claim columns — no migrations, just
   idempotent column adds.
-- **Claim-RPC pattern.** Any row a background worker might process
+- **Claim-RPC pattern.** Any row a background job might process
   carries `<kind>_claim_holder text` + `<kind>_claim_expires
   timestamptz`. The RPC `claim_next_pending_<kind>` picks the oldest
   unclaimed row via `for update skip locked` and stamps it; the
@@ -188,17 +190,18 @@ Load-bearing patterns the schema uses repeatedly:
   (`where claim_holder = $me and claim_expires > now()`). A trigger
   (`clear_*_embedding_on_change`) nulls the claim on user edits so
   a stale in-flight save can't land. This is the concurrency
-  primitive the entire worker subsystem relies on.
+  primitive the entire background-job subsystem relies on.
 - **Partial claim indexes.** Each claim column has a partial index
   where the holder is non-null, so the index stays tiny in steady
   state (0 rows claimed is the common case).
 - **`worker_leases` table + RPCs.** One row per
-  `(user_id, worker_kind)` implements the "at most one device per
-  worker kind" singleton. `acquire` / `heartbeat` / `release` RPCs
-  are idempotent and `security invoker` so RLS still applies.
-  `worker_kind` partitions the three workers so a device can hold
-  all three leases concurrently. See `./embeddings.md` for the full
-  story.
+  `(user_id, worker_kind)` once implemented the "at most one
+  device per worker kind" singleton for the retired browser
+  worker fleet. Nothing acquires a lease today - per-row claims
+  carry all the mutual exclusion - but the table and its
+  `acquire` / `heartbeat` / `release` RPCs are still in the
+  schema; removing them is a tracked follow-up of the
+  de-browser-background-jobs migration.
 
 ## Venice adapter
 
@@ -221,13 +224,13 @@ the function-side wire shape:
   yields the function-published event union. Used only by the
   main user-facing chat (`chat-loop.ts`).
 - `SupabaseService.complete(req)` - non-streaming one-shot,
-  routed through the venice/complete route. Used by every
-  browser background path: the intuition / samskara / summary
-  / journal agents, the four recall agents (memory, conversation,
-  wiki, journal), and the headless tool loop they share, plus the
-  web_search / research_docs / analyze_image sub-tools. The
-  reflection agent runs in the edge function and calls Venice
-  directly rather than routing through this browser method.
+  routed through the venice/complete route. Used by the two
+  remaining browser-side completion paths: the intuition
+  pipeline and the per-article manual wiki-update flow. The
+  server-side agent fleets (reflection, samskara, curation,
+  bias, the recall agents) run inside the venice function and
+  call Venice directly rather than routing through this browser
+  method.
 - `SupabaseService.embed(req)` - per-query vector. Routes through
   venice/embed.
 - `SupabaseService.extractText(file, filename)` - multipart upload
@@ -266,52 +269,45 @@ access the internet" refusals on the table). Background agents
 hardcode `undefined` on their requests so recall never inflates
 search costs.
 
-## Worker model
+## Background-job model
 
-Background Web Workers run while the app is unlocked. One
-browser-side worker remains - samskara
-(`src/lib/agents/samskara/`). Everything else moved
-server-side: embedding backfill via `pg_cron` (see
-`./embeddings.md`), reflection / wiki / memory-librarian via cron
-sweeps and the chat-turn tail, the five curation units
-(auto-title, thread topics, summaries, memory topics, recipe
-topics) via the curation tail + hourly sweep in the venice
-function, and the bias pipeline via the hourly `nak-bias-sweep`
-cron (see `./bias-profile.md`). One representative of each side:
+There are no browser Web Workers and no browser background
+jobs. Every background job satisfies the rule the
+de-browser-background-jobs migration set out: **a job that is
+not UI-scoped or ongoing-chat-scoped must not depend on a
+browser tab being open.** The fleet runs server-side in the
+venice edge function on two kinds of trigger:
 
-- `src/lib/agents/samskara/worker.ts` - the browser shape: a Web
-  Worker that polls for work while the app is unlocked. Covered in
-  `./samskara.md`.
-- `supabase/functions/venice/agents/reflection.ts` - the server
-  shape: fires from the completed-chat-turn tail (via
-  `EdgeRuntime.waitUntil` in `getStreamingResponse`), reads one
-  day-gate-eligible thread, and calls the memory tools via a
-  headless tool loop to update long-term memory. Covered in
-  `./memory.md`.
+- **Chat-turn tail** - `getStreamingResponse` registers a
+  sequential curation -> samskara -> reflection chain under
+  `EdgeRuntime.waitUntil` after each completed turn. The tail
+  is the low-latency driver for work the user notices
+  in-session: thread titles, samskara mints, fresh memories.
+- **pg_cron sweeps** - scheduled jobs that pg_net-POST a
+  function route, as the catch-up and maintenance drivers.
+  The minute ladder: embed backfill `*/5`, bias `:03`, wiki
+  `:07`, samskara decay `:13`/`:43`, rem + attachment expiry
+  `:17`, samskara sweep `:23`, reflection `:27`, librarian +
+  recipe-image GC `:37`, deep-sleep `:47`, curation `:57`.
 
-Each browser worker has a **manager** on the main thread
-(`agents/*/manager.ts`) that handles
-boot, cross-tab `navigator.locks` coordination, and Supabase
-lease acquisition. The `activate()` path fires the
-`manager.start()` calls fire-and-forget; `lock()` calls the
-matching `manager.stop()` which releases both the local Web Lock
-and the Supabase `worker_leases` row so another tab can pick up
-instantly.
+Mutual exclusion between a tail and the sweep that backs it up
+is the per-row claim columns ("Claim-RPC pattern" above) - no
+leases, no locks.
 
-Two layers of singleton enforcement:
+What the browser still owns is UI-scoped or ongoing-chat-scoped
+by definition: the intuition and context-recall priming layers
+(per-turn, main-thread), and the chat-scoped half of samskara
+(the cosine fire, the substrate stub write, the compound-summary
+read, the priming format, the mood pill). Losing any of it on
+tab close costs nothing - the next turn re-runs it.
 
-1. **`navigator.locks.request('nak:<kind>-worker')`** — cross-tab,
-   device-local. Queues competing tabs; only one holds the lock at
-   a time.
-2. **`worker_leases` RPC** — cross-device. Partitioned by
-   `worker_kind`; a device may only process rows while it holds
-   the lease, and a lapsed-lease worker stops mid-cycle rather
-   than racing.
-
-These two layers are independent. Either one alone prevents the
-common case (two tabs in the same browser, two browsers on the
-same account); the combination handles the edge case (the lapsed-
-Web-Lock-while-holding-the-Supabase-lease race).
+A representative server agent:
+`supabase/functions/venice/agents/reflection.ts` fires from the
+completed-chat-turn tail, reads one day-gate-eligible thread,
+and calls the memory tools via a headless tool loop to update
+long-term memory. Covered in `./memory.md`. The samskara
+formation pipeline (`agents/samskara.ts`, dual tail + sweep
+drivers) is the other fully-worked example; see `./samskara.md`.
 
 ## Production-path ownership (browser vs edge function)
 
@@ -338,16 +334,16 @@ Three categories of work:
    on - work registered with it survives the request that
    triggered it.
 
-3. **Background derivation the user controls in-session — browser
-   owns today.** Intuition and samskara. Run while
-   the app is unlocked. Losing them on tab close isn't a
-   correctness problem, just a "work resumes next session."
-   Long-term candidates for the function side as the cron +
-   waitUntil pattern matures - the wiki agents, the memory
-   librarian (rem + deep-sleep), the five curation units
-   (auto-title, topic tagging, summaries), and the bias observer
-   have already made that move and now run in the venice function
-   off the chat-turn tail and cron sweeps.
+3. **Per-turn derivation scoped to the live conversation —
+   browser owns.** Intuition, context recall, and the
+   chat-scoped samskara half (the cosine fire, the substrate
+   stub, the priming block). These run as part of assembling
+   the next turn; losing one on tab close isn't a correctness
+   problem, just an unprimed turn. Anything with a longer
+   lifecycle than the turn in front of the user - the agent
+   fleets, the curation units, the samskara formation loop -
+   lives in the venice function off the chat-turn tail and the
+   cron sweeps (see "Background-job model").
 
 Each row in the database has exactly **one writer-of-record**, set
 by which production path birthed it. The shared table is fine
@@ -372,7 +368,7 @@ turn:
 | `topics`, recipe edits, memory rows, settings | Browser | Direct user action UIs |
 | `topics` / `summary` derivations | Function | Curation tail after a completed turn + hourly sweep |
 | Embedding rows | Function | `pg_cron` + venice `/embed-backfill` |
-| Worker-lease rows | Browser | Background agent managers |
+| `samskaras` / substrate enrichment | Function | Samskara tail + hourly sweep |
 
 The auto-title case is the test of the frame: the same
 `threads.title` column has two writers, but they write for
@@ -406,7 +402,7 @@ perspective (which functions exist, what each one owns, the
 
 A new per-user setting lands in `profiles.settings` (JSONB) without
 a schema change. A new per-thread flag lands via `alter table
-threads add column if not exists`. A new worker-coordinated table
+threads add column if not exists`. A new background-job table
 follows the claim-RPC pattern.
 
 ## Where to go next
@@ -418,7 +414,7 @@ follows the claim-RPC pattern.
   friends compose.
 - `./chat.md` — the chat loop and the UI that drives it.
 - `./auth-session.md` — the full session lifecycle picture.
-- `./embeddings.md` — the canonical browser worker example;
-  summaries follow the same shape.
+- `./embeddings.md` — the server-side embed backfill and the
+  claim-RPC pattern in its canonical form.
 - `./memory.md` — reflection, a server-side counterpart that
   fires from the edge function's chat-turn tail.

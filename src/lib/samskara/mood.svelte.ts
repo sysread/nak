@@ -13,9 +13,9 @@
  * else that reads `current` is a passive observer.
  *
  * Lives in its own .svelte.ts module rather than `events.ts`
- * because `events.ts` is shared with the worker bundle, which
- * cannot import Svelte runes. The pill / modal / any future
- * consumer all sit on the main thread.
+ * because `events.ts` is deliberately rune-free (plain constants and
+ * dispatch helpers, loadable from tests without a Svelte compile).
+ * The pill / modal / any future consumer all sit on the main thread.
  */
 
 export interface CurrentMood {

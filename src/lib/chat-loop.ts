@@ -1243,7 +1243,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   // Persist both writes in parallel. The await-before-continuing
   // rationale on the existing intuition write applies symmetrically
   // to context-recall: a race against an unrelated thread UPDATE
-  // (an update_title call mid-turn, a samskara-worker bump, a
+  // (an update_title call mid-turn, a server-side curation write, a
   // cross-tab edit) could otherwise strand a fresh payload behind a
   // stale realtime echo. Cost is ~50-200ms of one Supabase UPDATE
   // each, parallel-merged into one wait.

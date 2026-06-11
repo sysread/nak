@@ -25,7 +25,6 @@ import {
   isThinkingLevel,
   isVerbosity,
   padEmbeddingForStorage,
-  parseEmbeddingColumn,
   resolveThinking,
   resolveTier,
   resolveVerbosity,
@@ -140,11 +139,11 @@ describe('AGENT_MODELS (background agents)', () => {
     expect(AGENT_MODELS.recall).toBe('deepseek-v4-flash');
     expect(AGENT_MODELS.conversationRecall).toBe('deepseek-v4-flash');
     expect(AGENT_MODELS.wikiRecall).toBe('deepseek-v4-flash');
-    // Two mistral-small slots: intuition, samskara. (The bias agent
-    // also runs mistral-small, but it lives server-side now - see
-    // BIAS_MODEL in supabase/functions/venice/agents/bias.ts.)
+    // One mistral-small slot: intuition. (The bias and samskara
+    // agents also run mistral-small, but they live server-side now -
+    // see BIAS_MODEL and SAMSKARA_MODEL under
+    // supabase/functions/venice/agents/.)
     expect(AGENT_MODELS.intuition).toBe('mistral-small-3-2-24b-instruct');
-    expect(AGENT_MODELS.samskara).toBe('mistral-small-3-2-24b-instruct');
     // No vision slot here: analyze_image's vision sub-call runs
     // server-side in the venice edge function, which holds the primary
     // (e2ee-qwen3-vl-30b-a3b-p) and uncensored-fallback
@@ -374,35 +373,6 @@ describe('padEmbeddingForStorage', () => {
   });
 });
 
-describe('parseEmbeddingColumn', () => {
-  it('parses the pgvector bracketed text literal into a number array', () => {
-    expect(parseEmbeddingColumn('[0.1,0.2,-0.3]')).toEqual([0.1, 0.2, -0.3]);
-  });
-
-  it('passes an already-parsed array through unchanged', () => {
-    const arr = [1, 2, 3];
-    expect(parseEmbeddingColumn(arr)).toBe(arr);
-  });
-
-  it('returns null for null, non-strings, empty, and unparseable input', () => {
-    expect(parseEmbeddingColumn(null)).toBeNull();
-    expect(parseEmbeddingColumn(undefined)).toBeNull();
-    expect(parseEmbeddingColumn(42)).toBeNull();
-    expect(parseEmbeddingColumn('')).toBeNull();
-    expect(parseEmbeddingColumn('not a vector')).toBeNull();
-    // A bare JSON scalar parses but isn't an array - reject it.
-    expect(parseEmbeddingColumn('3.14')).toBeNull();
-  });
-
-  it('is the inverse of the string a client-side cosine would otherwise mangle', () => {
-    // The bug this guards: treating the raw string as an array makes
-    // a[i] a character and a[i]*b[i] NaN. Parsed, the math is real.
-    const parsed = parseEmbeddingColumn('[3,4]');
-    expect(parsed).not.toBeNull();
-    const norm = Math.sqrt(parsed![0] ** 2 + parsed![1] ** 2);
-    expect(norm).toBe(5);
-  });
-});
 
 describe('coerceTierModelConfig', () => {
   it('accepts a well-formed snapshot', () => {

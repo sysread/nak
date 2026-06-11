@@ -19,7 +19,6 @@ import type { AppConfig } from './config';
 import {
   coerceTierModels,
   isModelTier,
-  parseEmbeddingColumn,
   isReasoningEffort,
   isThinkingLevel,
   isVerbosity,
@@ -4499,91 +4498,6 @@ export class SupabaseService {
     return { kind: 'error', error: 'deep-sleep-run returned an unrecognised response' };
   }
 
-  // Background-worker pipeline --------------------------------------------
-  //
-  // Methods in this block drive the background workers in
-  // `src/lib/embeddings/*` and, later, `src/lib/agents/*`. RLS scopes
-  // every query to the current user automatically — workers receive a
-  // session-scoped SupabaseService and never need to know the user id.
-  //
-  // Cross-device coordination has two layers:
-  //
-  //   1. A singleton lease per user per worker kind (`worker_leases`)
-  //      enforces that at most one worker of a given kind runs at a
-  //      time across all the user's tabs and devices.
-  //      acquireWorkerLease / heartbeatWorkerLease / releaseWorkerLease
-  //      drive it. The `workerKind` argument partitions the lease:
-  //      'embedding' and 'reflection' hold independently so both can
-  //      run concurrently. Duplicate Venice charges would otherwise be
-  //      the default for anyone with a laptop + phone both unlocked.
-  //
-  //   2. A per-row claim covers the lease-handover race: a row the
-  //      previous lease holder was mid-processing shouldn't be instantly
-  //      grabbed by the new holder. For embeddings that's
-  //      (`embedding_claim_holder`, `embedding_claim_expires`) columns
-  //      on `memories`; for reflection it's a parallel pair on `threads`.
-  //      The claim keeps the row reserved until TTL expires (long
-  //      enough for the old device's in-flight network call to
-  //      definitely have returned or timed out).
-  //
-  // Everything flows through SECURITY INVOKER RPCs in the schema so the
-  // atomic bits (on-conflict upsert, FOR UPDATE SKIP LOCKED, save-if-
-  // claim-still-ours) run in a single round trip each.
-
-  /**
-   * Try to take the singleton lease for a given worker kind. Returns
-   * true iff we hold it after the call. Safe to call at any interval —
-   * the RPC is idempotent (harmless if we already hold it, harmless if
-   * someone else does and theirs hasn't expired).
-   */
-  async acquireWorkerLease(
-    workerKind: string,
-    holderId: string,
-    ttlSeconds: number
-  ): Promise<boolean> {
-    const { data, error } = await this.client.rpc('acquire_worker_lease', {
-      p_worker_kind: workerKind,
-      p_holder_id: holderId,
-      p_ttl_seconds: ttlSeconds,
-    });
-    if (error) throw new SupabaseError(error.message);
-    return data === true;
-  }
-
-  /**
-   * Extend our lease for a given worker kind. Returns false if the
-   * lease has already been taken over by someone else — in that case
-   * the worker must stop processing immediately; continuing would risk
-   * a double-work race with the new holder.
-   */
-  async heartbeatWorkerLease(
-    workerKind: string,
-    holderId: string,
-    ttlSeconds: number
-  ): Promise<boolean> {
-    const { data, error } = await this.client.rpc('heartbeat_worker_lease', {
-      p_worker_kind: workerKind,
-      p_holder_id: holderId,
-      p_ttl_seconds: ttlSeconds,
-    });
-    if (error) throw new SupabaseError(error.message);
-    return data === true;
-  }
-
-  /**
-   * Release our lease for a given worker kind explicitly on graceful
-   * shutdown (stop message, app lock, sign-out). Idempotent — no-op
-   * when we don't actually hold it. Lets another device take over
-   * instantly instead of waiting for the TTL to elapse.
-   */
-  async releaseWorkerLease(workerKind: string, holderId: string): Promise<void> {
-    const { error } = await this.client.rpc('release_worker_lease', {
-      p_worker_kind: workerKind,
-      p_holder_id: holderId,
-    });
-    if (error) throw new SupabaseError(error.message);
-  }
-
   // Thread response claim --------------------------------------------------
   //
   // Per-thread cross-device claim used by the chat-loop to mark "this
@@ -5635,6 +5549,48 @@ export class SupabaseService {
   }
 
   /**
+   * Subscribe to the signed-in user's freshly minted samskaras. The
+   * formation pipeline runs in the venice function, so the INSERT into
+   * `samskaras` is itself the mint notification - this relay maps the
+   * new row's (tier, valence, confidence) into the mood-pill toast
+   * (the caller routes it to notifySamskaraMint). INSERT-only on
+   * purpose: dedup-reinforce hits update an existing row and must not
+   * toast. Rows with an unexpected shape are dropped - a toast is
+   * decoration, never worth surfacing an error for.
+   */
+  subscribeToSamskaraInserts(
+    userId: string,
+    onMint: (detail: { tier: 1 | 2; valence: number; confidence: number }) => void
+  ): () => void {
+    const channel = this.client
+      .channel(`samskaras:${userId}`)
+      .on(
+        'postgres_changes' as never,
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'samskaras',
+          filter: `user_id=eq.${userId}`,
+        },
+        (payload: { new?: Record<string, unknown> }) => {
+          const row = payload.new;
+          if (!row) return;
+          const tier = row.tier;
+          if (tier !== 1 && tier !== 2) return;
+          onMint({
+            tier,
+            valence: typeof row.valence === 'number' ? row.valence : 0,
+            confidence: typeof row.confidence === 'number' ? row.confidence : 0.5,
+          });
+        }
+      )
+      .subscribe();
+    return () => {
+      void this.client.removeChannel(channel);
+    };
+  }
+
+  /**
    * Subscribe to the signed-in user's agent-run progress channel. The
    * venice function publishes live step events (model rounds, tool
    * calls with their narration) for user-triggered agent runs - the
@@ -5666,14 +5622,14 @@ export class SupabaseService {
   //
   // Thin wrappers over the SQL functions defined in the samskara
   // section of supabase/schema.sql. The sql functions own all the
-  // RLS-aware bookkeeping (claim guards, cohort weighting, the
-  // confidence formula); these methods just shape the arguments and
-  // unwrap the response.
+  // RLS-aware bookkeeping (cohort weighting, the confidence formula);
+  // these methods just shape the arguments and unwrap the response.
   //
-  // The chat-loop side (fire/record/getCompoundSummary) is read-light
-  // and called once per turn. The worker side
-  // (claim/save/decay/compound-regen) is the formation pipeline; see
-  // src/lib/agents/samskara/ for callers.
+  // Only the chat-loop side (fire/record/getCompoundSummary) and the
+  // diagnostics reads live here now. The formation pipeline (claim /
+  // assimilate / mint / dedup / compound-regen) runs server-side in
+  // supabase/functions/venice/agents/samskara.ts against the same SQL
+  // surface via its p_user_id overloads.
 
   /**
    * Top-K cosine fire over the user's samskaras. Ranks by
@@ -5716,27 +5672,6 @@ export class SupabaseService {
       p_thread_id: threadId,
       p_user_round: userRound,
       p_fires: payload,
-    });
-    if (error) throw new SupabaseError(error.message);
-  }
-
-  /**
-   * Apply a cohort reaction across confirm / disconfirm / neutral
-   * partitions. The RPC owns the cohort-aware reinforcement
-   * weighting (+1/sqrt(N) per member rather than full +1) so cohorts
-   * influence their members without dominating single-fire signal.
-   */
-  async samskaraApplyReaction(
-    cohortId: string,
-    confirmIds: string[],
-    disconfirmIds: string[],
-    neutralIds: string[]
-  ): Promise<void> {
-    const { error } = await this.client.rpc('samskara_apply_reaction', {
-      p_cohort_id: cohortId,
-      p_confirm_ids: confirmIds,
-      p_disconfirm_ids: disconfirmIds,
-      p_neutral_ids: neutralIds,
     });
     if (error) throw new SupabaseError(error.message);
   }
@@ -5791,277 +5726,6 @@ export class SupabaseService {
       lastRegenAt: row.last_regen_at,
       samskaraCountAtRegen: row.samskara_count_at_regen ?? 0,
     };
-  }
-
-  /** Worker: claim the next substrate row needing assimilation. */
-  async samskaraClaimNextAssimilate(
-    holderId: string,
-    ttlSeconds: number
-  ): Promise<{
-    id: string;
-    threadId: string;
-    userMessageId: string;
-    assistantMessageId: string | null;
-  } | null> {
-    const { data, error } = await this.client.rpc('samskara_claim_next_assimilate', {
-      p_holder_id: holderId,
-      p_ttl_seconds: ttlSeconds,
-    });
-    if (error) throw new SupabaseError(error.message);
-    const rows = (data ?? []) as {
-      id: string;
-      thread_id: string;
-      user_message_id: string;
-      assistant_message_id: string | null;
-    }[];
-    if (rows.length === 0) return null;
-    const row = rows[0];
-    return {
-      id: row.id,
-      threadId: row.thread_id,
-      userMessageId: row.user_message_id,
-      assistantMessageId: row.assistant_message_id,
-    };
-  }
-
-  /** Worker: save assimilator output IF claim still ours. */
-  async samskaraSaveAssimilation(
-    id: string,
-    holderId: string,
-    situation: string,
-    outcome: string | null,
-    valence: number | null
-  ): Promise<boolean> {
-    const { data, error } = await this.client.rpc(
-      'samskara_save_assimilation_if_claimed',
-      {
-        p_id: id,
-        p_holder_id: holderId,
-        p_situation: situation,
-        p_outcome: outcome,
-        p_valence: valence,
-      }
-    );
-    if (error) throw new SupabaseError(error.message);
-    return data === true;
-  }
-
-  /** Worker: should we regenerate the compound summary right now? */
-  async samskaraShouldRegenCompound(): Promise<{
-    shouldRegen: boolean;
-    samskaraCount: number;
-    lastRegenAt: string | null;
-  }> {
-    const { data, error } = await this.client.rpc('samskara_should_regen_compound');
-    if (error) throw new SupabaseError(error.message);
-    const rows = (data ?? []) as {
-      should_regen: boolean;
-      samskara_count: number;
-      last_regen_at: string | null;
-    }[];
-    if (rows.length === 0) {
-      return { shouldRegen: false, samskaraCount: 0, lastRegenAt: null };
-    }
-    const r = rows[0];
-    return {
-      shouldRegen: r.should_regen,
-      samskaraCount: r.samskara_count,
-      lastRegenAt: r.last_regen_at,
-    };
-  }
-
-  /** Worker: claim the compound-regen slot. False = another device has it. */
-  async samskaraClaimCompoundRegen(
-    holderId: string,
-    ttlSeconds: number
-  ): Promise<boolean> {
-    const { data, error } = await this.client.rpc('samskara_claim_compound_regen', {
-      p_holder_id: holderId,
-      p_ttl_seconds: ttlSeconds,
-    });
-    if (error) throw new SupabaseError(error.message);
-    return data === true;
-  }
-
-  /** Worker: save the regenerated compound summary IF claim still ours. */
-  async samskaraSaveCompoundSummary(
-    holderId: string,
-    summary: string,
-    samskaraCount: number
-  ): Promise<boolean> {
-    const { data, error } = await this.client.rpc(
-      'samskara_save_compound_summary_if_claimed',
-      {
-        p_holder_id: holderId,
-        p_summary: summary,
-        p_samskara_count: samskaraCount,
-      }
-    );
-    if (error) throw new SupabaseError(error.message);
-    return data === true;
-  }
-
-  /**
-   * Worker: read the substrate-pair candidates for the relator phase.
-   * Returns recent embedded substrate rows ordered by created_at desc;
-   * the relator phase finds nearest-neighbour pairs in JS rather than
-   * via SQL because pgvector's `<=>` operator on a self-cross-join is
-   * O(n^2) and the per-user substrate count stays small enough that
-   * the JS pass is fine.
-   */
-  async samskaraRecentEmbeddedSubstrate(limit: number): Promise<SamskaraSubstrateRow[]> {
-    const { data, error } = await this.client
-      .from('samskara_substrate')
-      .select('id, situation, outcome, valence, situation_embedding, created_at')
-      .not('situation_embedding', 'is', null)
-      .order('created_at', { ascending: false })
-      .limit(limit);
-    if (error) throw new SupabaseError(error.message);
-    // pgvector comes back as a bracketed text literal, not a JS array.
-    // Parse it so callers that do client-side cosine (pair-relate's
-    // nearest-neighbour walk, mint-tier1's topical clustering) operate
-    // on real numbers instead of multiplying string characters into
-    // NaN. A row whose vector won't parse gets an empty array, which
-    // those callers treat as "no usable embedding" and skip.
-    return ((data ?? []) as Array<Record<string, unknown>>).map((r) => ({
-      ...r,
-      situation_embedding: parseEmbeddingColumn(r.situation_embedding) ?? [],
-    })) as SamskaraSubstrateRow[];
-  }
-
-  /**
-   * Worker: find the nearest existing samskaras by cosine similarity
-   * on `prediction_embedding`. Used by the mint-tier1 dedup guard to
-   * avoid creating near-duplicate twins - the minter agent only sees
-   * the immediate substrate sample and has no visibility into the
-   * existing corpus, so without this check a rewording of "user
-   * prefers ancient grains" lands as a separate samskara instead of
-   * reinforcing the original.
-   */
-  async samskaraNearestByPrediction(
-    embedding: number[],
-    kMax: number,
-    tier?: number
-  ): Promise<{ id: string; cosine: number; tier: number }[]> {
-    const { data, error } = await this.client.rpc(
-      'samskara_nearest_by_prediction',
-      {
-        p_query_embedding: embedding,
-        p_k_max: kMax,
-        // null searches all tiers (the tier-1 dedup guard's behaviour);
-        // a number restricts the search, which the tier-2 dedup guard
-        // needs so nearer tier-1 rows can't crowd a tier-2 twin out of
-        // the top k.
-        p_tier: tier ?? null,
-      }
-    );
-    if (error) throw new SupabaseError(error.message);
-    return (data ?? []) as { id: string; cosine: number; tier: number }[];
-  }
-
-  /**
-   * Worker: reinforce an existing samskara on a dedup hit. Bumps
-   * health by a small amount. Returns false when the id doesn't exist
-   * or isn't owned by the caller. Confidence is NOT touched here -
-   * re-observing is a weak signal; the real confidence swing stays
-   * with reaction-classify. Provenance is also left untouched - it
-   * records formation evidence, not every later re-observation (see
-   * samskara_reinforce_existing in schema.sql).
-   */
-  async samskaraReinforceExisting(
-    samskaraId: string,
-    healthBump: number
-  ): Promise<boolean> {
-    const { data, error } = await this.client.rpc('samskara_reinforce_existing', {
-      p_samskara_id: samskaraId,
-      p_health_bump: healthBump,
-    });
-    if (error) throw new SupabaseError(error.message);
-    return data === true;
-  }
-
-  /**
-   * Maintenance: collapse redundant tier-1 samskaras. Primary signal
-   * is co-firing behaviour (two samskaras that reliably fire in the
-   * same cohort are Hebbianly bound and merge into one); embedding
-   * cosine acts as an anti-spurious-cofire floor. If the primary
-   * pass leaves the tier-1 pool above `targetCount`, a safety-cap
-   * second pass greedily merges by pure embedding similarity down
-   * to the target. Returns the number of rows collapsed. Idempotent
-   * - a second call after a clean pass returns 0. Safe to run while
-   * the worker is live; a concurrent mint-tier1 can at worst
-   * re-create a twin we just removed, which the next run collapses.
-   *
-   * Defaults mirror the RPC's own defaults; the worker phase calls
-   * with all defaults, and the manual button in the diagnostics
-   * modal does the same. Exposed as parameters so a future UI knob
-   * (or a dev console) can dial aggressiveness without a schema
-   * edit.
-   */
-  async samskaraCollapseByCofiring(opts?: {
-    minCofires?: number;
-    minCofireRatio?: number;
-    cosineFloor?: number;
-    targetCount?: number;
-    capCosineFloor?: number;
-    maxCollapses?: number;
-  }): Promise<number> {
-    const { data, error } = await this.client.rpc('samskara_collapse_by_cofiring', {
-      p_min_cofires: opts?.minCofires ?? 3,
-      p_min_cofire_ratio: opts?.minCofireRatio ?? 0.5,
-      p_cosine_floor: opts?.cosineFloor ?? 0.7,
-      p_target_count: opts?.targetCount ?? 150,
-      p_cap_cosine_floor: opts?.capCosineFloor ?? 0.6,
-      p_max_collapses: opts?.maxCollapses ?? 20,
-    });
-    if (error) throw new SupabaseError(error.message);
-    return typeof data === 'number' ? data : 0;
-  }
-
-  /**
-   * Worker: detect one recurring co-fire constellation of tier-1
-   * samskaras worth compounding into a tier-2 parent. Returns the
-   * member rows (child id, prediction, valence, co-fire weight) when a
-   * group is found, or an empty array when there's no eligible group -
-   * which is the common case until a substantial tier-1 corpus has
-   * fired. The mint-tier2 phase hands the predictions to the minter
-   * agent and writes the children as 'samskara'-kind provenance.
-   *
-   * Called with no overrides; the RPC's own defaults are the single
-   * source of truth for the detection dials (min co-fires, cosine
-   * band, group size, coverage-skip threshold).
-   */
-  async samskaraTier2Candidate(): Promise<SamskaraTier2CandidateRow[]> {
-    const { data, error } = await this.client.rpc('samskara_tier2_candidate', {});
-    if (error) throw new SupabaseError(error.message);
-    return ((data ?? []) as {
-      samskara_id: string;
-      prediction: string;
-      valence: number | null;
-      cofire_weight: number;
-    }[]).map((r) => ({
-      samskaraId: r.samskara_id,
-      prediction: r.prediction,
-      valence: r.valence,
-      cofireWeight: r.cofire_weight,
-    }));
-  }
-
-  /**
-   * Worker: read all live samskaras ordered by ranked weight, for the
-   * compound-summary regenerator. The caller passes a cap (computed
-   * via log10 of total count) so the prose stays bounded as the
-   * corpus grows.
-   */
-  async samskaraTopForSummary(limit: number): Promise<SamskaraSummaryRow[]> {
-    const { data, error } = await this.client
-      .from('samskaras')
-      .select('id, tier, prediction, inner_voice, valence, confidence, health')
-      .order('health', { ascending: false })
-      .order('confidence', { ascending: false })
-      .limit(limit);
-    if (error) throw new SupabaseError(error.message);
-    return (data ?? []) as SamskaraSummaryRow[];
   }
 
   // Diagnostics reads --------------------------------------------------
@@ -6476,28 +6140,6 @@ export class SupabaseService {
     };
   }
 
-  /**
-   * Current worker-lease rows (self-selectable via RLS). The Health
-   * panel reads the `samskara` and `embedding` kinds and compares
-   * `expiresAt` to now: a lapsed lease means no live worker is holding
-   * it, so formation/embedding is silently stopped.
-   */
-  async samskaraWorkerLeases(): Promise<SamskaraWorkerLease[]> {
-    const { data, error } = await this.client
-      .from('worker_leases')
-      .select('worker_kind, holder_id, expires_at');
-    if (error) throw new SupabaseError(error.message);
-    return ((data ?? []) as {
-      worker_kind: string;
-      holder_id: string;
-      expires_at: string;
-    }[]).map((r) => ({
-      workerKind: r.worker_kind,
-      holderId: r.holder_id,
-      expiresAt: r.expires_at,
-    }));
-  }
-
   // --- Bias profile ------------------------------------------------------
 
   /**
@@ -6834,47 +6476,6 @@ export interface SamskaraFireRow {
   score: number;
 }
 
-/**
- * Substrate row shape for the relator phase. Includes the embedding
- * because the pair-discovery step needs to compute cosine in JS (see
- * samskaraRecentEmbeddedSubstrate above).
- */
-export interface SamskaraSubstrateRow {
-  id: string;
-  situation: string;
-  outcome: string | null;
-  valence: number | null;
-  situation_embedding: number[];
-  created_at: string;
-}
-
-/**
- * Samskara row projection for the compound-summarizer agent. Avoids
- * shipping the 2048-dim embedding back just to throw it away.
- */
-export interface SamskaraSummaryRow {
-  id: string;
-  tier: number;
-  prediction: string;
-  inner_voice: string | null;
-  valence: number | null;
-  confidence: number;
-  health: number;
-}
-
-/**
- * One member of a tier-2 candidate constellation, camelCased at the
- * RPC boundary. `cofireWeight` is the summed co-fire count of this
- * child's eligible edges to the rest of the group; it becomes the
- * provenance weight on the minted tier-2's child link.
- */
-export interface SamskaraTier2CandidateRow {
-  samskaraId: string;
-  prediction: string;
-  valence: number | null;
-  cofireWeight: number;
-}
-
 /** Sort keys for the Corpus browse list. */
 export type SamskaraBrowseSort = 'recent' | 'strongest' | 'most_fired' | 'recently_fired';
 
@@ -6955,13 +6556,6 @@ export interface SamskaraRates {
   resolved: number;
   unresolved: number;
   resolutionPct: number;
-}
-
-/** A worker-lease row, for the Health panel's worker-liveness readout. */
-export interface SamskaraWorkerLease {
-  workerKind: string;
-  holderId: string;
-  expiresAt: string;
 }
 
 /** Map a snake-case corpus row (select or RPC) to the camelCase UI shape. */

@@ -3,10 +3,13 @@
 Samskara is the layer of **instincts** Nak quietly forms about you as
 you chat. A samskara is a one-line predictive hunch - "in situations
 like X, this user tends to Y" - that Nak builds in the background from
-your conversations and uses to calibrate its replies. Most of the time
-they stay invisible: the only in-chat cue is the small mood emoji in the
-bottom-right pill. The surfaces below are where you can deliberately
-look under the hood.
+your conversations and uses to calibrate its replies. The forming
+happens on your own Supabase project, right after each exchange plus an
+hourly catch-up pass - no tab needs to stay open, and a new instinct
+typically surfaces within a couple of turns of the exchange that earned
+it. Most of the time they stay invisible: the only in-chat cue is the
+small mood emoji in the bottom-right pill. The surfaces below are where
+you can deliberately look under the hood.
 
 Two kinds:
 
@@ -64,23 +67,23 @@ from" is the tier-1 instincts it was built from.
 ### Health
 
 A live snapshot that makes background failures visible - the
-instinct-forming machinery runs entirely behind the scenes, so a stall
-would otherwise be invisible:
+instinct-forming machinery runs entirely behind the scenes on your
+Supabase project, so a stall would otherwise be invisible:
 
-- **Workers** - whether a background worker is running right now. They
-  only run while the app is open, so "idle" is normal, not a problem.
 - **Backlog** - work waiting to be processed. A few items is normal; a
-  large, persistent pile means a worker isn't keeping up.
+  large, persistent pile means the pipeline isn't keeping up.
 - **Inconsistencies** - internal bookkeeping that should stay near zero.
 - **Staleness** - how long since the always-on summary was rebuilt.
 - **Activity** - how many instincts formed and fired recently, and how
   often Nak learned from them. A low "reaction resolution" is expected -
   only the turn right after an instinct fires can confirm it.
+- **Corpus** - headline counts: total instincts by tier, how many are
+  near-dead or have never fired, and the raw-observation and
+  pair-association totals behind them.
 
 The dot at the top is green when healthy, amber when worth a look, and
 red when something genuinely needs attention - a deep backlog, a
-bookkeeping problem, or a long-stale summary. An idle worker on its own
-won't turn it red.
+bookkeeping problem, or a long-stale summary.
 
 ## Mood (per conversation)
 

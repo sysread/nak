@@ -2,38 +2,29 @@
   /*
    * Health panel for the Samskara diagnostics tab. Makes otherwise-
    * invisible pipeline failures legible: backlog depths, lost reaction
-   * signal, dead workers, staleness, inconsistencies, and windowed
-   * activity rates. Everything is computed live on open from existing
-   * rows - no stored history (see docs/dev/samskara.md observability
-   * section).
+   * signal, staleness, inconsistencies, and windowed activity rates.
+   * Everything is computed live on open from existing rows - no stored
+   * history (see docs/dev/samskara.md observability section).
    *
-   * Composition only: every severity classification, lease-liveness
-   * decision, and relative-time format is delegated to
-   * `$lib/ui/samskara-browse`.
+   * Composition only: every severity classification and relative-time
+   * format is delegated to `$lib/ui/samskara-browse`.
    */
   import { onMount } from 'svelte';
   import { app } from '$lib/state.svelte';
   import {
     severityFor,
     compoundStaleness,
-    leaseLiveness,
     worstSeverity,
     relativeTime,
     HEALTH_THRESHOLDS,
-    SAMSKARA_WORKER_KINDS,
     type Severity,
   } from '$lib/ui/samskara-browse';
-  import type {
-    SamskaraHealthSnapshot,
-    SamskaraRates,
-    SamskaraWorkerLease,
-  } from '$lib/supabase';
+  import type { SamskaraHealthSnapshot, SamskaraRates } from '$lib/supabase';
 
   let loading = $state(true);
   let error = $state<string | null>(null);
   let snap = $state<SamskaraHealthSnapshot | null>(null);
   let rates = $state<SamskaraRates | null>(null);
-  let leases = $state<SamskaraWorkerLease[]>([]);
   let compoundRegenAt = $state<string | null>(null);
 
   async function load(): Promise<void> {
@@ -53,7 +44,6 @@
     try {
       snap = await sb.samskaraHealthSnapshot();
       rates = await sb.samskaraRates(7);
-      leases = await sb.samskaraWorkerLeases();
       compoundRegenAt = (await sb.samskaraGetCompoundSummary())?.lastRegenAt ?? null;
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
@@ -88,14 +78,10 @@
       : []
   );
 
-  const workers = $derived(leaseLiveness(leases, SAMSKARA_WORKER_KINDS));
   const compoundSev = $derived<Severity>(compoundStaleness(compoundRegenAt));
 
   // Panel headline dot: the worst of the ACTIONABLE signals - backlog
-  // depth, internal inconsistencies, compound staleness. Worker liveness
-  // is deliberately excluded: a lapsed lease is the normal away state
-  // (workers run only while a tab is open), so an idle worker is not a
-  // failure and must not turn the headline red.
+  // depth, internal inconsistencies, compound staleness.
   const overall = $derived<Severity>(
     worstSeverity([
       ...backlog.map((b) => b.sev),
@@ -115,19 +101,6 @@
       <span class="sev-dot sev-{overall}" aria-hidden="true"></span>
       <span>{overall === 'ok' ? 'Pipeline healthy' : overall === 'warn' ? 'Needs a look' : 'Something is stuck'}</span>
       <button type="button" class="secondary health-refresh" onclick={() => void load()}>Refresh</button>
-    </div>
-
-    <h3 class="health-group">Workers</h3>
-    <div class="health-card">
-      {#each workers as w (w.workerKind)}
-        <div class="health-row">
-          <!-- Live -> green; idle -> neutral grey, NOT red. Workers run
-               client-side only while a tab is open, so idle is normal. -->
-          <span class="sev-dot" class:sev-ok={w.live} aria-hidden="true"></span>
-          <span class="health-label">{w.workerKind}</span>
-          <span class="health-value">{w.detail}</span>
-        </div>
-      {/each}
     </div>
 
     <h3 class="health-group">Backlog</h3>

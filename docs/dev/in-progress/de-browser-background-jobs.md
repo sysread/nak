@@ -1,16 +1,17 @@
 # De-browser the background jobs
 
-## STATUS (2026-06-10)
+## STATUS (2026-06-11)
 
-**Planned, broad-strokes on purpose; starts after the SoC and
-edge-log-coverage milestones** (the ports want the collapsed route
-layer and day-one loggers). Third of the three
+**C1, C2, and C3 are all implemented** (dates in the Items list;
+designs below). Third of the three
 [tighten-the-control-surfaces](./tighten-the-control-surfaces.md)
-milestones. Design pass happens when this becomes the active
-milestone, per the planning rhythm.
+milestones. Remaining follow-up: drop the `worker_leases` table,
+its RPCs, and the orphaned `SupabaseService` lease wrappers - the
+browser-side lease apparatus files are already deleted.
 
 **The rule:** a job that is not UI-scoped or ongoing-chat-scoped
-must not depend on a browser tab being open.
+must not depend on a browser tab being open. **Satisfied** - zero
+Web Workers and zero browser background jobs remain.
 
 ## Items
 
@@ -35,15 +36,20 @@ must not depend on a browser tab being open.
   outright (the day-gate subsumes it), and the aggregate
   dirty/throttle state collapsed into the cron cadence plus a 24h
   freshness floor.
-- **C3. Port the samskara formation loop. Active (2026-06-11;
-  design in "C3 design" below).** The deferral that previously
-  gated this is resolved: the concurrent session's samskara
-  diagnostics tab landed on main, and the fresh full read of the
-  area (the standing precondition) ran 2026-06-11 against the
-  rebased tree, covering the tier-2 machinery and the upstream
-  feedback-loop fixes. The chat-scoped half (fire, substrate stub,
-  compound-summary read, priming format, mood pill) stays
-  browser-side regardless - only the formation rotation moves.
+- **C3. Port the samskara formation loop. Implemented 2026-06-11**
+  (design in "C3 design" below). The formation rotation runs in
+  the venice function as `samskaraOnTurnTail` (turn tail, between
+  curation and reflection) plus the hourly `nak-samskara-sweep`
+  cron at :23; mint toasts ride the realtime INSERT relay on
+  `samskaras`. The chat-scoped half (fire, substrate stub,
+  compound-summary read, priming format, mood pill) stayed
+  browser-side as planned. Samskara was the last lease tenant, so
+  the browser lease apparatus (`base-manager.ts`, `holder.ts`,
+  `embeddings/lease.ts`, the manager wiring, the logger's
+  worker postMessage relay) went with it; only the
+  `worker_leases` table + its schema/RPC surface (and the
+  orphaned `SupabaseService` lease wrappers) remain as the
+  follow-up above.
 
   **Decay lifted early (2026-06-11).** Upstream 13ef213 flagged
   the decay phase as the cleanest pre-port lift (pure SQL, no LLM,
@@ -54,8 +60,8 @@ must not depend on a browser tab being open.
   browser worker's decay phase + throttle were deleted. QA:
   `docs/qa/use-cases/samskara-decay.md`. Dedup
   (`samskara_collapse_by_cofiring`) is NOT row-local (per-user
-  pair enumeration + population cap) and stays in the rotation
-  until the full C3 port.
+  pair enumeration + population cap), so it rode the full C3
+  port instead and now runs per user in the hourly sweep.
 
 ## Stays browser-side by definition
 
@@ -245,10 +251,11 @@ the worker-only `SupabaseService` wrappers (`biasClaimNextThread`,
 `biasUpsertSummary`), the `AGENT_MODELS.bias` entry, and the
 browser bias-loop tests (ported logic gets Deno coverage).
 `biasClearThread` and the chat/modal reads stay - they are
-chat-scoped. The shared lease apparatus (`base-manager.ts`,
-`holder.ts`, `embeddings/lease.ts`, the `worker_leases` table)
-still waits for the samskara port - it has one tenant left after
-this.
+chat-scoped. The shared lease apparatus had one tenant left after
+this (samskara) and went with the C3 port: the browser-side files
+(`base-manager.ts`, `holder.ts`, `embeddings/lease.ts`) are
+deleted, and only the `worker_leases` table + its schema surface
+remain as the tracked follow-up.
 
 ### Risks the QA re-execution must check
 
@@ -364,8 +371,10 @@ the mood pill, and `events.ts` are untouched consumers.
   `samskara_tier2_candidate`, `samskara_apply_reaction`,
   `samskara_collapse_by_cofiring`,
   `samskara_should_regen_compound`,
-  `samskara_claim_compound_regen`, `samskara_top_for_summary`,
+  `samskara_claim_compound_regen`,
   `samskara_save_compound_summary_if_claimed`.
+  (`samskaraTopForSummary` was never an RPC - it is a direct
+  RLS-scoped table read; the admin client filters explicitly.)
 - A global SECURITY DEFINER assimilate sweep claim
   (`samskara_claim_next_assimilate_for_sweep`) returning
   `user_id`, service-role only - the C2 claim shape; the per-row

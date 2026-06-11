@@ -5271,16 +5271,17 @@ $$;
 --   - All idempotent: `create table if not exists`, `add column if not
 --     exists`, drop-then-create policies and RPCs.
 --   - Vectors are `vector(2048)` to match memories/threads. Venice's
---     bge-m3 model emits 1024 dims; the worker pads with zeros via
---     `padEmbeddingForStorage` (see src/lib/models.ts). Cosine
---     similarity is invariant to that padding.
+--     bge-m3 model emits 1024 dims; writers pad with zeros via
+--     `padEmbeddingForStorage` (browser src/lib/models, edge
+--     _shared/backfill.ts). Cosine similarity is invariant to that
+--     padding.
 --
--- Cross-device coordination uses two layers, same as memories:
---   - The singleton `worker_kind='samskara'` lease in `worker_leases`
---     keeps formation work on one device at a time.
---   - Per-row claim columns on `samskara_substrate` and
---     `samskara_compound_summary` cover the lease-handover race for
---     work that crosses an LLM round-trip.
+-- The formation pipeline runs server-side in the venice function
+-- (supabase/functions/venice/agents/samskara.ts), driven by the
+-- chat-turn tail and the hourly nak-samskara-sweep cron. Per-row
+-- claim columns on `samskara_substrate` and
+-- `samskara_compound_summary` are the mutual exclusion between the
+-- two drivers for work that crosses an LLM round-trip.
 
 create table if not exists public.samskara_substrate (
   id uuid primary key default gen_random_uuid(),
@@ -5409,15 +5410,14 @@ drop policy if exists "samskara associations self-deletable" on public.samskara_
 create policy "samskara associations self-deletable" on public.samskara_associations
   for delete using (auth.uid() = user_id);
 
--- Auto-populate user_id on insert from the caller's session. The
--- pair-relate phase in src/lib/agents/samskara/loop.ts upserts
--- rows via a raw .from('samskara_associations').upsert(...) call
--- that only sets (a_id, b_id, articulated_relation, kind,
--- reinforcement, last_reinforced_at) - it does NOT set user_id.
--- Without this default, user_id lands as NULL, the RLS `with
--- check (auth.uid() = user_id)` policy fails, and the upsert
--- returns a 42501. Idempotent: `set default` overwrites any
--- prior default, so re-running the schema is safe.
+-- Auto-populate user_id on insert from the caller's session. A
+-- user-session upsert that omits user_id would otherwise land NULL,
+-- fail the RLS `with check (auth.uid() = user_id)` policy, and
+-- return a 42501. NOTE the inverse trap for the service role: under
+-- the venice function's admin client auth.uid() is NULL, so the
+-- server-side pair-relate writer sets user_id explicitly.
+-- Idempotent: `set default` overwrites any prior default, so
+-- re-running the schema is safe.
 alter table public.samskara_associations
   alter column user_id set default auth.uid();
 
@@ -5514,13 +5514,12 @@ drop policy if exists "samskaras self-deletable" on public.samskaras;
 create policy "samskaras self-deletable" on public.samskaras
   for delete using (auth.uid() = user_id);
 
--- Auto-populate user_id from auth.uid() on insert. mint-tier1 in
--- src/lib/agents/samskara/loop.ts inserts rows directly via
--- .from('samskaras').insert({...}) and doesn't set user_id.
--- Same RLS-failure symptom as samskara_associations above. The
--- default + the RLS `with check (auth.uid() = user_id)` policy
--- combine so callers can't accidentally or maliciously attribute
--- a samskara to someone else - the session identity wins.
+-- Auto-populate user_id from auth.uid() on insert; same RLS-failure
+-- symptom and same service-role caveat as samskara_associations
+-- above (the venice function's mint writers set user_id
+-- explicitly). The default + the RLS `with check` policy combine so
+-- user-session callers can't attribute a samskara to someone else -
+-- the session identity wins.
 alter table public.samskaras
   alter column user_id set default auth.uid();
 
@@ -6021,9 +6020,9 @@ end $$;
 -- never re-evaluated, which means cluster_seq is deterministic across
 -- repeated calls so the renderer can cache the result by cohort.
 --
--- Threshold default 0.85 matches the MINT dedup convention from
--- src/lib/agents/samskara/loop.ts; drop to ~0.75 if cohorts come back
--- splintered.
+-- Threshold default 0.85 matches MINT_DEDUP_COSINE in the formation
+-- pipeline (supabase/functions/venice/agents/samskara.ts); drop to
+-- ~0.75 if cohorts come back splintered.
 --
 -- Output is one row per fire in the thread (cohort-keyed), naming the
 -- cluster_seq it landed in (1-based, restarts per cohort) plus the
@@ -6603,7 +6602,8 @@ end $$;
 -- Mint-time dedup support -------------------------------------------------
 --
 -- `samskara_nearest_by_prediction` and `samskara_reinforce_existing`
--- back the mint-tier1 dedup guard in src/lib/agents/samskara/loop.ts.
+-- back the mint-phase dedup guards in
+-- supabase/functions/venice/agents/samskara.ts.
 -- Backstory: the mint-tier1 phase used to insert unconditionally
 -- whenever the minter agent returned a non-null candidate; because
 -- the agent's input is limited to a five-row substrate sample and
