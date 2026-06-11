@@ -96,3 +96,5 @@ One file per use-case under [`use-cases/`](./use-cases/), named
 - [bias-pipeline](./use-cases/bias-pipeline.md) - the bias worker's
   analyze and aggregate phases, their DB writes, and the
   diagnostics modal + prompt-block readers.
+- [samskara-decay](./use-cases/samskara-decay.md) - the decay
+  pass's three health nudges, exercised deterministically via SQL.
