@@ -19,6 +19,7 @@ import type { AppConfig } from './config';
 import {
   coerceTierModels,
   isModelTier,
+  parseEmbeddingColumn,
   isReasoningEffort,
   isThinkingLevel,
   isVerbosity,
@@ -6370,7 +6371,16 @@ export class SupabaseService {
       .order('created_at', { ascending: false })
       .limit(limit);
     if (error) throw new SupabaseError(error.message);
-    return (data ?? []) as SamskaraSubstrateRow[];
+    // pgvector comes back as a bracketed text literal, not a JS array.
+    // Parse it so callers that do client-side cosine (pair-relate's
+    // nearest-neighbour walk, mint-tier1's topical clustering) operate
+    // on real numbers instead of multiplying string characters into
+    // NaN. A row whose vector won't parse gets an empty array, which
+    // those callers treat as "no usable embedding" and skip.
+    return ((data ?? []) as Array<Record<string, unknown>>).map((r) => ({
+      ...r,
+      situation_embedding: parseEmbeddingColumn(r.situation_embedding) ?? [],
+    })) as SamskaraSubstrateRow[];
   }
 
   /**
@@ -6405,20 +6415,19 @@ export class SupabaseService {
 
   /**
    * Worker: reinforce an existing samskara on a dedup hit. Bumps
-   * health by a small amount and appends substrate provenance rows
-   * for the observations that prompted the re-statement. Returns
-   * false when the id doesn't exist or isn't owned by the caller.
-   * Confidence is NOT touched here - re-observing is a weak signal;
-   * the real confidence swing stays with reaction-classify.
+   * health by a small amount. Returns false when the id doesn't exist
+   * or isn't owned by the caller. Confidence is NOT touched here -
+   * re-observing is a weak signal; the real confidence swing stays
+   * with reaction-classify. Provenance is also left untouched - it
+   * records formation evidence, not every later re-observation (see
+   * samskara_reinforce_existing in schema.sql).
    */
   async samskaraReinforceExisting(
     samskaraId: string,
-    substrateIds: string[],
     healthBump: number
   ): Promise<boolean> {
     const { data, error } = await this.client.rpc('samskara_reinforce_existing', {
       p_samskara_id: samskaraId,
-      p_substrate_ids: substrateIds,
       p_health_bump: healthBump,
     });
     if (error) throw new SupabaseError(error.message);

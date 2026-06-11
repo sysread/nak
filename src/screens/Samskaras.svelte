@@ -166,7 +166,7 @@
           <div><dt>confidence</dt><dd>{selected.confidence.toFixed(2)}</dd></div>
           <div><dt>health</dt><dd>{selected.health.toFixed(2)}</dd></div>
           <div><dt>fired</dt><dd>{selected.fireCount}x</dd></div>
-          <div><dt>confirm / disconfirm</dt><dd>{selected.confirmCount} / {selected.disconfirmCount}</dd></div>
+          <div><dt>confirm / disconfirm</dt><dd>{selected.confirmCount.toFixed(1)} / {selected.disconfirmCount.toFixed(1)}</dd></div>
           <div><dt>last fired</dt><dd>{relativeTime(selected.lastFiredAt)}</dd></div>
           <div><dt>created</dt><dd>{relativeTime(selected.createdAt)}</dd></div>
         </dl>

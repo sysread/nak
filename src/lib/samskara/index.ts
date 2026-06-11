@@ -38,7 +38,7 @@ import {
   padEmbeddingForStorage,
 } from '../models';
 import { topKForCorpusSize } from './format';
-import { K_BASE, STALE_CEILING_HOURS } from './types';
+import { K_BASE, STALE_CEILING_HOURS, FIRE_SCORE_FLOOR } from './types';
 import type { FireResult } from './types';
 import { createLogger } from '../logger.svelte';
 
@@ -163,8 +163,19 @@ export async function fireSamskaras(
     return null;
   }
 
+  // Drop effectively-retired (health~0, score~0) samskaras before they
+  // join the cohort. The fire RPC has no health threshold by design -
+  // it returns the long tail ordered by score - but a row scoring ~0
+  // adds nothing to priming while still inflating cohort size,
+  // fire_count, and co-fire noise. See FIRE_SCORE_FLOOR.
+  const live = rows.filter((r) => r.score >= FIRE_SCORE_FLOOR);
+  if (live.length === 0) {
+    log.debug('fire: all top-k rows below score floor (corpus is dormant)');
+    return null;
+  }
+
   const cohortId = generateCohortId();
-  const fired = rows.map((r) => ({
+  const fired = live.map((r) => ({
     id: r.id,
     prediction: r.prediction,
     innerVoice: r.inner_voice,

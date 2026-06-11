@@ -464,6 +464,96 @@ describe('samskara runOneCycle - dedup phase', () => {
   });
 });
 
+describe('samskara runOneCycle - mint-tier1 topical clustering', () => {
+  // Recency-ordered substrate window (most-recent first). The seed and
+  // c1/c2 share a topic (near-parallel embeddings); off1/off2 are
+  // orthogonal. The cluster builder should keep seed+c1+c2 and drop the
+  // off-topic rows, so both the minter sample and the provenance batch
+  // are topically coherent.
+  function substrateRow(
+    id: string,
+    embedding: number[]
+  ): Awaited<ReturnType<SupabaseService['samskaraRecentEmbeddedSubstrate']>>[number] {
+    return {
+      id,
+      situation: `situation ${id}`,
+      outcome: `outcome ${id}`,
+      valence: 0,
+      situation_embedding: embedding,
+      created_at: new Date().toISOString(),
+    } as unknown as Awaited<
+      ReturnType<SupabaseService['samskaraRecentEmbeddedSubstrate']>
+    >[number];
+  }
+  const topicalWindow = [
+    substrateRow('seed', [1, 0, 0]),
+    substrateRow('c1', [1, 0, 0]),
+    substrateRow('off1', [0, 1, 0]),
+    substrateRow('c2', [0.95, 0.05, 0]),
+    substrateRow('off2', [0, 0, 1]),
+  ];
+
+  it('mints from the topical cluster and records only its rows as provenance', async () => {
+    const { coordinator } = buildCoordinator();
+    const mint = vi.fn(async () => ({
+      prediction: 'leans into single-topic detail',
+      innerVoice: '',
+      valence: 0.1,
+      confidence: 0.6,
+    }));
+    const { client, inserted, provRows } = fakeClient('t1-new');
+    const supabase = fakeSupabase({
+      samskaraRecentEmbeddedSubstrate: vi.fn(async () => topicalWindow),
+      samskaraNearestByPrediction: vi.fn(async () => []),
+      client,
+    } as unknown as Partial<SupabaseService>);
+    const agent = fakeAgent({ mint } as unknown as Partial<SamskaraAgent>);
+    const ctx = buildCtx({ coordinator, supabase, agent, phase: 'mint-tier1' });
+    await runOneCycle(ctx); // acquired-lease
+    const result = await runOneCycle(ctx);
+    expect(result).toBe<CycleResult>('progress');
+    // The minter saw only the coherent cluster (seed + c1 + c2), not
+    // the off-topic neighbours.
+    expect(mint).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sample_situations: ['situation seed', 'situation c1', 'situation c2'],
+      }),
+      expect.anything()
+    );
+    // Provenance is the same coherent set, all weight 1.0 substrate.
+    expect(provRows).toHaveLength(1);
+    expect(provRows[0].map((r) => r.ref_id)).toEqual(['seed', 'c1', 'c2']);
+    expect(provRows[0].every((r) => r.kind === 'substrate' && r.weight === 1.0)).toBe(true);
+    expect(inserted).toHaveLength(1);
+    expect(inserted[0].tier).toBe(1);
+  });
+
+  it('does not mint when the seed has too few topical neighbours', async () => {
+    const { coordinator } = buildCoordinator();
+    const mint = vi.fn(async () => ({
+      prediction: 'should never be asked',
+      innerVoice: '',
+      valence: 0,
+      confidence: 0.5,
+    }));
+    // Seed plus two orthogonal rows: cluster collapses to the seed
+    // alone (1 < MINT_CLUSTER_MIN), so the phase bails before the agent.
+    const supabase = fakeSupabase({
+      samskaraRecentEmbeddedSubstrate: vi.fn(async () => [
+        substrateRow('seed', [1, 0, 0]),
+        substrateRow('off1', [0, 1, 0]),
+        substrateRow('off2', [0, 0, 1]),
+      ]),
+    } as unknown as Partial<SupabaseService>);
+    const agent = fakeAgent({ mint } as unknown as Partial<SamskaraAgent>);
+    const ctx = buildCtx({ coordinator, supabase, agent, phase: 'mint-tier1' });
+    await runOneCycle(ctx); // acquired-lease
+    const result = await runOneCycle(ctx);
+    expect(result).toBe<CycleResult>('empty-phase');
+    expect(mint).not.toHaveBeenCalled();
+  });
+});
+
 describe('samskara runOneCycle - mint-tier2 phase', () => {
   const candidateGroup = [
     { samskaraId: 's1', prediction: 'pushes back on flowery prose', valence: -0.2, cofireWeight: 8 },
@@ -587,8 +677,8 @@ describe('samskara runOneCycle - mint-tier2 phase', () => {
     expect(result).toBe<CycleResult>('progress');
     // Dedup query was tier-scoped to compounds.
     expect(nearest).toHaveBeenCalledWith(expect.anything(), 1, 2);
-    // Reinforced health only - no substrate provenance for a tier-2.
-    expect(reinforce).toHaveBeenCalledWith('t2-existing', [], expect.any(Number));
+    // Reinforced health only - reinforce never writes provenance.
+    expect(reinforce).toHaveBeenCalledWith('t2-existing', expect.any(Number));
     // No new row, no mint toast.
     expect(inserted).toHaveLength(0);
     expect(mints).toEqual([]);
