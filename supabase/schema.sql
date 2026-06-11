@@ -4057,7 +4057,12 @@ grant execute on function public.claim_next_thread_for_reflection_sweep(text, in
 drop function if exists public.claim_next_thread_for_summary(text, int);
 create or replace function public.claim_next_thread_for_summary(
   p_holder_id text,
-  p_ttl_seconds int
+  p_ttl_seconds int,
+  -- b-strict escape hatch (see claim_next_thread_for_reflection): the
+  -- venice edge function drives summaries from a chat turn's waitUntil
+  -- tail with a service-role client that has no uid, so it passes the
+  -- thread owner's id explicitly.
+  p_user_id uuid default null
 ) returns table (thread_id uuid, terminal_msg_id uuid)
 language sql security invoker as $$
   with candidate as (
@@ -4076,7 +4081,7 @@ language sql security invoker as $$
          order by m.created_at desc
          limit 1
       ) term
-     where t.user_id = auth.uid()
+     where t.user_id = coalesce(p_user_id, auth.uid())
        and term.msg_id is distinct from t.last_summarised_msg_id
        and (t.summary_claim_expires is null
             or t.summary_claim_expires < now())
@@ -4101,7 +4106,9 @@ create or replace function public.save_thread_summary_if_claimed(
   p_thread_id uuid,
   p_holder_id text,
   p_summary text,
-  p_msg_id uuid
+  p_msg_id uuid,
+  -- b-strict escape hatch, same as the claim RPC above.
+  p_user_id uuid default null
 ) returns boolean
 language plpgsql security invoker as $$
 declare
@@ -4113,12 +4120,68 @@ begin
          summary_claim_holder = null,
          summary_claim_expires = null
    where id = p_thread_id
-     and user_id = auth.uid()
+     and user_id = coalesce(p_user_id, auth.uid())
      and summary_claim_holder = p_holder_id
      and summary_claim_expires > now();
   get diagnostics updated = row_count;
   return updated > 0;
 end $$;
+
+-- service_role grants for the edge-function curation drivers (turn
+-- tail + curation sweep; see the reflection grants above for the
+-- pattern).
+grant execute on function
+  public.claim_next_thread_for_summary(text, int, uuid) to service_role;
+grant execute on function
+  public.save_thread_summary_if_claimed(uuid, text, text, uuid, uuid) to service_role;
+
+-- Global summary sweep claim: the curation sweep's cross-user variant
+-- of claim_next_thread_for_summary. Same candidate predicate, no user
+-- filter; returns the owner so the agent can attribute drawer logs and
+-- scope its saves. Tail + sweep double-driving is safe by construction:
+-- the per-thread claim columns are the mutual exclusion.
+drop function if exists public.claim_next_thread_for_summary_sweep(text, int);
+create or replace function public.claim_next_thread_for_summary_sweep(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns table (thread_id uuid, terminal_msg_id uuid, user_id uuid)
+language sql security definer
+set search_path = public as $$
+  with candidate as (
+    select t.id as thread_id, term.msg_id as terminal_msg_id, t.user_id as user_id
+      from public.threads t
+      cross join lateral (
+        select m.id as msg_id
+          from public.messages m
+         where m.thread_id = t.id
+           and m.role = 'assistant'
+           and (m.tool_calls is null
+                or jsonb_typeof(m.tool_calls) <> 'array'
+                or jsonb_array_length(m.tool_calls) = 0)
+           and m.content is not null
+           and length(m.content) > 0
+         order by m.created_at desc
+         limit 1
+      ) term
+     where term.msg_id is distinct from t.last_summarised_msg_id
+       and (t.summary_claim_expires is null
+            or t.summary_claim_expires < now())
+     order by t.updated_at asc
+     limit 1
+     for update of t skip locked
+  )
+  update public.threads t
+     set summary_claim_holder = p_holder_id,
+         summary_claim_expires = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c
+   where t.id = c.thread_id
+  returning t.id as thread_id, c.terminal_msg_id, t.user_id;
+$$;
+
+revoke all on function public.claim_next_thread_for_summary_sweep(text, int)
+  from public, anon, authenticated;
+grant execute on function public.claim_next_thread_for_summary_sweep(text, int)
+  to service_role;
 
 -- Auto-title pipeline RPCs ----------------------------------------------
 --
@@ -4138,7 +4201,12 @@ end $$;
 drop function if exists public.claim_next_thread_for_auto_title(text, int);
 create or replace function public.claim_next_thread_for_auto_title(
   p_holder_id text,
-  p_ttl_seconds int
+  p_ttl_seconds int,
+  -- b-strict escape hatch (see claim_next_thread_for_reflection): the
+  -- venice edge function drives titling from a chat turn's waitUntil
+  -- tail with a service-role client that has no uid, so it passes the
+  -- thread owner's id explicitly.
+  p_user_id uuid default null
 ) returns table (thread_id uuid, user_text text)
 language sql security invoker as $$
   with candidate as (
@@ -4159,7 +4227,7 @@ language sql security invoker as $$
          order by m.created_at asc
          limit 1
       ) first_user
-     where t.user_id = auth.uid()
+     where t.user_id = coalesce(p_user_id, auth.uid())
        and t.title = 'New conversation'
        and t.title_manually_set = false
        and (t.auto_title_claim_expires is null
@@ -4193,7 +4261,9 @@ drop function if exists public.save_thread_title_if_claimed(uuid, text, text);
 create or replace function public.save_thread_title_if_claimed(
   p_thread_id uuid,
   p_holder_id text,
-  p_title text
+  p_title text,
+  -- b-strict escape hatch, same as the claim RPC above.
+  p_user_id uuid default null
 ) returns boolean
 language plpgsql security invoker as $$
 declare
@@ -4204,7 +4274,7 @@ begin
          auto_title_claim_holder = null,
          auto_title_claim_expires = null
    where id = p_thread_id
-     and user_id = auth.uid()
+     and user_id = coalesce(p_user_id, auth.uid())
      and auto_title_claim_holder = p_holder_id
      and auto_title_claim_expires > now()
      and title = 'New conversation'
@@ -4221,7 +4291,9 @@ end $$;
 drop function if exists public.clear_auto_title_claim(uuid, text);
 create or replace function public.clear_auto_title_claim(
   p_thread_id uuid,
-  p_holder_id text
+  p_holder_id text,
+  -- b-strict escape hatch, same as the claim RPC above.
+  p_user_id uuid default null
 ) returns void
 language plpgsql security invoker as $$
 begin
@@ -4229,9 +4301,63 @@ begin
      set auto_title_claim_holder = null,
          auto_title_claim_expires = null
    where id = p_thread_id
-     and user_id = auth.uid()
+     and user_id = coalesce(p_user_id, auth.uid())
      and auto_title_claim_holder = p_holder_id;
 end $$;
+
+-- service_role grants for the edge-function curation drivers.
+grant execute on function
+  public.claim_next_thread_for_auto_title(text, int, uuid) to service_role;
+grant execute on function
+  public.save_thread_title_if_claimed(uuid, text, text, uuid) to service_role;
+grant execute on function
+  public.clear_auto_title_claim(uuid, text, uuid) to service_role;
+
+-- Global auto-title sweep claim: cross-user variant of
+-- claim_next_thread_for_auto_title for the curation sweep's catch-up
+-- drain (a title attempt that failed on the turn tail would otherwise
+-- wait for the thread's next turn). Returns the owner for log
+-- attribution and save scoping.
+drop function if exists public.claim_next_thread_for_auto_title_sweep(text, int);
+create or replace function public.claim_next_thread_for_auto_title_sweep(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns table (thread_id uuid, user_text text, user_id uuid)
+language sql security definer
+set search_path = public as $$
+  with candidate as (
+    select t.id as thread_id, first_user.text as user_text, t.user_id as user_id
+      from public.threads t
+      cross join lateral (
+        select m.content as text
+          from public.messages m
+         where m.thread_id = t.id
+           and m.role = 'user'
+           and m.content is not null
+           and length(m.content) > 0
+         order by m.created_at asc
+         limit 1
+      ) first_user
+     where t.title = 'New conversation'
+       and t.title_manually_set = false
+       and (t.auto_title_claim_expires is null
+            or t.auto_title_claim_expires < now())
+     order by t.updated_at asc
+     limit 1
+     for update of t skip locked
+  )
+  update public.threads t
+     set auto_title_claim_holder = p_holder_id,
+         auto_title_claim_expires = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c
+   where t.id = c.thread_id
+  returning t.id as thread_id, c.user_text, t.user_id;
+$$;
+
+revoke all on function public.claim_next_thread_for_auto_title_sweep(text, int)
+  from public, anon, authenticated;
+grant execute on function public.claim_next_thread_for_auto_title_sweep(text, int)
+  to service_role;
 
 -- Topic-tagging pipeline RPCs -------------------------------------------
 --
@@ -4256,7 +4382,13 @@ end $$;
 drop function if exists public.claim_next_thread_for_topics(text, int);
 create or replace function public.claim_next_thread_for_topics(
   p_holder_id text,
-  p_ttl_seconds int
+  p_ttl_seconds int,
+  -- b-strict escape hatch (see claim_next_thread_for_reflection): the
+  -- venice edge function drives tagging from a chat turn's waitUntil
+  -- tail with a service-role client that has no uid, so it passes the
+  -- thread owner's id explicitly. The vocab CTE scopes on the same
+  -- coalesce so the model sees the right user's vocabulary.
+  p_user_id uuid default null
 ) returns table (thread_id uuid, terminal_msg_id uuid, existing_topics text[])
 language sql security invoker as $$
   with candidate as (
@@ -4275,7 +4407,7 @@ language sql security invoker as $$
          order by m.created_at desc
          limit 1
       ) term
-     where t.user_id = auth.uid()
+     where t.user_id = coalesce(p_user_id, auth.uid())
        and t.title <> 'New conversation'
        and term.msg_id is distinct from t.last_topics_msg_id
        and (t.topics_claim_expires is null
@@ -4292,7 +4424,7 @@ language sql security invoker as $$
     -- on the first few threads, then the vocabulary self-seeds.
     select coalesce(array_agg(distinct topic order by topic), '{}'::text[]) as topics
       from public.threads t, unnest(t.topics) as topic
-     where t.user_id = auth.uid()
+     where t.user_id = coalesce(p_user_id, auth.uid())
        and t.topics <> '{}'::text[]
   )
   update public.threads t
@@ -4314,7 +4446,9 @@ create or replace function public.save_thread_topics_if_claimed(
   p_thread_id uuid,
   p_holder_id text,
   p_topics text[],
-  p_msg_id uuid
+  p_msg_id uuid,
+  -- b-strict escape hatch, same as the claim RPC above.
+  p_user_id uuid default null
 ) returns boolean
 language plpgsql security invoker as $$
 declare
@@ -4326,7 +4460,7 @@ begin
          topics_claim_holder = null,
          topics_claim_expires = null
    where id = p_thread_id
-     and user_id = auth.uid()
+     and user_id = coalesce(p_user_id, auth.uid())
      and topics_claim_holder = p_holder_id
      and topics_claim_expires > now();
   get diagnostics updated = row_count;
@@ -4341,7 +4475,9 @@ end $$;
 drop function if exists public.clear_topics_claim(uuid, text);
 create or replace function public.clear_topics_claim(
   p_thread_id uuid,
-  p_holder_id text
+  p_holder_id text,
+  -- b-strict escape hatch, same as the claim RPC above.
+  p_user_id uuid default null
 ) returns void
 language plpgsql security invoker as $$
 begin
@@ -4349,9 +4485,76 @@ begin
      set topics_claim_holder = null,
          topics_claim_expires = null
    where id = p_thread_id
-     and user_id = auth.uid()
+     and user_id = coalesce(p_user_id, auth.uid())
      and topics_claim_holder = p_holder_id;
 end $$;
+
+-- service_role grants for the edge-function curation drivers.
+grant execute on function
+  public.claim_next_thread_for_topics(text, int, uuid) to service_role;
+grant execute on function
+  public.save_thread_topics_if_claimed(uuid, text, text[], uuid, uuid) to service_role;
+grant execute on function
+  public.clear_topics_claim(uuid, text, uuid) to service_role;
+
+-- Global thread-topics sweep claim: cross-user variant of
+-- claim_next_thread_for_topics for the curation sweep. The vocab CTE
+-- scopes to the candidate row's owner so the model sees that user's
+-- vocabulary, not an aggregate across accounts.
+drop function if exists public.claim_next_thread_for_topics_sweep(text, int);
+create or replace function public.claim_next_thread_for_topics_sweep(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns table (
+  thread_id uuid,
+  terminal_msg_id uuid,
+  existing_topics text[],
+  user_id uuid
+)
+language sql security definer
+set search_path = public as $$
+  with candidate as (
+    select t.id as thread_id, term.msg_id as terminal_msg_id, t.user_id as user_id
+      from public.threads t
+      cross join lateral (
+        select m.id as msg_id
+          from public.messages m
+         where m.thread_id = t.id
+           and m.role = 'assistant'
+           and (m.tool_calls is null
+                or jsonb_typeof(m.tool_calls) <> 'array'
+                or jsonb_array_length(m.tool_calls) = 0)
+           and m.content is not null
+           and length(m.content) > 0
+         order by m.created_at desc
+         limit 1
+      ) term
+     where t.title <> 'New conversation'
+       and term.msg_id is distinct from t.last_topics_msg_id
+       and (t.topics_claim_expires is null
+            or t.topics_claim_expires < now())
+     order by t.updated_at asc
+     limit 1
+     for update of t skip locked
+  ),
+  vocab as (
+    select coalesce(array_agg(distinct topic order by topic), '{}'::text[]) as topics
+      from public.threads t, unnest(t.topics) as topic
+     where t.user_id = (select c.user_id from candidate c)
+       and t.topics <> '{}'::text[]
+  )
+  update public.threads t
+     set topics_claim_holder = p_holder_id,
+         topics_claim_expires = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c, vocab v
+   where t.id = c.thread_id
+  returning t.id as thread_id, c.terminal_msg_id, v.topics as existing_topics, t.user_id;
+$$;
+
+revoke all on function public.claim_next_thread_for_topics_sweep(text, int)
+  from public, anon, authenticated;
+grant execute on function public.claim_next_thread_for_topics_sweep(text, int)
+  to service_role;
 
 -- Topic vocabulary + per-topic corpus counts for the current user.
 -- Used by the drawer's topic-filter dropdown on mount and after a
@@ -4423,7 +4626,13 @@ $$;
 drop function if exists public.claim_next_memory_for_topics(text, int);
 create or replace function public.claim_next_memory_for_topics(
   p_holder_id text,
-  p_ttl_seconds int
+  p_ttl_seconds int,
+  -- b-strict escape hatch (see claim_next_thread_for_reflection): the
+  -- venice edge function probes this queue from a chat turn's
+  -- waitUntil tail with a service-role client that has no uid, so it
+  -- passes the owner's id explicitly. The vocab CTE scopes on the
+  -- same coalesce.
+  p_user_id uuid default null
 ) returns table (
   memory_id uuid,
   label text,
@@ -4434,7 +4643,7 @@ language sql security invoker as $$
   with candidate as (
     select m.id as memory_id, m.label, m.data
       from public.memories m
-     where m.user_id = auth.uid()
+     where m.user_id = coalesce(p_user_id, auth.uid())
        and m.last_topics_at is null
        and (m.topics_claim_expires is null
             or m.topics_claim_expires < now())
@@ -4450,7 +4659,7 @@ language sql security invoker as $$
     -- seeds.
     select coalesce(array_agg(distinct topic order by topic), '{}'::text[]) as topics
       from public.memories m, unnest(m.topics) as topic
-     where m.user_id = auth.uid()
+     where m.user_id = coalesce(p_user_id, auth.uid())
        and m.topics <> '{}'::text[]
   )
   update public.memories m
@@ -4471,7 +4680,9 @@ drop function if exists public.save_memory_topics_if_claimed(uuid, text, text[])
 create or replace function public.save_memory_topics_if_claimed(
   p_memory_id uuid,
   p_holder_id text,
-  p_topics text[]
+  p_topics text[],
+  -- b-strict escape hatch, same as the claim RPC above.
+  p_user_id uuid default null
 ) returns boolean
 language plpgsql security invoker as $$
 declare
@@ -4483,7 +4694,7 @@ begin
          topics_claim_holder = null,
          topics_claim_expires = null
    where id = p_memory_id
-     and user_id = auth.uid()
+     and user_id = coalesce(p_user_id, auth.uid())
      and topics_claim_holder = p_holder_id
      and topics_claim_expires > now();
   get diagnostics updated = row_count;
@@ -4498,7 +4709,9 @@ end $$;
 drop function if exists public.clear_memory_topics_claim(uuid, text);
 create or replace function public.clear_memory_topics_claim(
   p_memory_id uuid,
-  p_holder_id text
+  p_holder_id text,
+  -- b-strict escape hatch, same as the claim RPC above.
+  p_user_id uuid default null
 ) returns void
 language plpgsql security invoker as $$
 begin
@@ -4506,9 +4719,65 @@ begin
      set topics_claim_holder = null,
          topics_claim_expires = null
    where id = p_memory_id
-     and user_id = auth.uid()
+     and user_id = coalesce(p_user_id, auth.uid())
      and topics_claim_holder = p_holder_id;
 end $$;
+
+-- service_role grants for the edge-function curation drivers.
+grant execute on function
+  public.claim_next_memory_for_topics(text, int, uuid) to service_role;
+grant execute on function
+  public.save_memory_topics_if_claimed(uuid, text, text[], uuid) to service_role;
+grant execute on function
+  public.clear_memory_topics_claim(uuid, text, uuid) to service_role;
+
+-- Global memory-topics sweep claim: cross-user variant of
+-- claim_next_memory_for_topics for the curation sweep. This queue's
+-- writers are all server-side (reflection / rem / deep-sleep on cron
+-- and chat-turn tails), so the sweep is the primary drain - without
+-- it a 3am rem consolidation leaves rows untagged until their owner
+-- next converses. The vocab CTE scopes to the candidate row's owner.
+drop function if exists public.claim_next_memory_for_topics_sweep(text, int);
+create or replace function public.claim_next_memory_for_topics_sweep(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns table (
+  memory_id uuid,
+  label text,
+  data text,
+  existing_topics text[],
+  user_id uuid
+)
+language sql security definer
+set search_path = public as $$
+  with candidate as (
+    select m.id as memory_id, m.label, m.data, m.user_id as user_id
+      from public.memories m
+     where m.last_topics_at is null
+       and (m.topics_claim_expires is null
+            or m.topics_claim_expires < now())
+     order by m.updated_at asc
+     limit 1
+     for update of m skip locked
+  ),
+  vocab as (
+    select coalesce(array_agg(distinct topic order by topic), '{}'::text[]) as topics
+      from public.memories m, unnest(m.topics) as topic
+     where m.user_id = (select c.user_id from candidate c)
+       and m.topics <> '{}'::text[]
+  )
+  update public.memories m
+     set topics_claim_holder = p_holder_id,
+         topics_claim_expires = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c, vocab v
+   where m.id = c.memory_id
+  returning m.id as memory_id, c.label, c.data, v.topics as existing_topics, m.user_id;
+$$;
+
+revoke all on function public.claim_next_memory_for_topics_sweep(text, int)
+  from public, anon, authenticated;
+grant execute on function public.claim_next_memory_for_topics_sweep(text, int)
+  to service_role;
 
 -- Memory-topic vocabulary + per-topic counts for the current user.
 -- Used by the Memories drawer's topic-filter dropdown on mount and
@@ -4555,7 +4824,13 @@ $$;
 drop function if exists public.claim_next_recipe_for_topics(text, int);
 create or replace function public.claim_next_recipe_for_topics(
   p_holder_id text,
-  p_ttl_seconds int
+  p_ttl_seconds int,
+  -- b-strict escape hatch (see claim_next_thread_for_reflection): the
+  -- venice edge function probes this queue from a chat turn's
+  -- waitUntil tail with a service-role client that has no uid, so it
+  -- passes the owner's id explicitly. The vocab CTE scopes on the
+  -- same coalesce.
+  p_user_id uuid default null
 ) returns table (
   recipe_id uuid,
   title text,
@@ -4566,7 +4841,7 @@ language sql security invoker as $$
   with candidate as (
     select r.id as recipe_id, r.title, r.cooklang
       from public.recipes r
-     where r.user_id = auth.uid()
+     where r.user_id = coalesce(p_user_id, auth.uid())
        and r.last_topics_at is null
        and (r.topics_claim_expires is null
             or r.topics_claim_expires < now())
@@ -4582,7 +4857,7 @@ language sql security invoker as $$
     -- self-seeds.
     select coalesce(array_agg(distinct topic order by topic), '{}'::text[]) as topics
       from public.recipes r, unnest(r.topics) as topic
-     where r.user_id = auth.uid()
+     where r.user_id = coalesce(p_user_id, auth.uid())
        and r.topics <> '{}'::text[]
   )
   update public.recipes r
@@ -4604,7 +4879,9 @@ drop function if exists public.save_recipe_topics_if_claimed(uuid, text, text[])
 create or replace function public.save_recipe_topics_if_claimed(
   p_recipe_id uuid,
   p_holder_id text,
-  p_topics text[]
+  p_topics text[],
+  -- b-strict escape hatch, same as the claim RPC above.
+  p_user_id uuid default null
 ) returns boolean
 language plpgsql security invoker as $$
 declare
@@ -4616,7 +4893,7 @@ begin
          topics_claim_holder = null,
          topics_claim_expires = null
    where id = p_recipe_id
-     and user_id = auth.uid()
+     and user_id = coalesce(p_user_id, auth.uid())
      and topics_claim_holder = p_holder_id
      and topics_claim_expires > now();
   get diagnostics updated = row_count;
@@ -4630,7 +4907,9 @@ end $$;
 drop function if exists public.clear_recipe_topics_claim(uuid, text);
 create or replace function public.clear_recipe_topics_claim(
   p_recipe_id uuid,
-  p_holder_id text
+  p_holder_id text,
+  -- b-strict escape hatch, same as the claim RPC above.
+  p_user_id uuid default null
 ) returns void
 language plpgsql security invoker as $$
 begin
@@ -4638,9 +4917,65 @@ begin
      set topics_claim_holder = null,
          topics_claim_expires = null
    where id = p_recipe_id
-     and user_id = auth.uid()
+     and user_id = coalesce(p_user_id, auth.uid())
      and topics_claim_holder = p_holder_id;
 end $$;
+
+-- service_role grants for the edge-function curation drivers.
+grant execute on function
+  public.claim_next_recipe_for_topics(text, int, uuid) to service_role;
+grant execute on function
+  public.save_recipe_topics_if_claimed(uuid, text, text[], uuid) to service_role;
+grant execute on function
+  public.clear_recipe_topics_claim(uuid, text, uuid) to service_role;
+
+-- Global recipe-topics sweep claim: cross-user variant of
+-- claim_next_recipe_for_topics for the curation sweep. Same
+-- server-writes/browser-drains rationale as the memory sweep claim:
+-- the recipe_* tools dispatch in the venice function, so the queue
+-- fills with no tab open. The vocab CTE scopes to the candidate
+-- row's owner.
+drop function if exists public.claim_next_recipe_for_topics_sweep(text, int);
+create or replace function public.claim_next_recipe_for_topics_sweep(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns table (
+  recipe_id uuid,
+  title text,
+  cooklang text,
+  existing_topics text[],
+  user_id uuid
+)
+language sql security definer
+set search_path = public as $$
+  with candidate as (
+    select r.id as recipe_id, r.title, r.cooklang, r.user_id as user_id
+      from public.recipes r
+     where r.last_topics_at is null
+       and (r.topics_claim_expires is null
+            or r.topics_claim_expires < now())
+     order by r.updated_at asc
+     limit 1
+     for update of r skip locked
+  ),
+  vocab as (
+    select coalesce(array_agg(distinct topic order by topic), '{}'::text[]) as topics
+      from public.recipes r, unnest(r.topics) as topic
+     where r.user_id = (select c.user_id from candidate c)
+       and r.topics <> '{}'::text[]
+  )
+  update public.recipes r
+     set topics_claim_holder = p_holder_id,
+         topics_claim_expires = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c, vocab v
+   where r.id = c.recipe_id
+  returning r.id as recipe_id, c.title, c.cooklang, v.topics as existing_topics, r.user_id;
+$$;
+
+revoke all on function public.claim_next_recipe_for_topics_sweep(text, int)
+  from public, anon, authenticated;
+grant execute on function public.claim_next_recipe_for_topics_sweep(text, int)
+  to service_role;
 
 -- Recipe-topic vocabulary + per-topic counts for the current user.
 -- Backs the Cookbook drawer's topic-filter dropdown. Distinct from
@@ -9898,6 +10233,81 @@ begin
   end if;
 exception when others then
   raise notice 'reflection sweep cron setup skipped: %', sqlerrm;
+end
+$cron$;
+
+-- ---------------------------------------------------------------------------
+-- Scheduled curation sweep (pg_cron -> pg_net -> venice/curation-sweep)
+--
+-- Hourly catch-up drain for the five curation queues the venice
+-- function's chat-turn tail also services: auto-title, thread topics,
+-- thread summaries, memory topics, recipe topics. The tail only fires
+-- when its owner converses, so the sweep is what drains work created
+-- server-side (rem / deep-sleep consolidations re-queue memory tags;
+-- recipe tools re-queue recipe tags) or left behind by a failed tail
+-- attempt. Same Vault secrets and dispatch shape as the reflection
+-- sweep above.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.nak_trigger_curation_sweep()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $fn$
+declare
+  v_url text;
+  v_key text;
+begin
+  begin
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'project_url' $q$ into v_url;
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'service_role_key' $q$ into v_key;
+  exception when others then
+    return;  -- vault not installed or unreadable; nothing to dispatch
+  end;
+  if v_url is null or v_key is null then
+    return;  -- secrets not seeded yet
+  end if;
+  begin
+    execute format(
+      $q$ select net.http_post(
+            url := %L,
+            headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', %L),
+            body := '{}'::jsonb
+          ) $q$,
+      v_url || '/functions/v1/venice/curation-sweep',
+      'Bearer ' || v_key
+    );
+  exception when others then
+    raise notice 'nak_trigger_curation_sweep: dispatch failed: %', sqlerrm;
+  end;
+end;
+$fn$;
+
+revoke all on function public.nak_trigger_curation_sweep() from public, anon, authenticated;
+
+do $cron$
+begin
+  if exists (select 1 from pg_available_extensions where name = 'pg_cron')
+     and exists (select 1 from pg_available_extensions where name = 'pg_net') then
+    create extension if not exists pg_cron;
+    create extension if not exists pg_net;
+    if exists (select 1 from cron.job where jobname = 'nak-curation-sweep') then
+      perform cron.unschedule('nak-curation-sweep');
+    end if;
+    -- Minute 57: the last free slot in the hourly spacing scheme
+    -- (embed */5, wiki 7, rem 17, reflection 27, librarian 37,
+    -- deep-sleep 47). Deliberately after rem (:17) and deep-sleep
+    -- (:47) so the tag queues their consolidations re-arm drain
+    -- within the same hour.
+    perform cron.schedule(
+      'nak-curation-sweep',
+      '57 * * * *',
+      $job$ select public.nak_trigger_curation_sweep(); $job$
+    );
+  end if;
+exception when others then
+  raise notice 'curation sweep cron setup skipped: %', sqlerrm;
 end
 $cron$;
 
