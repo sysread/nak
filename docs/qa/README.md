@@ -98,3 +98,6 @@ One file per use-case under [`use-cases/`](./use-cases/), named
   diagnostics modal + prompt-block readers.
 - [samskara-decay](./use-cases/samskara-decay.md) - the decay
   pass's three health nudges, exercised deterministically via SQL.
+- [samskara-formation](./use-cases/samskara-formation.md) - the
+  seven-phase formation rotation (assimilate through
+  compound-regen) plus the mint toast surface.
