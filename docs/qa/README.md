@@ -89,3 +89,6 @@ One file per use-case under [`use-cases/`](./use-cases/), named
 - [background-maintenance](./use-cases/background-maintenance.md) -
   embed backfill, attachment expiry, recipe-image GC, and their
   per-user drawer summaries.
+- [supervisor-units](./use-cases/supervisor-units.md) - the browser
+  supervisor's five claim-based units: auto-title, thread topics,
+  memory topics, recipe topics, summary.
