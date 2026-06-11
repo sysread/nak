@@ -35,18 +35,15 @@ must not depend on a browser tab being open.
   outright (the day-gate subsumes it), and the aggregate
   dirty/throttle state collapsed into the cron cadence plus a 24h
   freshness floor.
-- **C3. Samskara formation loop: deferred, user-confirmed
-  (2026-06-10).** The one standing exception to the rule. Deferred
-  until a concurrent session's samskara changes land - it is
-  building a new tab for observing samskaras (read-only, for
-  debugging and observability). On top of that: the tier-2 compound
-  machinery is weeks old (its two schema functions still owe the
-  post-deploy manual SQL exercise), the port is its own milestone
-  (8 phases, in-memory throttles, mint toast propagation), and the
-  chat-scoped half (fire, substrate stub, compound-summary read)
-  stays browser-side regardless. Standing rule applies when this
-  reopens: the samskara area needs a fresh full read before any
-  plan touches it.
+- **C3. Port the samskara formation loop. Active (2026-06-11;
+  design in "C3 design" below).** The deferral that previously
+  gated this is resolved: the concurrent session's samskara
+  diagnostics tab landed on main, and the fresh full read of the
+  area (the standing precondition) ran 2026-06-11 against the
+  rebased tree, covering the tier-2 machinery and the upstream
+  feedback-loop fixes. The chat-scoped half (fire, substrate stub,
+  compound-summary read, priming format, mood pill) stays
+  browser-side regardless - only the formation rotation moves.
 
   **Decay lifted early (2026-06-11).** Upstream 13ef213 flagged
   the decay phase as the cleanest pre-port lift (pure SQL, no LLM,
@@ -265,3 +262,181 @@ this.
 - Aggregate parity: the TS math moved runtimes; the QA pass
   should compare a recomputed `bias_summary` row against its
   pre-port value for the same inputs.
+
+## C3 design (2026-06-11)
+
+Baseline QA per the convention: backfill
+`docs/qa/use-cases/samskara-formation.md` and execute against the
+unchanged browser worker first. The baseline is expected to log
+one FAIL: `samskara_tier2_candidate` errors on every call against
+the local stack (`DELETE requires a WHERE clause`, SQLSTATE 21000)
+because the local PostgREST connections preload pg-safeupdate and
+the function clears its temp edge table with an unqualified
+`delete from _tier2_edges`. The mint-tier2 phase has therefore
+never run locally. The fix (`truncate`) ships with the C3 schema
+changes; the service-role port would hit the identical error, so
+this is a port prerequisite, not a drive-by.
+
+### Drivers: dual (turn tail + hourly cron), with a phase split
+
+The seven formation phases split by timing sensitivity, and the
+split is the design:
+
+- **Turn tail** (`samskaraOnTurnTail(admin, userId)`, sequential
+  between curation and reflection in `getStreamingResponse`'s
+  waitUntil tail - before reflection because reflection can span
+  minutes and the samskara phases carry the only hard timing
+  window in the fleet): reaction-classify FIRST, then an
+  assimilate drain (capped), then one pair-relate probe, then one
+  mint-tier1 probe.
+
+  Reaction-classify is the reason the tail exists. A fired
+  cohort's resolution window is 1-10 minutes after the fire, and
+  the resolving evidence IS the next user message - so the tail
+  of turn N+1 runs at exactly the moment turn N's cohort becomes
+  classifiable. A cron at any sane cadence misses most of the
+  window; the design already ages unresolved fires out via decay,
+  and a user who walked away produced no next message to classify
+  anyway. The 1-minute floor (avoid racing an in-flight turn)
+  stays for parity even though the tail runs post-turn.
+
+  Pair-relate and mint-tier1 ride the tail for mint
+  responsiveness: the in-session toast is the product surface.
+  Expected latency for a new claim: stub (browser, end of turn N)
+  -> assimilate (tail of N+1) -> situation embedding (the */5
+  embed backfill; `samskara-substrate` is already a registered
+  server-side source) -> mint probe (tail of N+2). A few minutes
+  and a couple of turns - comparable to the old worker's 60s
+  throttle plus embed lag.
+
+- **Hourly cron sweep** (`samskara-sweep` route via
+  `sweepHandler`, `nak-samskara-sweep` at `23 * * * *` - free
+  minute on the ladder): the catch-up driver and the only driver
+  for the heavy, timing-insensitive phases. Per tick: drain the
+  global assimilate queue (cross-user sweep claim, capped, cap
+  hit logged), then for each user with recent samskara activity
+  run pair-relate, mint-tier1, mint-tier2, dedup, and
+  compound-regen probes. Mint-tier2 and dedup and compound-regen
+  are cron-only on purpose: the tier-2 detection self-join is the
+  heaviest query in the feature and compounds form over days, the
+  dedup collapse is population maintenance, and the compound
+  summary already tolerates 24h staleness in the priming block.
+  The old 5-minute tier-2 throttle becomes "once per user per
+  hourly tick" for free.
+
+Sweep user discovery: a definer RPC returning users with
+substrate or fire activity inside the lookback window (2h - one
+tick plus slack for a missed tick). Compound-regen's per-user
+`should_regen` predicate and dedup's population cap make the
+probes self-limiting for users the window over-includes.
+
+### Throttles: deleted
+
+`PHASE_THROTTLE_MIN_INTERVAL_MS`, the tier-2 override, and the
+lease-loss throttle reset all existed to stop a continuously
+rotating browser worker from re-running exploratory probes every
+~9 seconds. Server-side there is no continuous rotation - one
+rotation per trigger (turn or tick) - so the trigger cadence IS
+the throttle. Nothing replaces them.
+
+### Mint toasts: postMessage becomes a realtime INSERT relay
+
+The worker's `onMint` -> postMessage -> manager ->
+`SAMSKARA_MINT_EVENT` chain dies with the worker. Replacement is
+the established relay pattern (wiki_articles / memories /
+recipes): add `samskaras` to the `supabase_realtime` publication,
+subscribe to user-filtered postgres_changes INSERTs in
+Chat.svelte, and map the new row's `(tier, valence, confidence)`
+into `notifySamskaraMint`. INSERT-only - no replica-identity
+index needed (that lesson applies to DELETE delivery).
+Dedup-reinforce hits insert nothing and so toast nothing, which
+matches the browser behaviour exactly. `SamskaraToasts.svelte`,
+the mood pill, and `events.ts` are untouched consumers.
+
+### Schema
+
+- Fix `samskara_tier2_candidate`: `truncate _tier2_edges` instead
+  of the unqualified `delete` (pg-safeupdate, above).
+- b-strict `p_user_id uuid default null` overloads on the invoker
+  RPCs the rotation calls: `samskara_claim_next_assimilate`,
+  `samskara_save_assimilation_if_claimed`,
+  `samskara_nearest_by_prediction`, `samskara_reinforce_existing`,
+  `samskara_tier2_candidate`, `samskara_apply_reaction`,
+  `samskara_collapse_by_cofiring`,
+  `samskara_should_regen_compound`,
+  `samskara_claim_compound_regen`, `samskara_top_for_summary`,
+  `samskara_save_compound_summary_if_claimed`.
+- A global SECURITY DEFINER assimilate sweep claim
+  (`samskara_claim_next_assimilate_for_sweep`) returning
+  `user_id`, service-role only - the C2 claim shape; the per-row
+  claim columns on `samskara_substrate` carry forward as the
+  mutual exclusion between tail and sweep.
+- A definer sweep-users RPC for the per-user cron phases.
+- The loop's raw `.from()` writes (associations upsert, both mint
+  inserts, provenance upserts) move to the admin client and MUST
+  set `user_id` explicitly - `samskaras`,
+  `samskara_provenance`, and `samskara_associations` all default
+  `user_id` to `auth.uid()`, which is NULL under the service role
+  (the C2 landmine).
+- `samskaras` joins the `supabase_realtime` publication.
+- `nak_trigger_samskara_sweep()` + pg_cron `nak-samskara-sweep`
+  at `23 * * * *`. Ladder after this: embed */5, bias :03, wiki
+  :07, decay :13/:43, rem+attachments :17, samskara :23,
+  reflection :27, librarian+recipe-gc :37, deep-sleep :47,
+  curation :57.
+
+### Server agent
+
+`supabase/functions/venice/agents/samskara.ts` exporting
+`samskaraOnTurnTail(adminClient, userId)` and
+`runSamskaraSweepTick(adminClient)`. The six prompts port
+verbatim from `src/lib/agents/samskara/prompts.ts`; model
+hardcoded `mistral-small-3-2-24b-instruct` (the
+`AGENT_MODELS.samskara` entry at port time). The loop's math
+helpers (cosine, `buildTopicalCluster`) and tuning constants
+(`MINT_DEDUP_COSINE`, `MINT_CLUSTER_*`) move into the module -
+no browser reader survives the port, so no `_shared` mirror is
+expected (verify with grep at port time; the chat-side constants
+in `src/lib/samskara/types.ts` are a disjoint set and stay).
+Edge logger source `samskara` (drops the `-worker` suffix, per
+the fleet convention); the sweep's per-user work logs through
+per-user loggers for drawer attribution.
+
+### Deletions (the payoff)
+
+`src/lib/agents/samskara/` entirely (agent, loop, manager,
+prompts, worker), the `nak:samskara-worker` Web Lock and its
+`worker_leases` partition use, the twelve worker-only
+`SupabaseService` wrappers (`samskaraClaimNextAssimilate`,
+`samskaraSaveAssimilation`, `samskaraRecentEmbeddedSubstrate`,
+`samskaraNearestByPrediction`, `samskaraReinforceExisting`,
+`samskaraTier2Candidate`, `samskaraApplyReaction`,
+`samskaraCollapseByCofiring`, `samskaraShouldRegenCompound`,
+`samskaraClaimCompoundRegen`, `samskaraTopForSummary`,
+`samskaraSaveCompoundSummary`), the `AGENT_MODELS.samskara`
+entry, the state-layer manager wiring, and
+`tests/samskara-loop.test.ts` (ported logic gets Deno coverage).
+The diagnostics tab's worker-lease panel
+(`samskaraWorkerLeases`) loses its subject and comes out in the
+same PR - a user-facing change, so `docs/user/` moves with it.
+Samskara is the last lease tenant: the shared apparatus
+(`base-manager.ts`, `holder.ts`, `embeddings/lease.ts`, the
+`worker_leases` table) becomes deletable, tracked as its own
+follow-up step after this port lands.
+
+### Risks the QA re-execution must check
+
+- Toast delivery now depends on realtime INSERT relay - a mint
+  that writes the row but never toasts points at the publication
+  or the subscription, not the agent.
+- The waitUntil tail now chains curation + samskara + reflection
+  sequentially; samskara adds up to ~4 quick completions before
+  reflection starts. Hosted lifetime is already on the [hosted]
+  ledger; the hourly sweep is the backstop for tail deaths.
+- Stub-recording race: the browser records the substrate stub at
+  end of turn N at roughly the same moment the tail runs, so the
+  tail usually assimilates turn N-1's stub. One-turn lag,
+  by construction; the sweep catches strays.
+- Tier-2 runs for the first time locally post-fix - the baseline
+  FAIL row and the post-fix row are the before/after evidence the
+  tier-2 schema functions have been owed since they shipped.
