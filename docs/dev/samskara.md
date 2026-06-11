@@ -163,9 +163,10 @@ toast is just a glance cue that the bias model is forming.
   `runOneCycle(ctx)` acquires the lease if needed, then
   advances exactly one phase per cycle. The outer worker
   rotates through `PHASES` (assimilate, pair-relate,
-  mint-tier1, mint-tier2, reaction-classify, decay,
+  mint-tier1, mint-tier2, reaction-classify,
   dedup, compound-regen) and treats an all-empty rotation as
-  the idle signal.
+  the idle signal. Decay is not in the rotation - it runs
+  server-side on pg_cron (see the Decay formula below).
 - `src/lib/agents/samskara/worker.ts` - the Web Worker entry
   point. Builds its own Supabase + Venice clients from the
   `start` message (class instances don't structured-clone),
@@ -183,7 +184,8 @@ toast is just a glance cue that the bias model is forming.
   RLS, the `worker_kind='samskara'` lease partition, and the
   RPC surface covering fire, cohort log, reaction apply,
   substrate record, assimilate claim/save, substrate-embed
-  claim/save, decay, co-firing-based dedup collapse,
+  claim/save, the cron-driven decay sweep, co-firing-based
+  dedup collapse,
   `samskara_tier2_candidate(...)` (the co-fire-group detector the
   mint-tier2 phase reads - the inverse of dedup; see the Tier-2
   detection formula below), `samskara_nearest_by_prediction(embed,
@@ -553,8 +555,6 @@ sleep (60s).
   buckets and applies via `samskara_apply_reaction`. Neutrals
   get `fired_at` nudged 15 minutes back so the unresolved-poll
   skips them on subsequent passes.
-- **Decay** - `samskara_decay()` RPC, no LLM. Three paths; see
-  the Decay formula below.
 - **Dedup** - `samskara_collapse_by_cofiring(...)` RPC, no LLM.
   Two-pass: a primary co-firing-based pass merges tier-1 pairs
   that reliably activate in the same cohort (Hebbian
@@ -638,8 +638,8 @@ reinforce meaningfully but can't dominate single-fire signal.
 
 ### Decay formula
 
-Three paths per `samskara_decay()` pass. Health is clamped to
-[0, 1].
+Three paths per `samskara_decay_sweep()` pass. Health is clamped
+to [0, 1].
 
 ```text
 stale-fire decay:
@@ -681,38 +681,31 @@ recalibrated "barely any signal" / "~three reactions of net
 disconfirm" bars. Overpopulation pruning is the collapse RPC's
 job, not decay's, so these bars can be lenient.
 
-Cadence matters as much as the thresholds: **decay is throttled
-to a 30-minute wall-clock interval** in the worker
-(`DECAY_THROTTLE_INTERVAL_MS`). It is SQL-only with no consumer
-inside the worker, so the rotation would otherwise run it every
-pass - many times a minute during an active session - and at
--0.03/pass that drove the whole corpus to health 0. The decay
-rates are a per-pass nudge; the 30-minute throttle is what makes
-"per pass" mean what the rates assume.
+Cadence matters as much as the thresholds: the decay rates are a
+per-PASS nudge calibrated for a ~30-minute interval. Run more
+often, they compound - an unthrottled per-rotation pass once
+drove the whole corpus to health 0 at -0.03/pass, and the
+worker's later in-memory throttle reset on every restart (page
+reload, tab switch, lease loss) so it still over-ran the target
+under active use. The pass therefore runs **server-side as the
+`nak-samskara-decay` pg_cron job** (`13,43 * * * *`, pure SQL, no
+pg_net - same shape as the stream janitor): a wall clock that no
+client lifecycle can reset. `samskara_decay_sweep()` is
+`security definer` with no `auth.uid()` filter - cron has no user
+session, and every predicate is row-local, so one cross-user pass
+is exactly the union of the per-user passes. The browser worker
+has no decay phase.
 
-> **Migration note - decay is a strong cron candidate.** The
-> 30-minute throttle is enforced *in memory, per worker process*,
-> so it resets on every worker restart: page reload, tab switch,
-> lease loss, redeploy. During active use decay therefore runs far
-> more often than 30 minutes (observed ~every 3 minutes while the
-> log drawer was being watched). The newborn-decay fix
-> (`coalesce(last_fired_at, created_at)` in the stale path) removed
-> the *harm* of over-frequent decay, so today this is a robustness
-> nicety, not a bug - but it is fragile by construction.
->
-> When the formation pipeline migrates from the client Web Worker
-> to edge functions + `pg_cron`, **decay is the single cleanest
-> phase to lift out first**: it is pure SQL, no LLM, no in-worker
-> consumer, and no per-row claim/lease coordination. Run
-> `samskara_decay()` as a scheduled `pg_cron` job (every ~30 min)
-> and the cadence becomes a true server-side wall clock with no
-> restart-reset failure mode - which makes the in-memory throttle
-> obsolete. At that point: drop `DECAY_THROTTLE_INTERVAL_MS` and
-> the throttle gate in `runDecayPhase`, and remove `'decay'` from
-> the client `PHASES` rotation (or leave it as a no-op) so the two
-> don't double-run. The same lift-to-cron reasoning extends to the
+> **Migration note - dedup is the remaining cron candidate.** The
+> same lift-to-cron reasoning that moved decay applies to the
 > other LLM-free maintenance phase, `dedup`
-> (`samskara_collapse_by_cofiring`), for the same reasons.
+> (`samskara_collapse_by_cofiring`): SQL-only, no in-worker
+> consumer. It is NOT row-local though - the co-fire pair
+> enumeration and the population cap are scoped per user - so a
+> sweep variant needs a per-user loop rather than a dropped
+> filter. Parked for the samskara leg of the
+> de-browser-background-jobs migration
+> (`docs/dev/in-progress/de-browser-background-jobs.md`).
 
 ### Dedup formula
 
@@ -904,7 +897,7 @@ summarizer reads samskaras to feed the agent.
   must do the same. RPCs that do the cosine in SQL (the fire,
   search, nearest, and cluster RPCs) are unaffected - this only
   bites client-side vector math.
-- **Reaction counts are `real`; decay is wall-clock throttled.**
+- **Reaction counts are `real`; decay cadence is load-bearing.**
   Two coupled traps that together euthanized the entire corpus
   to health 0 once. (1) `confirm_count`/`disconfirm_count` MUST
   be `real`: reactions increment by `1/sqrt(cohort_N)` (~0.2-0.6),
@@ -912,14 +905,13 @@ summarizer reads samskaras to feed the agent.
   making the locked-in decay rule fire on everything. Any RPC
   RETURNS TABLE that re-declares these as `int` (e.g.
   `samskara_search_by_prediction`) re-introduces the truncation
-  on the way out - keep them `real`. (2) `samskara_decay` is
-  SQL-only with no in-worker consumer, so the rotation will run
-  it every pass unless throttled; at -0.03 health per locked-in
-  pass that's lethal within ~30 min of active use. It's gated by
-  `DECAY_THROTTLE_INTERVAL_MS` (30 min) via the worker's
-  phase-throttle. If you ever see health collapse across the
-  board again, check the column type and the throttle before the
-  decay formula.
+  on the way out - keep them `real`. (2) the decay rates are a
+  per-pass nudge calibrated for a ~30-minute cadence; at -0.03
+  health per locked-in pass, anything that runs the pass more
+  often is lethal within ~30 min. The cadence is owned by the
+  `nak-samskara-decay` pg_cron schedule - if you ever see health
+  collapse across the board again, check the column type and the
+  cron schedule before the decay formula.
 - **Two injection mechanisms, both always-on.** The compound
   prose summary captures stable bias across every turn; the
   per-turn cosine fire surfaces situational bias. Either one
@@ -1028,7 +1020,7 @@ summarizer reads samskaras to feed the agent.
   same claim. Neither is optional.
 - **Tier-2 rides the unchanged hot path; orphans are fine.**
   `samskara_fire_top_k`, `samskara_apply_reaction`, and
-  `samskara_decay` have no tier filter, so a tier-2 fires, gets
+  `samskara_decay_sweep` have no tier filter, so a tier-2 fires, gets
   confirmed/disconfirmed, and decays exactly like a tier-1 the
   moment it exists - no chat-loop or UI change was needed to ship
   it. Because provenance has no FK on `ref_id`, a tier-2 whose

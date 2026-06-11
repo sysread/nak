@@ -5846,13 +5846,6 @@ export class SupabaseService {
     return data === true;
   }
 
-  /** Worker: run the decay pass. Returns count of rows changed. */
-  async samskaraDecay(): Promise<number> {
-    const { data, error } = await this.client.rpc('samskara_decay');
-    if (error) throw new SupabaseError(error.message);
-    return typeof data === 'number' ? data : 0;
-  }
-
   /** Worker: should we regenerate the compound summary right now? */
   async samskaraShouldRegenCompound(): Promise<{
     shouldRegen: boolean;

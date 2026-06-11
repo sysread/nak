@@ -10,7 +10,7 @@
  * the cycle internally advances exactly one phase (assimilate /
  * pair-relate /
  * cluster-mint-tier1 / cluster-mint-tier2 / reaction-classify /
- * decay / compound-regen). Phase rotation is round-robin across
+ * dedup / compound-regen). Phase rotation is round-robin across
  * cycles via the caller's `phaseIndex` state.
  *
  * Why phase rotation in the cycle (vs the worker): the cycle is the
@@ -100,7 +100,6 @@ export type SamskaraPhase =
   | 'mint-tier1'
   | 'mint-tier2'
   | 'reaction-classify'
-  | 'decay'
   | 'dedup'
   | 'compound-regen';
 
@@ -109,13 +108,15 @@ export type SamskaraPhase =
  * phase depends on enriched substrate; pair-relate next because
  * mint depends on association rows; mint-tier1 before mint-tier2
  * because tier 2 depends on tier-1 cohort patterns; reaction-classify
- * is independent and can run any time; decay is cheap; dedup runs
- * after decay so it sees up-to-date health values (a collapsed loser
- * folds its counters into the winner regardless, but scheduling this
- * way means a user looking at the debug panel between phases sees
- * decay-then-merge in that order rather than the reverse); compound-
- * regen runs last so its summary input reflects the freshest tier-2
- * state AND the post-dedup tier-1 pool.
+ * is independent and can run any time; compound-regen runs last so
+ * its summary input reflects the freshest tier-2 state AND the
+ * post-dedup tier-1 pool.
+ *
+ * Decay is NOT a worker phase: it runs server-side as the
+ * nak-samskara-decay pg_cron job (samskara_decay_sweep in
+ * schema.sql), so dedup sees health values at most half an hour
+ * stale - fine, since a collapsed loser folds its counters into the
+ * winner regardless of either row's current health.
  */
 export const PHASES: readonly SamskaraPhase[] = [
   'assimilate',
@@ -123,7 +124,6 @@ export const PHASES: readonly SamskaraPhase[] = [
   'mint-tier1',
   'mint-tier2',
   'reaction-classify',
-  'decay',
   'dedup',
   'compound-regen',
 ];
@@ -228,8 +228,6 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
         return await runMintTier2Phase(ctx);
       case 'reaction-classify':
         return await runReactionClassifyPhase(ctx);
-      case 'decay':
-        return await runDecayPhase(ctx);
       case 'dedup':
         return await runDedupPhase(ctx);
       case 'compound-regen':
@@ -1001,36 +999,6 @@ async function runReactionClassifyPhase(ctx: CycleContext): Promise<CycleResult>
     neutral: result.neutral.length,
   });
   return 'progress';
-}
-
-/** Decay phase. Cheap SQL-only update; throttled to a wall-clock cadence. */
-async function runDecayPhase(ctx: CycleContext): Promise<CycleResult> {
-  // Wall-clock throttle (see DECAY_THROTTLE_INTERVAL_MS in worker.ts).
-  // Decay's health nudges are calibrated as a per-PASS step, so the
-  // pass cadence has to be wall-clock, not per-rotation. Running it
-  // every rotation - which is what an unthrottled SQL-only phase does
-  // during an active session - drove the whole corpus to health 0.
-  if (isPhaseThrottled(ctx, 'decay')) return 'empty-phase';
-  try {
-    await ctx.supabase.samskaraDecay();
-  } catch (err) {
-    log.debug('decay: RPC failed', err);
-    return 'error';
-  }
-  ctx.phaseThrottle.lastRunMs.set('decay', Date.now());
-  // Single SQL update with no useful diagnostic surface unless it
-  // failed; trace so it stays out of the default drawer view.
-  log.trace('decay: applied');
-  // 'empty-phase', not 'progress'. Decay is pure cache maintenance
-  // - nothing inside the worker reacts to it, and the chat-loop
-  // reads samskara state directly from Supabase per request. A
-  // 'progress' return here would prevent the outer worker from
-  // ever taking its idle nap (the `allEmpty` gate flips false on
-  // any non-empty phase), spinning the loop at full speed and
-  // hammering every other phase's per-rotation queries
-  // (samskara_recent_embedded_substrate, samskara_fires, etc.)
-  // alongside it.
-  return 'empty-phase';
 }
 
 /**

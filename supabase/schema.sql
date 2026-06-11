@@ -6307,16 +6307,29 @@ revoke all on function public.samskara_save_substrate_embedding_if_claimed(uuid,
 grant execute on function public.samskara_claim_next_substrate_embed(text, int) to service_role;
 grant execute on function public.samskara_save_substrate_embedding_if_claimed(uuid, text, vector, text) to service_role;
 
--- Decay pass. Two updates, mirroring scratch's two paths: stale-fire
--- decay (gentle, hiatus-tolerant) and disconfirm decay (sharper,
--- gated on accumulated feedback). Health clamped to [0, 1]. Returns
--- the count of rows changed so the worker can log meaningful churn.
+-- Decay pass. Three updates: stale-fire decay (gentle,
+-- hiatus-tolerant), disconfirm decay (sharper, gated on accumulated
+-- feedback), and locked-in decay (fired a lot, never engaged with).
+-- Health clamped to [0, 1]. Returns the count of rows changed so a
+-- manual exercise can see the churn.
+--
+-- Driven by the nak-samskara-decay pg_cron job (see the cron block
+-- near the stream janitor), NOT by the browser samskara worker. The
+-- decay rates are calibrated as a per-PASS nudge on a ~30-minute
+-- cadence; the worker's in-memory throttle reset on every restart
+-- (reload, tab switch, lease loss) and over-ran that cadence under
+-- active use, so the pass moved to a server-side wall clock.
+--
+-- `security definer` with no auth.uid() filter: cron has no user
+-- session, and every predicate below is row-local (each row's own
+-- timestamps and counters), so one cross-user pass is exactly the
+-- union of the per-user passes. The EXECUTE grant below is the
+-- security boundary.
 drop function if exists public.samskara_decay();
-create or replace function public.samskara_decay()
+create or replace function public.samskara_decay_sweep()
 returns int
-language plpgsql security invoker as $$
+language plpgsql security definer as $$
 declare
-  v_uid uuid := auth.uid();
   v_stale int;
   v_disconfirm int;
   v_unreinforced int;
@@ -6337,8 +6350,7 @@ begin
   update public.samskaras
      set health = greatest(0.0, health - 0.02),
          updated_at = now()
-   where user_id = v_uid
-     and coalesce(last_fired_at, created_at) < now() - interval '60 days';
+   where coalesce(last_fired_at, created_at) < now() - interval '60 days';
   get diagnostics v_stale = row_count;
 
   -- Net-disconfirmed decay. Evidence bar is 1.0 of accumulated
@@ -6349,8 +6361,7 @@ begin
   update public.samskaras
      set health = greatest(0.0, health - 0.10),
          updated_at = now()
-   where user_id = v_uid
-     and disconfirm_count > confirm_count
+   where disconfirm_count > confirm_count
      and (disconfirm_count + confirm_count) >= 1.0;
   get diagnostics v_disconfirm = row_count;
 
@@ -6379,13 +6390,18 @@ begin
   update public.samskaras
      set health = greatest(0.0, health - 0.03),
          updated_at = now()
-   where user_id = v_uid
-     and fire_count > 10
+   where fire_count > 10
      and (confirm_count + disconfirm_count) < 0.5;
   get diagnostics v_unreinforced = row_count;
 
   return v_stale + v_disconfirm + v_unreinforced;
 end $$;
+
+-- Cron-only - same boundary as nak_sweep_stale_streams: pg_cron runs
+-- as the owner, and the service_role grant keeps the pass manually
+-- exercisable with the service key.
+revoke all on function public.samskara_decay_sweep() from public, anon, authenticated;
+grant execute on function public.samskara_decay_sweep() to service_role;
 
 -- Compound-summary regeneration coordination.
 --
@@ -10353,6 +10369,38 @@ begin
   end if;
 exception when others then
   raise notice 'stream-janitor cron setup skipped: %', sqlerrm;
+end
+$cron$;
+
+-- ---------------------------------------------------------------------------
+-- Scheduled samskara decay (pg_cron -> SQL)
+--
+-- Every 30 minutes, run the decay pass over the whole samskara corpus
+-- (see samskara_decay_sweep above). The decay rates are calibrated as
+-- a per-PASS nudge on this cadence; running it from the browser
+-- worker's rotation tied the cadence to an in-memory throttle that
+-- reset on every worker restart and over-ran the target under active
+-- use. A server-side wall clock has no restart-reset failure mode.
+--
+-- Pure SQL (no pg_net) for the same reason as the stream janitor: the
+-- pass only touches the samskaras table. Minutes 13/43 keep clear of
+-- the pg_net sweep ledger (:07 wiki, :17 rem + attachments, :27
+-- reflection, :37 librarian, :47 deep-sleep, :57 curation, */5 embed).
+do $cron$
+begin
+  if exists (select 1 from pg_available_extensions where name = 'pg_cron') then
+    create extension if not exists pg_cron;
+    if exists (select 1 from cron.job where jobname = 'nak-samskara-decay') then
+      perform cron.unschedule('nak-samskara-decay');
+    end if;
+    perform cron.schedule(
+      'nak-samskara-decay',
+      '13,43 * * * *',
+      $job$ select public.samskara_decay_sweep(); $job$
+    );
+  end if;
+exception when others then
+  raise notice 'samskara-decay cron setup skipped: %', sqlerrm;
 end
 $cron$;
 

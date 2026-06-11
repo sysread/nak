@@ -4,10 +4,9 @@
 
 The decay maintenance pass over the samskara corpus - the three
 health nudges (stale-fire -0.02, net-disconfirm -0.10, locked-in
--0.03) applied by `samskara_decay()`, currently driven by the
-browser samskara worker's `decay` phase on a 30-minute in-memory
-throttle ([dev: samskara](../../dev/samskara.md), "Decay formula"
-and the "Migration note - decay is a strong cron candidate" block).
+-0.03) applied by `samskara_decay_sweep()`, driven by the
+`nak-samskara-decay` pg_cron job every 30 minutes
+([dev: samskara](../../dev/samskara.md), "Decay formula").
 
 ## Preconditions
 
@@ -50,20 +49,24 @@ and the "Migration note - decay is a strong cron candidate" block).
 
 ## Steps
 
-1. Run the decay pass as the dev user. The function is security
-   invoker scoped by `auth.uid()`, so set the JWT claim in-session
-   (the browser worker normally supplies this via its authenticated
-   client; psql stands in for it here):
+1. Confirm the cron job is registered (the schema apply registers
+   it whenever the local image has pg_cron):
 
    ```sql
-   begin;
-   select set_config('request.jwt.claims',
-                     '{"sub":"<dev-user-id>"}', true);
-   select public.samskara_decay();
-   commit;
+   select jobname, schedule, command from cron.job
+    where jobname = 'nak-samskara-decay';
    ```
 
-2. Verify the per-row nudges landed:
+2. Run the pass directly - the sweep is what the cron job calls,
+   so a manual invocation is the deterministic stand-in for
+   waiting on the :13/:43 tick. It is cross-user `security
+   definer`, so no JWT claim is needed:
+
+   ```sql
+   select public.samskara_decay_sweep();
+   ```
+
+3. Verify the per-row nudges landed:
 
    ```sql
    select id, health from samskaras
@@ -72,15 +75,15 @@ and the "Migration note - decay is a strong cron candidate" block).
 
 ## Expected
 
-- (1) `samskara_decay()` returns the count of rows changed, `>= 3`.
-- (2) row-A health `0.48` (stale-fire -0.02); row-B health `0.40`
+- (1) one row: schedule `13,43 * * * *`, command
+  `select public.samskara_decay_sweep();`.
+- (2) returns the count of rows changed across ALL users, `>= 3`.
+- (3) row-A health `0.48` (stale-fire -0.02); row-B health `0.40`
   (net-disconfirm -0.10); row-C health `0.47` (locked-in -0.03).
   `updated_at` bumped to now() on all three.
-- The browser worker's `decay` phase applies the same pass on its
-  30-minute in-memory throttle during an active session (trace-tier
-  `decay: applied` line in the Logs drawer at `Trace+`); the SQL
-  exercise above is the deterministic stand-in for waiting on the
-  rotation.
+- **[hosted]** the cron tick itself fires at :13/:43 (check
+  `cron.job_run_details` after a deploy) - local proof stops at
+  the registration row plus the manual invocation.
 
 ## Cleanup
 
@@ -97,3 +100,4 @@ update samskaras set health = 0, disconfirm_count = 0,
 | Date | Env | Commit | Result | Notes |
 | ---- | --- | ------ | ------ | ----- |
 | 2026-06-11 | local | 5981c58 | pass | pre-lift baseline against the per-user `samskara_decay()` invoker (browser worker's decay phase, psql stand-in w/ jwt claim): returned 6 (3 forged + 3 pre-existing health-0 locked-in re-matches), per-row health exactly 0.48 / 0.40 / 0.47, updated_at bumped on all. Forged rows 8a1e5b5b (stale), 422e6389 (disconfirm), cb1d4308 (locked-in) |
+| 2026-06-11 | local | (this commit) | pass (1,2,3) | post-lift: cron.job row registered (`13,43 * * * *` -> `samskara_decay_sweep()`); manual sweep returned 6 and produced byte-identical per-row health to the baseline (0.48 / 0.40 / 0.47 on the same re-forged rows). ACL verified via pg_proc.proacl: postgres + service_role only, matching nak_sweep_stale_streams. Note: exercising the denial via `set local role anon` SEGFAULTS the local supabase image's backend (signal 11, reproducible against the long-standing janitor fn too) - local-image quirk, use the catalog ACL check instead. [hosted] tick firing deferred to the post-merge hosted pass |

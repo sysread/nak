@@ -48,6 +48,18 @@ must not depend on a browser tab being open.
   reopens: the samskara area needs a fresh full read before any
   plan touches it.
 
+  **Decay lifted early (2026-06-11).** Upstream 13ef213 flagged
+  the decay phase as the cleanest pre-port lift (pure SQL, no LLM,
+  no in-worker consumer, predicates row-local), so it moved ahead
+  of the rest of C3: `samskara_decay()` (per-user invoker) became
+  `samskara_decay_sweep()` (cross-user definer) driven by the
+  `nak-samskara-decay` pg_cron job at `13,43 * * * *`, and the
+  browser worker's decay phase + throttle were deleted. QA:
+  `docs/qa/use-cases/samskara-decay.md`. Dedup
+  (`samskara_collapse_by_cofiring`) is NOT row-local (per-user
+  pair enumeration + population cap) and stays in the rotation
+  until the full C3 port.
+
 ## Stays browser-side by definition
 
 Intuition and context-recall (ongoing-chat-scoped), the

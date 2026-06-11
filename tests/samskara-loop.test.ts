@@ -62,7 +62,6 @@ function fakeSupabase(overrides: Partial<SupabaseService> = {}): SupabaseService
     samskaraClaimNextAssimilate: vi.fn(async () => null),
     samskaraSaveAssimilation: vi.fn(async () => true),
     samskaraRecentEmbeddedSubstrate: vi.fn(async () => []),
-    samskaraDecay: vi.fn(async () => 0),
     samskaraCollapseByCofiring: vi.fn(async () => 0),
     samskaraShouldRegenCompound: vi.fn(async () => ({
       shouldRegen: false,
@@ -130,7 +129,9 @@ function buildCtx(overrides: Partial<CycleContext> = {}): CycleContext {
     holderId: 'holder-test',
     claimTtlSeconds: 600,
     regenClaimTtlSeconds: 1200,
-    phase: 'decay',
+    // Dedup is the cheapest SQL-only phase, so it stands in as the
+    // default for tests that only exercise lease handling.
+    phase: 'dedup',
     signal: new AbortController().signal,
     onLeaseLost: () => {},
     // Empty map = nothing throttled yet, which preserves the
@@ -149,48 +150,17 @@ describe('samskara runOneCycle - lease handling', () => {
   it('returns polling when the lease cannot be acquired', async () => {
     const { coordinator, leaseSpies } = buildCoordinator();
     leaseSpies.acquireWorkerLease.mockResolvedValueOnce(false);
-    const ctx = buildCtx({ coordinator, phase: 'decay' });
+    const ctx = buildCtx({ coordinator, phase: 'dedup' });
     const result = await runOneCycle(ctx);
     expect(result).toBe<CycleResult>('polling');
   });
 
   it('returns acquired-lease and defers work until the next cycle', async () => {
     const { coordinator } = buildCoordinator();
-    const ctx = buildCtx({ coordinator, phase: 'decay' });
+    const ctx = buildCtx({ coordinator, phase: 'dedup' });
     const result = await runOneCycle(ctx);
     expect(result).toBe<CycleResult>('acquired-lease');
     expect(coordinator.isHolding).toBe(true);
-  });
-});
-
-describe('samskara runOneCycle - decay phase', () => {
-  it('runs the decay RPC and reports empty-phase so the worker can idle', async () => {
-    const { coordinator } = buildCoordinator();
-    const decay = vi.fn(async () => 5);
-    const supabase = fakeSupabase({ samskaraDecay: decay } as Partial<SupabaseService>);
-    const ctx = buildCtx({ coordinator, supabase, phase: 'decay' });
-    await runOneCycle(ctx); // acquired-lease
-    const result = await runOneCycle(ctx);
-    expect(decay).toHaveBeenCalled();
-    // Decay is pure cache maintenance - the SQL update has no
-    // consumer inside the worker. Returning 'progress' would
-    // pin the outer worker's allEmpty gate false on every
-    // rotation, defeating the idle nap and spinning every other
-    // phase's per-rotation queries at full speed.
-    expect(result).toBe<CycleResult>('empty-phase');
-  });
-
-  it('returns error when the decay RPC throws', async () => {
-    const { coordinator } = buildCoordinator();
-    const supabase = fakeSupabase({
-      samskaraDecay: vi.fn(async () => {
-        throw new Error('boom');
-      }),
-    } as Partial<SupabaseService>);
-    const ctx = buildCtx({ coordinator, supabase, phase: 'decay' });
-    await runOneCycle(ctx);
-    const result = await runOneCycle(ctx);
-    expect(result).toBe<CycleResult>('error');
   });
 });
 
@@ -715,7 +685,6 @@ describe('PHASES', () => {
       'mint-tier1',
       'mint-tier2',
       'reaction-classify',
-      'decay',
       'dedup',
       'compound-regen',
     ]);
