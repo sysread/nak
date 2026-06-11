@@ -14,12 +14,13 @@ and key you entered during [getting started](./getting-started.md).
 
 ## Auto-titling
 
-A background worker watches for threads still on the `New
-conversation` placeholder, asks the fast model for a 3-6 word title
-based on your first message, and swaps it in. If the call fails (a
-network blip, a Venice 4xx) the worker retries on its next cycle, so
-a closed tab or a refresh mid-titling no longer leaves the thread
-permanently blank.
+Right after your first exchange completes, a background job on the
+server picks up threads still on the `New conversation`
+placeholder, asks the fast model for a 3-6 word title based on
+your first message, and swaps it in. If the call fails (a network
+blip, a Venice 4xx) an hourly catch-up pass retries. The work
+happens server-side, so a closed tab or a refresh mid-titling
+never leaves the thread permanently blank.
 
 What you see: the sidebar entry for the thread flips from
 `New conversation` to a real title within a few seconds of your
@@ -27,15 +28,16 @@ first send. You can always click the title bar to rename manually;
 the auto-title only seeds the first value, and a manual rename
 takes over for good.
 
-Cost: one short fast-tier call per new thread (64 output tokens max).
+Cost: one short fast-tier call per new thread.
 
 No toggle. The call is cheap enough that exposing a switch would be
 more friction than it saves.
 
 ## Thread summaries
 
-When a thread settles (no new messages for a while), a background
-worker asks the fast model to write a 2-3 sentence summary of it.
+After a conversation picks up new replies, a background job on the
+server asks the fast model to write (or refresh) a 2-3 sentence
+summary of it.
 The summary is stored on the thread row in Supabase but never
 rendered in the UI — it exists so [search](./search.md) and the
 conversation-recall agent (below) can find old threads by gist, not
@@ -54,8 +56,9 @@ No toggle.
 
 ## Topic tagging
 
-A separate background worker reads each thread and picks 1-4 short
-topic tags for it (`baking`, `sourdough`, `programming`, etc.). The
+A separate background job on the server reads each thread and
+picks 1-4 short topic tags for it (`baking`, `sourdough`,
+`programming`, etc.). The
 tags drive the **Topics** filter dropdown in the conversation
 drawer - see [Threads](./threads.md) for how to use it.
 
@@ -140,15 +143,17 @@ recipe, wiki article, and a few other text fields. Embeddings are
 what make `memory_search`, `conversation_search`, and the drawer
 searches find things by meaning rather than by exact keyword match.
 
-Unlike most of the items on this page, this one does **not** run in
+Like the rest of the items on this page, this does **not** run in
 your browser. It runs on your Supabase project on a schedule (every
 few minutes), so it keeps working with no tab open - close the laptop
-and new memories still get embedded. Most of the model-driven workers
-above (titles, summaries, tagging) need the app open in a tab;
-reflection, the [autonomous wiki agent](./wiki.md) and its librarian,
-the [memory librarian](./memory.md#the-memory-librarian)'s two
-tidy-up passes, embeddings, and the storage cleanup below run
-server-side without one.
+and new memories still get embedded. The other model-driven work
+above is server-side too: titles, summaries, and topic tagging run
+right after each exchange (with an hourly catch-up pass), and
+reflection, the [autonomous wiki agent](./wiki.md) and its
+librarian, the
+[memory librarian](./memory.md#the-memory-librarian)'s two tidy-up
+passes, and the storage cleanup below run on their own schedules.
+None of it needs the app open in a tab.
 
 What you see: nothing. A just-written memory is unembedded for a
 short window (up to a few minutes) until the next scheduled pass

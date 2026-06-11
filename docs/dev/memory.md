@@ -576,18 +576,19 @@ from the same ports); the browser carries only the wire schemas.
   covers the "just written, not yet embedded" window. Deep-sleep
   re-embeds its seed through the same Venice model to query the
   scored neighbor RPC. See `./embeddings.md`.
-- **Topics** — the memory-topics background worker tags each
-  memory with 1-4 short topic strings so the Memories drawer can
-  offer a topic filter. Both surfaces (search + filter) share the
-  same `searchMemoriesSemantic` pipeline; the filter is an
-  optional `selectedTopics` argument that the assistant-facing
+- **Topics** - the memory-topics curation unit (server-side, in
+  the venice function) tags each memory with 1-4 short topic
+  strings so the Memories drawer can offer a topic filter. Both
+  surfaces (search + filter) share the same
+  `searchMemoriesSemantic` pipeline; the filter is an optional
+  `selectedTopics` argument that the assistant-facing
   `memory_search` tool doesn't pass (no UI on the LLM side). See
-  `./topics.md` under "Memory topics" for the worker shape, the
+  `./topics.md` under "Memory topics" for the unit shape, the
   schema deltas, and the trigger / claim discipline.
 - **Summaries / conversation recall** — separate store (thread
-  rows), separate agents. Summary runs in the browser supervisor
-  fleet; reflection runs in the venice edge function, fired from
-  the completed-chat-turn tail. Both use the same per-row
+  rows), separate agents. Summary and reflection both run in the
+  venice edge function, fired from the completed-chat-turn tail
+  with an hourly sweep as catch-up. Both use the same per-row
   claim-RPC pattern on `threads` but have independent claim
   columns and no shared lease.
 - **Logging** - the reflection agent and both librarian passes

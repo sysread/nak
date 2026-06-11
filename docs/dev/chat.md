@@ -392,13 +392,15 @@ A chat turn goes:
   realtime echo lands). If you add a second write path that
   doesn't pipe through the same `Message.id`, you get a
   duplicate render.
-- **Auto-titling runs in a background worker, not from
-  `Chat.svelte`.** The worker (`src/lib/agents/auto_title/`)
-  polls the threads table for rows still on the `'New
-  conversation'` placeholder and titles them via the fast
-  agent model. Surviving page closes / refreshes is the whole
-  point - a fire-and-forget call from `Chat.svelte` would lose
-  work whenever the user closed the tab before the title call
+- **Auto-titling runs server-side, not from `Chat.svelte`.**
+  The curation tail in the venice function
+  (`supabase/functions/venice/agents/auto_title.ts`) claims
+  threads still on the `'New conversation'` placeholder after
+  each completed turn and titles them via the fast agent
+  model; an hourly sweep catches what the tail missed.
+  Surviving page closes / refreshes is the whole point - a
+  fire-and-forget call from `Chat.svelte` would lose work
+  whenever the user closed the tab before the title call
   resolved. The seed is always the *opening* user message
   (fetched in the same RPC that claims the row), so a retry
   titles the conversation's original topic rather than

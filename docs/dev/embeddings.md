@@ -131,12 +131,10 @@ browser worker wrote historically.
 The cross-tab Web Lock + Supabase `worker_leases` + heartbeat model
 documented here used to be the embeddings worker's, and embeddings
 was its canonical example. Backfill no longer uses any of it - but
-the agent worker fleet (reflection, summary, topics, samskara, bias,
-wiki, wiki-librarian, deep-sleep, rem, attachment-expiry, consolidated
-under the supervisor) still does, importing `LeaseCoordinator` from
-`embeddings/lease.ts`. For the live worker model see
-[`./architecture.md`](./architecture.md) and any
-`src/lib/agents/<feature>/worker.ts`. The short version:
+the two remaining browser workers (samskara and bias) still do,
+importing `LeaseCoordinator` from `embeddings/lease.ts`. For the
+live worker model see [`./architecture.md`](./architecture.md) and
+`src/lib/agents/{samskara,bias}/worker.ts`. The short version:
 
 - **`navigator.locks.request(...)`** - cross-tab, device-local;
   Web Locks queue natively.

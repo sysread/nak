@@ -268,25 +268,30 @@ search costs.
 
 ## Worker model
 
-Background Web Workers run while the app is unlocked. The
-browser-side workers are the agent fleet (embedding backfill is
-server-side via `pg_cron` and the `venice` edge function - see
-`./embeddings.md`). Two representative ones:
+Background Web Workers run while the app is unlocked. Two
+browser-side workers remain - samskara and the bias observer
+(`src/lib/agents/{samskara,bias}/`). Everything else moved
+server-side: embedding backfill via `pg_cron` (see
+`./embeddings.md`), reflection / wiki / memory-librarian via cron
+sweeps and the chat-turn tail, and the five curation units
+(auto-title, thread topics, summaries, memory topics, recipe
+topics) via the curation tail + hourly sweep in the venice
+function. One representative of each side:
 
-- `src/lib/agents/summary/worker.ts` — finds threads with a
-  terminal assistant message newer than `last_summarised_msg_id`,
-  runs the summary agent (fast model), writes `threads.summary`.
-  Covered in `./summaries.md`.
-- `supabase/functions/venice/agents/reflection.ts` — fires from
-  the completed-chat-turn tail (via `EdgeRuntime.waitUntil` in
-  `getStreamingResponse`), reads one day-gate-eligible thread,
-  and calls the memory tools via a headless tool loop to update
-  long-term memory. Covered in `./memory.md`.
+- `src/lib/agents/samskara/worker.ts` - the browser shape: a Web
+  Worker that polls for work while the app is unlocked. Covered in
+  `./samskara.md`.
+- `supabase/functions/venice/agents/reflection.ts` - the server
+  shape: fires from the completed-chat-turn tail (via
+  `EdgeRuntime.waitUntil` in `getStreamingResponse`), reads one
+  day-gate-eligible thread, and calls the memory tools via a
+  headless tool loop to update long-term memory. Covered in
+  `./memory.md`.
 
-Each worker has a **manager** on the main thread
+Each browser worker has a **manager** on the main thread
 (`agents/*/manager.ts`) that handles
 boot, cross-tab `navigator.locks` coordination, and Supabase
-lease acquisition. The `activate()` path fires all three
+lease acquisition. The `activate()` path fires the
 `manager.start()` calls fire-and-forget; `lock()` calls the
 matching `manager.stop()` which releases both the local Web Lock
 and the Supabase `worker_leases` row so another tab can pick up
@@ -333,13 +338,15 @@ Three categories of work:
    triggered it.
 
 3. **Background derivation the user controls in-session — browser
-   owns today.** Intuition, samskara, summaries, topic tagging,
-   auto-title. Run while the app is unlocked. Losing them on tab
-   close isn't a correctness problem, just a "work resumes next
-   session." Long-term candidates for the function side as the
-   cron + waitUntil pattern matures - the wiki agents and the
-   memory librarian (rem + deep-sleep) have already made that
-   move and now run cron-driven in the venice function.
+   owns today.** Intuition, samskara, the bias observer. Run while
+   the app is unlocked. Losing them on tab close isn't a
+   correctness problem, just a "work resumes next session."
+   Long-term candidates for the function side as the cron +
+   waitUntil pattern matures - the wiki agents, the memory
+   librarian (rem + deep-sleep), and the five curation units
+   (auto-title, topic tagging, summaries) have already made that
+   move and now run in the venice function off the chat-turn tail
+   and cron sweeps.
 
 Each row in the database has exactly **one writer-of-record**, set
 by which production path birthed it. The shared table is fine
@@ -358,22 +365,22 @@ turn:
 | `attachments` (generated image) | Function | Per-round `attachGeneratedImages` |
 | `threads` (insert) | Browser | New-thread button |
 | `threads.title` (manual rename) | Browser | Inline-rename UI |
-| `threads.title` (auto-title) | Browser (auto-title worker) | Background derivation, will likely migrate function-side |
+| `threads.title` (auto-title) | Function | Curation tail after a completed turn + hourly sweep |
 | `threads.status` / streaming row state | Function | Round loop terminal kinds |
 | `threads.last_error` | Function | Terminal-error path in `getStreamingResponse` |
 | `topics`, recipe edits, memory rows, settings | Browser | Direct user action UIs |
-| `topic_*` derivations | Function (cron) | Background pipelines |
+| `topics` / `summary` derivations | Function | Curation tail after a completed turn + hourly sweep |
 | Embedding rows | Function | `pg_cron` + venice `/embed-backfill` |
 | Worker-lease rows | Browser | Background agent managers |
 
 The auto-title case is the test of the frame: the same
 `threads.title` column has two writers, but they write for
 different reasons in different production paths. The function
-would write auto-title if it owned the streamed-turn lifecycle
-end-to-end (the auto-title worker is the lingering browser-side
-piece). The browser writes manual-rename because it owns the
-inline-rename UI. Writer-of-record is a property of the
-production event, not the column.
+writes auto-title because it owns the streamed-turn lifecycle
+end-to-end (the curation tail runs after the turn commits). The
+browser writes manual-rename because it owns the inline-rename
+UI. Writer-of-record is a property of the production event, not
+the column.
 
 **Heuristic for new work.** Ask "could a tab close lose this and
 that be a correctness problem?" If yes, it belongs function-side.

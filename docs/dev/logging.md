@@ -93,7 +93,7 @@ Two jobs, one module:
 ```ts
 import { createLogger } from '$lib/logger.svelte';
 
-const log = createLogger('reflection-worker');
+const log = createLogger('samskara-worker');
 
 log.info('picked up thread', threadId);
 log.warn('poll failed', err);
@@ -103,13 +103,18 @@ log.debug('payload', { foo, bar });
 Pick a short, stable source tag. Existing tags:
 
 - `update` - service-worker update lifecycle
-- `summary-worker`, `samskara-worker` - browser background loop
+- `samskara-worker`, `bias-worker` - browser background loop
   drivers
 - `reflection`, `wiki`, `wiki-librarian`, `rem`, `deep-sleep` - the
   reflection agent, the autonomous wiki agent, the wiki librarian,
   and the two memory-librarian passes, which run in the venice edge
   function and reach the drawer over the Broadcast log channel (see
   "Edge-to-main relay"), not via a Web Worker
+- `auto-title`, `topics`, `summary`, `memory-topics`,
+  `recipe-topics` - the five curation units (also edge-side, in the
+  venice function), driven by the chat-turn tail and the hourly
+  curation sweep; one source per unit so the drawer can isolate a
+  single queue
 - `stream` - the streaming chat orchestrator
   (getStreamingResponse), also edge-side. The browser renders the
   turn's content off the stream channel; this source carries the
@@ -161,11 +166,10 @@ position stays meaningful across bursts.
 
 ## Worker-to-main relay
 
-The browser background workers (summary, samskara, and the
-supervised auto_title / topics / memory_topics / recipe_topics
-units) import the logger from their loop drivers.
-Reflection and the autonomous wiki agent are NOT among them - they
-run server-side and use the edge-to-main relay below. Worker-context
+The browser background workers (samskara and bias) import the
+logger from their loop drivers. The other agents - reflection, the
+wiki pair, the memory librarian, and the five curation units - run
+server-side and use the edge-to-main relay below. Worker-context
 calls detect `WorkerGlobalScope` at module init and:
 
 1. Mirror the actionable tiers (`info` / `warn` / `error`) to
@@ -191,11 +195,12 @@ drawer too.
 
 ## Edge-to-main relay
 
-Background work that runs in the venice edge function (reflection
-and the autonomous wiki agent today; the remaining agent fleets as
-they migrate off the browser) has no Web Worker postMessage path to
-the drawer - its `console.log` lands only in Supabase's function
-logs. `createEdgeLogger(userId,
+Background work that runs in the venice edge function (reflection,
+the wiki agents, the memory-librarian passes, the five curation
+units, the mid-turn recall agents, and the streaming orchestrator
+itself) has no Web Worker postMessage path to the drawer - its
+`console.log` lands only in Supabase's function logs.
+`createEdgeLogger(userId,
 source)` in `supabase/functions/_shared/edge-log.ts` restores the
 drawer as the single observability surface. It mirrors the browser
 `createLogger` API (`trace` / `debug` / `info` / `warn` / `error`)
@@ -220,7 +225,7 @@ service_role and bypasses it.
 
 `createEdgeLogger` exposes a `flush()` that awaits every in-flight
 broadcast POST. A caller running under `EdgeRuntime.waitUntil`
-(reflection's chat-turn tail) MUST `await log.flush()` before
+(the chat-turn curation + reflection tail) MUST `await log.flush()` before
 settling, or the runtime can tear down the last un-awaited send -
 typically the outcome line, the one most worth seeing. The wiki
 sweep flushes per processed thread for the same reason, even though
@@ -253,10 +258,12 @@ so flush is about drawer fidelity, not data safety.
   the `update` source tag is load-bearing for debugging
   spurious-banner and reload-hang reports. See
   `docs/dev/build-deploy.md`.
-- **Embeddings**, **Memory**, **Summaries**, **Attachments**,
-  **Samskara** - each worker emits progress breadcrumbs through
-  the logger from its loop driver. See the respective feature
-  docs for which cycle transitions log what.
+- **Embeddings**, **Memory**, **Summaries**, **Topics**,
+  **Auto-title**, **Attachments**, **Samskara** - each background
+  pipeline emits progress breadcrumbs, browser workers through
+  `createLogger` and edge-side agents through `createEdgeLogger`.
+  See the respective feature docs for which cycle transitions log
+  what.
 
 ## Gotchas
 

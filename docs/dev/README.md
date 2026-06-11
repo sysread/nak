@@ -84,13 +84,12 @@ changing a contract that other features depend on.
   fans out to the memory-recall and conversation-recall
   agents in parallel, stitches their notes into one
   `<think>`-tagged priming block.
-- [Summaries](./summaries.md) — background thread-summary
-  worker.
-- [Topics](./topics.md) — background tagging worker plus the
-  drawer's topic-filter dropdown.
-- [Auto-title](./auto-title.md) — background worker that fills
-  in titles for threads still on the placeholder. Replaces the
-  in-Chat fire-and-forget call site.
+- [Summaries](./summaries.md) - server-side thread-summary
+  curation unit.
+- [Topics](./topics.md) - server-side tagging units (threads,
+  memories, recipes) plus the drawer's topic-filter dropdown.
+- [Auto-title](./auto-title.md) - server-side curation unit
+  that fills in titles for threads still on the placeholder.
 - [Embeddings](./embeddings.md) — the Web-Worker embedding
   pipeline plus the canonical cross-tab-lock + claim-RPC
   pattern.

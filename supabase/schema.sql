@@ -708,17 +708,17 @@ create index if not exists threads_reflection_claim_idx
 
 -- Summarisation + search pipeline ----------------------------------------
 --
--- Two workers cooperate to make conversations searchable:
+-- Two pipelines cooperate to make conversations searchable:
 --
---   1. The summary agent (src/lib/agents/summary/*) takes a thread and
---      writes a 2–3 sentence topical summary into `threads.summary`.
---      `last_summarised_msg_id` points at the terminal assistant
---      message we've summarised up to — same shape as
---      `last_reflected_msg_id`, same reasons (stable ids, no clock
---      skew). The per-thread claim columns mirror the reflection
---      agent exactly; the top-rail lease is a separate worker_kind
---      ('summary') so a device can hold summary + reflection +
---      embedding leases simultaneously.
+--   1. The summary agent (supabase/functions/venice/agents/summary.ts)
+--      takes a thread and writes a 2-3 sentence topical summary into
+--      `threads.summary`. `last_summarised_msg_id` points at the
+--      terminal assistant message we've summarised up to - same shape
+--      as `last_reflected_msg_id`, same reasons (stable ids, no clock
+--      skew). Two drivers run it: the chat turn's waitUntil tail
+--      (per-user) and the hourly curation sweep (cross-user). The
+--      per-thread claim columns are the only mutual exclusion between
+--      them - there is no worker lease for this unit.
 --
 --   2. The embeddings worker (src/lib/embeddings/*) then embeds
 --      `title + summary` into `embedding` so the search RPC below can
@@ -754,13 +754,14 @@ create index if not exists threads_embedding_claim_idx
 
 -- Auto-title pipeline ---------------------------------------------------
 --
--- The auto-title worker (src/lib/agents/auto_title/*) names threads that
--- are still on the `'New conversation'` placeholder. Per-thread claim
--- columns mirror the reflection / summary pair exactly; the singleton
--- lease is a separate `worker_kind` ('auto_title') so a device can hold
--- it concurrently with the others. Title generation is a single fast-
--- model completion against the opening user message - shape is one
--- non-streaming Venice call per thread, so 60s of claim TTL is plenty.
+-- The auto-title agent (supabase/functions/venice/agents/auto_title.ts)
+-- names threads that are still on the `'New conversation'` placeholder.
+-- Per-thread claim columns mirror the summary pair exactly and are the
+-- only mutual exclusion between the two drivers (chat-turn waitUntil
+-- tail and hourly curation sweep) - no worker lease. Title generation
+-- is a single fast-model completion against the opening user message -
+-- shape is one non-streaming Venice call per thread, so the 120s claim
+-- TTL the drivers pass has plenty of headroom.
 --
 -- The eligibility predicate is "title still default AND user did not
 -- pin a title manually AND there is at least one user message to title
@@ -776,16 +777,17 @@ create index if not exists threads_auto_title_claim_idx
 
 -- Topic-tagging pipeline ------------------------------------------------
 --
--- The topics worker (src/lib/agents/topics/*) tags each thread with a
--- short flat set of topic strings ('baking', 'sourdough', 'programming',
--- etc.) so the conversation drawer can offer a topic filter alongside
--- the default date-sorted list. The agent reads the conversation, the
--- existing per-user topic vocabulary, and asks the fast model to pick
--- 1-4 topics - reusing existing names when they fit so the vocabulary
--- doesn't sprawl into near-duplicates over time. Per-thread claim
--- columns mirror summary / auto_title exactly; the singleton lease is a
--- separate `worker_kind` ('topics') so a device can hold it concurrently
--- with the others.
+-- The thread-topics agent
+-- (supabase/functions/venice/agents/thread_topics.ts) tags each thread
+-- with a short flat set of topic strings ('baking', 'sourdough',
+-- 'programming', etc.) so the conversation drawer can offer a topic
+-- filter alongside the default date-sorted list. The agent reads the
+-- conversation, the existing per-user topic vocabulary, and asks the
+-- fast model to pick 1-4 topics - reusing existing names when they fit
+-- so the vocabulary doesn't sprawl into near-duplicates over time.
+-- Per-thread claim columns mirror summary / auto_title exactly and are
+-- the only mutual exclusion between the chat-turn tail and the hourly
+-- curation sweep - no worker lease.
 --
 -- `topics` defaults to '{}' (empty array) so existing rows match
 -- "untagged" without a backfill. `last_topics_msg_id` is the terminal
@@ -955,8 +957,9 @@ create trigger clear_memory_embedding_on_change
 
 -- Memory topic-tagging pipeline -----------------------------------------
 --
--- Same shape as threads.topics (see "Topic-tagging pipeline" above): a
--- background worker (src/lib/agents/memory_topics/*) tags each memory
+-- Same shape as threads.topics (see "Topic-tagging pipeline" above):
+-- the memory-topics agent
+-- (supabase/functions/venice/agents/memory_topics.ts) tags each memory
 -- with a short flat set of topic strings so the Memories drawer can
 -- offer a topic filter. The agent reads the memory's label+data plus
 -- the user's existing per-account vocabulary and picks 1-4 topics,
@@ -3037,9 +3040,10 @@ create trigger clear_recipe_embedding_on_change
 -- Recipe topic-tagging pipeline -----------------------------------------
 --
 -- Same shape as memories.topics (see "Memory topic-tagging pipeline"
--- above): a background worker (src/lib/agents/recipe_topics/*) tags
--- each recipe with a short flat set of topic strings so the Cookbook
--- drawer can offer a topic filter. The agent reads title + cooklang
+-- above): the recipe-topics agent
+-- (supabase/functions/venice/agents/recipe_topics.ts) tags each recipe
+-- with a short flat set of topic strings so the Cookbook drawer can
+-- offer a topic filter. The agent reads title + cooklang
 -- plus the user's existing recipe-topic vocabulary and picks 1-6
 -- topics across four dimensions - primary ingredients, cuisine,
 -- course, technique - reusing existing names where they fit so the
@@ -4185,19 +4189,17 @@ grant execute on function public.claim_next_thread_for_summary_sweep(text, int)
 
 -- Auto-title pipeline RPCs ----------------------------------------------
 --
--- Background worker that fills in titles for threads still on the
--- 'New conversation' placeholder. Replaces the in-Chat fire-and-forget
--- title-gen pipeline that lost work whenever the user closed the tab
--- (or refreshed) before the single Venice call resolved. The worker
--- lives in src/lib/agents/auto_title/* and uses the same lease + claim
--- pattern as reflection / summary.
+-- Claim / save / clear for the auto-title agent
+-- (supabase/functions/venice/agents/auto_title.ts), which fills in
+-- titles for threads still on the 'New conversation' placeholder.
+-- Same per-row claim pattern as the summary RPCs; the chat-turn
+-- waitUntil tail and the hourly curation sweep are the two callers,
+-- and these claim columns are the only mutual exclusion between them.
 --
--- The eligibility predicate matches the gate the in-Chat trigger used
--- to apply: title still default, title_manually_set still false, AND
--- at least one user message exists to title from. Returning the first
--- user message's text in the same round trip avoids a second SELECT
--- before the Venice call - the worker reuses the same tight system
--- prompt that title-gen.ts has always used.
+-- The eligibility predicate: title still default, title_manually_set
+-- still false, AND at least one user message exists to title from.
+-- Returning the first user message's text in the same round trip
+-- avoids a second SELECT before the Venice call.
 drop function if exists public.claim_next_thread_for_auto_title(text, int);
 create or replace function public.claim_next_thread_for_auto_title(
   p_holder_id text,
@@ -4283,10 +4285,10 @@ begin
   return updated > 0;
 end $$;
 
--- Explicit claim release - used by the worker when the title-gen call
+-- Explicit claim release - used by the agent when title generation
 -- produced no usable output (model emitted whitespace, abort fired) so
 -- another cycle can re-pick the row immediately rather than waiting for
--- the TTL. Guarded on holder so a stale call from a displaced worker
+-- the TTL. Guarded on holder so a stale call from a displaced holder
 -- can't clear the live claim. Returns void.
 drop function if exists public.clear_auto_title_claim(uuid, text);
 create or replace function public.clear_auto_title_claim(
@@ -4361,15 +4363,16 @@ grant execute on function public.claim_next_thread_for_auto_title_sweep(text, in
 
 -- Topic-tagging pipeline RPCs -------------------------------------------
 --
--- The topics worker (src/lib/agents/topics/*) tags threads with a short
--- flat set of topic strings. Shape mirrors the summary RPCs: claim by
--- terminal-assistant-message id, save guarded by holder + TTL +
--- terminal_msg_id stamp so a thread that grew mid-tagging simply re-
--- qualifies on the next cycle. The extra wrinkle vs summary: the claim
--- also returns the user's existing topic vocabulary in the same round
--- trip, so the worker can prompt the model with "reuse these names if
--- they fit" without a second SELECT. Saves one RPC per cycle and keeps
--- the vocabulary as fresh as the claim that consumed it.
+-- The thread-topics agent
+-- (supabase/functions/venice/agents/thread_topics.ts) tags threads
+-- with a short flat set of topic strings. Shape mirrors the summary
+-- RPCs: claim by terminal-assistant-message id, save guarded by holder
+-- + TTL + terminal_msg_id stamp so a thread that grew mid-tagging
+-- simply re-qualifies on the next cycle. The extra wrinkle vs summary:
+-- the claim also returns the user's existing topic vocabulary in the
+-- same round trip, so the agent can prompt the model with "reuse these
+-- names if they fit" without a second SELECT. Saves one RPC per cycle
+-- and keeps the vocabulary as fresh as the claim that consumed it.
 --
 -- Eligibility predicate: thread has at least one assistant message with
 -- non-empty content (same shape as summary), AND that terminal message
@@ -4930,11 +4933,11 @@ grant execute on function
   public.clear_recipe_topics_claim(uuid, text, uuid) to service_role;
 
 -- Global recipe-topics sweep claim: cross-user variant of
--- claim_next_recipe_for_topics for the curation sweep. Same
--- server-writes/browser-drains rationale as the memory sweep claim:
--- the recipe_* tools dispatch in the venice function, so the queue
--- fills with no tab open. The vocab CTE scopes to the candidate
--- row's owner.
+-- claim_next_recipe_for_topics for the curation sweep. Same catch-up
+-- rationale as the memory sweep claim: a row a turn tail failed to
+-- drain (or one re-queued by an edit outside a chat turn) would
+-- otherwise wait for the owner's next conversation. The vocab CTE
+-- scopes to the candidate row's owner.
 drop function if exists public.claim_next_recipe_for_topics_sweep(text, int);
 create or replace function public.claim_next_recipe_for_topics_sweep(
   p_holder_id text,

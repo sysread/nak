@@ -14,7 +14,11 @@ must not depend on a browser tab being open.
 
 ## Items
 
-- **C1. Retire the browser supervisor.** Full scoping in
+- **C1. Retire the browser supervisor.** Implemented 2026-06-11
+  (design in "C1 design" below); the five units run in the venice
+  function off the chat-turn tail and the hourly curation sweep,
+  and the supervisor + its lease apparatus are deleted. Full
+  scoping in
   [planned-changes.md](../planned-changes.md) ("Retire the browser
   supervisor"): port auto_title / summary / topics on the
   reflection-style turn tail (tail placement is load-bearing for
@@ -95,9 +99,9 @@ Follows the reflection precedent exactly:
   `claim_next_thread_for_reflection_sweep`: scan across users,
   return the claimed row plus `user_id` (and the vocab CTE scoped
   to the candidate row's user, not `auth.uid()`).
-- Per-row claim TTLs keep their browser-era values (60s title /
-  120s summary, topics / 60s memory, recipe tags) - the work shape
-  per row is unchanged.
+- Per-row claim TTL is the shared 120s the browser supervisor
+  actually passed to every unit (CURATION_CLAIM_TTL_SECONDS) - the
+  work shape per row is unchanged.
 
 ### Server agents
 

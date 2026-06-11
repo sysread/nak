@@ -209,10 +209,11 @@ present on every section - Chats, Recipes, Memories, and Wiki -
 so you can pop the drawer open without first switching back to a
 chat. The drawer is a live feed of everything Nak writes to its
 internal logs - service-worker updates, reflection / summary
-worker progress, recall-agent breadcrumbs, and anything else a
-background subsystem wants to tell you about. (Embedding backfill
-runs on your Supabase project, not in the browser, so it logs there
-rather than in this drawer.)
+agent progress, recall-agent breadcrumbs, and anything else a
+background subsystem wants to tell you about. (Server-side work,
+like embedding backfill and the curation agents, reaches the
+drawer over a live relay - entries published while the app is
+closed land only in your Supabase project's function logs.)
 
 Useful when:
 
@@ -236,7 +237,7 @@ Controls inside the drawer:
   dropdown here is a within-session override that resets on the
   next open.
 - **Source dropdown** - narrow the feed to a single subsystem tag
-  (e.g. `reflection-worker`, `summary-worker`, `samskara`). The list is
+  (e.g. `reflection`, `summary`, `auto-title`). The list is
   built dynamically from the tags actually present in the current
   buffer, so it never offers options that would match nothing. Starts
   at **All sources**; the dropdown is greyed out until at least one
@@ -256,7 +257,7 @@ Controls inside the drawer:
   the next log event onward.
 
 Each entry shows the level, the local time it was captured, the
-subsystem it came from (e.g. `[reflection-worker]`), and the message.
+subsystem it came from (e.g. `[reflection]`), and the message.
 When the message carried structured details - an error stack, a JSON
 payload, a captured object - a caret appears at the left of the row;
 click to expand / collapse the pretty-printed detail.
