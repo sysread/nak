@@ -5,7 +5,7 @@
 // Stands in for the hosted pg_cron jobs that drive the venice
 // function's scheduled routes.
 //
-// In production, supabase/schema.sql schedules six pg_net dispatches:
+// In production, supabase/schema.sql schedules nine pg_net dispatches:
 //   - `nak_trigger_embed_backfill()` every 5 minutes -> POST /backfill
 //     (drains pending embeddings server-side);
 //   - `nak_trigger_wiki_sweep()` hourly -> POST /wiki-sweep (runs the
@@ -19,18 +19,26 @@
 //     with their own 12h cadences);
 //   - `nak_trigger_reflection_sweep()` hourly -> POST /reflection-sweep
 //     (reflection's catch-up drain - the chat-turn tail is the primary
-//     driver, this reaches queues whose owners stopped conversing).
+//     driver, this reaches queues whose owners stopped conversing);
+//   - `nak_trigger_curation_sweep()` hourly -> POST /curation-sweep,
+//     `nak_trigger_bias_sweep()` hourly -> POST /bias-sweep, and
+//     `nak_trigger_samskara_sweep()` hourly -> POST /samskara-sweep
+//     (the catch-up siblings of the chat-turn tail for curation and
+//     samskara, and the bias pipeline's only driver).
+// Two further cron jobs run pure SQL with no HTTP route (the stream
+// janitor and samskara decay); this shim cannot stand in for those -
+// exercise them with manual psql when a local run matters.
 // The local Supabase stack (`mise run dev-start`) ships neither pg_cron
 // nor pg_net, so those schedules are guarded to no-op locally - nothing
 // drains any queue without this shim (the browser workers that used
 // to do this work were deleted when the features moved server-side).
 //
-// This script reproduces exactly what the cron jobs do: every N seconds
-// it POSTs each route on the LOCAL stack with the legacy service-role
-// key, the same call pg_net makes in prod. One shared interval for all
-// routes - prod cadences differ but locally you want fast feedback on
-// whichever queue you're testing, and an empty-queue tick is nearly
-// free.
+// This script reproduces what the cron jobs do: every N seconds it
+// POSTs each route on the LOCAL stack with the legacy service-role
+// key, the same call pg_net makes in prod. One shared interval for
+// most routes - prod cadences differ but locally you want fast
+// feedback on whichever queue you're testing, and an empty-queue tick
+// is nearly free. The exceptions ride SLOW_TICK_MULTIPLE below.
 //
 // It is local-only by construction: it reads the stack endpoints from
 // `supabase status` and refuses any non-loopback API target, so a shell with
@@ -138,110 +146,102 @@ async function tickBackfill(apiUrl, serviceRoleKey) {
   info(`[${stamp}] backfill: ${headline}${extras}`);
 }
 
-// One cron tick: POST /wiki-sweep and report the WikiSweepSummary.
+// One cron tick per agent sweep. Every sweep handler ACKs
+// `{accepted:true}` and runs detached (EdgeRuntime.waitUntil), so
+// postRoute's dispatch line is the whole report - outcomes land in the
+// in-app Logs drawer. (These used to parse per-route summaries; the
+// detached sweepHandler dispatch made the response body uniform.)
 async function tickWikiSweep(apiUrl, serviceRoleKey) {
   const stamp = new Date().toISOString().slice(11, 19);
-  const body = await postRoute(apiUrl, serviceRoleKey, 'wiki-sweep', stamp);
-  if (!body) return;
-  const {
-    claimed = 0,
-    processed = 0,
-    emptySlice = 0,
-    skipped = 0,
-    released = 0,
-    claimLost = 0,
-    errors = 0,
-  } = body;
-  const headline =
-    claimed > 0 ? style.green(`claimed ${claimed}, processed ${processed}`) : style.dim('nothing eligible');
-  const extras =
-    emptySlice || skipped || released || claimLost || errors
-      ? ` (emptySlice ${emptySlice}, skipped ${skipped}, released ${released}, claimLost ${claimLost}, errors ${errors})`
-      : '';
-  info(`[${stamp}] wiki-sweep: ${headline}${extras}`);
+  await postRoute(apiUrl, serviceRoleKey, 'wiki-sweep', stamp);
 }
 
-// One cron tick: POST /wiki-librarian-sweep and report the outcome.
 async function tickWikiLibrarianSweep(apiUrl, serviceRoleKey) {
   const stamp = new Date().toISOString().slice(11, 19);
-  const body = await postRoute(apiUrl, serviceRoleKey, 'wiki-librarian-sweep', stamp);
-  if (!body) return;
-  const { outcome = 'unknown', toolCalls = 0, articleCount = 0 } = body;
-  const headline =
-    outcome === 'reviewed'
-      ? style.green(`reviewed ${articleCount} articles (${toolCalls} tool calls)`)
-      : outcome === 'no-user'
-        ? style.dim('nobody due')
-        : outcome;
-  info(`[${stamp}] wiki-librarian: ${headline}`);
+  await postRoute(apiUrl, serviceRoleKey, 'wiki-librarian-sweep', stamp);
 }
 
-// One cron tick: POST /rem-sweep and report the RemSweepSummary.
 async function tickRemSweep(apiUrl, serviceRoleKey) {
   const stamp = new Date().toISOString().slice(11, 19);
-  const body = await postRoute(apiUrl, serviceRoleKey, 'rem-sweep', stamp);
-  if (!body) return;
-  const { outcome = 'unknown', conversationsProcessed = 0, toolCalls = 0 } = body;
-  const headline =
-    outcome === 'reviewed'
-      ? style.green(`reviewed ${conversationsProcessed} conversation(s) (${toolCalls} tool calls)`)
-      : outcome === 'no-user'
-        ? style.dim('nobody due')
-        : outcome;
-  info(`[${stamp}] rem: ${headline}`);
+  await postRoute(apiUrl, serviceRoleKey, 'rem-sweep', stamp);
 }
 
-// One cron tick: POST /deep-sleep-sweep and report the DeepSleepSweepSummary.
 async function tickDeepSleepSweep(apiUrl, serviceRoleKey) {
   const stamp = new Date().toISOString().slice(11, 19);
-  const body = await postRoute(apiUrl, serviceRoleKey, 'deep-sleep-sweep', stamp);
-  if (!body) return;
-  const { outcome = 'unknown', toolCalls = 0, batchSize = 0 } = body;
-  const headline =
-    outcome === 'reviewed'
-      ? style.green(`reviewed ${batchSize}-memory neighborhood (${toolCalls} tool calls)`)
-      : outcome === 'no-user'
-        ? style.dim('nobody due')
-        : outcome;
-  info(`[${stamp}] deep-sleep: ${headline}`);
+  await postRoute(apiUrl, serviceRoleKey, 'deep-sleep-sweep', stamp);
 }
 
-// One cron tick: POST /reflection-sweep and report the cycle result.
 async function tickReflectionSweep(apiUrl, serviceRoleKey) {
   const stamp = new Date().toISOString().slice(11, 19);
-  const body = await postRoute(apiUrl, serviceRoleKey, 'reflection-sweep', stamp);
-  if (!body) return;
-  const { outcome = 'unknown', threadId = '', toolCalls = 0 } = body;
-  const headline =
-    outcome === 'reflected'
-      ? style.green(`reflected thread ${threadId} (${toolCalls} tool calls)`)
-      : outcome === 'no-thread'
-        ? style.dim('nothing eligible')
-        : outcome;
-  info(`[${stamp}] reflection: ${headline}`);
+  await postRoute(apiUrl, serviceRoleKey, 'reflection-sweep', stamp);
 }
 
+// One cron tick each for the three newest sweeps.// One cron tick each for the slow-group sweeps (see
+// SLOW_TICK_MULTIPLE below).
+async function tickCurationSweep(apiUrl, serviceRoleKey) {
+  const stamp = new Date().toISOString().slice(11, 19);
+  await postRoute(apiUrl, serviceRoleKey, 'curation-sweep', stamp);
+}
+
+async function tickBiasSweep(apiUrl, serviceRoleKey) {
+  const stamp = new Date().toISOString().slice(11, 19);
+  await postRoute(apiUrl, serviceRoleKey, 'bias-sweep', stamp);
+}
+
+async function tickSamskaraSweep(apiUrl, serviceRoleKey) {
+  const stamp = new Date().toISOString().slice(11, 19);
+  await postRoute(apiUrl, serviceRoleKey, 'samskara-sweep', stamp);
+}
+
+// The curation / bias / samskara sweeps fire on every Nth base tick
+// rather than every tick. Unlike the older sweeps, an "idle" tick of
+// these is not free: the samskara sweep's pair-relate probe spends a
+// Venice call per active user per tick even with no new substrate
+// (the probe has no memory of declined pairs - see
+// docs/dev/samskara.md gotchas), and the curation sweep walks five
+// queues. At the 60s default this lands them every 10 minutes - quick
+// enough to test against, slow enough not to grind Venice budget in
+// an idle dev session. Drop the base interval (first CLI arg) when
+// you want a faster loop on one of them.
+const SLOW_TICK_MULTIPLE = 10;
+
 // Run the scheduled routes sequentially, cheapest first, so the heavy
-// LLM sweeps never queue the backfill tick behind them.
-async function tick(apiUrl, serviceRoleKey) {
+// LLM sweeps never queue the backfill tick behind them. `count` is the
+// base-tick ordinal; the slow group fires when it divides by
+// SLOW_TICK_MULTIPLE (including the immediate first tick at 0).
+async function tick(apiUrl, serviceRoleKey, count) {
   await tickBackfill(apiUrl, serviceRoleKey);
   await tickWikiSweep(apiUrl, serviceRoleKey);
   await tickWikiLibrarianSweep(apiUrl, serviceRoleKey);
   await tickRemSweep(apiUrl, serviceRoleKey);
   await tickDeepSleepSweep(apiUrl, serviceRoleKey);
   await tickReflectionSweep(apiUrl, serviceRoleKey);
+  if (count % SLOW_TICK_MULTIPLE === 0) {
+    await tickCurationSweep(apiUrl, serviceRoleKey);
+    await tickBiasSweep(apiUrl, serviceRoleKey);
+    await tickSamskaraSweep(apiUrl, serviceRoleKey);
+  }
 }
 
 async function main() {
   const intervalSeconds = parseInterval();
-  banner('Venice cron shim (DEV): backfill + wiki + memory-librarian + reflection sweeps');
+  banner('Venice cron shim (DEV): backfill + all agent sweeps');
   const { apiUrl, serviceRoleKey } = await readLocalStack();
   ok(`Targeting ${style.cyan(apiUrl)} every ${style.bold(intervalSeconds + 's')}. Ctrl-C to stop.`);
   info(style.dim('Local stand-in for the hosted pg_cron jobs (prod: backfill every 5 min, agent sweeps hourly).'));
 
+  ok(
+    `Slow group (curation / bias / samskara sweeps) fires every ` +
+      `${style.bold(SLOW_TICK_MULTIPLE + 'x')} the base interval.`
+  );
+
   // Fire once immediately so you do not wait a full interval for the first run.
-  await tick(apiUrl, serviceRoleKey);
-  const timer = setInterval(() => void tick(apiUrl, serviceRoleKey), intervalSeconds * 1000);
+  let count = 0;
+  await tick(apiUrl, serviceRoleKey, count);
+  const timer = setInterval(() => {
+    count += 1;
+    void tick(apiUrl, serviceRoleKey, count);
+  }, intervalSeconds * 1000);
 
   const stop = () => {
     clearInterval(timer);
