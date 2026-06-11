@@ -286,11 +286,13 @@
   /* No max-width: the intro wraps to the natural container width, the
      same as the help text and compound block below it. An artificial
      reading column here left the intro narrow while everything under it
-     ran full-width, which read as broken alignment. */
+     ran full-width, which read as broken alignment. No explicit
+     font-size either - the body prose inherits the 1rem root size, the
+     same reading size .msg / .wiki-content / .memory-card-data use,
+     instead of the shrunk-down size this surface carried before. */
   .samskara-summary-intro {
     margin: 0 0 1.1rem;
     line-height: 1.55;
-    font-size: 0.9rem;
   }
   .samskara-summary-head {
     font-size: 0.74rem;
@@ -300,9 +302,11 @@
     color: var(--muted);
     margin: 0 0 0.3rem;
   }
+  /* Caption under the heading. No font-size override - it falls back to
+     `.subtle`'s 0.9rem, the standard muted-caption size used across the
+     app, rather than the smaller size this surface used before. */
   .samskara-summary-help {
     margin: 0 0 0.6rem;
-    font-size: 0.85rem;
     line-height: 1.4;
   }
   .samskara-compound-block {
@@ -311,12 +315,14 @@
     background: var(--surface);
     padding: 0.6rem 0.75rem;
   }
+  /* The compound summary is the page's primary reading content, so it
+     inherits the 1rem root size (no font-size override) to match
+     message / wiki / memory body text rather than rendering smaller. */
   .samskara-compound-text {
     margin: 0;
     white-space: pre-wrap;
     word-break: break-word;
     font-family: inherit;
-    font-size: 0.88rem;
     line-height: 1.45;
   }
   .samskara-compound-meta {
