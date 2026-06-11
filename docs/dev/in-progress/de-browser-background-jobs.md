@@ -48,3 +48,83 @@ must not depend on a browser tab being open.
 
 Intuition and context-recall (ongoing-chat-scoped), the
 composer/catalog, the manual-run strips (UI).
+
+## C1 design (2026-06-11)
+
+Baseline QA executed first per the convention:
+`docs/qa/use-cases/supervisor-units.md` logs the browser-supervisor
+behavior the port must preserve (single-burst drain, same-rotation
+title-then-tag, no `updated_at` bumps, summary-triggered re-embed).
+
+### Drivers
+
+Reflection's dual-driver shape, applied to all five units:
+
+- **Turn tail** (`getStreamingResponse.ts`, next to the reflection
+  fire): one `curateOnTurnTail(admin, userId)` promise under its own
+  `edgeWaitUntil`. Runs auto_title FIRST and sequentially (title
+  latency on a brand-new conversation is the load-bearing UX), then
+  topics, summary, memory_topics, recipe_topics. The last two ride
+  the tail as well even though their work supply is not chat turns:
+  an empty-queue probe is one cheap RPC, and it preserves the
+  baseline's "tags land within minutes while the user is active"
+  feel. The tail is sufficiency for the thread-shaped units and
+  opportunism for the tag queues.
+- **Cron sweep** (`curation-sweep` route, `sweepHandler` factory,
+  pg_cron `57 * * * *` - the free slot): global catch-up for all
+  five queues. This is what closes the server-writes/browser-drains
+  gap: a rem consolidation at 3am re-queues memory tags and the
+  sweep drains them with no tab open. Unlike the one-row reflection
+  sweep, each queue drains up to a per-tick row cap (tag queues
+  burst after a librarian consolidation; one row per hour would
+  never catch up). Cap hit is logged - no silent truncation.
+
+### Schema
+
+Follows the reflection precedent exactly:
+
+- The existing per-user claim/save/clear RPCs (auto_title, summary,
+  topics x claim/save/clear; memory_topics, recipe_topics x
+  save/clear) gain the b-strict `p_user_id uuid default null`
+  overload (`coalesce(p_user_id, auth.uid())`) so the turn tail's
+  service-role client can scope them. Browser callers are gone
+  after this milestone, but the overload keeps the functions
+  role-agnostic rather than forking them.
+- Five new global SECURITY DEFINER sweep claims
+  (`claim_next_*_for_*_sweep`), mirroring
+  `claim_next_thread_for_reflection_sweep`: scan across users,
+  return the claimed row plus `user_id` (and the vocab CTE scoped
+  to the candidate row's user, not `auth.uid()`).
+- Per-row claim TTLs keep their browser-era values (60s title /
+  120s summary, topics / 60s memory, recipe tags) - the work shape
+  per row is unchanged.
+
+### Server agents
+
+One module per unit under `supabase/functions/venice/agents/`,
+prompts ported verbatim from the browser copies (behavior parity is
+the QA contract). Non-streaming completions via `toolComplete`;
+model ids hardcoded per agent, mirrored from the browser
+`AGENT_MODELS` registry at port time (same approach as
+`REFLECTION_MODEL`). Edge logger sources drop the browser's
+`-worker` suffix: `auto-title`, `summary`, `topics`,
+`memory-topics`, `recipe-topics`.
+
+### Deletions (the payoff)
+
+The supervisor worker + manager + loop, the five browser unit
+loops/agents/prompts, `title-gen.ts` (if no other caller), the
+`nak:supervisor-worker` Web Lock, the supervisor `worker_leases`
+partition, its heartbeat and session-token forwarding, the
+start-payload model wiring, and the browser-side unit tests (the
+ported logic gets Deno coverage in the functions island instead).
+
+### Risks the QA re-execution must check
+
+- Open-tab freshness: the browser worker wrote from inside the tab;
+  the UI now learns about titles/topics/summaries via realtime. If
+  the sidebar title or the dropdowns go stale after the port, the
+  realtime delivery (not the agents) is the suspect.
+- Hosted waitUntil lifetime now also carries the tail curation
+  chain (five quick completions worst-case) on top of reflection -
+  same soft-degradation posture, sweep is the backstop.
