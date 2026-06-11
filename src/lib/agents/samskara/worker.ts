@@ -60,9 +60,16 @@ const TIER2_THROTTLE_INTERVAL_MS = 5 * 60 * 1000;
  * the entire corpus within ~30 minutes of use (every samskara hit
  * health 0). The decay rates (-0.02 stale, -0.10 net-disconfirm, -0.03
  * locked-in) are calibrated as a per-PASS nudge; 30 minutes is the
- * intended cadence for that nudge, not per-rotation. Per-tab in-memory
- * throttle (a reload or a second tab can run it sooner), which is fine:
- * a handful of extra passes a day is gentle, unlike the old firehose.
+ * intended cadence for that nudge, not per-rotation.
+ *
+ * This throttle is in-memory per worker process, so it resets on every
+ * worker restart (reload, tab switch, lease loss, redeploy) - decay can
+ * run more often than 30 min under active use. That's tolerated, not
+ * ideal: decay is a strong candidate to move to a pg_cron job in the
+ * edge-function migration, which would make the cadence a true
+ * server-side wall clock and retire this constant. See the "Migration
+ * note - decay is a strong cron candidate" block in
+ * docs/dev/samskara.md.
  */
 const DECAY_THROTTLE_INTERVAL_MS = 30 * 60 * 1000;
 
