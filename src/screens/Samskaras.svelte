@@ -283,8 +283,11 @@
     max-width: 32rem;
     line-height: 1.5;
   }
+  /* No max-width: the intro wraps to the natural container width, the
+     same as the help text and compound block below it. An artificial
+     reading column here left the intro narrow while everything under it
+     ran full-width, which read as broken alignment. */
   .samskara-summary-intro {
-    max-width: 42rem;
     margin: 0 0 1.1rem;
     line-height: 1.55;
     font-size: 0.9rem;
