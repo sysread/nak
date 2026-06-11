@@ -144,3 +144,124 @@ ported logic gets Deno coverage in the functions island instead).
 - Hosted waitUntil lifetime now also carries the tail curation
   chain (five quick completions worst-case) on top of reflection -
   same soft-degradation posture, sweep is the backstop.
+
+## C2 design (2026-06-11)
+
+Baseline QA already passing:
+`docs/qa/use-cases/bias-pipeline.md` (post-starvation-fix rows)
+records the behavior the port must preserve - queue-head claim with
+the count predicate inline, full-drain claim/agent/save chains,
+zero-observation saves still stamping `bias_processed_at`, and the
+aggregate recompute updating `bias_summary`.
+
+### Drivers: cron-only, no turn tail
+
+The one fleet member that does NOT get the dual-driver shape.
+Analyze eligibility requires `threads.updated_at` before today's
+local midnight - by construction, the thread a chat turn just
+touched is never eligible at turn time, so a turn tail could only
+ever drain *yesterday's backlog*, which is exactly what the hourly
+sweep does. Bias is also the least time-critical feature in the
+app (results surface only in the diagnostics modal and the next
+day's prompt block). One driver, one code path.
+
+Each sweep tick runs both phases in order: analyze (drain up to
+the per-tick thread cap, cap hit logged) then aggregate. The
+in-memory `aggregateDirty` / bootstrap-probe / throttle machinery
+all collapses into the cron cadence: aggregate recomputes for
+(a) every user who got an analyze save this tick, plus (b) any
+user whose oldest `bias_summary.computed_at` is older than 24h -
+the daily floor matters because the posterior and feedback EMA
+are age-weighted, so tiers drift even with no new observations.
+`biasSummaryFreshness` (the bootstrap probe) has no successor.
+
+### Exclusion set: deleted, not replaced
+
+The re-inspection suggested replacing the postMessage'd
+open-tab id list with a recency window, but the recency window
+already exists: the `p_today_start` gate excludes everything
+updated today, which is a superset of "open and active in a tab
+right now". The save RPC's user-message-count guard covers the
+mid-analysis race (a message landing during analysis drops the
+save and releases the claim). `p_exclude_ids` and the
+`active-conv-ids` postMessage channel are deleted with nothing
+in their place.
+
+### Timezone: per-user, from the profile
+
+The browser computed "today's local midnight" from the device
+clock. The server has no device clock; the sweep claim computes
+each candidate's midnight from the profile's `displayTimezone`
+via `nak_safe_timezone` (the reflection-sweep precedent). Known
+semantic shift - the old code deliberately preferred the device
+wall clock for travelers - accepted: the divergence window is
+hours at most and the worst case is analyzing a thread the
+traveler is still using, which the save-time count guard already
+tolerates.
+
+### Schema
+
+- `bias_claim_next_thread_for_sweep(p_holder_id, p_ttl_seconds,
+  p_min_user_messages)` - SECURITY DEFINER, cross-user, mirrors
+  the per-user claim (inline count predicate and all) but
+  computes `p_today_start` per candidate from the owner's
+  timezone and returns `user_id` alongside `thread_id`,
+  `user_message_count`, `active_biases`. Service-role only.
+- b-strict `p_user_id uuid default null` overloads on
+  `bias_save_observations`, `bias_processed_threads_for_bias`,
+  and `bias_reactions_for_bias` so the sweep's service-role
+  client can scope the save and the aggregate reads per claimed
+  user. `bias_summary` upserts go through the admin client with
+  an explicit `user_id` (the browser method was already a direct
+  table upsert, not an RPC).
+- Per-thread claim columns (`bias_claim_holder` / `_expires`)
+  carry forward unchanged as the mutual exclusion; TTL stays
+  300s (one LLM call against a long transcript).
+- `nak_trigger_bias_sweep()` + pg_cron `nak-bias-sweep` at
+  `3 * * * *` (free minute; pg_net ladder is otherwise
+  :07/:17/:27/:37/:47/:57).
+
+### Server agent
+
+`supabase/functions/venice/agents/bias.ts` exporting
+`runBiasSweepTick(adminClient)` for the `bias-sweep` route via the
+existing `sweepHandler` factory. Observer/reactor prompt ported
+verbatim from `src/lib/agents/bias/prompts.ts`; model hardcoded
+`mistral-small-3-2-24b-instruct` (the browser `AGENT_MODELS.bias`
+entry at port time). Edge logger source `bias` (drops the
+`-worker` suffix, per the C1 convention); per-claim loggers name
+the row's owner. The aggregate math (`aggregatePosterior`,
+`feedbackEMA`, `clampConfidence`, the confidence floor/cap and
+`MIN_USER_MESSAGES` constants) MOVES into the function tree -
+after the worker deletion the browser no longer runs any bias
+math. `src/lib/bias/` keeps only what the chat path and modal
+read (catalog, format, types); audit its exports post-port.
+
+### Deletions (the payoff)
+
+`src/lib/agents/bias/` entirely (agent, loop, manager, prompts,
+worker), the `nak:bias-worker` Web Lock and its `worker_leases`
+partition use, the `active-conv-ids` plumbing in the state layer,
+the worker-only `SupabaseService` wrappers (`biasClaimNextThread`,
+`biasSaveObservations`, `biasSummaryFreshness`,
+`biasProcessedThreadsForBias`, `biasReactionsForBias`,
+`biasUpsertSummary`), the `AGENT_MODELS.bias` entry, and the
+browser bias-loop tests (ported logic gets Deno coverage).
+`biasClearThread` and the chat/modal reads stay - they are
+chat-scoped. The shared lease apparatus (`base-manager.ts`,
+`holder.ts`, `embeddings/lease.ts`, the `worker_leases` table)
+still waits for the samskara port - it has one tenant left after
+this.
+
+### Risks the QA re-execution must check
+
+- The prod backlog (~200 unprocessed threads) drains at the
+  per-tick cap per hour - a day-long burst of observer calls
+  after deploy. Deliberate; log lines make it visible.
+- Reactions depend on `bias_active_at_turn` snapshots written by
+  the browser chat path - unchanged here, but the sweep is the
+  first non-browser reader; a reactor pass that never fires
+  post-port points at the snapshot, not the agent.
+- Aggregate parity: the TS math moved runtimes; the QA pass
+  should compare a recomputed `bias_summary` row against its
+  pre-port value for the same inputs.
