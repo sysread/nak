@@ -8991,28 +8991,30 @@ drop function if exists public.bias_clear_thread(uuid);
 drop function if exists public.bias_processed_threads_for_bias(text);
 drop function if exists public.bias_reactions_for_bias(text);
 
--- Claim the next eligible thread for bias analysis. Eligibility is
--- the full filter list from docs/dev/bias-profile.md:
---   - belongs to the calling user
+-- Claim the next eligible thread for bias analysis - the cron
+-- sweep's claim, scanning across ALL users (the per-user variant
+-- died with the browser worker). Eligibility, from
+-- docs/dev/bias-profile.md:
 --   - has at least p_min_user_messages user messages (default 2)
 --   - either never processed, or processed before the thread's most
 --     recent update (a new user message bumps threads.updated_at,
 --     and chat-loop also clears bias_processed_at directly)
---   - threads.updated_at is BEFORE p_today_start - the caller passes
---     midnight-local-time-today as a UTC instant, so "today" excludes
---     conversations the user might still be actively chatting in
---   - id is not in p_exclude_ids (the worker's "currently open in
---     this app instance" list, gathered by the manager from main-
---     thread messages)
+--   - threads.updated_at falls on a calendar day BEFORE today in the
+--     owner's timezone (profile displayTimezone via
+--     nak_safe_timezone, UTC fallback) - "today" excludes
+--     conversations the user might still be actively chatting in.
+--     There is no open-tab exclusion list: this day-gate subsumes it,
+--     and the save RPC's message-count guard covers the mid-analysis
+--     race.
 --   - no live claim (claim_holder NULL, or expired, or already ours)
 --
--- Atomic claim via update-returning so two workers polling the same
--- candidate set never both win. Returns one row or empty.
-create or replace function public.bias_claim_next_thread(
+-- Atomic claim via update-returning so overlapping ticks never both
+-- win. Returns one row (with user_id for logger attribution) or
+-- empty.
+drop function if exists public.bias_claim_next_thread_for_sweep(text, int, int);
+create or replace function public.bias_claim_next_thread_for_sweep(
   p_holder_id text,
   p_ttl_seconds int,
-  p_exclude_ids uuid[],
-  p_today_start timestamptz,
   p_min_user_messages int
 )
 returns table (
@@ -9024,76 +9026,66 @@ returns table (
   -- compensation behavior the user's messages could have reacted
   -- to. Empty array means "no biases were active" and the reactor
   -- pass produces no rows.
-  active_biases text[]
+  active_biases text[],
+  user_id uuid
 )
-security invoker
-language plpgsql
-as $$
-declare
-  v_id uuid;
-  v_msg_count int;
-  v_active_biases text[];
-begin
-  if auth.uid() is null then
-    return;
-  end if;
-
-  -- Pick a candidate. We could combine the SELECT and UPDATE via
-  -- `update ... where id = (select ...)` but the two-step makes the
-  -- "what we picked" debuggable in a SQL editor session.
-  select t.id, (
-    select count(*)::int from public.messages m
-      where m.thread_id = t.id and m.role = 'user'
-  ), coalesce(t.bias_active_at_turn, '{}'::text[])
-    into v_id, v_msg_count, v_active_biases
-    from public.threads t
-    where t.user_id = auth.uid()
-      and t.updated_at < p_today_start
-      and (
-        t.bias_processed_at is null
-        or t.bias_processed_at < t.updated_at
-      )
-      and (
-        t.bias_claim_holder is null
-        or t.bias_claim_expires < now()
-        or t.bias_claim_holder = p_holder_id
-      )
-      and (
-        p_exclude_ids is null
-        or not (t.id = any(p_exclude_ids))
-      )
-      -- The count check MUST live in the WHERE, not as a post-SELECT
-      -- early return: this query takes one candidate (LIMIT 1, oldest
-      -- updated_at first), so a rejected candidate has to be excluded
-      -- BEFORE the limit or it stays the queue head and starves every
-      -- thread behind it. A one-shot Q&A thread at the head of the
-      -- queue once wedged the analyze pipeline this way for weeks -
-      -- the worker logged "no eligible threads" while eligible
-      -- multi-message threads sat unprocessed behind it. Same inline
-      -- shape as claim_next_thread_for_reflection's substance bar.
-      and (
-        select count(*) from public.messages m
-          where m.thread_id = t.id and m.role = 'user'
-      ) >= p_min_user_messages
-    order by t.updated_at asc
-    limit 1
-    for update skip locked;
-
-  if v_id is null then
-    return;
-  end if;
-
-  update public.threads
-    set bias_claim_holder = p_holder_id,
-        bias_claim_expires = now() + make_interval(secs => p_ttl_seconds)
-    where id = v_id;
-
-  thread_id := v_id;
-  user_message_count := v_msg_count;
-  active_biases := v_active_biases;
-  return next;
-end;
+language sql security definer
+set search_path = public as $$
+  with candidate as (
+    select t.id as thread_id,
+           (select count(*)::int from public.messages m
+             where m.thread_id = t.id and m.role = 'user') as user_message_count,
+           coalesce(t.bias_active_at_turn, '{}'::text[]) as active_biases,
+           t.user_id as user_id
+      from public.threads t
+      inner join public.profiles p on p.user_id = t.user_id
+      cross join lateral (
+        -- One safe-timezone resolution per candidate row, shared by
+        -- both sides of the day-gate comparison below.
+        select public.nak_safe_timezone(p.settings->>'displayTimezone') as tz
+      ) usertz
+     where (t.updated_at at time zone usertz.tz)::date
+             < (now() at time zone usertz.tz)::date
+       and (
+         t.bias_processed_at is null
+         or t.bias_processed_at < t.updated_at
+       )
+       and (
+         t.bias_claim_holder is null
+         or t.bias_claim_expires < now()
+         or t.bias_claim_holder = p_holder_id
+       )
+       -- The count check MUST live in the WHERE, not as a post-SELECT
+       -- early return: this query takes one candidate (LIMIT 1, oldest
+       -- updated_at first), so a rejected candidate has to be excluded
+       -- BEFORE the limit or it stays the queue head and starves every
+       -- thread behind it. A one-shot Q&A thread at the head of the
+       -- queue once wedged the analyze pipeline this way for weeks -
+       -- the worker logged "no eligible threads" while eligible
+       -- multi-message threads sat unprocessed behind it. Same inline
+       -- shape as claim_next_thread_for_reflection's substance bar.
+       and (
+         select count(*) from public.messages m
+           where m.thread_id = t.id and m.role = 'user'
+       ) >= p_min_user_messages
+     order by t.updated_at asc
+     limit 1
+     for update of t skip locked
+  )
+  update public.threads t
+     set bias_claim_holder = p_holder_id,
+         bias_claim_expires = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c
+   where t.id = c.thread_id
+  returning t.id, c.user_message_count, c.active_biases, t.user_id;
 $$;
+
+-- Global sweep, owner-privileged: only the cron-driven service role
+-- may claim across users.
+revoke all on function public.bias_claim_next_thread_for_sweep(text, int, int)
+  from public, anon, authenticated;
+grant execute on function public.bias_claim_next_thread_for_sweep(text, int, int)
+  to service_role;
 
 -- Save the agent's observations AND compensation-feedback reactions
 -- for a thread in one transaction. Three guards:
@@ -9115,23 +9107,30 @@ $$;
 --
 -- Returns true on success, false if any guard fails. Caller treats
 -- false as 'work was wasted, drain to next cycle'.
+--
+-- p_user_id: the sweep's service-role client has no auth.uid(), so
+-- it passes the claimed row's owner explicitly (the b-strict
+-- overload pattern). An authenticated caller omits it.
+drop function if exists public.bias_save_observations(uuid, text, int, jsonb, jsonb, uuid);
 create or replace function public.bias_save_observations(
   p_thread_id uuid,
   p_holder_id text,
   p_expected_msg_count int,
   p_observations jsonb,
-  p_reactions jsonb
+  p_reactions jsonb,
+  p_user_id uuid default null
 )
 returns boolean
 security invoker
 language plpgsql
 as $$
 declare
+  v_uid uuid := coalesce(p_user_id, auth.uid());
   v_actual_count int;
   v_obs jsonb;
   v_was_confirmed boolean;
 begin
-  if auth.uid() is null then
+  if v_uid is null then
     return false;
   end if;
 
@@ -9139,7 +9138,7 @@ begin
   -- If any condition fails the SELECT returns no row and we exit.
   perform 1 from public.threads
     where id = p_thread_id
-      and user_id = auth.uid()
+      and user_id = v_uid
       and bias_claim_holder = p_holder_id
       and (bias_claim_expires is null or bias_claim_expires > now());
   if not found then
@@ -9174,9 +9173,13 @@ begin
   -- nothing", which is the correct answer most of the time.
   if jsonb_array_length(p_observations) > 0 then
     for v_obs in select * from jsonb_array_elements(p_observations) loop
+      -- user_id explicit: the column default is auth.uid(), which is
+      -- NULL for the sweep's service-role call and would violate the
+      -- not-null constraint.
       insert into public.bias_observations
-        (thread_id, bias, confidence, reasoning, evidence_message_id)
+        (user_id, thread_id, bias, confidence, reasoning, evidence_message_id)
       values (
+        v_uid,
         p_thread_id,
         v_obs->>'bias',
         (v_obs->>'confidence')::real,
@@ -9201,8 +9204,9 @@ begin
         else null
       end;
       insert into public.bias_reactions
-        (thread_id, bias, was_confirmed, reasoning)
+        (user_id, thread_id, bias, was_confirmed, reasoning)
       values (
+        v_uid,
         p_thread_id,
         v_obs->>'bias',
         v_was_confirmed,
@@ -9270,7 +9274,14 @@ $$;
 -- accumulates correctly. The TypeScript side runs the math on this
 -- row set - keeps the math in one place (math.ts), with the SQL
 -- doing only the grouping and the timestamp join.
-create or replace function public.bias_processed_threads_for_bias(p_bias text)
+-- p_user_id: b-strict overload - the sweep's aggregate pass scopes
+-- per claimed user with the service-role client; authenticated
+-- callers omit it.
+drop function if exists public.bias_processed_threads_for_bias(text, uuid);
+create or replace function public.bias_processed_threads_for_bias(
+  p_bias text,
+  p_user_id uuid default null
+)
 returns table (
   thread_id uuid,
   processed_at timestamptz,
@@ -9279,8 +9290,10 @@ returns table (
 security invoker
 language plpgsql
 as $$
+declare
+  v_uid uuid := coalesce(p_user_id, auth.uid());
 begin
-  if auth.uid() is null then
+  if v_uid is null then
     return;
   end if;
   return query
@@ -9293,13 +9306,13 @@ begin
       select o.thread_id,
              (1.0 - exp(sum(ln(greatest(1.0 - o.confidence, 1e-9))))) ::real as p_conv
         from public.bias_observations o
-        where o.user_id = auth.uid() and o.bias = p_bias
+        where o.user_id = v_uid and o.bias = p_bias
         group by o.thread_id
     )
     select t.id, t.bias_processed_at, coalesce(h.p_conv, 0.0)::real
       from public.threads t
       left join hits h on h.thread_id = t.id
-      where t.user_id = auth.uid()
+      where t.user_id = v_uid
         and t.bias_processed_at is not null;
 end;
 $$;
@@ -9311,7 +9324,13 @@ $$;
 -- null) are returned alongside the signed ones so the aggregate
 -- pass can count them for its own debugging - the math kernel
 -- discards them, but the worker logs them.
-create or replace function public.bias_reactions_for_bias(p_bias text)
+-- p_user_id: b-strict overload, same as
+-- bias_processed_threads_for_bias above.
+drop function if exists public.bias_reactions_for_bias(text, uuid);
+create or replace function public.bias_reactions_for_bias(
+  p_bias text,
+  p_user_id uuid default null
+)
 returns table (
   thread_id uuid,
   was_confirmed boolean,
@@ -9322,8 +9341,10 @@ returns table (
 security invoker
 language plpgsql
 as $$
+declare
+  v_uid uuid := coalesce(p_user_id, auth.uid());
 begin
-  if auth.uid() is null then
+  if v_uid is null then
     return;
   end if;
   return query
@@ -9333,10 +9354,22 @@ begin
            r.created_at,
            r.reasoning
       from public.bias_reactions r
-      where r.user_id = auth.uid() and r.bias = p_bias
+      where r.user_id = v_uid and r.bias = p_bias
       order by r.created_at desc;
 end;
 $$;
+
+-- service_role grants for the sweep driver (the venice function's
+-- bias-sweep tick) - its only caller now that the browser worker is
+-- gone. The b-strict overload keeps the functions role-agnostic
+-- (an authenticated caller still gets auth.uid() scoping) rather
+-- than forking definer copies.
+grant execute on function
+  public.bias_save_observations(uuid, text, int, jsonb, jsonb, uuid) to service_role;
+grant execute on function
+  public.bias_processed_threads_for_bias(text, uuid) to service_role;
+grant execute on function
+  public.bias_reactions_for_bias(text, uuid) to service_role;
 
 
 --
@@ -10334,6 +10367,82 @@ begin
   end if;
 exception when others then
   raise notice 'curation sweep cron setup skipped: %', sqlerrm;
+end
+$cron$;
+
+-- ---------------------------------------------------------------------------
+-- Scheduled bias sweep (pg_cron -> pg_net -> venice/bias-sweep)
+--
+-- Hourly drain for the bias pipeline: analyze (claim settled threads
+-- via bias_claim_next_thread_for_sweep, run the observer/reactor
+-- agent, save observations + reactions) then aggregate (recompute
+-- bias_summary for the users touched this tick plus any user whose
+-- cache has aged past the daily freshness floor). Cron is the ONLY
+-- driver - there is no chat-turn tail, because analyze eligibility
+-- requires the thread's last update to fall on a prior calendar day
+-- in its owner's timezone, so the thread a turn just touched is
+-- never eligible at turn time. Same Vault secrets and dispatch shape
+-- as the reflection sweep above.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.nak_trigger_bias_sweep()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $fn$
+declare
+  v_url text;
+  v_key text;
+begin
+  begin
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'project_url' $q$ into v_url;
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'service_role_key' $q$ into v_key;
+  exception when others then
+    return;  -- vault not installed or unreadable; nothing to dispatch
+  end;
+  if v_url is null or v_key is null then
+    return;  -- secrets not seeded yet
+  end if;
+  begin
+    execute format(
+      $q$ select net.http_post(
+            url := %L,
+            headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', %L),
+            body := '{}'::jsonb
+          ) $q$,
+      v_url || '/functions/v1/venice/bias-sweep',
+      'Bearer ' || v_key
+    );
+  exception when others then
+    raise notice 'nak_trigger_bias_sweep: dispatch failed: %', sqlerrm;
+  end;
+end;
+$fn$;
+
+revoke all on function public.nak_trigger_bias_sweep() from public, anon, authenticated;
+
+do $cron$
+begin
+  if exists (select 1 from pg_available_extensions where name = 'pg_cron')
+     and exists (select 1 from pg_available_extensions where name = 'pg_net') then
+    create extension if not exists pg_cron;
+    create extension if not exists pg_net;
+    if exists (select 1 from cron.job where jobname = 'nak-bias-sweep') then
+      perform cron.unschedule('nak-bias-sweep');
+    end if;
+    -- Minute 3: the x7 ladder (:07 wiki, :17 rem, :27 reflection,
+    -- :37 librarian, :47 deep-sleep, :57 curation) is full, so the
+    -- bias sweep starts a new column clear of the */5 embed ticks
+    -- and the :13/:43 samskara decay.
+    perform cron.schedule(
+      'nak-bias-sweep',
+      '3 * * * *',
+      $job$ select public.nak_trigger_bias_sweep(); $job$
+    );
+  end if;
+exception when others then
+  raise notice 'bias sweep cron setup skipped: %', sqlerrm;
 end
 $cron$;
 
