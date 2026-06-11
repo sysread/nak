@@ -64,6 +64,35 @@ const MINT_DEDUP_COSINE = 0.85;
  */
 const MINT_DEDUP_HEALTH_BUMP = 0.02;
 
+/**
+ * Topical-cluster tuning for mint-tier1. The phase used to hand the
+ * minter the 8 most-recent substrate rows verbatim ("treat the most
+ * recent N as one cluster"), so a session that hopped topics produced
+ * predictions fused across unrelated turns ("in situations involving
+ * physics OR culinary history...") and provenance littered with
+ * temporally-adjacent bystander rows. Instead, seed on the most-recent
+ * row and keep only rows whose situation embedding is close to it, so
+ * both the minter input and the recorded provenance are one coherent
+ * topic.
+ *
+ * MINT_CLUSTER_COSINE_FLOOR is empirical: across this corpus, RANDOM
+ * substrate pairs already average ~0.50 cosine (the embedding space is
+ * compressed - everything is one user's chat turns), while same-topic
+ * runs measured ~0.6-0.75. 0.6 sits at the random p90, so it admits
+ * most same-topic neighbours while rejecting ~90% of cross-topic ones.
+ * The separation is imperfect by nature of the compressed space; this
+ * is a deliberate floor, not a hard boundary.
+ *
+ * MINT_CLUSTER_MAX caps the minter's sample (and the provenance batch)
+ * at 5, matching the old slice. MINT_CLUSTER_MIN requires at least 3
+ * coherent rows before minting - a one-off exchange with no topical
+ * neighbours in the recent window shouldn't crystallize into an
+ * instinct yet.
+ */
+const MINT_CLUSTER_COSINE_FLOOR = 0.6;
+const MINT_CLUSTER_MAX = 5;
+const MINT_CLUSTER_MIN = 3;
+
 /** All worker phases. Iteration order is significant - see PHASES below. */
 export type SamskaraPhase =
   | 'assimilate'
@@ -480,17 +509,39 @@ async function runMintTier1Phase(ctx: CycleContext): Promise<CycleResult> {
   // substrate query carries 8 * 2048-dim embeddings (~130 KB)
   // and the followup mint agent call burns Venice budget.
   ctx.phaseThrottle.lastRunMs.set('mint-tier1', Date.now());
-  if (recent.length < 4) {
-    log.trace('mint-tier1: insufficient substrate', { have: recent.length, need: 4 });
+  if (recent.length < MINT_CLUSTER_MIN) {
+    log.trace('mint-tier1: insufficient substrate', {
+      have: recent.length,
+      need: MINT_CLUSTER_MIN,
+    });
+    return 'empty-phase';
+  }
+
+  // Build a topical cluster instead of taking the recent rows verbatim:
+  // seed on the most-recent row and keep only same-topic neighbours
+  // (situation-embedding cosine >= floor). This is what keeps the
+  // minter from fusing unrelated turns into one prediction and keeps
+  // provenance pointing at the rows that actually share the claim's
+  // topic. See MINT_CLUSTER_* for the floor's empirical basis.
+  const clusterRows = buildTopicalCluster(recent);
+  if (clusterRows.length < MINT_CLUSTER_MIN) {
+    log.trace('mint-tier1: no coherent cluster', {
+      fetched: recent.length,
+      coherent: clusterRows.length,
+      need: MINT_CLUSTER_MIN,
+    });
     return 'empty-phase';
   }
 
   const cluster = {
     sample_labels: [],
-    sample_situations: recent.slice(0, 5).map((r) => r.situation),
-    reinforcement: recent.length,
+    sample_situations: clusterRows.map((r) => r.situation),
+    reinforcement: clusterRows.length,
   };
-  log.trace('mint-tier1: asking agent', { substrateCount: recent.length });
+  log.trace('mint-tier1: asking agent', {
+    fetched: recent.length,
+    clustered: clusterRows.length,
+  });
   const minted = await ctx.agent.mint(cluster, ctx.signal);
   if (!minted) {
     log.trace('mint-tier1: agent declined');
@@ -512,25 +563,19 @@ async function runMintTier1Phase(ctx: CycleContext): Promise<CycleResult> {
     return 'error';
   }
 
-  // Dedup guard. The minter agent only sees the five-row substrate
-  // sample and has no visibility into the existing samskara corpus,
-  // so it cheerfully produces reworded versions of claims that are
-  // already present. Query the nearest existing samskara by cosine
-  // on `prediction_embedding`; when the similarity exceeds the
-  // threshold, reinforce that row (health bump + substrate
-  // provenance) instead of minting a twin. A failure of the dedup
-  // check itself is non-fatal - we'd rather mint a possible twin
-  // than drop a valid signal, and the one-shot collapse RPC is
-  // available as a cleanup lane.
+  // Dedup guard. The minter agent only sees the substrate cluster and
+  // has no visibility into the existing samskara corpus, so it
+  // cheerfully produces reworded versions of claims that are already
+  // present. Query the nearest existing samskara by cosine on
+  // `prediction_embedding`; when the similarity exceeds the threshold,
+  // reinforce that row (health bump only) instead of minting a twin. A
+  // failure of the dedup check itself is non-fatal - we'd rather mint a
+  // possible twin than drop a valid signal, and the one-shot collapse
+  // RPC is available as a cleanup lane.
   try {
     const nearest = await ctx.supabase.samskaraNearestByPrediction(predEmbedding, 1);
     if (nearest.length > 0 && nearest[0].cosine >= MINT_DEDUP_COSINE) {
-      const substrateIds = recent.slice(0, 5).map((r) => r.id);
-      await ctx.supabase.samskaraReinforceExisting(
-        nearest[0].id,
-        substrateIds,
-        MINT_DEDUP_HEALTH_BUMP
-      );
+      await ctx.supabase.samskaraReinforceExisting(nearest[0].id, MINT_DEDUP_HEALTH_BUMP);
       log.debug('mint-tier1: dedup-reinforced existing', {
         id: nearest[0].id,
         cosine: nearest[0].cosine,
@@ -581,9 +626,10 @@ async function runMintTier1Phase(ctx: CycleContext): Promise<CycleResult> {
       return 'error';
     }
     samskaraId = data.id;
-    // Provenance: link this samskara back to the substrate rows that
-    // fed it. ignoreDuplicates handles re-runs cleanly.
-    const provRows = recent.slice(0, 5).map((r) => ({
+    // Provenance: link this samskara back to the topical cluster rows
+    // that fed it - the same coherent set the minter saw, not the raw
+    // recency window. ignoreDuplicates handles re-runs cleanly.
+    const provRows = clusterRows.map((r) => ({
       samskara_id: data.id,
       kind: 'substrate' as const,
       ref_id: r.id,
@@ -681,14 +727,13 @@ async function runMintTier2Phase(ctx: CycleContext): Promise<CycleResult> {
 
   // Embedding dedup against existing tier-2s only (p_tier=2). A hit
   // means the agent re-derived an existing compound from a different
-  // child set; bump its health rather than minting a twin. No
-  // substrate provenance to append here - the reinforcing evidence is
-  // tier-1 children, not substrate rows - so pass an empty id list and
-  // let the RPC just nudge health.
+  // child set; bump its health rather than minting a twin. Reinforce
+  // touches health only - it never writes provenance - so the
+  // compound's tier-1 child links stay as they were minted.
   try {
     const nearest = await ctx.supabase.samskaraNearestByPrediction(predEmbedding, 1, 2);
     if (nearest.length > 0 && nearest[0].cosine >= MINT_DEDUP_COSINE) {
-      await ctx.supabase.samskaraReinforceExisting(nearest[0].id, [], MINT_DEDUP_HEALTH_BUMP);
+      await ctx.supabase.samskaraReinforceExisting(nearest[0].id, MINT_DEDUP_HEALTH_BUMP);
       log.debug('mint-tier2: dedup-reinforced existing compound', {
         id: nearest[0].id,
         cosine: nearest[0].cosine,
@@ -958,14 +1003,21 @@ async function runReactionClassifyPhase(ctx: CycleContext): Promise<CycleResult>
   return 'progress';
 }
 
-/** Decay phase. Cheap SQL-only update; one call per cycle. */
+/** Decay phase. Cheap SQL-only update; throttled to a wall-clock cadence. */
 async function runDecayPhase(ctx: CycleContext): Promise<CycleResult> {
+  // Wall-clock throttle (see DECAY_THROTTLE_INTERVAL_MS in worker.ts).
+  // Decay's health nudges are calibrated as a per-PASS step, so the
+  // pass cadence has to be wall-clock, not per-rotation. Running it
+  // every rotation - which is what an unthrottled SQL-only phase does
+  // during an active session - drove the whole corpus to health 0.
+  if (isPhaseThrottled(ctx, 'decay')) return 'empty-phase';
   try {
     await ctx.supabase.samskaraDecay();
   } catch (err) {
     log.debug('decay: RPC failed', err);
     return 'error';
   }
+  ctx.phaseThrottle.lastRunMs.set('decay', Date.now());
   // Single SQL update with no useful diagnostic surface unless it
   // failed; trace so it stays out of the default drawer view.
   log.trace('decay: applied');
@@ -977,8 +1029,7 @@ async function runDecayPhase(ctx: CycleContext): Promise<CycleResult> {
   // any non-empty phase), spinning the loop at full speed and
   // hammering every other phase's per-rotation queries
   // (samskara_recent_embedded_substrate, samskara_fires, etc.)
-  // alongside it. The decay RPC still runs once per idle wake
-  // (~60s), which is the right cadence.
+  // alongside it.
   return 'empty-phase';
 }
 
@@ -1118,10 +1169,36 @@ function shorten(s: string, max = 80): string {
 }
 
 /**
+ * Seed-topical cluster for mint-tier1. Takes the recency-ordered
+ * substrate window (most-recent first) and returns the seed (row 0)
+ * plus the later rows whose situation embedding sits within
+ * MINT_CLUSTER_COSINE_FLOOR of the seed, capped at MINT_CLUSTER_MAX and
+ * preserving recency order. Rows with no usable embedding (a pgvector
+ * parse failure surfaces as an empty array) score cosine -1 and fall
+ * out; a seed with no embedding yields a lone-seed cluster the caller
+ * rejects against MINT_CLUSTER_MIN.
+ */
+function buildTopicalCluster(recent: SamskaraSubstrateRow[]): SamskaraSubstrateRow[] {
+  const seed = recent[0];
+  const seedEmb = seed.situation_embedding as number[];
+  const cluster: SamskaraSubstrateRow[] = [seed];
+  for (let i = 1; i < recent.length && cluster.length < MINT_CLUSTER_MAX; i++) {
+    const emb = recent[i].situation_embedding as number[];
+    if (!emb || emb.length === 0) continue;
+    if (cosine(seedEmb, emb) >= MINT_CLUSTER_COSINE_FLOOR) {
+      cluster.push(recent[i]);
+    }
+  }
+  return cluster;
+}
+
+/**
  * Cosine similarity between two equal-length vectors. Used by the
  * pair-relate phase to find the closest substrate neighbour for a
- * seed. Returns -1 if the vectors are zero-norm (defensive — should
- * never happen for real Venice embeddings).
+ * seed, and by mint-tier1's topical clustering. Returns -1 if the
+ * vectors are zero-norm (defensive, and the signal that a substrate
+ * embedding failed to parse - an empty array - shouldn't join a
+ * cluster).
  */
 function cosine(a: number[], b: number[]): number {
   const len = Math.min(a.length, b.length);

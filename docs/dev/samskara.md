@@ -335,16 +335,19 @@ samskaras (the mint-tier2 phase, see Contracts). Cap is `tier in
 - `health real default 1.0` - decays over time and on
   disconfirm; clamped to [0, 1]. **NO threshold filter at fire
   time** - see Gotchas.
-- `fire_count`, `confirm_count`, `disconfirm_count`,
+- `fire_count int`; `confirm_count real`, `disconfirm_count
+  real` (fractional by design - reactions add `1/sqrt(cohort_N)`,
+  which an int column would truncate to 0; see Gotchas);
   `last_fired_at`, `created_at`, `updated_at`.
 - Indexes on `(user_id, tier)` and `(user_id, health desc,
   confidence desc)`.
 
 ### `samskara_provenance`
 
-Audit trail for what each samskara was minted from. Kept even
-if the underlying substrate or association is deleted (no FK on
-`ref_id`); debugging beats normalisation.
+Audit trail for what each samskara was minted FROM - its
+formation cluster, not its later reinforcement history. Kept
+even if the underlying substrate or association is deleted (no
+FK on `ref_id`); debugging beats normalisation.
 
 - `samskara_id` (FK on cascade), `user_id`, `kind text check in
   ('substrate', 'association', 'samskara')`, `ref_id uuid`,
@@ -354,6 +357,14 @@ if the underlying substrate or association is deleted (no FK on
   provenance; tier-2 samskaras carry `'samskara'` provenance
   pointing at their tier-1 children, with `weight` set to each
   child's in-group co-fire count.
+- Records the mint-time topical cluster only. Dedup-reinforce
+  (`samskara_reinforce_existing`) deliberately does NOT append
+  provenance: appending the recency batch on every re-observation
+  grew the list without bound (200+ rows, mostly temporally-
+  adjacent bystanders) and buried the formation evidence. A
+  merge (`_samskara_merge_pair`) still copies the loser's
+  provenance to the winner - that's a second samskara's genuine
+  formation evidence, not a re-observation.
 
 ### `samskara_fires`
 
@@ -465,24 +476,35 @@ sleep (60s).
   pair per cycle keeps LLM call rate bounded. Orthogonal
   verdicts skip the write. Associations are upserted via a
   direct `client.from('samskara_associations').upsert(...)`
-  with `onConflict` on the unique key, not an RPC.
+  with `onConflict` on the unique key, not an RPC. The
+  JS-cosine here depends on `samskaraRecentEmbeddedSubstrate`
+  parsing pgvector text into a real array; see the embeddings
+  gotcha below.
 - **Mint-tier1** - `SamskaraAgent.mint({sample_labels,
   sample_situations, reinforcement}, signal) -> {confirm,
-  prediction, inner_voice, valence, confidence} | null`. v1
-  treats the most recent few embedded substrate rows as a
-  cluster and asks the minter whether they support a
-  prediction. The agent's `confirm: false` path is a weak
-  first-line filter (it refuses clusters it thinks are too
-  thin) but it can only see the five-row sample, never the
-  existing samskara corpus, so on its own it produces near-
-  duplicate twins of older claims as the sample drifts. A
-  second dedup guard runs after the prediction is embedded:
-  `samskara_nearest_by_prediction` returns the closest
-  existing samskara by cosine on `prediction_embedding`; when
-  the similarity exceeds `MINT_DEDUP_COSINE` (0.85), the loop
-  calls `samskara_reinforce_existing` - appending substrate
-  provenance and nudging health up by `MINT_DEDUP_HEALTH_BUMP`
-  (0.02, capped at 1.0) - instead of inserting a twin. Only
+  prediction, inner_voice, valence, confidence} | null`. The
+  phase fetches the recent embedded substrate window, then
+  builds a **topical cluster**: it seeds on the most recent row
+  and keeps only the later rows whose situation embedding is
+  within `MINT_CLUSTER_COSINE_FLOOR` (0.6) of the seed, capped
+  at `MINT_CLUSTER_MAX` (5). It mints only when the coherent
+  cluster reaches `MINT_CLUSTER_MIN` (3); a topic-hopping window
+  collapses to a sub-threshold cluster and is skipped rather
+  than fused into a cross-topic prediction. The same cluster is
+  what the minter sees AND what gets recorded as provenance, so
+  provenance names the rows that actually share the claim's
+  topic. The agent's `confirm: false` path is a weak first-line
+  filter (it refuses clusters it thinks are too thin) but it
+  can only see the sample, never the existing samskara corpus,
+  so on its own it produces near-duplicate twins of older
+  claims as the sample drifts. A second dedup guard runs after
+  the prediction is embedded: `samskara_nearest_by_prediction`
+  returns the closest existing samskara by cosine on
+  `prediction_embedding`; when the similarity exceeds
+  `MINT_DEDUP_COSINE` (0.85), the loop calls
+  `samskara_reinforce_existing` - nudging health up by
+  `MINT_DEDUP_HEALTH_BUMP` (0.02, capped at 1.0), and NOT
+  touching provenance - instead of inserting a twin. Only
   genuinely novel predictions fall through to the insert path.
   The minter prompt explicitly invites negative predictions
   ("user tends to NOT do Y") and assistant-behaviour
@@ -514,9 +536,9 @@ sleep (60s).
   child-set overlap (same children), and after the compound is
   embedded the loop checks the nearest existing tier-2 by cosine
   (`samskara_nearest_by_prediction` with `p_tier=2`), reinforcing it
-  via `samskara_reinforce_existing` when cosine >= `MINT_DEDUP_COSINE`
-  (0.85) instead of minting a twin (the different-children-same-claim
-  case). Throttled at 5 minutes - longer than mint-tier1's 60s
+  via `samskara_reinforce_existing` (health bump only, no provenance)
+  when cosine >= `MINT_DEDUP_COSINE` (0.85) instead of minting a twin
+  (the different-children-same-claim case). Throttled at 5 minutes - longer than mint-tier1's 60s
   because compound patterns form slowly and the detection self-join
   is the heaviest query in the worker. Successful mints fire `onMint`
   with `tier: 2`; the mood pill renders them through the same
@@ -588,16 +610,26 @@ still ranks normally so it can fire and accumulate signal.
 
 ### Reinforcement formula
 
-Bayesian-ish, inside `samskara_apply_reaction`:
+Bayesian-ish, inside `samskara_apply_reaction`. `inc` is the
+per-reaction increment `max(round(1/sqrt(cohort_N), 2), 0.01)`:
 
 ```text
 on confirm (per cohort member):
-  confirm_count += max(1 / sqrt(cohort_N), 0.01)
+  confirm_count += inc
   confidence = (confirm_count + 2) / (confirm_count + disconfirm_count + 3)
 on disconfirm (per cohort member):
-  disconfirm_count += max(1 / sqrt(cohort_N), 0.01)
+  disconfirm_count += inc
   confidence = (confirm_count + 1) / (confirm_count + disconfirm_count + 3)
 ```
+
+Both `confirm_count` and `disconfirm_count` are **`real`**, not
+integer. The increment is sub-unit (`1/sqrt(N)` ~ 0.2-0.6), so an
+integer column truncated every reaction to 0 - which froze
+confidence at its Laplace prior and made the decay rule below fire
+on every samskara. The counts feed both confidence and decay, so
+fractional storage is load-bearing, not cosmetic. The confidence
+expressions read the POST-increment counts (the SQL adds `inc`
+explicitly) so confidence doesn't lag one reaction behind.
 
 Cohort weight is `1 / sqrt(N)` with a 0.01 floor and two-decimal
 rounding. A 5-strong cohort all confirming contributes
@@ -615,10 +647,10 @@ stale-fire decay:
                     or last_fired_at < now() - interval '60 days'
 disconfirm decay:
   health -= 0.10 where disconfirm_count > confirm_count
-                    and disconfirm_count + confirm_count >= 3
+                    and disconfirm_count + confirm_count >= 1.0
 locked-in-without-feedback decay:
   health -= 0.03 where fire_count > 10
-                    and (confirm_count + disconfirm_count) < 0.2 * fire_count
+                    and (confirm_count + disconfirm_count) < 0.5
 ```
 
 The third path catches the "stereotype hardening" pathology
@@ -626,6 +658,26 @@ where a samskara fires constantly but never gets explicit
 confirm or disconfirm (neutrals only). The existing two paths
 never touch it; this gentle nudge crowds it out without
 artificially perturbing user-facing behaviour.
+
+Both feedback thresholds are ABSOLUTE accumulated weight, not
+raw counts or a fraction of fire_count. They were originally
+written against an integer-count, full-`+1`-per-reaction world
+(`>= 3` and `< 0.2 * fire_count`). With sqrt-weighted real
+increments and only ~20% of cohorts ever resolving, feedback
+accumulates at a small fraction of fire_count, so `0.2 *
+fire_count` was unreachable and `0.5` / `1.0` are the
+recalibrated "barely any signal" / "~three reactions of net
+disconfirm" bars. Overpopulation pruning is the collapse RPC's
+job, not decay's, so these bars can be lenient.
+
+Cadence matters as much as the thresholds: **decay is throttled
+to a 30-minute wall-clock interval** in the worker
+(`DECAY_THROTTLE_INTERVAL_MS`). It is SQL-only with no consumer
+inside the worker, so the rotation would otherwise run it every
+pass - many times a minute during an active session - and at
+-0.03/pass that drove the whole corpus to health 0. The decay
+rates are a per-pass nudge; the 30-minute throttle is what makes
+"per pass" mean what the rates assume.
 
 ### Dedup formula
 
@@ -783,19 +835,56 @@ summarizer reads samskaras to feed the agent.
 
 ## Gotchas
 
-- **No health threshold at fire time.** The instinct is to
-  filter out samskaras with `health < X` from the fire query;
-  that defeats the design. Three near-dead samskaras co-firing
-  is exactly the signal we want to surface, because cohort
-  reinforcement can pull them back from the brink and the
-  formation worker can mint a tier-2 compound from the cohort
-  later. The fire RPC ranks by `cosine^1.3 * sqrt(health *
-  confidence) * (1 + 0.1 * ln(1 + N))` so weak-but-relevant
-  samskaras break through (the 1.3 power on the cosine factor
-  is a relevance nudge, not a threshold - matches still rank
-  smoothly down toward zero). The token budget in
-  `formatPriming` is what bounds the long tail, not a SQL
-  filter.
+- **No health threshold at fire time, but a score floor on the
+  cohort.** The instinct is to filter out samskaras with
+  `health < X` from the fire query; that defeats the design.
+  Three near-dead samskaras co-firing is exactly the signal we
+  want to surface, because cohort reinforcement can pull them
+  back from the brink and the formation worker can mint a tier-2
+  compound from the cohort later. The fire RPC ranks by
+  `cosine^1.3 * sqrt(health * confidence) * (1 + 0.1 * ln(1 +
+  N))` so weak-but-relevant samskaras break through (the 1.3
+  power on the cosine factor is a relevance nudge, not a
+  threshold - matches still rank smoothly down toward zero). The
+  token budget in `formatPriming` is what bounds the long tail,
+  not a SQL filter. The one filter that DOES apply is client-side
+  in `fireSamskaras`: rows scoring below `FIRE_SCORE_FLOOR`
+  (0.01) are dropped before the cohort is logged. That's a floor
+  on SCORE, not health - it only removes effectively-retired rows
+  whose health decayed to ~0 (score ~0), which contribute nothing
+  to priming yet would otherwise bloat cohorts to ~20 members,
+  inflate fire_count, dilute each reaction's `1/sqrt(N)` weight,
+  and poison co-fire dedup / tier-2 detection with spurious
+  Hebbian binding. Live-but-weak matches (the long tail) all sit
+  above it.
+- **pgvector reads back as a string, not an array.** supabase-js
+  has no type mapping for `vector`/`halfvec`, so a selected
+  embedding column arrives as its bracketed text literal
+  (`"[0.1,...]"`). Any client-side cosine that treats it as an
+  array multiplies characters into NaN. This silently broke
+  pair-relate for weeks (zero associations - every similarity was
+  NaN, no pair cleared the threshold). `samskaraRecentEmbedded
+  Substrate` runs every row through `parseEmbeddingColumn`; any
+  new code path that reads an embedding column for JS-side math
+  must do the same. RPCs that do the cosine in SQL (the fire,
+  search, nearest, and cluster RPCs) are unaffected - this only
+  bites client-side vector math.
+- **Reaction counts are `real`; decay is wall-clock throttled.**
+  Two coupled traps that together euthanized the entire corpus
+  to health 0 once. (1) `confirm_count`/`disconfirm_count` MUST
+  be `real`: reactions increment by `1/sqrt(cohort_N)` (~0.2-0.6),
+  which an integer column truncates to 0, freezing confidence and
+  making the locked-in decay rule fire on everything. Any RPC
+  RETURNS TABLE that re-declares these as `int` (e.g.
+  `samskara_search_by_prediction`) re-introduces the truncation
+  on the way out - keep them `real`. (2) `samskara_decay` is
+  SQL-only with no in-worker consumer, so the rotation will run
+  it every pass unless throttled; at -0.03 health per locked-in
+  pass that's lethal within ~30 min of active use. It's gated by
+  `DECAY_THROTTLE_INTERVAL_MS` (30 min) via the worker's
+  phase-throttle. If you ever see health collapse across the
+  board again, check the column type and the throttle before the
+  decay formula.
 - **Two injection mechanisms, both always-on.** The compound
   prose summary captures stable bias across every turn; the
   per-turn cosine fire surfaces situational bias. Either one

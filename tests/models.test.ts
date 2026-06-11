@@ -25,6 +25,7 @@ import {
   isThinkingLevel,
   isVerbosity,
   padEmbeddingForStorage,
+  parseEmbeddingColumn,
   resolveThinking,
   resolveTier,
   resolveVerbosity,
@@ -369,6 +370,36 @@ describe('padEmbeddingForStorage', () => {
     const original = dot(a, b);
     const padded = dot(padEmbeddingForStorage(a), padEmbeddingForStorage(b));
     expect(padded).toBeCloseTo(original, 10);
+  });
+});
+
+describe('parseEmbeddingColumn', () => {
+  it('parses the pgvector bracketed text literal into a number array', () => {
+    expect(parseEmbeddingColumn('[0.1,0.2,-0.3]')).toEqual([0.1, 0.2, -0.3]);
+  });
+
+  it('passes an already-parsed array through unchanged', () => {
+    const arr = [1, 2, 3];
+    expect(parseEmbeddingColumn(arr)).toBe(arr);
+  });
+
+  it('returns null for null, non-strings, empty, and unparseable input', () => {
+    expect(parseEmbeddingColumn(null)).toBeNull();
+    expect(parseEmbeddingColumn(undefined)).toBeNull();
+    expect(parseEmbeddingColumn(42)).toBeNull();
+    expect(parseEmbeddingColumn('')).toBeNull();
+    expect(parseEmbeddingColumn('not a vector')).toBeNull();
+    // A bare JSON scalar parses but isn't an array - reject it.
+    expect(parseEmbeddingColumn('3.14')).toBeNull();
+  });
+
+  it('is the inverse of the string a client-side cosine would otherwise mangle', () => {
+    // The bug this guards: treating the raw string as an array makes
+    // a[i] a character and a[i]*b[i] NaN. Parsed, the math is real.
+    const parsed = parseEmbeddingColumn('[3,4]');
+    expect(parsed).not.toBeNull();
+    const norm = Math.sqrt(parsed![0] ** 2 + parsed![1] ** 2);
+    expect(norm).toBe(5);
   });
 });
 

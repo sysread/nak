@@ -766,6 +766,32 @@ export function padEmbeddingForStorage(embedding: readonly number[]): number[] {
   return padded;
 }
 
+/**
+ * Parse a pgvector column value read back through PostgREST into a
+ * plain number array. supabase-js has no type mapping for pgvector, so
+ * a `vector`/`halfvec` column arrives as its text literal - a bracketed
+ * string like "[0.1,0.2,...]" - NOT a JS array. Any client-side cosine
+ * math that treats that string as an array multiplies characters and
+ * silently yields NaN (this is exactly why the samskara pair-relate
+ * phase produced zero associations for weeks: every similarity came
+ * back NaN, so no pair ever cleared the threshold). Returns null when
+ * the value is absent or unparseable so callers can skip the row rather
+ * than feed NaN downstream. Already-array inputs pass through untouched
+ * for forward-compatibility if supabase-js ever maps the type.
+ */
+export function parseEmbeddingColumn(value: unknown): number[] | null {
+  if (Array.isArray(value)) return value as number[];
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return null;
+  try {
+    const parsed = JSON.parse(trimmed);
+    return Array.isArray(parsed) ? (parsed as number[]) : null;
+  } catch {
+    return null;
+  }
+}
+
 // --- Helpers ---------------------------------------------------------------
 
 export function isModelTier(v: unknown): v is ModelTier {

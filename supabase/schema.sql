@@ -4870,8 +4870,16 @@ create table if not exists public.samskaras (
   -- application layer.
   health real not null default 1.0,
   fire_count int not null default 0,
-  confirm_count int not null default 0,
-  disconfirm_count int not null default 0,
+  -- Reaction tallies are REAL, not integer. samskara_apply_reaction
+  -- bumps these by a cohort-aware weight of 1/sqrt(cohort_size) per
+  -- reaction (so a 16-fire cohort adds ~0.25, not 1.0). An integer
+  -- column truncated every such increment back to 0, which silently
+  -- froze confidence at its Laplace prior and made decay's
+  -- locked-in-without-feedback rule fire on every samskara - the whole
+  -- corpus decayed to health 0. Fractional storage is the contract the
+  -- reinforcement math was written against.
+  confirm_count real not null default 0,
+  disconfirm_count real not null default 0,
   last_fired_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -4882,6 +4890,23 @@ create index if not exists samskaras_user_tier_idx
 
 create index if not exists samskaras_user_health_idx
   on public.samskaras (user_id, health desc, confidence desc);
+
+-- Promote the reaction tallies from integer to real on databases that
+-- predate the type fix. `create table if not exists` above is a no-op
+-- on an existing table, so the column type only changes here. Guarded
+-- so the schema re-apply is idempotent: once the columns are real the
+-- block does nothing. int -> real is a value-preserving widening
+-- (every stored integer is exactly representable), so no data is lost
+-- when the one-time rewrite runs.
+do $$
+begin
+  if (select data_type from information_schema.columns
+       where table_schema = 'public' and table_name = 'samskaras'
+         and column_name = 'confirm_count') = 'integer' then
+    alter table public.samskaras alter column confirm_count type real;
+    alter table public.samskaras alter column disconfirm_count type real;
+  end if;
+end $$;
 
 alter table public.samskaras enable row level security;
 
@@ -5326,6 +5351,7 @@ declare
   v_uid uuid := auth.uid();
   v_cohort_n int;
   v_weight real;
+  v_inc real;
 begin
   -- Cohort size is the count of fires for this cohort that we own,
   -- not the size of any single id-array — neutral fires count toward
@@ -5335,11 +5361,22 @@ begin
    where user_id = v_uid and cohort_id = p_cohort_id;
   if v_cohort_n = 0 then return; end if;
   v_weight := 1.0 / sqrt(v_cohort_n::real);
+  -- Per-reaction increment, rounded to two decimals with a 0.01 floor
+  -- so even the largest cohort still moves the tally. Requires a real
+  -- column (see the samskaras table comment); on an integer column
+  -- this truncates to 0 for any cohort larger than one fire.
+  v_inc := greatest(round(v_weight * 100) / 100.0, 0.01);
 
+  -- Confidence recomputes from the POST-increment counts, not the
+  -- stored (pre-update) ones. In a single UPDATE every set-expression
+  -- reads the row's old values, so referencing `confirm_count` alone
+  -- would lag one reaction behind; we add v_inc explicitly to use the
+  -- value we're about to write.
   if array_length(p_confirm_ids, 1) > 0 then
     update public.samskaras
-       set confirm_count = confirm_count + greatest(round(v_weight * 100) / 100.0, 0.01),
-           confidence = (confirm_count + 2) / nullif(confirm_count + disconfirm_count + 3, 0)::real,
+       set confirm_count = confirm_count + v_inc,
+           confidence = (confirm_count + v_inc + 2)
+             / nullif(confirm_count + v_inc + disconfirm_count + 3, 0)::real,
            updated_at = now()
      where user_id = v_uid
        and id = any (p_confirm_ids);
@@ -5347,8 +5384,9 @@ begin
 
   if array_length(p_disconfirm_ids, 1) > 0 then
     update public.samskaras
-       set disconfirm_count = disconfirm_count + greatest(round(v_weight * 100) / 100.0, 0.01),
-           confidence = (confirm_count + 1) / nullif(confirm_count + disconfirm_count + 3, 0)::real,
+       set disconfirm_count = disconfirm_count + v_inc,
+           confidence = (confirm_count + 1)
+             / nullif(confirm_count + disconfirm_count + v_inc + 3, 0)::real,
            updated_at = now()
      where user_id = v_uid
        and id = any (p_disconfirm_ids);
@@ -5703,12 +5741,17 @@ begin
           or last_fired_at < now() - interval '60 days');
   get diagnostics v_stale = row_count;
 
+  -- Net-disconfirmed decay. Evidence bar is 1.0 of accumulated
+  -- reaction weight, not 3 raw counts: reactions land at
+  -- 1/sqrt(cohort_size) (~0.2-0.6 each), so 1.0 is roughly the "three
+  -- genuine reactions" the original integer `>= 3` was reaching for
+  -- before the real-counter fix made each reaction sub-unit.
   update public.samskaras
      set health = greatest(0.0, health - 0.10),
          updated_at = now()
    where user_id = v_uid
      and disconfirm_count > confirm_count
-     and (disconfirm_count + confirm_count) >= 3;
+     and (disconfirm_count + confirm_count) >= 1.0;
   get diagnostics v_disconfirm = row_count;
 
   -- Locked-in-without-feedback decay. A samskara that has fired many
@@ -5721,16 +5764,24 @@ begin
   -- artificially perturbing user-facing behaviour the way an
   -- exploration epsilon would.
   --
-  -- Threshold: fire_count > 10 AND total feedback < 20% of fires.
-  -- A row with no feedback at all has the ratio = 0, definitely
-  -- decays. A row that gets reacted-to ~1-in-3 fires is fine.
+  -- Threshold is ABSOLUTE accumulated feedback, not a fraction of
+  -- fire_count. The original `< 0.2 * fire_count` was structurally
+  -- unreachable: reactions only resolve for the ~20% of cohorts whose
+  -- follow-up lands in the 1-10min window, and each resolved reaction
+  -- adds 1/sqrt(cohort_size) (~0.2-0.6), so even a perfectly-reacted
+  -- samskara accumulates feedback at a small FRACTION of its fire
+  -- count - it could never clear 0.2x and every row decayed to 0.
+  -- `< 0.5` instead means "fired 10+ times but never accumulated even
+  -- ~one genuine reaction's worth of signal" - the actual un-engaged
+  -- case. A samskara that gets reacted to a couple of times crosses
+  -- 0.5 and is exempt; overpopulation pruning is the collapse RPC's
+  -- job, not decay's.
   update public.samskaras
      set health = greatest(0.0, health - 0.03),
          updated_at = now()
    where user_id = v_uid
      and fire_count > 10
-     and (confirm_count + disconfirm_count)::real
-         < 0.2 * fire_count::real;
+     and (confirm_count + disconfirm_count) < 0.5;
   get diagnostics v_unreinforced = row_count;
 
   return v_stale + v_disconfirm + v_unreinforced;
@@ -5911,17 +5962,28 @@ language sql stable security invoker as $$
 $$;
 
 -- Reinforce an existing samskara on re-observation. Called by the
--- mint-tier1 dedup path when the proposed prediction is semantically
--- too close to an existing row. Appends substrate provenance so the
--- audit trail still names the new observations, and nudges health up
--- by a small amount - capped at 1.0 - because a re-observation is a
--- weak positive signal (the user didn't actively confirm, they just
--- said something similar enough that the minter wanted to restate
--- the claim). Heavy reinforcement still goes through reaction-
--- classify's confirm/disconfirm path, which touches confidence.
+-- mint-tier1 / mint-tier2 dedup paths when the proposed prediction is
+-- semantically too close to an existing row. Nudges health up by a
+-- small amount - capped at 1.0 - because a re-observation is a weak
+-- positive signal (the user didn't actively confirm, they just said
+-- something similar enough that the minter wanted to restate the
+-- claim). Heavy reinforcement still goes through reaction-classify's
+-- confirm/disconfirm path, which touches confidence.
+--
+-- Deliberately does NOT touch provenance. Provenance records the
+-- substrate that FORMED a samskara (its origin cluster), not every
+-- later re-observation. Appending the recency batch on each dedup hit
+-- grew provenance without bound (rows accreted to 200+ links, most of
+-- them temporally-adjacent bystanders unrelated to the claim) and
+-- buried the formation evidence the detail view exists to show. The
+-- health bump and fire_count already encode "re-observed"; the audit
+-- trail stays the mint-time cluster.
+--
+-- The earlier signature carried a `p_substrate_ids uuid[]` arg for the
+-- append; drop it so PostgREST resolves the new 2-arg shape cleanly.
+drop function if exists public.samskara_reinforce_existing(uuid, uuid[], real);
 create or replace function public.samskara_reinforce_existing(
   p_samskara_id uuid,
-  p_substrate_ids uuid[],
   p_health_bump real
 ) returns boolean
 language plpgsql security invoker as $$
@@ -5945,18 +6007,6 @@ begin
      set health = least(1.0, health + p_health_bump),
          updated_at = now()
    where id = p_samskara_id and user_id = v_uid;
-
-  -- Extend the provenance chain with the substrate rows that
-  -- triggered this re-observation. Weight 0.5 (half of a fresh mint's
-  -- 1.0) encodes "this is a re-observation, not the canonical
-  -- evidence." `on conflict do nothing` keeps the function idempotent
-  -- under duplicate callers or retries.
-  if p_substrate_ids is not null and array_length(p_substrate_ids, 1) > 0 then
-    insert into public.samskara_provenance (samskara_id, user_id, kind, ref_id, weight)
-    select p_samskara_id, v_uid, 'substrate', sid, 0.5
-      from unnest(p_substrate_ids) as sid
-      on conflict (samskara_id, kind, ref_id) do nothing;
-  end if;
 
   return true;
 end $$;
@@ -6429,6 +6479,12 @@ end $$;
 -- would bury the weak-but-relevant samskaras the operator most wants to
 -- find. Optional tier filter. Returns the display fields the list and
 -- detail views render, plus cosine for an optional relevance readout.
+-- Drop before recreate: the confirm/disconfirm columns widened from
+-- int to real (see the samskaras table comment), and Postgres refuses
+-- to change a function's OUT column types via CREATE OR REPLACE. An
+-- int return type here would re-truncate the real column values on the
+-- way out, re-introducing the exact frozen-tally bug downstream.
+drop function if exists public.samskara_search_by_prediction(vector, int, int);
 create or replace function public.samskara_search_by_prediction(
   p_query_embedding vector(2048),
   p_k_max int,
@@ -6442,8 +6498,8 @@ create or replace function public.samskara_search_by_prediction(
   confidence real,
   health real,
   fire_count int,
-  confirm_count int,
-  disconfirm_count int,
+  confirm_count real,
+  disconfirm_count real,
   last_fired_at timestamptz,
   created_at timestamptz,
   cosine real
