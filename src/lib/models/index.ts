@@ -226,6 +226,19 @@ export const MODELS = {
     // See ModelSpec.leaksSpecialTokens.
     leaksSpecialTokens: true,
   },
+  'tencent-hy3-preview': {
+    id: 'tencent-hy3-preview',
+    // 295B-param MoE (21B active) from Tencent Hy. Backs the web_search
+    // tool's sub-completion. Beta model on Venice (model_spec.betaModel),
+    // so expect occasional churn in availability.
+    contextWindow: 256_000,
+    // Reasoning-capable: reasoning_effort options are none/low/high
+    // (default high). The web_search sub-call zeroes the CoT via
+    // disable_thinking so the budget goes to answer text, not reasoning.
+    supportsReasoning: true,
+    supportsVision: false,
+    supportsResponseFormat: true,
+  },
   'mistral-small-3-2-24b-instruct': {
     id: 'mistral-small-3-2-24b-instruct',
     contextWindow: 256_000,
@@ -560,11 +573,13 @@ export type AgentRole =
  *     final output). Pinned to the same id as `wiki` so a future
  *     swap of the wiki family flows through both surfaces.
  *
- *   webSearch - deepseek-v4-flash. The `web_search` tool's sub-
+ *   webSearch - tencent-hy3-preview. The `web_search` tool's sub-
  *     completion summarises Venice-provided results into 2-4
  *     sentences with citation markers. Bounded synthesis; the call
  *     site forces disable_thinking so the model can't burn the
- *     output budget on a CoT preamble.
+ *     output budget on a CoT preamble. Distinct id from the recall/
+ *     wiki family so the search agent can be retuned without
+ *     dragging the deepseek-backed agents along.
  *
  *   researchDocs - deepseek-v4-flash. The `research_docs` tool's
  *     sub-completion reads the bundled docs and answers in 2-5
@@ -612,7 +627,7 @@ export const AGENT_MODELS = {
   wikiLibrarian:      'deepseek-v4-flash',
   deepSleep:          'deepseek-v4-flash',
   rem:                'deepseek-v4-flash',
-  webSearch:          'deepseek-v4-flash',
+  webSearch:          'tencent-hy3-preview',
   researchDocs:       'deepseek-v4-flash',
   intuition:          'mistral-small-3-2-24b-instruct',
   recall:             'deepseek-v4-flash',

@@ -1,14 +1,15 @@
 // web_search (function-side port)
 //
 // Calls Venice with enable_web_search='on' through a one-shot
-// non-streaming completion against the fast tier, harvests the
-// synthesized answer plus web_search_citations, and returns them
+// non-streaming completion against a dedicated search model, harvests
+// the synthesized answer plus web_search_citations, and returns them
 // to the model. Wire schema lives in src/lib/tools/web_search.schema.ts.
 //
-// disable_thinking is on because the fast tier is a reasoning model
-// whose CoT pass would otherwise eat the token budget before any
-// answer text lands. 8196-token cap matches the browser-side ceiling
-// for citation-heavy summaries.
+// disable_thinking is on because the search model is reasoning-capable
+// (tencent-hy3-preview defaults to high reasoning_effort) and its CoT
+// pass would otherwise eat the token budget before any answer text
+// lands. 8196-token cap matches the browser-side ceiling for
+// citation-heavy summaries.
 //
 // Empty-text-with-citations is treated as an error rather than a
 // silent empty result - mirror of the browser path's discipline.
@@ -19,7 +20,7 @@ import { toolComplete } from './_venice_complete.ts';
 
 // Mirror of agentModel('webSearch') in src/lib/models/index.ts. Same
 // same-PR sync discipline as the other browser-mirror constants.
-const WEB_SEARCH_MODEL = 'deepseek-v4-flash';
+const WEB_SEARCH_MODEL = 'tencent-hy3-preview';
 
 const WEB_SEARCH_SYSTEM_PROMPT = [
   'You are a research-savvy search assistant. Given the query below,',
