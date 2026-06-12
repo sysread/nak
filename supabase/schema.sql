@@ -3833,6 +3833,32 @@ grant execute on function
 grant execute on function
   public.mark_thread_reflected_if_claimed(uuid, text, uuid, uuid) to service_role;
 
+-- Resolve a stored timezone preference to one Postgres will accept.
+-- The global sweep claims (reflection below, wiki, rem) evaluate the
+-- day-gate for EVERY user inside one query; a single profile carrying
+-- a malformed displayTimezone would make `at time zone` raise and
+-- wedge the whole sweep (one bad row pins the queue for all users).
+-- The browser-era claims took the timezone as a parameter, so a bad
+-- value only ever broke its own user's claim - the global shape needs
+-- the per-row guard. Probe the value and fall back to UTC on anything
+-- Postgres rejects. Defined above the FIRST consumer on purpose: the
+-- sweep claims are `language sql`, whose bodies resolve this
+-- reference at create time, and schema.sql applies top to bottom in
+-- one pass - a fresh project errors here if the definition sits below
+-- any caller.
+create or replace function public.nak_safe_timezone(p_tz text)
+returns text
+language plpgsql stable as $$
+begin
+  if p_tz is null or p_tz = '' then
+    return 'UTC';
+  end if;
+  perform now() at time zone p_tz;
+  return p_tz;
+exception when others then
+  return 'UTC';
+end $$;
+
 -- Global reflection sweep claim: the cron catch-up drain's variant of
 -- claim_next_thread_for_reflection. Same candidate predicate, but
 -- across ALL users - the timezone comes off each owner's profile
@@ -7486,28 +7512,6 @@ alter table public.threads
   -- skips recover without a manual reset. Cleared on the next
   -- successful run alongside the rest of the per-thread state.
   add column if not exists wiki_skip_fallback_attempted boolean not null default false;
-
--- Resolve a stored timezone preference to one Postgres will accept.
--- The global wiki sweep below evaluates the day-gate for EVERY user
--- inside one query; a single profile carrying a malformed
--- displayTimezone would make `at time zone` raise and wedge the whole
--- sweep (one bad row pins the queue for all users). The browser-era
--- claim took the timezone as a parameter, so a bad value only ever
--- broke its own user's claim - the global shape needs the per-row
--- guard. Probe the value and fall back to UTC on anything Postgres
--- rejects.
-create or replace function public.nak_safe_timezone(p_tz text)
-returns text
-language plpgsql stable as $$
-begin
-  if p_tz is null or p_tz = '' then
-    return 'UTC';
-  end if;
-  perform now() at time zone p_tz;
-  return p_tz;
-exception when others then
-  return 'UTC';
-end $$;
 
 -- Claim the next thread eligible for wiki processing, across ALL
 -- users. SECURITY DEFINER global sweep (same posture as
