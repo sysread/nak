@@ -73,20 +73,24 @@ pipeline the three layer searches likewise run in parallel via
 
 ## Triggers
 
-Context recall reuses `evaluatePreRoundTrigger` and
-`evaluateTitleTrigger` from `src/lib/intuition/triggers.ts` - the
-same evaluator that schedules an intuition refresh schedules a
-context-recall refresh. The evaluator's `cache` parameter is
-declared as a structural `RoundCacheSnapshot` shape so both
-`IntuitionPayload` and `ContextRecallPayload` flow through without
-a cast at the call site.
+Context recall reuses `evaluatePreRoundTrigger` from
+`src/lib/intuition/triggers.ts` - the same evaluator that schedules
+an intuition refresh schedules a context-recall refresh. The
+evaluator's `cache` parameter is declared as a structural
+`RoundCacheSnapshot` shape so both `IntuitionPayload` and
+`ContextRecallPayload` flow through without a cast at the call
+site. The evaluation itself runs inside
+`maybeRunContextRecallPipeline` (pipeline.ts) - the chat-loop's
+entry point, which owns the feature gate, the trigger decision, and
+the per-thread inflight dedup; the chat-loop supplies inputs and
+sequencing only.
 
-All four trigger reasons fire context recall:
+Three trigger reasons fire context recall (the `'title'` member of
+the trigger union is legacy-only - see intuition.md for the history
+of the dead mid-turn title trigger):
 
 - **`cold`** - thread has no payload yet. Fires unconditionally so
   the feature lands on every thread by the first response.
-- **`title`** - the model called `update_title` mid-turn. Topic
-  shift is the strongest signal we have.
 - **`mood`** - the user's valence band or confidence column changed
   since the last write.
 - **`stale`** - `STALE_FUSE_ROUNDS` (8 user-rounds) have passed

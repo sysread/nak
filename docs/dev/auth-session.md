@@ -116,8 +116,7 @@ fields on read.
 ## Refresh-token rotation across workers
 
 Nak runs multiple Supabase clients per tab: the main-thread
-client plus one in each background worker (supervisor,
-samskara, bias, wiki, wiki-librarian, deep-sleep, REM).
+client plus one in each background worker (samskara, bias).
 Only the main-thread client refreshes. Each worker is
 built with `autoRefreshToken: false` and is pinned to the
 current session via `setSession(...)`; its manager

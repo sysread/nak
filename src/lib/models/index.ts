@@ -230,8 +230,9 @@ export const MODELS = {
     id: 'mistral-small-3-2-24b-instruct',
     contextWindow: 256_000,
     // Venice's mistral-small does NOT accept reasoning_effort. Sending
-    // the field returns a 4xx, so the agents pinned to this id
-    // (intuition, summary, samskara) all omit it on the wire.
+    // the field returns a 4xx, so every agent pinned to this id
+    // (intuition browser-side; samskara and bias server-side) omits
+    // it on the wire.
     supportsReasoning: false,
     supportsVision: false,
     supportsResponseFormat: true,
@@ -254,18 +255,6 @@ export const MODELS = {
     // (it can't import from src/lib). The `e2ee-` prefix is Venice's
     // marker for end-to-end-encrypted serving.
     supportsVision: true,
-    supportsResponseFormat: true,
-  },
-  'e2ee-gpt-oss-20b-p': {
-    id: 'e2ee-gpt-oss-20b-p',
-    contextWindow: 128_000,
-    // The reasoning model is available but the auto-title call site
-    // sets `disableThinking: true` so the model emits the title
-    // directly rather than burning the budget on chain-of-thought.
-    supportsReasoning: true,
-    supportsVision: false,
-    // No function-calling support; the auto-title call is a single-shot
-    // text completion with no tools.
     supportsResponseFormat: true,
   },
   'venice-uncensored-1-2': {
@@ -502,14 +491,7 @@ export type AgentRole =
   | 'rem'
   | 'webSearch'
   | 'researchDocs'
-  | 'autoTitle'
   | 'intuition'
-  | 'summary'
-  | 'topics'
-  | 'memoryTopics'
-  | 'recipeTopics'
-  | 'samskara'
-  | 'bias'
   | 'recall'
   | 'conversationRecall'
   | 'wikiRecall';
@@ -594,31 +576,6 @@ export type AgentRole =
  *     matches the call site's disable_thinking pin and avoids any
  *     CoT overhead per call.
  *
- *   summary - mistral-small-3-2-24b-instruct. "Read the conversation,
- *     write 2-3 sentences" - cheap, bounded, output goes into a
- *     single embedding vector. No reasoning required.
- *
- *   topics - mistral-small-3-2-24b-instruct. "Read the conversation,
- *     pick 1-4 short topic tags from this existing vocabulary if any
- *     fit, otherwise mint new ones." Bounded JSON output, same
- *     reasoning profile as summary. No tools.
- *
- *   memoryTopics - mistral-small-3-2-24b-instruct. Sibling of `topics`
- *     but the input is a single memory (label+data) rather than a
- *     conversation. Same JSON-out / no-tools profile. Pinned to the
- *     same id as `topics` so a future tier swap of either flows
- *     through both.
- *
- *   recipeTopics - mistral-small-3-2-24b-instruct. Sibling of
- *     memoryTopics targeting one `recipes` row (title + cooklang).
- *     Picks 1-6 tags spanning primary ingredients, cuisine, course,
- *     and technique. Same JSON-out / no-tools profile; same model id
- *     as the other topic taggers so a swap flows through all three.
- *
- *   samskara - mistral-small-3-2-24b-instruct. Five short JSON-out
- *     phases (assimilate, relate, mint, classify, compound summary)
- *     with maxTokens 200-500 per phase. Structured output on bounded
- *     context; mistral-small handles it comfortably.
  *
  *   recall - deepseek-v4-flash. Memory-recall agent: read the live
  *     conversation, search memories, produce a short JSON note.
@@ -643,18 +600,11 @@ export type AgentRole =
  *     distinct slot so the three recall surfaces can be retuned
  *     independently if one regresses.
  *
- *   autoTitle - e2ee-gpt-oss-20b-p. Background title-generation
- *     completion that fires from Chat.svelte in parallel with the
- *     main chat-loop on the opening user turn. Single-shot text
- *     completion with a tiny system prompt and the user's typed
- *     text as the prompt; no tools, no priming, no history. Pinned
- *     to a cheap small model because the task is bounded ("3-6
- *     word title for this message") and the call runs on every
- *     fresh thread. The reasoning capability is suppressed on the
- *     wire with `disableThinking: true` so the model emits the
- *     title directly rather than burning the budget on chain-of-
- *     thought. The 128k context is overkill for the task but
- *     matches the e2ee-served capacity tier.
+ * The five curation agents (auto-title, summary, thread topics,
+ * memory topics, recipe topics), the bias pipeline, and the samskara
+ * formation agents have no slots here: they run server-side in the
+ * venice edge function (supabase/functions/venice/agents/), which
+ * holds their model ids directly - it cannot import from src/lib.
  */
 export const AGENT_MODELS = {
   reflection:         'deepseek-v4-flash',
@@ -665,16 +615,9 @@ export const AGENT_MODELS = {
   webSearch:          'deepseek-v4-flash',
   researchDocs:       'deepseek-v4-flash',
   intuition:          'mistral-small-3-2-24b-instruct',
-  summary:            'mistral-small-3-2-24b-instruct',
-  topics:             'mistral-small-3-2-24b-instruct',
-  memoryTopics:       'mistral-small-3-2-24b-instruct',
-  recipeTopics:       'mistral-small-3-2-24b-instruct',
-  samskara:           'mistral-small-3-2-24b-instruct',
-  bias:               'mistral-small-3-2-24b-instruct',
   recall:             'deepseek-v4-flash',
   conversationRecall: 'deepseek-v4-flash',
   wikiRecall:         'deepseek-v4-flash',
-  autoTitle:          'e2ee-gpt-oss-20b-p',
 } as const satisfies Record<AgentRole, ModelId>;
 
 /**
@@ -697,21 +640,6 @@ export function agentModel(role: AgentRole): ModelSpec {
  * for re-embedding.
  */
 export const VENICE_EMBEDDING_MODEL = 'text-embedding-bge-m3';
-
-/**
- * Venice's default text-to-image model for the generate_image tool. A
- * standalone constant rather than an AGENT_MODELS entry because an
- * image model isn't a chat ModelSpec - it has no context window, no
- * token-based capabilities, and `agentModel()` (which indexes MODELS)
- * would type-error on it. Same shape as VENICE_EMBEDDING_MODEL above:
- * one non-chat Venice model id, swappable here in one place.
- *
- * venice-sd35 is pixel-dimensioned (width/height up to 1280px), which
- * is why the tool maps aspect ratios to width/height pairs rather than
- * sending an `aspect_ratio` field - swapping to an aspect-ratio-native
- * model means revisiting that mapping in generate_image.ts.
- */
-export const VENICE_IMAGE_MODEL = 'venice-sd35';
 
 /**
  * Native output dimension of VENICE_EMBEDDING_MODEL - the length of each
@@ -764,32 +692,6 @@ export function padEmbeddingForStorage(embedding: readonly number[]): number[] {
   for (let i = 0; i < embedding.length; i++) padded[i] = embedding[i];
   for (let i = embedding.length; i < EMBEDDING_STORAGE_DIMS; i++) padded[i] = 0;
   return padded;
-}
-
-/**
- * Parse a pgvector column value read back through PostgREST into a
- * plain number array. supabase-js has no type mapping for pgvector, so
- * a `vector`/`halfvec` column arrives as its text literal - a bracketed
- * string like "[0.1,0.2,...]" - NOT a JS array. Any client-side cosine
- * math that treats that string as an array multiplies characters and
- * silently yields NaN (this is exactly why the samskara pair-relate
- * phase produced zero associations for weeks: every similarity came
- * back NaN, so no pair ever cleared the threshold). Returns null when
- * the value is absent or unparseable so callers can skip the row rather
- * than feed NaN downstream. Already-array inputs pass through untouched
- * for forward-compatibility if supabase-js ever maps the type.
- */
-export function parseEmbeddingColumn(value: unknown): number[] | null {
-  if (Array.isArray(value)) return value as number[];
-  if (typeof value !== 'string') return null;
-  const trimmed = value.trim();
-  if (trimmed.length === 0) return null;
-  try {
-    const parsed = JSON.parse(trimmed);
-    return Array.isArray(parsed) ? (parsed as number[]) : null;
-  } catch {
-    return null;
-  }
 }
 
 // --- Helpers ---------------------------------------------------------------

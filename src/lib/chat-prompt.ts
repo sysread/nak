@@ -262,7 +262,7 @@ Pass \`{enabled: []}\` to turn every gated toolbox off. Don't enable a toolbox t
 `;
 
 // Activity narration. Every tool schema has an injected `activity` string
-// parameter (see src/lib/tools/dispatch.ts). The UI renders it above the tool
+// parameter (see src/lib/tools/wire.ts). The UI renders it above the tool
 // name as the primary line, so the user can see what the model is doing
 // without clicking into the call details. This paragraph primes the model to
 // write a useful sentence rather than echoing the tool name back.
@@ -380,7 +380,7 @@ export function buildToolboxStateBlock(enabled: readonly string[]): string {
  *
  * **Tool surface.** The toggle_toolbox gating policy lifted out of
  * the tool's own description, the activity-parameter narration rule
- * (see ./tools/dispatch.ts for the schema injection that adds the
+ * (see ./tools/wire.ts for the schema injection that adds the
  * parameter to every tool), and the toolbox catalog. The catalog is
  * built from `TOOLBOXES` and `alwaysOnToolbox` so adding a tool or a
  * toolbox extends the prompt with no second list to keep in sync. It

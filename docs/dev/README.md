@@ -33,7 +33,7 @@ changing a contract that other features depend on.
 ### Overview
 
 - [Architecture](./architecture.md) — boot flow, phase state
-  machine, worker model, data-layer conventions, Venice
+  machine, background-job model, data-layer conventions, Venice
   adapter. The one doc to read first.
 - [Frontend organization](./frontend-organization.md) — how
   UI logic splits between pure primitives in `src/lib/ui/`
@@ -61,8 +61,8 @@ changing a contract that other features depend on.
 - [Attachments](./attachments.md) — per-message file
   attachments, Venice text-parser integration, and the
   expiration worker.
-- [Tools](./tools.md) — tool registry + the two parallel
-  executors (chat-side and headless-agent-side).
+- [Tools](./tools.md) — the browser-side toolbox catalog +
+  the edge-side dispatch (chat tools and agent loops).
 - [Memory](./memory.md) — `memories` store + reflection
   agent + memory recall.
 - [Wiki](./wiki.md) — flat encyclopedic articles about
@@ -84,16 +84,15 @@ changing a contract that other features depend on.
   fans out to the memory-recall and conversation-recall
   agents in parallel, stitches their notes into one
   `<think>`-tagged priming block.
-- [Summaries](./summaries.md) — background thread-summary
-  worker.
-- [Topics](./topics.md) — background tagging worker plus the
-  drawer's topic-filter dropdown.
-- [Auto-title](./auto-title.md) — background worker that fills
-  in titles for threads still on the placeholder. Replaces the
-  in-Chat fire-and-forget call site.
-- [Embeddings](./embeddings.md) — the Web-Worker embedding
-  pipeline plus the canonical cross-tab-lock + claim-RPC
-  pattern.
+- [Summaries](./summaries.md) - server-side thread-summary
+  curation unit.
+- [Topics](./topics.md) - server-side tagging units (threads,
+  memories, recipes) plus the drawer's topic-filter dropdown.
+- [Auto-title](./auto-title.md) - server-side curation unit
+  that fills in titles for threads still on the placeholder.
+- [Embeddings](./embeddings.md) — the server-side embed
+  backfill (pg_cron + the venice function) plus the canonical
+  claim-RPC pattern.
 - [Samskara](./samskara.md) — the chat model's progressively-
   built predictive model of the user. Substrate compounds into
   samskaras compounds into a prose summary that lives
@@ -104,8 +103,9 @@ changing a contract that other features depend on.
   produces a `<think>`-tagged internal monologue, injected
   ahead of the next completion. Cached per-thread; refreshed
   on title changes, mood-band shifts, and a staleness fuse.
-- [Bias profile](./bias-profile.md) — silent background worker
-  that analyzes past conversations for cognitive biases and
+- [Bias profile](./bias-profile.md) — silent server-side pipeline
+  (hourly cron sweep in the venice function) that analyzes past
+  conversations for cognitive biases and
   System-1 heuristics, aggregates evidence via a Bayesian
   Beta-Binomial posterior with recency decay, and injects
   compensation guidance for the strongest-evidence biases into
@@ -114,7 +114,7 @@ changing a contract that other features depend on.
   `profiles.settings` JSONB + theme.
 - [Help](./help.md) — in-app rendering of `docs/user/`.
 - [Logging](./logging.md) — the `createLogger` surface, the
-  in-app log drawer, and the worker-to-main log relay.
+  in-app log drawer, and the edge-to-main log relay.
 
 ### Build & deploy
 

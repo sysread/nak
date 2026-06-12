@@ -11,12 +11,10 @@
 //     tools/*.ts modules that self-register via registerTool() (pulled
 //     in for side effect by tools/index.ts). This file is just the
 //     dispatch shape the orchestrator calls against. The browser keeps
-//     same-named modules under src/lib/tools/*.ts, but a streamed chat
-//     turn dispatches HERE - those browser modules now serve only the
-//     wire schema the request-shape builder advertises. Their
-//     executeToolCall path has no production caller; a browser module
-//     still executes only when a background agent's toolbox includes
-//     the tool (browser-side agent dispatch via executeToolboxCall).
+//     only schema modules under src/lib/tools/*.schema.ts - every
+//     dispatch (streamed chat turns AND the background agents'
+//     headless loops in agents/_run.ts) happens HERE; the browser's
+//     role is composing the wire `tools` array the request carries.
 //   - The model arming / toolbox catalog. Which tools a turn can
 //     reach is decided at request-shape time (browser composes the
 //     `tools` array against thread.toolboxes_enabled) and the chosen
@@ -62,7 +60,16 @@ export interface ToolContext {
    * outlives the browser connection by design).
    */
   userId: string;
-  threadId: string;
+  /**
+   * Thread in scope for this dispatch, or null when there is none.
+   * Chat dispatch always carries the real (ownership-gated) thread
+   * id. Background librarian agents pass null - they operate across
+   * threads with no current one. Tools that genuinely need a thread
+   * call requireThreadId(); tools with optional thread behavior
+   * (wiki_update's source attribution, conversation_search's
+   * self-exclusion) branch on the null.
+   */
+  threadId: string | null;
   signal: AbortSignal;
   /**
    * Agent-recursion depth. Mirrors the browser-side field; tools that
@@ -109,6 +116,23 @@ export function registerTool(def: ToolDef): void {
     );
   }
   REGISTRY.set(def.name, def);
+}
+
+/**
+ * The thread id, or a loud error when this dispatch has none. For
+ * tools that are chat-only by nature (title renames, attachment
+ * lookups scoped to the conversation): a null thread here means a
+ * toolbox miswiring handed a thread-scoped tool to a background
+ * agent, and a thrown error beats the silent empty-result queries
+ * the old empty-string sentinel produced.
+ */
+export function requireThreadId(ctx: ToolContext): string {
+  if (!ctx.threadId) {
+    throw new Error(
+      'this tool requires a chat-thread context, but the current run has no thread in scope',
+    );
+  }
+  return ctx.threadId;
 }
 
 /**

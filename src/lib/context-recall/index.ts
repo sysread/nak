@@ -20,12 +20,11 @@ export {
   type ContextRecallPayload,
 } from './types';
 
-export { runContextRecallPipeline } from './pipeline';
+export { maybeRunContextRecallPipeline } from './pipeline';
 
 export {
   readContextRecallCache,
   writeContextRecallCache,
-  withContextRecallInflight,
 } from './cache';
 
 export { buildContextRecallThinkMessage } from './ephemeral';

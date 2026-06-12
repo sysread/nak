@@ -7,7 +7,6 @@
 import { describe, it, expect } from 'vitest';
 import {
   evaluatePreRoundTrigger,
-  evaluateTitleTrigger,
   countUserRounds,
   STALE_FUSE_ROUNDS,
   type IntuitionPayload,
@@ -196,36 +195,3 @@ describe('evaluatePreRoundTrigger', () => {
   });
 });
 
-describe('evaluateTitleTrigger', () => {
-  it('returns "cold" on first turn with no cache', () => {
-    expect(
-      evaluateTitleTrigger({
-        cache: null,
-        round: 1,
-        mood: null,
-      })
-    ).toBe('cold');
-  });
-
-  it('returns "title" when cache exists and is from a different round', () => {
-    expect(
-      evaluateTitleTrigger({
-        cache: payload({ computed_at_round: 1 }),
-        round: 3,
-        mood: { band: 2, column: 'confident' },
-      })
-    ).toBe('title');
-  });
-
-  it('debounces when cache was already written this round', () => {
-    // Pre-round trigger fired earlier this same turn. The title
-    // trigger should not run a second pipeline.
-    expect(
-      evaluateTitleTrigger({
-        cache: payload({ computed_at_round: 3 }),
-        round: 3,
-        mood: null,
-      })
-    ).toBeNull();
-  });
-});

@@ -150,6 +150,19 @@ layer to the same immediacy.
 - **`nak-local-config.json` is a secret.** Plaintext, carries
   the Venice key, git-ignored. Same design as the app's own
   config export.
+- **`set local role` + a revoked definer function segfaults the
+  DB.** In a superuser psql session against the local image,
+  `begin; set local role anon; select public.<security-definer
+  fn>(); rollback;` kills the backend with signal 11 and knocks
+  the whole cluster into recovery for a few seconds (observed
+  2026-06-11 against both `samskara_decay_sweep` and
+  `nak_sweep_stale_streams`, so it is an image quirk, not a
+  property of any one function; `set local role` followed by a
+  plain `select 1` is fine). Do not verify EXECUTE boundaries by
+  role-switching locally. Check the catalog instead:
+  `select proname, proacl from pg_proc where proname = '<fn>'` -
+  the correct shape for a cron/service function is
+  `{postgres=X/postgres,service_role=X/postgres}`.
 - **The cloud sync path is untouched.** `scripts/sync.mjs` and
   `mise run supabase-init` still target the linked project via
   the Management API. This stack is additive isolation, not a

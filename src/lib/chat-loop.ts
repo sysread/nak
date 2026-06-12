@@ -67,7 +67,8 @@ import {
   type OpenAIToolCall,
 } from './tools';
 import { buildSystemPrompt, buildToolboxStateBlock } from './chat-prompt';
-import { askUser, type AskUserOption } from './tools/ask_user';
+import { askUserSchema } from './tools/ask_user.schema';
+import { extractAskUserPrompt } from './ask-user';
 import {
   parseToolArguments,
   sanitizeToolCallIdForWire,
@@ -90,18 +91,15 @@ import { createLogger } from './logger.svelte';
 import {
   buildIntuitionThinkMessage,
   countUserRounds,
-  evaluatePreRoundTrigger,
+  maybeRunIntuitionPipeline,
   readIntuitionCache,
-  runIntuitionPipeline,
-  withIntuitionInflight,
   writeIntuitionCache,
   type IntuitionPayload,
 } from './intuition';
 import {
   buildContextRecallThinkMessage,
+  maybeRunContextRecallPipeline,
   readContextRecallCache,
-  runContextRecallPipeline,
-  withContextRecallInflight,
   writeContextRecallCache,
   type ContextRecallPayload,
 } from './context-recall';
@@ -362,10 +360,11 @@ interface MetadataSystemMessageOptions {
   titleManuallySet: boolean;
   /**
    * 1-based count of user messages in this thread including the
-   * current one. Title nudges are skipped on round 1 - the auto-title
-   * worker (see `src/lib/agents/auto_title/`) handles naming there;
-   * the metadata-message nudges only fire from round 2 onward as a
-   * safety net for the case where the worker hasn't polled yet.
+   * current one. Title nudges are skipped on round 1 - the server-side
+   * auto-title agent (supabase/functions/venice/agents/auto_title.ts)
+   * handles naming there; the metadata-message nudges only fire from
+   * round 2 onward as a safety net for the case where the agent
+   * hasn't polled yet.
    */
   currentUserRound: number;
 }
@@ -477,12 +476,12 @@ function buildMetadataSystemMessage(
     );
   }
 
-  // Title nudges are silent on round 1 - the auto-title worker
-  // (src/lib/agents/auto_title/*) polls the threads table for rows
-  // still on the placeholder and titles them in the background, so
-  // the model never has to. From round 2 on, if the worker hasn't
-  // landed yet (it may not have polled, or the user is on a brand-
-  // new device that hasn't taken the lease) the loud nag below
+  // Title nudges are silent on round 1 - the server-side auto-title
+  // agent (supabase/functions/venice/agents/auto_title.ts) polls the
+  // threads table for rows still on the placeholder and titles them
+  // in the background, so the model never has to. From round 2 on,
+  // if the agent hasn't landed yet (it may not have polled the row)
+  // the loud nag below
   // fires to recover; if a model-set title is already in place but
   // the topic may have drifted, the soft drift hint fires instead.
   // Manually-named threads suppress both nudges - the user
@@ -549,7 +548,7 @@ function splitSystemPreamble(
 /**
  * Which subconscious-priming pipeline a status signal refers to. These
  * are the three pre-response background jobs the chat-loop runs before
- * (and, for the title trigger, during) a turn:
+ * a turn:
  *
  *   'samskara'  - situational fire (top-k predictions for this turn).
  *   'intuition' - perception + drives + synthesis.
@@ -610,8 +609,8 @@ export interface ChatLoopHandlers {
    */
   onTitleChange?(title: string): void;
   /**
-   * A fresh intuition payload was computed for this thread (pre-round
-   * trigger, title trigger, or stale-fuse). Fires with the new payload
+   * A fresh intuition payload was computed for this thread (the
+   * pre-round trigger or stale-fuse). Fires with the new payload
    * so the UI can update the modal / inline indicator without waiting
    * for the next thread re-fetch. Skipped on rounds where the cache is
    * reused as-is - we only signal *changes*.
@@ -619,8 +618,8 @@ export interface ChatLoopHandlers {
   onIntuitionUpdate?(payload: IntuitionPayload): void;
   /**
    * A fresh context-recall payload was computed for this thread (the
-   * pre-round trigger, title trigger, or stale fuse fired and the
-   * pipeline produced a payload). Sibling of onIntuitionUpdate -
+   * pre-round trigger or stale fuse fired and the pipeline produced a
+   * payload). Sibling of onIntuitionUpdate -
    * fires once per refresh, with the freshly-computed payload, so the
    * UI can patch the in-memory thread row without waiting for the
    * next thread re-fetch. Skipped on rounds where the cache is reused
@@ -815,8 +814,8 @@ export interface ChatLoopOptions {
    * Mood snapshot at turn-entry. The chat-loop compares it against the
    * cached payload's mood snapshot to decide whether the band /
    * confidence column has shifted enough to warrant a refresh. Null /
-   * undefined disables the mood-shift trigger - the title trigger and
-   * stale fuse still operate. Both bands and column come from the same
+   * undefined disables the mood-shift trigger - the cold-start and
+   * stale-fuse triggers still operate. Both bands and column come from the same
    * MOOD_TABLE the samskara mood pill renders against (see
    * src/lib/samskara/events.ts).
    */
@@ -1151,19 +1150,18 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
 
   // Bias-profile invalidation. Each chat-loop invocation corresponds
   // to one new user message on this thread. If the thread had been
-  // processed by the bias worker before, the worker's prior
-  // observations are now based on a stale view of the conversation;
-  // clear them. The RPC is a no-op when the thread was never
-  // processed, so calling unconditionally is correct and cheap.
-  // Fire-and-forget: bias worker plumbing must never block a chat
-  // turn.
+  // analyzed by the bias sweep before, the prior observations are
+  // now based on a stale view of the conversation; clear them. The
+  // RPC is a no-op when the thread was never processed, so calling
+  // unconditionally is correct and cheap. Fire-and-forget: bias
+  // plumbing must never block a chat turn.
   void notifyBiasNewUserMessage(supabase, thread.id);
 
   // Bias-profile active-set snapshot (v2). Persist the bias keys
   // that just rendered into the system prompt to
-  // threads.bias_active_at_turn so the worker's reactor pass knows
-  // which biases the user's messages on this turn could have been
-  // reacting to. Empty array is a valid write and means "no
+  // threads.bias_active_at_turn so the bias sweep's reactor pass
+  // knows which biases the user's messages on this turn could have
+  // been reacting to. Empty array is a valid write and means "no
   // compensation guidance was active this turn" - the reactor
   // pass produces zero rows and the feedback EMA stays unchanged.
   // Fire-and-forget; errors swallowed inside the helper.
@@ -1199,95 +1197,76 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   let contextRecallCache: ContextRecallPayload | null =
     readContextRecallCache(thread);
 
-  const intuitionPreTrigger =
-    intuitionModelId !== undefined
-      ? evaluatePreRoundTrigger({
-          cache: intuitionCache,
-          round: currentUserRound,
-          mood: intuitionMood ?? null,
-        })
-      : null;
-  const contextRecallPreTrigger = contextRecallEnabled
-    ? evaluatePreRoundTrigger({
-        // ContextRecallPayload satisfies RoundCacheSnapshot
-        // structurally - the trigger evaluator only reads the round
-        // and mood-snapshot fields, both shared between payloads.
-        cache: contextRecallCache,
-        round: currentUserRound,
-        mood: intuitionMood ?? null,
-      })
-    : null;
+  // Fire-policy (the feature gates, trigger evaluation, and inflight
+  // dedup) lives inside each pipeline's maybeRun entry point - the
+  // loop supplies inputs and owns sequencing only. The onWillRun
+  // hooks are where the UI status signals attach: they fire at the
+  // moment a pipeline commits to running, so a no-trigger turn never
+  // flashes a status chip.
+  let intuitionStarted = false;
+  let contextRecallStarted = false;
+  const [freshIntuition, freshContextRecall] = await Promise.all([
+    maybeRunIntuitionPipeline({
+      supabase,
+      threadId: thread.id,
+      modelId: intuitionModelId,
+      cache: intuitionCache,
+      history,
+      signal,
+      round: currentUserRound,
+      mood: intuitionMood ?? null,
+      onWillRun: () => {
+        intuitionStarted = true;
+        handlers?.onSubconsciousStart?.('intuition');
+      },
+    }).finally(() => {
+      if (intuitionStarted) handlers?.onSubconsciousEnd?.('intuition');
+    }),
+    maybeRunContextRecallPipeline({
+      supabase,
+      threadId: thread.id,
+      userId,
+      enabled: contextRecallEnabled,
+      cache: contextRecallCache,
+      signal,
+      round: currentUserRound,
+      mood: intuitionMood ?? null,
+      onWillRun: () => {
+        contextRecallStarted = true;
+        handlers?.onSubconsciousStart?.('recall');
+      },
+    }).finally(() => {
+      if (contextRecallStarted) handlers?.onSubconsciousEnd?.('recall');
+    }),
+  ]);
 
-  if (intuitionPreTrigger || contextRecallPreTrigger) {
-    // Fire both pipelines in parallel. Each side resolves to either a
-    // fresh payload or null (the agent failed, OR its trigger was
-    // null and we short-circuited). Promise.all preserves the parallel
-    // latency win even when one side short-circuits.
-    const [freshIntuition, freshContextRecall] = await Promise.all([
-      intuitionPreTrigger && intuitionModelId
-        ? trackSubconscious(
-            'intuition',
-            withIntuitionInflight(thread.id, () =>
-              runIntuitionPipeline({
-                supabase,
-                model: intuitionModelId,
-                history,
-                signal,
-                round: currentUserRound,
-                mood: intuitionMood ?? null,
-                trigger: intuitionPreTrigger,
-              })
-            )
-          )
-        : Promise.resolve<IntuitionPayload | null>(null),
-      contextRecallPreTrigger
-        ? trackSubconscious(
-            'recall',
-            withContextRecallInflight(thread.id, () =>
-              runContextRecallPipeline({
-                supabase,
-                threadId: thread.id,
-                userId,
-                signal,
-                round: currentUserRound,
-                mood: intuitionMood ?? null,
-                trigger: contextRecallPreTrigger,
-              })
-            )
-          )
-        : Promise.resolve<ContextRecallPayload | null>(null),
-    ]);
-
-    // Persist both writes in parallel. The await-before-continuing
-    // rationale on the existing intuition write applies symmetrically
-    // to context-recall: a race against an unrelated thread UPDATE
-    // (an update_title call mid-turn, a samskara-worker bump, a
-    // cross-tab edit) could otherwise strand a fresh payload behind a
-    // stale realtime echo. Cost is ~50-200ms of one Supabase UPDATE
-    // each, parallel-merged into one wait.
-    const persistOps: Promise<void>[] = [];
-    if (freshIntuition) {
-      intuitionCache = freshIntuition;
-      persistOps.push(
-        writeIntuitionCache(supabase, thread.id, freshIntuition)
-      );
-    }
-    if (freshContextRecall) {
-      contextRecallCache = freshContextRecall;
-      persistOps.push(
-        writeContextRecallCache(supabase, thread.id, freshContextRecall)
-      );
-    }
-    if (persistOps.length > 0) await Promise.all(persistOps);
-
-    // UI handlers fire AFTER the writes settle - same ordering the
-    // prior intuition-only path enforced, for the same reason: a
-    // realtime echo that arrives between the patch and the write must
-    // see the persisted payload, not a transient null.
-    if (freshIntuition) handlers?.onIntuitionUpdate?.(freshIntuition);
-    if (freshContextRecall)
-      handlers?.onContextRecallUpdate?.(freshContextRecall);
+  // Persist both writes in parallel. The await-before-continuing
+  // rationale on the existing intuition write applies symmetrically
+  // to context-recall: a race against an unrelated thread UPDATE
+  // (an update_title call mid-turn, a server-side curation write, a
+  // cross-tab edit) could otherwise strand a fresh payload behind a
+  // stale realtime echo. Cost is ~50-200ms of one Supabase UPDATE
+  // each, parallel-merged into one wait.
+  const persistOps: Promise<void>[] = [];
+  if (freshIntuition) {
+    intuitionCache = freshIntuition;
+    persistOps.push(writeIntuitionCache(supabase, thread.id, freshIntuition));
   }
+  if (freshContextRecall) {
+    contextRecallCache = freshContextRecall;
+    persistOps.push(
+      writeContextRecallCache(supabase, thread.id, freshContextRecall)
+    );
+  }
+  if (persistOps.length > 0) await Promise.all(persistOps);
+
+  // UI handlers fire AFTER the writes settle - same ordering the
+  // prior intuition-only path enforced, for the same reason: a
+  // realtime echo that arrives between the patch and the write must
+  // see the persisted payload, not a transient null.
+  if (freshIntuition) handlers?.onIntuitionUpdate?.(freshIntuition);
+  if (freshContextRecall)
+    handlers?.onContextRecallUpdate?.(freshContextRecall);
 
   // Inject the synthetic `<think>` priming chain. Order matters for how
   // the model reads its own internal layers, from broadest to most
@@ -1596,29 +1575,16 @@ async function consumeStreamEvents(opts: {
           // rule; we mirror that here by only writing pendingAskUser
           // when the slot is empty.
           if (
-            ev.toolCall.function.name === askUser.name &&
+            ev.toolCall.function.name === askUserSchema.name &&
             pendingAskUser === null
           ) {
             try {
               const a = parseToolArguments(
                 ev.toolCall.function.arguments,
               ) as Record<string, unknown>;
-              const question =
-                typeof a.question === 'string' ? a.question : '';
-              const rawOptions = Array.isArray(a.options) ? a.options : [];
-              const options: AskUserOption[] = rawOptions
-                .filter((o): o is { label: string; description: string } =>
-                  !!o &&
-                  typeof o === 'object' &&
-                  typeof (o as { label?: unknown }).label === 'string' &&
-                  typeof (o as { description?: unknown }).description ===
-                    'string',
-                )
-                .map((o) => ({ label: o.label, description: o.description }));
               pendingAskUser = {
                 toolCallId: ev.toolCall.id,
-                question,
-                options,
+                ...extractAskUserPrompt(a),
               };
             } catch {
               // Malformed args from the model. The server will surface

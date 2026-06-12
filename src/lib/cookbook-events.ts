@@ -1,30 +1,26 @@
 /**
- * Rune-free side of the cookbook bridge. The event name constant
- * and the fire-and-forget dispatcher live here (plain .ts) so the
- * `recipe_*` tools — which get bundled into non-UI contexts like
- * the reflection Web Worker via the shared tool registry — can
- * signal "cookbook changed" without pulling `$state` into a worker
- * bundle.
+ * Rune-free side of the cookbook bridge - the `window` CustomEvent name
+ * and the subscribe helper live here (plain .ts, no `$state`) so any
+ * caller can import them without pulling runes into a non-UI bundle.
  *
  * The reactive store half lives in `cookbook-store.svelte.ts`; it
  * re-exports the symbols here so existing UI imports keep working.
  * Keep any `$state` / `$derived` / `$effect` rune code OUT of this
- * file — the whole point of the split is that a worker can import
- * it safely.
+ * file.
+ *
+ * The publisher is the recipes-table realtime relay in Chat.svelte
+ * (SupabaseService.subscribeToRecipeChanges -> emitCookbookChange):
+ * every recipe writer reachable from chat lives in the venice edge
+ * function now, so the replication stream is how the browser learns a
+ * write landed. Direct UI edits in Cookbook.svelte refresh their own
+ * local state and never used this bus; their writes also echo back
+ * through the relay, which is harmless - subscribers refetch
+ * idempotently.
  */
 
 const COOKBOOK_CHANGE_EVENT = 'nak:recipes:changed';
 
-/**
- * Fire-and-forget signal that something in the cookbook changed.
- * Called from `recipe_*` tool handlers after a successful write.
- * Listeners (the Cookbook modal, the drawer's Recipes tab) respond
- * by re-running `loadRecipes`. No-op when `window` is undefined —
- * the tool registry is reachable from the reflection worker, which
- * has `self` but no `window`, and from SSR contexts that have
- * neither.
- */
-export function notifyCookbookChanged(): void {
+export function emitCookbookChange(): void {
   if (typeof window === 'undefined') return;
   window.dispatchEvent(new CustomEvent(COOKBOOK_CHANGE_EVENT));
 }

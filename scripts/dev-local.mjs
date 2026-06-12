@@ -379,19 +379,21 @@ async function serveFunctions() {
   });
 }
 
-// Local stand-in for the hosted pg_cron embedding-backfill job. The local stack
-// has no pg_cron/pg_net, so the schedule in schema.sql no-ops here, and with the
-// browser worker deleted nothing else drains the embedding queue in local dev.
-// So dev-start runs the shim as a third supervised child (same lifecycle as Vite
-// / functions-serve), POSTing /backfill on an interval. On by default; set
+// Local stand-in for the hosted pg_cron jobs (embedding backfill +
+// autonomous wiki sweep). The local stack has no pg_cron/pg_net, so the
+// schedules in schema.sql no-op here, and with the browser workers deleted
+// nothing else drains either queue in local dev. So dev-start runs the shim
+// as a third supervised child (same lifecycle as Vite / functions-serve),
+// POSTing /backfill, /wiki-sweep, and /wiki-librarian-sweep on an interval.
+// On by default; set
 // NAK_DEV_BACKFILL=0 to disable. The cost is bounded: an idle tick is free (a
 // local claim query, no Venice call), and a tick only spends Venice when there
-// are actually unembedded rows - the same work hosted cron would do. Honours
+// is actually eligible work - the same work hosted cron would do. Honours
 // NAK_BACKFILL_INTERVAL via the inherited env. See scripts/dev-backfill-cron.mjs.
 function serveBackfillShim() {
   const v = process.env.NAK_DEV_BACKFILL;
   if (v !== undefined && ['0', 'false', 'off', 'no'].includes(v.toLowerCase())) return;
-  info('backfill cron shim on (set NAK_DEV_BACKFILL=0 to disable) - draining embeddings on an interval');
+  info('cron shim on (set NAK_DEV_BACKFILL=0 to disable) - ticking backfill + wiki sweeps on an interval');
   backfillChild = spawn('node', [resolve(REPO_ROOT, 'scripts/dev-backfill-cron.mjs')], {
     stdio: 'inherit',
   });

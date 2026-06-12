@@ -12,8 +12,119 @@ investigation cycles and the lessons learned are worth saving.
 
 ## Contents
 
+- [Retire the browser supervisor](#retire-the-browser-supervisor)
+  (shipped 2026-06-11 as item C1 of the
+  [de-browser-background-jobs](./in-progress/de-browser-background-jobs.md)
+  milestone; analysis kept as the historical record)
 - [Biometric unlock for the master password](#biometric-unlock-for-the-master-password)
   (obsolete - the master-password layer was removed; kept as WebAuthn PRF reference)
+
+## Retire the browser supervisor
+
+**Status:** shipped - implemented 2026-06-11 as item C1 of the
+[de-browser-background-jobs](./in-progress/de-browser-background-jobs.md)
+milestone, on the `claude/reorganize-the-workshop` branch. The five
+units now run in the venice function off the chat-turn tail and the
+hourly curation sweep; the browser supervisor and its lease
+apparatus are deleted. The analysis below stands as the historical
+record of the scoping (2026-06-10) - note its per-agent verdicts
+were later overtaken: bias (C2) and samskara (C3) shipped
+server-side in the same milestone, and only intuition remains
+browser-side, as ongoing-chat-scoped work. Output of the no-tool agents re-inspection
+the reorganize-the-workshop plan mandated after its Phase 3 closed
+(see that plan doc's Phase 5 ledger). The re-inspection covered all
+eight plain-completion agents; this entry records the verdicts and
+the follow-on project they point at.
+
+### The structural finding
+
+The dispatcher migration quietly created a gap for two of the
+supervisor's units. `memory_topics` and `recipe_topics` drain queues
+whose **writers are now all server-side**: reflection / rem /
+deep-sleep write and rewrite memories on cron and chat-turn tails,
+and the `recipe_*` tools dispatch in the venice function. A rem
+consolidation at 3am rewrites a memory's label and data, the
+`clear_memory_topics_on_change` trigger nulls its tags, and the row
+then sits untagged until a browser tab happens to be open - the only
+thing that drains the queue is the supervisor web worker. Before the
+migration, writers and tagger lived in the same browser session, so
+the coupling was invisible. Now it is a server-writes/browser-drains
+split, and the topic tags feed the TopicsFilter dropdowns. This is
+the one place the re-inspection found a browser-only assumption that
+has actually become an anti-pattern rather than just overhead.
+
+### Per-agent verdicts
+
+- **auto_title, summary, topics** (thread-shaped units): port
+  justified, reflection precedent applies directly. The work is
+  created by a completed chat turn, so the turn's `waitUntil` tail
+  is the natural trigger - title/summary/tags land seconds after the
+  turn instead of whenever the supervisor rotates, and work created
+  by a send-and-close-the-tab turn still gets done. UX note that is
+  load-bearing: titles currently appear fast because the supervisor
+  runs locally; a cron-only port would lag the title of a brand-new
+  conversation by up to the cron interval. Tail placement is not
+  optional for auto_title. The existing per-row claim RPCs stay as
+  the whole mutual exclusion (reflection proved no lease is needed);
+  the save RPCs need the b-strict `p_user_id` overload treatment.
+- **memory_topics, recipe_topics**: port justified AND closes the
+  structural gap above. Cron-sweep shape, a librarian clone minus
+  the toolbox: global SECURITY DEFINER claim, one completion,
+  guarded save. These two cannot ride a turn tail - their work
+  supply is not chat turns.
+- **The payoff for doing all five together**: the supervisor web
+  worker, its manager, the `nak:supervisor-worker` Web Lock, the
+  `worker_leases` supervisor partition, the heartbeat, and the
+  session-token postMessage forwarding all become deletable. That
+  apparatus exists only to amortize browser-side lease overhead
+  across five units; server-side, the per-row claim RPCs are the
+  mutual exclusion and the apparatus has no job. Porting a subset
+  keeps the apparatus alive for the remainder - all-or-nothing is
+  the economical shape.
+- **bias**: portable with the fleet pattern (lease becomes cron,
+  per-thread claim RPCs stay, aggregate throttle becomes the cron
+  cadence the way the fleets' did), medium cost. Two real design
+  questions: the active-conversation exclusion set is postMessage'd
+  live from the main thread (server equivalent would be
+  recency-based exclusion - "updated in the last N minutes" - which
+  is arguably better semantics than "open in some tab"), and the
+  in-memory aggregate dirty/throttle state needs a home. No
+  urgency: bias's work supply is browser-generated chat activity,
+  so there is no server-writes/browser-drains gap, just lease
+  overhead. Optional follow-on, not part of the supervisor
+  retirement.
+- **intuition**: NOT a fleet candidate; no action. It is
+  turn-latency-coupled, not background: it runs inside the chat
+  loop (`Promise.all` with context-recall, bounded by the slower of
+  the two), reads the live samskara mood rune and the in-memory
+  history array, and writes an ephemeral think block into the
+  request. Migrating it means folding it into `/stream`'s prompt
+  composition alongside `context-recall/gather.ts` - the same
+  "optionally fold into /stream later" project the workshop plan
+  already names for gather, and a different project from any fleet
+  port. Revisit only if that consolidation happens.
+- **samskara**: leave browser-side for now. An 8-phase round-robin
+  worker with in-memory per-phase throttles and variable backoff,
+  mint toasts via postMessage -> CustomEvent, and tier-2 compound
+  machinery that is weeks old (its two new schema functions still
+  owe the manual SQL exercise the upstream commit asked for). The
+  port shape, if ever: one cron tick = one rotation through the
+  phases, the cron interval replacing the in-memory throttles, and
+  a realtime insert subscription on `samskaras` replacing the mint
+  postMessage (the relay pattern now exists three times over). High
+  cost, moderate value - the feature is consumed in-session, so
+  closed-tab catch-up buys little. Revisit after tier-2 bakes.
+
+### Recommendation
+
+One follow-on project: **port the five supervisor units and delete
+the supervisor** - tail-trigger for the three thread-shaped units
+plus cron sweeps for the two tag queues, in whatever PR batching
+makes sense at build time. Bias is an optional later port on the
+same pattern. Intuition and samskara stay browser-side with no open
+question. Per the project's planning rhythm, target-state design
+beyond this paragraph is deliberately deferred to whenever this
+becomes the active milestone.
 
 ## Biometric unlock for the master password
 

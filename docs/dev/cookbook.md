@@ -84,7 +84,10 @@ unaffected.
   of the document structure). Unit-tested at `tests/recipe-detail.test.ts`.
 - `src/screens/Chat.svelte` — drawer tab switcher (`drawerTab`),
   Recipes list rendering, footer book icon, Cookbook modal mount,
-  `COOKBOOK_CHANGE_EVENT` listener in `onMount`.
+  `COOKBOOK_CHANGE_EVENT` listener in `onMount`, and the
+  recipes-table realtime relay (`subscribeToRecipeChanges` →
+  `emitCookbookChange`) that publishes the event when a server-side
+  recipe write lands.
 - `src/components/RecipeList.svelte` — the sidebar listing
   rendered by the Recipes drawer tab. Owns the search input, the
   sort selector (bound to `cookbook.sort`), the topic-filter
@@ -374,7 +377,8 @@ keystrokes; the LLM tool path keeps using `listRecipes`.
 - **Chat** (`./chat.md`) — hosts the Cookbook modal, the drawer tab,
   and the footer book icon. Adds a `drawerTab` state local to
   Chat.svelte. Registers the `COOKBOOK_CHANGE_EVENT` listener in
-  its `onMount` so a model-driven save refreshes the Recipes tab
+  its `onMount`, and runs the recipes-table realtime relay that
+  fires the event, so a model-driven save refreshes the Recipes tab
   live.
 - **Settings** (`./settings.md`) — no settings yet; cookbook-wide
   preferences (default servings, preferred unit system) would land
@@ -382,17 +386,18 @@ keystrokes; the LLM tool path keeps using `listRecipes`.
 - **Memory** (`./memory.md`) — scope contrast. A memory is "something
   about the user"; a recipe is "an item the user owns". Share the
   RLS posture and the tool-registry pattern; don't share data.
-- **Topics** (`./topics.md` under "Recipe topics") — a background
-  worker (`src/lib/agents/recipe_topics/*`) tags each recipe with
-  1-6 short topic strings spanning primary ingredients, cuisine,
-  course, and technique. The Cookbook drawer mounts the same
+- **Topics** (`./topics.md` under "Recipe topics") - a server-side
+  curation unit
+  (`supabase/functions/venice/agents/recipe_topics.ts`) tags each
+  recipe with 1-6 short topic strings spanning primary
+  ingredients, cuisine, course, and technique. The Cookbook drawer mounts the same
   `TopicsFilter.svelte` component the conversation and Memories
   drawers use; the filter narrows the Upcoming / Favorites / All /
   search buckets uniformly - server-side for the paginated "All
   recipes" list (so each page is filtered before it is sliced),
   client-side for the complete buckets and the capped search
   results. Changing the selection reloads the "All recipes" list
-  from page one. Tags are managed by the worker - no manual tagging
+  from page one. Tags are managed by the unit - no manual tagging
   tool exposed to the LLM or the user, by design.
 
 ## Gotchas
@@ -403,11 +408,24 @@ keystrokes; the LLM tool path keeps using `listRecipes`.
   upstream release. If the parser ever needs to handle recipe
   references or shopping-list blocks, revisit — but today every
   line of `src/lib/cooklang.ts` is straightforward.
-- **`notifyCookbookChanged` is the tools → UI bridge.** Tools don't
-  import anything from the UI layer; they fire a `window`
-  `CustomEvent`. The Cookbook modal and the drawer tab subscribe.
-  Adding direct imports the other way would create a cycle —
-  don't.
+- **The realtime relay is the tools → UI bridge.** The `recipe_*`
+  tools dispatch in the venice function, so the browser learns
+  about model-driven writes through a user-scoped
+  `postgres_changes` subscription on `recipes`
+  (`SupabaseService.subscribeToRecipeChanges`, wired in
+  Chat.svelte), which fires `emitCookbookChange` - the `window`
+  `CustomEvent` the Cookbook modal and the drawer tab subscribe to
+  via `onCookbookChange`. Same shape as the `wiki_articles` and
+  `memories` relays.
+- **DELETE events need the (id, user_id) replica identity.** A
+  DELETE's WAL record carries only the table's replica identity,
+  and realtime drops events its `user_id` filter can't match - so
+  with the default primary-key identity, server-side deletes never
+  reach the panel. `recipes_replident_idx` in `schema.sql` (and its
+  wiki_articles / memories twins) exists solely to put `user_id`
+  into the old tuple; dropping it silently degrades the identity to
+  NOTHING and breaks DELETE replication. The full rationale lives
+  on the schema block.
 - **Drawer Recipes tab loads lazily.** A session that never opens
   the tab never fetches recipes. The tool layer still loads via
   direct Supabase calls, so a model-driven save works regardless.

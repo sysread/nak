@@ -3,7 +3,7 @@
  *
  * The chat-loop side imports `FireResult` and `Samskara` from here so
  * its callers don't need to know about Supabase row shapes. The
- * worker side imports the same types so the formation pipeline and
+ * formation side mirrors the same shapes so the pipeline and
  * the chat-loop integration agree on what a fired samskara looks like.
  *
  * Why a separate types module rather than re-exporting from

@@ -18,10 +18,12 @@
 // runs on the live turn's critical path and one layer throwing must
 // not surface as a chat-turn failure.
 
-import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
+import { createEdgeLogger } from '../../_shared/edge-log.ts';
+import { requireThreadId, registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { memorySearch } from '../tools/memory_search.ts';
 import { conversationSearch } from '../tools/conversation_search.ts';
 import { wikiSearch } from '../tools/wiki_search.ts';
+import { logPreview } from './_recall_helpers.ts';
 
 // Per-layer caps. Memories ride inline so the cap also bounds the
 // injected token cost; conversations and wiki are id lists, so their
@@ -117,100 +119,120 @@ export const contextTool: ToolDef = {
     const empty: ContextIndex = { memories: [], conversations: [], wiki: [] };
     if (ctx.signal.aborted) return empty;
 
-    let query =
-      typeof args.topic === 'string' && args.topic.trim().length > 0
-        ? args.topic.trim()
-        : '';
-    if (query.length === 0) {
-      // RLS OFF: scoped via parent thread.
-      const { data: msgs, error: msgErr } = await ctx.adminClient
-        .from('messages')
-        .select('role, content')
-        .eq('thread_id', ctx.threadId)
-        .order('created_at', { ascending: true });
-      if (msgErr) {
-        // Degrade quietly - we cannot derive a query without the
-        // thread, so the umbrella returns the empty index.
-        console.error(
-          `[context] message read failed: ${msgErr.message}`,
-        );
-        return empty;
-      }
-      query = deriveRecallQuery((msgs ?? []) as StoredMessage[]);
-    }
-    if (query.length === 0) return empty;
-
-    // Run all three searches in parallel via allSettled. A search that
-    // throws contributes an empty list rather than failing the gather
-    // - one layer's outage must not surface as a chat-turn failure.
-    const [memoryR, convR, wikiR] = await Promise.allSettled([
-      memorySearch.execute(
-        { query, limit: CONTEXT_MEMORY_LIMIT },
-        ctx,
-      ),
-      conversationSearch.execute(
-        { query, limit: CONTEXT_CONVERSATION_LIMIT },
-        ctx,
-      ),
-      wikiSearch.execute({ query, limit: CONTEXT_WIKI_LIMIT }, ctx),
-    ]);
-
-    if (memoryR.status === 'rejected') {
-      console.error('[context] memory layer failed:', memoryR.reason);
-    }
-    if (convR.status === 'rejected') {
-      console.error('[context] conversation layer failed:', convR.reason);
-    }
-    if (wikiR.status === 'rejected') {
-      console.error('[context] wiki layer failed:', wikiR.reason);
-    }
-
-    const memories: ContextIndexMemory[] = [];
-    if (memoryR.status === 'fulfilled' && Array.isArray(memoryR.value)) {
-      for (const raw of memoryR.value as MemoryHit[]) {
-        if (!raw || typeof raw !== 'object') continue;
-        const id = raw.id;
-        const label = raw.label;
-        const data = raw.data;
-        const tag = raw.confidence_tag;
-        if (
-          typeof id !== 'string' ||
-          typeof label !== 'string' ||
-          typeof data !== 'string' ||
-          !isValidConfidenceTag(tag)
-        ) {
-          continue;
+    // Drawer logging. The umbrella runs mid-turn on the live chat
+    // path, so the run - and the finally-flush below - is bounded by
+    // the turn.
+    const log = createEdgeLogger(ctx.userId, 'context');
+    try {
+      let query =
+        typeof args.topic === 'string' && args.topic.trim().length > 0
+          ? args.topic.trim()
+          : '';
+      if (query.length === 0) {
+        // RLS OFF: scoped via parent thread.
+        const { data: msgs, error: msgErr } = await ctx.adminClient
+          .from('messages')
+          .select('role, content')
+          .eq('thread_id', requireThreadId(ctx))
+          .order('created_at', { ascending: true });
+        if (msgErr) {
+          // Degrade quietly - we cannot derive a query without the
+          // thread, so the umbrella returns the empty index.
+          log.error(`message read failed: ${msgErr.message}`, msgErr);
+          return empty;
         }
-        memories.push({ id, label, data, confidence_tag: tag });
-        if (memories.length >= CONTEXT_MEMORY_LIMIT) break;
+        query = deriveRecallQuery((msgs ?? []) as StoredMessage[]);
       }
-    }
+      if (query.length === 0) return empty;
 
-    const conversations: ContextIndexRef[] = [];
-    if (convR.status === 'fulfilled' && Array.isArray(convR.value)) {
-      for (const raw of convR.value as RefHit[]) {
-        if (!raw || typeof raw !== 'object') continue;
-        const id = raw.id;
-        const title = raw.title;
-        if (typeof id !== 'string' || typeof title !== 'string') continue;
-        conversations.push({ id, title });
-        if (conversations.length >= CONTEXT_CONVERSATION_LIMIT) break;
+      log.debug(`context gather start: query "${logPreview(query)}"`);
+
+      // Run all three searches in parallel via allSettled. A search that
+      // throws contributes an empty list rather than failing the gather
+      // - one layer's outage must not surface as a chat-turn failure.
+      const [memoryR, convR, wikiR] = await Promise.allSettled([
+        memorySearch.execute(
+          { query, limit: CONTEXT_MEMORY_LIMIT },
+          ctx,
+        ),
+        conversationSearch.execute(
+          { query, limit: CONTEXT_CONVERSATION_LIMIT },
+          ctx,
+        ),
+        wikiSearch.execute({ query, limit: CONTEXT_WIKI_LIMIT }, ctx),
+      ]);
+
+      if (memoryR.status === 'rejected') {
+        log.error('memory layer failed:', memoryR.reason);
       }
-    }
-
-    const wiki: ContextIndexRef[] = [];
-    if (wikiR.status === 'fulfilled' && Array.isArray(wikiR.value)) {
-      for (const raw of wikiR.value as RefHit[]) {
-        if (!raw || typeof raw !== 'object') continue;
-        const id = raw.id;
-        const title = raw.title;
-        if (typeof id !== 'string' || typeof title !== 'string') continue;
-        wiki.push({ id, title });
-        if (wiki.length >= CONTEXT_WIKI_LIMIT) break;
+      if (convR.status === 'rejected') {
+        log.error('conversation layer failed:', convR.reason);
       }
-    }
+      if (wikiR.status === 'rejected') {
+        log.error('wiki layer failed:', wikiR.reason);
+      }
 
-    return { memories, conversations, wiki };
+      const memories: ContextIndexMemory[] = [];
+      if (memoryR.status === 'fulfilled' && Array.isArray(memoryR.value)) {
+        for (const raw of memoryR.value as MemoryHit[]) {
+          if (!raw || typeof raw !== 'object') continue;
+          const id = raw.id;
+          const label = raw.label;
+          const data = raw.data;
+          const tag = raw.confidence_tag;
+          if (
+            typeof id !== 'string' ||
+            typeof label !== 'string' ||
+            typeof data !== 'string' ||
+            !isValidConfidenceTag(tag)
+          ) {
+            continue;
+          }
+          memories.push({ id, label, data, confidence_tag: tag });
+          if (memories.length >= CONTEXT_MEMORY_LIMIT) break;
+        }
+      }
+
+      const conversations: ContextIndexRef[] = [];
+      if (convR.status === 'fulfilled' && Array.isArray(convR.value)) {
+        for (const raw of convR.value as RefHit[]) {
+          if (!raw || typeof raw !== 'object') continue;
+          const id = raw.id;
+          const title = raw.title;
+          if (typeof id !== 'string' || typeof title !== 'string') continue;
+          conversations.push({ id, title });
+          if (conversations.length >= CONTEXT_CONVERSATION_LIMIT) break;
+        }
+      }
+
+      const wiki: ContextIndexRef[] = [];
+      if (wikiR.status === 'fulfilled' && Array.isArray(wikiR.value)) {
+        for (const raw of wikiR.value as RefHit[]) {
+          if (!raw || typeof raw !== 'object') continue;
+          const id = raw.id;
+          const title = raw.title;
+          if (typeof id !== 'string' || typeof title !== 'string') continue;
+          wiki.push({ id, title });
+          if (wiki.length >= CONTEXT_WIKI_LIMIT) break;
+        }
+      }
+
+      log.info(
+        `context gather finished (${memories.length} memories, ` +
+          `${conversations.length} conversations, ${wiki.length} wiki articles)`,
+      );
+      return { memories, conversations, wiki };
+    } catch (err) {
+      // Logging only - the failure still propagates to the tool
+      // dispatcher unchanged; this line is the drawer-visible reason.
+      log.error(
+        'context gather failed',
+        err instanceof Error ? err : new Error(String(err)),
+      );
+      throw err;
+    } finally {
+      await log.flush();
+    }
   },
 };
 

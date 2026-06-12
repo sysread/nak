@@ -1,7 +1,7 @@
 <script lang="ts">
   /**
    * Bias Profile diagnostics modal. Read-only view of the
-   * worker-maintained per-user, per-bias evidence cache plus the
+   * sweep-maintained per-user, per-bias evidence cache plus the
    * underlying per-conversation observations.
    *
    * Reached from the chart-glyph button in the bottom-right pill
@@ -15,7 +15,7 @@
    *     Lists the soft+strong biases that are currently shaping
    *     responses on this turn (the same RENDER_CAP-capped set the
    *     chat-loop injects into the system prompt) plus any
-   *     observations the worker has already recorded for this
+   *     observations the sweep has already recorded for this
    *     thread (or an explanation of why none exist yet - the
    *     thread is excluded from analysis while open).
    *
@@ -25,14 +25,14 @@
    *     the system-prompt contribution (if any).
    *
    *   - Recently processed conversations. Latest N (default 30)
-   *     threads the worker has analyzed, each expandable to its
+   *     threads the sweep has analyzed, each expandable to its
    *     per-observation list.
    *
    *   - Per-observation drill-down. Inside an expanded thread, one
    *     card per observation with the bias name, confidence, and
    *     the reasoning string.
    *
-   * No write controls; the worker is autonomic.
+   * No write controls; the pipeline is autonomic.
    */
   import { onMount } from 'svelte';
   import { app } from '$lib/state.svelte';
@@ -120,12 +120,12 @@
   // row in the per-bias evidence table (only one open at a time).
   // `expandedBiasObs` holds the loaded rows; `null` means "fetch
   // in flight", `[]` means "loaded but empty" (rare - implies the
-  // worker cleared the observations between the counts load and
+  // sweep cleared the observations between the counts load and
   // the per-bias fetch).
   let expandedBiasKey = $state<string | null>(null);
   let expandedBiasObs = $state<BiasObservationRow[] | null>(null);
   // Per-bias count of raw observations across the user's history.
-  // Zero means the worker has analyzed conversations but never
+  // Zero means the sweep has analyzed conversations but never
   // flagged this bias - the summary row's ci_lower is just the
   // prior's 10th-percentile (~5%) plus the cumulative no-hit mass,
   // not actual signal. Drives the "no evidence" rendering in the
@@ -142,10 +142,10 @@
   // empty array means "fetched and nothing recorded."
   let currentThreadObs = $state<ObservationRow[] | null>(null);
   let currentThreadReactions = $state<ReactionRow[] | null>(null);
-  // Has the worker analyzed the active thread yet? Drives the
+  // Has the sweep analyzed the active thread yet? Drives the
   // copy under "Observations from this conversation" - we need to
   // distinguish "already analyzed, came up empty" from "not yet
-  // analyzed" (which covers both the worker-not-gotten-to-it case
+  // analyzed" (which covers both the sweep-not-gotten-to-it case
   // and the brand-new-draft case where the thread row doesn't even
   // exist in the DB and the observations query trivially returns
   // []). Null while the fetch is in flight.
@@ -353,7 +353,7 @@
   }
 
   /**
-   * Has the worker ever flagged this bias for the user? Distinct
+   * Has the sweep ever flagged this bias for the user? Distinct
    * from "is the row above the N_eff floor": effective_n counts
    * processed conversations (with pConv=0 for no-hits), while this
    * counts raw observation rows. Zero observations means the
@@ -393,7 +393,7 @@
       // mass; the percentage itself is uninformative, so the prose
       // leans on "never flagged" rather than the number.
       core =
-        `No evidence - the worker has not flagged this bias in any ` +
+        `No evidence - the analysis has never flagged this bias in any ` +
         `analyzed conversation. The stats above are just the ` +
         `Beta(${ALPHA_PRIOR}, ${BETA_PRIOR}) prior with the ` +
         `cumulative no-hit denominator from processed conversations ` +
@@ -544,9 +544,9 @@
             <h2 class="block-title">Current conversation</h2>
             <p class="block-blurb subtle">
               What the bias layer is doing for the thread you have
-              open right now. The conversation itself is excluded
-              from analysis while open in this tab; the worker
-              picks it back up after you close it.
+              open right now. Conversations are analyzed only after
+              they settle: the hourly sweep picks one up once its
+              last activity falls on a previous day.
             </p>
 
             <h3 class="sub-title">Shaping responses on this turn</h3>
@@ -572,28 +572,26 @@
 
             <h3 class="sub-title">Observations from this conversation</h3>
             {#if currentThreadObs === null || currentThreadProcessedAt === null}
-              <!-- Worker hasn't analyzed this thread yet. Covers
+              <!-- The sweep hasn't analyzed this thread yet. Covers
                    two cases that look the same from the modal's
                    perspective: (1) the thread is materialized but
-                   the worker excludes it while open in this tab,
-                   and (2) the thread is still a brand-new draft
-                   that hasn't been written to the DB yet, in which
+                   still dated today (the day-gate defers it), and
+                   (2) the thread is still a brand-new draft that
+                   hasn't been written to the DB yet, in which
                    case the observations query trivially returns []
                    and would otherwise read as "already analyzed,
                    no findings" - wrong and misleading for a
                    conversation that hasn't even had its first
                    message sent. -->
               <p class="empty">
-                Not yet analyzed. While this conversation is open
-                in this tab the worker excludes it from its scan;
-                once you close it (and the conversation is no
-                longer dated today) the worker will pick it up on
-                its next rotation.
+                Not yet analyzed. Conversations become eligible
+                once their last activity falls on a previous day;
+                the hourly sweep picks this one up then.
               </p>
             {:else if currentThreadObs.length === 0}
               <p class="empty">
-                Already analyzed - the worker found no clear bias
-                evidence in this conversation. Reporting nothing
+                Already analyzed - no clear bias evidence was
+                found in this conversation. Reporting nothing
                 is the correct answer most of the time.
               </p>
             {:else}
@@ -618,14 +616,14 @@
                 {#if currentThreadReactions === null || currentThreadProcessedAt === null}
                   <!-- Same "not yet analyzed" gating as the
                        observations block above: an empty reactions
-                       list on an un-processed thread is the worker
+                       list on an un-processed thread is the sweep
                        not having gotten to it (or the thread being
                        a draft that doesn't exist in the DB yet),
                        not "scanned and found nothing." -->
                   Not yet analyzed. Reactions are recorded for the
                   biases that were active in the system prompt while
-                  the conversation happened; the worker classifies
-                  them after you close the conversation.
+                  the conversation happened; the sweep classifies
+                  them once the conversation settles.
                 {:else if renderedRows.length === 0}
                   No biases were active in the system prompt during
                   this conversation, so there was nothing for you
@@ -774,7 +772,7 @@
                 </p>
                 {#if hasEvidence(row.bias)}
                   <!-- Per-bias drill-down. Surfacing this only on
-                       rows the worker has actually flagged - rows
+                       rows the analysis has actually flagged - rows
                        with no observations have nothing to show
                        and the toggle would read as broken. -->
                   <button
@@ -796,7 +794,7 @@
                            the source thread's observations after
                            a new message arrived in it. -->
                       <p class="bias-evidence-empty subtle">
-                        No observations available - the worker may
+                        No observations available - the sweep may
                         have re-analyzed the source conversations
                         since this modal opened.
                       </p>
@@ -827,7 +825,7 @@
         <section class="block">
           <h2 class="block-title">Recently processed conversations</h2>
           <p class="block-blurb subtle">
-            Latest threads the worker has analyzed. Click a row to
+            Latest threads the sweep has analyzed. Click a row to
             expand the per-observation list. A thread re-enters the
             queue when you send a new message in it (prior
             observations are cleared and reanalyzed on the next

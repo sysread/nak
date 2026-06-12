@@ -145,15 +145,23 @@ depends = ["deps"]
 run = "pnpm knip"
 
 [tasks.check]
-description = "Full local gate — tests, svelte-check, ESLint, production build"
-# `depends` runs `deps` and `test` before this task's own `run` list
-# fires, so the order ends up: deps (pnpm install) → tests (which
-# includes the markdownlint guardrail) → svelte-check → ESLint →
-# pnpm build. Markdownlint rides the test dep; there's no second
-# invocation here. The explicit `deps` dep is belt-and-suspenders:
-# `test` already depends on it, but naming it here means a future edit
-# that unchains test from the gate won't silently skip the install
-# step.
+description = "Full local gate — tests, Deno island, svelte-check, ESLint, production build"
+# `depends` runs `deps`, `test`, and the Deno-island gates
+# (functions-check + functions-test) before this task's own `run`
+# list fires, so the order ends up: deps (pnpm install) → tests
+# (which includes the markdownlint guardrail) + Deno check/test →
+# svelte-check → ESLint → pnpm build. Markdownlint rides the test
+# dep; there's no second invocation here. The explicit `deps` dep is
+# belt-and-suspenders: `test` already depends on it, but naming it
+# here means a future edit that unchains test from the gate won't
+# silently skip the install step.
+#
+# The Deno island is in the gate (unlike knip) because the edge
+# function is where most of the app's logic now runs, and nothing
+# else type-checks or tests it: deploy bundles without checking, and
+# vitest never sees Deno code. knip stays out because it scans for
+# repo-wide rot a PR didn't introduce; functions-check/test only fail
+# on code the function actually deploys with.
 #
 # `pnpm build` is part of the gate because Vite + vite-plugin-pwa
 # failures (Rollup IIFE/code-splitting conflicts in worker bundles,
@@ -167,7 +175,7 @@ description = "Full local gate — tests, svelte-check, ESLint, production build
 # the gate makes Tests fail on the PR / push, which in turn blocks
 # the workflow_run trigger that would kick off Deploy. Cost is
 # ~12-15s on an up-to-date tree.
-depends = ["deps", "test"]
+depends = ["deps", "test", "functions-check", "functions-test"]
 run = [
   "pnpm check",
   "pnpm lint",
@@ -204,6 +212,18 @@ description = "Deno unit tests for the edge functions (offline - fake fetch, no 
 # --config points deno at the functions' import map; the tests/ dir holds only
 # the pure offline tests, so this stays network-free after deno caches std.
 run = "deno test --config supabase/functions/deno.json supabase/functions/tests/"
+
+[tasks.functions-check]
+description = "Type-check every edge-function entrypoint with deno check"
+# deno test only type-checks the test-import graph, and `supabase
+# functions deploy` bundles with esbuild (no type-check at all) - so
+# without this task, a type error in a handler-graph corner no test
+# imports surfaces NOWHERE and ships latent. Checking the entrypoints
+# covers the full import graph each function deploys with.
+# bundle-docs first: venice imports the gitignored research-docs
+# corpus, which doesn't exist on a fresh clone until the bundler runs.
+depends = ["bundle-docs"]
+run = "deno check --config supabase/functions/deno.json supabase/functions/venice/index.ts supabase/functions/expire-attachments/index.ts supabase/functions/recipe-image-gc/index.ts"
 
 [tasks.bundle-docs]
 description = "Bundle docs/user + docs/dev into the function-side research_docs corpus (supabase/functions/venice/_generated/research-docs-corpus.ts). Gitignored output; dev-start, functions-serve, and functions-deploy all depend on it."

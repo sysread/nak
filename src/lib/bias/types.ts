@@ -2,15 +2,16 @@
  * Shared types and tunable constants for the bias-profile feature.
  *
  * The chat-loop side imports `BiasSummaryRow` and `Tier` from here so
- * its readers don't pull in the Supabase/Venice surface; the worker
- * side imports the same types so the formation pipeline and the
- * chat-loop integration agree on what an aggregated bias row looks
- * like.
+ * its readers don't pull in the Supabase/Venice surface. The
+ * formation pipeline itself runs server-side
+ * (supabase/functions/venice/agents/bias.ts) against the _shared
+ * mirrors of these tunables - tests/bias-catalog-parity.test.ts
+ * pins the two sides together.
  *
  * Why a separate types module rather than re-exporting from
  * `./index.ts`: index.ts pulls Supabase and the model registry, and
- * we don't want every consumer of a type (the worker, tests, the
- * debug modal) to drag those imports along.
+ * we don't want every consumer of a type (tests, the debug modal)
+ * to drag those imports along.
  */
 import type { BiasKey } from './catalog-keys';
 
@@ -42,7 +43,7 @@ export interface BiasSummaryRow {
   /** Render-time tier, gated on N_eff floor and feedback-adjusted
    *  ciLower thresholds. */
   tier: Tier;
-  /** Wall-clock when this row was last recomputed by the worker. */
+  /** Wall-clock when the bias sweep last recomputed this row. */
   computedAt: string;
 }
 
@@ -79,7 +80,7 @@ export interface BiasObservation {
   id: string;
   threadId: string;
   bias: BiasKey;
-  /** Post-floor, post-cap; the worker clamps before insert so DB
+  /** Post-floor, post-cap; the sweep clamps before insert so DB
    *  rows always satisfy the [0.40, 0.85] check constraint. */
   confidence: number;
   reasoning: string;
@@ -100,9 +101,11 @@ export type Tier = 'elided' | 'soft' | 'strong';
 
 /**
  * Hard-coded math tunables. Lifted out of the schema layer so
- * changing them doesn't require a `mise run sync`; the worker
- * recomputes the cache on its next cycle. See docs/dev/bias-profile.md
- * for the rationale on each value.
+ * changing them doesn't require a `mise run sync`; the sweep
+ * recomputes the cache on its next tick. See docs/dev/bias-profile.md
+ * for the rationale on each value. The values here are what the
+ * BiasProfile screen displays; the sweep computes against the
+ * mirror in supabase/functions/_shared/bias-math.ts.
  *
  *   ALPHA_PRIOR / BETA_PRIOR — Beta(2, 8). Mean 0.2, equivalent to
  *   10 pseudo-conversations at the base rate. Carries the law-of-
@@ -149,8 +152,8 @@ export const PER_CONV_CAP = 0.85;
 export const RENDER_CAP = 4;
 
 /**
- * Minimum user-message count on a thread before the worker
- * considers it. The user wants two-plus user messages so we have
+ * Minimum user-message count on a thread before the analyze
+ * claim considers it. The user wants two-plus user messages so we have
  * an actual back-and-forth, not a one-shot ping. Matches the
  * spec.
  */
@@ -159,7 +162,7 @@ export const MIN_USER_MESSAGES = 2;
 /**
  * Compensation-feedback tunables (v2 calibration layer).
  *
- * Each time the worker analyzes a conversation it also asks the
+ * Each time the sweep analyzes a conversation it also asks the
  * agent whether the user affirmed or pushed back on the bias-
  * compensation behavior that was active during the conversation
  * (see `bias_reactions` in supabase/schema.sql). Those signals

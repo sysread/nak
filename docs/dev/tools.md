@@ -1,10 +1,11 @@
 # Tools
 
-The tool-calling subsystem. One registry organised into named
-toolboxes, two parallel executors (chat-side and headless-agent-
-side), and per-agent toolboxes that subset the registry for read-
-only or write-scoped roles. Every tool the model can invoke in any
-surface is declared here.
+The tool-calling subsystem. One catalog of tool schemas organised
+into named toolboxes on the browser side, and one dispatch layer on
+the server side: the venice Supabase edge function runs every tool -
+chat-turn calls through `performToolCall`, background-agent calls
+through the headless runner in `agents/_run.ts`. Every tool the
+model can invoke in any surface is declared here.
 
 ## Role in the app
 
@@ -12,242 +13,252 @@ Tools give the model a way to actually do things - store a memory,
 search prior threads, save a recipe, flip which toolboxes are
 active. The main chat loop exposes them to the primary model via
 named toolboxes; background agents expose their own scoped subsets
-to their own models. Both paths share the `ToolDef` shape and the
-`executeToolCall` / `executeToolboxCall` dispatchers, so adding a
-tool is a one-file-plus-toolbox-entry change.
+to their own models.
+
+The catalog and the dispatch live on opposite sides of the wire:
+
+- **The browser owns the catalog.** `buildToolList` composes the
+  wire `tools` array from the thread's enabled toolboxes, and
+  `src/lib/chat-prompt.ts` renders the same registry into the
+  system-prompt catalog. Every browser `ToolDef` is a
+  `serverSideTool(schema)` - catalog metadata plus an `execute()`
+  that throws. Nothing dispatches tools in the browser.
+- **The edge function owns every execution.** A streamed chat turn's
+  tool calls dispatch through `performToolCall`
+  (`supabase/functions/venice/performToolCall.ts`) against a
+  registry the `tools/index.ts` barrel populates at module load.
+  Background agents (reflection, the autonomous wiki agent, the
+  wiki librarian, rem, deep-sleep, the recall agents) run their
+  tool loops server-side via `runHeadlessAgent`
+  (`supabase/functions/venice/agents/_run.ts`) against per-agent
+  toolboxes.
+
+See [`./architecture.md`](./architecture.md) "Production-path
+ownership" for the full browser-vs-function frame.
+
+### Toolbox model: reads ride free, writes gate
 
 The main chat model sees toolboxes as the unit of enablement:
 
-- **`always_on`** - reflex-level tools that ride every request
-  regardless of the thread's `toolboxes_enabled` array.
-- **`cooking`**, **`memories`**, **`conversations`**, **`research`**
-  - gated toolboxes. Included in the wire catalog only when their
-  name appears in `threads.toolboxes_enabled`.
+- **`always_on`** - rides every request regardless of the thread's
+  `toolboxes_enabled` array. Carries every read-only surface plus a
+  few reflexes (below).
+- **`cooking`**, **`memories`**, **`wiki`**, **`library`**,
+  **`images`** - gated toolboxes carrying only writes. Included in
+  the wire catalog only when their name appears in
+  `threads.toolboxes_enabled`.
 
-The always-on toolbox carries:
+The principle: reads are idempotent and cheap, so gating them was
+forcing the model to weigh "do I need this badly enough to flip a
+toolbox?" and frequently answering wrong - passing over
+`memory_search` in favour of training data even when the user asked
+what Nak remembered. Writes still need a deliberate user-or-model
+gate so an autonomous tool turn can't scribble over user data
+without intent.
+
+### The always-on toolbox
+
+Notable members (the full ordered list is `alwaysOnToolbox` in
+`src/lib/tools/index.ts`):
 
 - `toggle_toolbox` - the gating mechanism itself. Without it in the
   always-on set, the model cannot enable any gated toolbox.
-- `context` - umbrella over the three recall tools. Fans out the
-  same three recall agents (memory, conversation, wiki) the
-  topic-boundary pipeline uses, in parallel, and returns a single
-  stitched first-person paragraph. The system prompt nudges the
-  model to consider this first when it wants broad context on the
-  user - one round-trip instead of three sequential per-layer calls.
-  Read-only.
-- `memory_recall`, `conversation_recall`, `wiki_recall` -
-  reflex-level per-layer reads the model uses
-  when it already knows which store it wants (or when it wants to
-  drill into one layer after the umbrella `context` call). Each
-  spawns its dedicated recall sub-agent and returns a structured
-  note. All four are read-only - they each ship with a toolbox
-  that carries only the matching `*_search` tool, so a bug in a
-  recall prompt can't scribble over user data.
+- `context` - umbrella recall over the three persistent layers
+  (memories, prior conversations, wiki). One round-trip returns a
+  works-cited index: memory facts verbatim plus related
+  conversations and wiki articles by id. Preferred first step when
+  the model wants broad context on the user.
+- `memory_recall`, `conversation_recall`, `wiki_recall` - per-layer
+  recall passes, each running an LLM sub-agent that returns a
+  synthesized note from one store. The targeted, more-expensive
+  drill-down tier above the deterministic `context` survey.
+- Direct reads across every store: `memory_search`,
+  `conversation_search` / `conversation_get`, `wiki_search` /
+  `wiki_list` / `wiki_get`, `recipe_list` / `recipe_get`,
+  `doc_list` / `doc_get` / `doc_grep` / `doc_read`.
+- `research_docs` - one-shot sub-completion whose system prompt
+  bundles the user-facing doc corpus (`docs/user/`), answering
+  meta-questions about Nak itself; returns `{answer, sources}`.
+  Passing `include_internal_dev_docs: true` expands the corpus to
+  `docs/dev/` for "how would I add feature X" planning questions.
+  The edge implementation reads a build-time bundle, not the
+  filesystem - see Interactions, "Help / user docs."
 - `web_search` - runs a one-shot Venice sub-completion with
   `enable_web_search: 'on'` + `enable_web_citations: true` and
-  returns `{answer, citations}`. Must be available without a
-  toggle round-trip because time-sensitive questions (news,
-  prices, today's weather) are the canonical case for search and
-  we don't want the model to refuse or hedge while waiting for a
-  toolbox flip. Read-only (no DB writes). Deliberately excluded
-  from `memoryToolbox`, `recallToolbox`,
-  `conversationRecallToolbox`, and `wikiRecallToolbox` - background
-  agents have no reason to reach for live web data, and giving them
-  the tool would burn search quota and pollute memories with scraped
+  returns `{answer, citations}`. Always-on because time-sensitive
+  questions (news, prices, today's weather) are the canonical case
+  for search and we don't want the model to refuse or hedge while
+  waiting for a toolbox flip. Read-only (no DB writes).
+  Deliberately absent from every agent toolbox - background agents
+  have no reason to reach for live web data, and giving them the
+  tool would burn search quota and pollute memories with scraped
   noise.
 - `update_title` - has to fire on the very first turn of a fresh
   thread when `toolboxes_enabled=[]` by default; gating it would
-  mean a toolbox flip before the model could name the
-  conversation.
+  mean a toolbox flip before the model could name the conversation.
 - `analyze_image` - fires a vision sub-completion for an image
-  attachment identified by filename and a caller-supplied query. Runs
-  against a primary vision model first and falls back once to a
-  permissive uncensored model on any failure (e.g. a spurious
-  content-safety block on an innocuous photo). Always-on so the
-  model can reach for it on any tier when the user sends an image. The main model phrases the
-  query from the user's intent (e.g. "what does this say?" becomes
-  an OCR-focused query); the tool returns the vision model's plain-
-  text answer. Like every chat tool it executes server-side in the
-  venice edge function (`supabase/functions/venice/tools/analyze_image.ts`),
-  which looks the image up by filename in the thread, downloads the
+  attachment identified by filename and a caller-supplied query.
+  Runs against a primary vision model first and falls back once to
+  a permissive uncensored model on any failure (e.g. a spurious
+  content-safety block on an innocuous photo). The edge
+  implementation (`supabase/functions/venice/tools/analyze_image.ts`)
+  looks the image up by filename in the thread, downloads the
   bytes, and inlines them as a base64 data URL.
+- `ask_user` - pose a clarifying multiple-choice question instead
+  of guessing intent. The turn suspends after the call lands; the
+  next round starts when the user submits an answer via the
+  AskUserCard UI. The tool surface is unique in the catalog: every
+  other tool's result is computed by code, this one's is supplied
+  by the user across a suspend/resume gap. Browser-side envelope
+  helpers (`parseAskUserContent`, `buildAskUserAnswerContent`) live
+  in `src/lib/ask-user.ts`; see `./chat.md` for the suspend/resume
+  contract.
 
-The gated `research` toolbox carries:
+### The gated write boxes
 
-- `research_docs` - fires a one-shot sub-completion on the fast
-  tier whose system prompt bundles every user-facing doc under
-  `docs/user/` (loaded via `src/lib/docs.ts`'s Vite glob). The
-  sub-model answers the caller's question from that context alone
-  and returns `{answer, sources}` where `sources` is an array of
-  doc paths. Same in-app corpus the Help modal renders, just with
-  the fast model doing the synthesis. Gated (not always-on) because
-  meta-questions about the app are a small fraction of
-  conversation turns; paying a tool-schema tax on every request
-  would be wasteful. The LLM flips the toolbox on via
-  `toggle_toolbox` when it sees a meta-question and keeps it on
-  for the rest of a research-oriented thread.
-
-  Dev-docs opt-in: passing `include_internal_dev_docs: true`
-  expands the bundled corpus to also carry every doc under
-  `docs/dev/` (architecture + per-feature dev notes, loaded via
-  `listDevDocs` / `loadDevDoc` from the same module). This lets
-  the tool field "how would I add feature X to Nak" planning
-  questions - the sub-model can cross-reference user-facing
-  behavior against internal design notes in a single pass. The
-  dev tree is ~4x the user tree's size, so opt-in per call rather
-  than always-on keeps the common case cheap. In dev mode the
-  sub-model is asked to cite sources with the tree prefix
-  (`docs/user/memory.md` vs `docs/dev/memory.md`) since several
-  filenames collide across the two trees, and
-  `parseResearchResult` preserves those prefixes when
-  `keepPrefixes: true` is passed.
-
-The gated `images` toolbox carries:
-
-- `generate_image` - runs one `VeniceClient.generateImage` (`POST
-  /image/generate`, default model `VENICE_IMAGE_MODEL`) from a
-  text prompt and optional negative prompt / style preset / aspect
-  ratio. Gated rather than always-on because a generation spends
-  Venice credits and writes a persistent attachment - the same
-  deliberate-write rationale the cookbook / memory write boxes use.
+- **`cooking`** - recipe writes: `recipe_save` / `recipe_update` /
+  `recipe_delete` plus the photo tools (`recipe_photos_attach` /
+  `_remove` / `_reorder`, `recipe_photo_label_set`). See
+  `./cookbook.md`.
+- **`memories`** - memory writes: `memory_create` / `memory_update`
+  / `memory_delete` plus the volitional levers (`memory_reaffirm` /
+  `memory_doubt` for graded confidence, `memory_relate` /
+  `memory_unrelate` for the memory graph). See `./memory.md`.
+- **`wiki`** - carries only `wiki_librarian`, which delegates a
+  maintenance task to a multi-round sub-agent. Direct `wiki_create`
+  / `wiki_update` / `wiki_delete` are NOT exposed to the main chat
+  at all - those are reserved for the autonomous wiki agent and the
+  librarian itself, so any chat-driven wiki edit goes through the
+  librarian's full read-then-plan loop rather than a one-shot
+  scribble. See `./wiki.md`.
+- **`library`** - document writes: `doc_create` (promote a file the
+  user attached into a permanent searchable document), `doc_update`,
+  `doc_delete`. See `./library.md`.
+- **`images`** - `generate_image`. Gated because a generation
+  spends Venice credits and writes a persistent attachment.
   Unusually for a tool, its real output does NOT come back in the
-  tool-result content: the base64 image rides under
-  `GENERATED_IMAGE_RESULT_KEY`, which the chat-loop harvests
-  (`extractGeneratedImage`) and strips (`stripGeneratedImage`)
-  before persisting the `role='tool'` row, then writes as a
-  `message_attachments` row on the terminal assistant message. The
-  model only sees a compact descriptor (filename + dimensions). See
-  `./attachments.md` for the storage + display half.
+  tool-result content: the edge orchestrator harvests the generated
+  bytes (`supabase/functions/venice/tools/_generated_image.ts` +
+  `getStreamingResponse.ts`) and writes a `message_attachments` row
+  on the terminal assistant message; the model only sees a compact
+  descriptor (filename + dimensions). See `./attachments.md`.
 
 ## Files
 
-- `src/lib/tools/index.ts` - the toolbox definitions
-  (`alwaysOnToolbox`, `cookingToolbox`, `memoriesToolbox`,
-  `conversationsToolbox`, `researchToolbox`), the ordered
-  `TOOLBOXES` list, the derived `GATED_TOOLBOX_NAMES` /
-  `GATED_TOOLBOX_META`, the flat `TOOLS` view used by tests, the
-  catalog builders (`buildToolList`, `buildSystemPrompt`), and the
-  main dispatcher `executeToolCall`. Also exports the agent-only
-  toolboxes (`memoryToolbox`, `recallToolbox`,
-  `conversationRecallToolbox`, `wikiRecallToolbox`).
-- `src/lib/tools/run.ts` - `runHeadlessToolLoop`: the agent-side
-  executor. Parallel to the chat loop but without persistence or
-  streaming callbacks.
-- `src/lib/tools/types.ts` - `ToolDef`, `Toolbox`, `ToolContext`,
-  OpenAI wire types.
-- `src/lib/tools/toggle_tools.ts` - the gating meta-tool
-  (`toggle_toolbox`). Validates incoming names against the current
-  `GATED_TOOLBOX_NAMES` set; unknown names are silently dropped
-  (the tool's return value tells the model what took effect).
-- `src/lib/tools/memory_*.ts` - the five memory tools (`search`,
-  `create`, `update`, `invalidate`, `delete`) plus `memory_recall`
-  (triggers the recall agent).
-- `src/lib/tools/conversation_search.ts`,
-  `conversation_recall.ts` - thread-level search + recall-agent
-  trigger.
-- `src/lib/tools/wiki_recall.ts`, `wiki_recall_toolbox.ts` - the
-  wiki-recall tool (main-chat) and the read-only toolbox the
-  wiki-recall agent uses internally.
-- `src/lib/tools/context.ts` - the umbrella recall tool: runs the
-  deterministic three-layer gather via `gatherContextIndex` (see
-  `src/lib/context-recall/gather.ts`) and returns the structured
-  index (memory facts verbatim; conversations + wiki by id). Thin
-  wrapper; the gather is shared with the reflexive pipeline.
-- `src/lib/tools/conversation_get.ts` - primary-key fetch of one
-  prior thread (title, summary, windowed transcript) by id; the
-  conversation-layer counterpart to `wiki_get`, and what makes the
-  conversation ids in the index / `context` result actionable.
-- `src/lib/tools/recipe_*.ts` - five cookbook tools (`save`,
-  `list`, `get`, `update`, `delete`). Mutating ones fire
-  `notifyCookbookChanged` from `cookbook-store.svelte.ts` so the
-  Cookbook modal + drawer tab refresh without the UI layer needing
-  to import the tools module. See `./cookbook.md`.
-- `src/lib/tools/recall_toolbox.ts`,
-  `conversation_recall_toolbox.ts` - the read-only toolboxes
-  assembled for the recall agents. Standalone files to break
-  import cycles.
-- `src/lib/tools/web_search.ts` - wraps a Venice sub-completion
-  with server-side web search on. Chat-loop harvests the
-  returned `citations` array into the terminal assistant row's
-  `citations` column so `CitationsPanel` + `^N^` markdown
-  superscripts light up the same way they did under the old
-  always-on search path.
-- `src/lib/tools/generate_image.ts` + `.schema.ts` - the
-  generate_image tool (gated `images` toolbox); maps an aspect
-  ratio to width/height for the pixel-dimensioned default model
-  and returns the descriptor + stashed payload.
-- `src/lib/tools/generated-image.ts` - dependency-light
-  harvest/strip helpers (`extractGeneratedImage`,
-  `stripGeneratedImage`, `generatedImageToNewAttachment`,
-  `GENERATED_IMAGE_RESULT_KEY`) shared by the tool and the
-  chat-loop. Kept separate so the chat-loop imports them without
-  pulling the lazy generate_image impl chunk.
-- `src/lib/tools/analyze_image.ts` - schema-only browser registration.
-  The implementation is server-side in
-  `supabase/functions/venice/tools/analyze_image.ts` (primary vision
-  model + uncensored fallback on any failure); the browser ToolDef
-  exists only so `buildToolList` advertises analyze_image in the wire
-  `tools` array, and its `execute()` throws if ever called.
-- `src/lib/tools/ask_user.ts` - the clarifying-question tool. Pure
-  args-validator that returns a `{__ask_user_pending__: true,
-  question, options}` sentinel; the chat-loop suspends after
-  persisting the sentinel as the tool-result row content, and the
-  `AskUserCard` UI rewrites the row to an `{__ask_user_answered__:
-  true, answer, via, option_index?}` envelope on submit (or
-  abandonment). `parseAskUserContent` and
-  `buildAskUserAnswerContent` are shared with `Chat.svelte` and
-  `chat-loop.ts`. The tool surface is unique in the catalog: every
-  other tool's result is computed by code, this one's result is
-  supplied by the user across a wire-format suspend/resume gap. See
-  `./chat.md` for the corresponding `ChatLoopResult.awaitingUserAnswer`
-  contract.
-- `src/lib/tools/research_docs.ts` - bundles every `docs/user/`
-  markdown file into the system prompt of a fast-tier sub-
-  completion and returns `{answer, sources}`. The trailing
-  `Sources: ...` line the prompt asks for is parsed back into
-  the sources array by `parseResearchResult`, exported for
-  direct test coverage. Uses `listDocs` / `loadDoc` from
-  `src/lib/docs.ts` so the bundled corpus is always identical
-  to what the Help modal renders. When the caller passes
-  `include_internal_dev_docs: true` the bundle also carries
-  every `docs/dev/` file (loaded via `listDevDocs` / `loadDevDoc`
-  from the same module), swaps in a dev-aware system prompt
-  header that asks for tree-prefixed source cites, and lifts the
-  output token cap so architecture answers aren't cramped.
+Browser catalog (`src/lib/tools/`):
+
+- `index.ts` - the toolbox definitions (`alwaysOnToolbox`,
+  `cookingToolbox`, `memoriesToolbox`, `wikiToolbox`,
+  `libraryToolbox`, `imagesToolbox`), the ordered `TOOLBOXES` list,
+  the derived `GATED_TOOLBOX_NAMES` / `GATED_TOOLBOX_META`, the
+  flat `TOOLS` view used by tests, the wire builder
+  (`buildToolList`), and `getToolFormatters` for the tool-call
+  detail panel. Every `ToolDef` here is a `serverSideTool(schema)`.
+- `<tool>.schema.ts` (one per tool) - the tool's name, description,
+  `shortDescription`, JSON Schema parameters, and any
+  `formatArgs` / `formatResult` pretty-printer overrides. The
+  schema half is everything the browser needs: the wire `tools`
+  array, the system-prompt catalog, and the detail-panel renderers
+  all read from it.
+- `server_side.ts` - `serverSideTool(schema)`: wraps a schema into
+  a `ToolDef` whose `execute()` throws, naming the tool's edge
+  home. The throw is the point - if a regression re-routes dispatch
+  browser-side it surfaces loudly instead of silently running stale
+  logic.
+- `types.ts` - `ToolDef`, `Toolbox`, `ToolContext`, `ToolResult`,
+  OpenAI wire types (`OpenAIToolDef`, `OpenAIToolCall`).
+- `wire.ts` - wire-shape helpers shared by the chat loop and the
+  browser agents that replay stored threads (summary, topics):
+  `sanitizeToolCallIdForWire`, `sanitizeToolCallsForWire`,
+  `parseToolArguments`, and `toOpenAIToolDef` (which injects the
+  `activity` narration parameter - see Contracts).
+
+Adjacent browser modules:
+
+- `src/lib/chat-prompt.ts` - `buildSystemPrompt` renders the
+  registry into the system-prompt catalog; `buildToolboxStateBlock`
+  renders the volatile `(on)`/`(off)` state.
+- `src/lib/ask-user.ts` - the ask_user suspend/resume envelope
+  helpers shared by `Chat.svelte` and the chat loop.
+
+Edge dispatch (`supabase/functions/venice/`):
+
+- `performToolCall.ts` - the function-side single-tool dispatcher:
+  the module-scoped registry, `registerTool` (throws on duplicate
+  names at module load), `listRegisteredTools`, the function-side
+  `ToolContext` (`adminClient`, `userId`, `threadId` - a string for
+  chat dispatch, null for the cross-thread librarian agents -
+  `signal`, `depth?`), `requireThreadId` (the loud guard
+  thread-requiring tools call instead of trusting the field), and
+  the dispatch the streaming orchestrator calls per tool-call
+  request. NOTE: supabase-js `.eq()` accepts `string | null`
+  silently, so the null-safety of each tool is a reviewed manual
+  discipline, not a compiler guarantee.
+- `tools/index.ts` - side-effect barrel: importing it registers
+  every tool implementation. New tool ports add one import line.
+- `tools/<name>.ts` - the implementations. Direct queries run on
+  the service-role client and MUST filter by `userId`
+  (`// RLS OFF` discipline); SECURITY DEFINER RPCs are the safer
+  path where one exists. See `./edge-function-auth.md`.
+- `agents/context.ts`, `agents/recall.ts`,
+  `agents/conversation_recall.ts`, `agents/wiki_recall.ts`,
+  `agents/wiki_librarian.ts` - agent-backed tools. Each file is
+  both the agent and its tool registration: `registerTool` at the
+  bottom makes the agent invocable as a chat tool.
+- `agents/_run.ts` - `runHeadlessAgent`, the headless tool loop
+  every background agent drives, plus the agent-side `AgentTool` /
+  `Toolbox` / `AgentToolContext` shapes, the `AgentProgressEvent`
+  union, and the injectable `complete` test seam. Documented in
+  depth in `./wiki.md` (the runner's first consumer).
+- `agents/_agent_tools.ts` - `asAgentTool(tool, wire)`: wraps a
+  registered `ToolDef` as an `AgentTool` so agent writes stay
+  byte-identical to the chat-side tools, plus the wire schemas more
+  than one agent shares.
+- `agents/_memory_librarian_tools.ts` - the shared toolbox the two
+  memory librarians (rem, deep-sleep) run with. See `./memory.md`.
+- `agents/_wire.ts` - function-side mirror of the browser wire
+  helpers (`encodeToolContent`, `parseToolArguments`, the
+  sanitizers) for the agent loop.
 
 ## Entry points
 
 - **Chat loop** - `chat-loop.ts` calls
-  `buildToolList(thread.toolboxes_enabled)` on every round and
-  `executeToolCall(name, args, ctx)` for each `tool_call` event.
-  The chat loop owns persistence of both the assistant-with-tool-
-  calls row and the per-call `role='tool'` rows.
-- **Background agents** - each agent calls `runHeadlessToolLoop`
-  with its own toolbox. The loop extends an in-memory
-  `VeniceMessage[]` each round and returns the final text + a few
-  counters. No persistence happens inside.
+  `buildToolList(thread.toolboxes_enabled)` to ship the wire
+  `tools` array, then observes the streamed `tool_call_request` /
+  `tool_call_response` events. The edge function is
+  writer-of-record for the whole turn: it dispatches each call via
+  `performToolCall` and persists the assistant-with-tool-calls row
+  and the per-call `role='tool'` rows. See `./chat.md`.
+- **Background agents** - server-side only. Each agent composes its
+  own prompt and toolbox and calls `runHeadlessAgent`, which drives
+  model -> tool -> model rounds entirely in memory (no DB writes,
+  no streaming) until the model settles into a text-only response.
+  Triggers and per-agent stories live with the owning features
+  (`./memory.md`, `./wiki.md`).
 - **System prompt assembly** - `buildSystemPrompt({ biasProfile })`
-  composes the baseline system message the chat loop prepends each
-  turn. The catalog section lists always-on tools first, then each
-  gated toolbox and its tools. The catalog is state-free: it lists
-  what toolboxes exist, not which are enabled, so the baseline stays
-  byte-identical across a `toggle_toolbox` flip and the prompt-prefix
-  cache survives it. The volatile `(on)`/`(off)` state is rendered by
-  `buildToolboxStateBlock` and folded into the per-turn metadata
-  system message (right after the datetime), so the model still sees
-  the same enabled picture the user does in the composer popover -
-  just from the trailing block, not the catalog.
+  in `src/lib/chat-prompt.ts` composes the baseline system message.
+  The catalog section lists always-on tools first, then each gated
+  toolbox and its tools. The catalog is state-free: it lists what
+  toolboxes exist, not which are enabled, so the baseline stays
+  byte-identical across a `toggle_toolbox` flip and the
+  prompt-prefix cache survives it. The volatile `(on)`/`(off)`
+  state is rendered by `buildToolboxStateBlock` and folded into the
+  per-turn metadata system message (right after the datetime), so
+  the model still sees the same enabled picture the user does in
+  the composer popover - just from the trailing block, not the
+  catalog.
 
 ## Data model
 
 - **Toolbox definitions** (`alwaysOnToolbox`, `cookingToolbox`,
-  `memoriesToolbox`, `conversationsToolbox`, `researchToolbox`) -
-  each is a `Toolbox` with a stable name, a human-readable
-  description (surfaced in the UI popover and in the system-prompt
-  catalog), and an ordered `tools: ToolDef[]` array.
-- **`TOOLBOXES`** - ordered list: always-on first, then cooking,
-  memories, conversations, research. Order is visible to the model
-  (system-prompt catalog) and to the user (popover).
+  `memoriesToolbox`, `wikiToolbox`, `libraryToolbox`,
+  `imagesToolbox`) - each is a `Toolbox` with a stable name, a
+  human-readable description (surfaced in the UI popover and in
+  the system-prompt catalog), and an ordered `tools: ToolDef[]`
+  array.
+- **`TOOLBOXES`** - ordered list: always-on first, then the gated
+  write boxes. Order is visible to the model (system-prompt
+  catalog) and to the user (popover).
 - **`GATED_TOOLBOX_NAMES`** - `TOOLBOXES` minus `alwaysOnToolbox`.
   The canonical name list for both writers (the `toggle_toolbox`
   tool and the composer popover) to validate against.
@@ -257,7 +268,8 @@ The gated `images` toolbox carries:
 - **`TOOLS`** - flat, deduped view of every tool across
   `TOOLBOXES`. Exported for test assertions; the wire builder
   composes from `TOOLBOXES` so a tool's toolbox membership drives
-  enablement.
+  enablement. Does NOT include agent-only toolboxes - those are
+  composed server-side and addressed by toolbox directly.
 - **`threads.toolboxes_enabled text[]`** - the per-thread set of
   enabled gated toolbox names. Written by `toggle_toolbox` (model-
   driven) and by the composer popover (user-driven). Empty array
@@ -265,43 +277,47 @@ The gated `images` toolbox carries:
   name is implicit and is never stored here; writers drop it
   silently, as they drop any unknown name, so a renamed or
   deleted toolbox does not break mid-flight.
-- **`Toolbox`** - a name + description + `tools: ToolDef[]`
-  subset. The agent-only `memoryToolbox` exports the reflection
-  agent's scope (memory CRUD with `memory_invalidate` in place of
-  `memory_delete`); `recallToolbox` and `conversationRecallToolbox`
-  are each one-tool read-only surfaces.
-- **`ToolContext`** - the record every `execute` handler receives
-  alongside the parsed args. Fields: `supabase`, `venice`,
-  `userId`, `threadId`, `signal`, `attachments?`. The
-  `attachments` field is optional (`Attachment[]`) - populated by
-  the chat loop from the current user message's DB rows so
-  `analyze_image` can find image bytes without a DB round-trip.
-  Agents assemble their own context with a fixed `threadId` (or
-  `''` for non-thread-scoped work) and leave `attachments`
-  absent; tools guard with `ctx.attachments ?? []`.
+- **Context shapes** - three, deliberately not unified:
+  - The browser `ToolContext` (`src/lib/tools/types.ts`) survives
+    as part of the `ToolDef.execute` signature and its shape tests;
+    no production code constructs one, since nothing dispatches
+    browser-side.
+  - The function-side `ToolContext` (`performToolCall.ts`) is what
+    chat-tool implementations actually receive: service-role
+    `adminClient`, the gateway-verified `userId`, `threadId`,
+    `signal`, and the agent-recursion `depth`.
+  - `AgentToolContext` (`agents/_run.ts`) is the same shape with
+    the same nullable `threadId` (null for the cross-thread
+    librarians). `asAgentTool` adapts between the latter two so agents
+    reuse registered implementations.
 
 ## Contracts
 
-- `ToolDef` - `{ name, description, shortDescription, parameters,
-  execute }`. `description` ships on the wire;
-  `shortDescription` is a <50-char line used in the system-prompt
-  catalog so the model knows what's behind the toggle without
-  needing the full JSON schema.
+- `ToolDef` (browser) - `{ name, description, shortDescription,
+  parameters, execute, formatArgs?, formatResult? }`. `description`
+  ships on the wire; `shortDescription` is a <50-char line used in
+  the system-prompt catalog so the model knows what's behind the
+  toggle without needing the full JSON schema. `execute()` throws
+  on every chat tool (see `serverSideTool`). The optional
+  formatters live on the schema half so the tool-call detail panel
+  can render domain-specific args/results; `getToolFormatters(name)`
+  resolves them, returning `undefined` for unknown names so a
+  persisted call referencing a renamed tool still renders via the
+  generic formatter.
 - **Injected `activity` param** - every tool's wire schema gets a
   required `activity: string` property bolted on at the
-  `toOpenAIToolDef` seam in `dispatch.ts`. The model fills it with a
+  `toOpenAIToolDef` seam in `wire.ts`. The model fills it with a
   short present-tense sentence narrating the call, the chat UI
   renders the sentence above the tool name in `ToolCalls.svelte`,
-  and the corresponding system-prompt block in `buildSystemPrompt`
-  primes the model to write a useful one. `ToolDef.parameters` stays
-  pristine - the injection happens at projection time - and handlers
-  never read `args.activity` (they ignore unknown keys the way
-  they've always ignored them). Older persisted calls predate the
-  injection; `ToolCalls.svelte` falls back to the legacy tool-name
-  primary line when the key is missing.
-- `execute(args, ctx): Promise<unknown>` - the tool's handler.
-  Errors thrown here land as `role='tool'` rows with an `error`
-  key in the JSON content; the loop does not retry.
+  and the corresponding system-prompt block primes the model to
+  write a useful one. `ToolDef.parameters` stays pristine - the
+  injection happens at projection time - and handlers never read
+  `args.activity`. Older persisted calls predate the injection;
+  `ToolCalls.svelte` falls back to the legacy tool-name primary
+  line when the key is missing. The venice function's agent runner
+  injects the same parameter for progress-observed agent runs (see
+  below); the two schemas must stay mirrored so the model sees one
+  contract whichever side composed the wire.
 - `buildToolList(enabledToolboxes: readonly string[]):
   OpenAIToolDef[]` - canonical way to build the request's `tools`
   array. Always includes the always-on toolbox; then each gated
@@ -309,51 +325,40 @@ The gated `images` toolbox carries:
   ignored; duplicates across toolboxes are deduped by tool name
   (first-seen wins). Callers should never construct this array
   by hand.
-- `buildSystemPrompt(opts?)` - `{ biasProfile? }`. Builds the
-  stable, state-free baseline (catalog included). No per-turn or
-  per-toolbox inputs - the volatile toolbox state lives in
-  `buildToolboxStateBlock`.
-- `buildToolboxStateBlock(enabled: readonly string[]): string` -
-  renders the gated toolboxes as `(on)`/`(off)` lines. The chat
-  loop folds this into the per-turn metadata system message (right
-  after the datetime) rather than the baseline, so a `toggle_toolbox`
-  flip churns only that trailing block. Unknown names in `enabled`
-  are ignored; toolboxes absent from `enabled` render `(off)`.
-- `executeToolCall(name, args, ctx): Promise<ToolResult>` - the
-  main chat dispatcher. Throws on unknown tool name. Looks up the
-  tool across every toolbox in `TOOLBOXES` in order.
-- `executeToolboxCall(toolbox, name, args, ctx)` - the agent
-  dispatcher. Scoped strictly to the toolbox's tools; throws with
-  the toolbox name included so errors from, say, the memory agent
-  don't look identical to errors from the main chat.
-- `toolbox.tools` is the authoritative subset. Two surfaces
-  declaring the same tool name but different toolboxes are fine;
-  the dispatcher reaches for the declared one.
-- `runHeadlessToolLoop(opts): Promise<HeadlessToolLoopResult>` -
-  `opts.messages` is already composed by the caller (no system-
-  prompt prepend). Returns `{ finalText, rounds, toolCalls,
-  stoppedByLimit }`. Default `maxRounds` is 8. The loop drives each
-  round through `opts.toolCtx.supabase.complete` (the venice/complete
-  edge function), so the caller doesn't pass a `VeniceClient` -
-  whatever supabase service rides on the tool context IS the
-  chat-completion seam.
-- **Abort semantics on the headless loop.** `opts.signal` is checked
-  at each round boundary (`if (signal.aborted) break;` at the top of
-  the loop) and cascades into per-tool child controllers (every tool
-  execution gets `childController(signal)`, so in-flight tool fetches
-  reject with `AbortError` immediately). What `opts.signal` does NOT
-  do, since the supabase JS client's `functions.invoke` exposes no
-  abort hook: cancel an in-flight chat-completion POST mid-fetch.
-  When an abort lands while the function is still waiting on Venice,
-  the POST runs to completion, the response gets parsed and pushed
-  into the message list, and the abort fires at the next round-
-  boundary check. Same limitation applies to every M3+ migrated path
-  (`SupabaseService.embed`, `extractText`, `generateImage`,
-  `complete`); flagged here because the headless loop's worst-case
-  in-flight wait is several seconds per round, longer than a single
-  embed or text-parse round-trip. If a future Supabase client release
-  adds `signal:` to `functions.invoke` opts (or we switch to raw
-  `fetch` against the function URL), this gap closes for free.
+- `buildSystemPrompt(opts?)` / `buildToolboxStateBlock(enabled)` -
+  live in `src/lib/chat-prompt.ts`, importing the registry from
+  here. The baseline is state-free; the state block renders the
+  gated toolboxes as `(on)`/`(off)` lines and rides the per-turn
+  metadata message. Unknown names in `enabled` are ignored;
+  toolboxes absent from `enabled` render `(off)`.
+- `serverSideTool(schema): ToolDef` - wraps a schema into a chat
+  `ToolDef` whose `execute()` throws, naming the tool and its edge
+  home. The chat catalog (`TOOLS`, `buildToolList`) carries it by
+  name; the edge function's `performToolCall` is what actually
+  runs it.
+- `registerTool(def)` / `performToolCall` (edge) - the function-
+  side `ToolDef` is just `{ name, execute(args, ctx) }`; the wire
+  schema stays browser-side. Implementations self-register at
+  module load via the `tools/index.ts` barrel; duplicate names
+  throw immediately so a registration collision surfaces at load
+  time, not as a "wrong tool ran" symptom. `listRegisteredTools()`
+  feeds the /stream response envelope so the browser can warn when
+  the model has tools armed that the function cannot dispatch.
+- `runHeadlessAgent(opts, parentDepth)` (edge) - drives the agent
+  loop until the model settles or `maxRounds` (default 20) runs
+  out; returns `{ finalText, rounds, toolCalls, stoppedByLimit }`.
+  Tool dispatch is scoped strictly to the passed toolbox - a name
+  outside it throws with the toolbox name included, because agents
+  are bounded contexts. `opts.complete` is the injectable
+  completion seam unit tests script model rounds through;
+  `opts.onProgress` attaches a live step listener AND opts the
+  toolbox wire schemas into the `activity` narration parameter
+  (narration costs output tokens, so unobserved agents keep their
+  wire bytes free of it). Depth is enforced here: an agent run
+  whose effective depth would exceed `MAX_AGENT_DEPTH` (3) is
+  refused before the first Venice call. Aborts short-circuit at
+  round boundaries and cascade into per-tool child controllers.
+  Full treatment in `./wiki.md`.
 - **Toggle semantics.** The `toggle_toolbox` tool takes
   `{enabled: string[]}` and replaces the thread's set. Passing
   `{enabled: []}` disables every gated toolbox. The tool returns
@@ -364,107 +369,96 @@ The gated `images` toolbox carries:
 
 ## Interactions with other features
 
-- **Chat** - every tool call the main model emits is dispatched
-  here. `buildToolList(thread.toolboxes_enabled)` shapes the wire
-  catalog each round; `onToolboxesEnabledChange` fires whenever
-  the model flips the thread's enabled set so the UI can patch
-  its local thread row without a refetch. See `./chat.md`.
+- **Chat** - `buildToolList(thread.toolboxes_enabled)` shapes the
+  wire catalog; the edge function dispatches and persists;
+  `onToolboxesEnabledChange` fires whenever the model flips the
+  thread's enabled set so the UI can patch its local thread row
+  without a refetch. See `./chat.md`.
 - **Attachments** - `generate_image` (gated `images` toolbox) is
   the one tool whose output bypasses the tool-result content
-  entirely: the chat-loop harvests its stashed base64 and writes a
-  `message_attachments` row on the terminal assistant message, so
-  generated images share storage, 30-day retention, RLS, and
-  `analyze_image` reachability with user uploads. See
+  entirely: the edge orchestrator harvests its generated bytes and
+  writes a `message_attachments` row on the terminal assistant
+  message, so generated images share storage, 30-day retention,
+  RLS, and `analyze_image` reachability with user uploads. See
   `./attachments.md`.
-- **Memory** - the five memory tools (`search`, `create`,
-  `update`, `invalidate`, `delete`) ARE the memory CRUD
-  interface. The user-facing `memoriesToolbox` packages
-  `search / create / update / delete`. The reflection agent's
-  `memoryToolbox` swaps `memory_delete` for `memory_invalidate`
-  because agents can only soft-decay, not hard-delete.
-  `memory_recall` is a separate always-on tool that kicks off the
-  recall agent. See `./memory.md`.
-- **Conversation recall** - `conversation_recall` is an always-
-  on tool; the agent it triggers has its own read-only toolbox
-  that imports `conversation_search` directly from its file to
-  avoid the cycle tools/index -> conversation_recall -> agents/...
-  -> tools/index. See `./conversation-recall.md`.
-- **Wiki recall** - `wiki_recall` follows the same pattern as the
-  memory and conversation recall tools: an always-on entry in the
-  main chat, backed by a dedicated sub-agent whose toolbox carries
-  only `wiki_search`. The umbrella `context` tool does NOT use these
-  agents - it runs the deterministic `gatherContextIndex` so a single
-  tool call surfaces broad context across every persistent layer
-  cheaply. See `./context-recall.md`.
-- **Cookbook** - five `recipe_*` tools gated by the `cooking`
-  toolbox. The store in `cookbook-store.svelte.ts` owns the
-  reactive recipe list; mutating tools fire a `window`
-  `CustomEvent` so the UI refreshes without a tools -> UI import.
-  See `./cookbook.md`.
-- **Reflection agent** - uses `memoryToolbox`, a write-scoped
-  subset of the memory tools: `create / update / invalidate /
-  search`, but NOT `delete` (agent can only soft-invalidate; hard
-  deletes are user-directed) and NOT `memory_recall` or any
-  `*_recall` (recursion with no purpose - reflection already has
-  the whole conversation in context). See `./memory.md`.
-- **Logging** - the recall tools (`memory_recall`,
-  `conversation_recall`, `wiki_recall`) and the
-  umbrella `context` tool emit diagnostic breadcrumbs via
-  `createLogger`. New tools should follow suit rather than
-  calling `console.*` directly - the `no-console` ESLint rule
-  enforces this outside `src/lib/logger.svelte.ts`. See
-  `./logging.md`.
-- **Help / user docs** - `research_docs` reads the bundled
-  `docs/user/` corpus via the same `listDocs` / `loadDoc`
-  primitives the Help modal uses (`src/lib/docs.ts`). New docs
-  added to the Help manual are automatically visible to the
-  research tool on the next build - the Vite glob is the single
-  source of truth. See `./help.md`.
-- **Dev docs** - `research_docs` also reaches into `docs/dev/`
-  via the parallel `listDevDocs` / `loadDevDoc` primitives in
-  `src/lib/docs.ts` when the caller opts in with
-  `include_internal_dev_docs: true`. Nothing else consumes that
-  glob; the Help modal is user-docs-only. Adding a new file
-  under `docs/dev/` makes it visible to the research tool on
-  the next build with no other wiring needed.
+- **Memory** - the memory tools ARE the memory CRUD interface. The
+  user-facing `memoriesToolbox` packages the writes; the agent
+  toolboxes (reflection's in `agents/reflection.ts`, the shared
+  librarian toolbox in `agents/_memory_librarian_tools.ts`) swap
+  `memory_delete` for `memory_invalidate` because agents can only
+  soft-decay, not hard-delete. See `./memory.md`.
+- **Recall** - `context`, `memory_recall`, `conversation_recall`,
+  and `wiki_recall` are chat tools whose implementations are
+  themselves agents (`agents/context.ts`, `agents/recall.ts`,
+  etc.), registered into the same dispatcher as the plain tools.
+  Each recall agent runs with a one-tool read-only toolbox so a
+  bug in a recall prompt can't scribble over user data. See
+  `./context-recall.md` and `./conversation-recall.md`.
+- **Wiki** - reads are always-on; the gated `wiki` toolbox carries
+  only the librarian delegation. Direct wiki writes exist solely
+  as agent-toolbox members. See `./wiki.md`.
+- **Library** - the `doc_*` read/write split mirrors the other
+  stores: reads always-on, writes behind the `library` box. See
+  `./library.md`.
+- **Cookbook** - recipe writes run server-side, which leaves a
+  known publisher gap on the browser's cookbook-change event: the
+  Cookbook modal and drawer tab still subscribe via
+  `onCookbookChange` (`src/lib/cookbook-events.ts`), but nothing
+  browser-side fires the event after a chat-driven recipe write.
+  The gap and its candidate fix (a recipes-table Realtime
+  subscription) are documented in that module. See `./cookbook.md`.
+- **Help / user docs** - the edge `research_docs` cannot read the
+  repo at request time, so `scripts/bundle-research-docs.mjs`
+  embeds both doc trees as static strings in
+  `supabase/functions/venice/_generated/research-docs-corpus.ts`.
+  The deploy workflow regenerates the bundle before deploying the
+  function, so committed doc edits reach the tool on the next
+  deploy. See `./help.md`.
+- **Logging** - edge-side tool and agent execution logs stream to
+  the in-app Logs drawer over the logs Broadcast channel. Browser
+  code that touches tool wire data logs via `createLogger` rather
+  than `console.*` (the `no-console` ESLint rule enforces this).
+  See `./logging.md`.
 
 ## Gotchas
 
-- **Two parallel executors, not one abstraction.** `chat-loop.ts`
-  and `run.ts` look superficially similar but diverge on
-  persistence, streaming, prompt-prepend, and the web-search
-  toggle. Trying to collapse them into a single function grew a
-  laundry list of optional flags last time; keeping them separate
-  is deliberate. If you find yourself copying a fix between the
-  two, the fix probably wants to live in `types.ts` or a small
-  shared helper, not in a unified loop.
-- **`encodeToolContent` is duplicated in both executors.** Kept
-  separate so `run.ts` doesn't import anything from
-  `chat-loop.ts` (agents shouldn't depend on streaming chat
-  infrastructure). The invariant: the two encoders must produce
-  identical shapes, so a future model swap between the two
-  surfaces doesn't have to relearn the result format. Check that
-  they match if you change either one.
-- **Circular-import dance around recall toolboxes.** `memory_recall`
-  lives in `tools/index.ts` and triggers `agents/recall/agent.ts`,
-  which needs a toolbox. If the agent imported the toolbox from
-  `tools/index.ts` the cycle would bite - the agent would load
-  before `memoryRecall` was defined, giving it an undefined
-  toolbox. The fix: `recall_toolbox.ts`,
-  `conversation_recall_toolbox.ts`, and `wiki_recall_toolbox.ts`
-  are their own files, re-exported from `tools/index.ts` so
-  consumers that read
-  `$lib/tools` still see them. Don't inline them back into the
-  barrel. For the same reason, `toggle_tools.ts` imports
-  `GATED_TOOLBOX_NAMES` and `alwaysOnToolbox` via a deferred
-  `await import('./index')` inside `execute()` rather than at the
-  top of the file.
+- **The throwing `execute()` is the point.** `serverSideTool`'s
+  throw never fires in production; if it does, tool dispatch was
+  wrongly routed browser-side. Don't "fix" a thrown
+  "executes server-side" error by giving the browser ToolDef a
+  body - the regression is in whatever routed the call, and a
+  browser body would silently drift from the live edge
+  implementation.
+- **The name is the cross-side contract.** The browser schema
+  (`src/lib/tools/<name>.schema.ts`) and the edge registration
+  (`registerTool` in `supabase/functions/venice/tools/<name>.ts`
+  or an `agents/*.ts` file) must agree on the wire-facing name:
+  the model emits whatever name the catalog declared, and the
+  dispatcher runs whatever registered under it. A schema without a
+  registration produces an armed-but-undispatchable tool (the
+  /stream envelope's `listRegisteredTools` check exists to catch
+  exactly this); a registration without a schema is unreachable
+  dead code.
+- **Two ToolContext shapes, deliberately not shared with the
+  browser.** The browser's `ToolContext` carries the session-JWT-
+  scoped `SupabaseService`; the function side has a service-role
+  admin client and an explicit user id. Muxing them under one
+  interface would force one side to inherit the other's
+  awkwardness; both honor the same external contract (the tool's
+  `execute(args, ctx)` signature) through their own interface.
+- **The `activity` injection lives in two mirrored places.** The
+  browser's `wire.ts` injects it into every chat tool; the edge
+  `agents/_run.ts` injects it into agent toolboxes only when an
+  `onProgress` listener is attached. The schema text must stay
+  identical in both so the model sees one contract. A change to
+  one without the other silently degrades the narration on the
+  un-updated side.
 - **`toggle_toolbox` is in `always_on` but not in the catalog.**
   It's the gating mechanism, not a capability to describe
   alongside recall. `buildSystemPrompt` filters it out of the
-  always-on catalog block; the toggle rule is explained in its
-  own prompt paragraph with the exact call shape
-  (`toggle_toolbox({enabled: [...]})`).
+  always-on catalog block by `toggleToolbox.name`; the toggle rule
+  is explained in its own prompt paragraph with the exact call
+  shape (`toggle_toolbox({enabled: [...]})`).
 - **Unknown toolbox names are dropped silently.** Both writers
   (`toggle_toolbox` and the composer popover) filter against
   `GATED_TOOLBOX_NAMES`, so a renamed or deleted toolbox doesn't
@@ -476,15 +470,25 @@ The gated `images` toolbox carries:
   `enabled` array does nothing (we already include it) and
   writers drop it. The stored array should never contain
   `always_on`.
-- **Recall tools are the only `always_on` non-toggle tools
-  because they're read-only.** Any new tool that wants always-on
-  behavior needs that same property or it should live inside a
-  gated toolbox.
+- **Always-on membership requires read-only behavior.** The
+  always-on set is "reads plus reflexes" by design; any new tool
+  that wants always-on placement needs the same no-writes property
+  or it belongs in a gated write box.
+- **The research_docs corpus is a build artifact.** Doc edits do
+  not reach the edge tool until `scripts/bundle-research-docs.mjs`
+  regenerates `_generated/research-docs-corpus.ts` and the
+  function redeploys - locally that means rerunning the bundle
+  script before `supabase functions serve` picks up new docs.
 
 ## Where to go next
 
-- `./chat.md` - the main caller of `executeToolCall` and the
-  owner of persistence around tool rounds.
-- `./memory.md` - the memory tools + reflection agent + recall
-  agent story.
-- `./conversation-recall.md` - recall-agent-specific plumbing.
+- `./chat.md` - ships the wire `tools` array and consumes the
+  streamed tool events the edge function publishes.
+- `./architecture.md` - "Production-path ownership," the
+  browser-vs-function frame this subsystem's split follows.
+- `./wiki.md` - the `runHeadlessAgent` runner in depth, including
+  its test seam and progress events.
+- `./memory.md` - the memory tools + reflection + the librarian
+  fleet (rem, deep-sleep) + recall.
+- `./conversation-recall.md` / `./context-recall.md` - recall-
+  agent-specific plumbing.

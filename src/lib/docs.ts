@@ -53,13 +53,6 @@ const docModules = import.meta.glob('/docs/user/**/*.md', {
 
 const DOC_PREFIX = '/docs/user/';
 
-/** Every doc path we know about (keys are relative to `docs/user/`). */
-export function listDocs(): string[] {
-  return Object.keys(docModules)
-    .map((k) => k.slice(DOC_PREFIX.length))
-    .sort();
-}
-
 /** True if `path` (relative to `docs/user/`) names a bundled doc. */
 export function hasDoc(path: string): boolean {
   return Object.prototype.hasOwnProperty.call(docModules, DOC_PREFIX + path);
@@ -136,39 +129,8 @@ export function resolveDocPath(currentPath: string, href: string): ResolvedDoc |
   return { path, hash };
 }
 
-// --- Developer docs --------------------------------------------------
-//
-// Parallel glob for `docs/dev/` - the architecture + per-feature dev
-// notes that ship alongside the user manual. Not reachable from the
-// Help modal (it renders only `docs/user/`); the single consumer is
-// the `research_docs` tool, which bundles this corpus into its sub-
-// completion system prompt when the caller passes
-// `include_internal_dev_docs: true`. Kept as its own glob rather than
-// a union with the user tree so the default research path (user docs
-// only) doesn't pay the ~200 KB dev-docs cost on every call.
-
-const devDocModules = import.meta.glob('/docs/dev/**/*.md', {
-  query: '?raw',
-  import: 'default',
-}) as Record<string, () => Promise<string>>;
-
-const DEV_DOC_PREFIX = '/docs/dev/';
-
-/** Every dev-doc path we know about (keys are relative to `docs/dev/`). */
-export function listDevDocs(): string[] {
-  return Object.keys(devDocModules)
-    .map((k) => k.slice(DEV_DOC_PREFIX.length))
-    .sort();
-}
-
-/**
- * Load the raw markdown for a dev doc. Throws if the path isn't in
- * the bundle - the single caller (`research_docs`) only ever passes
- * paths returned by `listDevDocs()`, so a miss here is a bug rather
- * than a user-input problem.
- */
-export async function loadDevDoc(path: string): Promise<string> {
-  const loader = devDocModules[DEV_DOC_PREFIX + path];
-  if (!loader) throw new Error(`Unknown dev doc: ${path}`);
-  return await loader();
-}
+// Developer docs (`docs/dev/`) are not bundled here. The Help modal
+// renders only `docs/user/`, and the one browser consumer of the dev
+// corpus - the `research_docs` tool's `include_internal_dev_docs`
+// path - now runs server-side in the venice edge function, which
+// reads the dev tree itself.

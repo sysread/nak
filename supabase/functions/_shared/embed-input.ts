@@ -139,32 +139,32 @@ const strOrNull = (v: unknown): string | null => (typeof v === 'string' ? v : nu
 export const EMBED_SOURCES: EmbedSource[] = [
   {
     name: 'memories',
-    claimRpc: 'claim_next_pending_memory', // returns (id, label, data)
+    claimRpc: 'claim_next_pending_memory', // returns (id, label, data, user_id)
     saveRpc: 'save_memory_embedding_if_claimed',
     buildInput: (row) => buildMemoryEmbedInput(str(row.label), str(row.data)),
   },
   {
     name: 'threads',
-    claimRpc: 'claim_next_pending_thread_for_embedding', // returns (id, title, summary)
+    claimRpc: 'claim_next_pending_thread_for_embedding', // returns (id, title, summary, user_id)
     saveRpc: 'save_thread_embedding_if_claimed',
     buildInput: (row) => buildThreadEmbedInput(str(row.title), strOrNull(row.summary)),
   },
   {
     name: 'recipes',
-    claimRpc: 'claim_next_pending_recipe', // returns (id, title, source, cooklang)
+    claimRpc: 'claim_next_pending_recipe', // returns (id, title, source, cooklang, user_id)
     saveRpc: 'save_recipe_embedding_if_claimed',
     buildInput: (row) =>
       buildRecipeEmbedInput(str(row.title), strOrNull(row.source), str(row.cooklang)),
   },
   {
     name: 'wiki',
-    claimRpc: 'claim_next_pending_wiki_article', // returns (id, title, content)
+    claimRpc: 'claim_next_pending_wiki_article', // returns (id, title, content, user_id)
     saveRpc: 'save_wiki_article_embedding_if_claimed',
     buildInput: (row) => buildWikiEmbedInput(str(row.title), str(row.content)),
   },
   {
     name: 'samskara-substrate',
-    claimRpc: 'samskara_claim_next_substrate_embed', // returns (id, situation, outcome)
+    claimRpc: 'samskara_claim_next_substrate_embed', // returns (id, situation, outcome, user_id)
     saveRpc: 'samskara_save_substrate_embedding_if_claimed',
     buildInput: (row) => buildSubstrateEmbedInput(str(row.situation), strOrNull(row.outcome)),
   },

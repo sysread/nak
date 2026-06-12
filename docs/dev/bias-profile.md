@@ -1,6 +1,6 @@
 # Bias profile
 
-A silent background worker that observes the user's conversations
+A silent server-side pipeline that observes the user's conversations
 for cognitive biases and System-1 heuristics (Kahneman-style;
 representativeness, anchoring, affect heuristic, substitution,
 framing effect, etc.), aggregates evidence across conversations
@@ -37,14 +37,19 @@ threshold (0.30) renders the same bullet with stronger phrasing.
 
 The chat-loop reads the cached `bias_summary` row set once per
 turn entry and threads the rendered block into every round's
-`buildSystemPrompt` call. Worker side: one Web Worker, one
-`worker_kind='bias'` lease, two phases per rotation (analyze,
-aggregate). Per-turn cost on the chat side is one SELECT against
+`buildSystemPrompt` call. Pipeline side: the hourly
+`nak-bias-sweep` pg_cron job (minute :03) drives the venice edge
+function's `bias-sweep` route, which runs two phases per tick
+(analyze, then aggregate). Cron is the ONLY driver - there is no
+chat-turn tail, because analyze eligibility requires the thread's
+last update to fall on a prior calendar day in its owner's
+timezone, so a turn's own thread is never eligible at turn time.
+Per-turn cost on the chat side is one SELECT against
 `bias_summary` plus one fire-and-forget `bias_clear_thread` RPC
 when the user's new message lands on a previously-processed
 thread.
 
-The math is the load-bearing piece. The worker's observer agent
+The math is the load-bearing piece. The sweep's observer agent
 is itself a fallible LLM susceptible to the clustering illusion
 and the law of small numbers (the very biases it reports against);
 the math protects against this with a deliberately conservative
@@ -62,22 +67,34 @@ interval lower bound (not the mean) as the surfacing gate.
   resolve). Survivorship bias is intentionally absent - it
   requires a counterfactual the observer can't see in a
   transcript.
-- `src/lib/bias/types.ts` - shared row shapes and the math
-  tunables (`ALPHA_PRIOR`, `BETA_PRIOR`, `HALF_LIFE_DAYS`,
-  `N_EFF_FLOOR`, `CI_LB_SOFT`, `CI_LB_STRONG`, `CONFIDENCE_FLOOR`,
-  `CONFIDENCE_CAP`, `PER_CONV_CAP`, `RENDER_CAP`,
-  `MIN_USER_MESSAGES`). One module so a tuning pass touches
-  exactly one file.
-- `src/lib/bias/math.ts` - pure functions for the aggregation
-  pipeline. `collapseWithinConversation` (noisy-OR + per-conv
-  cap), `recencyWeight` (exponential decay), `aggregatePosterior`
-  (Beta-Binomial weighted update + CI lower bound + tier), and
-  `clampConfidence` for the ingest path. The credible-interval
-  lower bound is computed via an exact inverse regularized
-  incomplete beta (continued-fraction expansion + Newton-with-
-  bisection inversion) - ~150 lines, no external dependency,
-  tested against scipy reference values at seven (p, alpha, beta)
-  points.
+- `src/lib/bias/types.ts` - shared row shapes and the browser-side
+  copy of the math tunables (`ALPHA_PRIOR`, `BETA_PRIOR`,
+  `HALF_LIFE_DAYS`, `N_EFF_FLOOR`, `CI_LB_SOFT`, `CI_LB_STRONG`,
+  `CONFIDENCE_FLOOR`, `CONFIDENCE_CAP`, `PER_CONV_CAP`,
+  `RENDER_CAP`, `MIN_USER_MESSAGES`). The chat path and the
+  BiasProfile screen read these for rendering and display; the
+  sweep's math reads the mirrored constants in
+  `supabase/functions/_shared/bias-math.ts`. A tuning pass touches
+  both files; the parity test fails the gate on a one-sided edit.
+- `supabase/functions/_shared/bias-math.ts` - pure functions for
+  the aggregation pipeline, fed by the sweep's aggregate phase.
+  `collapseWithinConversation` (noisy-OR + per-conv cap),
+  `recencyWeight` (exponential decay), `aggregatePosterior`
+  (Beta-Binomial weighted update + CI lower bound + tier),
+  `feedbackEMA`, and `clampConfidence` for the ingest path.
+  Self-contained (no relative imports) so the Deno island, vitest
+  (`tests/bias-math.test.ts`), and tsc can all load it. The
+  credible-interval lower bound is computed via an exact inverse
+  regularized incomplete beta (continued-fraction expansion +
+  Newton-with-bisection inversion) - ~150 lines, no external
+  dependency, tested against scipy reference values at seven
+  (p, alpha, beta) points.
+- `supabase/functions/_shared/bias-catalog.ts` - self-contained
+  mirror of `src/lib/bias/catalog-keys.ts` + `catalog.ts`. The
+  browser copies stay the canonical edit surface for the chat
+  path and the modal; the mirror feeds the observer agent's
+  prompt and ingest validation. `tests/bias-catalog-parity.test.ts`
+  deep-compares the two sides so the mirror cannot drift silently.
 - `src/lib/bias/format.ts` - pure renderer for the system-prompt
   block. Filters `bias_summary` rows to soft+strong, sorts tier-
   then-CI-descending, caps at `RENDER_CAP`, emits one bullet per
@@ -86,43 +103,29 @@ interval lower bound (not the mean) as the surfacing gate.
 - `src/lib/bias/index.ts` - the chat-loop-facing public surface.
   Owns `getBiasProfileBlock` (cached SELECT + format pass; returns
   null on cold start) and `notifyBiasNewUserMessage` (fire-and-
-  forget RPC that clears the worker's processed state on a thread
-  after a new user message lands).
-- `src/lib/agents/bias/prompts.ts` - the observer agent's system
-  prompt, built dynamically from `BIAS_CATALOG` so a catalog edit
-  flows automatically. Five sequential falsification questions
-  before any report: could a reasonable person be doing this
-  without the bias, is the user thinking out loud, is this a
-  joke / banter / whimsy / role-play / fiction, is this
-  suspension-of-disbelief content, am I generalizing from one
-  sentence. The third and fourth questions are the whimsy
-  exception - load-bearing against pedantic over-reporting in
-  playful conversations.
-- `src/lib/agents/bias/agent.ts` - `BiasObserverAgent`. One
-  `observe` method: build a transcript payload, call the fast
-  model, parse the JSON envelope, validate items against the
-  catalog enum. Catalog-rejection drops the offending item; rate-
-  limit re-throws to route the cycle driver to its long back-off;
-  other errors return null.
-- `src/lib/agents/bias/loop.ts` - the testable cycle driver.
-  `runOneCycle(ctx)` acquires the lease if needed, then advances
-  exactly one phase. Phases: `aggregate` (recompute every catalog
-  entry's `bias_summary` row from
-  `bias_processed_threads_for_bias` plus the math kernel) and
-  `analyze` (claim the next eligible thread, fetch its
-  transcript, run the agent, clamp confidences through
-  floor/cap, save under the message-count guard).
-- `src/lib/agents/bias/worker.ts` - the Web Worker entry point.
-  Builds its own Supabase + Venice clients from the `start`
-  message, instantiates the agent, and round-robins `runOneCycle`
-  across `PHASES` until abort. One extra message channel
-  (`active-conv-ids`) which the manager uses to push the user's
-  open-thread set into the worker's exclusion list.
-- `src/lib/agents/bias/manager.ts` - main-thread supervisor,
-  same shape as the other agent managers. Owns the
-  `navigator.locks.request('nak:bias-worker')` Web Lock, the
-  per-device `holderId`, the auth-change forwarding, and the
-  `setActiveConvIds` live-update method.
+  forget RPC that clears the pipeline's processed state on a
+  thread after a new user message lands).
+- `supabase/functions/venice/agents/bias.ts` - the whole pipeline.
+  Owns the observer/reactor system prompt (built dynamically from
+  the catalog mirror so a catalog edit flows automatically; five
+  sequential falsification questions before any report - could a
+  reasonable person be doing this without the bias, is the user
+  thinking out loud, is this a joke / banter / whimsy / role-play /
+  fiction, is this suspension-of-disbelief content, am I
+  generalizing from one sentence; the third and fourth questions
+  are the whimsy exception, load-bearing against pedantic
+  over-reporting in playful conversations), the single-completion
+  `observeThread` call (parse the JSON envelope, drop items that
+  fail shape checks or name unknown catalog keys, drop reactions
+  for non-active biases as fabrication), the analyze drain
+  (claim via `bias_claim_next_thread_for_sweep`, fetch the
+  transcript, clamp confidences through floor/cap, save under the
+  message-count guard), the aggregate recompute, and the exported
+  `runBiasSweepTick(adminClient)` entry the `bias-sweep` route
+  calls. The model is hardcoded
+  `mistral-small-3-2-24b-instruct` - a static role-to-model
+  mapping, not a per-user tier. Per-claim edge loggers use
+  source `bias`.
 - `src/components/BiasPill.svelte` - chart-glyph pill that opens
   the diagnostics modal. Mounted inside `.messages-wrap` in
   `Chat.svelte`, stacked at the top of the bottom-right column
@@ -137,12 +140,14 @@ interval lower bound (not the mean) as the surfacing gate.
   expanded. Three sections: per-bias evidence table, processed
   conversations list with drill-down to observations, footer
   citing the math constants.
-- `supabase/schema.sql` (bias-profile section) - three new
-  tables (`bias_observations`, `bias_summary`), four new columns
-  on `threads` (`bias_processed_at`, `bias_processed_msg_count`,
-  `bias_claim_holder`, `bias_claim_expires`), and the RPC
-  surface covering claim, save, clear, and the per-bias
-  contribution query.
+- `supabase/schema.sql` (bias-profile section) - the tables
+  (`bias_observations`, `bias_summary`, `bias_reactions`), the
+  columns on `threads` (`bias_processed_at`,
+  `bias_processed_msg_count`, `bias_claim_holder`,
+  `bias_claim_expires`, `bias_active_at_turn`), the RPC surface
+  covering the sweep claim, save, clear, and the per-bias
+  contribution queries, plus the `nak_trigger_bias_sweep()`
+  dispatcher and the `nak-bias-sweep` pg_cron job.
 
 ## Entry points
 
@@ -151,27 +156,23 @@ interval lower bound (not the mean) as the surfacing gate.
   `getBiasProfileBlock(supabase)` reads the cached rows and
   renders the system-prompt section once per turn (reused across
   rounds); `notifyBiasNewUserMessage(supabase, thread.id)` is
-  fire-and-forget and clears the worker's processed state on the
-  thread so the worker re-analyzes with the fresh message.
+  fire-and-forget and clears the pipeline's processed state on the
+  thread so the sweep re-analyzes with the fresh message.
 - **`buildSystemPrompt({ biasProfile })`** - in
   `src/lib/chat-prompt.ts`, the rendered block lands at the end
   of the baseline system prompt (after the toolbox catalog) when
   non-null. Absent entirely on cold start - no placeholder text.
-- **`Chat.svelte` active-thread effect** - calls
-  `notifyBiasActiveConvIds([activeThreadId])` whenever the open
-  thread changes (open, close, switch). The exported helper in
-  `state.svelte.ts` forwards to `biasManager.setActiveConvIds`
-  which posts an `active-conv-ids` message into the worker.
-- **`biasManager.start(opts)`** - called from `activate()` in
-  `state.svelte.ts` alongside the other worker managers.
-  Acquires the `nak:bias-worker` Web Lock, posts the worker a
-  `start` message carrying the per-device `holderId`, the fast-
-  model id from `agentModel('bias')`, and the cached active-
-  conv-ids set.
+- **`nak-bias-sweep` pg_cron job** - hourly at minute :03 (the
+  x7 ladder is full; :03 starts a new column clear of the */5
+  embed ticks and the :13/:43 samskara decay). The job calls
+  `nak_trigger_bias_sweep()`, which reads the project URL and
+  service-role key from Vault and pg_net-POSTs the venice
+  function's `bias-sweep` route. The route's `sweepHandler`
+  wrapper calls `runBiasSweepTick(adminClient)`.
 
 ## Data model
 
-Three new tables and four new columns on `threads`. All
+Three tables and five columns on `threads`. All
 RLS-scoped to `auth.uid() = user_id`, all created with
 `if not exists`, all RLS policies drop-then-recreated per the
 project's idempotency convention (see `supabase/schema.sql`'s
@@ -179,24 +180,27 @@ header comment).
 
 ### `threads` additions
 
-- `bias_processed_at timestamptz` - when the worker last
+- `bias_processed_at timestamptz` - when the sweep last
   analyzed this thread. NULL means the thread is eligible for a
-  fresh analyze pass. The worker also re-eligibles a thread
+  fresh analyze pass. A thread also re-eligibles
   when `bias_processed_at < threads.updated_at` (a new user
   message bumps `updated_at`).
 - `bias_processed_msg_count int` - the user-message count the
-  worker saw at analysis time. The save RPC's optimistic-
+  sweep saw at analysis time. The save RPC's optimistic-
   concurrency token: if a new user message landed during the
   agent call, the save drops the work and releases the claim.
 - `bias_claim_holder text` / `bias_claim_expires timestamptz` -
   per-thread claim columns, independent of samskara's claims on
-  the same thread. The atomic update-returning inside
-  `bias_claim_next_thread` ensures two workers polling the same
-  candidate set never both win.
+  the same thread. The mutual exclusion: the atomic
+  update-returning inside `bias_claim_next_thread_for_sweep`
+  ensures overlapping sweep ticks never both win the same
+  candidate. Claim TTL is 300s - generous enough for one LLM
+  call against a long transcript.
 
 ### `bias_observations`
 
-Per-conversation per-bias evidence rows written by the worker.
+Per-conversation per-bias evidence rows written by the sweep's
+analyze phase.
 
 - `id uuid primary key default gen_random_uuid()`.
 - `user_id uuid` (FK to `auth.users`).
@@ -216,8 +220,8 @@ Per-conversation per-bias evidence rows written by the worker.
   message being deleted (the observation keeps its text; the
   deep link is lost).
 - `created_at timestamptz`.
-- Indexes on `(thread_id)` and `(user_id, bias)` - the worker's
-  per-bias aggregation query and the modal's per-thread drill-
+- Indexes on `(thread_id)` and `(user_id, bias)` - the aggregate
+  phase's per-bias query and the modal's per-thread drill-
   down query, respectively.
 
 ### `bias_summary`
@@ -225,7 +229,7 @@ Per-conversation per-bias evidence rows written by the worker.
 Per-(user, bias) aggregate cache. The chat-loop's only read.
 
 - `(user_id, bias)` composite primary key. One row per catalog
-  entry per user; the worker upserts on each aggregate pass.
+  entry per user; the sweep upserts on each aggregate pass.
 - `effective_n real` - sum of recency weights. Real (not int)
   because of the continuous decay.
 - `posterior_alpha real` / `posterior_beta real` - Beta-Binomial
@@ -271,52 +275,68 @@ contract.
 
 `text[]` column, default `{}`. Snapshot of bias keys that
 rendered into the system prompt on the most recent chat-loop
-turn for this thread. The chat-loop writes per turn; the worker
-reads via `bias_claim_next_thread` so the reactor knows which
-biases the user's messages could have been reacting to. Empty
-array means no biases were active and the reactor pass produces
-zero rows.
+turn for this thread. The chat-loop writes per turn; the sweep
+reads via `bias_claim_next_thread_for_sweep` so the reactor
+knows which biases the user's messages could have been reacting
+to. Empty array means no biases were active and the reactor pass
+produces zero rows.
 
 ### RPCs
 
-- `bias_claim_next_thread(holder, ttl, exclude_ids, today_start,
-  min_user_messages)` - returns `(thread_id, user_message_count,
-  active_biases)` for the next eligible thread or empty. Atomic
-  update-returning. Eligibility = at least `min_user_messages`
+- `bias_claim_next_thread_for_sweep(p_holder_id, p_ttl_seconds,
+  p_min_user_messages)` - SECURITY DEFINER, service-role only,
+  scans across ALL users. Returns `(thread_id,
+  user_message_count, active_biases, user_id)` for the next
+  eligible thread (oldest `updated_at` first) or empty; `user_id`
+  attributes the per-claim logger to the row's owner. Atomic
+  update-returning. Eligibility = at least `p_min_user_messages`
   user messages, never processed or processed before the
-  thread's most recent update, `updated_at` before
-  `today_start`, id not in `exclude_ids`, no live claim. v2:
-  `active_biases` is the snapshot from
+  thread's most recent update, `updated_at` on a calendar day
+  before today in the owner's timezone (the profile's
+  `displayTimezone` via `nak_safe_timezone`, UTC fallback), no
+  live claim. The user-message-count predicate lives inline in
+  the WHERE, not as a post-SELECT check - see the starvation
+  gotcha below. `active_biases` is the snapshot from
   `threads.bias_active_at_turn` so the agent knows what
   compensation was on the wire during this conversation.
-- `bias_save_observations(thread_id, holder, expected_count,
-  observations, reactions)` - in a transaction, verify claim
-  plus ownership plus user-message-count, delete prior
-  observations and reactions for the thread, insert the new ones
-  (empty arrays are valid saves), set `bias_processed_at =
-  now()` and `bias_processed_msg_count = expected_count`,
-  release claim. Returns false if any guard fired. v2:
-  observations and reactions persist atomically in one
+- `bias_save_observations(p_thread_id, p_holder_id,
+  p_expected_msg_count, p_observations, p_reactions, p_user_id)` -
+  in a transaction, verify claim plus ownership plus
+  user-message-count, delete prior observations and reactions for
+  the thread, insert the new ones (empty arrays are valid saves),
+  set `bias_processed_at = now()` and `bias_processed_msg_count =
+  expected_count`, release claim. Returns false if any guard
+  fired. Observations and reactions persist atomically in one
   transaction so the two sides of the merged-agent output cannot
-  drift.
+  drift. `p_user_id` is the b-strict overload pattern: the sweep's
+  service-role client has no `auth.uid()`, so it passes the
+  claimed row's owner explicitly; an authenticated caller omits
+  it and gets `auth.uid()` scoping.
 - `bias_clear_thread(thread_id)` - delete observations AND
   reactions for the thread, clear `bias_processed_at`,
   `bias_processed_msg_count`, the claim columns, and
   `bias_active_at_turn`. Called from the chat-loop on every
   user-message send. Idempotent and cheap.
-- `bias_processed_threads_for_bias(bias)` - aggregation input.
-  Joins every processed thread against the per-thread noisy-OR-
-  collapsed probability for the specified bias. Returns
-  `pConv = 0` for threads with no observation of this bias so
-  the denominator stays the full processed set.
-- `bias_reactions_for_bias(bias)` (v2) - aggregation input for
-  the feedback EMA. One row per reaction with age in days.
+- `bias_processed_threads_for_bias(p_bias, p_user_id)` -
+  aggregation input. Joins every processed thread against the
+  per-thread noisy-OR-collapsed probability for the specified
+  bias. Returns `pConv = 0` for threads with no observation of
+  this bias so the denominator stays the full processed set.
+  `p_user_id` is the same b-strict overload as the save RPC -
+  the sweep's aggregate pass scopes per claimed user.
+- `bias_reactions_for_bias(p_bias, p_user_id)` (v2) -
+  aggregation input for the feedback EMA. One row per reaction
+  with age in days. Same b-strict `p_user_id` overload.
 
-### Lease
+### Cron job
 
-`worker_leases` row with `worker_kind='bias'`. New partition,
-holds independently of the other workers' leases. Same TTL and
-heartbeat numbers as samskara (45s / 20s).
+`nak-bias-sweep`, scheduled hourly at `3 * * * *`.
+`nak_trigger_bias_sweep()` (SECURITY DEFINER, revoked from every
+non-owner role) reads `project_url` and `service_role_key` from
+Vault and dispatches a pg_net POST to the venice function's
+`bias-sweep` route. Missing Vault secrets make the trigger a
+silent no-op so a fork without the automation wired up doesn't
+spam errors.
 
 ## Contracts
 
@@ -334,44 +354,59 @@ heartbeat numbers as samskara (45s / 20s).
   thread was never processed.
 - `snapshotBiasActiveBiases(supabase, threadId, biases):
   Promise<void>` (v2) - fire-and-forget. Writes the active set
-  to `threads.bias_active_at_turn` so the worker's reactor can
+  to `threads.bias_active_at_turn` so the sweep's reactor can
   read it via the claim RPC. Empty array is a valid write.
 - `formatBiasProfileBlock(rows): string | null` - pure. Used by
   the modal preview and by tests. The chat-loop reader's
   internal call.
 
-### Worker side (async, fast-model agent calls)
+### Sweep side (async, fast-model agent calls)
 
-Two phases per rotation:
+`runBiasSweepTick(adminClient)` runs two phases per tick,
+non-throwing by contract (one phase failing must not stop the
+other, and nothing may throw into the sweep handler):
 
-- **Aggregate** - `runOneCycle({phase: 'aggregate'})` walks
-  `BIAS_KEYS` and upserts one summary row per catalog entry.
-  Cheap; runs every rotation so the chat-loop read stays warm
-  even when nothing was analyzed. v2: also reads reactions and
-  computes the feedback EMA per bias, threading it into the
-  feedback-aware `tier()` call so the persisted tier reflects
-  the shifted gates. Cold start (no observations, no reactions)
-  still emits N upserts, all rendering as `tier='elided'` on
-  the prior alone with `feedback_score=0`.
-- **Analyze** - `runOneCycle({phase: 'analyze'})` claims the
-  next eligible thread, fetches its transcript via
-  `listMessages`, calls `BiasObserverAgent.observe` with the
-  claim's `activeBiases` set, clamps confidences through
-  `clampConfidence`, and saves both observations and reactions
-  in one RPC under the message-count guard. The save-rejected
-  outcome (claim lost or count drifted) is not an error - the
-  thread becomes re-eligible on the next rotation with fresh
-  state.
+- **Analyze** - drains the cross-user queue up to a per-tick cap
+  of 10 threads (`ANALYZE_SWEEP_CAP`; the cap bounds a tick's
+  worst-case Venice spend, and a cap hit is logged so a queue
+  growing faster than the drain is visible). Each step claims the
+  most-overdue eligible thread via
+  `bias_claim_next_thread_for_sweep`, fetches its transcript
+  (user + assistant turns; tool calls and reasoning are out of
+  scope), runs `observeThread` with the claim's `active_biases`
+  set, clamps confidences through `clampConfidence`, and saves
+  both observations and reactions in one RPC under the
+  message-count guard. The save-rejected outcome (claim lost or
+  count drifted) is not an error - the thread becomes re-eligible
+  on a later tick with fresh state, and the drain continues. An
+  error stops this tick's drain; the next hourly tick retries.
+- **Aggregate** - recomputes `bias_summary` for every user the
+  analyze drain touched this tick, plus any user whose oldest
+  `bias_summary.computed_at` is older than 24h
+  (`SUMMARY_MAX_AGE_MS`, the freshness floor - the posterior and
+  feedback EMA are age-weighted, so tiers drift even with no new
+  observations, and the floor keeps that drift surfacing). Per
+  user it walks `BIAS_KEYS` and upserts one summary row per
+  catalog entry; v2 also reads reactions and computes the
+  feedback EMA per bias, threading it into the feedback-aware
+  `tier()` call so the persisted tier reflects the shifted gates.
+  Cold start (no observations, no reactions) still emits N
+  upserts, all rendering as `tier='elided'` on the prior alone
+  with `feedback_score=0`.
 
-Phase rotation order is `[aggregate, analyze]` deliberately:
-aggregate first so the chat-loop cache stays warm on rotations
-where analyze has nothing to do; analyze second so the next
-rotation's aggregate sees the new write.
+Phase order is analyze-then-aggregate deliberately: the same
+tick's aggregate sees the analyze drain's new observations, so a
+fresh save reaches `bias_summary` (and the next day's prompt
+block) without waiting an extra hour.
 
 ### Math contract
 
-Math constants live in `src/lib/bias/types.ts`. The eight tunables
-that change feature behavior:
+Math constants live in two mirrored files:
+`supabase/functions/_shared/bias-math.ts` (the sweep's math
+kernel) and `src/lib/bias/types.ts` (the chat path's render
+constants and the modal's display copy).
+`tests/bias-catalog-parity.test.ts` fails the gate on a one-sided
+edit. The tunables that change feature behavior:
 
 ```text
 ALPHA_PRIOR = 2                    # prior alpha
@@ -467,28 +502,36 @@ closes the block.
   a `<think>` block AFTER the user turn. Both are always-on
   contributions to the model's view of the user, but they sit
   in different parts of the prompt so they don't conflict.
-  Both use the LeaseCoordinator pattern from `embeddings/lease`,
-  with separate `worker_kind` partitions on `worker_leases`.
+  Both run server-side in the venice function with per-row
+  claims as the mutual exclusion; bias is cron-only while
+  samskara's formation pipeline is dual-driver (turn tail +
+  hourly sweep).
 - **Intuition ([./intuition.md](./intuition.md))** - sibling
   feature, no data flow. Intuition fires per-thread on title /
   mood / staleness triggers and produces a `<think>` block.
   Bias profile fires per-user across conversations and
   produces a system-prompt section. Both expose a pill in the
   bottom-right column; bias stacks above intuition.
-- **Logging ([./logging.md](./logging.md))** - the formation
-  worker emits `log` and `progress` messages on every cycle;
-  `BiasManager` routes them through the structured logger which
-  flows into the in-app log drawer. The Trace+ filter surfaces
-  the per-phase decisions ("analyze: no eligible threads",
-  "aggregate: recomputed N summary rows"). The Info+ default
-  surfaces only the lifecycle headlines ("analyze: claimed
-  thread X", "analyze: saved N observations").
-- **Settings** - no bias controls in v1 (no enable/disable, no
+- **Logging ([./logging.md](./logging.md))** - the sweep writes
+  through per-claim edge loggers (`createEdgeLogger(userId,
+  'bias')`), attributed to the claimed thread's owner and
+  flushed per claim; the edge-log broadcast streams the lines
+  into the owner's in-app Logs drawer. The Trace+ filter
+  surfaces the per-phase decisions ("analyze: observer returned
+  null", "analyze: save rejected"). The Info+ default surfaces
+  the lifecycle headlines ("analyze: claimed thread X",
+  "analyze: saved N observations", "aggregate: recomputed N
+  summary rows"). Tick-level plumbing failures (claim RPC
+  errors, the analyze-cap notice, stale-scan failures) go to
+  the function's console log - they have no single owner to
+  attribute.
+- **Settings** - no bias controls (no enable/disable, no
   threshold sliders, no catalog editor). The math defaults are
-  the contract; tuning happens in `types.ts` if it has to
-  happen at all.
-- **Auth-session** - same as every worker. The bias worker
-  requires a live session; `lock()` releases the lease.
+  the contract; tuning happens in `bias-math.ts` + `types.ts`
+  (both sides of the mirror) if it has to happen at all. The
+  profile's `displayTimezone` setting does feed the claim's
+  day-gate, so a timezone change shifts which threads count as
+  "settled" on the next tick.
 
 ## Gotchas
 
@@ -498,9 +541,9 @@ closes the block.
   the bias get `pConv = 0` and still count toward the
   denominator. Without that join the math collapses: the rate
   estimate becomes "fraction of bias-positive threads where the
-  bias was observed", which is always 100%. The unit-test for
-  the aggregate phase (`tests/bias-loop.test.ts`) covers this
-  case directly.
+  bias was observed", which is always 100%. The math tests
+  (`tests/bias-math.test.ts`) cover the zero-pConv contributions
+  directly.
 - **The cap on per-conversation noisy-OR is intentional.**
   `collapseWithinConversation` clamps the within-conv
   probability at `PER_CONV_CAP` (0.85). Three same-bias
@@ -531,27 +574,37 @@ closes the block.
   per the original design constraint - the agent side keeps
   bad data out of the cache, and the chat side prevents
   pedantic intervention from the main model.
-- **Today's conversations are excluded.** The worker filters
-  `threads.updated_at < midnight-local-today-UTC`. The caller
-  (`runAnalyzePhase`) computes the cutoff via the host
-  browser's system timezone. If the user travels and the tz
-  shifts mid-day, the cutoff shifts with them - midnight
-  always means "midnight on the device they are holding."
-- **Currently-open threads are excluded.** The
-  `excludeThreadIds` set is forwarded by the manager via
-  postMessage on every active-thread change. Per-tab tracking
-  only; cross-tab coordination is the `worker_leases`
-  singleton's job. A worker on the active tab knows the user's
-  open conversation; a worker that just took the lease via
-  failover doesn't know what other tabs have open. That's
-  acceptable: the new lease-holder will exclude its own active
-  thread, and the other tabs will trip the same exclude on
-  their next route change once they're foregrounded.
+- **Today's conversations are excluded.** The claim's day-gate
+  requires `threads.updated_at` to fall on a calendar day before
+  today in the thread owner's timezone, resolved per candidate
+  row from the profile's `displayTimezone` setting via
+  `nak_safe_timezone` (UTC fallback for missing or garbage
+  values). The server has no device clock, so the profile
+  timezone is the source of truth: a traveler whose device
+  timezone has moved ahead of their profile setting can have a
+  thread analyzed a few hours early, which the save-time
+  message-count guard tolerates.
+- **There is no open-thread exclusion list.** The day-gate
+  subsumes it: a thread the user is actively chatting in was
+  updated today, which already excludes it from eligibility.
+  The save RPC's user-message-count guard covers the remaining
+  mid-analysis race (a message landing while the agent runs
+  drops the save and releases the claim).
+- **The count predicate lives inline in the claim's WHERE.**
+  `bias_claim_next_thread_for_sweep` takes one candidate
+  (LIMIT 1, oldest `updated_at` first), so a candidate that
+  fails the `min_user_messages` bar has to be excluded BEFORE
+  the limit - a post-SELECT early return leaves it as the
+  permanent queue head and starves every thread behind it. A
+  one-shot Q&A thread at the head of the queue once wedged the
+  analyze pipeline this way for weeks: the logs read "no
+  eligible threads" while eligible multi-message threads sat
+  unprocessed behind it.
 - **The save RPC is the optimistic-concurrency boundary.** If
   a new user message lands while the agent is running,
   `bias_save_observations` rejects the save because
   `count(messages where role='user')` no longer matches
-  `expected_count`. The worker drops the work and the thread
+  `expected_count`. The sweep drops the work and the thread
   becomes re-eligible. The chat-loop's
   `notifyBiasNewUserMessage` call helps by clearing
   `bias_processed_at` directly, but the save-side guard is
@@ -599,9 +652,12 @@ closes the block.
   `bias_active_at_turn` when the conversation happened. A
   reaction for a non-active bias is dropped at agent parse time
   - no compensation was on the wire to react to. If the
-  chat-loop's snapshot write fails silently the worker sees an
+  chat-loop's snapshot write fails silently the sweep sees an
   empty active set and produces no reactions, which is the
-  correct fallback (no false feedback signal generated).
+  correct fallback (no false feedback signal generated). The
+  browser chat path is the only snapshot writer - a reactor
+  pass that never fires points at the snapshot write, not the
+  agent.
 - **Three-state was_confirmed.** true / false / null. Null
   means "agent looked and saw no clear signal", distinct from
   the absence of a row which means "agent never ran for this
@@ -691,10 +747,10 @@ to retune; one constant edit.
 
 - `./chat.md` - the seam where the bias-profile block plugs
   into the per-turn system prompt.
-- `./samskara.md` - sibling background worker; same
-  LeaseCoordinator pattern, different aggregation shape.
+- `./samskara.md` - sibling background feature; same
+  server-side fleet, different aggregation shape.
 - `./intuition.md` - sibling subconscious-layer pattern; bias
   is its slower-moving cross-conversation counterpart.
-- `./logging.md` - where the worker's `log` messages surface
+- `./logging.md` - where the sweep's edge-log lines surface
   for debugging.
-- `./architecture.md` - the worker model in context.
+- `./architecture.md` - the browser/function split in context.

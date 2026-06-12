@@ -48,6 +48,22 @@ import {
 } from '../_shared/backfill.ts';
 import { streamChannelName } from '../_shared/venice-stream.ts';
 import { getStreamingResponse } from './getStreamingResponse.ts';
+import { retryWikiThread, runWikiSweepTick } from './agents/wiki.ts';
+import { runReflectionSweepTick } from './agents/reflection.ts';
+import { runCurationSweepTick } from './agents/curation.ts';
+import { runBiasSweepTick } from './agents/bias.ts';
+import { runSamskaraSweepTick } from './agents/samskara.ts';
+import {
+  runWikiLibrarianManual,
+  runWikiLibrarianSweepTick,
+} from './agents/wiki_librarian.ts';
+import { runRemManual, runRemSweepTick } from './agents/rem.ts';
+import {
+  runDeepSleepManual,
+  runDeepSleepSweepTick,
+} from './agents/deep_sleep.ts';
+import { createAgentProgressPublisher } from '../_shared/agent-progress.ts';
+import { createEdgeLogger } from '../_shared/edge-log.ts';
 // Side-effect import: every tool module under ./tools/ calls
 // registerTool() at module-load via this barrel, populating the
 // performToolCall registry before the first /stream request lands.
@@ -103,6 +119,32 @@ async function readVeniceKey(admin: SupabaseClient): Promise<string | null> {
   if (error || !data) return null;
   const key = (data as { venice_api_key?: string | null }).venice_api_key;
   return typeof key === 'string' && key.length > 0 ? key : null;
+}
+
+// Handler preambles. Every route needs the admin client, and the
+// Venice-proxy routes additionally need the shared key; both
+// failures map to the same 503s everywhere. The `| Response` return
+// lets call sites stay two lines (`if (x instanceof Response) return
+// x`) instead of repeating the error mapping per handler.
+
+/** Admin client or the 503 every handler returns when env is missing. */
+function requireAdmin(): SupabaseClient | Response {
+  const admin = adminClient();
+  if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
+  return admin;
+}
+
+/** Admin client + shared Venice key, or the matching 503. */
+async function requireVeniceEnv(): Promise<
+  { admin: SupabaseClient; apiKey: string } | Response
+> {
+  const admin = requireAdmin();
+  if (admin instanceof Response) return admin;
+  const apiKey = await readVeniceKey(admin);
+  if (!apiKey) {
+    return json({ error: 'no Venice key configured (app_config unseeded)' }, 503);
+  }
+  return { admin, apiKey };
 }
 
 /**
@@ -204,12 +246,9 @@ async function handleEmbed(req: Request): Promise<Response> {
     return json({ error: 'body must include `input` and `model`' }, 400);
   }
 
-  const admin = adminClient();
-  if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
-  const apiKey = await readVeniceKey(admin);
-  if (!apiKey) {
-    return json({ error: 'no Venice key configured (app_config unseeded)' }, 503);
-  }
+  const env = await requireVeniceEnv();
+  if (env instanceof Response) return env;
+  const { apiKey } = env;
 
   try {
     const result = await veniceEmbed({ apiKey, model: body.model, input: body.input });
@@ -254,12 +293,9 @@ async function handleUsage(req: Request): Promise<Response> {
     return json({ error: 'invalid JSON body' }, 400);
   }
 
-  const admin = adminClient();
-  if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
-  const apiKey = await readVeniceKey(admin);
-  if (!apiKey) {
-    return json({ error: 'no Venice key configured (app_config unseeded)' }, 503);
-  }
+  const env = await requireVeniceEnv();
+  if (env instanceof Response) return env;
+  const { apiKey } = env;
 
   try {
     const result = await veniceFetchUsagePage({
@@ -298,12 +334,9 @@ async function handleUsage(req: Request): Promise<Response> {
  * is always POST) even though the upstream call is a GET.
  */
 async function handleModels(): Promise<Response> {
-  const admin = adminClient();
-  if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
-  const apiKey = await readVeniceKey(admin);
-  if (!apiKey) {
-    return json({ error: 'no Venice key configured (app_config unseeded)' }, 503);
-  }
+  const env = await requireVeniceEnv();
+  if (env instanceof Response) return env;
+  const { apiKey } = env;
 
   try {
     const result = await veniceFetchModels({ apiKey });
@@ -344,12 +377,9 @@ async function handleComplete(req: Request): Promise<Response> {
     return json({ error: 'body must be a JSON object' }, 400);
   }
 
-  const admin = adminClient();
-  if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
-  const apiKey = await readVeniceKey(admin);
-  if (!apiKey) {
-    return json({ error: 'no Venice key configured (app_config unseeded)' }, 503);
-  }
+  const env = await requireVeniceEnv();
+  if (env instanceof Response) return env;
+  const { apiKey } = env;
 
   try {
     const result = await veniceComplete({
@@ -426,12 +456,9 @@ async function handleImageGenerate(req: Request): Promise<Response> {
     return json({ error: 'body must include `model` and `prompt`' }, 400);
   }
 
-  const admin = adminClient();
-  if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
-  const apiKey = await readVeniceKey(admin);
-  if (!apiKey) {
-    return json({ error: 'no Venice key configured (app_config unseeded)' }, 503);
-  }
+  const env = await requireVeniceEnv();
+  if (env instanceof Response) return env;
+  const { apiKey } = env;
 
   try {
     const result = await veniceGenerateImage({
@@ -491,12 +518,9 @@ async function handleTextParser(req: Request): Promise<Response> {
   const filename =
     filePart instanceof File && filePart.name ? filePart.name : 'attachment';
 
-  const admin = adminClient();
-  if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
-  const apiKey = await readVeniceKey(admin);
-  if (!apiKey) {
-    return json({ error: 'no Venice key configured (app_config unseeded)' }, 503);
-  }
+  const env = await requireVeniceEnv();
+  if (env instanceof Response) return env;
+  const { apiKey } = env;
 
   try {
     const text = await veniceExtractText({ apiKey, file: filePart, filename });
@@ -518,17 +542,22 @@ async function handleTextParser(req: Request): Promise<Response> {
 async function handleBackfill(req: Request): Promise<Response> {
   if (!isServiceRole(req)) return json({ error: 'forbidden' }, 403);
 
-  const admin = adminClient();
-  if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
-  const apiKey = await readVeniceKey(admin);
-  if (!apiKey) {
-    return json({ error: 'no Venice key configured (app_config unseeded)' }, 503);
-  }
+  const env = await requireVeniceEnv();
+  if (env instanceof Response) return env;
+  const { admin, apiKey } = env;
 
   // One holder id per invocation. The claim/save RPCs guard on it so an
   // overlapping invocation (a slow tick still running when the next fires)
   // can't save over a row this one claimed.
   const holderId = crypto.randomUUID();
+
+  // Per-user drawer attribution. The claim RPCs return each row's
+  // user_id; saves tally per owner so the tick can emit one
+  // "embedded N item(s)" summary into each affected user's Logs
+  // drawer. Keyed per source+id because ids are only unique within
+  // a table.
+  const rowOwner = new Map<string, string>();
+  const embeddedByUser = new Map<string, number>();
 
   const deps: BackfillDeps = {
     claim: async (sourceIndex) => {
@@ -540,6 +569,9 @@ async function handleBackfill(req: Request): Promise<Response> {
       if (error) throw error;
       const row = (Array.isArray(data) ? data[0] : data) as Record<string, unknown> | undefined;
       if (!row) return null;
+      if (typeof row.user_id === 'string') {
+        rowOwner.set(`${sourceIndex}:${String(row.id)}`, row.user_id);
+      }
       return { id: String(row.id), input: source.buildInput(row) };
     },
     embed: async (input) => {
@@ -555,7 +587,14 @@ async function handleBackfill(req: Request): Promise<Response> {
         p_embedding_model: VENICE_EMBEDDING_MODEL,
       });
       if (error) throw error;
-      return data === true;
+      const saved = data === true;
+      if (saved) {
+        const owner = rowOwner.get(`${sourceIndex}:${id}`);
+        if (owner) {
+          embeddedByUser.set(owner, (embeddedByUser.get(owner) ?? 0) + 1);
+        }
+      }
+      return saved;
     },
   };
 
@@ -566,7 +605,193 @@ async function handleBackfill(req: Request): Promise<Response> {
     isRateLimit: (err) => err instanceof VeniceError && err.kind === 'rate_limit',
   });
 
+  // One drawer line per affected user, after the drain settles. Most
+  // ticks touch nobody (queues run empty) and emit nothing.
+  for (const [userId, count] of embeddedByUser) {
+    const log = createEdgeLogger(userId, 'embeddings');
+    log.info(`embedded ${count} item(s) in the background`);
+    await log.flush();
+  }
+
   return json(summary);
+}
+
+// ---------------------------------------------------------------------------
+// Fleet route factories. Every agent fleet exposes the same two route
+// shapes - a cron-driven sweep and (for some) a user-triggered manual
+// run - and the per-fleet variation is which tick/run function to
+// call, not handler structure. The factories own the structure; each
+// fleet contributes one line per route below. Fleet SEMANTICS
+// (claim cadence, work-unit bounds, toggles) live with the tick/run
+// functions in agents/*.ts, not here.
+// ---------------------------------------------------------------------------
+
+/**
+ * Cron-driven sweep route: service-role only (pg_cron -> pg_net sends
+ * the service JWT). The tick runs DETACHED under EdgeRuntime.waitUntil
+ * and the response is an immediate `{accepted: true}`: an agent sweep
+ * can outlive the HTTP window (pg_net's timeout is seconds; the local
+ * gateway's is ~2.5 minutes), and a synchronous handler gets killed
+ * with the dropped request - observed locally as a sweep that claimed
+ * its row and died before reflecting it. Nothing reads the response
+ * body anyway: pg_net ignores it, and tick outcomes reach the user's
+ * Logs drawer through each fleet's edge logger.
+ */
+function sweepHandler(
+  tick: (admin: SupabaseClient) => Promise<unknown>,
+): (req: Request) => Promise<Response> {
+  return async (req) => {
+    if (!isServiceRole(req)) return json({ error: 'forbidden' }, 403);
+    const admin = requireAdmin();
+    if (admin instanceof Response) return admin;
+    // Ticks are non-throwing by contract (each fleet catches and
+    // folds failures into its summary), so a rejection here is an
+    // infrastructure bug. No user has been claimed yet at this layer,
+    // so there is no drawer to notify - the function log is the
+    // surface.
+    edgeWaitUntil(
+      tick(admin).catch((err) => {
+        console.error(
+          '[sweep] tick rejected:',
+          err instanceof Error ? err.message : String(err),
+        );
+      }),
+    );
+    return json({ accepted: true });
+  };
+}
+
+/**
+ * User-triggered manual-run route. Body: { runId?: string, ...fleet
+ * extras }. The browser mints the runId and subscribes to its
+ * agent-runs channel BEFORE posting, so the step events published
+ * here are never raced; a missing runId just means no progress
+ * publishing (the result body still carries the outcome).
+ * Agent-level failures and in-flight collisions come back inside the
+ * fleet's result union, not as transport errors. The factory owns
+ * auth, body parse, the runId cap, and the publisher lifecycle; the
+ * `run` adapter pulls any fleet-specific fields off the parsed body.
+ */
+function manualRunHandler(
+  logSource: string,
+  run: (
+    admin: SupabaseClient,
+    userId: string,
+    body: Record<string, unknown>,
+    onProgress: ((event: Record<string, unknown>) => void) | undefined,
+  ) => Promise<unknown>,
+): (req: Request) => Promise<Response> {
+  return async (req) => {
+    const userId = userIdFromJwt(req);
+    if (!userId) return json({ error: 'unauthorized' }, 401);
+    const admin = requireAdmin();
+    if (admin instanceof Response) return admin;
+
+    let body: Record<string, unknown>;
+    try {
+      body = (await req.json()) as Record<string, unknown>;
+    } catch {
+      return json({ error: 'invalid JSON body' }, 400);
+    }
+    // Cap the client-minted id so a hostile body can't bloat every
+    // broadcast payload; the id is an opaque demux key, not identity.
+    const runId =
+      typeof body.runId === 'string' && body.runId.length > 0 && body.runId.length <= 64
+        ? body.runId
+        : null;
+
+    const publisher = runId ? createAgentProgressPublisher(userId, runId) : null;
+    let result: unknown;
+    try {
+      result = await run(
+        admin,
+        userId,
+        body,
+        publisher ? (event) => publisher.publish(event) : undefined,
+      );
+    } catch (err) {
+      // The run functions fold expected failures into their result
+      // unions, so a throw here is an infrastructure bug. The
+      // requesting user is known, so their drawer gets the line.
+      const log = createEdgeLogger(userId, logSource);
+      log.error(
+        'manual run failed unexpectedly',
+        err instanceof Error ? err : new Error(String(err)),
+      );
+      await log.flush();
+      return json({ error: 'internal error during manual run' }, 500);
+    }
+    // Flush before responding so the 'done' event lands no later than
+    // the response body that also announces completion.
+    if (publisher) await publisher.flush();
+    return json(result);
+  };
+}
+
+// The fleet routing table. One line per route; the referenced
+// tick/run functions carry the fleet semantics and their doc
+// comments.
+const handleWikiSweep = sweepHandler(runWikiSweepTick);
+const handleWikiLibrarianSweep = sweepHandler(runWikiLibrarianSweepTick);
+const handleRemSweep = sweepHandler(runRemSweepTick);
+const handleDeepSleepSweep = sweepHandler(runDeepSleepSweepTick);
+// Reflection's catch-up drain. The primary driver stays the chat
+// turn's waitUntil tail in getStreamingResponse; this route exists so
+// a user who stops conversing still gets their queue drained, and so
+// reflection's trigger surface is visible in this routing table like
+// every other fleet's.
+const handleReflectionSweep = sweepHandler(runReflectionSweepTick);
+// Curation catch-up drain (auto-title, thread topics, summaries,
+// memory topics, recipe topics). The primary driver is the chat
+// turn's waitUntil tail in getStreamingResponse, same dual-driver
+// shape as reflection; this route is what drains work created
+// server-side (rem / deep-sleep consolidations re-queue memory tags)
+// or left behind by a failed tail attempt.
+const handleCurationSweep = sweepHandler(runCurationSweepTick);
+const handleBiasSweep = sweepHandler(runBiasSweepTick);
+const handleSamskaraSweep = sweepHandler(runSamskaraSweepTick);
+const handleWikiLibrarianRun = manualRunHandler('wiki-librarian', (admin, userId, body, onProgress) =>
+  runWikiLibrarianManual(
+    admin,
+    userId,
+    typeof body.instructions === 'string' ? body.instructions : null,
+    onProgress,
+  ),
+);
+const handleRemRun = manualRunHandler('rem', (admin, userId, _body, onProgress) =>
+  runRemManual(admin, userId, onProgress),
+);
+const handleDeepSleepRun = manualRunHandler('deep-sleep', (admin, userId, _body, onProgress) =>
+  runDeepSleepManual(admin, userId, onProgress),
+);
+
+/**
+ * User-triggered retry of a wiki-skipped thread (the Wiki Skipped
+ * panel's Retry button). Not a manual-run route: it has a required
+ * threadId, no runId, and no progress channel. Authenticated as the
+ * calling user; the gateway-validated id scopes every RPC the retry
+ * makes. Responds with the WikiRetryResult union - agent-level
+ * failures are an application outcome (kind: 'error'), not a
+ * transport error, so the panel can render them without sniffing
+ * status codes.
+ */
+async function handleWikiRetry(req: Request): Promise<Response> {
+  const userId = userIdFromJwt(req);
+  if (!userId) return json({ error: 'unauthorized' }, 401);
+  const admin = requireAdmin();
+  if (admin instanceof Response) return admin;
+
+  let body: { threadId?: unknown };
+  try {
+    body = await req.json();
+  } catch {
+    return json({ error: 'invalid JSON body' }, 400);
+  }
+  const threadId = typeof body.threadId === 'string' ? body.threadId : '';
+  if (!threadId) return json({ error: 'threadId is required' }, 400);
+
+  const result = await retryWikiThread(admin, userId, threadId);
+  return json(result);
 }
 
 interface StreamRequestBody {
@@ -626,51 +851,34 @@ interface StreamEnvelope {
 }
 
 /**
- * Browser-triggered streaming chat completion. POSTs body with
- * threadId, userMessageId, and a Venice wire body; the function
- * returns the envelope synchronously and runs the round chain in
- * the background via EdgeRuntime.waitUntil. Live events publish to
- * the thread:<id>:stream Broadcast channel; the row persistence
- * happens server-side so a backgrounded mobile PWA returns to find
- * the assistant turn either complete or still in flight regardless
- * of whether the tab survived.
- *
- * Auth model: b-strict. Gateway's verify_jwt validates the session
- * JWT and the function extracts userId from the `sub` claim. Every
- * DB write is service-role; ownership is gated by the explicit
- * userId comparison against the thread row before anything starts.
+ * Shared front half of both stream handlers: thread ownership, the
+ * channel name, and the in-flight probe (with its stale-row
+ * janitor). Returns a Response on any early exit; otherwise the
+ * resolved context plus `inFlight` - the envelope of an existing
+ * stream when one is running, null when the thread is quiet. Both
+ * callers branch on `inFlight` rather than re-probing, so the
+ * duplicate-completion guard and the reconnect answer stay one
+ * code path.
  */
-async function handleStream(req: Request): Promise<Response> {
-  let body: StreamRequestBody;
-  try {
-    body = (await req.json()) as StreamRequestBody;
-  } catch {
-    return json({ error: 'invalid JSON body' }, 400);
+async function resolveStreamContext(
+  req: Request,
+  threadId: string,
+): Promise<
+  | Response
+  | {
+    userId: string;
+    admin: SupabaseClient;
+    channelName: string;
+    inFlight: StreamEnvelope | null;
   }
-  if (typeof body.threadId !== 'string' || body.threadId.length === 0) {
-    return json({ error: 'body.threadId is required' }, 400);
-  }
-  // userMessageId anchors the terminal commit's conflict check, so a
-  // fresh stream must carry it. A reconnect-only request observes
-  // someone else's in-flight turn (same tab after refresh, another
-  // device opening the thread) and the caller can't be expected to
-  // know which user message the original sender anchored on - so the
-  // requirement only applies to fresh streams.
-  if (
-    body.reconnectOnly !== true &&
-    (typeof body.userMessageId !== 'string' ||
-      body.userMessageId.length === 0)
-  ) {
-    return json({ error: 'body.userMessageId is required' }, 400);
-  }
-
+> {
   const userId = userIdFromJwt(req);
   if (!userId) {
     return json({ error: 'unauthenticated' }, 401);
   }
 
-  const admin = adminClient();
-  if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
+  const admin = requireAdmin();
+  if (admin instanceof Response) return admin;
 
   // Ownership gate. The thread row's user_id is authoritative; we
   // never trust the body. Without this, a forged threadId in the
@@ -679,7 +887,7 @@ async function handleStream(req: Request): Promise<Response> {
   const { data: thread, error: threadErr } = await admin
     .from('threads')
     .select('user_id')
-    .eq('id', body.threadId)
+    .eq('id', threadId)
     .maybeSingle();
   if (threadErr) {
     return json({ error: `thread lookup failed: ${threadErr.message}` }, 502);
@@ -690,21 +898,22 @@ async function handleStream(req: Request): Promise<Response> {
     return json({ error: 'thread not found' }, 404);
   }
 
-  const channelName = streamChannelName(body.threadId);
+  const channelName = streamChannelName(threadId);
 
-  // Reconnect probe: is there an in-flight streaming row on this
-  // thread? Same answer drives same-device-reload, cross-device
-  // ape-mode, and the explicit reconnectOnly path. Returning the
-  // existing envelope short-circuits a duplicate completion.
+  // In-flight probe: is there a streaming row on this thread? The
+  // same answer drives same-device-reload, cross-device ape-mode,
+  // and the explicit reconnect route. Surfacing the existing
+  // envelope short-circuits a duplicate completion.
   const { data: streamingRow } = await admin
     .from('messages')
     .select('id, content, created_at')
-    .eq('thread_id', body.threadId)
+    .eq('thread_id', threadId)
     .eq('status', 'streaming')
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle();
 
+  let inFlight: StreamEnvelope | null = null;
   if (streamingRow) {
     const row = streamingRow as {
       id: string;
@@ -731,8 +940,8 @@ async function handleStream(req: Request): Promise<Response> {
     const STALE_THRESHOLD_MS = 2 * 380_000; // 760 seconds (~12.7 min)
     const ageMs = Date.now() - new Date(row.created_at).getTime();
     if (ageMs > STALE_THRESHOLD_MS) {
-      // Best-effort cleanup. If either UPDATE fails we still return
-      // noStreamInFlight - leaving the row in 'streaming' is the
+      // Best-effort cleanup. If either UPDATE fails we still report
+      // no stream in flight - leaving the row in 'streaming' is the
       // worst case but the next reconnect will retry the same
       // janitor pass.
       try {
@@ -755,41 +964,67 @@ async function handleStream(req: Request): Promise<Response> {
               occurred_at: new Date().toISOString(),
             },
           })
-          .eq('id', body.threadId);
+          .eq('id', threadId);
       } catch {
         // Swallowed by design - see jsdoc.
       }
-      const envelope: StreamEnvelope = {
+      // inFlight stays null: the janitored row no longer counts as a
+      // running stream.
+    } else {
+      inFlight = {
         channelName,
-        assistantRowId: null,
-        completedSoFar: '',
-        noStreamInFlight: true,
+        assistantRowId: row.id,
+        completedSoFar: row.content ?? '',
       };
-      return json(envelope);
     }
-    const envelope: StreamEnvelope = {
-      channelName,
-      assistantRowId: row.id,
-      completedSoFar: row.content ?? '',
-    };
-    return json(envelope);
   }
 
-  if (body.reconnectOnly === true) {
-    const envelope: StreamEnvelope = {
-      channelName,
-      assistantRowId: null,
-      completedSoFar: '',
-      noStreamInFlight: true,
-    };
-    return json(envelope);
-  }
+  return { userId, admin, channelName, inFlight };
+}
 
+/**
+ * Browser-triggered streaming chat completion (the fresh-stream half
+ * of /stream). POSTs threadId, userMessageId, and a Venice wire
+ * body; the function returns the envelope synchronously and runs
+ * the round chain in the background via EdgeRuntime.waitUntil. Live
+ * events publish to the thread:<id>:stream Broadcast channel; the
+ * row persistence happens server-side so a backgrounded mobile PWA
+ * returns to find the assistant turn either complete or still in
+ * flight regardless of whether the tab survived.
+ *
+ * Auth model: b-strict. Gateway's verify_jwt validates the session
+ * JWT and the function extracts userId from the `sub` claim. Every
+ * DB write is service-role; ownership is gated by the explicit
+ * userId comparison against the thread row before anything starts.
+ */
+async function handleStreamFresh(
+  req: Request,
+  body: StreamRequestBody,
+): Promise<Response> {
+  if (typeof body.threadId !== 'string' || body.threadId.length === 0) {
+    return json({ error: 'body.threadId is required' }, 400);
+  }
+  // userMessageId anchors the terminal commit's conflict check, so a
+  // fresh stream must carry it.
+  if (
+    typeof body.userMessageId !== 'string' ||
+    body.userMessageId.length === 0
+  ) {
+    return json({ error: 'body.userMessageId is required' }, 400);
+  }
   if (!body.body || typeof body.body !== 'object') {
     return json({ error: 'body.body is required for fresh streams' }, 400);
   }
 
-  const apiKey = await readVeniceKey(admin);
+  const ctx = await resolveStreamContext(req, body.threadId);
+  if (ctx instanceof Response) return ctx;
+
+  // A stream is already running on this thread (double-send, or a
+  // second device racing the first). Hand back its envelope instead
+  // of spawning a duplicate completion.
+  if (ctx.inFlight) return json(ctx.inFlight);
+
+  const apiKey = await readVeniceKey(ctx.admin);
   if (!apiKey) {
     return json({ error: 'no Venice key configured (app_config unseeded)' }, 503);
   }
@@ -798,11 +1033,6 @@ async function handleStream(req: Request): Promise<Response> {
   // wall deadline + the control channel cancel) - the request signal
   // is NOT passed in because the request returns immediately after
   // this envelope and the orchestrator must survive that disconnect.
-  // The validation above guarantees userMessageId is a non-empty string
-  // when reconnectOnly is not set; assert here so TS narrows below.
-  if (typeof body.userMessageId !== 'string') {
-    return json({ error: 'body.userMessageId is required' }, 400);
-  }
   // Silently drop malformed entries rather than 400ing the whole
   // request: the browser filters synthetic-row sentinels before
   // sending, so anything non-uuid here is a stray, and failing the
@@ -816,19 +1046,70 @@ async function handleStream(req: Request): Promise<Response> {
     apiKey,
     threadId: body.threadId,
     userMessageId: body.userMessageId,
-    userId,
+    userId: ctx.userId,
     supersededIds,
     bodyTemplate: body.body as Record<string, unknown>,
-    adminClient: admin,
+    adminClient: ctx.admin,
   });
   edgeWaitUntil(promise);
 
   const envelope: StreamEnvelope = {
-    channelName,
+    channelName: ctx.channelName,
     assistantRowId: null,
     completedSoFar: '',
   };
   return json(envelope);
+}
+
+/**
+ * The reconnect-only half of /stream: observe an in-flight turn
+ * without starting one. Drives reopen-thread and cross-device
+ * ape-mode - the caller can't know which user message the original
+ * sender anchored on, so no userMessageId (or wire body) is
+ * required. Returns the in-flight envelope when a stream is
+ * running, or the noStreamInFlight marker so the browser renders
+ * terminal state from the row instead of subscribing to a topic no
+ * publisher feeds.
+ */
+async function handleStreamReconnect(
+  req: Request,
+  body: StreamRequestBody,
+): Promise<Response> {
+  if (typeof body.threadId !== 'string' || body.threadId.length === 0) {
+    return json({ error: 'body.threadId is required' }, 400);
+  }
+
+  const ctx = await resolveStreamContext(req, body.threadId);
+  if (ctx instanceof Response) return ctx;
+
+  if (ctx.inFlight) return json(ctx.inFlight);
+  const envelope: StreamEnvelope = {
+    channelName: ctx.channelName,
+    assistantRowId: null,
+    completedSoFar: '',
+    noStreamInFlight: true,
+  };
+  return json(envelope);
+}
+
+/**
+ * Wire-compat dispatcher for /stream. Fresh streams and reconnects
+ * share the route (the browser flags reconnects with
+ * `reconnectOnly: true` in the body), but they are two different
+ * operations with different required fields and different return
+ * semantics - so they are two handlers, and this shim only parses
+ * the body once and picks one.
+ */
+async function handleStream(req: Request): Promise<Response> {
+  let body: StreamRequestBody;
+  try {
+    body = (await req.json()) as StreamRequestBody;
+  } catch {
+    return json({ error: 'invalid JSON body' }, 400);
+  }
+  return body.reconnectOnly === true
+    ? handleStreamReconnect(req, body)
+    : handleStreamFresh(req, body);
 }
 
 Deno.serve(async (req: Request): Promise<Response> => {
@@ -842,6 +1123,18 @@ Deno.serve(async (req: Request): Promise<Response> => {
   if (route === 'usage' && req.method === 'POST') return handleUsage(req);
   if (route === 'models' && req.method === 'POST') return handleModels();
   if (route === 'backfill' && req.method === 'POST') return handleBackfill(req);
+  if (route === 'wiki-sweep' && req.method === 'POST') return handleWikiSweep(req);
+  if (route === 'reflection-sweep' && req.method === 'POST') return handleReflectionSweep(req);
+  if (route === 'curation-sweep' && req.method === 'POST') return handleCurationSweep(req);
+  if (route === 'bias-sweep' && req.method === 'POST') return handleBiasSweep(req);
+  if (route === 'samskara-sweep' && req.method === 'POST') return handleSamskaraSweep(req);
+  if (route === 'wiki-retry' && req.method === 'POST') return handleWikiRetry(req);
+  if (route === 'wiki-librarian-sweep' && req.method === 'POST') return handleWikiLibrarianSweep(req);
+  if (route === 'wiki-librarian-run' && req.method === 'POST') return handleWikiLibrarianRun(req);
+  if (route === 'rem-sweep' && req.method === 'POST') return handleRemSweep(req);
+  if (route === 'rem-run' && req.method === 'POST') return handleRemRun(req);
+  if (route === 'deep-sleep-sweep' && req.method === 'POST') return handleDeepSleepSweep(req);
+  if (route === 'deep-sleep-run' && req.method === 'POST') return handleDeepSleepRun(req);
   if (route === 'text-parser' && req.method === 'POST') return handleTextParser(req);
   if (route === 'image-generate' && req.method === 'POST') return handleImageGenerate(req);
   if (route === 'complete' && req.method === 'POST') return handleComplete(req);

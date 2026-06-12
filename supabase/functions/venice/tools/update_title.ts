@@ -21,7 +21,7 @@
 // ToolContext with a wrong userId can't write someone else's thread
 // even if the threadId-binding logic upstream regresses.
 
-import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
+import { requireThreadId, registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 
 const TITLE_MAX_CHARS = 80;
 
@@ -70,7 +70,7 @@ export const updateTitle: ToolDef = {
     const { error } = await ctx.adminClient
       .from('threads')
       .update({ title, updated_at: new Date().toISOString() })
-      .eq('id', ctx.threadId)
+      .eq('id', requireThreadId(ctx))
       .eq('user_id', ctx.userId);
     if (error) throw new Error(`renameThread failed: ${error.message}`);
 

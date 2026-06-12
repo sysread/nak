@@ -6,7 +6,9 @@
  * the closed enum) doesn't drag the full BIAS_CATALOG with its
  * per-entry definition/example/nearMiss/guidance prose into the
  * main chunk. The catalog itself is needed only by the BiasProfile
- * screen (lazy) and the bias worker (separate bundle).
+ * screen (lazy); the server-side observer agent renders its prompt
+ * from the _shared mirror (see supabase/functions/_shared/
+ * bias-catalog.ts and the parity test that pins the two together).
  *
  * BIAS_KEYS is the single source of truth for the closed enum. The
  * sibling `./catalog` types its object as

@@ -2,25 +2,49 @@
 // DEV SHIM - not used in production, not part of any deploy.
 // ===========================================================================
 //
-// Stands in for the hosted pg_cron job that drives embedding backfill.
+// Stands in for the hosted pg_cron jobs that drive the venice
+// function's scheduled routes.
 //
-// In production, supabase/schema.sql schedules `nak_trigger_embed_backfill()`
-// every 5 minutes via pg_cron; it POSTs to the venice function's /backfill
-// route through pg_net. The local Supabase stack (`mise run dev-start`) ships
-// neither pg_cron nor pg_net, so that schedule is guarded to no-op locally -
-// nothing drains the embedding queue without an open browser tab anymore (the
-// browser worker was deleted when backfill moved server-side).
+// In production, supabase/schema.sql schedules nine pg_net dispatches:
+//   - `nak_trigger_embed_backfill()` every 5 minutes -> POST /backfill
+//     (drains pending embeddings server-side);
+//   - `nak_trigger_wiki_sweep()` hourly -> POST /wiki-sweep (runs the
+//     autonomous wiki agent on day-gate-eligible threads);
+//   - `nak_trigger_wiki_librarian_sweep()` hourly -> POST
+//     /wiki-librarian-sweep (runs the librarian for the most-overdue
+//     eligible user; the 12h cadence lives in its claim RPC);
+//   - `nak_trigger_rem_sweep()` hourly -> POST /rem-sweep and
+//     `nak_trigger_deep_sleep_sweep()` hourly -> POST /deep-sleep-sweep
+//     (the two memory librarians; same most-overdue-user claim shape
+//     with their own 12h cadences);
+//   - `nak_trigger_reflection_sweep()` hourly -> POST /reflection-sweep
+//     (reflection's catch-up drain - the chat-turn tail is the primary
+//     driver, this reaches queues whose owners stopped conversing);
+//   - `nak_trigger_curation_sweep()` hourly -> POST /curation-sweep,
+//     `nak_trigger_bias_sweep()` hourly -> POST /bias-sweep, and
+//     `nak_trigger_samskara_sweep()` hourly -> POST /samskara-sweep
+//     (the catch-up siblings of the chat-turn tail for curation and
+//     samskara, and the bias pipeline's only driver).
+// Two further cron jobs run pure SQL with no HTTP route (the stream
+// janitor and samskara decay); this shim cannot stand in for those -
+// exercise them with manual psql when a local run matters.
+// The local Supabase stack (`mise run dev-start`) ships neither pg_cron
+// nor pg_net, so those schedules are guarded to no-op locally - nothing
+// drains any queue without this shim (the browser workers that used
+// to do this work were deleted when the features moved server-side).
 //
-// This script reproduces exactly what the cron job does: every N seconds it
-// POSTs to the LOCAL /backfill route with the legacy service-role key, the same
-// call pg_net makes in prod. Run it alongside `mise run dev-start` when you want
-// the queue to drain on a cadence locally instead of hand-running the curl.
+// This script reproduces what the cron jobs do: every N seconds it
+// POSTs each route on the LOCAL stack with the legacy service-role
+// key, the same call pg_net makes in prod. One shared interval for
+// most routes - prod cadences differ but locally you want fast
+// feedback on whichever queue you're testing, and an empty-queue tick
+// is nearly free. The exceptions ride SLOW_TICK_MULTIPLE below.
 //
 // It is local-only by construction: it reads the stack endpoints from
 // `supabase status` and refuses any non-loopback API target, so a shell with
 // prod creds in the environment can never point it at the hosted project.
 //
-// See docs/dev/embeddings.md and
+// See docs/dev/embeddings.md, docs/dev/wiki.md, and
 // docs/dev/in-progress/venice-edge-functions/embeddings.md.
 // ===========================================================================
 import { runCapture } from './lib/shell.mjs';
@@ -77,49 +101,152 @@ async function readLocalStack() {
   return { apiUrl: s.API_URL.replace(/\/$/, ''), serviceRoleKey: s.SERVICE_ROLE_KEY };
 }
 
-// One cron tick: POST /backfill and report the BackfillSummary the function
-// returns. Never throws - a failed tick logs a warning and the next tick
-// retries, exactly as a fire-and-forget cron job would.
-async function tick(apiUrl, serviceRoleKey) {
-  const stamp = new Date().toISOString().slice(11, 19);
+// POST one scheduled route with the service-role bearer and return the
+// parsed JSON summary, or null on a transport/HTTP failure (already
+// logged). Never throws - a failed tick logs a warning and the next
+// tick retries, exactly as a fire-and-forget cron job would.
+async function postRoute(apiUrl, serviceRoleKey, route, stamp) {
   try {
-    const res = await fetch(`${apiUrl}/functions/v1/venice/backfill`, {
+    const res = await fetch(`${apiUrl}/functions/v1/venice/${route}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${serviceRoleKey}` },
       body: '{}',
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) {
-      warn(`[${stamp}] backfill HTTP ${res.status}: ${JSON.stringify(body)}`);
-      return;
+      warn(`[${stamp}] ${route} HTTP ${res.status}: ${JSON.stringify(body)}`);
+      return null;
     }
-    const { embedded = 0, rejected = 0, noEmbedding = 0, errors = 0, rateLimited = false } = body;
-    const headline = embedded > 0 ? style.green(`embedded ${embedded}`) : style.dim('nothing pending');
-    const extras =
-      rejected || noEmbedding || errors || rateLimited
-        ? ` (rejected ${rejected}, noEmbedding ${noEmbedding}, errors ${errors}, rateLimited ${rateLimited})`
-        : '';
-    info(`[${stamp}] ${headline}${extras}`);
+    // Agent sweeps run detached server-side (EdgeRuntime.waitUntil) and
+    // acknowledge immediately - their outcomes land in the in-app Logs
+    // drawer, not this response. Print the dispatch and stop here so
+    // the per-route printers don't render an "unknown" summary.
+    if (body && body.accepted === true) {
+      info(`[${stamp}] ${route}: dispatched (runs async; outcome in the Logs drawer)`);
+      return null;
+    }
+    return body;
   } catch (err) {
-    warn(`[${stamp}] tick failed: ${err.message}`);
+    warn(`[${stamp}] ${route} tick failed: ${err.message}`);
+    return null;
+  }
+}
+
+// One cron tick: POST /backfill and report the BackfillSummary.
+async function tickBackfill(apiUrl, serviceRoleKey) {
+  const stamp = new Date().toISOString().slice(11, 19);
+  const body = await postRoute(apiUrl, serviceRoleKey, 'backfill', stamp);
+  if (!body) return;
+  const { embedded = 0, rejected = 0, noEmbedding = 0, errors = 0, rateLimited = false } = body;
+  const headline = embedded > 0 ? style.green(`embedded ${embedded}`) : style.dim('nothing pending');
+  const extras =
+    rejected || noEmbedding || errors || rateLimited
+      ? ` (rejected ${rejected}, noEmbedding ${noEmbedding}, errors ${errors}, rateLimited ${rateLimited})`
+      : '';
+  info(`[${stamp}] backfill: ${headline}${extras}`);
+}
+
+// One cron tick per agent sweep. Every sweep handler ACKs
+// `{accepted:true}` and runs detached (EdgeRuntime.waitUntil), so
+// postRoute's dispatch line is the whole report - outcomes land in the
+// in-app Logs drawer. (These used to parse per-route summaries; the
+// detached sweepHandler dispatch made the response body uniform.)
+async function tickWikiSweep(apiUrl, serviceRoleKey) {
+  const stamp = new Date().toISOString().slice(11, 19);
+  await postRoute(apiUrl, serviceRoleKey, 'wiki-sweep', stamp);
+}
+
+async function tickWikiLibrarianSweep(apiUrl, serviceRoleKey) {
+  const stamp = new Date().toISOString().slice(11, 19);
+  await postRoute(apiUrl, serviceRoleKey, 'wiki-librarian-sweep', stamp);
+}
+
+async function tickRemSweep(apiUrl, serviceRoleKey) {
+  const stamp = new Date().toISOString().slice(11, 19);
+  await postRoute(apiUrl, serviceRoleKey, 'rem-sweep', stamp);
+}
+
+async function tickDeepSleepSweep(apiUrl, serviceRoleKey) {
+  const stamp = new Date().toISOString().slice(11, 19);
+  await postRoute(apiUrl, serviceRoleKey, 'deep-sleep-sweep', stamp);
+}
+
+async function tickReflectionSweep(apiUrl, serviceRoleKey) {
+  const stamp = new Date().toISOString().slice(11, 19);
+  await postRoute(apiUrl, serviceRoleKey, 'reflection-sweep', stamp);
+}
+
+// One cron tick each for the three newest sweeps.// One cron tick each for the slow-group sweeps (see
+// SLOW_TICK_MULTIPLE below).
+async function tickCurationSweep(apiUrl, serviceRoleKey) {
+  const stamp = new Date().toISOString().slice(11, 19);
+  await postRoute(apiUrl, serviceRoleKey, 'curation-sweep', stamp);
+}
+
+async function tickBiasSweep(apiUrl, serviceRoleKey) {
+  const stamp = new Date().toISOString().slice(11, 19);
+  await postRoute(apiUrl, serviceRoleKey, 'bias-sweep', stamp);
+}
+
+async function tickSamskaraSweep(apiUrl, serviceRoleKey) {
+  const stamp = new Date().toISOString().slice(11, 19);
+  await postRoute(apiUrl, serviceRoleKey, 'samskara-sweep', stamp);
+}
+
+// The curation / bias / samskara sweeps fire on every Nth base tick
+// rather than every tick. Unlike the older sweeps, an "idle" tick of
+// these is not free: the samskara sweep's pair-relate probe spends a
+// Venice call per active user per tick even with no new substrate
+// (the probe has no memory of declined pairs - see
+// docs/dev/samskara.md gotchas), and the curation sweep walks five
+// queues. At the 60s default this lands them every 10 minutes - quick
+// enough to test against, slow enough not to grind Venice budget in
+// an idle dev session. Drop the base interval (first CLI arg) when
+// you want a faster loop on one of them.
+const SLOW_TICK_MULTIPLE = 10;
+
+// Run the scheduled routes sequentially, cheapest first, so the heavy
+// LLM sweeps never queue the backfill tick behind them. `count` is the
+// base-tick ordinal; the slow group fires when it divides by
+// SLOW_TICK_MULTIPLE (including the immediate first tick at 0).
+async function tick(apiUrl, serviceRoleKey, count) {
+  await tickBackfill(apiUrl, serviceRoleKey);
+  await tickWikiSweep(apiUrl, serviceRoleKey);
+  await tickWikiLibrarianSweep(apiUrl, serviceRoleKey);
+  await tickRemSweep(apiUrl, serviceRoleKey);
+  await tickDeepSleepSweep(apiUrl, serviceRoleKey);
+  await tickReflectionSweep(apiUrl, serviceRoleKey);
+  if (count % SLOW_TICK_MULTIPLE === 0) {
+    await tickCurationSweep(apiUrl, serviceRoleKey);
+    await tickBiasSweep(apiUrl, serviceRoleKey);
+    await tickSamskaraSweep(apiUrl, serviceRoleKey);
   }
 }
 
 async function main() {
   const intervalSeconds = parseInterval();
-  banner('Embedding backfill cron shim (DEV)');
+  banner('Venice cron shim (DEV): backfill + all agent sweeps');
   const { apiUrl, serviceRoleKey } = await readLocalStack();
   ok(`Targeting ${style.cyan(apiUrl)} every ${style.bold(intervalSeconds + 's')}. Ctrl-C to stop.`);
-  info(style.dim('Local stand-in for the hosted pg_cron job (prod runs every 5 min).'));
+  info(style.dim('Local stand-in for the hosted pg_cron jobs (prod: backfill every 5 min, agent sweeps hourly).'));
+
+  ok(
+    `Slow group (curation / bias / samskara sweeps) fires every ` +
+      `${style.bold(SLOW_TICK_MULTIPLE + 'x')} the base interval.`
+  );
 
   // Fire once immediately so you do not wait a full interval for the first run.
-  await tick(apiUrl, serviceRoleKey);
-  const timer = setInterval(() => void tick(apiUrl, serviceRoleKey), intervalSeconds * 1000);
+  let count = 0;
+  await tick(apiUrl, serviceRoleKey, count);
+  const timer = setInterval(() => {
+    count += 1;
+    void tick(apiUrl, serviceRoleKey, count);
+  }, intervalSeconds * 1000);
 
   const stop = () => {
     clearInterval(timer);
     console.log('');
-    ok('Backfill shim stopped.');
+    ok('Cron shim stopped.');
     process.exit(0);
   };
   process.on('SIGINT', stop);

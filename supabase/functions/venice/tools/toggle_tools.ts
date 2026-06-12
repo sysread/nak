@@ -19,7 +19,7 @@
 // the model self-correct on the next call - throwing on a typo would
 // abort the chat turn for a recoverable mistake.
 
-import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
+import { requireThreadId, registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 
 // Mirror of GATED_TOOLBOX_NAMES in src/lib/tools/index.ts. Keep in
 // sync when adding / removing a toolbox; same-PR landing is the
@@ -62,7 +62,7 @@ export const toggleToolbox: ToolDef = {
     const { error } = await ctx.adminClient
       .from('threads')
       .update({ toolboxes_enabled: accepted })
-      .eq('id', ctx.threadId)
+      .eq('id', requireThreadId(ctx))
       .eq('user_id', ctx.userId);
     if (error) throw new Error(`setThreadToolboxesEnabled failed: ${error.message}`);
 

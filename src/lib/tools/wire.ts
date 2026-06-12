@@ -1,18 +1,17 @@
 /**
  * Wire helpers for tool calls. Pure utilities that handle the
- * OpenAI/Venice wire format in both directions - projecting stored or
- * in-loop tool calls back onto the wire (sanitizeToolCallsForWire,
- * sanitizeToolCallIdForWire), and parsing the inbound arguments JSON
- * string into a usable args object (parseToolArguments). No other
- * dependencies, so anyone touching tool-call wire data - the chat
- * loop, the headless agent loop in `./run.ts`, every agent that
- * replays a stored thread (reflection, recall, conversation_recall,
- * summary) - can call in without dragging
- * chat-loop along. Keeping the helpers here means a fix or extension
- * lands in one place rather than five copies.
+ * OpenAI/Venice wire format in both directions - projecting ToolDefs
+ * and stored tool calls onto the wire (toOpenAIToolDef,
+ * sanitizeToolCallsForWire, sanitizeToolCallIdForWire), and parsing
+ * the inbound arguments JSON string into a usable args object
+ * (parseToolArguments). No other dependencies, so anyone touching
+ * tool-call wire data - the chat loop, the no-tool completion agents
+ * (summary, topics) that replay stored threads - can call in without
+ * dragging chat-loop along. Keeping the helpers here means a fix or
+ * extension lands in one place rather than five copies.
  */
 
-import type { OpenAIToolCall } from './types';
+import type { OpenAIToolCall, OpenAIToolDef, ToolDef } from './types';
 
 /**
  * Pattern Venice's strict tool_call_id validator accepts: alphanumeric
@@ -91,7 +90,7 @@ export function sanitizeToolCallIdForWire(id: string): string {
  * every subsequent round and every future turn that replays the offending
  * assistant row from the DB, because the bad arguments string rides along
  * unchanged. The `activity` param required of every tool call (see
- * ACTIVITY_PARAM_SCHEMA in tools/dispatch.ts) is a free-form sentence the
+ * ACTIVITY_PARAM_SCHEMA below) is a free-form sentence the
  * model writes itself, which is exactly the shape most prone to this.
  *
  * Parse-and-restringify when the blob is valid JSON (canonicalises
@@ -104,12 +103,11 @@ export function sanitizeToolCallIdForWire(id: string): string {
  * tool-error result row), so the next round's model sees the failure
  * via the tool result regardless of what the echoed arguments say.
  *
- * Used by:
- *   - chat-loop.ts (toVeniceMessage + the in-loop history push)
- *   - tools/run.ts (the headless agent loop's in-loop history push)
- *   - every agent's messageToVenice helper that projects a stored
- *     Message onto a VeniceMessage (reflection, recall,
- *     conversation_recall, summary).
+ * Used by chat-loop.ts (toVeniceMessage + the in-loop history push)
+ * and the no-tool completion agents' messageToVenice helpers that
+ * project a stored Message onto a VeniceMessage (summary, topics).
+ * The venice function's agent runner carries its own mirror of this
+ * discipline.
  */
 export function sanitizeToolCallsForWire(
   calls: readonly OpenAIToolCall[]
@@ -159,9 +157,9 @@ export function sanitizeToolCallsForWire(
  * tool whose schema nests free-form fields under a wrapper still
  * benefits.
  *
- * Throws on invalid JSON. Callers (chat-loop.ts, tools/run.ts) catch
- * the throw and surface it as a tool error so the next round sees
- * the parse failure instead of a silent default.
+ * Throws on invalid JSON. The caller (chat-loop.ts) catches the
+ * throw and surfaces it as a tool error so the next round sees the
+ * parse failure instead of a silent default.
  */
 export function parseToolArguments(raw: string): Record<string, unknown> {
   if (raw.length === 0) return {};
@@ -195,4 +193,80 @@ function recoverEscapesInString(s: string): string {
     .replace(/\\n/g, '\n')
     .replace(/\\r/g, '\r')
     .replace(/\\t/g, '\t');
+}
+
+/**
+ * Schema for the `activity` parameter we inject into every tool's
+ * arguments. The LLM fills it with a short present-tense sentence
+ * narrating what this specific call is doing; the chat UI surfaces the
+ * sentence above the tool name while the call is in flight and after
+ * it completes, so the user sees a plain-language trace of the model's
+ * moves instead of a wall of schema calls. Kept deliberately terse so
+ * the model doesn't pad it into a paragraph.
+ *
+ * Parameter name `activity` rather than `note` to avoid colliding with
+ * memory_relate's existing `note` argument (the edge annotation). Names
+ * this module owns are invisible to tool handlers - injected into the
+ * wire schema here, ignored by every handler that reads specific keys.
+ * (The venice function's agent runner injects the same parameter for
+ * progress-observed agent runs; see supabase/functions/venice/agents/
+ * _run.ts.)
+ */
+const ACTIVITY_PARAM_SCHEMA = {
+  type: 'string',
+  description:
+    'REQUIRED. One short present-tense sentence, addressed to the user, ' +
+    'narrating what you are doing with this specific call - e.g. ' +
+    '"Searching your memories for notes about the dishwasher", ' +
+    '"Saving that pancake recipe to your cookbook". Keep it under ' +
+    '100 characters. Surfaced prominently in the UI above the tool ' +
+    "name so the user can see what's happening without opening the " +
+    'call details.',
+} as const;
+
+/**
+ * Merge the shared `activity` property into a tool's JSON Schema
+ * without mutating the original. We inject at the wire-projection
+ * layer rather than forcing every ToolDef to declare it, so adding a
+ * new tool doesn't require remembering the convention. `activity` is
+ * added to `required` so the model can't silently omit it, and the
+ * rest of the schema (including `additionalProperties: false`) rides
+ * through untouched.
+ */
+function injectActivityParam(
+  parameters: Record<string, unknown>
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...parameters };
+  const existing = (out.properties as Record<string, unknown> | undefined) ?? {};
+  out.properties = { ...existing, activity: ACTIVITY_PARAM_SCHEMA };
+  const required = Array.isArray(out.required)
+    ? [...(out.required as unknown[])]
+    : [];
+  if (!required.includes('activity')) required.push('activity');
+  out.required = required;
+  // If the tool's schema didn't declare `type`, default it to 'object'
+  // so `properties` / `required` are meaningful to the model. Tools in
+  // this codebase all declare `type: 'object'`, but test fixtures
+  // sometimes ship `parameters: {}` - keep them valid.
+  if (out.type === undefined) out.type = 'object';
+  return out;
+}
+
+/**
+ * Translate a ToolDef into the OpenAI / Venice request shape. Venice
+ * mirrors OpenAI's `/chat/completions` `tools` parameter exactly.
+ *
+ * We project an `activity` string into every tool's parameters at this
+ * seam so the model must narrate what it's doing on every call; see
+ * `injectActivityParam` above for the rationale.
+ */
+export function toOpenAIToolDef(t: ToolDef): OpenAIToolDef {
+  return {
+    type: 'function',
+    function: {
+      name: t.name,
+      description: t.description,
+      parameters: injectActivityParam(t.parameters),
+    },
+  };
 }

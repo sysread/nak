@@ -8,7 +8,7 @@
  *   1. The compound prose summary - "current best model of the user."
  *      Rendered as the body of one `<think>` block. Always-on across
  *      turns; missing on cold-start threads where the formation
- *      worker hasn't run yet.
+ *      formation pipeline hasn't run yet.
  *   2. The situational fire from this specific turn - top-k samskaras
  *      ranked by cosine^1.3 * sqrt(health * confidence) * sample-size
  *      bonus. Rendered as a first-person bulleted observation list
@@ -120,7 +120,7 @@ export interface PrimingThinks {
  * `<think>` blocks at all.
  *
  * The compound body is whitespace-trimmed but otherwise pass-through:
- * the formation worker emits prose intended to read in first person,
+ * the formation pipeline emits prose intended to read in first person,
  * and any framing belongs in the prompt, not here. The fire body
  * carries a short orientation sentence so the bullets read as
  * observations the assistant is recalling rather than a bare list.

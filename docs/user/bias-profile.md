@@ -14,9 +14,9 @@ position confidently, it elaborates on the position rather than
 challenging it. These are not Nak-specific - all chat assistants
 do this. Bias profile is the layer that pushes back.
 
-A background worker quietly reads conversations you've already
-finished and reports any cognitive biases it observes in your
-messages. Evidence accumulates across many conversations via a
+A background analysis pass (an hourly server-side sweep) quietly
+reads conversations you've already finished and reports any
+cognitive biases it observes in your messages. Evidence accumulates across many conversations via a
 calibrated Bayesian aggregation; once enough evidence has piled
 up for a particular bias, the assistant's system prompt gains a
 short instruction to compensate for it in future responses.
@@ -40,24 +40,23 @@ from Kahneman's *Thinking, Fast and Slow* and adjacent literature:
 - Recency bias, negativity bias, black-and-white thinking
 - Fundamental attribution error
 
-The catalog is fixed. The worker only reports against these
+The catalog is fixed. The analysis only reports against these
 names; it cannot invent new categories or stretch a clear bias
 to fit a near-miss. The full set of definitions and examples
 lives in the source at `src/lib/bias/catalog.ts`.
 
 ## What's NOT tracked
 
-- **Conversations from today.** The worker only processes
-  conversations from yesterday or earlier. Today's chats might
-  still be in progress; analyzing them while you're typing
-  would be intrusive.
-- **The conversation you currently have open.** Same reason: if
-  you're looking at a thread, you might still send another
-  message in it.
+- **Conversations from today.** The sweep only processes
+  conversations whose last activity falls on a previous day.
+  Today's chats might still be in progress; analyzing them while
+  you're typing would be intrusive. (This also covers whatever
+  conversation you have open right now - sending a message dates
+  it today.)
 - **Jokes, banter, fiction, role-play, and hypotheticals
   presented for fun.** Nak's framing of "trying on a position
   for play" is explicitly NOT the same as "holding a position";
-  the worker's prompt has specific instructions to skip these
+  the analysis prompt has specific instructions to skip these
   registers, and the assistant's compensation rules are also
   suspended in playful exchanges.
 
@@ -66,8 +65,8 @@ lives in the source at `src/lib/bias/catalog.ts`.
 Look for the chart-graph icon in the pill column in the
 bottom-right corner of the messages pane - second from the top,
 above the brain and the mood emoji, below the recall light
-bulb. The icon appears once the worker has analyzed at least
-one conversation. Click it to open the bias profile diagnostics
+bulb. The icon appears once at least one conversation has been
+analyzed. Click it to open the bias profile diagnostics
 modal.
 
 The modal has three sections:
@@ -77,18 +76,18 @@ The modal has three sections:
   the 90% credible interval, the posterior mean rate, and the
   effective sample size. Biases marked "in prompt" are the ones
   actively shaping responses this session. Hover any tier or
-  "in prompt" badge for a one-line explanation of what it means. Biases the worker has
-  never flagged in any analyzed conversation read as "no
+  "in prompt" badge for a one-line explanation of what it means. Biases never
+  flagged in any analyzed conversation read as "no
   evidence" rather than a number - their CI lower would just be
   the prior's 10th-percentile (~5%), and surfacing that as a
   percentage misreads as a real measurement. Rows with at least
   one observation expose a "View N observations" toggle: clicking
-  it lists every conversation the worker flagged for that bias,
+  it lists every conversation flagged for that bias,
   with the agent's reasoning quoted underneath. The conversation
   title is a link - clicking jumps to that thread and closes the
   modal.
 - **Recently processed conversations.** The latest threads the
-  worker has analyzed. Click any thread to expand and see the
+  sweep has analyzed. Click any thread to expand and see the
   individual observations it found.
 - **Per-observation drill-down.** For each observation, the
   bias name, the confidence level the agent reported, and the
@@ -137,7 +136,7 @@ prompt.
 
 ## How the system adapts to your reactions
 
-Each time the worker analyzes a conversation it also classifies
+Each time the sweep analyzes a conversation it also classifies
 how you reacted to the bias-compensation behavior the assistant
 was instructed to perform. Three outcomes per bias that was
 active during that conversation:

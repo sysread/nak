@@ -31,7 +31,7 @@
  * black_and_white_thinking that aren't in TFAS by name but are
  * what shows up in actual user conversations. We deliberately do
  * NOT split heuristics from their failure modes (e.g. availability
- * heuristic vs availability bias) - the worker can only see
+ * heuristic vs availability bias) - the observer can only see
  * observable behavior, and the underlying mechanism is the same.
  *
  * survivorship_bias is intentionally absent - it's almost never

@@ -1,9 +1,21 @@
 # Browser tool/agent dead code after the streaming-root migration
 
-**Status:** triage notes for a future cleanup session. Nothing here is
-done except the `analyze_image` worked example (see below). Do NOT treat
-the dead lists as safe-to-delete without running the per-file checklist -
-the live and dead tools are interleaved inside the same toolboxes.
+**Status: EXECUTED.** Phase 1 of
+[`./reorganize-the-workshop.md`](./reorganize-the-workshop.md) landed
+this triage. Every "DEAD" tool below is now a `serverSideTool(schema)`
+in `src/lib/tools/index.ts` (schema kept, impl file deleted); the recall
+agents + recall toolboxes are gone; `executeToolCall` is gone. The
+helper relocations described in the plan landed too: ask_user content
+helpers -> `src/lib/ask-user.ts`, `sanitizeTitle` -> `src/lib/title-gen.ts`.
+This file is retained as the record of *what* was dead and *why* the
+per-file checklist mattered (live and dead tools were interleaved inside
+the same toolboxes). Phases 2 and 3 have since closed too: every "live
+via agent" tool below is ALSO gone now - the agents migrated
+server-side and the whole browser dispatch layer
+(`executeToolboxCall`, `runHeadlessToolLoop`, `lazyTool`, the toolbox
+aggregators) went with the last fleet. The present-tense "still
+dispatches browser-side" framing below describes the state at Phase 1
+time; read it as history.
 
 ## One-paragraph summary
 
@@ -134,12 +146,19 @@ these are removable once the recall tools are:
 - **`generate_image`** (`src/lib/tools/generate_image.ts` +
   `generate_image.schema.ts` + `generated-image.ts`; edge ports
   `tools/generate_image.ts` + `tools/_generated_image.ts`). The harvest
-  runs edge-side now, so the TOOL `execute()` is likely dead, BUT
-  `generated-image.ts` exports pure helpers (`extractGeneratedImage`,
-  `stripGeneratedImage`, `generatedImageToNewAttachment`,
-  `GENERATED_IMAGE_RESULT_KEY`) that may still be imported by live
-  browser rendering / chat-loop code. Verify those readers before
-  removing anything beyond the tool `execute()`.
+  runs edge-side now, so the TOOL `execute()` is dead, and
+  `generated-image.ts` falls dead WITH it. The helper file exports pure
+  functions (`extractGeneratedImage`, `stripGeneratedImage`,
+  `generatedImageToNewAttachment`, `GENERATED_IMAGE_RESULT_KEY`) that
+  looked like they might have a live browser-rendering / chat-loop
+  reader - verified 2026-06-08 they do NOT. The only importer of
+  `generated-image.ts` anywhere in `src` is `generate_image.ts` itself
+  (one constant, `GENERATED_IMAGE_RESULT_KEY`). `generate_image.ts` is
+  in no agent toolbox; its sole reference is the chat `imagesToolbox`
+  `lazyTool` in `index.ts`. So deleting the tool impl orphans the helper
+  file - delete `generated-image.ts` in the same step (it is NOT named
+  in any "DEAD" list above because it is a helper, not a tool; it dies
+  transitively). knip confirms.
 
 ## Naming traps
 

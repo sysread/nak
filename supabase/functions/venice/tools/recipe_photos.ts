@@ -19,7 +19,7 @@
 // recipe_image_upsert, then link the resulting image ids onto the
 // recipe.
 
-import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
+import { requireThreadId, registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 
 interface AttachmentRow {
   id: string;
@@ -35,7 +35,12 @@ interface PhotoMetaRow {
   label: string | null;
 }
 
-async function sha256Hex(bytes: Uint8Array): Promise<string> {
+// The parameter is ArrayBuffer-backed by declaration because
+// crypto.subtle.digest rejects SharedArrayBuffer-backed views, and
+// TypeScript's generic Uint8Array<ArrayBufferLike> default would admit
+// them. Callers construct fresh views over blob.arrayBuffer(), so the
+// narrower type costs nothing.
+async function sha256Hex(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', bytes);
   const view = new Uint8Array(digest);
   let out = '';
@@ -111,7 +116,7 @@ export const recipePhotosAttach: ToolDef = {
         .select(
           'id, filename, mime_type, size_bytes, storage_path, messages!inner(thread_id)',
         )
-        .eq('messages.thread_id', ctx.threadId)
+        .eq('messages.thread_id', requireThreadId(ctx))
         .eq('filename', filename)
         .like('mime_type', 'image/%')
         .order('created_at', { ascending: false })

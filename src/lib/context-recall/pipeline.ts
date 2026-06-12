@@ -43,6 +43,8 @@ import type { SupabaseService } from '../supabase';
 import type { IntuitionTrigger } from '../intuition/types';
 import { createLogger } from '../logger.svelte';
 import type { ContextRecallPayload } from './types';
+import { evaluatePreRoundTrigger } from '../intuition/triggers';
+import { withContextRecallInflight } from './cache';
 import { gatherContextIndex, renderContextThink } from './gather';
 
 const log = createLogger('context-recall');
@@ -133,4 +135,55 @@ export async function runContextRecallPipeline(
     elapsedMs: Date.now() - startedAt,
   });
   return payload;
+}
+
+/**
+ * Inputs for maybeRunContextRecallPipeline - the run inputs minus
+ * the trigger (derived by the evaluation here).
+ */
+export interface MaybeRunContextRecallInputs
+  extends Omit<RunContextRecallInputs, 'trigger'> {
+  /** Feature gate (the chat-loop's contextRecallEnabled option);
+   *  undefined means off, matching the option's optionality. */
+  enabled: boolean | undefined;
+  /** Current cached payload off the thread row; null = cold start. */
+  cache: ContextRecallPayload | null;
+  /**
+   * Fires at the moment the pipeline commits to running, before the
+   * gather starts - the caller hangs its UI status signal here.
+   * Never called on a no-trigger or feature-off turn.
+   */
+  onWillRun?: (trigger: IntuitionTrigger) => void;
+}
+
+/**
+ * The chat-loop's entry point - the context-recall twin of
+ * maybeRunIntuitionPipeline. Owns the feature gate, the trigger
+ * evaluation (the shared evaluator; ContextRecallPayload satisfies
+ * its RoundCacheSnapshot shape structurally), and the per-thread
+ * inflight dedup. Resolves null on feature-off, no-trigger, and
+ * pipeline failure alike.
+ */
+export function maybeRunContextRecallPipeline(
+  inputs: MaybeRunContextRecallInputs
+): Promise<ContextRecallPayload | null> {
+  if (inputs.enabled !== true) return Promise.resolve(null);
+  const trigger = evaluatePreRoundTrigger({
+    cache: inputs.cache,
+    round: inputs.round,
+    mood: inputs.mood,
+  });
+  if (!trigger) return Promise.resolve(null);
+  inputs.onWillRun?.(trigger);
+  return withContextRecallInflight(inputs.threadId, () =>
+    runContextRecallPipeline({
+      supabase: inputs.supabase,
+      threadId: inputs.threadId,
+      userId: inputs.userId,
+      signal: inputs.signal,
+      round: inputs.round,
+      mood: inputs.mood,
+      trigger,
+    })
+  );
 }

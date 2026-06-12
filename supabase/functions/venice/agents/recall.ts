@@ -23,7 +23,8 @@
 //     queries this table to find conversations with new co-occurrence
 //     signal. Best-effort: a transient DB error doesn't fail recall.
 
-import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
+import { createEdgeLogger } from '../../_shared/edge-log.ts';
+import { registerTool, requireThreadId, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { readVeniceKey } from '../tools/_venice_key.ts';
 import { memorySearch } from '../tools/memory_search.ts';
 import {
@@ -34,6 +35,7 @@ import {
 } from './_run.ts';
 import {
   loadThreadSlice,
+  logPreview,
   messageToVenice,
   parseRecallOutput,
   type RecallNote,
@@ -179,96 +181,119 @@ fence.`;
  * hand the note back to the main model as the memory_recall tool result.
  */
 async function runRecall(ctx: ToolContext): Promise<RecallNote> {
-  const slice = await loadThreadSlice(ctx.adminClient, ctx.threadId);
-  if (slice.length === 0) {
-    return { kind: 'none', reason: 'thread has no user turn yet' };
-  }
+  // Drawer logging. Recall runs mid-turn inside the chat tool dispatch,
+  // so the run - and the finally-flush below - is bounded by the turn;
+  // flushing here cannot stall anything past the response.
+  const log = createEdgeLogger(ctx.userId, 'recall');
+  try {
+    const slice = await loadThreadSlice(ctx.adminClient, requireThreadId(ctx));
+    if (slice.length === 0) {
+      return { kind: 'none', reason: 'thread has no user turn yet' };
+    }
 
-  const convo: VeniceWireMessage[] = slice.map(messageToVenice);
-  // Recall instruction as the final user turn. Matches the reflection-
-  // agent "switch modes" idiom.
-  convo.push({ role: 'user', content: RECALL_PROMPT });
+    // The slice ends at the user turn the agent is recalling for
+    // (trimToLastUserTurn), so its tail is the input worth previewing.
+    log.debug(
+      `recall start: ${slice.length} message(s), ` +
+        `latest user turn "${logPreview(slice[slice.length - 1].content ?? '')}"`,
+    );
 
-  // Recall-toolbox wrapper around memory_search. The wrapper records
-  // every memory id memory_search returned so we can feed the rem
-  // librarian's hint queue after the agent settles. Calls into the
-  // already-registered ToolDef so we get the production search
-  // behaviour without duplicating the query path.
-  const recalledIds = new Set<string>();
-  const recallMemorySearch: AgentTool = {
-    name: 'memory_search',
-    wire: MEMORY_SEARCH_WIRE_SCHEMA,
-    async execute(args, agentCtx) {
-      const result = await memorySearch.execute(args, {
-        adminClient: agentCtx.adminClient,
-        userId: agentCtx.userId,
-        threadId: agentCtx.threadId,
-        signal: agentCtx.signal,
-        depth: agentCtx.depth,
-      });
-      if (Array.isArray(result)) {
-        for (const m of result) {
-          if (m && typeof m === 'object') {
-            const id = (m as Record<string, unknown>).id;
-            if (typeof id === 'string') recalledIds.add(id);
+    const convo: VeniceWireMessage[] = slice.map(messageToVenice);
+    // Recall instruction as the final user turn. Matches the reflection-
+    // agent "switch modes" idiom.
+    convo.push({ role: 'user', content: RECALL_PROMPT });
+
+    // Recall-toolbox wrapper around memory_search. The wrapper records
+    // every memory id memory_search returned so we can feed the rem
+    // librarian's hint queue after the agent settles. Calls into the
+    // already-registered ToolDef so we get the production search
+    // behaviour without duplicating the query path.
+    const recalledIds = new Set<string>();
+    const recallMemorySearch: AgentTool = {
+      name: 'memory_search',
+      wire: MEMORY_SEARCH_WIRE_SCHEMA,
+      async execute(args, agentCtx) {
+        const result = await memorySearch.execute(args, {
+          adminClient: agentCtx.adminClient,
+          userId: agentCtx.userId,
+          threadId: agentCtx.threadId,
+          signal: agentCtx.signal,
+          depth: agentCtx.depth,
+        });
+        if (Array.isArray(result)) {
+          for (const m of result) {
+            if (m && typeof m === 'object') {
+              const id = (m as Record<string, unknown>).id;
+              if (typeof id === 'string') recalledIds.add(id);
+            }
           }
         }
+        return result;
+      },
+    };
+
+    const toolbox: Toolbox = {
+      name: 'recall',
+      tools: [recallMemorySearch],
+    };
+
+    const apiKey = await readVeniceKey(ctx.adminClient);
+    if (!apiKey) throw new Error('no Venice key configured (app_config unseeded)');
+
+    const baseCtx: Omit<AgentToolContext, 'signal' | 'depth'> = {
+      adminClient: ctx.adminClient,
+      userId: ctx.userId,
+      threadId: ctx.threadId,
+    };
+
+    const result = await runHeadlessAgent(
+      {
+        model: RECALL_MODEL,
+        messages: convo,
+        toolbox,
+        baseCtx,
+        apiKey,
+        signal: ctx.signal,
+      },
+      ctx.depth ?? 0,
+    );
+
+    const note = parseRecallOutput(result.finalText);
+
+    // Best-effort feed for the rem librarian. Surface upsert errors to
+    // the log only (recall has already settled its answer; the hint
+    // queue is advisory).
+    if (recalledIds.size > 0) {
+      const now = new Date().toISOString();
+      const rows = Array.from(recalledIds).map((memory_id) => ({
+        user_id: ctx.userId,
+        memory_id,
+        conversation_id: ctx.threadId,
+        last_seen_at: now,
+      }));
+      // RLS OFF: explicit user_id stamped.
+      const { error: upErr } = await ctx.adminClient
+        .from('memory_conversation')
+        .upsert(rows, { onConflict: 'memory_id,conversation_id' });
+      if (upErr) {
+        log.error(`memory_conversation upsert failed: ${upErr.message}`, upErr);
       }
-      return result;
-    },
-  };
-
-  const toolbox: Toolbox = {
-    name: 'recall',
-    tools: [recallMemorySearch],
-  };
-
-  const apiKey = await readVeniceKey(ctx.adminClient);
-  if (!apiKey) throw new Error('no Venice key configured (app_config unseeded)');
-
-  const baseCtx: Omit<AgentToolContext, 'signal' | 'depth'> = {
-    adminClient: ctx.adminClient,
-    userId: ctx.userId,
-    threadId: ctx.threadId,
-  };
-
-  const result = await runHeadlessAgent(
-    {
-      model: RECALL_MODEL,
-      messages: convo,
-      toolbox,
-      baseCtx,
-      apiKey,
-      signal: ctx.signal,
-    },
-    ctx.depth ?? 0,
-  );
-
-  const note = parseRecallOutput(result.finalText);
-
-  // Best-effort feed for the rem librarian. Surface upsert errors only
-  // to the function log (recall has already returned its answer; the
-  // hint queue is advisory).
-  if (recalledIds.size > 0) {
-    const now = new Date().toISOString();
-    const rows = Array.from(recalledIds).map((memory_id) => ({
-      user_id: ctx.userId,
-      memory_id,
-      conversation_id: ctx.threadId,
-      last_seen_at: now,
-    }));
-    // RLS OFF: explicit user_id stamped.
-    const { error: upErr } = await ctx.adminClient
-      .from('memory_conversation')
-      .upsert(rows, { onConflict: 'memory_id,conversation_id' });
-    if (upErr) {
-      console.error(
-        `[memory_recall] memory_conversation upsert failed: ${upErr.message}`,
-      );
     }
-  }
 
-  return note;
+    log.info(
+      `recall finished (${result.toolCalls} tool call(s), ` +
+        `${recalledIds.size} memor${recalledIds.size === 1 ? 'y' : 'ies'} surfaced, ` +
+        `outcome=${note.kind})`,
+    );
+    return note;
+  } catch (err) {
+    // Logging only - the failure still propagates to the tool
+    // dispatcher unchanged; this line is the drawer-visible reason.
+    log.error('recall failed', err instanceof Error ? err : new Error(String(err)));
+    throw err;
+  } finally {
+    await log.flush();
+  }
 }
 
 export const memoryRecall: ToolDef = {

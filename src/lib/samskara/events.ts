@@ -1,8 +1,8 @@
 /**
- * Rune-free side of the samskara main-thread event bridge. The event
- * name constant and the emoji mapping live here so the worker-adjacent
- * manager (which can't pull Svelte runes) can import them without
- * dragging a UI dependency into the worker bundle.
+ * Rune-free side of the samskara mint-event bridge: the event name
+ * constant, the emoji mood table, and the `notifySamskaraMint`
+ * dispatcher. Chat.svelte's realtime relay calls the dispatcher when
+ * the server-side formation pipeline INSERTs a fresh samskara row.
  *
  * The reactive toast UI is in `src/components/SamskaraToasts.svelte`
  * and listens for this event on `window`. Keep any `$state` /
@@ -206,11 +206,10 @@ export function valenceToMoodLabel(valence: number, confidence: number = 1): str
 }
 
 /**
- * Dispatch the mint event to the main thread's toast listener.
- * No-op when `window` is undefined — the samskara manager runs on the
- * main thread where `window` always exists in practice, but keeping
- * the guard means importing this file from a worker-adjacent module
- * (tests, SSR) never throws.
+ * Dispatch the mint event to the toast listener. The caller is
+ * Chat.svelte's realtime INSERT relay, which always runs where
+ * `window` exists - the guard keeps imports from non-DOM contexts
+ * (tests, SSR) from throwing.
  */
 export function notifySamskaraMint(detail: SamskaraMintEventDetail): void {
   if (typeof window === 'undefined') return;

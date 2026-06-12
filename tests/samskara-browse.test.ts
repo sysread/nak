@@ -8,7 +8,6 @@ import {
   collapseSimilar,
   severityFor,
   compoundStaleness,
-  leaseLiveness,
   matchSummary,
   worstSeverity,
   relativeTime,
@@ -17,7 +16,7 @@ import {
   HEALTH_THRESHOLDS,
   type CollapsedRow,
 } from '../src/lib/ui/samskara-browse';
-import type { SamskaraCorpusRow, SamskaraWorkerLease } from '../src/lib/supabase';
+import type { SamskaraCorpusRow } from '../src/lib/supabase';
 
 function row(id: string): SamskaraCorpusRow {
   return {
@@ -91,25 +90,6 @@ describe('compoundStaleness', () => {
   });
   it('treats a missing summary as warn, not alarm', () => {
     expect(compoundStaleness(null, now)).toBe('warn');
-  });
-});
-
-describe('leaseLiveness', () => {
-  const now = Date.parse('2026-06-10T12:00:00Z');
-  const leases: SamskaraWorkerLease[] = [
-    { workerKind: 'samskara', holderId: 'h1', expiresAt: '2026-06-10T12:00:30Z' },
-    { workerKind: 'embedding', holderId: 'h2', expiresAt: '2026-06-10T11:59:00Z' },
-  ];
-  it('reports a future expiry as "in Ns" (not a past-tense "ago")', () => {
-    const out = leaseLiveness(leases, ['samskara', 'embedding'], now);
-    expect(out).toEqual([
-      { workerKind: 'samskara', live: true, detail: 'live, expires in 30s' },
-      { workerKind: 'embedding', live: false, detail: 'idle - not currently running' },
-    ]);
-  });
-  it('reports a missing lease as idle, not a failure', () => {
-    const out = leaseLiveness([], ['samskara'], now);
-    expect(out).toEqual([{ workerKind: 'samskara', live: false, detail: 'idle - not currently running' }]);
   });
 });
 

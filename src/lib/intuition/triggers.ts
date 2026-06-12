@@ -110,21 +110,3 @@ export function evaluatePreRoundTrigger(ctx: TriggerContext): IntuitionTrigger |
   return null;
 }
 
-/**
- * Decide whether to refresh after a mid-turn `update_title` tool
- * landed. The title trigger always wins on a different round
- * (topic shift is the strongest signal we have), but skips when the
- * current round has already produced a payload - either via the
- * pre-round trigger that fired earlier this same turn, or via a
- * prior in-turn title call (rare; the model could rename twice in
- * one turn).
- *
- * Cold-start lands here too: with no cache, a title call always
- * triggers. This is how turn-1 typically gets its first intuition.
- */
-export function evaluateTitleTrigger(ctx: TriggerContext): IntuitionTrigger | null {
-  const { cache, round } = ctx;
-  if (!cache) return 'cold';
-  if (cache.computed_at_round >= round) return null;
-  return 'title';
-}

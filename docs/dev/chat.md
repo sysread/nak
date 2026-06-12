@@ -316,12 +316,20 @@ A chat turn goes:
   (memory facts verbatim; conversations + wiki by id); the system
   prompt nudges the model to consider this first when it wants broad
   context on the user. Same executor path. See `./context-recall.md`.
-- **Summaries / reflection / journal** — no direct call;
-  their triggers watch for a terminal assistant message
-  newer than `last_summarised_msg_id` /
-  `last_reflected_msg_id`. The chat loop creates that
-  assistant message; the workers pick it up on their next
-  poll. See `./summaries.md`, `./memory.md`.
+- **Summaries / journal** — no direct call; their triggers
+  watch for a terminal assistant message newer than
+  `last_summarised_msg_id`. The chat loop creates that
+  assistant message; the background workers pick it up on
+  their next poll. See `./summaries.md`.
+- **Reflection** — driven directly from the completed-turn
+  tail. `getStreamingResponse` (the streaming orchestrator)
+  fires `reflectOneThread` via `EdgeRuntime.waitUntil` after
+  the chat response ships, draining one day-gate-eligible
+  thread from the reflection queue as background work. The
+  chat loop creates the terminal assistant message that makes
+  a thread eligible; reflection acts on it on the same turn's
+  tail (after at least a calendar day has elapsed). See
+  `./memory.md`.
 - **Topics** — `Chat.svelte` owns the `selectedTopics` /
   `topicsVocabulary` state for the drawer's topic-filter
   dropdown and threads `selectedTopics` through the three
@@ -384,13 +392,15 @@ A chat turn goes:
   realtime echo lands). If you add a second write path that
   doesn't pipe through the same `Message.id`, you get a
   duplicate render.
-- **Auto-titling runs in a background worker, not from
-  `Chat.svelte`.** The worker (`src/lib/agents/auto_title/`)
-  polls the threads table for rows still on the `'New
-  conversation'` placeholder and titles them via the fast
-  agent model. Surviving page closes / refreshes is the whole
-  point - a fire-and-forget call from `Chat.svelte` would lose
-  work whenever the user closed the tab before the title call
+- **Auto-titling runs server-side, not from `Chat.svelte`.**
+  The curation tail in the venice function
+  (`supabase/functions/venice/agents/auto_title.ts`) claims
+  threads still on the `'New conversation'` placeholder after
+  each completed turn and titles them via the fast agent
+  model; an hourly sweep catches what the tail missed.
+  Surviving page closes / refreshes is the whole point - a
+  fire-and-forget call from `Chat.svelte` would lose work
+  whenever the user closed the tab before the title call
   resolved. The seed is always the *opening* user message
   (fetched in the same RPC that claims the row), so a retry
   titles the conversation's original topic rather than

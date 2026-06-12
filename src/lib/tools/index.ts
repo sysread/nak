@@ -4,9 +4,10 @@
  * boxes into wire-shaped payloads.
  *
  * Responsibility split:
- * *   - Each tool file (./toggle_tools.ts, ./memory_*.ts, ./conversation_*.ts,
- *     ...) exports a single ToolDef describing what it does and how to
- *     run it.
+ *   - Each chat tool has a `<tool>.schema.ts` carrying its name +
+ *     description + parameters. The matching ToolDef is a
+ *     `serverSideTool(schema)`: schema-only catalog metadata; the impl
+ *     lives in the venice edge function and dispatch happens there.
  *   - This file composes them into named toolboxes (cooking, memories,
  *     always_on), resolves names to defs, and projects them into
  *     the OpenAI / Venice request shape.
@@ -14,9 +15,11 @@
  *     which imports the registry from here to render the dynamic tool
  *     catalog. Prose blocks and the catalog renderer live there, not
  *     here.
- *   - The orchestration loop in `../chat-loop.ts` is the only caller
- *     that invokes executeToolCall() - no other module should reach
- *     directly into a tool's execute() handler.
+ *   - Nothing dispatches tools in the browser. The browser ships the
+ *     wire `tools` array (via `buildToolList`) and the edge function's
+ *     `performToolCall` runs the tool; the browser observes the result
+ *     over the stream. The last browser-side dispatchers (the memory
+ *     librarian fleets) migrated to the venice function.
  *
  * Toolbox model: the always_on toolbox rides with every request and
  * carries every read-only surface (the recall pair, web search,
@@ -36,51 +39,37 @@
  * deliberate user-or-model gate so an autonomous turn can't scribble
  * over user data without intent.
  *
- * Note on the agent-only `memoryToolbox` re-exported near the bottom
- * of this file: its definition lives in `./memory_toolbox` (kept out
- * of this barrel for reflection-worker bundling reasons - see that
- * file's header) but the export rides through here so callers can
- * still pull it from `$lib/tools`. It is a DIFFERENT set of tools
- * (`memory_invalidate` in place of `memory_delete`) than the user-
- * facing `memoriesToolbox` defined in this file. Agents must not
- * hard-delete on their own authority - they can only soft-decay
- * confidence. The user-facing surface keeps hard-delete because
- * "forget X" is user-directed and unambiguous. Don't collapse the
- * two.
+ * Note on the user-facing `memoriesToolbox` defined here vs. the
+ * agent-only memory toolboxes (both server-side now: the reflection
+ * toolbox in supabase/functions/venice/agents/reflection.ts, the
+ * memory-librarian toolbox in agents/_memory_librarian_tools.ts):
+ * the agent sets
+ * substitute `memory_invalidate` (soft-decay) for `memory_delete`.
+ * Agents must not hard-delete on their own authority - they can only
+ * decay confidence. The user-facing surface keeps hard-delete because
+ * "forget X" is user-directed and unambiguous. Don't collapse the two.
  */
-import type { ToolDef, OpenAIToolDef, ToolContext, ToolResult, Toolbox } from './types';
+import type { ToolDef, OpenAIToolDef, Toolbox } from './types';
 
-// --- Eagerly-imported always-on tools -------------------------------
-// The umbrella `context` tool, the four per-layer recall tools, web
-// search, update_title, analyze_image, and the toggle meta-tool fire
-// on the first-message critical path (the recall surfaces on topic
-// boundaries / when the model needs persistent context, web_search
-// on time-sensitive questions, update_title on the very first turn,
-// analyze_image when the user attaches an image). The cold-start
-// chunk-fetch tax is not acceptable there, so they stay eager. The
-// other always-on tools (search/list/read across memories,
-// conversations, recipes, wiki, app docs) are still
-// always-on but lazy-imported via the lazyTool wrappers below - they
-// fire on demand, not on every turn, so the schema rides eagerly
-// while the impl module loads on first dispatch.
-import { toggleToolbox } from './toggle_tools';
-import { memoryRecall } from './memory_recall';
-import { conversationRecall } from './conversation_recall';
-import { wikiRecall } from './wiki_recall';
-import { contextTool } from './context';
-import { webSearch } from './web_search';
-import { updateTitle } from './update_title';
-import { analyzeImage } from './analyze_image';
-import { askUser } from './ask_user';
+// --- Always-on tool schemas ------------------------------------------
+// Schema-only registrations: every browser `execute()` is dead - tool
+// dispatch happens in the venice edge function (see `./server_side.ts`).
+// The schemas ride eagerly because the first-message critical path
+// renders the catalog and ships the wire `tools` array.
+import { toggleToolboxSchema } from './toggle_tools.schema';
+import { memoryRecallSchema } from './memory_recall.schema';
+import { conversationRecallSchema } from './conversation_recall.schema';
+import { wikiRecallSchema } from './wiki_recall.schema';
+import { contextSchema } from './context.schema';
+import { webSearchSchema } from './web_search.schema';
+import { updateTitleSchema } from './update_title.schema';
+import { analyzeImageSchema } from './analyze_image.schema';
+import { askUserSchema } from './ask_user.schema';
 
-// --- Lazy-loaded tool schemas ---------------------------------------
-// The schemas (name + description + shortDescription + parameters)
-// stay eager because every chat-loop turn renders the catalog and
-// every wire payload sends the tool-list shape. The matching impl
-// modules are dynamic-imported on first dispatch via the `lazyTool`
-// helper below; Vite emits one chunk per `import('./<tool>')` call.
-// Tools split across always-on (read paths) and the gated write
-// boxes - the lazy split is orthogonal to gating.
+// --- Gated + remaining always-on tool schemas ------------------------
+// Same schema-only story as above. Tools split across always-on (read
+// paths) and the gated write boxes; gating is a wire-payload concern,
+// not a dispatch one.
 import { memorySearchSchema } from './memory_search.schema';
 import { memoryCreateSchema } from './memory_create.schema';
 import { memoryUpdateSchema } from './memory_update.schema';
@@ -114,157 +103,63 @@ import { docUpdateSchema } from './doc_update.schema';
 import { docDeleteSchema } from './doc_delete.schema';
 import { generateImageSchema } from './generate_image.schema';
 
-// Agent-only toolbox re-exports moved to the bottom of the file
-// alongside other re-exports. Direct `export ... from` rather than
-// `import` + `export` so Rollup can tree-shake the chain out of the
-// main chunk when main-chunk consumers don't reference these
-// symbols (the workers / agents that DO use them import directly
-// from `./memory_toolbox` etc., not via this barrel).
+// `serverSideTool` wraps a schema into a ToolDef whose execute() throws
+// - the browser ships catalog metadata only; every dispatch happens in
+// the venice edge function. The last browser-side dispatchers (the
+// memory-librarian fleets) migrated server-side, so every ToolDef here
+// is schema-only. See `./server_side.ts`.
+import { serverSideTool } from './server_side';
 
-// `lazyTool` lives in `./lazy.ts` so the agent-toolbox files
-// (`./memory_toolbox`, `./recall_toolbox`,
-// `./conversation_recall_toolbox`, `./wiki_recall_toolbox`) can use
-// it too. With every consumer going through the lazy path, Vite
-// emits one chunk per impl module regardless of which toolbox
-// dispatches into it.
-import { lazyTool } from './lazy';
+// --- Schema-only always-on tools ------------------------------------
+// The eager always-on surfaces whose dispatch is server-side. Each is
+// a serverSideTool: catalog metadata for the wire payload, a throwing
+// execute() that fires only if a regression re-routes dispatch
+// browser-side. `toggleToolbox` is read by chat-prompt.ts for its
+// `.name` (to filter it out of the rendered catalog) and re-exported
+// below; the rest are referenced only by `alwaysOnToolbox`.
+const toggleToolbox = serverSideTool(toggleToolboxSchema);
+const memoryRecall = serverSideTool(memoryRecallSchema);
+const conversationRecall = serverSideTool(conversationRecallSchema);
+const wikiRecall = serverSideTool(wikiRecallSchema);
+const contextTool = serverSideTool(contextSchema);
+const webSearch = serverSideTool(webSearchSchema);
+const updateTitle = serverSideTool(updateTitleSchema);
+const analyzeImage = serverSideTool(analyzeImageSchema);
+const askUser = serverSideTool(askUserSchema);
 
 // --- Gated tool wrappers --------------------------------------------
-// Each is a thin object: schema fields spread in eagerly, execute()
-// resolves the impl chunk on first call. Subsequent calls hit the
-// browser's module cache - latency is one Promise resolution.
-const memorySearch = lazyTool(
-  memorySearchSchema,
-  () => import('./memory_search'),
-  'memorySearch'
-);
-const memoryCreate = lazyTool(
-  memoryCreateSchema,
-  () => import('./memory_create'),
-  'memoryCreate'
-);
-const memoryUpdate = lazyTool(
-  memoryUpdateSchema,
-  () => import('./memory_update'),
-  'memoryUpdate'
-);
-const memoryDelete = lazyTool(
-  memoryDeleteSchema,
-  () => import('./memory_delete'),
-  'memoryDelete'
-);
-const memoryReaffirm = lazyTool(
-  memoryReaffirmSchema,
-  () => import('./memory_reaffirm'),
-  'memoryReaffirm'
-);
-const memoryDoubt = lazyTool(
-  memoryDoubtSchema,
-  () => import('./memory_doubt'),
-  'memoryDoubt'
-);
-const memoryRelate = lazyTool(
-  memoryRelateSchema,
-  () => import('./memory_relate'),
-  'memoryRelate'
-);
-const memoryUnrelate = lazyTool(
-  memoryUnrelateSchema,
-  () => import('./memory_unrelate'),
-  'memoryUnrelate'
-);
-const conversationSearch = lazyTool(
-  conversationSearchSchema,
-  () => import('./conversation_search'),
-  'conversationSearch'
-);
-const conversationGet = lazyTool(
-  conversationGetSchema,
-  () => import('./conversation_get'),
-  'conversationGet'
-);
-const recipeList = lazyTool(
-  recipeListSchema,
-  () => import('./recipe_list'),
-  'recipeList'
-);
-const recipeGet = lazyTool(
-  recipeGetSchema,
-  () => import('./recipe_get'),
-  'recipeGet'
-);
-const recipeSave = lazyTool(
-  recipeSaveSchema,
-  () => import('./recipe_save'),
-  'recipeSave'
-);
-const recipeUpdate = lazyTool(
-  recipeUpdateSchema,
-  () => import('./recipe_update'),
-  'recipeUpdate'
-);
-const recipeDelete = lazyTool(
-  recipeDeleteSchema,
-  () => import('./recipe_delete'),
-  'recipeDelete'
-);
-const recipePhotosAttach = lazyTool(
-  recipePhotosAttachSchema,
-  () => import('./recipe_photos_attach'),
-  'recipePhotosAttach'
-);
-const recipePhotosRemove = lazyTool(
-  recipePhotosRemoveSchema,
-  () => import('./recipe_photos_remove'),
-  'recipePhotosRemove'
-);
-const recipePhotosReorder = lazyTool(
-  recipePhotosReorderSchema,
-  () => import('./recipe_photos_reorder'),
-  'recipePhotosReorder'
-);
-const recipePhotoLabelSet = lazyTool(
-  recipePhotoLabelSetSchema,
-  () => import('./recipe_photo_label_set'),
-  'recipePhotoLabelSet'
-);
-const researchDocs = lazyTool(
-  researchDocsSchema,
-  () => import('./research_docs'),
-  'researchDocs'
-);
-const wikiSearch = lazyTool(
-  wikiSearchSchema,
-  () => import('./wiki_search'),
-  'wikiSearch'
-);
-const wikiList = lazyTool(
-  wikiListSchema,
-  () => import('./wiki_list'),
-  'wikiList'
-);
-const wikiGet = lazyTool(
-  wikiGetSchema,
-  () => import('./wiki_get'),
-  'wikiGet'
-);
-const wikiLibrarian = lazyTool(
-  wikiLibrarianSchema,
-  () => import('./wiki_librarian'),
-  'wikiLibrarian'
-);
-const docList = lazyTool(docListSchema, () => import('./doc_list'), 'docList');
-const docGet = lazyTool(docGetSchema, () => import('./doc_get'), 'docGet');
-const docGrep = lazyTool(docGrepSchema, () => import('./doc_grep'), 'docGrep');
-const docRead = lazyTool(docReadSchema, () => import('./doc_read'), 'docRead');
-const docCreate = lazyTool(docCreateSchema, () => import('./doc_create'), 'docCreate');
-const docUpdate = lazyTool(docUpdateSchema, () => import('./doc_update'), 'docUpdate');
-const docDelete = lazyTool(docDeleteSchema, () => import('./doc_delete'), 'docDelete');
-const generateImage = lazyTool(
-  generateImageSchema,
-  () => import('./generate_image'),
-  'generateImage'
-);
+const memorySearch = serverSideTool(memorySearchSchema);
+const memoryCreate = serverSideTool(memoryCreateSchema);
+const memoryUpdate = serverSideTool(memoryUpdateSchema);
+const memoryDelete = serverSideTool(memoryDeleteSchema);
+const memoryReaffirm = serverSideTool(memoryReaffirmSchema);
+const memoryDoubt = serverSideTool(memoryDoubtSchema);
+const memoryRelate = serverSideTool(memoryRelateSchema);
+const memoryUnrelate = serverSideTool(memoryUnrelateSchema);
+const conversationSearch = serverSideTool(conversationSearchSchema);
+const conversationGet = serverSideTool(conversationGetSchema);
+const recipeList = serverSideTool(recipeListSchema);
+const recipeGet = serverSideTool(recipeGetSchema);
+const recipeSave = serverSideTool(recipeSaveSchema);
+const recipeUpdate = serverSideTool(recipeUpdateSchema);
+const recipeDelete = serverSideTool(recipeDeleteSchema);
+const recipePhotosAttach = serverSideTool(recipePhotosAttachSchema);
+const recipePhotosRemove = serverSideTool(recipePhotosRemoveSchema);
+const recipePhotosReorder = serverSideTool(recipePhotosReorderSchema);
+const recipePhotoLabelSet = serverSideTool(recipePhotoLabelSetSchema);
+const researchDocs = serverSideTool(researchDocsSchema);
+const wikiSearch = serverSideTool(wikiSearchSchema);
+const wikiList = serverSideTool(wikiListSchema);
+const wikiGet = serverSideTool(wikiGetSchema);
+const wikiLibrarian = serverSideTool(wikiLibrarianSchema);
+const docList = serverSideTool(docListSchema);
+const docGet = serverSideTool(docGetSchema);
+const docGrep = serverSideTool(docGrepSchema);
+const docRead = serverSideTool(docReadSchema);
+const docCreate = serverSideTool(docCreateSchema);
+const docUpdate = serverSideTool(docUpdateSchema);
+const docDelete = serverSideTool(docDeleteSchema);
+const generateImage = serverSideTool(generateImageSchema);
 
 /**
  * Always-on toolbox. Rides with every request regardless of the
@@ -400,12 +295,12 @@ export const cookingToolbox: Toolbox = {
  * memory levers (reaffirm/doubt for graded confidence, relate/
  * unrelate for the memory-graph layer).
  *
- * Contrast with the agent-only `memoryToolbox` (defined in
- * `./memory_toolbox`, re-exported near the bottom of this file),
- * which swaps `memory_delete` for `memory_invalidate` and includes
- * `memory_search` directly because agents don't have access to the
- * always-on registry. Agents operating on their own authority only
- * get soft-decay, not hard delete.
+ * Contrast with the agent-only memory toolboxes (the server-side
+ * reflection toolbox; `memoryLibrarianToolbox` here), which swap
+ * `memory_delete` for `memory_invalidate` and include `memory_search`
+ * directly because agents don't have access to the always-on
+ * registry. Agents operating on their own authority only get
+ * soft-decay, not hard delete.
  */
 export const memoriesToolbox: Toolbox = {
   name: 'memories',
@@ -547,8 +442,8 @@ export const GATED_TOOLBOX_META: readonly ToolboxMeta[] = GATED_TOOLBOXES.map(
 /**
  * Flat, deduped view of every tool reachable from the main chat
  * model - i.e. every tool across `TOOLBOXES`. Does NOT include
- * agent-only toolboxes (`memoryToolbox`, `recallToolbox`,
- * `conversationRecallToolbox`) - those are addressed by toolbox
+ * agent-only toolboxes (`memoryLibrarianToolbox`,
+ * `wikiLibrarianToolbox`) - those are addressed by toolbox
  * directly. Exposed for test assertions and any future UI that
  * wants to inventory the full catalog; the wire builder
  * (`buildToolList`) still composes from `TOOLBOXES` so a tool's
@@ -575,17 +470,10 @@ function byName(name: string): ToolDef | undefined {
   return undefined;
 }
 
-// `toOpenAIToolDef`, `buildToolboxWireList`, and `executeToolboxCall`
-// live in `./dispatch` so the reflection agent worker can reach them
-// without walking the rest of this barrel (which statically imports
-// `research_docs` + lazy docs-glob, incompatible with the worker's
-// IIFE format). Re-exported below for callers that still import from
-// `$lib/tools`.
-import {
-  toOpenAIToolDef,
-  buildToolboxWireList,
-  executeToolboxCall,
-} from './dispatch';
+// `toOpenAIToolDef` lives in `./wire.ts` with the other wire-shape
+// projections; it injects the required `activity` narration parameter
+// into every tool the chat request ships.
+import { toOpenAIToolDef } from './wire';
 
 /**
  * The tools array we send with a request, built from the thread's
@@ -610,20 +498,6 @@ export function buildToolList(enabledToolboxes: readonly string[]): OpenAIToolDe
 }
 
 /**
- * Dispatch a single tool call by name. Unknown tools throw so the caller
- * can surface a clear error back to the model as a tool-result message.
- */
-export async function executeToolCall(
-  name: string,
-  args: Record<string, unknown>,
-  ctx: ToolContext
-): Promise<ToolResult> {
-  const tool = byName(name);
-  if (!tool) throw new Error(`Unknown tool: ${name}`);
-  return tool.execute(args, ctx);
-}
-
-/**
  * Look up the optional pretty-formatter overrides a tool may
  * declare on its schema. Used by the tool-call detail panel
  * (`src/components/ToolCalls.svelte` via `src/lib/ui/tool-calls.ts`)
@@ -645,23 +519,9 @@ export function getToolFormatters(name: string): ToolFormatters | undefined {
   return { formatArgs: tool.formatArgs, formatResult: tool.formatResult };
 }
 
-// Re-export the agent-only toolboxes whose definitions live in their
-// own leaf files (`./memory_toolbox`, `./recall_toolbox`,
-// `./conversation_recall_toolbox`). `memoryToolbox` moved out of this
-// barrel because the reflection worker imports it - see its file
-// header for the IIFE/code-splitting failure mode that keeps it out
-// of `./index.ts`. The recall toolboxes live in their own files to
-// avoid a circular import - see those files' headers for why.
-// Direct `export ... from` re-exports so Rollup can elide the
-// chain when main-chunk consumers don't read these symbols. Worker
-// / agent entry points import the toolboxes directly via their
-// source paths, not through this barrel.
-export { memoryToolbox } from './memory_toolbox';
-export { recallToolbox } from './recall_toolbox';
-export { conversationRecallToolbox } from './conversation_recall_toolbox';
-export { wikiRecallToolbox } from './wiki_recall_toolbox';
-
-export { toOpenAIToolDef, buildToolboxWireList, executeToolboxCall };
-export { toggleToolbox, updateTitle };
+export { toOpenAIToolDef };
+// `toggleToolbox` is read by chat-prompt.ts for its `.name`; re-exported
+// for that one consumer.
+export { toggleToolbox };
 export type { ToolDef, OpenAIToolDef, ToolContext, ToolResult, Toolbox } from './types';
 export type { OpenAIToolCall } from './types';

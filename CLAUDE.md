@@ -413,7 +413,38 @@ placeholder H2s. Fleshing them out is its own work; what matters
 per-PR is that the relevant page moves forward by the section the
 PR introduces.
 
-## Commit / branch / merge conventions
+## QA use-cases (docs/qa/)
+
+`docs/qa/use-cases/` holds manual-verification walkthroughs in a
+fixed format (covers / preconditions / steps / expected / cleanup /
+append-only results log) - see `docs/qa/README.md` for the format.
+They are the executable record of "how do we prove this feature
+works end to end," aimed at the seams unit tests can't reach.
+
+**Keep them current, in this order:**
+
+1. **New feature ships -> its use-case ships in the same PR.** A
+   feature without a walkthrough has no repeatable proof.
+2. **Changing an existing feature that has no use-case? Backfill
+   the use-case FIRST and execute it against the unchanged code.**
+   The pre-change pass is the baseline; without it, a post-change
+   pass only proves the new behavior is self-consistent, not that
+   the change preserved what mattered.
+3. **After the change, re-execute and log both runs** in the
+   results table. The before/after pair is the regression
+   evidence.
+
+This ordering exists so a session can spawn a QA agent at the
+START of a change (execute the relevant cases, log the baseline)
+and again at the END (re-execute, diff against the baseline) -
+AI-driven regression testing over the walkthroughs. The agent only
+needs the use-case file and a running stack; if it also needs
+tribal knowledge, the use-case is missing a precondition - fix the
+doc.
+
+Results-log discipline: append, never overwrite; every row carries
+date, environment, and commit. Expectations marked **[hosted]**
+only count when run against the hosted project.
 
 See standing instructions at session start for branch names. In
 short: develop on the designated feature branch, push when done,
@@ -556,14 +587,22 @@ every gate task `depends = ["deps"]`, which runs `pnpm install
 up-to-date tree.
 
 ```sh
-mise run check        # full local gate: deps + test + svelte-check + lint + build
-mise run test         # vitest run
-mise run markdownlint # markdownlint-cli2 only
-mise run knip         # dead-code scan; NOT in the gate by design
-mise run dev-frontend # Vite dev server only, no backend
-mise run dev-start    # isolated local dev: local Supabase stack + Vite
-mise run build        # production PWA build
+mise run check           # full local gate: deps + test + deno check/test + svelte-check + lint + build
+mise run test            # vitest run
+mise run functions-test  # Deno unit tests for the edge functions
+mise run functions-check # deno check over every edge-function entrypoint
+mise run markdownlint    # markdownlint-cli2 only
+mise run knip            # dead-code scan; NOT in the gate by design
+mise run dev-frontend    # Vite dev server only, no backend
+mise run dev-start       # isolated local dev: local Supabase stack + Vite
+mise run build           # production PWA build
 ```
+
+The Deno island (functions-check + functions-test) rides the gate
+because nothing else covers it: `supabase functions deploy` bundles
+with esbuild and never type-checks, vitest never sees Deno code, and
+`deno test` only type-checks what the tests import - functions-check
+covers the full import graph each function deploys with.
 
 If you prefer raw pnpm (or mise isn't available - ephemeral
 sandboxes, first-time checkouts), the manual sequence is
@@ -582,6 +621,16 @@ Always run the gate before committing - including for CSS- or
 markdown-only changes. The test suite includes a postcss parse of
 every stylesheet under `src/` (`tests/styles.test.ts`) and a
 markdownlint pass over the doc tree (`tests/markdownlint.test.ts`).
+
+### Check exit codes, not piped output
+
+Piping a gate command (`mise run check 2>&1 | tail -2`) replaces
+its exit code with the pipe tail's - a failed gate reads as success
+and the next `&&` step (often `git commit`) runs anyway. This has
+shipped lint-broken and type-broken commits that needed amending.
+When chaining on success, capture the status explicitly
+(`mise run check > /tmp/out 2>&1; echo "GATE=$?"`) or run the gate
+as its own un-piped command before the commit step.
 
 ### Read the warnings, not just the exit code
 

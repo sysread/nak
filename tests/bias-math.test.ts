@@ -1,8 +1,10 @@
 /**
  * Coverage for the bias-aggregation math. Pure functions, no DB / no
- * LLM / no Svelte runes - the worker's aggregate phase composes
- * these into one call per (user_id, bias) pair, and the chat-loop
- * format pass reads the resulting tier.
+ * LLM / no Deno globals - the venice function's bias-sweep aggregate
+ * pass composes these into one call per (user_id, bias) pair, and
+ * the chat-loop format pass reads the resulting tier. The module
+ * under test lives in the Deno island but is self-contained, so
+ * vitest loads it directly - no Deno port of this suite needed.
  *
  * The thresholds (N_EFF_FLOOR, CI_LB_SOFT, CI_LB_STRONG) and the
  * prior (ALPHA_PRIOR, BETA_PRIOR) are load-bearing: a reviewer
@@ -28,8 +30,6 @@ import {
   feedbackEMA,
   type ConversationContribution,
   type FeedbackContribution,
-} from '../src/lib/bias/math';
-import {
   ALPHA_PRIOR,
   BETA_PRIOR,
   CI_LB_SOFT,
@@ -42,7 +42,7 @@ import {
   HALF_LIFE_DAYS,
   N_EFF_FLOOR,
   PER_CONV_CAP,
-} from '../src/lib/bias/types';
+} from '../supabase/functions/_shared/bias-math';
 
 describe('collapseWithinConversation', () => {
   it('returns 0 for the empty-observation case', () => {

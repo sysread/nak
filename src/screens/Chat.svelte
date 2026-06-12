@@ -45,7 +45,6 @@
   import {
     app,
     applyServerSettings,
-    notifyBiasActiveConvIds,
     resetForSignOut,
   } from '$lib/state.svelte';
   import {
@@ -157,7 +156,7 @@
     cookbook,
     loadRecipes,
   } from '$lib/cookbook-store.svelte';
-  import { onCookbookChange } from '$lib/cookbook-events';
+  import { onCookbookChange, emitCookbookChange } from '$lib/cookbook-events';
   import {
     memoriesStore,
     runMemoriesSearch,
@@ -166,21 +165,21 @@
     wikiStore,
     runWikiSearch,
   } from '$lib/wiki-store.svelte';
-  import { onWikiChange } from '$lib/wiki-events';
+  import { onWikiChange, emitWikiChange } from '$lib/wiki-events';
+  import { emitMemoryChange } from '$lib/memory-events';
   import {
     documentStore,
     runDocumentSearch,
   } from '$lib/documents-store.svelte';
   import { onDocumentChange } from '$lib/document-events';
-  import { wikiLibrarianRunner } from '$lib/agents/wiki-librarian/runner.svelte';
-  import { deepSleepRunner } from '$lib/agents/deep-sleep/runner.svelte';
-  import { remRunner } from '$lib/agents/rem/runner.svelte';
+  import { librarianRun } from '$lib/agents/memory-librarian-run.svelte';
   import { moodState } from '$lib/samskara/mood.svelte';
   import {
     bandIndexFor,
     columnFor,
     valenceToEmoji,
     valenceToMoodLabel,
+    notifySamskaraMint,
   } from '$lib/samskara/events';
   import {
     coerceIntuitionPayload,
@@ -220,7 +219,7 @@
     type AskUserVia,
     type AskUserAnsweredContent,
     type AskUserPendingContent,
-  } from '$lib/tools/ask_user';
+  } from '$lib/ask-user';
   import MessageAttachments from '../components/MessageAttachments.svelte';
   import TopBarActions from '../components/TopBarActions.svelte';
   // ExtractedTextDrawer + LogsDrawer are toggled overlays - the
@@ -244,7 +243,7 @@
   type AskUserCardComponent = typeof import('../components/AskUserCard.svelte').default;
   type SamskaraToastsComponent = typeof import('../components/SamskaraToasts.svelte').default;
   import { extractedTextDrawer } from '$lib/extractedTextDrawer.svelte';
-  import { logsDrawer, createLogger } from '$lib/logger.svelte';
+  import { logsDrawer, createLogger, appendFromEdge } from '$lib/logger.svelte';
 
   const log = createLogger('chat');
   import { VeniceError, StreamDisconnectedError, cancelStream, awaitStreamSettled, type VeniceMessage } from '$lib/venice';
@@ -598,16 +597,6 @@
   $effect(() => {
     if (route.cid === activeThreadId) return;
     void selectThread(route.cid);
-  });
-  // Forward the open-thread set to the bias worker so it skips
-  // analyzing conversations the user might still be typing in.
-  // Empty array when no thread is open (the new-chat screen) so the
-  // worker is free to process everything else; one-element array
-  // when a thread is selected. This is per-tab; the cross-tab
-  // singleton coordination already lives in the worker_leases
-  // layer.
-  $effect(() => {
-    notifyBiasActiveConvIds(activeThreadId ? [activeThreadId] : []);
   });
   let messages = $state<Message[]>([]);
 
@@ -1791,6 +1780,58 @@
         }
       },
     });
+  });
+
+  // Realtime: follow the current user's edge-function log channel and
+  // feed entries into the Logs drawer. Background work that runs server-
+  // side (reflection, and the agent fleets as they migrate off the
+  // browser) has no Web Worker postMessage path to the drawer, so it
+  // broadcasts structured entries to `logs:<userId>` instead; this is
+  // the browser end of that pipe. RLS scopes the channel to the owner.
+  $effect(() => {
+    if (!app.supabase || !session) return;
+    return app.supabase.subscribeToUserLogs(session.user.id, appendFromEdge);
+  });
+
+  // Realtime: relay server-side wiki writes into the window-level
+  // wiki-change event bus. The autonomous wiki agent runs in the
+  // venice function (cron-driven sweep), where emitWikiChange is
+  // unreachable - this subscription is how an open Wiki panel learns
+  // a background article write landed. Browser-side writers (the Wiki
+  // UI, the librarian's tools) still fire the bus directly; their
+  // own DB writes ALSO echo back through this subscription, which is
+  // harmless - consumers refetch idempotently.
+  $effect(() => {
+    if (!app.supabase || !session) return;
+    return app.supabase.subscribeToWikiArticleChanges(session.user.id, emitWikiChange);
+  });
+
+  // Realtime: the memories twin of the wiki relay above. Every memory
+  // writer is server-side now (reflection on the chat-turn tail, the
+  // rem / deep-sleep librarian sweeps), so this subscription is how an
+  // open Memories panel learns a background write landed.
+  $effect(() => {
+    if (!app.supabase || !session) return;
+    return app.supabase.subscribeToMemoryChanges(session.user.id, emitMemoryChange);
+  });
+
+  // Realtime: the recipes leg of the same family. The recipe_* tools
+  // dispatch in the venice function, so a model-driven recipe write
+  // reaches the Cookbook modal and the drawer's Recipes tab through
+  // this relay into the cookbook event bus.
+  $effect(() => {
+    if (!app.supabase || !session) return;
+    return app.supabase.subscribeToRecipeChanges(session.user.id, emitCookbookChange);
+  });
+
+  // Realtime: mint toasts. The samskara formation pipeline runs in the
+  // venice function (turn tail + hourly sweep), so a fresh mint reaches
+  // the mood pill as a user-scoped INSERT on `samskaras`, relayed into
+  // the same window event the old in-tab worker dispatched.
+  // SamskaraToasts.svelte is the unchanged consumer.
+  $effect(() => {
+    if (!app.supabase || !session) return;
+    return app.supabase.subscribeToSamskaraInserts(session.user.id, notifySamskaraMint);
   });
 
   // Inline title rename state.
@@ -3367,15 +3408,14 @@
     // flight. Best-effort: absence of the lock is not fatal.
     await acquireWakeLock();
 
-    // Auto-titling no longer fires from here. The auto-title worker
-    // (src/lib/agents/auto_title/*) polls the threads table for rows
-    // still on the 'New conversation' placeholder and titles them in
-    // the background, surviving page closes / refreshes that the
-    // old in-Chat fire-and-forget pipeline lost work to. The chat-
-    // loop's metadata message stays silent about titles on round 1
-    // (the worker owns naming there) and falls back to the loud nag
-    // on round 2+ if the worker hasn't landed yet. See
-    // docs/dev/auto-title.md for the full pipeline.
+    // Auto-titling does not fire from here. The server-side auto-title
+    // agent (supabase/functions/venice/agents/auto_title.ts) polls the
+    // threads table for rows still on the 'New conversation'
+    // placeholder and titles them in the background, surviving page
+    // closes / refreshes. The chat-loop's metadata message stays
+    // silent about titles on round 1 (the agent owns naming there)
+    // and falls back to the loud nag on round 2+ if the agent hasn't
+    // landed yet. See docs/dev/auto-title.md for the full pipeline.
 
     try {
       let loopResult;
@@ -5688,8 +5728,9 @@
   //
   // The search box at the top of the drawer runs both an exact ILIKE
   // match on the title and a semantic cosine-similarity search against
-  // `title + summary` embeddings (see src/lib/agents/summary/* and the
-  // threads EmbeddingSource). Exact hits always rank above semantic
+  // `title + summary` embeddings; the server-side summary agent
+  // (supabase/functions/venice/agents/summary.ts) writes
+  // `threads.summary`. Exact hits always rank above semantic
   // hits — the merge in SupabaseService.searchThreads enforces that.
   //
   // The paginated list is hidden entirely while a query is active; the
@@ -6551,20 +6592,20 @@
             {
               id: 'deep-sleep',
               label: 'Deep-sleep pass',
-              title: deepSleepRunner.busy
-                ? 'Deep-sleep is already running'
+              title: librarianRun.running
+                ? 'A memory-librarian pass is already running'
                 : 'Run the deep-sleep pass now (similarity-sweep consolidation)',
-              disabled: deepSleepRunner.busy,
+              disabled: librarianRun.running,
               onclick: () => (deepSleepTrigger = true),
               icon: deepSleepIcon,
             },
             {
               id: 'rem',
               label: 'Rem pass',
-              title: remRunner.busy
-                ? 'Rem is already running'
+              title: librarianRun.running
+                ? 'A memory-librarian pass is already running'
                 : 'Run the rem pass now (associative integration over recent recall)',
-              disabled: remRunner.busy,
+              disabled: librarianRun.running,
               onclick: () => (remTrigger = true),
               icon: remIcon,
             },
@@ -6611,10 +6652,12 @@
             {
               id: 'librarian',
               label: 'Run librarian',
-              title: wikiLibrarianRunner.busy
-                ? 'The librarian is already running'
-                : 'Run the wiki librarian now',
-              disabled: wikiLibrarianRunner.busy,
+              // No preemptive busy gray-out: the librarian runs
+              // server-side and the browser has no live view of the
+              // scheduled sweep. The server's in-flight guard rejects
+              // a colliding run with a clean "already in flight"
+              // message in the strip instead.
+              title: 'Run the wiki librarian now',
               onclick: () => (wikiLibrarianTrigger = true),
               icon: librarianIcon,
             },

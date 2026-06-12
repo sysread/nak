@@ -1,112 +1,32 @@
 /**
- * Wiki agent. Drives two distinct flows over the user's wiki:
+ * Wiki manual-edit agent: the per-article "Ask agent to update" flow
+ * on Wiki.svelte. One Venice completion, response_format pinned to
+ * JSON, no tool loop. Returns a structured preview the UI displays
+ * before persisting via `supabase.updateWikiArticle`.
  *
- *   - **Autonomous**: `run()` is called by the worker loop. Reads a
- *     settled thread, appends `WIKI_AUTONOMOUS_PROMPT` as the final
- *     user turn, and runs the headless tool loop with `wikiToolbox`.
- *     The loop's side effects (wiki_search / wiki_create /
- *     wiki_update / wiki_delete calls) ARE the persistent output;
- *     the final text is the model's one-or-two-sentence operator
- *     summary of its choices (see WikiOutput.finalText), surfaced
- *     in the log drawer by the cycle driver.
- *
- *   - **Manual**: `updateOne()` runs synchronously on the main thread
- *     when the user clicks "Ask agent to update" on a single article.
- *     One Venice completion, response_format pinned to JSON, no tool
- *     loop. Returns a structured preview the UI displays before
- *     persisting.
- *
- * The two paths share the same model (`agentModel('wiki').id`) and
- * voice (encyclopedic third-person), but the prompts are distinct -
- * autonomous reads a conversation and decides per-topic, manual
- * applies explicit instructions to one article.
- *
- * The agent does NOT acquire or release the lease, claim or mark the
- * thread, or spawn its own worker. Those live in `./loop.ts` and
- * `./worker.ts` respectively. This class is pure logic.
+ * This file used to also house the autonomous wiki agent (the
+ * background flow that reads settled threads and maintains the wiki
+ * through the wiki_* tools). That flow now runs server-side in the
+ * venice edge function - the cron-driven sweep plus the Skipped
+ * panel's /wiki-retry route; see
+ * supabase/functions/venice/agents/wiki.ts. The manual flow stays
+ * browser-side because it is a single no-tool completion with a
+ * user-interactive preview, the same category as the other no-tool
+ * agents.
  */
-import type { Agent, AgentRunRequest, AgentRunResult } from '../types';
-import type { SupabaseService, Message } from '../../supabase';
+import type { SupabaseService } from '../../supabase';
 import type { VeniceMessage, ResponseFormat } from '../../venice';
-import { wikiToolbox } from '../../tools/wiki_toolbox';
-import { runHeadlessToolLoop } from '../../tools/run';
-import { sanitizeToolCallIdForWire, sanitizeToolCallsForWire } from '../../tools/wire';
 import { agentModel } from '../../models';
 import { createLogger } from '../../logger.svelte';
-import {
-  buildWikiAutonomousPrompt,
-  buildWikiManualPrompt,
-  type WikiUserProfile,
-} from './prompt';
-import type { WikiInput, WikiOutput } from './types';
+import { buildWikiManualPrompt, type WikiUserProfile } from './prompt';
 
-const log = createLogger('wiki-worker');
+const log = createLogger('wiki-manual');
 
 /**
- * Pin response_format=json_object on the manual path. The autonomous
- * path is tool-driven (no JSON output expected) so we leave
- * responseFormat unset there.
+ * Pin response_format=json_object so the model's reply parses as the
+ * ManualDecision shape below.
  */
 const WIKI_MANUAL_RESPONSE_FORMAT: ResponseFormat = { type: 'json_object' };
-
-/**
- * Sentinel substring Venice emits when its content classifier rejects
- * the request body. Observed shape (truncated):
- *
- *   Venice HTTP 400: {"error":"Input text data may contain
- *   inappropriate content.","request_id":"..."}
- *
- * Matching on the human-readable phrase (rather than the HTTP code
- * alone) keeps the fallback narrow: a 400 for a malformed request,
- * an over-context error, or anything else stays on the original
- * model's error path and lets the loop's failure counter handle it.
- */
-const CONTENT_FILTER_SENTINEL =
-  'Input text data may contain inappropriate content';
-
-/**
- * Uncensored fallback model. The default wiki slot
- * (deepseek-v4-flash, see AGENT_MODELS in src/lib/models/index.ts)
- * has a strict input classifier that rejects bodies it doesn't like
- * even before the model gets a chance to read them - on a wiki run
- * that means the autonomous agent can't process the conversation no
- * matter how many retries we throw at it. arcee-trinity-large-thinking
- * does not run that classifier, so a single retry against it
- * unblocks the conversation. We retry exactly once: if the fallback
- * also fails, the failure path records it and the loop's counter
- * eventually advances the pointer.
- */
-const CONTENT_FILTER_FALLBACK_MODEL = 'arcee-trinity-large-thinking';
-
-/**
- * True when an error looks like Venice's content-classifier rejection.
- * Exported for test coverage so the sentinel can be exercised
- * without needing a real VeniceError instance.
- */
-export function isContentFilterRejection(err: unknown): boolean {
-  if (err == null) return false;
-  const message = err instanceof Error ? err.message : String(err);
-  return message.includes(CONTENT_FILTER_SENTINEL);
-}
-
-function messageToVenice(m: Message): VeniceMessage {
-  if (m.role === 'tool') {
-    return {
-      role: 'tool',
-      content: m.content,
-      tool_call_id:
-        m.tool_call_id != null
-          ? sanitizeToolCallIdForWire(m.tool_call_id)
-          : undefined,
-      name: m.name ?? undefined,
-    };
-  }
-  const out: VeniceMessage = { role: m.role, content: m.content };
-  if (m.role === 'assistant' && m.tool_calls && m.tool_calls.length > 0) {
-    out.tool_calls = sanitizeToolCallsForWire(m.tool_calls);
-  }
-  return out;
-}
 
 /**
  * Result shape for `updateOne()`. Discriminated union so the UI can
@@ -168,15 +88,12 @@ function parseManualDecision(text: string): ManualDecision | null {
   return { action, title, content, reason };
 }
 
-export class WikiAgent implements Agent<WikiInput, WikiOutput> {
-  readonly name = 'wiki';
+export class WikiAgent {
   readonly model: string;
-  readonly toolbox = wikiToolbox;
   /**
-   * Mutable user profile (Settings -> AI -> About you). Read on
-   * every `run()` / `updateOne()` so the worker can live-update it
-   * via `setUserProfile` without a restart. Null (or both fields
-   * empty) suppresses the "About the user" block entirely.
+   * User profile (Settings -> AI -> About you) for the prompt's
+   * "About the user" block. Null (or both fields empty) suppresses
+   * the block entirely.
    */
   private userProfile: WikiUserProfile | null = null;
 
@@ -187,323 +104,11 @@ export class WikiAgent implements Agent<WikiInput, WikiOutput> {
      * slot (currently deepseek-v4-flash). Useful for tests.
      */
     modelId?: string,
-    /**
-     * Initial user profile. The worker passes this from its
-     * StartMessage; the per-article manual flow (called on the
-     * main thread) passes the values it just read off
-     * `app.userName` / `app.userLocation`. Null keeps the prompt's
-     * "About the user" block off.
-     */
+    /** Initial user profile; null keeps the "About the user" block off. */
     userProfile?: WikiUserProfile | null
   ) {
     this.model = modelId ?? agentModel('wiki').id;
     this.userProfile = userProfile ?? null;
-  }
-
-  /**
-   * Live-update the profile fields. Called by the worker on a
-   * `{type:'profile'}` postMessage so a Settings edit reaches the
-   * next cycle without a restart.
-   */
-  setUserProfile(profile: WikiUserProfile | null): void {
-    this.userProfile = profile;
-  }
-
-  async run(
-    req: AgentRunRequest<WikiInput>
-  ): Promise<AgentRunResult<WikiOutput>> {
-    const signal = req.signal ?? new AbortController().signal;
-
-    if (signal.aborted) {
-      return {
-        output: { finalText: '', inputMessageCount: 0 },
-        toolCalls: 0,
-        stoppedReason: 'aborted',
-      };
-    }
-
-    let slice: Message[];
-    let convo: VeniceMessage[];
-    try {
-      const allMessages = await this.supabase.listMessages(req.input.threadId);
-      const terminalIdx = allMessages.findIndex(
-        (m) => m.id === req.input.terminalMsgId
-      );
-      slice =
-        terminalIdx >= 0 ? allMessages.slice(0, terminalIdx + 1) : allMessages;
-
-      if (slice.length === 0) {
-        // Pathological: no messages. Mark and move on (loop's
-        // pointer-advance is unconditional on `done`).
-        return {
-          output: { finalText: '', inputMessageCount: 0 },
-          toolCalls: 0,
-          stoppedReason: 'done',
-        };
-      }
-
-      convo = slice.map(messageToVenice);
-      convo.push({
-        role: 'user',
-        content: buildWikiAutonomousPrompt({
-          userProfile: this.userProfile,
-        }),
-      });
-    } catch (err) {
-      // History fetch / prompt build failed before any Venice call.
-      // No fallback applies; surface as a normal agent error.
-      return {
-        output: { finalText: '', inputMessageCount: 0 },
-        toolCalls: 0,
-        stoppedReason: 'error',
-        error: err instanceof Error ? err.message : String(err),
-      };
-    }
-
-    // Two-shot model attempt. The fallback only triggers when the
-    // primary fails with the content-classifier sentinel; any other
-    // error (network blip, 500, parse failure) returns as-is so the
-    // loop's failure counter handles it. A single retry is enough -
-    // if the uncensored model also fails, we genuinely can't process
-    // this conversation and the loop should advance.
-    const primary = await this.runOnce({
-      modelId: this.model,
-      convo,
-      slice,
-      signal,
-      req,
-    });
-    if (primary.kind === 'ok') return primary.result;
-    if (
-      !isContentFilterRejection(primary.error) ||
-      this.model === CONTENT_FILTER_FALLBACK_MODEL
-    ) {
-      return primary.errorResult;
-    }
-
-    log.warn(
-      `content-classifier rejection on thread ${req.input.threadId}; ` +
-        `retrying with ${CONTENT_FILTER_FALLBACK_MODEL}`
-    );
-    const fallback = await this.runOnce({
-      modelId: CONTENT_FILTER_FALLBACK_MODEL,
-      convo,
-      slice,
-      signal,
-      req,
-    });
-    if (fallback.kind === 'ok') {
-      log.info(
-        `fallback ${CONTENT_FILTER_FALLBACK_MODEL} cleared content-filter ` +
-          `rejection on thread ${req.input.threadId}`
-      );
-      return fallback.result;
-    }
-    return fallback.errorResult;
-  }
-
-  /**
-   * Run a single Venice tool loop against the given model id and
-   * return either a success result or the error wrapped alongside the
-   * AgentRunResult the caller would surface unchanged. Factored out
-   * of `run()` so the primary + fallback paths share the exact same
-   * tool-loop invocation; the only thing that varies is the model
-   * id. Returns a discriminated union rather than throwing so the
-   * caller can decide whether the failure mode warrants the
-   * fallback retry without a second try/catch.
-   */
-  private async runOnce(args: {
-    modelId: string;
-    convo: VeniceMessage[];
-    slice: Message[];
-    signal: AbortSignal;
-    req: AgentRunRequest<WikiInput>;
-  }): Promise<
-    | { kind: 'ok'; result: AgentRunResult<WikiOutput> }
-    | { kind: 'error'; error: unknown; errorResult: AgentRunResult<WikiOutput> }
-  > {
-    log.info(
-      `asking ${args.modelId} about thread ${args.req.input.threadId} ` +
-        `(${args.slice.length} messages)`
-    );
-    try {
-      const result = await runHeadlessToolLoop({
-        model: args.modelId,
-        messages: args.convo,
-        toolbox: this.toolbox,
-        toolCtx: {
-          supabase: this.supabase,
-          userId: args.req.userId,
-          threadId: args.req.input.threadId,
-        },
-        signal: args.signal,
-        // Bumped from 'low' to 'medium' after production traffic
-        // showed the agent surface-pattern-matching its way through
-        // conversations - extracting every named entity into a
-        // separate article (Kermit protocol, NAK signal, ...) instead
-        // of stopping to ask "what aspect of the user does this
-        // conversation actually reveal?". Medium gives the model
-        // budget to apply the prime-directive framing before
-        // dispatching tool calls. The manual updateOne path stays
-        // on 'low' - it's a single-completion JSON shape with the
-        // user already directing the change.
-        reasoningEffort: 'medium',
-      });
-      return {
-        kind: 'ok',
-        result: {
-          output: {
-            finalText: result.finalText,
-            inputMessageCount: args.slice.length,
-          },
-          toolCalls: result.toolCalls,
-          stoppedReason: args.signal.aborted ? 'aborted' : 'done',
-        },
-      };
-    } catch (err) {
-      return {
-        kind: 'error',
-        error: err,
-        errorResult: {
-          output: { finalText: '', inputMessageCount: 0 },
-          toolCalls: 0,
-          stoppedReason: 'error',
-          error: err instanceof Error ? err.message : String(err),
-        },
-      };
-    }
-  }
-
-  /**
-   * In-panel "Retry" affordance for the Wiki Skipped page. Mirrors
-   * the autonomous worker's pipeline (claim - run - mark) but
-   * bypasses the claim protocol: this runs synchronously on the
-   * main thread when the user clicks Retry on a row, so there's no
-   * concurrent device to coordinate with. The flow:
-   *
-   *   1. Resolve the thread's terminal assistant message id
-   *      server-side (the same lateral the worker's claim RPC
-   *      computes), so the agent operates on the same anchor it
-   *      would have anyway.
-   *   2. Call `run()`, which already does the primary -> uncensored-
-   *      fallback two-shot internally. A successful run lands the
-   *      wiki_* tool side effects through the user-owned RPCs.
-   *   3. On done: call `manualAdvanceWikiPointer` to clear the skip
-   *      marker and advance `last_wiki_processed_msg_id` outside
-   *      the worker's claim guard. The Skipped panel reloads and
-   *      the row drops.
-   *   4. On error: surface the agent's error string. The skip
-   *      marker stays put so the user sees the row is still
-   *      problematic; the worker won't touch it until the
-   *      eligibility predicate matches again.
-   *
-   * `'no-op'` covers the edge case where the thread has no
-   * assistant message to anchor against (a thread the user purged
-   * messages from since the skip stamp). Caller renders a friendly
-   * message rather than an error banner.
-   */
-  async retrySkippedThread(args: {
-    threadId: string;
-    userId: string;
-    signal?: AbortSignal;
-  }): Promise<
-    | {
-        kind: 'ok';
-        terminalMsgId: string;
-        /**
-         * Number of wiki_* tool calls the agent issued. Zero is a
-         * legitimate outcome - the prompt tells the model to be
-         * conservative and skip rather than fabricate edits, and
-         * Trinity in particular leans on that. Surface the count so
-         * the UI can tell the user whether anything actually landed
-         * in the changelog.
-         */
-        toolCalls: number;
-        /**
-         * The model's one-or-two-sentence operator-facing summary of
-         * what it did and why (see WIKI_AUTONOMOUS_BODY_LINES'
-         * "Final reply" block in ./prompt.ts). Falls back to '(none)'
-         * if the model returned an empty string - same convention
-         * the worker's log line uses.
-         */
-        reasoning: string;
-      }
-    | { kind: 'no-op'; reason: string }
-    | { kind: 'error'; error: string }
-  > {
-    const signal = args.signal ?? new AbortController().signal;
-    if (signal.aborted) return { kind: 'no-op', reason: 'Retry aborted.' };
-
-    let terminalMsgId: string | null;
-    try {
-      terminalMsgId = await this.supabase.computeWikiTerminalMsgId(
-        args.threadId
-      );
-    } catch (err) {
-      return {
-        kind: 'error',
-        error: err instanceof Error ? err.message : String(err),
-      };
-    }
-    if (terminalMsgId === null) {
-      return {
-        kind: 'no-op',
-        reason: 'No assistant message to process in this thread.',
-      };
-    }
-
-    const result = await this.run({
-      input: { threadId: args.threadId, terminalMsgId },
-      userId: args.userId,
-      threadId: args.threadId,
-      signal,
-    });
-
-    if (result.stoppedReason === 'aborted') {
-      return { kind: 'no-op', reason: 'Retry aborted.' };
-    }
-    if (result.stoppedReason === 'error') {
-      return {
-        kind: 'error',
-        error: result.error ?? 'unknown error',
-      };
-    }
-    // stoppedReason === 'done'. Advance the pointer + clear the skip
-    // outside the claim protocol. Best-effort: a failure here would
-    // mean the wiki tool side effects landed but the skip marker
-    // didn't clear, leaving a stale row in the panel. Surface as an
-    // error so the user can retry (which is idempotent at the tool
-    // layer - wiki_create with the same title hits the unique
-    // constraint and the agent falls through to wiki_update).
-    try {
-      await this.supabase.manualAdvanceWikiPointer(args.threadId, terminalMsgId);
-    } catch (err) {
-      return {
-        kind: 'error',
-        error: `agent succeeded but pointer-advance failed: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      };
-    }
-    // Normalise whitespace so a stray newline in the model's summary
-    // doesn't break our single-line log convention, and fall back to
-    // a sentinel for an empty summary so a missing reasoning still
-    // shows up as something rather than as a dangling empty quote.
-    // Mirrors the same shape the worker's loop.ts uses.
-    const reasoning =
-      result.output.finalText.replace(/\s+/g, ' ').trim() || '(none)';
-    log.info(
-      `manual retry finished thread ${args.threadId} ` +
-        `(${result.toolCalls} tool calls over ` +
-        `${result.output.inputMessageCount} messages, ` +
-        `reasoning="${reasoning}")`
-    );
-    return {
-      kind: 'ok',
-      terminalMsgId,
-      toolCalls: result.toolCalls,
-      reasoning,
-    };
   }
 
   /**

@@ -73,12 +73,11 @@ indicator until the claim clears.
   (`acquire_thread_response_claim`,
   `heartbeat_thread_response_claim`,
   `release_thread_response_claim`) plus the heartbeat interval.
-  Structurally parallel to `LeaseCoordinator` in
-  `src/lib/embeddings/lease.ts` - same heartbeat pattern, same
-  `onLost`-on-decisive-false semantics, same swallow-thrown-errors
-  posture. Differs by partition key: worker leases are
-  user-level singletons keyed by `workerKind`; thread claims are
-  per-row, keyed by `threadId`.
+  Heartbeat-coordinator shape: `onLost`-on-decisive-false
+  semantics, swallow-thrown-errors posture. Claims are per-row,
+  keyed by `threadId` (not a user-level singleton - the retired
+  browser worker fleet's `LeaseCoordinator` was the singleton
+  variant of this pattern).
 - `supabase/schema.sql` (section "Thread response claim") —
   the two columns on `threads`, the partial index on the
   expiry column, and the three security-invoker RPCs.

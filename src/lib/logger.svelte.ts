@@ -1,5 +1,6 @@
 /**
- * Unified logger for main-thread and Web Worker code paths.
+ * Application logger feeding the browser console and the in-app Logs
+ * drawer.
  *
  * Two jobs, tied together because they surface the same dev-facing
  * surface area:
@@ -7,25 +8,16 @@
  *   1. Mirror `info` / `warn` / `error` calls to the browser console
  *      so regular devtools still work for the actionable tiers.
  *      `trace` and `debug` are intentionally NOT mirrored - they go
- *      only to the in-app drawer, because the high-volume per-cycle
- *      worker breadcrumbs that ride those tiers were swamping the
- *      browser console even with the Verbose filter off.
+ *      only to the in-app drawer, because high-volume breadcrumbs on
+ *      those tiers were swamping the browser console even with the
+ *      Verbose filter off.
  *   2. Feed an in-app Logs drawer (left-side panel in `Chat.svelte`)
- *      backed by a capped ring buffer of structured entries. Main-
- *      thread call sites write directly into the buffer; worker call
- *      sites postMessage a serialized entry back up, and the worker
- *      managers (embeddings / summary / reflection / attachment-
- *      expiry) route those entries into the main-thread buffer via
- *      `appendFromWorker`.
- *
- * Why one module for both contexts: call sites (e.g. the three
- * `loop.ts` drivers under `src/lib/agents/` and `src/lib/embeddings/`)
- * run inside dedicated Web Workers in production and inside Node /
- * jsdom during unit tests. They can't know their host context up
- * front, and we don't want two parallel logger APIs they'd have to
- * pick between. A single `createLogger('source')` returns the same
- * shape regardless; the module's own IS_WORKER detection decides
- * whether to push into the local buffer or postMessage.
+ *      backed by a capped ring buffer of structured entries. Local
+ *      call sites write directly into the buffer; server-side
+ *      background work (the venice function's agent fleets) arrives
+ *      through `appendFromEdge` via the user's `logs:<id>` Broadcast
+ *      channel - the edge logger emits the identical
+ *      SerializableLogEntry wire shape.
  *
  * Why capped: a misbehaving loop could spam logs indefinitely and
  * the drawer's scroll region would grow until the tab OOMs. MAX_ENTRIES
@@ -33,12 +25,12 @@
  * long session, small enough that the reactive $state array stays
  * cheap to diff.
  *
- * Why pre-serialize worker details: Error instances don't survive
- * postMessage's structured clone (the class identity is lost and
- * stack becomes undefined). We flatten into a tagged-union that the
- * renderer can reconstitute - Error -> Error-like object with
- * name/message/stack preserved - so the drawer renders worker logs
- * indistinguishably from main-thread logs.
+ * Why the tagged-union detail shape: Error instances don't survive
+ * JSON serialization (the class identity is lost and stack becomes
+ * undefined), and edge entries ride a Broadcast channel as JSON. The
+ * union lets the renderer reconstitute an Error-like object with
+ * name/message/stack preserved, so server-side logs render
+ * indistinguishably from local ones.
  */
 
 export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error';
@@ -95,7 +87,7 @@ export interface LogEntry {
    *  the renderer so the buffer stays timezone-agnostic. */
   timestamp: number;
   level: LogLevel;
-  /** Subsystem tag like `update`, `reflection-worker`, `samskara`.
+  /** Subsystem tag like `update`, `chat-loop`, `bias`.
    *  Null only for callers that don't belong to a named subsystem.
    *
    *  Level guidance for new call sites: `trace` for per-cycle worker
@@ -121,10 +113,11 @@ export interface Logger {
   error(message: string, ...details: unknown[]): void;
 }
 
-// Worker-to-main wire format. Explicit tagged union instead of raw
-// `unknown` so the receiving side can reconstitute Error instances
-// (which otherwise lose their stack through structured clone) and
-// safely JSON-stringify the rest.
+// Drawer wire format, shared with the edge logger
+// (supabase/functions/_shared/edge-log.ts). Explicit tagged union
+// instead of raw `unknown` so the receiving side can reconstitute
+// Error instances (which otherwise lose their stack through JSON
+// serialization) and safely stringify the rest.
 export type SerializableDetail =
   | { kind: 'string'; value: string }
   | { kind: 'json'; value: unknown }
@@ -138,29 +131,11 @@ export interface SerializableLogEntry {
   details: SerializableDetail[];
 }
 
-export interface WorkerLogMessage {
-  type: 'nak-log';
-  entry: SerializableLogEntry;
-}
-
 // Cap the buffer. 2000 entries is enough to cover a few hours of a
-// chatty session (reflection + embedding workers together log maybe
-// a few dozen entries per minute). Exceeding this drops from the head,
-// which matches the mental model of a scroll-back console.
+// chatty session (the edge fleets' relayed logs plus local breadcrumbs
+// run maybe a few dozen entries per minute). Exceeding this drops from
+// the head, which matches the mental model of a scroll-back console.
 const MAX_ENTRIES = 2000;
-
-// WorkerGlobalScope exists only inside dedicated/shared/service
-// workers. jsdom (vitest) and the real main-thread browser context
-// both lack it, so this check cleanly discriminates without a
-// fragile `typeof window` inversion.
-const IS_WORKER: boolean = (() => {
-  try {
-    const scope = (globalThis as { WorkerGlobalScope?: unknown }).WorkerGlobalScope;
-    return typeof scope === 'function' && self instanceof (scope as new () => unknown);
-  } catch {
-    return false;
-  }
-})();
 
 // Vitest sets `process.env.VITEST='true'` for every runner subprocess.
 // The console mirror (info/warn/error) in `writeConsole` exists so
@@ -188,10 +163,6 @@ interface DrawerState {
   open: boolean;
 }
 
-// The $state stores are created unconditionally. In a worker context
-// they just sit unread - pushEntry is never called on the worker side
-// (we postMessage instead). Cheaper than a runtime branch every time
-// someone imports the module.
 const state = $state<LogsState>({ entries: [] });
 const drawerState = $state<DrawerState>({ open: false });
 
@@ -207,21 +178,6 @@ function pushEntry(partial: Omit<LogEntry, 'id'>): void {
   }
 }
 
-function toSerializableDetail(v: unknown): SerializableDetail {
-  if (v instanceof Error) {
-    return { kind: 'error', name: v.name, message: v.message, stack: v.stack ?? null };
-  }
-  if (typeof v === 'string') return { kind: 'string', value: v };
-  try {
-    // structuredClone validates the value *is* clone-safe. If it
-    // throws (functions, DOM nodes, cyclic structures) fall back to
-    // a string repr so the entry still carries something readable.
-    return { kind: 'json', value: structuredClone(v) };
-  } catch {
-    return { kind: 'string', value: safeString(v) };
-  }
-}
-
 function fromSerializableDetail(d: SerializableDetail): unknown {
   if (d.kind === 'string') return d.value;
   if (d.kind === 'json') return d.value;
@@ -232,14 +188,6 @@ function fromSerializableDetail(d: SerializableDetail): unknown {
   e.name = d.name;
   if (d.stack) e.stack = d.stack;
   return e;
-}
-
-function safeString(v: unknown): string {
-  try {
-    return String(v);
-  } catch {
-    return '[unserializable]';
-  }
 }
 
 function writeConsole(
@@ -282,37 +230,17 @@ function emit(
   details: unknown[]
 ): void {
   writeConsole(level, source, message, details);
-  const timestamp = Date.now();
-  if (IS_WORKER) {
-    const serialized: SerializableLogEntry = {
-      timestamp,
-      level,
-      source,
-      message,
-      details: details.map(toSerializableDetail),
-    };
-    try {
-      (self as DedicatedWorkerGlobalScope).postMessage({
-        type: 'nak-log',
-        entry: serialized,
-      } satisfies WorkerLogMessage);
-    } catch {
-      // Best-effort. For info/warn/error the console mirror above
-      // still carried the log; for trace/debug a failed postMessage
-      // (e.g. non-dedicated worker context) drops the entry, since
-      // those tiers are drawer-only and have no console fallback.
-    }
-    return;
-  }
-  pushEntry({ timestamp, level, source, message, details });
+  pushEntry({ timestamp: Date.now(), level, source, message, details });
 }
 
 /**
  * Named logger for a subsystem. The `source` tag is the drawer's
  * grouping key; pick something short and stable. Existing prefixes
- * in the codebase (`update`, `reflection-worker`, `samskara`,
- * `recall-agent`, ...) are the convention - one source per file is
- * typical, but not a hard rule.
+ * in the codebase (`update`, `chat-loop`, `bias`, ...) are the
+ * convention - one source per file is typical, but not a hard rule.
+ * Edge-side sources arrive through `appendFromEdge` and share the
+ * same namespace, so a server agent and its browser-side helpers can
+ * deliberately group under one tag (the bias pipeline does).
  */
 export function createLogger(source: string): Logger {
   return {
@@ -324,14 +252,12 @@ export function createLogger(source: string): Logger {
   };
 }
 
-/**
- * Relay a worker-originated log entry into the main-thread buffer.
- * Called by each worker manager's `message` handler when it sees a
- * `{type:'nak-log'}` wire message. Does NOT re-emit to console -
- * the worker already logged there; mirroring again would double-
- * print.
- */
-export function appendFromWorker(entry: SerializableLogEntry): void {
+// Shared ingress for remotely-originated entries (Web Worker postMessage
+// or edge-function Broadcast). Both arrive pre-serialized; reconstitute
+// the details and push into the same ring buffer. No console mirror -
+// the origin already logged to its own console, and re-emitting would
+// double-print.
+function appendSerialized(entry: SerializableLogEntry): void {
   pushEntry({
     timestamp: entry.timestamp,
     level: entry.level,
@@ -341,9 +267,17 @@ export function appendFromWorker(entry: SerializableLogEntry): void {
   });
 }
 
-export function isWorkerLogMessage(data: unknown): data is WorkerLogMessage {
-  if (!data || typeof data !== 'object') return false;
-  return (data as { type?: unknown }).type === 'nak-log';
+/**
+ * Relay an edge-function-originated log entry into the buffer. Called by
+ * the `SupabaseService.subscribeToUserLogs` handler when a `nak-log`
+ * Broadcast event arrives on the user's `logs:<id>` channel. The edge
+ * logger (supabase/functions/_shared/edge-log.ts) emits the identical
+ * SerializableLogEntry shape, so server-side background work (reflection,
+ * and the other agent fleets as they migrate off the browser) renders in
+ * the drawer indistinguishably from worker logs.
+ */
+export function appendFromEdge(entry: SerializableLogEntry): void {
+  appendSerialized(entry);
 }
 
 /**

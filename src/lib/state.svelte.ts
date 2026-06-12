@@ -53,96 +53,16 @@ import {
 } from './theme';
 import { DEFAULT_LOG_LEVEL, type LogLevel } from './logger.svelte';
 
-/**
- * Lazy reference to a worker manager. Each manager module is
- * imported on the first `start()` call, which lets Vite code-split
- * the manager class + its worker bundle out of the main chunk - the
- * managers don't run until activate() fires anyway, so paying the
- * import cost on unlock instead of at first paint is a clean win.
- *
- * The captured Promise is what makes the pattern safe: stop() can
- * fire before the dynamic import resolves (e.g. the user signs out
- * faster than the network delivers the chunk), and `.then()` will
- * still run the teardown whenever the module finally lands.
- *
- * `whenLoaded(fn)` is the escape hatch for live-update calls (e.g.
- * the wiki worker's `setProfile` / `setTimezone`). It's a no-op
- * if start() never fired - a manager whose worker hasn't spawned
- * has nothing to push the update at.
- */
-function lazyManager<
-  M extends { start: (opts: never) => unknown; stop: () => void },
->(
-  load: () => Promise<M>
-): {
-  start(opts: Parameters<M['start']>[0]): void;
-  stop(): void;
-  whenLoaded(fn: (m: M) => void): void;
-} {
-  let promise: Promise<M> | null = null;
-  return {
-    start(opts) {
-      if (!promise) promise = load();
-      void promise.then((m) => void m.start(opts as never));
-    },
-    stop() {
-      if (!promise) return;
-      void promise.then((m) => m.stop());
-    },
-    whenLoaded(fn) {
-      if (!promise) return;
-      void promise.then(fn);
-    },
-  };
-}
-
-// One lazy handle per worker manager. The static imports moved here
-// so Vite code-splits each manager + its worker bundle out of the
-// main chunk - they only land when activate() kicks off the
-// background-worker startup. The shared deps (BaseWorkerManager,
-// SupabaseService, LeaseCoordinator, the logger, holder) all ride
-// the SAME dynamic-import graph, so Vite parks them in a chunk that
-// every manager chunk pulls from rather than duplicating them.
-//
-// Order doesn't matter; each handle is independent.
-//
-// Embedding backfill is no longer a worker here: it runs server-side on a
-// pg_cron schedule against the venice edge function (see
-// docs/dev/embeddings.md). Search-query embeds go through the function too
-// (SupabaseService.embed), so nothing in the browser holds a Venice key for
-// the embeddings path.
-// Six formerly-standalone workers (auto_title, summary, reflection,
-// topics, memory_topics, recipe_topics) are
-// consolidated under one supervisor worker. The supervisor owns one
-// lease, one heartbeat, one Supabase client, and one auth setup -
-// see src/lib/agents/supervisor/loop.ts for the rationale and which
-// workers stayed standalone.
-const supervisor = lazyManager(() =>
-  import('./agents/supervisor/manager').then((m) => m.supervisorManager)
-);
-const samskara = lazyManager(() =>
-  import('./agents/samskara/manager').then((m) => m.samskaraManager)
-);
-const bias = lazyManager(() =>
-  import('./agents/bias/manager').then((m) => m.biasManager)
-);
-const wiki = lazyManager(() =>
-  import('./agents/wiki/manager').then((m) => m.wikiManager)
-);
-const wikiLibrarian = lazyManager(() =>
-  import('./agents/wiki-librarian/manager').then((m) => m.wikiLibrarianManager)
-);
-// Memory librarian workers. Two agents (deep-sleep and rem) share
-// the 'memory-librarian' lease partition so only one can run at a
-// time per user across devices; their cadence gates (deep_sleep_last_
-// run_at, rem_last_run_at) are independent so they run on naturally
-// staggered schedules. Toggled together by app.memoryLibrarianEnabled.
-const deepSleep = lazyManager(() =>
-  import('./agents/deep-sleep/manager').then((m) => m.deepSleepManager)
-);
-const rem = lazyManager(() =>
-  import('./agents/rem/manager').then((m) => m.remManager)
-);
+// No background Web Workers remain. The whole fleet runs server-side
+// in the venice edge function (supabase/functions/venice/agents/),
+// driven by chat-turn tails and pg_cron sweeps: embeddings, the five
+// curation units, reflection, the wiki agents, the memory librarians,
+// the bias pipeline, and - last to move - the samskara formation
+// loop. Their output (titles, summaries, tags, memories, articles,
+// bias_summary rows, samskaras) lands in the same tables the UI
+// reads, and the UI learns about it through user-scoped realtime
+// relays wired in Chat.svelte. The Settings toggles that used to gate
+// workers are plain settings writes the server-side claim RPCs read.
 
 export type AppPhase = 'loading' | 'setup' | 'unlocked';
 
@@ -218,10 +138,12 @@ interface AppState {
    */
   notifyOnComplete: boolean;
   /**
-   * User wiki feature: background wiki worker runs unless this is
-   * explicitly false. Seeded to true on activate() so a brand-new
-   * account gets wiki entries out of the box; overwritten from
-   * Supabase `profiles.settings.wikiAutomaticEnabled` on unlock.
+   * User wiki feature: the server-side wiki sweep processes this
+   * user's threads unless this is explicitly false (the cron sweep's
+   * claim predicate reads the persisted form per candidate thread).
+   * Seeded to true on activate() so a brand-new account gets wiki
+   * entries out of the box; overwritten from Supabase
+   * `profiles.settings.wikiAutomaticEnabled` on unlock.
    */
   wikiAutomaticEnabled: boolean;
   /**
@@ -243,10 +165,11 @@ interface AppState {
   memoryLibrarianEnabled: boolean;
   /**
    * IANA timezone the model sees when reasoning about "what time is
-   * it for the user" in the per-turn metadata system message; also
-   * used by the wiki worker to bucket day-eligible threads. Seeded
-   * from the browser's detected zone on activate() so a first-time
-   * user lands on sensible defaults; overwritten from Supabase
+   * it for the user" in the per-turn metadata system message; the
+   * persisted form is also what the server-side day-gated agents
+   * (reflection, wiki) bucket eligibility against. Seeded from the
+   * browser's detected zone on activate() so a first-time user lands
+   * on sensible defaults; overwritten from Supabase
    * `profiles.settings.displayTimezone` on unlock.
    */
   displayTimezone: string;
@@ -339,12 +262,11 @@ function setNotifyOnComplete(enabled: boolean): void {
 }
 
 /**
- * Apply the display name in memory and live-update the wiki workers
- * so the next background article uses the new name without a worker
- * restart. Empty string is "not set" - the chat-loop's per-turn
- * metadata builder treats it the same as absent. The prompt builder
- * suppresses the "About the user" block when both this and
- * userLocation are empty.
+ * Apply the display name in memory. Empty string is "not set" - the
+ * chat-loop's per-turn metadata builder treats it the same as absent.
+ * No worker push remains: every prompt that renders an "About the
+ * user" block (the wiki agent, the librarian) reads
+ * profiles.settings.userName server-side per run.
  *
  * Does NOT persist. The settings-load path uses this directly (the
  * value just came back from Supabase, so persisting it again would
@@ -353,93 +275,69 @@ function setNotifyOnComplete(enabled: boolean): void {
  */
 function setUserName(name: string): void {
   app.userName = name;
-  wiki.whenLoaded((m) => m.setProfile(name, app.userLocation));
-  wikiLibrarian.whenLoaded((m) => m.setProfile(name, app.userLocation));
 }
 
 /**
- * Apply the user's location in memory and live-update the wiki
- * workers. Empty string is "not set". Does NOT persist - same split
- * as `setUserName`: the settings-load path uses this directly,
- * user-driven changes route through `persistUserLocation`.
+ * Apply the user's location in memory. Empty string is "not set".
+ * Does NOT persist - same split as `setUserName`: the settings-load
+ * path uses this directly, user-driven changes route through
+ * `persistUserLocation`.
  */
 function setUserLocation(location: string): void {
   app.userLocation = location;
-  wiki.whenLoaded((m) => m.setProfile(app.userName, location));
-  wikiLibrarian.whenLoaded((m) => m.setProfile(app.userName, location));
 }
 
 /**
- * Apply the display timezone in memory and push the new zone to the
- * wiki worker so it starts bucketing on the right days immediately.
- * Does NOT persist; user-driven changes route through
- * `persistDisplayTimezone`. Caller is responsible for normalizing
- * user-supplied input to a valid IANA name first.
+ * Apply the display timezone in memory. Does NOT persist; user-driven
+ * changes route through `persistDisplayTimezone`. Caller is
+ * responsible for normalizing user-supplied input to a valid IANA
+ * name first.
+ *
+ * No live worker push remains: both day-gated agents (reflection,
+ * wiki) read profiles.settings.displayTimezone server-side, so the
+ * persisted setting is the only consumer.
  */
 function setDisplayTimezone(tz: string): void {
   app.displayTimezone = tz;
-  wiki.whenLoaded((m) => m.setTimezone(tz || null));
-  supervisor.whenLoaded((m) => m.setTimezone(tz || null));
 }
 
 /**
- * Flip the background wiki worker on/off in the current session.
- * The toggle is the live switch, not a passive preference. Does
- * NOT persist; user-driven changes from Settings.svelte route
+ * Flip the in-memory "automatic wiki updates" flag. The live switch
+ * is the persisted setting: the server-side wiki sweep's claim
+ * predicate reads profiles.settings.wikiAutomaticEnabled per
+ * candidate thread, so there is no worker to start or stop here.
+ * Does NOT persist; user-driven changes from Settings.svelte route
  * through `persistWikiAutomaticEnabled`.
  */
 function setWikiAutomaticEnabled(enabled: boolean): void {
   app.wikiAutomaticEnabled = enabled;
-  if (!app.supabase || !app.config) return;
-  if (enabled) {
-    wiki.start({
-      supabase: app.supabase,
-      config: app.config,
-      timezone: app.displayTimezone || null,
-      userName: app.userName,
-      userLocation: app.userLocation,
-    });
-  } else {
-    wiki.stop();
-  }
 }
 
 /**
- * Flip the wiki librarian on/off. Independent of the per-conversation
- * wiki worker - the user can disable autonomy on one or the other
- * without losing the other.
+ * Flip the in-memory wiki-librarian flag. Independent of the
+ * automatic wiki agent - the user can disable autonomy on one or the
+ * other without losing the other. The live switch is the persisted
+ * setting: the librarian sweep's claim predicate reads
+ * profiles.settings.wikiLibrarianEnabled server-side, so there is no
+ * worker to start or stop here. Does NOT persist; user-driven changes
+ * route through `persistWikiLibrarianEnabled`.
  */
 function setWikiLibrarianEnabled(enabled: boolean): void {
   app.wikiLibrarianEnabled = enabled;
-  if (!app.supabase || !app.config) return;
-  if (enabled) {
-    wikiLibrarian.start({
-      supabase: app.supabase,
-      config: app.config,
-      userName: app.userName,
-      userLocation: app.userLocation,
-    });
-  } else {
-    wikiLibrarian.stop();
-  }
 }
 
 /**
- * Flip the memory librarian on/off. Toggles both deep-sleep and rem
- * together - they share the cross-device 'memory-librarian' lease
- * partition and their work is complementary, so the user-facing
- * concept is a single "memory librarian" switch.
+ * Flip the in-memory memory-librarian flag. One switch for both
+ * passes (deep-sleep and rem) - their work is complementary and they
+ * share the server-side in-flight guard, so the user-facing concept
+ * is a single "memory librarian". The live switch is the persisted
+ * setting: both sweeps' claim predicates read
+ * profiles.settings.memoryLibrarianEnabled server-side, so there is
+ * no worker to start or stop here. Does NOT persist; user-driven
+ * changes route through `persistMemoryLibrarianEnabled`.
  */
 function setMemoryLibrarianEnabled(enabled: boolean): void {
   app.memoryLibrarianEnabled = enabled;
-  if (!app.supabase || !app.config) return;
-  if (enabled) {
-    deepSleep.start({ supabase: app.supabase, config: app.config });
-    rem.start({ supabase: app.supabase, config: app.config });
-  } else {
-    deepSleep.stop();
-    rem.stop();
-  }
 }
 
 /**
@@ -746,95 +644,19 @@ export function applyServerSettings(s: UserSettings): void {
   setSystemPrompts(s.systemPrompts ?? []);
 }
 
-// One-way latch flipped by `haltBackgroundWork()` when a newer build is
-// detected. Module-scoped (not on the reactive `app` object) because it
-// must survive a lock/unlock cycle - if the user signs out and back in
-// after the update banner appears, we still don't want to fire fresh
-// workers against soon-to-be-stale code. The page reload through
-// `applyUpdate()` is the only thing that clears it.
+// One-way latch flipped by `haltBackgroundWork()` when a newer build
+// is detected. Module-scoped (not on the reactive `app` object)
+// because it must survive a lock/unlock cycle. With the worker fleet
+// fully server-side this only gates the cache resets below; it stays
+// because update.svelte.ts still calls the halt on a pending build.
 let workersHalted = false;
-
-function startBackgroundWorkers(config: AppConfig): void {
-  if (!app.supabase) return;
-  // A newer build was announced (see `haltBackgroundWork()` below) -
-  // don't fire workers that we'd just tear down. This covers the race
-  // where `onNeedRefresh` lands between `activate()` and the settings
-  // fetch that gates worker startup.
-  if (workersHalted) return;
-  // Each manager acquires a cross-tab lock before spawning its
-  // worker, so another tab holding the lock will make these calls
-  // hang internally - they're fire-and-forget by design, never
-  // await them. If there's no Supabase session yet the worker exits
-  // cleanly and state.svelte.ts doesn't need to retry; the next
-  // unlock / sign-in will call `activate()` again.
-  //
-  // The workers run concurrently and partition the shared
-  // `worker_leases` table on `worker_kind` ('reflection' / 'summary' /
-  // 'topics' / 'memory-topics' / 'recipe-topics' /
-  // 'auto_title' / 'samskara' / 'wiki') so one device can hold every
-  // lease simultaneously without contention. The summary worker feeds
-  // the drawer's search feature - it writes `threads.summary`, which the
-  // server-side cron backfill then picks up to build the searchable
-  // vector (see docs/dev/embeddings.md).
-  // The topics worker writes `threads.topics` which the drawer reads
-  // to populate the topic-filter dropdown; see docs/dev/topics.md.
-  // The memory-topics and recipe-topics workers are siblings that
-  // tag `memories.topics` and `recipes.topics` for the Memories and
-  // Recipes tabs' own topic filters. The attachment-expiry worker
-  // reclaims binaries from attachments on threads quieter than 30
-  // days. The auto-title worker fills in titles for threads still
-  // on the 'New conversation' placeholder; see docs/dev/auto-title.md.
-  // The samskara worker forms the chat model's progressively-built
-  // predictive model of the user; see docs/dev/samskara.md.
-  supervisor.start({
-    supabase: app.supabase,
-    config,
-    timezone: app.displayTimezone || null,
-  });
-  samskara.start({ supabase: app.supabase, config });
-  // Bias-observer worker silently analyzes processed conversations
-  // for cognitive-bias / System-1-heuristic evidence; the aggregated
-  // posterior feeds the system-prompt "User profile - observed
-  // patterns" block when biases clear a tier. See
-  // docs/dev/bias-profile.md.
-  bias.start({ supabase: app.supabase, config });
-  if (app.wikiAutomaticEnabled) {
-    wiki.start({
-      supabase: app.supabase,
-      config,
-      timezone: app.displayTimezone || null,
-      userName: app.userName,
-      userLocation: app.userLocation,
-    });
-  }
-  if (app.wikiLibrarianEnabled) {
-    wikiLibrarian.start({
-      supabase: app.supabase,
-      config,
-      userName: app.userName,
-      userLocation: app.userLocation,
-    });
-  }
-  if (app.memoryLibrarianEnabled) {
-    deepSleep.start({ supabase: app.supabase, config });
-    rem.start({ supabase: app.supabase, config });
-  }
-}
 
 /**
  * Transition to the unlocked state. News up `SupabaseService` and
  * `VeniceClient` against the supplied config, seeds default user
  * preferences synchronously so any reader of `app.*` before the
  * settings fetch resolves sees sane values, then kicks the
- * settings-fetch-then-workers chain.
- *
- * Workers don't start until the settings fetch has either succeeded
- * or failed. This closes a race where a worker would briefly run on
- * seed values (browser timezone, generic profile, default-on
- * toggles) and could write a wiki article with the wrong values
- * during the few hundred ms before the user's real settings landed.
- * On settings-fetch failure the workers still start with the seeds,
- * so a degraded Supabase doesn't gate the entire bootstrap.
+ * settings fetch.
  */
 export function activate(config: AppConfig): void {
   app.config = config;
@@ -866,89 +688,45 @@ export function activate(config: AppConfig): void {
   app.userLocation = '';
   app.phase = 'unlocked';
   app.error = null;
-  // Fire-and-forget settings-then-workers chain. Workers don't start
-  // until settings have either loaded successfully or failed, which
-  // closes the race where a worker would briefly run on seeds before
-  // the user's actual config arrived. The race that was open before
-  // the fix landed: workers were started immediately with seed
-  // values (browser timezone, generic profile, default-on toggle),
-  // and could write an article with the wrong values during the few
-  // hundred ms before Chat.svelte's settings fetch corrected them.
-  void loadSettingsThenStartWorkers(config);
+  // Fire-and-forget settings fetch; `applyServerSettings` overwrites
+  // the seeds above when it lands. Best-effort - a degraded Supabase
+  // doesn't gate the bootstrap.
+  void loadSettings();
 }
 
-async function loadSettingsThenStartWorkers(config: AppConfig): Promise<void> {
-  if (app.supabase) {
-    try {
-      const settings = await app.supabase.getSettings();
-      applyServerSettings(settings);
-    } catch {
-      // Best-effort: keep the seeds set in `activate()`. Workers will
-      // boot with default values in this branch - same as the legacy
-      // behaviour pre-race-fix, so a Supabase outage doesn't gate the
-      // entire bootstrap.
-    }
+async function loadSettings(): Promise<void> {
+  if (!app.supabase) return;
+  try {
+    const settings = await app.supabase.getSettings();
+    applyServerSettings(settings);
+  } catch {
+    // Best-effort: keep the seeds set in `activate()`. A Supabase
+    // outage doesn't gate the entire bootstrap.
   }
-  startBackgroundWorkers(config);
 }
 
 /**
- * Tear down every background worker and wipe the usage cache. Each
- * manager handle's stop() is a no-op when start() never fired (module
- * never loaded) and dispatches through the captured import Promise
- * otherwise - so a teardown that races a still-loading manager chunk
- * still runs when the chunk lands. Order doesn't matter; the locks are
- * independent.
- *
- * Used by `resetForSignOut()` (sign-out releases each Web Lock so a
- * queued tab can take over) and by `haltBackgroundWork()` (a newer
- * build is waiting and processing must stop on stale code until the
- * user reloads). The `resetUsage()` / `resetCatalog()` calls keep
- * billing rows and the model catalog from leaking across a sign-out /
- * sign-in-as-someone-else into the Settings panes' caches.
+ * Wipe the per-session caches. The `resetUsage()` / `resetCatalog()`
+ * calls keep billing rows and the model catalog from leaking across a
+ * sign-out / sign-in-as-someone-else into the Settings panes' caches.
  */
-function stopBackgroundWorkers(): void {
-  supervisor.stop();
-  samskara.stop();
-  bias.stop();
-  wiki.stop();
-  wikiLibrarian.stop();
-  deepSleep.stop();
-  rem.stop();
+function resetSessionCaches(): void {
   resetUsage();
   resetCatalog();
 }
 
 /**
- * Halt all background work because a newer build is waiting. Called
+ * Halt background processing because a newer build is waiting. Called
  * from `update.svelte.ts::onNeedRefresh` once the SW reports a waiting
- * version. Latches the `workersHalted` flag so that a subsequent
- * sign-out + sign-in inside the same page session cannot accidentally
- * fire workers back up on stale code - the only way out of the halted
- * state is the page reload that `applyUpdate()` performs.
- *
- * The update poller itself lives in update.svelte.ts and is not in the
- * worker list - it's what's announcing the new build, so it has to
- * keep running. Same for the in-flight chat loop: it's user-initiated,
- * not background, and the user gets to finish their turn before the
- * update banner asks them to reload.
+ * version; the page reload through `applyUpdate()` is the only way out
+ * of the halted state. With the worker fleet fully server-side this
+ * has shrunk to the cache resets - it survives as the update flow's
+ * hook point until the lease apparatus teardown decides its fate.
  */
 export function haltBackgroundWork(): void {
   if (workersHalted) return;
   workersHalted = true;
-  stopBackgroundWorkers();
-}
-
-/**
- * Forward the set of "currently open" conversation ids to the
- * bias-observer worker so it skips analyzing threads the user
- * might still be typing in. Called from Chat.svelte whenever
- * the active thread changes (opens, closes, or switches). Safe
- * to call before the worker is loaded; the manager caches the
- * value and folds it into the next start payload.
- */
-export function notifyBiasActiveConvIds(ids: readonly string[]): void {
-  bias.whenLoaded((m) => m.setActiveConvIds(ids));
+  resetSessionCaches();
 }
 
 /**
@@ -960,15 +738,15 @@ export function notifyBiasActiveConvIds(ids: readonly string[]): void {
  * still-present localStorage entry so the fix is a single-field edit
  * rather than retyping both values.
  *
- * Background workers are stopped because the services they were
- * pinned to are about to be torn down. Profile defaults are NOT
- * reset (unlike `resetForSignOut`) since the user is going to
- * re-activate against the same account once they fix the config -
- * keeping the seeds avoids a visible flash of generic timezone +
- * empty profile while settings re-load.
+ * Session caches are reset because the services they were pinned to
+ * are about to be torn down. Profile defaults are NOT reset (unlike
+ * `resetForSignOut`) since the user is going to re-activate against
+ * the same account once they fix the config - keeping the seeds
+ * avoids a visible flash of generic timezone + empty profile while
+ * settings re-load.
  */
 export function enterSetup(): void {
-  stopBackgroundWorkers();
+  resetSessionCaches();
   app.supabase = null;
   app.venice = null;
   app.config = null;
@@ -977,18 +755,18 @@ export function enterSetup(): void {
 }
 
 /**
- * Stop every background worker and reset the in-memory user state.
- * Called by the Sign-out path in Settings - sign-out is the only
- * "tear everything down" affordance the app has for an authenticated
- * session (see the phase-state-machine docblock at the top of this
- * file). The stored config in localStorage stays untouched; a
- * subsequent sign-in re-uses it without going through Setup. Use
- * `clearStoredConfig()` (config.ts) for the heavier "this device
- * should forget the project entirely" affordance, or `enterSetup()`
- * above for the "fix mistyped Supabase keys" affordance.
+ * Reset the in-memory user state and session caches. Called by the
+ * Sign-out path in Settings - sign-out is the only "tear everything
+ * down" affordance the app has for an authenticated session (see the
+ * phase-state-machine docblock at the top of this file). The stored
+ * config in localStorage stays untouched; a subsequent sign-in
+ * re-uses it without going through Setup. Use `clearStoredConfig()`
+ * (config.ts) for the heavier "this device should forget the project
+ * entirely" affordance, or `enterSetup()` above for the "fix
+ * mistyped Supabase keys" affordance.
  */
 export function resetForSignOut(): void {
-  stopBackgroundWorkers();
+  resetSessionCaches();
   app.defaultModel = DEFAULT_TIER;
   app.tierModels = {};
   app.defaultReasoningEffort = DEFAULT_REASONING_EFFORT;

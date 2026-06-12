@@ -184,8 +184,9 @@ instructions or close the dialog.
 ## The autonomous background agent
 
 A background agent reads conversations a day after they settle and
-either updates an existing article or creates a new one. The
-specifics:
+either updates an existing article or creates a new one. It runs on
+your Supabase project on an hourly schedule, not in your browser -
+articles keep accruing with no tab open. The specifics:
 
 - A conversation becomes eligible the day **after** its newest
   message lands (in your timezone). A conversation that wraps Monday
@@ -239,10 +240,11 @@ Each row shows:
 - The **timestamp** the agent gave up.
 - The **error detail** the agent received (trimmed for display).
 
-Each row carries a **Retry** button. Clicking it re-runs the wiki
-agent against the conversation right now, on the main thread, going
-through the same primary -> uncensored-fallback two-shot the worker
-uses. On success the row stays visible with the agent's verdict
+Each row carries a **Retry** button. Clicking it asks the server to
+re-run the wiki agent against the conversation right now, going
+through the same primary -> uncensored-fallback two-shot the
+scheduled sweep uses. On success the row stays visible with the
+agent's verdict
 inline: how many wiki edits landed (often **zero** - the agent's
 prompt tells it to be conservative and skip rather than fabricate
 content), and a one-line **reasoning** summary the agent wrote
@@ -252,12 +254,12 @@ you can retry again once you've made changes. The agent's writes
 (any new wiki articles, any updates) land regardless, since the
 wiki tools commit each call individually.
 
-The autonomous worker also processes skipped rows on its own
+The autonomous agent also processes skipped rows on its own
 schedule. Adding or editing turns in the conversation is not the
 trigger - skipped threads bypass the usual "wait a day after the
-last message" cooldown so the worker can pick them up on its next
+last message" cooldown so the agent can pick them up on its next
 sweep without waiting. If you want immediate feedback, use the
-Retry button; if you can wait, the worker will get to them.
+Retry button; if you can wait, the sweep will get to them.
 
 If the panel is empty, the autonomous agent hasn't given up on
 anything - that's the steady state.
@@ -265,7 +267,9 @@ anything - that's the steady state.
 ## The librarian
 
 A second background agent - the wiki **librarian** - runs every 12
-hours or so. Its job is different from the per-conversation agent:
+hours or so, on your Supabase project like the per-conversation
+agent (no tab needs to be open). Its job is different from the
+per-conversation agent:
 instead of reading a single conversation and adding to the wiki, the
 librarian looks at the wiki as a whole and tries to make it more
 coherent. It can:
@@ -314,9 +318,9 @@ it's conservative - if it isn't confident two articles overlap
 enough to merge, or that a title has drifted far enough to need a
 rename, it leaves them alone.
 
-The 12-hour minimum interval is enforced atomically across devices
-(via a Postgres claim); only one run happens per cycle even if you
-have the app open on multiple devices.
+The 12-hour minimum interval is enforced server-side (via an atomic
+Postgres claim); exactly one scheduled run happens per cycle no
+matter how many devices you have the app open on - or none.
 
 You can disable the librarian independently from the per-conversation
 agent in **Settings -> Wiki**. The two toggles are independent: you
@@ -350,8 +354,10 @@ step. The confirmation strip surfaces this before you commit.
 A manual run does **not** reset the 12-hour cadence for the next
 background run. Manual and scheduled runs are independent.
 
-The button is grayed out while a scheduled librarian run is in
-flight - the two paths never write to the wiki at the same time.
+The three ways a librarian run can start (scheduled, this button,
+and the chat-driven path below) are mutually exclusive: starting one
+while another is in flight shows a "try again in a moment" message
+instead of racing two passes over the wiki.
 
 ### Asking Nak to run the librarian from the chat
 

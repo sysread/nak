@@ -74,6 +74,8 @@ export const conversationSearch: ToolDef = {
     // applied unconditionally here because main chat is the only
     // currently-active caller post-cut.
     const hits = ((data ?? []) as ThreadEmbeddingHit[])
+      // Null threadId (a cross-thread librarian run) simply excludes
+      // nothing - there is no current conversation to echo back.
       .filter((h) => h.id !== ctx.threadId)
       .slice(0, limit);
     if (hits.length === 0) return [];

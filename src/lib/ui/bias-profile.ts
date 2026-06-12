@@ -11,7 +11,7 @@ import type { Tier } from '$lib/bias/types';
 /**
  * Fallback for a thread title rendered as a clickable link in the
  * per-bias drill-down. A thread can reach the bias table before
- * the auto-title worker has produced anything; the bracketed
+ * the auto-title agent has produced anything; the bracketed
  * sentinel keeps the link scannable and unambiguous about what's
  * missing. Idiom matches `wiki-skipped-panel.ts:displayTitle` so
  * the two drill-down surfaces read the same way.
@@ -40,7 +40,7 @@ export function observationsLabel(n: number): string {
  * opaque without knowing the surfacing machinery; this expands it
  * into what the tier means and whether it reaches the system
  * prompt. Keyed off the same three-way `Tier` the gates produce
- * (see `src/lib/bias/math.ts:tierFor`).
+ * (see the tier rule in supabase/functions/_shared/bias-math.ts).
  */
 export function tierTitle(tier: Tier): string {
   switch (tier) {

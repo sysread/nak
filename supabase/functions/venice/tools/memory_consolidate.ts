@@ -1,0 +1,113 @@
+// memory_consolidate (function-side port)
+//
+// Merge two duplicate memories into one. The memory librarians' (rem,
+// deep-sleep) single content-write primitive; not reachable from
+// reflection or the main chat (consolidation is a cross-row decision
+// the per-turn agents shouldn't be making). Wire schema lives with the
+// librarian toolbox in agents/_memory_librarian_tools.ts.
+//
+// The heavy lifting lives in the `consolidate_memories` Postgres RPC
+// so the four-step sequence (write survivor content + max confidence,
+// halve loser, redirect memory_conversation rows, redirect
+// memory_relations edges with self-loop and duplicate cleanup) runs
+// in one transaction. See supabase/schema.sql for the rationale on
+// each step. Auth: b-strict - the RPC takes p_user_id and enforces
+// per-row ownership against it (the admin client bypasses RLS, so
+// those explicit checks are the whole guarantee).
+//
+// Confidence-handling note: the survivor's post-merge confidence is
+// `greatest(survivor.confidence, loser.confidence)`, NOT a bump.
+// Two threads independently producing the same fact IS corroboration,
+// but we preserve the strongest existing evidence rather than
+// manufacturing new evidence - repeated consolidation passes would
+// otherwise systematically inflate the store.
+
+import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
+import { appendMemoryChangelog } from './_memory_changelog.ts';
+
+// Mirror of MAX_MEMORY_DATA_CHARS in src/lib/memories.ts.
+const MAX_MEMORY_DATA_CHARS = 8000;
+
+export const memoryConsolidate: ToolDef = {
+  name: 'memory_consolidate',
+  async execute(args: Record<string, unknown>, ctx: ToolContext) {
+    const survivorId =
+      typeof args.survivor_id === 'string' ? args.survivor_id.trim() : '';
+    const loserId = typeof args.loser_id === 'string' ? args.loser_id.trim() : '';
+    const label = typeof args.label === 'string' ? args.label.trim() : '';
+    const data = typeof args.data === 'string' ? args.data : '';
+
+    if (!survivorId) throw new Error('survivor_id is required');
+    if (!loserId) throw new Error('loser_id is required');
+    if (survivorId === loserId) {
+      throw new Error('survivor_id and loser_id must differ');
+    }
+    if (label.length === 0) throw new Error('label is required');
+    if (data.length === 0) throw new Error('data is required');
+    if (data.length > MAX_MEMORY_DATA_CHARS) {
+      throw new Error(
+        `data exceeds ${MAX_MEMORY_DATA_CHARS}-char limit (got ${data.length}); ` +
+          'consolidation needs a single condensed body, not the concatenation of two',
+      );
+    }
+
+    // Snapshot the loser's label before the merge so the changelog
+    // message reads "Merged X into this". Best-effort and resilient:
+    // the label is only used to phrase the message, so a fetch failure
+    // (or a stale loser id) must not abort the consolidation - it just
+    // falls back to generic phrasing. Kept outside the consolidate
+    // call so the RPC's own errors still propagate verbatim.
+    let loserLabel: string | undefined;
+    try {
+      // RLS OFF: filter by userId.
+      const { data: loser } = await ctx.adminClient
+        .from('memories')
+        .select('label')
+        .eq('id', loserId)
+        .eq('user_id', ctx.userId)
+        .maybeSingle();
+      loserLabel = (loser as { label: string } | null)?.label.trim() || undefined;
+    } catch {
+      // best-effort; generic phrasing below covers the missing label.
+    }
+
+    const { data: confidence, error } = await ctx.adminClient.rpc(
+      'consolidate_memories',
+      {
+        p_survivor_id: survivorId,
+        p_loser_id: loserId,
+        p_new_label: label,
+        p_new_data: data,
+        p_user_id: ctx.userId,
+      },
+    );
+    if (error) throw new Error(`consolidateMemories failed: ${error.message}`);
+    if (typeof confidence !== 'number') {
+      throw new Error(
+        `consolidate_memories returned non-numeric: ${JSON.stringify(confidence)}`,
+      );
+    }
+
+    // Record the merge as an 'update' on the survivor - consolidation is
+    // the librarian's only content-write, and "combining" is exactly the
+    // change the user wants visible in the changelog. The message is
+    // auto-generated (the librarian tool carries no message param);
+    // best-effort, like the other write paths.
+    try {
+      await appendMemoryChangelog(ctx.adminClient, ctx.userId, {
+        memory_id: survivorId,
+        kind: 'update',
+        label_at_change: label,
+        message: loserLabel
+          ? `Merged "${loserLabel}" into this memory.`
+          : 'Merged a duplicate memory into this one.',
+      });
+    } catch {
+      // best-effort by design
+    }
+
+    return { survivor_id: survivorId, confidence };
+  },
+};
+
+registerTool(memoryConsolidate);

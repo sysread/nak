@@ -42,8 +42,6 @@
   import type { Memory, MemoryRelation, SimilarMemory } from '$lib/supabase';
   import Markdown from '../components/Markdown.svelte';
   import MemoryChangelogPanel from '../components/MemoryChangelogPanel.svelte';
-  import { deepSleepRunner } from '$lib/agents/deep-sleep/runner.svelte';
-  import { remRunner } from '$lib/agents/rem/runner.svelte';
   import { librarianRun } from '$lib/agents/memory-librarian-run.svelte';
   import {
     librarianPassInfo,
@@ -901,8 +899,10 @@
   // "open the confirm strip for this pass" rather than running. The
   // actual run starts when the user confirms via confirmLibrarianRun.
   function openLibrarianConfirm(pass: MemoryLibrarianPass): void {
-    // Don't stack a confirm on top of an in-flight run.
-    if (deepSleepRunner.busy || remRunner.busy) return;
+    // Don't stack a confirm on top of an in-flight run. (Collisions
+    // with scheduled server-side runs are the in-flight guard's job;
+    // this only debounces the local strip.)
+    if (librarianRun.running) return;
     librarianConfirm = pass;
   }
 

@@ -209,15 +209,16 @@ present on every section - Chats, Recipes, Memories, and Wiki -
 so you can pop the drawer open without first switching back to a
 chat. The drawer is a live feed of everything Nak writes to its
 internal logs - service-worker updates, reflection / summary
-worker progress, recall-agent breadcrumbs, and anything else a
-background subsystem wants to tell you about. (Embedding backfill
-runs on your Supabase project, not in the browser, so it logs there
-rather than in this drawer.)
+agent progress, recall-agent breadcrumbs, and anything else a
+background subsystem wants to tell you about. (Server-side work,
+like embedding backfill and the curation agents, reaches the
+drawer over a live relay - entries published while the app is
+closed land only in your Supabase project's function logs.)
 
 Useful when:
 
 - A reply took an unusually long time and you want to see whether a
-  background worker was blocked.
+  background job was stuck.
 - The "new version" banner behaves unexpectedly - every service-
   worker state transition lands in the drawer.
 - You filed a bug and the maintainers asked for log context.
@@ -228,7 +229,7 @@ Controls inside the drawer:
   / Debug+ / Info+ / Warn+ / Error). The `+` means "this level and
   everything more severe", matching the filter behaviour of the
   browser devtools console. `Trace+` is the most permissive setting
-  and surfaces the per-cycle breadcrumbs background workers emit
+  and surfaces the per-cycle breadcrumbs background jobs emit
   even when they have nothing to do; `Debug+` is the default and
   hides those routine pings while still showing every decision worth
   keeping visible. The drawer opens at whatever you've set as your
@@ -236,12 +237,12 @@ Controls inside the drawer:
   dropdown here is a within-session override that resets on the
   next open.
 - **Source dropdown** - narrow the feed to a single subsystem tag
-  (e.g. `reflection-worker`, `summary-worker`, `samskara`). The list is
+  (e.g. `reflection`, `summary`, `auto-title`). The list is
   built dynamically from the tags actually present in the current
   buffer, so it never offers options that would match nothing. Starts
   at **All sources**; the dropdown is greyed out until at least one
   entry with a source has landed. The level filter still applies on
-  top, so picking a worker tag and stepping the level down to `Trace+`
+  top, so picking a source tag and stepping the level down to `Trace+`
   is the fastest way to read one subsystem's per-cycle breadcrumbs in
   isolation.
 - **Search box** - case-insensitive substring match against the
@@ -256,7 +257,7 @@ Controls inside the drawer:
   the next log event onward.
 
 Each entry shows the level, the local time it was captured, the
-subsystem it came from (e.g. `[reflection-worker]`), and the message.
+subsystem it came from (e.g. `[reflection]`), and the message.
 When the message carried structured details - an error stack, a JSON
 payload, a captured object - a caret appears at the left of the row;
 click to expand / collapse the pretty-printed detail.
@@ -266,21 +267,24 @@ at the matching level, so if you are more comfortable filtering there
 the drawer doesn't take anything away - it just adds an in-app view
 that travels with the PWA install.
 
-### Samskara diagnostics
+### Conversation mood
 
 Click the **mood emoji** at the bottom-right of the conversation
-pane (the persistent pill that updates when a samskara mints) to open a
-dedicated **samskara diagnostics** screen - a read-only window into
-the samskara pipeline for the current conversation. Useful while
-vetting the feature or debugging a "why did the model seem to
-already expect X" moment.
+pane (the persistent pill that updates when a samskara mints) to
+open the **conversation mood** pop-up - where the current
+conversation's latest read sits between warm and cool, confident
+and tentative. The pop-up is the per-conversation view only;
+everything corpus-wide (browsing every instinct, pipeline health,
+the always-on summary) lives on the **Samskara tab** in the
+conversation drawer - see [Samskara](./samskara.md).
 
 The pill is visible whenever a conversation is open. On a thread
 that has fired before, the pill seeds from the most recent stored
 fire so the emoji you see right after opening matches the model's
 last read. On a thread with no fire history it shows 💤 as a
-"nothing to report" placeholder; the diagnostics screen will say
-so explicitly. As soon as the worker mints something new, the
+"nothing to report" placeholder. As soon as a new samskara mints -
+the forming happens on the server within a couple of turns of the
+exchange that earned it, whether or not the tab stays open - the
 emoji swaps to track that mint. On the brand-new-chat screen with
 no conversation selected the pill is hidden - there's no context
 yet to predict against.
@@ -295,34 +299,17 @@ The emoji is picked from a small two-axis table:
   one; a tentative neutral read shows up as 🤨 (skeptical) instead
   of 😐, and so on.
 
-Hover the pill for the disambiguating label, or open the
-diagnostics screen below: it has a fold-away **legend** that plots
-all ten cells with their valence ranges and the confidence cutoff,
-sourced directly from the same lookup the pill uses (so the legend
-can never drift), and overlays a small **glowing red dot** on the
-cell where the pill currently sits.
-
-The screen shows:
-
-- **Overview counters** - total samskaras (split by tier), total
-  pair associations across the corpus, and per-chat counts for
-  substrate records and cohort fires.
-- **Mood-pill legend** - a dismissable table illustrating the
-  (valence x confidence) lookup the pill is reading from, with
-  axis labels and the boundaries of each band. A glowing red dot
-  marks the current pill position; the row tells you the valence
-  band, the column tells you confident vs. tentative, and the line
-  beneath the table reads out the exact valence and confidence
-  numbers that produced it. Defaults to open on first arrival;
-  click the summary line to fold it once you've internalised the
-  axes.
-- **Compound summary** - the prose block currently riding in every
-  system prompt, plus how many samskaras it covers and when the
-  worker last regenerated it.
+Hover the pill for the disambiguating label, or open the pop-up:
+it holds a fold-away **legend** that plots all ten cells with
+their valence ranges and the confidence cutoff, sourced directly
+from the same lookup the pill uses (so the legend can never
+drift), and overlays a small **glowing red dot** on the cell where
+the pill currently sits. The line beneath the table reads out the
+exact valence and confidence numbers that produced it.
 
 Per-turn detail (which samskaras fired on a specific user message,
-plus the assimilator's notes for that round) lives **inline in the
-chat transcript**, not in this modal. See **Per-message diagnostics**
+plus Nak's notes for that round) lives **inline in the chat
+transcript**, not in this pop-up. See **Per-message diagnostics**
 below.
 
 ### Per-message diagnostics
@@ -336,7 +323,7 @@ panel anchored to that turn. The panel shows:
   **disconfirmed**, or **pending**, depending on what the reaction
   classifier did with it on the following turn.
 - The **substrate row** for the same round, lifted to the top of the
-  panel with an accent stripe because it's the worker's after-the-
+  panel with an accent stripe because it's Nak's after-the-
   fact summary of what actually happened on this turn ("user asked
   X about Y, expressing Z" / "the assistant did W and it landed P").
   Includes its lifecycle state (pending assimilation, assimilated
@@ -348,23 +335,10 @@ panel anchored to that turn. The panel shows:
   score, valence, confidence, and health.
 
 The icon only appears on messages that produced at least one fire
-or substrate row, so cold-start messages and any turn the worker
+or substrate row, so cold-start messages and any turn Nak
 couldn't predict against stay clean. Panels remember whether you
 opened them for the duration of the open thread; switching to
 another conversation collapses them all.
-
-The toolbar also has a **Consolidate** button. The samskara
-worker runs the same consolidation pass automatically each
-rotation, so this is a "do it now without waiting for the
-background pass" trigger rather than the only way merges happen.
-Two things trigger a merge: tier-1 samskaras that reliably fire in
-the same cohort (i.e. behaviourally redundant - one captures what
-the other captures, regardless of how the text reads), and a
-population-count safety cap if the tier-1 pool is still above
-target after the co-firing pass. Merged losers have their fires
-and provenance migrated to the winner (the older row). Capped at
-20 merges per click - re-click to drain further. Idempotent; a
-second click against a clean pool reports "Nothing to consolidate".
 
 Closes via the ×, Escape, or clicking the backdrop.
 

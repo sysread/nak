@@ -76,15 +76,12 @@
   } from '$lib/wiki';
   import { onWikiChange, emitWikiChange } from '$lib/wiki-events';
   import { WikiAgent, type WikiUpdateOneResult } from '$lib/agents/wiki/agent';
-  import {
-    runManually as runLibrarianManually,
-    type RunManuallyResult,
-    type LibrarianProgress,
-  } from '$lib/agents/wiki-librarian/runner.svelte';
   import type {
+    AgentRunProgressEvent,
     WikiArticle,
     WikiArticleSource,
     WikiArticleRelated,
+    WikiLibrarianRunResult,
   } from '$lib/supabase';
   import { extractHeadings, uniqueSlug, type HeadingEntry } from '$lib/markdown';
   import Markdown from '../components/Markdown.svelte';
@@ -757,12 +754,14 @@
   // Triggered by the top-bar button in Chat.svelte via the
   // `triggerLibrarianRun` $bindable prop. Confirmation strip with an
   // optional custom-instructions textarea is rendered at the top of
-  // the panel below; submitting calls `runLibrarianManually()` (a
-  // main-thread runner that does NOT touch the scheduled worker's
-  // claim RPC, so the next periodic run still fires on its 12h
-  // cadence). The button itself is disabled while either a scheduled
-  // run is in flight (`wikiLibrarianRunner.workerBusy`) or this
-  // strip's own submission is in flight (`librarianBusy`).
+  // the panel below; submitting POSTs to the venice function's
+  // /wiki-librarian-run route (SupabaseService.runWikiLibrarian). The
+  // run does NOT touch the scheduled sweep's cadence stamp, so the
+  // next periodic run still fires on its 12h clock. Collisions with a
+  // scheduled or chat-dispatched run come back as a `busy` result
+  // from the shared server-side in-flight guard; the button itself is
+  // only disabled while this strip's own submission is in flight
+  // (`librarianBusy`).
   let librarianConfirmOpen = $state(false);
   // True when the user has asked for the Skipped panel (top-bar
   // alert button). Mutually exclusive with the librarian strip and
@@ -772,17 +771,19 @@
   let librarianInstructions = $state('');
   let librarianBusy = $state(false);
   let librarianError = $state<string | null>(null);
-  let librarianResult = $state<RunManuallyResult | null>(null);
+  let librarianResult = $state<WikiLibrarianRunResult | null>(null);
   let librarianTextarea = $state<HTMLTextAreaElement | null>(null);
 
-  // Live step list for the manual librarian run. Each `LibrarianProgress`
-  // event from the runner gets translated into one row here; the
-  // template renders them with the rotating-glyph spinner next to
-  // whichever row is still `pending`, a check on the ones that finished
-  // cleanly, and an X on any that errored. Without this the user sees
-  // nothing but "Working..." for the 10-30 seconds the agent takes,
-  // even though the underlying tool calls each narrate themselves via
-  // the dispatcher-injected `activity` field.
+  // Live step list for the manual librarian run. The run executes
+  // server-side; each progress event arrives over the agent-runs
+  // Broadcast channel (see SupabaseService.subscribeToAgentRunProgress)
+  // and gets translated into one row here. The template renders them
+  // with the rotating-glyph spinner next to whichever row is still
+  // `pending`, a check on the ones that finished cleanly, and an X on
+  // any that errored. Without this the user sees nothing but
+  // "Working..." for the 10-30 seconds the agent takes, even though
+  // the underlying tool calls each narrate themselves via the
+  // runner-injected `activity` field.
   interface LibrarianStep {
     label: string;
     status: 'pending' | 'ok' | 'error';
@@ -799,7 +800,7 @@
     const last = librarianSteps[librarianSteps.length - 1];
     if (last && last.status === 'pending') last.status = 'ok';
   }
-  function pushLibrarianStep(event: LibrarianProgress): void {
+  function pushLibrarianStep(event: AgentRunProgressEvent): void {
     if (event.kind === 'preparing') {
       const n = event.articleCount;
       librarianSteps.push({
@@ -820,8 +821,9 @@
       settleTrailingPending();
       // Prefer the model's narration; fall back to the bare tool name
       // when the model emitted an empty activity (shouldn't happen -
-      // dispatch.ts marks activity required - but be robust to model
-      // misbehaviour rather than rendering an empty row).
+      // the runner marks activity required when progress is wired -
+      // but be robust to model misbehaviour rather than rendering an
+      // empty row).
       const label = event.activity.trim() || event.name;
       librarianSteps.push({
         label,
@@ -936,27 +938,44 @@
     librarianError = null;
     librarianResult = null;
     librarianSteps = [];
+    // Subscribe to the progress channel BEFORE the POST so the first
+    // step events can't race the subscription (the same pre-subscribe
+    // rule streaming chat follows). The runId filter keeps a stale or
+    // concurrent run's events out of this strip's step list.
+    const runId = crypto.randomUUID();
+    let unsubscribe: (() => void) | null = null;
     try {
       const session = await app.supabase.getSession();
       if (!session) {
         librarianError = 'Not signed in.';
         return;
       }
-      const result = await runLibrarianManually({
-        supabase: app.supabase,
-        userId: session.user.id,
-        userName: app.userName,
-        userLocation: app.userLocation,
-        customInstructions: librarianInstructions.trim() || null,
-        onProgress: pushLibrarianStep,
+      unsubscribe = app.supabase.subscribeToAgentRunProgress(
+        session.user.id,
+        (event) => {
+          if (event.runId === runId) pushLibrarianStep(event);
+        }
+      );
+      const result = await app.supabase.runWikiLibrarian({
+        instructions: librarianInstructions.trim() || null,
+        runId,
       });
       librarianResult = result;
-      if (result.kind === 'error') {
+      if (result.kind === 'busy') {
+        librarianError =
+          'A librarian run is already in flight (scheduled or chat-driven). Try again in a moment.';
+      } else if (result.kind === 'error') {
         librarianError = result.error ?? 'Librarian run failed.';
+      } else {
+        // Fire the local refresh immediately - the wiki_articles
+        // realtime echo also arrives, but consumers refetch
+        // idempotently and the local fire keeps the panel snappy.
+        emitWikiChange();
       }
     } catch (err) {
       librarianError = err instanceof Error ? err.message : String(err);
     } finally {
+      unsubscribe?.();
       librarianBusy = false;
     }
   }

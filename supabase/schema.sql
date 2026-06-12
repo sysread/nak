@@ -687,7 +687,17 @@ drop function if exists public.expire_old_attachments(int);
 alter table public.threads
   add column if not exists last_reflected_msg_id uuid references public.messages(id) on delete set null,
   add column if not exists reflection_holder_id text,
-  add column if not exists reflection_claim_expires_at timestamptz;
+  add column if not exists reflection_claim_expires_at timestamptz,
+  -- Attempt accounting, stamped AT CLAIM TIME by both reflection
+  -- claims. Counting attempts (not failures) is deliberate: a run
+  -- that dies to the invocation wall clock never reaches an error
+  -- handler, so a failure counter would miss exactly the deaths that
+  -- need bounding. Three attempts at the same terminal message and
+  -- the claims stop offering the thread; a new conversation turn
+  -- changes the terminal message and refreshes the budget. A
+  -- successful mark resets the count.
+  add column if not exists reflection_attempt_msg_id uuid,
+  add column if not exists reflection_attempt_count int not null default 0;
 
 -- Claim-lookup index. Partial on `reflection_holder_id is not null` so
 -- the index only carries live claims — the common case is 0 rows
@@ -698,17 +708,17 @@ create index if not exists threads_reflection_claim_idx
 
 -- Summarisation + search pipeline ----------------------------------------
 --
--- Two workers cooperate to make conversations searchable:
+-- Two pipelines cooperate to make conversations searchable:
 --
---   1. The summary agent (src/lib/agents/summary/*) takes a thread and
---      writes a 2–3 sentence topical summary into `threads.summary`.
---      `last_summarised_msg_id` points at the terminal assistant
---      message we've summarised up to — same shape as
---      `last_reflected_msg_id`, same reasons (stable ids, no clock
---      skew). The per-thread claim columns mirror the reflection
---      agent exactly; the top-rail lease is a separate worker_kind
---      ('summary') so a device can hold summary + reflection +
---      embedding leases simultaneously.
+--   1. The summary agent (supabase/functions/venice/agents/summary.ts)
+--      takes a thread and writes a 2-3 sentence topical summary into
+--      `threads.summary`. `last_summarised_msg_id` points at the
+--      terminal assistant message we've summarised up to - same shape
+--      as `last_reflected_msg_id`, same reasons (stable ids, no clock
+--      skew). Two drivers run it: the chat turn's waitUntil tail
+--      (per-user) and the hourly curation sweep (cross-user). The
+--      per-thread claim columns are the only mutual exclusion between
+--      them - there is no worker lease for this unit.
 --
 --   2. The embeddings worker (src/lib/embeddings/*) then embeds
 --      `title + summary` into `embedding` so the search RPC below can
@@ -744,13 +754,14 @@ create index if not exists threads_embedding_claim_idx
 
 -- Auto-title pipeline ---------------------------------------------------
 --
--- The auto-title worker (src/lib/agents/auto_title/*) names threads that
--- are still on the `'New conversation'` placeholder. Per-thread claim
--- columns mirror the reflection / summary pair exactly; the singleton
--- lease is a separate `worker_kind` ('auto_title') so a device can hold
--- it concurrently with the others. Title generation is a single fast-
--- model completion against the opening user message - shape is one
--- non-streaming Venice call per thread, so 60s of claim TTL is plenty.
+-- The auto-title agent (supabase/functions/venice/agents/auto_title.ts)
+-- names threads that are still on the `'New conversation'` placeholder.
+-- Per-thread claim columns mirror the summary pair exactly and are the
+-- only mutual exclusion between the two drivers (chat-turn waitUntil
+-- tail and hourly curation sweep) - no worker lease. Title generation
+-- is a single fast-model completion against the opening user message -
+-- shape is one non-streaming Venice call per thread, so the 120s claim
+-- TTL the drivers pass has plenty of headroom.
 --
 -- The eligibility predicate is "title still default AND user did not
 -- pin a title manually AND there is at least one user message to title
@@ -766,16 +777,17 @@ create index if not exists threads_auto_title_claim_idx
 
 -- Topic-tagging pipeline ------------------------------------------------
 --
--- The topics worker (src/lib/agents/topics/*) tags each thread with a
--- short flat set of topic strings ('baking', 'sourdough', 'programming',
--- etc.) so the conversation drawer can offer a topic filter alongside
--- the default date-sorted list. The agent reads the conversation, the
--- existing per-user topic vocabulary, and asks the fast model to pick
--- 1-4 topics - reusing existing names when they fit so the vocabulary
--- doesn't sprawl into near-duplicates over time. Per-thread claim
--- columns mirror summary / auto_title exactly; the singleton lease is a
--- separate `worker_kind` ('topics') so a device can hold it concurrently
--- with the others.
+-- The thread-topics agent
+-- (supabase/functions/venice/agents/thread_topics.ts) tags each thread
+-- with a short flat set of topic strings ('baking', 'sourdough',
+-- 'programming', etc.) so the conversation drawer can offer a topic
+-- filter alongside the default date-sorted list. The agent reads the
+-- conversation, the existing per-user topic vocabulary, and asks the
+-- fast model to pick 1-4 topics - reusing existing names when they fit
+-- so the vocabulary doesn't sprawl into near-duplicates over time.
+-- Per-thread claim columns mirror summary / auto_title exactly and are
+-- the only mutual exclusion between the chat-turn tail and the hourly
+-- curation sweep - no worker lease.
 --
 -- `topics` defaults to '{}' (empty array) so existing rows match
 -- "untagged" without a backfill. `last_topics_msg_id` is the terminal
@@ -945,8 +957,9 @@ create trigger clear_memory_embedding_on_change
 
 -- Memory topic-tagging pipeline -----------------------------------------
 --
--- Same shape as threads.topics (see "Topic-tagging pipeline" above): a
--- background worker (src/lib/agents/memory_topics/*) tags each memory
+-- Same shape as threads.topics (see "Topic-tagging pipeline" above):
+-- the memory-topics agent
+-- (supabase/functions/venice/agents/memory_topics.ts) tags each memory
 -- with a short flat set of topic strings so the Memories drawer can
 -- offer a topic filter. The agent reads the memory's label+data plus
 -- the user's existing per-account vocabulary and picks 1-4 topics,
@@ -1179,10 +1192,11 @@ create policy "memory_relations are self-deletable"
 --     librarian looks for missed relations and hidden duplicates that
 --     only surface when memories appear together in conversation.
 --
--- Both agents acquire the SAME lease partition ('memory-librarian'),
--- which is the cross-device mutex - only one of them can run at a time
--- per user. Cadence drift naturally separates them most of the time;
--- the lease catches the rare overlap.
+-- Both agents share ONE in-flight guard (the holder+TTL pair below) -
+-- only one of them can run at a time per user, across every entry
+-- path (the two cron sweeps and the two manual-run routes). Cadence
+-- drift naturally separates the scheduled runs most of the time; the
+-- guard catches the rare overlap.
 --
 -- Schema additions for this feature, applied here:
 --
@@ -1192,14 +1206,17 @@ create policy "memory_relations are self-deletable"
 --     referenced during recall on a conversation. last_seen_at /
 --     last_processed_at gate the eligibility predicate.
 --   - profiles.deep_sleep_last_run_at, profiles.rem_last_run_at:
---     cross-device cadence gates, modelled on
+--     per-user cadence gates, modelled on
 --     profiles.wiki_librarian_last_run_at.
---   - claim_deep_sleep_run / claim_rem_run: atomic claim RPCs, same
---     shape as claim_wiki_librarian_run.
+--   - claim_next_user_for_deep_sleep / claim_next_user_for_rem:
+--     global SECURITY DEFINER sweeps for the cron-driven venice
+--     routes (stamp-before-run, most-overdue user first).
+--   - claim_memory_librarian_inflight / release: the shared run
+--     mutex described above.
 --   - consolidate_memories: the agent's content-write primitive. Single
 --     RPC so the (survivor confidence, loser invalidate, memory_conversation
 --     redirect, memory_relations redirect) sequence is one atomic
---     transaction - the agent dispatch happens client-side; this is
+--     transaction - the agent loop runs in the venice function; this is
 --     just the bookkeeping the agent doesn't need to think about.
 
 alter table public.memories
@@ -1290,63 +1307,151 @@ drop policy if exists "memory_conversation is self-deletable" on public.memory_c
 create policy "memory_conversation is self-deletable" on public.memory_conversation
   for delete using (auth.uid() = user_id);
 
--- Cadence gates for the two librarian workers. Modelled on
--- profiles.wiki_librarian_last_run_at - same UPDATE-with-WHERE
--- atomic claim, same 12h default interval enforced by the RPC.
+-- Cadence gates + run coordination for the two librarian agents.
+-- Same machinery as the wiki librarian's (see that section for the
+-- full rationale): a per-pass cadence stamp claimed by a global
+-- SECURITY DEFINER sweep (stamp lands BEFORE the run so a crashed
+-- run waits out the interval instead of retrying hot), plus ONE
+-- shared holder+TTL in-flight guard covering both passes - the
+-- server-side successor to the browser workers' shared
+-- 'memory-librarian' lease. All four entry paths (the rem and
+-- deep-sleep cron sweeps, and both Memories-panel manual-run
+-- routes) take the guard; manual runs take ONLY the guard, never
+-- the cadence stamp (user-driven runs don't reset the 12h clock).
 
 alter table public.profiles
   add column if not exists deep_sleep_last_run_at timestamptz,
-  add column if not exists rem_last_run_at timestamptz;
+  add column if not exists rem_last_run_at timestamptz,
+  add column if not exists memory_librarian_inflight_holder text,
+  add column if not exists memory_librarian_inflight_expires_at timestamptz;
 
--- Atomic claim for the deep-sleep agent. Mirrors
--- claim_wiki_librarian_run exactly; see the wiki librarian section
--- below for the rationale on the UPDATE-with-WHERE shape and why
--- this is the cross-device coordination primitive.
+-- Claim the next user due for a scheduled deep-sleep run, across ALL
+-- users. Gated on the memory-librarian Settings toggle (only the
+-- literal string 'false' disables - matching the client's `?? true`
+-- default, and a cast could wedge the global sweep on one malformed
+-- value). Most-overdue user first; returns their user_id or no row
+-- when nobody is due. EXECUTE locked to service_role: the only
+-- caller is the cron-driven venice route.
 drop function if exists public.claim_deep_sleep_run(int);
-create or replace function public.claim_deep_sleep_run(
+drop function if exists public.claim_next_user_for_deep_sleep(int);
+create or replace function public.claim_next_user_for_deep_sleep(
   p_min_interval_seconds int
+) returns uuid
+language sql security definer
+set search_path = public as $$
+  with candidate as (
+    select p.user_id
+      from public.profiles p
+     where (p.settings->>'memoryLibrarianEnabled') is distinct from 'false'
+       and (
+         p.deep_sleep_last_run_at is null
+         or p.deep_sleep_last_run_at
+              < now() - make_interval(secs => p_min_interval_seconds)
+       )
+     order by p.deep_sleep_last_run_at asc nulls first
+     limit 1
+     for update of p skip locked
+  )
+  update public.profiles p
+     set deep_sleep_last_run_at = now()
+    from candidate c
+   where p.user_id = c.user_id
+  returning p.user_id;
+$$;
+
+revoke all on function public.claim_next_user_for_deep_sleep(int)
+  from public, anon, authenticated;
+grant execute on function public.claim_next_user_for_deep_sleep(int)
+  to service_role;
+
+-- Rem's twin of the claim above. Independent cadence column so the
+-- two passes drift apart on their own 12h clocks; same toggle, same
+-- posture.
+drop function if exists public.claim_rem_run(int);
+drop function if exists public.claim_next_user_for_rem(int);
+create or replace function public.claim_next_user_for_rem(
+  p_min_interval_seconds int
+) returns uuid
+language sql security definer
+set search_path = public as $$
+  with candidate as (
+    select p.user_id
+      from public.profiles p
+     where (p.settings->>'memoryLibrarianEnabled') is distinct from 'false'
+       and (
+         p.rem_last_run_at is null
+         or p.rem_last_run_at
+              < now() - make_interval(secs => p_min_interval_seconds)
+       )
+     order by p.rem_last_run_at asc nulls first
+     limit 1
+     for update of p skip locked
+  )
+  update public.profiles p
+     set rem_last_run_at = now()
+    from candidate c
+   where p.user_id = c.user_id
+  returning p.user_id;
+$$;
+
+revoke all on function public.claim_next_user_for_rem(int)
+  from public, anon, authenticated;
+grant execute on function public.claim_next_user_for_rem(int)
+  to service_role;
+
+-- Take the shared memory-librarian in-flight guard. Returns true
+-- when this holder acquired it (no current holder, or the previous
+-- holder's TTL lapsed - a crashed run must not wedge both librarians
+-- forever). One guard for BOTH passes on purpose: rem and deep-sleep
+-- reason over the same memory rows, and two agents consolidating the
+-- same neighborhood concurrently would make conflicting decisions.
+-- b-strict: the venice function calls with the service-role client
+-- and passes the owner id explicitly; coalesce keeps a hypothetical
+-- browser caller correct.
+drop function if exists public.claim_memory_librarian_inflight(text, int, uuid);
+create or replace function public.claim_memory_librarian_inflight(
+  p_holder_id text,
+  p_ttl_seconds int,
+  p_user_id uuid default null
 ) returns boolean
 language plpgsql security invoker as $$
 declare
   updated int;
 begin
-  if auth.uid() is null then
-    return false;
-  end if;
   update public.profiles
-     set deep_sleep_last_run_at = now()
-   where user_id = auth.uid()
+     set memory_librarian_inflight_holder = p_holder_id,
+         memory_librarian_inflight_expires_at = now() + make_interval(secs => p_ttl_seconds)
+   where user_id = coalesce(p_user_id, auth.uid())
      and (
-       deep_sleep_last_run_at is null
-       or deep_sleep_last_run_at
-            < now() - make_interval(secs => p_min_interval_seconds)
+       memory_librarian_inflight_holder is null
+       or memory_librarian_inflight_expires_at is null
+       or memory_librarian_inflight_expires_at < now()
      );
   get diagnostics updated = row_count;
   return updated > 0;
 end $$;
 
-drop function if exists public.claim_rem_run(int);
-create or replace function public.claim_rem_run(
-  p_min_interval_seconds int
-) returns boolean
-language plpgsql security invoker as $$
-declare
-  updated int;
-begin
-  if auth.uid() is null then
-    return false;
-  end if;
+grant execute on function
+  public.claim_memory_librarian_inflight(text, int, uuid) to service_role;
+
+-- Release the in-flight guard IF it is still ours. A lapsed-and-
+-- stolen guard is left alone (the thief owns it now). No-op when
+-- the holder doesn't match.
+drop function if exists public.release_memory_librarian_inflight(text, uuid);
+create or replace function public.release_memory_librarian_inflight(
+  p_holder_id text,
+  p_user_id uuid default null
+) returns void
+language sql security invoker as $$
   update public.profiles
-     set rem_last_run_at = now()
-   where user_id = auth.uid()
-     and (
-       rem_last_run_at is null
-       or rem_last_run_at
-            < now() - make_interval(secs => p_min_interval_seconds)
-     );
-  get diagnostics updated = row_count;
-  return updated > 0;
-end $$;
+     set memory_librarian_inflight_holder = null,
+         memory_librarian_inflight_expires_at = null
+   where user_id = coalesce(p_user_id, auth.uid())
+     and memory_librarian_inflight_holder = p_holder_id;
+$$;
+
+grant execute on function
+  public.release_memory_librarian_inflight(text, uuid) to service_role;
 
 -- pick_rem_eligible_conversations: the conversation queue rem pulls
 -- from. Returns up to p_limit conversation ids that still have
@@ -1364,22 +1469,31 @@ end $$;
 -- SQL, so the query lives here. Predicate matches the partial index
 -- memory_conversation_eligible_idx.
 --
--- security invoker + the explicit user_id = auth.uid() filter scope the
--- read to the caller and let the (user_id, conversation_id,
--- last_seen_at) index serve the query.
+-- security invoker + the explicit user filter scope the read to the
+-- caller and let the (user_id, conversation_id, last_seen_at) index
+-- serve the query.
+--
+-- p_user_id: b-strict escape hatch; see search_memories_by_embedding.
+-- The rem agent runs in the venice function under the service role
+-- (no auth.uid()) and passes the claimed user explicitly.
 drop function if exists public.pick_rem_eligible_conversations(int);
+drop function if exists public.pick_rem_eligible_conversations(int, uuid);
 create or replace function public.pick_rem_eligible_conversations(
-  p_limit int
+  p_limit int,
+  p_user_id uuid default null
 ) returns table (conversation_id uuid)
 language sql security invoker as $$
   select mc.conversation_id
     from public.memory_conversation mc
-   where mc.user_id = auth.uid()
+   where mc.user_id = coalesce(p_user_id, auth.uid())
      and (mc.last_processed_at is null or mc.last_processed_at < mc.last_seen_at)
    group by mc.conversation_id
    order by min(mc.last_seen_at) asc
    limit p_limit;
 $$;
+
+grant execute on function
+  public.pick_rem_eligible_conversations(int, uuid) to service_role;
 
 -- consolidate_memories: the deep-sleep / rem agents' single content-
 -- write primitive. The agent decides "memories A and B are the same
@@ -1418,44 +1532,50 @@ $$;
 --   5. Touches survivor.last_librarian_visit_at so the survivor
 --      doesn't immediately re-enter the deep-sleep candidate pool.
 --
--- security invoker so RLS scopes every write to the calling user.
--- Both memories rows must belong to the caller or the function
--- raises (RLS catches the read, not the update; we re-check in
--- application code via the row count).
+-- security invoker; the explicit per-row ownership checks below are
+-- what gate the writes. For a browser caller RLS additionally scopes
+-- every read and write; for the venice function's service-role
+-- client (which bypasses RLS) the ownership checks against the
+-- b-strict p_user_id are the whole guarantee - both memories rows
+-- must belong to that user or the function raises.
 --
 -- Returns the survivor's post-update confidence so the tool can echo
 -- it to the LLM.
 
 drop function if exists public.consolidate_memories(uuid, uuid, text, text);
+drop function if exists public.consolidate_memories(uuid, uuid, text, text, uuid);
 create or replace function public.consolidate_memories(
   p_survivor_id uuid,
   p_loser_id uuid,
   p_new_label text,
-  p_new_data text
+  p_new_data text,
+  p_user_id uuid default null
 ) returns real
 language plpgsql security invoker as $$
 declare
+  v_caller uuid := coalesce(p_user_id, auth.uid());
   v_survivor_confidence real;
   v_loser_confidence real;
   v_max_confidence real;
   v_owner uuid;
 begin
-  if auth.uid() is null then
+  if v_caller is null then
     raise exception 'not authenticated';
   end if;
   if p_survivor_id = p_loser_id then
     raise exception 'survivor_id and loser_id must differ';
   end if;
 
-  -- Read both rows and confirm ownership. RLS scopes the select to
-  -- the caller; a row for another user returns null, which we treat
-  -- as "not found."
+  -- Read both rows and confirm ownership. For browser callers RLS
+  -- scopes the select; a row for another user returns null, which we
+  -- treat as "not found." For the service-role caller the explicit
+  -- v_owner comparison is the gate.
   select confidence, user_id into v_survivor_confidence, v_owner
     from public.memories where id = p_survivor_id;
   if v_owner is null then
     raise exception 'survivor memory % not found or not owned by caller', p_survivor_id;
   end if;
-  if v_owner <> auth.uid() then
+  if v_owner <> v_caller then
     raise exception 'survivor memory % is not owned by the caller', p_survivor_id;
   end if;
 
@@ -1464,7 +1584,7 @@ begin
   if v_owner is null then
     raise exception 'loser memory % not found or not owned by caller', p_loser_id;
   end if;
-  if v_owner <> auth.uid() then
+  if v_owner <> v_caller then
     raise exception 'loser memory % is not owned by the caller', p_loser_id;
   end if;
 
@@ -1545,6 +1665,10 @@ begin
 
   return v_max_confidence;
 end $$;
+
+grant execute on function
+  public.consolidate_memories(uuid, uuid, text, text, uuid)
+  to service_role;
 
 -- recipes ----------------------------------------------------------------
 --
@@ -1952,15 +2076,16 @@ set search_path = public as $$
 $$;
 
 -- Delete the given recipe_images rows that are STILL orphaned, returning
--- the bucket keys actually removed so the caller deletes those objects.
--- The re-check (no link) closes the race where a row listed as orphan
--- gets re-linked before we delete it - that row is skipped and its object
--- kept. Content addressing makes it self-healing anyway: a re-attach
--- re-uploads the same <uid>/<sha256> key. Idempotent: already-deleted ids
--- return nothing.
+-- the bucket keys actually removed so the caller deletes those objects,
+-- plus each row's user_id so the caller can attribute the per-user GC
+-- summary in the owner's Logs drawer. The re-check (no link) closes the
+-- race where a row listed as orphan gets re-linked before we delete it -
+-- that row is skipped and its object kept. Content addressing makes it
+-- self-healing anyway: a re-attach re-uploads the same <uid>/<sha256>
+-- key. Idempotent: already-deleted ids return nothing.
 drop function if exists public.delete_orphan_recipe_images(uuid[]);
 create or replace function public.delete_orphan_recipe_images(p_ids uuid[])
-returns table (id uuid, storage_path text)
+returns table (id uuid, storage_path text, user_id uuid)
 language sql security definer
 set search_path = public as $$
   delete from public.recipe_images ri
@@ -1968,7 +2093,7 @@ set search_path = public as $$
      and not exists (
        select 1 from public.recipe_version_images rvi where rvi.image_id = ri.id
      )
-  returning ri.id, ri.storage_path
+  returning ri.id, ri.storage_path, ri.user_id
 $$;
 
 revoke all on function public.list_orphan_recipe_images(int) from public, anon, authenticated;
@@ -2915,9 +3040,10 @@ create trigger clear_recipe_embedding_on_change
 -- Recipe topic-tagging pipeline -----------------------------------------
 --
 -- Same shape as memories.topics (see "Memory topic-tagging pipeline"
--- above): a background worker (src/lib/agents/recipe_topics/*) tags
--- each recipe with a short flat set of topic strings so the Cookbook
--- drawer can offer a topic filter. The agent reads title + cooklang
+-- above): the recipe-topics agent
+-- (supabase/functions/venice/agents/recipe_topics.ts) tags each recipe
+-- with a short flat set of topic strings so the Cookbook drawer can
+-- offer a topic filter. The agent reads title + cooklang
 -- plus the user's existing recipe-topic vocabulary and picks 1-6
 -- topics across four dimensions - primary ingredients, cuisine,
 -- course, technique - reusing existing names where they fit so the
@@ -3002,7 +3128,7 @@ drop function if exists public.claim_next_pending_recipe(text, int);
 create or replace function public.claim_next_pending_recipe(
   p_holder_id text,
   p_ttl_seconds int
-) returns table (id uuid, title text, source text, cooklang text)
+) returns table (id uuid, title text, source text, cooklang text, user_id uuid)
 language sql security definer
 set search_path = public as $$
   with candidate as (
@@ -3020,7 +3146,7 @@ set search_path = public as $$
          embedding_claim_expires = now() + make_interval(secs => p_ttl_seconds)
     from candidate c
    where r.id = c.id
-  returning r.id, r.title, r.source, r.cooklang;
+  returning r.id, r.title, r.source, r.cooklang, r.user_id;
 $$;
 
 drop function if exists public.save_recipe_embedding_if_claimed(uuid, text, vector, text);
@@ -3089,153 +3215,24 @@ language sql stable security invoker as $$
    limit match_limit
 $$;
 
--- worker_leases ----------------------------------------------------------
+-- worker_leases: removed -----------------------------------------------------
 --
--- Singleton per user per worker kind: at most one worker of a given kind
--- runs at a time across all the user's open tabs and devices. Originally
--- an embeddings-only table (`embedding_worker_leases`); generalised when
--- the memory-reflection agent landed — agents are a category now, not a
--- one-off, and each agent kind wants the same lease-plus-heartbeat
--- shape. The `worker_kind` column partitions the lease: `'embedding'`
--- and `'reflection'` hold independently so both can run concurrently as
--- long as there's one per kind.
---
--- Lease is the top rail for "one device at a time per worker kind"; the
--- bottom rails (per-row claims on `memories`, per-thread claims on
--- `threads`) handle the lease-handover race where in-flight work on the
--- outgoing device shouldn't collide with the new lease holder.
---
--- Workers hold their lease by writing `(holder_id, expires_at)` and
--- heartbeating it forward every ~20s. When `expires_at < now()` the
--- lease is claimable by anyone. A polling device runs acquire every
--- ~20s; it's one cheap SELECT plus an optional UPDATE.
---
--- Why `(user_id, worker_kind)` composite primary key: we want "at most
--- one per user per kind" structurally enforced, and `on conflict
--- (user_id, worker_kind)` is the primitive the acquire RPC relies on.
-
--- Clean up the pre-generalisation table on databases synced before the
--- rename. `cascade` also sweeps its old RLS policies. Idempotent — a
--- never-synced database or a freshly-synced one has no table by that
--- name and skips.
-drop table if exists public.embedding_worker_leases cascade;
-
-create table if not exists public.worker_leases (
-  user_id uuid not null references auth.users(id) on delete cascade,
-  worker_kind text not null,
-  holder_id text not null,
-  expires_at timestamptz not null,
-  primary key (user_id, worker_kind)
-);
-
-alter table public.worker_leases enable row level security;
-
-drop policy if exists "worker leases are self-selectable"
-  on public.worker_leases;
-create policy "worker leases are self-selectable"
-  on public.worker_leases
-  for select using (auth.uid() = user_id);
-
-drop policy if exists "worker leases are self-insertable"
-  on public.worker_leases;
-create policy "worker leases are self-insertable"
-  on public.worker_leases
-  for insert with check (auth.uid() = user_id);
-
-drop policy if exists "worker leases are self-updatable"
-  on public.worker_leases;
-create policy "worker leases are self-updatable"
-  on public.worker_leases
-  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
-
-drop policy if exists "worker leases are self-deletable"
-  on public.worker_leases;
-create policy "worker leases are self-deletable"
-  on public.worker_leases
-  for delete using (auth.uid() = user_id);
-
--- Worker-lease RPCs ------------------------------------------------------
---
--- `security invoker` throughout — RLS still applies, but the explicit
--- `user_id = auth.uid()` guards inside each function's body keep intent
--- obvious at the call site and protect us if the policies ever change
--- shape. Every function is drop-then-create because some signatures
--- change the return type, which `create or replace` can't do in place.
---
--- Drop the pre-generalisation function signatures too, so a
--- freshly-synced database with no leftover table still has no leftover
--- functions pointing at it.
+-- The per-user per-worker-kind singleton lease coordinated the browser
+-- Web Worker fleet (one device at a time per kind). The whole fleet
+-- runs server-side in the venice function now, where the per-row claim
+-- columns (substrate / threads / compound-summary and friends) are the
+-- only mutual exclusion needed - cron ticks and turn tails don't race
+-- the way two open tabs did. Idempotent teardown so databases that
+-- synced the lease era drop their footprint on the next apply; the
+-- pre-generalisation embedding-era names ride along.
+drop function if exists public.acquire_worker_lease(text, text, int);
+drop function if exists public.heartbeat_worker_lease(text, text, int);
+drop function if exists public.release_worker_lease(text, text);
 drop function if exists public.acquire_embedding_lease(text, int);
 drop function if exists public.heartbeat_embedding_lease(text, int);
 drop function if exists public.release_embedding_lease(text);
-
--- Try to take the singleton lease for a given worker kind. Returns true
--- iff we hold it after the call. Atomic via `on conflict do update
--- where ...`: the update only fires when the existing lease is either
--- ours (same holder_id, harmless refresh) or expired.
-drop function if exists public.acquire_worker_lease(text, text, int);
-create or replace function public.acquire_worker_lease(
-  p_worker_kind text,
-  p_holder_id text,
-  p_ttl_seconds int
-) returns boolean
-language plpgsql security invoker as $$
-begin
-  insert into public.worker_leases (user_id, worker_kind, holder_id, expires_at)
-    values (auth.uid(), p_worker_kind, p_holder_id, now() + make_interval(secs => p_ttl_seconds))
-    on conflict (user_id, worker_kind) do update
-      set holder_id = excluded.holder_id,
-          expires_at = excluded.expires_at
-      where public.worker_leases.expires_at < now()
-         or public.worker_leases.holder_id = excluded.holder_id;
-  return exists (
-    select 1 from public.worker_leases
-     where user_id = auth.uid()
-       and worker_kind = p_worker_kind
-       and holder_id = p_holder_id
-       and expires_at > now()
-  );
-end $$;
-
--- Extend our lease if we still own it. Returns true iff the update
--- landed — false means our lease lapsed and someone else took over, in
--- which case the worker should stop immediately rather than keep
--- processing rows it no longer has the right to.
-drop function if exists public.heartbeat_worker_lease(text, text, int);
-create or replace function public.heartbeat_worker_lease(
-  p_worker_kind text,
-  p_holder_id text,
-  p_ttl_seconds int
-) returns boolean
-language plpgsql security invoker as $$
-declare
-  updated int;
-begin
-  update public.worker_leases
-     set expires_at = now() + make_interval(secs => p_ttl_seconds)
-   where user_id = auth.uid()
-     and worker_kind = p_worker_kind
-     and holder_id = p_holder_id
-     and expires_at > now();
-  get diagnostics updated = row_count;
-  return updated > 0;
-end $$;
-
--- Explicit release — used by the worker on graceful shutdown so another
--- device can pick up instantly rather than waiting for the TTL. Always
--- returns void: nothing to do if our lease is already gone.
-drop function if exists public.release_worker_lease(text, text);
-create or replace function public.release_worker_lease(
-  p_worker_kind text,
-  p_holder_id text
-) returns void
-language plpgsql security invoker as $$
-begin
-  delete from public.worker_leases
-   where user_id = auth.uid()
-     and worker_kind = p_worker_kind
-     and holder_id = p_holder_id;
-end $$;
+drop table if exists public.worker_leases cascade;
+drop table if exists public.embedding_worker_leases cascade;
 
 -- Claim the next pending memory atomically. The CTE picks one unclaimed
 -- or expired-claim row using `for update skip locked`, which is the
@@ -3252,7 +3249,7 @@ drop function if exists public.claim_next_pending_memory(text, int);
 create or replace function public.claim_next_pending_memory(
   p_holder_id text,
   p_ttl_seconds int
-) returns table (id uuid, label text, data text)
+) returns table (id uuid, label text, data text, user_id uuid)
 language sql security definer
 set search_path = public as $$
   with candidate as (
@@ -3270,7 +3267,7 @@ set search_path = public as $$
          embedding_claim_expires = now() + make_interval(secs => p_ttl_seconds)
     from candidate c
    where m.id = c.id
-  returning m.id, m.label, m.data;
+  returning m.id, m.label, m.data, m.user_id;
 $$;
 
 -- Save the embedding IF our claim is still valid. Returns true on
@@ -3384,10 +3381,15 @@ $$;
 -- anything the user's memories cover. Kept as a separate function so
 -- the main memory_search path (and the Memories browser) stays on the
 -- unscored RPC and doesn't have to care about a column it never uses.
+-- Also used by the deep-sleep librarian's neighbor fetch in the venice
+-- function, which is why it carries the p_user_id b-strict escape
+-- hatch (see search_memories_by_embedding above).
 drop function if exists public.search_memories_by_embedding_scored(vector, int);
+drop function if exists public.search_memories_by_embedding_scored(vector, int, uuid);
 create or replace function public.search_memories_by_embedding_scored(
   query_embedding vector(2048),
-  match_limit int
+  match_limit int,
+  p_user_id uuid default null
 ) returns table (
   id uuid,
   label text,
@@ -3400,13 +3402,17 @@ language sql stable security invoker as $$
          ((1 - (embedding <=> query_embedding))
            * (1 + 0.15 * ln(1 + confidence)))::real as similarity
     from public.memories
-   where user_id = auth.uid()
+   where user_id = coalesce(p_user_id, auth.uid())
      and embedding is not null
      and confidence >= 0.05
    order by (1 - (embedding <=> query_embedding))
           * (1 + 0.15 * ln(1 + confidence)) desc
    limit match_limit
 $$;
+
+grant execute on function
+  public.search_memories_by_embedding_scored(vector, int, uuid)
+  to service_role;
 
 -- Neighbours of one memory: the top-k other memories most similar to a
 -- given source row, used by the Memories detail panel's "Similar
@@ -3479,15 +3485,14 @@ $$;
 -- send a competing message. When A's runExchange finishes (or aborts),
 -- release_thread_response_claim clears the claim and B's UI re-enables.
 --
--- The claim is per-THREAD, distinct from the per-worker-kind singleton
--- `worker_leases` used by background agents. Each thread has at most one
--- in-flight response across all of the user's devices; multiple threads
--- can be responding in parallel (their claims live on different rows).
+-- The claim is per-THREAD: each thread has at most one in-flight
+-- response across all of the user's devices; multiple threads can be
+-- responding in parallel (their claims live on different rows).
 --
 -- TTL is 60s and the holder beats every 20s (see ThreadClaimCoordinator
--- in src/lib/exchange/thread-claim-coordinator.ts). Longer than the
--- worker-lease 45s/20s because chat turns legitimately run longer than
--- background jobs on slow models. A device that crashes mid-turn frees
+-- in src/lib/exchange/thread-claim-coordinator.ts) - three heartbeat
+-- attempts per expiry, since chat turns legitimately run long on slow
+-- models. A device that crashes mid-turn frees
 -- its claim within 60s.
 --
 -- Columns piggyback on `threads` rather than living in a separate table
@@ -3700,7 +3705,15 @@ create or replace function public.claim_next_thread_for_reflection(
   -- memory_recall tool has no per-conversation source attribution
   -- on memories, so a same-day write could ride straight back into
   -- the conversation that produced it.
-  p_timezone text default 'UTC'
+  p_timezone text default 'UTC',
+  -- b-strict escape hatch (see search_memories_by_embedding): the
+  -- browser supervisor calls with auth.uid() in scope and leaves this
+  -- null; the venice edge function fires reflection from a chat turn's
+  -- waitUntil tail with a service-role client that has no uid, so it
+  -- passes the thread owner's id explicitly. security invoker stays
+  -- correct because service_role bypasses RLS and the coalesce scopes
+  -- the claim to one user either way.
+  p_user_id uuid default null
 ) returns table (thread_id uuid, terminal_msg_id uuid)
 language sql security invoker as $$
   with candidate as (
@@ -3736,8 +3749,14 @@ language sql security invoker as $$
          order by m2.created_at desc
          limit 1
       ) newest
-     where t.user_id = auth.uid()
+     where t.user_id = coalesce(p_user_id, auth.uid())
        and term.msg_id is distinct from t.last_reflected_msg_id
+       -- Attempt cap: stop offering a terminal message that has
+       -- already burned three claims (see the column comment on
+       -- reflection_attempt_count). A different terminal message
+       -- means new conversation turns landed - fresh budget.
+       and (term.msg_id is distinct from t.reflection_attempt_msg_id
+            or t.reflection_attempt_count < 3)
        and (t.reflection_claim_expires_at is null
             or t.reflection_claim_expires_at < now())
        and (newest.created_at at time zone p_timezone)::date
@@ -3759,7 +3778,12 @@ language sql security invoker as $$
   )
   update public.threads t
      set reflection_holder_id = p_holder_id,
-         reflection_claim_expires_at = now() + make_interval(secs => p_ttl_seconds)
+         reflection_claim_expires_at = now() + make_interval(secs => p_ttl_seconds),
+         reflection_attempt_count = case
+           when t.reflection_attempt_msg_id is distinct from c.terminal_msg_id then 1
+           else t.reflection_attempt_count + 1
+         end,
+         reflection_attempt_msg_id = c.terminal_msg_id
     from candidate c
    where t.id = c.thread_id
   returning t.id as thread_id, c.terminal_msg_id;
@@ -3777,7 +3801,11 @@ drop function if exists public.mark_thread_reflected_if_claimed(uuid, text, uuid
 create or replace function public.mark_thread_reflected_if_claimed(
   p_thread_id uuid,
   p_holder_id text,
-  p_msg_id uuid
+  p_msg_id uuid,
+  -- b-strict escape hatch, same as the claim RPC above: null from the
+  -- browser (auth.uid() in scope), the thread owner's id from the
+  -- service-role edge-function caller.
+  p_user_id uuid default null
 ) returns boolean
 language plpgsql security invoker as $$
 declare
@@ -3786,14 +3814,110 @@ begin
   update public.threads
      set last_reflected_msg_id = p_msg_id,
          reflection_holder_id = null,
-         reflection_claim_expires_at = null
+         reflection_claim_expires_at = null,
+         reflection_attempt_count = 0
    where id = p_thread_id
-     and user_id = auth.uid()
+     and user_id = coalesce(p_user_id, auth.uid())
      and reflection_holder_id = p_holder_id
      and reflection_claim_expires_at > now();
   get diagnostics updated = row_count;
   return updated > 0;
 end $$;
+
+-- service_role grants for the edge-function reflection driver (the
+-- venice function fires reflection from a chat turn's waitUntil tail).
+-- The browser keeps calling these as the authenticated user; these
+-- grants just let the service-role client reach them too.
+grant execute on function
+  public.claim_next_thread_for_reflection(text, int, text, uuid) to service_role;
+grant execute on function
+  public.mark_thread_reflected_if_claimed(uuid, text, uuid, uuid) to service_role;
+
+-- Global reflection sweep claim: the cron catch-up drain's variant of
+-- claim_next_thread_for_reflection. Same candidate predicate, but
+-- across ALL users - the timezone comes off each owner's profile
+-- (nak_safe_timezone, UTC fallback) instead of a parameter. The
+-- per-turn waitUntil tail only drains when its owner converses, so
+-- without this sweep a dormant account's reflection queue never
+-- moves. Tail + sweep double-driving is safe by construction: the
+-- per-thread claim columns are the mutual exclusion, so whichever
+-- driver claims first wins and the other sees no candidate.
+drop function if exists public.claim_next_thread_for_reflection_sweep(text, int);
+create or replace function public.claim_next_thread_for_reflection_sweep(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns table (thread_id uuid, terminal_msg_id uuid, user_id uuid)
+language sql security definer
+set search_path = public as $$
+  with candidate as (
+    select t.id as thread_id, term.msg_id as terminal_msg_id, t.user_id as user_id
+      from public.threads t
+      inner join public.profiles p on p.user_id = t.user_id
+      cross join lateral (
+        -- One safe-timezone resolution per candidate row, shared by
+        -- both sides of the day-gate comparison below.
+        select public.nak_safe_timezone(p.settings->>'displayTimezone') as tz
+      ) usertz
+      cross join lateral (
+        select m.id as msg_id
+          from public.messages m
+         where m.thread_id = t.id
+           and m.role = 'assistant'
+           and (m.tool_calls is null
+                or jsonb_typeof(m.tool_calls) <> 'array'
+                or jsonb_array_length(m.tool_calls) = 0)
+           and m.content is not null
+           and length(m.content) > 0
+         order by m.created_at desc
+         limit 1
+      ) term
+      cross join lateral (
+        select m2.created_at
+          from public.messages m2
+         where m2.thread_id = t.id
+         order by m2.created_at desc
+         limit 1
+      ) newest
+     where term.msg_id is distinct from t.last_reflected_msg_id
+       -- Same attempt cap as the per-user claim; see the column
+       -- comment on reflection_attempt_count.
+       and (term.msg_id is distinct from t.reflection_attempt_msg_id
+            or t.reflection_attempt_count < 3)
+       and (t.reflection_claim_expires_at is null
+            or t.reflection_claim_expires_at < now())
+       and (newest.created_at at time zone usertz.tz)::date
+             < (now() at time zone usertz.tz)::date
+       and (
+         -- Same substance bar as the per-user claim: at least one
+         -- follow-up user message.
+         select count(*)
+           from public.messages m3
+          where m3.thread_id = t.id
+            and m3.role = 'user'
+       ) >= 2
+     order by t.updated_at asc
+     limit 1
+     for update of t skip locked
+  )
+  update public.threads t
+     set reflection_holder_id = p_holder_id,
+         reflection_claim_expires_at = now() + make_interval(secs => p_ttl_seconds),
+         reflection_attempt_count = case
+           when t.reflection_attempt_msg_id is distinct from c.terminal_msg_id then 1
+           else t.reflection_attempt_count + 1
+         end,
+         reflection_attempt_msg_id = c.terminal_msg_id
+    from candidate c
+   where t.id = c.thread_id
+  returning t.id as thread_id, c.terminal_msg_id, t.user_id;
+$$;
+
+-- Global sweep, owner-privileged: only the cron-driven service role
+-- may claim across users.
+revoke all on function public.claim_next_thread_for_reflection_sweep(text, int)
+  from public, anon, authenticated;
+grant execute on function public.claim_next_thread_for_reflection_sweep(text, int)
+  to service_role;
 
 -- Summarisation pipeline RPCs -------------------------------------------
 --
@@ -3807,7 +3931,12 @@ end $$;
 drop function if exists public.claim_next_thread_for_summary(text, int);
 create or replace function public.claim_next_thread_for_summary(
   p_holder_id text,
-  p_ttl_seconds int
+  p_ttl_seconds int,
+  -- b-strict escape hatch (see claim_next_thread_for_reflection): the
+  -- venice edge function drives summaries from a chat turn's waitUntil
+  -- tail with a service-role client that has no uid, so it passes the
+  -- thread owner's id explicitly.
+  p_user_id uuid default null
 ) returns table (thread_id uuid, terminal_msg_id uuid)
 language sql security invoker as $$
   with candidate as (
@@ -3826,7 +3955,7 @@ language sql security invoker as $$
          order by m.created_at desc
          limit 1
       ) term
-     where t.user_id = auth.uid()
+     where t.user_id = coalesce(p_user_id, auth.uid())
        and term.msg_id is distinct from t.last_summarised_msg_id
        and (t.summary_claim_expires is null
             or t.summary_claim_expires < now())
@@ -3851,7 +3980,9 @@ create or replace function public.save_thread_summary_if_claimed(
   p_thread_id uuid,
   p_holder_id text,
   p_summary text,
-  p_msg_id uuid
+  p_msg_id uuid,
+  -- b-strict escape hatch, same as the claim RPC above.
+  p_user_id uuid default null
 ) returns boolean
 language plpgsql security invoker as $$
 declare
@@ -3863,32 +3994,91 @@ begin
          summary_claim_holder = null,
          summary_claim_expires = null
    where id = p_thread_id
-     and user_id = auth.uid()
+     and user_id = coalesce(p_user_id, auth.uid())
      and summary_claim_holder = p_holder_id
      and summary_claim_expires > now();
   get diagnostics updated = row_count;
   return updated > 0;
 end $$;
 
+-- service_role grants for the edge-function curation drivers (turn
+-- tail + curation sweep; see the reflection grants above for the
+-- pattern).
+grant execute on function
+  public.claim_next_thread_for_summary(text, int, uuid) to service_role;
+grant execute on function
+  public.save_thread_summary_if_claimed(uuid, text, text, uuid, uuid) to service_role;
+
+-- Global summary sweep claim: the curation sweep's cross-user variant
+-- of claim_next_thread_for_summary. Same candidate predicate, no user
+-- filter; returns the owner so the agent can attribute drawer logs and
+-- scope its saves. Tail + sweep double-driving is safe by construction:
+-- the per-thread claim columns are the mutual exclusion.
+drop function if exists public.claim_next_thread_for_summary_sweep(text, int);
+create or replace function public.claim_next_thread_for_summary_sweep(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns table (thread_id uuid, terminal_msg_id uuid, user_id uuid)
+language sql security definer
+set search_path = public as $$
+  with candidate as (
+    select t.id as thread_id, term.msg_id as terminal_msg_id, t.user_id as user_id
+      from public.threads t
+      cross join lateral (
+        select m.id as msg_id
+          from public.messages m
+         where m.thread_id = t.id
+           and m.role = 'assistant'
+           and (m.tool_calls is null
+                or jsonb_typeof(m.tool_calls) <> 'array'
+                or jsonb_array_length(m.tool_calls) = 0)
+           and m.content is not null
+           and length(m.content) > 0
+         order by m.created_at desc
+         limit 1
+      ) term
+     where term.msg_id is distinct from t.last_summarised_msg_id
+       and (t.summary_claim_expires is null
+            or t.summary_claim_expires < now())
+     order by t.updated_at asc
+     limit 1
+     for update of t skip locked
+  )
+  update public.threads t
+     set summary_claim_holder = p_holder_id,
+         summary_claim_expires = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c
+   where t.id = c.thread_id
+  returning t.id as thread_id, c.terminal_msg_id, t.user_id;
+$$;
+
+revoke all on function public.claim_next_thread_for_summary_sweep(text, int)
+  from public, anon, authenticated;
+grant execute on function public.claim_next_thread_for_summary_sweep(text, int)
+  to service_role;
+
 -- Auto-title pipeline RPCs ----------------------------------------------
 --
--- Background worker that fills in titles for threads still on the
--- 'New conversation' placeholder. Replaces the in-Chat fire-and-forget
--- title-gen pipeline that lost work whenever the user closed the tab
--- (or refreshed) before the single Venice call resolved. The worker
--- lives in src/lib/agents/auto_title/* and uses the same lease + claim
--- pattern as reflection / summary.
+-- Claim / save / clear for the auto-title agent
+-- (supabase/functions/venice/agents/auto_title.ts), which fills in
+-- titles for threads still on the 'New conversation' placeholder.
+-- Same per-row claim pattern as the summary RPCs; the chat-turn
+-- waitUntil tail and the hourly curation sweep are the two callers,
+-- and these claim columns are the only mutual exclusion between them.
 --
--- The eligibility predicate matches the gate the in-Chat trigger used
--- to apply: title still default, title_manually_set still false, AND
--- at least one user message exists to title from. Returning the first
--- user message's text in the same round trip avoids a second SELECT
--- before the Venice call - the worker reuses the same tight system
--- prompt that title-gen.ts has always used.
+-- The eligibility predicate: title still default, title_manually_set
+-- still false, AND at least one user message exists to title from.
+-- Returning the first user message's text in the same round trip
+-- avoids a second SELECT before the Venice call.
 drop function if exists public.claim_next_thread_for_auto_title(text, int);
 create or replace function public.claim_next_thread_for_auto_title(
   p_holder_id text,
-  p_ttl_seconds int
+  p_ttl_seconds int,
+  -- b-strict escape hatch (see claim_next_thread_for_reflection): the
+  -- venice edge function drives titling from a chat turn's waitUntil
+  -- tail with a service-role client that has no uid, so it passes the
+  -- thread owner's id explicitly.
+  p_user_id uuid default null
 ) returns table (thread_id uuid, user_text text)
 language sql security invoker as $$
   with candidate as (
@@ -3909,7 +4099,7 @@ language sql security invoker as $$
          order by m.created_at asc
          limit 1
       ) first_user
-     where t.user_id = auth.uid()
+     where t.user_id = coalesce(p_user_id, auth.uid())
        and t.title = 'New conversation'
        and t.title_manually_set = false
        and (t.auto_title_claim_expires is null
@@ -3943,7 +4133,9 @@ drop function if exists public.save_thread_title_if_claimed(uuid, text, text);
 create or replace function public.save_thread_title_if_claimed(
   p_thread_id uuid,
   p_holder_id text,
-  p_title text
+  p_title text,
+  -- b-strict escape hatch, same as the claim RPC above.
+  p_user_id uuid default null
 ) returns boolean
 language plpgsql security invoker as $$
 declare
@@ -3954,7 +4146,7 @@ begin
          auto_title_claim_holder = null,
          auto_title_claim_expires = null
    where id = p_thread_id
-     and user_id = auth.uid()
+     and user_id = coalesce(p_user_id, auth.uid())
      and auto_title_claim_holder = p_holder_id
      and auto_title_claim_expires > now()
      and title = 'New conversation'
@@ -3963,15 +4155,17 @@ begin
   return updated > 0;
 end $$;
 
--- Explicit claim release - used by the worker when the title-gen call
+-- Explicit claim release - used by the agent when title generation
 -- produced no usable output (model emitted whitespace, abort fired) so
 -- another cycle can re-pick the row immediately rather than waiting for
--- the TTL. Guarded on holder so a stale call from a displaced worker
+-- the TTL. Guarded on holder so a stale call from a displaced holder
 -- can't clear the live claim. Returns void.
 drop function if exists public.clear_auto_title_claim(uuid, text);
 create or replace function public.clear_auto_title_claim(
   p_thread_id uuid,
-  p_holder_id text
+  p_holder_id text,
+  -- b-strict escape hatch, same as the claim RPC above.
+  p_user_id uuid default null
 ) returns void
 language plpgsql security invoker as $$
 begin
@@ -3979,21 +4173,76 @@ begin
      set auto_title_claim_holder = null,
          auto_title_claim_expires = null
    where id = p_thread_id
-     and user_id = auth.uid()
+     and user_id = coalesce(p_user_id, auth.uid())
      and auto_title_claim_holder = p_holder_id;
 end $$;
 
+-- service_role grants for the edge-function curation drivers.
+grant execute on function
+  public.claim_next_thread_for_auto_title(text, int, uuid) to service_role;
+grant execute on function
+  public.save_thread_title_if_claimed(uuid, text, text, uuid) to service_role;
+grant execute on function
+  public.clear_auto_title_claim(uuid, text, uuid) to service_role;
+
+-- Global auto-title sweep claim: cross-user variant of
+-- claim_next_thread_for_auto_title for the curation sweep's catch-up
+-- drain (a title attempt that failed on the turn tail would otherwise
+-- wait for the thread's next turn). Returns the owner for log
+-- attribution and save scoping.
+drop function if exists public.claim_next_thread_for_auto_title_sweep(text, int);
+create or replace function public.claim_next_thread_for_auto_title_sweep(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns table (thread_id uuid, user_text text, user_id uuid)
+language sql security definer
+set search_path = public as $$
+  with candidate as (
+    select t.id as thread_id, first_user.text as user_text, t.user_id as user_id
+      from public.threads t
+      cross join lateral (
+        select m.content as text
+          from public.messages m
+         where m.thread_id = t.id
+           and m.role = 'user'
+           and m.content is not null
+           and length(m.content) > 0
+         order by m.created_at asc
+         limit 1
+      ) first_user
+     where t.title = 'New conversation'
+       and t.title_manually_set = false
+       and (t.auto_title_claim_expires is null
+            or t.auto_title_claim_expires < now())
+     order by t.updated_at asc
+     limit 1
+     for update of t skip locked
+  )
+  update public.threads t
+     set auto_title_claim_holder = p_holder_id,
+         auto_title_claim_expires = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c
+   where t.id = c.thread_id
+  returning t.id as thread_id, c.user_text, t.user_id;
+$$;
+
+revoke all on function public.claim_next_thread_for_auto_title_sweep(text, int)
+  from public, anon, authenticated;
+grant execute on function public.claim_next_thread_for_auto_title_sweep(text, int)
+  to service_role;
+
 -- Topic-tagging pipeline RPCs -------------------------------------------
 --
--- The topics worker (src/lib/agents/topics/*) tags threads with a short
--- flat set of topic strings. Shape mirrors the summary RPCs: claim by
--- terminal-assistant-message id, save guarded by holder + TTL +
--- terminal_msg_id stamp so a thread that grew mid-tagging simply re-
--- qualifies on the next cycle. The extra wrinkle vs summary: the claim
--- also returns the user's existing topic vocabulary in the same round
--- trip, so the worker can prompt the model with "reuse these names if
--- they fit" without a second SELECT. Saves one RPC per cycle and keeps
--- the vocabulary as fresh as the claim that consumed it.
+-- The thread-topics agent
+-- (supabase/functions/venice/agents/thread_topics.ts) tags threads
+-- with a short flat set of topic strings. Shape mirrors the summary
+-- RPCs: claim by terminal-assistant-message id, save guarded by holder
+-- + TTL + terminal_msg_id stamp so a thread that grew mid-tagging
+-- simply re-qualifies on the next cycle. The extra wrinkle vs summary:
+-- the claim also returns the user's existing topic vocabulary in the
+-- same round trip, so the agent can prompt the model with "reuse these
+-- names if they fit" without a second SELECT. Saves one RPC per cycle
+-- and keeps the vocabulary as fresh as the claim that consumed it.
 --
 -- Eligibility predicate: thread has at least one assistant message with
 -- non-empty content (same shape as summary), AND that terminal message
@@ -4006,7 +4255,13 @@ end $$;
 drop function if exists public.claim_next_thread_for_topics(text, int);
 create or replace function public.claim_next_thread_for_topics(
   p_holder_id text,
-  p_ttl_seconds int
+  p_ttl_seconds int,
+  -- b-strict escape hatch (see claim_next_thread_for_reflection): the
+  -- venice edge function drives tagging from a chat turn's waitUntil
+  -- tail with a service-role client that has no uid, so it passes the
+  -- thread owner's id explicitly. The vocab CTE scopes on the same
+  -- coalesce so the model sees the right user's vocabulary.
+  p_user_id uuid default null
 ) returns table (thread_id uuid, terminal_msg_id uuid, existing_topics text[])
 language sql security invoker as $$
   with candidate as (
@@ -4025,7 +4280,7 @@ language sql security invoker as $$
          order by m.created_at desc
          limit 1
       ) term
-     where t.user_id = auth.uid()
+     where t.user_id = coalesce(p_user_id, auth.uid())
        and t.title <> 'New conversation'
        and term.msg_id is distinct from t.last_topics_msg_id
        and (t.topics_claim_expires is null
@@ -4042,7 +4297,7 @@ language sql security invoker as $$
     -- on the first few threads, then the vocabulary self-seeds.
     select coalesce(array_agg(distinct topic order by topic), '{}'::text[]) as topics
       from public.threads t, unnest(t.topics) as topic
-     where t.user_id = auth.uid()
+     where t.user_id = coalesce(p_user_id, auth.uid())
        and t.topics <> '{}'::text[]
   )
   update public.threads t
@@ -4064,7 +4319,9 @@ create or replace function public.save_thread_topics_if_claimed(
   p_thread_id uuid,
   p_holder_id text,
   p_topics text[],
-  p_msg_id uuid
+  p_msg_id uuid,
+  -- b-strict escape hatch, same as the claim RPC above.
+  p_user_id uuid default null
 ) returns boolean
 language plpgsql security invoker as $$
 declare
@@ -4076,7 +4333,7 @@ begin
          topics_claim_holder = null,
          topics_claim_expires = null
    where id = p_thread_id
-     and user_id = auth.uid()
+     and user_id = coalesce(p_user_id, auth.uid())
      and topics_claim_holder = p_holder_id
      and topics_claim_expires > now();
   get diagnostics updated = row_count;
@@ -4091,7 +4348,9 @@ end $$;
 drop function if exists public.clear_topics_claim(uuid, text);
 create or replace function public.clear_topics_claim(
   p_thread_id uuid,
-  p_holder_id text
+  p_holder_id text,
+  -- b-strict escape hatch, same as the claim RPC above.
+  p_user_id uuid default null
 ) returns void
 language plpgsql security invoker as $$
 begin
@@ -4099,9 +4358,76 @@ begin
      set topics_claim_holder = null,
          topics_claim_expires = null
    where id = p_thread_id
-     and user_id = auth.uid()
+     and user_id = coalesce(p_user_id, auth.uid())
      and topics_claim_holder = p_holder_id;
 end $$;
+
+-- service_role grants for the edge-function curation drivers.
+grant execute on function
+  public.claim_next_thread_for_topics(text, int, uuid) to service_role;
+grant execute on function
+  public.save_thread_topics_if_claimed(uuid, text, text[], uuid, uuid) to service_role;
+grant execute on function
+  public.clear_topics_claim(uuid, text, uuid) to service_role;
+
+-- Global thread-topics sweep claim: cross-user variant of
+-- claim_next_thread_for_topics for the curation sweep. The vocab CTE
+-- scopes to the candidate row's owner so the model sees that user's
+-- vocabulary, not an aggregate across accounts.
+drop function if exists public.claim_next_thread_for_topics_sweep(text, int);
+create or replace function public.claim_next_thread_for_topics_sweep(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns table (
+  thread_id uuid,
+  terminal_msg_id uuid,
+  existing_topics text[],
+  user_id uuid
+)
+language sql security definer
+set search_path = public as $$
+  with candidate as (
+    select t.id as thread_id, term.msg_id as terminal_msg_id, t.user_id as user_id
+      from public.threads t
+      cross join lateral (
+        select m.id as msg_id
+          from public.messages m
+         where m.thread_id = t.id
+           and m.role = 'assistant'
+           and (m.tool_calls is null
+                or jsonb_typeof(m.tool_calls) <> 'array'
+                or jsonb_array_length(m.tool_calls) = 0)
+           and m.content is not null
+           and length(m.content) > 0
+         order by m.created_at desc
+         limit 1
+      ) term
+     where t.title <> 'New conversation'
+       and term.msg_id is distinct from t.last_topics_msg_id
+       and (t.topics_claim_expires is null
+            or t.topics_claim_expires < now())
+     order by t.updated_at asc
+     limit 1
+     for update of t skip locked
+  ),
+  vocab as (
+    select coalesce(array_agg(distinct topic order by topic), '{}'::text[]) as topics
+      from public.threads t, unnest(t.topics) as topic
+     where t.user_id = (select c.user_id from candidate c)
+       and t.topics <> '{}'::text[]
+  )
+  update public.threads t
+     set topics_claim_holder = p_holder_id,
+         topics_claim_expires = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c, vocab v
+   where t.id = c.thread_id
+  returning t.id as thread_id, c.terminal_msg_id, v.topics as existing_topics, t.user_id;
+$$;
+
+revoke all on function public.claim_next_thread_for_topics_sweep(text, int)
+  from public, anon, authenticated;
+grant execute on function public.claim_next_thread_for_topics_sweep(text, int)
+  to service_role;
 
 -- Topic vocabulary + per-topic corpus counts for the current user.
 -- Used by the drawer's topic-filter dropdown on mount and after a
@@ -4173,7 +4499,13 @@ $$;
 drop function if exists public.claim_next_memory_for_topics(text, int);
 create or replace function public.claim_next_memory_for_topics(
   p_holder_id text,
-  p_ttl_seconds int
+  p_ttl_seconds int,
+  -- b-strict escape hatch (see claim_next_thread_for_reflection): the
+  -- venice edge function probes this queue from a chat turn's
+  -- waitUntil tail with a service-role client that has no uid, so it
+  -- passes the owner's id explicitly. The vocab CTE scopes on the
+  -- same coalesce.
+  p_user_id uuid default null
 ) returns table (
   memory_id uuid,
   label text,
@@ -4184,7 +4516,7 @@ language sql security invoker as $$
   with candidate as (
     select m.id as memory_id, m.label, m.data
       from public.memories m
-     where m.user_id = auth.uid()
+     where m.user_id = coalesce(p_user_id, auth.uid())
        and m.last_topics_at is null
        and (m.topics_claim_expires is null
             or m.topics_claim_expires < now())
@@ -4200,7 +4532,7 @@ language sql security invoker as $$
     -- seeds.
     select coalesce(array_agg(distinct topic order by topic), '{}'::text[]) as topics
       from public.memories m, unnest(m.topics) as topic
-     where m.user_id = auth.uid()
+     where m.user_id = coalesce(p_user_id, auth.uid())
        and m.topics <> '{}'::text[]
   )
   update public.memories m
@@ -4221,7 +4553,9 @@ drop function if exists public.save_memory_topics_if_claimed(uuid, text, text[])
 create or replace function public.save_memory_topics_if_claimed(
   p_memory_id uuid,
   p_holder_id text,
-  p_topics text[]
+  p_topics text[],
+  -- b-strict escape hatch, same as the claim RPC above.
+  p_user_id uuid default null
 ) returns boolean
 language plpgsql security invoker as $$
 declare
@@ -4233,7 +4567,7 @@ begin
          topics_claim_holder = null,
          topics_claim_expires = null
    where id = p_memory_id
-     and user_id = auth.uid()
+     and user_id = coalesce(p_user_id, auth.uid())
      and topics_claim_holder = p_holder_id
      and topics_claim_expires > now();
   get diagnostics updated = row_count;
@@ -4248,7 +4582,9 @@ end $$;
 drop function if exists public.clear_memory_topics_claim(uuid, text);
 create or replace function public.clear_memory_topics_claim(
   p_memory_id uuid,
-  p_holder_id text
+  p_holder_id text,
+  -- b-strict escape hatch, same as the claim RPC above.
+  p_user_id uuid default null
 ) returns void
 language plpgsql security invoker as $$
 begin
@@ -4256,9 +4592,65 @@ begin
      set topics_claim_holder = null,
          topics_claim_expires = null
    where id = p_memory_id
-     and user_id = auth.uid()
+     and user_id = coalesce(p_user_id, auth.uid())
      and topics_claim_holder = p_holder_id;
 end $$;
+
+-- service_role grants for the edge-function curation drivers.
+grant execute on function
+  public.claim_next_memory_for_topics(text, int, uuid) to service_role;
+grant execute on function
+  public.save_memory_topics_if_claimed(uuid, text, text[], uuid) to service_role;
+grant execute on function
+  public.clear_memory_topics_claim(uuid, text, uuid) to service_role;
+
+-- Global memory-topics sweep claim: cross-user variant of
+-- claim_next_memory_for_topics for the curation sweep. This queue's
+-- writers are all server-side (reflection / rem / deep-sleep on cron
+-- and chat-turn tails), so the sweep is the primary drain - without
+-- it a 3am rem consolidation leaves rows untagged until their owner
+-- next converses. The vocab CTE scopes to the candidate row's owner.
+drop function if exists public.claim_next_memory_for_topics_sweep(text, int);
+create or replace function public.claim_next_memory_for_topics_sweep(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns table (
+  memory_id uuid,
+  label text,
+  data text,
+  existing_topics text[],
+  user_id uuid
+)
+language sql security definer
+set search_path = public as $$
+  with candidate as (
+    select m.id as memory_id, m.label, m.data, m.user_id as user_id
+      from public.memories m
+     where m.last_topics_at is null
+       and (m.topics_claim_expires is null
+            or m.topics_claim_expires < now())
+     order by m.updated_at asc
+     limit 1
+     for update of m skip locked
+  ),
+  vocab as (
+    select coalesce(array_agg(distinct topic order by topic), '{}'::text[]) as topics
+      from public.memories m, unnest(m.topics) as topic
+     where m.user_id = (select c.user_id from candidate c)
+       and m.topics <> '{}'::text[]
+  )
+  update public.memories m
+     set topics_claim_holder = p_holder_id,
+         topics_claim_expires = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c, vocab v
+   where m.id = c.memory_id
+  returning m.id as memory_id, c.label, c.data, v.topics as existing_topics, m.user_id;
+$$;
+
+revoke all on function public.claim_next_memory_for_topics_sweep(text, int)
+  from public, anon, authenticated;
+grant execute on function public.claim_next_memory_for_topics_sweep(text, int)
+  to service_role;
 
 -- Memory-topic vocabulary + per-topic counts for the current user.
 -- Used by the Memories drawer's topic-filter dropdown on mount and
@@ -4305,7 +4697,13 @@ $$;
 drop function if exists public.claim_next_recipe_for_topics(text, int);
 create or replace function public.claim_next_recipe_for_topics(
   p_holder_id text,
-  p_ttl_seconds int
+  p_ttl_seconds int,
+  -- b-strict escape hatch (see claim_next_thread_for_reflection): the
+  -- venice edge function probes this queue from a chat turn's
+  -- waitUntil tail with a service-role client that has no uid, so it
+  -- passes the owner's id explicitly. The vocab CTE scopes on the
+  -- same coalesce.
+  p_user_id uuid default null
 ) returns table (
   recipe_id uuid,
   title text,
@@ -4316,7 +4714,7 @@ language sql security invoker as $$
   with candidate as (
     select r.id as recipe_id, r.title, r.cooklang
       from public.recipes r
-     where r.user_id = auth.uid()
+     where r.user_id = coalesce(p_user_id, auth.uid())
        and r.last_topics_at is null
        and (r.topics_claim_expires is null
             or r.topics_claim_expires < now())
@@ -4332,7 +4730,7 @@ language sql security invoker as $$
     -- self-seeds.
     select coalesce(array_agg(distinct topic order by topic), '{}'::text[]) as topics
       from public.recipes r, unnest(r.topics) as topic
-     where r.user_id = auth.uid()
+     where r.user_id = coalesce(p_user_id, auth.uid())
        and r.topics <> '{}'::text[]
   )
   update public.recipes r
@@ -4354,7 +4752,9 @@ drop function if exists public.save_recipe_topics_if_claimed(uuid, text, text[])
 create or replace function public.save_recipe_topics_if_claimed(
   p_recipe_id uuid,
   p_holder_id text,
-  p_topics text[]
+  p_topics text[],
+  -- b-strict escape hatch, same as the claim RPC above.
+  p_user_id uuid default null
 ) returns boolean
 language plpgsql security invoker as $$
 declare
@@ -4366,7 +4766,7 @@ begin
          topics_claim_holder = null,
          topics_claim_expires = null
    where id = p_recipe_id
-     and user_id = auth.uid()
+     and user_id = coalesce(p_user_id, auth.uid())
      and topics_claim_holder = p_holder_id
      and topics_claim_expires > now();
   get diagnostics updated = row_count;
@@ -4380,7 +4780,9 @@ end $$;
 drop function if exists public.clear_recipe_topics_claim(uuid, text);
 create or replace function public.clear_recipe_topics_claim(
   p_recipe_id uuid,
-  p_holder_id text
+  p_holder_id text,
+  -- b-strict escape hatch, same as the claim RPC above.
+  p_user_id uuid default null
 ) returns void
 language plpgsql security invoker as $$
 begin
@@ -4388,9 +4790,65 @@ begin
      set topics_claim_holder = null,
          topics_claim_expires = null
    where id = p_recipe_id
-     and user_id = auth.uid()
+     and user_id = coalesce(p_user_id, auth.uid())
      and topics_claim_holder = p_holder_id;
 end $$;
+
+-- service_role grants for the edge-function curation drivers.
+grant execute on function
+  public.claim_next_recipe_for_topics(text, int, uuid) to service_role;
+grant execute on function
+  public.save_recipe_topics_if_claimed(uuid, text, text[], uuid) to service_role;
+grant execute on function
+  public.clear_recipe_topics_claim(uuid, text, uuid) to service_role;
+
+-- Global recipe-topics sweep claim: cross-user variant of
+-- claim_next_recipe_for_topics for the curation sweep. Same catch-up
+-- rationale as the memory sweep claim: a row a turn tail failed to
+-- drain (or one re-queued by an edit outside a chat turn) would
+-- otherwise wait for the owner's next conversation. The vocab CTE
+-- scopes to the candidate row's owner.
+drop function if exists public.claim_next_recipe_for_topics_sweep(text, int);
+create or replace function public.claim_next_recipe_for_topics_sweep(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns table (
+  recipe_id uuid,
+  title text,
+  cooklang text,
+  existing_topics text[],
+  user_id uuid
+)
+language sql security definer
+set search_path = public as $$
+  with candidate as (
+    select r.id as recipe_id, r.title, r.cooklang, r.user_id as user_id
+      from public.recipes r
+     where r.last_topics_at is null
+       and (r.topics_claim_expires is null
+            or r.topics_claim_expires < now())
+     order by r.updated_at asc
+     limit 1
+     for update of r skip locked
+  ),
+  vocab as (
+    select coalesce(array_agg(distinct topic order by topic), '{}'::text[]) as topics
+      from public.recipes r, unnest(r.topics) as topic
+     where r.user_id = (select c.user_id from candidate c)
+       and r.topics <> '{}'::text[]
+  )
+  update public.recipes r
+     set topics_claim_holder = p_holder_id,
+         topics_claim_expires = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c, vocab v
+   where r.id = c.recipe_id
+  returning r.id as recipe_id, c.title, c.cooklang, v.topics as existing_topics, r.user_id;
+$$;
+
+revoke all on function public.claim_next_recipe_for_topics_sweep(text, int)
+  from public, anon, authenticated;
+grant execute on function public.claim_next_recipe_for_topics_sweep(text, int)
+  to service_role;
 
 -- Recipe-topic vocabulary + per-topic counts for the current user.
 -- Backs the Cookbook drawer's topic-filter dropdown. Distinct from
@@ -4441,7 +4899,7 @@ drop function if exists public.claim_next_pending_thread_for_embedding(text, int
 create or replace function public.claim_next_pending_thread_for_embedding(
   p_holder_id text,
   p_ttl_seconds int
-) returns table (id uuid, title text, summary text)
+) returns table (id uuid, title text, summary text, user_id uuid)
 language sql security definer
 set search_path = public as $$
   with candidate as (
@@ -4460,7 +4918,7 @@ set search_path = public as $$
          embedding_claim_expires = now() + make_interval(secs => p_ttl_seconds)
     from candidate c
    where t.id = c.id
-  returning t.id, t.title, t.summary;
+  returning t.id, t.title, t.summary, t.user_id;
 $$;
 
 -- Save the thread embedding IF our claim is still valid. Same shape
@@ -4683,16 +5141,17 @@ $$;
 --   - All idempotent: `create table if not exists`, `add column if not
 --     exists`, drop-then-create policies and RPCs.
 --   - Vectors are `vector(2048)` to match memories/threads. Venice's
---     bge-m3 model emits 1024 dims; the worker pads with zeros via
---     `padEmbeddingForStorage` (see src/lib/models.ts). Cosine
---     similarity is invariant to that padding.
+--     bge-m3 model emits 1024 dims; writers pad with zeros via
+--     `padEmbeddingForStorage` (browser src/lib/models, edge
+--     _shared/backfill.ts). Cosine similarity is invariant to that
+--     padding.
 --
--- Cross-device coordination uses two layers, same as memories:
---   - The singleton `worker_kind='samskara'` lease in `worker_leases`
---     keeps formation work on one device at a time.
---   - Per-row claim columns on `samskara_substrate` and
---     `samskara_compound_summary` cover the lease-handover race for
---     work that crosses an LLM round-trip.
+-- The formation pipeline runs server-side in the venice function
+-- (supabase/functions/venice/agents/samskara.ts), driven by the
+-- chat-turn tail and the hourly nak-samskara-sweep cron. Per-row
+-- claim columns on `samskara_substrate` and
+-- `samskara_compound_summary` are the mutual exclusion between the
+-- two drivers for work that crosses an LLM round-trip.
 
 create table if not exists public.samskara_substrate (
   id uuid primary key default gen_random_uuid(),
@@ -4821,15 +5280,14 @@ drop policy if exists "samskara associations self-deletable" on public.samskara_
 create policy "samskara associations self-deletable" on public.samskara_associations
   for delete using (auth.uid() = user_id);
 
--- Auto-populate user_id on insert from the caller's session. The
--- pair-relate phase in src/lib/agents/samskara/loop.ts upserts
--- rows via a raw .from('samskara_associations').upsert(...) call
--- that only sets (a_id, b_id, articulated_relation, kind,
--- reinforcement, last_reinforced_at) - it does NOT set user_id.
--- Without this default, user_id lands as NULL, the RLS `with
--- check (auth.uid() = user_id)` policy fails, and the upsert
--- returns a 42501. Idempotent: `set default` overwrites any
--- prior default, so re-running the schema is safe.
+-- Auto-populate user_id on insert from the caller's session. A
+-- user-session upsert that omits user_id would otherwise land NULL,
+-- fail the RLS `with check (auth.uid() = user_id)` policy, and
+-- return a 42501. NOTE the inverse trap for the service role: under
+-- the venice function's admin client auth.uid() is NULL, so the
+-- server-side pair-relate writer sets user_id explicitly.
+-- Idempotent: `set default` overwrites any prior default, so
+-- re-running the schema is safe.
 alter table public.samskara_associations
   alter column user_id set default auth.uid();
 
@@ -4926,13 +5384,12 @@ drop policy if exists "samskaras self-deletable" on public.samskaras;
 create policy "samskaras self-deletable" on public.samskaras
   for delete using (auth.uid() = user_id);
 
--- Auto-populate user_id from auth.uid() on insert. mint-tier1 in
--- src/lib/agents/samskara/loop.ts inserts rows directly via
--- .from('samskaras').insert({...}) and doesn't set user_id.
--- Same RLS-failure symptom as samskara_associations above. The
--- default + the RLS `with check (auth.uid() = user_id)` policy
--- combine so callers can't accidentally or maliciously attribute
--- a samskara to someone else - the session identity wins.
+-- Auto-populate user_id from auth.uid() on insert; same RLS-failure
+-- symptom and same service-role caveat as samskara_associations
+-- above (the venice function's mint writers set user_id
+-- explicitly). The default + the RLS `with check` policy combine so
+-- user-session callers can't attribute a samskara to someone else -
+-- the session identity wins.
 alter table public.samskaras
   alter column user_id set default auth.uid();
 
@@ -5344,11 +5801,12 @@ create or replace function public.samskara_apply_reaction(
   p_cohort_id uuid,
   p_confirm_ids uuid[],
   p_disconfirm_ids uuid[],
-  p_neutral_ids uuid[]
+  p_neutral_ids uuid[],
+  p_user_id uuid default null
 ) returns void
 language plpgsql security invoker as $$
 declare
-  v_uid uuid := auth.uid();
+  v_uid uuid := coalesce(p_user_id, auth.uid());
   v_cohort_n int;
   v_weight real;
   v_inc real;
@@ -5432,9 +5890,9 @@ end $$;
 -- never re-evaluated, which means cluster_seq is deterministic across
 -- repeated calls so the renderer can cache the result by cohort.
 --
--- Threshold default 0.85 matches the MINT dedup convention from
--- src/lib/agents/samskara/loop.ts; drop to ~0.75 if cohorts come back
--- splintered.
+-- Threshold default 0.85 matches MINT_DEDUP_COSINE in the formation
+-- pipeline (supabase/functions/venice/agents/samskara.ts); drop to
+-- ~0.75 if cohorts come back splintered.
 --
 -- Output is one row per fire in the thread (cohort-keyed), naming the
 -- cluster_seq it landed in (1-based, restarts per cohort) plus the
@@ -5594,9 +6052,15 @@ end $$;
 -- `claim_next_pending_memory`: `for update skip locked` plus a
 -- holder/expiry stamp lets concurrent workers walk past locked rows.
 drop function if exists public.samskara_claim_next_assimilate(text, int);
+-- p_user_id overload: the venice function's turn tail claims with the
+-- service-role client, which has no auth.uid(). Trailing default keeps
+-- the function role-agnostic. The old 2-arg signature is dropped so
+-- PostgREST resolves the call unambiguously.
+drop function if exists public.samskara_claim_next_assimilate(text, int);
 create or replace function public.samskara_claim_next_assimilate(
   p_holder_id text,
-  p_ttl_seconds int
+  p_ttl_seconds int,
+  p_user_id uuid default null
 ) returns table (
   id uuid,
   thread_id uuid,
@@ -5607,7 +6071,7 @@ language sql security invoker as $$
   with candidate as (
     select s.id
       from public.samskara_substrate s
-     where s.user_id = auth.uid()
+     where s.user_id = coalesce(p_user_id, auth.uid())
        and s.situation is null
        and (s.assimilate_claim_expires is null
             or s.assimilate_claim_expires < now())
@@ -5623,6 +6087,67 @@ language sql security invoker as $$
   returning s.id, s.thread_id, s.user_message_id, s.assistant_message_id;
 $$;
 
+-- Global sweep variant for the hourly samskara sweep: no user filter,
+-- owner-privileged, returns user_id so the sweep can scope the
+-- follow-up reads and attribute drawer logs. The per-row claim
+-- columns are the mutual exclusion between this and the turn tail.
+-- EXECUTE locked to service_role below.
+create or replace function public.samskara_claim_next_assimilate_for_sweep(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns table (
+  id uuid,
+  thread_id uuid,
+  user_message_id uuid,
+  assistant_message_id uuid,
+  user_id uuid
+)
+language sql security definer
+set search_path = public as $$
+  with candidate as (
+    select s.id
+      from public.samskara_substrate s
+     where s.situation is null
+       and (s.assimilate_claim_expires is null
+            or s.assimilate_claim_expires < now())
+     order by s.created_at asc
+     limit 1
+     for update skip locked
+  )
+  update public.samskara_substrate s
+     set assimilate_claim_holder = p_holder_id,
+         assimilate_claim_expires = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c
+   where s.id = c.id
+  returning s.id, s.thread_id, s.user_message_id, s.assistant_message_id, s.user_id;
+$$;
+
+revoke all on function public.samskara_claim_next_assimilate_for_sweep(text, int) from public, anon, authenticated;
+grant execute on function public.samskara_claim_next_assimilate_for_sweep(text, int) to service_role;
+
+-- Sweep user discovery: users with recent samskara activity get the
+-- per-user maintenance rotation (pair-relate, mints, dedup, regen)
+-- each tick. Substrate creation and fires are the two activity
+-- signals; union dedups. The probes themselves are self-limiting
+-- (regen has its own predicate, dedup self-caps), so a user the
+-- window over-includes costs a few cheap reads.
+create or replace function public.samskara_sweep_users(
+  p_window_hours int default 2
+) returns table (user_id uuid)
+language sql security definer
+set search_path = public as $$
+  select s.user_id
+    from public.samskara_substrate s
+   where s.created_at > now() - make_interval(hours => p_window_hours)
+  union
+  select f.user_id
+    from public.samskara_fires f
+   where f.fired_at > now() - make_interval(hours => p_window_hours);
+$$;
+
+revoke all on function public.samskara_sweep_users(int) from public, anon, authenticated;
+grant execute on function public.samskara_sweep_users(int) to service_role;
+
 -- Save assimilator output IF our claim is still valid. Returns false
 -- when the row was deleted, the claim expired, or another holder
 -- took over — the worker treats false as "skip and move on".
@@ -5634,7 +6159,8 @@ create or replace function public.samskara_save_assimilation_if_claimed(
   p_holder_id text,
   p_situation text,
   p_outcome text,
-  p_valence real
+  p_valence real,
+  p_user_id uuid default null
 ) returns boolean
 language plpgsql security invoker as $$
 declare
@@ -5647,7 +6173,7 @@ begin
          assimilate_claim_holder = null,
          assimilate_claim_expires = null
    where id = p_id
-     and user_id = auth.uid()
+     and user_id = coalesce(p_user_id, auth.uid())
      and assimilate_claim_holder = p_holder_id
      and assimilate_claim_expires > now();
   get diagnostics updated = row_count;
@@ -5665,7 +6191,7 @@ drop function if exists public.samskara_claim_next_substrate_embed(text, int);
 create or replace function public.samskara_claim_next_substrate_embed(
   p_holder_id text,
   p_ttl_seconds int
-) returns table (id uuid, situation text, outcome text)
+) returns table (id uuid, situation text, outcome text, user_id uuid)
 language sql security definer
 set search_path = public as $$
   with candidate as (
@@ -5684,7 +6210,7 @@ set search_path = public as $$
          embedding_claim_expires = now() + make_interval(secs => p_ttl_seconds)
     from candidate c
    where s.id = c.id
-  returning s.id, s.situation, s.outcome;
+  returning s.id, s.situation, s.outcome, s.user_id;
 $$;
 
 drop function if exists public.samskara_save_substrate_embedding_if_claimed(
@@ -5719,16 +6245,29 @@ revoke all on function public.samskara_save_substrate_embedding_if_claimed(uuid,
 grant execute on function public.samskara_claim_next_substrate_embed(text, int) to service_role;
 grant execute on function public.samskara_save_substrate_embedding_if_claimed(uuid, text, vector, text) to service_role;
 
--- Decay pass. Two updates, mirroring scratch's two paths: stale-fire
--- decay (gentle, hiatus-tolerant) and disconfirm decay (sharper,
--- gated on accumulated feedback). Health clamped to [0, 1]. Returns
--- the count of rows changed so the worker can log meaningful churn.
+-- Decay pass. Three updates: stale-fire decay (gentle,
+-- hiatus-tolerant), disconfirm decay (sharper, gated on accumulated
+-- feedback), and locked-in decay (fired a lot, never engaged with).
+-- Health clamped to [0, 1]. Returns the count of rows changed so a
+-- manual exercise can see the churn.
+--
+-- Driven by the nak-samskara-decay pg_cron job (see the cron block
+-- near the stream janitor), NOT by the browser samskara worker. The
+-- decay rates are calibrated as a per-PASS nudge on a ~30-minute
+-- cadence; the worker's in-memory throttle reset on every restart
+-- (reload, tab switch, lease loss) and over-ran that cadence under
+-- active use, so the pass moved to a server-side wall clock.
+--
+-- `security definer` with no auth.uid() filter: cron has no user
+-- session, and every predicate below is row-local (each row's own
+-- timestamps and counters), so one cross-user pass is exactly the
+-- union of the per-user passes. The EXECUTE grant below is the
+-- security boundary.
 drop function if exists public.samskara_decay();
-create or replace function public.samskara_decay()
+create or replace function public.samskara_decay_sweep()
 returns int
-language plpgsql security invoker as $$
+language plpgsql security definer as $$
 declare
-  v_uid uuid := auth.uid();
   v_stale int;
   v_disconfirm int;
   v_unreinforced int;
@@ -5749,8 +6288,7 @@ begin
   update public.samskaras
      set health = greatest(0.0, health - 0.02),
          updated_at = now()
-   where user_id = v_uid
-     and coalesce(last_fired_at, created_at) < now() - interval '60 days';
+   where coalesce(last_fired_at, created_at) < now() - interval '60 days';
   get diagnostics v_stale = row_count;
 
   -- Net-disconfirmed decay. Evidence bar is 1.0 of accumulated
@@ -5761,8 +6299,7 @@ begin
   update public.samskaras
      set health = greatest(0.0, health - 0.10),
          updated_at = now()
-   where user_id = v_uid
-     and disconfirm_count > confirm_count
+   where disconfirm_count > confirm_count
      and (disconfirm_count + confirm_count) >= 1.0;
   get diagnostics v_disconfirm = row_count;
 
@@ -5791,13 +6328,18 @@ begin
   update public.samskaras
      set health = greatest(0.0, health - 0.03),
          updated_at = now()
-   where user_id = v_uid
-     and fire_count > 10
+   where fire_count > 10
      and (confirm_count + disconfirm_count) < 0.5;
   get diagnostics v_unreinforced = row_count;
 
   return v_stale + v_disconfirm + v_unreinforced;
 end $$;
+
+-- Cron-only - same boundary as nak_sweep_stale_streams: pg_cron runs
+-- as the owner, and the service_role grant keeps the pass manually
+-- exercisable with the service key.
+revoke all on function public.samskara_decay_sweep() from public, anon, authenticated;
+grant execute on function public.samskara_decay_sweep() to service_role;
 
 -- Compound-summary regeneration coordination.
 --
@@ -5809,7 +6351,12 @@ end $$;
 -- claim/save RPCs follow the standard claim-then-save shape so
 -- multiple devices coordinate.
 drop function if exists public.samskara_should_regen_compound();
-create or replace function public.samskara_should_regen_compound()
+-- p_user_id overload for the sweep's service-role probe; the old
+-- 0-arg signature is dropped so PostgREST resolves the call cleanly.
+drop function if exists public.samskara_should_regen_compound();
+create or replace function public.samskara_should_regen_compound(
+  p_user_id uuid default null
+)
 returns table (
   should_regen boolean,
   samskara_count int,
@@ -5817,7 +6364,7 @@ returns table (
 )
 language plpgsql stable security invoker as $$
 declare
-  v_uid uuid := auth.uid();
+  v_uid uuid := coalesce(p_user_id, auth.uid());
   v_count int;
   v_last_regen timestamptz;
   v_count_at_regen int;
@@ -5869,11 +6416,12 @@ end $$;
 drop function if exists public.samskara_claim_compound_regen(text, int);
 create or replace function public.samskara_claim_compound_regen(
   p_holder_id text,
-  p_ttl_seconds int
+  p_ttl_seconds int,
+  p_user_id uuid default null
 ) returns boolean
 language plpgsql security invoker as $$
 declare
-  v_uid uuid := auth.uid();
+  v_uid uuid := coalesce(p_user_id, auth.uid());
   v_changed int;
 begin
   -- Insert-or-update with claim guard. The compound row is
@@ -5900,11 +6448,12 @@ drop function if exists public.samskara_save_compound_summary_if_claimed(
 create or replace function public.samskara_save_compound_summary_if_claimed(
   p_holder_id text,
   p_summary text,
-  p_samskara_count int
+  p_samskara_count int,
+  p_user_id uuid default null
 ) returns boolean
 language plpgsql security invoker as $$
 declare
-  v_uid uuid := auth.uid();
+  v_uid uuid := coalesce(p_user_id, auth.uid());
   v_changed int;
 begin
   update public.samskara_compound_summary
@@ -5923,7 +6472,8 @@ end $$;
 -- Mint-time dedup support -------------------------------------------------
 --
 -- `samskara_nearest_by_prediction` and `samskara_reinforce_existing`
--- back the mint-tier1 dedup guard in src/lib/agents/samskara/loop.ts.
+-- back the mint-phase dedup guards in
+-- supabase/functions/venice/agents/samskara.ts.
 -- Backstory: the mint-tier1 phase used to insert unconditionally
 -- whenever the minter agent returned a non-null candidate; because
 -- the agent's input is limited to a five-row substrate sample and
@@ -5940,10 +6490,12 @@ end $$;
 -- drop the old signature so the 3-arg version doesn't create an
 -- overload that PostgREST can't disambiguate.
 drop function if exists public.samskara_nearest_by_prediction(vector, int);
+drop function if exists public.samskara_nearest_by_prediction(vector, int, int);
 create or replace function public.samskara_nearest_by_prediction(
   p_query_embedding vector(2048),
   p_k_max int,
-  p_tier int default null
+  p_tier int default null,
+  p_user_id uuid default null
 ) returns table (
   id uuid,
   cosine real,
@@ -5966,7 +6518,7 @@ language sql stable security invoker as $$
          (1 - (s.prediction_embedding <=> p_query_embedding))::real as cosine,
          s.tier
     from public.samskaras s
-   where s.user_id = auth.uid()
+   where s.user_id = coalesce(p_user_id, auth.uid())
      and s.prediction_embedding is not null
      and (p_tier is null or s.tier = p_tier)
    order by s.prediction_embedding <=> p_query_embedding asc
@@ -5994,13 +6546,15 @@ $$;
 -- The earlier signature carried a `p_substrate_ids uuid[]` arg for the
 -- append; drop it so PostgREST resolves the new 2-arg shape cleanly.
 drop function if exists public.samskara_reinforce_existing(uuid, uuid[], real);
+drop function if exists public.samskara_reinforce_existing(uuid, real);
 create or replace function public.samskara_reinforce_existing(
   p_samskara_id uuid,
-  p_health_bump real
+  p_health_bump real,
+  p_user_id uuid default null
 ) returns boolean
 language plpgsql security invoker as $$
 declare
-  v_uid uuid := auth.uid();
+  v_uid uuid := coalesce(p_user_id, auth.uid());
   v_exists boolean;
 begin
   -- Ownership check yields an explicit boolean to the caller so
@@ -6144,17 +6698,19 @@ end $$;
 -- Idempotent under repeated calls. Safe to run while the worker is
 -- live: a concurrent mint-tier1 could at worst re-create a twin
 -- this call just removed, which the next invocation catches.
+drop function if exists public.samskara_collapse_by_cofiring(int, real, real, int, real, int);
 create or replace function public.samskara_collapse_by_cofiring(
   p_min_cofires int default 3,
   p_min_cofire_ratio real default 0.5,
   p_cosine_floor real default 0.70,
   p_target_count int default 150,
   p_cap_cosine_floor real default 0.60,
-  p_max_collapses int default 20
+  p_max_collapses int default 20,
+  p_user_id uuid default null
 ) returns int
 language plpgsql security invoker as $$
 declare
-  v_uid uuid := auth.uid();
+  v_uid uuid := coalesce(p_user_id, auth.uid());
   v_collapsed int := 0;
   v_pair record;
   v_winner uuid;
@@ -6320,13 +6876,15 @@ end $$;
 -- neighbour scan, and the per-member weight read all hit the eligible
 -- self-join once rather than three times. `on commit drop` scopes it to
 -- the PostgREST call's transaction.
+drop function if exists public.samskara_tier2_candidate(int, real, real, int, int, real);
 create or replace function public.samskara_tier2_candidate(
   p_min_cofires    int  default 4,
   p_cosine_lo      real default 0.30,
   p_cosine_hi      real default 0.68,
   p_min_group_size int  default 3,
   p_max_group_size int  default 6,
-  p_overlap_skip   real default 0.60
+  p_overlap_skip   real default 0.60,
+  p_user_id        uuid default null
 ) returns table (
   samskara_id uuid,
   prediction text,
@@ -6335,7 +6893,7 @@ create or replace function public.samskara_tier2_candidate(
 )
 language plpgsql security invoker as $$
 declare
-  v_uid uuid := auth.uid();
+  v_uid uuid := coalesce(p_user_id, auth.uid());
   v_active int;
   v_seed_a uuid;
   v_seed_b uuid;
@@ -6364,7 +6922,13 @@ begin
     b_id uuid,
     cofires int
   ) on commit drop;
-  delete from _tier2_edges;
+  -- TRUNCATE, not an unqualified DELETE: PostgREST connections can
+  -- preload pg-safeupdate (the local stack does), which rejects
+  -- DELETE without a WHERE clause even inside function bodies -
+  -- SQLSTATE 21000 on every call, which is how this function spent
+  -- weeks never running locally. TRUNCATE is a different command
+  -- class safeupdate doesn't hook, and is faster besides.
+  truncate _tier2_edges;
   insert into _tier2_edges (a_id, b_id, cofires)
   with pair_cofires as (
     select least(f1.samskara_id, f2.samskara_id) as a_id,
@@ -6803,10 +7367,6 @@ alter table public.threads
   drop column if exists last_journaled_msg_id,
   drop column if exists journal_claim_holder,
   drop column if exists journal_claim_expires_at;
--- Drop any lingering worker_leases rows so a tab that hasn't reloaded
--- yet doesn't keep heartbeating a partition that no longer exists.
-delete from public.worker_leases where worker_kind = 'journal';
-
 -- User Wiki ---------------------------------------------------------------
 --
 -- Flat (no nesting) encyclopedia-style articles peer to chats and
@@ -6927,8 +7487,47 @@ alter table public.threads
   -- successful run alongside the rest of the per-thread state.
   add column if not exists wiki_skip_fallback_attempted boolean not null default false;
 
--- Claim the next thread eligible for wiki processing. Two notable
--- shape choices:
+-- Resolve a stored timezone preference to one Postgres will accept.
+-- The global wiki sweep below evaluates the day-gate for EVERY user
+-- inside one query; a single profile carrying a malformed
+-- displayTimezone would make `at time zone` raise and wedge the whole
+-- sweep (one bad row pins the queue for all users). The browser-era
+-- claim took the timezone as a parameter, so a bad value only ever
+-- broke its own user's claim - the global shape needs the per-row
+-- guard. Probe the value and fall back to UTC on anything Postgres
+-- rejects.
+create or replace function public.nak_safe_timezone(p_tz text)
+returns text
+language plpgsql stable as $$
+begin
+  if p_tz is null or p_tz = '' then
+    return 'UTC';
+  end if;
+  perform now() at time zone p_tz;
+  return p_tz;
+exception when others then
+  return 'UTC';
+end $$;
+
+-- Claim the next thread eligible for wiki processing, across ALL
+-- users. SECURITY DEFINER global sweep (same posture as
+-- claim_next_pending_wiki_article in the embeddings section): the
+-- caller is the venice function's /wiki-sweep route, driven by
+-- pg_cron with a service-role bearer, so there is no auth.uid() to
+-- scope by. EXECUTE is locked to service_role below. The per-user
+-- inputs the browser worker used to pass as parameters are read off
+-- the joined profile instead:
+--   - the day-gate timezone comes from settings->>'displayTimezone'
+--     (via nak_safe_timezone, UTC fallback);
+--   - the Settings "automatic wiki updates" toggle gates eligibility
+--     here (only the literal string 'false' disables - anything else,
+--     including a missing key, means enabled, matching the client's
+--     `?? true` default; a cast would let one malformed value wedge
+--     the global sweep).
+-- Returns user_id alongside the thread columns so the agent can scope
+-- its run to the owner.
+--
+-- Two notable shape choices, unchanged from the browser-era claim:
 --   (1) Eligibility uses the NEWEST message's created_at (read off a
 --       second lateral) rather than threads.updated_at. Both columns
 --       move on every insert, but reading the timestamp from messages
@@ -6948,24 +7547,30 @@ drop function if exists public.claim_next_thread_for_wiki(text, int);
 drop function if exists public.claim_next_thread_for_wiki(text, int, text);
 create or replace function public.claim_next_thread_for_wiki(
   p_holder_id text,
-  p_ttl_seconds int,
-  -- User's display timezone from Settings -> AI -> About you;
-  -- determines the calendar day the eligibility gate buckets on.
-  p_timezone text default 'UTC'
+  p_ttl_seconds int
 ) returns table (
   thread_id uuid,
+  user_id uuid,
   terminal_msg_id uuid,
   title text,
   newest_msg_at timestamptz
 )
-language sql security invoker as $$
+language sql security definer
+set search_path = public as $$
   with candidate as (
     select
       t.id as thread_id,
+      t.user_id as user_id,
       term.msg_id as terminal_msg_id,
       t.title as title,
       newest.created_at as newest_msg_at
       from public.threads t
+      inner join public.profiles p on p.user_id = t.user_id
+      cross join lateral (
+        -- One safe-timezone resolution per candidate row, shared by
+        -- both sides of the day-gate comparison below.
+        select public.nak_safe_timezone(p.settings->>'displayTimezone') as tz
+      ) usertz
       cross join lateral (
         -- Terminal-msg lateral: latest assistant row whose
         -- tool_calls is empty/null and whose
@@ -6994,7 +7599,7 @@ language sql security invoker as $$
          order by m2.created_at desc
          limit 1
       ) newest
-     where t.user_id = auth.uid()
+     where (p.settings->>'wikiAutomaticEnabled') is distinct from 'false'
        and (t.wiki_claim_expires_at is null
             or t.wiki_claim_expires_at < now())
        and (
@@ -7032,8 +7637,8 @@ language sql security invoker as $$
          --       (flag stamped true).
          (
            term.msg_id is distinct from t.last_wiki_processed_msg_id
-           and (newest.created_at at time zone p_timezone)::date
-               < (now() at time zone p_timezone)::date
+           and (newest.created_at at time zone usertz.tz)::date
+               < (now() at time zone usertz.tz)::date
          )
          or (
            t.wiki_last_skip_reason is not null
@@ -7050,8 +7655,16 @@ language sql security invoker as $$
          wiki_claim_expires_at = now() + make_interval(secs => p_ttl_seconds)
     from candidate c
    where t.id = c.thread_id
-  returning t.id as thread_id, c.terminal_msg_id, c.title, c.newest_msg_at;
+  returning t.id as thread_id, t.user_id as user_id, c.terminal_msg_id,
+            c.title, c.newest_msg_at;
 $$;
+
+-- Global sweep, owner-privileged: only the cron-driven service role
+-- may claim across users.
+revoke all on function public.claim_next_thread_for_wiki(text, int)
+  from public, anon, authenticated;
+grant execute on function public.claim_next_thread_for_wiki(text, int)
+  to service_role;
 
 -- Advance the per-thread wiki pointer IF our claim is still ours.
 -- Called after every successful agent run - even a no-op run (agent
@@ -7064,7 +7677,13 @@ drop function if exists public.mark_thread_wiki_processed_if_claimed(uuid, text,
 create or replace function public.mark_thread_wiki_processed_if_claimed(
   p_thread_id uuid,
   p_holder_id text,
-  p_msg_id uuid
+  p_msg_id uuid,
+  -- b-strict escape hatch (see claim_next_thread_for_reflection): the
+  -- venice function's wiki sweep runs with a service-role client that
+  -- has no auth.uid(), so it passes the owner id the claim returned.
+  -- security invoker stays correct because service_role bypasses RLS
+  -- and the coalesce scopes the update to one user either way.
+  p_user_id uuid default null
 ) returns boolean
 language plpgsql security invoker as $$
 declare
@@ -7087,12 +7706,16 @@ begin
          -- with content-filter would never get the fallback retry.
          wiki_skip_fallback_attempted = false
    where id = p_thread_id
-     and user_id = auth.uid()
+     and user_id = coalesce(p_user_id, auth.uid())
      and wiki_claim_holder = p_holder_id
      and wiki_claim_expires_at > now();
   get diagnostics updated = row_count;
   return updated > 0;
 end $$;
+
+grant execute on function
+  public.mark_thread_wiki_processed_if_claimed(uuid, text, uuid, uuid)
+  to service_role;
 
 -- Record an agent failure against the claimed wiki thread. The error
 -- path in loop.ts calls this instead of mark_thread_wiki_processed
@@ -7126,7 +7749,11 @@ create or replace function public.record_wiki_failure_or_skip(
   -- wiki_last_skip_reason on the skip path so the Skipped panel can
   -- render it. Ignored on the release path - in-flight failures
   -- don't warrant surfacing yet; only the final give-up does.
-  p_reason text default null
+  p_reason text default null,
+  -- b-strict escape hatch, same as the mark RPC above: null from a
+  -- browser caller (auth.uid() in scope), the thread owner's id from
+  -- the service-role wiki sweep.
+  p_user_id uuid default null
 ) returns text
 language plpgsql security invoker as $$
 declare
@@ -7135,7 +7762,7 @@ begin
   update public.threads
      set wiki_failure_count = wiki_failure_count + 1
    where id = p_thread_id
-     and user_id = auth.uid()
+     and user_id = coalesce(p_user_id, auth.uid())
      and wiki_claim_holder = p_holder_id
      and wiki_claim_expires_at > now()
   returning wiki_failure_count into v_new_count;
@@ -7177,6 +7804,10 @@ begin
   return 'released';
 end $$;
 
+grant execute on function
+  public.record_wiki_failure_or_skip(uuid, text, uuid, int, text, uuid)
+  to service_role;
+
 -- Read the user's skipped-thread list. Joined with the title for
 -- display and the newest message timestamp so the panel can sort by
 -- recency. RLS scopes to auth.uid() - the security_invoker posture
@@ -7202,22 +7833,26 @@ language sql security invoker as $$
 $$;
 
 -- Compute the same "terminal assistant message" id the worker would
--- pin against a given thread. Used by the in-panel Retry button on
--- the Skipped page, which runs the wiki agent inline against the
--- thread and needs the same msg id the worker would have picked.
--- Returns null when the thread has no assistant message with
--- non-empty content and no tool calls (the agent would have nothing
--- to anchor against).
+-- pin against a given thread. Used by the Skipped-panel Retry flow
+-- (the venice function's /wiki-retry route), which runs the wiki
+-- agent against the thread and needs the same msg id the sweep would
+-- have picked. Returns null when the thread has no assistant message
+-- with non-empty content and no tool calls (the agent would have
+-- nothing to anchor against).
 drop function if exists public.compute_wiki_terminal_msg_id(uuid);
 create or replace function public.compute_wiki_terminal_msg_id(
-  p_thread_id uuid
+  p_thread_id uuid,
+  -- b-strict escape hatch: the /wiki-retry route runs with the
+  -- service-role client and passes the gateway-validated user id;
+  -- a browser caller leaves this null and auth.uid() applies.
+  p_user_id uuid default null
 ) returns uuid
 language sql security invoker as $$
   select m.id
     from public.messages m
    inner join public.threads t on t.id = m.thread_id
    where m.thread_id = p_thread_id
-     and t.user_id = auth.uid()
+     and t.user_id = coalesce(p_user_id, auth.uid())
      and m.role = 'assistant'
      and (m.tool_calls is null
           or jsonb_typeof(m.tool_calls) <> 'array'
@@ -7228,20 +7863,25 @@ language sql security invoker as $$
    limit 1;
 $$;
 
+grant execute on function
+  public.compute_wiki_terminal_msg_id(uuid, uuid) to service_role;
+
 -- Advance the wiki pointer + clear the skip marker from outside the
--- worker's claim protocol. Used by the in-panel Retry button after a
--- successful inline agent run: the worker's mark RPC requires an
--- active claim (the worker holds one for the duration of its
--- cycle), but the manual retry doesn't go through the claim
--- protocol at all. This RPC does the equivalent state transition
--- without the claim guard - it's RLS-scoped to auth.uid()'s own
--- threads, so a user can only manually advance their own pointers.
--- No-op when the thread isn't found (e.g. a thread the user just
--- deleted while the retry was in flight).
+-- sweep's claim protocol. Used by the /wiki-retry route after a
+-- successful agent run: the sweep's mark RPC requires an active
+-- claim, but the manual retry doesn't go through the claim protocol
+-- at all. This RPC does the equivalent state transition without the
+-- claim guard - scoped to the owning user (auth.uid() or the
+-- gateway-validated id the service-role caller passes), so a user
+-- can only advance their own pointers. No-op when the thread isn't
+-- found (e.g. a thread the user just deleted while the retry was in
+-- flight).
 drop function if exists public.manual_advance_wiki_pointer(uuid, uuid);
 create or replace function public.manual_advance_wiki_pointer(
   p_thread_id uuid,
-  p_msg_id uuid
+  p_msg_id uuid,
+  -- b-strict escape hatch, same as compute_wiki_terminal_msg_id.
+  p_user_id uuid default null
 ) returns void
 language sql security invoker as $$
   update public.threads
@@ -7253,8 +7893,11 @@ language sql security invoker as $$
          wiki_last_skip_reason = null,
          wiki_skip_fallback_attempted = false
    where id = p_thread_id
-     and user_id = auth.uid();
+     and user_id = coalesce(p_user_id, auth.uid());
 $$;
+
+grant execute on function
+  public.manual_advance_wiki_pointer(uuid, uuid, uuid) to service_role;
 
 -- Embeddings pipeline RPCs for wiki articles. Same claim/save shape
 -- as memories, same 2048-dim padded vectors,
@@ -7265,7 +7908,7 @@ drop function if exists public.claim_next_pending_wiki_article(text, int);
 create or replace function public.claim_next_pending_wiki_article(
   p_holder_id text,
   p_ttl_seconds int
-) returns table (id uuid, title text, content text)
+) returns table (id uuid, title text, content text, user_id uuid)
 language sql security definer
 set search_path = public as $$
   with candidate as (
@@ -7283,7 +7926,7 @@ set search_path = public as $$
          embedding_claim_expires = now() + make_interval(secs => p_ttl_seconds)
     from candidate c
    where w.id = c.id
-  returning w.id, w.title, w.content;
+  returning w.id, w.title, w.content, w.user_id;
 $$;
 
 drop function if exists public.save_wiki_article_embedding_if_claimed(uuid, text, vector, text);
@@ -7677,55 +8320,126 @@ begin
    where user_id = v_user;
 end $$;
 
--- Wiki librarian last-run timestamp + atomic-claim RPC. The wiki
+-- Wiki librarian cadence + run-coordination state. The wiki
 -- librarian is a separate background agent that periodically
 -- reorganises the user's wiki: consolidating duplicates, fact-
 -- checking against conversation history, merging articles that
 -- belong together. It runs on a long minimum interval (12 hours
 -- by default) - far less often than the per-conversation wiki
--- agent - and there's no per-thread queue. Cross-device
--- coordination needs an atomic "is it time to run yet?" check
--- so two devices that both wake up don't both run the agent.
+-- agent - and there's no per-thread queue. The scheduled drive is
+-- the venice function's /wiki-librarian-sweep route (pg_cron ->
+-- pg_net, see the cron section at the bottom of this file).
 --
--- Approach: store the last successful run timestamp on profiles
--- and gate the run via an UPDATE-with-WHERE that only matches
--- when `now() - last_run >= min_interval`. The UPDATE is atomic
--- per row, so only one device's call ever sees the row update;
--- the others see zero rows updated and skip.
+-- Cadence gate: store the last run timestamp on profiles and gate
+-- via an UPDATE-with-WHERE that only matches when `now() - last_run
+-- >= min_interval`. The UPDATE is atomic per row, so concurrent
+-- sweep ticks can't double-claim a user. The stamp lands BEFORE the
+-- run on purpose: a run that dies mid-flight waits out the interval
+-- rather than retrying hot against whatever killed it.
+--
+-- In-flight guard: a separate holder+TTL pair, because the cadence
+-- stamp can't express "running right now". Three server paths can
+-- start a librarian run (the scheduled sweep, the Wiki panel's
+-- manual-run button, the chat-dispatched wiki_librarian tool); the
+-- guard makes them mutually exclusive so two runs never edit the
+-- wiki concurrently. Manual and chat runs take ONLY the guard (not
+-- the cadence stamp - user-driven runs don't reset the 12h clock).
 alter table public.profiles
-  add column if not exists wiki_librarian_last_run_at timestamptz;
+  add column if not exists wiki_librarian_last_run_at timestamptz,
+  add column if not exists wiki_librarian_inflight_holder text,
+  add column if not exists wiki_librarian_inflight_expires_at timestamptz;
 
--- Atomic claim. Returns true if this caller acquired the run
--- (i.e. the timestamp had aged past p_min_interval_seconds, OR
--- no prior run timestamp was stored), false otherwise. The
--- worker calls this BEFORE running the agent; if it returns
--- false the worker skips this cycle and naps until the next
--- check.
---
--- security invoker so RLS scopes the row to the calling user.
--- profiles already has a self-update policy.
+-- Claim the next user due for a scheduled librarian run, across ALL
+-- users. SECURITY DEFINER global sweep (same posture as
+-- claim_next_thread_for_wiki): the caller is the cron-driven
+-- service role, so there is no auth.uid() to scope by; EXECUTE is
+-- locked to service_role below. Gated on the Settings toggle (only
+-- the literal string 'false' disables - matching the client's
+-- `?? true` default, and a cast could wedge the global sweep on one
+-- malformed value). Most-overdue user first; returns their user_id
+-- or no row when nobody is due.
 drop function if exists public.claim_wiki_librarian_run(int);
-create or replace function public.claim_wiki_librarian_run(
+drop function if exists public.claim_next_user_for_wiki_librarian(int);
+create or replace function public.claim_next_user_for_wiki_librarian(
   p_min_interval_seconds int
+) returns uuid
+language sql security definer
+set search_path = public as $$
+  with candidate as (
+    select p.user_id
+      from public.profiles p
+     where (p.settings->>'wikiLibrarianEnabled') is distinct from 'false'
+       and (
+         p.wiki_librarian_last_run_at is null
+         or p.wiki_librarian_last_run_at
+              < now() - make_interval(secs => p_min_interval_seconds)
+       )
+     order by p.wiki_librarian_last_run_at asc nulls first
+     limit 1
+     for update of p skip locked
+  )
+  update public.profiles p
+     set wiki_librarian_last_run_at = now()
+    from candidate c
+   where p.user_id = c.user_id
+  returning p.user_id;
+$$;
+
+revoke all on function public.claim_next_user_for_wiki_librarian(int)
+  from public, anon, authenticated;
+grant execute on function public.claim_next_user_for_wiki_librarian(int)
+  to service_role;
+
+-- Take the per-user in-flight guard. Returns true when this holder
+-- acquired it (no current holder, or the previous holder's TTL
+-- lapsed - a crashed run must not wedge the librarian forever).
+-- b-strict: the venice function calls with the service-role client
+-- and passes the owner id explicitly; coalesce keeps a hypothetical
+-- browser caller correct.
+drop function if exists public.claim_wiki_librarian_inflight(text, int, uuid);
+create or replace function public.claim_wiki_librarian_inflight(
+  p_holder_id text,
+  p_ttl_seconds int,
+  p_user_id uuid default null
 ) returns boolean
 language plpgsql security invoker as $$
 declare
   updated int;
 begin
-  if auth.uid() is null then
-    return false;
-  end if;
   update public.profiles
-     set wiki_librarian_last_run_at = now()
-   where user_id = auth.uid()
+     set wiki_librarian_inflight_holder = p_holder_id,
+         wiki_librarian_inflight_expires_at = now() + make_interval(secs => p_ttl_seconds)
+   where user_id = coalesce(p_user_id, auth.uid())
      and (
-       wiki_librarian_last_run_at is null
-       or wiki_librarian_last_run_at
-            < now() - make_interval(secs => p_min_interval_seconds)
+       wiki_librarian_inflight_holder is null
+       or wiki_librarian_inflight_expires_at is null
+       or wiki_librarian_inflight_expires_at < now()
      );
   get diagnostics updated = row_count;
   return updated > 0;
 end $$;
+
+grant execute on function
+  public.claim_wiki_librarian_inflight(text, int, uuid) to service_role;
+
+-- Release the in-flight guard IF it is still ours. A lapsed-and-
+-- stolen guard is left alone (the thief owns it now). No-op when
+-- the holder doesn't match.
+drop function if exists public.release_wiki_librarian_inflight(text, uuid);
+create or replace function public.release_wiki_librarian_inflight(
+  p_holder_id text,
+  p_user_id uuid default null
+) returns void
+language sql security invoker as $$
+  update public.profiles
+     set wiki_librarian_inflight_holder = null,
+         wiki_librarian_inflight_expires_at = null
+   where user_id = coalesce(p_user_id, auth.uid())
+     and wiki_librarian_inflight_holder = p_holder_id;
+$$;
+
+grant execute on function
+  public.release_wiki_librarian_inflight(text, uuid) to service_role;
 
 -- Atomic assistant-message commit with conflict detection -----------------
 --
@@ -8233,28 +8947,30 @@ drop function if exists public.bias_clear_thread(uuid);
 drop function if exists public.bias_processed_threads_for_bias(text);
 drop function if exists public.bias_reactions_for_bias(text);
 
--- Claim the next eligible thread for bias analysis. Eligibility is
--- the full filter list from docs/dev/bias-profile.md:
---   - belongs to the calling user
+-- Claim the next eligible thread for bias analysis - the cron
+-- sweep's claim, scanning across ALL users (the per-user variant
+-- died with the browser worker). Eligibility, from
+-- docs/dev/bias-profile.md:
 --   - has at least p_min_user_messages user messages (default 2)
 --   - either never processed, or processed before the thread's most
 --     recent update (a new user message bumps threads.updated_at,
 --     and chat-loop also clears bias_processed_at directly)
---   - threads.updated_at is BEFORE p_today_start - the caller passes
---     midnight-local-time-today as a UTC instant, so "today" excludes
---     conversations the user might still be actively chatting in
---   - id is not in p_exclude_ids (the worker's "currently open in
---     this app instance" list, gathered by the manager from main-
---     thread messages)
+--   - threads.updated_at falls on a calendar day BEFORE today in the
+--     owner's timezone (profile displayTimezone via
+--     nak_safe_timezone, UTC fallback) - "today" excludes
+--     conversations the user might still be actively chatting in.
+--     There is no open-tab exclusion list: this day-gate subsumes it,
+--     and the save RPC's message-count guard covers the mid-analysis
+--     race.
 --   - no live claim (claim_holder NULL, or expired, or already ours)
 --
--- Atomic claim via update-returning so two workers polling the same
--- candidate set never both win. Returns one row or empty.
-create or replace function public.bias_claim_next_thread(
+-- Atomic claim via update-returning so overlapping ticks never both
+-- win. Returns one row (with user_id for logger attribution) or
+-- empty.
+drop function if exists public.bias_claim_next_thread_for_sweep(text, int, int);
+create or replace function public.bias_claim_next_thread_for_sweep(
   p_holder_id text,
   p_ttl_seconds int,
-  p_exclude_ids uuid[],
-  p_today_start timestamptz,
   p_min_user_messages int
 )
 returns table (
@@ -8266,69 +8982,66 @@ returns table (
   -- compensation behavior the user's messages could have reacted
   -- to. Empty array means "no biases were active" and the reactor
   -- pass produces no rows.
-  active_biases text[]
+  active_biases text[],
+  user_id uuid
 )
-security invoker
-language plpgsql
-as $$
-declare
-  v_id uuid;
-  v_msg_count int;
-  v_active_biases text[];
-begin
-  if auth.uid() is null then
-    return;
-  end if;
-
-  -- Pick a candidate. We could combine the SELECT and UPDATE via
-  -- `update ... where id = (select ...)` but the two-step makes the
-  -- "what we picked" debuggable in a SQL editor session.
-  select t.id, (
-    select count(*)::int from public.messages m
-      where m.thread_id = t.id and m.role = 'user'
-  ), coalesce(t.bias_active_at_turn, '{}'::text[])
-    into v_id, v_msg_count, v_active_biases
-    from public.threads t
-    where t.user_id = auth.uid()
-      and t.updated_at < p_today_start
-      and (
-        t.bias_processed_at is null
-        or t.bias_processed_at < t.updated_at
-      )
-      and (
-        t.bias_claim_holder is null
-        or t.bias_claim_expires < now()
-        or t.bias_claim_holder = p_holder_id
-      )
-      and (
-        p_exclude_ids is null
-        or not (t.id = any(p_exclude_ids))
-      )
-    -- Defer the user-message count check to a HAVING-style filter
-    -- below; computing it inline keeps the index-friendly filters
-    -- doing the heavy work.
-    order by t.updated_at asc
-    limit 1
-    for update skip locked;
-
-  if v_id is null then
-    return;
-  end if;
-  if v_msg_count < p_min_user_messages then
-    return;
-  end if;
-
-  update public.threads
-    set bias_claim_holder = p_holder_id,
-        bias_claim_expires = now() + make_interval(secs => p_ttl_seconds)
-    where id = v_id;
-
-  thread_id := v_id;
-  user_message_count := v_msg_count;
-  active_biases := v_active_biases;
-  return next;
-end;
+language sql security definer
+set search_path = public as $$
+  with candidate as (
+    select t.id as thread_id,
+           (select count(*)::int from public.messages m
+             where m.thread_id = t.id and m.role = 'user') as user_message_count,
+           coalesce(t.bias_active_at_turn, '{}'::text[]) as active_biases,
+           t.user_id as user_id
+      from public.threads t
+      inner join public.profiles p on p.user_id = t.user_id
+      cross join lateral (
+        -- One safe-timezone resolution per candidate row, shared by
+        -- both sides of the day-gate comparison below.
+        select public.nak_safe_timezone(p.settings->>'displayTimezone') as tz
+      ) usertz
+     where (t.updated_at at time zone usertz.tz)::date
+             < (now() at time zone usertz.tz)::date
+       and (
+         t.bias_processed_at is null
+         or t.bias_processed_at < t.updated_at
+       )
+       and (
+         t.bias_claim_holder is null
+         or t.bias_claim_expires < now()
+         or t.bias_claim_holder = p_holder_id
+       )
+       -- The count check MUST live in the WHERE, not as a post-SELECT
+       -- early return: this query takes one candidate (LIMIT 1, oldest
+       -- updated_at first), so a rejected candidate has to be excluded
+       -- BEFORE the limit or it stays the queue head and starves every
+       -- thread behind it. A one-shot Q&A thread at the head of the
+       -- queue once wedged the analyze pipeline this way for weeks -
+       -- the worker logged "no eligible threads" while eligible
+       -- multi-message threads sat unprocessed behind it. Same inline
+       -- shape as claim_next_thread_for_reflection's substance bar.
+       and (
+         select count(*) from public.messages m
+           where m.thread_id = t.id and m.role = 'user'
+       ) >= p_min_user_messages
+     order by t.updated_at asc
+     limit 1
+     for update of t skip locked
+  )
+  update public.threads t
+     set bias_claim_holder = p_holder_id,
+         bias_claim_expires = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c
+   where t.id = c.thread_id
+  returning t.id, c.user_message_count, c.active_biases, t.user_id;
 $$;
+
+-- Global sweep, owner-privileged: only the cron-driven service role
+-- may claim across users.
+revoke all on function public.bias_claim_next_thread_for_sweep(text, int, int)
+  from public, anon, authenticated;
+grant execute on function public.bias_claim_next_thread_for_sweep(text, int, int)
+  to service_role;
 
 -- Save the agent's observations AND compensation-feedback reactions
 -- for a thread in one transaction. Three guards:
@@ -8350,23 +9063,30 @@ $$;
 --
 -- Returns true on success, false if any guard fails. Caller treats
 -- false as 'work was wasted, drain to next cycle'.
+--
+-- p_user_id: the sweep's service-role client has no auth.uid(), so
+-- it passes the claimed row's owner explicitly (the b-strict
+-- overload pattern). An authenticated caller omits it.
+drop function if exists public.bias_save_observations(uuid, text, int, jsonb, jsonb, uuid);
 create or replace function public.bias_save_observations(
   p_thread_id uuid,
   p_holder_id text,
   p_expected_msg_count int,
   p_observations jsonb,
-  p_reactions jsonb
+  p_reactions jsonb,
+  p_user_id uuid default null
 )
 returns boolean
 security invoker
 language plpgsql
 as $$
 declare
+  v_uid uuid := coalesce(p_user_id, auth.uid());
   v_actual_count int;
   v_obs jsonb;
   v_was_confirmed boolean;
 begin
-  if auth.uid() is null then
+  if v_uid is null then
     return false;
   end if;
 
@@ -8374,7 +9094,7 @@ begin
   -- If any condition fails the SELECT returns no row and we exit.
   perform 1 from public.threads
     where id = p_thread_id
-      and user_id = auth.uid()
+      and user_id = v_uid
       and bias_claim_holder = p_holder_id
       and (bias_claim_expires is null or bias_claim_expires > now());
   if not found then
@@ -8409,9 +9129,13 @@ begin
   -- nothing", which is the correct answer most of the time.
   if jsonb_array_length(p_observations) > 0 then
     for v_obs in select * from jsonb_array_elements(p_observations) loop
+      -- user_id explicit: the column default is auth.uid(), which is
+      -- NULL for the sweep's service-role call and would violate the
+      -- not-null constraint.
       insert into public.bias_observations
-        (thread_id, bias, confidence, reasoning, evidence_message_id)
+        (user_id, thread_id, bias, confidence, reasoning, evidence_message_id)
       values (
+        v_uid,
         p_thread_id,
         v_obs->>'bias',
         (v_obs->>'confidence')::real,
@@ -8436,8 +9160,9 @@ begin
         else null
       end;
       insert into public.bias_reactions
-        (thread_id, bias, was_confirmed, reasoning)
+        (user_id, thread_id, bias, was_confirmed, reasoning)
       values (
+        v_uid,
         p_thread_id,
         v_obs->>'bias',
         v_was_confirmed,
@@ -8505,7 +9230,14 @@ $$;
 -- accumulates correctly. The TypeScript side runs the math on this
 -- row set - keeps the math in one place (math.ts), with the SQL
 -- doing only the grouping and the timestamp join.
-create or replace function public.bias_processed_threads_for_bias(p_bias text)
+-- p_user_id: b-strict overload - the sweep's aggregate pass scopes
+-- per claimed user with the service-role client; authenticated
+-- callers omit it.
+drop function if exists public.bias_processed_threads_for_bias(text, uuid);
+create or replace function public.bias_processed_threads_for_bias(
+  p_bias text,
+  p_user_id uuid default null
+)
 returns table (
   thread_id uuid,
   processed_at timestamptz,
@@ -8514,8 +9246,10 @@ returns table (
 security invoker
 language plpgsql
 as $$
+declare
+  v_uid uuid := coalesce(p_user_id, auth.uid());
 begin
-  if auth.uid() is null then
+  if v_uid is null then
     return;
   end if;
   return query
@@ -8528,13 +9262,13 @@ begin
       select o.thread_id,
              (1.0 - exp(sum(ln(greatest(1.0 - o.confidence, 1e-9))))) ::real as p_conv
         from public.bias_observations o
-        where o.user_id = auth.uid() and o.bias = p_bias
+        where o.user_id = v_uid and o.bias = p_bias
         group by o.thread_id
     )
     select t.id, t.bias_processed_at, coalesce(h.p_conv, 0.0)::real
       from public.threads t
       left join hits h on h.thread_id = t.id
-      where t.user_id = auth.uid()
+      where t.user_id = v_uid
         and t.bias_processed_at is not null;
 end;
 $$;
@@ -8546,7 +9280,13 @@ $$;
 -- null) are returned alongside the signed ones so the aggregate
 -- pass can count them for its own debugging - the math kernel
 -- discards them, but the worker logs them.
-create or replace function public.bias_reactions_for_bias(p_bias text)
+-- p_user_id: b-strict overload, same as
+-- bias_processed_threads_for_bias above.
+drop function if exists public.bias_reactions_for_bias(text, uuid);
+create or replace function public.bias_reactions_for_bias(
+  p_bias text,
+  p_user_id uuid default null
+)
 returns table (
   thread_id uuid,
   was_confirmed boolean,
@@ -8557,8 +9297,10 @@ returns table (
 security invoker
 language plpgsql
 as $$
+declare
+  v_uid uuid := coalesce(p_user_id, auth.uid());
 begin
-  if auth.uid() is null then
+  if v_uid is null then
     return;
   end if;
   return query
@@ -8568,10 +9310,22 @@ begin
            r.created_at,
            r.reasoning
       from public.bias_reactions r
-      where r.user_id = auth.uid() and r.bias = p_bias
+      where r.user_id = v_uid and r.bias = p_bias
       order by r.created_at desc;
 end;
 $$;
+
+-- service_role grants for the sweep driver (the venice function's
+-- bias-sweep tick) - its only caller now that the browser worker is
+-- gone. The b-strict overload keeps the functions role-agnostic
+-- (an authenticated caller still gets auth.uid() scoping) rather
+-- than forking definer copies.
+grant execute on function
+  public.bias_save_observations(uuid, text, int, jsonb, jsonb, uuid) to service_role;
+grant execute on function
+  public.bias_processed_threads_for_bias(text, uuid) to service_role;
+grant execute on function
+  public.bias_reactions_for_bias(text, uuid) to service_role;
 
 
 --
@@ -8596,7 +9350,84 @@ begin
   ) then
     alter publication supabase_realtime add table public.messages;
   end if;
+  -- wiki_articles feeds the browser's emitWikiChange refresh: the
+  -- autonomous wiki agent writes articles server-side (cron-driven, no
+  -- browser event bus to fire), so an open Wiki panel learns about
+  -- changes through a user-scoped postgres_changes subscription
+  -- instead of the old worker progress message.
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'wiki_articles'
+  ) then
+    alter publication supabase_realtime add table public.wiki_articles;
+  end if;
+  -- memories feeds the browser's emitMemoryChange refresh the same
+  -- way wiki_articles feeds emitWikiChange: the memory librarians
+  -- (rem, deep-sleep) and reflection all write memories server-side
+  -- now, so an open Memories panel learns about changes through a
+  -- user-scoped postgres_changes subscription.
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'memories'
+  ) then
+    alter publication supabase_realtime add table public.memories;
+  end if;
+  -- recipes feeds the browser's emitCookbookChange refresh, third of
+  -- the wiki_articles / memories family: the chat-reachable recipe
+  -- writers (the recipe_* tools) run server-side, so the Cookbook
+  -- modal and the drawer's Recipes tab learn about model-driven
+  -- writes through a user-scoped postgres_changes subscription.
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'recipes'
+  ) then
+    alter publication supabase_realtime add table public.recipes;
+  end if;
+  -- samskaras feeds the mint toast: the formation pipeline runs in
+  -- the venice function now, so the browser learns about a fresh
+  -- mint through a user-scoped postgres_changes INSERT subscription
+  -- that maps the new row's (tier, valence, confidence) into the
+  -- mood pill. INSERT-only - no replica-identity index needed (that
+  -- requirement is specific to DELETE delivery, see below).
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'samskaras'
+  ) then
+    alter publication supabase_realtime add table public.samskaras;
+  end if;
 end $$;
+
+-- DELETE delivery for the user-filtered postgres_changes relays above.
+-- A DELETE's WAL record carries only the table's replica identity (the
+-- primary key by default), so realtime cannot match a user_id filter
+-- against it and silently drops the event - an open panel keeps
+-- showing a row a server-side tool already deleted. REPLICA IDENTITY
+-- FULL would fix delivery but writes the entire old row into WAL on
+-- every update/delete, and memories + recipes carry vector(2048)
+-- embeddings - a bulk confidence sweep would amplify WAL by ~10KB per
+-- row. A unique (id, user_id) index as the replica identity puts
+-- exactly the filter column into the old tuple at near-zero WAL cost.
+-- NOTE: dropping one of these indexes silently degrades the table's
+-- replica identity to NOTHING, which breaks DELETE replication
+-- entirely - they look redundant next to the pkey but are
+-- load-bearing for realtime.
+create unique index if not exists recipes_replident_idx
+  on public.recipes (id, user_id);
+alter table public.recipes replica identity using index recipes_replident_idx;
+create unique index if not exists wiki_articles_replident_idx
+  on public.wiki_articles (id, user_id);
+alter table public.wiki_articles replica identity using index wiki_articles_replident_idx;
+create unique index if not exists memories_replident_idx
+  on public.memories (id, user_id);
+alter table public.memories replica identity using index memories_replident_idx;
 
 -- ---------------------------------------------------------------------------
 -- Realtime Broadcast authorization (streaming-root channels)
@@ -8668,6 +9499,36 @@ create policy "control channel: owner publish" on realtime.messages
         where t.id = public.realtime_topic_thread_id(realtime.topic())
           and t.user_id = (select auth.uid())
     )
+  );
+
+-- Per-user log channel. Background work that runs in the venice edge
+-- function (reflection, and the other agent fleets as they migrate) has
+-- no Web Worker postMessage path back to the browser Logs drawer, so it
+-- publishes structured log entries to a 'logs:<user-uuid>' Broadcast
+-- topic instead. The topic name carries the owner's id directly, so the
+-- subscribe gate is a literal equality - no threads join needed. The
+-- function publishes under service_role (bypasses this policy); the
+-- browser only ever subscribes (never publishes), so there is no
+-- matching INSERT policy. Browser must subscribe with private:true for
+-- this to engage.
+drop policy if exists "log channel: owner subscribe" on realtime.messages;
+create policy "log channel: owner subscribe" on realtime.messages
+  for select to authenticated
+  using (
+    realtime.topic() = 'logs:' || (select auth.uid())::text
+  );
+
+-- Same owner-subscribe shape for the agent-run progress channel: the
+-- venice function publishes live step events (model rounds, tool
+-- calls) for user-triggered agent runs - the Wiki librarian's
+-- manual-run strip is the first consumer. Per-USER topic rather than
+-- per-run so this one literal-equality policy covers every run; the
+-- payload carries the runId and consumers demux client-side.
+drop policy if exists "agent-run channel: owner subscribe" on realtime.messages;
+create policy "agent-run channel: owner subscribe" on realtime.messages
+  for select to authenticated
+  using (
+    realtime.topic() = 'agent-runs:' || (select auth.uid())::text
   );
 
 -- ---------------------------------------------------------------------------
@@ -9046,6 +9907,579 @@ end
 $cron$;
 
 -- ---------------------------------------------------------------------------
+-- Scheduled wiki sweep (pg_cron -> pg_net -> venice/wiki-sweep)
+--
+-- Drives the server-side autonomous wiki agent. Replaces the browser
+-- wiki Web Worker: a cron tick POSTs to the venice function's
+-- /wiki-sweep route, which claims day-gate-eligible threads across
+-- every member (claim_next_thread_for_wiki above) and runs the wiki
+-- agent's tool loop on each, bounded per invocation. Same Vault-secret
+-- custody and no-op-until-seeded behavior as the embed backfill
+-- trigger above.
+--
+-- Hourly, not every-5-minutes: wiki eligibility only changes when a
+-- user's local calendar day rolls over (plus the rare content-filter
+-- recovery re-entry), and each processed thread is an LLM tool-loop,
+-- so a tighter cadence would mostly buy empty claims. The per-tick
+-- bound lives in the function handler; the schedule resumes a long
+-- drain across ticks.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.nak_trigger_wiki_sweep()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $fn$
+declare
+  v_url text;
+  v_key text;
+begin
+  begin
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'project_url' $q$ into v_url;
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'service_role_key' $q$ into v_key;
+  exception when others then
+    return;  -- vault not installed or unreadable; nothing to dispatch
+  end;
+  if v_url is null or v_key is null then
+    return;  -- secrets not seeded yet
+  end if;
+  begin
+    execute format(
+      $q$ select net.http_post(
+            url := %L,
+            headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', %L),
+            body := '{}'::jsonb
+          ) $q$,
+      v_url || '/functions/v1/venice/wiki-sweep',
+      'Bearer ' || v_key
+    );
+  exception when others then
+    raise notice 'nak_trigger_wiki_sweep: dispatch failed: %', sqlerrm;
+  end;
+end;
+$fn$;
+
+revoke all on function public.nak_trigger_wiki_sweep() from public, anon, authenticated;
+
+do $cron$
+begin
+  if exists (select 1 from pg_available_extensions where name = 'pg_cron')
+     and exists (select 1 from pg_available_extensions where name = 'pg_net') then
+    create extension if not exists pg_cron;
+    create extension if not exists pg_net;
+    if exists (select 1 from cron.job where jobname = 'nak-wiki-sweep') then
+      perform cron.unschedule('nak-wiki-sweep');
+    end if;
+    -- Minute 7, offset from the embed backfill's */5 grid so the two
+    -- pg_net dispatches don't stack on the same tick.
+    perform cron.schedule(
+      'nak-wiki-sweep',
+      '7 * * * *',
+      $job$ select public.nak_trigger_wiki_sweep(); $job$
+    );
+  end if;
+exception when others then
+  raise notice 'wiki sweep cron setup skipped: %', sqlerrm;
+end
+$cron$;
+
+-- ---------------------------------------------------------------------------
+-- Scheduled wiki-librarian sweep (pg_cron -> pg_net -> venice/wiki-librarian-sweep)
+--
+-- Drives the scheduled half of the server-side wiki librarian. The
+-- route claims the most-overdue eligible user
+-- (claim_next_user_for_wiki_librarian; the 12h minimum interval is
+-- enforced by that claim, not by this schedule) and runs the
+-- librarian's review for them. Hourly tick, one user per tick: the
+-- claim's interval gate makes a tighter schedule pointless, and a
+-- librarian run is the heaviest agent cycle in the system. Same
+-- Vault-secret custody and no-op-until-seeded behavior as the embed
+-- backfill trigger above.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.nak_trigger_wiki_librarian_sweep()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $fn$
+declare
+  v_url text;
+  v_key text;
+begin
+  begin
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'project_url' $q$ into v_url;
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'service_role_key' $q$ into v_key;
+  exception when others then
+    return;  -- vault not installed or unreadable; nothing to dispatch
+  end;
+  if v_url is null or v_key is null then
+    return;  -- secrets not seeded yet
+  end if;
+  begin
+    execute format(
+      $q$ select net.http_post(
+            url := %L,
+            headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', %L),
+            body := '{}'::jsonb
+          ) $q$,
+      v_url || '/functions/v1/venice/wiki-librarian-sweep',
+      'Bearer ' || v_key
+    );
+  exception when others then
+    raise notice 'nak_trigger_wiki_librarian_sweep: dispatch failed: %', sqlerrm;
+  end;
+end;
+$fn$;
+
+revoke all on function public.nak_trigger_wiki_librarian_sweep() from public, anon, authenticated;
+
+do $cron$
+begin
+  if exists (select 1 from pg_available_extensions where name = 'pg_cron')
+     and exists (select 1 from pg_available_extensions where name = 'pg_net') then
+    create extension if not exists pg_cron;
+    create extension if not exists pg_net;
+    if exists (select 1 from cron.job where jobname = 'nak-wiki-librarian-sweep') then
+      perform cron.unschedule('nak-wiki-librarian-sweep');
+    end if;
+    -- Minute 37: offset from the wiki sweep's minute 7 and the embed
+    -- backfill's */5 grid so the heavy agent dispatches never share a
+    -- tick.
+    perform cron.schedule(
+      'nak-wiki-librarian-sweep',
+      '37 * * * *',
+      $job$ select public.nak_trigger_wiki_librarian_sweep(); $job$
+    );
+  end if;
+exception when others then
+  raise notice 'wiki librarian sweep cron setup skipped: %', sqlerrm;
+end
+$cron$;
+
+-- ---------------------------------------------------------------------------
+-- Scheduled memory-librarian sweeps (pg_cron -> pg_net -> venice function)
+--
+-- Drives the scheduled halves of the two server-side memory
+-- librarians. Each route claims the most-overdue eligible user
+-- (claim_next_user_for_rem / claim_next_user_for_deep_sleep; the 12h
+-- minimum interval is enforced by those claims, not by these
+-- schedules) and runs that pass for them. Hourly tick, one user per
+-- tick, two separate jobs so the passes keep independent cadences.
+-- Same Vault-secret custody and no-op-until-seeded behavior as the
+-- embed backfill trigger above.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.nak_trigger_rem_sweep()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $fn$
+declare
+  v_url text;
+  v_key text;
+begin
+  begin
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'project_url' $q$ into v_url;
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'service_role_key' $q$ into v_key;
+  exception when others then
+    return;  -- vault not installed or unreadable; nothing to dispatch
+  end;
+  if v_url is null or v_key is null then
+    return;  -- secrets not seeded yet
+  end if;
+  begin
+    execute format(
+      $q$ select net.http_post(
+            url := %L,
+            headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', %L),
+            body := '{}'::jsonb
+          ) $q$,
+      v_url || '/functions/v1/venice/rem-sweep',
+      'Bearer ' || v_key
+    );
+  exception when others then
+    raise notice 'nak_trigger_rem_sweep: dispatch failed: %', sqlerrm;
+  end;
+end;
+$fn$;
+
+revoke all on function public.nak_trigger_rem_sweep() from public, anon, authenticated;
+
+do $cron$
+begin
+  if exists (select 1 from pg_available_extensions where name = 'pg_cron')
+     and exists (select 1 from pg_available_extensions where name = 'pg_net') then
+    create extension if not exists pg_cron;
+    create extension if not exists pg_net;
+    if exists (select 1 from cron.job where jobname = 'nak-rem-sweep') then
+      perform cron.unschedule('nak-rem-sweep');
+    end if;
+    -- Minute 17: offset from the embed backfill's */5 grid, the wiki
+    -- sweep's minute 7, the wiki librarian's minute 37, and the
+    -- deep-sleep sweep's minute 47, so the heavy agent dispatches
+    -- never share a tick.
+    perform cron.schedule(
+      'nak-rem-sweep',
+      '17 * * * *',
+      $job$ select public.nak_trigger_rem_sweep(); $job$
+    );
+  end if;
+exception when others then
+  raise notice 'rem sweep cron setup skipped: %', sqlerrm;
+end
+$cron$;
+
+create or replace function public.nak_trigger_deep_sleep_sweep()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $fn$
+declare
+  v_url text;
+  v_key text;
+begin
+  begin
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'project_url' $q$ into v_url;
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'service_role_key' $q$ into v_key;
+  exception when others then
+    return;  -- vault not installed or unreadable; nothing to dispatch
+  end;
+  if v_url is null or v_key is null then
+    return;  -- secrets not seeded yet
+  end if;
+  begin
+    execute format(
+      $q$ select net.http_post(
+            url := %L,
+            headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', %L),
+            body := '{}'::jsonb
+          ) $q$,
+      v_url || '/functions/v1/venice/deep-sleep-sweep',
+      'Bearer ' || v_key
+    );
+  exception when others then
+    raise notice 'nak_trigger_deep_sleep_sweep: dispatch failed: %', sqlerrm;
+  end;
+end;
+$fn$;
+
+revoke all on function public.nak_trigger_deep_sleep_sweep() from public, anon, authenticated;
+
+do $cron$
+begin
+  if exists (select 1 from pg_available_extensions where name = 'pg_cron')
+     and exists (select 1 from pg_available_extensions where name = 'pg_net') then
+    create extension if not exists pg_cron;
+    create extension if not exists pg_net;
+    if exists (select 1 from cron.job where jobname = 'nak-deep-sleep-sweep') then
+      perform cron.unschedule('nak-deep-sleep-sweep');
+    end if;
+    -- Minute 47: see the rem sweep's minute-17 comment for the
+    -- spacing scheme.
+    perform cron.schedule(
+      'nak-deep-sleep-sweep',
+      '47 * * * *',
+      $job$ select public.nak_trigger_deep_sleep_sweep(); $job$
+    );
+  end if;
+exception when others then
+  raise notice 'deep-sleep sweep cron setup skipped: %', sqlerrm;
+end
+$cron$;
+
+-- ---------------------------------------------------------------------------
+-- Scheduled reflection catch-up sweep (pg_cron -> pg_net -> venice function)
+--
+-- Reflection's primary driver is the chat turn's waitUntil tail in
+-- getStreamingResponse - one eligible older thread drains per
+-- completed turn. This hourly sweep is the catch-up path for queues
+-- the tail can't reach: a user who stops conversing leaves eligible
+-- threads stranded (no turns -> no draining). One thread per tick,
+-- claimed across all users by claim_next_thread_for_reflection_sweep;
+-- the per-thread claim columns make tail + sweep double-driving safe.
+-- Same Vault-secret custody and no-op-until-seeded behavior as the
+-- other sweep triggers above.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.nak_trigger_reflection_sweep()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $fn$
+declare
+  v_url text;
+  v_key text;
+begin
+  begin
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'project_url' $q$ into v_url;
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'service_role_key' $q$ into v_key;
+  exception when others then
+    return;  -- vault not installed or unreadable; nothing to dispatch
+  end;
+  if v_url is null or v_key is null then
+    return;  -- secrets not seeded yet
+  end if;
+  begin
+    execute format(
+      $q$ select net.http_post(
+            url := %L,
+            headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', %L),
+            body := '{}'::jsonb
+          ) $q$,
+      v_url || '/functions/v1/venice/reflection-sweep',
+      'Bearer ' || v_key
+    );
+  exception when others then
+    raise notice 'nak_trigger_reflection_sweep: dispatch failed: %', sqlerrm;
+  end;
+end;
+$fn$;
+
+revoke all on function public.nak_trigger_reflection_sweep() from public, anon, authenticated;
+
+do $cron$
+begin
+  if exists (select 1 from pg_available_extensions where name = 'pg_cron')
+     and exists (select 1 from pg_available_extensions where name = 'pg_net') then
+    create extension if not exists pg_cron;
+    create extension if not exists pg_net;
+    if exists (select 1 from cron.job where jobname = 'nak-reflection-sweep') then
+      perform cron.unschedule('nak-reflection-sweep');
+    end if;
+    -- Minute 27: see the rem sweep's minute-17 comment for the
+    -- spacing scheme (embed */5, wiki 7, rem 17, librarian 37,
+    -- deep-sleep 47).
+    perform cron.schedule(
+      'nak-reflection-sweep',
+      '27 * * * *',
+      $job$ select public.nak_trigger_reflection_sweep(); $job$
+    );
+  end if;
+exception when others then
+  raise notice 'reflection sweep cron setup skipped: %', sqlerrm;
+end
+$cron$;
+
+-- ---------------------------------------------------------------------------
+-- Scheduled curation sweep (pg_cron -> pg_net -> venice/curation-sweep)
+--
+-- Hourly catch-up drain for the five curation queues the venice
+-- function's chat-turn tail also services: auto-title, thread topics,
+-- thread summaries, memory topics, recipe topics. The tail only fires
+-- when its owner converses, so the sweep is what drains work created
+-- server-side (rem / deep-sleep consolidations re-queue memory tags;
+-- recipe tools re-queue recipe tags) or left behind by a failed tail
+-- attempt. Same Vault secrets and dispatch shape as the reflection
+-- sweep above.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.nak_trigger_curation_sweep()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $fn$
+declare
+  v_url text;
+  v_key text;
+begin
+  begin
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'project_url' $q$ into v_url;
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'service_role_key' $q$ into v_key;
+  exception when others then
+    return;  -- vault not installed or unreadable; nothing to dispatch
+  end;
+  if v_url is null or v_key is null then
+    return;  -- secrets not seeded yet
+  end if;
+  begin
+    execute format(
+      $q$ select net.http_post(
+            url := %L,
+            headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', %L),
+            body := '{}'::jsonb
+          ) $q$,
+      v_url || '/functions/v1/venice/curation-sweep',
+      'Bearer ' || v_key
+    );
+  exception when others then
+    raise notice 'nak_trigger_curation_sweep: dispatch failed: %', sqlerrm;
+  end;
+end;
+$fn$;
+
+revoke all on function public.nak_trigger_curation_sweep() from public, anon, authenticated;
+
+do $cron$
+begin
+  if exists (select 1 from pg_available_extensions where name = 'pg_cron')
+     and exists (select 1 from pg_available_extensions where name = 'pg_net') then
+    create extension if not exists pg_cron;
+    create extension if not exists pg_net;
+    if exists (select 1 from cron.job where jobname = 'nak-curation-sweep') then
+      perform cron.unschedule('nak-curation-sweep');
+    end if;
+    -- Minute 57: the last free slot in the hourly spacing scheme
+    -- (embed */5, wiki 7, rem 17, reflection 27, librarian 37,
+    -- deep-sleep 47). Deliberately after rem (:17) and deep-sleep
+    -- (:47) so the tag queues their consolidations re-arm drain
+    -- within the same hour.
+    perform cron.schedule(
+      'nak-curation-sweep',
+      '57 * * * *',
+      $job$ select public.nak_trigger_curation_sweep(); $job$
+    );
+  end if;
+exception when others then
+  raise notice 'curation sweep cron setup skipped: %', sqlerrm;
+end
+$cron$;
+
+-- ---------------------------------------------------------------------------
+-- Scheduled bias sweep (pg_cron -> pg_net -> venice/bias-sweep)
+--
+-- Hourly drain for the bias pipeline: analyze (claim settled threads
+-- via bias_claim_next_thread_for_sweep, run the observer/reactor
+-- agent, save observations + reactions) then aggregate (recompute
+-- bias_summary for the users touched this tick plus any user whose
+-- cache has aged past the daily freshness floor). Cron is the ONLY
+-- driver - there is no chat-turn tail, because analyze eligibility
+-- requires the thread's last update to fall on a prior calendar day
+-- in its owner's timezone, so the thread a turn just touched is
+-- never eligible at turn time. Same Vault secrets and dispatch shape
+-- as the reflection sweep above.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.nak_trigger_bias_sweep()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $fn$
+declare
+  v_url text;
+  v_key text;
+begin
+  begin
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'project_url' $q$ into v_url;
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'service_role_key' $q$ into v_key;
+  exception when others then
+    return;  -- vault not installed or unreadable; nothing to dispatch
+  end;
+  if v_url is null or v_key is null then
+    return;  -- secrets not seeded yet
+  end if;
+  begin
+    execute format(
+      $q$ select net.http_post(
+            url := %L,
+            headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', %L),
+            body := '{}'::jsonb
+          ) $q$,
+      v_url || '/functions/v1/venice/bias-sweep',
+      'Bearer ' || v_key
+    );
+  exception when others then
+    raise notice 'nak_trigger_bias_sweep: dispatch failed: %', sqlerrm;
+  end;
+end;
+$fn$;
+
+revoke all on function public.nak_trigger_bias_sweep() from public, anon, authenticated;
+
+do $cron$
+begin
+  if exists (select 1 from pg_available_extensions where name = 'pg_cron')
+     and exists (select 1 from pg_available_extensions where name = 'pg_net') then
+    create extension if not exists pg_cron;
+    create extension if not exists pg_net;
+    if exists (select 1 from cron.job where jobname = 'nak-bias-sweep') then
+      perform cron.unschedule('nak-bias-sweep');
+    end if;
+    -- Minute 3: the x7 ladder (:07 wiki, :17 rem, :27 reflection,
+    -- :37 librarian, :47 deep-sleep, :57 curation) is full, so the
+    -- bias sweep starts a new column clear of the */5 embed ticks
+    -- and the :13/:43 samskara decay.
+    perform cron.schedule(
+      'nak-bias-sweep',
+      '3 * * * *',
+      $job$ select public.nak_trigger_bias_sweep(); $job$
+    );
+  end if;
+exception when others then
+  raise notice 'bias sweep cron setup skipped: %', sqlerrm;
+end
+$cron$;
+
+-- Hourly samskara formation sweep: the catch-up driver behind the
+-- chat-turn tail (and the ONLY driver for mint-tier2, dedup, and
+-- compound-regen). Same vault -> pg_net dispatch shape as the other
+-- sweep triggers.
+create or replace function public.nak_trigger_samskara_sweep()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $fn$
+declare
+  v_url text;
+  v_key text;
+begin
+  begin
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'project_url' $q$ into v_url;
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'service_role_key' $q$ into v_key;
+  exception when others then
+    return;  -- vault not installed or unreadable; nothing to dispatch
+  end;
+  if v_url is null or v_key is null then
+    return;  -- secrets not seeded yet
+  end if;
+  begin
+    execute format(
+      $q$ select net.http_post(
+            url := %L,
+            headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', %L),
+            body := '{}'::jsonb
+          ) $q$,
+      v_url || '/functions/v1/venice/samskara-sweep',
+      'Bearer ' || v_key
+    );
+  exception when others then
+    raise notice 'nak_trigger_samskara_sweep: dispatch failed: %', sqlerrm;
+  end;
+end;
+$fn$;
+
+revoke all on function public.nak_trigger_samskara_sweep() from public, anon, authenticated;
+
+do $cron$
+begin
+  if exists (select 1 from pg_available_extensions where name = 'pg_cron')
+     and exists (select 1 from pg_available_extensions where name = 'pg_net') then
+    create extension if not exists pg_cron;
+    create extension if not exists pg_net;
+    if exists (select 1 from cron.job where jobname = 'nak-samskara-sweep') then
+      perform cron.unschedule('nak-samskara-sweep');
+    end if;
+    -- Minute 23: the x3 column after bias's :03 and the :13/:43
+    -- decay pair, clear of the x7 ladder and the */5 embed ticks.
+    perform cron.schedule(
+      'nak-samskara-sweep',
+      '23 * * * *',
+      $job$ select public.nak_trigger_samskara_sweep(); $job$
+    );
+  end if;
+exception when others then
+  raise notice 'samskara sweep cron setup skipped: %', sqlerrm;
+end
+$cron$;
+
+-- ---------------------------------------------------------------------------
 -- Scheduled stream-claim janitor (pg_cron -> SQL)
 --
 -- Every minute, call nak_sweep_stale_streams() to terminate threads whose
@@ -9081,6 +10515,38 @@ end
 $cron$;
 
 -- ---------------------------------------------------------------------------
+-- Scheduled samskara decay (pg_cron -> SQL)
+--
+-- Every 30 minutes, run the decay pass over the whole samskara corpus
+-- (see samskara_decay_sweep above). The decay rates are calibrated as
+-- a per-PASS nudge on this cadence; running it from the browser
+-- worker's rotation tied the cadence to an in-memory throttle that
+-- reset on every worker restart and over-ran the target under active
+-- use. A server-side wall clock has no restart-reset failure mode.
+--
+-- Pure SQL (no pg_net) for the same reason as the stream janitor: the
+-- pass only touches the samskaras table. Minutes 13/43 keep clear of
+-- the pg_net sweep ledger (:07 wiki, :17 rem + attachments, :27
+-- reflection, :37 librarian, :47 deep-sleep, :57 curation, */5 embed).
+do $cron$
+begin
+  if exists (select 1 from pg_available_extensions where name = 'pg_cron') then
+    create extension if not exists pg_cron;
+    if exists (select 1 from cron.job where jobname = 'nak-samskara-decay') then
+      perform cron.unschedule('nak-samskara-decay');
+    end if;
+    perform cron.schedule(
+      'nak-samskara-decay',
+      '13,43 * * * *',
+      $job$ select public.samskara_decay_sweep(); $job$
+    );
+  end if;
+exception when others then
+  raise notice 'samskara-decay cron setup skipped: %', sqlerrm;
+end
+$cron$;
+
+-- ---------------------------------------------------------------------------
 -- Scheduled attachment expiry (pg_cron -> pg_net -> expire-attachments)
 --
 -- Stage 2 of the attachments-storage migration
@@ -9104,19 +10570,21 @@ $cron$;
 
 -- Select a bounded batch of live attachments eligible for expiry: object still
 -- present (storage_path not null) and the owning thread dormant for p_days.
--- Returns (id, storage_path) so the function knows which objects to delete and
--- which rows to mark. No claim/TTL: deletion + marking are idempotent (removing
--- an already-gone object is a no-op, re-marking an expired row is a no-op), so
--- two overlapping ticks can't corrupt anything - the FOR UPDATE SKIP LOCKED
--- just keeps them from contending on the same rows within a tick.
+-- Returns (id, storage_path, user_id) so the function knows which objects to
+-- delete, which rows to mark, and which user's Logs drawer to notify (the
+-- per-user expiry summary; attachments carry no user_id column, so the owner
+-- comes off the thread join). No claim/TTL: deletion + marking are idempotent
+-- (removing an already-gone object is a no-op, re-marking an expired row is a
+-- no-op), so two overlapping ticks can't corrupt anything - the FOR UPDATE
+-- SKIP LOCKED just keeps them from contending on the same rows within a tick.
 drop function if exists public.list_expirable_attachments(int, int);
 create or replace function public.list_expirable_attachments(
   p_days int,
   p_limit int
-) returns table (id uuid, storage_path text)
+) returns table (id uuid, storage_path text, user_id uuid)
 language sql security definer
 set search_path = public as $$
-  select a.id, a.storage_path
+  select a.id, a.storage_path, t.user_id
     from public.message_attachments a
     join public.messages m on m.id = a.message_id
     join public.threads t on t.id = m.thread_id

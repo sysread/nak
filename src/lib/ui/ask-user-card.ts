@@ -16,7 +16,7 @@ import type {
   AskUserOption,
   AskUserAnsweredContent,
   AskUserVia,
-} from '$lib/tools/ask_user';
+} from '$lib/ask-user';
 
 /**
  * The line shown under the question in the "answered" state.

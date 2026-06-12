@@ -1,147 +1,164 @@
 # Topics
 
-Background worker that tags each thread with a short flat set of
-topic strings, plus the drawer UI that uses those tags to filter
-the conversation list.
+Server-side curation unit that tags each thread with a short flat
+set of topic strings, plus the drawer UI that uses those tags to
+filter the conversation list. The tagging runs in the venice edge
+function; there is no browser-side tagging code.
 
-Two sibling workers do the same job for the other drawer surfaces:
+Two sibling units do the same job for the other drawer surfaces:
 
-- `src/lib/agents/memory_topics/*` tags `memories.topics` for the
-  Memories tab. See "Memory topics" below.
-- `src/lib/agents/recipe_topics/*` tags `recipes.topics` for the
-  Cookbook drawer tab. See "Recipe topics" below.
+- `supabase/functions/venice/agents/memory_topics.ts` tags
+  `memories.topics` for the Memories tab. See "Memory topics" below.
+- `supabase/functions/venice/agents/recipe_topics.ts` tags
+  `recipes.topics` for the Cookbook drawer tab. See "Recipe topics"
+  below.
 
-All three implementations mirror each other file-for-file and share
-the `TopicsFilter.svelte` component plus the `topicsFilterClause`
+All three implementations mirror each other and share the
+`TopicsFilter.svelte` component plus the `topicsFilterClause`
 helper. Differences are noted in the subsections.
 
 ## Role in the app
 
 When a thread accumulates a terminal assistant message past
-`last_topics_msg_id`, the topics worker claims it, asks the fast
-model for 1-4 short topic tags (with the user's existing topic
-vocabulary inlined for normalisation), and writes the result back
-via a claim-guarded RPC. The drawer's `[Topics ▾]` dropdown reads
-the per-user vocabulary on mount and after a tag-update arrives via
-the realtime channel; selecting one or more topics narrows the
-conversation list via a `topics &&` overlap predicate.
+`last_topics_msg_id`, the thread-topics unit claims it, asks the
+fast model (`mistral-small-3-2-24b-instruct`, hardcoded in the
+agent module) for 1-4 short topic tags (with the user's existing
+topic vocabulary inlined for normalisation), and writes the result
+back via a claim-guarded RPC. The drawer's `[Topics ▾]` dropdown
+reads the per-user vocabulary on mount and after a tag-update
+arrives via the realtime channel; selecting one or more topics
+narrows the conversation list via a `topics &&` overlap predicate.
+
+Two drivers run the unit (same shape for all five curation units):
+
+- **Chat-turn tail** - `curateOnTurnTail(admin, userId)` fires from
+  `getStreamingResponse.ts`'s `waitUntil` tail on every completed
+  turn, per-unit drain cap 3. Thread topics runs second in the
+  walk, after auto-title.
+- **Hourly curation sweep** - the `/curation-sweep` route (pg_cron
+  job `nak-curation-sweep`, minute 57) runs `runCurationSweepTick`
+  cross-user via the SECURITY DEFINER `*_sweep` claim RPCs,
+  per-queue cap 10.
+
+Double-driving is safe: the per-row claim columns are the only
+mutual exclusion - whichever driver claims first wins and the
+other sees an empty queue. There are no worker leases for these
+units.
 
 The dropdown also offers a synthetic `(untagged)` entry that
-filters to rows whose `topics` column is empty - either the worker
+filters to rows whose `topics` column is empty - either the unit
 hasn't reached them yet, or the agent ran and chose to emit no
 topics. Multi-select is OR semantics: `baking` + `bread` shows
 threads tagged with either.
 
 ## Files
 
-- `src/lib/agents/topics/agent.ts` — `TopicsAgent.run`; one tagging
-  call per invocation. Parses + normalises the model's JSON output
-  (lowercase, strip non-alphanum-or-hyphen, dedupe, cap at 4). No
-  tool calls.
-- `src/lib/agents/topics/prompt.ts` — the user-turn instruction.
-  `buildTopicsPrompt(existing)` inlines the user's current
-  vocabulary so the model can reuse names rather than minting near-
-  duplicates.
-- `src/lib/agents/topics/loop.ts` — `runOneCycle`, `napForResult`.
-  Same lease-acquire → claim → work → save shape as summary; the
-  wrinkle is the claim returns an extra `existing_topics` column
-  that the agent forwards to the prompt.
-- `src/lib/agents/topics/worker.ts` — Web Worker entry point.
-  Mirrors `../summary/worker.ts`; builds the per-worker Supabase +
-  Venice clients and drives `runOneCycle` until abort.
-- `src/lib/agents/topics/manager.ts` — main-thread supervisor.
-  Cross-tab Web Lock (`nak:topics-worker`), starts/stops the
-  Worker, builds the `StartMessage`.
-- `src/components/TopicsFilter.svelte` — the drawer's dropdown +
+- `supabase/functions/venice/agents/thread_topics.ts` - the work
+  unit: `tagOneThread` (per-user claim, tail driver),
+  `sweepClaimAndTagThread` (cross-user claim, sweep driver), the
+  topics prompt (existing vocabulary inlined), and the JSON parse +
+  normalise step (lowercase, strip non-alphanum-or-hyphen, dedupe,
+  cap at 4, reject the `(untagged)` sentinel).
+- `supabase/functions/venice/agents/curation.ts` - the composition
+  layer that orders the five units and owns the drain loops.
+- `src/components/TopicsFilter.svelte` - the drawer's dropdown +
   pill row. Pure presentation; the parent passes the vocabulary +
   selection in and gets an `onChange` callback out. The Svelte file
   owns only what is genuinely framework-specific: prop wiring,
   `$state` / `$derived` declarations, DOM refs, the document-level
   click/key listeners, and the markup. Every UI-behavior decision
   is composed in from the primitives module.
-- `src/lib/ui/topics-filter.ts` — pure UI-behavior primitives for the
+- `src/lib/ui/topics-filter.ts` - pure UI-behavior primitives for the
   topic filter. `computeOptions(topics)`, `labelFor(topic)`,
   `isUntagged(topic)`, `selectionAfterToggle(selected, topic)`,
   `selectionAfterClearOne(selected, topic)`. No runes, no Svelte
   imports - this file is what a port to another framework would
   carry across unchanged. Unit-tested directly in
   `tests/topics-filter.test.ts` (plain vitest, no harness).
-- `src/screens/Chat.svelte` — owns `selectedTopics` /
+- `src/screens/Chat.svelte` - owns `selectedTopics` /
   `topicsVocabulary` state, threads `selectedTopics` through the
   three bucket fetches + search + window-fetch, refreshes the
   vocabulary on the realtime `onUpdate` path when the row's topics
   changed.
-- `src/lib/supabase.ts` — `topicsFilterClause()` helper,
-  `claimNextThreadForTopics` / `saveThreadTopicsIfClaimed` /
-  `clearTopicsClaim` / `listUserTopics` RPC wrappers, the
-  `UNTAGGED_TOPIC_SENTINEL` export.
-- `supabase/schema.sql` (topics section) — `threads.topics`,
+- `src/lib/supabase.ts` - the `topicsFilterClause()` helper, the
+  `listUserTopics` / `listUserMemoryTopics` / `listUserRecipeTopics`
+  vocabulary wrappers (all parsed through `parseTopicVocabulary`),
+  and the `UNTAGGED_TOPIC_SENTINEL` export.
+- `supabase/schema.sql` (topics sections) - `threads.topics`,
   `last_topics_msg_id`, the claim columns, the GIN index, and the
-  four RPCs.
+  RPCs (`claim_next_thread_for_topics`,
+  `claim_next_thread_for_topics_sweep`,
+  `save_thread_topics_if_claimed`, `clear_topics_claim`,
+  `list_user_topics`).
 
 ## Entry points
 
-- **`activate()` in `state.svelte.ts`** — calls
-  `topicsManager.start({ supabase, config })` fire-and-forget
-  alongside the other agent managers.
-- **`lock()`** — calls `topicsManager.stop()`. Releases the Web
-  Lock and the Supabase lease.
-- **Drawer onMount in `Chat.svelte`** — fires
+- **`getStreamingResponse.ts` terminal tail** - on a `completed`
+  turn, `curateOnTurnTail` walks the five units.
+- **`/curation-sweep` route in `venice/index.ts`** - the hourly
+  cron tick; `runCurationSweepTick` drains each queue cross-user.
+- **Drawer onMount in `Chat.svelte`** - fires
   `refreshTopicsVocabulary()` on first auth event and on each
   subsequent auth event. Also fired from the realtime `onUpdate`
   handler when the incoming row's `topics` differ from the
   existing copy.
-- **`$effect` watching `selectedTopics`** — refetches all three
+- **`$effect` watching `selectedTopics`** - refetches all three
   buckets when the user changes the filter. Cursors reset because
   the predicate changed.
-- **Cycle result driver** — inside the Worker, `runOneCycle`
-  returns a `CycleResult` (`acquired-lease` / `polling` /
-  `empty-queue` / `tagged` / `claim-lost` / `empty-topics` /
-  `error`). `napForResult` maps each to a sleep before the next
-  cycle.
+- **Outcome vocabulary** - each cycle returns a
+  `ThreadTopicsOutcome` (`empty-queue` / `tagged` / `claim-lost` /
+  `empty-topics` / `error`). The drain loops keep claiming on
+  `tagged` and `claim-lost` and stop on the rest.
 
 ## Data model
 
-- **`threads.topics text[] not null default '{}'`** — the flat tag
-  list. Empty array means "untagged" (either the worker hasn't run
+- **`threads.topics text[] not null default '{}'`** - the flat tag
+  list. Empty array means "untagged" (either the unit hasn't run
   yet, or it chose to emit nothing). The `UNTAGGED_TOPIC_SENTINEL`
   (`'(untagged)'`) is a UI-side primitive only; it never lands in
   this column.
-- **`threads.last_topics_msg_id`** — terminal assistant message id
+- **`threads.last_topics_msg_id`** - terminal assistant message id
   the tags cover up to. A new terminal message past this id
-  re-qualifies the thread on the next poll; the next tagging pass
+  re-qualifies the thread on the next cycle; the next tagging pass
   overwrites `topics` rather than appending.
 - **`threads.topics_claim_holder`** + **`threads.topics_claim_expires`**
-  — per-row claim columns. Same shape as summary / reflection;
-  partial index on `topics_claim_holder is not null` keeps it
-  tiny.
-- **GIN index `threads_topics_gin_idx`** — backs the `topics &&`
+  - per-row claim columns, the sole mutual exclusion between the
+  two drivers. Same shape as summary / reflection; partial index on
+  `topics_claim_holder is not null` keeps it tiny. Claim TTL is
+  `CURATION_CLAIM_TTL_SECONDS` (120s), shared by all five curation
+  units.
+- **GIN index `threads_topics_gin_idx`** - backs the `topics &&`
   overlap predicate the drawer uses to filter the conversation
   list. RLS narrows reads per user implicitly.
-- **`worker_leases` row** — `worker_kind='topics'`. Partitioned
-  from the other workers so a device can hold every lease at once.
 
 ## Contracts
 
-- `TopicsAgent.run(req): Promise<AgentRunResult<TopicsOutput>>` —
-  `TopicsOutput.topics: string[]` is the validated tag list, or
-  `[]` when the model produced unparseable output, no valid items,
-  or only the reserved sentinel. The loop treats empty as a non-
-  result and calls `clearTopicsClaim` so the row re-enters the
-  queue immediately rather than waiting for the TTL.
-- `runOneCycle(ctx): Promise<CycleResult>` — one observable state
-  transition; same shape as the other agent loops.
-- `claim_next_thread_for_topics` RPC (schema) — returns
-  `(thread_id, terminal_msg_id, existing_topics)`. The third
-  column is the user's per-account vocabulary at claim time,
-  fetched in the same round trip so the agent can normalise
-  without a second SELECT. Eligibility excludes threads still on
-  the `'New conversation'` placeholder (auto-title runs first).
-- `save_thread_topics_if_claimed` RPC — only writes if
+- `tagOneThread(admin, userId, log): Promise<ThreadTopicsOutcome>` -
+  one per-user cycle: claim, tag, save. Non-throwing. Empty or
+  unparseable model output calls `clear_topics_claim` so the row
+  re-enters the queue immediately rather than waiting for the TTL,
+  and returns `empty-topics`.
+- `sweepClaimAndTagThread(admin): Promise<ThreadTopicsOutcome>` -
+  one cross-user sweep step; creates its own edge logger per claim
+  and flushes before returning.
+- `claim_next_thread_for_topics(holder, ttl, p_user_id)` RPC -
+  returns `(thread_id, terminal_msg_id, existing_topics)`. The
+  third column is the user's per-account vocabulary at claim time,
+  fetched in the same round trip so the agent can normalise without
+  a second SELECT. Eligibility excludes threads still on the
+  `'New conversation'` placeholder (auto-title runs first).
+  `p_user_id` is the b-strict escape hatch for the service-role
+  caller.
+- `claim_next_thread_for_topics_sweep(holder, ttl)` RPC - SECURITY
+  DEFINER cross-user variant; returns `user_id`, and its vocab CTE
+  scopes to the candidate row's owner so the model sees that user's
+  vocabulary, not an aggregate across accounts.
+- `save_thread_topics_if_claimed(thread_id, holder, topics, msg_id,
+  p_user_id)` RPC - only writes if
   `topics_claim_holder = $me AND topics_claim_expires > now()`.
   Does NOT bump `updated_at` (tagging is a side-effect; bumping
   would re-promote the thread in the drawer).
-- `list_user_topics` RPC — returns the sorted vocabulary for the
+- `list_user_topics` RPC - returns the sorted vocabulary for the
   calling user as a jsonb object `{ topics: [{topic, count}],
   untagged }`. `count` is the per-topic tally the dropdown shows in
   parens; `untagged` backs the synthetic `(untagged)` row's count.
@@ -156,7 +173,7 @@ threads tagged with either.
   The supabase-service wrapper parses it into a `TopicVocabulary` (see
   `supabase.ts`); the sibling `list_user_memory_topics` /
   `list_user_recipe_topics` RPCs return the same shape.
-- `topicsFilterClause(selected)` (helper in `supabase.ts`) — turns
+- `topicsFilterClause(selected)` (helper in `supabase.ts`) - turns
   a `selectedTopics` array into a PostgREST `or(...)` clause.
   Handles the untagged sentinel specially (`topics.eq.{}`) and
   the real-topic case via `topics.ov.{a,b,c}`. Returns null when
@@ -165,28 +182,31 @@ threads tagged with either.
 
 ## Interactions with other features
 
-- **Chat** — owns the drawer state (`selectedTopics`,
+- **Chat** - owns the drawer state (`selectedTopics`,
   `topicsVocabulary`) and the `$effect` that refetches buckets on
   filter change. Also threads `selectedTopics` through the three
   list functions, the search, and the window-fetch for
-  cross-bucket search-result-opens. See `./chat.md`.
-- **Search** — `searchThreads` accepts a `selectedTopics`
+  cross-bucket search-result-opens. The completed turn's tail is
+  what drives the tagging itself. See `./chat.md`.
+- **Search** - `searchThreads` accepts a `selectedTopics`
   parameter. Exact (ILIKE) hits are filtered server-side via the
   same `topicsFilterClause`; semantic hits are filtered client-
   side because the embedding RPC doesn't read the topics column.
   Same outcome: "search within the active topic filter."
-- **Auto-title** — runs first by design. The topics claim's
+- **Auto-title** - runs first by design. The topics claim's
   eligibility predicate excludes threads still on the placeholder
   title, so the topic vocabulary doesn't get seeded with junk on
   brand-new threads that haven't been auto-titled yet.
-- **Summaries** — sibling background loop, same plumbing shape.
+- **Summaries** - sibling curation unit, same plumbing shape.
   Both write a derived column on the thread row; tagging doesn't
   invalidate the embedding (the
   `clear_thread_embedding_on_change` trigger only fires on
   `title` / `summary` changes).
-- **Logging** — the loop driver emits progress and error
-  breadcrumbs through `createLogger('topics-worker')`. Same
-  worker-to-main relay as summary / reflection.
+- **Logging** - the drivers emit progress and error breadcrumbs
+  through `createEdgeLogger(userId, 'topics')` (siblings:
+  `'memory-topics'`, `'recipe-topics'`), which reach the in-app
+  Logs drawer over the `logs:<userId>` Broadcast topic. See
+  `./logging.md`.
 
 ## Gotchas
 
@@ -213,11 +233,6 @@ threads tagged with either.
   to be present. The UX decision (see the design discussion that
   led to this feature) is OR, and the operator choice locks
   that in.
-- **Worker_kind is just a string.** Adding a new agent
-  (`'topics'` here) doesn't need a schema change to
-  `worker_leases` — the column is free-form text. The agent
-  itself defines the value; the LeaseCoordinator passes it
-  through verbatim to `acquire_worker_lease` and friends.
 - **Topic re-tagging is overwrite, not append.** Same shape as
   summary: a new terminal-assistant-message past
   `last_topics_msg_id` reopens the claim and the next pass
@@ -225,6 +240,10 @@ threads tagged with either.
   ceases to appear in the filter once a later pass dropped it.
   Acceptable because the vocabulary self-corrects across the
   user's thread set.
+- **The model id is hardcoded in the agent modules.**
+  `mistral-small-3-2-24b-instruct` in all three topics units (and
+  summary) mirrors the corresponding `agentModel(...)` entries in
+  `src/lib/models/index.ts`. Change both together.
 
 ## Memory topics
 
@@ -250,15 +269,18 @@ filter dropdown. Two pieces differ vs threads:
   thread topics prompt's framing produced verbose paraphrases when
   pointed at single facts.
 
-Files mirror the topics tree under
-`src/lib/agents/memory_topics/` (`agent.ts`, `prompt.ts`,
-`loop.ts`, `worker.ts`, `manager.ts`). Cross-tab lock name:
-`nak:memory-topics-worker`. Worker_kind in the lease table:
-`memory-topics`. RPC quartet:
+The unit lives in
+`supabase/functions/venice/agents/memory_topics.ts`
+(`tagOneMemory` / `sweepClaimAndTagMemory`). RPC family:
 `claim_next_memory_for_topics` /
+`claim_next_memory_for_topics_sweep` /
 `save_memory_topics_if_claimed` /
-`clear_memory_topics_claim` / `list_user_memory_topics`. The UI
-is `src/components/MemoryList.svelte` (which mounts the same
+`clear_memory_topics_claim` / `list_user_memory_topics`. This
+queue's writers are mostly server-side (reflection on chat-turn
+tails; rem / deep-sleep on cron), so the hourly sweep matters more
+here than for threads - a 3am rem consolidation would otherwise
+leave rows untagged until their owner next converses. The UI is
+`src/components/MemoryList.svelte` (which mounts the same
 `TopicsFilter.svelte` the conversation drawer uses) backed by
 `memoriesStore.topicsVocabulary` + `memoriesStore.selectedTopics`
 in `src/lib/memories-store.svelte.ts`.
@@ -312,7 +334,8 @@ pieces differ vs the other two surfaces:
   course on multi-dimensional dishes ("chicken tikka masala" wants
   chicken + indian + curry + dinner). Six lets all four dimensions
   land plus a second headline ingredient on dual-protein dishes.
-  The cap lives in `MAX_RECIPE_TOPICS` in `recipe_topics/agent.ts`.
+  The cap lives in `MAX_RECIPE_TOPICS` in
+  `supabase/functions/venice/agents/recipe_topics.ts`.
 
 - **Prompt.** Targets the four dimensions explicitly with worked
   examples calibrating the "primary ingredients only - no pantry
@@ -320,8 +343,9 @@ pieces differ vs the other two surfaces:
   produced ingredient-name dumps (every `@ingredient{}` became a
   tag); the memory prompt's "subject area" framing doesn't fit
   structured Cooklang input. The prompt is the load-bearing part
-  of the recipe-topics design - see `recipe_topics/prompt.ts` for
-  the four-dimension rationale and the calibration examples.
+  of the recipe-topics design - see the prompt constant in
+  `recipe_topics.ts` for the four-dimension rationale and the
+  calibration examples.
 
 Filter wiring. Recipe topics are applied client-side in
 `src/components/RecipeList.svelte`: the cookbook is bounded
@@ -335,25 +359,26 @@ arrays) matches the helper used on the other two surfaces.
 
 Vocabulary refresh. `loadRecipes` chains a
 `list_user_recipe_topics` fetch onto every successful refresh, so
-a newly-minted topic from the worker shows up in the dropdown the
+a newly-minted topic from the unit shows up in the dropdown the
 next time the list reloads (tool mutations, modal opens, tab
 switches all trigger reloads). The sibling
 `refreshRecipesTopicsVocabulary` is also called from
 `RecipeList.svelte`'s `onMount` so the dropdown is primed before
 the first load resolves.
 
-Files mirror the topics tree under
-`src/lib/agents/recipe_topics/`. Cross-tab lock name:
-`nak:recipe-topics-worker`. Worker_kind in the lease table:
-`recipe-topics`. RPC quartet: `claim_next_recipe_for_topics` /
+The unit lives in
+`supabase/functions/venice/agents/recipe_topics.ts`
+(`tagOneRecipe` / `sweepClaimAndTagRecipe`). RPC family:
+`claim_next_recipe_for_topics` /
+`claim_next_recipe_for_topics_sweep` /
 `save_recipe_topics_if_claimed` / `clear_recipe_topics_claim` /
 `list_user_recipe_topics`.
 
 ## Where to go next
 
-- `./summaries.md` — sibling worker, same shape.
-- `./auto-title.md` — runs first; topics is gated on it.
-- `./chat.md` — the drawer state that owns the filter UI.
-- `./memory.md` — the store the memory-topics worker tags.
-- `./cookbook.md` — the store the recipe-topics worker tags.
-- `./architecture.md` — the worker model in context.
+- `./summaries.md` - sibling curation unit, same shape.
+- `./auto-title.md` - runs first; topics is gated on it.
+- `./chat.md` - the drawer state that owns the filter UI.
+- `./memory.md` - the store the memory-topics unit tags.
+- `./cookbook.md` - the store the recipe-topics unit tags.
+- `./architecture.md` - background work in context.

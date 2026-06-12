@@ -12,12 +12,12 @@
  *     the resulting cohort. Returns the fired set so the caller can
  *     format the priming block. The cohort id is generated here and
  *     written to the fire log along with the user-round index, so
- *     reaction-classify in the worker can later resolve the cohort
+ *     the formation pipeline's reaction-classify can later resolve the cohort
  *     as a unit and the per-message inline UI can anchor each cohort
  *     to the user message that triggered it.
  *   - `recordSubstrateStub(supabase, threadId, msgIds)` — insert the
  *     per-round substrate row at end-of-round. The assimilator phase
- *     of the formation worker enriches it later; this call is fast
+ *     of the formation pipeline enriches it later; this call is fast
  *     and LLM-free.
  *
  * Plus `formatPrimingThinks` which is pure (no IO) and lives in
@@ -28,9 +28,10 @@
  * intuition synthetic turns.
  *
  * The module is deliberately small: anything more complex (the
- * formation pipeline, the agent prompts, the worker loop) lives
- * under `src/lib/agents/samskara/`. This file is the chat-loop's
- * mental contract with the feature.
+ * formation pipeline, the agent prompts, the rotation drivers) runs
+ * server-side in the venice function
+ * (supabase/functions/venice/agents/samskara.ts). This file is the
+ * chat-loop's mental contract with the feature.
  */
 import type { SupabaseService } from '../supabase';
 import {
@@ -99,7 +100,7 @@ export async function getCompoundSummary(
  *
  * Cohort id: generated here as a uuid via crypto.randomUUID and
  * written into every fire row in the same RPC. The reaction
- * classifier in the worker uses cohort_id to score the set as a
+ * classifier in the formation pipeline uses cohort_id to score the set as a
  * unit (cohort-aware reinforcement weighting) and to mark the entire
  * cohort resolved in one update.
  *
@@ -235,10 +236,9 @@ export async function recordSubstrateStub(
 }
 
 /**
- * Cohort-id generator. Wrapper over crypto.randomUUID with the same
- * Math.random fallback `makeHolderId` (`src/lib/agents/holder.ts`)
- * uses, so this file is independently testable from any browser-
- * only assumption.
+ * Cohort-id generator. Wrapper over crypto.randomUUID with a
+ * Math.random fallback so this file is independently testable from
+ * any browser-only assumption.
  */
 function generateCohortId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {

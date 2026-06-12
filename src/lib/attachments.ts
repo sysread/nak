@@ -213,21 +213,6 @@ export async function sha256Hex(buffer: ArrayBuffer): Promise<string> {
 }
 
 /**
- * SHA-256 of a base64 string's decoded bytes. Convenience wrapper
- * around `sha256Hex` for callers (the LLM tool path) that already
- * hold the bytes as base64 - decoding to an ArrayBuffer in one place
- * keeps the call site terse.
- */
-export async function sha256HexFromBase64(base64: string): Promise<string> {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return sha256Hex(bytes.buffer);
-}
-
-/**
  * Downscale an image File to fit within IMAGE_MAX_EDGE_PX on its
  * longest edge, re-encoding as JPEG (for photographic images) or PNG
  * (for images with transparency — detected by a presence of an alpha
