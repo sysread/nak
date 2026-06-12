@@ -309,11 +309,6 @@ phase.
   cascade).
 - `articulated_relation text not null` - the relator agent's
   short label.
-- `relation_embedding vector(2048)` - reserved for label-level
-  clustering; nullable so the relator phase can write the row
-  immediately and an embedder catches up later (same
-  separation as substrate's situation vs situation_embedding
-  split).
 - `kind text check in ('pattern', 'contrast', 'prerequisite',
   'consequence')` - the relator's taxonomy. The fifth scratch
   category `'orthogonal'` is not an association; orthogonal
@@ -325,11 +320,25 @@ phase.
   (the probe skips adjudicated pairs), so in practice this only
   increments when the turn-tail and sweep drivers race the same
   fresh pair.
+- `minted_at timestamptz` - consumption stamp for the
+  association-mint probe (see Mint phases). NULL until the edge
+  has been fed to the tier-1 minter; set on mint, dedup-hit, OR
+  decline alike. A stamped edge leaves the candidate pool
+  permanently (substrate is immutable, so its evidence can't
+  change); fresh corroboration re-opens a pattern as NEW
+  unstamped edges. Per-edge, never per-hub.
 - `last_reinforced_at`, `created_at` timestamps.
 
-All writes go through `samskara_associate` (security definer,
-service_role-only): PostgREST upserts can only SET conflict
-columns to payload values, so the increment has to live in SQL.
+(The old `relation_embedding vector(2048)` column - reserved for
+label-level clustering and never populated or read - was dropped
+when association-mint landed. Re-add via one guarded ALTER if
+label-clustering is ever built; see the association-mint plan.)
+
+All accept-writes go through `samskara_associate` (security
+definer, service_role-only): PostgREST upserts can only SET
+conflict columns to payload values, so the reinforcement
+increment has to live in SQL. The consumption stamp is a plain
+service-role `UPDATE ... set minted_at` from the probe.
 
 ### `samskara_pair_declines`
 
@@ -384,10 +393,13 @@ FK on `ref_id`); debugging beats normalisation.
   ('substrate', 'association', 'samskara')`, `ref_id uuid`,
   `weight real default 1.0`.
 - Primary key `(samskara_id, kind, ref_id)`.
-- Tier-1 samskaras carry `'substrate'` and `'association'`
-  provenance; tier-2 samskaras carry `'samskara'` provenance
-  pointing at their tier-1 children, with `weight` set to each
-  child's in-group co-fire count.
+- Tier-1 samskaras carry `'substrate'` provenance always, plus
+  `'association'` provenance when minted from the association
+  graph (the association-mint path - those rows carry BOTH kinds,
+  the only mixed-provenance case, `weight` = the edge's
+  reinforcement snapshot at consumption time). Tier-2 samskaras
+  carry `'samskara'` provenance pointing at their tier-1
+  children, `weight` = each child's in-group co-fire count.
 - Records the mint-time topical cluster only. Dedup-reinforce
   (`samskara_reinforce_existing`) deliberately does NOT append
   provenance: appending the recency batch on every re-observation
@@ -580,6 +592,30 @@ logs and yields to the next phase.
   ongoing redundancy consolidation. It's the same RPC the
   sweep's dedup probe runs each tick (see below); it has no
   manual UI trigger - dedup runs autonomically. Idempotent.
+- **Mint-tier1-assoc** (`mintTier1FromAssociationsProbe`, SWEEP
+  ONLY) - mints from the association graph instead of the recency
+  window, so cross-session recurrence that no recency window can
+  co-locate still reaches the minter. `samskara_association_cluster`
+  picks the hub (the substrate row with the most summed
+  reinforcement over its UNCONSUMED edges, >= 2 distinct partners)
+  and returns the hub's edges to its top
+  (`MINT_CLUSTER_MAX - 1`) partners. `buildAssociationCluster`
+  folds those into the minter payload - hub + distinct-partner
+  situations as `sample_situations`, the edge labels in the
+  otherwise-empty `sample_labels` slot, summed reinforcement as
+  the strength hint. Same `agentMint`, embed, and dedup guard as
+  Mint-tier1, then provenance = member substrate rows (`weight`
+  1.0) PLUS the consumed edges as `'association'` (`weight` =
+  reinforcement). **Self-quenching:** every minter verdict - mint,
+  dedup-hit, OR decline - stamps the fed edges `minted_at` so a
+  stable graph spends one call then goes quiet; only a non-verdict
+  (transport/parse/embed failure or a failed insert) leaves them
+  unstamped to retry. `agentMint`'s return splits three ways
+  (`MintResult | 'declined' | null`) precisely so this probe can
+  stamp a clean decline but never stamp a failure. Absent from the
+  turn tail on purpose: cross-session consolidation isn't
+  latency-sensitive, and keeping it sweep-only holds per-turn
+  Venice spend flat.
 - **Mint-tier2** - `agentMint(apiKey, TIER2_MINTER_PROMPT,
   {children}) -> {prediction, inner_voice, valence, confidence}
   | null` (same parse, different prompt - the input is finished
@@ -1136,6 +1172,45 @@ summarizer reads samskaras to feed the agent.
   flat associations count during a quiet stretch is this, not a
   stall. An agent-null result (transport/parse failure) is NOT
   a verdict and leaves the pair unadjudicated for retry.
+- **Association-mint self-quenches the same way - stamp on
+  decline or loop forever.** Mint-tier1-assoc stamps `minted_at`
+  on the fed edges for EVERY minter verdict, decline included;
+  without stamping declines, a stable graph re-feeds the same hub
+  every sweep and burns a minter call per hour re-asking an
+  unchanged question (the pair-relate pathology, one level up).
+  Decline consumes the *current* evidence; future edges to the
+  same hub arrive unstamped and re-qualify it - that's the
+  designed re-open, not a loophole. Conversely a non-verdict
+  (`agentMint` -> null, embed failure, failed insert) must NEVER
+  stamp, or evidence is silently discarded. That is the whole
+  reason `agentMint` returns `MintResult | 'declined' | null`
+  instead of the recency path's `MintResult | null`.
+- **A consumed edge is permanent per edge.** Re-reinforcing an
+  already-consumed edge (pair-relate re-encountering the pair)
+  bumps `reinforcement` but does NOT re-trigger minting. Known
+  limitation: corroboration of an already-minted pattern reaches
+  the existing samskara's health only if a fresh mint attempt
+  happens to dedup onto it. No direct re-reinforcement -> health
+  path today.
+- **Mixed-pattern hubs underperform by design.** A hub's edges
+  can span genuinely different tendencies (one observation
+  relating to a baking pattern AND a family pattern). v1 feeds
+  the whole neighbourhood and leans on the minter's
+  `confirm:false` guard; decline-stamps guarantee no loop, but a
+  messy crossroads hub yields one-or-zero samskaras where a
+  smarter version would get several. The future fix - grouping a
+  hub's edges by what their *labels* say before minting - is what
+  the dropped `relation_embedding` column was reserved for.
+- **Mixed-kind provenance breaks the first-row heading.**
+  Association-minted tier-1s are the only rows with two
+  provenance kinds (substrate + association), and the detail RPC
+  orders by `weight` desc - an edge with reinforcement > 1
+  outranks substrate weight 1.0 - so heading the section off
+  `provenance[0].kind` mislabels it. `Samskaras.svelte` groups by
+  kind via `groupProvenance` (in `src/lib/ui/samskara-browse.ts`)
+  and renders one headed section per kind present. Any future
+  provenance kind must extend that grouping, not resurrect the
+  first-row heuristic.
 - **Writes that bypass the RPC boundary.** The mint inserts +
   provenance upserts and the pair-decline writes use the raw
   admin client rather than an RPC, with `user_id` set

@@ -11,7 +11,11 @@
  * thresholds, label/pluralization/relative-time helpers - lives here
  * and is unit-tested directly.
  */
-import type { SamskaraBrowseSort, SamskaraCorpusRow } from '../supabase';
+import type {
+  SamskaraBrowseSort,
+  SamskaraCorpusRow,
+  SamskaraProvenanceRow,
+} from '../supabase';
 
 /** Debounce window between the last keystroke and the search round trip. Matches the other drawer tabs. */
 export const SEARCH_DEBOUNCE_MS = 200;
@@ -182,4 +186,50 @@ export function worstSeverity(severities: readonly Severity[]): Severity {
   if (severities.includes('alarm')) return 'alarm';
   if (severities.includes('warn')) return 'warn';
   return 'ok';
+}
+
+/**
+ * Provenance kinds in display order: the substrate that formed the
+ * samskara first, then the relations that tied that substrate together,
+ * then (for a tier-2) its tier-1 children. A samskara minted from the
+ * association graph is the first kind to carry MIXED provenance
+ * (substrate + association), which is exactly why the detail view can no
+ * longer label the whole section off the first row's kind.
+ */
+type ProvenanceKind = SamskaraProvenanceRow['kind'];
+const PROVENANCE_ORDER: readonly ProvenanceKind[] = ['substrate', 'association', 'samskara'];
+const PROVENANCE_HEADINGS: Record<ProvenanceKind, string> = {
+  substrate: 'Formed from (substrate)',
+  association: 'Related observations',
+  samskara: 'Compounded from (tier-1 children)',
+};
+
+export interface ProvenanceGroup {
+  kind: ProvenanceKind;
+  heading: string;
+  rows: SamskaraProvenanceRow[];
+}
+
+/**
+ * Bucket provenance rows by kind into the display-ordered groups the
+ * detail view renders, one headed section each. Empty kinds are
+ * dropped, so a single-kind samskara still renders exactly one group -
+ * preserving the prior one-heading behaviour without the first-row
+ * heuristic that mislabels mixed provenance.
+ */
+export function groupProvenance(rows: readonly SamskaraProvenanceRow[]): ProvenanceGroup[] {
+  const byKind = new Map<ProvenanceKind, SamskaraProvenanceRow[]>();
+  for (const row of rows) {
+    const list = byKind.get(row.kind);
+    if (list) list.push(row);
+    else byKind.set(row.kind, [row]);
+  }
+  const groups: ProvenanceGroup[] = [];
+  for (const kind of PROVENANCE_ORDER) {
+    const groupRows = byKind.get(kind);
+    if (groupRows && groupRows.length > 0) {
+      groups.push({ kind, heading: PROVENANCE_HEADINGS[kind], rows: groupRows });
+    }
+  }
+  return groups;
 }

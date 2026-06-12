@@ -5270,24 +5270,45 @@ create table if not exists public.samskara_associations (
   a_id uuid not null references public.samskara_substrate(id) on delete cascade,
   b_id uuid not null references public.samskara_substrate(id) on delete cascade,
   articulated_relation text not null,
-  -- Optional: lets us cluster associations by label embedding when
-  -- minting tier-1 samskaras. Filled by the embedder phase via the
-  -- same pattern as substrate. Keeping it nullable means the relator
-  -- phase can write the row immediately and the embedder catches up
-  -- later — same separation as substrate's `situation` vs
-  -- `situation_embedding` split.
-  relation_embedding vector(2048),
   kind text not null check (
     kind in ('pattern', 'contrast', 'prerequisite', 'consequence')
   ),
   reinforcement integer not null default 1,
   last_reinforced_at timestamptz not null default now(),
+  -- Consumption stamp for the association-mint probe. NULL until the
+  -- edge has been fed to the tier-1 minter; set to now() once it has -
+  -- on a fresh mint, a dedup-hit, OR a decline alike. A stamped edge
+  -- leaves the candidate pool permanently: substrate is immutable
+  -- after assimilation, so this edge's evidence cannot change. Fresh
+  -- corroboration of the same pattern arrives as NEW (unstamped) edges,
+  -- which is how a consumed hub re-qualifies - the stamp is per-edge,
+  -- never per-hub. See docs/dev/samskara.md and the association-mint
+  -- plan.
+  minted_at timestamptz,
   created_at timestamptz not null default now(),
   unique (user_id, a_id, b_id, articulated_relation)
 );
 
 create index if not exists samskara_associations_user_reinforced_idx
   on public.samskara_associations (user_id, last_reinforced_at desc);
+
+-- Column migration for databases that predate this change: the
+-- `create table if not exists` above is a no-op on an existing table,
+-- so the add/drop happens here. Both guarded, both idempotent.
+-- relation_embedding was reserved for label-level clustering and never
+-- populated or read; dropping it is the cleanup half of the
+-- association-mint work (re-adding is one guarded ALTER if that feature
+-- ever lands).
+alter table public.samskara_associations
+  add column if not exists minted_at timestamptz;
+alter table public.samskara_associations
+  drop column if exists relation_embedding;
+
+-- Hub selection scans only unconsumed edges, so a partial index keeps
+-- it off the consumed bulk as the graph grows.
+create index if not exists samskara_associations_user_unconsumed_idx
+  on public.samskara_associations (user_id)
+  where minted_at is null;
 
 alter table public.samskara_associations enable row level security;
 
@@ -5352,6 +5373,90 @@ $$;
 
 revoke all on function public.samskara_associate(uuid, uuid, uuid, text, text) from public, anon, authenticated;
 grant execute on function public.samskara_associate(uuid, uuid, uuid, text, text) to service_role;
+
+-- Association-mint hub selection --
+--
+-- Picks ONE hub - the substrate row with the most unconsumed
+-- association evidence - and returns that hub's unconsumed edges so the
+-- association-mint probe can cluster cross-session recurrence the
+-- recency window can't see. Hub = the endpoint with the greatest summed
+-- reinforcement over its unconsumed edges, requiring at least two
+-- distinct partners (hub + 2 partners = 3 member rows, the minter's
+-- floor). Edges are undirected, so each one credits both endpoints.
+--
+-- Returns at most the top (cluster-max minus one) partners by summed
+-- reinforcement, all of their edges to the hub - so two edges to the
+-- same partner under different labels both come back as one member with
+-- two labels. Zero rows when no hub qualifies: that's the probe's
+-- quench condition (no LLM call). Snapshots situation text for both
+-- endpoints so the caller needs no follow-up reads.
+--
+-- security definer + service_role-only, same as samskara_associate -
+-- the probe runs under the admin client with no auth.uid().
+drop function if exists public.samskara_association_cluster(uuid);
+create or replace function public.samskara_association_cluster(p_user_id uuid)
+returns table (
+  association_id uuid,
+  label text,
+  kind text,
+  reinforcement int,
+  hub_id uuid,
+  hub_situation text,
+  partner_id uuid,
+  partner_situation text
+)
+language sql security definer
+set search_path = public as $$
+  with unconsumed as (
+    select id, a_id, b_id, articulated_relation, kind, reinforcement
+      from public.samskara_associations
+     where user_id = p_user_id and minted_at is null
+  ),
+  -- Undirected fan-out: one row per (endpoint, other endpoint) so an
+  -- edge contributes to both of its substrate rows' hub scores.
+  endpoints as (
+    select a_id as hub, b_id as partner, id, articulated_relation, kind, reinforcement
+      from unconsumed
+    union all
+    select b_id as hub, a_id as partner, id, articulated_relation, kind, reinforcement
+      from unconsumed
+  ),
+  hub_rank as (
+    select hub
+      from endpoints
+     group by hub
+    having count(distinct partner) >= 2
+     order by sum(reinforcement) desc, count(distinct partner) desc, hub
+     limit 1
+  ),
+  ranked_partners as (
+    select e.partner
+      from endpoints e
+      join hub_rank hr on e.hub = hr.hub
+     group by e.partner
+     order by sum(e.reinforcement) desc, e.partner
+     limit 4  -- MINT_CLUSTER_MAX - 1 (hub + up to 4 partners = 5 members)
+  )
+  select e.id as association_id,
+         e.articulated_relation as label,
+         e.kind,
+         e.reinforcement,
+         hr.hub as hub_id,
+         hsub.situation as hub_situation,
+         e.partner as partner_id,
+         psub.situation as partner_situation
+    from endpoints e
+    join hub_rank hr on e.hub = hr.hub
+    join ranked_partners rp on rp.partner = e.partner
+    join public.samskara_substrate hsub
+      on hsub.id = hr.hub and hsub.user_id = p_user_id
+    join public.samskara_substrate psub
+      on psub.id = e.partner and psub.user_id = p_user_id
+   order by e.reinforcement desc, e.id;
+$$;
+
+revoke all on function public.samskara_association_cluster(uuid) from public, anon, authenticated;
+grant execute on function public.samskara_association_cluster(uuid) to service_role;
 
 -- Pair declines --
 --
@@ -7329,7 +7434,12 @@ $$;
 --     count means workers are crashing mid-claim, not just idle.
 --   - near_dead / never_fired: corpus-quality signals (decay working,
 --     mints that never match anything).
+--   - associations / associations_unconsumed: the relation graph total
+--     and the slice still awaiting an association-mint pass. A standing
+--     unconsumed pile is normal between hourly sweeps; it should drain,
+--     not grow without bound.
 -- One round trip beats a dozen head-counts from the client.
+drop function if exists public.samskara_health_snapshot();
 create or replace function public.samskara_health_snapshot()
 returns table (
   total_samskaras int,
@@ -7338,6 +7448,7 @@ returns table (
   near_dead int,
   never_fired int,
   associations int,
+  associations_unconsumed int,
   substrate_total int,
   pending_assimilate int,
   pending_embed int,
@@ -7362,6 +7473,8 @@ language sql stable security invoker as $$
       where s.user_id = auth.uid() and s.fire_count = 0)::int,
     (select count(*) from public.samskara_associations a
       where a.user_id = auth.uid())::int,
+    (select count(*) from public.samskara_associations a
+      where a.user_id = auth.uid() and a.minted_at is null)::int,
     (select count(*) from public.samskara_substrate sub
       where sub.user_id = auth.uid())::int,
     (select count(*) from public.samskara_substrate sub

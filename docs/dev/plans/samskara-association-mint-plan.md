@@ -1,11 +1,17 @@
 # Samskara Association-Mint Implementation Plan
 
-Status: PLANNED (not yet implemented). Builds the consumer side of
-the associative layer: minting tier-1 samskaras from the association
-graph that pair-relate has been writing since the feature shipped.
-Companion to `docs/dev/samskara.md` (the living reference) - when
-this lands, the relevant sections there get updated and this doc
-gets a pointer note like the tier-2 plan's.
+Status: LANDED. The consumer side of the associative layer -
+minting tier-1 samskaras from the association graph pair-relate
+writes - is implemented (`mintTier1FromAssociationsProbe` +
+`samskara_association_cluster`). The living reference is
+`docs/dev/samskara.md` (associations table, the Mint-tier1-assoc
+phase, the provenance and gotchas sections); the walkthrough is
+`docs/qa/use-cases/samskara-association-mint.md`. This doc is kept
+as the design rationale of record. One plan item shipped as
+written with a deliberate divergence worth noting: the consumption
+stamp is set on a successful INSERT (id returned), not
+unconditionally after the mint decision, so a failed insert leaves
+the edges unconsumed to retry - see the agent code + gotchas.
 
 ## SYNOPSIS
 

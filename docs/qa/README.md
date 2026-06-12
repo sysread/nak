@@ -104,3 +104,6 @@ One file per use-case under [`use-cases/`](./use-cases/), named
 - [samskara-formation](./use-cases/samskara-formation.md) - the
   seven-phase formation rotation (assimilate through
   compound-regen) plus the mint toast surface.
+- [samskara-association-mint](./use-cases/samskara-association-mint.md) -
+  the sweep-only `mint-tier1-assoc` phase: minting from the
+  association graph, the consumption stamp, mixed-kind provenance.

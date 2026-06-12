@@ -61,8 +61,10 @@ Browse, search, filter, and sort every instinct Nak has formed:
   it shows how many remain after folding.
 
 Click any row to see its detail - confidence, health, how often it has
-fired, and where it came from. For a tier-2 compound, "where it came
-from" is the tier-1 instincts it was built from.
+fired, and where it came from. "Where it came from" lists the moments it
+was formed from, and - for an instinct built from recurring patterns
+across different conversations - the relations Nak noticed between them.
+For a tier-2 compound, it's the tier-1 instincts it was built from.
 
 ### Health
 
