@@ -128,17 +128,20 @@ describe('AGENT_MODELS (background agents)', () => {
     }
   });
   it('groups roles by model id as expected', () => {
-    // Deepseek slots: reflection, web search, research docs, and the
-    // three recall agents (memory, conversation, wiki). The recall
-    // trio rides the foreground capacity pool because grounded recall
-    // is fabrication-sensitive under json_object pressure - see the
-    // per-slot rationale block in src/lib/models/index.ts.
+    // Deepseek slots: reflection, research docs, and the three recall
+    // agents (memory, conversation, wiki). The recall trio rides the
+    // foreground capacity pool because grounded recall is fabrication-
+    // sensitive under json_object pressure - see the per-slot rationale
+    // block in src/lib/models/index.ts.
     expect(AGENT_MODELS.reflection).toBe('deepseek-v4-flash');
-    expect(AGENT_MODELS.webSearch).toBe('deepseek-v4-flash');
     expect(AGENT_MODELS.researchDocs).toBe('deepseek-v4-flash');
     expect(AGENT_MODELS.recall).toBe('deepseek-v4-flash');
     expect(AGENT_MODELS.conversationRecall).toBe('deepseek-v4-flash');
     expect(AGENT_MODELS.wikiRecall).toBe('deepseek-v4-flash');
+    // web search runs its own slot (tencent-hy3-preview), kept distinct
+    // from the deepseek family so the search agent can be retuned in
+    // isolation - it was the unreliable one in practice.
+    expect(AGENT_MODELS.webSearch).toBe('tencent-hy3-preview');
     // One mistral-small slot: intuition. (The bias and samskara
     // agents also run mistral-small, but they live server-side now -
     // see BIAS_MODEL and SAMSKARA_MODEL under
