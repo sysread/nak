@@ -2,10 +2,10 @@
 //
 // Docs-research entrypoint. The main chat model calls this to hand off
 // "how do I X in Nak", "what does Y do", "is there a shortcut for Z"
-// questions to a one-shot sub-completion on the fast tier whose system
-// prompt carries every doc under docs/user/ concatenated with path
-// delimiters. The sub-call answers from that context alone and hands
-// back a short synthesis plus the doc paths it leaned on.
+// questions to a one-shot sub-completion (RESEARCH_DOCS_MODEL) whose
+// system prompt carries every doc under docs/user/ concatenated with
+// path delimiters. The sub-call answers from that context alone and
+// hands back a short synthesis plus the doc paths it leaned on.
 //
 // Dev-doc mode: when args.include_internal_dev_docs is true, the sub-
 // call's system prompt also carries every doc under docs/dev/ - the
@@ -37,7 +37,7 @@ import {
 // Mirror of src/lib/models/index.ts's agentModel('researchDocs').id.
 // Keep in sync with the browser model registry; the model is the same
 // across paths because the prompt is identical.
-const RESEARCH_DOCS_MODEL = 'kimi-k2-5';
+const RESEARCH_DOCS_MODEL = 'tencent-hy3-preview';
 
 const SYSTEM_PROMPT_HEADER =
   'You are a documentation assistant for Nak, a personal AI assistant ' +
@@ -161,6 +161,11 @@ export const researchDocs: ToolDef = {
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userTurn },
       ],
+      // Single-shot synthesis into a small budget (2048/4096). Hy3
+      // defaults to high reasoning_effort, which would spend the whole
+      // cap on a CoT preamble before any prose lands - same failure
+      // mode web_search guards against - so disable thinking outright.
+      disableThinking: true,
       maxTokens: includeDev ? 4096 : 2048,
     });
 

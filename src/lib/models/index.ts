@@ -519,19 +519,24 @@ export type AgentRole =
  * Per-slot rationale (kept here rather than at call sites so the
  * decision context lives next to the swap):
  *
- *   reflection - deepseek-v4-flash. Read the thread, make some
- *     judgments, call the memory tools. Big-window model is the win -
- *     the entire conversation is the context.
+ *   reflection - tencent-hy3-preview. Read the thread, make some
+ *     judgments, call the memory tools. Reasoning-capable with a 256k
+ *     window that swallows all but the longest threads; cheaper per
+ *     token than the deepseek slot it moved off. Hy3 defaults to high
+ *     reasoning_effort, so the call site pins reasoning_effort:'low' -
+ *     a short grounding pass without paying the high-effort CoT tax on
+ *     every round of a multi-round memory-write loop.
  *
- *     NOTE on capacity: the Balanced and Fast foreground tiers ALSO
- *     front this id (Smart is on qwen-3-7-plus). The
- *     earlier policy of "background agents must not share capacity
- *     with foreground tiers" has been deliberately relaxed. If
- *     overload errors return under the shared-capacity shape, the
- *     next move is repointing the background agents (reflection,
- *     wiki, wikiLibrarian, webSearch, researchDocs, recall,
- *     conversationRecall, wikiRecall) to a non-foreground id, NOT
- *     downgrading the foreground tiers.
+ *     NOTE on capacity: the Balanced and Fast foreground tiers front
+ *     deepseek-v4-flash (Smart is on qwen-3-7-plus). The deepseek-
+ *     backed background agents (wiki, wikiLibrarian, deepSleep, rem)
+ *     therefore share capacity with those tiers; the earlier policy of
+ *     "background agents must not share capacity with foreground tiers"
+ *     has been deliberately relaxed. If overload errors return under
+ *     the shared-capacity shape, the next move is repointing those four
+ *     to a non-foreground id, NOT downgrading the foreground tiers.
+ *     reflection / webSearch / researchDocs / the recall trio already
+ *     sit off the foreground id (tencent-hy3-preview).
  *
  *   wiki - deepseek-v4-flash. Autonomous wiki agent: read a settled
  *     thread the day after, decide which topics warrant a new article
@@ -581,9 +586,13 @@ export type AgentRole =
  *     wiki family so the search agent can be retuned without
  *     dragging the deepseek-backed agents along.
  *
- *   researchDocs - deepseek-v4-flash. The `research_docs` tool's
+ *   researchDocs - tencent-hy3-preview. The `research_docs` tool's
  *     sub-completion reads the bundled docs and answers in 2-5
- *     sentences. Same bounded-synthesis profile as webSearch.
+ *     sentences. Same bounded-synthesis profile as webSearch, so the
+ *     call site forces disable_thinking the same way - a single-shot
+ *     synthesis into a small (2048/4096) budget can't afford to spend
+ *     Hy3's default-high CoT before any prose lands. Moved off
+ *     kimi-k2-5, which was both pricier and overkill for docs Q&A.
  *
  *   intuition - mistral-small-3-2-24b-instruct. The pre-turn pulse
  *     fires before every assistant turn; latency is the primary
@@ -592,28 +601,29 @@ export type AgentRole =
  *     CoT overhead per call.
  *
  *
- *   recall - deepseek-v4-flash. Memory-recall agent: read the live
+ *   recall - tencent-hy3-preview. Memory-recall agent: read the live
  *     conversation, search memories, produce a short JSON note.
- *     Pinned to the same id as reflection / wiki / webSearch /
- *     researchDocs because grounded recall over a real DB surface
- *     (memory_search) is sensitive to model-side fabrication - small
- *     MoE models under json_object pressure will confabulate
- *     plausible-shaped notes rather than emit the empty signal. A
- *     dense reasoning model with the large window is the cheapest
- *     fix; the cost is that recall now shares capacity with the
- *     foreground Balanced/Fast tiers. Distinct constant from
- *     conversationRecall so the two recall surfaces can be retuned
- *     independently if one regresses.
+ *     Grounded recall over a real DB surface (memory_search) is
+ *     sensitive to model-side fabrication - models under json_object
+ *     pressure will confabulate plausible-shaped notes rather than
+ *     emit the empty signal - so it wants a reasoning model that can
+ *     check whether a hit actually supports the note. Hy3 is reasoning-
+ *     capable and cheaper than the deepseek slot it moved off; the call
+ *     site pins reasoning_effort:'low' (not disable_thinking) to keep a
+ *     short grounding pass while capping the mid-turn latency the recall
+ *     agents add to live chat. Distinct constant from conversationRecall
+ *     so the two recall surfaces can be retuned independently if one
+ *     regresses.
  *
- *   conversationRecall - deepseek-v4-flash. Conversation-recall
- *     agent; same shape and rationale as recall.
+ *   conversationRecall - tencent-hy3-preview. Conversation-recall
+ *     agent; same shape and rationale as recall (reasoning_effort:'low').
  *
- *   wikiRecall - deepseek-v4-flash. Wiki-recall agent: read the live
+ *   wikiRecall - tencent-hy3-preview. Wiki-recall agent: read the live
  *     conversation, search the user's wiki articles, produce a short
- *     first-person note. Same bounded-synthesis JSON-out shape and
- *     fabrication-sensitivity profile as recall / conversationRecall;
- *     distinct slot so the three recall surfaces can be retuned
- *     independently if one regresses.
+ *     first-person note. Same bounded JSON-out shape, fabrication-
+ *     sensitivity, and reasoning_effort:'low' posture as recall /
+ *     conversationRecall; distinct slot so the three recall surfaces
+ *     can be retuned independently if one regresses.
  *
  * The five curation agents (auto-title, summary, thread topics,
  * memory topics, recipe topics), the bias pipeline, and the samskara
@@ -622,17 +632,17 @@ export type AgentRole =
  * holds their model ids directly - it cannot import from src/lib.
  */
 export const AGENT_MODELS = {
-  reflection:         'deepseek-v4-flash',
+  reflection:         'tencent-hy3-preview',
   wiki:               'deepseek-v4-flash',
   wikiLibrarian:      'deepseek-v4-flash',
   deepSleep:          'deepseek-v4-flash',
   rem:                'deepseek-v4-flash',
   webSearch:          'tencent-hy3-preview',
-  researchDocs:       'deepseek-v4-flash',
+  researchDocs:       'tencent-hy3-preview',
   intuition:          'mistral-small-3-2-24b-instruct',
-  recall:             'deepseek-v4-flash',
-  conversationRecall: 'deepseek-v4-flash',
-  wikiRecall:         'deepseek-v4-flash',
+  recall:             'tencent-hy3-preview',
+  conversationRecall: 'tencent-hy3-preview',
+  wikiRecall:         'tencent-hy3-preview',
 } as const satisfies Record<AgentRole, ModelId>;
 
 /**
