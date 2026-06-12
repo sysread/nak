@@ -5256,13 +5256,14 @@ create policy "samskara substrate self-deletable" on public.samskara_substrate
 
 -- Associations --
 --
--- Pair-labels between substrate rows. Written by the relator phase of
--- the formation worker. `(a_id, b_id, articulated_relation)` is unique
--- so re-encountering the same relation between the same pair upserts
--- onto the existing row and bumps `reinforcement` rather than
--- duplicating. The `kind` enum drops scratch's `'orthogonal'` value —
--- orthogonal pairs aren't written at all (the relator agent returns a
--- skip verdict and the worker discards the result).
+-- Pair-labels between substrate rows. Written by the pair-relate
+-- probe via `samskara_associate` below. `(a_id, b_id,
+-- articulated_relation)` is unique so re-encountering the same
+-- relation between the same pair updates the existing row (the RPC's
+-- conflict clause increments `reinforcement`) rather than
+-- duplicating. The `kind` enum drops scratch's `'orthogonal'` value -
+-- orthogonal verdicts are recorded in `samskara_pair_declines` so the
+-- probe never re-asks, but they are not associations.
 create table if not exists public.samskara_associations (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
@@ -5316,6 +5317,70 @@ create policy "samskara associations self-deletable" on public.samskara_associat
 -- re-running the schema is safe.
 alter table public.samskara_associations
   alter column user_id set default auth.uid();
+
+-- Association upsert with a working reinforcement counter. PostgREST
+-- upserts can only SET conflict columns to payload values, so the
+-- TS-side writer could never express "increment the existing count" -
+-- every re-accept overwrote reinforcement with the literal 1. This
+-- RPC owns the conflict arithmetic instead. Re-encounters are rare by
+-- design (the probe skips already-adjudicated pairs), but the
+-- turn-tail and sweep drivers can still race the same fresh pair, and
+-- the increment keeps the counter honest when they do. Returns the
+-- post-write reinforcement so the caller can log it.
+-- Pair-relate runs only under the venice function's service-role
+-- client post-port, so EXECUTE is locked to service_role (same
+-- posture as the sweep claims).
+drop function if exists public.samskara_associate(uuid, uuid, uuid, text, text);
+create or replace function public.samskara_associate(
+  p_user_id uuid,
+  p_a_id uuid,
+  p_b_id uuid,
+  p_label text,
+  p_kind text
+) returns integer
+language sql security definer
+set search_path = public as $$
+  insert into public.samskara_associations
+         (user_id, a_id, b_id, articulated_relation, kind)
+  values (p_user_id, p_a_id, p_b_id, p_label, p_kind)
+  on conflict (user_id, a_id, b_id, articulated_relation)
+  do update set reinforcement = samskara_associations.reinforcement + 1,
+                kind = excluded.kind,
+                last_reinforced_at = now()
+  returning reinforcement;
+$$;
+
+revoke all on function public.samskara_associate(uuid, uuid, uuid, text, text) from public, anon, authenticated;
+grant execute on function public.samskara_associate(uuid, uuid, uuid, text, text) to service_role;
+
+-- Pair declines --
+--
+-- Permanent memory of relator "orthogonal" verdicts. Substrate rows
+-- are immutable once assimilated (situation/outcome never change), so
+-- a declined pair would get the same verdict on every re-ask - the
+-- ledger lets the pair-relate probe skip adjudicated pairs instead of
+-- burning a Venice call per probe re-asking the same question on a
+-- quiet corpus. No TTL on purpose: a decline can only become stale if
+-- substrate content becomes mutable, which would be a design change.
+-- (a_id, b_id) are stored in canonical order (a_id < b_id), same
+-- convention as samskara_associations.
+create table if not exists public.samskara_pair_declines (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  a_id uuid not null references public.samskara_substrate(id) on delete cascade,
+  b_id uuid not null references public.samskara_substrate(id) on delete cascade,
+  declined_at timestamptz not null default now(),
+  primary key (user_id, a_id, b_id)
+);
+
+alter table public.samskara_pair_declines enable row level security;
+
+-- Select-only for the owner (diagnostics surfaces may want to show
+-- declines). Writes come exclusively from the venice function's
+-- service-role client, which bypasses RLS - no client write path, so
+-- no insert/update/delete policies.
+drop policy if exists "samskara pair declines self-selectable" on public.samskara_pair_declines;
+create policy "samskara pair declines self-selectable" on public.samskara_pair_declines
+  for select using (auth.uid() = user_id);
 
 -- Samskaras --
 --

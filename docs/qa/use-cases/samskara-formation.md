@@ -73,12 +73,15 @@ observable contract - claims, writes, toasts - is the same.
      from samskara_substrate where id = '<forged-id>';
    ```
 
-3. Watch one pair-relate probe (`pair-relate: selected pair ...`
-   at Info, then either `associated` or `agent declined`). Record
-   which branch ran and the association count before/after:
+3. Watch one pair-relate probe. Three valid outcomes: `selected
+   pair ...` at Info followed by `associated` (with its
+   reinforcement count) or `agent declined`, or the trace line
+   `every candidate pair already adjudicated` with no Venice
+   call. Record which branch ran and both ledgers before/after:
 
    ```sql
-   select count(*) from samskara_associations;
+   select (select count(*) from samskara_associations) as accepted,
+          (select count(*) from samskara_pair_declines) as declined;
    ```
 
 4. Watch one mint-tier1 probe. Three valid outcomes, record which:
@@ -151,11 +154,14 @@ observable contract - claims, writes, toasts - is the same.
   (worst case ~5 min idle nap + 60s throttle), `situation` /
   `outcome` / `valence` all land, and the save happens under the
   claim guard (a second worker's save would be rejected).
-- (3) Pair-relate selects the closest embedded pair and either
-  writes an association row (count increments) or logs the
-  agent's `orthogonal` decline. A decline is valid for one probe,
-  but a corpus-wide association count of zero after many probes
-  is a finding to record, not normal background noise.
+- (3) Pair-relate selects the closest pair the relator has not
+  already ruled on and persists the verdict either way: an
+  association row (accepted count increments) or a
+  `samskara_pair_declines` row (declined count increments). A
+  re-probe on an unchanged corpus must take the
+  fully-adjudicated trace branch - re-selecting a pair that
+  already sits in either ledger is a regression. Flat counts on
+  a quiet corpus are the designed silence, not a stall.
 - (4) Exactly one of mint / dedup-reinforce / decline. On a true
   mint: a `samskaras` row with `tier = 1`, provenance rows
   pointing at the cluster's substrate ids, and the mood pill
@@ -196,3 +202,4 @@ feature output and stay.
 | 2026-06-11 | local | 87105f2 | pass (8/8; 5 = expected FAIL) | browser-worker baseline. Assimilate: forged stub b155acfa claimed and saved in ~1.2s (retained per cleanup rule - a mint's provenance points at it). Pair-relate: wrote the corpus's FIRST association rows (0 -> 2); the weeks-at-zero count is explained - the probe has no memory of declined pairs, so a static corpus re-selects the same closest pair every 60s and the agent declines it every time (one wasted Venice call/min); fresh substrate immediately produced accepted pairs. Also: re-accepting an existing pair bumps last_reinforced_at but `reinforcement` stays 1 (the upsert overwrites it with the literal 1). Mint-tier1: minted 9490bd4e (3 provenance rows) plus 4 dedup-reinforces; mood pill rendered post-mint but was already visible at pageload, so causality unproven. Mint-tier2: the documented every-cycle 21000 failure, direct RPC repro identical; tier-2 corpus still 0. Reaction-classify: cohort fd0458ea applied ~2 min after fire; 2/4 rows confirmed, 2 left NULL - initially flagged as a classifier gap, but NULL-with-backdated-fired_at is exactly how samskara_apply_reaction marks NEUTRAL verdicts (there is no neutral boolean state; the backdate ages them out of the unresolved window), so this is the designed shape. Dedup: 0 collapses, steady state. Compound-regen: forced via 7h backdate; count_at_regen 12 -> 14, prose updated |
 | 2026-06-11 | local | a5eb802 | FAIL (1-2, 6; rest pass) | post-port run. Blocking regression: both messages-table reads filtered on a nonexistent `messages.user_id` column (ownership routes through threads.user_id) - every assimilate and reaction-classify threw `column messages.user_id does not exist`; the substrate queue only grew, the sweep drain aborted at assimilated=0, and cohorts could not resolve (cohort 4c275558 left 5 rows NULL with un-backdated fired_at - genuine failure, not the neutral shape). Claim/scheduling machinery and runPhase isolation worked (a failing phase never took down the rotation). PASSING: pair-relate (associations 6 -> 7; reinforcement-stuck-at-1 quirk persists), mint-tier1 (3x dedup-reinforce), mint-tier2 POST-FIX CONFIRMED (direct RPC returns a result set, no 21000; the corpus minted its first-ever local tier-2), dedup (first nonzero collapse, tier-1 14 -> 13), compound-regen (7h backdate -> fresh 1175-char summary, count 14), step 9 toast relay (pill content -> cheerful within ~5s of the SQL insert), drawer relay under the `samskara` source tag, tail phase ordering as designed |
 | 2026-06-11 | local | c618678 | pass (1-2, 6 re-run; rest pass per prior row) | fix verification: the messages reads scope by thread_id. Assimilate: a sweep tick drained all three stuck stubs claim -> agent -> save (`assimilated=3`, pending queue 0) after their stale failed-attempt claims were released manually. Reaction-classify, live two-turn run: cohort 202a1cc5 (5 fires) resolved by the second turn's tail ~30s after the reply - 2 rows confirmed true (fired_at intact), 3 NEUTRAL (was_confirmed NULL, fired_at backdated ~13 min - the designed shape); zero `failed` / `message read failed` lines across the window. The feedback loop is closed end to end on the ported pipeline |
+| 2026-06-12 | local | 209fd94 | pass (1-3 re-run; partial scope) | pair-relate adjudication change only (declines ledger + adjudicated-skip + samskara_associate RPC). Baseline for the old behavior is the 87105f2 row (static corpus re-selected the same pair every probe, reinforcement stuck at 1). Post-change: forged stub 275636cb assimilated + embedded, then three sweep ticks on a static corpus selected three DISTINCT pairs (tick 3 kept the same seed but skipped its adjudicated top candidate 38e3cdc7 and related next-closest 9eb79527) - the amnesia loop is gone. Associations 11 -> 14. Direct re-call of samskara_associate on an existing pair+label returned reinforcement 2 with last_reinforced_at bumped - the conflict clause increments. Declined branch not organically reachable this run (the relator accepted every probe; clone-derived pairs are genuinely related) - the decline write shares the upsert shape and the adjudicated-read union with the proven accept side; rankPairCandidates floor/ordering pinned by the Deno suite. Decline-branch live confirmation rides the next orthogonal verdict in normal operation |

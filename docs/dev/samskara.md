@@ -316,14 +316,33 @@ phase.
   split).
 - `kind text check in ('pattern', 'contrast', 'prerequisite',
   'consequence')` - the relator's taxonomy. The fifth scratch
-  category `'orthogonal'` is filtered at agent boundary and
-  never written.
-- `reinforcement integer default 1` - intended as an on-conflict
-  bump, but the formation upsert's payload always carries
-  `reinforcement: 1`, so re-accepting the same pair+label
-  refreshes `last_reinforced_at` without ever incrementing the
-  counter (see Gotchas).
+  category `'orthogonal'` is not an association; orthogonal
+  verdicts are recorded in `samskara_pair_declines` so the
+  probe never re-asks the pair.
+- `reinforcement integer default 1` - bumped by the
+  `samskara_associate` RPC's conflict clause when the same
+  pair+label is written again. Re-encounters are rare by design
+  (the probe skips adjudicated pairs), so in practice this only
+  increments when the turn-tail and sweep drivers race the same
+  fresh pair.
 - `last_reinforced_at`, `created_at` timestamps.
+
+All writes go through `samskara_associate` (security definer,
+service_role-only): PostgREST upserts can only SET conflict
+columns to payload values, so the increment has to live in SQL.
+
+### `samskara_pair_declines`
+
+Permanent ledger of relator "orthogonal" verdicts, keyed
+`(user_id, a_id, b_id)` with the pair in canonical order
+(`a_id < b_id`, same convention as associations). Substrate
+rows are immutable once assimilated, so a verdict is permanent -
+no TTL, no re-asks. The pair-relate probe unions this table
+with `samskara_associations` to build the adjudicated set it
+skips during candidate selection; once every pair in the window
+is adjudicated, the probe returns without a Venice call.
+Select-only RLS for the owner; writes come exclusively from the
+service-role client.
 
 ### `samskaras`
 
@@ -1103,33 +1122,31 @@ summarizer reads samskaras to feed the agent.
   while passing hosted. Keep the TRUNCATE.
 - **Pair-relate uses a naive seed-most-recent approach.**
   One pair per probe: seed on the most recent embedded
-  substrate row, pick its closest neighbour by cosine in JS,
-  call the relator once. Good enough at substrate-corpus
-  scale; expect to replace with a smarter multi-pair sampler
-  once the corpus grows past a few hundred rows per user.
-- **Pair-relate has no memory of declined pairs.** The probe
-  always selects the closest pair to the most recent row, and a
-  relator "orthogonal" verdict writes nothing - so on a static
-  corpus every probe re-selects the same closest pair and the
-  relator declines it every time. Association counts only grow
-  when fresh substrate arrives and changes the selection. A
+  substrate row, walk its neighbours best-cosine-first to the
+  closest pair the relator hasn't already ruled on, call the
+  relator once. Good enough at substrate-corpus scale; expect
+  to replace with a smarter multi-pair sampler once the corpus
+  grows past a few hundred rows per user.
+- **A quiet corpus goes silent, not chatty.** Both relator
+  verdicts persist (accepts in `samskara_associations`,
+  declines in `samskara_pair_declines`), and candidate
+  selection skips adjudicated pairs - so once every pair in the
+  window is ruled on, the probe logs a trace line and spends no
+  Venice call until fresh substrate changes the selection. A
   flat associations count during a quiet stretch is this, not a
-  stall.
-- **The associations upsert never increments reinforcement.**
-  The upsert payload always carries `reinforcement: 1`, and the
-  on-conflict update overwrites with the payload - so
-  re-accepting an existing pair+label bumps `last_reinforced_at`
-  but `reinforcement` stays 1 forever. Anything that wants to
-  rank associations by reinforcement is reading a constant
-  column until this is fixed (an `excluded.reinforcement + 1`
-  style conflict clause, or an RPC).
-- **Writes that bypass the RPC boundary.** Pair-relate's
-  association upsert and the mint inserts + provenance upserts
-  use the raw admin client rather than an RPC, with `user_id`
-  set explicitly on every row (the column defaults are
-  `auth.uid()`, which is NULL under the service role). Future
-  policy that wants to encapsulate those writes
-  (soft-uniqueness, merge jobs) should wrap them in RPCs first.
+  stall. An agent-null result (transport/parse failure) is NOT
+  a verdict and leaves the pair unadjudicated for retry.
+- **Writes that bypass the RPC boundary.** The mint inserts +
+  provenance upserts and the pair-decline writes use the raw
+  admin client rather than an RPC, with `user_id` set
+  explicitly on every row (the column defaults are
+  `auth.uid()`, which is NULL under the service role).
+  Association writes are the exception: they go through the
+  `samskara_associate` RPC because the on-conflict
+  reinforcement increment can't be expressed in a PostgREST
+  upsert. Future policy that wants to encapsulate the remaining
+  raw writes (soft-uniqueness, merge jobs) should wrap them in
+  RPCs first.
 - **`samskara_compound_summary.summary` is NULL on cold start
   and can be NULL after a stale-ceiling trip.** The chat-loop
   reader (`getCompoundSummary`) handles both by returning null,

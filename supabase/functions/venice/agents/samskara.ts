@@ -847,9 +847,67 @@ async function assimilateDrainForUser(
 }
 
 /**
- * Pair-relate probe: read the recent embedded window, pick the
- * closest non-self pair for the most recent row, ask the relator,
- * upsert the association when the verdict is non-orthogonal.
+ * Cosine floor for pair-relate candidates. Same floor the browser
+ * loop used: below 0.3 the "closest pair" is noise in this compressed
+ * embedding space, not a relation.
+ */
+const PAIR_RELATE_COSINE_FLOOR = 0.3;
+
+/**
+ * Rank the seed's potential partners by cosine, best first, dropping
+ * rows below the floor and rows whose embedding failed to parse.
+ * Pure so the Deno suite can pin the ordering and floor behaviour.
+ */
+function rankPairCandidates(
+  seed: SubstrateRow,
+  recent: SubstrateRow[],
+): { row: SubstrateRow; sim: number }[] {
+  const out: { row: SubstrateRow; sim: number }[] = [];
+  for (let i = 1; i < recent.length; i++) {
+    if (recent[i].embedding.length === 0) continue;
+    const sim = cosine(seed.embedding, recent[i].embedding);
+    if (sim >= PAIR_RELATE_COSINE_FLOOR) out.push({ row: recent[i], sim });
+  }
+  out.sort((x, y) => y.sim - x.sim);
+  return out;
+}
+
+/**
+ * Partner ids the relator has already ruled on for this seed, in
+ * either direction: accepted pairs live in samskara_associations,
+ * declined pairs in samskara_pair_declines. Substrate content is
+ * immutable after assimilation, so a past verdict is permanent and
+ * re-asking the agent about an adjudicated pair learns nothing.
+ */
+async function adjudicatedPartners(
+  admin: SupabaseClient,
+  userId: string,
+  seedId: string,
+): Promise<Set<string>> {
+  const out = new Set<string>();
+  for (const table of ['samskara_associations', 'samskara_pair_declines']) {
+    const { data, error } = await admin
+      .from(table)
+      .select('a_id, b_id')
+      .eq('user_id', userId)
+      .or(`a_id.eq.${seedId},b_id.eq.${seedId}`);
+    if (error) throw new Error(`${table} read failed: ${error.message}`);
+    for (const r of data ?? []) {
+      out.add(r.a_id === seedId ? (r.b_id as string) : (r.a_id as string));
+    }
+  }
+  return out;
+}
+
+/**
+ * Pair-relate probe: read the recent embedded window, walk the seed's
+ * partners best-cosine-first to the closest pair the relator has not
+ * already ruled on, ask the relator once, and persist the verdict
+ * either way - associations via the samskara_associate RPC (whose
+ * conflict clause increments reinforcement atomically), declines into
+ * the samskara_pair_declines ledger. Recording declines is what lets
+ * a quiet corpus go fully silent: once every pair in the window is
+ * adjudicated, the probe returns before spending a Venice call.
  * One pair per probe keeps the LLM call rate bounded.
  */
 async function pairRelateProbe(
@@ -862,23 +920,21 @@ async function pairRelateProbe(
   if (recent.length < 2) return;
   const seed = recent[0];
   if (seed.embedding.length === 0) return;
-  let bestIdx = -1;
-  let bestSim = -Infinity;
-  for (let i = 1; i < recent.length; i++) {
-    if (recent[i].embedding.length === 0) continue;
-    const sim = cosine(seed.embedding, recent[i].embedding);
-    if (sim > bestSim) {
-      bestSim = sim;
-      bestIdx = i;
-    }
-  }
-  // Same floor the browser loop used: below 0.3 the "closest pair" is
-  // noise in this compressed embedding space, not a relation.
-  if (bestIdx < 0 || bestSim < 0.3) return;
+  const ranked = rankPairCandidates(seed, recent);
+  if (ranked.length === 0) return;
 
-  const partner = recent[bestIdx];
+  const adjudicated = await adjudicatedPartners(admin, userId, seed.id);
+  const pick = ranked.find((c) => !adjudicated.has(c.row.id));
+  if (!pick) {
+    log.trace('pair-relate: every candidate pair already adjudicated', {
+      candidates: ranked.length,
+    });
+    return;
+  }
+
+  const partner = pick.row;
   log.info(
-    `pair-relate: selected pair ${seed.id} <> ${partner.id} (cosine ${bestSim.toFixed(3)})`,
+    `pair-relate: selected pair ${seed.id} <> ${partner.id} (cosine ${pick.sim.toFixed(3)})`,
   );
   const result = await agentRelate(
     apiKey,
@@ -886,35 +942,45 @@ async function pairRelateProbe(
     { situation: partner.situation, outcome: partner.outcome },
   );
   if (!result) {
+    // Transport/parse failure, not a verdict - leave the pair
+    // unadjudicated so a later probe can retry it.
     log.debug('pair-relate: agent returned null');
     return;
   }
+
+  // Canonical pair ordering, same convention as the table columns.
+  const aId = seed.id < partner.id ? seed.id : partner.id;
+  const bId = seed.id < partner.id ? partner.id : seed.id;
+
   if (result.kind === 'orthogonal' || result.label.length === 0) {
     log.debug('pair-relate: agent declined', { kind: result.kind });
+    // Direct table write under the service role (user_id explicit -
+    // the admin client has no auth.uid()), same documented pattern as
+    // the mint inserts. ignoreDuplicates: a concurrent probe may have
+    // recorded the same decline; nothing to update on a re-decline.
+    const { error } = await admin.from('samskara_pair_declines').upsert(
+      { user_id: userId, a_id: aId, b_id: bId },
+      { onConflict: 'user_id,a_id,b_id', ignoreDuplicates: true },
+    );
+    if (error) log.debug('pair-relate: decline write error', { error: error.message });
     return;
   }
 
-  // Canonical pair ordering + on-conflict-update so re-encountering
-  // the same pair+label bumps reinforcement instead of failing.
-  const aId = seed.id < partner.id ? seed.id : partner.id;
-  const bId = seed.id < partner.id ? partner.id : seed.id;
-  const { error } = await admin.from('samskara_associations').upsert(
-    {
-      user_id: userId,
-      a_id: aId,
-      b_id: bId,
-      articulated_relation: result.label,
-      kind: result.kind,
-      reinforcement: 1,
-      last_reinforced_at: new Date().toISOString(),
-    },
-    { onConflict: 'user_id,a_id,b_id,articulated_relation', ignoreDuplicates: false },
-  );
+  const { data, error } = await admin.rpc('samskara_associate', {
+    p_user_id: userId,
+    p_a_id: aId,
+    p_b_id: bId,
+    p_label: result.label,
+    p_kind: result.kind,
+  });
   if (error) {
-    log.debug('pair-relate: upsert error', { error: error.message });
+    log.debug('pair-relate: associate error', { error: error.message });
     return;
   }
-  log.info(`pair-relate: associated ${aId} <> ${bId} (${result.kind}: ${shorten(result.label)})`);
+  const reinforcement = typeof data === 'number' ? data : 1;
+  log.info(
+    `pair-relate: associated ${aId} <> ${bId} (${result.kind}: ${shorten(result.label)}, reinforcement ${reinforcement})`,
+  );
 }
 
 /**
@@ -1524,8 +1590,10 @@ export const __test = {
   MINT_CLUSTER_COSINE_FLOOR,
   MINT_CLUSTER_MAX,
   MINT_CLUSTER_MIN,
+  PAIR_RELATE_COSINE_FLOOR,
   buildTopicalCluster,
   cosine,
   parseVector,
+  rankPairCandidates,
   stripJsonFence,
 };
