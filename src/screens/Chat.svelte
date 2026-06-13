@@ -197,7 +197,7 @@
     shouldRetainDisplaced,
   } from '$lib/ui/recall';
   import { formatMessageStamp } from '$lib/ui/message-timestamp';
-  import { isReasoningOnlyStall } from '$lib/ui/incomplete-turn';
+  import { isReasoningOnlyStall, isCutOffPartialText } from '$lib/ui/incomplete-turn';
   import { headingFor, parseLastError } from '$lib/ui/last-error';
   import { computeRegenerateRangeIds, persistedRowIds } from '$lib/ui/regenerate';
   import {
@@ -4368,21 +4368,31 @@
     if (userIdx === -1) return;
     const userMessage = messages[userIdx];
 
-    // A reasoning-only stall is a dead turn, not a continuation point:
-    // the empty assistant row at the tail carries nothing for the
-    // re-roll to build on, so mark it for replacement the way
-    // regenerateFrom marks its range. Without this the dead bubble
-    // lingers above the fresh answer once the retry lands (the
-    // pendingDeleteSet filter keeps it off the wire, the commit RPC
-    // deletes the row atomically with the new turn's commit, and the
-    // post-loop fade in runExchange prunes it from the view). The
-    // other incomplete-tail shapes (orphaned tool rows, a bare user
-    // message) ARE genuine continuation points - their persisted rows
-    // are exactly what the model needs to pick up - so they keep the
-    // no-delete behavior.
+    // A dead-turn tail carries nothing coherent for the re-roll to
+    // build on, so mark it for replacement the way regenerateFrom marks
+    // its range. Two shapes qualify:
+    //   - reasoning-only stall: the model thought but never answered
+    //     (isReasoningOnlyStall), so the bubble is a bare reasoning
+    //     panel with no reply.
+    //   - partial-text cutoff: the stream failed mid-answer and the
+    //     edge function persisted the half-sentence as a status='error'
+    //     row (isCutOffPartialText). Continuing from a sentence that
+    //     stops mid-thought reads disjointly, so we re-roll instead.
+    // Without this the dead card lingers above the fresh answer once the
+    // retry lands: the pendingDeleteSet red-outlines it (.regen-target)
+    // and keeps it off the wire, the commit RPC deletes the row
+    // atomically with the new turn's commit, and the post-loop fade in
+    // runExchange prunes it from the view. The other incomplete-tail
+    // shapes (orphaned tool rows, a bare user message) ARE genuine
+    // continuation points - their persisted rows are exactly what the
+    // model needs to pick up - so they keep the no-delete behavior. When
+    // the cutoff landed after one or more completed tool rounds, only
+    // the trailing partial-text row is the dead tail; the tool rows
+    // before it stay as fuel and the re-roll synthesizes a new final
+    // answer from them.
     const tail = messages[messages.length - 1];
     let supersededIds: string[] | undefined;
-    if (isReasoningOnlyStall(tail)) {
+    if (isReasoningOnlyStall(tail) || isCutOffPartialText(tail)) {
       pendingDeleteIds = [tail.id];
       supersededIds = persistedRowIds(messages, [tail.id]);
     }

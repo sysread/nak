@@ -7,7 +7,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import type { Message } from '../src/lib/supabase';
-import { isReasoningOnlyStall } from '../src/lib/ui/incomplete-turn';
+import { isReasoningOnlyStall, isCutOffPartialText } from '../src/lib/ui/incomplete-turn';
 
 function msg(over: Partial<Message>): Message {
   return {
@@ -56,5 +56,57 @@ describe('isReasoningOnlyStall', () => {
   it('is false for non-assistant roles', () => {
     expect(isReasoningOnlyStall(msg({ role: 'user', content: '', reasoning: 'x' }))).toBe(false);
     expect(isReasoningOnlyStall(msg({ role: 'tool', content: '', reasoning: 'x' }))).toBe(false);
+  });
+});
+
+describe('isCutOffPartialText', () => {
+  it('is true for an error-status assistant row with visible content and no tool calls', () => {
+    expect(
+      isCutOffPartialText(msg({ content: 'Here is the first half of the ans', status: 'error' }))
+    ).toBe(true);
+  });
+
+  it('is false when the row finished cleanly (status complete)', () => {
+    // A legitimately short reply commits as 'complete' and must stay a
+    // continuation point, never a replace target.
+    expect(isCutOffPartialText(msg({ content: 'Yes.', status: 'complete' }))).toBe(false);
+  });
+
+  it('is false for a user-initiated stop (status aborted)', () => {
+    // An aborted reply carries the interrupted marker and is a
+    // deliberate endpoint, not a cutoff to re-roll.
+    expect(
+      isCutOffPartialText(msg({ content: 'partial...', status: 'aborted' }))
+    ).toBe(false);
+  });
+
+  it('is false when status is missing (legacy rows / no terminal mark)', () => {
+    expect(isCutOffPartialText(msg({ content: 'partial...', status: null }))).toBe(false);
+    expect(isCutOffPartialText(msg({ content: 'partial...' }))).toBe(false);
+  });
+
+  it('treats whitespace-only content as empty (a reasoning-only stall, not partial text)', () => {
+    expect(
+      isCutOffPartialText(msg({ content: '  \n', status: 'error', reasoning: 'thinking...' }))
+    ).toBe(false);
+  });
+
+  it('is false when the row carries tool calls (a continuation point, not a dead tail)', () => {
+    expect(
+      isCutOffPartialText(
+        msg({
+          content: 'about to call a tool',
+          status: 'error',
+          tool_calls: [
+            { id: 'c1', type: 'function', function: { name: 'web_search', arguments: '{}' } },
+          ],
+        })
+      )
+    ).toBe(false);
+  });
+
+  it('is false for non-assistant roles', () => {
+    expect(isCutOffPartialText(msg({ role: 'user', content: 'x', status: 'error' }))).toBe(false);
+    expect(isCutOffPartialText(msg({ role: 'tool', content: 'x', status: 'error' }))).toBe(false);
   });
 });

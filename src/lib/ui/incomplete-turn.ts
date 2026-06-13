@@ -3,8 +3,18 @@
  * transcript. The matching $derived (`incompleteTurnTail` in
  * src/screens/Chat.svelte) decides whether to show the "response
  * appears to have been cut off" retry banner; `retryIncompleteTurn`
- * uses the same predicate to decide whether the retry must REPLACE the
+ * uses these predicates to decide whether the retry must REPLACE the
  * tail or CONTINUE from it.
+ *
+ * REPLACE vs CONTINUE: a tail is a continuation point when its
+ * persisted rows are exactly what the model needs to pick up - an
+ * orphaned tool round (the tool results are the fuel) or a bare user
+ * message. A tail is a DEAD turn when there's nothing coherent to
+ * build on - a reasoning-only stall (isReasoningOnlyStall) or a
+ * visible answer the stream cut off mid-sentence (isCutOffPartialText).
+ * Retry replaces a dead turn (red-outline + atomic delete on commit,
+ * the same machinery the Regenerate button uses) rather than appending
+ * a continuation beneath it.
  *
  * Interacts with: src/screens/Chat.svelte (the banner derived + the
  * retry handler), src/lib/supabase.ts (the Message shape).
@@ -32,4 +42,34 @@ export function isReasoningOnlyStall(message: Message): boolean {
   const hasContent = message.content.trim().length > 0;
   const hasReasoning = (message.reasoning ?? '').trim().length > 0;
   return !hasContent && hasReasoning;
+}
+
+/**
+ * True when `message` is a partial-text cutoff: an assistant row the
+ * streaming function marked `status='error'` mid-reply, carrying the
+ * visible text it accumulated up to the break but no tool calls. The
+ * edge function persists whatever it streamed before the failure (the
+ * terminal write in getStreamingResponse.ts), so the half-finished
+ * answer survives as a real DB row and renders as a normal card with
+ * the error banner beneath it - rather than vanishing the way the old
+ * browser-owned streaming buffer did.
+ *
+ * Like a reasoning-only stall this is a DEAD turn for retry purposes:
+ * continuing from a sentence that stops mid-thought reads disjointly,
+ * so Retry REPLACES the row (red-outline while the re-roll runs, atomic
+ * delete when the fresh answer commits) instead of appending a second
+ * card beneath it.
+ *
+ * The `status='error'` gate is load-bearing: a legitimately short reply
+ * that finished on its own commits as `'complete'` and must stay a
+ * continuation point, never a replace target. A user-initiated stop
+ * commits as `'aborted'` (carrying the interrupted marker) and is a
+ * deliberate endpoint we leave alone. Only the error terminal means the
+ * visible answer was genuinely cut off.
+ */
+export function isCutOffPartialText(message: Message): boolean {
+  if (message.role !== 'assistant') return false;
+  if (message.tool_calls && message.tool_calls.length > 0) return false;
+  if (message.status !== 'error') return false;
+  return message.content.trim().length > 0;
 }
