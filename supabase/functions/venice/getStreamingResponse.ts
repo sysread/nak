@@ -846,6 +846,37 @@ export async function getStreamingResponse(
     await flushRowUpdate();
     await publisher.flush();
 
+    // A failure or abort that struck before any visible text left
+    // assistantRowId null: ensureAssistantRow fires on the first
+    // response_text, but a turn that streamed only reasoning - then the
+    // stream errored, or the model "thought" without ever answering -
+    // never reached that branch. Without a row the accumulated reasoning
+    // (the one artifact that explains WHY the turn failed) is lost: the
+    // browser clears its live buffers on the error path and has no
+    // persisted card to fall back on, so the user watches the partial
+    // vanish with no way to inspect it. Create the row now so the
+    // partial (reasoning, plus any text) survives as a status='error' /
+    // 'aborted' card. Scoped to the failed/stopped terminals with
+    // something to preserve - the 'completed' and 'suspended_for_ask_user'
+    // terminals own their own row lifecycle, and a turn that streamed
+    // nothing at all has nothing to persist.
+    if (
+      assistantRowId === null &&
+      (terminalKind === 'error' || terminalKind === 'aborted') &&
+      (accum.content.length > 0 || accum.reasoning.length > 0)
+    ) {
+      // Best-effort: ensureAssistantRow throws on an insert failure, and
+      // this runs in the finally where a throw would escape the
+      // orchestrator and mask the original terminal. Swallow - failing
+      // to preserve the partial degrades to the prior behavior (the
+      // card is lost), it doesn't break the turn.
+      try {
+        await ensureAssistantRow();
+      } catch (err) {
+        log.error(`${runId} failed to persist cut-off partial row:`, err);
+      }
+    }
+
     // Terminal write: commit to 'complete' via the SECURITY DEFINER
     // RPC on the happy path; otherwise transition the row to the
     // matching terminal status directly via UPDATE.

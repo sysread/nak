@@ -1,17 +1,27 @@
-# Chat: retrying a cut-off response replaces it
+# Chat: a cut-off reply is preserved, then replaced on retry
 
 ## Covers
 
-The dead-turn retry path ([dev: chat](../../dev/chat.md)):
-`retryIncompleteTurn` in `src/screens/Chat.svelte` and the
-classification predicates in `src/lib/ui/incomplete-turn.ts`
-(`isReasoningOnlyStall`, `isCutOffPartialText`). Specifically, that a
-retry of a DEAD tail REPLACES it - red-outlining the card while the
-re-roll runs and atomically deleting it on commit (the Regenerate
-button's machinery: `pendingDeleteIds` -> `.regen-target`,
-`supersededIds` -> `commit_assistant_message`) - rather than appending
-a continuation beneath it. Contrast with a continuation tail (orphaned
-tool round, bare user message), which the retry keeps and builds on.
+Two coupled behaviors ([dev: chat](../../dev/chat.md), gotcha "A
+cut-off reply's partial is preserved as a card, not dropped"):
+
+1. **Live retention.** A stream that fails mid-reply leaves its partial
+   (reasoning + any text) on screen as a `status='error'` card with the
+   error banner beneath it, instead of vanishing with the live bubble.
+   Server side, `getStreamingResponse.ts` creates the row at terminal
+   write even when only reasoning streamed (`ensureAssistantRow`
+   normally fires on first `response_text`). Browser side, `venice.ts`
+   keeps the drain open past the `error` broadcast so the terminal END
+   carries the row id, and `consumeStreamEvents` (`chat-loop.ts`)
+   hydrates that row before throwing.
+2. **Retry replaces.** `retryIncompleteTurn` + the classification
+   predicates in `src/lib/ui/incomplete-turn.ts` (`isReasoningOnlyStall`,
+   `isCutOffPartialText`) treat a dead tail as a REPLACE target -
+   red-outlining the card while the re-roll runs and atomically deleting
+   it on commit (the Regenerate machinery: `pendingDeleteIds` ->
+   `.regen-target`, `supersededIds` -> `commit_assistant_message`) -
+   rather than appending a continuation. Contrast with a continuation
+   tail (orphaned tool round, bare user message), which retry keeps.
 
 ## Preconditions
 
@@ -59,6 +69,12 @@ tool round, bare user message), which the retry keeps and builds on.
 
    Reload, click the "The response appears to have been cut off"
    banner's Retry, and watch the bare reasoning card.
+6. Live retention (the actual failure path, no forging). Send a message
+   that makes the model think before answering, and the instant
+   reasoning starts streaming, kill the network (DevTools Network ->
+   Offline) so the upstream stream errors mid-reply. Restore the
+   network after the error banner appears. Watch whether the reasoning
+   that streamed remains on screen.
 
 ## Expected
 
@@ -76,6 +92,13 @@ tool round, bare user message), which the retry keeps and builds on.
 - (5) Same replace behavior for the reasoning-only stall: the bare
   reasoning card red-outlines during the re-roll, then fades out as the
   fresh answer replaces it. No second card stacked beneath.
+- (6) The reasoning that streamed STAYS on screen as a card after the
+  failure - it does not flash away when the live bubble unmounts. The
+  error banner shows beneath it with a Retry button. (Before this fix
+  the card vanished the moment the failure landed, because the
+  reasoning-only partial was never persisted and the live buffer
+  cleared on the error path.) A `messages` row with `status='error'`
+  and the reasoning populated exists for the thread tail.
 
 ## Cleanup
 

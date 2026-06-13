@@ -15,7 +15,7 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import { __test, type ChatLoopHandlers } from '../src/lib/chat-loop';
-import type { StreamEvent } from '../src/lib/venice';
+import { VeniceError, type StreamEvent } from '../src/lib/venice';
 import type { Message, SupabaseService } from '../src/lib/supabase';
 
 const { consumeStreamEvents } = __test;
@@ -128,6 +128,68 @@ describe('consumeStreamEvents', () => {
     );
     expect(result.conflictDetected).toBe(true);
     expect(result.interrupted).toBe(false);
+  });
+
+  it('hydrates the cut-off partial then throws on a terminal error event', async () => {
+    // The server persists whatever streamed (here reasoning-only) as a
+    // status='error' row and publishes END carrying its id AFTER the
+    // 'error' event. The consumer must hand that row to its card
+    // (onAssistantPersisted) before throwing, so the partial survives
+    // the browser's error path instead of vanishing.
+    const partial = {
+      ...row('ERR1', ''),
+      reasoning: 'half a thought',
+      status: 'error' as const,
+    };
+    const { supabase, getMessageMock } = makeSupabase(async () => partial);
+    const onAssistantPersisted = vi.fn();
+    await expect(
+      run(
+        [
+          { type: 'reasoning', delta: 'half a thought' },
+          { type: 'error', kind: 'internal', message: 'boom', retryable: false },
+          {
+            type: 'end',
+            persistedAssistantId: 'ERR1',
+            terminalKind: 'error',
+            roundsRun: 1,
+          },
+        ],
+        supabase,
+        { onAssistantPersisted },
+      ),
+    ).rejects.toThrow('boom');
+    // Hydration ran (END was not dropped) and the partial card landed
+    // before the throw.
+    expect(getMessageMock).toHaveBeenCalledWith('ERR1');
+    expect(onAssistantPersisted).toHaveBeenCalledTimes(1);
+    expect(onAssistantPersisted.mock.calls[0][0].id).toBe('ERR1');
+  });
+
+  it('preserves the rate_limit kind when stashing the terminal error', async () => {
+    // runExchange parks a retry closure only on a VeniceError whose
+    // kind is 'rate_limit'; deferring the throw must not flatten it.
+    const { supabase } = makeSupabase(async () => row('ERR2', 'partial'));
+    let caught: unknown;
+    try {
+      await run(
+        [
+          { type: 'text', delta: 'partial' },
+          { type: 'error', kind: 'rate_limit', message: 'overloaded', retryable: true },
+          {
+            type: 'end',
+            persistedAssistantId: 'ERR2',
+            terminalKind: 'error',
+            roundsRun: 1,
+          },
+        ],
+        supabase,
+      );
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(VeniceError);
+    expect((caught as VeniceError).kind).toBe('rate_limit');
   });
 
   it('clears accumulators on stream_retry so the next attempt starts clean', async () => {

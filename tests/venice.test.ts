@@ -1051,6 +1051,47 @@ describe('streamChat (streaming-root transport)', () => {
     ]);
   });
 
+  it('keeps the drain open after an error broadcast so the terminal END still flows', async () => {
+    // The function publishes 'error' mid-round, then runs its terminal
+    // write and publishes END carrying the persisted partial's id. The
+    // drain must NOT close on 'error' or the END (and the row id the
+    // consumer needs to hydrate the cut-off card) would be dropped.
+    const channel = makeChannel('thread:T1:stream');
+    const channels = new Map([[channel.name, channel]]);
+    const { client } = makeSupabase({
+      envelope: {
+        channelName: channel.name,
+        assistantRowId: null,
+        completedSoFar: '',
+      },
+      channels,
+    });
+    const venice = new VeniceClient({ supabase: client });
+    const gen = venice.streamChat({
+      model: 'm',
+      messages: [],
+      streamCtx: { threadId: 'T1', userMessageId: 'U1' },
+    });
+    const collected: StreamEvent[] = [];
+    const drained = (async () => {
+      for await (const ev of gen) collected.push(ev);
+    })();
+    await Promise.resolve();
+    await Promise.resolve();
+    channel.emit('reasoning_text', { content: 'half a thought' });
+    channel.emit('error', { kind: 'internal', message: 'boom', retryable: false });
+    channel.emit('END', {
+      persistedAssistantId: 'ERR1',
+      terminalKind: 'error',
+    });
+    await drained;
+    expect(collected).toEqual([
+      { type: 'reasoning', delta: 'half a thought' },
+      { type: 'error', kind: 'internal', message: 'boom', retryable: false },
+      { type: 'end', persistedAssistantId: 'ERR1', terminalKind: 'error', roundsRun: 0 },
+    ]);
+  });
+
   it('translates an assistant_round_committed broadcast into a round_committed StreamEvent', async () => {
     const channel = makeChannel('thread:T1:stream');
     const channels = new Map([[channel.name, channel]]);

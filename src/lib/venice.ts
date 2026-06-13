@@ -1405,7 +1405,16 @@ function setupStreamSubscription(
       message: typeof p.message === 'string' ? p.message : 'stream error',
       retryable: p.retryable === true,
     });
-    close();
+    // Do NOT close the drain here. The function breaks its round loop on
+    // this event, then runs its terminal write (persisting whatever
+    // reasoning/text accumulated as a status='error' row) and publishes
+    // END carrying that row's id. The chat-loop consumer needs that END
+    // to hydrate the cut-off partial into the transcript before it
+    // throws - closing on 'error' would drop the END and the partial
+    // card would vanish, leaving only the error banner. END is the sole
+    // terminal (the function's finally always publishes it); a genuine
+    // socket drop still tears the drain down via the status callback's
+    // disconnect path.
   });
   channel.on('broadcast', { event: 'assistant_round_committed' }, ({ payload }) => {
     const p = payload as { id?: string };
