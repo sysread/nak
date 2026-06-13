@@ -37,7 +37,7 @@ import {
 // Mirror of src/lib/models/index.ts's agentModel('researchDocs').id.
 // Keep in sync with the browser model registry; the model is the same
 // across paths because the prompt is identical.
-const RESEARCH_DOCS_MODEL = 'tencent-hy3-preview';
+const RESEARCH_DOCS_MODEL = 'deepseek-v4-flash';
 
 const SYSTEM_PROMPT_HEADER =
   'You are a documentation assistant for Nak, a personal AI assistant ' +
@@ -161,11 +161,6 @@ export const researchDocs: ToolDef = {
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userTurn },
       ],
-      // Single-shot synthesis into a small budget (2048/4096). Hy3
-      // defaults to high reasoning_effort, which would spend the whole
-      // cap on a CoT preamble before any prose lands - same failure
-      // mode web_search guards against - so disable thinking outright.
-      disableThinking: true,
       maxTokens: includeDev ? 4096 : 2048,
     });
 

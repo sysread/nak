@@ -128,25 +128,22 @@ describe('AGENT_MODELS (background agents)', () => {
     }
   });
   it('groups roles by model id as expected', () => {
-    // Deepseek slots: the four memory/wiki librarian-tier agents that
-    // still share the foreground deepseek id (wiki, wikiLibrarian,
-    // deepSleep, rem). See the per-slot rationale block in
-    // src/lib/models/index.ts.
+    // Deepseek slots: everything except web search. reflection, the
+    // recall trio, and research_docs were briefly on tencent-hy3-preview
+    // but moved back; only web_search stayed on Hy3. See the per-slot
+    // rationale block in src/lib/models/index.ts.
+    expect(AGENT_MODELS.reflection).toBe('deepseek-v4-flash');
     expect(AGENT_MODELS.wiki).toBe('deepseek-v4-flash');
     expect(AGENT_MODELS.wikiLibrarian).toBe('deepseek-v4-flash');
     expect(AGENT_MODELS.deepSleep).toBe('deepseek-v4-flash');
     expect(AGENT_MODELS.rem).toBe('deepseek-v4-flash');
-    // Hy3 slots: web search plus the bounded-synthesis / recall agents
-    // moved off deepseek (and research_docs off kimi) for cost. The
-    // recall trio stays fabrication-sensitive, so their call sites pin
-    // reasoning_effort:'low' rather than disabling thinking - see the
-    // per-slot rationale block in src/lib/models/index.ts.
+    expect(AGENT_MODELS.researchDocs).toBe('deepseek-v4-flash');
+    expect(AGENT_MODELS.recall).toBe('deepseek-v4-flash');
+    expect(AGENT_MODELS.conversationRecall).toBe('deepseek-v4-flash');
+    expect(AGENT_MODELS.wikiRecall).toBe('deepseek-v4-flash');
+    // The lone Hy3 slot: web search, kept distinct so the search agent
+    // can be retuned without dragging the deepseek-backed agents along.
     expect(AGENT_MODELS.webSearch).toBe('tencent-hy3-preview');
-    expect(AGENT_MODELS.reflection).toBe('tencent-hy3-preview');
-    expect(AGENT_MODELS.researchDocs).toBe('tencent-hy3-preview');
-    expect(AGENT_MODELS.recall).toBe('tencent-hy3-preview');
-    expect(AGENT_MODELS.conversationRecall).toBe('tencent-hy3-preview');
-    expect(AGENT_MODELS.wikiRecall).toBe('tencent-hy3-preview');
     // One mistral-small slot: intuition. (The bias and samskara
     // agents also run mistral-small, but they live server-side now -
     // see BIAS_MODEL and SAMSKARA_MODEL under

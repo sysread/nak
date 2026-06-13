@@ -42,7 +42,7 @@ import {
   type VeniceWireMessage,
 } from './_recall_helpers.ts';
 
-const RECALL_MODEL = 'tencent-hy3-preview';
+const RECALL_MODEL = 'deepseek-v4-flash';
 
 const MEMORY_SEARCH_WIRE_SCHEMA: AgentTool['wire'] = {
   type: 'function',
@@ -253,12 +253,6 @@ async function runRecall(ctx: ToolContext): Promise<RecallNote> {
         toolbox,
         baseCtx,
         apiKey,
-        // Hy3 defaults to high reasoning_effort. Recall runs mid-turn
-        // (it adds latency to the live chat) but is fabrication-
-        // sensitive under JSON pressure, so we keep a short grounding
-        // pass rather than disabling thinking outright - 'low' is the
-        // balance between latency and not confabulating notes.
-        reasoningEffort: 'low',
         signal: ctx.signal,
       },
       ctx.depth ?? 0,

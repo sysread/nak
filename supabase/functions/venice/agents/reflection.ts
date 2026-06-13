@@ -64,7 +64,7 @@ import {
 // AGENT_MODELS is a static role->model map, NOT one of the per-user
 // configurable tiers, so the browser path resolved this same constant -
 // hardcoding it here stays faithful after the cutover.
-const REFLECTION_MODEL = 'tencent-hy3-preview';
+const REFLECTION_MODEL = 'deepseek-v4-flash';
 
 // 600s matches the other fleets' claim TTLs (wiki, librarian). The
 // browser-era 120s looked generous but a substantial thread's
@@ -423,12 +423,6 @@ async function reflectClaimedThread(
         toolbox: buildReflectionToolbox(),
         baseCtx,
         apiKey,
-        // Hy3 defaults to high reasoning_effort. Cap it at 'low' here:
-        // reflection runs a multi-round memory-write loop and the final
-        // text is discarded, so a short grounding pass is enough - high-
-        // effort CoT on every round would multiply token cost for no
-        // gain in the tool-call decisions that ARE the output.
-        reasoningEffort: 'low',
         // No outer turn to cancel - reflection runs in a background
         // tail or a cron tick, after any user-visible work already
         // shipped. A never-aborting signal lets runHeadlessAgent run

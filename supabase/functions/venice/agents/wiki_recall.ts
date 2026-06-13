@@ -29,7 +29,7 @@ import {
   type VeniceWireMessage,
 } from './_recall_helpers.ts';
 
-const WIKI_RECALL_MODEL = 'tencent-hy3-preview';
+const WIKI_RECALL_MODEL = 'deepseek-v4-flash';
 
 const WIKI_SEARCH_WIRE_SCHEMA: AgentTool['wire'] = {
   type: 'function',
@@ -188,10 +188,6 @@ async function runWikiRecall(
         toolbox,
         baseCtx,
         apiKey,
-        // See recall.ts: Hy3 defaults high; 'low' keeps a short
-        // grounding pass for this fabrication-sensitive mid-turn agent
-        // without the high-effort CoT latency tax.
-        reasoningEffort: 'low',
         signal: ctx.signal,
       },
       ctx.depth ?? 0,
