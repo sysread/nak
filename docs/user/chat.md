@@ -477,12 +477,21 @@ transcript. Its refresh-arrow button resumes the turn the same way
 the in-session retry would: the existing tool results stay, and the
 model picks up from them to produce the reply.
 
-The same banner also appears after a turn where the model produced
-only its private reasoning and no actual answer (a quirk of some
-models that occasionally "think" without replying). In that case
-there's nothing to build on, so clicking retry discards the empty
-response and generates a fresh one in its place rather than stacking
-a second reply beneath it.
+A turn where the model produced only its private reasoning and no
+actual answer (a quirk of some models that occasionally "think"
+without replying) is handled the same way: there's nothing to build
+on, so clicking retry discards the empty response and generates a
+fresh one in its place rather than stacking a second reply beneath it.
+
+The same goes for a reply the stream cut off partway through - say a
+network error mid-answer. The text the model managed to send stays
+on screen as a normal card with the error banner beneath it, so you
+don't lose what arrived. Click retry and that partial card is
+outlined in red while a fresh, complete answer streams in, then it
+fades out and the new reply takes its place - the same red-outline
+preview the regenerate button uses. (If the cutoff happened after a
+tool round had already finished, those tool results are kept and the
+new answer builds on them; only the half-finished text is replaced.)
 
 ## Where to go next
 

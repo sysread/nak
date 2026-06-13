@@ -75,6 +75,9 @@ One file per use-case under [`use-cases/`](./use-cases/), named
 - [chat-ask-user](./use-cases/chat-ask-user.md) - the ask_user
   tool's suspend/resume lifecycle and the AskUserCard's
   pre-populated question/options.
+- [chat-cutoff-retry](./use-cases/chat-cutoff-retry.md) - retrying a
+  dead tail (partial-text cutoff or reasoning-only stall) red-outlines
+  and replaces it rather than appending a continuation.
 - [reflection-drain](./use-cases/reflection-drain.md) - the
   chat-tail drain, the hourly catch-up sweep, and the attempt cap.
 - [wiki-fleet](./use-cases/wiki-fleet.md) - autonomous wiki sweep,
