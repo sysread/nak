@@ -133,15 +133,26 @@ All in `supabase/functions/venice/agents/samskara.ts` plus
   selects the hub - the substrate row with the greatest
   `sum(reinforcement)` over its **unconsumed** edges, requiring
   at least 2 distinct partners (hub + 2 partners satisfies
-  `MINT_CLUSTER_MIN = 3` member rows) - and returns that hub's
-  unconsumed edges, best-reinforcement first, capped at
-  `MINT_CLUSTER_MAX - 1` (4) edges: `(association_id, label, kind,
-  reinforcement, hub_id, hub_situation, partner_id,
-  partner_situation)`. Two edges to the same partner (different
-  labels) are legal and yield one member row with two labels.
-  `security definer`, `service_role`-only grants, same shape as
-  `samskara_associate`. Returns zero rows when no hub qualifies -
-  the probe's quench condition.
+  `MINT_CLUSTER_MIN = 3` member rows) - and returns one
+  representative edge for each of the hub's top
+  (`MINT_CLUSTER_MAX - 1` = 4) partners: `(association_id, label,
+  kind, reinforcement, hub_id, hub_situation, partner_id,
+  partner_situation)`. `security definer`, `service_role`-only
+  grants, same shape as `samskara_associate`. Returns zero rows
+  when no hub qualifies - the probe's quench condition.
+
+  > **Revised during QA (local + hosted read-only).** The first
+  > cut returned *all* of a partner's edges ("two edges to the
+  > same partner yield two labels"). Real data killed that:
+  > pair-relate's unique key includes the label text, so it writes
+  > a NEW row each time it phrases the same pair's relation
+  > slightly differently - one observed hub had **28 edges to just
+  > 2 partners**. Returning them all floods `sample_labels` with
+  > near-duplicates AND skews hub/partner selection toward whichever
+  > pair got re-labeled most, not the most genuinely-connected
+  > observation. Fix: collapse to one representative
+  > (highest-reinforcement) edge per `(hub, partner)` BEFORE any
+  > ranking, so the whole pipeline ranks on distinct relationships.
 
 #### 2b. Agent: `mintTier1FromAssociationsProbe` (sweep only)
 

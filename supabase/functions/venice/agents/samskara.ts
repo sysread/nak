@@ -1123,10 +1123,11 @@ interface AssociationCluster {
 /**
  * Fold the RPC's edge rows into one cluster. The hub (identical across
  * every row) is the first member; each distinct partner adds one more.
- * Two edges to the same partner under different labels collapse to one
- * member row carrying both labels - that is why members dedup on
- * partner id while labels do not. Pure so the Deno suite can pin the
- * member-dedup and label-collection behaviour.
+ * The RPC already returns one representative edge per partner, so in
+ * practice every row has a distinct partner; the partner-id dedup here
+ * is defensive (any repeat keeps both labels but adds the partner once).
+ * Pure so the Deno suite can pin the member-dedup and label-collection
+ * behaviour.
  */
 function buildAssociationCluster(edges: AssociationEdgeRow[]): AssociationCluster {
   const hub = edges[0];

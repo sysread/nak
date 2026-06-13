@@ -5380,16 +5380,24 @@ grant execute on function public.samskara_associate(uuid, uuid, uuid, text, text
 -- association evidence - and returns that hub's unconsumed edges so the
 -- association-mint probe can cluster cross-session recurrence the
 -- recency window can't see. Hub = the endpoint with the greatest summed
--- reinforcement over its unconsumed edges, requiring at least two
--- distinct partners (hub + 2 partners = 3 member rows, the minter's
+-- reinforcement over its DEDUPED unconsumed edges, requiring at least
+-- two distinct partners (hub + 2 partners = 3 member rows, the minter's
 -- floor). Edges are undirected, so each one credits both endpoints.
 --
--- Returns at most the top (cluster-max minus one) partners by summed
--- reinforcement, all of their edges to the hub - so two edges to the
--- same partner under different labels both come back as one member with
--- two labels. Zero rows when no hub qualifies: that's the probe's
--- quench condition (no LLM call). Snapshots situation text for both
--- endpoints so the caller needs no follow-up reads.
+-- Edges are collapsed to one representative (highest-reinforcement) per
+-- (hub, partner) BEFORE any ranking. pair-relate's unique key includes
+-- the label text, so it writes a NEW row each time it phrases the same
+-- pair's relation slightly differently - a hot pair accumulates dozens
+-- of near-duplicate-labeled edges (observed: 28 edges for one pair).
+-- Without the collapse those duplicates flood the minter's sample_labels
+-- AND skew hub/partner selection toward whichever pair got re-labeled
+-- the most, rather than the most genuinely-connected observation. After
+-- the collapse, ranking reflects distinct corroborated relationships.
+--
+-- Returns the top (cluster-max minus one) partners by summed
+-- reinforcement, one edge each. Zero rows when no hub qualifies: that's
+-- the probe's quench condition (no LLM call). Snapshots situation text
+-- for both endpoints so the caller needs no follow-up reads.
 --
 -- security definer + service_role-only, same as samskara_associate -
 -- the probe runs under the admin client with no auth.uid().
@@ -5414,12 +5422,22 @@ set search_path = public as $$
   ),
   -- Undirected fan-out: one row per (endpoint, other endpoint) so an
   -- edge contributes to both of its substrate rows' hub scores.
-  endpoints as (
+  endpoints_all as (
     select a_id as hub, b_id as partner, id, articulated_relation, kind, reinforcement
       from unconsumed
     union all
     select b_id as hub, a_id as partner, id, articulated_relation, kind, reinforcement
       from unconsumed
+  ),
+  -- Collapse near-duplicate-labeled edges to one per (hub, partner) so
+  -- the whole pipeline below ranks on distinct relationships, not on how
+  -- many ways a single pair got phrased. Strongest edge wins, id breaks
+  -- ties.
+  endpoints as (
+    select distinct on (hub, partner)
+           hub, partner, id, articulated_relation, kind, reinforcement
+      from endpoints_all
+     order by hub, partner, reinforcement desc, id
   ),
   hub_rank as (
     select hub

@@ -598,8 +598,14 @@ logs and yields to the next phase.
   co-locate still reaches the minter. `samskara_association_cluster`
   picks the hub (the substrate row with the most summed
   reinforcement over its UNCONSUMED edges, >= 2 distinct partners)
-  and returns the hub's edges to its top
-  (`MINT_CLUSTER_MAX - 1`) partners. `buildAssociationCluster`
+  and returns ONE representative (highest-reinforcement) edge per
+  the hub's top (`MINT_CLUSTER_MAX - 1`) partners. The RPC collapses
+  to one edge per (hub, partner) BEFORE ranking, because
+  pair-relate's label-in-the-unique-key means a hot pair accrues
+  dozens of near-duplicate-labeled edges - without the collapse
+  those flood `sample_labels` and skew hub selection toward the
+  most-relabeled pair, not the best-connected observation (QA caught
+  one hub with 28 edges across 2 partners). `buildAssociationCluster`
   folds those into the minter payload - hub + distinct-partner
   situations as `sample_situations`, the edge labels in the
   otherwise-empty `sample_labels` slot, summed reinforcement as
