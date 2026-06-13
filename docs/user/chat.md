@@ -484,14 +484,17 @@ on, so clicking retry discards the empty response and generates a
 fresh one in its place rather than stacking a second reply beneath it.
 
 The same goes for a reply the stream cut off partway through - say a
-network error mid-answer. The text the model managed to send stays
-on screen as a normal card with the error banner beneath it, so you
-don't lose what arrived. Click retry and that partial card is
-outlined in red while a fresh, complete answer streams in, then it
-fades out and the new reply takes its place - the same red-outline
+network error mid-answer, or a failure while the model was still
+thinking. Whatever the model managed to send - its reasoning, and any
+answer text - stays on screen as a normal card with the error banner
+beneath it, so you can read what arrived and work out *why* it failed
+(a token limit, a malformed sequence, a network drop). Nothing is
+dropped the moment the failure happens. Click retry and that partial
+card is outlined in red while a fresh, complete answer streams in, then
+it fades out and the new reply takes its place - the same red-outline
 preview the regenerate button uses. (If the cutoff happened after a
 tool round had already finished, those tool results are kept and the
-new answer builds on them; only the half-finished text is replaced.)
+new answer builds on them; only the half-finished reply is replaced.)
 
 ## Where to go next
 

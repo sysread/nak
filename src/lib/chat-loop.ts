@@ -1527,6 +1527,15 @@ async function consumeStreamEvents(opts: {
   let endTerminalKind: ConsumedStreamResult['terminalKind'] = null;
   let endConflict: string | undefined;
   let endRoundsRun: number | null = null;
+  // A terminal stream error, captured but NOT thrown until after the
+  // post-loop persisted-row hydration. Throwing the instant the 'error'
+  // event arrives would skip the hydration below, so the cut-off
+  // partial (the model's reasoning, plus any text that streamed before
+  // the break) never lands in the transcript - the browser's error path
+  // then clears the live buffers and leaves only the error banner with
+  // nothing to inspect. Deferring the throw lets the persisted
+  // status='error' row hand off to its card first.
+  let streamError: VeniceError | null = null;
 
   // Track the in-flight calls keyed by id so a tool_call_response can
   // pair to the originating tool_call request for the UI's per-tool
@@ -1702,13 +1711,23 @@ async function consumeStreamEvents(opts: {
           break;
         }
         case 'error':
-          // The server reported a terminal stream failure. Throw with
-          // a kind matching the original VeniceError categorization so
-          // the outer try/catch surfaces a recognisable shape.
-          throw new VeniceError(
+          // The server reported a terminal stream failure. Stash it
+          // with a kind matching the original VeniceError categorization
+          // (so the outer try/catch surfaces a recognisable shape and
+          // a rate_limit keeps its retry closure) but DON'T throw yet:
+          // the server breaks its round loop on this event, then runs
+          // its terminal write - persisting whatever reasoning/text
+          // accumulated as a status='error' row - and publishes END
+          // carrying that row's id. We keep consuming so the END below
+          // sets endPersistedId and the post-loop hydration hands the
+          // partial off to its card before we throw. (venice.ts no
+          // longer closes the drain on 'error' for exactly this reason;
+          // END is the sole terminal.)
+          streamError = new VeniceError(
             ev.message || 'stream error',
             ev.kind === 'rate_limit' ? 'rate_limit' : 'http',
           );
+          break;
         case 'end':
           endPersistedId =
             ev.persistedAssistantId.length > 0
@@ -1755,17 +1774,17 @@ async function consumeStreamEvents(opts: {
     //     conflictDetected path so the "conversation changed on
     //     another device" UI fires.
     //   - no conflict - generic stream error that already published
-    //     an END (vs the mid-stream 'error' event which throws).
-    //     Surface as a thrown error so the caller's error banner shows.
+    //     an END. Stash a thrown error so the caller's error banner
+    //     shows, but only if the mid-stream 'error' event didn't
+    //     already give us a more specific kind/message (it usually
+    //     fires first and carries the provider's detail). The throw
+    //     itself is deferred to after hydration (see streamError).
     if (endConflict === 'round_limit') {
       stoppedByLimit = true;
     } else if (endConflict) {
       conflictDetected = true;
-    } else {
-      throw new VeniceError(
-        `stream ended in error state${endConflict ? `: ${endConflict}` : ''}`,
-        'http',
-      );
+    } else if (!streamError) {
+      streamError = new VeniceError('stream ended in error state', 'http');
     }
   }
   const awaitingUserAnswer =
@@ -1797,6 +1816,13 @@ async function consumeStreamEvents(opts: {
       );
     }
   }
+
+  // Terminal error: throw AFTER hydrating the persisted partial above,
+  // so the cut-off card (reasoning + whatever text streamed) is already
+  // in the transcript when runExchange's catch clears the live buffers
+  // and raises the error banner. The user keeps the partial to diagnose
+  // WHY the turn failed instead of watching it vanish.
+  if (streamError) throw streamError;
 
   // Suppress unused-name warnings on the round-only state we used to
   // mutate. streamingCitations / streamingUsage land on the persisted

@@ -517,6 +517,29 @@ A chat turn goes:
   risks a missed END. A caller abort (user Stop) is exempt - the server
   publishes its own END(aborted) and the abort signal suppresses the
   disconnect throw.
+- **A cut-off reply's partial is preserved as a card, not dropped.**
+  Two coupled pieces make this work, and they break as a pair if you
+  touch one without the other. (1) Server: `ensureAssistantRow` fires
+  on the first `response_text`, so a turn that streamed only reasoning
+  (then errored, or "thought" without answering) would leave
+  `assistantRowId` null and persist nothing. The terminal-write block
+  in `getStreamingResponse.ts` therefore creates the row at finally
+  time when the terminal is `error`/`aborted` AND any content or
+  reasoning accumulated, so the partial lands as a `status='error'` row
+  carrying the reasoning. (2) Browser: the live streaming bubble is
+  gated on `activeSlot.sending` alone, so it unmounts the instant the
+  turn ends - the persisted DB row is the ONLY thing that can show the
+  partial afterward. The drain in `venice.ts` no longer `close()`s on
+  the `error` broadcast event (END is the sole terminal), and
+  `consumeStreamEvents` (`chat-loop.ts`) stashes the terminal error
+  instead of throwing immediately, throwing only AFTER the post-loop
+  `onAssistantPersisted` hydration has handed the persisted partial to
+  its card. Without the deferral the throw races ahead of hydration and
+  `runExchange`'s catch clears the buffers into a void; without the
+  server-side row there's nothing to hydrate. The retry affordance
+  (`displayedError` for a partial-text tail, the cut-off banner for a
+  reasoning-only one) then replaces the card on click - see
+  `retryIncompleteTurn` and `src/lib/ui/incomplete-turn.ts`.
 - **Drafts must not enter realtime state.** The draft's in-memory
   id is a freshly-minted UUID; if a draft leaks into `addMessage`
   before being materialized, the realtime `INSERT` handler sees a
