@@ -6110,6 +6110,7 @@ export class SupabaseService {
       nearDead: r?.near_dead ?? 0,
       neverFired: r?.never_fired ?? 0,
       associations: r?.associations ?? 0,
+      associationsUnconsumed: r?.associations_unconsumed ?? 0,
       substrateTotal: r?.substrate_total ?? 0,
       pendingAssimilate: r?.pending_assimilate ?? 0,
       pendingEmbed: r?.pending_embed ?? 0,
@@ -6537,6 +6538,8 @@ export interface SamskaraHealthSnapshot {
   nearDead: number;
   neverFired: number;
   associations: number;
+  /** Association edges not yet fed to the association-mint pass. Drains across sweeps. */
+  associationsUnconsumed: number;
   substrateTotal: number;
   pendingAssimilate: number;
   pendingEmbed: number;

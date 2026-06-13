@@ -239,7 +239,15 @@ Two prediction shapes are equally welcome:
 Predictions about the assistant's behaviour are also valid:
 "this user expects the assistant to ask before suggesting code"
 reads as a samskara just as cleanly as "this user prefers terse
-replies." Lean into whichever framing the cluster actually supports.`;
+replies." Lean into whichever framing the cluster actually supports.
+
+You may also receive "sample_labels": short relations a prior
+analysis already articulated between pairs of the observations
+(e.g. "both show the user seeking the mechanism behind a
+behaviour"). When present, treat them as pre-digested hints about
+what ties the cluster together - stronger signal than the raw
+situations alone. When "sample_labels" is empty, work from the
+situations directly.`;
 
 /**
  * Tier-2 (compound) minter prompt. Reads a set of EXISTING tier-1
@@ -481,15 +489,26 @@ async function agentRelate(
 
 /**
  * Shared parse for both minter prompts - the output contract is
- * identical; only the prompt and payload differ. Null covers parse
- * failure AND an explicit confirm:false refusal; callers don't need
- * to distinguish (both mean "no mint this rotation").
+ * identical; only the prompt and payload differ. Three outcomes the
+ * caller CAN distinguish, because the association-mint path must:
+ *   - MintResult  : confirm:true with a usable prediction -> mint.
+ *   - 'declined'  : a clean confirm:false verdict -> a real judgment
+ *                   that this cluster supports no claim. The
+ *                   association path stamps the edges as consumed on
+ *                   this; re-asking the same immutable cluster would
+ *                   only burn calls.
+ *   - null        : NO verdict - transport failure, unparseable body,
+ *                   or a contradictory confirm:true-without-prediction.
+ *                   The association path must NOT stamp on this; the
+ *                   evidence is intact and a later sweep retries.
+ * The recency mint path treats 'declined' and null identically (it
+ * stamps nothing), so it just checks for a MintResult.
  */
 async function agentMint(
   apiKey: string,
   systemPrompt: string,
   payload: string,
-): Promise<MintResult | null> {
+): Promise<MintResult | 'declined' | null> {
   const raw = await callOnce(apiKey, systemPrompt, payload);
   if (raw === null) return null;
   const parsed = tryParseJson<{
@@ -499,7 +518,8 @@ async function agentMint(
     valence?: unknown;
     confidence?: unknown;
   }>(raw);
-  if (!parsed || parsed.confirm !== true) return null;
+  if (!parsed) return null;
+  if (parsed.confirm !== true) return 'declined';
   if (typeof parsed.prediction !== 'string' || parsed.prediction.length === 0) return null;
   return {
     prediction: parsed.prediction,
@@ -690,7 +710,7 @@ async function insertMint(
   tier: 1 | 2,
   minted: MintResult,
   predEmbedding: number[],
-  provenance: { kind: 'substrate' | 'samskara'; refId: string; weight: number }[],
+  provenance: { kind: 'substrate' | 'samskara' | 'association'; refId: string; weight: number }[],
 ): Promise<string | null> {
   const { data, error } = await admin
     .from('samskaras')
@@ -1015,7 +1035,9 @@ async function mintTier1Probe(
       reinforcement: clusterRows.length,
     }),
   );
-  if (!minted) {
+  // Recency path stamps nothing, so a decline and a failure are the
+  // same non-event here.
+  if (minted === null || minted === 'declined') {
     log.trace('mint-tier1: agent declined');
     return;
   }
@@ -1074,6 +1096,209 @@ async function mintTier1Probe(
   }
 }
 
+/** One row of the samskara_association_cluster RPC result. */
+interface AssociationEdgeRow {
+  association_id: string;
+  label: string;
+  kind: string;
+  reinforcement: number;
+  hub_id: string;
+  hub_situation: string;
+  partner_id: string;
+  partner_situation: string;
+}
+
+/** The assembled association cluster fed to the minter + provenance. */
+interface AssociationCluster {
+  /** Hub situation first, then each distinct partner's situation. */
+  situations: string[];
+  /** Every edge label (one per edge, partner-duplicates kept). */
+  labels: string[];
+  /** Summed reinforcement across the edges - the minter's strength hint. */
+  reinforcementSum: number;
+  /** Substrate ids of the member rows (hub + distinct partners) for provenance. */
+  memberIds: string[];
+}
+
+/**
+ * Fold the RPC's edge rows into one cluster. The hub (identical across
+ * every row) is the first member; each distinct partner adds one more.
+ * The RPC already returns one representative edge per partner, so in
+ * practice every row has a distinct partner; the partner-id dedup here
+ * is defensive (any repeat keeps both labels but adds the partner once).
+ * Pure so the Deno suite can pin the member-dedup and label-collection
+ * behaviour.
+ */
+function buildAssociationCluster(edges: AssociationEdgeRow[]): AssociationCluster {
+  const hub = edges[0];
+  const memberIds = [hub.hub_id];
+  const situations = [hub.hub_situation];
+  const seen = new Set<string>([hub.hub_id]);
+  for (const e of edges) {
+    if (seen.has(e.partner_id)) continue;
+    seen.add(e.partner_id);
+    memberIds.push(e.partner_id);
+    situations.push(e.partner_situation);
+  }
+  return {
+    situations,
+    labels: edges.map((e) => e.label),
+    reinforcementSum: edges.reduce((sum, e) => sum + e.reinforcement, 0),
+    memberIds,
+  };
+}
+
+/**
+ * Stamp a batch of association edges consumed. Best-effort: a failure
+ * here only means the edges get re-fed next sweep (the minter will
+ * dedup onto whatever this pass minted), so log and move on rather than
+ * unwinding a landed mint.
+ */
+async function stampConsumed(
+  admin: SupabaseClient,
+  userId: string,
+  edgeIds: string[],
+  log: EdgeLogger,
+): Promise<void> {
+  if (edgeIds.length === 0) return;
+  const { error } = await admin
+    .from('samskara_associations')
+    .update({ minted_at: new Date().toISOString() })
+    .eq('user_id', userId)
+    .in('id', edgeIds);
+  if (error) {
+    log.debug('mint-tier1-assoc: consumption stamp failed', { error: error.message });
+  }
+}
+
+/**
+ * Association-mint probe (SWEEP ONLY): mint a tier-1 samskara from the
+ * relation graph rather than the recency window. Where mintTier1Probe
+ * sees only the 8 most-recent substrate rows, this reads a hub of
+ * unconsumed associations - cross-session recurrence the recency window
+ * structurally cannot co-locate - and feeds the hub's cluster, WITH the
+ * edge labels in the long-empty sample_labels slot, to the same minter.
+ *
+ * Self-quenching by the same logic pair-relate uses: every minter
+ * verdict (mint, dedup-hit, OR decline) stamps the fed edges consumed,
+ * so a stable graph spends one minter call then goes quiet. Only a
+ * non-verdict (transport/parse failure, embed failure, or a failed
+ * insert) leaves the edges unstamped for a later retry - never stamp
+ * evidence we didn't actually adjudicate. New corroboration re-opens
+ * the hub as fresh unstamped edges.
+ */
+async function mintTier1FromAssociationsProbe(
+  admin: SupabaseClient,
+  userId: string,
+  log: EdgeLogger,
+  apiKey: string,
+): Promise<void> {
+  const { data, error } = await admin.rpc('samskara_association_cluster', {
+    p_user_id: userId,
+  });
+  if (error) throw new Error(`mint-tier1-assoc: cluster RPC failed: ${error.message}`);
+  const edges = (Array.isArray(data) ? data : []) as AssociationEdgeRow[];
+  if (edges.length === 0) {
+    log.trace('mint-tier1-assoc: no hub with unconsumed evidence');
+    return;
+  }
+
+  const cluster = buildAssociationCluster(edges);
+  const edgeIds = edges.map((e) => e.association_id);
+
+  const minted = await agentMint(
+    apiKey,
+    MINTER_PROMPT,
+    JSON.stringify({
+      sample_labels: cluster.labels,
+      sample_situations: cluster.situations,
+      reinforcement: cluster.reinforcementSum,
+    }),
+  );
+
+  // No verdict: leave the edges unconsumed so a later sweep retries.
+  if (minted === null) {
+    log.debug('mint-tier1-assoc: no verdict, leaving edges unconsumed', {
+      edges: edgeIds.length,
+    });
+    return;
+  }
+
+  // Clean refusal: the cluster supports no claim. The evidence is
+  // immutable, so consume it - re-asking learns nothing.
+  if (minted === 'declined') {
+    await stampConsumed(admin, userId, edgeIds, log);
+    log.trace('mint-tier1-assoc: minter declined the cluster', { edges: edgeIds.length });
+    return;
+  }
+
+  const predEmbedding = await embedPrediction(apiKey, minted.prediction);
+  if (!predEmbedding) {
+    // Reached a mint decision but couldn't embed it (transient). Leave
+    // unconsumed; the retry re-mints and embeds.
+    log.debug('mint-tier1-assoc: prediction embed failed, leaving edges unconsumed');
+    return;
+  }
+
+  // Dedup guard, identical to the recency path: a near-duplicate of an
+  // existing samskara gets a health bump instead of a twin. Either way
+  // the cluster's evidence is spent, so stamp.
+  try {
+    const { data: nearest } = await admin.rpc('samskara_nearest_by_prediction', {
+      p_query_embedding: predEmbedding,
+      p_k_max: 1,
+      p_user_id: userId,
+    });
+    const top = Array.isArray(nearest) ? nearest[0] : null;
+    if (top && typeof top.cosine === 'number' && top.cosine >= MINT_DEDUP_COSINE) {
+      await admin.rpc('samskara_reinforce_existing', {
+        p_samskara_id: top.id,
+        p_health_bump: MINT_DEDUP_HEALTH_BUMP,
+        p_user_id: userId,
+      });
+      await stampConsumed(admin, userId, edgeIds, log);
+      log.debug('mint-tier1-assoc: dedup-reinforced existing', {
+        id: top.id,
+        cosine: top.cosine,
+        candidate: shorten(minted.prediction),
+      });
+      return;
+    }
+  } catch (err) {
+    if (err instanceof VeniceError) throw err;
+    log.debug('mint-tier1-assoc: dedup check failed, proceeding with mint', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  // Provenance: the member substrate rows (weight 1.0) plus the
+  // consumed edges as 'association' kind, weight = reinforcement
+  // snapshot at consumption time.
+  const provenance = [
+    ...cluster.memberIds.map((refId) => ({
+      kind: 'substrate' as const,
+      refId,
+      weight: 1.0,
+    })),
+    ...edges.map((e) => ({
+      kind: 'association' as const,
+      refId: e.association_id,
+      weight: e.reinforcement,
+    })),
+  ];
+  const id = await insertMint(admin, userId, log, 1, minted, predEmbedding, provenance);
+  // Stamp only when the samskara row actually landed: a failed insert
+  // leaves the edges unconsumed so the next sweep retries cleanly.
+  if (id) {
+    await stampConsumed(admin, userId, edgeIds, log);
+    log.info('mint-tier1-assoc: minted samskara', {
+      id,
+      prediction: shorten(minted.prediction),
+      edges: edgeIds.length,
+    });
+  }
+}
+
 /**
  * Mint-tier2 probe: ask the detection RPC for a co-fire constellation,
  * generalize it with the tier-2 minter, embed, dedup against existing
@@ -1108,7 +1333,7 @@ async function mintTier2Probe(
       children: candidate.map((c) => ({ prediction: c.prediction, valence: c.valence })),
     }),
   );
-  if (!minted) {
+  if (minted === null || minted === 'declined') {
     log.trace('mint-tier2: agent declined');
     return;
   }
@@ -1445,8 +1670,8 @@ export interface SamskaraSweepSummary {
 /**
  * Hourly sweep driver for the samskara-sweep route. Drains the
  * cross-user assimilate queue, then runs the per-user maintenance
- * rotation (pair-relate, mint-tier1, mint-tier2, dedup,
- * compound-regen) for every user with recent samskara activity.
+ * rotation (pair-relate, mint-tier1, mint-tier1-assoc, mint-tier2,
+ * dedup, compound-regen) for every user with recent samskara activity.
  * Reaction-classify is deliberately absent: classification needs the
  * next user message, which implies a turn, which implies the tail
  * already ran at the right moment - an hourly tick misses the 10
@@ -1549,6 +1774,12 @@ export async function runSamskaraSweepTick(
         pairRelateProbe(adminClient, userId, log, apiKey),
       );
       await runPhase(log, 'mint-tier1', () => mintTier1Probe(adminClient, userId, log, apiKey));
+      // Sweep-only: cross-session consolidation from the association
+      // graph. Absent from the turn tail on purpose - it isn't
+      // latency-sensitive and keeps per-turn Venice spend flat.
+      await runPhase(log, 'mint-tier1-assoc', () =>
+        mintTier1FromAssociationsProbe(adminClient, userId, log, apiKey),
+      );
       await runPhase(log, 'mint-tier2', () => mintTier2Probe(adminClient, userId, log, apiKey));
       await runPhase(log, 'dedup', () => dedupProbe(adminClient, userId, log));
       await runPhase(log, 'compound-regen', () =>
@@ -1592,6 +1823,7 @@ export const __test = {
   MINT_CLUSTER_MIN,
   PAIR_RELATE_COSINE_FLOOR,
   buildTopicalCluster,
+  buildAssociationCluster,
   cosine,
   parseVector,
   rankPairCandidates,

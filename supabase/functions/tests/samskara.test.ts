@@ -23,6 +23,7 @@ const {
   MINT_CLUSTER_MAX,
   MINT_CLUSTER_MIN,
   buildTopicalCluster,
+  buildAssociationCluster,
   PAIR_RELATE_COSINE_FLOOR,
   rankPairCandidates,
   cosine,
@@ -136,6 +137,42 @@ Deno.test('buildTopicalCluster caps the cluster at MINT_CLUSTER_MAX', () => {
     embedding: emb,
   }));
   assertEquals(buildTopicalCluster(rows).length, MINT_CLUSTER_MAX);
+});
+
+Deno.test('buildAssociationCluster: hub first, distinct partners, all labels, summed reinforcement', () => {
+  const edge = (
+    association_id: string,
+    partner_id: string,
+    label: string,
+    reinforcement: number,
+  ) => ({
+    association_id,
+    label,
+    kind: 'pattern',
+    reinforcement,
+    hub_id: 'hub',
+    hub_situation: 'hub-sit',
+    partner_id,
+    partner_situation: `sit-${partner_id}`,
+  });
+  // Two edges to partner A (different labels) + one to partner B.
+  const edges = [
+    edge('e1', 'A', 'both seek mechanisms', 3),
+    edge('e2', 'A', 'both are terse', 2),
+    edge('e3', 'B', 'both reference cost', 1),
+  ];
+  const cluster = buildAssociationCluster(edges);
+  // Members dedup on partner: hub + A + B = 3 member rows / situations.
+  assertEquals(cluster.memberIds, ['hub', 'A', 'B']);
+  assertEquals(cluster.situations, ['hub-sit', 'sit-A', 'sit-B']);
+  // Labels are per-edge, partner-duplicates kept (A contributes two).
+  assertEquals(cluster.labels, [
+    'both seek mechanisms',
+    'both are terse',
+    'both reference cost',
+  ]);
+  // Reinforcement sums across every edge, not deduped.
+  assertEquals(cluster.reinforcementSum, 6);
 });
 
 Deno.test('rankPairCandidates orders by cosine and applies the floor', () => {

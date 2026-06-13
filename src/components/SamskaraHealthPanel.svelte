@@ -171,7 +171,9 @@
       </div>
       <div class="health-row">
         <span class="health-label">Substrate / associations</span>
-        <span class="health-value">{snap.substrateTotal} / {snap.associations}</span>
+        <span class="health-value">
+          {snap.substrateTotal} / {snap.associations} ({snap.associationsUnconsumed} awaiting mint)
+        </span>
       </div>
     </div>
   {/if}

@@ -14,9 +14,10 @@ import {
   formatValence,
   emptyMessage,
   HEALTH_THRESHOLDS,
+  groupProvenance,
   type CollapsedRow,
 } from '../src/lib/ui/samskara-browse';
-import type { SamskaraCorpusRow } from '../src/lib/supabase';
+import type { SamskaraCorpusRow, SamskaraProvenanceRow } from '../src/lib/supabase';
 
 function row(id: string): SamskaraCorpusRow {
   return {
@@ -106,6 +107,41 @@ describe('worstSeverity', () => {
     expect(worstSeverity(['ok', 'warn'])).toBe('warn');
     expect(worstSeverity(['ok', 'ok'])).toBe('ok');
     expect(worstSeverity([])).toBe('ok');
+  });
+});
+
+describe('groupProvenance', () => {
+  const row = (
+    kind: SamskaraProvenanceRow['kind'],
+    refId: string,
+    weight = 1,
+  ): SamskaraProvenanceRow => ({ kind, refId, weight, label: refId, refTier: null });
+
+  it('groups mixed provenance into display order, one section per kind', () => {
+    // Intentionally interleaved + association weight above substrate, to
+    // prove ordering comes from the kind order, not row order or weight.
+    const groups = groupProvenance([
+      row('association', 'a1', 5),
+      row('substrate', 's1'),
+      row('association', 'a2', 3),
+      row('substrate', 's2'),
+    ]);
+    expect(groups.map((g) => g.kind)).toEqual(['substrate', 'association']);
+    expect(groups[0].heading).toBe('Formed from (substrate)');
+    expect(groups[1].heading).toBe('Related observations');
+    expect(groups[0].rows.map((r) => r.refId)).toEqual(['s1', 's2']);
+    expect(groups[1].rows.map((r) => r.refId)).toEqual(['a1', 'a2']);
+  });
+
+  it('drops empty kinds: a single-kind samskara yields exactly one group', () => {
+    const groups = groupProvenance([row('samskara', 'c1'), row('samskara', 'c2')]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].kind).toBe('samskara');
+    expect(groups[0].heading).toBe('Compounded from (tier-1 children)');
+  });
+
+  it('returns no groups for empty provenance', () => {
+    expect(groupProvenance([])).toEqual([]);
   });
 });
 

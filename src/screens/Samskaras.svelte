@@ -32,6 +32,7 @@
     tierBadge,
     formatValence,
     relativeTime,
+    groupProvenance,
   } from '$lib/ui/samskara-browse';
   import type { SamskaraProvenanceRow } from '$lib/supabase';
   import SamskaraHealthPanel from '../components/SamskaraHealthPanel.svelte';
@@ -130,11 +131,10 @@
     };
   });
 
-  function provenanceHeading(kind: SamskaraProvenanceRow['kind']): string {
-    if (kind === 'samskara') return 'Compounded from (tier-1 children)';
-    if (kind === 'substrate') return 'Formed from (substrate)';
-    return 'Related observations';
-  }
+  // Group provenance by kind so a mixed-provenance samskara (substrate +
+  // association, the association-mint case) renders one headed section
+  // per kind instead of mislabeling the whole list off the first row.
+  const provenanceGroups = $derived(groupProvenance(provenance));
 </script>
 
 <div class="samskara-panel">
@@ -223,24 +223,26 @@
           <div><dt>created</dt><dd>{relativeTime(selected.createdAt)}</dd></div>
         </dl>
 
-        <h3 class="samskara-prov-head">
-          {provenance.length > 0 ? provenanceHeading(provenance[0].kind) : 'Provenance'}
-        </h3>
         {#if provLoading}
+          <h3 class="samskara-prov-head">Provenance</h3>
           <p class="subtle">Loading provenance…</p>
         {:else if provenance.length === 0}
+          <h3 class="samskara-prov-head">Provenance</h3>
           <p class="subtle">No provenance recorded.</p>
         {:else}
-          <ul class="samskara-prov-list">
-            {#each provenance as p (p.kind + p.refId)}
-              <li>
-                {#if p.kind === 'samskara' && p.refTier}
-                  <span class="samskara-prov-badge">T{p.refTier}</span>
-                {/if}
-                <span class="samskara-prov-label">{p.label ?? '(removed)'}</span>
-              </li>
-            {/each}
-          </ul>
+          {#each provenanceGroups as group (group.kind)}
+            <h3 class="samskara-prov-head">{group.heading}</h3>
+            <ul class="samskara-prov-list">
+              {#each group.rows as p (p.kind + p.refId)}
+                <li>
+                  {#if p.kind === 'samskara' && p.refTier}
+                    <span class="samskara-prov-badge">T{p.refTier}</span>
+                  {/if}
+                  <span class="samskara-prov-label">{p.label ?? '(removed)'}</span>
+                </li>
+              {/each}
+            </ul>
+          {/each}
         {/if}
       </article>
     {/if}
