@@ -234,11 +234,11 @@ export const MEMORY_UNRELATE_WIRE_SCHEMA: AgentTool['wire'] = {
  *
  * No char-budget trim: matches the browser agents, which sent the
  * whole slice. The tightest window among this helper's consumers is
- * 256k (mistral-small for summary / thread_topics, tencent-hy3-preview
- * for reflection; wiki's deepseek-v4-flash is wider at 1M). The
- * day-gated queues plus that 256k floor make an over-budget thread a
- * rare corner; if it ever bites, trimming is a separate follow-up, not
- * a silent divergence here.
+ * 256k (mistral-small for summary / thread_topics; reflection and wiki
+ * run deepseek-v4-flash, wider at 1M). The day-gated queues plus that
+ * 256k floor make an over-budget thread a rare corner; if it ever
+ * bites, trimming is a separate follow-up, not a silent divergence
+ * here.
  */
 export async function loadThreadSliceUpTo(
   adminClient: SupabaseClient,
