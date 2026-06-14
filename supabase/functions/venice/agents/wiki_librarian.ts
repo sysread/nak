@@ -246,7 +246,7 @@ function buildLibrarianToolbox(): Toolbox {
 }
 
 // ---------------------------------------------------------------------------
-// Prompt. Verbatim port of src/lib/agents/wiki-librarian/prompt.ts -
+// Prompt. Ported from src/lib/agents/wiki-librarian/prompt.ts -
 // the standard five-step sweep body, the custom-instructions variant,
 // and the librarian's own profile block (which carries CORRECTIVE
 // wording on top of the per-conversation agent's anti-fabrication
@@ -396,6 +396,14 @@ const WIKI_LIBRARIAN_DISCIPLINE_BLOCK = `**Discipline**:
 - Do not fabricate. Only assert facts that appear in the
   existing articles, in conversations you searched, or in the
   excerpts above. Do not import outside knowledge.
+- Attribute to the right speaker when you corroborate against
+  conversations. In a thread the user's turns are the user's own
+  claims; the assistant's turns are AI output. A claim is
+  confirmed only when the USER stated or accepted it - an
+  assistant having explained or suggested something in a past
+  conversation is not evidence the user believes, learned, or
+  adopted it, and is not grounds to "correct" an article toward
+  it.
 - Same voice and tone the wiki uses already: encyclopedic,
   third-person, present tense, neutral. Refer to subjects
   directly (a first name, the project name) rather than "the
@@ -805,6 +813,13 @@ export function buildWikiLibrarianPrompt(opts: {
         'consolidating duplicates, removing out-of-scope articles, fact-',
         'checking against conversation history, and tightening the',
         'boundaries between articles that overlap.',
+        '',
+        "The wiki is the user's own biographical record AND the context a",
+        'future assistant loads (through wiki_search) to understand them,',
+        'so keep it accurate to the user. When you reorganise or fact-',
+        "check, preserve what the user actually said and did, and don't",
+        "let an assistant's past suggestion or explanation harden into a",
+        'claim about the user.',
       ];
   if (profileBlock.length > 0) {
     intro.push('', profileBlock);

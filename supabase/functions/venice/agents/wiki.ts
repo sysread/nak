@@ -320,13 +320,23 @@ const WIKI_DELETE_WIRE_SCHEMA: AgentTool['wire'] = {
 };
 
 // ---------------------------------------------------------------------------
-// Prompt. Verbatim port of buildWikiAutonomousPrompt +
-// renderUserProfileBlock + WIKI_AUTONOMOUS_BODY_LINES from the
-// deleted src/lib/agents/wiki/prompt.ts. The framing layers (prime
-// directive, anti-name-fabrication, longitudinal accretion,
-// update-over-create bias, sterility test) each encode a production
-// failure mode - the prompt.ts preamble documented their history; do
-// not soften any of them without re-reading that history in git.
+// Prompt. The framing layers each encode a production failure mode and
+// must not be softened casually:
+//   - dual-purpose + speaker attribution (the opening): the wiki is
+//     both the user's biographical record and the context a future
+//     assistant reads, and ONLY the user's own turns are a source of
+//     user-facts - assistant turns are AI output. Guards the
+//     regression where the agent attributed the assistant's statements
+//     (explanations, suggestions, the options it laid out) to the user.
+//   - anti-name-fabrication (renderUserProfileBlock): the model once
+//     named the user after a friend mentioned in conversation.
+//   - prime directive, longitudinal accretion, update-over-create
+//     bias, sterility test (WIKI_AUTONOMOUS_BODY_LINES): keep the wiki
+//     user-centric and additive rather than a per-conversation dump.
+// renderUserProfileBlock + the body began as a port of the deleted
+// src/lib/agents/wiki/prompt.ts, whose preamble documented the history
+// of the ported layers; re-read that history in git before touching
+// them.
 // ---------------------------------------------------------------------------
 
 /**
@@ -416,6 +426,26 @@ export function buildWikiAutonomousPrompt(
     'reply. Your job is to maintain the long-term wiki the user keeps',
     'about themselves and the topics they care about, using the wiki tools',
     'below.',
+    '',
+    'The wiki has two readers, and both want the same thing. It is the',
+    "user's own external memory - a biographical record they keep and",
+    'return to - and it is the context a future assistant loads (through',
+    'wiki_search) to understand who the user is before answering them.',
+    'Neither reader wants a transcript of this one chat; both want an',
+    "accurate, durable account of the user's life, work, and views.",
+    '',
+    'The conversation above has two speakers, and they are NOT',
+    "interchangeable as sources. The user's turns are the user: their",
+    'words, their situation, the claims and decisions they own. Your own',
+    'turns - the assistant - are AI output: answers, explanations,',
+    'suggestions, the options you laid out. You are documenting the USER,',
+    'so a fact earns a place in the wiki only when the USER said it, did',
+    'it, or explicitly took it up - never on the strength of something',
+    'you, the assistant, asserted. Explaining a topic is not the user',
+    'having learned it; proposing an approach is not the user having',
+    'adopted it; listing options is not the user having chosen one. When',
+    "the only source for a statement is your own reply, it is not a fact",
+    'about the user and does not belong in the wiki.',
   ];
   if (profileBlock.length > 0) {
     lines.push('', profileBlock);
