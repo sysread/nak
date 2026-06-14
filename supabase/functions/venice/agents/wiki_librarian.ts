@@ -501,8 +501,8 @@ ${WIKI_LIBRARIAN_TOOLS_BLOCK}
    wiki_update the article that is the better home (longer,
    broader, or more accurate) to absorb the unique facts from
    the duplicate, then wiki_delete the duplicate.
-3. **Fix references to the user.** Two failure patterns to clean
-   up here, both visible from the article body:
+3. **Fix references to the user.** Three failure patterns to clean
+   up here:
 
    (a) **Fabricated names.** If the "About the user" block has a
        name (e.g. "Jeff"), scan for articles that appear to be
@@ -530,6 +530,24 @@ ${WIKI_LIBRARIAN_TOOLS_BLOCK}
        person, not a generic third-party report. Skip cases
        where "the user" is genuinely the better wording (rare,
        but possible) - default to substituting the name.
+
+   (c) **Assistant-sourced claims attributed to the user.** A
+       previous per-conversation pass may have folded something
+       the ASSISTANT said in a thread - an explanation it gave,
+       an approach it proposed, options it laid out - into the
+       article as though the user stated, learned, or adopted
+       it. Watch for article facts that read more like advice or
+       exposition than like something the user would say about
+       themselves ("the user should...", a how-to paragraph, a
+       definition of a concept the user was merely asking
+       about). When one looks suspect, conversation_search for
+       the thread it came from and check who actually originated
+       it: if the user only received the information and never
+       confirmed, acted on, or claimed it, wiki_update to fix
+       the framing - re-attribute it accurately or drop it.
+       Leave it alone when conversation_search cannot corroborate
+       the misattribution; a confident wrong "correction" is
+       worse than a borderline line left standing.
 4. **Check for stale facts using date markers.** Articles are
    written with date markers attached to facts ("as of March
    2026", "in late 2025", "Jeff started this in early 2026").

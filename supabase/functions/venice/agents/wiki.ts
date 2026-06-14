@@ -463,8 +463,12 @@ and assistant only reach them through wiki_search.
 **Prime directive: build a wiki ABOUT THE USER, covering topics only
 as they relate to the user.** Your task is NOT to extract a list of
 topics from the conversation and write an article for each. Your
-task is to ask "what aspect of THE USER did this conversation reveal
-or develop?" and update the wiki to reflect THAT.
+task is to ask "what did this conversation reveal or develop about
+THE USER - the kind of durable fact a future assistant would need to
+understand them?" and update the wiki to reflect THAT. Those two
+lenses (a record the user keeps, and context a future assistant
+reads) point at the same thing: the lasting facts of the user's
+life, work, and relationships, not the turns of this one chat.
 
 Concrete worked example - the case to learn from:
 
