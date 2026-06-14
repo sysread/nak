@@ -542,9 +542,14 @@ ${WIKI_LIBRARIAN_TOOLS_BLOCK}
        definition of a concept the user was merely asking
        about). When one looks suspect, conversation_search for
        the thread it came from and check who actually originated
-       it: if the user only received the information and never
-       confirmed, acted on, or claimed it, wiki_update to fix
-       the framing - re-attribute it accurately or drop it.
+       it, then correct by what you find. If the user only
+       received the information and never confirmed, acted on, or
+       claimed it, wiki_update to re-attribute it accurately or
+       drop it. If the user DID take it up - adopted the approach,
+       acted on it, asked to save it - keep it, but frame the
+       provenance ("Jeff saved a recommended reading list", not
+       "Jeff concluded ...") so the article does not read the
+       assistant's contribution as the user's own origination.
        Leave it alone when conversation_search cannot corroborate
        the misattribution; a confident wrong "correction" is
        worse than a borderline line left standing.
