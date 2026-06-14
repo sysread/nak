@@ -80,6 +80,19 @@ export function appendProgressStep(
   }
 }
 
+// Label for the "Run librarian" button across its three states: this
+// client's own run in flight, someone else's run in flight (another tab,
+// another device, or a scheduled background run - detected via the
+// in-flight lease), or idle. Both in-flight states disable the button.
+export function librarianRunButtonLabel(
+  ownRunBusy: boolean,
+  runInFlightElsewhere: boolean,
+): string {
+  if (ownRunBusy) return 'Working…';
+  if (runInFlightElsewhere) return 'A run is in progress…';
+  return 'Run librarian';
+}
+
 // Terminal finalize, driven by the POST outcome rather than the `done` event.
 // 'ok' settles a still-spinning trailing row to ok (a no-op when `done`
 // already settled it); 'error' settles it to error so a timed-out or failed

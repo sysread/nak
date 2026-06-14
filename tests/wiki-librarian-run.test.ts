@@ -14,6 +14,7 @@ import type { AgentRunProgressEvent } from '../src/lib/supabase';
 import {
   appendProgressStep,
   finalizeLibrarianSteps,
+  librarianRunButtonLabel,
   LIBRARIAN_PARTIAL_SAVE_NOTE,
   type LibrarianStep,
 } from '../src/lib/ui/wiki-librarian-run';
@@ -122,5 +123,20 @@ describe('finalizeLibrarianSteps', () => {
 describe('LIBRARIAN_PARTIAL_SAVE_NOTE', () => {
   it('tells the user partial edits were kept', () => {
     expect(LIBRARIAN_PARTIAL_SAVE_NOTE).toMatch(/kept/i);
+  });
+});
+
+describe('librarianRunButtonLabel', () => {
+  it('reports this client own run first', () => {
+    expect(librarianRunButtonLabel(true, false)).toBe('Working…');
+    // own-run wins even if the lease also reads as in-flight (it will -
+    // our own run holds it).
+    expect(librarianRunButtonLabel(true, true)).toBe('Working…');
+  });
+  it('reports another in-flight run (lease held, not ours)', () => {
+    expect(librarianRunButtonLabel(false, true)).toBe('A run is in progress…');
+  });
+  it('is idle otherwise', () => {
+    expect(librarianRunButtonLabel(false, false)).toBe('Run librarian');
   });
 });

@@ -9603,6 +9603,25 @@ begin
   ) then
     alter publication supabase_realtime add table public.samskaras;
   end if;
+  -- profiles feeds the manual-agent-run strips' "a run is in flight"
+  -- spinner + button-disable. The wiki/memory librarian in-flight
+  -- leases live on this row (*_inflight_expires_at); a manual or
+  -- scheduled run claims the lease (UPDATE) and releases it (UPDATE),
+  -- so a user-scoped postgres_changes subscription on UPDATE lets every
+  -- open client (the originating tab, a refresh, another device) detect
+  -- a run - including background scheduled runs - and render at least a
+  -- spinner. UPDATE-only delivery: the filter is on user_id, which the
+  -- new tuple always carries, so no replica-identity index is needed
+  -- (that requirement is specific to DELETE delivery, see below; lease
+  -- rows are never deleted, only nulled).
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'profiles'
+  ) then
+    alter publication supabase_realtime add table public.profiles;
+  end if;
 end $$;
 
 -- DELETE delivery for the user-filtered postgres_changes relays above.

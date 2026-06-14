@@ -74,7 +74,12 @@ interface StartDeps {
  */
 function stepEventFor(
   pass: MemoryLibrarianPass,
-  event: AgentRunProgressEvent
+  // The terminal `result` event belongs to the detached run pattern
+  // (detachedManualRunHandler); the memory librarians still use the
+  // synchronous manualRunHandler, so they never receive it. Excluded here
+  // so the non-result events map cleanly onto the step union; the caller
+  // also skips it defensively.
+  event: Exclude<AgentRunProgressEvent, { kind: 'result' }>
 ): Parameters<typeof pushStep>[1] {
   if (event.kind === 'preparing') {
     return pass === 'deep-sleep'
@@ -158,7 +163,10 @@ export const librarianRun = {
       unsubscribe = deps.supabase.subscribeToAgentRunProgress(
         session.user.id,
         (event) => {
-          if (event.runId === runId) pushStep(state.steps, stepEventFor(pass, event));
+          // Skip the detached-run terminal event (not used by this
+          // synchronous path) and other runs' events.
+          if (event.runId !== runId || event.kind === 'result') return;
+          pushStep(state.steps, stepEventFor(pass, event));
         }
       );
 
