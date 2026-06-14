@@ -992,7 +992,13 @@ explicit instructions), and output shape (tool calls vs JSON).
   or drops assistant-sourced claims already on disk) now carry an
   explicit rule: a fact enters the wiki only when the USER originated
   or accepted it; an assistant having explained or proposed something
-  is never grounds for a user-fact. This pairs with
+  the user did not take up is never grounds for a user-fact. The
+  middle case is real and must be attributed, not dropped: content the
+  user adopted or asked to save (a reading list saved on request, an
+  approach the user took up) belongs in the wiki, but framed by its
+  provenance ("Jeff saved a recommended list", not "Jeff concluded")
+  so a future assistant can tell what the user worked out from what
+  the user was handed and kept. This pairs with
   the dual-purpose framing (biographical record for the user + context
   a future assistant loads via wiki_search) - both readers want what
   is true of the user, not a transcript. Don't soften it; "document

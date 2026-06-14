@@ -446,6 +446,18 @@ export function buildWikiAutonomousPrompt(
     'adopted it; listing options is not the user having chosen one. When',
     "the only source for a statement is your own reply, it is not a fact",
     'about the user and does not belong in the wiki.',
+    '',
+    'The exception is content the user took up: if the user adopted an',
+    'approach you offered, acted on it, or asked you to save a',
+    'recommendation, then what the user values IS a fact about the user',
+    'and belongs in the wiki - but record it with its provenance, not as',
+    "the user's own conclusion. Write \"Jeff saved a set of",
+    'recommended self-discovery books" or "Jeff adopted the suggested',
+    'colder retard step", not "Jeff believes ..." as though the idea',
+    'originated with him. The future assistant needs to tell what the',
+    'user worked out from what the user was handed and chose to keep;',
+    'flattening the two is the same error as crediting the user with',
+    'your explanations.',
   ];
   if (profileBlock.length > 0) {
     lines.push('', profileBlock);
