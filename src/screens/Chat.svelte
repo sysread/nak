@@ -166,6 +166,7 @@
     runWikiSearch,
   } from '$lib/wiki-store.svelte';
   import { onWikiChange, emitWikiChange } from '$lib/wiki-events';
+  import { wikiLibrarianLease } from '$lib/agents/inflight-lease.svelte';
   import { emitMemoryChange } from '$lib/memory-events';
   import {
     documentStore,
@@ -1804,6 +1805,18 @@
   $effect(() => {
     if (!app.supabase || !session) return;
     return app.supabase.subscribeToWikiArticleChanges(session.user.id, emitWikiChange);
+  });
+
+  // Watch the wiki-librarian in-flight lease so every client knows when a
+  // run is active - the originating tab, a refresh, another device, AND
+  // scheduled background runs (they hold the same lease). Drives the
+  // top-bar sparkle button's disabled state below and the Wiki panel's
+  // "a run is in progress" spinner. Start/stop with the session; the
+  // watcher does its own realtime subscribe + initial read.
+  $effect(() => {
+    if (!app.supabase || !session) return;
+    wikiLibrarianLease.start({ supabase: app.supabase, userId: session.user.id });
+    return () => wikiLibrarianLease.stop();
   });
 
   // Realtime: the memories twin of the wiki relay above. Every memory
@@ -6662,12 +6675,17 @@
             {
               id: 'librarian',
               label: 'Run librarian',
-              // No preemptive busy gray-out: the librarian runs
-              // server-side and the browser has no live view of the
-              // scheduled sweep. The server's in-flight guard rejects
-              // a colliding run with a clean "already in flight"
-              // message in the strip instead.
-              title: 'Run the wiki librarian now',
+              // Disabled while a run is in flight - the in-flight lease
+              // (wikiLibrarianLease, realtime off the profiles row) gives
+              // the browser a live view of any run, manual OR scheduled,
+              // on any device. The server-side guard is still the real
+              // mutual exclusion (and surfaces `busy` if a run is kicked
+              // in the gap before the lease propagates); this just stops
+              // the obvious double-click.
+              title: wikiLibrarianLease.running
+                ? 'A librarian run is already in progress'
+                : 'Run the wiki librarian now',
+              disabled: wikiLibrarianLease.running,
               onclick: () => (wikiLibrarianTrigger = true),
               icon: librarianIcon,
             },

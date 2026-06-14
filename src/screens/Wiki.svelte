@@ -77,13 +77,21 @@
   import { onWikiChange, emitWikiChange } from '$lib/wiki-events';
   import { WikiAgent, type WikiUpdateOneResult } from '$lib/agents/wiki/agent';
   import type {
-    AgentRunProgressEvent,
     WikiArticle,
     WikiArticleSource,
     WikiArticleRelated,
     WikiLibrarianRunResult,
   } from '$lib/supabase';
   import { extractHeadings, uniqueSlug, type HeadingEntry } from '$lib/markdown';
+  import {
+    appendProgressStep,
+    finalizeLibrarianSteps,
+    librarianRunButtonLabel,
+    LIBRARIAN_PARTIAL_SAVE_NOTE,
+    type LibrarianStep,
+  } from '$lib/ui/wiki-librarian-run';
+  import { awaitDetachedRun } from '$lib/agents/detached-run';
+  import { wikiLibrarianLease } from '$lib/agents/inflight-lease.svelte';
   import Markdown from '../components/Markdown.svelte';
   import WikiChangelogPanel from '../components/WikiChangelogPanel.svelte';
   import WikiSkippedPanel from '../components/WikiSkippedPanel.svelte';
@@ -774,6 +782,15 @@
   let librarianResult = $state<WikiLibrarianRunResult | null>(null);
   let librarianTextarea = $state<HTMLTextAreaElement | null>(null);
 
+  // A wiki-librarian run is in flight that THIS strip didn't start -
+  // another tab, another device, or a scheduled background run, detected
+  // via the shared in-flight lease. Disables the Run button and drives
+  // the "a run is in progress" notice so a second run can't be kicked
+  // into the server-side guard's `busy`.
+  const runInFlightElsewhere = $derived(
+    wikiLibrarianLease.running && !librarianBusy
+  );
+
   // Live step list for the manual librarian run. The run executes
   // server-side; each progress event arrives over the agent-runs
   // Broadcast channel (see SupabaseService.subscribeToAgentRunProgress)
@@ -784,59 +801,11 @@
   // "Working..." for the 10-30 seconds the agent takes, even though
   // the underlying tool calls each narrate themselves via the
   // runner-injected `activity` field.
-  interface LibrarianStep {
-    label: string;
-    status: 'pending' | 'ok' | 'error';
-  }
+  // Step rows + the event->row mapping live in $lib/ui/wiki-librarian-run.
+  // The strip only reassigns this $state from those pure transforms; the
+  // terminal-finalize there is what keeps the spinner from outliving the run
+  // when the `done` broadcast never arrives (gateway-timeout case).
   let librarianSteps = $state<LibrarianStep[]>([]);
-
-  // Map a runner progress event onto the step list. Each non-`done`
-  // event pushes a new row; before pushing, we resolve whatever row is
-  // still pending (the previous phase just finished by definition).
-  // `done` doesn't push a new row - it just settles the trailing
-  // pending row, so the spinner stops without leaving a stray "Done."
-  // step hanging below the result paragraph.
-  function settleTrailingPending(): void {
-    const last = librarianSteps[librarianSteps.length - 1];
-    if (last && last.status === 'pending') last.status = 'ok';
-  }
-  function pushLibrarianStep(event: AgentRunProgressEvent): void {
-    if (event.kind === 'preparing') {
-      const n = event.articleCount;
-      librarianSteps.push({
-        label: `Loading ${n} article${n === 1 ? '' : 's'}`,
-        status: 'pending',
-      });
-      return;
-    }
-    if (event.kind === 'thinking') {
-      settleTrailingPending();
-      librarianSteps.push({
-        label: `Thinking (round ${event.round})`,
-        status: 'pending',
-      });
-      return;
-    }
-    if (event.kind === 'tool') {
-      settleTrailingPending();
-      // Prefer the model's narration; fall back to the bare tool name
-      // when the model emitted an empty activity (shouldn't happen -
-      // the runner marks activity required when progress is wired -
-      // but be robust to model misbehaviour rather than rendering an
-      // empty row).
-      const label = event.activity.trim() || event.name;
-      librarianSteps.push({
-        label,
-        status: event.ok ? 'ok' : 'error',
-      });
-      return;
-    }
-    // event.kind === 'done'
-    const last = librarianSteps[librarianSteps.length - 1];
-    if (last && last.status === 'pending') {
-      last.status = event.ok ? 'ok' : 'error';
-    }
-  }
 
   // Watch the trigger from the top-bar button. Opens the confirmation
   // strip (and only the strip - the run itself is gated behind the
@@ -943,39 +912,60 @@
     // rule streaming chat follows). The runId filter keeps a stale or
     // concurrent run's events out of this strip's step list.
     const runId = crypto.randomUUID();
-    let unsubscribe: (() => void) | null = null;
     try {
       const session = await app.supabase.getSession();
       if (!session) {
         librarianError = 'Not signed in.';
         return;
       }
-      unsubscribe = app.supabase.subscribeToAgentRunProgress(
-        session.user.id,
-        (event) => {
-          if (event.runId === runId) pushLibrarianStep(event);
-        }
-      );
-      const result = await app.supabase.runWikiLibrarian({
-        instructions: librarianInstructions.trim() || null,
+      const supa = app.supabase;
+      // Detached run: the POST returns {accepted:true} immediately and the
+      // run continues server-side past the gateway window. awaitDetachedRun
+      // subscribes first, kicks the POST, streams progress into the step
+      // list, and resolves with the result carried by the terminal event.
+      const result = await awaitDetachedRun<WikiLibrarianRunResult>({
+        supabase: supa,
+        userId: session.user.id,
         runId,
+        post: () =>
+          supa.runWikiLibrarian({
+            instructions: librarianInstructions.trim() || null,
+            runId,
+          }),
+        onProgress: (event) => {
+          librarianSteps = appendProgressStep(librarianSteps, event);
+        },
       });
       librarianResult = result;
       if (result.kind === 'busy') {
+        // No run started - the in-flight guard rejected it. Nothing was
+        // committed and no steps were produced, so there's nothing to
+        // finalize or refresh.
         librarianError =
           'A librarian run is already in flight (scheduled or chat-driven). Try again in a moment.';
       } else if (result.kind === 'error') {
-        librarianError = result.error ?? 'Librarian run failed.';
+        // Run errored server-side mid-loop; earlier wiki_update calls may
+        // already be committed. Settle the spinner, refresh to surface them.
+        librarianError = `${result.error ?? 'Librarian run failed.'} ${LIBRARIAN_PARTIAL_SAVE_NOTE}`;
+        librarianSteps = finalizeLibrarianSteps(librarianSteps, 'error');
+        emitWikiChange();
       } else {
+        librarianSteps = finalizeLibrarianSteps(librarianSteps, 'ok');
         // Fire the local refresh immediately - the wiki_articles
         // realtime echo also arrives, but consumers refetch
         // idempotently and the local fire keeps the panel snappy.
         emitWikiChange();
       }
     } catch (err) {
-      librarianError = err instanceof Error ? err.message : String(err);
+      // The kick failed (transport/auth) or awaitDetachedRun's inactivity
+      // backstop fired (the channel went silent). The detached run may have
+      // landed edits before a dropped channel, so settle the step list,
+      // refresh to surface any committed edits, and note the partial save.
+      const raw = err instanceof Error ? err.message : String(err);
+      librarianError = `${raw} ${LIBRARIAN_PARTIAL_SAVE_NOTE}`;
+      librarianSteps = finalizeLibrarianSteps(librarianSteps, 'error');
+      emitWikiChange();
     } finally {
-      unsubscribe?.();
       librarianBusy = false;
     }
   }
@@ -1180,6 +1170,18 @@
         {#if librarianError}
           <p class="error">{librarianError}</p>
         {/if}
+        {#if runInFlightElsewhere && librarianSteps.length === 0}
+          <!-- A run this strip didn't start is in flight (another tab /
+               device, or a scheduled background run), detected via the
+               in-flight lease. We have no step-level fidelity for it -
+               that rides the originator's runId-filtered channel - so
+               show a low-fidelity "in progress" spinner and keep the
+               Run button disabled until the lease clears. -->
+          <p class="subtle wiki-librarian-inflight" aria-live="polite">
+            <span class="librarian-step-glyph" aria-hidden="true">↻</span>
+            A librarian run is in progress…
+          </p>
+        {/if}
         {#if librarianSteps.length > 0}
           <!-- Live step list. Each row pairs the rotating-glyph
                spinner (pending) or a final glyph (ok/error) with the
@@ -1211,9 +1213,9 @@
             type="button"
             class="primary"
             onclick={submitLibrarianRun}
-            disabled={librarianBusy}
+            disabled={librarianBusy || runInFlightElsewhere}
           >
-            {librarianBusy ? 'Working…' : 'Run librarian'}
+            {librarianRunButtonLabel(librarianBusy, runInFlightElsewhere)}
           </button>
         </div>
       </div>

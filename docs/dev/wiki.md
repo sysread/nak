@@ -347,17 +347,41 @@ UI:
   is to navigate elsewhere); the done-state "Close" survives because
   dismissing the run result is a different operation from navigating
   away.
-  **Librarian strip.** The manual run is subscribe-then-POST: the
-  strip mints a `runId`, subscribes via
-  `SupabaseService.subscribeToAgentRunProgress` filtering events on
-  that id, then POSTs through `SupabaseService.runWikiLibrarian`.
-  While the run executes server-side, the step events (preparing /
-  thinking / tool / done; tool events carry the model-emitted
-  `activity` narration) render as a live step list with a spinner on
-  the pending row. A `busy` result (the shared server-side in-flight
-  guard) renders a try-again message; an `ok` result fires
-  `emitWikiChange` locally so the panel refreshes ahead of the
-  realtime echo.
+  **Librarian strip (detached run).** A librarian pass can run minutes
+  (conversation reads over a multi-round loop), past the gateway's
+  ~2.5min response window, so the manual run is **detached**: the
+  route is `detachedManualRunHandler` (venice `index.ts`), which kicks
+  the run under `EdgeRuntime.waitUntil` and responds `{accepted:true}`
+  immediately - the run finishes under the ~7min wall-clock even though
+  the request returned. The outcome the HTTP body used to carry now
+  rides the `agent-runs` channel as a terminal **`result` event**. The
+  client wraps this in `awaitDetachedRun` (`src/lib/agents/detached-run.ts`):
+  subscribe-before-kick (runId-filtered), stream progress into the step
+  list (`appendProgressStep`), resolve on the `result` event, reject on
+  an inactivity backstop (180s of channel silence). The step transforms
+  and `finalizeLibrarianSteps` are pure functions in
+  `src/lib/ui/wiki-librarian-run.ts`, unit-tested at
+  `tests/wiki-librarian-run.test.ts`; `awaitDetachedRun` at
+  `tests/detached-run.test.ts`. `submitLibrarianRun` maps the result
+  union (busy / ok / error), finalizes the steps, fires `emitWikiChange`,
+  and on error/timeout appends `LIBRARIAN_PARTIAL_SAVE_NOTE` (the write
+  tools commit each edit immediately, so a run that died mid-loop may
+  have already landed edits - the refresh surfaces them).
+  **Run liveness = the in-flight lease, for every client.** The robust
+  signal is not a broadcast event but the `profiles` in-flight lease
+  (`wiki_librarian_inflight_expires_at`, held = future expiry), watched
+  via `wikiLibrarianLease` (`src/lib/agents/inflight-lease.svelte.ts`) -
+  a realtime subscription on the `profiles` row plus an initial read and
+  a TTL timer. Started in `Chat.svelte` with the session; read by the
+  top-bar sparkle button (disabled while held) and the panel ("a run is
+  in progress" low-fidelity spinner when a run THIS strip didn't start
+  is active). Because manual AND scheduled runs claim the same lease,
+  the UI lights up for background sweeps too, and the lease clearing is
+  the backstop that settles every client even if the `result` broadcast
+  is dropped. Reusable across fleets via the generic
+  `createInflightLeaseWatcher(column)` + the `getInflightLeaseExpiry` /
+  `subscribeToInflightLease` data methods; the memory librarians flip to
+  the detached route + a lease watcher the same way once confirmed.
   Renders a nested **table of contents** at the top of the article
   (between the title header and the body) for articles with two or
   more Markdown headings. ToC entries link to `#slug` anchors; a
@@ -410,10 +434,12 @@ UI:
   state is a local flag in `Wiki.svelte`, and a clock-button click
   while the librarian is open has to touch both the route AND that
   flag. Wiki.svelte resets each flag after consuming it. The
-  librarian button has no preemptive busy gray-out: the browser has
-  no live view of the scheduled sweep or a chat-dispatched run, so
-  the server-side in-flight guard's `busy` result is the collision
-  surface instead.
+  librarian button disables while a run is in flight, driven by the
+  `wikiLibrarianLease` in-flight-lease watcher (realtime off the
+  `profiles` row) - covering scheduled and chat-dispatched runs too,
+  not just this tab's. The server-side in-flight guard's `busy` result
+  remains the authoritative collision surface for the gap before the
+  lease propagates.
 - `src/screens/Settings.svelte` - the "Wiki" group with the
   `wikiAutomaticEnabled` and `wikiLibrarianEnabled` toggles.
 
@@ -1075,14 +1101,29 @@ explicit instructions), and output shape (tool calls vs JSON).
   need a policy that parses the topic string. Consequence: a
   subscriber MUST filter on runId, or events from a concurrent or
   stale run bleed into its step list.
-- **No preemptive busy gray-out on the librarian button.** The
-  in-flight guard lives on profiles, server-side, and the browser
-  has no live view of the scheduled sweep or a chat-dispatched run -
-  so the top-bar sparkles button stays enabled and a collision
-  surfaces as the guard's `busy` result with a try-again message in
-  the strip. A client-side gray-out could only cover runs this tab
-  started and would imply a safety the server guard already
-  provides.
+- **The librarian button's gray-out reads the in-flight lease, not a
+  local flag.** The in-flight guard lives on `profiles`; with
+  `profiles` in the realtime publication, `wikiLibrarianLease` gives
+  the browser a live view of ANY run - manual, scheduled, or
+  chat-dispatched, on any device - so the top-bar sparkles button
+  disables while a run is in flight (`disabled: wikiLibrarianLease.running`).
+  The server-side guard is still the real mutual exclusion (and
+  surfaces `busy` if a run is kicked in the gap before the lease
+  propagates); the gray-out just prevents the obvious double-click and
+  is the same signal that drives the panel's "a run is in progress"
+  spinner. The lease is a TTL'd server fact, so it also clears a stale
+  gray-out after a crashed run without an explicit release.
+- **A detached manual run must publish its outcome over the channel.**
+  `detachedManualRunHandler` responds `{accepted:true}` and runs under
+  `EdgeRuntime.waitUntil`, so the result the synchronous
+  `manualRunHandler` returned in the HTTP body now rides the
+  `agent-runs` channel as a terminal `result` event. A `runId` is
+  therefore REQUIRED on the detached route (no channel, no result).
+  The browser's real terminal backstop is the lease clearing, not the
+  `result` event (fire-and-forget broadcast) - so dropping the result
+  costs the operator-summary text, not a hung UI. Don't "simplify"
+  the route back to awaiting the run synchronously: that reinstates
+  the gateway-504 on long passes this whole path exists to dodge.
 - **Use `messages.created_at` for the day-gate, not
   `threads.updated_at`.** The journal RPC reads `threads.updated_at`
   because journals fire on a same-day cooldown predicate that

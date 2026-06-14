@@ -803,7 +803,27 @@ export type AgentRunProgressEvent = { runId: string } & (
   | { kind: 'thinking'; round: number }
   | { kind: 'tool'; name: string; activity: string; ok: boolean; ms: number }
   | { kind: 'done'; ok: boolean }
+  // Terminal outcome for a DETACHED manual run (detachedManualRunHandler).
+  // The detached route responds {accepted:true} immediately and the run
+  // continues in the background, so the result the HTTP body used to
+  // carry rides the channel as this final event. `result` is the fleet's
+  // own run-result union (e.g. WikiLibrarianRunResult); consumers narrow
+  // it. Best-effort like every broadcast - the in-flight lease is the
+  // backstop if it's dropped.
+  | { kind: 'result'; result: unknown }
 );
+
+/**
+ * The profiles columns that hold a background-agent's manual-run
+ * in-flight lease (<agent>_inflight_expires_at). A held lease (future
+ * expiry) is what the UI reads to show "a run is in flight" - the
+ * spinner + button-disable - for every client, including background
+ * scheduled runs. Generic across fleets so the lease helpers serve the
+ * wiki librarian and the memory librarians alike.
+ */
+export type InflightLeaseColumn =
+  | 'wiki_librarian_inflight_expires_at'
+  | 'memory_librarian_inflight_expires_at';
 
 function coerceWikiChangelogKind(raw: unknown): WikiChangelogKind | null {
   if (raw === 'create' || raw === 'update' || raw === 'delete') return raw;
@@ -4408,25 +4428,16 @@ export class SupabaseService {
   async runWikiLibrarian(args: {
     instructions: string | null;
     runId: string;
-  }): Promise<WikiLibrarianRunResult> {
-    const { data, error } = await this.client.functions.invoke('venice/wiki-librarian-run', {
+  }): Promise<void> {
+    // Detached route: the body is {accepted:true} and the run continues
+    // in the background past the gateway window. The outcome arrives
+    // later as a `result` event on the agent-runs channel (await it via
+    // awaitDetachedRun), so this POST only KICKS the run - a non-error
+    // response means accepted. A transport/auth failure throws.
+    const { error } = await this.client.functions.invoke('venice/wiki-librarian-run', {
       body: { instructions: args.instructions, runId: args.runId },
     });
     if (error) throw await veniceFunctionError(error);
-    const result = data as Partial<WikiLibrarianRunResult> | null;
-    if (result && result.kind === 'ok' && typeof result.finalText === 'string') {
-      return {
-        kind: 'ok',
-        finalText: result.finalText,
-        toolCalls: typeof result.toolCalls === 'number' ? result.toolCalls : 0,
-        articleCount: typeof result.articleCount === 'number' ? result.articleCount : 0,
-      };
-    }
-    if (result && result.kind === 'busy') return { kind: 'busy' };
-    if (result && result.kind === 'error' && typeof result.error === 'string') {
-      return { kind: 'error', error: result.error };
-    }
-    return { kind: 'error', error: 'wiki-librarian-run returned an unrecognised response' };
   }
 
   /**
@@ -5467,6 +5478,71 @@ export class SupabaseService {
    * changed". The wiki surfaces refetch their own lists; pushing row
    * deltas through would duplicate their loaders for no win.
    */
+  /**
+   * Read whether a background-agent in-flight lease is currently held
+   * for this user. The wiki/memory librarian manual + scheduled runs
+   * claim a lease on the profiles row (<agent>_inflight_expires_at);
+   * held = a future expiry. RLS lets a user read their own profile.
+   * Returns the expiry ISO string when held, else null. The caller
+   * derives "running" and arms a timer at the expiry for the crash/TTL
+   * case - a lease that lapses without an explicit release writes no
+   * row, so no realtime UPDATE fires.
+   */
+  async getInflightLeaseExpiry(
+    userId: string,
+    column: InflightLeaseColumn
+  ): Promise<string | null> {
+    const { data, error } = await this.client
+      .from('profiles')
+      .select(column)
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (error) throw new Error(`getInflightLeaseExpiry failed: ${error.message}`);
+    const exp = (data as Record<string, unknown> | null)?.[column];
+    if (typeof exp !== 'string') return null;
+    return new Date(exp).getTime() > Date.now() ? exp : null;
+  }
+
+  /**
+   * Subscribe to in-flight lease transitions for this user via realtime
+   * profiles UPDATEs (requires profiles in the supabase_realtime
+   * publication - schema.sql). Calls back with the lease expiry ISO when
+   * a run claims/holds it, or null when released. Does NOT fire on a TTL
+   * lapse (that writes no row) - the caller's expiry timer covers that.
+   * Filtering on user_id is safe for UPDATE delivery because the new
+   * tuple always carries it (no replica-identity index needed, unlike
+   * the DELETE-delivery relays). Returns an unsubscribe.
+   */
+  subscribeToInflightLease(
+    userId: string,
+    column: InflightLeaseColumn,
+    onChange: (expiry: string | null) => void
+  ): () => void {
+    const channel = this.client
+      .channel(`inflight_lease:${column}:${userId}`)
+      .on(
+        'postgres_changes' as never,
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'profiles',
+          filter: `user_id=eq.${userId}`,
+        },
+        (payload: { new?: Record<string, unknown> | null }) => {
+          const exp = payload.new?.[column];
+          if (typeof exp !== 'string') {
+            onChange(null);
+            return;
+          }
+          onChange(new Date(exp).getTime() > Date.now() ? exp : null);
+        }
+      )
+      .subscribe();
+    return () => {
+      void this.client.removeChannel(channel);
+    };
+  }
+
   subscribeToWikiArticleChanges(userId: string, onChange: () => void): () => void {
     const channel = this.client
       .channel(`wiki_articles:${userId}`)

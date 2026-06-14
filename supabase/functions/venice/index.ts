@@ -728,6 +728,82 @@ function manualRunHandler(
   };
 }
 
+/**
+ * Detached variant of manualRunHandler for runs that can outlive the
+ * gateway's response window (~2.5 min). manualRunHandler awaits the
+ * whole run before responding, so a long pass (a librarian reading
+ * conversations over a multi-round tool loop) draws a gateway 504 even
+ * though the function would finish - the edits land, but the response
+ * and the trailing terminal broadcast never reach the browser. This
+ * factory runs the fleet function DETACHED under EdgeRuntime.waitUntil
+ * (same shape as the sweep routes and chat /stream) and responds
+ * {accepted:true} immediately. The outcome can no longer ride the HTTP
+ * body, so it is published as a terminal `result` event on the
+ * agent-runs channel; the browser's real backstop is the in-flight
+ * lease (profiles realtime), which settles the UI even if this
+ * fire-and-forget broadcast is dropped.
+ *
+ * runId is REQUIRED here (unlike manualRunHandler, where a missing id
+ * just suppresses progress): without it there is no channel to carry
+ * the result at all.
+ */
+function detachedManualRunHandler(
+  logSource: string,
+  run: (
+    admin: SupabaseClient,
+    userId: string,
+    body: Record<string, unknown>,
+    onProgress: ((event: Record<string, unknown>) => void) | undefined,
+  ) => Promise<unknown>,
+): (req: Request) => Promise<Response> {
+  return async (req) => {
+    const userId = userIdFromJwt(req);
+    if (!userId) return json({ error: 'unauthorized' }, 401);
+    const admin = requireAdmin();
+    if (admin instanceof Response) return admin;
+
+    let body: Record<string, unknown>;
+    try {
+      body = (await req.json()) as Record<string, unknown>;
+    } catch {
+      return json({ error: 'invalid JSON body' }, 400);
+    }
+    const runId =
+      typeof body.runId === 'string' && body.runId.length > 0 && body.runId.length <= 64
+        ? body.runId
+        : null;
+    if (!runId) {
+      return json({ error: 'runId is required for a detached manual run' }, 400);
+    }
+
+    const publisher = createAgentProgressPublisher(userId, runId);
+    edgeWaitUntil(
+      (async () => {
+        let result: unknown;
+        try {
+          result = await run(admin, userId, body, (event) => publisher.publish(event));
+        } catch (err) {
+          // The fleet functions fold expected failures into their result
+          // unions, so a throw here is an infrastructure bug. Surface it
+          // as an error result so the browser still settles, and log it
+          // to the requesting user's drawer.
+          const log = createEdgeLogger(userId, logSource);
+          log.error(
+            'detached manual run failed unexpectedly',
+            err instanceof Error ? err : new Error(String(err)),
+          );
+          await log.flush();
+          result = { kind: 'error', error: 'internal error during manual run' };
+        }
+        // Terminal event - the outcome the HTTP body used to carry.
+        publisher.publish({ kind: 'result', result });
+        await publisher.flush();
+      })(),
+    );
+    return json({ accepted: true });
+  };
+}
+
 // The fleet routing table. One line per route; the referenced
 // tick/run functions carry the fleet semantics and their doc
 // comments.
@@ -750,7 +826,11 @@ const handleReflectionSweep = sweepHandler(runReflectionSweepTick);
 const handleCurationSweep = sweepHandler(runCurationSweepTick);
 const handleBiasSweep = sweepHandler(runBiasSweepTick);
 const handleSamskaraSweep = sweepHandler(runSamskaraSweepTick);
-const handleWikiLibrarianRun = manualRunHandler('wiki-librarian', (admin, userId, body, onProgress) =>
+// Detached: a librarian pass can run minutes (conversation reads over a
+// multi-round loop), past the gateway window. rem/deep-sleep stay on the
+// synchronous manualRunHandler until this pattern is confirmed in prod,
+// then they flip to detachedManualRunHandler the same way.
+const handleWikiLibrarianRun = detachedManualRunHandler('wiki-librarian', (admin, userId, body, onProgress) =>
   runWikiLibrarianManual(
     admin,
     userId,
