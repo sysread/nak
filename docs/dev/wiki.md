@@ -425,7 +425,7 @@ Tests:
   sentinel match staying narrow, and the prompt invariants
   (anti-name-fabrication, profile-block rendering rules).
 - `supabase/functions/tests/wiki_librarian.test.ts` - the
-  librarian's composition guards: toolbox membership (the three
+  librarian's composition guards: toolbox membership (the four
   reads plus wiki_update / wiki_delete; no `wiki_create`, no memory
   writes, no `ask_user`), the prompt's variant selection (custom
   instructions swap in the bounded body; whitespace falls back to
@@ -890,10 +890,15 @@ explicit instructions), and output shape (tool calls vs JSON).
   gets memory write tools. Composition is asserted in
   `supabase/functions/tests/wiki.test.ts`.
 - The librarian's toolbox (`buildLibrarianToolbox` in
-  `agents/wiki_librarian.ts`) bundles three reads (wiki_search,
-  conversation_search, memory_search) plus wiki_update +
-  wiki_delete - **no wiki_create** (the librarian consolidates what
-  exists, it never invents) and no memory writes. The write tools
+  `agents/wiki_librarian.ts`) bundles four reads (wiki_search,
+  conversation_search, conversation_get, memory_search) plus
+  wiki_update + wiki_delete - **no wiki_create** (the librarian
+  consolidates what exists, it never invents) and no memory writes.
+  `conversation_search` returns only title + topic summary, so the
+  attribution pass (workflow step 3c) and the stale-fact pass (step
+  4) use `conversation_get` to read the actual role-tagged turns -
+  the summary cannot tell the librarian whether a claim came from the
+  user or was merely explained by the assistant. The write tools
   are the registered ports wrapped via `asAgentToolNoThread`, which
   blanks the context's threadId before the registered execute()
   sees it: the registered write tools auto-attach a non-empty
