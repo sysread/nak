@@ -980,6 +980,24 @@ explicit instructions), and output shape (tool calls vs JSON).
   conventionally), not their own page. If you relax the scope rule,
   leave the historical failure mode noted somewhere or the
   per-thread shape will silently re-introduce it.
+- **Speaker attribution: the assistant's turns are not a source of
+  user-facts.** The agents read a role-tagged transcript
+  (`messageToVenice` preserves user / assistant / tool roles
+  verbatim), but the model historically blurred the two - folding the
+  assistant's own explanations and suggestions into the article as
+  things "the user" said, learned, or adopted. Both the autonomous
+  prompt (opening framing) and the librarian prompt (the discipline
+  block plus a self-correction pattern in the "fix references to the
+  user" step, which conversation_search-corroborates and re-attributes
+  or drops assistant-sourced claims already on disk) now carry an
+  explicit rule: a fact enters the wiki only when the USER originated
+  or accepted it; an assistant having explained or proposed something
+  is never grounds for a user-fact. This pairs with
+  the dual-purpose framing (biographical record for the user + context
+  a future assistant loads via wiki_search) - both readers want what
+  is true of the user, not a transcript. Don't soften it; "document
+  the user's learning" framings are exactly what reintroduce the
+  conflation (the assistant teaching X is not the user knowing X).
 - **`nak_safe_timezone` is load-bearing for the global sweep.** The
   claim evaluates the day-gate for every user inside one query; a
   single profile carrying a malformed `displayTimezone` would make

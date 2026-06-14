@@ -246,7 +246,7 @@ function buildLibrarianToolbox(): Toolbox {
 }
 
 // ---------------------------------------------------------------------------
-// Prompt. Verbatim port of src/lib/agents/wiki-librarian/prompt.ts -
+// Prompt. Ported from src/lib/agents/wiki-librarian/prompt.ts -
 // the standard five-step sweep body, the custom-instructions variant,
 // and the librarian's own profile block (which carries CORRECTIVE
 // wording on top of the per-conversation agent's anti-fabrication
@@ -396,6 +396,14 @@ const WIKI_LIBRARIAN_DISCIPLINE_BLOCK = `**Discipline**:
 - Do not fabricate. Only assert facts that appear in the
   existing articles, in conversations you searched, or in the
   excerpts above. Do not import outside knowledge.
+- Attribute to the right speaker when you corroborate against
+  conversations. In a thread the user's turns are the user's own
+  claims; the assistant's turns are AI output. A claim is
+  confirmed only when the USER stated or accepted it - an
+  assistant having explained or suggested something in a past
+  conversation is not evidence the user believes, learned, or
+  adopted it, and is not grounds to "correct" an article toward
+  it.
 - Same voice and tone the wiki uses already: encyclopedic,
   third-person, present tense, neutral. Refer to subjects
   directly (a first name, the project name) rather than "the
@@ -493,8 +501,8 @@ ${WIKI_LIBRARIAN_TOOLS_BLOCK}
    wiki_update the article that is the better home (longer,
    broader, or more accurate) to absorb the unique facts from
    the duplicate, then wiki_delete the duplicate.
-3. **Fix references to the user.** Two failure patterns to clean
-   up here, both visible from the article body:
+3. **Fix references to the user.** Three failure patterns to clean
+   up here:
 
    (a) **Fabricated names.** If the "About the user" block has a
        name (e.g. "Jeff"), scan for articles that appear to be
@@ -522,6 +530,24 @@ ${WIKI_LIBRARIAN_TOOLS_BLOCK}
        person, not a generic third-party report. Skip cases
        where "the user" is genuinely the better wording (rare,
        but possible) - default to substituting the name.
+
+   (c) **Assistant-sourced claims attributed to the user.** A
+       previous per-conversation pass may have folded something
+       the ASSISTANT said in a thread - an explanation it gave,
+       an approach it proposed, options it laid out - into the
+       article as though the user stated, learned, or adopted
+       it. Watch for article facts that read more like advice or
+       exposition than like something the user would say about
+       themselves ("the user should...", a how-to paragraph, a
+       definition of a concept the user was merely asking
+       about). When one looks suspect, conversation_search for
+       the thread it came from and check who actually originated
+       it: if the user only received the information and never
+       confirmed, acted on, or claimed it, wiki_update to fix
+       the framing - re-attribute it accurately or drop it.
+       Leave it alone when conversation_search cannot corroborate
+       the misattribution; a confident wrong "correction" is
+       worse than a borderline line left standing.
 4. **Check for stale facts using date markers.** Articles are
    written with date markers attached to facts ("as of March
    2026", "in late 2025", "Jeff started this in early 2026").
@@ -805,6 +831,13 @@ export function buildWikiLibrarianPrompt(opts: {
         'consolidating duplicates, removing out-of-scope articles, fact-',
         'checking against conversation history, and tightening the',
         'boundaries between articles that overlap.',
+        '',
+        "The wiki is the user's own biographical record AND the context a",
+        'future assistant loads (through wiki_search) to understand them,',
+        'so keep it accurate to the user. When you reorganise or fact-',
+        "check, preserve what the user actually said and did, and don't",
+        "let an assistant's past suggestion or explanation harden into a",
+        'claim about the user.',
       ];
   if (profileBlock.length > 0) {
     intro.push('', profileBlock);
