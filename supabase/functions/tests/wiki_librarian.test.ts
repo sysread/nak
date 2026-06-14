@@ -3,9 +3,11 @@
 // the librarian worker's toolbox and prompt module; both moved
 // server-side when the fleet migrated, so the invariants live here:
 //
-//   - The toolbox is reads (wiki/conversation/memory search) plus the
-//     two wiki writes. NO wiki_create (the librarian consolidates,
-//     never invents), no memory writes, no ask_user.
+//   - The toolbox is reads (wiki_search, conversation_search,
+//     conversation_get, memory_search) plus the two wiki writes. NO
+//     wiki_create (the librarian consolidates, never invents), no
+//     memory writes, no ask_user. conversation_get is what lets the
+//     attribution pass read who-said-what, not just a topic summary.
 //   - Custom instructions swap the five-step sweep body for the
 //     bounded "do this and the coherency fallout, nothing else"
 //     variant; an empty/whitespace instructions string falls back to
@@ -22,7 +24,14 @@ Deno.test('librarian toolbox is reads + wiki writes, in declared order', () => {
   assertEquals(toolbox.name, 'wikiLibrarian');
   assertEquals(
     toolbox.tools.map((t) => t.name),
-    ['wiki_search', 'conversation_search', 'memory_search', 'wiki_update', 'wiki_delete'],
+    [
+      'wiki_search',
+      'conversation_search',
+      'conversation_get',
+      'memory_search',
+      'wiki_update',
+      'wiki_delete',
+    ],
   );
 });
 

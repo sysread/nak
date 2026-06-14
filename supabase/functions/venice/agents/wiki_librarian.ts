@@ -49,6 +49,7 @@ import { registerTool, type ToolContext, type ToolDef } from '../performToolCall
 import { readVeniceKey } from '../tools/_venice_key.ts';
 import { wikiSearch } from '../tools/wiki_search.ts';
 import { conversationSearch } from '../tools/conversation_search.ts';
+import { conversationGet } from '../tools/conversation_get.ts';
 import { memorySearch } from '../tools/memory_search.ts';
 import { wikiUpdate } from '../tools/wiki_update.ts';
 import { wikiDelete } from '../tools/wiki_delete.ts';
@@ -124,6 +125,34 @@ const CONVERSATION_SEARCH_WIRE_SCHEMA: AgentTool['wire'] = {
         query: { type: 'string', description: 'Natural-language query.' },
         limit: { type: 'integer', minimum: 1, maximum: 50 },
       },
+      additionalProperties: false,
+    },
+  },
+};
+
+const CONVERSATION_GET_WIRE_SCHEMA: AgentTool['wire'] = {
+  type: 'function',
+  function: {
+    name: 'conversation_get',
+    description:
+      'Read the actual turns of one prior conversation by id (use a ' +
+      'conversation_search hit to get the id). Returns {found, ' +
+      'conversation: {title, summary, truncated, messages: [{role, ' +
+      'content}]}}. conversation_search returns only a topic summary; ' +
+      'THIS shows who said what, so it is the tool for checking whether ' +
+      'a claim in an article was originated by the user or merely ' +
+      "explained by the assistant. Long threads are windowed to the " +
+      'most recent messages (truncated: true); the summary covers the ' +
+      'earlier part.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: {
+          type: 'string',
+          description: 'UUID of the thread (from conversation_search).',
+        },
+      },
+      required: ['id'],
       additionalProperties: false,
     },
   },
@@ -238,6 +267,7 @@ function buildLibrarianToolbox(): Toolbox {
     tools: [
       asAgentTool(wikiSearch, WIKI_SEARCH_WIRE_SCHEMA),
       asAgentTool(conversationSearch, CONVERSATION_SEARCH_WIRE_SCHEMA),
+      asAgentTool(conversationGet, CONVERSATION_GET_WIRE_SCHEMA),
       asAgentTool(memorySearch, MEMORY_SEARCH_WIRE_SCHEMA),
       asAgentToolNoThread(wikiUpdate, WIKI_UPDATE_WIRE_SCHEMA),
       asAgentToolNoThread(wikiDelete, WIKI_DELETE_WIRE_SCHEMA),
@@ -315,11 +345,19 @@ const WIKI_LIBRARIAN_TOOLS_BLOCK = `**Tools you can use**:
 
 - \`wiki_search\` - read the full body of any article (search by
   title, topic, or natural query).
-- \`conversation_search\` - read across the user's past
-  conversations to verify a claim or find context. Use this
-  when an article makes a specific factual assertion that you
-  want to corroborate, or when you suspect two articles cover
-  the same conversation thread under different titles.
+- \`conversation_search\` - find the user's past conversations
+  by topic. Returns title + a topic summary per hit, NOT the
+  turns - use it to locate the thread you want, then open it
+  with conversation_get. Use this when an article makes a
+  specific factual assertion you want to corroborate, or when
+  you suspect two articles cover the same conversation thread
+  under different titles.
+- \`conversation_get\` - read the actual turns of one thread by
+  id (from a conversation_search hit). conversation_search only
+  gives you a topic summary; conversation_get shows who said
+  what, so it is the tool for checking whether a claim came from
+  the USER or was merely explained by the assistant. Long
+  threads are windowed to the most recent messages.
 - \`memory_search\` - read the user's atomic-fact memory store
   (the same store the chat-side memory_search hits). Useful as
   a second corroboration source for fact-checking - if an
@@ -540,19 +578,22 @@ ${WIKI_LIBRARIAN_TOOLS_BLOCK}
        exposition than like something the user would say about
        themselves ("the user should...", a how-to paragraph, a
        definition of a concept the user was merely asking
-       about). When one looks suspect, conversation_search for
-       the thread it came from and check who actually originated
-       it, then correct by what you find. If the user only
-       received the information and never confirmed, acted on, or
-       claimed it, wiki_update to re-attribute it accurately or
-       drop it. If the user DID take it up - adopted the approach,
-       acted on it, asked to save it - keep it, but frame the
+       about). When one looks suspect, conversation_search to
+       find the thread it came from, then conversation_get to
+       read the actual turns and see who originated it - the
+       search summary alone will not tell you, only the turns
+       will. Correct by what you find. If the user only received
+       the information and never confirmed, acted on, or claimed
+       it, wiki_update to re-attribute it accurately or drop it.
+       If the user DID take it up - adopted the approach, acted
+       on it, asked to save it - keep it, but frame the
        provenance ("Jeff saved a recommended reading list", not
        "Jeff concluded ...") so the article does not read the
        assistant's contribution as the user's own origination.
-       Leave it alone when conversation_search cannot corroborate
-       the misattribution; a confident wrong "correction" is
-       worse than a borderline line left standing.
+       Leave it alone when you cannot read the source turns or
+       they do not corroborate the misattribution; a confident
+       wrong "correction" is worse than a borderline line left
+       standing.
 4. **Check for stale facts using date markers.** Articles are
    written with date markers attached to facts ("as of March
    2026", "in late 2025", "Jeff started this in early 2026").
@@ -561,8 +602,9 @@ ${WIKI_LIBRARIAN_TOOLS_BLOCK}
    - When an excerpt makes a specific claim with an OLD date
      marker that could plausibly have changed (a job title, a
      relationship status, a project status), use
-     conversation_search to look for more recent mentions. If
-     you find a clear contradiction in newer conversations,
+     conversation_search to find more recent threads, then
+     conversation_get to read what was actually said. If you
+     find a clear contradiction in newer conversations,
      wiki_update the article: APPEND the new dated statement
      ("As of March 2026, Maya is at Foo. As of November 2026,
      she has moved to Bar.") rather than overwriting the old
