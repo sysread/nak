@@ -77,13 +77,18 @@
   import { onWikiChange, emitWikiChange } from '$lib/wiki-events';
   import { WikiAgent, type WikiUpdateOneResult } from '$lib/agents/wiki/agent';
   import type {
-    AgentRunProgressEvent,
     WikiArticle,
     WikiArticleSource,
     WikiArticleRelated,
     WikiLibrarianRunResult,
   } from '$lib/supabase';
   import { extractHeadings, uniqueSlug, type HeadingEntry } from '$lib/markdown';
+  import {
+    appendProgressStep,
+    finalizeLibrarianSteps,
+    LIBRARIAN_PARTIAL_SAVE_NOTE,
+    type LibrarianStep,
+  } from '$lib/ui/wiki-librarian-run';
   import Markdown from '../components/Markdown.svelte';
   import WikiChangelogPanel from '../components/WikiChangelogPanel.svelte';
   import WikiSkippedPanel from '../components/WikiSkippedPanel.svelte';
@@ -784,59 +789,11 @@
   // "Working..." for the 10-30 seconds the agent takes, even though
   // the underlying tool calls each narrate themselves via the
   // runner-injected `activity` field.
-  interface LibrarianStep {
-    label: string;
-    status: 'pending' | 'ok' | 'error';
-  }
+  // Step rows + the event->row mapping live in $lib/ui/wiki-librarian-run.
+  // The strip only reassigns this $state from those pure transforms; the
+  // terminal-finalize there is what keeps the spinner from outliving the run
+  // when the `done` broadcast never arrives (gateway-timeout case).
   let librarianSteps = $state<LibrarianStep[]>([]);
-
-  // Map a runner progress event onto the step list. Each non-`done`
-  // event pushes a new row; before pushing, we resolve whatever row is
-  // still pending (the previous phase just finished by definition).
-  // `done` doesn't push a new row - it just settles the trailing
-  // pending row, so the spinner stops without leaving a stray "Done."
-  // step hanging below the result paragraph.
-  function settleTrailingPending(): void {
-    const last = librarianSteps[librarianSteps.length - 1];
-    if (last && last.status === 'pending') last.status = 'ok';
-  }
-  function pushLibrarianStep(event: AgentRunProgressEvent): void {
-    if (event.kind === 'preparing') {
-      const n = event.articleCount;
-      librarianSteps.push({
-        label: `Loading ${n} article${n === 1 ? '' : 's'}`,
-        status: 'pending',
-      });
-      return;
-    }
-    if (event.kind === 'thinking') {
-      settleTrailingPending();
-      librarianSteps.push({
-        label: `Thinking (round ${event.round})`,
-        status: 'pending',
-      });
-      return;
-    }
-    if (event.kind === 'tool') {
-      settleTrailingPending();
-      // Prefer the model's narration; fall back to the bare tool name
-      // when the model emitted an empty activity (shouldn't happen -
-      // the runner marks activity required when progress is wired -
-      // but be robust to model misbehaviour rather than rendering an
-      // empty row).
-      const label = event.activity.trim() || event.name;
-      librarianSteps.push({
-        label,
-        status: event.ok ? 'ok' : 'error',
-      });
-      return;
-    }
-    // event.kind === 'done'
-    const last = librarianSteps[librarianSteps.length - 1];
-    if (last && last.status === 'pending') {
-      last.status = event.ok ? 'ok' : 'error';
-    }
-  }
 
   // Watch the trigger from the top-bar button. Opens the confirmation
   // strip (and only the strip - the run itself is gated behind the
@@ -953,7 +910,9 @@
       unsubscribe = app.supabase.subscribeToAgentRunProgress(
         session.user.id,
         (event) => {
-          if (event.runId === runId) pushLibrarianStep(event);
+          if (event.runId === runId) {
+            librarianSteps = appendProgressStep(librarianSteps, event);
+          }
         }
       );
       const result = await app.supabase.runWikiLibrarian({
@@ -962,18 +921,35 @@
       });
       librarianResult = result;
       if (result.kind === 'busy') {
+        // No run started - the in-flight guard rejected it. Nothing was
+        // committed and no steps were produced, so there's nothing to
+        // finalize or refresh.
         librarianError =
           'A librarian run is already in flight (scheduled or chat-driven). Try again in a moment.';
       } else if (result.kind === 'error') {
-        librarianError = result.error ?? 'Librarian run failed.';
+        // Run errored server-side mid-loop; earlier wiki_update calls may
+        // already be committed. Settle the spinner, refresh to surface them.
+        librarianError = `${result.error ?? 'Librarian run failed.'} ${LIBRARIAN_PARTIAL_SAVE_NOTE}`;
+        librarianSteps = finalizeLibrarianSteps(librarianSteps, 'error');
+        emitWikiChange();
       } else {
+        librarianSteps = finalizeLibrarianSteps(librarianSteps, 'ok');
         // Fire the local refresh immediately - the wiki_articles
         // realtime echo also arrives, but consumers refetch
         // idempotently and the local fire keeps the panel snappy.
         emitWikiChange();
       }
     } catch (err) {
-      librarianError = err instanceof Error ? err.message : String(err);
+      // The POST itself failed - commonly a gateway timeout (504) on a long
+      // run. The run may have completed or partially completed server-side
+      // before the connection dropped, and the terminal `done` progress event
+      // never arrived, so the trailing step row would otherwise spin forever.
+      // Settle it from this outcome, refresh the panel to surface any
+      // committed edits, and tell the user the run may have partially applied.
+      const raw = err instanceof Error ? err.message : String(err);
+      librarianError = `${raw} ${LIBRARIAN_PARTIAL_SAVE_NOTE}`;
+      librarianSteps = finalizeLibrarianSteps(librarianSteps, 'error');
+      emitWikiChange();
     } finally {
       unsubscribe?.();
       librarianBusy = false;

@@ -354,10 +354,27 @@ UI:
   While the run executes server-side, the step events (preparing /
   thinking / tool / done; tool events carry the model-emitted
   `activity` narration) render as a live step list with a spinner on
-  the pending row. A `busy` result (the shared server-side in-flight
-  guard) renders a try-again message; an `ok` result fires
-  `emitWikiChange` locally so the panel refreshes ahead of the
-  realtime echo.
+  the pending row. The event->row transforms and the terminal finalize
+  are pure functions in `src/lib/ui/wiki-librarian-run.ts`
+  (`appendProgressStep`, `finalizeLibrarianSteps`), unit-tested at
+  `tests/wiki-librarian-run.test.ts`. A `busy` result (the shared
+  server-side in-flight guard) renders a try-again message; an `ok`
+  result fires `emitWikiChange` locally so the panel refreshes ahead
+  of the realtime echo.
+  **Terminal state is driven by the POST, not the `done` broadcast.**
+  The spinner is per-row (a `pending` row renders the rotating glyph),
+  and the only progress event that settles the trailing row is the
+  terminal `done`. But a run killed by a gateway timeout (the 504 case
+  on a long run) returns or throws on the POST and may never publish
+  `done` - the function was cut off first. So the strip calls
+  `finalizeLibrarianSteps` on every terminal path of `submitLibrarianRun`
+  (ok / error / thrown), settling any still-pending row from the POST
+  outcome so the spinner can't outlive the request. On error or a
+  thrown POST the strip also fires `emitWikiChange` and appends
+  `LIBRARIAN_PARTIAL_SAVE_NOTE`: the wiki write tools commit each edit
+  immediately, so a run that died mid-loop may have already landed
+  edits, and the refresh surfaces them (this is exactly the "two
+  changelog entries appeared after two failed-looking runs" case).
   Renders a nested **table of contents** at the top of the article
   (between the title header and the body) for articles with two or
   more Markdown headings. ToC entries link to `#slug` anchors; a
