@@ -1179,7 +1179,7 @@
                Run button disabled until the lease clears. -->
           <p class="subtle wiki-librarian-inflight" aria-live="polite">
             <span class="librarian-step-glyph" aria-hidden="true">↻</span>
-            A librarian run is in progress…
+            The librarian is running in the background…
           </p>
         {/if}
         {#if librarianSteps.length > 0}
