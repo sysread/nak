@@ -1,8 +1,24 @@
 # Samskara Tier-2 Implementation Plan
 
-Status: proposal. Nothing here is built yet. The tier-2 phase has
-been a stub since v1 (`runMintTier2Phase` returns `'empty-phase'`);
-this plan turns it into a real phase.
+Status: LANDED and superseded - this is a historical proposal, kept
+for the design rationale. Tier-2 (compound) minting shipped, then
+moved server-side with the rest of the formation loop; the living
+reference is [`../samskara.md`](../samskara.md) (the Mint-tier2 phase,
+the tier-2 detection formula, the dedup-coupling and re-mint-storm
+gotchas), and the walkthrough is the tier-2 leg of
+`../../qa/use-cases/samskara-formation.md`. Where the implementation
+diverged from this plan, samskara.md wins. Two notes for the reader:
+
+- This plan predates the server-side port, so it speaks the old
+  browser-worker vocabulary (`runMintTier2Phase`, `loop.ts`,
+  `'empty-phase'`). The shipped phase is the `mintTier2Probe` driver
+  in `supabase/functions/venice/agents/samskara.ts`, run cron-only
+  from `runSamskaraSweepTick`. There is no longer a stub returning
+  `'empty-phase'`.
+- The detection RPC landed as `samskara_tier2_candidate` with the
+  half-open cosine band `[0.30, 0.68)` deliberately below dedup's
+  0.70 merge floor; the coverage skip is Jaccard-based. See
+  samskara.md for the authoritative parameters.
 
 Read [`../samskara.md`](../samskara.md) first - this plan assumes its
 data model and worker-phase vocabulary.

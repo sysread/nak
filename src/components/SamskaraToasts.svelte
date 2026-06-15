@@ -289,11 +289,11 @@
     border-color: color-mix(in srgb, var(--border) 80%, transparent);
   }
 
-  /* Tier-2 reserved hook - lands when compound-of-compounds minting
-     ships (see runMintTier2Phase in loop.ts). Currently identical to
-     tier-1 because no tier-2 mints fire; the class is here so the
-     visual differentiation can happen without another worker/UI
-     round trip when the phase wakes up. */
+  /* Tier-2 (compound-of-compounds) mints get an extra accent ring so
+     the operator can tell a higher-order claim fired from a flat
+     tier-1 one. Applied via class:tier-2={current.tier === 2} on the
+     pill; a tier-2 mint reaches the pill through the same realtime
+     relay and valence->emoji path as tier-1, only the ring differs. */
   .mood-pill.tier-2 {
     box-shadow:
       0 4px 12px rgba(0, 0, 0, 0.22),

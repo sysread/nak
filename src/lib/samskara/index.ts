@@ -7,7 +7,7 @@
  *   - `getCompoundSummary(supabase)` — read the cached prose summary
  *     row at round-1 entry. Returns null when cold-start or when the
  *     cache is stale enough that we'd rather inject nothing.
- *   - `fireSamskaras(supabase, venice, threadId, userRound, userText)`
+ *   - `fireSamskaras(supabase, threadId, userRound, userText, signal?)`
  *     — embed the user's input, run the cosine fire RPC, and persist
  *     the resulting cohort. Returns the fired set so the caller can
  *     format the priming block. The cohort id is generated here and

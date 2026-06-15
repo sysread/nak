@@ -111,8 +111,8 @@
 
   {#if substrate}
     <!-- Substrate stub for the same round, mounted ABOVE the fires
-         because it's the worker's after-the-fact summary of what
-         actually happened on this turn ("user asked X about Y,
+         because it's the formation pipeline's after-the-fact summary of
+         what actually happened on this turn ("user asked X about Y,
          expressing Z" / "the assistant did W and it landed P") -
          the headline read. The fires below are the predictions that
          fed into producing this turn; the substrate is the result.
@@ -120,7 +120,7 @@
          tinted background so the panel reads as "answer up top,
          working below" rather than a flat list of equal-weight
          sections. Lifecycle status tracks how far the formation
-         worker has carried the row - situation/outcome filled by
+         pipeline has carried the row - situation/outcome filled by
          the assimilator, embedding model filled by the embedder. -->
     <div class="substrate-block">
       <header class="substrate-head">
