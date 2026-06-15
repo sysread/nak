@@ -225,6 +225,20 @@
   // too to bucket day-eligible threads. Persisted on
   // `profiles.settings.displayTimezone`.
   let displayTimezone = $state<string>(app.displayTimezone || detectTimezone());
+  // Save-button + saved-vs-suggested state for the timezone field. The
+  // SAVED baseline is the persisted profile value: app.displayTimezone when
+  // it was actually written (displayTimezonePersisted), else "" - because
+  // until the first save app.displayTimezone is only the browser-detected
+  // default seeded on activate(). So the field is "dirty" (Save actionable,
+  // blue) whenever the input diverges from the saved baseline, which
+  // INCLUDES the never-saved case where the shown value is only a hint. The
+  // button also disables while a save is in flight.
+  let tzSaving = $state(false);
+  const tzSavedValue = $derived(
+    app.displayTimezonePersisted ? app.displayTimezone : ''
+  );
+  const tzDirty = $derived(displayTimezone.trim() !== tzSavedValue.trim());
+  const tzCanSave = $derived(tzDirty && !tzSaving);
 
   // --- Wiki pane ---
   // Toggle for the autonomous wiki agent. The toggle pushes through
@@ -1222,12 +1236,18 @@
     }
     const prev = displayTimezone;
     displayTimezone = normalized;
+    tzSaving = true;
     try {
       await persistDisplayTimezone(normalized);
+      // app.displayTimezonePersisted flips true on success, so the
+      // saved-vs-suggested status line updates itself - that IS the
+      // confirmation; no separate transient badge needed.
       modelInfo = `Display timezone set to ${normalized}.`;
     } catch (err) {
       displayTimezone = prev;
       modelError = err instanceof Error ? err.message : String(err);
+    } finally {
+      tzSaving = false;
     }
   }
 
@@ -1467,10 +1487,31 @@
           </datalist>
           <button
             type="button"
-            class="secondary"
+            class="primary"
+            disabled={!tzCanSave}
             onclick={() => onChangeDisplayTimezone(displayTimezone)}
-          >Save</button>
+          >{tzSaving ? 'Saving…' : 'Save'}</button>
         </div>
+        <!-- Saved-vs-suggested status. Until the first save the field shows
+             the browser-detected default that is NOT in the profile - the
+             server day-gates fall back to UTC for it - so say so loudly and
+             keep Save actionable. Once persisted, show the saved value (and,
+             when the input diverges again, that the change is unsaved). -->
+        <p class="tz-status" aria-live="polite">
+          {#if !app.displayTimezonePersisted}
+            <span class="tz-status-hint">
+              ⚠ Suggested from your browser - <strong>not saved</strong>.
+              Until you Save, the wiki and memory sweeps treat your timezone
+              as UTC. Click Save to store it.
+            </span>
+          {:else if tzDirty}
+            <span class="tz-status-hint">
+              Unsaved change. Saved value: <code>{tzSavedValue}</code>.
+            </span>
+          {:else}
+            <span class="tz-status-saved">Saved as <code>{tzSavedValue}</code>.</span>
+          {/if}
+        </p>
 
         <h3 class="pane-section">Models</h3>
         <p class="subtle">

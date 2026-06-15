@@ -711,6 +711,21 @@ label {
   color: var(--ok);
 }
 
+/* Saved-vs-suggested status under the AI -> About you Timezone field.
+   The hint variant (value shown but not persisted, or an unsaved edit)
+   uses the warn color so a merely-suggested value reads as clearly
+   not-yet-committed; the saved variant is muted. */
+.tz-status {
+  margin: 0.4rem 0 0 0;
+  font-size: 0.85rem;
+}
+.tz-status-hint {
+  color: var(--warn);
+}
+.tz-status-saved {
+  color: var(--muted);
+}
+
 /* Screen-reader-only label pattern. Keeps the visual footer clean while
    announcing state changes via aria-live on the wrapper. */
 .sr-only {
