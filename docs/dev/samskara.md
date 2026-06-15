@@ -796,18 +796,23 @@ session, and every predicate is row-local, so one cross-user pass
 is exactly the union of the per-user passes. Decay is not part of
 the formation rotation; the cron job is its only driver.
 
-**Being replaced (in progress).** This wall-clock decay is slated to
-give way to *relevance-gated, event-driven* decay: a next-day
-retrospective judge (`nak-samskara-evaluation-sweep`, the
-`samskara_evaluation.ts` agent) that scores each samskara against the
-conversation it actually fired in, so a prediction only loses (or
-gains) health when it was genuinely tested. As of slice 1 that sweep
-runs in **shadow mode** - it records a per-fire `verdict`
-(`held`/`contradicted`/`not-engaged`) on `samskara_fires` and logs the
-health delta it *would* apply, but changes no health and removes
-nothing. **The formula above remains the live mechanism** until slice
-2 flips the judge live and retires both this sweep and the reaction
-classifier. Design of record:
+**RETIRED - superseded by self-calibrating health.** The wall-clock
+decay formula above no longer runs. Health is now a *derived,
+relevance-gated posterior*: the next-day evaluation sweep
+(`nak-samskara-evaluation-sweep`, the `samskara_evaluation.ts` agent)
+judges each samskara against the conversation it actually fired in
+(`held` / `contradicted` / `not-engaged`), and `samskara_apply_evaluation`
+recomputes `health` = `confidence` = a recency-discounted hit rate
+shrunk toward `p0`, the population's aggregate hit rate
+(`samskara_population_p0`). A prediction only moves when it is genuinely
+tested; an untested or evidence-less one sits at `p0` (the baseline),
+not at 0 - so `health` and `confidence` merged into one verdict-derived
+score. The `nak-samskara-decay` cron is unscheduled; the new
+`nak-samskara-reap` cron (`samskara_reap_dead`, minute :13) clears only
+repeatedly-contradicted, long-quiet rows. The `samskara_decay_sweep` /
+`samskara_apply_reaction` functions and the live reaction-classify
+probe are left defined-but-dead pending a cleanup pass. Design of
+record + the model's math:
 [`plans/samskara-decay-relevance-gated-plan.md`](plans/samskara-decay-relevance-gated-plan.md).
 
 ### Dedup formula

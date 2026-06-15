@@ -6829,6 +6829,32 @@ end $$;
 revoke all on function public.samskara_reap_dead(real, int) from public, anon, authenticated;
 grant execute on function public.samskara_reap_dead(real, int) to service_role;
 
+-- One-shot health reconcile. Recompute health = confidence = the derived
+-- posterior of each samskara's CURRENT tallies (k=5 mirrors
+-- samskara_apply_evaluation - keep the two in sync). On the first apply
+-- after the flip this IS the repair: the int-truncation casualties carry
+-- zero evidence, so they evaluate to p0 (the population baseline) and
+-- lift out of their stale bug-era health, fire-able again. Idempotent
+-- afterward - health is a pure function of (tallies, p0), so re-running
+-- only re-asserts it. Guarded so an empty samskaras table is a clean
+-- no-op; per-user because p0 is per-user.
+do $reconcile$
+declare
+  v_user uuid;
+  v_p0 real;
+begin
+  for v_user in select distinct user_id from public.samskaras loop
+    v_p0 := public.samskara_population_p0(v_user);
+    update public.samskaras s
+       set health     = (s.confirm_count + 5.0 * v_p0) / (s.confirm_count + s.disconfirm_count + 5.0),
+           confidence = (s.confirm_count + 5.0 * v_p0) / (s.confirm_count + s.disconfirm_count + 5.0)
+     where s.user_id = v_user;
+  end loop;
+exception when others then
+  raise notice 'samskara health reconcile skipped: %', sqlerrm;
+end
+$reconcile$;
+
 -- Compound-summary regeneration coordination.
 --
 -- Three RPCs. `samskara_should_regen_compound` returns a small
@@ -10963,7 +10989,7 @@ begin
     -- Minute 3: the x7 ladder (:07 wiki, :17 rem, :27 reflection,
     -- :37 librarian, :47 deep-sleep, :57 curation) is full, so the
     -- bias sweep starts a new column clear of the */5 embed ticks
-    -- and the :13/:43 samskara decay.
+    -- and the :13 samskara reaper.
     perform cron.schedule(
       'nak-bias-sweep',
       '3 * * * *',
@@ -11076,17 +11102,20 @@ $cron$;
 -- ---------------------------------------------------------------------------
 -- Scheduled samskara decay (pg_cron -> SQL)
 --
--- Every 30 minutes, run the decay pass over the whole samskara corpus
--- (see samskara_decay_sweep above). The decay rates are calibrated as
--- a per-PASS nudge on this cadence; running it from the browser
--- worker's rotation tied the cadence to an in-memory throttle that
--- reset on every worker restart and over-ran the target under active
--- use. A server-side wall clock has no restart-reset failure mode.
+-- Wall-clock samskara decay is RETIRED. Health is now a derived,
+-- relevance-gated posterior maintained by the evaluation sweep
+-- (samskara_apply_evaluation, driven by nak-samskara-evaluation-sweep);
+-- a wall-clock pass would fight it over the same column. The old
+-- nak-samskara-decay job is unscheduled idempotently on every apply.
+-- (samskara_decay_sweep() is left defined-but-uncalled pending a
+-- dead-code cleanup pass.)
 --
--- Pure SQL (no pg_net) for the same reason as the stream janitor: the
--- pass only touches the samskaras table. Minutes 13/43 keep clear of
--- the pg_net sweep ledger (:07 wiki, :17 rem + attachments, :27
--- reflection, :37 librarian, :47 deep-sleep, :57 curation, */5 embed).
+-- The freed minute-13 slot now drives the REAPER: a pure-SQL pass (no
+-- pg_net, same shape the old decay used) that deletes
+-- repeatedly-contradicted, long-quiet samskaras (samskara_reap_dead).
+-- Untested-but-baseline rows sit at p0 and are spared; only real
+-- accumulated misses are cleared. Was :13/:43; the reaper needs only
+-- one pass a day's worth of cadence, so a single :13 tick.
 do $cron$
 begin
   if exists (select 1 from pg_available_extensions where name = 'pg_cron') then
@@ -11094,14 +11123,17 @@ begin
     if exists (select 1 from cron.job where jobname = 'nak-samskara-decay') then
       perform cron.unschedule('nak-samskara-decay');
     end if;
+    if exists (select 1 from cron.job where jobname = 'nak-samskara-reap') then
+      perform cron.unschedule('nak-samskara-reap');
+    end if;
     perform cron.schedule(
-      'nak-samskara-decay',
-      '13,43 * * * *',
-      $job$ select public.samskara_decay_sweep(); $job$
+      'nak-samskara-reap',
+      '13 * * * *',
+      $job$ select public.samskara_reap_dead(); $job$
     );
   end if;
 exception when others then
-  raise notice 'samskara-decay cron setup skipped: %', sqlerrm;
+  raise notice 'samskara reaper cron setup skipped: %', sqlerrm;
 end
 $cron$;
 

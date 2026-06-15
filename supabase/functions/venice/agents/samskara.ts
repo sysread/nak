@@ -1623,12 +1623,17 @@ async function runPhase(
  * between curation and reflection on completed turns. Non-throwing -
  * a samskara failure never disturbs the committed turn.
  *
- * Phase order is load-bearing: reaction-classify first (the resolution
- * window is the only hard timing in the loop), then the assimilate
- * drain (new substrate feeds everything else), then the exploratory
- * probes. The stub this very turn produced is usually NOT visible yet
- * - the browser records it at roughly the same moment this tail runs -
- * so the drain works one turn behind, by construction.
+ * Phase order is load-bearing: the assimilate drain first (new
+ * substrate feeds everything else), then the exploratory probes. The
+ * stub this very turn produced is usually NOT visible yet - the
+ * browser records it at roughly the same moment this tail runs - so
+ * the drain works one turn behind, by construction.
+ *
+ * Reaction classification used to run first here (its 1-10min window
+ * was the only hard timing); it has moved to the next-day evaluation
+ * sweep (agents/samskara_evaluation.ts), which judges every fired
+ * samskara against the settled conversation and feeds health. Running
+ * the live probe too would double-count tallies against the sweep.
  */
 export async function samskaraOnTurnTail(
   adminClient: SupabaseClient,
@@ -1641,9 +1646,6 @@ export async function samskaraOnTurnTail(
       log.warn('tail: no Venice key configured; skipping');
       return;
     }
-    await runPhase(log, 'reaction-classify', () =>
-      reactionClassifyProbe(adminClient, userId, log, apiKey),
-    );
     await runPhase(log, 'assimilate', () =>
       assimilateDrainForUser(adminClient, userId, log, apiKey, TAIL_ASSIMILATE_CAP),
     );

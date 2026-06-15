@@ -9,7 +9,7 @@
 import { assert, assertEquals } from 'jsr:@std/assert';
 import { __test } from '../venice/agents/samskara_evaluation.ts';
 
-const { parseVerdicts, HEALTH_DELTA, buildVerdictRequest } = __test;
+const { parseVerdicts, buildVerdictRequest } = __test;
 
 Deno.test('parseVerdicts keeps well-formed enum verdicts', () => {
   const m = parseVerdicts('{"p1":"held","p2":"contradicted","p3":"not-engaged"}');
@@ -38,19 +38,6 @@ Deno.test('parseVerdicts returns empty on non-object JSON', () => {
   assertEquals(parseVerdicts('["held","not-engaged"]').size, 0);
   assertEquals(parseVerdicts('"held"').size, 0);
   assertEquals(parseVerdicts('null').size, 0);
-});
-
-Deno.test('HEALTH_DELTA signs encode reinforce / penalise / forget', () => {
-  // held reinforces, contradicted penalises hardest, not-engaged is the
-  // gentle relevance-gated forgetting. The relative magnitudes are the
-  // calibration starting point slice 2 inherits.
-  assert(HEALTH_DELTA.held > 0, 'held must reinforce');
-  assert(HEALTH_DELTA.contradicted < 0, 'contradicted must penalise');
-  assert(HEALTH_DELTA['not-engaged'] < 0, 'not-engaged must decay');
-  assert(
-    Math.abs(HEALTH_DELTA.contradicted) > Math.abs(HEALTH_DELTA['not-engaged']),
-    'contradiction must bite harder than mere non-engagement',
-  );
 });
 
 Deno.test('buildVerdictRequest names the three verdicts, the tags, and the JSON contract', () => {

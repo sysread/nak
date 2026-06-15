@@ -55,24 +55,14 @@ const EVALUATION_CLAIM_TTL_SECONDS = 600;
 // floor for agent sub-calls keeps finish_reason off 'length'.
 const EVALUATION_MAX_TOKENS = 2048;
 
-// Health deltas the judge WOULD apply per verdict. Wired here so slice
-// 2 applies the same numbers it shadow-logged. First-draft magnitudes
-// (the plan's starting point); the shadow-run calibrates them against
-// the historical live-classifier confirms before they go live.
-//   held           - prediction borne out -> reinforce
-//   contradicted   - user did the opposite -> penalise
-//   not-engaged    - fired but the conversation neither confirmed nor
-//                    refuted it -> the gentle relevance-gated forgetting
-const HEALTH_DELTA: Record<VerdictKind, number> = {
-  held: 0.2,
-  contradicted: -0.2,
-  'not-engaged': -0.05,
-};
-
-// SLICE-1 KILL SWITCH. While true the judge records verdicts + logs
-// would-be deltas but never writes health. Slice 2 sets this false and
-// routes the deltas through the health-apply RPC.
-const SHADOW_MODE = true;
+// Kill switch. While true the judge records verdicts but never writes
+// health (the slice-1 shadow phase). False routes each verdict through
+// samskara_apply_evaluation, which recomputes health as the
+// empirical-Bayes posterior. There are NO per-verdict delta constants
+// under the derived model - held / contradicted / not-engaged are hit /
+// miss / no-evidence, and the magnitude falls out of the posterior and
+// its population prior, not a hand-tuned step.
+const SHADOW_MODE = false;
 
 type VerdictKind = 'held' | 'contradicted' | 'not-engaged';
 
@@ -300,8 +290,8 @@ async function evaluateClaimedThread(
 
   // Group fired samskaras by the verdict the judge gave them. A
   // prediction the judge omitted or mis-typed gets no verdict (and no
-  // delta) this cycle - best-effort; it re-evaluates next time its
-  // thread becomes eligible.
+  // health update) this cycle - best-effort; it re-evaluates next time
+  // its thread becomes eligible.
   const byVerdict: Record<VerdictKind, string[]> = {
     held: [],
     contradicted: [],
@@ -312,15 +302,19 @@ async function evaluateClaimedThread(
     if (v) byVerdict[v].push(p.id);
   }
 
-  // Record the verdicts on the fire rows (shadow + slice 2 both do
-  // this). One update per verdict group, stamping every fire row of
-  // each samskara in this thread.
+  // Record the verdicts on the fire rows. One update per verdict group,
+  // stamping every fire row of each samskara in this thread. was_confirmed
+  // is set alongside (held -> true, contradicted -> false, not-engaged ->
+  // null) so the legacy readers of that column - the Health panel's
+  // resolution stats, CohortPanel, BiasProfile - keep working now that the
+  // live reaction classifier (its former writer) no longer runs.
   for (const kind of VERDICT_KINDS) {
     const ids = byVerdict[kind];
     if (ids.length === 0) continue;
+    const wasConfirmed = kind === 'held' ? true : kind === 'contradicted' ? false : null;
     const { error: updErr } = await adminClient
       .from('samskara_fires')
-      .update({ verdict: kind })
+      .update({ verdict: kind, was_confirmed: wasConfirmed })
       .eq('thread_id', threadId)
       .eq('user_id', userId)
       .in('samskara_id', ids);
@@ -329,22 +323,32 @@ async function evaluateClaimedThread(
 
   const judged = byVerdict.held.length + byVerdict.contradicted.length +
     byVerdict['not-engaged'].length;
-  const wouldApply = VERDICT_KINDS.map(
-    (k) => `${k}=${byVerdict[k].length}(${HEALTH_DELTA[k] >= 0 ? '+' : ''}${HEALTH_DELTA[k]})`,
-  ).join(' ');
+  const verdictSummary = VERDICT_KINDS.map((k) => `${k}=${byVerdict[k].length}`).join(' ');
 
   if (SHADOW_MODE) {
-    // Shadow: verdicts are recorded above; health is untouched. Log the
-    // deltas slice 2 would apply so a week of these lines calibrates the
-    // magnitudes against the historical live-classifier confirms.
+    // Shadow: verdicts are recorded above; health is untouched. The line
+    // lets a week of judgements be eyeballed before going live.
     log.info(
-      `shadow-judged thread ${threadId}: ${judged}/${predictions.length} predictions; ` +
-        `would apply ${wouldApply}`,
+      `shadow-judged thread ${threadId}: ${judged}/${predictions.length} predictions; ${verdictSummary}`,
+    );
+  } else {
+    // Live: fold the verdicts into the self-calibrating posterior.
+    // samskara_apply_evaluation discounts prior evidence, applies this
+    // round's hit/miss, and recomputes health = confidence = the
+    // posterior shrunk toward the population prior `p0`. The not-engaged
+    // ids ride along so their prior evidence is discounted (the
+    // forgetting) even though they add no hit or miss.
+    const { error: applyErr } = await adminClient.rpc('samskara_apply_evaluation', {
+      p_user_id: userId,
+      p_held: byVerdict.held,
+      p_contradicted: byVerdict.contradicted,
+      p_not_engaged: byVerdict['not-engaged'],
+    });
+    if (applyErr) throw new Error(`samskara_apply_evaluation failed: ${applyErr.message}`);
+    log.info(
+      `judged thread ${threadId}: ${judged}/${predictions.length} predictions; ${verdictSummary}`,
     );
   }
-  // Slice 2: when SHADOW_MODE is false, route byVerdict through the
-  // health-apply RPC here (health delta clamped [0,1] + the
-  // confirm/disconfirm/confidence count-math the fire score reads).
 
   const marked = await markEvaluated(adminClient, threadId, holderId, terminalMsgId, userId);
   if (!marked) {
@@ -377,5 +381,5 @@ async function markEvaluated(
 }
 
 // Test-only surface: the verdict parser's defensive drops and the
-// delta map are behaviour worth pinning without a live Venice call.
-export const __test = { parseVerdicts, HEALTH_DELTA, buildVerdictRequest };
+// prompt contract are behaviour worth pinning without a live Venice call.
+export const __test = { parseVerdicts, buildVerdictRequest };
