@@ -4450,29 +4450,16 @@ export class SupabaseService {
    * the live step events: subscribe via subscribeToAgentRunProgress
    * BEFORE calling this, or the first events race the subscription.
    */
-  async runRem(args: { runId: string }): Promise<RemRunResult> {
-    const { data, error } = await this.client.functions.invoke('venice/rem-run', {
+  async runRem(args: { runId: string }): Promise<void> {
+    // Detached route: the body is {accepted:true} and the run continues
+    // in the background past the gateway window. The RemRunResult arrives
+    // later as a `result` event on the agent-runs channel (await it via
+    // awaitDetachedRun), so this POST only KICKS the run - a non-error
+    // response means accepted. A transport/auth failure throws.
+    const { error } = await this.client.functions.invoke('venice/rem-run', {
       body: { runId: args.runId },
     });
     if (error) throw await veniceFunctionError(error);
-    const result = data as Partial<RemRunResult> | null;
-    if (result && result.kind === 'ok' && typeof result.finalText === 'string') {
-      return {
-        kind: 'ok',
-        finalText: result.finalText,
-        toolCalls: typeof result.toolCalls === 'number' ? result.toolCalls : 0,
-        conversationsProcessed:
-          typeof result.conversationsProcessed === 'number'
-            ? result.conversationsProcessed
-            : 0,
-      };
-    }
-    if (result && result.kind === 'empty-queue') return { kind: 'empty-queue' };
-    if (result && result.kind === 'busy') return { kind: 'busy' };
-    if (result && result.kind === 'error' && typeof result.error === 'string') {
-      return { kind: 'error', error: result.error };
-    }
-    return { kind: 'error', error: 'rem-run returned an unrecognised response' };
   }
 
   /**
@@ -4481,32 +4468,14 @@ export class SupabaseService {
    * runWikiLibrarian): subscribe to the progress channel before the
    * POST; the in-flight collision comes back as kind 'busy'.
    */
-  async runDeepSleep(args: { runId: string }): Promise<DeepSleepRunResult> {
-    const { data, error } = await this.client.functions.invoke('venice/deep-sleep-run', {
+  async runDeepSleep(args: { runId: string }): Promise<void> {
+    // Detached route, same contract as runRem: returns {accepted:true};
+    // the DeepSleepRunResult arrives as a `result` event on the
+    // agent-runs channel (await via awaitDetachedRun). KICK only.
+    const { error } = await this.client.functions.invoke('venice/deep-sleep-run', {
       body: { runId: args.runId },
     });
     if (error) throw await veniceFunctionError(error);
-    const result = data as Partial<DeepSleepRunResult> | null;
-    if (result && result.kind === 'ok' && typeof result.finalText === 'string') {
-      return {
-        kind: 'ok',
-        finalText: result.finalText,
-        toolCalls: typeof result.toolCalls === 'number' ? result.toolCalls : 0,
-        batchSize: typeof result.batchSize === 'number' ? result.batchSize : 0,
-      };
-    }
-    if (result && result.kind === 'no-eligible') return { kind: 'no-eligible' };
-    if (result && result.kind === 'too-small') {
-      return {
-        kind: 'too-small',
-        batchSize: typeof result.batchSize === 'number' ? result.batchSize : 0,
-      };
-    }
-    if (result && result.kind === 'busy') return { kind: 'busy' };
-    if (result && result.kind === 'error' && typeof result.error === 'string') {
-      return { kind: 'error', error: result.error };
-    }
-    return { kind: 'error', error: 'deep-sleep-run returned an unrecognised response' };
   }
 
   // Thread response claim --------------------------------------------------

@@ -33,8 +33,14 @@
  * UI with nothing in flight, so losing it on navigation (and
  * re-opening with one click) is fine.
  */
-import type { AgentRunProgressEvent, SupabaseService } from '../supabase';
+import type {
+  AgentRunProgressEvent,
+  DeepSleepRunResult,
+  RemRunResult,
+  SupabaseService,
+} from '../supabase';
 import { emitMemoryChange } from '../memory-events';
+import { awaitDetachedRun } from './detached-run';
 import {
   pushStep,
   deepSleepResultLine,
@@ -153,25 +159,33 @@ export const librarianRun = {
     state.error = null;
 
     const runId = crypto.randomUUID();
-    let unsubscribe: (() => void) | null = null;
     try {
       const session = await deps.supabase.getSession();
       if (!session) {
         state.error = 'Not signed in.';
         return;
       }
-      unsubscribe = deps.supabase.subscribeToAgentRunProgress(
-        session.user.id,
-        (event) => {
-          // Skip the detached-run terminal event (not used by this
-          // synchronous path) and other runs' events.
-          if (event.runId !== runId || event.kind === 'result') return;
-          pushStep(state.steps, stepEventFor(pass, event));
-        }
-      );
+      const supa = deps.supabase;
+      const userId = session.user.id;
+      // Detached run: the POST returns {accepted:true}; the run continues
+      // server-side and the result arrives as the terminal event.
+      // awaitDetachedRun subscribes-before-kick, streams progress into the
+      // step list, and resolves with the result union.
+      const onProgress = (event: AgentRunProgressEvent): void => {
+        // awaitDetachedRun intercepts the terminal `result`; narrow it off
+        // so the step-list mapper only sees progress phases.
+        if (event.kind === 'result') return;
+        pushStep(state.steps, stepEventFor(pass, event));
+      };
 
       if (pass === 'deep-sleep') {
-        const result = await deps.supabase.runDeepSleep({ runId });
+        const result = await awaitDetachedRun<DeepSleepRunResult>({
+          supabase: supa,
+          userId,
+          runId,
+          post: () => supa.runDeepSleep({ runId }),
+          onProgress,
+        });
         if (result.kind === 'busy') {
           state.error = BUSY_MESSAGE;
           return;
@@ -187,7 +201,13 @@ export const librarianRun = {
           state.resultText = result.finalText.trim();
         }
       } else {
-        const result = await deps.supabase.runRem({ runId });
+        const result = await awaitDetachedRun<RemRunResult>({
+          supabase: supa,
+          userId,
+          runId,
+          post: () => supa.runRem({ runId }),
+          onProgress,
+        });
         if (result.kind === 'busy') {
           state.error = BUSY_MESSAGE;
           return;
@@ -209,9 +229,12 @@ export const librarianRun = {
       // local fire keeps the panel snappy.
       emitMemoryChange();
     } catch (err) {
+      // The kick failed (transport/auth) or awaitDetachedRun's inactivity
+      // backstop fired. The detached run may have committed memory changes
+      // before a dropped channel, so still refresh to surface them.
       state.error = err instanceof Error ? err.message : String(err);
+      emitMemoryChange();
     } finally {
-      unsubscribe?.();
       state.running = false;
     }
   },

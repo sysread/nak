@@ -166,14 +166,16 @@
     runWikiSearch,
   } from '$lib/wiki-store.svelte';
   import { onWikiChange, emitWikiChange } from '$lib/wiki-events';
-  import { wikiLibrarianLease } from '$lib/agents/inflight-lease.svelte';
+  import {
+    wikiLibrarianLease,
+    memoryLibrarianLease,
+  } from '$lib/agents/inflight-lease.svelte';
   import { emitMemoryChange } from '$lib/memory-events';
   import {
     documentStore,
     runDocumentSearch,
   } from '$lib/documents-store.svelte';
   import { onDocumentChange } from '$lib/document-events';
-  import { librarianRun } from '$lib/agents/memory-librarian-run.svelte';
   import { moodState } from '$lib/samskara/mood.svelte';
   import {
     bandIndexFor,
@@ -1817,6 +1819,16 @@
     if (!app.supabase || !session) return;
     wikiLibrarianLease.start({ supabase: app.supabase, userId: session.user.id });
     return () => wikiLibrarianLease.stop();
+  });
+
+  // Memory librarian (rem + deep-sleep) twin of the wiki lease watcher.
+  // Both passes share one in-flight guard, so one watcher drives the
+  // disable state on both top-bar buttons and reflects scheduled
+  // background memory-librarian runs too.
+  $effect(() => {
+    if (!app.supabase || !session) return;
+    memoryLibrarianLease.start({ supabase: app.supabase, userId: session.user.id });
+    return () => memoryLibrarianLease.stop();
   });
 
   // Realtime: the memories twin of the wiki relay above. Every memory
@@ -6599,11 +6611,12 @@
                the wiki tab's changelog button) plus two manual-trigger
                actions for the memory librarian's two passes (deep-sleep
                = similarity-sweep consolidation; rem = conversation-
-               batched associative integration). The librarian buttons
-               disable while the scheduled worker or a previous manual
-               run is in flight - the runners' .busy getter ORs both.
-               The panel itself owns the progress strip and the result
-               line; these are just the launchers. -->
+               batched associative integration). Like the wiki sparkle,
+               these are NAVIGATION (they open the pass's confirm strip),
+               so they stay enabled while a pass is in flight - the page's
+               Run button is what disables, with a "running in the
+               background" spinner. The panel owns the progress strip and
+               the result line; these are just the launchers. -->
           {@const actions = [
             {
               id: 'changelog',
@@ -6615,20 +6628,14 @@
             {
               id: 'deep-sleep',
               label: 'Deep-sleep pass',
-              title: librarianRun.running
-                ? 'A memory-librarian pass is already running'
-                : 'Run the deep-sleep pass now (similarity-sweep consolidation)',
-              disabled: librarianRun.running,
+              title: 'Run the deep-sleep pass (similarity-sweep consolidation)',
               onclick: () => (deepSleepTrigger = true),
               icon: deepSleepIcon,
             },
             {
               id: 'rem',
               label: 'Rem pass',
-              title: librarianRun.running
-                ? 'A memory-librarian pass is already running'
-                : 'Run the rem pass now (associative integration over recent recall)',
-              disabled: librarianRun.running,
+              title: 'Run the rem pass (associative integration over recent recall)',
               onclick: () => (remTrigger = true),
               icon: remIcon,
             },

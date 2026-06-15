@@ -662,90 +662,25 @@ function sweepHandler(
 }
 
 /**
- * User-triggered manual-run route. Body: { runId?: string, ...fleet
- * extras }. The browser mints the runId and subscribes to its
- * agent-runs channel BEFORE posting, so the step events published
- * here are never raced; a missing runId just means no progress
- * publishing (the result body still carries the outcome).
- * Agent-level failures and in-flight collisions come back inside the
- * fleet's result union, not as transport errors. The factory owns
- * auth, body parse, the runId cap, and the publisher lifecycle; the
- * `run` adapter pulls any fleet-specific fields off the parsed body.
- */
-function manualRunHandler(
-  logSource: string,
-  run: (
-    admin: SupabaseClient,
-    userId: string,
-    body: Record<string, unknown>,
-    onProgress: ((event: Record<string, unknown>) => void) | undefined,
-  ) => Promise<unknown>,
-): (req: Request) => Promise<Response> {
-  return async (req) => {
-    const userId = userIdFromJwt(req);
-    if (!userId) return json({ error: 'unauthorized' }, 401);
-    const admin = requireAdmin();
-    if (admin instanceof Response) return admin;
-
-    let body: Record<string, unknown>;
-    try {
-      body = (await req.json()) as Record<string, unknown>;
-    } catch {
-      return json({ error: 'invalid JSON body' }, 400);
-    }
-    // Cap the client-minted id so a hostile body can't bloat every
-    // broadcast payload; the id is an opaque demux key, not identity.
-    const runId =
-      typeof body.runId === 'string' && body.runId.length > 0 && body.runId.length <= 64
-        ? body.runId
-        : null;
-
-    const publisher = runId ? createAgentProgressPublisher(userId, runId) : null;
-    let result: unknown;
-    try {
-      result = await run(
-        admin,
-        userId,
-        body,
-        publisher ? (event) => publisher.publish(event) : undefined,
-      );
-    } catch (err) {
-      // The run functions fold expected failures into their result
-      // unions, so a throw here is an infrastructure bug. The
-      // requesting user is known, so their drawer gets the line.
-      const log = createEdgeLogger(userId, logSource);
-      log.error(
-        'manual run failed unexpectedly',
-        err instanceof Error ? err : new Error(String(err)),
-      );
-      await log.flush();
-      return json({ error: 'internal error during manual run' }, 500);
-    }
-    // Flush before responding so the 'done' event lands no later than
-    // the response body that also announces completion.
-    if (publisher) await publisher.flush();
-    return json(result);
-  };
-}
-
-/**
- * Detached variant of manualRunHandler for runs that can outlive the
- * gateway's response window (~2.5 min). manualRunHandler awaits the
- * whole run before responding, so a long pass (a librarian reading
- * conversations over a multi-round tool loop) draws a gateway 504 even
- * though the function would finish - the edits land, but the response
- * and the trailing terminal broadcast never reach the browser. This
- * factory runs the fleet function DETACHED under EdgeRuntime.waitUntil
- * (same shape as the sweep routes and chat /stream) and responds
- * {accepted:true} immediately. The outcome can no longer ride the HTTP
- * body, so it is published as a terminal `result` event on the
- * agent-runs channel; the browser's real backstop is the in-flight
+ * Factory for a user-triggered manual fleet run. The run can outlive the
+ * gateway's response window (~2.5 min), so awaiting the whole pass before
+ * responding would draw a gateway 504 on a long one (a librarian reading
+ * conversations over a multi-round tool loop): the function finishes and
+ * the edits land, but the response and the trailing terminal broadcast
+ * never reach the browser. So this runs the fleet function DETACHED under
+ * EdgeRuntime.waitUntil (same shape as the sweep routes and chat /stream)
+ * and responds {accepted:true} immediately. The outcome can no longer
+ * ride the HTTP body, so it is published as a terminal `result` event on
+ * the agent-runs channel; the browser's real backstop is the in-flight
  * lease (profiles realtime), which settles the UI even if this
  * fire-and-forget broadcast is dropped.
  *
- * runId is REQUIRED here (unlike manualRunHandler, where a missing id
- * just suppresses progress): without it there is no channel to carry
- * the result at all.
+ * runId is REQUIRED: without it there is no channel to carry the result.
+ * The browser mints it and subscribes to its agent-runs channel BEFORE
+ * posting (the pre-subscribe rule), so the events published here are
+ * never raced. The `run` adapter pulls any fleet-specific fields off the
+ * parsed body; agent-level failures and in-flight collisions come back
+ * inside the fleet's result union, surfaced via the `result` event.
  */
 function detachedManualRunHandler(
   logSource: string,
@@ -826,10 +761,11 @@ const handleReflectionSweep = sweepHandler(runReflectionSweepTick);
 const handleCurationSweep = sweepHandler(runCurationSweepTick);
 const handleBiasSweep = sweepHandler(runBiasSweepTick);
 const handleSamskaraSweep = sweepHandler(runSamskaraSweepTick);
-// Detached: a librarian pass can run minutes (conversation reads over a
-// multi-round loop), past the gateway window. rem/deep-sleep stay on the
-// synchronous manualRunHandler until this pattern is confirmed in prod,
-// then they flip to detachedManualRunHandler the same way.
+// All three manual fleet runs (wiki librarian, rem, deep-sleep) are
+// detached: each pass can run minutes (conversation/memory reads over a
+// multi-round loop) past the gateway window, so the route returns
+// {accepted:true} and reports the outcome over the agent-runs channel +
+// the in-flight lease.
 const handleWikiLibrarianRun = detachedManualRunHandler('wiki-librarian', (admin, userId, body, onProgress) =>
   runWikiLibrarianManual(
     admin,
@@ -838,10 +774,10 @@ const handleWikiLibrarianRun = detachedManualRunHandler('wiki-librarian', (admin
     onProgress,
   ),
 );
-const handleRemRun = manualRunHandler('rem', (admin, userId, _body, onProgress) =>
+const handleRemRun = detachedManualRunHandler('rem', (admin, userId, _body, onProgress) =>
   runRemManual(admin, userId, onProgress),
 );
-const handleDeepSleepRun = manualRunHandler('deep-sleep', (admin, userId, _body, onProgress) =>
+const handleDeepSleepRun = detachedManualRunHandler('deep-sleep', (admin, userId, _body, onProgress) =>
   runDeepSleepManual(admin, userId, onProgress),
 );
 

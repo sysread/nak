@@ -312,10 +312,22 @@ in `docs/user/memory.md`. The dev side has five moving parts:
   `librarianRun.start()` in `memory-librarian-run.svelte.ts` ->
   `SupabaseService.runDeepSleep` / `runRem` -> `POST
   /deep-sleep-run` / `/rem-run` (user JWT) with a client-minted
-  runId. Live step events ride the per-user `agent-runs:<userId>`
-  Broadcast channel (subscribe-before-POST); a collision with any
-  other librarian run folds into a `busy` result. Manual runs
-  never touch the cadence stamps.
+  runId. **Detached** like the wiki librarian (`docs/dev/wiki.md`):
+  the route (`detachedManualRunHandler`) returns `{accepted:true}`
+  and runs under `EdgeRuntime.waitUntil`, so a long pass can't draw
+  the gateway 504; `librarianRun.start` awaits the outcome through
+  `awaitDetachedRun` (subscribe-before-POST on the per-user
+  `agent-runs:<userId>` channel, resolve on the terminal `result`
+  event). Run liveness for every client is the shared
+  `memory_librarian_inflight_expires_at` lease, watched via
+  `memoryLibrarianLease` (`agents/inflight-lease.svelte.ts`,
+  realtime off the `profiles` row), reflecting scheduled background
+  passes too. Following the wiki sparkle pattern: the top-bar
+  launchers stay ENABLED (they're navigation - they open the confirm
+  strip), and the lease instead disables the confirm strip's **Run**
+  submit and renders a "running in the background" spinner when a pass
+  is in flight elsewhere. A collision still folds into a `busy`
+  result. Manual runs never touch the cadence stamps.
 - **User memory CRUD through the assistant** — user asks "what
   do you remember about me?" or "forget that I liked X"; the
   main model calls `memory_search` / `memory_update` /
