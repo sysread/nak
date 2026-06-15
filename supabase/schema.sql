@@ -10626,11 +10626,69 @@ exception when others then
 end
 $cron$;
 
--- Samskara evaluation sweep dispatcher. Clone of the reflection trigger
--- fn: reads the Vault project_url + service_role_key and POSTs the
--- cron-only edge route. The route runs the next-day retrospective judge
--- (relevance-gated samskara decay; shadow mode in slice 1). Silent no-op
--- when Vault is unseeded, same as every other trigger fn.
+-- Read-only "is there work?" gate for the evaluation sweep. Mirrors the
+-- candidate predicate of claim_next_thread_for_evaluation_sweep exactly,
+-- minus the `for update skip locked` lease and the claim mutation, so the
+-- frequent (*/10) trigger fn can skip the edge POST entirely on idle
+-- ticks. KEEP THIS PREDICATE IN SYNC with that claim's candidate CTE: a
+-- mismatch that is too strict here silently strands a thread for a tick
+-- (or forever, if permanently false-negative); too loose just costs an
+-- occasional POST-then-no-thread, which is harmless.
+drop function if exists public.samskara_evaluable_exists();
+create or replace function public.samskara_evaluable_exists()
+returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (
+    select 1
+      from public.threads t
+      inner join public.profiles p on p.user_id = t.user_id
+      cross join lateral (
+        select public.nak_safe_timezone(p.settings->>'displayTimezone') as tz
+      ) usertz
+      cross join lateral (
+        select m.id as msg_id
+          from public.messages m
+         where m.thread_id = t.id
+           and m.role = 'assistant'
+           and (m.tool_calls is null
+                or jsonb_typeof(m.tool_calls) <> 'array'
+                or jsonb_array_length(m.tool_calls) = 0)
+           and m.content is not null
+           and length(m.content) > 0
+         order by m.created_at desc
+         limit 1
+      ) term
+      cross join lateral (
+        select m2.created_at
+          from public.messages m2
+         where m2.thread_id = t.id
+         order by m2.created_at desc
+         limit 1
+      ) newest
+     where term.msg_id is distinct from t.last_evaluated_msg_id
+       and (term.msg_id is distinct from t.evaluation_attempt_msg_id
+            or t.evaluation_attempt_count < 3)
+       and (t.evaluation_claim_expires_at is null
+            or t.evaluation_claim_expires_at < now())
+       and (newest.created_at at time zone usertz.tz)::date
+             < (now() at time zone usertz.tz)::date
+       and (
+         select count(*)
+           from public.messages m3
+          where m3.thread_id = t.id
+            and m3.role = 'user'
+       ) >= 2
+  );
+$$;
+revoke all on function public.samskara_evaluable_exists() from public, anon, authenticated;
+grant execute on function public.samskara_evaluable_exists() to service_role;
+
+-- Samskara evaluation sweep dispatcher. Reads the Vault project_url +
+-- service_role_key and POSTs the cron-only edge route, which runs the
+-- next-day retrospective judge (relevance-gated samskara health). Gated:
+-- it fast-exits via samskara_evaluable_exists() so the */10 cron only
+-- spins up the edge function when a thread is actually claimable. Silent
+-- no-op when Vault is unseeded, same as every other trigger fn.
 create or replace function public.nak_trigger_samskara_evaluation_sweep()
 returns void
 language plpgsql
@@ -10641,6 +10699,12 @@ declare
   v_url text;
   v_key text;
 begin
+  -- Fast-exit: only spin up the edge function when there is actually a
+  -- thread to judge. The */10 cadence is cheap because an idle tick stops
+  -- right here at one SQL EXISTS - no edge POST, no log line, no Venice.
+  if not public.samskara_evaluable_exists() then
+    return;
+  end if;
   begin
     execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'project_url' $q$ into v_url;
     execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'service_role_key' $q$ into v_key;
@@ -10677,13 +10741,16 @@ begin
     if exists (select 1 from cron.job where jobname = 'nak-samskara-evaluation-sweep') then
       perform cron.unschedule('nak-samskara-evaluation-sweep');
     end if;
-    -- Minute 33: a free slot in the sweep minute-spacing scheme (see the
-    -- reflection sweep's minute-27 comment). Taken: embed */5, bias 3,
-    -- wiki 7, decay 13/43, rem + attachment-expiry 17, samskara-sweep
-    -- 23, reflection 27, librarian 37, deep-sleep 47, curation 57.
+    -- Every 10 minutes, NOT a fixed-minute slot: the trigger fn gates on
+    -- samskara_evaluable_exists() and only POSTs the edge route when a
+    -- thread is actually claimable, so idle ticks are just a cheap SQL
+    -- EXISTS in pg_cron (no edge POST, no log noise, no Venice). Frequent
+    -- polling keeps the one-thread-per-run judge draining the initial
+    -- backlog in ~days instead of ~weeks; steady-state new threads get
+    -- judged within ~10 min of becoming eligible.
     perform cron.schedule(
       'nak-samskara-evaluation-sweep',
-      '33 * * * *',
+      '*/10 * * * *',
       $job$ select public.nak_trigger_samskara_evaluation_sweep(); $job$
     );
   end if;
