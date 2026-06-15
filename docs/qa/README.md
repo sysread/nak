@@ -107,3 +107,28 @@ One file per use-case under [`use-cases/`](./use-cases/), named
 - [samskara-association-mint](./use-cases/samskara-association-mint.md) -
   the sweep-only `mint-tier1-assoc` phase: minting from the
   association graph, the consumption stamp, mixed-kind provenance.
+- [attachments-lifecycle-ux](./use-cases/attachments-lifecycle-ux.md) -
+  attaching files from the composer, waiting for processing,
+  post-send previews, extracted-text drawers, and expired-file
+  surfaces.
+- [threads-management](./use-cases/threads-management.md) - thread title
+  generation, manual rename pinning, topic-filter pills, and the
+  per-thread multi-device reply lock.
+- [memory-browser-actions](./use-cases/memory-browser-actions.md) - the
+  Memories tab's browse/search/filter flows, edit/reaffirm/doubt,
+  relate/unrelate, delete, and recall visibility.
+- [wiki-editor-agent-update](./use-cases/wiki-editor-agent-update.md) -
+  wiki article browse/search/create/edit/delete, per-article agent
+  previews, and skipped-item retry/dismiss controls.
+- [library-document-workflow](./use-cases/library-document-workflow.md) -
+  Library upload, processing/searchability states, document-backed
+  answers, and document management actions.
+- [search-cross-tab](./use-cases/search-cross-tab.md) - the shared drawer
+  search UX across Chats, Recipes, Memories, and Wiki, including
+  scanner loading and substring fallback.
+- [settings-account-and-updates](./use-cases/settings-account-and-updates.md) -
+  Settings pane independence, update-check/reload flow, background-job
+  toggles, usage refresh, and credential/export actions.
+- [setup-config-transfer](./use-cases/setup-config-transfer.md) - first
+  launch setup, local config persistence, and config-only export/import
+  across browsers.
