@@ -103,6 +103,15 @@ create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function public.handle_new_user();
 
+-- handle_new_user runs only via the trigger above, executing as the
+-- table owner; nothing invokes it as an RPC. Living in the public
+-- schema otherwise grants anon/authenticated a default EXECUTE that
+-- PostgREST exposes at /rest/v1/rpc/handle_new_user - inert (it
+-- references the trigger pseudo-record `new` and errors out of
+-- trigger context) but a flagged surface. Revoke it to match the
+-- definer-lockdown convention used elsewhere in this file.
+revoke all on function public.handle_new_user() from public, anon, authenticated;
+
 -- app_config -------------------------------------------------------------
 --
 -- Project-global configuration shared by every member of this Supabase
@@ -3625,7 +3634,7 @@ end $$;
 -- via SQL.
 create or replace function public.nak_sweep_stale_streams()
 returns int
-language plpgsql security definer as $$
+language plpgsql security definer set search_path = public as $$
 declare
   affected int;
 begin
@@ -6480,7 +6489,7 @@ grant execute on function public.samskara_save_substrate_embedding_if_claimed(uu
 drop function if exists public.samskara_decay();
 create or replace function public.samskara_decay_sweep()
 returns int
-language plpgsql security definer as $$
+language plpgsql security definer set search_path = public as $$
 declare
   v_stale int;
   v_disconfirm int;
