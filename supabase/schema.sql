@@ -7203,33 +7203,63 @@ end $$;
 -- MUST stay below dedup's p_cosine_floor or the two phases fight over
 -- the same pairs - dedup deleting what tier-2 just grouped.
 --
--- Group shape: the strongest eligible edge seeds the group, then every
--- node that shares an eligible edge with BOTH seed members joins (up to
--- p_max_group_size, strongest first). Requiring both - not either -
+-- Group shape: eligible edges are ranked strongest-co-fire first; the
+-- strongest edge whose grown group is large enough AND not already
+-- covered by an existing tier-2 seeds the candidate. Around a seed,
+-- every node sharing an eligible edge with BOTH seed members joins (up
+-- to p_max_group_size, strongest first). Requiring both - not either -
 -- keeps the constellation coherent: a node co-firing with only one seed
 -- member is adjacent, not part of the pattern.
 --
--- Coverage skip: if an existing tier-2's child-set already overlaps the
--- candidate by Jaccard >= p_overlap_skip, return nothing. The group
--- still co-fires every cycle, so without this guard detection would
--- re-surface the same compound forever - the tier-2 analog of the
--- tier-1 twin problem. The mint phase's embedding dedup is the second
--- net (it catches a different child set that synthesized to the same
--- claim).
+-- Base-rate gate: eligibility is NOT raw co-fire count. Two samskaras
+-- that each fire on a large fraction of turns co-fire thousands of times
+-- by base rate alone, with no real association - and those always-on
+-- predictions are the least topically specific, so ranking by raw count
+-- floats generic noise to the top (a forced candidate built that way
+-- came back a cross-topic grab-bag the minter refuses). Eligibility also
+-- requires cofires(A,B) / min(fire_count_A, fire_count_B) >=
+-- p_min_cofire_ratio - the same normalization dedup uses - so a
+-- surviving edge means the two co-activate as a real fraction of when
+-- either fires, not that both are merely busy.
 --
--- Volatile (not stable): builds a temp edge table so the seed, the
--- neighbour scan, and the per-member weight read all hit the eligible
--- self-join once rather than three times. `on commit drop` scopes it to
--- the PostgREST call's transaction.
+-- Cosine band [p_cosine_lo, p_cosine_hi): the UPPER bound is
+-- load-bearing - it MUST stay below dedup's p_cosine_floor (above) or
+-- the two phases fight over the same pairs. The LOWER bound is currently
+-- non-binding: every prediction shares the "In situations like X, this
+-- user tends to Y" template, which floors pairwise prediction-cosine
+-- around 0.38, so no co-firing pair sits below p_cosine_lo = 0.30.
+-- Coherence is carried by the base-rate gate, not this floor; the band's
+-- only live job is keeping tier-2 out of dedup's territory. (Do not
+-- "fix" the floor by raising p_cosine_lo - prediction-cosine is template
+-- similarity, not topical similarity, so a higher floor filters noise,
+-- not for coherence.)
+--
+-- Seed iteration (coverage): a candidate group whose child-set overlaps
+-- an existing tier-2 by Jaccard >= p_overlap_skip is SKIPPED, and
+-- detection advances to the next-strongest uncovered seed rather than
+-- giving up. Without this, once one tier-2 exists the single strongest
+-- edge sits in the densest (already-compounded) region forever, the skip
+-- fires every cycle, and detection returns empty permanently while many
+-- uncovered constellations elsewhere go unseen. The probe budget scales
+-- with the existing-tier-2 count so the first uncovered seed is always
+-- reachable. The mint phase's embedding dedup is the second net (it
+-- catches a different child set that synthesized to the same claim).
+--
+-- Volatile (not stable): builds temp edge + existing-child-set tables so
+-- the seed loop, neighbour scans, and per-member weight read hit the
+-- eligible self-join once rather than per iteration. `on commit drop`
+-- scopes them to the PostgREST call's transaction.
 drop function if exists public.samskara_tier2_candidate(int, real, real, int, int, real);
+drop function if exists public.samskara_tier2_candidate(int, real, real, int, int, real, uuid);
 create or replace function public.samskara_tier2_candidate(
-  p_min_cofires    int  default 4,
-  p_cosine_lo      real default 0.30,
-  p_cosine_hi      real default 0.68,
-  p_min_group_size int  default 3,
-  p_max_group_size int  default 6,
-  p_overlap_skip   real default 0.60,
-  p_user_id        uuid default null
+  p_min_cofires      int  default 4,
+  p_min_cofire_ratio real default 0.30,
+  p_cosine_lo        real default 0.30,
+  p_cosine_hi        real default 0.68,
+  p_min_group_size   int  default 3,
+  p_max_group_size   int  default 6,
+  p_overlap_skip     real default 0.60,
+  p_user_id          uuid default null
 ) returns table (
   samskara_id uuid,
   prediction text,
@@ -7240,12 +7270,11 @@ language plpgsql security invoker as $$
 declare
   v_uid uuid := coalesce(p_user_id, auth.uid());
   v_active int;
-  v_seed_a uuid;
-  v_seed_b uuid;
+  v_existing_count int;
+  v_seed record;
   v_extra uuid[];
   v_group uuid[];
-  v_existing record;
-  v_overlap real;
+  v_max_overlap real;
 begin
   -- Cheap precondition before the costly self-join: tier-2 is
   -- meaningless until a substantial tier-1 corpus has actually fired.
@@ -7258,10 +7287,14 @@ begin
   end if;
 
   -- Eligible edges materialized once. Each is a tier-1<->tier-1 pair
-  -- that co-fires in >= p_min_cofires cohorts AND whose prediction-
-  -- embedding cosine sits in the [lo, hi) band - above lo to reject
-  -- spurious co-fires, strictly below hi (dedup's floor) so we only
-  -- ever group claims dedup deliberately leaves distinct.
+  -- that co-fires in >= p_min_cofires cohorts, clears the base-rate
+  -- ratio gate (co-fires as a real fraction of the rarer member's fire
+  -- count, not pure base-rate binding), AND whose prediction-embedding
+  -- cosine sits in the [lo, hi) band - strictly below hi (dedup's
+  -- floor) so we only ever group claims dedup deliberately leaves
+  -- distinct. The lo bound is non-binding in practice (the prediction
+  -- template floors cosine ~0.38); the ratio gate, not lo, is what
+  -- keeps frequency-bound noise out. See the preamble.
   create temporary table if not exists _tier2_edges (
     a_id uuid,
     b_id uuid,
@@ -7298,91 +7331,110 @@ begin
      and sb.tier = 1
      and sa.prediction_embedding is not null
      and sb.prediction_embedding is not null
+     and (pc.cofires::real
+            / greatest(least(sa.fire_count, sb.fire_count), 1)::real) >= p_min_cofire_ratio
      and (1 - (sa.prediction_embedding <=> sb.prediction_embedding))::real >= p_cosine_lo
      and (1 - (sa.prediction_embedding <=> sb.prediction_embedding))::real <  p_cosine_hi;
 
-  -- Seed: the strongest single eligible edge. Deterministic tie-break
-  -- on the ids so repeated calls pick the same seed when co-fire counts
-  -- tie.
-  select e.a_id, e.b_id into v_seed_a, v_seed_b
-    from _tier2_edges e
-   order by e.cofires desc, e.a_id, e.b_id
-   limit 1;
-  if v_seed_a is null then
-    return;
-  end if;
-
-  -- Grow: nodes sharing an eligible edge with BOTH seed members,
-  -- strongest combined co-fire first, capped at the group budget.
-  select coalesce(array_agg(node order by w desc), array[]::uuid[])
-    into v_extra
-    from (
-      select i.node, sum(i.cofires)::int as w
-        from (
-          select a_id as node, b_id as other, cofires from _tier2_edges
-          union all
-          select b_id as node, a_id as other, cofires from _tier2_edges
-        ) i
-       where i.other in (v_seed_a, v_seed_b)
-         and i.node not in (v_seed_a, v_seed_b)
-       group by i.node
-      having count(distinct i.other) = 2
-       order by w desc
-       limit greatest(p_max_group_size - 2, 0)
-    ) picked;
-
-  v_group := array[v_seed_a, v_seed_b] || v_extra;
-  if coalesce(array_length(v_group, 1), 0) < p_min_group_size then
-    return;
-  end if;
-
-  -- Coverage skip. Jaccard of the candidate group against each existing
-  -- tier-2's child-set; bail if any already covers this constellation.
-  for v_existing in
-    select sp.samskara_id as t2_id,
-           array_agg(sp.ref_id) as children
+  -- Existing tier-2 child-sets, materialized once. The seed loop tests
+  -- each candidate group's Jaccard overlap against these to skip
+  -- already-compounded regions.
+  create temporary table if not exists _tier2_existing (
+    t2_id uuid,
+    children uuid[]
+  ) on commit drop;
+  truncate _tier2_existing;
+  insert into _tier2_existing (t2_id, children)
+    select sp.samskara_id, array_agg(sp.ref_id)
       from public.samskara_provenance sp
       join public.samskaras s2 on s2.id = sp.samskara_id
      where sp.user_id = v_uid
        and sp.kind = 'samskara'
        and s2.tier = 2
-     group by sp.samskara_id
+     group by sp.samskara_id;
+  select count(*) into v_existing_count from _tier2_existing;
+
+  -- Seed iteration. Walk eligible edges strongest-co-fire first; the
+  -- first whose grown group is both large enough and uncovered wins.
+  -- Deterministic tie-break on the ids so repeated calls pick the same
+  -- order when co-fire counts tie. Probe budget = 64 + 16 per existing
+  -- tier-2: each existing tier-2 of up to p_max_group_size members can
+  -- cover at most C(size,2) of the strongest edges (<= 15 at size 6),
+  -- so 16 apiece keeps the first uncovered seed reachable as tier-2s
+  -- accumulate; the 64 base covers the common no/one-tier-2 case.
+  for v_seed in
+    select e.a_id, e.b_id
+      from _tier2_edges e
+     order by e.cofires desc, e.a_id, e.b_id
+     limit (64 + 16 * v_existing_count)
   loop
-    select (
+    -- Grow: nodes sharing an eligible edge with BOTH seed members,
+    -- strongest combined co-fire first, capped at the group budget.
+    select coalesce(array_agg(node order by w desc), array[]::uuid[])
+      into v_extra
+      from (
+        select i.node, sum(i.cofires)::int as w
+          from (
+            select a_id as node, b_id as other, cofires from _tier2_edges
+            union all
+            select b_id as node, a_id as other, cofires from _tier2_edges
+          ) i
+         where i.other in (v_seed.a_id, v_seed.b_id)
+           and i.node not in (v_seed.a_id, v_seed.b_id)
+         group by i.node
+        having count(distinct i.other) = 2
+         order by w desc
+         limit greatest(p_max_group_size - 2, 0)
+      ) picked;
+
+    v_group := array[v_seed.a_id, v_seed.b_id] || v_extra;
+    if coalesce(array_length(v_group, 1), 0) < p_min_group_size then
+      continue;
+    end if;
+
+    -- Coverage: max Jaccard of this group against existing tier-2
+    -- child-sets. Skip to the next-strongest seed if any covers it.
+    select coalesce(max(
       cardinality(array(
-        select unnest(v_group) intersect select unnest(v_existing.children)
+        select unnest(v_group) intersect select unnest(x.children)
       ))::real
       / nullif(cardinality(array(
-          select unnest(v_group) union select unnest(v_existing.children)
+          select unnest(v_group) union select unnest(x.children)
         )), 0)::real
-    ) into v_overlap;
-    if coalesce(v_overlap, 0) >= p_overlap_skip then
-      return;
+    ), 0) into v_max_overlap
+      from _tier2_existing x;
+    if v_max_overlap >= p_overlap_skip then
+      continue;
     end if;
+
+    -- Uncovered winner. Emit the members with a per-member weight =
+    -- summed co-fire count of that member's eligible edges to the rest
+    -- of the group. Becomes the provenance weight on the minted tier-2's
+    -- child links; the compound's own valence is the minter agent's
+    -- call, not a weighted mean here. One candidate per call: return.
+    return query
+      with mem as (
+        select unnest(v_group) as mid
+      ),
+      weighted as (
+        select m.mid,
+               coalesce(sum(e.cofires), 0)::real as cw
+          from mem m
+          left join _tier2_edges e
+            on (e.a_id = m.mid and e.b_id = any(v_group))
+            or (e.b_id = m.mid and e.a_id = any(v_group))
+         group by m.mid
+      )
+      select s.id, s.prediction, s.valence, w.cw
+        from weighted w
+        join public.samskaras s
+          on s.id = w.mid
+         and s.user_id = v_uid;
+    return;
   end loop;
 
-  -- Emit the members with a per-member weight = summed co-fire count of
-  -- that member's eligible edges to the rest of the group. Becomes the
-  -- provenance weight on the minted tier-2's child links; the compound's
-  -- own valence is the minter agent's call, not a weighted mean here.
-  return query
-    with mem as (
-      select unnest(v_group) as mid
-    ),
-    weighted as (
-      select m.mid,
-             coalesce(sum(e.cofires), 0)::real as cw
-        from mem m
-        left join _tier2_edges e
-          on (e.a_id = m.mid and e.b_id = any(v_group))
-          or (e.b_id = m.mid and e.a_id = any(v_group))
-       group by m.mid
-    )
-    select s.id, s.prediction, s.valence, w.cw
-      from weighted w
-      join public.samskaras s
-        on s.id = w.mid
-       and s.user_id = v_uid;
+  -- No uncovered constellation among the probed seeds.
+  return;
 end $$;
 
 -- Observability reads -----------------------------------------------------
