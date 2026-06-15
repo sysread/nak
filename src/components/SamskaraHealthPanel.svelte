@@ -112,6 +112,14 @@
           <span class="health-value">{row.value}</span>
         </div>
       {/each}
+      <!-- Informational, not thresholded / not in `backlog`: the next-day
+           judge's backlog starts large (every pre-redesign fire) and drains
+           over time, so a static severity would false-alarm the headline
+           during the expected drain. -->
+      <div class="health-row">
+        <span class="health-label">Awaiting judgment</span>
+        <span class="health-value">{snap.firesAwaitingJudgment}</span>
+      </div>
     </div>
 
     <h3 class="health-group">Inconsistencies</h3>

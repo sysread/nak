@@ -5880,9 +5880,12 @@ create index if not exists samskara_fires_user_round_idx
   on public.samskara_fires (user_id, thread_id, user_round)
   where user_round is not null;
 
-create index if not exists samskara_fires_unresolved_idx
-  on public.samskara_fires (user_id, thread_id, fired_at desc)
-  where was_confirmed is null;
+-- samskara_fires_unresolved_idx served the retired reaction classifier's
+-- "oldest unresolved cohort in the 1-10min window" poll (partial on
+-- was_confirmed is null). Nothing reads that access path anymore - the
+-- evaluation backlog counts verdict is null, which at this scale is a
+-- cheap unindexed count. Dropped from existing databases on re-apply.
+drop index if exists public.samskara_fires_unresolved_idx;
 
 alter table public.samskara_fires enable row level security;
 
@@ -7599,8 +7602,7 @@ returns table (
   pending_assimilate int,
   pending_embed int,
   fires_total int,
-  fires_unresolved_window int,
-  fires_aged_out int,
+  fires_awaiting_judgment int,
   orphan_fires int,
   stuck_assimilate_claims int,
   stuck_embed_claims int
@@ -7631,15 +7633,13 @@ language sql stable security invoker as $$
         and sub.situation is not null)::int,
     (select count(*) from public.samskara_fires f
       where f.user_id = auth.uid())::int,
+    -- Fires the next-day judge still owes a verdict (verdict is null):
+    -- the evaluation-sweep backlog. Drains toward ~0 as the sweep
+    -- catches up; a persistent climb means the sweep is stalled. (This
+    -- replaced two metrics built on the retired 1-10min reaction window.)
     (select count(*) from public.samskara_fires f
       where f.user_id = auth.uid()
-        and f.was_confirmed is null
-        and f.fired_at <= now() - interval '1 minute'
-        and f.fired_at >= now() - interval '10 minutes')::int,
-    (select count(*) from public.samskara_fires f
-      where f.user_id = auth.uid()
-        and f.was_confirmed is null
-        and f.fired_at < now() - interval '10 minutes')::int,
+        and f.verdict is null)::int,
     (select count(*) from public.samskara_fires f
       where f.user_id = auth.uid()
         and not exists (

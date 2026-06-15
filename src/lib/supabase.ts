@@ -6160,8 +6160,7 @@ export class SupabaseService {
       pendingAssimilate: r?.pending_assimilate ?? 0,
       pendingEmbed: r?.pending_embed ?? 0,
       firesTotal: r?.fires_total ?? 0,
-      firesUnresolvedWindow: r?.fires_unresolved_window ?? 0,
-      firesAgedOut: r?.fires_aged_out ?? 0,
+      firesAwaitingJudgment: r?.fires_awaiting_judgment ?? 0,
       orphanFires: r?.orphan_fires ?? 0,
       stuckAssimilateClaims: r?.stuck_assimilate_claims ?? 0,
       stuckEmbedClaims: r?.stuck_embed_claims ?? 0,
@@ -6592,8 +6591,7 @@ export interface SamskaraHealthSnapshot {
   pendingAssimilate: number;
   pendingEmbed: number;
   firesTotal: number;
-  firesUnresolvedWindow: number;
-  firesAgedOut: number;
+  firesAwaitingJudgment: number;
   orphanFires: number;
   stuckAssimilateClaims: number;
   stuckEmbedClaims: number;
