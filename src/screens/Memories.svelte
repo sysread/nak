@@ -896,16 +896,29 @@
     librarianConfirm !== null || librarianRun.active,
   );
 
+  // A pass is in flight (this tab's own run OR any other - scheduled,
+  // another device - via the in-flight lease). Disables the confirm
+  // strip's Run submit, mirroring the wiki page's Run button.
+  const memoryLibrarianBusy = $derived(
+    librarianRun.running || memoryLibrarianLease.running,
+  );
+  // A pass is in flight that this tab DIDN'T start - no local step-level
+  // fidelity, so the confirm strip shows a "running in the background"
+  // spinner. (Our own run shows the progress strip instead.)
+  const runInFlightElsewhere = $derived(
+    memoryLibrarianLease.running && !librarianRun.running,
+  );
+
   // The top-bar buttons set the trigger flags; we translate that into
   // "open the confirm strip for this pass" rather than running. The
   // actual run starts when the user confirms via confirmLibrarianRun.
   function openLibrarianConfirm(pass: MemoryLibrarianPass): void {
-    // Don't open a confirm on top of an in-flight pass - this tab's own
-    // run (librarianRun.running) or any other (scheduled, another device),
-    // detected via the in-flight lease. The top-bar launchers already
-    // disable on the same signal; this closes the realtime-lag gap and the
-    // server-side guard remains the authoritative collision surface.
-    if (librarianRun.running || memoryLibrarianLease.running) return;
+    // Your own active run shows the progress strip below - nothing to
+    // confirm. A pass in flight ELSEWHERE (another device, scheduled
+    // background) still opens this strip: the launcher is navigation, and
+    // the strip renders a "running in the background" spinner with Run
+    // disabled (the wiki sparkle page pattern).
+    if (librarianRun.running) return;
     librarianConfirm = pass;
   }
 
@@ -963,19 +976,32 @@
 <section class="memories-panel" aria-label="Memories">
   <div class="memories-body">
     {#if librarianConfirm !== null && librarianConfirmInfo}
-      <!-- Confirmation strip. The top-bar icon buttons have no
-           hover-title on touch devices, so this is where the user
-           learns which pass they're about to run and what it does
-           before any tokens get spent. Mutually exclusive with the
-           progress strip below - opening a confirm only happens when
-           no run is in flight. -->
+      <!-- Confirmation strip - the "page" the top-bar launcher opens
+           (the launcher is navigation, always enabled; the Run button
+           here is the gated submit). It also tells the user which pass
+           they're about to run, since the top-bar icons have no
+           hover-title on touch. When a pass is already in flight
+           elsewhere (another device, or a scheduled background run) the
+           strip shows a "running in the background" spinner and disables
+           Run - the same pattern as the wiki sparkle page. Your own
+           active run shows the progress strip below instead. -->
       <aside class="librarian-strip" aria-label="Confirm librarian run">
         <header class="librarian-strip-head">
           <strong>{librarianConfirmInfo.title}</strong>
         </header>
         <p class="librarian-confirm-desc">{librarianConfirmInfo.description}</p>
+        {#if runInFlightElsewhere}
+          <p class="subtle librarian-inflight" aria-live="polite">
+            <span class="librarian-inflight-spinner" aria-hidden="true">↻</span>
+            A memory-librarian pass is running in the background…
+          </p>
+        {/if}
         <div class="librarian-confirm-actions">
-          <button type="button" onclick={confirmLibrarianRun}>
+          <button
+            type="button"
+            onclick={confirmLibrarianRun}
+            disabled={memoryLibrarianBusy}
+          >
             {librarianConfirm === 'deep-sleep' ? 'Run deep-sleep' : 'Run rem'}
           </button>
           <button
@@ -1535,6 +1561,19 @@
   @keyframes librarian-pulse {
     0%, 100% { opacity: 0.45; }
     50% { opacity: 1; }
+  }
+
+  /* "Running in the background" notice in the confirm strip when a pass
+     is in flight that this tab didn't start. Reuses the pending pulse so
+     the in-flight cue matches the progress strip's. */
+  .librarian-inflight {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin: 0 0 0.5rem 0;
+  }
+  .librarian-inflight-spinner {
+    animation: librarian-pulse 1.4s ease-in-out infinite;
   }
 
   .librarian-result-line {

@@ -321,9 +321,12 @@ in `docs/user/memory.md`. The dev side has five moving parts:
   event). Run liveness for every client is the shared
   `memory_librarian_inflight_expires_at` lease, watched via
   `memoryLibrarianLease` (`agents/inflight-lease.svelte.ts`,
-  realtime off the `profiles` row) - it disables both top-bar
-  launchers and reflects scheduled background passes too. A
-  collision with any other librarian run folds into a `busy`
+  realtime off the `profiles` row), reflecting scheduled background
+  passes too. Following the wiki sparkle pattern: the top-bar
+  launchers stay ENABLED (they're navigation - they open the confirm
+  strip), and the lease instead disables the confirm strip's **Run**
+  submit and renders a "running in the background" spinner when a pass
+  is in flight elsewhere. A collision still folds into a `busy`
   result. Manual runs never touch the cadence stamps.
 - **User memory CRUD through the assistant** — user asks "what
   do you remember about me?" or "forget that I liked X"; the

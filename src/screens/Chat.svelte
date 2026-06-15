@@ -176,7 +176,6 @@
     runDocumentSearch,
   } from '$lib/documents-store.svelte';
   import { onDocumentChange } from '$lib/document-events';
-  import { librarianRun } from '$lib/agents/memory-librarian-run.svelte';
   import { moodState } from '$lib/samskara/mood.svelte';
   import {
     bandIndexFor,
@@ -1831,14 +1830,6 @@
     memoryLibrarianLease.start({ supabase: app.supabase, userId: session.user.id });
     return () => memoryLibrarianLease.stop();
   });
-
-  // Disable the memory-librarian launchers while a pass is in flight.
-  // librarianRun.running flips instantly on a local click; the lease
-  // covers the cross-client / scheduled-background case (and lags a local
-  // click by one realtime round-trip, hence the OR for snappy feedback).
-  const memoryLibrarianBusy = $derived(
-    librarianRun.running || memoryLibrarianLease.running
-  );
 
   // Realtime: the memories twin of the wiki relay above. Every memory
   // writer is server-side now (reflection on the chat-turn tail, the
@@ -6620,12 +6611,12 @@
                the wiki tab's changelog button) plus two manual-trigger
                actions for the memory librarian's two passes (deep-sleep
                = similarity-sweep consolidation; rem = conversation-
-               batched associative integration). The librarian buttons
-               disable while a pass is in flight - local run OR the
-               in-flight lease (memoryLibrarianBusy), which also covers a
-               scheduled background pass and runs on another device. The
-               panel itself owns the progress strip and the result line;
-               these are just the launchers. -->
+               batched associative integration). Like the wiki sparkle,
+               these are NAVIGATION (they open the pass's confirm strip),
+               so they stay enabled while a pass is in flight - the page's
+               Run button is what disables, with a "running in the
+               background" spinner. The panel owns the progress strip and
+               the result line; these are just the launchers. -->
           {@const actions = [
             {
               id: 'changelog',
@@ -6637,20 +6628,14 @@
             {
               id: 'deep-sleep',
               label: 'Deep-sleep pass',
-              title: memoryLibrarianBusy
-                ? 'A memory-librarian pass is already running'
-                : 'Run the deep-sleep pass now (similarity-sweep consolidation)',
-              disabled: memoryLibrarianBusy,
+              title: 'Run the deep-sleep pass (similarity-sweep consolidation)',
               onclick: () => (deepSleepTrigger = true),
               icon: deepSleepIcon,
             },
             {
               id: 'rem',
               label: 'Rem pass',
-              title: memoryLibrarianBusy
-                ? 'A memory-librarian pass is already running'
-                : 'Run the rem pass now (associative integration over recent recall)',
-              disabled: memoryLibrarianBusy,
+              title: 'Run the rem pass (associative integration over recent recall)',
               onclick: () => (remTrigger = true),
               icon: remIcon,
             },
