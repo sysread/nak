@@ -43,6 +43,7 @@
   import Markdown from '../components/Markdown.svelte';
   import MemoryChangelogPanel from '../components/MemoryChangelogPanel.svelte';
   import { librarianRun } from '$lib/agents/memory-librarian-run.svelte';
+  import { memoryLibrarianLease } from '$lib/agents/inflight-lease.svelte';
   import {
     librarianPassInfo,
     type MemoryLibrarianPass,
@@ -899,10 +900,12 @@
   // "open the confirm strip for this pass" rather than running. The
   // actual run starts when the user confirms via confirmLibrarianRun.
   function openLibrarianConfirm(pass: MemoryLibrarianPass): void {
-    // Don't stack a confirm on top of an in-flight run. (Collisions
-    // with scheduled server-side runs are the in-flight guard's job;
-    // this only debounces the local strip.)
-    if (librarianRun.running) return;
+    // Don't open a confirm on top of an in-flight pass - this tab's own
+    // run (librarianRun.running) or any other (scheduled, another device),
+    // detected via the in-flight lease. The top-bar launchers already
+    // disable on the same signal; this closes the realtime-lag gap and the
+    // server-side guard remains the authoritative collision surface.
+    if (librarianRun.running || memoryLibrarianLease.running) return;
     librarianConfirm = pass;
   }
 

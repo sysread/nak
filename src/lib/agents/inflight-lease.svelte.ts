@@ -100,3 +100,11 @@ export function createInflightLeaseWatcher(
 export const wikiLibrarianLease = createInflightLeaseWatcher(
   'wiki_librarian_inflight_expires_at'
 );
+
+// Shared singleton for the memory librarian lease (rem + deep-sleep share
+// one in-flight guard, so one watcher covers both passes). Read by the
+// Memories top-bar buttons (disable while running) and the panel; started
+// in Chat.svelte alongside the wiki one.
+export const memoryLibrarianLease = createInflightLeaseWatcher(
+  'memory_librarian_inflight_expires_at'
+);
