@@ -95,11 +95,20 @@ export function librarianRunButtonLabel(
 
 // Terminal finalize, driven by the POST outcome rather than the `done` event.
 // 'ok' settles a still-spinning trailing row to ok (a no-op when `done`
-// already settled it); 'error' settles it to error so a timed-out or failed
-// run shows an X instead of an eternal spinner. No-op when nothing is pending.
+// already settled it) and appends an explicit "Done" row; 'error' settles
+// it to error so a timed-out or failed run shows an X instead of an eternal
+// spinner. No-op when nothing is pending.
+//
+// Why "Done" only on success: a successful run otherwise reads as cut off
+// when its last phase is a settled "Thinking (round N)" - the check alone
+// doesn't say "finished." On the error/timeout paths the error message and
+// the trailing X already mark the end, and a client-side inactivity timeout
+// can mean the run is STILL going server-side, so we don't assert a
+// misleading terminal row there.
 export function finalizeLibrarianSteps(
   steps: LibrarianStep[],
   outcome: 'ok' | 'error',
 ): LibrarianStep[] {
-  return settleTrailing(steps, outcome);
+  const settled = settleTrailing(steps, outcome);
+  return outcome === 'ok' ? [...settled, { label: 'Done', status: 'ok' }] : settled;
 }
