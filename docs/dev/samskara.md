@@ -1289,12 +1289,15 @@ A first-class drawer tab (sibling to chats/memories/wiki/recipes,
 `drawer=samskara`) is the operator's read-only window into the global
 pipeline state. It replaced the old `route.modal='samskara'`
 diagnostics modal (whose per-conversation mood graph moved to
-`SamskaraMood.svelte`). Three surfaces, but only two are sub-nav tabs:
-**Summary** is the default landing page reached via a top-bar button
-(not the sub-nav), while **Corpus** and **Health** are the two tabs in
-the sub-nav. Summary sat as a third sub-tab once, which wrongly implied
-it was per-samskara like the Corpus detail; it's per-user/global, so it
-was lifted out to the top row and made the default.
+`SamskaraMood.svelte`). Three surfaces, NO sub-nav. **Summary** and
+**Health** are both GLOBAL (per-user / corpus-wide) and reached via
+top-bar buttons in `Chat.svelte`'s samskara `TopBarActions` cluster;
+**Corpus** is the per-samskara detail, reached by selecting a sidebar
+row. Summary is the default landing page. Both globals lived as sub-nav
+tabs next to the per-samskara Corpus detail once, which wrongly implied
+they belonged to the selected instinct; they were lifted out to the top
+row (Summary first, then Health), which collapsed the sub-nav to a
+single Corpus tab and so removed it entirely.
 
 - **Corpus** - browse/search/filter/sort the samskara corpus, with a
   tier filter and a "hide similar" cosine slider (the corpus analog of
@@ -1320,7 +1323,13 @@ was lifted out to the top row and made the default.
   `samskara_health_snapshot`, `samskara_rates`, and the severity
   thresholds in `src/lib/ui/samskara-browse.ts`
   (named constants, tune against observed behaviour). Piece:
-  `src/components/SamskaraHealthPanel.svelte`.
+  `src/components/SamskaraHealthPanel.svelte`. Reached via the top-bar
+  **Health** button (an `activity`/pulse icon in `Chat.svelte`'s samskara
+  `TopBarActions` cluster), which flips the `triggerHealthView`
+  `$bindable` prop; `Samskaras.svelte` watches it, switches `subView` to
+  `health`, and clears `route.samskara_id` (Health is corpus-wide, so a
+  lingering sidebar selection would falsely read as "health of this one")
+  - same shape as the Summary trigger below.
 
 - **Summary** - the default landing page: the always-on compound summary
   block (per-user, global) plus a short orientation paragraph on what

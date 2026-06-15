@@ -74,8 +74,9 @@ dev shim's tick of it), never a chat turn.
    select count(*) from samskaras where user_id = '<user>' and tier = 1;
    ```
 
-   Open the Samskara tab -> Health: note "Substrate / associations"
-   shows `... (<N> awaiting mint)` matching `unconsumed`.
+   Open the Samskara tab, click the **Health** button in the top row:
+   note "Substrate / associations" shows `... (<N> awaiting mint)`
+   matching `unconsumed`.
 
 3. **Tick the sweep.** Hit the `nak-samskara-sweep` route (dev
    shim tick, or `curl` the local function). Watch the Logs drawer
