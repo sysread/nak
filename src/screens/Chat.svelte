@@ -6086,16 +6086,6 @@
               type="button"
               role="tab"
               class="thread grow"
-              class:active={drawerTab === 'memories'}
-              aria-selected={drawerTab === 'memories'}
-              onclick={() => onPickMemoriesTab()}
-            >Memories</button>
-          </div>
-          <div class="row thread-row">
-            <button
-              type="button"
-              role="tab"
-              class="thread grow"
               class:active={drawerTab === 'wiki'}
               aria-selected={drawerTab === 'wiki'}
               onclick={() => onPickWikiTab()}
@@ -6110,6 +6100,16 @@
               aria-selected={drawerTab === 'library'}
               onclick={() => onPickLibraryTab()}
             >Library</button>
+          </div>
+          <div class="row thread-row">
+            <button
+              type="button"
+              role="tab"
+              class="thread grow"
+              class:active={drawerTab === 'memories'}
+              aria-selected={drawerTab === 'memories'}
+              onclick={() => onPickMemoriesTab()}
+            >Memories</button>
           </div>
           <div class="row thread-row">
             <button
