@@ -174,6 +174,17 @@ interface AppState {
    */
   displayTimezone: string;
   /**
+   * Whether displayTimezone is the user's SAVED value (true) or just the
+   * browser-detected default seeded on activate() that has never been
+   * written to profiles.settings (false). The server-side day-gates read
+   * the saved value only, so an unsaved default silently runs the gate on
+   * UTC; Settings uses this to show "saved vs. suggested" and to make the
+   * Save button actionable while the shown value is only a hint. Set true
+   * on a successful persistDisplayTimezone and from loadSettings when the
+   * profile carries a value; false on activate/lock.
+   */
+  displayTimezonePersisted: boolean;
+  /**
    * Free-form display name the user entered in Settings -> AI ->
    * About you. Empty string means "not set"; chat-loop reads both
    * profile fields per-turn and only emits the User profile block
@@ -215,6 +226,7 @@ export const app = $state<AppState>({
   wikiLibrarianEnabled: true,
   memoryLibrarianEnabled: true,
   displayTimezone: detectTimezone(),
+  displayTimezonePersisted: false,
   userName: '',
   userLocation: '',
   error: null,
@@ -560,6 +572,7 @@ export async function persistDisplayTimezone(tz: string): Promise<void> {
   setDisplayTimezone(tz);
   try {
     await app.supabase.updateSettings({ displayTimezone: tz });
+    app.displayTimezonePersisted = true;
   } catch (err) {
     setDisplayTimezone(prev);
     throw err;
@@ -633,6 +646,10 @@ export function applyServerSettings(s: UserSettings): void {
   setWikiLibrarianEnabled(s.wikiLibrarianEnabled ?? true);
   setMemoryLibrarianEnabled(s.memoryLibrarianEnabled ?? true);
   if (s.displayTimezone) setDisplayTimezone(s.displayTimezone);
+  // Track whether the profile actually carries a saved zone (vs. the
+  // activate()-seeded browser default), so Settings can distinguish saved
+  // from suggested and the server day-gates' UTC fallback is visible.
+  app.displayTimezonePersisted = !!s.displayTimezone;
   // Profile: empty string is the "not set" sentinel; always
   // assign so explicit absence in the blob clears any value
   // carried over from a prior unlock or another tab.
@@ -684,6 +701,7 @@ export function activate(config: AppConfig): void {
   app.wikiLibrarianEnabled = true;
   app.memoryLibrarianEnabled = true;
   app.displayTimezone = detectTimezone();
+  app.displayTimezonePersisted = false;
   app.userName = '';
   app.userLocation = '';
   app.phase = 'unlocked';
@@ -781,6 +799,7 @@ export function resetForSignOut(): void {
   app.wikiLibrarianEnabled = true;
   app.memoryLibrarianEnabled = true;
   app.displayTimezone = detectTimezone();
+  app.displayTimezonePersisted = false;
   // Profile: same rationale - never leak the previous account's
   // name/location across a sign-out / sign-in-as-someone-else flow.
   app.userName = '';
