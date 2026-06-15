@@ -6,23 +6,26 @@
    * deliberately-opened window into what the pipeline has formed and
    * whether it's working.
    *
-   * Three surfaces, but NOT three peer sub-tabs:
+   * Three surfaces, NO sub-nav. Two are GLOBAL (per-user, not
+   * per-samskara) and reached via top-bar buttons in Chat.svelte; one
+   * is the per-samskara detail reached by selecting a sidebar row:
    *
    *   - Summary - the DEFAULT landing page. The global, always-on
-   *     compound prose block (per-user, not per-samskara), plus a short
-   *     orientation on what samskara is. Reached on tab-open and via the
-   *     top-bar Summary button (Chat.svelte), NOT the sub-nav - it sat
-   *     next to Corpus/Health as a sub-tab once, which wrongly implied
-   *     it was per-samskara.
+   *     compound prose block plus a short orientation on what samskara
+   *     is. Reached on tab-open and via the top-bar Summary button.
+   *   - Health - the SamskaraHealthPanel. Global corpus-wide
+   *     diagnostics (silent-failure detection over the whole pipeline),
+   *     so it's a top-bar button too rather than a per-samskara sub-tab
+   *     - it read as per-samskara sitting next to the Corpus detail.
    *   - Corpus - detail of the samskara selected in the sidebar,
    *     including its provenance (for a tier-2, its tier-1 children).
-   *   - Health - the SamskaraHealthPanel.
    *
-   * Corpus and Health are the two sub-nav tabs. The sidebar
-   * (SamskaraBrowseList) drives `route.samskara_id`; selecting a row
-   * switches into Corpus so the detail shows. The top-bar Summary
-   * button flips `triggerSummaryView` to return to the landing page
-   * (and clears the selection so the sidebar deselects).
+   * The sidebar (SamskaraBrowseList) drives `route.samskara_id`;
+   * selecting a row switches into Corpus so the detail shows. The two
+   * top-bar buttons flip `triggerSummaryView` / `triggerHealthView` to
+   * jump to their global surface (each clears the selection so the
+   * sidebar deselects, matching how the global summary read shouldn't
+   * leave a stale per-instinct selection highlighted).
    */
   import { onMount } from 'svelte';
   import { app } from '$lib/state.svelte';
@@ -47,13 +50,26 @@
      * same pattern as the wiki changelog trigger.
      */
     triggerSummaryView?: boolean;
+    /**
+     * Top-bar Health button in Chat.svelte flips this to true to jump
+     * to the global SamskaraHealthPanel. Same shape as
+     * `triggerSummaryView`: switch to the Health surface, clear any
+     * selected samskara (Health is corpus-wide, so a lingering sidebar
+     * selection would falsely read as "health of this one"), reset the
+     * flag.
+     */
+    triggerHealthView?: boolean;
   }
-  let { triggerSummaryView = $bindable(false) }: Props = $props();
+  let {
+    triggerSummaryView = $bindable(false),
+    triggerHealthView = $bindable(false),
+  }: Props = $props();
 
-  // Summary is the default surface (global, per-user). Corpus and Health
-  // are the two sub-nav tabs; Summary is reached via the top-bar button,
-  // not the sub-nav. The per-conversation mood graph lives in its own
-  // modal (opened from the mood pill), not here.
+  // Summary is the default surface (global, per-user). Summary and
+  // Health are both reached via top-bar buttons (both global); Corpus is
+  // the per-samskara detail reached by selecting a sidebar row. No
+  // sub-nav. The per-conversation mood graph lives in its own modal
+  // (opened from the mood pill), not here.
   type SubView = 'summary' | 'corpus' | 'health';
   let subView = $state<SubView>('summary');
 
@@ -77,6 +93,20 @@
       subView = 'summary';
       if (route.samskara_id) navigate({ samskara_id: null });
       triggerSummaryView = false;
+    }
+  });
+
+  // Top-bar Health button -> the global health panel. Same shape as the
+  // Summary trigger above: clear the selection so the sidebar deselects
+  // (Health is corpus-wide, not the health of one instinct - a left-over
+  // highlight would mislead) and so a later re-click of the same row
+  // re-sets samskara_id and re-trips the corpus effect. Clearing to null
+  // is guarded out of that effect, so the two don't fight.
+  $effect(() => {
+    if (triggerHealthView) {
+      subView = 'health';
+      if (route.samskara_id) navigate({ samskara_id: null });
+      triggerHealthView = false;
     }
   });
 
@@ -138,25 +168,6 @@
 </script>
 
 <div class="samskara-panel">
-  <div class="samskara-subnav" role="tablist" aria-label="Samskara views">
-    <button
-      type="button"
-      class="samskara-subnav-btn"
-      class:active={subView === 'corpus'}
-      role="tab"
-      aria-selected={subView === 'corpus'}
-      onclick={() => (subView = 'corpus')}
-    >Corpus</button>
-    <button
-      type="button"
-      class="samskara-subnav-btn"
-      class:active={subView === 'health'}
-      role="tab"
-      aria-selected={subView === 'health'}
-      onclick={() => (subView = 'health')}
-    >Health</button>
-  </div>
-
   <div class="samskara-panel-body">
     {#if subView === 'health'}
       <SamskaraHealthPanel />
@@ -173,9 +184,9 @@
           situations like X, this user tends to Y." They're distilled in
           the background from your conversations; when a new message
           resembles a samskara's situation, it fires and nudges Nak's
-          reply. Browse the individual instincts under
-          <strong>Corpus</strong>, and watch the forming pipeline under
-          <strong>Health</strong>.
+          reply. Browse the individual instincts in the list to the left,
+          and watch the forming pipeline under <strong>Health</strong> in
+          the top row.
         </p>
         <h3 class="samskara-summary-head">Compound summary (always on in system prompt)</h3>
         <p class="subtle samskara-summary-help">
@@ -255,25 +266,6 @@
     flex-direction: column;
     height: 100%;
     min-height: 0;
-  }
-  .samskara-subnav {
-    display: flex;
-    gap: 0.25rem;
-    padding: 0.5rem 0.75rem 0;
-    border-bottom: 1px solid var(--border);
-  }
-  .samskara-subnav-btn {
-    padding: 0.35rem 0.75rem;
-    font-size: 0.85rem;
-    background: transparent;
-    color: var(--muted);
-    border: none;
-    border-bottom: 2px solid transparent;
-    cursor: pointer;
-  }
-  .samskara-subnav-btn.active {
-    color: var(--text);
-    border-bottom-color: var(--accent);
   }
   .samskara-panel-body {
     flex: 1;

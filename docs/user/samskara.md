@@ -35,18 +35,20 @@ is:
 ## The Samskara tab
 
 A tab in the conversation drawer (alongside Chats, Memories, Wiki, and
-so on). It opens on the **Summary** - the global, always-on read - with
-**Corpus** and **Health** as tabs across the top of the panel.
+so on). It opens on the **Summary** - the global, always-on read. Two
+buttons in the top row of the panel jump to the global views,
+**Summary** and **Health**; the per-instinct **Corpus** detail opens
+when you click an instinct in the list.
 
 ### Summary
 
 The tab's home page, and what you land on when you open it. The always-on
 **summary** is a short paragraph capturing Nak's current read on who you
 are, which rides along in every reply. It's built across all your
-conversations, so it's global - which is why it's the landing page rather
-than sitting next to Corpus and Health (where it looked like it belonged
-to one instinct). A short note above it orients you on what samskara is.
-Jump back here any time with the **Summary button** in the top row of the
+conversations, so it's global - which is why it's a top-row button and
+the landing page, rather than something that looked like it belonged to
+one instinct. A short note above it orients you on what samskara is. Jump
+back here any time with the **Summary button** in the top row of the
 panel.
 
 ### Corpus
@@ -67,6 +69,11 @@ across different conversations - the relations Nak noticed between them.
 For a tier-2 compound, it's the tier-1 instincts it was built from.
 
 ### Health
+
+Open it with the **Health button** in the top row of the panel. Like the
+summary, it's a global read - it covers the whole instinct-forming
+pipeline, not any single instinct - so it lives in the top row rather
+than next to the per-instinct detail.
 
 A live snapshot that makes background failures visible - the
 instinct-forming machinery runs entirely behind the scenes on your
