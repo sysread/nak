@@ -863,6 +863,26 @@ Per-member `cofire_weight` (summed co-fire count of that
 member's in-group edges) rides back on the result and becomes
 the provenance `weight`.
 
+**Known defect - detection is effectively non-functional (2026-06-15
+prod audit).** The formula above is the *intent*; in production it has
+minted exactly one tier-2 in a 151-samskara / ~29k-fire corpus and
+returns empty every sweep. Three independent holes combine: (1) the
+seed is the single strongest edge and the coverage skip `return`s
+empty without advancing to the next *uncovered* edge, so one tier-2
+sitting on the densest co-fire region masks every other constellation
+forever (winner-take-all); (2) eligibility uses the **raw** co-fire
+count with no base-rate normalization - unlike dedup's `cofires /
+min(fires)` ratio - so the busiest (least topically specific)
+samskaras dominate, and a forced candidate comes back as an incoherent
+cross-topic grab-bag bound by firing frequency, not affinity; (3) the
+`p_cosine_lo` (0.30) floor is inert because the shared prediction
+template floors any pairwise prediction-cosine around 0.38 (audit:
+`min_cos` 0.381, zero co-firing pairs below 0.30), so the band
+collapses to "anything below 0.68" and gates nothing. The redesign -
+ratio gate, a coherence gate that survives the template, and seed
+iteration - is scoped in
+[`plans/samskara-tier2-detection-quality-plan.md`](plans/samskara-tier2-detection-quality-plan.md).
+
 ### Compound-regen trigger
 
 ```text
@@ -1144,6 +1164,16 @@ summarizer reads samskaras to feed the agent.
   a WHERE clause` (SQLSTATE 21000) - so a "simpler" unqualified
   DELETE breaks every tier-2 probe against the local stack
   while passing hosted. Keep the TRUNCATE.
+- **Tier-2 detection is currently a near-no-op - do not trust the
+  "Tier-2 detection formula" section as a description of live
+  behaviour.** A 2026-06-15 prod audit found exactly one tier-2 minted
+  in a 151-samskara corpus and the candidate RPC returning empty every
+  sweep, from three stacked defects (winner-take-all coverage-skip,
+  raw co-fire count with no base-rate normalization, and an inert
+  cosine floor the prediction template defeats). The "Known defect"
+  note under that section has the detail; the fix is scoped in
+  [`plans/samskara-tier2-detection-quality-plan.md`](plans/samskara-tier2-detection-quality-plan.md).
+  Until it lands, treat any tier-2 reasoning as aspirational.
 - **Pair-relate uses a naive seed-most-recent approach.**
   One pair per probe: seed on the most recent embedded
   substrate row, walk its neighbours best-cosine-first to the
