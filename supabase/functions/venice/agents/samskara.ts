@@ -1,19 +1,18 @@
 // Samskara formation pipeline: assimilate chat rounds into substrate,
 // relate and cluster them into tier-1 predictive claims, compound
-// co-firing claims into tier-2, classify the user's reactions to fired
-// cohorts, collapse redundancy, and keep the per-user compound summary
-// prose fresh. docs/dev/samskara.md is the design doc.
+// co-firing claims into tier-2, collapse redundancy, and keep the
+// per-user compound summary prose fresh. docs/dev/samskara.md is the
+// design doc. (Scoring the user's reactions to fired cohorts moved to
+// the next-day evaluation sweep - see agents/samskara_evaluation.ts.)
 //
 // Two exported drivers, matching the fleet's dual-driver shape:
 //
 //   - samskaraOnTurnTail(admin, userId) - rides getStreamingResponse's
 //     waitUntil tail between curation and reflection. Runs the
-//     session-responsive phases: reaction-classify FIRST (a fired
-//     cohort's resolution window is 1-10 minutes and the resolving
-//     evidence IS the next user message, so the tail of turn N+1 lands
-//     exactly when turn N's cohort becomes classifiable), then a capped
-//     assimilate drain, then one pair-relate probe, then one mint-tier1
-//     probe (the in-session toast surface).
+//     session-responsive phases: a capped assimilate drain, then one
+//     pair-relate probe, then one mint-tier1 probe (the in-session
+//     toast surface). Reaction scoring used to run first here; it moved
+//     to the next-day evaluation sweep (agents/samskara_evaluation.ts).
 //
 //   - runSamskaraSweepTick(admin) - the hourly nak-samskara-sweep cron
 //     (route /venice/samskara-sweep via sweepHandler). Catch-up for the
@@ -119,15 +118,6 @@ const MINT_CLUSTER_MIN = 3;
  */
 const PAIR_RELATE_WINDOW = 40;
 const MINT_WINDOW = 8;
-
-/**
- * Reaction-classify resolution window, minutes after the fire. The
- * floor avoids racing a turn that's still in flight; fires older than
- * the ceiling age out via decay rather than being force-classified by
- * stale next-turn signal (see docs/dev/samskara.md).
- */
-const CLASSIFY_FLOOR_MS = 60 * 1000;
-const CLASSIFY_CEILING_MS = 10 * 60 * 1000;
 
 /**
  * Lookback for the sweep's per-user phase fan-out: users with
@@ -297,38 +287,6 @@ not three bullets. Keep it in the same "in situations like X, this
 user tends to Y" shape so it embeds and fires like any other claim.`;
 
 /**
- * Reaction-classifier prompt. Reads a cohort of samskaras that fired
- * on the previous turn plus the user's response to that turn, and
- * partitions the cohort into confirm / disconfirm / neutral buckets.
- */
-const REACTION_PROMPT = `You are scoring how a user reacted to an AI assistant turn that was
-shaped by a set of "samskaras" - predictive claims about the user.
-
-You will receive:
-- the cohort that shaped the previous turn, as an array of {id, prediction},
-- the assistant message that was sent,
-- the user message that came next.
-
-For each samskara in the cohort, decide whether the new user
-message confirms the prediction (the user behaved as the samskara
-expected), disconfirms it (the user did the opposite), or is
-neutral (the user message was about something unrelated, or did
-not speak to the prediction either way).
-
-Reply with a single JSON object, no prose, no markdown fence:
-
-{
-  "confirm": [<id>, ...],
-  "disconfirm": [<id>, ...],
-  "neutral": [<id>, ...]
-}
-
-Every id from the cohort must appear in exactly one bucket. Bias
-toward neutral when the signal is ambiguous - false confidence in
-either direction skews future priming more than missing a real
-signal.`;
-
-/**
  * Compound-summary prompt. Reads the top live samskaras and produces
  * a prose paragraph the chat loop appends to every system prompt as
  * the always-on calibration block.
@@ -373,12 +331,6 @@ interface MintResult {
   innerVoice: string;
   valence: number;
   confidence: number;
-}
-
-interface ReactionResult {
-  confirm: string[];
-  disconfirm: string[];
-  neutral: string[];
 }
 
 /**
@@ -528,39 +480,6 @@ async function agentMint(
     confidence:
       typeof parsed.confidence === 'number' ? clamp(parsed.confidence, 0, 1) : 0.5,
   };
-}
-
-function asStringArray(v: unknown): string[] | null {
-  if (!Array.isArray(v)) return null;
-  for (const item of v) if (typeof item !== 'string') return null;
-  return v as string[];
-}
-
-async function agentClassifyReaction(
-  apiKey: string,
-  cohort: { id: string; prediction: string }[],
-  assistantMessage: string,
-  nextUserMessage: string,
-): Promise<ReactionResult | null> {
-  const raw = await callOnce(
-    apiKey,
-    REACTION_PROMPT,
-    JSON.stringify({
-      cohort,
-      assistant_message: assistantMessage,
-      user_message: nextUserMessage,
-    }),
-  );
-  if (raw === null) return null;
-  const parsed = tryParseJson<{ confirm?: unknown; disconfirm?: unknown; neutral?: unknown }>(
-    raw,
-  );
-  if (!parsed) return null;
-  const confirm = asStringArray(parsed.confirm);
-  const disconfirm = asStringArray(parsed.disconfirm);
-  const neutral = asStringArray(parsed.neutral);
-  if (!confirm || !disconfirm || !neutral) return null;
-  return { confirm, disconfirm, neutral };
 }
 
 async function agentSummarizeCompound(
@@ -1394,114 +1313,6 @@ async function mintTier2Probe(
 }
 
 /**
- * Reaction-classify probe: find the oldest unresolved cohort inside
- * the resolution window, pair it with the assistant message that was
- * sent and the user message that came next, classify, apply.
- */
-async function reactionClassifyProbe(
-  admin: SupabaseClient,
-  userId: string,
-  log: EdgeLogger,
-  apiKey: string,
-): Promise<void> {
-  const now = Date.now();
-  const minAge = new Date(now - CLASSIFY_CEILING_MS).toISOString();
-  const maxAge = new Date(now - CLASSIFY_FLOOR_MS).toISOString();
-  const { data: candRows, error: candErr } = await admin
-    .from('samskara_fires')
-    .select('cohort_id, thread_id, fired_at')
-    .eq('user_id', userId)
-    .is('was_confirmed', null)
-    .gte('fired_at', minAge)
-    .lte('fired_at', maxAge)
-    .order('fired_at', { ascending: true })
-    .limit(1);
-  if (candErr) throw new Error(`reaction-classify: candidate query failed: ${candErr.message}`);
-  const candidate = candRows?.[0];
-  if (!candidate) return;
-  log.debug('reaction-classify: candidate cohort', {
-    cohortId: candidate.cohort_id,
-    threadId: candidate.thread_id,
-    firedAt: candidate.fired_at,
-  });
-
-  const { data: cohortRows, error: cohortErr } = await admin
-    .from('samskara_fires')
-    .select('samskara_id')
-    .eq('user_id', userId)
-    .eq('cohort_id', candidate.cohort_id);
-  if (cohortErr) throw new Error(`reaction-classify: cohort read failed: ${cohortErr.message}`);
-  const cohortIds = (cohortRows ?? []).map((r) => r.samskara_id as string);
-  if (cohortIds.length === 0) return;
-
-  const { data: samskaraRows, error: samErr } = await admin
-    .from('samskaras')
-    .select('id, prediction')
-    .eq('user_id', userId)
-    .in('id', cohortIds);
-  if (samErr) throw new Error(`reaction-classify: samskara read failed: ${samErr.message}`);
-  const cohort = (samskaraRows ?? []).map((r) => ({
-    id: r.id as string,
-    prediction: r.prediction as string,
-  }));
-  if (cohort.length === 0) return;
-
-  // The assistant message sent after the fire (no tool_calls, real
-  // content), then the user message that followed it. thread_id is
-  // the ownership scope - `messages` has no user_id column, and the
-  // fire row this candidate came from is anchored to the user's own
-  // thread.
-  const { data: messages, error: msgErr } = await admin
-    .from('messages')
-    .select('role, content, tool_calls, created_at')
-    .eq('thread_id', candidate.thread_id)
-    .gte('created_at', candidate.fired_at)
-    .order('created_at', { ascending: true });
-  if (msgErr) throw new Error(`reaction-classify: message read failed: ${msgErr.message}`);
-  let assistantMsg = '';
-  let nextUserMsg = '';
-  for (const m of messages ?? []) {
-    const content = (m.content as string | null) ?? '';
-    if (assistantMsg.length === 0) {
-      const toolCalls = m.tool_calls as unknown[] | null;
-      if (m.role === 'assistant' && (!toolCalls || toolCalls.length === 0) && content.length > 0) {
-        assistantMsg = content;
-      }
-    } else if (m.role === 'user') {
-      nextUserMsg = content;
-      break;
-    }
-  }
-  if (assistantMsg.length === 0 || nextUserMsg.length === 0) {
-    // The user hasn't replied yet (or the thread shape doesn't fit).
-    // Leave the cohort unresolved; decay handles it past the window.
-    return;
-  }
-
-  const result = await agentClassifyReaction(apiKey, cohort, assistantMsg, nextUserMsg);
-  if (!result) {
-    log.debug('reaction-classify: agent returned null');
-    return;
-  }
-
-  const { error: applyErr } = await admin.rpc('samskara_apply_reaction', {
-    p_cohort_id: candidate.cohort_id,
-    p_confirm_ids: result.confirm,
-    p_disconfirm_ids: result.disconfirm,
-    p_neutral_ids: result.neutral,
-    p_user_id: userId,
-  });
-  if (applyErr) throw new Error(`reaction-classify: apply RPC failed: ${applyErr.message}`);
-  log.info('reaction-classify: applied', {
-    cohortId: candidate.cohort_id,
-    cohortSize: cohort.length,
-    confirm: result.confirm.length,
-    disconfirm: result.disconfirm.length,
-    neutral: result.neutral.length,
-  });
-}
-
-/**
  * Dedup probe: one collapse-by-cofiring pass. SQL-only; the RPC caps
  * itself at 20 collapses per call so an over-populated pool drains
  * across ticks rather than one giant transaction.
@@ -1814,7 +1625,6 @@ export const __test = {
   RELATOR_PROMPT,
   MINTER_PROMPT,
   TIER2_MINTER_PROMPT,
-  REACTION_PROMPT,
   COMPOUND_SUMMARY_PROMPT,
   SAMSKARA_MODEL,
   TAIL_ASSIMILATE_CAP,

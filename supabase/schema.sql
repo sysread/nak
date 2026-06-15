@@ -5682,14 +5682,14 @@ create table if not exists public.samskaras (
   -- application layer.
   health real not null default 1.0,
   fire_count int not null default 0,
-  -- Reaction tallies are REAL, not integer. samskara_apply_reaction
-  -- bumps these by a cohort-aware weight of 1/sqrt(cohort_size) per
-  -- reaction (so a 16-fire cohort adds ~0.25, not 1.0). An integer
-  -- column truncated every such increment back to 0, which silently
-  -- froze confidence at its Laplace prior and made decay's
-  -- locked-in-without-feedback rule fire on every samskara - the whole
-  -- corpus decayed to health 0. Fractional storage is the contract the
-  -- reinforcement math was written against.
+  -- Verdict tallies are REAL, not integer. samskara_apply_evaluation
+  -- discounts these by the evidence half-life and folds in each verdict
+  -- (held -> confirm, contradicted -> disconfirm); health is their
+  -- derived posterior, and the discount alone keeps them fractional. An
+  -- integer column truncated the sub-unit increments of the earlier
+  -- reaction classifier back to 0, which silently froze confidence at
+  -- its prior and (under the since-retired wall-clock decay) drove the
+  -- whole corpus to health 0 - the bug this column's type prevents.
   confirm_count real not null default 0,
   disconfirm_count real not null default 0,
   last_fired_at timestamptz,
@@ -6148,99 +6148,15 @@ begin
      );
 end $$;
 
--- Apply a reaction across a cohort. The reaction-classify phase calls
--- this with the partition the fast-model agent produced — three id
--- arrays (confirms / disconfirms / neutrals). Bumps confirm/disconfirm
--- counts with cohort-aware reinforcement weights, recomputes
--- confidence using the additive-Laplace shape (with the +2 bonus on
--- confirms), and sets `was_confirmed` on the matching fire rows so
--- they don't get re-classified on the next pass.
---
--- Cohort weight: a cohort of N receives `+1 / sqrt(N)` per member
--- rather than full +1. This keeps a large cohort from dominating
--- single-fire signal but still lets the cohort reinforce its members
--- meaningfully. The choice of sqrt vs log vs linear was empirical in
--- scratch's predecessor; revisit if cohort dynamics misbehave.
+-- samskara_apply_reaction (the live reaction classifier's apply step) is
+-- RETIRED. Reaction scoring moved to the next-day evaluation sweep, whose
+-- samskara_apply_evaluation (in the self-calibrating block below) is the
+-- sole writer of the verdict tallies + health. Dropped from existing
+-- databases on re-apply - both the current 5-arg signature and the
+-- legacy 4-arg one (drop is signature-specific, so the live 5-arg
+-- version needs its own line or it silently survives).
+drop function if exists public.samskara_apply_reaction(uuid, uuid[], uuid[], uuid[], uuid);
 drop function if exists public.samskara_apply_reaction(uuid, uuid[], uuid[], uuid[]);
-create or replace function public.samskara_apply_reaction(
-  p_cohort_id uuid,
-  p_confirm_ids uuid[],
-  p_disconfirm_ids uuid[],
-  p_neutral_ids uuid[],
-  p_user_id uuid default null
-) returns void
-language plpgsql security invoker as $$
-declare
-  v_uid uuid := coalesce(p_user_id, auth.uid());
-  v_cohort_n int;
-  v_weight real;
-  v_inc real;
-begin
-  -- Cohort size is the count of fires for this cohort that we own,
-  -- not the size of any single id-array — neutral fires count toward
-  -- the cohort even though they don't shift confidence.
-  select count(*) into v_cohort_n
-    from public.samskara_fires
-   where user_id = v_uid and cohort_id = p_cohort_id;
-  if v_cohort_n = 0 then return; end if;
-  v_weight := 1.0 / sqrt(v_cohort_n::real);
-  -- Per-reaction increment, rounded to two decimals with a 0.01 floor
-  -- so even the largest cohort still moves the tally. Requires a real
-  -- column (see the samskaras table comment); on an integer column
-  -- this truncates to 0 for any cohort larger than one fire.
-  v_inc := greatest(round(v_weight * 100) / 100.0, 0.01);
-
-  -- Confidence recomputes from the POST-increment counts, not the
-  -- stored (pre-update) ones. In a single UPDATE every set-expression
-  -- reads the row's old values, so referencing `confirm_count` alone
-  -- would lag one reaction behind; we add v_inc explicitly to use the
-  -- value we're about to write.
-  if array_length(p_confirm_ids, 1) > 0 then
-    update public.samskaras
-       set confirm_count = confirm_count + v_inc,
-           confidence = (confirm_count + v_inc + 2)
-             / nullif(confirm_count + v_inc + disconfirm_count + 3, 0)::real,
-           updated_at = now()
-     where user_id = v_uid
-       and id = any (p_confirm_ids);
-  end if;
-
-  if array_length(p_disconfirm_ids, 1) > 0 then
-    update public.samskaras
-       set disconfirm_count = disconfirm_count + v_inc,
-           confidence = (confirm_count + 1)
-             / nullif(confirm_count + disconfirm_count + v_inc + 3, 0)::real,
-           updated_at = now()
-     where user_id = v_uid
-       and id = any (p_disconfirm_ids);
-  end if;
-
-  -- Resolve all cohort fires we own. Neutrals get marked resolved too
-  -- so they don't re-trigger classification — they just don't shift
-  -- counts.
-  update public.samskara_fires
-     set was_confirmed = case
-       when samskara_id = any (p_confirm_ids) then true
-       when samskara_id = any (p_disconfirm_ids) then false
-       else null
-     end
-   where user_id = v_uid
-     and cohort_id = p_cohort_id;
-
-  -- Mark neutrals resolved by stamping a sentinel. NULL would let the
-  -- next pass re-pick them; we want them out of the unresolved pool.
-  -- Two-step because the case-expression above leaves neutrals at
-  -- NULL by design (we don't have a 'neutral' boolean state). Use a
-  -- separate UPDATE keyed on neutral_ids that sets was_confirmed to
-  -- false but tagged at the application layer via the cohort context.
-  -- Simpler: leave neutrals NULL but bump fired_at so the
-  -- unresolved-window predicate (>10 min) ages them out faster.
-  update public.samskara_fires
-     set fired_at = now() - interval '15 minutes'
-   where user_id = v_uid
-     and cohort_id = p_cohort_id
-     and samskara_id = any (p_neutral_ids);
-end $$;
 
 -- Cluster a thread's fires by cosine similarity on their samskaras'
 -- prediction embeddings, scoped per-cohort. Used by the diagnostics
@@ -6610,110 +6526,22 @@ revoke all on function public.samskara_save_substrate_embedding_if_claimed(uuid,
 grant execute on function public.samskara_claim_next_substrate_embed(text, int) to service_role;
 grant execute on function public.samskara_save_substrate_embedding_if_claimed(uuid, text, vector, text) to service_role;
 
--- Decay pass. Three updates: stale-fire decay (gentle,
--- hiatus-tolerant), disconfirm decay (sharper, gated on accumulated
--- feedback), and locked-in decay (fired a lot, never engaged with).
--- Health clamped to [0, 1]. Returns the count of rows changed so a
--- manual exercise can see the churn.
---
--- Driven by the nak-samskara-decay pg_cron job (see the cron block
--- near the stream janitor), NOT by the browser samskara worker. The
--- decay rates are calibrated as a per-PASS nudge on a ~30-minute
--- cadence; the worker's in-memory throttle reset on every restart
--- (reload, tab switch, lease loss) and over-ran that cadence under
--- active use, so the pass moved to a server-side wall clock.
---
--- `security definer` with no auth.uid() filter: cron has no user
--- session, and every predicate below is row-local (each row's own
--- timestamps and counters), so one cross-user pass is exactly the
--- union of the per-user passes. The EXECUTE grant below is the
--- security boundary.
+-- samskara_decay_sweep (wall-clock decay) is RETIRED - health is now the
+-- relevance-gated posterior maintained by samskara_apply_evaluation (see
+-- the self-calibrating block below); the nak-samskara-decay cron is
+-- unscheduled near the stream janitor. Dropped, along with the earlier
+-- samskara_decay() signature, from existing databases on re-apply.
 drop function if exists public.samskara_decay();
-create or replace function public.samskara_decay_sweep()
-returns int
-language plpgsql security definer set search_path = public as $$
-declare
-  v_stale int;
-  v_disconfirm int;
-  v_unreinforced int;
-begin
-  -- Stale-fire decay. Staleness is measured from the last fire, OR
-  -- from creation for a samskara that has never fired - that's what
-  -- `coalesce(last_fired_at, created_at)` buys. A bare `last_fired_at
-  -- is null` clause docked every BRAND-NEW samskara 0.02 per pass
-  -- during the gap between mint and first fire: a newborn hasn't had
-  -- the chance to fire yet, so treating null-last-fired as "stale,
-  -- never fires" is wrong. Worse, under frequent decay a niche claim
-  -- that doesn't match a turn for a while could decay to health 0
-  -- before ever firing, drop below the fire score floor, and then
-  -- never fire again - a stillbirth spiral. Coalescing to created_at
-  -- gives every newborn the full 60-day window to establish itself
-  -- while still pruning rows that genuinely never fire across that
-  -- window.
-  update public.samskaras
-     set health = greatest(0.0, health - 0.02),
-         updated_at = now()
-   where coalesce(last_fired_at, created_at) < now() - interval '60 days';
-  get diagnostics v_stale = row_count;
-
-  -- Net-disconfirmed decay. Evidence bar is 1.0 of accumulated
-  -- reaction weight, not 3 raw counts: reactions land at
-  -- 1/sqrt(cohort_size) (~0.2-0.6 each), so 1.0 is roughly the "three
-  -- genuine reactions" the original integer `>= 3` was reaching for
-  -- before the real-counter fix made each reaction sub-unit.
-  update public.samskaras
-     set health = greatest(0.0, health - 0.10),
-         updated_at = now()
-   where disconfirm_count > confirm_count
-     and (disconfirm_count + confirm_count) >= 1.0;
-  get diagnostics v_disconfirm = row_count;
-
-  -- Locked-in-without-feedback decay. A samskara that has fired many
-  -- times but accumulated very little reaction signal is one of two
-  -- things: bland context the user never reacts to, or stuck firing
-  -- without challenge ("stereotype hardening" - the recursion-trap
-  -- pathology where the model converges on a local minimum that's
-  -- not wrong enough to update but not right enough to delight).
-  -- Either way, a gentle 0.03 nudge per pass crowds it out without
-  -- artificially perturbing user-facing behaviour the way an
-  -- exploration epsilon would.
-  --
-  -- Threshold is ABSOLUTE accumulated feedback, not a fraction of
-  -- fire_count. The original `< 0.2 * fire_count` was structurally
-  -- unreachable: reactions only resolve for the ~20% of cohorts whose
-  -- follow-up lands in the 1-10min window, and each resolved reaction
-  -- adds 1/sqrt(cohort_size) (~0.2-0.6), so even a perfectly-reacted
-  -- samskara accumulates feedback at a small FRACTION of its fire
-  -- count - it could never clear 0.2x and every row decayed to 0.
-  -- `< 0.5` instead means "fired 10+ times but never accumulated even
-  -- ~one genuine reaction's worth of signal" - the actual un-engaged
-  -- case. A samskara that gets reacted to a couple of times crosses
-  -- 0.5 and is exempt; overpopulation pruning is the collapse RPC's
-  -- job, not decay's.
-  update public.samskaras
-     set health = greatest(0.0, health - 0.03),
-         updated_at = now()
-   where fire_count > 10
-     and (confirm_count + disconfirm_count) < 0.5;
-  get diagnostics v_unreinforced = row_count;
-
-  return v_stale + v_disconfirm + v_unreinforced;
-end $$;
-
--- Cron-only - same boundary as nak_sweep_stale_streams: pg_cron runs
--- as the owner, and the service_role grant keeps the pass manually
--- exercisable with the service key.
-revoke all on function public.samskara_decay_sweep() from public, anon, authenticated;
-grant execute on function public.samskara_decay_sweep() to service_role;
+drop function if exists public.samskara_decay_sweep();
 
 -- ===========================================================================
 -- Self-calibrating health (relevance-gated decay; the evaluation sweep).
 -- Design of record: docs/dev/plans/samskara-decay-relevance-gated-plan.md.
--- These RPCs are the slice-2 machinery. As of this commit they are INERT -
--- nothing calls samskara_apply_evaluation yet and the reaper has no cron; the
--- wall-clock samskara_decay_sweep above is still the live mechanism. The
--- atomic flip (edge calls apply, decay retired, classifier removed, health
--- recomputed) lands in a following change.
+-- These RPCs ARE the live health mechanism: samskara_apply_evaluation
+-- (called by the next-day evaluation sweep) is the sole writer of the
+-- verdict tallies and the derived health posterior, and samskara_reap_dead
+-- runs on the nak-samskara-reap cron. The wall-clock decay sweep and the
+-- live reaction classifier they replaced are retired (dropped above).
 -- ===========================================================================
 
 -- Population hit-rate prior p0: the user's aggregate held-rate over the
@@ -7831,6 +7659,10 @@ $$;
 -- timestamps over the last p_days - no metrics table, no cron. Answers
 -- "is the pipeline alive and converging" (mints flowing, fires
 -- happening, reactions actually resolving) without storing history.
+-- Drop-then-recreate (not just create-or-replace): the verdict-mix
+-- columns changed the RETURNS TABLE shape, and Postgres rejects a
+-- create-or-replace that changes a function's return type.
+drop function if exists public.samskara_rates(int);
 create or replace function public.samskara_rates(p_days int default 7)
 returns table (
   window_days int,
@@ -7838,11 +7670,18 @@ returns table (
   fires int,
   resolved int,
   unresolved int,
-  resolution_pct real
+  resolution_pct real,
+  held int,
+  contradicted int,
+  not_engaged int
 )
 language sql stable security invoker as $$
+  -- "Resolved" = the next-day evaluation sweep has judged the fire
+  -- (verdict is set). held/contradicted/not-engaged break that down; an
+  -- unjudged fire (same-day thread, or under the 2-round gate) has a
+  -- null verdict and counts as unresolved.
   with w as (
-    select f.was_confirmed
+    select f.verdict
       from public.samskara_fires f
      where f.user_id = auth.uid()
        and f.fired_at >= now() - make_interval(days => p_days)
@@ -7853,11 +7692,14 @@ language sql stable security invoker as $$
       where s.user_id = auth.uid()
         and s.created_at >= now() - make_interval(days => p_days))::int,
     (select count(*) from w)::int,
-    (select count(*) from w where was_confirmed is not null)::int,
-    (select count(*) from w where was_confirmed is null)::int,
+    (select count(*) from w where verdict is not null)::int,
+    (select count(*) from w where verdict is null)::int,
     (case when (select count(*) from w) = 0 then 0::real
-          else ((select count(*) from w where was_confirmed is not null)::real
-                / (select count(*) from w)::real * 100.0) end)::real
+          else ((select count(*) from w where verdict is not null)::real
+                / (select count(*) from w)::real * 100.0) end)::real,
+    (select count(*) from w where verdict = 'held')::int,
+    (select count(*) from w where verdict = 'contradicted')::int,
+    (select count(*) from w where verdict = 'not-engaged')::int
 $$;
 
 -- Journal feature removed -------------------------------------------------
@@ -11106,9 +10948,8 @@ $cron$;
 -- relevance-gated posterior maintained by the evaluation sweep
 -- (samskara_apply_evaluation, driven by nak-samskara-evaluation-sweep);
 -- a wall-clock pass would fight it over the same column. The old
--- nak-samskara-decay job is unscheduled idempotently on every apply.
--- (samskara_decay_sweep() is left defined-but-uncalled pending a
--- dead-code cleanup pass.)
+-- nak-samskara-decay job is unscheduled idempotently on every apply,
+-- and the samskara_decay_sweep function itself is dropped above.
 --
 -- The freed minute-13 slot now drives the REAPER: a pure-SQL pass (no
 -- pg_net, same shape the old decay used) that deletes

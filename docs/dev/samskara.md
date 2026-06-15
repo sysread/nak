@@ -235,11 +235,10 @@ toast is just a glance cue that the bias model is forming.
 - **`samskaraOnTurnTail(admin, userId)`** - fired from
   `getStreamingResponse`'s `EdgeRuntime.waitUntil` tail on
   completed turns, sequenced curation -> samskara -> reflection.
-  Samskara runs before reflection because reflection can span
-  minutes and samskara carries the fleet's only hard timing
-  window (the reaction-classify resolution window). Runs
-  reaction-classify first, then a capped assimilate drain, then
-  one pair-relate probe, then one mint-tier1 probe.
+  Runs the session-responsive phases: a capped assimilate drain,
+  then one pair-relate probe, then one mint-tier1 probe. (Reaction
+  scoring is no longer a tail phase - it moved to the next-day
+  evaluation sweep, `samskara_evaluation.ts`.)
 - **`runSamskaraSweepTick(admin)`** - the hourly
   `nak-samskara-sweep` pg_cron job (`23 * * * *`) pg_net-POSTs
   `/venice/samskara-sweep` (a `sweepHandler` route, service-role
@@ -370,11 +369,11 @@ samskaras (the mint-tier2 phase, see Contracts). Cap is `tier in
   80 chars.
 - `valence real` - aggregated from substrate or child-samskara
   provenance. Same scalar as on substrate.
-- `confidence real default 0.5` - updated via the additive-
-  Laplace formula in `samskara_apply_reaction`.
-- `health real default 1.0` - decays over time and on
-  disconfirm; clamped to [0, 1]. **NO threshold filter at fire
-  time** - see Gotchas.
+- `confidence real default 0.5` - the verdict posterior, kept
+  equal to `health` (see Health: the verdict posterior).
+- `health real default 1.0` - the derived posterior, recomputed
+  by `samskara_apply_evaluation`; clamped to [0, 1]. **NO threshold
+  filter at fire time** - see Gotchas.
 - `fire_count int`; `confirm_count real`, `disconfirm_count
   real` (fractional by design - reactions add `1/sqrt(cohort_N)`,
   which an int column would truncate to 0; see Gotchas);
@@ -438,7 +437,9 @@ reinforcement and cohort detection.
   fires age out via decay rather than being force-classified by
   stale signal.
 - Partial index on `(user_id, thread_id, fired_at desc) where
-  was_confirmed is null` targets the reaction-classify poll.
+  was_confirmed is null` - served the retired reaction-classify
+  unresolved poll; now vestigial (an unused-index advisor will
+  flag it for a later drop).
 - Partial index on `(user_id, thread_id, user_round) where
   user_round is not null` targets the inline CohortPanel
   lookup ("which cohort fired at user-round N in this thread").
@@ -496,9 +497,8 @@ Each phase is a one-row-at-a-time probe that mirrors the
 embeddings backfill's claim -> process -> save shape. Two
 drivers run the phases, split by timing sensitivity:
 
-- **Turn tail** (`samskaraOnTurnTail`) - reaction-classify
-  first (the only hard timing window in the loop), then an
-  assimilate drain capped at `TAIL_ASSIMILATE_CAP` (3) so the
+- **Turn tail** (`samskaraOnTurnTail`) - an assimilate drain
+  capped at `TAIL_ASSIMILATE_CAP` (3) so the
   chain never delays reflection behind it, then one pair-relate
   probe, then one mint-tier1 probe (the in-session toast
   surface).
@@ -644,16 +644,19 @@ logs and yields to the next phase.
   insert reaches the mood pill through the same realtime relay
   and valence->emoji path as tier-1, so there is no UI
   special-case.
-- **Reaction-classify** - `agentClassifyReaction(apiKey, cohort,
-  assistantMsg, nextUserMsg) -> {confirm[], disconfirm[],
-  neutral[]} | null`. Tail-only. Reads the oldest unresolved
-  cohort inside the resolution window (fires aged 1-10 minutes;
-  older fires age out via decay), the assistant's reply, and the
-  next user message; partitions the cohort into three buckets
-  and applies via `samskara_apply_reaction`. There is no neutral
-  boolean state: a neutral leaves `was_confirmed` NULL and gets
-  `fired_at` backdated 15 minutes, pushing the row out of the
-  window so the unresolved poll skips it on subsequent passes.
+- **Evaluation (next-day judge)** - `samskara_evaluation.ts`, the
+  `nak-samskara-evaluation-sweep` cron. NOT on the turn tail: it waits
+  until a conversation has settled (same next-day + `>= 2`-round gate as
+  reflection), then runs one structured completion to judge every
+  samskara that FIRED in the thread (`held` / `contradicted` /
+  `not-engaged`) and routes the verdicts through
+  `samskara_apply_evaluation` - the sole writer of the verdict tallies
+  and the derived health posterior. Firing is the relevance gate, so an
+  untested prediction is never judged. It replaced a live 1-10 minute
+  reaction classifier (`agentClassifyReaction` + `samskara_apply_reaction`)
+  that resolved only ~4% of fires; `was_confirmed` is now set by the
+  judge (`held` -> true, `contradicted` -> false) for the legacy panels
+  that still read it.
 - **Dedup** - `samskara_collapse_by_cofiring(...)` RPC, no LLM.
   Cron-only.
   Two-pass: a primary co-firing-based pass merges tier-1 pairs
@@ -709,110 +712,73 @@ confirms) rank by sample size when cosine and health are
 close. Caps at ~1.46x for N=100; a brand-new samskara at N=0
 still ranks normally so it can fire and accumulate signal.
 
-### Reinforcement formula
+### Health: the verdict posterior
 
-Bayesian-ish, inside `samskara_apply_reaction`. `inc` is the
-per-reaction increment `max(round(1/sqrt(cohort_N), 2), 0.01)`:
+Health is a *derived statistic*, not an accumulator. It is a
+recency-discounted hit rate - of the times a samskara's topic actually
+came up (it fired) and the next-day judge tested it, how often did the
+prediction hold? `health` and `confidence` are the SAME number now (the
+merge): both are this posterior, so the fire score's
+`sqrt(health * confidence)` collapses to it.
 
-```text
-on confirm (per cohort member):
-  confirm_count += inc
-  confidence = (confirm_count + 2) / (confirm_count + disconfirm_count + 3)
-on disconfirm (per cohort member):
-  disconfirm_count += inc
-  confidence = (confirm_count + 1) / (confirm_count + disconfirm_count + 3)
-```
-
-Both `confirm_count` and `disconfirm_count` are **`real`**, not
-integer. The increment is sub-unit (`1/sqrt(N)` ~ 0.2-0.6), so an
-integer column truncated every reaction to 0 - which froze
-confidence at its Laplace prior and made the decay rule below fire
-on every samskara. The counts feed both confidence and decay, so
-fractional storage is load-bearing, not cosmetic. The confidence
-expressions read the POST-increment counts (the SQL adds `inc`
-explicitly) so confidence doesn't lag one reaction behind.
-
-Cohort weight is `1 / sqrt(N)` with a 0.01 floor and two-decimal
-rounding. A 5-strong cohort all confirming contributes
-`5 * 0.45 ~ 2.24` total confirm-count, not 5. Large cohorts
-reinforce meaningfully but can't dominate single-fire signal.
-
-### Decay formula
-
-Three paths per `samskara_decay_sweep()` pass. Health is clamped
-to [0, 1].
+`samskara_apply_evaluation(user, held[], contradicted[], not_engaged[])`
+updates each fired samskara online, one discount step plus the verdict:
 
 ```text
-stale-fire decay:
-  health -= 0.02 where coalesce(last_fired_at, created_at)
-                         < now() - interval '60 days'
-disconfirm decay:
-  health -= 0.10 where disconfirm_count > confirm_count
-                    and disconfirm_count + confirm_count >= 1.0
-locked-in-without-feedback decay:
-  health -= 0.03 where fire_count > 10
-                    and (confirm_count + disconfirm_count) < 0.5
+discount prior evidence (the forgetting):
+  confirm_count    *= d        -- d = 0.5 ^ (1/L), L = half-life in evaluations
+  disconfirm_count *= d
+fold in this evaluation's verdict:
+  held         -> confirm_count    += 1
+  contradicted -> disconfirm_count += 1
+  not-engaged  -> neither (the discount above is its only effect)
+recompute the posterior (written to BOTH health and confidence):
+  health = confidence = (confirm_count + k*p0) / (confirm_count + disconfirm_count + k)
 ```
 
-The third path catches the "stereotype hardening" pathology
-where a samskara fires constantly but never gets explicit
-confirm or disconfirm (neutrals only). The existing two paths
-never touch it; this gentle nudge crowds it out without
-artificially perturbing user-facing behaviour.
+`p0` is the **population's aggregate hit rate** (`samskara_population_p0`:
+`sum(confirm) / sum(confirm + disconfirm)` across the user's corpus, weak
+neutral fallback under 20 evidence) and `k` is the prior strength
+(pseudo-count, 5). A fresh or evidence-less samskara therefore sits at
+`p0` - the user's own baseline - not a guessed constant. That is the
+"calibrate from aggregate metrics" prior: every individual health is a
+shrinkage estimate toward the population. The posterior is a weighted
+average of {0,1} outcomes and `p0` in [0, 1], so it is inherently bounded
+to [0, 1] - it cannot run away.
 
-The stale-fire path coalesces `last_fired_at` to `created_at`
-so a never-yet-fired samskara is judged by its AGE, not punished
-for the gap before its first fire. A bare `last_fired_at is
-null` clause docked every newborn 0.02/pass until it first fired
-(live data: health tracked the mint-to-first-fire delay in exact
-0.02 steps), and under frequent decay a niche claim could reach
-health 0 before ever firing - then it sits below the fire score
-floor and never fires again, a stillbirth spiral. Coalescing
-gives newborns the full 60-day window to establish while still
-pruning claims that genuinely never fire.
+`confirm_count` / `disconfirm_count` stay **`real`** (the discount makes
+them fractional). An integer column truncated the earlier classifier's
+sub-unit increments to 0 and froze the whole corpus at health 0 - the bug
+this column's type prevents. The two knobs (`p0`, `L`) are data-derived,
+not eyeballed: `p0` from the population tallies, `L` from the typical
+evaluation cadence. The old reaction-tally Laplace `(confirm+2) /
+(confirm+disconfirm+3)` is exactly the `k*p0` / `k` prior here, now
+population-derived instead of flat.
 
-Both feedback thresholds are ABSOLUTE accumulated weight, not
-raw counts or a fraction of fire_count. They were originally
-written against an integer-count, full-`+1`-per-reaction world
-(`>= 3` and `< 0.2 * fire_count`). With sqrt-weighted real
-increments and only ~20% of cohorts ever resolving, feedback
-accumulates at a small fraction of fire_count, so `0.2 *
-fire_count` was unreachable and `0.5` / `1.0` are the
-recalibrated "barely any signal" / "~three reactions of net
-disconfirm" bars. Overpopulation pruning is the collapse RPC's
-job, not decay's, so these bars can be lenient.
+### Decay: relevance-gated forgetting (no wall clock)
 
-Cadence matters as much as the thresholds: the decay rates are a
-per-PASS nudge calibrated for a ~30-minute interval. Run more
-often, they compound - an unthrottled per-rotation pass once
-drove the whole corpus to health 0 at -0.03/pass, and any
-client-lifecycle-scoped throttle resets on reload or tab switch,
-so the cadence has to be owned by a wall clock. The pass
-therefore runs **server-side as the `nak-samskara-decay` pg_cron
-job** (`13,43 * * * *`, pure SQL, no pg_net - same shape as the
-stream janitor). `samskara_decay_sweep()` is
-`security definer` with no `auth.uid()` filter - cron has no user
-session, and every predicate is row-local, so one cross-user pass
-is exactly the union of the per-user passes. Decay is not part of
-the formation rotation; the cron job is its only driver.
+There is no wall-clock decay pass. Forgetting IS the evidence discount
+above: each time a samskara is evaluated without earning a fresh hit, its
+prior evidence shrinks and its posterior regresses toward `p0`. A
+prediction whose topic never recurs is never evaluated, never decays, and
+waits at its last posterior - untested is not wrong. That is the whole
+point of the redesign: decay tracks *being tested*, not elapsed time, so a
+narrow-but-valid claim is not eroded on the days its topic is absent.
 
-**RETIRED - superseded by self-calibrating health.** The wall-clock
-decay formula above no longer runs. Health is now a *derived,
-relevance-gated posterior*: the next-day evaluation sweep
-(`nak-samskara-evaluation-sweep`, the `samskara_evaluation.ts` agent)
-judges each samskara against the conversation it actually fired in
-(`held` / `contradicted` / `not-engaged`), and `samskara_apply_evaluation`
-recomputes `health` = `confidence` = a recency-discounted hit rate
-shrunk toward `p0`, the population's aggregate hit rate
-(`samskara_population_p0`). A prediction only moves when it is genuinely
-tested; an untested or evidence-less one sits at `p0` (the baseline),
-not at 0 - so `health` and `confidence` merged into one verdict-derived
-score. The `nak-samskara-decay` cron is unscheduled; the new
-`nak-samskara-reap` cron (`samskara_reap_dead`, minute :13) clears only
-repeatedly-contradicted, long-quiet rows. The `samskara_decay_sweep` /
-`samskara_apply_reaction` functions and the live reaction-classify
-probe are left defined-but-dead pending a cleanup pass. Design of
-record + the model's math:
+"Dead" therefore means **repeatedly contradicted** - a posterior driven
+well below `p0` by real misses, not mere staleness. The reaper
+(`samskara_reap_dead`, the `nak-samskara-reap` pure-SQL cron at minute
+:13) deletes only rows below a low health floor AND not fired in `>= 14`
+days, so genuinely-wrong, long-quiet predictions are cleared while an
+untested-but-baseline one is spared (still eligible to fire and prove
+itself). The baseline-sitting majority is bounded by
+`samskara_collapse_by_cofiring` and the 150-row population cap, not by
+decay.
+
+History: this replaced a wall-clock `samskara_decay_sweep` (a per-pass
+health nudge on a 30-minute cron) plus a live 1-10 minute reaction
+classifier that resolved only ~4% of fires. Both are retired and dropped.
+Design of record + the model's derivation:
 [`plans/samskara-decay-relevance-gated-plan.md`](plans/samskara-decay-relevance-gated-plan.md).
 
 ### Dedup formula
@@ -1019,21 +985,19 @@ summarizer reads samskaras to feed the agent.
   must do the same. RPCs that do the cosine in SQL (the fire,
   search, nearest, and cluster RPCs) are unaffected - this only
   bites JS-side vector math.
-- **Reaction counts are `real`; decay cadence is load-bearing.**
-  Two coupled traps that together euthanized the entire corpus
-  to health 0 once. (1) `confirm_count`/`disconfirm_count` MUST
-  be `real`: reactions increment by `1/sqrt(cohort_N)` (~0.2-0.6),
-  which an integer column truncates to 0, freezing confidence and
-  making the locked-in decay rule fire on everything. Any RPC
-  RETURNS TABLE that re-declares these as `int` (e.g.
-  `samskara_search_by_prediction`) re-introduces the truncation
-  on the way out - keep them `real`. (2) the decay rates are a
-  per-pass nudge calibrated for a ~30-minute cadence; at -0.03
-  health per locked-in pass, anything that runs the pass more
-  often is lethal within ~30 min. The cadence is owned by the
-  `nak-samskara-decay` pg_cron schedule - if you ever see health
-  collapse across the board again, check the column type and the
-  cron schedule before the decay formula.
+- **Verdict counts are `real`; the prior is load-bearing.**
+  `confirm_count`/`disconfirm_count` MUST be `real`: the
+  per-evaluation discount (`* 0.5^(1/L)`) and the earlier classifier's
+  sub-unit increments are both fractional, and an integer column
+  truncates them to 0, freezing health at the prior - the bug that
+  once euthanized the whole corpus to 0. Any RPC RETURNS TABLE that
+  re-declares these as `int` (e.g. `samskara_search_by_prediction`)
+  re-introduces the truncation on the way out - keep them `real`.
+  Health can no longer "collapse across the board" from a runaway
+  decay cadence - there is no decay pass, and the posterior is a
+  bounded rate. The remaining failure mode is a systematically harsh
+  judge dragging the corpus toward `p0` and below; if you see that,
+  look at the judge prompt and `p0`, not a cron schedule.
 - **Two injection mechanisms, both always-on.** The compound
   prose summary captures stable bias across every turn; the
   per-turn cosine fire surfaces situational bias. Either one
@@ -1093,15 +1057,13 @@ summarizer reads samskaras to feed the agent.
   base. The inline comment on the threshold formula names this
   explicitly so a reviewer doesn't mis-flag it as inconsistent
   with the TS side.
-- **Reaction classification reads the user's NEXT message.**
-  Fires happen on turn T's user input; classification runs on
-  turn T+1's user input (responding to the assistant's turn-T
-  reply). 10-minute resolution window - fires older than that
-  age out via decay rather than being force-classified by
-  stale signal. This is why reaction-classify is tail-only and
-  runs FIRST in the tail: the tail of turn N+1 lands exactly
-  when turn N's cohort becomes classifiable, and it is the only
-  hard timing window in the whole pipeline.
+- **Evaluation is next-day, not in-session.** The judge waits until a
+  conversation has settled (next-day + `>= 2`-round gate) and reads the
+  whole transcript with hindsight - there is no in-session resolution
+  window and no tail-first timing constraint. The tradeoff: a verdict,
+  and the health it moves, lands roughly a day after the turn rather
+  than minutes after. This replaced a live 1-10 minute reaction
+  classifier whose narrow window resolved only ~4% of fires.
 - **Neutral has no boolean state.** `was_confirmed` is
   true/false/NULL, and a classified-neutral fire stays NULL -
   it is marked only by `fired_at` being backdated 15 minutes,
@@ -1133,8 +1095,9 @@ summarizer reads samskaras to feed the agent.
   the tail therefore adds its cost to EVERY completed turn, and
   adding one to the sweep adds it per active user per hour -
   budget accordingly. The tail/sweep phase split is the design,
-  not an accident: reaction-classify is tail-only (timing
-  window), mint-tier2 / dedup / compound-regen are cron-only
+  not an accident: the assimilate drain and exploratory probes are
+  tail-driven (session-responsive), mint-tier2 / dedup / compound-regen
+  are cron-only
   (heavy or timing-insensitive), and moving a phase across that
   line should be a deliberate decision.
 - **Tier-2 detection and dedup read the same co-fire self-join
@@ -1162,9 +1125,9 @@ summarizer reads samskaras to feed the agent.
   the second a different child set the agent synthesized into the
   same claim. Neither is optional.
 - **Tier-2 rides the unchanged hot path; orphans are fine.**
-  `samskara_fire_top_k`, `samskara_apply_reaction`, and
-  `samskara_decay_sweep` have no tier filter, so a tier-2 fires, gets
-  confirmed/disconfirmed, and decays exactly like a tier-1 the
+  `samskara_fire_top_k` and `samskara_apply_evaluation` have no tier
+  filter, so a tier-2 fires, gets judged, and updates its posterior
+  exactly like a tier-1 the
   moment it exists - no chat-loop or UI change was needed to ship
   it. Because provenance has no FK on `ref_id`, a tier-2 whose
   children dedup later merges or deletes simply keeps standing on

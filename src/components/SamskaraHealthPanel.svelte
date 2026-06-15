@@ -146,16 +146,22 @@
           <span class="health-value">{rates.fires}</span>
         </div>
         <div class="health-row">
-          <span class="health-label">Reaction resolution</span>
+          <span class="health-label">Judged</span>
           <span class="health-value">
             {rates.resolutionPct.toFixed(0)}% ({rates.resolved}/{rates.fires})
           </span>
         </div>
+        <div class="health-row">
+          <span class="health-label">Verdicts</span>
+          <span class="health-value">
+            {rates.held} held / {rates.contradicted} contradicted / {rates.notEngaged} not-engaged
+          </span>
+        </div>
       </div>
       <p class="health-note subtle">
-        A low resolution rate is normal - only the turn right after a fire
-        can confirm or disconfirm it, so most fires never get an explicit
-        reaction.
+        Fires are judged the next day by the evaluation sweep, against the
+        whole settled conversation - so a recent fire whose thread is still
+        same-day (or under 2 rounds) simply hasn't been judged yet.
       </p>
     {/if}
 

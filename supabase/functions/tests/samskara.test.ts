@@ -13,7 +13,6 @@ const {
   RELATOR_PROMPT,
   MINTER_PROMPT,
   TIER2_MINTER_PROMPT,
-  REACTION_PROMPT,
   COMPOUND_SUMMARY_PROMPT,
   SAMSKARA_MODEL,
   TAIL_ASSIMILATE_CAP,
@@ -64,14 +63,6 @@ Deno.test('both minter prompts share the confirm-gated output shape', () => {
   // enumerate the children.
   assert(TIER2_MINTER_PROMPT.includes('GENERALIZE'));
   assert(TIER2_MINTER_PROMPT.includes('children'));
-});
-
-Deno.test('reaction prompt demands a total partition of the cohort', () => {
-  for (const bucket of ['"confirm"', '"disconfirm"', '"neutral"']) {
-    assert(REACTION_PROMPT.includes(bucket), `missing ${bucket}`);
-  }
-  assert(REACTION_PROMPT.includes('exactly one bucket'));
-  assert(REACTION_PROMPT.includes('Bias\ntoward neutral') || REACTION_PROMPT.includes('Bias toward neutral'));
 });
 
 Deno.test('compound summary prompt forbids the leaky failure modes', () => {

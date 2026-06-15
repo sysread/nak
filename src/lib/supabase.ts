@@ -6183,6 +6183,9 @@ export class SupabaseService {
       resolved: r?.resolved ?? 0,
       unresolved: r?.unresolved ?? 0,
       resolutionPct: r?.resolution_pct ?? 0,
+      held: r?.held ?? 0,
+      contradicted: r?.contradicted ?? 0,
+      notEngaged: r?.not_engaged ?? 0,
     };
   }
 
@@ -6604,6 +6607,9 @@ export interface SamskaraRates {
   resolved: number;
   unresolved: number;
   resolutionPct: number;
+  held: number;
+  contradicted: number;
+  notEngaged: number;
 }
 
 /** Map a snake-case corpus row (select or RPC) to the camelCase UI shape. */
