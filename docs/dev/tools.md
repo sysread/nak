@@ -140,8 +140,11 @@ Notable members (the full ordered list is `alwaysOnToolbox` in
   tool-result content: the edge orchestrator harvests the generated
   bytes (`supabase/functions/venice/tools/_generated_image.ts` +
   `getStreamingResponse.ts`) and writes a `message_attachments` row
-  on the terminal assistant message; the model only sees a compact
-  descriptor (filename + dimensions). See `./attachments.md`.
+  on the round's assistant-with-tool-calls message; the model only sees
+  a compact descriptor (filename + dimensions). The browser renders that
+  image in a dedicated `GeneratedImageCard` that resolves it by filename
+  (the per-round attach never echoes over realtime). See
+  `./attachments.md`.
 
 ## Files
 

@@ -122,6 +122,10 @@ One file per use-case under [`use-cases/`](./use-cases/), named
   attaching files from the composer, waiting for processing,
   post-send previews, extracted-text drawers, and expired-file
   surfaces.
+- [chat-generated-image-card](./use-cases/chat-generated-image-card.md) -
+  the dedicated generated-image card resolving by filename and
+  rendering without a reload (the per-round attach never echoes over
+  realtime).
 - [threads-management](./use-cases/threads-management.md) - thread title
   generation, manual rename pinning, topic-filter pills, and the
   per-thread multi-device reply lock.

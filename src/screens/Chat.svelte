@@ -215,6 +215,8 @@
   import VerbosityPicker from '../components/VerbosityPicker.svelte';
   import Scanner from '../components/Scanner.svelte';
   import ToolCalls from '../components/ToolCalls.svelte';
+  import GeneratedImageCard from '../components/GeneratedImageCard.svelte';
+  import { generatedImagesForGroup } from '$lib/ui/generated-image';
   import {
     parseAskUserContent,
     buildAskUserAnswerContent,
@@ -1665,29 +1667,31 @@
       // is when the persisted row enters the local view.
       if (msg.role === 'assistant' && msg.status === 'streaming') return;
       appendMessage(msg);
-      // Hydrate attachments for rows that can carry them — user rows
-      // (uploads) and assistant rows (generate_image output). The
-      // realtime payload only carries the `messages` row — Postgres
-      // replication doesn't join across tables — so a message with
-      // attachments reaches the subscriber with `attachments` unset.
-      // Fire a follow-up fetch and re-append; `appendMessage`'s upgrade
-      // path replaces the placeholder with the hydrated row.
+      // Hydrate attachments for user rows (uploads). The realtime
+      // payload only carries the `messages` row — Postgres replication
+      // doesn't join across tables — so a message with attachments
+      // reaches the subscriber with `attachments` unset. Fire a
+      // follow-up fetch and re-append; `appendMessage`'s upgrade path
+      // replaces the placeholder with the hydrated row.
       //
-      // Covers two scenarios:
+      // Covers two scenarios for uploads:
       //   1. Local sender race — the sender's own appendMessage with
-      //      attachments already lands (the user-upload path, or the
-      //      chat-loop's onAssistantAttachments patch for generated
-      //      images); this hydration is a defensive second attempt for
-      //      the case where the realtime echo arrives but the local
-      //      path never fires.
+      //      attachments already lands; this hydration is a defensive
+      //      second attempt for the case where the realtime echo
+      //      arrives but the local path never fires.
       //   2. Cross-tab sync — tab B sees the INSERT from tab A and
-      //      needs to fetch attachments itself; this is the only path
-      //      that does it.
+      //      needs to fetch attachments itself.
+      //
+      // Assistant rows are deliberately excluded: their only
+      // attachment source is generate_image, and that output is
+      // attached server-side AFTER this row's INSERT echo, so it would
+      // never be hydrated here anyway. GeneratedImageCard resolves the
+      // image by filename instead (see generated-image.ts).
       //
       // Fire-and-forget: a failure here just leaves the row without
       // attachments in this tab. The next full `listMessages` on
       // reload (or a re-subscribe) hydrates correctly.
-      if ((msg.role === 'user' || msg.role === 'assistant') && app.supabase) {
+      if (msg.role === 'user' && app.supabase) {
         void app.supabase
           .listAttachmentsByMessageIds([msg.id])
           .then((byId) => {
@@ -3597,19 +3601,6 @@
                 appendMessage(msg);
               }
             },
-            onAssistantAttachments: (messageId, attachments) => {
-              // The chat-loop wrote generate_image output to this
-              // assistant row at end of turn. Patch the live message so
-              // the image renders without a refetch; appendMessage's
-              // upgrade path swaps the attachment-less row for this one.
-              // Background-thread slots need no patch - their buffered
-              // row is attachment-less, but listMessages re-hydrates
-              // assistant attachments on re-entry and mergeMessagesById
-              // prefers the fetched row.
-              if (ctx.threadId !== activeThreadId) return;
-              const existing = messages.find((m) => m.id === messageId);
-              if (existing) appendMessage({ ...existing, attachments });
-            },
             onToolStart: (call) => {
               // performance.now() rather than Date.now() so the
               // elapsed math is monotonic — the user's clock jumping
@@ -5110,6 +5101,21 @@
   type MessageBlock =
     | { kind: 'plain'; message: Message }
     | { kind: 'tool-group'; assistant: Message; resultsByCallId: Record<string, Message> }
+    // A generate_image tool call's output, rendered as its own card
+    // directly below the tool-group block for the turn it fired on.
+    // `key` is the tool_call_id (stable across renders); `assistantId`
+    // anchors it to the originating row; `filename` + `aspectRatio` let
+    // GeneratedImageCard resolve the image by filename and size its
+    // loading placeholder. A separate block (not the AssistantBody
+    // attachment slot) because the image hydrates by filename, not via
+    // the realtime attachment path - see src/lib/ui/generated-image.ts.
+    | {
+        kind: 'generated-image';
+        key: string;
+        assistantId: string;
+        filename: string;
+        aspectRatio: string;
+      }
     // Rendered as a single faded "Renamed to X" line where an
     // `update_title` call fired. Carries a stable `key` so the #each
     // keyed loop can distinguish multiple renames within one turn
@@ -5494,6 +5500,24 @@
           // visible ones without mutating the store-owned row.
           const narrowed: Message = { ...m, tool_calls: visibleCalls };
           blocks.push({ kind: 'tool-group', assistant: narrowed, resultsByCallId: scoped });
+
+          // Emit one generated-image card per successful generate_image
+          // call, immediately after the tool-group block so the picture
+          // sits right under the tool card that made it. The card
+          // resolves the image by filename rather than reading the
+          // assistant row's attachments, because the server-side
+          // per-round attach never echoes back over realtime (see
+          // generated-image.ts). Skipped for failed/in-flight calls -
+          // the descriptor is only parseable once the result lands.
+          for (const img of generatedImagesForGroup(visibleCalls, scoped)) {
+            blocks.push({
+              kind: 'generated-image',
+              key: img.key,
+              assistantId: m.id,
+              filename: img.filename,
+              aspectRatio: img.aspectRatio,
+            });
+          }
         }
 
         // Emit one rename block per successful update_title call on
@@ -6802,6 +6826,8 @@
               ? `rename:${block.key}`
               : block.kind === 'ask-user'
               ? `ask-user:${block.key}`
+              : block.kind === 'generated-image'
+              ? `generated-image:${block.key}`
               : block.assistant.id
           )}
             {#if block.kind === 'tool-group'}
@@ -6823,7 +6849,6 @@
                   contextWindow={currentTierSpec.contextWindow}
                   usage={block.assistant.usage}
                   createdAt={block.assistant.created_at}
-                  attachments={block.assistant.attachments}
                   disabled={pendingDeleteSet.has(block.assistant.id) || (activeSlot?.sending ?? false)}
                   onRegenerate={() => { void regenerateFrom(block.assistant.id); }}
                   onRegeneratePreviewEnter={() => previewRegenerateFrom(block.assistant.id)}
@@ -6837,6 +6862,22 @@
                     sending={activeSlot?.sending ?? false}
                   />
                 </AssistantBody>
+              </div>
+            {:else if block.kind === 'generated-image'}
+              <!-- Generated-image card: its own assistant bubble sitting
+                   directly under the tool-group block whose generate_image
+                   call produced it. GeneratedImageCard resolves the image
+                   by filename and shows a sized Scanner placeholder until
+                   it lands - it does NOT read the assistant row's
+                   attachments, because the server-side per-round attach
+                   never echoes over the messages realtime channel, so the
+                   in-memory row stays attachment-less until a reload. -->
+              <div class="msg assistant generated-image-host">
+                <GeneratedImageCard
+                  threadId={activeThreadId}
+                  filename={block.filename}
+                  aspectRatio={block.aspectRatio}
+                />
               </div>
             {:else if block.kind === 'rename'}
               <!-- Low-emphasis inline indicator for an `update_title`
@@ -6887,7 +6928,6 @@
                   contextWindow={currentTierSpec.contextWindow}
                   usage={block.message.usage}
                   createdAt={block.message.created_at}
-                  attachments={block.message.attachments}
                   disabled={pendingDeleteSet.has(block.message.id) || activeSlot?.sending}
                   onRegenerate={() => { void regenerateFrom(block.message.id); }}
                   onRegeneratePreviewEnter={() => previewRegenerateFrom(block.message.id)}

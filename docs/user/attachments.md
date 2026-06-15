@@ -68,9 +68,10 @@ Other files show up under your message as a download chip:
 Nak can also create images for you. Enable the **Images** toolbox in
 the [toolbox popover](./chat.md#toolboxes), then ask for a picture -
 "draw me a watercolor fox in a snowy forest." Nak writes a detailed
-prompt, sends it to Venice's image model, and attaches the result to
-its reply as a large preview, exactly like an image you uploaded
-yourself.
+prompt and sends it to Venice's image model. The picture appears as a
+large preview in its own card just below the generation step, with a
+brief loading placeholder while the image downloads - then it renders
+exactly like an image you uploaded yourself.
 
 - Nak often turns the Images toolbox on by itself when you clearly
   ask for a picture, the same way it reaches for other capabilities
