@@ -6675,17 +6675,15 @@
             {
               id: 'librarian',
               label: 'Run librarian',
-              // Disabled while a run is in flight - the in-flight lease
-              // (wikiLibrarianLease, realtime off the profiles row) gives
-              // the browser a live view of any run, manual OR scheduled,
-              // on any device. The server-side guard is still the real
-              // mutual exclusion (and surfaces `busy` if a run is kicked
-              // in the gap before the lease propagates); this just stops
-              // the obvious double-click.
-              title: wikiLibrarianLease.running
-                ? 'A librarian run is already in progress'
-                : 'Run the wiki librarian now',
-              disabled: wikiLibrarianLease.running,
+              // Always enabled: this NAVIGATES to the librarian page, it
+              // does not start a run. Disabling it would lock the user out
+              // of the very page that shows the in-flight state. When a run
+              // (theirs, another device's, or a scheduled sweep) is active,
+              // the page itself shows a "running in the background" spinner
+              // with a disabled Run button - driven by wikiLibrarianLease in
+              // Wiki.svelte. The server-side guard remains the real mutual
+              // exclusion.
+              title: 'Run the wiki librarian',
               onclick: () => (wikiLibrarianTrigger = true),
               icon: librarianIcon,
             },

@@ -434,12 +434,15 @@ UI:
   state is a local flag in `Wiki.svelte`, and a clock-button click
   while the librarian is open has to touch both the route AND that
   flag. Wiki.svelte resets each flag after consuming it. The
-  librarian button disables while a run is in flight, driven by the
-  `wikiLibrarianLease` in-flight-lease watcher (realtime off the
-  `profiles` row) - covering scheduled and chat-dispatched runs too,
-  not just this tab's. The server-side in-flight guard's `busy` result
-  remains the authoritative collision surface for the gap before the
-  lease propagates.
+  librarian sparkle button stays ENABLED while a run is in flight - it
+  navigates to the librarian page, so disabling it would lock the user
+  out of the page that shows the in-flight state. The in-flight signal
+  (`wikiLibrarianLease`, realtime off the `profiles` row, covering
+  scheduled and chat-dispatched runs too) instead disables the Run
+  button ON the page and renders a "running in the background" spinner.
+  The server-side in-flight guard's `busy` result remains the
+  authoritative collision surface for the gap before the lease
+  propagates.
 - `src/screens/Settings.svelte` - the "Wiki" group with the
   `wikiAutomaticEnabled` and `wikiLibrarianEnabled` toggles.
 
@@ -1101,18 +1104,18 @@ explicit instructions), and output shape (tool calls vs JSON).
   need a policy that parses the topic string. Consequence: a
   subscriber MUST filter on runId, or events from a concurrent or
   stale run bleed into its step list.
-- **The librarian button's gray-out reads the in-flight lease, not a
-  local flag.** The in-flight guard lives on `profiles`; with
-  `profiles` in the realtime publication, `wikiLibrarianLease` gives
-  the browser a live view of ANY run - manual, scheduled, or
-  chat-dispatched, on any device - so the top-bar sparkles button
-  disables while a run is in flight (`disabled: wikiLibrarianLease.running`).
-  The server-side guard is still the real mutual exclusion (and
+- **The in-flight state disables the Run button, NOT the sparkle.** The
+  top-bar sparkle navigates to the librarian page, so it stays enabled
+  while a run is in flight - disabling it would lock the user out of the
+  page that shows the run. The in-flight guard lives on `profiles`; with
+  `profiles` in the realtime publication, `wikiLibrarianLease` gives the
+  browser a live view of ANY run - manual, scheduled, or chat-dispatched,
+  on any device. On the page that drives `runInFlightElsewhere`, which
+  disables the Run button and renders a "running in the background"
+  spinner. The server-side guard is still the real mutual exclusion (and
   surfaces `busy` if a run is kicked in the gap before the lease
-  propagates); the gray-out just prevents the obvious double-click and
-  is the same signal that drives the panel's "a run is in progress"
-  spinner. The lease is a TTL'd server fact, so it also clears a stale
-  gray-out after a crashed run without an explicit release.
+  propagates). The lease is a TTL'd server fact, so it also clears a
+  stale spinner after a crashed run without an explicit release.
 - **A detached manual run must publish its outcome over the channel.**
   `detachedManualRunHandler` responds `{accepted:true}` and runs under
   `EdgeRuntime.waitUntil`, so the result the synchronous
