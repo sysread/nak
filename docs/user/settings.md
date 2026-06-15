@@ -56,9 +56,9 @@ the Memories panel keep working. See [Memory](./memory.md).
 Two independent toggles plus a reset:
 
 - **Automatic articles** - lets the autonomous agent write and
-  update wiki articles on its own. Off by default; manual edits and
-  the per-article "ask agent to update" button still work when it's
-  off.
+  update wiki articles on its own. On by default for new accounts;
+  manual edits and the per-article "ask agent to update" button
+  still work when it's off.
 - **Librarian** - the periodic pass that deduplicates articles,
   fact-checks them, and tightens their boundaries. Independent of
   the automatic-articles toggle.

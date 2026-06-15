@@ -20,7 +20,8 @@ through the regular sign-in screen after importing.
 ## Exporting
 
 Settings &rarr; **API keys** &rarr; **Export**. The button
-downloads `nak-config.json` with the two fields above.
+downloads a timestamped `nak-config-<timestamp>.json` file with the
+two fields above.
 
 ## Importing on a new browser
 
