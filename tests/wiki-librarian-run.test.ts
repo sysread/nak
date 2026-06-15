@@ -101,17 +101,26 @@ describe('finalizeLibrarianSteps', () => {
     ]);
   });
 
-  it('settles a still-pending trailing row to ok on a clean finish', () => {
+  it('settles a still-pending trailing row to ok and appends Done on a clean finish', () => {
     const pending: LibrarianStep[] = [{ label: 'Thinking (round 1)', status: 'pending' }];
     expect(finalizeLibrarianSteps(pending, 'ok')).toEqual([
       { label: 'Thinking (round 1)', status: 'ok' },
+      { label: 'Done', status: 'ok' },
     ]);
   });
 
-  it('leaves an already-settled trailing row alone (done arrived first)', () => {
-    const settled: LibrarianStep[] = [
+  it('appends Done even when the trailing row already settled', () => {
+    const settled: LibrarianStep[] = [{ label: 'Merging Maya articles', status: 'ok' }];
+    expect(finalizeLibrarianSteps(settled, 'ok')).toEqual([
       { label: 'Merging Maya articles', status: 'ok' },
-    ];
+      { label: 'Done', status: 'ok' },
+    ]);
+  });
+
+  it('does not append a terminal row on the error/timeout path', () => {
+    // The error message + the trailing X already mark the end; a
+    // client-side timeout may mean the run is still going server-side.
+    const settled: LibrarianStep[] = [{ label: 'Merging Maya articles', status: 'ok' }];
     expect(finalizeLibrarianSteps(settled, 'error')).toEqual(settled);
   });
 
