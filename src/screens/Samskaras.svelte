@@ -180,8 +180,8 @@
         <h3 class="samskara-summary-head">Compound summary (always on in system prompt)</h3>
         <p class="subtle samskara-summary-help">
           This is the global read: a single paragraph distilled from the
-          whole corpus that rides in every system prompt. A background
-          worker rebuilds it once enough new samskaras have been minted
+          whole corpus that rides in every system prompt. It is rebuilt
+          in the background once enough new samskaras have been minted
           since the last regen, so it drifts between conversations rather
           than mid-thread.
         </p>
@@ -196,7 +196,7 @@
             </p>
           </div>
         {:else}
-          <p class="subtle">No compound summary yet - the worker builds one once you have ~5 samskaras.</p>
+          <p class="subtle">No compound summary yet - it is built in the background once enough samskaras have formed.</p>
         {/if}
       </section>
     {:else if !selected}
