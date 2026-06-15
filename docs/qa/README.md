@@ -72,12 +72,23 @@ One file per use-case under [`use-cases/`](./use-cases/), named
 - [chat-recall-agents](./use-cases/chat-recall-agents.md) - the
   mid-turn recall agents (memory_recall and siblings), their drawer
   sources, and memory_conversation seeding.
+- [context-recall-priming](./use-cases/context-recall-priming.md) - the
+  boundary-triggered deterministic recall pipeline, its works-cited
+  index, the synthetic `<think>` injection, and the umbrella `context`
+  tool.
+- [intuition-pipeline](./use-cases/intuition-pipeline.md) - the
+  subconscious perception / drive / synthesis pipeline, its
+  trigger and cache logic on `threads.intuition_payload`, and the
+  `<think>`-tagged injection ahead of the next completion.
 - [chat-ask-user](./use-cases/chat-ask-user.md) - the ask_user
   tool's suspend/resume lifecycle and the AskUserCard's
   pre-populated question/options.
 - [chat-cutoff-retry](./use-cases/chat-cutoff-retry.md) - retrying a
   dead tail (partial-text cutoff or reasoning-only stall) red-outlines
   and replaces it rather than appending a continuation.
+- [exchange-per-thread-slots](./use-cases/exchange-per-thread-slots.md) -
+  per-thread streaming slot isolation: navigate away mid-stream and
+  back, concurrent multi-thread streams, no throbber/text bleed.
 - [reflection-drain](./use-cases/reflection-drain.md) - the
   chat-tail drain, the hourly catch-up sweep, and the attempt cap.
 - [wiki-fleet](./use-cases/wiki-fleet.md) - autonomous wiki sweep,
@@ -126,9 +137,20 @@ One file per use-case under [`use-cases/`](./use-cases/), named
 - [search-cross-tab](./use-cases/search-cross-tab.md) - the shared drawer
   search UX across Chats, Recipes, Memories, and Wiki, including
   scanner loading and substring fallback.
+- [cookbook-recipe-lifecycle](./use-cases/cookbook-recipe-lifecycle.md) -
+  recipe authoring in Cooklang, version log + revert, photos +
+  lightbox, Upcoming / Favorites bookmarks, click-to-rate, the copy
+  exports, and a model-driven recipe_save landing via the relay.
 - [settings-account-and-updates](./use-cases/settings-account-and-updates.md) -
   Settings pane independence, update-check/reload flow, background-job
   toggles, usage refresh, and credential/export actions.
 - [setup-config-transfer](./use-cases/setup-config-transfer.md) - first
   launch setup, local config persistence, and config-only export/import
   across browsers.
+- [help-modal-docs](./use-cases/help-modal-docs.md) - the in-app Help
+  modal: rendering the bundled user manual, internal `.md` link
+  navigation with the Scanner transition, external-link new-tab, and
+  heading-anchor scrolling.
+- [auth-session-lifecycle](./use-cases/auth-session-lifecycle.md) - the
+  Supabase auth gate, sign in/up toggle, sign out reset, and session
+  restore on reload.
