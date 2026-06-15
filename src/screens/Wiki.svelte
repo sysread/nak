@@ -1191,7 +1191,7 @@
                work during the 10-30s the loop runs - the old
                "Working..." button alone reads as "hung." Stays
                visible after the run settles so the user can scan the
-               trail alongside the result card below. -->
+               trail alongside the summary below. -->
           <ol class="librarian-steps" aria-live="polite">
             {#each librarianSteps as step, i (i)}
               <li class="librarian-step status-{step.status}">
@@ -1208,6 +1208,31 @@
             {/each}
           </ol>
         {/if}
+        {#if librarianResult && librarianResult.kind === 'ok'}
+          <!-- Post-run summary, between the checklist and the Run button
+               so the strip reads top-to-bottom: steps -> what it decided
+               -> run again. The librarian's final reply is its
+               operator-facing summary; shown as an italic block quote so
+               it reads as "the agent said," set apart from the UI chrome.
+               Rendered through Markdown because the reply sometimes
+               carries backticked article titles or a short list. -->
+          <div class="wiki-librarian-result" aria-live="polite">
+            {#if librarianResult.finalText.trim().length > 0}
+              <blockquote class="wiki-librarian-summary">
+                <Markdown content={librarianResult.finalText} />
+              </blockquote>
+            {:else}
+              <p class="subtle">
+                The librarian completed without any changes.
+              </p>
+            {/if}
+            <p class="subtle wiki-librarian-result-meta">
+              {librarianResult.toolCalls} tool call{librarianResult.toolCalls === 1 ? '' : 's'}
+              over {librarianResult.articleCount} article{librarianResult.articleCount === 1 ? '' : 's'}.
+              See the Logs drawer for the full trace.
+            </p>
+          </div>
+        {/if}
         <div class="row">
           <button
             type="button"
@@ -1219,32 +1244,6 @@
           </button>
         </div>
       </div>
-      {#if librarianResult && librarianResult.kind === 'ok'}
-        <!-- Post-run result rendered as a message card below the
-             input rather than swapping the input out for a modal
-             "Done" screen. The user can scan the librarian's summary
-             and immediately type another instruction without
-             round-tripping through a Close button. The summary is
-             markdown (the prompt's "Final reply" block sometimes
-             includes bullet lists or backtick-fenced article titles)
-             so we render through the same `<Markdown>` component the
-             rest of the wiki uses instead of dropping the model's
-             formatting on the floor. -->
-        <div class="wiki-librarian-result" aria-live="polite">
-          {#if librarianResult.finalText.trim().length > 0}
-            <Markdown content={librarianResult.finalText} />
-          {:else}
-            <p class="subtle">
-              The librarian completed without any changes.
-            </p>
-          {/if}
-          <p class="subtle wiki-librarian-result-meta">
-            {librarianResult.toolCalls} tool call{librarianResult.toolCalls === 1 ? '' : 's'}
-            over {librarianResult.articleCount} article{librarianResult.articleCount === 1 ? '' : 's'}.
-            See the Logs drawer for the full trace.
-          </p>
-        </div>
-      {/if}
     {:else if !route.wiki_article_id}
       <!-- No-article default. Compose mode wins (don't yank a mid-
            draft user off their form), then the Skipped panel (alert-
@@ -1853,11 +1852,25 @@
      <Markdown> render from blowing out the column. */
   .wiki-librarian-result {
     margin-top: 0.75rem;
-    padding: 0.75rem 1rem;
-    border: 1px solid var(--border);
-    border-radius: 0.5rem;
-    background: var(--surface);
     min-width: 0;
+  }
+  /* The librarian's final reply as an italic block quote - reads as
+     "the agent said," set apart from the surrounding UI. The left rule
+     is the block-quote affordance now that the bordered card is gone. */
+  .wiki-librarian-summary {
+    margin: 0;
+    padding: 0.1rem 0 0.1rem 0.75rem;
+    border-left: 3px solid var(--border);
+    font-style: italic;
+  }
+  /* Trim the rendered markdown's outer paragraph margins so the quote
+     sits tight against its rule; keep inter-paragraph spacing for a
+     multi-line reply. */
+  .wiki-librarian-summary :global(p:first-child) {
+    margin-top: 0;
+  }
+  .wiki-librarian-summary :global(p:last-child) {
+    margin-bottom: 0;
   }
   .wiki-librarian-result-meta {
     margin: 0.5rem 0 0 0;
