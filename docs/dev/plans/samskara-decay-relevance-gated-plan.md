@@ -112,18 +112,19 @@ time. For each claimed thread it:
 2. Feeds the agent the thread transcript plus each fired
    prediction, and asks for a per-prediction **verdict** against
    what actually happened:
-   - `held` - the prediction was borne out -> **health up**
-   - `contradicted` - the user did the opposite / it was wrong ->
-     **health down (large)**
+   - `held` - the prediction was borne out -> a **hit**
+   - `contradicted` - the user did the opposite / it was wrong -> a
+     **miss**
    - `fired-but-not-engaged` - relevant-ish but the conversation
-     neither confirmed nor refuted it -> **health down (small)**;
-     this is the relevance-gated "forgetting" term, and it only
-     touches predictions that actually fired
-3. Applies the health deltas (clamped `[0, 1]`) and records the
-   verdict for observability.
+     neither confirmed nor refuted it -> **no evidence** (neither hit
+     nor miss); it only marks that the prediction got another at-bat,
+     which ages its older evidence (the forgetting)
+3. Updates the prediction's verdict tallies and recomputes its
+   **derived health** (see "Self-calibrating health"). There are no
+   hand-tuned deltas.
 
-Predictions that **did not fire** in the thread receive **no
-delta** at all - the core of the redesign.
+Predictions that **did not fire** in the thread are not evaluated at
+all - the core of the redesign.
 
 ### Replace the live reaction classifier
 
@@ -148,34 +149,83 @@ verdict. Dormant predictions (topic never recurs) simply persist
 untouched until their topic returns - the intended behavior for a
 narrow-but-valid claim.
 
-### Health increment widens
+### Self-calibrating health (derived from verdicts, not hand-tuned deltas)
 
-Today health rises **only** via the `+0.02` dedup-bump on re-mint of
-a near-duplicate (`samskara_reinforce_existing`). Under this plan a
-`held` verdict also raises health (the lever the system is missing -
-confirmation currently feeds `confidence`/`confirm_count` but never
-`health`). The dedup-bump stays as a second path.
+Health is **not an accumulator nudged by fixed deltas**. It is a
+*derived statistic* - a prediction's smoothed hit rate: of the times
+its topic actually came up (it fired) and the conversation tested it,
+how often did it hold? This is the same shape the codebase already
+uses for `confidence` (`(confirm+2)/(confirm+disconfirm+3)`, a
+Laplace-smoothed hit rate), so it is not a new pattern; it is that
+pattern promoted to the single survival signal.
 
-### One-time repair migration
+Mechanics, online, mirroring the existing `confirm_count` /
+`disconfirm_count` update plus one discount step:
 
-After the sweep is live, reseed the bug-killed dead to a
-**fire-able** health (~`0.3`) so relevance-gated evaluation can
-re-sort them. The seed must clear `FIRE_SCORE_FLOOR` - the intuition
-of "set it just above death" fails because at ~`0.003` the
-`sqrt(health * confidence)` term keeps the fire score below the
-floor, so the prediction never fires and never gets re-tested.
-Because the dead are mostly high-recurrence (EVIDENCE), the 102
-recurring ones get re-judged within days; held ones climb,
-contradicted ones die in ~2 strikes.
+- Reuse `confirm_count` / `disconfirm_count` (already `real`, already
+  read by the fire-score sample-size term) as the hit / miss tallies.
+  `held` increments confirm, `contradicted` increments disconfirm,
+  `not-engaged` increments neither.
+- **Forgetting = evidence discounting.** Before applying a verdict,
+  scale the existing tallies by `d = 0.5 ** (1/L)`, with `L` a
+  half-life measured in *evaluations*. Each at-bat ages prior
+  evidence, so a prediction that keeps firing but stops earning hits
+  sees its tallies shrink and **regresses toward the prior**. It does
+  not crash to 0 - untested is not wrong.
+- **Health is the empirical-Bayes posterior mean:**
+  `health = (confirm_eff + k*p0) / (confirm_eff + disconfirm_eff + k)`,
+  where `p0` is the **population's aggregate hit rate** (held over
+  held-plus-contradicted across all of the user's verdicts) and `k` is
+  the prior strength. A fresh or evidence-less prediction sits at `p0`
+  - the user's own baseline - not at a guessed constant. This is the
+  answer to "base it on aggregate metrics": the prior is computed from
+  the population, and each individual health is a shrinkage estimate
+  toward it.
+
+Only two knobs, both interpretable and both read off the aggregates
+rather than eyeballed:
+
+- `p0` - taken directly from the population's verdict tallies
+  (recomputed periodically; falls back to a weak neutral prior while
+  data is sparse).
+- `L` - the evidence half-life; default to a small multiple of the
+  median number of evaluations a prediction receives, so "forgotten"
+  means "went unconfirmed across roughly its normal testing cadence".
+
+**Health and confidence merge.** Both are now "hit rate from
+verdicts," so they collapse into one score - "is this prediction
+earning its keep." The fire-score `sqrt(health * confidence)` term
+becomes that single posterior; the sample-size term keeps reading
+`confirm_count + disconfirm_count`. The old Laplace constants `+2` /
+`+3` are exactly the `k*p0` / `k` of the new prior, now data-derived
+instead of flat.
+
+### Repair is (almost) free under the derived model
+
+The int-truncation bug left the bug-killed dead with `confirm_count` /
+`disconfirm_count` at 0 (the truncation) and `health` decayed to 0.
+Under derived health, **health is recomputed from the tallies** - and
+a prediction with zero evidence evaluates to `p0`, the population
+baseline. So simply switching the fire score onto the derived
+posterior lifts every evidence-less casualty back to "unproven" (and
+fire-able), where the relevance-gated judge re-sorts it as its topic
+recurs. No fragile "seed to ~`0.3` to clear `FIRE_SCORE_FLOOR`" guess
+is needed; the model subsumes the repair. The one-shot migration is
+just a recompute of `health` for all rows when the new fire score goes
+live. Because the dead are mostly high-recurrence (EVIDENCE), the 102
+recurring ones get re-judged within days from that baseline.
 
 ### Reaper (new) + collapse (unchanged)
 
-A reaper deletes samskaras that are **`health = 0` AND have not
-fired in `>= N` days** (start N = 14), so corpses stop counting
-against the 150 population cap while a recurring prediction mid-re-
-evaluation is never reaped. `samskara_collapse_by_cofiring` is
-**unchanged** - it remains the duplicate-merge and overpopulation
-backstop.
+Because evidence-less predictions regress to `p0` (not 0), "dead" now
+means **repeatedly contradicted** - a posterior driven well below the
+baseline by real misses. The reaper deletes samskaras whose derived
+health is **below a low floor AND that have not fired in `>= N` days**
+(start N = 14), so genuinely-wrong, long-quiet predictions are cleared
+while an untested-but-baseline prediction is left alone (it is still
+eligible to fire and prove itself). `samskara_collapse_by_cofiring` is
+**unchanged** - it remains the duplicate-merge and, via the 150
+population cap, the bound on the baseline-sitting majority.
 
 ## Why this is not "just tune the decay constants"
 
@@ -191,24 +241,32 @@ different question, not a retuned answer.
 
 ## Risks and rollout
 
-- **The judge becomes the sole health authority.** No fast feedback
-  loop: too harsh re-euthanizes the corpus; too lenient (LLMs over-
-  confirm) bloats it past the 150 cap. This is the main risk.
+- **The judge becomes the sole survival authority.** No fast feedback
+  loop: a systematically harsh judge drags the corpus toward `p0` and
+  below; a systematically lenient one (LLMs over-confirm) pins it high
+  and leans on the cap. This is the main risk - but it is bounded:
+  derived health is a *rate*, so it cannot run away the way an
+  unbounded accumulator could, and an evidence-less prediction can
+  only ever sit at `p0`, never higher.
 - **Mitigations:**
-  - **Shadow-run first.** Run the sweep for ~1 week applying
-    **reduced** deltas (or write verdicts without applying), and
-    compare its verdicts against the 1,040 historical live-confirms
-    to calibrate magnitudes before full force.
-  - **Skeptical judge prompt.** Default to `fired-but-not-engaged`;
-    require explicit transcript evidence for `held`. Err toward the
-    cap, not against it.
+  - **Shadow-run measures the prior; it does not hand-tune deltas.**
+    The ~1 week of shadow verdicts gives the aggregate hit-rate
+    distribution that *sets `p0`* and the evaluation cadence that sets
+    `L`. The data parameterizes the model; nothing is eyeballed.
+  - **Skeptical judge prompt.** Default to `not-engaged`; require
+    explicit transcript evidence for `held`. A `not-engaged` is
+    no-evidence, so an over-cautious judge only slows learning - it
+    does not actively mis-score.
   - **Backstops stay.** Reaper + collapse + the 150 cap bound bloat
     regardless of judge calibration.
-  - **Observability.** Surface per-verdict deltas in the Health
-    panel and edge logs so drift is visible.
-- **Deltas are first-draft** (`held` `+~0.2`, `contradicted`
-  `-~0.2`, `not-engaged` `-~0.05`, seed `~0.3`, reaper `N=14d`) and
-  are the shadow-run's job to confirm.
+  - **Observability.** Surface the verdict mix, `p0`, and each
+    prediction's derived health in the Health panel and edge logs so
+    drift is visible.
+- **The two model knobs (`p0`, `L`) are data-derived, not first-draft
+  guesses** - `p0` from the population tallies, `L` from the median
+  evaluation cadence. The reaper floor and `N` are the only remaining
+  hand-set values, and both are low-stakes (they gate deletion of
+  already-contradicted, long-quiet rows).
 
 ## Implementation prerequisites (read before coding)
 
@@ -221,25 +279,28 @@ different question, not a retuned answer.
    the `createEdgeLogger` usage) - the structural template for the
    new sweep.
 3. `samskara_fire_top_k` and `FIRE_SCORE_FLOOR`
-   (`src/lib/samskara/index.ts`) - confirm the seed clears the floor
-   for a topically-matching turn at the chosen `confidence` prior.
-4. The Health snapshot RPC + `SamskaraHealthPanel.svelte` - where
-   verdict/delta observability lands.
+   (`src/lib/samskara/index.ts`) - confirm the derived posterior at
+   `p0` clears the floor for a topically-matching turn, so
+   evidence-less predictions still fire and get re-tested.
+4. The Health snapshot RPC + `SamskaraHealthPanel.svelte` - where the
+   verdict mix + derived-health observability lands.
 
 ## Itemized changes
 
-- **schema.sql:** new claim RPC for the evaluation sweep (definer,
-  service-role-locked, `set search_path = public`); new cron job +
-  trigger fn (guarded `do` block, pg_net POST, same auth pattern as
-  the other sweeps); new health-apply RPC (or fold into the claim
-  result); reaper RPC + cron; **drop** `samskara_decay_sweep` + its
-  cron; remove the live-reaction RPC. Repair is a one-shot guarded
-  `update`.
-- **supabase/functions/venice/:** new evaluation-sweep agent (judge
-  prompt + per-prediction verdict + delta apply), modeled on
-  reflection; remove the live reaction-classify call site.
-- **Frontend:** retire any UI tied to the live reaction window;
-  add verdict/delta surfacing to the Health panel.
+- **schema.sql** (slice-1 claim/mark RPCs + cron already landed): a
+  verdict-apply RPC that discount-then-increments `confirm_count` /
+  `disconfirm_count` from the verdict mix and recomputes `health` as
+  the posterior; a `p0` (population hit-rate) computation, periodically
+  refreshed; the fire score `samskara_fire_top_k` collapsed onto the
+  single posterior; reaper RPC + cron; **drop** `samskara_decay_sweep`
+  and its cron, and remove `samskara_apply_reaction`. Repair = a
+  one-shot `health` recompute (no seed constant).
+- **supabase/functions/venice/:** flip `SHADOW_MODE` off so the judge
+  routes verdicts through the verdict-apply RPC; remove the live
+  reaction-classify call site (`reactionClassifyProbe`,
+  `agentClassifyReaction`, the `CLASSIFY_*_MS` window consts).
+- **Frontend:** retire any UI tied to the live reaction window; add
+  the verdict-mix + derived-health surfacing to the Health panel.
 - **Docs/QA:** update `docs/dev/samskara.md` (decay/reaction/health
   sections) in the same PR; add a `docs/qa/use-cases/` walkthrough
   for the evaluation sweep.
@@ -248,7 +309,11 @@ different question, not a retuned answer.
 
 - Replace vs supplement the live classifier: **decided = replace**
   (4.4% coverage does not justify the second code path).
-- Final deltas + reaper window: **shadow-run calibrates**.
-- Whether `contradicted` should also feed `confidence`/counts (kept
-  for the Bayesian confidence display) or only `health`: decide at
-  implementation against the reaction lifecycle.
+- Health as derived posterior vs accumulator deltas: **decided =
+  derived** - self-calibrating from the population prior `p0`, no
+  hand-tuned deltas. See "Self-calibrating health".
+- Merge `health` and `confidence` into one verdict-derived score:
+  **decided = merge** once the live classifier (today's confidence
+  source) is retired.
+- `p0` recompute cadence, `L` default, and reaper floor / `N`: set
+  from the shadow week's aggregates at slice-2 build time.
