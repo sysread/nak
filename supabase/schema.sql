@@ -708,6 +708,21 @@ alter table public.threads
   add column if not exists reflection_attempt_msg_id uuid,
   add column if not exists reflection_attempt_count int not null default 0;
 
+-- Samskara evaluation sweep claim/cursor columns. Parallel to the
+-- reflection_* set above and load-bearing for the same reason: the
+-- evaluation sweep (the next-day retrospective judge of fired
+-- samskaras) day-gates and leases the SAME settled threads reflection
+-- does, so it needs its own independent claim columns or the two
+-- sweeps would contend for one lease. last_evaluated_msg_id is the
+-- "judged up to" cursor - the newest terminal assistant message at the
+-- time this thread's fired samskaras were last evaluated.
+alter table public.threads
+  add column if not exists last_evaluated_msg_id uuid references public.messages(id) on delete set null,
+  add column if not exists evaluation_holder_id text,
+  add column if not exists evaluation_claim_expires_at timestamptz,
+  add column if not exists evaluation_attempt_msg_id uuid,
+  add column if not exists evaluation_attempt_count int not null default 0;
+
 -- Claim-lookup index. Partial on `reflection_holder_id is not null` so
 -- the index only carries live claims — the common case is 0 rows
 -- claimed, and a partial index stays tiny under that steady state.
@@ -3954,6 +3969,122 @@ revoke all on function public.claim_next_thread_for_reflection_sweep(text, int)
 grant execute on function public.claim_next_thread_for_reflection_sweep(text, int)
   to service_role;
 
+-- Samskara evaluation sweep claim ----------------------------------------
+--
+-- The next-day retrospective judge's thread claim. A near-exact clone of
+-- claim_next_thread_for_reflection_sweep: same cross-user scope, same
+-- per-owner timezone day-gate (nak_safe_timezone, defined above this
+-- caller on purpose), same ">= 2 user messages" substance bar, same
+-- updated_at-ordered skip-locked lease. The only differences are the
+-- claim/cursor columns (evaluation_* instead of reflection_*) - the two
+-- sweeps target the same settled threads, so each must hold its own
+-- lease. last_evaluated_msg_id is the cursor; terminal_msg_id is the
+-- newest terminal assistant message ("judge up to here").
+drop function if exists public.claim_next_thread_for_evaluation_sweep(text, int);
+create or replace function public.claim_next_thread_for_evaluation_sweep(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns table (thread_id uuid, terminal_msg_id uuid, user_id uuid)
+language sql security definer
+set search_path = public as $$
+  with candidate as (
+    select t.id as thread_id, term.msg_id as terminal_msg_id, t.user_id as user_id
+      from public.threads t
+      inner join public.profiles p on p.user_id = t.user_id
+      cross join lateral (
+        select public.nak_safe_timezone(p.settings->>'displayTimezone') as tz
+      ) usertz
+      cross join lateral (
+        select m.id as msg_id
+          from public.messages m
+         where m.thread_id = t.id
+           and m.role = 'assistant'
+           and (m.tool_calls is null
+                or jsonb_typeof(m.tool_calls) <> 'array'
+                or jsonb_array_length(m.tool_calls) = 0)
+           and m.content is not null
+           and length(m.content) > 0
+         order by m.created_at desc
+         limit 1
+      ) term
+      cross join lateral (
+        select m2.created_at
+          from public.messages m2
+         where m2.thread_id = t.id
+         order by m2.created_at desc
+         limit 1
+      ) newest
+     where term.msg_id is distinct from t.last_evaluated_msg_id
+       and (term.msg_id is distinct from t.evaluation_attempt_msg_id
+            or t.evaluation_attempt_count < 3)
+       and (t.evaluation_claim_expires_at is null
+            or t.evaluation_claim_expires_at < now())
+       and (newest.created_at at time zone usertz.tz)::date
+             < (now() at time zone usertz.tz)::date
+       and (
+         select count(*)
+           from public.messages m3
+          where m3.thread_id = t.id
+            and m3.role = 'user'
+       ) >= 2
+     order by t.updated_at asc
+     limit 1
+     for update of t skip locked
+  )
+  update public.threads t
+     set evaluation_holder_id = p_holder_id,
+         evaluation_claim_expires_at = now() + make_interval(secs => p_ttl_seconds),
+         evaluation_attempt_count = case
+           when t.evaluation_attempt_msg_id is distinct from c.terminal_msg_id then 1
+           else t.evaluation_attempt_count + 1
+         end,
+         evaluation_attempt_msg_id = c.terminal_msg_id
+    from candidate c
+   where t.id = c.thread_id
+  returning t.id as thread_id, c.terminal_msg_id, t.user_id;
+$$;
+
+revoke all on function public.claim_next_thread_for_evaluation_sweep(text, int)
+  from public, anon, authenticated;
+grant execute on function public.claim_next_thread_for_evaluation_sweep(text, int)
+  to service_role;
+
+-- Samskara evaluation sweep mark-done ------------------------------------
+--
+-- Clone of mark_thread_reflected_if_claimed for the evaluation cursor.
+-- Advances last_evaluated_msg_id and releases the lease, but only if the
+-- caller still holds an unexpired claim - a lost claim (lease expired or
+-- stolen) is a no-op returning false, so a slow judge never clobbers a
+-- newer claimant's cursor. Only the service-role sweep calls it.
+drop function if exists public.mark_thread_evaluated_if_claimed(uuid, text, uuid, uuid);
+create or replace function public.mark_thread_evaluated_if_claimed(
+  p_thread_id uuid,
+  p_holder_id text,
+  p_msg_id uuid,
+  p_user_id uuid default null
+) returns boolean
+language plpgsql security invoker as $$
+declare
+  updated int;
+begin
+  update public.threads
+     set last_evaluated_msg_id = p_msg_id,
+         evaluation_holder_id = null,
+         evaluation_claim_expires_at = null,
+         evaluation_attempt_count = 0
+   where id = p_thread_id
+     and user_id = coalesce(p_user_id, auth.uid())
+     and evaluation_holder_id = p_holder_id
+     and evaluation_claim_expires_at > now();
+  get diagnostics updated = row_count;
+  return updated > 0;
+end $$;
+
+revoke all on function public.mark_thread_evaluated_if_claimed(uuid, text, uuid, uuid)
+  from public, anon, authenticated;
+grant execute on function public.mark_thread_evaluated_if_claimed(uuid, text, uuid, uuid)
+  to service_role;
+
 -- Summarisation pipeline RPCs -------------------------------------------
 --
 -- Mirror of the reflection pair, but the predicate is "needs a new
@@ -5691,6 +5822,17 @@ create table if not exists public.samskara_fires (
 -- user deletes earlier user messages (rare; not worth a trigger).
 alter table public.samskara_fires
   add column if not exists user_round integer;
+
+-- Retrospective evaluation verdict for this fire, set by the samskara
+-- evaluation sweep (the next-day judge that replaces the live reaction
+-- classifier). One of 'held' | 'contradicted' | 'not-engaged', or NULL
+-- until the owning thread is evaluated. Distinct from was_confirmed (the
+-- two-state boolean the legacy live classifier set): verdict is the
+-- three-state signal the sweep records per fired samskara and the basis
+-- for the health delta it applies. Values are controlled by the edge
+-- agent (a trusted internal boundary), so no CHECK constraint here.
+alter table public.samskara_fires
+  add column if not exists verdict text;
 
 -- Best-effort backfill of user_round for fire rows written before
 -- this column existed. Ranks cohorts within (user_id, thread_id) by
