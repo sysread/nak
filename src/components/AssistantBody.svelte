@@ -34,9 +34,8 @@
   import ContextRing from './ContextRing.svelte';
   import ReasoningPanel from './ReasoningPanel.svelte';
   import CitationsPanel from './CitationsPanel.svelte';
-  import MessageAttachments from './MessageAttachments.svelte';
   import type { Snippet } from 'svelte';
-  import type { Message, Attachment } from '$lib/supabase';
+  import type { Message } from '$lib/supabase';
   import { app } from '$lib/state.svelte';
   import {
     citationFlashDelay,
@@ -72,13 +71,6 @@
     createdAt?: string | null;
     /** Tool-group card (ToolCalls component). Rendered between body and actions. */
     children?: Snippet;
-    /**
-     * Attachments on this assistant message - generate_image output.
-     * Rendered as large image previews below the body, the same
-     * MessageAttachments component user-uploaded images use. Absent on
-     * the vast majority of assistant rows (no image was generated).
-     */
-    attachments?: Attachment[] | null;
     /**
      * Set true when the user can't trigger a mutating/parallel
      * action against this row: either it's in the regenerate-from-here
@@ -123,7 +115,6 @@
     usage = null,
     createdAt = null,
     children,
-    attachments = null,
     disabled = false,
     onRegenerate,
     onRegeneratePreviewEnter,
@@ -200,10 +191,6 @@
 <div class="assistant-body" onclick={onBodyClick}>
   <Markdown {content} />
 </div>
-
-{#if attachments && attachments.length > 0}
-  <MessageAttachments {attachments} />
-{/if}
 
 {#if children}
   {@render children()}

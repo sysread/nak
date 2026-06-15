@@ -295,6 +295,45 @@ per-call `expanded` and `viewMode` runes and the markup.
 
 Consumers: assistant bubble in `Chat.svelte`.
 
+## `<GeneratedImageCard>`
+
+File: `src/components/GeneratedImageCard.svelte`.
+
+The dedicated card for a `generate_image` tool's output, rendered as
+its own `.msg.assistant` bubble directly below the tool-group card
+that produced it (`Chat.svelte`'s `generated-image` message block).
+
+```ts
+interface Props {
+  threadId: string | null;  // thread to resolve the image within
+  filename: string;         // the orchestrator-minted filename (resolution key)
+  aspectRatio: string;      // CSS aspect-ratio for the placeholder box
+}
+```
+
+- Resolves the image itself, by filename, via
+  `findImageByFilenameInThread` in an effect, then delegates the render
+  to `<MessageAttachments>` so the preview / download-anchor /
+  expired-chip treatment matches every other attachment. While the
+  attachment is unresolved it shows a `<Scanner>` placeholder sized to
+  `aspectRatio` so the card holds its space and doesn't reflow when the
+  bytes land.
+- Why by-filename instead of reading the assistant row's `attachments`:
+  generate_image attaches its output server-side, per round, AFTER the
+  assistant row was inserted and echoed over realtime, and the
+  `message_attachments` insert fires no `messages` event. The in-memory
+  row never re-hydrates, so before this card the image only appeared
+  after a full reload. See [`./attachments.md`](./attachments.md).
+- A short bounded retry (`RETRY_DELAYS_MS`) covers the rare case where
+  the card mounts before the server-side attach has committed; a
+  replayed thread resolves on the first attempt and never retries.
+- Decision logic (which calls get a card, the descriptor parse, the
+  aspect-ratio string) lives in `src/lib/ui/generated-image.ts`,
+  unit-tested at `tests/generated-image.test.ts`. The `.svelte` file
+  owns only the resolution effect and the placeholder markup.
+
+Consumer: `generated-image` block in `Chat.svelte`.
+
 ## `<CopyButton>`
 
 File: `src/components/CopyButton.svelte`.

@@ -218,12 +218,13 @@ A chat turn goes:
 - `ChatLoopHandlers` - the event surface the UI uses: text
   updates, tool start/done/error, persistence events,
   `onToolboxesEnabledChange` (for the composer toolbox flash
-  when `toggle_toolbox` fires), `onAssistantAttachments`
-  (generate_image output attached per-round, so the UI patches
-  the in-memory row without a refetch), `onGuardRetry` (a
+  when `toggle_toolbox` fires), `onGuardRetry` (a
   function-side output guard discarded a junk attempt and is
   re-rolling). Every handler is optional; the loop runs cleanly
-  with none of them.
+  with none of them. (Generated images are NOT delivered through
+  a handler: the function attaches them server-side per round and
+  `GeneratedImageCard` resolves them by filename - see
+  [./attachments.md](./attachments.md).)
 - **Output guards** (`supabase/functions/venice/stream-guards.ts`)
   - generic "the completion came back wrong, re-roll it"
   machinery armed inside the function's streaming round. The

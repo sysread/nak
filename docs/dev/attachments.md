@@ -48,8 +48,18 @@ covers the attachment-specific pieces.
   chips.
 - `src/lib/ui/message-attachments.ts` - `partitionAttachments` (liveness
   on `storage_path`). Pure UI primitive.
-- `src/components/AssistantBody.svelte` - renders `MessageAttachments`
-  for generated images on the assistant reply.
+- `src/components/GeneratedImageCard.svelte` - the dedicated card for a
+  `generate_image` output, rendered as its own assistant bubble below
+  the tool-call card. Resolves the image by filename
+  (`findImageByFilenameInThread`) with a bounded retry, shows a Scanner
+  placeholder sized to the image's aspect ratio until it lands, then
+  delegates the render to `MessageAttachments`. See "Generated-image
+  rendering" under Gotchas.
+- `src/lib/ui/generated-image.ts` - pure browser-side primitives for
+  the card: `parseGeneratedImageResult` (descriptor off the tool-result
+  row), `aspectRatioCss`, and `generatedImagesForGroup` (which
+  tool-group calls get a card). Unit-tested in
+  `tests/generated-image.test.ts`.
 - `src/lib/tools/generate_image.ts` + `.schema.ts` - the generate_image
   tool (gated `images` toolbox); returns a compact descriptor with the
   base64 payload stashed under a key the chat-loop harvests.
@@ -83,9 +93,13 @@ covers the attachment-specific pieces.
   URLs for rendering.
 - **Model generates an image** - `generate_image` returns a compact
   descriptor with the base64 under `GENERATED_IMAGE_RESULT_KEY`; the
-  chat-loop harvests it, strips it from the tool-result row, and at end
-  of turn writes it via `addAttachments` (same bucket upload path),
-  firing `onAssistantAttachments` to patch the live row.
+  edge orchestrator (`getStreamingResponse.ts`) harvests it, strips it
+  from the tool-result row, and attaches it per-round to that round's
+  assistant-with-tool-calls row via a `message_attachments` insert. The
+  browser does NOT get a realtime nudge for that insert (it's a separate
+  table, and the assistant row was already echoed), so
+  `GeneratedImageCard` resolves the image by filename instead - see
+  "Generated-image rendering" under Gotchas.
 - **Expiry** - the `expire-attachments` edge function (hourly cron)
   deletes bucket objects whose thread is 30 days dormant, then nulls
   `storage_path` + stamps `expired_at`. No open tab required.
@@ -138,8 +152,10 @@ parent - `messages.thread_id -> threads.user_id = auth.uid()`.
 - **Generated images never put base64 on the tool-result row**: the
   ~700KB base64 rides under `GENERATED_IMAGE_RESULT_KEY` and is stripped
   before `encodeToolContent`; the bytes reach the user via the bucket
-  upload on the terminal assistant row. Otherwise identical to uploads -
-  same bucket, same expiry sweep, same RLS chain.
+  upload on the round's assistant-with-tool-calls row (per-round, not at
+  terminal commit - so a same-turn `recipe_photos_attach` can resolve
+  the image by filename). Otherwise identical to uploads - same bucket,
+  same expiry sweep, same RLS chain.
 - **`<thread_attachments>` system block**: built once per turn from
   `listAttachmentSummariesForThread` (metadata-only projection). Lists
   live images, live documents, and expired filenames; empty sections add
@@ -179,11 +195,35 @@ parent - `messages.thread_id -> threads.user_id = auth.uid()`.
 - **Models** - `ModelSpec.supportsVision` gates inline images.
 - **Realtime**: `subscribeToMessages` echoes a `messages` INSERT without
   the joined attachments, so `Chat.svelte` fires a follow-up
-  `listAttachmentsByMessageIds` for user- AND assistant-role inserts and
-  re-runs `appendMessage` with the hydrated row (cross-tab sync + the
-  generated-image case). `mergeMessagesById` prefers the DB-fetched row.
+  `listAttachmentsByMessageIds` for USER-role inserts and re-runs
+  `appendMessage` with the hydrated row (upload cross-tab sync).
+  Assistant rows are excluded on purpose: their only attachment source
+  is `generate_image`, which is attached server-side AFTER the row's
+  INSERT echo, so this fetch would race ahead of the attach and find
+  nothing. `GeneratedImageCard` resolves those by filename instead - see
+  "Generated-image rendering" below. `mergeMessagesById` prefers the
+  DB-fetched row.
 
 ## Gotchas
+
+- **Generated-image rendering goes through a dedicated card, not the
+  message attachment slot.** The image is attached server-side to the
+  round's assistant-with-tool-calls row, AFTER that row was inserted and
+  echoed over realtime, and the `message_attachments` insert fires no
+  `messages` event of its own. So the producing tab's in-memory row
+  never re-hydrates with the attachment - before this card existed, the
+  image only appeared after a full `listMessages` on reload.
+  `Chat.svelte`'s message-block builder emits a `generated-image` block
+  (via `generatedImagesForGroup`) right after the tool-group block, and
+  `GeneratedImageCard` resolves the image itself by filename
+  (`findImageByFilenameInThread`, thread-scoped + RLS-safe) with a
+  bounded retry covering the rare mount-before-attach race. This is why
+  `AssistantBody` no longer takes an `attachments` prop and the realtime
+  hydration above skips assistant rows: generated images are the card's
+  job now, resolved by filename rather than by the realtime path that
+  never delivered them. The server attaches BEFORE it publishes the
+  `tool_call_response` that makes the card appear, so the first lookup
+  almost always wins; the retry is just insurance.
 
 - **Liveness is `storage_path`, not bytes.** Reads project `storage_path`
   and mint signed URLs; a thread full of images no longer ships base64 on

@@ -51,7 +51,6 @@ import type {
   Message,
   Thread,
   ThreadAttachmentSummary,
-  Attachment,
 } from './supabase';
 import type {
   VeniceClient,
@@ -582,16 +581,6 @@ export interface ChatLoopHandlers {
   onAssistantPersisted?(message: Message): void;
   /** A tool-result row has been written (fires once per tool). */
   onToolResultPersisted?(message: Message): void;
-  /**
-   * Generated-image attachments were written to the terminal assistant
-   * row at end of turn (from one or more generate_image calls). Fires
-   * once, with the message id they were attached to and the hydrated
-   * rows, so the UI can patch the in-memory assistant message without a
-   * refetch - the same way the user-upload path patches attachments
-   * onto the just-sent user message. Skipped when no image was
-   * generated this turn.
-   */
-  onAssistantAttachments?(messageId: string, attachments: Attachment[]): void;
   /**
    * The thread's gated-toolbox set changed during the round (triggered
    * by a `toggle_toolbox` call from the model). UI surfaces this as
