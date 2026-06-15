@@ -6706,6 +6706,129 @@ end $$;
 revoke all on function public.samskara_decay_sweep() from public, anon, authenticated;
 grant execute on function public.samskara_decay_sweep() to service_role;
 
+-- ===========================================================================
+-- Self-calibrating health (relevance-gated decay; the evaluation sweep).
+-- Design of record: docs/dev/plans/samskara-decay-relevance-gated-plan.md.
+-- These RPCs are the slice-2 machinery. As of this commit they are INERT -
+-- nothing calls samskara_apply_evaluation yet and the reaper has no cron; the
+-- wall-clock samskara_decay_sweep above is still the live mechanism. The
+-- atomic flip (edge calls apply, decay retired, classifier removed, health
+-- recomputed) lands in a following change.
+-- ===========================================================================
+
+-- Population hit-rate prior p0: the user's aggregate held-rate over the
+-- current verdict tallies, with a weak neutral fallback until enough
+-- evidence accrues so a cold start doesn't swing on one or two points.
+-- This is the "calibrate from aggregate metrics" prior - a fresh or
+-- evidence-less samskara's derived health sits here, at the user's own
+-- baseline, not at a guessed constant. Service-role only (it reads across
+-- a user's whole corpus via the p_user_id param, so it must not be
+-- reachable by a caller who could pass someone else's id).
+drop function if exists public.samskara_population_p0(uuid);
+create or replace function public.samskara_population_p0(p_user_id uuid)
+returns real
+language sql stable security definer set search_path = public as $$
+  select case
+    when coalesce(sum(confirm_count + disconfirm_count), 0) < 20.0 then 0.66::real
+    else (sum(confirm_count) / nullif(sum(confirm_count + disconfirm_count), 0))::real
+  end
+  from public.samskaras
+  where user_id = p_user_id;
+$$;
+revoke all on function public.samskara_population_p0(uuid) from public, anon, authenticated;
+grant execute on function public.samskara_population_p0(uuid) to service_role;
+
+-- Verdict-apply for the evaluation sweep - the self-calibrating successor
+-- to samskara_apply_reaction. For every samskara that fired in a judged
+-- thread, age its prior evidence by the discount d, fold in this
+-- evaluation's verdict (held -> a hit, contradicted -> a miss,
+-- not-engaged -> no evidence, discount only), then recompute health as the
+-- empirical-Bayes posterior shrunk toward p0. health and confidence are
+-- kept EQUAL - both ARE the posterior, the single "earning its keep" score
+-- the fire RPC's sqrt(health*confidence) collapses to (so no fire-score
+-- change is needed). The posterior is a weighted average of {0,1} outcomes
+-- and p0 in [0,1], so it is inherently bounded to [0,1] - it cannot run
+-- away the way the old accumulator could. Two model knobs: k (prior
+-- strength) and the evidence half-life L (in evaluations) behind the
+-- discount d = 0.5^(1/L). Caller (the service-role sweep) must pass each
+-- fired samskara in exactly one of the three arrays.
+drop function if exists public.samskara_apply_evaluation(uuid, uuid[], uuid[], uuid[]);
+create or replace function public.samskara_apply_evaluation(
+  p_user_id uuid,
+  p_held uuid[],
+  p_contradicted uuid[],
+  p_not_engaged uuid[]
+) returns int
+language plpgsql security definer set search_path = public as $$
+declare
+  k constant real := 5.0;                       -- prior strength (pseudo-count)
+  l_halflife constant real := 10.0;             -- evidence half-life, in evaluations
+  d constant real := 0.5 ^ (1.0 / l_halflife);  -- per-evaluation discount
+  v_p0 real;
+  affected int;
+begin
+  -- Snapshot the prior BEFORE this evaluation's updates so one cycle's
+  -- writes don't feed back into its own shrinkage target.
+  v_p0 := public.samskara_population_p0(p_user_id);
+
+  with judged as (
+    select unnest(p_held)        as id, 1.0::real as h, 0.0::real as m
+    union all
+    select unnest(p_contradicted) as id, 0.0::real as h, 1.0::real as m
+    union all
+    select unnest(p_not_engaged)  as id, 0.0::real as h, 0.0::real as m
+  ),
+  computed as (
+    select s.id,
+           s.confirm_count * d + j.h    as new_confirm,
+           s.disconfirm_count * d + j.m as new_disconfirm
+      from public.samskaras s
+      join judged j on j.id = s.id and s.user_id = p_user_id
+  )
+  update public.samskaras s
+     set confirm_count    = c.new_confirm,
+         disconfirm_count = c.new_disconfirm,
+         -- The merged posterior: written to BOTH health and confidence so
+         -- the fire score's sqrt(health*confidence) equals it exactly.
+         health     = (c.new_confirm + k * v_p0) / (c.new_confirm + c.new_disconfirm + k),
+         confidence = (c.new_confirm + k * v_p0) / (c.new_confirm + c.new_disconfirm + k),
+         updated_at = now()
+    from computed c
+   where s.id = c.id;
+  get diagnostics affected = row_count;
+  return affected;
+end $$;
+revoke all on function public.samskara_apply_evaluation(uuid, uuid[], uuid[], uuid[])
+  from public, anon, authenticated;
+grant execute on function public.samskara_apply_evaluation(uuid, uuid[], uuid[], uuid[])
+  to service_role;
+
+-- Reaper: delete repeatedly-contradicted, long-quiet samskaras. Under
+-- derived health a never-tested prediction sits at p0 (the baseline), so a
+-- LOW health now means real accumulated misses, not mere staleness. Only
+-- rows below the floor AND not fired in >= p_quiet_days are removed, so a
+-- recurring prediction mid-re-evaluation is never reaped, and never-fired
+-- rows (last_fired_at null - newborns, or the bug-era evidence-less rows
+-- now sitting at p0) are spared by the not-null guard. Returns the count.
+drop function if exists public.samskara_reap_dead(real, int);
+create or replace function public.samskara_reap_dead(
+  p_health_floor real default 0.15,
+  p_quiet_days int default 14
+) returns int
+language plpgsql security definer set search_path = public as $$
+declare
+  affected int;
+begin
+  delete from public.samskaras s
+   where s.health < p_health_floor
+     and s.last_fired_at is not null
+     and s.last_fired_at < now() - make_interval(days => p_quiet_days);
+  get diagnostics affected = row_count;
+  return affected;
+end $$;
+revoke all on function public.samskara_reap_dead(real, int) from public, anon, authenticated;
+grant execute on function public.samskara_reap_dead(real, int) to service_role;
+
 -- Compound-summary regeneration coordination.
 --
 -- Three RPCs. `samskara_should_regen_compound` returns a small
