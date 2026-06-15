@@ -796,6 +796,20 @@ session, and every predicate is row-local, so one cross-user pass
 is exactly the union of the per-user passes. Decay is not part of
 the formation rotation; the cron job is its only driver.
 
+**Being replaced (in progress).** This wall-clock decay is slated to
+give way to *relevance-gated, event-driven* decay: a next-day
+retrospective judge (`nak-samskara-evaluation-sweep`, the
+`samskara_evaluation.ts` agent) that scores each samskara against the
+conversation it actually fired in, so a prediction only loses (or
+gains) health when it was genuinely tested. As of slice 1 that sweep
+runs in **shadow mode** - it records a per-fire `verdict`
+(`held`/`contradicted`/`not-engaged`) on `samskara_fires` and logs the
+health delta it *would* apply, but changes no health and removes
+nothing. **The formula above remains the live mechanism** until slice
+2 flips the judge live and retires both this sweep and the reaction
+classifier. Design of record:
+[`plans/samskara-decay-relevance-gated-plan.md`](plans/samskara-decay-relevance-gated-plan.md).
+
 ### Dedup formula
 
 Two passes per `samskara_collapse_by_cofiring()` call.

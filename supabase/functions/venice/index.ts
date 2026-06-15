@@ -53,6 +53,7 @@ import { runReflectionSweepTick } from './agents/reflection.ts';
 import { runCurationSweepTick } from './agents/curation.ts';
 import { runBiasSweepTick } from './agents/bias.ts';
 import { runSamskaraSweepTick } from './agents/samskara.ts';
+import { runSamskaraEvaluationSweepTick } from './agents/samskara_evaluation.ts';
 import {
   runWikiLibrarianManual,
   runWikiLibrarianSweepTick,
@@ -761,6 +762,12 @@ const handleReflectionSweep = sweepHandler(runReflectionSweepTick);
 const handleCurationSweep = sweepHandler(runCurationSweepTick);
 const handleBiasSweep = sweepHandler(runBiasSweepTick);
 const handleSamskaraSweep = sweepHandler(runSamskaraSweepTick);
+// Samskara evaluation sweep: the next-day retrospective judge that
+// scores each fired samskara against the conversation it fired in
+// (relevance-gated decay). Shadow mode in slice 1 - records verdicts
+// + logs would-be health deltas, changes no health. See
+// agents/samskara_evaluation.ts.
+const handleSamskaraEvaluationSweep = sweepHandler(runSamskaraEvaluationSweepTick);
 // All three manual fleet runs (wiki librarian, rem, deep-sleep) are
 // detached: each pass can run minutes (conversation/memory reads over a
 // multi-round loop) past the gateway window, so the route returns
@@ -1144,6 +1151,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
   if (route === 'curation-sweep' && req.method === 'POST') return handleCurationSweep(req);
   if (route === 'bias-sweep' && req.method === 'POST') return handleBiasSweep(req);
   if (route === 'samskara-sweep' && req.method === 'POST') return handleSamskaraSweep(req);
+  if (route === 'samskara-evaluation-sweep' && req.method === 'POST') {
+    return handleSamskaraEvaluationSweep(req);
+  }
   if (route === 'wiki-retry' && req.method === 'POST') return handleWikiRetry(req);
   if (route === 'wiki-librarian-sweep' && req.method === 'POST') return handleWikiLibrarianSweep(req);
   if (route === 'wiki-librarian-run' && req.method === 'POST') return handleWikiLibrarianRun(req);

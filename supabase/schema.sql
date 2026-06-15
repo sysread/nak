@@ -10635,6 +10635,72 @@ exception when others then
 end
 $cron$;
 
+-- Samskara evaluation sweep dispatcher. Clone of the reflection trigger
+-- fn: reads the Vault project_url + service_role_key and POSTs the
+-- cron-only edge route. The route runs the next-day retrospective judge
+-- (relevance-gated samskara decay; shadow mode in slice 1). Silent no-op
+-- when Vault is unseeded, same as every other trigger fn.
+create or replace function public.nak_trigger_samskara_evaluation_sweep()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $fn$
+declare
+  v_url text;
+  v_key text;
+begin
+  begin
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'project_url' $q$ into v_url;
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'service_role_key' $q$ into v_key;
+  exception when others then
+    return;  -- vault not installed or unreadable; nothing to dispatch
+  end;
+  if v_url is null or v_key is null then
+    return;  -- secrets not seeded yet
+  end if;
+  begin
+    execute format(
+      $q$ select net.http_post(
+            url := %L,
+            headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', %L),
+            body := '{}'::jsonb
+          ) $q$,
+      v_url || '/functions/v1/venice/samskara-evaluation-sweep',
+      'Bearer ' || v_key
+    );
+  exception when others then
+    raise notice 'nak_trigger_samskara_evaluation_sweep: dispatch failed: %', sqlerrm;
+  end;
+end;
+$fn$;
+
+revoke all on function public.nak_trigger_samskara_evaluation_sweep() from public, anon, authenticated;
+
+do $cron$
+begin
+  if exists (select 1 from pg_available_extensions where name = 'pg_cron')
+     and exists (select 1 from pg_available_extensions where name = 'pg_net') then
+    create extension if not exists pg_cron;
+    create extension if not exists pg_net;
+    if exists (select 1 from cron.job where jobname = 'nak-samskara-evaluation-sweep') then
+      perform cron.unschedule('nak-samskara-evaluation-sweep');
+    end if;
+    -- Minute 33: a free slot in the sweep minute-spacing scheme (see the
+    -- reflection sweep's minute-27 comment). Taken: embed */5, bias 3,
+    -- wiki 7, decay 13/43, rem + attachment-expiry 17, samskara-sweep
+    -- 23, reflection 27, librarian 37, deep-sleep 47, curation 57.
+    perform cron.schedule(
+      'nak-samskara-evaluation-sweep',
+      '33 * * * *',
+      $job$ select public.nak_trigger_samskara_evaluation_sweep(); $job$
+    );
+  end if;
+exception when others then
+  raise notice 'samskara evaluation sweep cron setup skipped: %', sqlerrm;
+end
+$cron$;
+
 -- ---------------------------------------------------------------------------
 -- Scheduled curation sweep (pg_cron -> pg_net -> venice/curation-sweep)
 --
