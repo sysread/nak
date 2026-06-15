@@ -1,103 +1,126 @@
-# Samskara decay pass
+# Samskara health (relevance-gated decay)
 
 ## Covers
 
-The decay maintenance pass over the samskara corpus - the three
-health nudges (stale-fire -0.02, net-disconfirm -0.10, locked-in
--0.03) applied by `samskara_decay_sweep()`, driven by the
-`nak-samskara-decay` pg_cron job every 30 minutes
-([dev: samskara](../../dev/samskara.md), "Decay formula").
+The self-calibrating health model that replaced wall-clock decay
+([dev: samskara](../../dev/samskara.md), "Health: the verdict
+posterior" / "Decay: relevance-gated forgetting"). Health is a derived
+empirical-Bayes posterior, not an accumulator:
+
+- `samskara_apply_evaluation(user, held[], contradicted[], not_engaged[])`
+  - the verdict-apply the next-day evaluation sweep calls: discount
+  prior evidence by `d = 0.5^(1/L)`, fold in the verdict (held ->
+  confirm, contradicted -> disconfirm, not-engaged -> neither), then
+  recompute `health = confidence = (confirm + k*p0)/(confirm +
+  disconfirm + k)` (k = 5).
+- `samskara_population_p0(user)` - the prior: the user's aggregate
+  hit rate, weak `0.66` fallback under 20 evidence.
+- The one-shot health reconcile (runs on every schema apply) - the
+  free repair: zero-evidence rows evaluate to `p0`.
+- `samskara_reap_dead(floor, quiet_days)` - deletes repeatedly-
+  contradicted, long-quiet rows; the `nak-samskara-reap` pure-SQL cron
+  (`13 * * * *`).
+
+The live LLM judge (the sweep reading a settled conversation and
+producing the verdicts) is the **[hosted]** tail below.
 
 ## Preconditions
 
 - Local stack up (`mise run dev-start`), schema applied
   (`psql -v ON_ERROR_STOP=1 -f supabase/schema.sql`).
-- Know the dev user's id:
+- Dev user id and the current prior:
 
   ```sql
   select id from auth.users where email = 'dev@nak.local';
+  select public.samskara_population_p0('<user>');  -- expect ~0.66 on a sparse local corpus
   ```
 
-- Forge one disjoint candidate per decay path so each nudge is
-  individually observable (pick three existing rows; health 0.5
-  makes the drop visible above the `greatest(0, ...)` clamp):
-
-  ```sql
-  -- stale-fire: never/last fired over 60 days ago, low fire count
-  -- so the locked-in predicate stays out of the way
-  update samskaras set health = 0.5,
-         last_fired_at = now() - interval '61 days',
-         created_at = now() - interval '61 days'
-   where id = '<row-A>';  -- fire_count <= 10, no feedback
-
-  -- net-disconfirm: accumulated disconfirm outweighs confirm with
-  -- at least 1.0 total reaction weight; fresh fire, low fire count
-  update samskaras set health = 0.5,
-         disconfirm_count = 1.2, confirm_count = 0.1,
-         last_fired_at = now()
-   where id = '<row-B>';  -- fire_count <= 10
-
-  -- locked-in: many fires, near-zero accumulated feedback, fresh
-  update samskaras set health = 0.5, last_fired_at = now()
-   where id = '<row-C>';  -- fire_count > 10, feedback < 0.5
-  ```
-
-- Other corpus rows may also match a predicate (typically health-0
-  rows that re-match locked-in every pass); the return count is
-  therefore `>= 3`, and the per-row assertions below are the real
-  check.
+- Pick two existing rows to forge. Run the mutating steps inside a
+  transaction you `rollback` so real local corpus rows survive.
 
 ## Steps
 
-1. Confirm the cron job is registered (the schema apply registers
-   it whenever the local image has pg_cron):
+1. Reaper cron registered (the schema apply registers it whenever the
+   local image has pg_cron):
 
    ```sql
-   select jobname, schedule, command from cron.job
-    where jobname = 'nak-samskara-decay';
+   select jobname, schedule, command from cron.job where jobname = 'nak-samskara-reap';
    ```
 
-2. Run the pass directly - the sweep is what the cron job calls,
-   so a manual invocation is the deterministic stand-in for
-   waiting on the :13/:43 tick. It is cross-user `security
-   definer`, so no JWT claim is needed:
+2. Verdict-apply and the posterior. Forge a zero-evidence row, then
+   apply each verdict and read the result:
 
    ```sql
-   select public.samskara_decay_sweep();
+   begin;
+   update samskaras set confirm_count = 0, disconfirm_count = 0,
+          health = 0.1, confidence = 0.1 where id = '<row-A>';
+   -- held -> a hit
+   select public.samskara_apply_evaluation('<user>', array['<row-A>']::uuid[], '{}'::uuid[], '{}'::uuid[]);
+   select confirm_count, disconfirm_count, round(health::numeric,4) h, round(confidence::numeric,4) c
+     from samskaras where id = '<row-A>';
+   -- contradicted -> a miss (discounts the prior confirm, folds in a disconfirm)
+   select public.samskara_apply_evaluation('<user>', '{}'::uuid[], array['<row-A>']::uuid[], '{}'::uuid[]);
+   select confirm_count, disconfirm_count, round(health::numeric,4) h, round(confidence::numeric,4) c
+     from samskaras where id = '<row-A>';
+   -- not-engaged -> discount only (no hit, no miss)
+   select public.samskara_apply_evaluation('<user>', '{}'::uuid[], '{}'::uuid[], array['<row-A>']::uuid[]);
+   select confirm_count, disconfirm_count, round(health::numeric,4) h, round(confidence::numeric,4) c
+     from samskaras where id = '<row-A>';
+   rollback;
    ```
 
-3. Verify the per-row nudges landed:
+3. Reaper. Forge a below-floor, long-quiet row and confirm it is
+   reaped while a recently-fired one is not:
 
    ```sql
-   select id, health from samskaras
-    where id in ('<row-A>', '<row-B>', '<row-C>');
+   begin;
+   update samskaras set health = 0.05, last_fired_at = now() - interval '15 days' where id = '<row-A>';
+   update samskaras set health = 0.05, last_fired_at = now() where id = '<row-B>';
+   select public.samskara_reap_dead();           -- default floor 0.15, quiet 14d
+   select id from samskaras where id in ('<row-A>', '<row-B>');
+   rollback;
    ```
 
 ## Expected
 
-- (1) one row: schedule `13,43 * * * *`, command
-  `select public.samskara_decay_sweep();`.
-- (2) returns the count of rows changed across ALL users, `>= 3`.
-- (3) row-A health `0.48` (stale-fire -0.02); row-B health `0.40`
-  (net-disconfirm -0.10); row-C health `0.47` (locked-in -0.03).
-  `updated_at` bumped to now() on all three.
-- **[hosted]** the cron tick itself fires at :13/:43 (check
-  `cron.job_run_details` after a deploy) - local proof stops at
-  the registration row plus the manual invocation.
+- (1) one row: schedule `13 * * * *`, command
+  `select public.samskara_reap_dead();`.
+- (2) `health` and `confidence` are EQUAL at every step (the merge).
+  After `held`: `confirm_count = 1`, `health = (1 + 5*p0)/(1 + 5)`
+  (e.g. `0.7167` at `p0 = 0.66`). After `contradicted`: confirm
+  discounts to `1*d` and a disconfirm folds in, so health drops below
+  the held value. After `not-engaged`: both counts just discount by
+  `d` and health regresses slightly toward `p0`. (`apply_evaluation`
+  returns the count of rows touched: `1` each call.)
+- (3) `<row-A>` (below floor AND quiet 15d) is deleted; `<row-B>`
+  (below floor but fired today) survives - the reaper spares anything
+  fired within `quiet_days`.
+- **[hosted]** the live judge. Against a settled conversation (newest
+  message on a prior calendar day, `>= 2` user rounds) that fired
+  samskaras, the `nak-samskara-evaluation-sweep` tick claims it, judges
+  each fired prediction, and applies the verdicts. Watch the in-app
+  Logs drawer (source `samskara-eval`) for `judged thread <id>: N/M
+  predictions; held=.. contradicted=.. not-engaged=..`, then verify the
+  `samskara_fires.verdict` writes and the moved `health`. This is the
+  Venice path; run it against the hosted project post-deploy.
 
 ## Cleanup
 
-Restore the forged rows if their health/feedback values matter
-(they are test-corpus rows locally, so usually they do not):
-
-```sql
-update samskaras set health = 0, disconfirm_count = 0,
-       confirm_count = 0 where id in ('<row-B>');
-```
+All mutating steps run inside `begin; ... rollback;`, so no corpus row
+is changed or deleted. If you ran any step outside a transaction,
+restore the forged row's `health`/`confirm_count`/`disconfirm_count`,
+or just let the next evaluation re-derive them.
 
 ## Results log
 
+> The rows dated 2026-06-11 tested the now-retired wall-clock
+> `samskara_decay_sweep` (three fixed health nudges on a 30-minute
+> cron). That mechanism was replaced on 2026-06-15 by the
+> relevance-gated posterior the steps above now exercise; new
+> executions append below the divider.
+
 | Date | Env | Commit | Result | Notes |
 | ---- | --- | ------ | ------ | ----- |
-| 2026-06-11 | local | 5981c58 | pass | pre-lift baseline against the per-user `samskara_decay()` invoker (browser worker's decay phase, psql stand-in w/ jwt claim): returned 6 (3 forged + 3 pre-existing health-0 locked-in re-matches), per-row health exactly 0.48 / 0.40 / 0.47, updated_at bumped on all. Forged rows 8a1e5b5b (stale), 422e6389 (disconfirm), cb1d4308 (locked-in) |
-| 2026-06-11 | local | b56436b | pass (1,2,3) | post-lift: cron.job row registered (`13,43 * * * *` -> `samskara_decay_sweep()`); manual sweep returned 6 and produced byte-identical per-row health to the baseline (0.48 / 0.40 / 0.47 on the same re-forged rows). ACL verified via pg_proc.proacl: postgres + service_role only, matching nak_sweep_stale_streams. Note: exercising the denial via `set local role anon` SEGFAULTS the local supabase image's backend (signal 11, reproducible against the long-standing janitor fn too) - local-image quirk, use the catalog ACL check instead. [hosted] tick firing deferred to the post-merge hosted pass |
+| 2026-06-11 | local | 5981c58 | pass | (retired decay) pre-lift baseline against the per-user `samskara_decay()` invoker: returned 6, per-row health 0.48 / 0.40 / 0.47, updated_at bumped. |
+| 2026-06-11 | local | b56436b | pass | (retired decay) post-lift: cron row `13,43 * * * *` -> `samskara_decay_sweep()`; manual sweep returned 6, byte-identical per-row health; ACL postgres + service_role only. |
+| --- | --- | --- | --- | relevance-gated model (this rewrite) below |

@@ -2,6 +2,15 @@
 
 ## STATUS (2026-06-11)
 
+> Partially superseded (2026-06-15): some of what this milestone
+> lifted server-side has since been retired by the relevance-gated
+> samskara decay redesign - `samskara_decay_sweep` and its
+> `nak-samskara-decay` cron, the `reaction-classify` tail phase, and
+> `samskara_apply_reaction` are gone. This doc is the record of the
+> de-browser milestone as it shipped; for current samskara health/
+> reaction behaviour see [`../samskara.md`](../samskara.md) and
+> [`../plans/samskara-decay-relevance-gated-plan.md`](../plans/samskara-decay-relevance-gated-plan.md).
+
 **C1, C2, and C3 are all implemented, and the milestone is
 closed** (dates in the Items list; designs below). Third of the
 three

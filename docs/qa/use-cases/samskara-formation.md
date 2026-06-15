@@ -1,20 +1,19 @@
-# Samskara formation: the seven-phase background rotation
+# Samskara formation: the six-phase background rotation
 
 ## Covers
 
-The samskara formation loop's seven phases - assimilate (claim a
+The samskara formation loop's six phases - assimilate (claim a
 substrate stub, extract situation/outcome/valence), pair-relate
 (label a relation between the two closest recent substrate rows),
 mint-tier1 (crystallize a topical substrate cluster into a
 predictive claim), mint-tier2 (compound a co-fire constellation of
-tier-1s), reaction-classify (resolve a fired cohort against the
-user's next message), dedup (collapse redundant tier-1s by
-co-firing), and compound-regen (re-synthesize the per-user summary
-prose) - plus the mint toast surface (the mood pill). Decay is NOT
-covered here; it has its own use-case
-([samskara-decay](./samskara-decay.md)). Chat-side firing and the
-priming block are exercised only as far as reaction-classify needs
-them. ([dev: samskara](../../dev/samskara.md))
+tier-1s), dedup (collapse redundant tier-1s by co-firing), and
+compound-regen (re-synthesize the per-user summary prose) - plus the
+mint toast surface (the mood pill). Health/decay and reaction scoring
+are NOT covered here: health has its own use-case
+([samskara-decay](./samskara-decay.md)), and reaction scoring moved
+out of formation to the next-day evaluation sweep covered there.
+([dev: samskara](../../dev/samskara.md))
 
 Where the rotation runs depends on the commit under test: rows
 logged before the C3 port exercise the browser Web Worker
@@ -100,22 +99,10 @@ observable contract - claims, writes, toasts - is the same.
         -H "Content-Type: application/json" -d '{}'
    ```
 
-6. Reaction-classify, live: send a chat message in an existing
-   thread (the cohort fires at turn start - the per-turn cohort
-   panel under the user message shows it), wait ~90 seconds (the
-   1-minute resolution floor plus slack), then send a follow-up
-   message reacting to the reply. Watch for
-   `reaction-classify: applied` and verify the cohort resolved:
-
-   ```sql
-   select was_confirmed, count(*) from samskara_fires
-    where cohort_id = '<cohort-id>' group by 1;
-   ```
-
-7. Watch one dedup pass: `dedup: nothing to collapse` (trace) or
+6. Watch one dedup pass: `dedup: nothing to collapse` (trace) or
    `dedup: collapsed samskaras` (debug). Both are valid; record
    the count.
-8. Force a compound regen and watch the chain
+7. Force a compound regen and watch the chain
    (`compound-regen: synthesizing ...` then `saved summary`):
 
    ```sql
@@ -128,7 +115,7 @@ observable contract - claims, writes, toasts - is the same.
           length(summary) from samskara_compound_summary;
    ```
 
-9. Mint toast relay, deterministically: with the app open on a
+8. Mint toast relay, deterministically: with the app open on a
    thread, insert a fake samskara directly (the INSERT itself is
    the toast signal via the realtime relay; `prediction_embedding`
    is NOT NULL, hence the zero vector):
@@ -172,15 +159,12 @@ observable contract - claims, writes, toasts - is the same.
   requires a WHERE clause`) - pg-safeupdate on the local
   PostgREST connections rejects the function's unqualified
   temp-table `delete`, so mint-tier2 has never run locally.
-- (6) The fired cohort's rows get `was_confirmed` set (true /
-  false per the classifier's verdict) within a rotation or two of
-  the follow-up message, while the fire is 1-10 minutes old.
-- (7) Dedup returns a collapse count >= 0; zero is the steady
+- (6) Dedup returns a collapse count >= 0; zero is the steady
   state on a healthy corpus.
-- (8) The summary regenerates: `last_regen_at` bumps to now,
+- (7) The summary regenerates: `last_regen_at` bumps to now,
   `samskara_count_at_regen` matches the current corpus count,
   and the prose changes only if the corpus did.
-- (9) The mood pill updates within a few seconds of the insert
+- (8) The mood pill updates within a few seconds of the insert
   (valence 0.8 / confidence 0.9 maps to the warm + confident cell);
   the probe row's deletion does not revert the pill (mood state is
   sticky by design).
@@ -192,8 +176,7 @@ observable contract - claims, writes, toasts - is the same.
 Delete the forged substrate stub if it was not minted from
 (`delete from samskara_substrate where id = '<forged-id>'`);
 leave it if a mint's provenance points at it. The regenerated
-compound summary and any reaction classifications are real
-feature output and stay.
+compound summary is real feature output and stays.
 
 ## Results log
 
