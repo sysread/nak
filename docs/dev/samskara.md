@@ -352,6 +352,26 @@ is adjudicated, the probe returns without a Venice call.
 Select-only RLS for the owner; writes come exclusively from the
 service-role client.
 
+### `samskara_tier2_declines`
+
+Ledger of tier-2-minter `confirm:false` verdicts, keyed
+`(user_id, group_key)` where `group_key` is the declined group's
+sorted child ids joined with `,`. `children uuid[]` holds the same
+sorted ids for the candidate RPC's Jaccard overlap test. Unlike
+`samskara_pair_declines` this is **TTL'd, not permanent**: the
+candidate walk only honors a decline within the recency window
+(`v_decline_ttl`, 7 days) before the group re-qualifies. A tier-2
+decline is over a co-fire *constellation*, and the co-fire graph
+keeps growing - a group too weak today may strengthen - so the
+verdict must be able to lapse, where a pair decline (immutable
+substrate) cannot. A re-decline upserts on `group_key`, re-arming
+the window. No per-element FK (arrays can't reference); a deleted
+child leaves a stale id that only weakens the Jaccard match
+slightly and is cleared by the TTL anyway. Select-only RLS for the
+owner; writes come exclusively from the service-role client. Folds
+into `samskara_tier2_candidate`'s coverage skip - see the Mint-tier2
+contract.
+
 ### `samskaras`
 
 The unit. Tier 1 is minted from substrate-cluster mints; tier
@@ -881,15 +901,16 @@ constellation), strongest combined lift first, capped at
 `p_max_group_size` (default 6). A group smaller than
 `p_min_group_size` (default 3) is rejected - a 2-member group is a
 dedup candidate, not a compound. The coverage skip then *advances*:
-if an existing tier-2's child-set overlaps the candidate by
-Jaccard >= `p_overlap_skip` (default 0.60), that seed is skipped
-and detection walks to the next-strongest *uncovered* edge rather
-than returning empty, so one tier-2 on a dense region no longer
-masks every other constellation. The probe budget
-(`64 + 16 * existing_tier2_count`) bounds the walk while keeping
-the first uncovered seed reachable. A cheap precondition (at least
-8 tier-1 samskaras with `fire_count > 0`) gates the whole thing
-before the expensive self-join runs.
+a *covered region* overlaps the candidate by Jaccard >=
+`p_overlap_skip` (default 0.60), that seed is skipped and detection
+walks to the next-strongest *uncovered* edge rather than returning
+empty, so one tier-2 on a dense region no longer masks every other
+constellation. A covered region is either an existing tier-2's
+child-set OR a recent minter decline (below). The probe budget
+(`64 + 16 * (existing_tier2_count + recent_decline_count)`) bounds the
+walk while keeping the first uncovered, non-declined seed reachable. A
+cheap precondition (at least 8 tier-1 samskaras with `fire_count > 0`)
+gates the whole thing before the expensive self-join runs.
 
 Per-member `cofire_weight` (summed co-fire count of that
 member's in-group edges) rides back on the result and becomes
@@ -901,12 +922,22 @@ it superseded an earlier raw-co-fire-then-ratio detection that
 minted exactly one tier-2 in a 151-samskara / ~29k-fire corpus and
 returned empty every sweep.
 
-TODO: the coverage skip only knows about *minted* tier-2s. If the
-minter agent *declines* a candidate, nothing records the decline,
-so detection re-offers the same strongest-lift group every sweep
-and a persistently-declined top candidate starves every weaker
-uncovered constellation behind it; want a way to record or
-time-decay a decline so the walk advances past it.
+**Decline memory.** The coverage skip would otherwise know only
+*minted* tier-2s, so a candidate the minter *declines* (`confirm:false`)
+would be re-offered every sweep - and a persistently-declined top
+candidate would starve every weaker uncovered constellation behind it.
+`mintTier2Probe` records each clean decline (the sorted child-set) into
+`samskara_tier2_declines`, and the candidate RPC folds recent declines
+into the same coverage test that handles minted tier-2s. A `null` from
+the minter (transport/parse failure) is NOT a verdict and is never
+recorded - same non-verdict discipline as the association-mint decline
+stamp. Unlike `samskara_pair_declines`, this ledger is **TTL'd, not
+permanent** (`v_decline_ttl`, 7 days): a pair decline is over immutable
+substrate so the verdict can never change, but a tier-2 decline is over
+a co-fire constellation, and the co-fire graph keeps growing - a group
+too weak to compound today may accumulate enough joint firing to be
+worth re-offering after the window. A re-decline upserts on `group_key`
+(the sorted child ids), re-arming the window.
 
 ### Compound-regen trigger
 
@@ -1329,15 +1360,21 @@ A first-class drawer tab (sibling to chats/memories/wiki/recipes,
 `drawer=samskara`) is the operator's read-only window into the global
 pipeline state. It replaced the old `route.modal='samskara'`
 diagnostics modal (whose per-conversation mood graph moved to
-`SamskaraMood.svelte`). Three surfaces, NO sub-nav. **Summary** and
-**Health** are both GLOBAL (per-user / corpus-wide) and reached via
-top-bar buttons in `Chat.svelte`'s samskara `TopBarActions` cluster;
-**Corpus** is the per-samskara detail, reached by selecting a sidebar
-row. Summary is the default landing page. Both globals lived as sub-nav
-tabs next to the per-samskara Corpus detail once, which wrongly implied
-they belonged to the selected instinct; they were lifted out to the top
-row (Summary first, then Health), which collapsed the sub-nav to a
-single Corpus tab and so removed it entirely.
+`SamskaraMood.svelte`). Two surfaces, NO sub-nav. **Overview** is the
+GLOBAL (per-user / corpus-wide) read, reached on tab-open and via the
+single top-bar button in `Chat.svelte`'s samskara `TopBarActions`
+cluster; **Corpus** is the per-samskara detail, reached by selecting a
+sidebar row. Overview is the default landing page.
+
+Overview is a merge of two surfaces that used to be separate top-bar
+buttons (**Summary** and **Health**). Both were global per-user reads,
+so two buttons for "the global view" read as redundant; they were
+collapsed into one page - the compound summary on top, pipeline health
+below - behind one **Overview** button. (Earlier still, both lived as
+sub-nav tabs next to the per-samskara Corpus detail, which wrongly
+implied they belonged to the selected instinct; lifting them to the top
+row removed the sub-nav entirely. The button-merge is the second step of
+that same simplification.)
 
 - **Corpus** - browse/search/filter/sort the samskara corpus, with a
   tier filter and a "hide similar" cosine slider (the corpus analog of
@@ -1350,40 +1387,42 @@ single Corpus tab and so removed it entirely.
   `src/components/SamskaraBrowseList.svelte`,
   `src/lib/samskara-browse-store.svelte.ts`,
   `src/lib/ui/samskara-browse.ts`.
-- **Health** - silent-failure detection computed live (no stored
-  history). The headline severity is the worst of the ACTIONABLE
-  signals only: backlog depth (pending assimilate / embed, loose
-  `[50, 500]` bars - a snapshot of a few is normal, since the
-  tail drains small caps per turn and the sweep is hourly),
-  internal inconsistencies (orphan fires, stuck claims -
-  tight bars, should be ~0), and compound-summary staleness. The
-  windowed mint/fire/resolution rates and the corpus counters
-  are shown but NOT severity-bearing (see the calibration note
-  below). Backed by
-  `samskara_health_snapshot`, `samskara_rates`, and the severity
-  thresholds in `src/lib/ui/samskara-browse.ts`
-  (named constants, tune against observed behaviour). Piece:
-  `src/components/SamskaraHealthPanel.svelte`. Reached via the top-bar
-  **Health** button (an `activity`/pulse icon in `Chat.svelte`'s samskara
-  `TopBarActions` cluster), which flips the `triggerHealthView`
-  `$bindable` prop; `Samskaras.svelte` watches it, switches `subView` to
-  `health`, and clears `route.samskara_id` (Health is corpus-wide, so a
-  lingering sidebar selection would falsely read as "health of this one")
-  - same shape as the Summary trigger below.
-
-- **Summary** - the default landing page: the always-on compound summary
-  block (per-user, global) plus a short orientation paragraph on what
-  samskara is. Fetched via `samskaraGetCompoundSummary` in
-  `Samskaras.svelte`. Reached on tab-open and via the top-bar **Summary**
-  button (an `align-left` icon in `Chat.svelte`'s samskara `TopBarActions`
-  cluster), which flips the `triggerSummaryView` `$bindable` prop;
-  `Samskaras.svelte` watches it, switches `subView` to `summary`, and
-  clears `route.samskara_id` so the sidebar deselects. The inverse wiring
-  is a `$effect` that flips `subView` to `corpus` whenever
+- **Overview** - the default landing page, `SamskaraHealthPanel.svelte`.
+  Reached on tab-open and via the top-bar **Overview** button (an
+  `align-left` icon), which flips the `triggerOverviewView` `$bindable`
+  prop; `Samskaras.svelte` watches it, switches `subView` to `overview`,
+  and clears `route.samskara_id` so the sidebar deselects. The inverse
+  wiring is a `$effect` that flips `subView` to `corpus` whenever
   `route.samskara_id` becomes truthy (sidebar row click or deep link), so
-  selecting a samskara always lands on its detail. The mood legend that
-  used to share this surface moved to the conversation-mood modal (see the
-  scope split above).
+  selecting a samskara always lands on its detail. Two stacked reads,
+  loaded by the panel itself and reloaded together by one **Refresh**:
+  - **Compound summary** (top, below the refresh row) - the always-on
+    prose block (per-user, global) that rides in every system prompt,
+    plus a short orientation paragraph on what samskara is. Fetched via
+    `samskaraGetCompoundSummary`. The mood legend that used to share this
+    surface moved to the conversation-mood modal (see the scope split
+    above).
+  - **Pipeline health** - silent-failure detection computed live (no
+    stored history). The headline severity is the worst of the
+    ACTIONABLE signals only: backlog depth (pending assimilate / embed,
+    loose `[50, 500]` bars - a snapshot of a few is normal, since the
+    tail drains small caps per turn and the sweep is hourly), internal
+    inconsistencies (orphan fires, stuck claims - tight bars, should be
+    ~0), and compound-summary staleness. The windowed mint/fire/
+    resolution rates, the corpus counters, and the tier-2-candidate
+    readout are shown but NOT severity-bearing (see the calibration note
+    below). Backed by `samskara_health_snapshot`, `samskara_rates`, and
+    the severity thresholds in `src/lib/ui/samskara-browse.ts` (named
+    constants, tune against observed behaviour).
+  - **Tier-2 candidate readout** - "Tier-2 candidate: available (N
+    members) / none" in the Corpus card, via `samskaraTier2CandidateSize`
+    (calls the same `samskara_tier2_candidate` detection RPC the sweep's
+    mint-tier2 phase uses, security-invoker, scoped to `auth.uid()`).
+    Informational, not thresholded: a non-empty result is GOOD (detection
+    is finding an uncovered constellation to compound) and "none" is the
+    normal resting state. This is the instrument that makes the tier-2
+    detector's liveness visible - the "empty every sweep" stall the lift
+    redesign fixed used to need a manual self-join to diagnose.
 
 Read-only by design - no delete/pin/edit. Curation would re-open the
 "operator games the bias model" question; if it's ever wanted it's a

@@ -35,21 +35,46 @@ is:
 ## The Samskara tab
 
 A tab in the conversation drawer (alongside Chats, Memories, Wiki, and
-so on). It opens on the **Summary** - the global, always-on read. Two
-buttons in the top row of the panel jump to the global views,
-**Summary** and **Health**; the per-instinct **Corpus** detail opens
-when you click an instinct in the list.
+so on). It opens on the **Overview** - the global, always-on read. One
+button in the top row of the panel jumps back to it; the per-instinct
+**Corpus** detail opens when you click an instinct in the list.
 
-### Summary
+### Overview
 
-The tab's home page, and what you land on when you open it. The always-on
-**summary** is a short paragraph capturing Nak's current read on who you
-are, which rides along in every reply. It's built across all your
-conversations, so it's global - which is why it's a top-row button and
-the landing page, rather than something that looked like it belonged to
-one instinct. A short note above it orients you on what samskara is. Jump
-back here any time with the **Summary button** in the top row of the
-panel.
+The tab's home page, and what you land on when you open it. It's the
+global read - everything here covers the whole instinct-forming pipeline
+across all your conversations, not any one instinct - which is why it's
+the landing page and a single top-row button, rather than something that
+looked like it belonged to a selected instinct. Jump back here any time
+with the **Overview button** in the top row of the panel. One **Refresh**
+re-reads everything on the page at once.
+
+At the top is the always-on **summary**: a short paragraph capturing
+Nak's current read on who you are, which rides along in every reply,
+rebuilt in the background as new instincts form. A short note above it
+orients you on what samskara is.
+
+Below the summary is a live **health** snapshot that makes background
+failures visible - the instinct-forming machinery runs entirely behind
+the scenes on your Supabase project, so a stall would otherwise be
+invisible:
+
+- **Backlog** - work waiting to be processed. A few items is normal; a
+  large, persistent pile means the pipeline isn't keeping up.
+- **Inconsistencies** - internal bookkeeping that should stay near zero.
+- **Staleness** - how long since the always-on summary was rebuilt.
+- **Activity** - how many instincts formed and fired recently, and how
+  often Nak learned from them. A low "reaction resolution" is expected -
+  only the turn right after an instinct fires can confirm it.
+- **Corpus** - headline counts: total instincts by tier, how many are
+  near-dead or have never fired, the raw-observation and pair-association
+  totals behind them, and whether a new **tier-2 compound** is currently
+  ready to form (a higher-order instinct distilled from several that keep
+  firing together).
+
+The dot at the top is green when healthy, amber when worth a look, and
+red when something genuinely needs attention - a deep backlog, a
+bookkeeping problem, or a long-stale summary.
 
 ### Corpus
 
@@ -67,32 +92,6 @@ fired, and where it came from. "Where it came from" lists the moments it
 was formed from, and - for an instinct built from recurring patterns
 across different conversations - the relations Nak noticed between them.
 For a tier-2 compound, it's the tier-1 instincts it was built from.
-
-### Health
-
-Open it with the **Health button** in the top row of the panel. Like the
-summary, it's a global read - it covers the whole instinct-forming
-pipeline, not any single instinct - so it lives in the top row rather
-than next to the per-instinct detail.
-
-A live snapshot that makes background failures visible - the
-instinct-forming machinery runs entirely behind the scenes on your
-Supabase project, so a stall would otherwise be invisible:
-
-- **Backlog** - work waiting to be processed. A few items is normal; a
-  large, persistent pile means the pipeline isn't keeping up.
-- **Inconsistencies** - internal bookkeeping that should stay near zero.
-- **Staleness** - how long since the always-on summary was rebuilt.
-- **Activity** - how many instincts formed and fired recently, and how
-  often Nak learned from them. A low "reaction resolution" is expected -
-  only the turn right after an instinct fires can confirm it.
-- **Corpus** - headline counts: total instincts by tier, how many are
-  near-dead or have never fired, and the raw-observation and
-  pair-association totals behind them.
-
-The dot at the top is green when healthy, amber when worth a look, and
-red when something genuinely needs attention - a deep backlog, a
-bookkeeping problem, or a long-stale summary.
 
 ## Mood (per conversation)
 

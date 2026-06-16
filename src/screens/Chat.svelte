@@ -437,17 +437,16 @@
   // two wiki panel buttons.
   let wikiSkippedTrigger = $state(false);
 
-  // Trigger flags for the Samskara top-bar buttons. Both surfaces they
-  // reach are GLOBAL (per-user, not per-samskara), which is why they
-  // live on the top row rather than as sub-nav tabs next to the
-  // per-samskara Corpus detail (where they read as belonging to one
-  // instinct). Summary jumps to the always-on compound prose block (the
-  // tab's default landing page); Health jumps to the corpus-wide
-  // pipeline health panel. Each clears any selected samskara. Routed
-  // through Samskaras.svelte (which owns the sub-view state) via
-  // $bindable triggers, same shape as the wiki top-bar buttons.
-  let samskaraSummaryTrigger = $state(false);
-  let samskaraHealthTrigger = $state(false);
+  // Trigger flag for the Samskara top-bar Overview button. The surface
+  // it reaches is GLOBAL (per-user, not per-samskara), which is why it
+  // lives on the top row rather than as sub-nav next to the per-samskara
+  // Corpus detail (where it would read as belonging to one instinct).
+  // Overview is the tab's default landing page - the always-on compound
+  // summary stacked above corpus-wide pipeline health. Clears any
+  // selected samskara. Routed through Samskaras.svelte (which owns the
+  // sub-view state) via a $bindable trigger, same shape as the wiki
+  // top-bar buttons.
+  let samskaraOverviewTrigger = $state(false);
 
   // Trigger flags for the memory librarian top-bar buttons. Two
   // separate buttons because the user might want to run one pass
@@ -6565,22 +6564,15 @@
         {/snippet}
         {#snippet summaryIcon()}
           <!-- Feather "align-left" - paragraph lines, reads as "the
-               prose summary block" rather than a list or a document. -->
+               overview / prose summary block" rather than a list or a
+               document. The Overview surface leads with the compound
+               summary prose, so the prose glyph fits the merged page. -->
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <line x1="17" y1="10" x2="3" y2="10" />
             <line x1="21" y1="6" x2="3" y2="6" />
             <line x1="21" y1="14" x2="3" y2="14" />
             <line x1="17" y1="18" x2="3" y2="18" />
-          </svg>
-        {/snippet}
-        {#snippet healthIcon()}
-          <!-- Feather "activity" - an ECG/pulse line, reads as "pipeline
-               health / is the machinery still beating" rather than a
-               medical cross. -->
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
           </svg>
         {/snippet}
         {#if drawerTab === 'chats'}
@@ -6736,31 +6728,23 @@
             <span class="title-btn panel-section-label">Wiki</span>
           </div>
         {:else if drawerTab === 'samskara'}
-          <!-- Samskara diagnostics top-bar. Summary and Health are both
-               GLOBAL reads (per-user / corpus-wide, not per-samskara), so
-               both live on the top row rather than as peer sub-tabs next
-               to the per-samskara Corpus detail (where they read as
-               belonging to the selected instinct). Summary -> the
-               compound-summary landing page; Health -> the corpus-wide
-               pipeline health panel. The only per-samskara surface,
-               Corpus, is reached by selecting a sidebar row, so it needs
-               no top-bar button. Both route through the Samskaras panel
-               via $bindable triggers because the sub-view state lives
-               there. -->
+          <!-- Samskara diagnostics top-bar. Overview is a GLOBAL read
+               (per-user, not per-samskara), so it lives on the top row
+               rather than as a sub-tab next to the per-samskara Corpus
+               detail (where it would read as belonging to the selected
+               instinct). Overview -> the landing page: compound summary
+               stacked above corpus-wide pipeline health. The only
+               per-samskara surface, Corpus, is reached by selecting a
+               sidebar row, so it needs no top-bar button. Routes through
+               the Samskaras panel via a $bindable trigger because the
+               sub-view state lives there. -->
           {@const actions = [
             {
-              id: 'summary',
-              label: 'Summary',
-              title: 'Global compound summary',
-              onclick: () => (samskaraSummaryTrigger = true),
+              id: 'overview',
+              label: 'Overview',
+              title: 'Global compound summary + pipeline health',
+              onclick: () => (samskaraOverviewTrigger = true),
               icon: summaryIcon,
-            },
-            {
-              id: 'health',
-              label: 'Health',
-              title: 'Corpus-wide pipeline health',
-              onclick: () => (samskaraHealthTrigger = true),
-              icon: healthIcon,
             },
           ]}
           <TopBarActions {actions} menuLabel="Samskara actions" />
@@ -8115,18 +8099,16 @@
           />
         {/if}
       {:else if drawerTab === 'samskara'}
-        <!-- Samskara diagnostics panel. Summary is the default landing
-             page (global compound prose); Health is the corpus-wide
-             pipeline panel - both global, both reached via top-bar
-             buttons. Corpus is the per-samskara detail: the sidebar
+        <!-- Samskara diagnostics panel. Overview is the default landing
+             page (global compound summary stacked above corpus-wide
+             pipeline health), reached via the single top-bar button.
+             Corpus is the per-samskara detail: the sidebar
              SamskaraBrowseList drives route.samskara_id, which the panel
-             uses to switch into it. `triggerSummaryView` /
-             `triggerHealthView` wire the two top-bar buttons to their
-             global surfaces. -->
+             uses to switch into it. `triggerOverviewView` wires the
+             top-bar Overview button to the global surface. -->
         {#if SamskarasComp}
           <SamskarasComp
-            bind:triggerSummaryView={samskaraSummaryTrigger}
-            bind:triggerHealthView={samskaraHealthTrigger}
+            bind:triggerOverviewView={samskaraOverviewTrigger}
           />
         {/if}
       {:else}
