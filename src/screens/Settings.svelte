@@ -2171,13 +2171,6 @@
             </p>
           {/if}
         {/if}
-        <p class="subtle" style="font-size:0.8rem">
-          The underlying endpoint is marked beta by Venice; the shape
-          of a row can shift without notice. If the list comes back
-          empty after a successful fetch, Venice most likely hasn't
-          ingested your recent requests yet — the ledger can lag live
-          traffic by a few minutes.
-        </p>
       {:else if group === 'security'}
         <h2>Security</h2>
 
