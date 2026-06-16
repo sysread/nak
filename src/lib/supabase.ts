@@ -2622,8 +2622,35 @@ export class SupabaseService {
   }
 
   async deleteThread(threadId: string): Promise<void> {
+    // Collect the thread's live attachment object keys BEFORE the delete:
+    // threads -> messages -> message_attachments all cascade, so once the
+    // thread is gone the rows are gone and their bucket keys are
+    // unrecoverable. Includes generated images (same table). Expired rows
+    // (storage_path null) have no object left, so we filter them out.
+    const { data: attachRows, error: listErr } = await this.client
+      .from('message_attachments')
+      .select('storage_path, messages!inner(thread_id)')
+      .eq('messages.thread_id', threadId)
+      .not('storage_path', 'is', null);
+    if (listErr) throw new SupabaseError(listErr.message);
+    const paths = (attachRows ?? [])
+      .map((r) => (r as { storage_path: string | null }).storage_path)
+      .filter((p): p is string => typeof p === 'string' && p.length > 0);
+
     const { error } = await this.client.from('threads').delete().eq('id', threadId);
     if (error) throw new SupabaseError(error.message);
+
+    // Best-effort object reclamation AFTER the rows are gone (the reverse of
+    // deleteDocument's object-then-row order): the thread has already left the
+    // user's view, so a Storage hiccup must not resurrect it. Any object left
+    // behind here is caught by the daily attachment-gc sweep (bucket objects
+    // with no message_attachments row), so we swallow the remove error rather
+    // than fail the delete. Doing it after the cascade also means a partial
+    // failure can't strand a live row pointing at a deleted object (which would
+    // render as a broken image).
+    if (paths.length > 0) {
+      await this.client.storage.from('attachments').remove(paths);
+    }
   }
 
   // memories -------------------------------------------------------------

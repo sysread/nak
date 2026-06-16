@@ -554,6 +554,17 @@ alter table public.message_attachments
 create index if not exists message_attachments_message_idx
   on public.message_attachments (message_id, position);
 
+-- Anti-join support for the orphan-object GC sweep
+-- (list_orphan_attachment_objects). The sweep asks "which attachments
+-- bucket objects have NO live row pointing at them" - storage.objects
+-- LEFT-anti-joined to this column - so a row's storage_path must be
+-- index-probable. Partial on non-null because an expired row's path is
+-- null (its object is already gone) and never participates in the join.
+drop index if exists public.message_attachments_storage_path_idx;
+create index if not exists message_attachments_storage_path_idx
+  on public.message_attachments (storage_path)
+  where storage_path is not null;
+
 -- Partial index used by the expiry sweep. Only carries live (non-
 -- expired) rows - those with an object still in the bucket - so the
 -- scan to find expirable attachments stays tiny in steady state; the
@@ -11502,5 +11513,121 @@ begin
   end if;
 exception when others then
   raise notice 'attachment expiry cron setup skipped: %', sqlerrm;
+end
+$cron$;
+
+-- Orphan-object GC for the attachments bucket (pg_cron -> pg_net -> attachment-gc)
+--
+-- Deleting a thread cascades message_attachments rows away (thread -> messages
+-- -> message_attachments, all `on delete cascade`), but SQL can't reach Storage
+-- to drop the bucket OBJECTS those rows pointed at - so every deleted thread
+-- leaves its attachment + generated-image objects stranded in the bucket. The
+-- client's deleteThread best-effort removes them inline, but a failed remove
+-- (offline, partial error) or any object predating that path stays orphaned
+-- forever: the expiry sweep can't see it (no row to drive the dormancy join).
+--
+-- This daily sweep is the backstop. It lists bucket objects with no live row
+-- pointing at them and deletes the objects in the attachment-gc edge function
+-- (service-role Storage client). Same Vault-secret custody + local-stack guards
+-- as the expiry / recipe-image-gc crons; no-ops until the secrets are seeded.
+--
+-- Distinct from expire-attachments: expiry reclaims objects of LIVE rows whose
+-- thread went dormant (row survives, marked expired); this reclaims objects
+-- whose row is already GONE. The two never overlap - an expired row's
+-- storage_path is null, so its object was already deleted and can't resurface
+-- here as a false orphan.
+
+-- List a bounded batch of attachments-bucket objects with no live
+-- message_attachments row. p_min_age_seconds is a grace window: an in-flight
+-- send uploads the object a moment before its row insert commits, so a freshly
+-- created object with no row yet is not an orphan - skipping objects younger
+-- than the window keeps the sweep from racing a concurrent upload. No FOR
+-- UPDATE / claim: the list step mutates nothing, and object deletion is
+-- idempotent (removing a gone object is a no-op), so overlapping ticks at worst
+-- redo harmless work. security definer + service-role-only: cron has no user
+-- session and the sweep spans every member's objects.
+drop function if exists public.list_orphan_attachment_objects(int, int);
+create or replace function public.list_orphan_attachment_objects(
+  p_min_age_seconds int,
+  p_limit int
+) returns table (name text)
+language sql security definer
+set search_path = public as $$
+  select o.name
+    from storage.objects o
+   where o.bucket_id = 'attachments'
+     and o.created_at < now() - make_interval(secs => p_min_age_seconds)
+     and not exists (
+       select 1 from public.message_attachments a
+        where a.storage_path = o.name
+     )
+   order by o.created_at asc
+   limit p_limit
+$$;
+
+revoke all on function public.list_orphan_attachment_objects(int, int) from public, anon, authenticated;
+grant execute on function public.list_orphan_attachment_objects(int, int) to service_role;
+
+-- Cron dispatcher, same shape + Vault-secret custody as
+-- nak_trigger_attachment_expiry above. Dynamic SQL so it compiles where pg_net /
+-- vault are absent (local stack); no-ops until the secrets are seeded.
+create or replace function public.nak_trigger_attachment_gc()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $fn$
+declare
+  v_url text;
+  v_key text;
+begin
+  begin
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'project_url' $q$ into v_url;
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'service_role_key' $q$ into v_key;
+  exception when others then
+    return;  -- vault not installed or unreadable; nothing to dispatch
+  end;
+  if v_url is null or v_key is null then
+    return;  -- secrets not seeded yet
+  end if;
+  begin
+    execute format(
+      $q$ select net.http_post(
+            url := %L,
+            headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', %L),
+            body := '{}'::jsonb
+          ) $q$,
+      v_url || '/functions/v1/attachment-gc',
+      'Bearer ' || v_key
+    );
+  exception when others then
+    raise notice 'nak_trigger_attachment_gc: dispatch failed: %', sqlerrm;
+  end;
+end;
+$fn$;
+
+revoke all on function public.nak_trigger_attachment_gc() from public, anon, authenticated;
+
+-- Schedule the sweep daily. Orphans only appear on thread deletion (rare
+-- relative to dormancy expiry) and the client's inline delete handles the
+-- common case, so this backstop runs once a day rather than hourly. Guarded on
+-- extension availability + idempotent reschedule, same as the expiry cron.
+do $cron$
+begin
+  if exists (select 1 from pg_available_extensions where name = 'pg_cron')
+     and exists (select 1 from pg_available_extensions where name = 'pg_net') then
+    create extension if not exists pg_cron;
+    create extension if not exists pg_net;
+    if exists (select 1 from cron.job where jobname = 'nak-attachment-gc') then
+      perform cron.unschedule('nak-attachment-gc');
+    end if;
+    perform cron.schedule(
+      'nak-attachment-gc',
+      '23 4 * * *',
+      $job$ select public.nak_trigger_attachment_gc(); $job$
+    );
+  end if;
+exception when others then
+  raise notice 'attachment gc cron setup skipped: %', sqlerrm;
 end
 $cron$;

@@ -72,6 +72,11 @@ covers the attachment-specific pieces.
   `_shared/expire-attachments.ts` - the server-side expiry sweep
   (replaced the old browser `attachment_expiry` worker). See
   [`./file-storage.md`](./file-storage.md).
+- `supabase/functions/attachment-gc/index.ts` +
+  `_shared/attachment-gc.ts` - the daily orphan-object GC sweep, backed by
+  the `list_orphan_attachment_objects` RPC. Reclaims bucket objects with no
+  `message_attachments` row (the orphans a thread deletion leaves behind).
+  See [`./file-storage.md`](./file-storage.md).
 - `src/screens/Chat.svelte` - composer state, paperclip button, paste
   handler, drag-drop overlay, preview chips, pre-send guard, the
   signed-URL pre-resolution before a send, attachment rendering.
@@ -103,6 +108,12 @@ covers the attachment-specific pieces.
 - **Expiry** - the `expire-attachments` edge function (hourly cron)
   deletes bucket objects whose thread is 30 days dormant, then nulls
   `storage_path` + stamps `expired_at`. No open tab required.
+- **Thread deletion** - `SupabaseService.deleteThread` collects the
+  thread's live attachment keys before the cascade removes their rows, then
+  best-effort removes those bucket objects after the thread is gone. The
+  daily `attachment-gc` sweep is the backstop for whatever that misses (a
+  failed inline remove, or objects from threads deleted before this path
+  existed). See [`./file-storage.md`](./file-storage.md).
 
 ## Data model
 
