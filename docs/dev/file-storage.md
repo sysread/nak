@@ -80,6 +80,16 @@ and deployed via its own line in `.github/workflows/deploy.yml`.
   owning thread has been dormant 30 days, then nulls `storage_path` +
   stamps `expired_at`. Backed by `list_expirable_attachments` /
   `mark_attachments_expired`.
+- **`attachment-gc`** (daily): deletes attachment-bucket objects with no
+  `message_attachments` row - the orphans a thread deletion leaves behind
+  (the cascade drops the rows; SQL can't drop the objects). Backed by
+  `list_orphan_attachment_objects` (a `storage.objects` anti-join over the
+  live `storage_path`s, with an age grace window so an in-flight upload's
+  object isn't mistaken for an orphan). The client's `deleteThread`
+  removes these inline on delete; this is the backstop for a failed inline
+  remove or any pre-existing backlog. Distinct from `expire-attachments`:
+  expiry reclaims objects of LIVE rows (row survives, marked expired);
+  this reclaims objects whose row is already GONE - they never overlap.
 - **`recipe-image-gc`** (every 6h): deletes `recipe_images` rows with no
   `recipe_version_images` link AND their bucket object - both insert-side
   and delete-side orphans. Backed by `list_orphan_recipe_images` /
@@ -92,7 +102,7 @@ and deployed via its own line in `.github/workflows/deploy.yml`.
 
 The pure drain loops are unit-tested offline in
 `supabase/functions/_shared/*` (`expire-attachments.ts`,
-`recipe-image-gc.ts`); the edge handlers are glue.
+`attachment-gc.ts`, `recipe-image-gc.ts`); the edge handlers are glue.
 
 ## Text extraction
 
