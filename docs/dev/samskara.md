@@ -838,50 +838,75 @@ co-fire self-join, filtered:
 
 ```text
 eligible(A, B) when:
-  cofires(A, B) >= p_min_cofires             -- default 4
+  cofires(A, B) >= p_min_cofires             -- default 10
+  lift(A, B)    >= p_min_lift                 -- default 2.0
   p_cosine_lo <= cosine(embed_A, embed_B)    -- default 0.30
   cosine(embed_A, embed_B) < p_cosine_hi     -- default 0.68 (< dedup floor 0.70)
+
+  where lift(A, B) = cofires(A, B) * cohorts / (fires_A * fires_B)
 ```
 
-The half-open top end is the whole point: tier-2 only ever
-groups pairs whose embedding similarity sits *below* dedup's
-merge floor, so it claims the "related but distinct" band dedup
+Lift is the load-bearing selectivity: observed co-fires over the
+co-fires expected if A and B fired independently. Base-rate
+binding - two busy predictions colliding because both fire on a
+large share of turns - sits at lift ~1 (at or below chance);
+genuine co-activation runs several times chance. Raw co-fire
+ranking, and even dedup's `cofires / min(fires)` ratio, both fail
+here: the ratio still reads ~0.5 for two busy-but-independent
+predictions because the rarer member is also busy. A 2026-06-15
+prod audit measured the grab-bag pairs (emoji + pork chops + Thai,
+each firing 600-1300x) at lift < 1.5 while real constellations ran
+2x-25x, so `p_min_lift = 2.0` splits them. The companion
+`p_min_cofires = 10` is an absolute-mass guard against lift's
+small-sample variance (a pair firing 4x that always co-fires
+scores a huge lift on 4 points). Lift is a rate ratio, so the
+threshold holds as the corpus grows.
+
+The half-open cosine top end is a separate guard: tier-2 only ever
+groups pairs whose embedding similarity sits *below* dedup's merge
+floor, so it claims the "related but distinct" band dedup
 deliberately leaves alone (see the dedup-coupling Gotcha). The
-group is the strongest eligible edge plus every node sharing an
-eligible edge with BOTH seed members (not either - co-firing
-with one seed member is adjacent, not part of the constellation),
-strongest combined co-fire first, capped at `p_max_group_size`
-(default 6). A group smaller than `p_min_group_size` (default 3)
-is rejected - a 2-member group is a dedup candidate, not a
-compound. Finally the coverage skip: if any existing tier-2's
-child-set overlaps the candidate by Jaccard >= `p_overlap_skip`
-(default 0.60), return empty. A cheap precondition (at least 8
-tier-1 samskaras with `fire_count > 0`) gates the whole thing
+`p_cosine_lo` floor is effectively inert - the shared prediction
+template floors any pairwise prediction-cosine around 0.38 (audit:
+`min_cos` 0.381, zero co-firing pairs below 0.30) - and is left
+that way on purpose: prediction-cosine is template similarity, not
+topical similarity, so raising the floor would filter noise, not
+gate coherence. Coherence rides on lift plus the minter's
+judgement, not the cosine band.
+
+The group is the strongest-LIFT eligible edge plus every node
+sharing an eligible edge with BOTH seed members (not either -
+co-firing with one seed member is adjacent, not part of the
+constellation), strongest combined lift first, capped at
+`p_max_group_size` (default 6). A group smaller than
+`p_min_group_size` (default 3) is rejected - a 2-member group is a
+dedup candidate, not a compound. The coverage skip then *advances*:
+if an existing tier-2's child-set overlaps the candidate by
+Jaccard >= `p_overlap_skip` (default 0.60), that seed is skipped
+and detection walks to the next-strongest *uncovered* edge rather
+than returning empty, so one tier-2 on a dense region no longer
+masks every other constellation. The probe budget
+(`64 + 16 * existing_tier2_count`) bounds the walk while keeping
+the first uncovered seed reachable. A cheap precondition (at least
+8 tier-1 samskaras with `fire_count > 0`) gates the whole thing
 before the expensive self-join runs.
 
 Per-member `cofire_weight` (summed co-fire count of that
 member's in-group edges) rides back on the result and becomes
 the provenance `weight`.
 
-**Known defect - detection is effectively non-functional (2026-06-15
-prod audit).** The formula above is the *intent*; in production it has
+The lift redesign is recorded in
+[`plans/samskara-tier2-detection-quality-plan.md`](plans/samskara-tier2-detection-quality-plan.md);
+it superseded an earlier raw-co-fire-then-ratio detection that
 minted exactly one tier-2 in a 151-samskara / ~29k-fire corpus and
-returns empty every sweep. Three independent holes combine: (1) the
-seed is the single strongest edge and the coverage skip `return`s
-empty without advancing to the next *uncovered* edge, so one tier-2
-sitting on the densest co-fire region masks every other constellation
-forever (winner-take-all); (2) eligibility uses the **raw** co-fire
-count with no base-rate normalization - unlike dedup's `cofires /
-min(fires)` ratio - so the busiest (least topically specific)
-samskaras dominate, and a forced candidate comes back as an incoherent
-cross-topic grab-bag bound by firing frequency, not affinity; (3) the
-`p_cosine_lo` (0.30) floor is inert because the shared prediction
-template floors any pairwise prediction-cosine around 0.38 (audit:
-`min_cos` 0.381, zero co-firing pairs below 0.30), so the band
-collapses to "anything below 0.68" and gates nothing. The redesign -
-ratio gate, a coherence gate that survives the template, and seed
-iteration - is scoped in
-[`plans/samskara-tier2-detection-quality-plan.md`](plans/samskara-tier2-detection-quality-plan.md).
+returned empty every sweep.
+
+TODO: the coverage skip only knows about *minted* tier-2s. If the
+minter agent *declines* a candidate, nothing records the decline,
+so detection re-offers the same strongest-lift group every sweep
+and a persistently-declined top candidate starves every weaker
+uncovered constellation behind it; want a way to record or
+time-decay a decline so the walk advances past it.
 
 ### Compound-regen trigger
 
@@ -1164,15 +1189,19 @@ summarizer reads samskaras to feed the agent.
   a WHERE clause` (SQLSTATE 21000) - so a "simpler" unqualified
   DELETE breaks every tier-2 probe against the local stack
   while passing hosted. Keep the TRUNCATE.
-- **Tier-2 detection is currently a near-no-op - do not trust the
-  "Tier-2 detection formula" section as a description of live
-  behaviour.** A 2026-06-15 prod audit found exactly one tier-2 minted
-  in a 151-samskara corpus and the candidate RPC returning empty every
-  sweep, from three stacked defects (winner-take-all coverage-skip,
-  raw co-fire count with no base-rate normalization, and an inert
-  cosine floor the prediction template defeats). The "Known defect"
-  note under that section has the detail; the fix is scoped in
-  [`plans/samskara-tier2-detection-quality-plan.md`](plans/samskara-tier2-detection-quality-plan.md).
+- **Tier-2 gates on lift; dedup gates on the rarer-member ratio -
+  the divergence is deliberate.** dedup (`cofires / min(fires) >=
+  0.5`) is hunting *duplicates*, which are perfectly correlated
+  (ratio -> 1), so the ratio is the right tool. Tier-2 is hunting
+  *distinct-but-co-activating* pairs, and there the ratio fails:
+  two busy-but-independent predictions still reach ratio ~0.5
+  because the rarer member is also busy. Only lift
+  (`cofires * cohorts / (fires_A * fires_B)`, observed over
+  expected-under-independence) separates genuine association
+  (several times chance) from base-rate binding (~1x). Do not
+  "align" tier-2 with dedup by porting the ratio gate - a
+  2026-06-15 prod audit proved it admits the exact grab-bag it is
+  meant to reject. See the Tier-2 detection formula section.
   Until it lands, treat any tier-2 reasoning as aspirational.
 - **Pair-relate uses a naive seed-most-recent approach.**
   One pair per probe: seed on the most recent embedded
