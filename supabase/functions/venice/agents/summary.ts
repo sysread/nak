@@ -26,6 +26,7 @@ import type { StoredMessage, VeniceWireMessage } from './_recall_helpers.ts';
 import {
   CURATION_CLAIM_TTL_SECONDS,
   messageToWire,
+  repairToolCallFanIn,
   trimToCompleteTurn,
   trimToFirstUserOrSystem,
 } from './_curation_helpers.ts';
@@ -163,7 +164,7 @@ async function summariseClaimedThread(
     const apiKey = await readVeniceKey(adminClient);
     if (!apiKey) throw new Error('no Venice key configured (app_config unseeded)');
 
-    const condensed = condenseHistory(slice);
+    const condensed = repairToolCallFanIn(condenseHistory(slice));
     const convo: VeniceWireMessage[] = condensed.map(messageToWire);
     convo.push({ role: 'user', content: SUMMARY_PROMPT });
 
