@@ -5808,6 +5808,22 @@ create table if not exists public.samskara_fires (
   was_confirmed boolean
 );
 
+-- Aggressive autovacuum for an insert-heavy, self-joined table.
+-- samskara_collapse_by_cofiring self-joins this table on cohort_id
+-- every hourly sweep; its candidate-enumeration step is an Index Only
+-- Scan over samskara_fires_no_dup_in_cohort. With Postgres defaults
+-- (insert_scale_factor 0.2) the visibility map lags the steady insert
+-- stream, so the "index only" scan fell back to ~90k heap fetches per
+-- pass - the dominant cost of that RPC. Vacuuming after 5% growth
+-- keeps the VM fresh so the scan stays heap-free. The plain
+-- scale_factor is lowered to match because _samskara_merge_pair also
+-- retargets/deletes loser fires (updates + deletes), and those dead
+-- tuples want collecting on the same cadence.
+alter table public.samskara_fires set (
+  autovacuum_vacuum_insert_scale_factor = 0.05,
+  autovacuum_vacuum_scale_factor = 0.05
+);
+
 -- Per-thread index of the user message this cohort fired in response
 -- to. 1-based, matches the in-memory countUserRounds(history) value
 -- the chat loop sees at fire time (the current user message is
