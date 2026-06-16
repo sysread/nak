@@ -7203,7 +7203,7 @@ end $$;
 -- MUST stay below dedup's p_cosine_floor or the two phases fight over
 -- the same pairs - dedup deleting what tier-2 just grouped.
 --
--- Group shape: eligible edges are ranked strongest-co-fire first; the
+-- Group shape: eligible edges are ranked strongest-LIFT first; the
 -- strongest edge whose grown group is large enough AND not already
 -- covered by an existing tier-2 seeds the candidate. Around a seed,
 -- every node sharing an eligible edge with BOTH seed members joins (up
@@ -7211,16 +7211,26 @@ end $$;
 -- keeps the constellation coherent: a node co-firing with only one seed
 -- member is adjacent, not part of the pattern.
 --
--- Base-rate gate: eligibility is NOT raw co-fire count. Two samskaras
--- that each fire on a large fraction of turns co-fire thousands of times
--- by base rate alone, with no real association - and those always-on
--- predictions are the least topically specific, so ranking by raw count
--- floats generic noise to the top (a forced candidate built that way
--- came back a cross-topic grab-bag the minter refuses). Eligibility also
--- requires cofires(A,B) / min(fire_count_A, fire_count_B) >=
--- p_min_cofire_ratio - the same normalization dedup uses - so a
--- surviving edge means the two co-activate as a real fraction of when
--- either fires, not that both are merely busy.
+-- Lift gate (the load-bearing selectivity): eligibility is NOT raw
+-- co-fire count, and NOT the rarer-member ratio dedup uses. Raw count
+-- ranks the busiest predictions to the top - two samskaras that each
+-- fire on a large fraction of turns co-fire hundreds of times by base
+-- rate alone, with no real association (a forced candidate built that
+-- way came back a cross-topic grab-bag of the highest-firing claims:
+-- emojis + pork chops + Thai food). dedup's ratio (cofires /
+-- min(fires)) does not catch this either: two busy-but-independent
+-- predictions still reach ratio ~0.5, because the rarer member is also
+-- busy. The measure that DOES isolate association is lift:
+--     lift = cofires * v_cohorts / (fire_count_a * fire_count_b)
+-- i.e. observed co-fires over co-fires expected under independence.
+-- Base-rate binding sits at lift ~1 (at or below chance); genuine
+-- co-activation runs several times chance. Eligibility requires
+-- lift >= p_min_lift (default 2.0, comfortably above the ~1.5 ceiling
+-- the grab-bag pairs reach in production). Lift is a rate ratio, so the
+-- threshold stays meaningful as the corpus grows. The companion
+-- p_min_cofires floor (raised to 10) is an absolute-mass guard against
+-- lift's small-sample variance - a pair firing 4 times that always
+-- co-fires scores a huge lift on 4 data points.
 --
 -- Cosine band [p_cosine_lo, p_cosine_hi): the UPPER bound is
 -- load-bearing - it MUST stay below dedup's p_cosine_floor (above) or
@@ -7228,9 +7238,9 @@ end $$;
 -- non-binding: every prediction shares the "In situations like X, this
 -- user tends to Y" template, which floors pairwise prediction-cosine
 -- around 0.38, so no co-firing pair sits below p_cosine_lo = 0.30.
--- Coherence is carried by the base-rate gate, not this floor; the band's
--- only live job is keeping tier-2 out of dedup's territory. (Do not
--- "fix" the floor by raising p_cosine_lo - prediction-cosine is template
+-- Coherence is carried by the lift gate, not this floor; the band's only
+-- live job is keeping tier-2 out of dedup's territory. (Do not "fix" the
+-- floor by raising p_cosine_lo - prediction-cosine is template
 -- similarity, not topical similarity, so a higher floor filters noise,
 -- not for coherence.)
 --
@@ -7251,9 +7261,10 @@ end $$;
 -- scopes them to the PostgREST call's transaction.
 drop function if exists public.samskara_tier2_candidate(int, real, real, int, int, real);
 drop function if exists public.samskara_tier2_candidate(int, real, real, int, int, real, uuid);
+drop function if exists public.samskara_tier2_candidate(int, real, real, real, int, int, real, uuid);
 create or replace function public.samskara_tier2_candidate(
-  p_min_cofires      int  default 4,
-  p_min_cofire_ratio real default 0.30,
+  p_min_cofires      int  default 10,
+  p_min_lift         real default 2.0,
   p_cosine_lo        real default 0.30,
   p_cosine_hi        real default 0.68,
   p_min_group_size   int  default 3,
@@ -7270,6 +7281,7 @@ language plpgsql security invoker as $$
 declare
   v_uid uuid := coalesce(p_user_id, auth.uid());
   v_active int;
+  v_cohorts int;
   v_existing_count int;
   v_seed record;
   v_extra uuid[];
@@ -7286,19 +7298,34 @@ begin
     return;
   end if;
 
+  -- Total fire cohorts - the denominator for the lift gate. Lift =
+  -- observed co-fires / co-fires expected under independence
+  -- (fires_a * fires_b / v_cohorts): how many times more often a pair
+  -- fires together than chance. Computed once; used in the edge filter.
+  select count(distinct cohort_id) into v_cohorts
+    from public.samskara_fires
+   where user_id = v_uid;
+  if coalesce(v_cohorts, 0) = 0 then
+    return;
+  end if;
+
   -- Eligible edges materialized once. Each is a tier-1<->tier-1 pair
-  -- that co-fires in >= p_min_cofires cohorts, clears the base-rate
-  -- ratio gate (co-fires as a real fraction of the rarer member's fire
-  -- count, not pure base-rate binding), AND whose prediction-embedding
+  -- that co-fires in >= p_min_cofires cohorts (an absolute-mass floor
+  -- that controls the small-sample variance of lift - a pair firing 4
+  -- times that always co-fires scores a huge lift on 4 data points),
+  -- clears the lift gate (>= p_min_lift times more co-firing than
+  -- independence predicts - genuine association, not two busy
+  -- predictions colliding by base rate), AND whose prediction-embedding
   -- cosine sits in the [lo, hi) band - strictly below hi (dedup's
   -- floor) so we only ever group claims dedup deliberately leaves
   -- distinct. The lo bound is non-binding in practice (the prediction
-  -- template floors cosine ~0.38); the ratio gate, not lo, is what
-  -- keeps frequency-bound noise out. See the preamble.
+  -- template floors cosine ~0.38); the lift gate, not lo, is what keeps
+  -- base-rate noise out. See the preamble.
   create temporary table if not exists _tier2_edges (
     a_id uuid,
     b_id uuid,
-    cofires int
+    cofires int,
+    lift real
   ) on commit drop;
   -- TRUNCATE, not an unqualified DELETE: PostgREST connections can
   -- preload pg-safeupdate (the local stack does), which rejects
@@ -7307,7 +7334,7 @@ begin
   -- weeks never running locally. TRUNCATE is a different command
   -- class safeupdate doesn't hook, and is faster besides.
   truncate _tier2_edges;
-  insert into _tier2_edges (a_id, b_id, cofires)
+  insert into _tier2_edges (a_id, b_id, cofires, lift)
   with pair_cofires as (
     select least(f1.samskara_id, f2.samskara_id) as a_id,
            greatest(f1.samskara_id, f2.samskara_id) as b_id,
@@ -7321,7 +7348,9 @@ begin
      group by 1, 2
      having count(*) >= p_min_cofires
   )
-  select pc.a_id, pc.b_id, pc.cofires
+  select pc.a_id, pc.b_id, pc.cofires,
+         (pc.cofires::real * v_cohorts::real
+            / greatest(sa.fire_count::real * sb.fire_count::real, 1)::real)::real as lift
     from pair_cofires pc
     join public.samskaras sa on sa.id = pc.a_id
     join public.samskaras sb on sb.id = pc.b_id
@@ -7331,8 +7360,8 @@ begin
      and sb.tier = 1
      and sa.prediction_embedding is not null
      and sb.prediction_embedding is not null
-     and (pc.cofires::real
-            / greatest(least(sa.fire_count, sb.fire_count), 1)::real) >= p_min_cofire_ratio
+     and (pc.cofires::real * v_cohorts::real
+            / greatest(sa.fire_count::real * sb.fire_count::real, 1)::real) >= p_min_lift
      and (1 - (sa.prediction_embedding <=> sb.prediction_embedding))::real >= p_cosine_lo
      and (1 - (sa.prediction_embedding <=> sb.prediction_embedding))::real <  p_cosine_hi;
 
@@ -7354,10 +7383,12 @@ begin
      group by sp.samskara_id;
   select count(*) into v_existing_count from _tier2_existing;
 
-  -- Seed iteration. Walk eligible edges strongest-co-fire first; the
-  -- first whose grown group is both large enough and uncovered wins.
-  -- Deterministic tie-break on the ids so repeated calls pick the same
-  -- order when co-fire counts tie. Probe budget = 64 + 16 per existing
+  -- Seed iteration. Walk eligible edges strongest-LIFT first - NOT raw
+  -- co-fire: raw co-fire ranks the busiest base-rate-bound pairs to the
+  -- top, which is what produced the original cross-topic grab-bag. The
+  -- first seed whose grown group is both large enough and uncovered
+  -- wins. Deterministic tie-break on the ids so repeated calls pick the
+  -- same order when lift ties. Probe budget = 64 + 16 per existing
   -- tier-2: each existing tier-2 of up to p_max_group_size members can
   -- cover at most C(size,2) of the strongest edges (<= 15 at size 6),
   -- so 16 apiece keeps the first uncovered seed reachable as tier-2s
@@ -7365,19 +7396,22 @@ begin
   for v_seed in
     select e.a_id, e.b_id
       from _tier2_edges e
-     order by e.cofires desc, e.a_id, e.b_id
+     order by e.lift desc, e.a_id, e.b_id
      limit (64 + 16 * v_existing_count)
   loop
     -- Grow: nodes sharing an eligible edge with BOTH seed members,
-    -- strongest combined co-fire first, capped at the group budget.
+    -- strongest combined LIFT first, capped at the group budget. Lift,
+    -- not raw co-fire, for the same reason as the seed ordering - the
+    -- group should accrete the most genuinely-associated neighbours,
+    -- not the busiest.
     select coalesce(array_agg(node order by w desc), array[]::uuid[])
       into v_extra
       from (
-        select i.node, sum(i.cofires)::int as w
+        select i.node, sum(i.lift)::real as w
           from (
-            select a_id as node, b_id as other, cofires from _tier2_edges
+            select a_id as node, b_id as other, lift from _tier2_edges
             union all
-            select b_id as node, a_id as other, cofires from _tier2_edges
+            select b_id as node, a_id as other, lift from _tier2_edges
           ) i
          where i.other in (v_seed.a_id, v_seed.b_id)
            and i.node not in (v_seed.a_id, v_seed.b_id)
