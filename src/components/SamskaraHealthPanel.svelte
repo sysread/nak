@@ -1,13 +1,25 @@
 <script lang="ts">
   /*
-   * Health panel for the Samskara diagnostics tab. Makes otherwise-
-   * invisible pipeline failures legible: backlog depths, lost reaction
-   * signal, staleness, inconsistencies, and windowed activity rates.
-   * Everything is computed live on open from existing rows - no stored
-   * history (see docs/dev/samskara.md observability section).
+   * Overview surface for the Samskara diagnostics tab: the global,
+   * always-on read on what the pipeline has formed and whether it is
+   * working. Two things stacked on one page (they were two separate
+   * top-bar surfaces before - a Summary page and a Health page - which
+   * read as redundant since both are global per-user reads):
    *
-   * Composition only: every severity classification and relative-time
-   * format is delegated to `$lib/ui/samskara-browse`.
+   *   1. The compound summary - the prose block that rides in every
+   *      system prompt - at the top, below the refresh row.
+   *   2. Pipeline health - backlog depths, staleness, inconsistencies,
+   *      windowed activity rates, corpus shape, and whether a tier-2
+   *      candidate is currently offerable. Computed live on open from
+   *      existing rows, no stored history (see docs/dev/samskara.md
+   *      observability section).
+   *
+   * One Refresh reloads BOTH - the summary and every health read - so
+   * the page is a single coherent snapshot, not two stale halves.
+   *
+   * Composition only: every severity classification, relative-time
+   * format, and count-to-label transform is delegated to
+   * `$lib/ui/samskara-browse`.
    */
   import { onMount } from 'svelte';
   import { app } from '$lib/state.svelte';
@@ -17,6 +29,8 @@
     worstSeverity,
     relativeTime,
     verdictBreakdown,
+    tier2CandidateLabel,
+    samskaraCountPhrase,
     HEALTH_THRESHOLDS,
     type Severity,
   } from '$lib/ui/samskara-browse';
@@ -26,7 +40,16 @@
   let error = $state<string | null>(null);
   let snap = $state<SamskaraHealthSnapshot | null>(null);
   let rates = $state<SamskaraRates | null>(null);
-  let compoundRegenAt = $state<string | null>(null);
+  // The always-on compound prose block, shown at the top of the page.
+  let compound = $state<{
+    summary: string | null;
+    lastRegenAt: string | null;
+    samskaraCountAtRegen: number;
+  } | null>(null);
+  // How many tier-1 members the tier-2 detector would currently offer
+  // the minter (0 = none). Surfaced so the "is detection finding
+  // uncovered constellations?" question is visible without a self-join.
+  let tier2CandidateSize = $state(0);
 
   async function load(): Promise<void> {
     if (!app.supabase) {
@@ -45,7 +68,8 @@
     try {
       snap = await sb.samskaraHealthSnapshot();
       rates = await sb.samskaraRates(7);
-      compoundRegenAt = (await sb.samskaraGetCompoundSummary())?.lastRegenAt ?? null;
+      compound = await sb.samskaraGetCompoundSummary();
+      tier2CandidateSize = await sb.samskaraTier2CandidateSize();
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
     } finally {
@@ -79,7 +103,7 @@
       : []
   );
 
-  const compoundSev = $derived<Severity>(compoundStaleness(compoundRegenAt));
+  const compoundSev = $derived<Severity>(compoundStaleness(compound?.lastRegenAt ?? null));
 
   // Panel headline dot: the worst of the ACTIONABLE signals - backlog
   // depth, internal inconsistencies, compound staleness.
@@ -103,6 +127,30 @@
       <span>{overall === 'ok' ? 'Pipeline healthy' : overall === 'warn' ? 'Needs a look' : 'Something is stuck'}</span>
       <button type="button" class="secondary health-refresh" onclick={() => void load()}>Refresh</button>
     </div>
+
+    <!-- Compound summary: the always-on prose block, at the top of the
+         page below the refresh row. This is the global read - "what does
+         Nak think of me, overall?" - rebuilt in the background as new
+         samskaras form, so it drifts between conversations rather than
+         mid-thread. Refresh (above) reloads it alongside the health
+         reads. -->
+    <h3 class="health-group">Compound summary <span class="health-group-note">(always on in system prompt)</span></h3>
+    <section class="health-summary">
+      {#if compound?.summary}
+        <div class="health-summary-block">
+          <pre class="health-summary-text">{compound.summary}</pre>
+          <p class="subtle health-summary-meta">
+            Covers {samskaraCountPhrase(compound.samskaraCountAtRegen)} ·
+            regenerated {relativeTime(compound.lastRegenAt)}
+          </p>
+        </div>
+      {:else}
+        <p class="subtle">
+          No compound summary yet - it is built in the background once
+          enough samskaras have formed.
+        </p>
+      {/if}
+    </section>
 
     <h3 class="health-group">Backlog</h3>
     <div class="health-card">
@@ -139,7 +187,7 @@
       <div class="health-row">
         <span class="sev-dot sev-{compoundSev}" aria-hidden="true"></span>
         <span class="health-label">Compound summary regenerated</span>
-        <span class="health-value">{relativeTime(compoundRegenAt)}</span>
+        <span class="health-value">{relativeTime(compound?.lastRegenAt ?? null)}</span>
       </div>
     </div>
 
@@ -182,6 +230,16 @@
         <span class="health-label">Samskaras</span>
         <span class="health-value">{snap.totalSamskaras} (T1 {snap.tier1} · T2 {snap.tier2})</span>
       </div>
+      <!-- Informational, not thresholded: a non-empty candidate is GOOD
+           (detection is finding an uncovered constellation to compound),
+           and "none" is the normal resting state, so neither warrants a
+           severity dot. This is the readout that makes the tier-2
+           detector's liveness visible - an empty result with few tier-2s
+           used to require a manual self-join to diagnose. -->
+      <div class="health-row">
+        <span class="health-label">Tier-2 candidate</span>
+        <span class="health-value">{tier2CandidateLabel(tier2CandidateSize)}</span>
+      </div>
       <div class="health-row">
         <span class="health-label">Near-dead / never-fired</span>
         <span class="health-value">{snap.nearDead} / {snap.neverFired}</span>
@@ -220,6 +278,35 @@
     letter-spacing: 0.06em;
     color: var(--muted);
     margin: 1rem 0 0.35rem;
+  }
+  /* Lowercase parenthetical rider on a group heading (the heading itself
+     is uppercased); text-transform: none keeps it readable as prose. */
+  .health-group-note {
+    text-transform: none;
+    font-weight: 400;
+    letter-spacing: 0;
+  }
+  /* Compound-summary block. The summary is the page's primary reading
+     content, so the prose inherits the root 1rem size (no font-size
+     override) to match message / wiki / memory body text rather than the
+     0.88rem the diagnostics rows use. */
+  .health-summary-block {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    padding: 0.6rem 0.75rem;
+  }
+  .health-summary-text {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: inherit;
+    font-size: 1rem;
+    line-height: 1.45;
+  }
+  .health-summary-meta {
+    margin: 0.5rem 0 0;
+    font-size: 0.75rem;
   }
   .health-note {
     margin: 0.35rem 0 0;

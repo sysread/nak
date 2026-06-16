@@ -7,7 +7,8 @@ detection RPC `samskara_tier2_candidate`: the **lift gate** that
 replaced raw-co-fire ranking (so base-rate-bound busy pairs no
 longer dominate), the **seed iteration** that advances past a
 covered constellation instead of returning empty, the coverage
-skip against existing tier-2 child-sets, and the `'samskara'`
+skip against existing tier-2 child-sets **and recent minter
+declines** (`samskara_tier2_declines`, TTL'd), and the `'samskara'`
 provenance the minted compound carries back to its tier-1
 children. Detection upstream of the minter is the focus; the
 producer side (tier-1 formation, co-fire recording) is covered by
@@ -165,10 +166,26 @@ shim's tick), never a chat turn.
 - **Quench is honest.** When no uncovered constellation clears the
   lift gate, the phase logs no candidate and spends NO Venice call.
 
-- **Decline path (known limitation).** If the minter returns
-  `confirm:false`, nothing records the decline, so the next tick
-  re-offers the SAME strongest-lift group. Expected for now; noted
-  as a TODO in the dev doc (detection has no memory of declines).
+- **Decline path records and advances.** If the minter returns
+  `confirm:false`, `mintTier2Probe` writes the candidate's sorted
+  child-set to `samskara_tier2_declines`, and the next tick's
+  `samskara_tier2_candidate` treats that group as covered (Jaccard
+  against the recent-decline set), so detection advances to a
+  DIFFERENT uncovered group instead of re-offering the same one. The
+  decline is TTL'd (7 days): after the window the group re-qualifies,
+  since its co-fire structure may have strengthened. A `null` from the
+  minter (transport/parse failure) is NOT a verdict and records
+  nothing - the group stays offerable. Verify after a decline:
+
+  ```sql
+  select group_key, cardinality(children) n, declined_at
+    from samskara_tier2_declines where user_id='<user>'
+   order by declined_at desc limit 5;
+  -- expect: a row whose children match the just-declined candidate;
+  -- then the next samskara_tier2_candidate(...) call returns a group
+  -- with a DIFFERENT member set (or empty if nothing else clears the
+  -- gate).
+  ```
 
 ## Cleanup
 

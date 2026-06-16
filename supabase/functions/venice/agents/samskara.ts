@@ -1252,8 +1252,32 @@ async function mintTier2Probe(
       children: candidate.map((c) => ({ prediction: c.prediction, valence: c.valence })),
     }),
   );
-  if (minted === null || minted === 'declined') {
-    log.trace('mint-tier2: agent declined');
+  if (minted === 'declined') {
+    // Record the decline so detection advances past this constellation
+    // instead of re-offering the same strongest-lift group every sweep
+    // (which would starve every weaker uncovered constellation behind
+    // it). The candidate RPC TTLs the decline, so a group that later
+    // strengthens re-qualifies - we just stamp it here. group_key is the
+    // sorted child ids so a re-decline upserts and re-arms the window.
+    // Only a clean 'declined' verdict records; a null (transport/parse
+    // failure) is NOT a verdict and must leave the group offerable, same
+    // discipline as the association-mint decline stamp.
+    const childIds = candidate.map((c) => c.samskara_id).sort();
+    const { error: declineErr } = await admin.from('samskara_tier2_declines').upsert(
+      {
+        user_id: userId,
+        group_key: childIds.join(','),
+        children: childIds,
+        declined_at: new Date().toISOString(),
+      },
+      { onConflict: 'user_id,group_key' },
+    );
+    if (declineErr) log.debug('mint-tier2: decline write error', { error: declineErr.message });
+    log.trace('mint-tier2: agent declined (recorded)');
+    return;
+  }
+  if (minted === null) {
+    log.trace('mint-tier2: minter returned null (no verdict, leaving group offerable)');
     return;
   }
 

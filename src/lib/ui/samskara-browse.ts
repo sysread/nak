@@ -257,3 +257,18 @@ export function verdictBreakdown(rates: {
     { label: 'not-engaged', count: rates.notEngaged },
   ];
 }
+
+/**
+ * Health-panel readout for the tier-2 detector: how many tier-1 members
+ * it would currently hand the minter. Size is 0 (nothing offerable) or
+ * >= the minter's 3-member floor; the singular branch is defensive.
+ */
+export function tier2CandidateLabel(size: number): string {
+  if (size <= 0) return 'none available';
+  return `available (${size} member${size === 1 ? '' : 's'})`;
+}
+
+/** "N samskara" / "N samskaras" - the compound-summary coverage caption. */
+export function samskaraCountPhrase(count: number): string {
+  return `${count} samskara${count === 1 ? '' : 's'}`;
+}

@@ -6188,6 +6188,21 @@ export class SupabaseService {
     };
   }
 
+  /**
+   * Health panel readout: how many tier-1 members the tier-2 detector
+   * would currently offer the minter (0 = nothing available). Calls the
+   * same detection RPC the sweep's mint-tier2 phase uses - a non-empty
+   * return with few tier-2s is the signal detection is finding uncovered
+   * constellations again (the instrument that would have surfaced the
+   * "empty every sweep" stall the lift redesign fixed). The RPC is
+   * security-invoker and scopes to auth.uid() with no args.
+   */
+  async samskaraTier2CandidateSize(): Promise<number> {
+    const { data, error } = await this.client.rpc('samskara_tier2_candidate');
+    if (error) throw new SupabaseError(error.message);
+    return Array.isArray(data) ? data.length : 0;
+  }
+
   // --- Bias profile ------------------------------------------------------
 
   /**

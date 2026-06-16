@@ -5645,6 +5645,48 @@ drop policy if exists "samskara pair declines self-selectable" on public.samskar
 create policy "samskara pair declines self-selectable" on public.samskara_pair_declines
   for select using (auth.uid() = user_id);
 
+-- Tier-2 candidate declines --
+--
+-- Memory of tier-2-minter "confirm:false" verdicts on a co-fire
+-- constellation, so detection (samskara_tier2_candidate) advances past
+-- a declined group instead of re-offering the SAME strongest-lift group
+-- every sweep. Without this, a persistently-declined top candidate
+-- starves every weaker uncovered constellation behind it - the
+-- coverage skip only knew about MINTED tier-2s, not declines.
+--
+-- Unlike samskara_pair_declines, this ledger is TTL'd, NOT permanent:
+-- the candidate walk only honors a decline within a recency window (see
+-- the candidate function's v_decline_ttl). A pair decline is permanent
+-- because substrate is immutable, so the verdict can never change. A
+-- tier-2 decline is over a CO-FIRE constellation, and the co-fire graph
+-- keeps growing - a group the minter rejected as too weak today may
+-- accumulate enough joint firing to be worth re-offering later. The TTL
+-- is the re-arm: a declined group goes quiet for the window, then
+-- re-qualifies.
+--
+-- `group_key` is the sorted child ids joined with ',' - a stable
+-- identity for the constellation so a re-decline upserts (refreshing
+-- declined_at, re-arming the window) rather than inserting a duplicate.
+-- `children` is the sorted child-id array, read back for the Jaccard
+-- overlap test. No per-element FK (arrays can't reference) - a deleted
+-- child leaves a stale id in the array, which only weakens the Jaccard
+-- match slightly and is cleared by the TTL within the window anyway.
+create table if not exists public.samskara_tier2_declines (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  group_key text not null,
+  children uuid[] not null,
+  declined_at timestamptz not null default now(),
+  primary key (user_id, group_key)
+);
+
+alter table public.samskara_tier2_declines enable row level security;
+
+-- Select-only for the owner; writes come exclusively from the venice
+-- function's service-role client, same as samskara_pair_declines.
+drop policy if exists "samskara tier2 declines self-selectable" on public.samskara_tier2_declines;
+create policy "samskara tier2 declines self-selectable" on public.samskara_tier2_declines
+  for select using (auth.uid() = user_id);
+
 -- Samskaras --
 --
 -- The unit. Tier 1 are minted from substrate-cluster mints; tier 2
@@ -7261,15 +7303,23 @@ end $$;
 -- not for coherence.)
 --
 -- Seed iteration (coverage): a candidate group whose child-set overlaps
--- an existing tier-2 by Jaccard >= p_overlap_skip is SKIPPED, and
+-- a COVERED region by Jaccard >= p_overlap_skip is SKIPPED, and
 -- detection advances to the next-strongest uncovered seed rather than
--- giving up. Without this, once one tier-2 exists the single strongest
--- edge sits in the densest (already-compounded) region forever, the skip
--- fires every cycle, and detection returns empty permanently while many
--- uncovered constellations elsewhere go unseen. The probe budget scales
--- with the existing-tier-2 count so the first uncovered seed is always
--- reachable. The mint phase's embedding dedup is the second net (it
--- catches a different child set that synthesized to the same claim).
+-- giving up. A covered region is either an existing tier-2's child-set
+-- (already compounded) OR a recent tier-2-minter decline (the minter
+-- just rejected that group and would reject it again - see
+-- samskara_tier2_declines, TTL'd so a strengthening group re-qualifies
+-- after the window). Without the existing-tier-2 skip, once one tier-2
+-- exists the single strongest edge sits in the densest (already-
+-- compounded) region forever, the skip fires every cycle, and detection
+-- returns empty permanently while many uncovered constellations
+-- elsewhere go unseen. Without the decline skip, a group the minter
+-- keeps refusing re-wins the seed every sweep and starves every weaker
+-- uncovered constellation behind it. The probe budget scales with the
+-- covered-region count (existing tier-2s + recent declines) so the
+-- first uncovered, non-declined seed is always reachable. The mint
+-- phase's embedding dedup is the second net (it catches a different
+-- child set that synthesized to the same claim).
 --
 -- Volatile (not stable): builds temp edge + existing-child-set tables so
 -- the seed loop, neighbour scans, and per-member weight read hit the
@@ -7299,10 +7349,17 @@ declare
   v_active int;
   v_cohorts int;
   v_existing_count int;
+  v_decline_count int;
   v_seed record;
   v_extra uuid[];
   v_group uuid[];
   v_max_overlap real;
+  -- How long a tier-2-minter decline suppresses re-offering its group.
+  -- TTL'd (not permanent like pair-declines) because the co-fire graph
+  -- keeps growing: a group too weak to compound today may accumulate
+  -- enough joint firing to be worth re-offering after the window. See
+  -- samskara_tier2_declines.
+  v_decline_ttl constant interval := interval '7 days';
 begin
   -- Cheap precondition before the costly self-join: tier-2 is
   -- meaningless until a substantial tier-1 corpus has actually fired.
@@ -7399,21 +7456,41 @@ begin
      group by sp.samskara_id;
   select count(*) into v_existing_count from _tier2_existing;
 
+  -- Recent tier-2-minter declines, materialized once. A group whose
+  -- child-set overlaps one of these by Jaccard >= p_overlap_skip is
+  -- skipped exactly like a minted-tier2-covered group - that is what
+  -- stops detection re-offering a declined constellation every sweep.
+  -- Only declines inside v_decline_ttl count; older ones have re-armed
+  -- (the co-fire structure may have shifted), so the group re-qualifies.
+  create temporary table if not exists _tier2_declined (
+    children uuid[]
+  ) on commit drop;
+  truncate _tier2_declined;
+  insert into _tier2_declined (children)
+    select d.children
+      from public.samskara_tier2_declines d
+     where d.user_id = v_uid
+       and d.declined_at >= now() - v_decline_ttl;
+  select count(*) into v_decline_count from _tier2_declined;
+
   -- Seed iteration. Walk eligible edges strongest-LIFT first - NOT raw
   -- co-fire: raw co-fire ranks the busiest base-rate-bound pairs to the
   -- top, which is what produced the original cross-topic grab-bag. The
   -- first seed whose grown group is both large enough and uncovered
   -- wins. Deterministic tie-break on the ids so repeated calls pick the
-  -- same order when lift ties. Probe budget = 64 + 16 per existing
-  -- tier-2: each existing tier-2 of up to p_max_group_size members can
-  -- cover at most C(size,2) of the strongest edges (<= 15 at size 6),
-  -- so 16 apiece keeps the first uncovered seed reachable as tier-2s
-  -- accumulate; the 64 base covers the common no/one-tier-2 case.
+  -- same order when lift ties. Probe budget = 64 + 16 per covered
+  -- region, where a covered region is an existing tier-2 OR a recent
+  -- decline: each covers up to C(size,2) of the strongest edges (<= 15
+  -- at size 6), so 16 apiece keeps the first uncovered, non-declined
+  -- seed reachable as covered regions accumulate; the 64 base covers
+  -- the common no/one-tier-2 case. Declines count for the same reason
+  -- minted tier-2s do - a declined group sits among the strongest seeds
+  -- and gets skipped, consuming budget on the way to a fresh one.
   for v_seed in
     select e.a_id, e.b_id
       from _tier2_edges e
      order by e.lift desc, e.a_id, e.b_id
-     limit (64 + 16 * v_existing_count)
+     limit (64 + 16 * (v_existing_count + v_decline_count))
   loop
     -- Grow: nodes sharing an eligible edge with BOTH seed members,
     -- strongest combined LIFT first, capped at the group budget. Lift,
@@ -7442,8 +7519,12 @@ begin
       continue;
     end if;
 
-    -- Coverage: max Jaccard of this group against existing tier-2
-    -- child-sets. Skip to the next-strongest seed if any covers it.
+    -- Coverage: max Jaccard of this group against every covered region -
+    -- existing tier-2 child-sets AND recent minter declines. Skip to the
+    -- next-strongest seed if any covers it. Declines sit in the same test
+    -- as minted tier-2s because both mean "do not offer this group": a
+    -- minted one is already compounded, a recently-declined one the
+    -- minter just rejected and would reject again within the window.
     select coalesce(max(
       cardinality(array(
         select unnest(v_group) intersect select unnest(x.children)
@@ -7452,7 +7533,11 @@ begin
           select unnest(v_group) union select unnest(x.children)
         )), 0)::real
     ), 0) into v_max_overlap
-      from _tier2_existing x;
+      from (
+        select children from _tier2_existing
+        union all
+        select children from _tier2_declined
+      ) x;
     if v_max_overlap >= p_overlap_skip then
       continue;
     end if;
