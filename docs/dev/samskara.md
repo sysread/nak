@@ -300,10 +300,16 @@ chat time; enriched in the background.
   `(assimilate_claim_holder, assimilate_claim_expires)` for the
   assimilator phase. Two phases write to this row at different
   times so they need independent claims.
+- `pair_seeded_at timestamptz` - the pair-relate seed cursor.
+  Stamped when this row is chosen as a pair-relate seed; the probe
+  always seeds the longest-unseeded embedded row, so the seed
+  round-robins the corpus. See `samskara_pair_probe_candidates`.
 - Partial indexes on `(user_id, created_at) where situation is
   null` and `(user_id, created_at) where situation_embedding is
   null and situation is not null` keep the claim queries cheap
-  as the substrate table grows.
+  as the substrate table grows; a third on `(user_id,
+  pair_seeded_at nulls first) where situation_embedding is not
+  null` orders the pair-relate seed pick.
 
 ### `samskara_associations`
 
@@ -334,10 +340,10 @@ phase.
   unstamped edges. Per-edge, never per-hub.
 - `last_reinforced_at`, `created_at` timestamps.
 
-(The old `relation_embedding vector(2048)` column - reserved for
-label-level clustering and never populated or read - was dropped
-when association-mint landed. Re-add via one guarded ALTER if
-label-clustering is ever built; see the association-mint plan.)
+(An old `relation_embedding vector(2048)` column was dropped when
+association-mint landed - never populated or read. Noted here only
+so a reference to it in the association-mint plan's history doesn't
+read as a missing column.)
 
 All accept-writes go through `samskara_associate` (security
 definer, service_role-only): PostgREST upserts can only SET
@@ -1241,19 +1247,28 @@ summarizer reads samskaras to feed the agent.
   "align" tier-2 with dedup by porting the ratio gate - a
   2026-06-15 prod audit proved it admits the exact grab-bag it is
   meant to reject. See the Tier-2 detection formula section.
-- **Pair-relate uses a naive seed-most-recent approach.**
-  One pair per probe: seed on the most recent embedded
-  substrate row, walk its neighbours best-cosine-first to the
-  closest pair the relator hasn't already ruled on, call the
-  relator once. Good enough at substrate-corpus scale; expect
-  to replace with a smarter multi-pair sampler once the corpus
-  grows past a few hundred rows per user.
+- **Pair-relate seeds corpus-wide, round-robin, not on the
+  recency frontier.** One pair per probe, but the seed is the
+  longest-unseeded embedded substrate row (`pair_seeded_at` asc,
+  nulls first), stamped on selection so successive probes walk the
+  whole corpus instead of re-seeding the newest row. The seed's
+  best still-unadjudicated partner (corpus-wide nearest-neighbour by
+  `situation_embedding`, above `PAIR_RELATE_COSINE_FLOOR`) is the
+  pair the relator rules on. All of this - seed pick, stamp,
+  NN, adjudication-exclusion - is one RPC,
+  `samskara_pair_probe_candidates`. The earlier version seeded only
+  on the newest row and ranked partners within just the 40 newest,
+  so associations among older observations went permanently
+  unexplored; this fixes that coverage gap. No vector index on the
+  scan on purpose (cheap seqscan at corpus scale, hourly not hot -
+  same call as the retired memories HNSW); revisit with an ANN index
+  only if the substrate corpus makes the seqscan the bottleneck.
 - **A quiet corpus goes silent, not chatty.** Both relator
   verdicts persist (accepts in `samskara_associations`,
-  declines in `samskara_pair_declines`), and candidate
-  selection skips adjudicated pairs - so once every pair in the
-  window is ruled on, the probe logs a trace line and spends no
-  Venice call until fresh substrate changes the selection. A
+  declines in `samskara_pair_declines`), and the candidate RPC
+  excludes adjudicated pairs - so once a seed's neighbourhood is
+  fully ruled on it yields no partner and the probe logs a trace
+  line and spends no Venice call (the seed still advances). A
   flat associations count during a quiet stretch is this, not a
   stall. An agent-null result (transport/parse failure) is NOT
   a verdict and leaves the pair unadjudicated for retry.
@@ -1272,20 +1287,21 @@ summarizer reads samskaras to feed the agent.
   instead of the recency path's `MintResult | null`.
 - **A consumed edge is permanent per edge.** Re-reinforcing an
   already-consumed edge (pair-relate re-encountering the pair)
-  bumps `reinforcement` but does NOT re-trigger minting. Known
-  limitation: corroboration of an already-minted pattern reaches
-  the existing samskara's health only if a fresh mint attempt
-  happens to dedup onto it. No direct re-reinforcement -> health
-  path today.
-- **Mixed-pattern hubs underperform by design.** A hub's edges
+  bumps `reinforcement` but does NOT re-trigger minting; the
+  reinforcement count grows on the edge while the samskara it
+  produced is unaffected. This is deliberate: `health` is the
+  verdict posterior (does the prediction hold when tested in
+  conversation), a different axis from how often the underlying
+  pattern recurs, so recurrence is kept out of it.
+- **Mixed-pattern hubs yield fewer samskaras.** A hub's edges
   can span genuinely different tendencies (one observation
-  relating to a baking pattern AND a family pattern). v1 feeds
-  the whole neighbourhood and leans on the minter's
-  `confirm:false` guard; decline-stamps guarantee no loop, but a
-  messy crossroads hub yields one-or-zero samskaras where a
-  smarter version would get several. The future fix - grouping a
-  hub's edges by what their *labels* say before minting - is what
-  the dropped `relation_embedding` column was reserved for.
+  relating to a baking pattern AND a family pattern). The probe
+  feeds the whole neighbourhood as one cluster and leans on the
+  minter's `confirm:false` guard; decline-stamps guarantee no
+  loop, but a messy crossroads hub mints one-or-zero samskaras
+  rather than splitting into several. Acceptable as-is - the
+  guard keeps it honest. If messy hubs ever prove a meaningful
+  fraction of real hubs, revisit from scratch.
 - **Mixed-kind provenance breaks the first-row heading.**
   Association-minted tier-1s are the only rows with two
   provenance kinds (substrate + association), and the detail RPC

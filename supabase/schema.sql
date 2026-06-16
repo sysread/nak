@@ -5376,6 +5376,20 @@ create index if not exists samskara_substrate_pending_embed_idx
 create index if not exists samskara_substrate_user_created_idx
   on public.samskara_substrate (user_id, created_at desc);
 
+-- Pair-relate seed cursor. When the pair-relate probe seeds on this row
+-- (to explore its associations) it stamps `pair_seeded_at = now()`; the
+-- probe always seeds the longest-unseeded embedded row (nulls = never
+-- seeded), round-robining the seed across the whole corpus instead of
+-- pinning it to the newest observation. See samskara_pair_probe_candidates.
+-- Index orders the seed pick (oldest-stamp-first, nulls first) over the
+-- embedded rows the probe is allowed to seed.
+alter table public.samskara_substrate
+  add column if not exists pair_seeded_at timestamptz;
+
+create index if not exists samskara_substrate_pair_seed_idx
+  on public.samskara_substrate (user_id, pair_seeded_at nulls first)
+  where situation_embedding is not null;
+
 alter table public.samskara_substrate enable row level security;
 
 drop policy if exists "samskara substrate self-selectable" on public.samskara_substrate;
@@ -5686,6 +5700,106 @@ alter table public.samskara_tier2_declines enable row level security;
 drop policy if exists "samskara tier2 declines self-selectable" on public.samskara_tier2_declines;
 create policy "samskara tier2 declines self-selectable" on public.samskara_tier2_declines
   for select using (auth.uid() = user_id);
+
+-- Pair-relate seed rotation + partner selection --
+--
+-- Picks ONE pair-relate seed and returns its best unadjudicated
+-- partners, corpus-wide. Replaces an earlier probe that seeded only on
+-- the NEWEST embedded substrate row and ranked partners within just the
+-- 40 most-recent rows - a recency-pinned walk that left associations
+-- among older observations permanently unexplored (the association
+-- graph, which feeds mint-tier1-assoc, only ever grew near the recency
+-- frontier).
+--
+-- Seed = the embedded row that has waited longest since it was last
+-- seeded (pair_seeded_at asc, nulls = never seeded first), so the seed
+-- round-robins across the whole corpus over successive probes. The seed
+-- is stamped on selection so the walk advances next probe even if this
+-- seed yields no pair (a fully-adjudicated or neighbourless seed quenches
+-- this tick without an LLM call, then steps aside). Partners = every
+-- other embedded row within p_floor cosine of the seed that the relator
+-- has NOT already ruled on (accepted pairs in samskara_associations,
+-- declined pairs in samskara_pair_declines, either direction), ordered
+-- by cosine desc, capped at p_k. The caller relates the top row.
+--
+-- No vector index on situation_embedding on purpose: the per-probe
+-- nearest-neighbour scan is a sequential cosine over the user's embedded
+-- substrate, which is cheap at this corpus scale and runs hourly, not on
+-- a hot path - the same reasoning that retired the memories HNSW index.
+-- Revisit with an ANN index only if the substrate corpus grows enough to
+-- make the seqscan the sweep's bottleneck.
+--
+-- security definer + service_role-only, same posture as
+-- samskara_associate - the probe runs under the admin client with no
+-- auth.uid(), and the function writes (the seed stamp).
+drop function if exists public.samskara_pair_probe_candidates(uuid, int, real);
+create or replace function public.samskara_pair_probe_candidates(
+  p_user_id uuid,
+  p_k       int  default 8,
+  p_floor   real default 0.30
+) returns table (
+  seed_id           uuid,
+  seed_situation    text,
+  seed_outcome      text,
+  partner_id        uuid,
+  partner_situation text,
+  partner_outcome   text,
+  cosine            real
+)
+language plpgsql security definer
+set search_path = public as $$
+declare
+  v_seed_id        uuid;
+  v_seed_situation text;
+  v_seed_outcome   text;
+  v_seed_embedding vector(2048);
+begin
+  -- Longest-unseeded embedded row wins the seed.
+  select s.id, s.situation, s.outcome, s.situation_embedding
+    into v_seed_id, v_seed_situation, v_seed_outcome, v_seed_embedding
+    from public.samskara_substrate s
+   where s.user_id = p_user_id
+     and s.situation_embedding is not null
+   order by s.pair_seeded_at asc nulls first, s.id
+   limit 1;
+  if v_seed_id is null then
+    return;
+  end if;
+
+  -- Stamp the seed so the next probe advances regardless of whether this
+  -- one yields a pair (prevents a neighbourless seed from wedging the
+  -- walk on every tick).
+  update public.samskara_substrate
+     set pair_seeded_at = now()
+   where id = v_seed_id;
+
+  return query
+    select v_seed_id, v_seed_situation, v_seed_outcome,
+           p.id, p.situation, p.outcome,
+           (1 - (p.situation_embedding <=> v_seed_embedding))::real as cos
+      from public.samskara_substrate p
+     where p.user_id = p_user_id
+       and p.situation_embedding is not null
+       and p.id <> v_seed_id
+       and (1 - (p.situation_embedding <=> v_seed_embedding))::real >= p_floor
+       and not exists (
+         select 1 from public.samskara_associations a
+          where a.user_id = p_user_id
+            and a.a_id = least(v_seed_id, p.id)
+            and a.b_id = greatest(v_seed_id, p.id)
+       )
+       and not exists (
+         select 1 from public.samskara_pair_declines d
+          where d.user_id = p_user_id
+            and d.a_id = least(v_seed_id, p.id)
+            and d.b_id = greatest(v_seed_id, p.id)
+       )
+     order by cos desc
+     limit p_k;
+end $$;
+
+revoke all on function public.samskara_pair_probe_candidates(uuid, int, real) from public, anon, authenticated;
+grant execute on function public.samskara_pair_probe_candidates(uuid, int, real) to service_role;
 
 -- Samskaras --
 --

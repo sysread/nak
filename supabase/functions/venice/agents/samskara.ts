@@ -117,12 +117,14 @@ const MINT_CLUSTER_MAX = 5;
 const MINT_CLUSTER_MIN = 3;
 
 /**
- * Substrate windows the exploratory probes read: pair-relate scans
- * wide for the best neighbour; mint-tier1 reads just enough to seed
- * one topical cluster.
+ * mint-tier1 reads just enough recent substrate to seed one topical
+ * cluster (it is deliberately recency-seeded). pair-relate no longer
+ * reads a recency window - it seeds corpus-wide via
+ * samskara_pair_probe_candidates and asks for this many ranked partner
+ * candidates per probe, of which it relates the best.
  */
-const PAIR_RELATE_WINDOW = 40;
 const MINT_WINDOW = 8;
+const PAIR_RELATE_K = 8;
 
 /**
  * Lookback for the sweep's per-user phase fan-out: users with
@@ -807,61 +809,19 @@ async function assimilateDrainForUser(
 const PAIR_RELATE_COSINE_FLOOR = 0.3;
 
 /**
- * Rank the seed's potential partners by cosine, best first, dropping
- * rows below the floor and rows whose embedding failed to parse.
- * Pure so the Deno suite can pin the ordering and floor behaviour.
- */
-function rankPairCandidates(
-  seed: SubstrateRow,
-  recent: SubstrateRow[],
-): { row: SubstrateRow; sim: number }[] {
-  const out: { row: SubstrateRow; sim: number }[] = [];
-  for (let i = 1; i < recent.length; i++) {
-    if (recent[i].embedding.length === 0) continue;
-    const sim = cosine(seed.embedding, recent[i].embedding);
-    if (sim >= PAIR_RELATE_COSINE_FLOOR) out.push({ row: recent[i], sim });
-  }
-  out.sort((x, y) => y.sim - x.sim);
-  return out;
-}
-
-/**
- * Partner ids the relator has already ruled on for this seed, in
- * either direction: accepted pairs live in samskara_associations,
- * declined pairs in samskara_pair_declines. Substrate content is
- * immutable after assimilation, so a past verdict is permanent and
- * re-asking the agent about an adjudicated pair learns nothing.
- */
-async function adjudicatedPartners(
-  admin: SupabaseClient,
-  userId: string,
-  seedId: string,
-): Promise<Set<string>> {
-  const out = new Set<string>();
-  for (const table of ['samskara_associations', 'samskara_pair_declines']) {
-    const { data, error } = await admin
-      .from(table)
-      .select('a_id, b_id')
-      .eq('user_id', userId)
-      .or(`a_id.eq.${seedId},b_id.eq.${seedId}`);
-    if (error) throw new Error(`${table} read failed: ${error.message}`);
-    for (const r of data ?? []) {
-      out.add(r.a_id === seedId ? (r.b_id as string) : (r.a_id as string));
-    }
-  }
-  return out;
-}
-
-/**
- * Pair-relate probe: read the recent embedded window, walk the seed's
- * partners best-cosine-first to the closest pair the relator has not
- * already ruled on, ask the relator once, and persist the verdict
- * either way - associations via the samskara_associate RPC (whose
- * conflict clause increments reinforcement atomically), declines into
- * the samskara_pair_declines ledger. Recording declines is what lets
- * a quiet corpus go fully silent: once every pair in the window is
- * adjudicated, the probe returns before spending a Venice call.
- * One pair per probe keeps the LLM call rate bounded.
+ * Pair-relate probe: seed on the longest-unseeded embedded observation
+ * (corpus-wide round-robin via samskara_pair_probe_candidates, NOT the
+ * recency frontier - an earlier version seeded only on the newest row and
+ * ranked partners within just the 40 newest, so associations among older
+ * observations went permanently unexplored), take the seed's closest
+ * still-unadjudicated partner, ask the relator once, and persist the
+ * verdict either way - associations via the samskara_associate RPC (whose
+ * conflict clause increments reinforcement atomically), declines into the
+ * samskara_pair_declines ledger. The RPC excludes already-adjudicated
+ * pairs in SQL, so once a seed's neighbourhood is fully ruled on it yields
+ * no candidate and the probe returns before spending a Venice call - what
+ * lets a quiet corpus go fully silent. One pair per probe keeps the LLM
+ * call rate bounded.
  */
 async function pairRelateProbe(
   admin: SupabaseClient,
@@ -869,30 +829,39 @@ async function pairRelateProbe(
   log: EdgeLogger,
   apiKey: string,
 ): Promise<void> {
-  const recent = await recentEmbeddedSubstrate(admin, userId, PAIR_RELATE_WINDOW);
-  if (recent.length < 2) return;
-  const seed = recent[0];
-  if (seed.embedding.length === 0) return;
-  const ranked = rankPairCandidates(seed, recent);
-  if (ranked.length === 0) return;
-
-  const adjudicated = await adjudicatedPartners(admin, userId, seed.id);
-  const pick = ranked.find((c) => !adjudicated.has(c.row.id));
-  if (!pick) {
-    log.trace('pair-relate: every candidate pair already adjudicated', {
-      candidates: ranked.length,
-    });
+  const { data: candData, error: candErr } = await admin.rpc('samskara_pair_probe_candidates', {
+    p_user_id: userId,
+    p_k: PAIR_RELATE_K,
+    p_floor: PAIR_RELATE_COSINE_FLOOR,
+  });
+  if (candErr) throw new Error(`pair-relate: candidate RPC failed: ${candErr.message}`);
+  const rows = (Array.isArray(candData) ? candData : []) as {
+    seed_id: string;
+    seed_situation: string | null;
+    seed_outcome: string | null;
+    partner_id: string;
+    partner_situation: string | null;
+    partner_outcome: string | null;
+    cosine: number;
+  }[];
+  if (rows.length === 0) {
+    // No embedded row to seed on, or the seeded observation has no
+    // unadjudicated partner above the floor - the probe's quench. The
+    // seed was still stamped, so the next probe advances to another row.
+    log.trace('pair-relate: no unadjudicated pair for the seeded observation');
     return;
   }
 
-  const partner = pick.row;
+  // The RPC ranked by cosine and already excluded adjudicated pairs, so
+  // the first row is the closest partner left to rule on for this seed.
+  const pick = rows[0];
   log.info(
-    `pair-relate: selected pair ${seed.id} <> ${partner.id} (cosine ${pick.sim.toFixed(3)})`,
+    `pair-relate: selected pair ${pick.seed_id} <> ${pick.partner_id} (cosine ${pick.cosine.toFixed(3)})`,
   );
   const result = await agentRelate(
     apiKey,
-    { situation: seed.situation, outcome: seed.outcome },
-    { situation: partner.situation, outcome: partner.outcome },
+    { situation: pick.seed_situation, outcome: pick.seed_outcome },
+    { situation: pick.partner_situation, outcome: pick.partner_outcome },
   );
   if (!result) {
     // Transport/parse failure, not a verdict - leave the pair
@@ -901,9 +870,10 @@ async function pairRelateProbe(
     return;
   }
 
-  // Canonical pair ordering, same convention as the table columns.
-  const aId = seed.id < partner.id ? seed.id : partner.id;
-  const bId = seed.id < partner.id ? partner.id : seed.id;
+  // Canonical pair ordering, same convention as the table columns (and
+  // as the RPC's adjudication-exclusion test).
+  const aId = pick.seed_id < pick.partner_id ? pick.seed_id : pick.partner_id;
+  const bId = pick.seed_id < pick.partner_id ? pick.partner_id : pick.seed_id;
 
   if (result.kind === 'orthogonal' || result.label.length === 0) {
     log.debug('pair-relate: agent declined', { kind: result.kind });
@@ -1676,6 +1646,5 @@ export const __test = {
   buildAssociationCluster,
   cosine,
   parseVector,
-  rankPairCandidates,
   stripJsonFence,
 };

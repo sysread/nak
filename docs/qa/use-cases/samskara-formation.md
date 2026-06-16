@@ -75,8 +75,11 @@ observable contract - claims, writes, toasts - is the same.
 3. Watch one pair-relate probe. Three valid outcomes: `selected
    pair ...` at Info followed by `associated` (with its
    reinforcement count) or `agent declined`, or the trace line
-   `every candidate pair already adjudicated` with no Venice
-   call. Record which branch ran and both ledgers before/after:
+   `no unadjudicated pair for the seeded observation` with no
+   Venice call. The probe seeds the longest-unseeded embedded row
+   (round-robin via `samskara_pair_probe_candidates`), not the
+   newest, and relates its closest still-unadjudicated partner.
+   Record which branch ran and both ledgers before/after:
 
    ```sql
    select (select count(*) from samskara_associations) as accepted,
@@ -141,14 +144,19 @@ observable contract - claims, writes, toasts - is the same.
   (worst case ~5 min idle nap + 60s throttle), `situation` /
   `outcome` / `valence` all land, and the save happens under the
   claim guard (a second worker's save would be rejected).
-- (3) Pair-relate selects the closest pair the relator has not
-  already ruled on and persists the verdict either way: an
-  association row (accepted count increments) or a
-  `samskara_pair_declines` row (declined count increments). A
-  re-probe on an unchanged corpus must take the
-  fully-adjudicated trace branch - re-selecting a pair that
-  already sits in either ledger is a regression. Flat counts on
-  a quiet corpus are the designed silence, not a stall.
+- (3) Pair-relate seeds the longest-unseeded embedded row,
+  selects that seed's closest pair the relator has not already
+  ruled on, and persists the verdict either way: an association
+  row (accepted count increments) or a `samskara_pair_declines`
+  row (declined count increments). Because the seed round-robins,
+  successive probes on an unchanged corpus advance through
+  different seeds and keep finding unadjudicated pairs until
+  EVERY seed's neighbourhood is exhausted; only then does the
+  quench trace branch (`no unadjudicated pair for the seeded
+  observation`) run every tick. Re-selecting a pair that already
+  sits in either ledger is a regression (the RPC excludes them).
+  Flat counts on a fully-adjudicated corpus are the designed
+  silence, not a stall.
 - (4) Exactly one of mint / dedup-reinforce / decline. On a true
   mint: a `samskaras` row with `tier = 1`, provenance rows
   pointing at the cluster's substrate ids, and the mood pill
