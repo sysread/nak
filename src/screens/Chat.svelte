@@ -6562,17 +6562,15 @@
             <line x1="12" y1="17" x2="12.01" y2="17" />
           </svg>
         {/snippet}
-        {#snippet summaryIcon()}
-          <!-- Feather "align-left" - paragraph lines, reads as "the
-               overview / prose summary block" rather than a list or a
-               document. The Overview surface leads with the compound
-               summary prose, so the prose glyph fits the merged page. -->
+        {#snippet overviewIcon()}
+          <!-- Feather "activity" - an ECG/pulse line, reads as "pipeline
+               health / is the machinery still beating." The Overview
+               surface stacks the compound summary over live pipeline
+               health, and the pulse glyph reads as the diagnostics view
+               more distinctly than a prose-lines glyph would. -->
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <line x1="17" y1="10" x2="3" y2="10" />
-            <line x1="21" y1="6" x2="3" y2="6" />
-            <line x1="21" y1="14" x2="3" y2="14" />
-            <line x1="17" y1="18" x2="3" y2="18" />
+            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
           </svg>
         {/snippet}
         {#if drawerTab === 'chats'}
@@ -6744,7 +6742,7 @@
               label: 'Overview',
               title: 'Global compound summary + pipeline health',
               onclick: () => (samskaraOverviewTrigger = true),
-              icon: summaryIcon,
+              icon: overviewIcon,
             },
           ]}
           <TopBarActions {actions} menuLabel="Samskara actions" />

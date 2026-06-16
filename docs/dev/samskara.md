@@ -1389,7 +1389,7 @@ that same simplification.)
   `src/lib/ui/samskara-browse.ts`.
 - **Overview** - the default landing page, `SamskaraHealthPanel.svelte`.
   Reached on tab-open and via the top-bar **Overview** button (an
-  `align-left` icon), which flips the `triggerOverviewView` `$bindable`
+  `activity`/pulse icon), which flips the `triggerOverviewView` `$bindable`
   prop; `Samskaras.svelte` watches it, switches `subView` to `overview`,
   and clears `route.samskara_id` so the sidebar deselects. The inverse
   wiring is a `$effect` that flips `subView` to `corpus` whenever
