@@ -235,6 +235,72 @@ Deno.test('repairToolCallFanIn closes a complete tool block that runs into a use
   assertEquals(out[2].role, 'assistant');
 });
 
+Deno.test('repairToolCallFanIn is a reference no-op on an empty slice', () => {
+  const empty: StoredMessage[] = [];
+  assert(repairToolCallFanIn(empty) === empty);
+});
+
+Deno.test('repairToolCallFanIn closes a trailing tool-calling assistant at end of slice', () => {
+  // Interrupted final round: assistant called a tool, nothing landed,
+  // conversation ends. Synthesize the result AND a recovery assistant so
+  // the block doesn't end the slice on a tool row.
+  const msgs = [plain('user', 'u0'), asstCall('a1', ['call_aaa'])];
+  const out = repairToolCallFanIn(msgs);
+  assertWireValid(out);
+  assertEquals(out.length, 4);
+  assertEquals(out[2].role, 'tool');
+  assertEquals(out[2].tool_call_id, 'call_aaa');
+  assertEquals(out[3].role, 'assistant');
+});
+
+Deno.test('repairToolCallFanIn fills only the unanswered calls in a partial fan-in', () => {
+  // Assistant called two tools; only the first result landed.
+  const msgs = [
+    asstCall('a1', ['call_aaa', 'call_bbb']),
+    toolRes('t1', 'call_aaa'),
+    plain('assistant', 'a2'),
+  ];
+  const out = repairToolCallFanIn(msgs);
+  assertWireValid(out);
+  // Real result for call_aaa kept; call_bbb synthesized.
+  assertEquals(out[1].id, 't1');
+  assertEquals(out[2].tool_call_id, 'call_bbb');
+  assertEquals(out[2].content, '(tool execution was interrupted - no result available)');
+});
+
+Deno.test('repairToolCallFanIn de-dupes a repeated tool result for the same call', () => {
+  const msgs = [
+    asstCall('a1', ['call_aaa']),
+    toolRes('t1', 'call_aaa'),
+    toolRes('t1-dup', 'call_aaa'),
+    plain('assistant', 'a2'),
+  ];
+  const out = repairToolCallFanIn(msgs);
+  assertWireValid(out);
+  // First result kept, duplicate dropped.
+  assert(out.some((m) => m.id === 't1'));
+  assert(!out.some((m) => m.id === 't1-dup'));
+});
+
+Deno.test('repairToolCallFanIn output is idempotent - a second pass is a reference no-op', () => {
+  const msgs = [
+    plain('user', 'u0'),
+    asstCall('a1', ['call_aaa']),
+    asstCall('a2', ['call_bbb']),
+    asstCall('a3', ['call_ccc']),
+    toolRes('t3', 'call_ccc'),
+    plain('assistant', 'text1'),
+    toolRes('late1', 'call_aaa'),
+    plain('user', 'u1'),
+  ];
+  const once = repairToolCallFanIn(msgs);
+  assertWireValid(once);
+  // Re-running on already-valid output must change nothing and return the
+  // same array by reference - the curation path can re-enter without
+  // stacking phantom rows.
+  assert(repairToolCallFanIn(once) === once);
+});
+
 // --- topics validators: parity across the three units --------------------
 
 Deno.test('thread parseTopics parses, normalises, dedupes, and caps at 4', () => {
