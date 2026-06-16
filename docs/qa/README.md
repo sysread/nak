@@ -118,6 +118,9 @@ One file per use-case under [`use-cases/`](./use-cases/), named
 - [samskara-association-mint](./use-cases/samskara-association-mint.md) -
   the sweep-only `mint-tier1-assoc` phase: minting from the
   association graph, the consumption stamp, mixed-kind provenance.
+- [samskara-tier2-mint](./use-cases/samskara-tier2-mint.md) - the
+  sweep-only `mint-tier2` phase: lift-gated co-fire constellation
+  detection, seed iteration past covered groups, compound provenance.
 - [attachments-lifecycle-ux](./use-cases/attachments-lifecycle-ux.md) -
   attaching files from the composer, waiting for processing,
   post-send previews, extracted-text drawers, and expired-file
