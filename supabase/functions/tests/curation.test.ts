@@ -17,6 +17,7 @@ import { __test as threadTopics } from '../venice/agents/thread_topics.ts';
 import { __test as memoryTopics } from '../venice/agents/memory_topics.ts';
 import { __test as recipeTopics } from '../venice/agents/recipe_topics.ts';
 import { __test as curation } from '../venice/agents/curation.ts';
+import { repairToolCallFanIn } from '../venice/agents/_curation_helpers.ts';
 import type { StoredMessage } from '../venice/agents/_recall_helpers.ts';
 
 // --- auto_title: sanitizeTitle ------------------------------------------
@@ -95,6 +96,143 @@ Deno.test('condenseHistory trims the head/tail seam to safe wire boundaries', ()
   assertEquals(headEnd.role === 'tool', false);
   const tailStartIdx = out.findIndex((m) => Number(m.id.slice(1)) >= 120);
   assertEquals(out[tailStartIdx].role, 'user');
+});
+
+// --- repairToolCallFanIn: wire-shape repair before the Venice call --------
+
+function asstCall(id: string, callIds: string[]): StoredMessage {
+  return {
+    id,
+    role: 'assistant',
+    content: '',
+    tool_calls: callIds.map((cid) => ({
+      id: cid,
+      type: 'function',
+      function: { name: 'context', arguments: '{}' },
+    })),
+    tool_call_id: null,
+    name: null,
+  };
+}
+
+function toolRes(id: string, callId: string): StoredMessage {
+  return {
+    id,
+    role: 'tool',
+    content: 'result',
+    tool_calls: null,
+    tool_call_id: callId,
+    name: 'context',
+  };
+}
+
+function plain(role: StoredMessage['role'], id: string): StoredMessage {
+  return { id, role, content: id, tool_calls: null, tool_call_id: null, name: null };
+}
+
+// Assert the slice satisfies the three wire rules Venice enforces: every
+// tool-result row sits in the block right after the assistant that
+// called its id, every assistant-with-tool_calls block is followed by an
+// assistant, and no tool row is an orphan.
+function assertWireValid(msgs: StoredMessage[]): void {
+  let k = 0;
+  while (k < msgs.length) {
+    const m = msgs[k];
+    if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
+      const ids = new Set((m.tool_calls as Array<{ id: string }>).map((c) => c.id));
+      const seen = new Set<string>();
+      let p = k + 1;
+      while (p < msgs.length && msgs[p].role === 'tool') {
+        const tcid = msgs[p].tool_call_id!;
+        assert(ids.has(tcid), `tool ${tcid} not a call of its block`);
+        assert(!seen.has(tcid), `duplicate tool result ${tcid}`);
+        seen.add(tcid);
+        p++;
+      }
+      assertEquals(seen.size, ids.size, 'every call answered exactly once');
+      const next = p < msgs.length ? msgs[p] : null;
+      assert(next === null ? false : next.role === 'assistant', 'block followed by assistant');
+      k = p;
+      continue;
+    }
+    assert(m.role !== 'tool', `orphan tool row ${m.tool_call_id}`);
+    k++;
+  }
+}
+
+Deno.test('repairToolCallFanIn is a reference no-op on an already-valid thread', () => {
+  const msgs = [
+    plain('user', 'u0'),
+    asstCall('a1', ['call_aaa']),
+    toolRes('t1', 'call_aaa'),
+    plain('assistant', 'a2'),
+  ];
+  assert(repairToolCallFanIn(msgs) === msgs);
+});
+
+Deno.test('repairToolCallFanIn synthesizes a stub result for an unanswered call', () => {
+  const msgs = [
+    plain('user', 'u0'),
+    asstCall('a1', ['call_aaa']),
+    plain('assistant', 'a2'),
+  ];
+  const out = repairToolCallFanIn(msgs);
+  assertWireValid(out);
+  // a1's call gets a synthesized tool row before the next assistant.
+  assertEquals(out[2].role, 'tool');
+  assertEquals(out[2].tool_call_id, 'call_aaa');
+});
+
+Deno.test('repairToolCallFanIn drops orphan/misplaced tool results and synthesizes the gaps', () => {
+  // The thread a0e7940e shape: two tool-calling assistants whose results
+  // landed late (after the text replies), so they sort as orphan tool
+  // rows. Each call gets a synthesized in-position result; the stranded
+  // late rows are dropped rather than emitted as unexpected ids.
+  const msgs = [
+    plain('user', 'u0'),
+    asstCall('a1', ['call_aaa']),
+    asstCall('a2', ['call_bbb']),
+    asstCall('a3', ['call_ccc']),
+    toolRes('t3', 'call_ccc'),
+    plain('assistant', 'text1'),
+    plain('assistant', 'text2'),
+    toolRes('late1', 'call_aaa'),
+    toolRes('late2', 'call_bbb'),
+    plain('user', 'u1'),
+  ];
+  const out = repairToolCallFanIn(msgs);
+  assertWireValid(out);
+  // The late orphan rows are gone.
+  assert(!out.some((m) => m.id === 'late1' || m.id === 'late2'));
+  // No user immediately follows a tool block (the orphan run is dropped,
+  // not closed with a recovery assistant).
+  for (let n = 1; n < out.length; n++) {
+    if (out[n].role === 'user') assert(out[n - 1].role !== 'tool');
+  }
+});
+
+Deno.test('repairToolCallFanIn drops a mismatched tool row inside an otherwise-valid block', () => {
+  const msgs = [
+    asstCall('a1', ['call_aaa']),
+    toolRes('t1', 'call_aaa'),
+    toolRes('stray', 'call_zzz'),
+    plain('assistant', 'a2'),
+  ];
+  const out = repairToolCallFanIn(msgs);
+  assertWireValid(out);
+  assert(!out.some((m) => m.id === 'stray'));
+});
+
+Deno.test('repairToolCallFanIn closes a complete tool block that runs into a user turn', () => {
+  const msgs = [
+    asstCall('a1', ['call_aaa']),
+    toolRes('t1', 'call_aaa'),
+    plain('user', 'u1'),
+  ];
+  const out = repairToolCallFanIn(msgs);
+  assertWireValid(out);
+  // A recovery assistant sits between the tool block and the user turn.
+  assertEquals(out[2].role, 'assistant');
 });
 
 // --- topics validators: parity across the three units --------------------
