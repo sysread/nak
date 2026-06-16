@@ -5595,41 +5595,50 @@ export class SupabaseService {
 
   /**
    * Subscribe to the signed-in user's freshly minted samskaras. The
-   * formation pipeline runs in the venice function, so the INSERT into
-   * `samskaras` is itself the mint notification - this relay maps the
-   * new row's (tier, valence, confidence) into the mood-pill toast
-   * (the caller routes it to notifySamskaraMint). INSERT-only on
-   * purpose: dedup-reinforce hits update an existing row and must not
-   * toast. Rows with an unexpected shape are dropped - a toast is
-   * decoration, never worth surfacing an error for.
+   * formation pipeline runs in the venice function and publishes a
+   * `samskara-mint` Broadcast event per mint (insertMint ->
+   * publishSamskaraMint); this relay maps its (tier, valence,
+   * confidence) payload into the mood-pill toast (the caller routes it to
+   * notifySamskaraMint).
+   *
+   * Broadcast rather than a postgres_changes echo on purpose: only the
+   * server-side INSERT emits the event, so dedup-reinforce hits (which
+   * UPDATE an existing row) stay silent - the intended toast semantics -
+   * and `samskaras` stays out of the realtime publication, where its
+   * fire-bookkeeping UPDATE churn used to flood the WAL decoder (see
+   * supabase/functions/_shared/samskara-mint.ts). Payloads with an
+   * unexpected shape are dropped: a toast is decoration, never worth
+   * surfacing an error for.
+   *
+   * `private: true` engages the "samskara mint channel: owner subscribe"
+   * policy on realtime.messages (supabase/schema.sql) - a user only
+   * receives their own mints. The edge function publishes under
+   * service_role and bypasses the policy.
    */
   subscribeToSamskaraInserts(
     userId: string,
     onMint: (detail: { tier: 1 | 2; valence: number; confidence: number }) => void
   ): () => void {
     const channel = this.client
-      .channel(`samskaras:${userId}`)
-      .on(
-        'postgres_changes' as never,
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'samskaras',
-          filter: `user_id=eq.${userId}`,
-        },
-        (payload: { new?: Record<string, unknown> }) => {
-          const row = payload.new;
-          if (!row) return;
-          const tier = row.tier;
-          if (tier !== 1 && tier !== 2) return;
-          onMint({
-            tier,
-            valence: typeof row.valence === 'number' ? row.valence : 0,
-            confidence: typeof row.confidence === 'number' ? row.confidence : 0.5,
-          });
-        }
-      )
-      .subscribe();
+      .channel(`samskaras:${userId}`, { config: { private: true } })
+      .on('broadcast', { event: 'samskara-mint' }, ({ payload }) => {
+        const detail = payload as Record<string, unknown> | undefined;
+        if (!detail) return;
+        const tier = detail.tier;
+        if (tier !== 1 && tier !== 2) return;
+        onMint({
+          tier,
+          valence: typeof detail.valence === 'number' ? detail.valence : 0,
+          confidence: typeof detail.confidence === 'number' ? detail.confidence : 0.5,
+        });
+      })
+      // Surface the channel lifecycle at debug so a "mint toasts aren't
+      // popping" report can tell an RLS-rejected private subscribe
+      // (CHANNEL_ERROR / TIMED_OUT) from a publish-side miss. Same
+      // breadcrumb subscribeToUserLogs keeps for the logs channel.
+      .subscribe((status, err) => {
+        log.debug(`samskaras channel subscribe status: ${status}`, err ?? '');
+      });
     return () => {
       void this.client.removeChannel(channel);
     };

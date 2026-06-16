@@ -1857,8 +1857,8 @@
 
   // Realtime: mint toasts. The samskara formation pipeline runs in the
   // venice function (turn tail + hourly sweep), so a fresh mint reaches
-  // the mood pill as a user-scoped INSERT on `samskaras`, relayed into
-  // the same window event the old in-tab worker dispatched.
+  // the mood pill as a private samskara-mint Broadcast event, relayed
+  // into the same window event the old in-tab worker dispatched.
   // SamskaraToasts.svelte is the unchanged consumer.
   $effect(() => {
     if (!app.supabase || !session) return;

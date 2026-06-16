@@ -116,24 +116,24 @@ observable contract - claims, writes, toasts - is the same.
    ```
 
 8. Mint toast relay, deterministically: with the app open on a
-   thread, insert a fake samskara directly (the INSERT itself is
-   the toast signal via the realtime relay; `prediction_embedding`
-   is NOT NULL, hence the zero vector):
+   thread, publish a `samskara-mint` Broadcast event on the user's
+   private topic - the same event `insertMint` sends on a real mint.
+   The toast rides Broadcast, not a postgres_changes echo on
+   `samskaras` (the table is intentionally out of the realtime
+   publication), so no row insert is involved:
 
    ```sql
-   insert into samskaras
-          (user_id, tier, prediction, prediction_embedding,
-           valence, confidence)
-   select id, 1, 'QA toast probe',
-          array_fill(0::real, array[2048])::vector, 0.8, 0.9
-     from auth.users where email = 'dev@nak.local';
+   select realtime.send(
+     jsonb_build_object('tier', 1, 'valence', 0.8, 'confidence', 0.9),
+     'samskara-mint',
+     'samskaras:' || (select id::text from auth.users
+                       where email = 'dev@nak.local'),
+     true
+   );
    ```
 
-   Watch the mood pill, then clean up:
-
-   ```sql
-   delete from samskaras where prediction = 'QA toast probe';
-   ```
+   Watch the mood pill. Nothing to clean up - a Broadcast event is
+   ephemeral and persists no row.
 
 ## Expected
 
@@ -164,10 +164,9 @@ observable contract - claims, writes, toasts - is the same.
 - (7) The summary regenerates: `last_regen_at` bumps to now,
   `samskara_count_at_regen` matches the current corpus count,
   and the prose changes only if the corpus did.
-- (8) The mood pill updates within a few seconds of the insert
-  (valence 0.8 / confidence 0.9 maps to the warm + confident cell);
-  the probe row's deletion does not revert the pill (mood state is
-  sticky by design).
+- (8) The mood pill updates within a few seconds of the broadcast
+  (valence 0.8 / confidence 0.9 maps to the warm + confident cell).
+  Mood state is sticky by design, so the pill holds after the toast.
 - **[hosted]** post-port only: the `nak-samskara-sweep` cron tick
   fires at :23 (check `cron.job_run_details` after a deploy).
 

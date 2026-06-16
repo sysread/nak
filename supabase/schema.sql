@@ -9918,19 +9918,24 @@ begin
   ) then
     alter publication supabase_realtime add table public.recipes;
   end if;
-  -- samskaras feeds the mint toast: the formation pipeline runs in
-  -- the venice function now, so the browser learns about a fresh
-  -- mint through a user-scoped postgres_changes INSERT subscription
-  -- that maps the new row's (tier, valence, confidence) into the
-  -- mood pill. INSERT-only - no replica-identity index needed (that
-  -- requirement is specific to DELETE delivery, see below).
-  if not exists (
+  -- samskaras is deliberately NOT a member. Mint toasts ride a private
+  -- samskara-mint Broadcast event (insertMint -> _shared/samskara-mint.ts
+  -- + the owner-subscribe policy below), never a postgres_changes echo.
+  -- The only thing any client ever consumed was the INSERT, but the fire
+  -- path UPDATEs fire_count / last_fired_at / health on this table on
+  -- every fire - those updates outran inserts ~10,000:1. As a publication
+  -- member each one got decoded off the WAL by realtime.list_changes and
+  -- discarded for want of a subscriber, which made that decode the single
+  -- largest consumer of database time. Drop it on re-apply for databases
+  -- that still carry the old membership (alter publication has no `drop
+  -- table if exists`, so guard explicitly).
+  if exists (
     select 1 from pg_publication_tables
     where pubname = 'supabase_realtime'
       and schemaname = 'public'
       and tablename = 'samskaras'
   ) then
-    alter publication supabase_realtime add table public.samskaras;
+    alter publication supabase_realtime drop table public.samskaras;
   end if;
   -- profiles feeds the manual-agent-run strips' "a run is in flight"
   -- spinner + button-disable. The wiki/memory librarian in-flight
@@ -10077,6 +10082,23 @@ create policy "agent-run channel: owner subscribe" on realtime.messages
   for select to authenticated
   using (
     realtime.topic() = 'agent-runs:' || (select auth.uid())::text
+  );
+
+-- Same owner-subscribe shape for the samskara mint-toast channel. The
+-- venice function publishes a 'samskara-mint' event to 'samskaras:<uuid>'
+-- when insertMint lands a fresh tier-1/tier-2 row; the browser pops the
+-- mood-pill toast. This replaced a postgres_changes INSERT subscription
+-- on the samskaras table: the table's fire-bookkeeping UPDATE churn made
+-- it the heaviest table for realtime.list_changes to decode, so it was
+-- pulled from the supabase_realtime publication (above) and the toast
+-- moved to Broadcast. The function publishes under service_role (bypasses
+-- this policy); the browser only subscribes, so there is no INSERT
+-- policy. Browser must subscribe with private:true for this to engage.
+drop policy if exists "samskara mint channel: owner subscribe" on realtime.messages;
+create policy "samskara mint channel: owner subscribe" on realtime.messages
+  for select to authenticated
+  using (
+    realtime.topic() = 'samskaras:' || (select auth.uid())::text
   );
 
 -- ---------------------------------------------------------------------------

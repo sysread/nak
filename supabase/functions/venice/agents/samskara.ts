@@ -27,17 +27,22 @@
 // trigger cadence (turn or tick) IS the rate limit - nothing here
 // rotates continuously.
 //
-// Mint toasts: the INSERT into `samskaras` is itself the notification.
-// The table is in the supabase_realtime publication and Chat.svelte
-// relays user-filtered INSERT events into the notifySamskaraMint
-// path. Dedup-reinforce hits update an existing row and therefore
-// stay silent, which is the intended toast semantics.
+// Mint toasts: insertMint publishes a samskara-mint Broadcast event on
+// the user's private topic, which Chat.svelte relays into the
+// notifySamskaraMint path. insertMint is the sole INSERT path into
+// `samskaras`, so this reproduces the old INSERT-only toast semantics:
+// dedup-reinforce hits update an existing row (never insertMint) and
+// therefore stay silent. Broadcast rather than a postgres_changes echo
+// keeps `samskaras` out of the realtime publication - see
+// _shared/samskara-mint.ts for why its UPDATE churn made that decode
+// the single largest database-time consumer.
 //
 // The fire path, substrate stub recording, priming format, and the
 // compound-summary read are chat-scoped and live browser-side
 // (src/lib/samskara/).
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createEdgeLogger, type EdgeLogger } from '../../_shared/edge-log.ts';
+import { publishSamskaraMint } from '../../_shared/samskara-mint.ts';
 import { readVeniceKey } from '../tools/_venice_key.ts';
 import { toolComplete } from '../tools/_venice_complete.ts';
 import { veniceEmbed, VeniceError } from '../../_shared/venice.ts';
@@ -665,6 +670,15 @@ async function insertMint(
     // only degrades the diagnostics drill-down, so log and keep it.
     log.debug(`mint-tier${tier}: provenance upsert failed`, { error: provErr.message });
   }
+  // Pop the mood-pill toast in any open client. Broadcast on the user's
+  // private samskaras topic, not a postgres_changes echo (the table is
+  // deliberately out of the realtime publication - see samskara-mint.ts).
+  // Best-effort and awaited so the POST settles before this tick returns.
+  await publishSamskaraMint(userId, {
+    tier,
+    valence: minted.valence,
+    confidence: minted.confidence,
+  });
   return data.id as string;
 }
 
