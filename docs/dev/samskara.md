@@ -193,10 +193,11 @@ toast is just a glance cue that the bias model is forming.
   (users with substrate/fire activity inside a lookback window).
   `nak_trigger_samskara_sweep()` + the `nak-samskara-sweep`
   pg_cron job (`23 * * * *`) drive the sweep route, and
-  `samskaras` is a member of the `supabase_realtime` publication
-  so mint INSERTs reach the browser (the toast signal). Follows
-  the project's idempotent-apply conventions (`if not exists`,
-  drop-then-create for policies and functions).
+  `insertMint` publishes a `samskara-mint` Broadcast event so
+  mints reach the browser (the toast signal); `samskaras` is
+  intentionally NOT in the `supabase_realtime` publication.
+  Follows the project's idempotent-apply conventions (`if not
+  exists`, drop-then-create for policies and functions).
 
 ## Entry points
 
@@ -252,16 +253,21 @@ toast is just a glance cue that the bias model is forming.
   samskara-specific entry point on that side; the `EMBED_SOURCES`
   registry entry shapes the same claim/build/save flow memories and
   threads do.
-- **Mint relay** - the INSERT into `samskaras` is itself the
-  toast notification. `Chat.svelte` subscribes to user-filtered
-  postgres_changes INSERTs via
-  `SupabaseService.subscribeToSamskaraInserts` and routes the new
-  row's `(tier, valence, confidence)` into `notifySamskaraMint`,
-  which dispatches `SAMSKARA_MINT_EVENT` on `window`; the
-  `SamskaraToasts` component mounted inside `Chat.svelte` listens
-  for it and renders the valence-mapped emoji pill. INSERT-only
-  by design: dedup-reinforce hits update an existing row and
-  therefore stay silent.
+- **Mint relay** - `insertMint` publishes a `samskara-mint`
+  Broadcast event (`(tier, valence, confidence)`) on the user's
+  private `samskaras:<uuid>` topic via
+  `_shared/samskara-mint.ts`. `Chat.svelte` subscribes through
+  `SupabaseService.subscribeToSamskaraInserts` and routes the
+  payload into `notifySamskaraMint`, which dispatches
+  `SAMSKARA_MINT_EVENT` on `window`; the `SamskaraToasts`
+  component mounted inside `Chat.svelte` listens for it and
+  renders the valence-mapped emoji pill. INSERT-only by design:
+  `insertMint` is the sole insert path, so dedup-reinforce hits
+  (which UPDATE an existing row) stay silent. Broadcast rather
+  than a postgres_changes echo keeps `samskaras` out of the
+  realtime publication - its fire-bookkeeping UPDATE churn had
+  made `realtime.list_changes` decode the table's WAL the
+  single largest database-time consumer.
 
 ## Data model
 
@@ -601,12 +607,13 @@ logs and yields to the next phase.
   suggesting code") alongside the standard positive shape.
   The insert goes through the admin client with an explicit
   `user_id` (the column default is `auth.uid()`, NULL under the
-  service role). The INSERT itself is the toast signal: it rides
-  the `supabase_realtime` publication to `Chat.svelte`'s
-  subscription, which re-emits `SAMSKARA_MINT_EVENT` for the
-  mood pill. Dedup-reinforcement inserts nothing and therefore
-  toasts nothing - the intended semantics - though it logs so
-  the Logs drawer shows "dedup-reinforced existing" breadcrumbs.
+  service role). `insertMint` then publishes a `samskara-mint`
+  Broadcast event to the user's private topic, which reaches
+  `Chat.svelte`'s subscription and re-emits `SAMSKARA_MINT_EVENT`
+  for the mood pill. Dedup-reinforcement inserts nothing and so
+  emits no mint event - the intended toast semantics - though it
+  logs so the Logs drawer shows "dedup-reinforced existing"
+  breadcrumbs.
 
   A third tool - `samskara_collapse_by_cofiring(...)` - handles
   ongoing redundancy consolidation. It's the same RPC the
@@ -967,7 +974,8 @@ summarizer reads samskaras to feed the agent.
   curation -> samskara -> reflection. `Chat.svelte` mounts the
   single `<SamskaraToasts />` component and owns the
   `subscribeToSamskaraInserts` realtime subscription that turns
-  mint INSERTs into `SAMSKARA_MINT_EVENT`. See `./chat.md`.
+  `samskara-mint` Broadcast events into `SAMSKARA_MINT_EVENT`. See
+  `./chat.md`.
 - **Embeddings** - `samskara-substrate` registers as a source
   in the server-side embed backfill (`_shared/embed-input.ts`)
   alongside memories and threads. Pure embed work; no LLM calls
