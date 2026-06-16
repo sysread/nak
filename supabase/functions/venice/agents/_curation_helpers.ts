@@ -124,18 +124,64 @@ const RECOVERY_TOOL_BODY = '(tool execution was interrupted - no result availabl
 const RECOVERY_ASSISTANT_BODY =
   '*(The previous response was interrupted before I finished. Picking up from here.)*';
 
+function makeRecoveryTool(call: OpenAIToolCall): StoredMessage {
+  return {
+    id: `synthetic-recovery-tool-${call.id}`,
+    role: 'tool',
+    content: RECOVERY_TOOL_BODY,
+    tool_calls: null,
+    tool_call_id: call.id,
+    name: call.function?.name ?? null,
+  };
+}
+
+function makeRecoveryAssistant(): StoredMessage {
+  return {
+    id: 'synthetic-recovery-asst',
+    role: 'assistant',
+    content: RECOVERY_ASSISTANT_BODY,
+    tool_calls: null,
+    tool_call_id: null,
+    name: null,
+  };
+}
+
 /**
- * Inject synthetic tool-result and recovery-assistant rows for any
- * broken tool-call fan-in in a StoredMessage slice. Port of
- * synthesizeRecoveryMessages in src/lib/conversation-recovery.ts,
- * retyped over StoredMessage. The curation units use this to repair
- * interrupted exchanges before sending to Venice - Venice returns
- * HTTP 400 "Not the same number of function calls and responses" when
- * an assistant message's tool_calls array has more entries than the
- * immediately-following tool rows.
+ * Rebuild a StoredMessage slice into a tool-call fan-in that Venice's
+ * strict validators accept. Three wire-shape errors drove this, all
+ * arising when a tool-using round is interrupted between persisting the
+ * assistant-with-tool_calls row and persisting (in the right place) its
+ * tool-result rows:
  *
- * Returns the same array by reference when no repair is needed, so the
- * no-op path is cheap.
+ *   - "Not the same number of function calls and responses" - an
+ *     assistant's tool_calls has more ids than the tool rows that
+ *     immediately follow it.
+ *   - "Unexpected tool call id <id> in tool results" - a tool-result
+ *     row carries an id with no matching call in the assistant block it
+ *     sits in (or no assistant-with-tool_calls anchor at all).
+ *   - "Unexpected role 'user' after role 'tool'" - a tool block runs
+ *     straight into a user turn with no assistant reply between.
+ *
+ * The invariant enforced: every tool-result row must sit in the block
+ * immediately after the assistant that called its id, and every such
+ * block must be followed by an assistant turn. So for each
+ * assistant-with-tool_calls we keep only the following tool rows whose
+ * id is one of THAT assistant's calls (de-duped), synthesize a stub
+ * result for every unanswered call, and append a recovery assistant
+ * when the block would otherwise be followed by a non-assistant row or
+ * end of slice. Tool rows with no matching preceding call - including
+ * the late, misplaced results a crash can leave stranded after a text
+ * turn (see thread a0e7940e: A1/A2 results persisted at the end, after
+ * the assistant's text replies, so they sort as orphans) - are dropped.
+ *
+ * Diverges from synthesizeRecoveryMessages in
+ * src/lib/conversation-recovery.ts: the browser KEEPS orphan/mismatched
+ * tool rows because it has to render them and heal the thread on the
+ * next persist. This path only builds a throwaway wire copy and never
+ * writes back, so dropping the wire-invalid rows is both correct and
+ * simpler than trying to re-anchor them.
+ *
+ * Returns the same array by reference when no repair is needed.
  */
 export function repairToolCallFanIn(messages: StoredMessage[]): StoredMessage[] {
   if (messages.length === 0) return messages;
@@ -147,45 +193,39 @@ export function repairToolCallFanIn(messages: StoredMessage[]): StoredMessage[] 
 
     if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
       result.push(m);
+      const calls = m.tool_calls as OpenAIToolCall[];
+      const callIds = new Set(calls.map((c) => c.id));
+
+      // Walk the consecutive tool block, keeping only rows that answer
+      // one of THIS assistant's calls (first occurrence per id).
+      // Mismatched or duplicate tool rows are dropped - emitting them is
+      // what triggers "Unexpected tool call id <id> in tool results".
       const answered = new Set<string>();
       let j = i + 1;
       while (j < messages.length && messages[j].role === 'tool') {
         const tcid = messages[j].tool_call_id;
-        if (tcid) answered.add(tcid);
-        result.push(messages[j]);
+        if (tcid && callIds.has(tcid) && !answered.has(tcid)) {
+          answered.add(tcid);
+          result.push(messages[j]);
+        } else {
+          modified = true;
+        }
         j++;
       }
-      // Inject synthetic tool-result rows for every unanswered call.
-      const calls = m.tool_calls as OpenAIToolCall[];
-      let missingCount = 0;
+
       for (const call of calls) {
         if (!answered.has(call.id)) {
-          result.push({
-            id: `synthetic-recovery-tool-${call.id}`,
-            role: 'tool',
-            content: RECOVERY_TOOL_BODY,
-            tool_calls: null,
-            tool_call_id: call.id,
-            name: call.function?.name ?? null,
-          });
-          missingCount++;
+          result.push(makeRecoveryTool(call));
           modified = true;
         }
       }
-      // If the tool block (existing + injected) isn't followed by an
-      // assistant, insert a recovery assistant. Venice rejects
-      // `tool -> user` and `tool -> EOF` as wire-invalid.
-      const toolBlockLength = j - i - 1 + missingCount;
+
+      // The block is never empty (>=1 call, each answered by a kept or
+      // synthesized row), so the only question is whether an assistant
+      // follows it. Venice rejects `tool -> user` and `tool -> EOF`.
       const next = j < messages.length ? messages[j] : null;
-      if (toolBlockLength > 0 && (next === null || next.role !== 'assistant')) {
-        result.push({
-          id: 'synthetic-recovery-asst',
-          role: 'assistant',
-          content: RECOVERY_ASSISTANT_BODY,
-          tool_calls: null,
-          tool_call_id: null,
-          name: null,
-        });
+      if (next === null || next.role !== 'assistant') {
+        result.push(makeRecoveryAssistant());
         modified = true;
       }
       i = j;
@@ -193,26 +233,15 @@ export function repairToolCallFanIn(messages: StoredMessage[]): StoredMessage[] 
     }
 
     if (m.role === 'tool') {
-      // Orphan tool row (no asst_with_tool_calls anchor). Keep the rows
-      // but guard the transition: `tool -> user` and `tool -> EOF` are
-      // both wire violations. A recovery assistant in between is the fix.
+      // Orphan tool run with no assistant-with-tool_calls anchor. Every
+      // such row is wire-invalid (a tool result with no preceding call),
+      // so drop the whole run. Dropping can't create a `tool -> x`
+      // violation, and the row before the run was not an
+      // assistant-with-tool_calls (or it would have consumed this run),
+      // so no recovery assistant is needed.
       let j = i;
-      while (j < messages.length && messages[j].role === 'tool') {
-        result.push(messages[j]);
-        j++;
-      }
-      const next = j < messages.length ? messages[j] : null;
-      if (next === null || next.role !== 'assistant') {
-        result.push({
-          id: 'synthetic-recovery-asst',
-          role: 'assistant',
-          content: RECOVERY_ASSISTANT_BODY,
-          tool_calls: null,
-          tool_call_id: null,
-          name: null,
-        });
-        modified = true;
-      }
+      while (j < messages.length && messages[j].role === 'tool') j++;
+      modified = true;
       i = j;
       continue;
     }
