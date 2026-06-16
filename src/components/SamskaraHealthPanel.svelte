@@ -16,6 +16,7 @@
     compoundStaleness,
     worstSeverity,
     relativeTime,
+    verdictBreakdown,
     HEALTH_THRESHOLDS,
     type Severity,
   } from '$lib/ui/samskara-browse';
@@ -161,8 +162,10 @@
         </div>
         <div class="health-row">
           <span class="health-label">Verdicts</span>
-          <span class="health-value">
-            {rates.held} held / {rates.contradicted} contradicted / {rates.notEngaged} not-engaged
+          <span class="health-value health-value--stack">
+            {#each verdictBreakdown(rates) as v (v.label)}
+              <span>{v.count} {v.label}</span>
+            {/each}
           </span>
         </div>
       </div>
@@ -243,6 +246,15 @@
   .health-value {
     margin-left: auto;
     font-variant-numeric: tabular-nums;
+  }
+  /* Verdict breakdown stacks its counts vertically, right-aligned,
+     instead of one slash-joined line - the joined form wrapped
+     mid-slash on narrow viewports. */
+  .health-value--stack {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.1rem;
   }
   /* Severity dot. Green/amber/red for ok/warn/alarm, sized to read as a
      status light next to each row without dominating. */

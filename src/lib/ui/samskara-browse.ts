@@ -233,3 +233,27 @@ export function groupProvenance(rows: readonly SamskaraProvenanceRow[]): Provena
   }
   return groups;
 }
+
+export interface VerdictCount {
+  label: string;
+  count: number;
+}
+
+/**
+ * The judged-fire verdict breakdown as a labelled list, in the order
+ * the Health panel stacks them. Extracted so the panel iterates a
+ * vertical list rather than interpolating three slash-separated counts
+ * on one line - that line wrapped mid-slash and read as jarring on
+ * narrow (mobile) viewports.
+ */
+export function verdictBreakdown(rates: {
+  held: number;
+  contradicted: number;
+  notEngaged: number;
+}): VerdictCount[] {
+  return [
+    { label: 'held', count: rates.held },
+    { label: 'contradicted', count: rates.contradicted },
+    { label: 'not-engaged', count: rates.notEngaged },
+  ];
+}
