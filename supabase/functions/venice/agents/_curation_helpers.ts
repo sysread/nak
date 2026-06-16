@@ -111,6 +111,118 @@ export function messageToWire(m: StoredMessage): VeniceWireMessage {
   return out;
 }
 
+// Visible body for synthesized tool-result rows injected during repair.
+// Plain parens, not markdown italic, because tool content travels as a
+// JSON string on the wire - italic underscores inside that string have
+// caused render glitches in tool-call cards when read back.
+const RECOVERY_TOOL_BODY = '(tool execution was interrupted - no result available)';
+
+// Visible body for the synthesized assistant turn that closes an
+// interrupted exchange. Mirrors the browser constant in
+// src/lib/conversation-recovery.ts so the model sees the same phrasing
+// regardless of which path assembled the thread.
+const RECOVERY_ASSISTANT_BODY =
+  '*(The previous response was interrupted before I finished. Picking up from here.)*';
+
+/**
+ * Inject synthetic tool-result and recovery-assistant rows for any
+ * broken tool-call fan-in in a StoredMessage slice. Port of
+ * synthesizeRecoveryMessages in src/lib/conversation-recovery.ts,
+ * retyped over StoredMessage. The curation units use this to repair
+ * interrupted exchanges before sending to Venice - Venice returns
+ * HTTP 400 "Not the same number of function calls and responses" when
+ * an assistant message's tool_calls array has more entries than the
+ * immediately-following tool rows.
+ *
+ * Returns the same array by reference when no repair is needed, so the
+ * no-op path is cheap.
+ */
+export function repairToolCallFanIn(messages: StoredMessage[]): StoredMessage[] {
+  if (messages.length === 0) return messages;
+  const result: StoredMessage[] = [];
+  let modified = false;
+  let i = 0;
+  while (i < messages.length) {
+    const m = messages[i];
+
+    if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
+      result.push(m);
+      const answered = new Set<string>();
+      let j = i + 1;
+      while (j < messages.length && messages[j].role === 'tool') {
+        const tcid = messages[j].tool_call_id;
+        if (tcid) answered.add(tcid);
+        result.push(messages[j]);
+        j++;
+      }
+      // Inject synthetic tool-result rows for every unanswered call.
+      const calls = m.tool_calls as OpenAIToolCall[];
+      let missingCount = 0;
+      for (const call of calls) {
+        if (!answered.has(call.id)) {
+          result.push({
+            id: `synthetic-recovery-tool-${call.id}`,
+            role: 'tool',
+            content: RECOVERY_TOOL_BODY,
+            tool_calls: null,
+            tool_call_id: call.id,
+            name: call.function?.name ?? null,
+          });
+          missingCount++;
+          modified = true;
+        }
+      }
+      // If the tool block (existing + injected) isn't followed by an
+      // assistant, insert a recovery assistant. Venice rejects
+      // `tool -> user` and `tool -> EOF` as wire-invalid.
+      const toolBlockLength = j - i - 1 + missingCount;
+      const next = j < messages.length ? messages[j] : null;
+      if (toolBlockLength > 0 && (next === null || next.role !== 'assistant')) {
+        result.push({
+          id: 'synthetic-recovery-asst',
+          role: 'assistant',
+          content: RECOVERY_ASSISTANT_BODY,
+          tool_calls: null,
+          tool_call_id: null,
+          name: null,
+        });
+        modified = true;
+      }
+      i = j;
+      continue;
+    }
+
+    if (m.role === 'tool') {
+      // Orphan tool row (no asst_with_tool_calls anchor). Keep the rows
+      // but guard the transition: `tool -> user` and `tool -> EOF` are
+      // both wire violations. A recovery assistant in between is the fix.
+      let j = i;
+      while (j < messages.length && messages[j].role === 'tool') {
+        result.push(messages[j]);
+        j++;
+      }
+      const next = j < messages.length ? messages[j] : null;
+      if (next === null || next.role !== 'assistant') {
+        result.push({
+          id: 'synthetic-recovery-asst',
+          role: 'assistant',
+          content: RECOVERY_ASSISTANT_BODY,
+          tool_calls: null,
+          tool_call_id: null,
+          name: null,
+        });
+        modified = true;
+      }
+      i = j;
+      continue;
+    }
+
+    result.push(m);
+    i++;
+  }
+  return modified ? result : messages;
+}
+
 /**
  * Non-streaming completion pinned to JSON-object output. The topics
  * units (thread/memory/recipe) need `response_format: {type:
