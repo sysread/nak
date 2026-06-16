@@ -5632,7 +5632,13 @@ export class SupabaseService {
           confidence: typeof detail.confidence === 'number' ? detail.confidence : 0.5,
         });
       })
-      .subscribe();
+      // Surface the channel lifecycle at debug so a "mint toasts aren't
+      // popping" report can tell an RLS-rejected private subscribe
+      // (CHANNEL_ERROR / TIMED_OUT) from a publish-side miss. Same
+      // breadcrumb subscribeToUserLogs keeps for the logs channel.
+      .subscribe((status, err) => {
+        log.debug(`samskaras channel subscribe status: ${status}`, err ?? '');
+      });
     return () => {
       void this.client.removeChannel(channel);
     };
