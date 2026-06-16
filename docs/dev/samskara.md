@@ -1432,7 +1432,19 @@ that same simplification.)
     loose `[50, 500]` bars - a snapshot of a few is normal, since the
     tail drains small caps per turn and the sweep is hourly), internal
     inconsistencies (orphan fires, stuck claims - tight bars, should be
-    ~0), and compound-summary staleness. The windowed mint/fire/
+    ~0), and the compound-summary regen backlog. That last signal is the
+    EVENT arm of `samskara_should_regen_compound` reconstructed
+    client-side (samskaras formed since the last regen vs the
+    `max(3, ceil(5 * log10(total + 10)))` threshold), NOT the summary's
+    age: regen only runs when the hourly sweep visits a user, and the
+    sweep only fans out to users active in the last
+    `SWEEP_USER_WINDOW_HOURS`, so an idle account's summary drifts past
+    the predicate's 6h window with nothing wrong and nothing to do - an
+    age-based dot lit amber/red on exactly that benign case. The delta
+    only grows while the user is active (which is when the sweep can act),
+    so a delta stuck past the bar is a real "not keeping up" signal. The
+    age is still shown, as an informational, dot-less row. The windowed
+    mint/fire/
     resolution rates, the corpus counters, and the tier-2-candidate
     readout are shown but NOT severity-bearing (see the calibration note
     below). Backed by `samskara_health_snapshot`, `samskara_rates`, and
@@ -1471,7 +1483,8 @@ not surfaced as a severity bar at all; the windowed resolution rate is
 shown with a note that low is normal. A genuinely stuck pipeline shows
 up as a deep, persistent backlog instead - which IS a severity bar.
 The headline severity therefore considers only backlog,
-inconsistencies, and compound staleness.
+inconsistencies, and the compound-regen backlog (the event arm of the
+regen predicate, not summary age - see the observability section above).
 
 ## Where to go next
 

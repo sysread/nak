@@ -158,14 +158,55 @@ export function severityFor(value: number, thresholds: readonly [number, number]
   return 'ok';
 }
 
-/** Compound-summary staleness, in hours, to severity. ok < 6h, warn < 24h, else alarm. */
-export function compoundStaleness(lastRegenAt: string | null, now: number = Date.now()): Severity {
-  if (!lastRegenAt) return 'warn'; // no summary yet is mild, not an alarm
-  const ageH = (now - new Date(lastRegenAt).getTime()) / 3_600_000;
-  if (Number.isNaN(ageH)) return 'warn';
-  if (ageH >= 24) return 'alarm';
-  if (ageH >= 6) return 'warn';
-  return 'ok';
+export interface CompoundRegenStatus {
+  /** Severity for the headline dot. */
+  sev: Severity;
+  /** New samskaras formed since the last regen (the event-arm value). */
+  delta: number;
+  /** Count at which the background regen fires (the log10-damped bar). */
+  threshold: number;
+}
+
+/**
+ * Compound-summary regen status, derived from the SAME predicate the
+ * background regen uses (schema.sql `samskara_should_regen_compound`),
+ * NOT wall-clock age.
+ *
+ * Age alone is a false positive: the summary only regenerates when the
+ * hourly sweep visits a user, and the sweep only fans out to users with
+ * substrate/fire activity in the last couple of hours
+ * (SWEEP_USER_WINDOW_HOURS). An idle account's summary therefore drifts
+ * arbitrarily far past the predicate's 6h window with nothing wrong and
+ * nothing to do - an age>=6h/>=24h dot lit amber/red on exactly that
+ * benign case.
+ *
+ * The actionable arm is the event count: samskaras formed since the last
+ * regen, against the log10-damped threshold. Unlike age, the delta only
+ * grows while the user is active - which is precisely when the sweep can
+ * act on it - so a delta stuck past the bar is a real "the sweep isn't
+ * keeping up" signal, not an idle-time artifact.
+ *
+ * threshold = max(3, ceil(5 * log10(total + 10))), mirroring the SQL.
+ * Both sides are base-10: JS `Math.log10` equals Postgres unary `log()`
+ * (NOT `ln()`); see the base-10 caution in the SQL function. Due at
+ * >= threshold (warn); escalates to alarm at >= 2x threshold, where
+ * "due but unmet" stops reading as "the next sweep will catch it".
+ */
+export function compoundRegenStatus(
+  totalSamskaras: number,
+  samskaraCountAtRegen: number,
+  hasSummary: boolean,
+): CompoundRegenStatus {
+  const threshold = Math.max(3, Math.ceil(5 * Math.log10(totalSamskaras + 10)));
+  // No summary yet is mild, not an alarm: the normal resting state of a
+  // corpus that hasn't formed enough samskaras to prime the first regen.
+  // Mirrors the predicate's `last_regen_at is null and count > 0` arm.
+  if (!hasSummary) {
+    return { sev: totalSamskaras > 0 ? 'warn' : 'ok', delta: totalSamskaras, threshold };
+  }
+  const delta = Math.max(0, totalSamskaras - samskaraCountAtRegen);
+  const sev: Severity = delta >= 2 * threshold ? 'alarm' : delta >= threshold ? 'warn' : 'ok';
+  return { sev, delta, threshold };
 }
 
 /**
