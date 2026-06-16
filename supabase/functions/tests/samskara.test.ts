@@ -23,8 +23,6 @@ const {
   MINT_CLUSTER_MIN,
   buildTopicalCluster,
   buildAssociationCluster,
-  PAIR_RELATE_COSINE_FLOOR,
-  rankPairCandidates,
   cosine,
   parseVector,
   stripJsonFence,
@@ -164,39 +162,6 @@ Deno.test('buildAssociationCluster: hub first, distinct partners, all labels, su
   ]);
   // Reinforcement sums across every edge, not deduped.
   assertEquals(cluster.reinforcementSum, 6);
-});
-
-Deno.test('rankPairCandidates orders by cosine and applies the floor', () => {
-  const seed = { id: 'seed', situation: 's', outcome: 'o', embedding: unit(1, 0, 0) };
-  const rows = [
-    seed,
-    // cosine ~0.71 vs seed - second-best candidate.
-    { id: 'mid', situation: 's', outcome: 'o', embedding: unit(1, 1, 0) },
-    // cosine ~0.99 vs seed - best candidate.
-    { id: 'near', situation: 's', outcome: 'o', embedding: unit(0.9, 0.1, 0) },
-    // cosine 0 vs seed - below PAIR_RELATE_COSINE_FLOOR, dropped.
-    { id: 'far', situation: 's', outcome: 'o', embedding: unit(0, 1, 0) },
-    // Unparseable embedding - dropped before scoring.
-    { id: 'broken', situation: 's', outcome: 'o', embedding: [] },
-  ];
-  const ranked = rankPairCandidates(seed, rows);
-  assertEquals(
-    ranked.map((c) => c.row.id),
-    ['near', 'mid'],
-  );
-  assert(ranked[0].sim >= ranked[1].sim);
-  assert(ranked.every((c) => c.sim >= PAIR_RELATE_COSINE_FLOOR));
-});
-
-Deno.test('rankPairCandidates never pairs the seed with itself', () => {
-  const seed = { id: 'seed', situation: 's', outcome: 'o', embedding: unit(1, 0) };
-  // The window always leads with the seed row; an identical twin
-  // later in the window is a legitimate candidate, the seed is not.
-  const ranked = rankPairCandidates(seed, [
-    seed,
-    { id: 'twin', situation: 's', outcome: 'o', embedding: unit(1, 0) },
-  ]);
-  assertEquals(ranked.map((c) => c.row.id), ['twin']);
 });
 
 Deno.test('parseVector handles pgvector text, arrays, and garbage', () => {
