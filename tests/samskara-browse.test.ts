@@ -7,7 +7,7 @@ import { describe, it, expect } from 'vitest';
 import {
   collapseSimilar,
   severityFor,
-  compoundStaleness,
+  compoundRegenStatus,
   matchSummary,
   worstSeverity,
   relativeTime,
@@ -82,15 +82,32 @@ describe('severityFor', () => {
   });
 });
 
-describe('compoundStaleness', () => {
-  const now = Date.parse('2026-06-10T12:00:00Z');
-  it('ok when fresh, warn at 6h, alarm at 24h', () => {
-    expect(compoundStaleness('2026-06-10T11:00:00Z', now)).toBe('ok'); // 1h
-    expect(compoundStaleness('2026-06-10T05:00:00Z', now)).toBe('warn'); // 7h
-    expect(compoundStaleness('2026-06-09T10:00:00Z', now)).toBe('alarm'); // 26h
+describe('compoundRegenStatus', () => {
+  // threshold = max(3, ceil(5 * log10(total + 10))). At total=152 the bar
+  // is ceil(5 * log10(162)) = ceil(11.04) = 12; alarm at 2x = 24.
+  it('severity tracks the regen backlog, not the summary age', () => {
+    expect(compoundRegenStatus(152, 152, true).sev).toBe('ok'); // 0 new
+    expect(compoundRegenStatus(152, 145, true).sev).toBe('ok'); // 7 < 12
+    expect(compoundRegenStatus(152, 140, true).sev).toBe('warn'); // 12 >= 12
+    expect(compoundRegenStatus(152, 128, true).sev).toBe('alarm'); // 24 >= 24
   });
-  it('treats a missing summary as warn, not alarm', () => {
-    expect(compoundStaleness(null, now)).toBe('warn');
+  it('exposes the delta and threshold for the readout', () => {
+    expect(compoundRegenStatus(152, 145, true)).toMatchObject({ delta: 7, threshold: 12 });
+  });
+  it('floors the threshold at 3 for a small corpus', () => {
+    // ceil(5 * log10(13)) = ceil(5.57) = 6, so the floor doesn't bind
+    // here; a near-empty corpus (total=0 -> ceil(5*log10(10))=5) is still
+    // above 3, so the floor only matters as a guard, never a false alarm.
+    expect(compoundRegenStatus(3, 0, true).threshold).toBeGreaterThanOrEqual(3);
+  });
+  it('treats a missing summary as warn when any samskaras exist, else ok', () => {
+    expect(compoundRegenStatus(5, 0, false).sev).toBe('warn');
+    expect(compoundRegenStatus(0, 0, false).sev).toBe('ok');
+  });
+  it('clamps a negative delta to ok (count_at_regen above current count)', () => {
+    // A regen stamped a higher count than the live total (e.g. reaping
+    // dropped rows after the stamp) must not read as a backlog.
+    expect(compoundRegenStatus(140, 152, true).sev).toBe('ok');
   });
 });
 

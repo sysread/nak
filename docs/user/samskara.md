@@ -62,7 +62,11 @@ invisible:
 - **Backlog** - work waiting to be processed. A few items is normal; a
   large, persistent pile means the pipeline isn't keeping up.
 - **Inconsistencies** - internal bookkeeping that should stay near zero.
-- **Staleness** - how long since the always-on summary was rebuilt.
+- **Staleness** - how many new instincts have formed since the always-on
+  summary was last rebuilt, against the point where a rebuild is due. A
+  rebuild only happens while you're actively chatting, so the summary's
+  raw age (shown alongside) is not itself a problem - the dot tracks the
+  backlog of unincorporated instincts, not the clock.
 - **Activity** - how many instincts formed and fired recently, and how
   often Nak learned from them. A low "reaction resolution" is expected -
   only the turn right after an instinct fires can confirm it.
@@ -74,7 +78,8 @@ invisible:
 
 The dot at the top is green when healthy, amber when worth a look, and
 red when something genuinely needs attention - a deep backlog, a
-bookkeeping problem, or a long-stale summary.
+bookkeeping problem, or a pile of new instincts the summary hasn't
+absorbed yet.
 
 ### Corpus
 

@@ -25,7 +25,7 @@
   import { app } from '$lib/state.svelte';
   import {
     severityFor,
-    compoundStaleness,
+    compoundRegenStatus,
     worstSeverity,
     relativeTime,
     verdictBreakdown,
@@ -103,15 +103,21 @@
       : []
   );
 
-  const compoundSev = $derived<Severity>(compoundStaleness(compound?.lastRegenAt ?? null));
+  // Compound-summary regen health is the event-count backlog (samskaras
+  // formed since the last regen vs the regen threshold), NOT the summary's
+  // age - see compoundRegenStatus for why age is a false positive on an
+  // idle account.
+  const compoundRegen = $derived(
+    compoundRegenStatus(snap?.totalSamskaras ?? 0, compound?.samskaraCountAtRegen ?? 0, !!compound?.summary)
+  );
 
   // Panel headline dot: the worst of the ACTIONABLE signals - backlog
-  // depth, internal inconsistencies, compound staleness.
+  // depth, internal inconsistencies, compound-regen backlog.
   const overall = $derived<Severity>(
     worstSeverity([
       ...backlog.map((b) => b.sev),
       ...inconsistencies.map((i) => i.sev),
-      compoundSev,
+      compoundRegen.sev,
     ])
   );
 </script>
@@ -184,11 +190,30 @@
 
     <h3 class="health-group">Staleness</h3>
     <div class="health-card">
-      <div class="health-row">
-        <span class="sev-dot sev-{compoundSev}" aria-hidden="true"></span>
-        <span class="health-label">Compound summary regenerated</span>
-        <span class="health-value">{relativeTime(compound?.lastRegenAt ?? null)}</span>
-      </div>
+      {#if compound?.summary}
+        <!-- Dotted signal: the regen backlog (new samskaras since the last
+             regen vs the threshold the background job fires at), NOT the
+             age below it. Age can't drive the dot - regen only runs when
+             the sweep visits an active user, so a stale-but-idle summary is
+             benign (see compoundRegenStatus). -->
+        <div class="health-row">
+          <span class="sev-dot sev-{compoundRegen.sev}" aria-hidden="true"></span>
+          <span class="health-label">New samskaras since summary</span>
+          <span class="health-value">{compoundRegen.delta} / {compoundRegen.threshold}</span>
+        </div>
+        <!-- Informational, not dotted: when the summary last rebuilt. Useful
+             context, but age alone is not a health signal. -->
+        <div class="health-row">
+          <span class="health-label">Summary last regenerated</span>
+          <span class="health-value">{relativeTime(compound.lastRegenAt)}</span>
+        </div>
+      {:else}
+        <div class="health-row">
+          <span class="sev-dot sev-{compoundRegen.sev}" aria-hidden="true"></span>
+          <span class="health-label">Compound summary</span>
+          <span class="health-value">not built yet</span>
+        </div>
+      {/if}
     </div>
 
     {#if rates}
