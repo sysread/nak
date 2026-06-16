@@ -1202,7 +1202,6 @@ summarizer reads samskaras to feed the agent.
   "align" tier-2 with dedup by porting the ratio gate - a
   2026-06-15 prod audit proved it admits the exact grab-bag it is
   meant to reject. See the Tier-2 detection formula section.
-  Until it lands, treat any tier-2 reasoning as aspirational.
 - **Pair-relate uses a naive seed-most-recent approach.**
   One pair per probe: seed on the most recent embedded
   substrate row, walk its neighbours best-cosine-first to the
