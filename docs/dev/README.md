@@ -110,6 +110,12 @@ changing a contract that other features depend on.
   Beta-Binomial posterior with recency decay, and injects
   compensation guidance for the strongest-evidence biases into
   the main chat LLM's system prompt.
+- [Prompt augmentation](./prompt-augmentation.md) — the
+  cross-feature contract for everything that shapes one chat
+  turn: the injection order of the bias appendix + the
+  context-recall / samskara / intuition `<think>` chain + the
+  per-turn metadata block, plus freshness, failure degradation,
+  and observability rules. The spec `chat-loop.ts` implements.
 - [Settings](./settings.md) — the settings modal +
   `profiles.settings` JSONB + theme.
 - [Help](./help.md) — in-app rendering of `docs/user/`.
