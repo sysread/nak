@@ -469,6 +469,15 @@ const GATED_TOOLBOXES: readonly Toolbox[] = TOOLBOXES.filter(
  * Toolbox names that the UI + schema recognise as valid values in the
  * thread's `toolboxes_enabled` array. Exported for the UI popover and
  * for the toggle meta-tool to validate incoming names against.
+ *
+ * SOURCE OF TRUTH. The server-side toggle handler
+ * (supabase/functions/venice/tools/toggle_tools.ts) can't import this
+ * file (Deno can't load the browser barrel), so it keeps a
+ * hand-maintained mirror of these names. A toolbox added here but not
+ * there can't be enabled by the model (the toggle silently drops the
+ * unknown name and returns `enabled: []`). tests/toggle-toolbox-mirror.test.ts
+ * cross-checks the two so the drift fails the gate - add a toolbox in
+ * BOTH places.
  */
 export const GATED_TOOLBOX_NAMES: readonly string[] = GATED_TOOLBOXES.map(
   (tb) => tb.name
