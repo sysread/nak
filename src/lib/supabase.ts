@@ -41,8 +41,6 @@ import type {
   Citation,
   EmbeddingRequest,
   EmbeddingResponse,
-  ImageGenRequest,
-  ImageGenResult,
   TokenUsage,
 } from './venice';
 import {
@@ -75,7 +73,6 @@ import type {
   ThreadCursor,
   ThreadPage,
   ThreadSearchHit,
-  ThreadSummaryRow,
   Memory,
   MemoryChangelogKind,
   MemoryChangelogEntry,
@@ -90,11 +87,8 @@ import type {
   Recipe,
   RecipeVersion,
   RecipePhoto,
-  RecipePhotoMeta,
   RecipePhotoInput,
   Document,
-  DocumentGrepHit,
-  DocumentStat,
   UserSettings,
   SystemPrompt,
   TopicVocabulary,
@@ -112,8 +106,6 @@ import {
   coerceWikiChangelogEntry,
   parseTopicVocabulary,
   coerceDocument,
-  coerceDocumentGrepHit,
-  coerceDocumentStat,
   USER_PROFILE_FIELD_MAX,
   UNTAGGED_TOPIC_SENTINEL,
   DEFAULT_THREAD_PAGE_SIZE,
@@ -713,48 +705,6 @@ export class SupabaseService {
   }
 
   /**
-   * Generate an image through the venice edge function's /image-generate
-   * route. The function holds the shared key server-side and pins the
-   * variants=1 / return_binary=false defaults so the response is a single
-   * base64 image ready for the message_attachments row the chat-loop creates.
-   *
-   * The camel-cased ImageGenRequest shape is preserved on the wire; the Deno
-   * helper does the snake_case translation Venice expects. req.signal is not
-   * propagated (functions.invoke has no abort hook), so an aborted generation
-   * still spends Venice credits - the chat-loop's tool-side handling treats
-   * the discarded result the same as a model-side retry.
-   */
-  async generateImage(req: ImageGenRequest): Promise<ImageGenResult> {
-    const { data, error } = await this.client.functions.invoke('venice/image-generate', {
-      body: {
-        model: req.model,
-        prompt: req.prompt,
-        negativePrompt: req.negativePrompt,
-        stylePreset: req.stylePreset,
-        width: req.width,
-        height: req.height,
-        seed: req.seed,
-        steps: req.steps,
-        cfgScale: req.cfgScale,
-        safeMode: req.safeMode,
-        hideWatermark: req.hideWatermark,
-        format: req.format,
-      },
-    });
-    if (error) throw await veniceFunctionError(error);
-    const result = data as { imageBase64?: unknown; mimeType?: unknown } | null;
-    const imageBase64 = result?.imageBase64;
-    const mimeType = result?.mimeType;
-    if (typeof imageBase64 !== 'string' || typeof mimeType !== 'string') {
-      throw new VeniceError(
-        'Venice image response did not contain image data.',
-        'parse'
-      );
-    }
-    return { imageBase64, mimeType };
-  }
-
-  /**
    * Merge a partial settings patch into the profiles.settings jsonb. Does a
    * read-then-write — fine for a single-user app but not safe under
    * concurrent writes from multiple tabs. If multi-tab concurrency ever
@@ -1192,54 +1142,6 @@ export class SupabaseService {
     return out;
   }
 
-  /**
-   * Batch-fetch a tool-facing projection of thread rows by id,
-   * preserving the caller's id ordering. Used to hydrate the
-   * `summary` column onto results of `searchThreads` — the
-   * `search_threads_by_embedding` RPC returns only the columns the
-   * drawer UI needs (id, title, archived, updated_at, similarity), so
-   * the model-facing `conversation_search` tool has to round-trip for
-   * the summary. Deliberately a narrow projection rather than a
-   * `Thread[]` - the tool result set doesn't need user_id /
-   * toolboxes_enabled / model / reasoning_effort, and surfacing those
-   * on tool results would be noise the LLM then has to filter.
-   *
-   * `.in('id', ids)` returns rows in the server's natural order, not
-   * the caller's requested order — we re-sort against the input so
-   * callers that already sorted their ids upstream (by similarity, by
-   * merge order) keep that sort.
-   */
-  async listThreadSummariesByIds(ids: readonly string[]): Promise<ThreadSummaryRow[]> {
-    if (ids.length === 0) return [];
-    const { data, error } = await this.client
-      .from('threads')
-      .select('id, title, summary, archived, updated_at')
-      .in('id', ids as string[]);
-    if (error) throw new SupabaseError(error.message);
-    const rows = ((data ?? []) as {
-      id: unknown;
-      title: unknown;
-      summary: unknown;
-      archived: unknown;
-      updated_at: unknown;
-    }[]).map(
-      (row): ThreadSummaryRow => ({
-        id: String(row.id),
-        title: String(row.title ?? ''),
-        summary: typeof row.summary === 'string' ? row.summary : null,
-        archived: row.archived === true,
-        updated_at: String(row.updated_at),
-      })
-    );
-    const byId = new Map(rows.map((r) => [r.id, r]));
-    const out: ThreadSummaryRow[] = [];
-    for (const id of ids) {
-      const r = byId.get(id);
-      if (r) out.push(r);
-    }
-    return out;
-  }
-
   async createThread(
     title: string,
     model: ModelTier | null = null,
@@ -1500,36 +1402,6 @@ export class SupabaseService {
     const { data, error } = await q;
     if (error) throw new SupabaseError(error.message);
     return (data ?? []) as Memory[];
-  }
-
-  /**
-   * Insert a new memory. `confidence` is optional; omitting it defers to
-   * the schema default (1.0). The volitional-memory tools pass it
-   * explicitly when the LLM marks a memory as already-corroborated at
-   * birth; the Memories.svelte create flow and the reflection agent
-   * leave it unset.
-   */
-  async createMemory(
-    label: string,
-    data: string,
-    confidence?: number
-  ): Promise<Memory> {
-    const session = await this.getSession();
-    if (!session) throw new SupabaseError('Not authenticated.');
-    const payload: {
-      user_id: string;
-      label: string;
-      data: string;
-      confidence?: number;
-    } = { user_id: session.user.id, label, data };
-    if (confidence !== undefined) payload.confidence = confidence;
-    const { data: row, error } = await this.client
-      .from('memories')
-      .insert(payload)
-      .select('id, label, data, confidence, topics, created_at, updated_at')
-      .single();
-    if (error) throw new SupabaseError(error.message);
-    return row as Memory;
   }
 
   /**
@@ -2285,180 +2157,6 @@ export class SupabaseService {
     ).map((r) => ({ id: r.image_id, label: r.label ?? null }));
   }
 
-  /**
-   * Lightweight (no bytes) projection of the current photo set for a
-   * recipe. Used in tool returns so the LLM sees `photos: [{id,
-   * position}]` it can chain into a follow-up attach/remove/reorder
-   * call. Calls the same embedded-select shape as `listRecipePhotos`
-   * but skips the `data` column to keep the wire payload small.
-   */
-  async listRecipePhotoMeta(recipeId: string): Promise<RecipePhotoMeta[]> {
-    const { data, error } = await this.client
-      .from('recipe_versions')
-      .select('id, recipe_version_images(position, image_id, label)')
-      .eq('recipe_id', recipeId)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (error) throw new SupabaseError(error.message);
-    if (!data) return [];
-    type LinkRow = {
-      position: number;
-      image_id: string;
-      label: string | null;
-    };
-    const links = (data as { recipe_version_images?: LinkRow[] | null })
-      .recipe_version_images;
-    if (!Array.isArray(links)) return [];
-    return links
-      .map((l) => ({
-        id: l.image_id,
-        position: l.position,
-        label: l.label ?? null,
-      }))
-      .sort((a, b) => a.position - b.position);
-  }
-
-  /**
-   * Append photos to a recipe's current set. Creates a new version row
-   * with the post-mutation link list. Returns the new full ordered
-   * link list as `[{id, position}]` so callers (especially LLM tools)
-   * can echo it back to the model without a follow-up read.
-   *
-   * Duplicate IDs (an image already on the recipe) are silently
-   * skipped server-side - attaching the same photo twice is a no-op,
-   * not an error, so the LLM doesn't have to dedupe before calling.
-   */
-  async attachRecipePhotos(
-    recipeId: string,
-    photos: RecipePhotoInput[],
-    changeMessage: string
-  ): Promise<RecipePhotoMeta[]> {
-    const { imageIds, imageLabels } = splitPhotoInputs(photos);
-    const { data, error } = await this.client.rpc('recipe_attach_photos', {
-      p_recipe_id: recipeId,
-      p_image_ids: imageIds,
-      p_image_labels: imageLabels,
-      p_change_message: changeMessage.trim(),
-    });
-    if (error) throw new SupabaseError(error.message);
-    return (
-      (data ?? []) as Array<{
-        image_id: string;
-        position: number;
-        label: string | null;
-      }>
-    ).map((r) => ({
-      id: r.image_id,
-      position: r.position,
-      label: r.label ?? null,
-    }));
-  }
-
-  /**
-   * Remove photos from a recipe's current set by id. Throws when an
-   * id isn't currently linked, naming the offenders so the caller
-   * can re-issue with the right set.
-   */
-  async removeRecipePhotos(
-    recipeId: string,
-    imageIds: string[],
-    changeMessage: string
-  ): Promise<RecipePhotoMeta[]> {
-    const { data, error } = await this.client.rpc('recipe_remove_photos', {
-      p_recipe_id: recipeId,
-      p_image_ids: imageIds,
-      p_change_message: changeMessage.trim(),
-    });
-    if (error) throw new SupabaseError(error.message);
-    return (
-      (data ?? []) as Array<{
-        image_id: string;
-        position: number;
-        label: string | null;
-      }>
-    ).map((r) => ({
-      id: r.image_id,
-      position: r.position,
-      label: r.label ?? null,
-    }));
-  }
-
-  /**
-   * Set a recipe's photo order to exactly the given id sequence. The
-   * array must be a permutation of the current set - missing or
-   * extra ids fail loudly server-side.
-   */
-  async reorderRecipePhotos(
-    recipeId: string,
-    imageIds: string[],
-    changeMessage: string
-  ): Promise<RecipePhotoMeta[]> {
-    const { data, error } = await this.client.rpc('recipe_reorder_photos', {
-      p_recipe_id: recipeId,
-      p_image_ids: imageIds,
-      p_change_message: changeMessage.trim(),
-    });
-    if (error) throw new SupabaseError(error.message);
-    return (
-      (data ?? []) as Array<{
-        image_id: string;
-        position: number;
-        label: string | null;
-      }>
-    ).map((r) => ({
-      id: r.image_id,
-      position: r.position,
-      label: r.label ?? null,
-    }));
-  }
-
-  /**
-   * Update the labels (captions) on photos that are already linked
-   * to a recipe. `photos` is the list of `(id, label)` pairs to
-   * change; photos not named keep their existing labels. A null /
-   * blank label clears the caption. Creates a new version row so a
-   * label edit shows in the History panel like every other change.
-   */
-  async setRecipePhotoLabels(
-    recipeId: string,
-    photos: RecipePhotoInput[],
-    changeMessage: string
-  ): Promise<RecipePhotoMeta[]> {
-    if (photos.length === 0) {
-      throw new SupabaseError('photos must contain at least one entry');
-    }
-    // Force the parallel arrays - the RPC requires both. Empty/blank
-    // labels survive as nulls in the wire payload (not the elided
-    // path splitPhotoInputs takes for "no labels at all"), since the
-    // contract here is "set this photo's label to whatever I sent,
-    // even if that's null."
-    const imageIds = photos.map((p) => p.id);
-    const imageLabels = photos.map((p) => {
-      if (p.label === null || p.label === undefined) return null;
-      const trimmed = p.label.trim();
-      return trimmed.length === 0 ? null : trimmed;
-    });
-    const { data, error } = await this.client.rpc('recipe_set_photo_labels', {
-      p_recipe_id: recipeId,
-      p_image_ids: imageIds,
-      p_image_labels: imageLabels,
-      p_change_message: changeMessage.trim(),
-    });
-    if (error) throw new SupabaseError(error.message);
-    return (
-      (data ?? []) as Array<{
-        image_id: string;
-        position: number;
-        label: string | null;
-      }>
-    ).map((r) => ({
-      id: r.image_id,
-      position: r.position,
-      label: r.label ?? null,
-    }));
-  }
-
   // User wiki -------------------------------------------------------------
 
   // --- Wiki articles ---------------------------------------------------
@@ -2510,34 +2208,6 @@ export class SupabaseService {
     );
     const hasMore = all.length > opts.pageSize;
     return { rows: hasMore ? all.slice(0, opts.pageSize) : all, hasMore };
-  }
-
-  async getWikiArticleById(id: string): Promise<WikiArticle | null> {
-    const { data, error } = await this.client
-      .from('wiki_articles')
-      .select('id, title, content, created_at, updated_at')
-      .eq('id', id)
-      .maybeSingle();
-    if (error) throw new SupabaseError(error.message);
-    if (!data) return null;
-    return coerceWikiArticle(data as Record<string, unknown>);
-  }
-
-  /**
-   * Title-keyed lookup. The autonomous agent uses this to resolve a
-   * candidate title to an existing article id when `wiki_create`
-   * raised a unique-violation - the agent then calls `wiki_update`
-   * against the resolved id.
-   */
-  async getWikiArticleByTitle(title: string): Promise<WikiArticle | null> {
-    const { data, error } = await this.client
-      .from('wiki_articles')
-      .select('id, title, content, created_at, updated_at')
-      .eq('title', title)
-      .maybeSingle();
-    if (error) throw new SupabaseError(error.message);
-    if (!data) return null;
-    return coerceWikiArticle(data as Record<string, unknown>);
   }
 
   async createWikiArticle(args: {
@@ -2649,18 +2319,6 @@ export class SupabaseService {
         : { extraction_status: 'failed', extraction_error: result.error.slice(0, 500) };
     const { error } = await this.client.from('documents').update(patch).eq('id', id);
     if (error) throw new SupabaseError(error.message);
-  }
-
-  async listDocuments(opts: { limit?: number } = {}): Promise<Document[]> {
-    const { data, error } = await this.client
-      .from('documents')
-      .select(
-        'id, title, description, filename, mime_type, size_bytes, storage_path, extracted_text, extraction_status, extraction_error, created_at, updated_at'
-      )
-      .order('created_at', { ascending: false })
-      .limit(opts.limit ?? 500);
-    if (error) throw new SupabaseError(error.message);
-    return (data ?? []).map((row) => coerceDocument(row as Record<string, unknown>));
   }
 
   /**
@@ -2810,108 +2468,7 @@ export class SupabaseService {
   // crosses the wire - only matching snippets or the requested line range come
   // back.
 
-  /**
-   * Regex search over a document's text (or every document the user owns when
-   * `documentId` is omitted), with line numbers and context. An invalid regex
-   * surfaces as a SupabaseError the calling tool rephrases.
-   */
-  async grepDocument(opts: {
-    pattern: string;
-    documentId?: string | null;
-    caseSensitive?: boolean;
-    context?: number;
-    maxMatches?: number;
-  }): Promise<DocumentGrepHit[]> {
-    const { data, error } = await this.client.rpc('grep_documents', {
-      p_pattern: opts.pattern,
-      p_document_id: opts.documentId ?? null,
-      p_case_sensitive: opts.caseSensitive ?? false,
-      p_context: opts.context ?? 2,
-      p_max_matches: opts.maxMatches ?? 50,
-    });
-    if (error) throw new SupabaseError(error.message);
-    return ((data ?? []) as unknown[]).map((row) =>
-      coerceDocumentGrepHit(row as Record<string, unknown>)
-    );
-  }
-
-  /**
-   * Read a contiguous line range of a document, numbered, plus the document's
-   * total line count. Empty `lines` means the range was out of bounds or the
-   * document isn't the caller's (RLS); `totalLines` is 0 in that case.
-   */
-  async readDocumentLines(
-    documentId: string,
-    start: number,
-    end: number
-  ): Promise<{ lines: { line_number: number; content: string }[]; totalLines: number }> {
-    const { data, error } = await this.client.rpc('read_document_lines', {
-      p_document_id: documentId,
-      p_start: start,
-      p_end: end,
-    });
-    if (error) throw new SupabaseError(error.message);
-    const rows = (data ?? []) as Record<string, unknown>[];
-    const lines = rows.map((r) => ({
-      line_number: typeof r.line_number === 'number' ? r.line_number : Number(r.line_number ?? 0),
-      content: typeof r.content === 'string' ? r.content : '',
-    }));
-    const totalLines = rows.length > 0 ? Number(rows[0].total_lines ?? 0) : 0;
-    return { lines, totalLines };
-  }
-
-  /**
-   * Metadata + total line count for one document, without fetching its text.
-   * Returns null for an unknown id or one the caller doesn't own.
-   */
-  async getDocumentStat(id: string): Promise<DocumentStat | null> {
-    const { data, error } = await this.client.rpc('document_stat', { p_document_id: id });
-    if (error) throw new SupabaseError(error.message);
-    const rows = (data ?? []) as Record<string, unknown>[];
-    if (rows.length === 0) return null;
-    return coerceDocumentStat(rows[0]);
-  }
-
   // --- Wiki sources, changelog & agent runs ----------------------------
-
-  /**
-   * Attribute one or more source conversations to a wiki article.
-   * Upsert semantics on the composite (article_id, thread_id) primary
-   * key: a thread already attributed gets its `last_processed_at`
-   * bumped rather than producing a duplicate row.
-   *
-   * Called by the wiki tools after a successful create/update:
-   *   - autonomous agent: passes its current threadId (singular).
-   *   - librarian: passes the `source_thread_ids` parameter the
-   *     model supplied, after filtering through `findExistingThreadIds`
-   *     so a hallucinated id can't land.
-   *
-   * Empty / all-invalid input is a silent no-op (no round-trip).
-   */
-  async attachWikiArticleSources(
-    articleId: string,
-    threadIds: readonly string[]
-  ): Promise<void> {
-    if (threadIds.length === 0) return;
-    const seen = new Set<string>();
-    const rows: Array<{
-      article_id: string;
-      thread_id: string;
-      last_processed_at: string;
-    }> = [];
-    const now = new Date().toISOString();
-    for (const id of threadIds) {
-      if (typeof id !== 'string' || id.length === 0) continue;
-      if (seen.has(id)) continue;
-      seen.add(id);
-      rows.push({ article_id: articleId, thread_id: id, last_processed_at: now });
-    }
-    if (rows.length === 0) return;
-    const { error } = await this.client
-      .from('wiki_article_sources')
-      .upsert(rows, { onConflict: 'article_id,thread_id' });
-    if (error) throw new SupabaseError(error.message);
-  }
 
   /**
    * Return the bibliography for one article: every thread that has
@@ -3163,34 +2720,6 @@ export class SupabaseService {
   }
 
   // Wiki background pipeline ---------------------------------------------
-
-  /**
-   * Filter a candidate set of thread ids down to those that exist
-   * for the current user (RLS-scoped). Used by the librarian's
-   * `wiki_update` path to validate the `source_thread_ids` parameter
-   * the model supplied - the constraint is "agents only attribute
-   * thread ids they got from the runtime (their current thread, or
-   * `conversation_search` results)", and this method is the defense
-   * in depth that catches a hallucinated id at the tool boundary
-   * before it lands in `wiki_article_sources`.
-   *
-   * Empty input returns an empty set without a round-trip.
-   * Postgres errors propagate as SupabaseError.
-   */
-  async findExistingThreadIds(ids: readonly string[]): Promise<Set<string>> {
-    if (ids.length === 0) return new Set();
-    const { data, error } = await this.client
-      .from('threads')
-      .select('id')
-      .in('id', [...ids]);
-    if (error) throw new SupabaseError(error.message);
-    const out = new Set<string>();
-    for (const row of data ?? []) {
-      const id = (row as { id?: unknown }).id;
-      if (typeof id === 'string') out.add(id);
-    }
-    return out;
-  }
 
   /**
    * List the user's wiki-skipped threads, most recent first. The
@@ -3483,42 +3012,6 @@ export class SupabaseService {
     });
     if (error) throw new SupabaseError(error.message);
     return (data ?? []) as Memory[];
-  }
-
-  /**
-   * Scored variant of `searchMemoriesByEmbedding`. Same ranking
-   * formula, but returns the boosted similarity score per row so the
-   * caller can threshold in application code. Used by the opening-
-   * turn memory-recall priming in chat-loop.ts — the main
-   * `memory_search` path continues to use the unscored RPC.
-   */
-  async searchMemoriesByEmbeddingScored(
-    queryEmbedding: number[],
-    limit: number
-  ): Promise<
-    Array<{
-      id: string;
-      label: string;
-      data: string;
-      confidence: number;
-      similarity: number;
-    }>
-  > {
-    const { data, error } = await this.client.rpc(
-      'search_memories_by_embedding_scored',
-      {
-        query_embedding: queryEmbedding,
-        match_limit: limit,
-      }
-    );
-    if (error) throw new SupabaseError(error.message);
-    return (data ?? []) as Array<{
-      id: string;
-      label: string;
-      data: string;
-      confidence: number;
-      similarity: number;
-    }>;
   }
 
   /**
@@ -3824,20 +3317,6 @@ export class SupabaseService {
   }
 
   /**
-   * Download one attachment's bytes from the bucket as a Blob. Used by the
-   * paths that need the raw bytes rather than a URL: doc_create (re-upload
-   * into the documents bucket) and recipe_photos_attach (hash + dedup).
-   * Throws if the object is gone (expired).
-   */
-  async downloadAttachmentBlob(storagePath: string): Promise<Blob> {
-    const { data, error } = await this.client.storage
-      .from('attachments')
-      .download(storagePath);
-    if (error) throw new SupabaseError(error.message);
-    return data;
-  }
-
-  /**
    * Find the most recent image attachment in this thread whose filename
    * matches exactly. Returns the row regardless of expiry state - the
    * caller distinguishes "not found" (null return) from "expired"
@@ -3866,33 +3345,6 @@ export class SupabaseService {
       .eq('messages.thread_id', threadId)
       .eq('filename', filename)
       .like('mime_type', 'image/%')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (error) throw new SupabaseError(error.message);
-    if (!data) return null;
-    return coerceAttachmentRow(data as Record<string, unknown>);
-  }
-
-  /**
-   * Find the most recent attachment in a thread by filename, regardless of
-   * mime type or expiry state. Used by `doc_create` to promote a file the user
-   * pasted into the conversation into a persistent Library document: it reads
-   * the bytes (from the bucket via `storage_path`, null once expired) and the
-   * already-parsed `extracted_text`. RLS scopes the thread join to the caller's
-   * own threads.
-   */
-  async findAttachmentByFilenameInThread(
-    threadId: string,
-    filename: string
-  ): Promise<Attachment | null> {
-    const { data, error } = await this.client
-      .from('message_attachments')
-      .select(
-        'id, message_id, position, filename, mime_type, size_bytes, storage_path, extracted_text, expired_at, created_at, messages!inner(thread_id)'
-      )
-      .eq('messages.thread_id', threadId)
-      .eq('filename', filename)
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -4007,53 +3459,6 @@ export class SupabaseService {
       .update({ updated_at: new Date().toISOString() })
       .eq('id', threadId);
     return data as Message;
-  }
-
-  /**
-   * Atomic terminal-assistant-message insert with conflict detection.
-   * Routes through the `add_assistant_message` Postgres function which:
-   *   1. Locks the thread row to prevent two devices from both committing.
-   *   2. Checks for any user message created after p_user_message_id. If
-   *      one exists the response was generated against a stale context and
-   *      must not land - the function returns { conflict: true }.
-   *   3. Inserts the assistant row and bumps threads.updated_at.
-   *
-   * Returns { conflict: true } when the check fires, or
-   * { conflict: false, message } on success. The caller (chat-loop) treats
-   * a conflict as a non-error early exit rather than throwing, so the UI
-   * can show a focused "conversation changed on another device" prompt
-   * instead of the generic error banner.
-   *
-   * Only used for terminal assistant rows (the final answer and
-   * user-interrupted rows). Intermediate tool-calling rounds use the
-   * regular addMessage path - they are same-device and same-context by
-   * construction, so the conflict check would be noise.
-   */
-  async commitAssistantMessage(
-    threadId: string,
-    content: string,
-    opts: {
-      model?: string | null;
-      usage?: TokenUsage | null;
-      reasoning?: string | null;
-      citations?: Citation[] | null;
-    },
-    userMessageId: string
-  ): Promise<{ conflict: true } | { conflict: false; message: Message }> {
-    const trimmed = content.trim();
-    const { data, error } = await this.client.rpc('add_assistant_message', {
-      p_thread_id:       threadId,
-      p_user_message_id: userMessageId,
-      p_content:         trimmed,
-      p_model:           opts.model ?? null,
-      p_usage:           opts.usage ?? null,
-      p_reasoning:       opts.reasoning ?? null,
-      p_citations:       opts.citations ?? null,
-    });
-    if (error) throw new SupabaseError(error.message);
-    const result = data as { conflict: boolean; message?: unknown };
-    if (result.conflict) return { conflict: true };
-    return { conflict: false, message: result.message as Message };
   }
 
   /**
