@@ -21,13 +21,24 @@
 
 import { requireThreadId, registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 
-// Mirror of GATED_TOOLBOX_NAMES in src/lib/tools/index.ts. Keep in
-// sync when adding / removing a toolbox; same-PR landing is the
-// expected discipline.
+// Hand-maintained MIRROR of GATED_TOOLBOX_NAMES in
+// src/lib/tools/index.ts (the source of truth). Toggle dispatch is
+// server-side, and this Deno module can't import the browser barrel, so
+// the gated-toolbox names are duplicated here. A name the model toggles
+// that is absent from this Set is silently dropped (the accept loop
+// below filters on it), so a stale mirror manifests as "the toolbox
+// can't be enabled" - exactly how the wiki_records omission surfaced
+// after that feature shipped (toggle returned `enabled: []`).
+//
+// DRIFT GUARD: tests/toggle-toolbox-mirror.test.ts (vitest) reads this
+// literal as text and asserts it equals the browser GATED_TOOLBOX_NAMES,
+// so adding a toolbox in only one place fails the gate. Keep the Set
+// literal a flat list of quoted strings so that parser keeps working.
 const GATED_TOOLBOX_NAMES = new Set<string>([
   'cooking',
   'memories',
   'wiki',
+  'wiki_records',
   'library',
   'images',
 ]);

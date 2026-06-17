@@ -264,7 +264,16 @@ Edge dispatch (`supabase/functions/venice/`):
   catalog) and to the user (popover).
 - **`GATED_TOOLBOX_NAMES`** - `TOOLBOXES` minus `alwaysOnToolbox`.
   The canonical name list for both writers (the `toggle_toolbox`
-  tool and the composer popover) to validate against.
+  tool and the composer popover) to validate against. **Mirror
+  alert:** `toggle_toolbox` actually dispatches server-side
+  (`supabase/functions/venice/tools/toggle_tools.ts`), which can't
+  import this browser barrel and so keeps a HAND-MAINTAINED copy of
+  these names. A toolbox added here but not there can't be enabled
+  by the model - the toggle silently drops the unknown name and
+  returns `enabled: []` (the bug that shipped with `wiki_records`).
+  `tests/toggle-toolbox-mirror.test.ts` cross-checks the two lists,
+  so adding a gated toolbox means editing BOTH places (and the
+  guard fails the gate if you forget).
 - **`GATED_TOOLBOX_META`** - `{name, description}[]` projection
   that the UI popover reads; kept narrow so Chat.svelte does not
   pull in tool definitions just to render a list.
