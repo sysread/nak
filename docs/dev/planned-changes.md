@@ -13,26 +13,28 @@ investigation cycles and the lessons learned are worth saving.
 ## Contents
 
 - [Retire the browser supervisor](#retire-the-browser-supervisor)
-  (shipped 2026-06-11 as item C1 of the
-  [de-browser-background-jobs](./in-progress/de-browser-background-jobs.md)
-  milestone; analysis kept as the historical record)
+  (shipped 2026-06-11 as item C1 of the de-browser-background-jobs
+  milestone; analysis kept here as the historical record)
 - [Biometric unlock for the master password](#biometric-unlock-for-the-master-password)
   (obsolete - the master-password layer was removed; kept as WebAuthn PRF reference)
 
 ## Retire the browser supervisor
 
 **Status:** shipped - implemented 2026-06-11 as item C1 of the
-[de-browser-background-jobs](./in-progress/de-browser-background-jobs.md)
-milestone, on the `claude/reorganize-the-workshop` branch. The five
+de-browser-background-jobs milestone, on the
+`claude/reorganize-the-workshop` branch. (That milestone's in-progress
+design doc was retired once it closed; the current background-job model
+lives in [architecture.md](./architecture.md) under "Background-job
+model", and git preserves the migration narratives.) The five
 units now run in the venice function off the chat-turn tail and the
 hourly curation sweep; the browser supervisor and its lease
 apparatus are deleted. The analysis below stands as the historical
 record of the scoping (2026-06-10) - note its per-agent verdicts
 were later overtaken: bias (C2) and samskara (C3) shipped
 server-side in the same milestone, and only intuition remains
-browser-side, as ongoing-chat-scoped work. Output of the no-tool agents re-inspection
-the reorganize-the-workshop plan mandated after its Phase 3 closed
-(see that plan doc's Phase 5 ledger). The re-inspection covered all
+browser-side, as ongoing-chat-scoped work. Output of the no-tool agents
+re-inspection the reorganize-the-workshop plan mandated after its
+Phase 3 closed. The re-inspection covered all
 eight plain-completion agents; this entry records the verdicts and
 the follow-on project they point at.
 

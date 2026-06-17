@@ -28,6 +28,29 @@ If a dev doc is wrong, stale, or missing the thing that would have
 saved you, fix it in the same PR. A stale dev doc misleads the next
 session with full confidence - worse than no doc at all.
 
+### `docs/dev/in-progress/` is for *open* work only
+
+`docs/dev/in-progress/` holds plans and milestone trackers for work
+that is actively underway. It is not an archive. When a milestone
+ships, **graduate and retire its doc in the same PR that closes it**:
+
+1. **Graduate** the durable content - the "how it works now" end state,
+   the load-bearing design rationale - into the permanent feature docs
+   (`architecture.md`, the per-feature doc) if it isn't already there.
+   The in-progress doc is a migration *narrative*; the permanent docs
+   own current reality.
+2. **Retire** the in-progress doc: delete it. Git preserves the
+   narrative; a finished plan left in `in-progress/` reads as open work
+   and is exactly the "ambiguous ownership / migration residue" debt
+   these docs are supposed to prevent.
+3. **Fix inbound links** (grep `in-progress/` across `docs/`) so nothing
+   dangles - usually point them at the permanent doc that now owns the
+   end state.
+
+The test: if someone opens `in-progress/` and can't tell what is still
+unfinished, the folder has rotted. Keep it honest as the work lands,
+not in a later cleanup sweep.
+
 ## Talking to the user
 
 Hard constraints, not style preferences. (Personality and prose
