@@ -1362,6 +1362,52 @@ export class SupabaseService {
     }
   }
 
+  async deleteMessages(messageIds: string[]): Promise<void> {
+    // Delete a set of message rows by id - the "delete from here"
+    // gesture passes a user message and every row after it. The
+    // "messages are self-deletable via thread" RLS policy scopes the
+    // delete to threads the caller owns, so a forged id from another
+    // user's thread silently matches nothing.
+    //
+    // Everything that references messages.id either cascades or clears:
+    // message_attachments cascade (their bucket objects are reclaimed
+    // below), and the threads.last_*_msg_id watermarks + the bias
+    // evidence_message_id pointer are ON DELETE SET NULL - so the next
+    // reflection/summary/topics/wiki/evaluation cycle simply re-runs
+    // from a cleared watermark. samskara_substrate.user_message_id and
+    // samskara_fires.user_round are soft pointers with no FK; their
+    // rows survive and may go off-by-N, which the samskara design
+    // accepts (rare, not worth a trigger).
+    if (messageIds.length === 0) return;
+
+    // Collect attachment object keys BEFORE the delete: the cascade
+    // removes the rows, after which their bucket keys are
+    // unrecoverable. Expired rows (storage_path null) have no object
+    // left, so they are filtered out.
+    const { data: attachRows, error: listErr } = await this.client
+      .from('message_attachments')
+      .select('storage_path')
+      .in('message_id', messageIds)
+      .not('storage_path', 'is', null);
+    if (listErr) throw new SupabaseError(listErr.message);
+    const paths = (attachRows ?? [])
+      .map((r) => (r as { storage_path: string | null }).storage_path)
+      .filter((p): p is string => typeof p === 'string' && p.length > 0);
+
+    const { error } = await this.client.from('messages').delete().in('id', messageIds);
+    if (error) throw new SupabaseError(error.message);
+
+    // Best-effort object reclamation AFTER the rows are gone (same order
+    // as deleteThread): a Storage hiccup must not strand a live row
+    // pointing at a deleted object. Anything left behind is swept by the
+    // daily attachment-gc (bucket objects with no message_attachments
+    // row), so the remove error is swallowed rather than failing the
+    // delete.
+    if (paths.length > 0) {
+      await this.client.storage.from('attachments').remove(paths);
+    }
+  }
+
   // memories -------------------------------------------------------------
   //
   // RLS on the memories table scopes every query to the signed-in user's

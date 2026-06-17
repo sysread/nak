@@ -148,6 +148,24 @@ detects from your browser and you can override in Settings.
 
 ## Copying, editing, and deleting messages
 
+Your own messages carry a trash button at the right edge of their
+action row. Click it and Nak removes that message and **everything
+after it** - the reply it prompted, any later turns you went on to
+have, all of it - rolling the conversation back to exactly where it
+stood before you sent that message. Hovering the button red-outlines
+the range it will remove so you can see the blast radius before you
+commit; a confirmation prompt guards the click.
+
+This is the harder-edged sibling of regenerate. Regenerate rolls back
+and immediately re-runs the model; delete-from-here rolls back and
+stops, leaving you at a clean prompt to take the thread in a new
+direction (or to delete the whole thread from the conversation list if
+you removed everything). Unlike regenerate, a delete cannot be undone -
+the removed messages are gone from the database, not just hidden.
+
+To remove an entire conversation, use **Delete** in the thread list
+rather than deleting from the first message.
+
 ## Stop and resume
 
 While the model is generating a response, the send button turns

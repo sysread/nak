@@ -476,6 +476,28 @@ A chat turn goes:
   Synthetic recovery rows never ride `supersededIds` (they have no
   DB row; see `persistedRowIds` in `src/lib/ui/regenerate.ts`) but
   stay in `pendingDeleteIds` for the in-memory prune.
+- **Delete-from-here is a DIRECT client delete, not the commit RPC.**
+  The trash button on a user message (`deleteFrom` in `Chat.svelte`)
+  removes that message and every row after it with no re-run, so there
+  is no `/stream` turn to carry `supersededIds`. It calls
+  `SupabaseService.deleteMessages(ids)` straight against the table,
+  gated by the "messages are self-deletable via thread" RLS policy.
+  Correctness rests entirely on the schema's FK contracts, NOT on app
+  cleanup: `message_attachments` cascade (their bucket objects are
+  reclaimed best-effort, same order as `deleteThread`); every
+  `threads.last_*_msg_id` watermark and `bias_observations`
+  `evidence_message_id` is `ON DELETE SET NULL`, so the next
+  reflection/summary/topics/wiki/evaluation cycle re-runs from a
+  cleared mark; `samskara_substrate.user_message_id` and
+  `samskara_fires.user_round` are soft pointers (no FK) whose rows
+  survive and may go off-by-N, which the samskara design accepts. The
+  range is computed by `computeDeleteFromRangeIds`
+  (`src/lib/ui/message-delete.ts`) - the inclusive slice from the
+  clicked user row to the tail, the mirror of regenerate's
+  exclusive-of-the-anchor range. The fade-out/prune animation is the
+  shared `fadeOutAndPruneRows` helper both this and regenerate call;
+  on a delete failure the rows survived server-side, so the handler
+  clears the greying and surfaces the error instead of pruning.
 - **Reconnect POLLS the DB row; it does NOT resume the live stream.**
   When `selectThread` finds the transcript tail is a
   `status='streaming'` assistant row and no local slot is producing it

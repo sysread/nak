@@ -203,6 +203,7 @@
   import { isReasoningOnlyStall, isCutOffPartialText } from '$lib/ui/incomplete-turn';
   import { headingFor, parseLastError } from '$lib/ui/last-error';
   import { computeRegenerateRangeIds, persistedRowIds } from '$lib/ui/regenerate';
+  import { computeDeleteFromRangeIds } from '$lib/ui/message-delete';
   import {
     orderedSubconsciousRows,
     subconsciousLabel,
@@ -3822,25 +3823,7 @@
         // selectThread reload see the deleted rows missing from
         // listMessages.
         if (ctx.threadId === activeThreadId) {
-          const indexOfId = new Map(
-            idsToDelete.map((id) => [id, messages.findIndex((m) => m.id === id)] as const)
-          );
-          const orderedNewestFirst = [...idsToDelete].sort(
-            (a, b) => (indexOfId.get(b) ?? 0) - (indexOfId.get(a) ?? 0)
-          );
-          const STAGGER_MS = 250;
-          const ANIM_MS = 500;
-          const delays: Record<string, number> = {};
-          orderedNewestFirst.forEach((id, i) => {
-            delays[id] = i * STAGGER_MS;
-          });
-          fadeOutDelays = delays;
-          const totalMs =
-            (orderedNewestFirst.length - 1) * STAGGER_MS + ANIM_MS;
-          await new Promise<void>((resolve) => window.setTimeout(resolve, totalMs));
-          const drop = new Set(idsToDelete);
-          messages = messages.filter((m) => !drop.has(m.id));
-          fadeOutDelays = {};
+          await fadeOutAndPruneRows(idsToDelete);
         }
         pendingDeleteIds = [];
       } else if (pendingDeleteIds.length > 0) {
@@ -4277,6 +4260,88 @@
       originalText: '',
       userMessageId: draft.userMessageId,
     });
+  }
+
+  /**
+   * Staggered fade-out then prune of a set of message rows from the
+   * view. Shared by the regenerate path (replaced rows unwind as the
+   * new turn lands) and deleteFrom (the deleted range unwinds after the
+   * DB delete). The tail fades newest-first - the highest index gets
+   * delay 0, each older row +250ms - so the rows visibly unwind back
+   * toward the anchor rather than collapsing at once. Resolves once the
+   * rows are gone from `messages` and the delays are cleared. Callers
+   * own deciding WHETHER to animate (e.g. background exchanges skip it).
+   */
+  async function fadeOutAndPruneRows(idsToDelete: string[]): Promise<void> {
+    if (idsToDelete.length === 0) return;
+    const indexOfId = new Map(
+      idsToDelete.map((id) => [id, messages.findIndex((m) => m.id === id)] as const)
+    );
+    const orderedNewestFirst = [...idsToDelete].sort(
+      (a, b) => (indexOfId.get(b) ?? 0) - (indexOfId.get(a) ?? 0)
+    );
+    const STAGGER_MS = 250;
+    const ANIM_MS = 500;
+    const delays: Record<string, number> = {};
+    orderedNewestFirst.forEach((id, i) => {
+      delays[id] = i * STAGGER_MS;
+    });
+    fadeOutDelays = delays;
+    const totalMs = (orderedNewestFirst.length - 1) * STAGGER_MS + ANIM_MS;
+    await new Promise<void>((resolve) => window.setTimeout(resolve, totalMs));
+    const drop = new Set(idsToDelete);
+    messages = messages.filter((m) => !drop.has(m.id));
+    fadeOutDelays = {};
+  }
+
+  /**
+   * Paint the would-be-deleted range red while the user hovers the
+   * user-message delete button, reusing the same .regen-target hover
+   * channel the Regenerate button uses (the visual language - red
+   * outline on doomed rows - is identical). Cleared on leave by the
+   * shared clearRegeneratePreview.
+   */
+  function previewDeleteFrom(userMessageId: string): void {
+    if (activeSlot?.sending) return;
+    hoverRegenerateIds = computeDeleteFromRangeIds(messages, userMessageId);
+  }
+
+  /**
+   * Delete a user message and everything after it, reverting the thread
+   * to its state just before that message was sent. Nothing re-runs -
+   * this is the destructive half of regenerate without the re-send.
+   *
+   * The DB delete only carries persisted rows (synthetic recovery rows
+   * have sentinel ids no row matches); the in-memory fade-out prunes the
+   * full range. Server-side, message FKs cascade or clear (see
+   * SupabaseService.deleteMessages), so the thread's derived state
+   * (summary, reflection, topics, wiki, evaluation watermarks) simply
+   * re-runs from a cleared mark on the next worker cycle.
+   */
+  async function deleteFrom(userMessageId: string): Promise<void> {
+    if (activeSlot?.sending || !app.supabase) return;
+    const active = activeThreadId ? findThread(activeThreadId) ?? null : null;
+    if (!active || active.isDraft || active.archived) return;
+    const rangeIds = computeDeleteFromRangeIds(messages, userMessageId);
+    if (rangeIds.length === 0) return;
+    if (!confirm('Delete this message and everything after it?')) return;
+    // Red-outline the doomed range during the await the same way
+    // regenerate does, then drop the hover channel so pendingDeleteSet
+    // is the sole source of .regen-target through the fade-out.
+    pendingDeleteIds = rangeIds;
+    hoverRegenerateIds = [];
+    try {
+      await app.supabase.deleteMessages(persistedRowIds(messages, rangeIds));
+    } catch (e) {
+      // The rows survived server-side, so clear the greying and surface
+      // the failure rather than pruning a view that no longer matches
+      // the DB.
+      pendingDeleteIds = [];
+      error = { text: e instanceof Error ? e.message : 'Failed to delete messages.' };
+      return;
+    }
+    await fadeOutAndPruneRows(rangeIds);
+    pendingDeleteIds = [];
   }
 
   async function regenerateFrom(assistantMessageId: string): Promise<void> {
@@ -6991,6 +7056,36 @@
                         </svg>
                       </button>
                     {/if}
+                    <!-- Delete-from-here. Removes this user message and
+                         every row after it, reverting the thread to its
+                         pre-message state. Disabled mid-send (a delete
+                         racing the streaming turn would prune rows the
+                         loop is still writing). Hovering red-outlines
+                         the doomed range via the shared regen preview
+                         channel. -->
+                    <button
+                      type="button"
+                      class="copy-btn delete-from-btn"
+                      title="Delete this message and everything after it"
+                      aria-label="Delete this message and everything after it"
+                      disabled={activeSlot?.sending ?? false}
+                      onclick={() => { void deleteFrom(block.message.id); }}
+                      onmouseenter={() => previewDeleteFrom(block.message.id)}
+                      onmouseleave={clearRegeneratePreview}
+                      onfocus={() => previewDeleteFrom(block.message.id)}
+                      onblur={clearRegeneratePreview}
+                    >
+                      <!-- Feather "trash-2" - matches the action row's
+                           14px / 2px-stroke outline icon language. -->
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                           stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                           stroke-linejoin="round" aria-hidden="true">
+                        <polyline points="3 6 5 6 21 6" />
+                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                        <line x1="10" y1="11" x2="10" y2="17" />
+                        <line x1="14" y1="11" x2="14" y2="17" />
+                      </svg>
+                    </button>
                   </div>
                   {#if cohortExpanded && CohortPanelComp}
                     <div class="cohort-panel-host">

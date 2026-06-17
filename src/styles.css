@@ -2617,6 +2617,19 @@ h1 {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
+/* Delete-from-here toggle on user messages. Reuses .copy-btn for the
+   visual base, but ramps to --danger on hover/focus instead of --text:
+   the gesture is destructive (drops this message and every row after
+   it) and hovering it also red-outlines the doomed range via
+   .regen-target, so the button and the rows it threatens read in the
+   same danger color. */
+.copy-btn.delete-from-btn:hover,
+.copy-btn.delete-from-btn:focus-visible {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
 .cohort-panel-host {
   margin-top: 0.6rem;
 }
