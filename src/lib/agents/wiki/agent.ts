@@ -10,9 +10,9 @@
  * venice edge function - the cron-driven sweep plus the Skipped
  * panel's /wiki-retry route; see
  * supabase/functions/venice/agents/wiki.ts. The manual flow stays
- * browser-side because it is a single no-tool completion with a
- * user-interactive preview, the same category as the other no-tool
- * agents.
+ * browser-side as the intentional exception after that move because
+ * it is a single no-tool completion with a user-interactive preview,
+ * the same category as the other no-tool agents.
  */
 import type { SupabaseService } from '../../supabase';
 import type { VeniceMessage, ResponseFormat } from '../../venice';

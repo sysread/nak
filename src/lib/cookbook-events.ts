@@ -9,13 +9,13 @@
  * file.
  *
  * The publisher is the recipes-table realtime relay in Chat.svelte
- * (SupabaseService.subscribeToRecipeChanges -> emitCookbookChange):
- * every recipe writer reachable from chat lives in the venice edge
- * function now, so the replication stream is how the browser learns a
- * write landed. Direct UI edits in Cookbook.svelte refresh their own
- * local state and never used this bus; their writes also echo back
- * through the relay, which is harmless - subscribers refetch
- * idempotently.
+ * (SupabaseService.subscribeToRecipeChanges -> emitCookbookChange).
+ * Every recipe writer reachable from chat lives in the venice edge
+ * function now, so the replication stream is the writer-of-record
+ * notification path for model-driven saves. Direct UI edits in
+ * Cookbook.svelte refresh their own local state and never needed this
+ * bus; their writes may also echo back through the relay, which is
+ * harmless because subscribers refetch idempotently.
  */
 
 const COOKBOOK_CHANGE_EVENT = 'nak:recipes:changed';

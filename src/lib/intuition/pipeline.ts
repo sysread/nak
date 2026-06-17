@@ -1,6 +1,10 @@
 /**
  * The intuition pipeline. Three stages:
  *
+ * This remains browser-side intentionally: it is turn-local priming
+ * assembled from the live thread context, not an unfinished
+ * background-job migration.
+ *
  *   1. Perception - one fast-model call. Reads the transcript,
  *      classifies the prompt, and produces an objective-observer
  *      summary.

@@ -403,13 +403,14 @@ Edge dispatch (`supabase/functions/venice/`):
 - **Library** - the `doc_*` read/write split mirrors the other
   stores: reads always-on, writes behind the `library` box. See
   `./library.md`.
-- **Cookbook** - recipe writes run server-side, which leaves a
-  known publisher gap on the browser's cookbook-change event: the
-  Cookbook modal and drawer tab still subscribe via
-  `onCookbookChange` (`src/lib/cookbook-events.ts`), but nothing
-  browser-side fires the event after a chat-driven recipe write.
-  The gap and its candidate fix (a recipes-table Realtime
-  subscription) are documented in that module. See `./cookbook.md`.
+- **Cookbook** - recipe writes run server-side, so the browser
+  learns about chat-driven saves through the recipes-table Realtime
+  relay (`SupabaseService.subscribeToRecipeChanges` in
+  `src/lib/supabase.ts`) wired by `Chat.svelte` into the coarse
+  `emitCookbookChange` / `onCookbookChange` event bus in
+  `src/lib/cookbook-events.ts`. Open Cookbook surfaces refetch on
+  that event rather than depending on per-tool browser publishers.
+  See `./cookbook.md`.
 - **Help / user docs** - the edge `research_docs` cannot read the
   repo at request time, so `scripts/bundle-research-docs.mjs`
   embeds both doc trees as static strings in

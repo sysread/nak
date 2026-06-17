@@ -1,23 +1,25 @@
-// In-flight lease watcher - the run-liveness signal every client reads.
+// In-flight run watcher - the run-liveness signal every client reads.
 //
-// A manual or scheduled librarian run claims a TTL lease on the user's
-// profiles row (<agent>_inflight_expires_at). This watcher tracks that
-// lease via realtime + an initial read and exposes a single `running`
-// boolean, so any surface can react: the top-bar button disables while a
-// run is in flight, the panel shows a spinner, and - because scheduled
-// background runs hold the SAME lease - the UI lights up for those too,
-// not just user-triggered ones.
+// A manual or scheduled librarian run stamps a TTL-backed
+// <agent>_inflight_expires_at column on the user's profiles row. This
+// watcher tracks that server-side expiry via realtime + an initial read
+// and exposes a single `running` boolean, so any surface can react: the
+// top-bar button disables while a run is in flight, the panel shows a
+// spinner, and - because scheduled background runs stamp the SAME expiry
+// - the UI lights up for those too, not just user-triggered ones.
 //
 // It is a server fact with a TTL, not an ephemeral event, which is what
 // makes it the robust backstop: even if the per-run progress broadcast
-// is dropped, the lease clearing (or its TTL lapsing) still settles the
-// UI. Generic across fleets via the column; the wiki singleton is
+// is dropped, clearing the expiry (or letting it lapse) still settles
+// the UI. This is unrelated to the deleted browser-worker
+// `worker_leases` apparatus; the only thing shared is the informal word
+// "lease". Generic across fleets via the column; the wiki singleton is
 // exported here, the memory librarians get their own the same way.
 
 import type { InflightLeaseColumn, SupabaseService } from '../supabase';
 
 export interface InflightLeaseWatcher {
-  /** True while a run (any client, manual or scheduled) holds the lease. */
+  /** True while a run (any client, manual or scheduled) still holds the TTL-backed inflight expiry. */
   readonly running: boolean;
   /** Begin watching. Idempotent - a second call while active is a no-op. */
   start(deps: { supabase: SupabaseService; userId: string }): void;
@@ -39,9 +41,9 @@ export function createInflightLeaseWatcher(
   };
 
   // Apply a fresh expiry from realtime or the initial read. Arms a timer
-  // to flip `running` off at the expiry instant: a lease that lapses by
-  // TTL (a crashed run that never released) writes no row, so no realtime
-  // UPDATE fires - the timer is what eventually clears a stale spinner.
+  // to flip `running` off at the expiry instant: a crashed run that
+  // never clears its expiry writes no row, so no realtime UPDATE fires -
+  // the timer is what eventually clears a stale spinner.
   const apply = (expiry: string | null): void => {
     if (!active) return;
     clearTimer();
@@ -93,18 +95,18 @@ export function createInflightLeaseWatcher(
   };
 }
 
-// Shared singleton for the wiki librarian lease. Read by the top-bar
-// sparkle button (disable while running) and the Wiki panel (spinner);
-// started once when the wiki feature mounts (Chat.svelte) and stopped on
-// sign-out / teardown.
+// Shared singleton for the wiki librarian run watcher. Read by the
+// top-bar sparkle button (disable while running) and the Wiki panel
+// (spinner); started once when the wiki feature mounts (Chat.svelte)
+// and stopped on sign-out / teardown.
 export const wikiLibrarianLease = createInflightLeaseWatcher(
   'wiki_librarian_inflight_expires_at'
 );
 
-// Shared singleton for the memory librarian lease (rem + deep-sleep share
-// one in-flight guard, so one watcher covers both passes). Read by the
-// Memories top-bar buttons (disable while running) and the panel; started
-// in Chat.svelte alongside the wiki one.
+// Shared singleton for the memory librarian run watcher (rem + deep-sleep
+// share one in-flight guard, so one watcher covers both passes). Read by
+// the Memories top-bar buttons (disable while running) and the panel;
+// started in Chat.svelte alongside the wiki one.
 export const memoryLibrarianLease = createInflightLeaseWatcher(
   'memory_librarian_inflight_expires_at'
 );

@@ -190,14 +190,16 @@ Load-bearing patterns the schema uses repeatedly:
 - **Partial claim indexes.** Each claim column has a partial index
   where the holder is non-null, so the index stays tiny in steady
   state (0 rows claimed is the common case).
-- **`worker_leases` table + RPCs.** One row per
+- **Retired `worker_leases` / browser-worker apparatus.** One row per
   `(user_id, worker_kind)` once implemented the "at most one
   device per worker kind" singleton for the retired browser
-  worker fleet. Nothing acquires a lease today - per-row claims
-  carry all the mutual exclusion - but the table and its
-  `acquire` / `heartbeat` / `release` RPCs are still in the
-  schema; removing them is a tracked follow-up of the
-  de-browser-background-jobs migration.
+  worker fleet. Nothing acquires a worker lease today - per-row
+  claims carry all the mutual exclusion - and the old table plus
+  its `acquire` / `heartbeat` / `release` RPCs have now been
+  dropped from the schema. The only remaining "lease" concept in
+  the browser is the per-profile TTL-backed run-liveness watch for
+  manual/scheduled librarian UI affordances; it is unrelated to the
+  deleted worker-leases system.
 
 ## Venice adapter
 
@@ -220,10 +222,11 @@ the function-side wire shape:
   yields the function-published event union. Used only by the
   main user-facing chat (`chat-loop.ts`).
 - `SupabaseService.complete(req)` - non-streaming one-shot,
-  routed through the venice/complete route. Used by the two
-  remaining browser-side completion paths: the intuition
-  pipeline and the per-article manual wiki-update flow. The
-  server-side agent fleets (reflection, samskara, curation,
+  routed through the venice/complete route. Used only by the two
+  intentional browser-side completion paths: the intuition
+  pipeline and the per-article manual wiki-update preview flow.
+  Both are turn- or UI-scoped exceptions, not migration residue.
+  The server-side agent fleets (reflection, samskara, curation,
   bias, the recall agents) run inside the venice function and
   call Venice directly rather than routing through this browser
   method.
