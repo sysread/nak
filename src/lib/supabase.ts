@@ -23,17 +23,14 @@ import {
   isThinkingLevel,
   isVerbosity,
   type ModelTier,
-  type ReasoningEffort,
   type ThinkingLevel,
-  type TierModels,
   type Verbosity,
 } from './models';
 import { coerceCatalog, type CatalogModel } from './models/catalog';
-import { isAccent, isColorMode, type Accent, type ColorMode } from './theme';
+import { isAccent, isColorMode } from './theme';
 import {
   isLogLevel,
   createLogger,
-  type LogLevel,
   type SerializableLogEntry,
 } from './logger.svelte';
 
@@ -63,139 +60,58 @@ import {
 } from './usage';
 import { synthesizeRecoveryMessages } from './conversation-recovery';
 
-// Re-exported so consumers that already pull Message from this module
-// don't also need to import from venice.ts just to type a row.
-export type { Citation };
+// Domain row types live in ./supabase/types/*; this module keeps the
+// SupabaseService class plus the row coercers that read those types.
+// Re-export the whole type layer so `$lib/supabase` stays the single
+// import surface every consumer already reaches for, then pull the
+// names this file's coercers and class methods reference into local
+// scope (a re-export alone doesn't bind them here).
+export * from './supabase/types';
+import type {
+  Thread,
+  Attachment,
+  NewAttachment,
+  ThreadAttachmentSummary,
+  Message,
+  ThreadCursor,
+  ThreadPage,
+  ThreadSearchHit,
+  ThreadSummaryRow,
+  Memory,
+  MemoryChangelogKind,
+  MemoryChangelogEntry,
+  SimilarMemory,
+  MemoryRelation,
+  WikiArticle,
+  WikiArticleSource,
+  WikiArticleRelated,
+  WikiChangelogKind,
+  WikiChangelogEntry,
+  WikiRetryResult,
+  Recipe,
+  RecipeVersion,
+  RecipePhoto,
+  RecipePhotoMeta,
+  RecipePhotoInput,
+  Document,
+  DocumentGrepHit,
+  DocumentStat,
+  UserSettings,
+  SystemPrompt,
+  TopicCount,
+  TopicVocabulary,
+  OffsetPage,
+  AgentRunProgressEvent,
+  InflightLeaseColumn,
+} from './supabase/types';
+import {
+  coerceSettings,
+  coerceSystemPrompt,
+  USER_PROFILE_FIELD_MAX,
+  UNTAGGED_TOPIC_SENTINEL,
+  DEFAULT_THREAD_PAGE_SIZE,
+} from './supabase/types';
 
-export interface Thread {
-  id: string;
-  user_id: string;
-  title: string;
-  /** Per-thread model tier override. Null/absent means use user default. */
-  model: ModelTier | null;
-  /**
-   * Per-thread thinking-level override. Holds 'off' as well as
-   * low/medium/high - 'off' resolves to disable_thinking on the wire,
-   * the others to reasoning_effort (see ThinkingLevel / thinkingToWire
-   * in ./models). Null/absent means fall through to the tier/user
-   * default. Only consulted on reasoning-capable models; the composer
-   * picker is hidden (and the field cleared on re-point) when the
-   * resolved model can't reason. The column is still named
-   * reasoning_effort for storage-compat - no migration needed since it
-   * was already plain text with no CHECK.
-   */
-  reasoning_effort: ThinkingLevel | null;
-  /**
-   * Per-thread text.verbosity override. Null/absent means use the
-   * user default. Surfaced unconditionally in the composer —
-   * unlike reasoning_effort we don't gate on a model-capability
-   * flag; providers that don't recognize the knob silently ignore
-   * it rather than 400.
-   */
-  verbosity: Verbosity | null;
-  /**
-   * Names of gated toolboxes active on this thread. Flipped by the
-   * `toggle_toolbox` meta-tool (LLM-driven) or the composer toolbox
-   * popover (user-driven). The always_on toolbox is implicit and is
-   * never represented here. Unknown names are dropped by both
-   * writers; an empty array means "only the always_on set." See
-   * `GATED_TOOLBOX_NAMES` in src/lib/tools/index.ts for the
-   * canonical name list.
-   */
-  toolboxes_enabled: string[];
-  /**
-   * Soft-hide flag. Archived threads still load — they just render under
-   * the drawer's collapsed "Archive" section and lock out the composer.
-   * Flipped by the archive / restore row actions; restore also bumps
-   * updated_at so the thread jumps to the top of the Chats list.
-   */
-  archived: boolean;
-  /**
-   * True once the user has explicitly renamed the thread (via the title
-   * input, or by materializing a draft with an explicit title). The chat
-   * loop reads this to suppress the title-note / `update_title`
-   * instruction in the system prompt — once the user has committed to a
-   * title, the model never sees the prompt that would let it clobber
-   * their choice. Defaults to false; flipped true by the manual rename
-   * path and never reset by the auto-title flow.
-   */
-  title_manually_set: boolean;
-  created_at: string;
-  updated_at: string;
-  /**
-   * Cached intuition payload for this thread. Holds the perception, the
-   * five drive reactions, the synthesised internal-monologue, and the
-   * round/mood snapshot the cache was written against. Refreshed
-   * synchronously by the chat-loop on title-tool fires and on mood-band
-   * shifts; reused as-is between refreshes so the perception + 5 drives
-   * + synthesis pipeline doesn't run on every chitchat turn. Null on
-   * threads that haven't accumulated a refresh yet (cold start).
-   *
-   * The payload shape is defined in src/lib/intuition/types.ts and
-   * coerced from jsonb on read; we deliberately keep this column
-   * loosely-typed at the row layer (just `unknown`) so the intuition
-   * module owns the parse, the same way other jsonb columns do.
-   */
-  intuition_payload: unknown;
-  /**
-   * Cached context-recall payload for this thread. Holds the stitched
-   * first-person note assembled from the memory-recall and conversation-
-   * recall agents, plus the round/mood snapshot the cache was written
-   * against. Refreshed by the chat-loop on the same triggers as
-   * intuition (cold-start, mid-turn title shift, mood-band shift,
-   * stale fuse) and reused as-is between fires. Null on cold-start
-   * threads.
-   *
-   * The payload shape is defined in src/lib/context-recall/types.ts and
-   * coerced from jsonb on read; the column is `unknown` here so the
-   * context-recall module owns the parse, same posture as intuition.
-   */
-  context_recall_payload: unknown;
-  /**
-   * Topic tags assigned by the server-side topics agent
-   * (supabase/functions/venice/agents/thread_topics.ts). Flat list;
-   * the drawer's topic-filter dropdown uses these to narrow the
-   * conversation list by `topics &&` predicate. Empty array means
-   * "untagged" - either the agent hasn't
-   * reached this thread yet, or it ran and chose to emit no topics.
-   * The UI treats the two cases the same: filterable as "(untagged)".
-   */
-  topics: string[];
-  /**
-   * Cross-device "this device is producing the response right now"
-   * claim. Stamped by `acquire_thread_response_claim` at the start of
-   * a chat turn, refreshed by `heartbeat_thread_response_claim`,
-   * cleared by `release_thread_response_claim`. Observer devices read
-   * these via the regular threads realtime subscription and use them
-   * to render a "responding on another device" indicator + disable
-   * their composer. Null on idle threads.
-   *
-   * See `acquire_thread_response_claim` and friends in
-   * `supabase/schema.sql`, plus `ThreadClaimCoordinator` in
-   * `src/lib/exchange/thread-claim-coordinator.ts`.
-   */
-  response_holder_id: string | null;
-  response_claim_expires_at: string | null;
-  /**
-   * Most recent unrecoverable error against this thread. Written by
-   * the streaming function on any terminalKind='error' path; cleared
-   * by commit_assistant_message on the happy commit. Browser keys the
-   * error card off this column being non-null. Shape is the
-   * LastErrorPayload from `_shared/error-translate.ts`:
-   * `{kind, message, retryable, occurred_at}`. Loosely typed here so
-   * the renderer owns the parse - a row predating the column reads
-   * as null, and a drifting jsonb shape that doesn't match the
-   * expected envelope falls through to a generic "Error" card rather
-   * than crashing the screen.
-   */
-  last_error: unknown;
-  /**
-   * App-local flag: true when this thread exists only in memory (the user
-   * clicked "new thread" but hasn't sent a message or renamed it yet).
-   * Drafts are never sent to Supabase — they materialize on first save.
-   */
-  isDraft?: boolean;
-}
 
 /**
  * Coerce the raw row from Supabase. The `model` column is `text` without a
@@ -271,60 +187,7 @@ function coerceThread(row: Record<string, unknown>): Thread {
   };
 }
 
-/**
- * A saved memory — label + free-form data, per-user. The `embedding` column
- * exists on the table but we deliberately don't ship it to the client
- * (1024 floats is a lot of bytes for a list view). The embed-on-write
- * path will populate it server-side or via a dedicated client method.
- *
- * `confidence` is the volitional-memory layer's trust scalar. Default 1.0
- * on create, capped at 10.0. The reflection agent's `memory_invalidate`
- * halves it; the chat-side `memory_reaffirm` / `memory_doubt` tools
- * nudge it (+0.5 and ×0.7 respectively). Below 0.05 the memory hides
- * from search (soft-delete). The field is required everywhere `Memory`
- * rides because the Memories UI and opening-recall both format a
- * qualitative tag from it - see MEMORY_CONFIDENCE_* in src/lib/memories.ts.
- */
-export interface Memory {
-  id: string;
-  label: string;
-  data: string;
-  confidence: number;
-  /**
-   * Topic tags written by the server-side memory-topics agent
-   * (supabase/functions/venice/agents/memory_topics.ts). Empty array
-   * means "untagged" -
-   * either the agent hasn't reached the row yet, it ran and
-   * chose to emit nothing, or the user just edited the row (the
-   * `clear_memory_topics_on_change` trigger nulls last_topics_at on
-   * content change and the next sweep re-tags). The
-   * UNTAGGED_TOPIC_SENTINEL is a UI-only primitive and never lands
-   * in this column.
-   */
-  topics: string[];
-  created_at: string;
-  updated_at: string;
-}
 
-/**
- * One row of the memory changelog: a single content-affecting mutation
- * (create / update / delete, plus librarian consolidations recorded as
- * an 'update' on the survivor) captured at the time of the change.
- * `memory_id` is null when the underlying memory has since been
- * hard-deleted (the FK uses ON DELETE SET NULL); `label_at_change` is
- * the snapshot taken at write time so the row still reads meaningfully
- * without a join. See the matching table + RLS in
- * `supabase/schema.sql:memory_changelog`. Parallel to WikiChangelogEntry.
- */
-export type MemoryChangelogKind = 'create' | 'update' | 'delete';
-export interface MemoryChangelogEntry {
-  id: string;
-  memory_id: string | null;
-  kind: MemoryChangelogKind;
-  label_at_change: string;
-  message: string;
-  created_at: string;
-}
 
 function coerceMemoryChangelogKind(raw: unknown): MemoryChangelogKind | null {
   if (raw === 'create' || raw === 'update' || raw === 'delete') return raw;
@@ -352,97 +215,9 @@ function coerceMemoryChangelogEntry(
   };
 }
 
-/**
- * A memory plus its match score, returned by `search_memories_similar`.
- * `similarity` is the boosted-cosine value the RPC ranks on (raw cosine
- * times the bounded confidence boost), so it's monotonic with the result
- * order and can edge slightly above 1.0 for a near-identical, highly-
- * corroborated neighbour. The extra field is harmless where a plain
- * `Memory` is expected, so these rows feed `upsertMemoryRow` directly.
- */
-export interface SimilarMemory extends Memory {
-  similarity: number;
-}
 
-/**
- * A directed edge between two memories in the volitional-memory graph.
- * The LLM draws these via the memory_relate tool; the user can add and
- * remove them in the Memories UI. Retrieval traverses outbound edges
- * one hop deep so the LLM sees linked context alongside a match.
- *
- * `to_label` / `to_data` / `to_confidence` are the target memory's
- * display fields, joined in by `get_memory_relations` so consumers can
- * render the edge inline without a second round-trip.
- */
-export interface MemoryRelation {
-  id: string;
-  from_memory_id: string;
-  to_memory_id: string;
-  kind: 'supports' | 'contradicts' | 'generalises' | 'specialises';
-  note: string | null;
-  created_at: string;
-  to_label: string;
-  to_data: string;
-  to_confidence: number;
-}
 
-/**
-/**
- * One file attached to a user message (or a model-generated image). The
- * original bytes live in the private `attachments` Storage bucket,
- * pointed at by `storage_path`; the row carries only metadata + the
- * extracted text. Liveness is keyed on `storage_path`:
- *   * live:    storage_path !== null  (object in the bucket)
- *   * expired: storage_path === null  (object deleted by the expiry
- *              sweep, or a legacy pre-bucket row). `extracted_text`
- *              survives the transition so the message list stays
- *              meaningful.
- * Bytes are never loaded into the row on read; the UI fetches a signed
- * URL on demand (see SupabaseService.createAttachmentSignedUrls) and the
- * vision wire hands Venice a signed URL directly.
- */
-export interface Attachment {
-  id: string;
-  message_id: string;
-  /** Stable in-message render order. Sparse; assigned at insert time. */
-  position: number;
-  filename: string;
-  /** MIME type captured at upload time. Drives icon selection and vision inlining. */
-  mime_type: string;
-  /** Byte count of the original file — preserved across expiration. */
-  size_bytes: number;
-  /**
-   * Object key in the `attachments` bucket
-   * (`<user_id>/<attachment_id>/<filename>`), or `null` once the expiry
-   * sweep has deleted the object (or for a legacy pre-bucket row).
-   * Non-null iff the attachment is live.
-   */
-  storage_path: string | null;
-  /**
-   * Text extracted by Venice's /augment/text-parser at upload time for
-   * non-image files. Stays populated after expiration — the value the
-   * model saw outlives the original object.
-   */
-  extracted_text: string | null;
-  /** Timestamp at which the object was deleted by the expiry sweep; null when live. */
-  expired_at: string | null;
-  created_at: string;
-}
 
-/**
- * Fields callers supply when inserting a new attachment. `data_base64` is
- * the SOURCE bytes to upload to the bucket - `addAttachments` uploads it
- * and stores the resulting `storage_path`; it is never written to a
- * column.
- */
-export interface NewAttachment {
-  position: number;
-  filename: string;
-  mime_type: string;
-  size_bytes: number;
-  data_base64: string;
-  extracted_text: string | null;
-}
 
 /**
  * Decode a base64 string to raw bytes for a Storage upload. Kept local
@@ -481,154 +256,11 @@ function coerceAttachmentRow(raw: Record<string, unknown>): Attachment {
   };
 }
 
-/**
- * Lightweight projection of a thread's attachments for the per-turn
- * `<thread_attachments>` system block. Carries only what the block
- * formatter and the model need (filename + categorisation flags) - no
- * `data` payload, no `extracted_text` payload, so the wire stays small
- * even on conversations with many file attachments.
- */
-export interface ThreadAttachmentSummary {
-  filename: string;
-  mime_type: string;
-  /** Image MIME types route through the analyze_image tool branch in the block. */
-  is_image: boolean;
-  /** True when the binary has been reclaimed by the expiry worker. */
-  expired: boolean;
-  /** Insert timestamp, used by the block formatter for stable ordering. */
-  created_at: string;
-}
 
-/**
- * A saved recipe. The authoritative representation is `cooklang`, the
- * full raw Cooklang source string — structure (ingredients, cookware,
- * timers, metadata) is re-derived on read by `src/lib/cooklang.ts`.
- * Keeping the source as the source of truth means a future spec tweak
- * doesn't invalidate stored rows.
- *
- * `source` and `source_url` are both nullable. A recipe the model fetched
- * from a URL will carry both; a recipe the user typed by hand may have
- * neither.
- */
-export interface Recipe {
-  id: string;
-  title: string;
-  source: string | null;
-  source_url: string | null;
-  cooklang: string;
-  /**
-   * User-set rating, 1-5 stars. `null` means unrated; cleared rows
-   * round-trip back as null so "never rated" stays distinguishable
-   * from a hypothetical zero (which the schema rejects).
-   */
-  rating: number | null;
-  /**
-   * Workflow flag - true when the user has marked this recipe as one
-   * they plan to make during the current grocery-shopping cycle. Drives
-   * the "Upcoming" section at the top of the drawer listing. Not
-   * versioned (toggling does not write a recipe_versions row) and does
-   * not bump `updated_at` so the recency sort stays stable.
-   */
-  upcoming: boolean;
-  /**
-   * Long-lived bookmark for recipes the user loves and wants one
-   * click away. Independent of `upcoming` - a recipe can be either,
-   * both, or neither. Drives the "Favorites" section just below
-   * Upcoming in the drawer listing. Same non-versioned, non-
-   * `updated_at`-bumping semantics as `upcoming`.
-   */
-  favorite: boolean;
-  /**
-   * Topic tags written by the server-side recipe-topics agent
-   * (supabase/functions/venice/agents/recipe_topics.ts). Empty array
-   * means "untagged" -
-   * either the agent hasn't reached the row, it ran and
-   * chose to emit nothing, or the user just edited title/cooklang
-   * (the `clear_recipe_topics_on_change` trigger nulls
-   * `last_topics_at` on content change and the next sweep
-   * re-tags). The UNTAGGED_TOPIC_SENTINEL is a UI-only primitive
-   * and never lands in this column. Cap of 6 tags per row vs the
-   * 4 used on threads/memories - recipes legitimately span more
-   * dimensions (primary ingredients + cuisine + course + technique).
-   */
-  topics: string[];
-  created_at: string;
-  updated_at: string;
-  /** Populated only by `search_recipes_by_embedding`. */
-  similarity?: number;
-}
 
-/**
- * One immutable snapshot in a recipe's history. Every create and every
- * update writes one row via the `recipe_create_with_version` /
- * `recipe_update_with_version` RPCs. The latest row by `created_at`
- * always matches the parent `recipes` row by content; older rows are
- * the trail of past states the user can browse and revert to.
- *
- * `change_message` is required - the UI Edit form and the LLM
- * `recipe_save` / `recipe_update` tools all force a non-empty value
- * before the RPC is called.
- */
-export interface RecipeVersion {
-  id: string;
-  recipe_id: string;
-  title: string;
-  source: string | null;
-  source_url: string | null;
-  cooklang: string;
-  /** Snapshot of the parent recipe's rating at save time. */
-  rating: number | null;
-  change_message: string;
-  created_at: string;
-}
 
-/**
- * One photo on a recipe, ready to render. Loaded by the detail pane and
- * the edit form for thumbnail rendering and lightbox open. `url` is a
- * display-ready source resolved by `listRecipePhotos`: a short-lived
- * signed URL into the `recipe-images` bucket, or - for a legacy row not
- * yet moved by the migrate button - a `data:` URI built from the base64
- * fallback. The component renders `url` directly and stays synchronous.
- *
- * `position` is the link table's `position` field on the recipe's
- * latest version - lower numbers render first in the strip. `label`
- * is the optional caption rendered below the thumbnail and beside
- * the lightbox image; null means "no caption", and empty strings
- * round-trip as null (the DB normalises whitespace-only labels to
- * null on write).
- */
-export interface RecipePhoto {
-  id: string;
-  position: number;
-  mime_type: string;
-  size_bytes: number;
-  url: string;
-  label: string | null;
-}
 
-/**
- * Lightweight projection of the same photo without the bytes. Returned
- * by the photo-mutation RPCs and embedded in tool returns the LLM sees,
- * so the LLM can chain attach/remove/reorder operations against
- * specific photo IDs without paying the base64 cost on every tool
- * round-trip.
- */
-export interface RecipePhotoMeta {
-  id: string;
-  position: number;
-  label: string | null;
-}
 
-/**
- * One ordered (image_id, label) pair as sent on the wire to the
- * versioned create/update/attach RPCs. Used so callers express photo
- * sets as a single ordered list rather than two parallel arrays they
- * have to keep in sync.
- */
-export interface RecipePhotoInput {
-  id: string;
-  label: string | null;
-}
 
 /**
  * Flatten `RecipePhotoInput[]` into the parallel arrays the
@@ -654,23 +286,6 @@ function splitPhotoInputs(photos: RecipePhotoInput[]): {
   return { imageIds, imageLabels };
 }
 
-/**
- * One topical article in the user's wiki. Flat list (no nesting), one
- * article per `(user_id, title)` (the schema enforces uniqueness so the
- * autonomous agent's `wiki_create` can fall through to `wiki_update` on
- * conflict). Articles are written in encyclopedic third-person prose
- * and are never auto-injected into the chat - the main LLM reaches
- * them only through the always-on `wiki_search` tool.
- */
-export interface WikiArticle {
-  id: string;
-  title: string;
-  content: string;
-  created_at: string;
-  updated_at: string;
-  /** Populated only by `searchWikiArticlesByEmbedding`. */
-  similarity?: number;
-}
 
 function coerceWikiArticle(raw: Record<string, unknown>): WikiArticle {
   return {
@@ -684,146 +299,14 @@ function coerceWikiArticle(raw: Record<string, unknown>): WikiArticle {
   };
 }
 
-/**
- * One row of the bibliography shown beneath a wiki article: a thread
- * that contributed to the article, with the thread's title and the
- * timestamp this attribution was last refreshed (re-processing the
- * same thread bumps this rather than inserting a duplicate row).
- *
- * Surfaced via `listWikiArticleSources`; populated by the wiki tools
- * themselves when an article is created or updated (autonomous agent
- * attaches the current thread; librarian passes `source_thread_ids`
- * explicitly through the tool boundary).
- */
-export interface WikiArticleSource {
-  thread_id: string;
-  /** May be null when the thread has been hard-deleted but the
-   *  attribution row hasn't been cascade-cleaned yet. The UI renders
-   *  a placeholder title in that window. */
-  thread_title: string | null;
-  first_processed_at: string;
-  last_processed_at: string;
-}
 
-/**
- * One row of the See Also section beneath a wiki article. Returned
- * by the `find_related_wiki_articles` RPC, which uses the dynamic
- * similarity floor (the minimum cosine similarity between the target
- * article and its source conversations) to decide which candidates
- * clear the bar.
- */
-export interface WikiArticleRelated {
-  id: string;
-  title: string;
-  similarity: number;
-}
 
-/**
- * One row of the wiki changelog: a single create / update / delete
- * recorded at the time of the mutation. `article_id` is null when the
- * underlying article has since been deleted (the FK uses ON DELETE SET
- * NULL); `title_at_change` is the snapshot taken at write time so the
- * row still reads meaningfully without a join. See the matching table
- * + RLS in `supabase/schema.sql:wiki_changelog`.
- */
-export type WikiChangelogKind = 'create' | 'update' | 'delete';
-export interface WikiChangelogEntry {
-  id: string;
-  article_id: string | null;
-  kind: WikiChangelogKind;
-  title_at_change: string;
-  message: string;
-  created_at: string;
-}
 
-/**
- * Outcome of a server-side wiki retry (the venice function's
- * /wiki-retry route; see retryWikiThread below). Mirror of the
- * function's WikiRetryResult union. `toolCalls` can legitimately be
- * zero - the agent is prompted to skip rather than fabricate edits -
- * so the Skipped panel surfaces the count instead of assuming a
- * cleared skip means new changelog rows.
- */
-export type WikiRetryResult =
-  | { kind: 'ok'; terminalMsgId: string; toolCalls: number; reasoning: string }
-  | { kind: 'no-op'; reason: string }
-  | { kind: 'error'; error: string };
 
-/**
- * Outcome of a server-side manual librarian run (the venice
- * function's /wiki-librarian-run route; see runWikiLibrarian below).
- * `busy` means another librarian run (scheduled, manual, or
- * chat-dispatched) holds the in-flight guard - the UI surfaces a
- * "try again in a moment" rather than racing two passes.
- */
-export type WikiLibrarianRunResult =
-  | { kind: 'ok'; finalText: string; toolCalls: number; articleCount: number }
-  | { kind: 'busy' }
-  | { kind: 'error'; error: string };
 
-/**
- * Outcome of a server-side manual rem run (the venice function's
- * /rem-run route; see runRem below). Same `busy` contract as the
- * wiki librarian: the shared memory-librarian in-flight guard turns
- * a collision with a scheduled or deep-sleep run into a clean
- * "try again in a moment" instead of two passes racing.
- */
-export type RemRunResult =
-  | { kind: 'ok'; finalText: string; toolCalls: number; conversationsProcessed: number }
-  | { kind: 'empty-queue' }
-  | { kind: 'busy' }
-  | { kind: 'error'; error: string };
 
-/** Outcome of a server-side manual deep-sleep run (/deep-sleep-run; see runDeepSleep). */
-export type DeepSleepRunResult =
-  | { kind: 'ok'; finalText: string; toolCalls: number; batchSize: number }
-  | { kind: 'no-eligible' }
-  | { kind: 'too-small'; batchSize: number }
-  | { kind: 'busy' }
-  | { kind: 'error'; error: string };
 
-/**
- * One live step event from a server-side agent run, as published to
- * the agent-runs:<userId> Broadcast channel by the venice function.
- * Mirror of the per-agent progress unions: `preparing` (whose count
- * field names the agent's work unit - articles for the wiki
- * librarian, conversations for rem, the memory batch for
- * deep-sleep), the runner's `thinking` / `tool` events, and a
- * closing `done`. `runId` is the demux key - every event carries the
- * id the client minted for its run, so concurrent runs (or a stale
- * subscription) can't cross streams.
- */
-export type AgentRunProgressEvent = { runId: string } & (
-  | {
-      kind: 'preparing';
-      articleCount?: number;
-      conversationCount?: number;
-      batchSize?: number;
-    }
-  | { kind: 'thinking'; round: number }
-  | { kind: 'tool'; name: string; activity: string; ok: boolean; ms: number }
-  | { kind: 'done'; ok: boolean }
-  // Terminal outcome for a DETACHED manual run (detachedManualRunHandler).
-  // The detached route responds {accepted:true} immediately and the run
-  // continues in the background, so the result the HTTP body used to
-  // carry rides the channel as this final event. `result` is the fleet's
-  // own run-result union (e.g. WikiLibrarianRunResult); consumers narrow
-  // it. Best-effort like every broadcast - the in-flight lease is the
-  // backstop if it's dropped.
-  | { kind: 'result'; result: unknown }
-);
 
-/**
- * The profiles columns that hold a background-agent's manual-run
- * in-flight lease (<agent>_inflight_expires_at). A held lease (future
- * expiry) is what the UI reads to show "a run is in flight" - the
- * spinner + button-disable - for every client, including background
- * scheduled runs. Generic across fleets so the lease helpers serve the
- * wiki librarian and the memory librarians alike.
- */
-export type InflightLeaseColumn =
-  | 'wiki_librarian_inflight_expires_at'
-  | 'memory_librarian_inflight_expires_at';
 
 function coerceWikiChangelogKind(raw: unknown): WikiChangelogKind | null {
   if (raw === 'create' || raw === 'update' || raw === 'delete') return raw;
@@ -851,99 +334,6 @@ function coerceWikiChangelogEntry(
   };
 }
 
-export interface Message {
-  id: string;
-  thread_id: string;
-  /**
-   * OpenAI message roles. `'tool'` rows carry a tool-result (`content` is
-   * the stringified return value) and always pair to an assistant row
-   * via `tool_call_id`. Every other role works as before.
-   */
-  role: 'user' | 'assistant' | 'system' | 'tool';
-  content: string;
-  created_at: string;
-  /**
-   * Files the user attached to this message. Only populated on user
-   * rows, and only after `listMessages` has co-fetched the attachment
-   * table — the base `messages` SELECT doesn't include this. Null
-   * means "we haven't loaded attachments for this row yet"; an empty
-   * array means "we loaded and there are none." Realtime INSERTs
-   * arrive without attachments attached; the subscriber is
-   * responsible for hydrating them via `listAttachmentsByMessageIds`.
-   */
-  attachments?: Attachment[] | null;
-  /**
-   * When the assistant emitted tool calls, this holds the raw array in
-   * the OpenAI shape: `[{id, type, function: {name, arguments}}]`.
-   * Arguments is a JSON-encoded string as the API provides it — don't
-   * re-stringify on read.
-   */
-  tool_calls?: OpenAIToolCall[] | null;
-  /** On role='tool' rows, the call id this result answers. */
-  tool_call_id?: string | null;
-  /** On role='tool' rows, the name of the tool that was invoked. */
-  name?: string | null;
-  /**
-   * Concrete Venice model id that produced this assistant row (e.g.
-   * 'kimi-k2-5'). Captured at send-time rather than derived from the
-   * tier, so the row stays truthful across later tier re-targeting.
-   * Null on user/system/tool rows and on assistant rows written before
-   * this column existed.
-   */
-  model?: string | null;
-  /**
-   * OpenAI-shaped token usage for the turn that produced this assistant
-   * row. Drives the context-window indicator on the message card. Null
-   * when the provider didn't report usage (older rows; rate-limited
-   * streams that got cut before the epilogue).
-   */
-  usage?: TokenUsage | null;
-  /**
-   * Chain-of-thought text emitted by reasoning-capable models on
-   * `delta.reasoning_content`. Null when the model didn't produce any,
-   * and on older rows written before the column existed. Rendered in
-   * a collapsible panel at the top of the message bubble — the panel
-   * starts closed on replay; it auto-opens then animates shut while
-   * the live response is streaming in.
-   */
-  reasoning?: string | null;
-  /**
-   * Venice-sourced web citations for this assistant turn, in the shape
-   * Venice returns on `venice_parameters.web_search_citations`. The
-   * inline `^N^` superscripts in `content` are 1-based indexes into
-   * this array. Null on older rows and on turns that didn't touch the
-   * web-search augmentation.
-   */
-  citations?: Citation[] | null;
-  /**
-   * Set to true on rows that `listMessages` synthesized in memory to
-   * repair an interrupted-exchange shape (see
-   * `lib/conversation-recovery.ts`). Synthetic rows ride through the
-   * wire projection like any other row but have no DB id yet — the
-   * chat-loop's send path persists them ahead of the next user turn,
-   * after which subsequent reads see the healed shape and the
-   * synthesizer no-ops. Never written to the DB.
-   */
-  synthetic?: boolean;
-  /**
-   * Lifecycle state of an assistant row written by the streaming-root
-   * edge function. Null on user/system/tool rows and on assistant rows
-   * written before the column existed. The streaming function INSERTs
-   * the row with `'streaming'` at first content delta and UPDATEs the
-   * status to a terminal value (`'complete' | 'aborted' | 'error' |
-   * 'suspended_for_ask_user'`) when the round chain settles. The
-   * browser subscriber filters `'streaming'` rows out of `appendMessage`
-   * so an in-flight row never paints as an empty bubble alongside the
-   * live streaming buffer.
-   */
-  status?:
-    | 'streaming'
-    | 'complete'
-    | 'aborted'
-    | 'error'
-    | 'suspended_for_ask_user'
-    | null;
-}
 
 class SupabaseError extends Error {
   constructor(message: string) {
@@ -952,65 +342,10 @@ class SupabaseError extends Error {
   }
 }
 
-/**
- * Composite cursor for thread pagination. `updated_at` is the primary
- * sort key, `id` is the tie-break — collisions on `updated_at` are
- * rare but non-zero under a realtime burst (two bumps in the same
- * millisecond), and without the id tie-break a page boundary would
- * drop or duplicate the colliding row.
- */
-export interface ThreadCursor {
-  updated_at: string;
-  id: string;
-}
 
-export interface ThreadPage {
-  rows: Thread[];
-  /**
-   * `null` when the query has been drained (no more rows). Any truthy
-   * value should be passed straight back as `cursor` on the next call
-   * — the caller shouldn't synthesise cursors themselves.
-   */
-  nextCursor: ThreadCursor | null;
-}
 
-/**
- * Sentinel value the drawer's topic-filter dropdown uses to mean "rows
- * whose `topics` column is empty." It's not a real topic - the worker
- * never emits this string - but threading it through the selectedTopics
- * array lets the OR-of-checkboxes UI stay one shape (a list of strings)
- * instead of growing a second "untagged also?" boolean. The pageThreads
- * / search builders treat the sentinel specially and turn it into
- * `topics = '{}'` rather than an `&&` membership test.
- *
- * The leading "(" is illegal in any real topic (the worker prompt forbids
- * it and the agent's parse strips punctuation anyway), so the sentinel
- * can never collide with a model-emitted topic.
- */
-export const UNTAGGED_TOPIC_SENTINEL = '(untagged)';
 
-/**
- * One row of a topic-vocabulary listing: a topic name plus how many of
- * the user's items (threads / memories / recipes, depending on the RPC)
- * carry it. `count` is the number the topic dropdown shows in parens.
- */
-export interface TopicCount {
-  topic: string;
-  count: number;
-}
 
-/**
- * Return shape of the three `list_user_*_topics` RPCs. `topics` is the
- * alphabetised real-topic vocabulary with per-topic corpus counts;
- * `untagged` is how many items have no topics at all (backs the
- * synthesised "(untagged)" dropdown row). Counts are corpus-wide on
- * purpose - the memory and thread lists are paginated/capped client-
- * side, so a client tally would undercount.
- */
-export interface TopicVocabulary {
-  topics: TopicCount[];
-  untagged: number;
-}
 
 /**
  * Coerce the jsonb a `list_user_*_topics` RPC returns into a
@@ -1140,318 +475,16 @@ function ilikeFilterPattern(query: string): string {
   return `%${query}%`;
 }
 
-/**
- * One merged search hit. `kind` tags where the hit came from so the
- * UI can render an indicator badge; `similarity` is only set for
- * semantic hits (cosine similarity in [−1, 1], generally ~0.3–0.9
- * for meaningful matches on bge-m3). The merge ordering guarantees
- * every 'exact' appears before every 'semantic', satisfying the
- * product requirement that exact matches outrank semantic ones.
- */
-export interface ThreadSearchHit {
-  thread: Thread;
-  kind: 'exact' | 'semantic';
-  similarity?: number;
-}
 
-/**
- * Narrow projection of a thread row used by `listThreadSummariesByIds`
- * and the `conversation_search` tool. Carries the fields the LLM needs
- * to judge relevance — title + the summary agent's 2–3 sentence topical
- * summary — plus just enough metadata (archived, updated_at) to order
- * and weigh results. `summary` is nullable because the summary worker
- * runs asynchronously after the first terminal assistant turn; a brand-
- * new thread may have an embedding (populated from title alone) but no
- * summary yet.
- */
-export interface ThreadSummaryRow {
-  id: string;
-  title: string;
-  summary: string | null;
-  archived: boolean;
-  updated_at: string;
-}
 
-/** Default page size for Older and Archived buckets. */
-export const DEFAULT_THREAD_PAGE_SIZE = 25;
 
-/**
- * One page of an offset-paginated browse listing (recipes, memories,
- * wiki articles). `hasMore` is derived from a `pageSize + 1` probe -
- * the query asks for one extra row and the method strips it, so the
- * caller learns there's a next page without a second count query.
- *
- * Why offset and not the keyset cursors the thread drawer uses
- * (ThreadCursor / ThreadPage): threads bump their `updated_at`
- * constantly under the realtime feed, so a keyset cursor is the only
- * way to page them without dropping or duplicating a row that moved
- * across the boundary mid-scroll. The cookbook / memory / wiki lists
- * are personal, low-write collections that nobody is mutating while
- * you scroll them, so offset is safe - and it pages an arbitrary
- * ORDER BY (the recipe sort picker's rating-nulls-last and
- * alphabetical modes) without the composite-cursor predicate a keyset
- * scheme would need for each sort key.
- */
-export interface OffsetPage<T> {
-  rows: T[];
-  hasMore: boolean;
-}
 
-/** Default page size for the offset-paginated browse listings. */
-export const DEFAULT_LIST_PAGE_SIZE = 50;
 
-/**
- * Recent-bucket cutoff. 3 days = roughly the "still actively working
- * on it" window for most users — anything newer is something they're
- * likely to want one click away at the top of the drawer, anything
- * older is reference material and lives behind infinite-scroll.
- */
-export const RECENT_THREAD_CUTOFF_MS = 3 * 24 * 60 * 60 * 1000;
 
-/**
- * Per-user preferences persisted on `profiles.settings` (jsonb). Keeps
- * prefs that should follow the account across browsers — the local
- * Supabase config (URL + publishable key) stays per-device by design.
- */
-export interface UserSettings {
-  defaultModel?: ModelTier;
-  /**
-   * Per-tier model + reasoning overrides. Each entry repoints a tier
-   * (Smart/Balanced/Fast) at a user-chosen Venice model and pins that
-   * tier's default reasoning level, carrying a capability snapshot so the
-   * chat send path resolves synchronously without the catalog. Absent
-   * tiers fall back to the built-in TierSpec. See TierModelConfig in
-   * ./models for the snapshot rationale.
-   */
-  tierModels?: TierModels;
-  /**
-   * User-level reasoning-effort default, used on reasoning-capable
-   * models when the thread hasn't overridden it. Absent means fall
-   * back to {@link DEFAULT_REASONING_EFFORT} in code (`low`) so an
-   * empty settings jsonb still produces sane behavior.
-   */
-  defaultReasoningEffort?: ReasoningEffort;
-  /**
-   * User-level text.verbosity default, used when the thread hasn't
-   * overridden it. Absent means fall back to {@link DEFAULT_VERBOSITY}
-   * in code (`medium`) so an empty settings jsonb still produces sane
-   * behavior.
-   */
-  defaultVerbosity?: Verbosity;
-  colorMode?: ColorMode;
-  accent?: Accent;
-  /** Library of named system prompts the user can toggle per-thread. */
-  systemPrompts?: SystemPrompt[];
-  /**
-   * Minimum level the Logs drawer should show by default. Absent
-   * means "show everything" (the lowest tier, `debug`) — falling back
-   * to DEFAULT_LOG_LEVEL in state.svelte.ts. The drawer seeds its own
-   * filter from this value at open time; within-session overrides via
-   * the drawer's dropdown are not persisted.
-   */
-  defaultLogLevel?: LogLevel;
-  /**
-   * Opt-in: ask the model to sprinkle light Markdown emphasis (bold
-   * on terms, italics on phrases) through its replies so the user
-   * can skim the save-points. Chat-loop appends a short instruction
-   * block to the per-turn system-prompt appendix when this is true.
-   * Absent / false leaves the prompt untouched. Named after the
-   * "bionic reading" visual style the feature is modelled on, even
-   * though this is semantic emphasis rather than mechanical prefix
-   * bolding.
-   */
-  emphasisMarkdown?: boolean;
-  /**
-   * Opt-in: when a chat completion finishes in a thread the user isn't
-   * currently viewing, surface it via an OS notification (if the tab is
-   * hidden and permission was granted) or an in-app unread dot on the
-   * sidebar row. Default off because enabling it triggers the browser's
-   * permission prompt - the user has to ask for the feature explicitly.
-   */
-  notifyOnComplete?: boolean;
-  /**
-   * IANA timezone the model sees when reasoning about "what time is
-   * it for the user" in the per-turn metadata system message, and
-   * the zone the wiki worker uses to bucket day-eligible threads.
-   * "America/New_York", "Europe/London", etc. Seeded on first
-   * Settings visit from
-   * `Intl.DateTimeFormat().resolvedOptions().timeZone`; the user
-   * overrides from Settings -> AI -> About you. Absent means "fall
-   * back to the browser's current zone at read time"; callers must
-   * handle `undefined` rather than assume a server default so a
-   * user roaming across time zones never silently lands entries on
-   * the wrong day.
-   */
-  displayTimezone?: string;
-  /**
-   * User wiki feature: when true, the background wiki agent processes
-   * settled threads (one calendar day after the newest message in the
-   * user's tz) and updates / creates encyclopedic articles about
-   * topics the conversation surfaced. Default-on semantics: absent
-   * means on; only present when the user has explicitly disabled.
-   * False stops the manager from starting the worker at unlock and
-   * stops it mid-session when flipped. Manual edits and the
-   * per-article "ask agent to update" button are unaffected by this
-   * flag.
-   */
-  wikiAutomaticEnabled?: boolean;
-  /**
-   * Wiki librarian: when true, a separate background agent runs every
-   * ~12 hours, reads the full wiki, and consolidates duplicates +
-   * fact-checks against conversation history. Independent of
-   * `wikiAutomaticEnabled` so the user can disable per-conversation
-   * autonomy while still getting periodic reorganisation, or vice
-   * versa. Default-on like the other wiki toggle.
-   */
-  wikiLibrarianEnabled?: boolean;
-  /**
-   * Memory librarian: when true, the deep-sleep and rem background
-   * agents run on their staggered 12h cadences, consolidating
-   * cross-thread duplicate memories and populating the relations
-   * graph. Independent of the wiki librarian; default-on like the
-   * other librarian toggles. Both sweeps run server-side; see
-   * supabase/functions/venice/agents/{rem,deep_sleep}.ts.
-   */
-  memoryLibrarianEnabled?: boolean;
-  /**
-   * Free-form display name the user wants the model to address them
-   * by. Optional - absent / empty string means "no name supplied,
-   * the model has nothing to reach for." When present, chat-loop
-   * folds it into the per-turn system-prompt appendix as a short
-   * "User profile" block so every reply this turn sees the name. No
-   * format imposed: a first name, a nickname, "they/them" pronouns,
-   * a self-description, all valid. Capped at USER_PROFILE_FIELD_MAX
-   * to keep a corrupt blob from ballooning the prompt.
-   */
-  userName?: string;
-  /**
-   * Free-form location the user wants the model to know about -
-   * city, region, country, "rural Vermont", "currently roaming in
-   * Asia", whatever they want to share. Same opt-in semantics and
-   * length cap as userName. Used so weather/timezone/cultural-
-   * context questions land grounded rather than the model guessing
-   * or asking back. Not derived from IP or geolocation - we never
-   * try to detect this; the user supplies it explicitly in
-   * Settings or leaves it blank.
-   */
-  userLocation?: string;
-}
 
-/**
- * Length ceiling applied to free-form user-profile string fields
- * (`userName`, `userLocation`) at the coercer + updater boundary.
- * Defensive cap so a corrupt blob can't balloon the per-turn
- * system prompt. 200 characters is generous enough for a
- * descriptive entry ("Brooklyn, NY - born in Lagos, partial to
- * Pacific timezones") without being a foothold for prompt-stuffing.
- */
-const USER_PROFILE_FIELD_MAX = 200;
 
-/**
- * A named system prompt. `enabledByDefault` is the "ride along on every new
- * conversation" flag; per-thread enablement lives in component state (it
- * isn't persisted — see the note on Chat.svelte). Ids are client-generated
- * UUIDs so new prompts can be created offline and referenced immediately.
- */
-export interface SystemPrompt {
-  id: string;
-  name: string;
-  body: string;
-  enabledByDefault: boolean;
-}
 
-function coerceSystemPrompt(raw: unknown): SystemPrompt | null {
-  if (typeof raw !== 'object' || raw === null) return null;
-  const r = raw as Record<string, unknown>;
-  const id = typeof r.id === 'string' && r.id.length > 0 ? r.id : null;
-  const name = typeof r.name === 'string' ? r.name : null;
-  const body = typeof r.body === 'string' ? r.body : null;
-  const enabledByDefault = r.enabledByDefault === true;
-  if (id === null || name === null || body === null) return null;
-  return { id, name, body, enabledByDefault };
-}
 
-/**
- * Scrub an unknown jsonb blob from Supabase into a well-typed UserSettings.
- * Drops unknown / malformed fields silently so a bad value written by an
- * older build can't break the app.
- */
-export function coerceSettings(raw: unknown): UserSettings {
-  if (typeof raw !== 'object' || raw === null) return {};
-  const r = raw as Record<string, unknown>;
-  const out: UserSettings = {};
-  if (isModelTier(r.defaultModel)) out.defaultModel = r.defaultModel;
-  const tierModels = coerceTierModels(r.tierModels);
-  if (tierModels) out.tierModels = tierModels;
-  if (isReasoningEffort(r.defaultReasoningEffort)) {
-    out.defaultReasoningEffort = r.defaultReasoningEffort;
-  }
-  if (isVerbosity(r.defaultVerbosity)) out.defaultVerbosity = r.defaultVerbosity;
-  if (isColorMode(r.colorMode)) out.colorMode = r.colorMode;
-  if (isAccent(r.accent)) out.accent = r.accent;
-  if (Array.isArray(r.systemPrompts)) {
-    const prompts: SystemPrompt[] = [];
-    for (const item of r.systemPrompts) {
-      const p = coerceSystemPrompt(item);
-      if (p) prompts.push(p);
-    }
-    if (prompts.length > 0) out.systemPrompts = prompts;
-  }
-  if (isLogLevel(r.defaultLogLevel)) out.defaultLogLevel = r.defaultLogLevel;
-  if (typeof r.emphasisMarkdown === 'boolean') {
-    out.emphasisMarkdown = r.emphasisMarkdown;
-  }
-  if (typeof r.notifyOnComplete === 'boolean') {
-    out.notifyOnComplete = r.notifyOnComplete;
-  }
-  if (typeof r.wikiAutomaticEnabled === 'boolean') {
-    out.wikiAutomaticEnabled = r.wikiAutomaticEnabled;
-  }
-  if (typeof r.wikiLibrarianEnabled === 'boolean') {
-    out.wikiLibrarianEnabled = r.wikiLibrarianEnabled;
-  }
-  if (typeof r.memoryLibrarianEnabled === 'boolean') {
-    out.memoryLibrarianEnabled = r.memoryLibrarianEnabled;
-  }
-  // displayTimezone is the canonical key. We also read the legacy
-  // `journalTimezone` key so a profile written before the rename
-  // lands keeps its setting on first read; the next updateSettings
-  // call writes the new key and the legacy one falls out of the
-  // blob naturally because nothing writes it any more.
-  const tzCandidate =
-    typeof r.displayTimezone === 'string' && r.displayTimezone.length > 0
-      ? r.displayTimezone
-      : typeof r.journalTimezone === 'string' && r.journalTimezone.length > 0
-        ? r.journalTimezone
-        : null;
-  if (tzCandidate !== null && tzCandidate.length < 128) {
-    // Character set loose on purpose - IANA zones are
-    // `Continent/City` plus aliases, and we don't want to re-implement
-    // the zone list client-side. The 128-char ceiling is a defensive
-    // cap so a malformed blob can't balloon.
-    out.displayTimezone = tzCandidate;
-  }
-  // userName / userLocation: free-form opt-in profile strings. Empty
-  // string is treated as absent so the prompt builder doesn't have to
-  // distinguish "user typed nothing" from "field never set" - either
-  // way the appendix block stays out. Length-capped to keep a corrupt
-  // blob from ballooning the per-turn prompt.
-  if (
-    typeof r.userName === 'string' &&
-    r.userName.length > 0 &&
-    r.userName.length <= USER_PROFILE_FIELD_MAX
-  ) {
-    out.userName = r.userName;
-  }
-  if (
-    typeof r.userLocation === 'string' &&
-    r.userLocation.length > 0 &&
-    r.userLocation.length <= USER_PROFILE_FIELD_MAX
-  ) {
-    out.userLocation = r.userLocation;
-  }
-  return out;
-}
 
 /**
  * Translate a supabase-js functions.invoke error (from any venice-function
@@ -1484,26 +517,6 @@ async function veniceFunctionError(error: unknown): Promise<VeniceError> {
   return new VeniceError(`Network error contacting the venice function: ${message}`, 'network');
 }
 
-/**
- * A persistent reference document in the user's Library. Mirrors the
- * `public.documents` table. The original file lives in the `documents`
- * Storage bucket (pointed at by `storage_path`); `extracted_text` is the
- * Venice text-parser output that gets chunked + embedded for search.
- */
-export interface Document {
-  id: string;
-  title: string;
-  description: string;
-  filename: string;
-  mime_type: string;
-  size_bytes: number;
-  storage_path: string | null;
-  extracted_text: string | null;
-  extraction_status: 'pending' | 'done' | 'failed';
-  extraction_error: string | null;
-  created_at: string;
-  updated_at: string;
-}
 
 function coerceDocument(raw: Record<string, unknown>): Document {
   const status = raw.extraction_status;
@@ -1524,18 +537,6 @@ function coerceDocument(raw: Record<string, unknown>): Document {
   };
 }
 
-/**
- * One hit from `grep_documents`: a matching line with its location and a few
- * lines of context on either side.
- */
-export interface DocumentGrepHit {
-  document_id: string;
-  title: string;
-  line_number: number;
-  line_text: string;
-  context_before: string[];
-  context_after: string[];
-}
 
 function coerceDocumentGrepHit(raw: Record<string, unknown>): DocumentGrepHit {
   const toLines = (v: unknown): string[] =>
@@ -1550,24 +551,6 @@ function coerceDocumentGrepHit(raw: Record<string, unknown>): DocumentGrepHit {
   };
 }
 
-/**
- * `document_stat` output: a document's metadata plus its total line count,
- * fetched without shipping the extracted text. Powers the `doc_get` tool.
- */
-export interface DocumentStat {
-  id: string;
-  title: string;
-  description: string;
-  filename: string;
-  mime_type: string;
-  size_bytes: number;
-  extraction_status: 'pending' | 'done' | 'failed';
-  extraction_error: string | null;
-  has_text: boolean;
-  total_lines: number;
-  created_at: string;
-  updated_at: string;
-}
 
 function coerceDocumentStat(raw: Record<string, unknown>): DocumentStat {
   const status = raw.extraction_status;
