@@ -53,6 +53,10 @@
     formatRecallTimestamp,
     formatRecallTrigger,
   } from '$lib/ui/recall';
+  import {
+    formatRelativeAge,
+    isStaleForDisplay,
+  } from '$lib/ui/payload-freshness';
   import type { Message, Thread } from '$lib/supabase';
 
   interface Props {
@@ -94,6 +98,12 @@
   const entries = $derived<readonly ContextRecallPayload[]>(
     buildRecallEntries(payload, history)
   );
+
+  // Snapshot at modal-open for the per-entry relative-age line. The modal
+  // is short-lived, so a static "now" is fine - no live clock. The stale
+  // badge only applies to the live cache (entries[0] when `payload` is
+  // non-null); history entries are past payloads, so staleness is moot.
+  const now = Date.now();
 </script>
 
 <svelte:window onkeydown={(e) => { if (e.key === 'Escape') onClose(); }} />
@@ -195,6 +205,10 @@
 
             <p class="entry-meta subtle">
               {formatRecallTrigger(entry.trigger)} · {formatRecallTimestamp(entry.computed_at_at)}
+              ({formatRelativeAge(entry.computed_at_at, now)})
+              {#if i === 0 && payload !== null && isStaleForDisplay(entry.computed_at_at, now)}
+                <span class="stale-badge">stale</span>
+              {/if}
             </p>
           </section>
         {/each}
@@ -377,6 +391,20 @@
   .entry-meta {
     margin: 0.6rem 0 0;
     font-size: 0.78rem;
+  }
+
+  /* "stale" chip on the live cache entry: old enough that the chat-loop
+     would suppress it at injection time. Warm hue = soft warning. */
+  .stale-badge {
+    display: inline-block;
+    margin-left: 0.4rem;
+    padding: 0 0.35rem;
+    border-radius: 0.4rem;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--bg);
+    background: var(--warning, #b8860b);
   }
 
   .empty {

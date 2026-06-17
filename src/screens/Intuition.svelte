@@ -32,6 +32,14 @@
     type IntuitionPayload,
   } from '$lib/intuition';
   import type { Thread } from '$lib/supabase';
+  import {
+    formatIntuitionTrigger,
+    formatIntuitionTimestamp,
+  } from '$lib/ui/intuition';
+  import {
+    formatRelativeAge,
+    isStaleForDisplay,
+  } from '$lib/ui/payload-freshness';
 
   interface Props {
     onClose: () => void;
@@ -81,26 +89,9 @@
     };
   }
 
-  function formatTimestamp(ms: number): string {
-    try {
-      return new Date(ms).toLocaleString();
-    } catch {
-      return String(ms);
-    }
-  }
-
-  function formatTrigger(t: IntuitionPayload['trigger']): string {
-    switch (t) {
-      case 'title':
-        return 'topic shift (title changed)';
-      case 'mood':
-        return 'mood shift';
-      case 'stale':
-        return 'staleness fuse';
-      case 'cold':
-        return 'first read on this thread';
-    }
-  }
+  // Snapshot at modal-open for the relative-age line and stale badge.
+  // The modal is short-lived, so a static "now" is fine - no live clock.
+  const now = Date.now();
 </script>
 
 <svelte:window onkeydown={(e) => { if (e.key === 'Escape') onClose(); }} />
@@ -192,8 +183,14 @@
         </section>
 
         <footer class="intuition-footer subtle">
-          <p>Computed {formatTimestamp(payload.computed_at_at)}</p>
-          <p>Trigger: {formatTrigger(payload.trigger)}</p>
+          <p>
+            Computed {formatIntuitionTimestamp(payload.computed_at_at)}
+            ({formatRelativeAge(payload.computed_at_at, now)})
+            {#if isStaleForDisplay(payload.computed_at_at, now)}
+              <span class="stale-badge">stale</span>
+            {/if}
+          </p>
+          <p>Trigger: {formatIntuitionTrigger(payload.trigger)}</p>
           <p>User round: {payload.computed_at_round}</p>
         </footer>
       {/if}
@@ -372,6 +369,22 @@
 
   .intuition-footer p {
     margin: 0;
+  }
+
+  /* "stale" chip next to the computed-age line: this payload is old
+     enough that the chat-loop would suppress it at injection time. Warm
+     hue to read as a soft warning, not an error. */
+  .stale-badge {
+    display: inline-block;
+    margin-left: 0.4rem;
+    padding: 0 0.35rem;
+    border-radius: 0.4rem;
+    font-size: 0.7rem;
+    font-style: normal;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--bg);
+    background: var(--warning, #b8860b);
   }
 
   .empty {
