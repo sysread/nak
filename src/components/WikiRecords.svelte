@@ -20,7 +20,8 @@
    */
   import { app } from '$lib/state.svelte';
   import { searchWikiRecordsSemantic, MAX_WIKI_RECORD_CONTENT_CHARS } from '$lib/wiki';
-  import type { WikiRecord } from '$lib/supabase';
+  import type { WikiArticle, WikiRecord } from '$lib/supabase';
+  import { downloadRecordMarkdown, downloadArticleZip } from '$lib/wiki-export';
   import { emitWikiRecordChange, onWikiRecordChange } from '$lib/wiki-events';
   import {
     formatRecordDate,
@@ -35,9 +36,10 @@
   import Markdown from './Markdown.svelte';
 
   interface Props {
-    articleId: string;
+    article: WikiArticle;
   }
-  const { articleId }: Props = $props();
+  const { article }: Props = $props();
+  const articleId = $derived(article.id);
 
   // --- list + filter state ---------------------------------------------
   let records = $state<WikiRecord[]>([]);
@@ -202,9 +204,19 @@
 <section class="wiki-records" aria-label="Records">
   <header class="wiki-records-header">
     <h2>{recordsHeadline(searchResults ? searchResults.length : records.length)}</h2>
-    {#if !composing}
-      <button type="button" class="primary" onclick={startCompose}>Add record</button>
-    {/if}
+    <div class="wiki-records-header-actions">
+      {#if records.length > 0}
+        <!-- Exports this article's records (filters/search aside) plus the
+             article body as a ZIP. Uses the unfiltered `records` rather
+             than `visible` so a download is always the full set. -->
+        <button type="button" onclick={() => downloadArticleZip(article, records)}>
+          Export all
+        </button>
+      {/if}
+      {#if !composing}
+        <button type="button" class="primary" onclick={startCompose}>Add record</button>
+      {/if}
+    </div>
   </header>
 
   <!-- Cross-article semantic search. A hit may belong to another
@@ -343,6 +355,9 @@
               <Markdown content={record.content} />
               <div class="row wiki-record-actions">
                 <button type="button" onclick={() => startEdit(record)}>Edit</button>
+                <button type="button" onclick={() => downloadRecordMarkdown(record)}>
+                  Export
+                </button>
                 <button type="button" class="danger" onclick={() => void deleteRecord(record)}>
                   Delete
                 </button>
@@ -370,6 +385,11 @@
   }
   .wiki-records-header h2 {
     margin: 0;
+  }
+  .wiki-records-header-actions {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
   }
   .wiki-records-search {
     display: flex;

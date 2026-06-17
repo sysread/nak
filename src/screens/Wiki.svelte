@@ -1627,7 +1627,7 @@
              current state). Keyed on a.id so switching articles remounts
              with a fresh load rather than leaking the prior list. -->
         {#key a.id}
-          <WikiRecords articleId={a.id} />
+          <WikiRecords article={a} />
         {/key}
 
         {#if deletingId === a.id}

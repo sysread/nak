@@ -94,6 +94,9 @@ One file per use-case under [`use-cases/`](./use-cases/), named
 - [wiki-fleet](./use-cases/wiki-fleet.md) - autonomous wiki sweep,
   skipped-thread retry, librarian sweep + manual run with live
   narration.
+- [wiki-records](./use-cases/wiki-records.md) - dated records:
+  manual add/edit/filter/search/export, the extraction sweep, the
+  librarian promoting learnings while preserving records.
 - [memory-librarians](./use-cases/memory-librarians.md) - rem and
   deep-sleep sweeps, manual runs from the Memories panel, the
   shared in-flight guard.
