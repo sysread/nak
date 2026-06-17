@@ -207,6 +207,16 @@ export interface VeniceCompleteOptions {
    */
   retrySchedule?: number[];
   /**
+   * Opt-in: also retry a 429 (rate_limit), honoring Venice's Retry-After
+   * window (capped, see RATE_LIMIT_WAIT_CAP_MS). Off by default so the
+   * browser-proxied non-streaming route and the mid-turn tool calls keep
+   * their current give-up-on-429 behavior. The server-side background
+   * agents (auto-title and the rest of the curation family) set this:
+   * they have no browser rate-limit loop behind them, so without it a
+   * single "model overloaded" 429 fails the whole sub-call.
+   */
+  retryRateLimit?: boolean;
+  /**
    * Aborts the in-flight fetch and any pending backoff sleep. Optional -
    * the route handler does not wire one today (the backoff is bounded),
    * but tool sub-completions and tests can cancel.
@@ -223,13 +233,21 @@ export interface VeniceCompleteOptions {
 // classes the streaming path already retries server-side
 // (withRateLimitRetry in getStreamingCompletion); the non-streaming
 // path lost its retry loop in the move onto the edge function. 429 is
-// deliberately NOT retried here: the browser's SupabaseService.complete
-// owns the rate-limit loop and honors Venice's Retry-After, so retrying
-// it here too would just stack waits. Deterministic (no jitter) on
-// purpose - the retries hit Venice's infra, not ours, and the per-turn
-// caller count is small, so there's no thundering herd against our own
-// service to spread out.
+// retried only when the caller opts in via retryRateLimit (the
+// server-side curation/background agents do; the browser-proxied route
+// and mid-turn tools do not, because the browser's
+// SupabaseService.complete owns their rate-limit loop and honors
+// Retry-After). Deterministic (no jitter) on purpose - the retries hit
+// Venice's infra, not ours, and the per-turn caller count is small, so
+// there's no thundering herd against our own service to spread out.
 const COMPLETE_RETRY_SCHEDULE_MS = [500, 1500, 4000];
+
+// Ceiling on how long a single 429 backoff will wait, even if Venice's
+// Retry-After asks for longer. Keeps a sustained-overload 429 from
+// parking a background sub-call past the function's waitUntil budget;
+// the agents' claim-release-and-retry-next-tick path is the backstop
+// for overload that outlasts this.
+const RATE_LIMIT_WAIT_CAP_MS = 5000;
 
 /**
  * True for failures a retry might clear: a connection-level error, or an
@@ -284,15 +302,20 @@ export async function veniceComplete(opts: VeniceCompleteOptions): Promise<unkno
     try {
       return await veniceCompleteOnce(opts);
     } catch (err) {
-      const retriesLeft = attempt < schedule.length;
-      if (
-        !(err instanceof VeniceError) ||
-        !isTransientCompleteError(err) ||
-        !retriesLeft
-      ) {
-        throw err;
-      }
-      const interrupted = await sleepCancellable(schedule[attempt], opts.signal);
+      const retryable =
+        err instanceof VeniceError &&
+        (isTransientCompleteError(err) ||
+          (opts.retryRateLimit === true && err.kind === 'rate_limit'));
+      if (!retryable || attempt >= schedule.length) throw err;
+      // On a 429 Venice tells us how long its window is; honor that over
+      // the blind schedule, but floor it at the scheduled delay and cap
+      // it (a long Retry-After must not blow the background budget).
+      const baseMs = schedule[attempt];
+      const waitMs =
+        err.kind === 'rate_limit' && typeof err.retryAfterMs === 'number'
+          ? Math.min(Math.max(err.retryAfterMs, baseMs), RATE_LIMIT_WAIT_CAP_MS)
+          : baseMs;
+      const interrupted = await sleepCancellable(waitMs, opts.signal);
       // Aborted mid-backoff: surface the failure we already have rather
       // than firing another attempt the caller no longer wants.
       if (interrupted) throw err;

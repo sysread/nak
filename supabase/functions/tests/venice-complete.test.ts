@@ -173,7 +173,7 @@ Deno.test('veniceComplete does NOT retry a 4xx', async () => {
   assertEquals(calls(), 1);
 });
 
-Deno.test('veniceComplete does NOT retry a 429 (the browser loop owns that)', async () => {
+Deno.test('veniceComplete does NOT retry a 429 by default (opt-out: browser route + mid-turn tools)', async () => {
   const { fetchImpl, calls } = sequencedFetch([
     new Response('slow down', { status: 429, headers: { 'Retry-After': '7' } }),
   ]);
@@ -183,6 +183,29 @@ Deno.test('veniceComplete does NOT retry a 429 (the browser loop owns that)', as
   );
   assertEquals(err.kind, 'rate_limit');
   assertEquals(calls(), 1);
+});
+
+Deno.test('veniceComplete retries a 429 when retryRateLimit is set', async () => {
+  // No Retry-After header, so the backoff uses the (zero) scheduled
+  // delay and the test stays instant - the retryAfterMs-honoring path is
+  // exercised by the mapping tests above, here we just pin that the
+  // opt-in turns a 429 into a retryable transient.
+  const { fetchImpl, calls } = sequencedFetch([
+    new Response('slow down', { status: 429 }),
+    okBody(),
+  ]);
+  const out = await veniceComplete({
+    apiKey: 'k',
+    body: {},
+    fetchImpl,
+    retrySchedule: [0],
+    retryRateLimit: true,
+  });
+  assertEquals(
+    (out as { choices: [{ message: { content: string } }] }).choices[0].message.content,
+    'pong'
+  );
+  assertEquals(calls(), 2);
 });
 
 Deno.test('veniceComplete maps a non-JSON success body to parse', async () => {

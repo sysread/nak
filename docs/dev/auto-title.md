@@ -9,8 +9,8 @@ venice edge function; there is no browser-side titling code.
 Every thread is created with `title = 'New conversation'`. The
 auto-title unit claims a placeholder-titled thread (oldest first,
 skipping rows the user manually pinned), asks the small fast model
-(`e2ee-gpt-oss-20b-p`, hardcoded in the agent module) for a title
-against the first user message, and writes the result back via a
+(`mistral-small-3-2-24b-instruct`, hardcoded in the agent module) for a
+title against the first user message, and writes the result back via a
 claim-guarded RPC.
 
 Two drivers run it:
@@ -168,11 +168,19 @@ metadata-message details.
   claimed. If you ever introduce a "create empty thread" flow, the
   thread won't auto-title until a user message lands.
 - **The model id is hardcoded in the agent module.**
-  `AUTO_TITLE_MODEL = 'e2ee-gpt-oss-20b-p'` mirrors
-  `agentModel('autoTitle')` in `src/lib/models/index.ts` -
-  `AGENT_MODELS` is a static role->model map, not a per-user
-  configurable tier, so the hardcode is faithful. Change both
-  together.
+  `AUTO_TITLE_MODEL = 'mistral-small-3-2-24b-instruct'` - the same
+  cheap, fast, non-reasoning instruct model the other server-side
+  curation agents (summary, topics, bias, samskara) use. There is NO
+  `autoTitle` role in `AGENT_MODELS`; the curation agents run
+  server-side and hold their ids directly (the edge function cannot
+  import `src/lib`), so this is a bare string, not a mirror of a
+  browser constant. Auto-title only ever sees the first user message,
+  and its siblings already run the full thread through the same id, so
+  there is no privacy reason to isolate it on a separate (e2ee) model -
+  one shared, better-provisioned id also avoids the small-model 429
+  overload that the earlier `e2ee-gpt-oss-20b-p` was prone to. The
+  sub-call opts into `retryRateLimit` (see `_shared/venice.ts`), so a
+  transient 429 is ridden out rather than failing the cycle.
 - **`maxTokens` is 2048, not "title-sized."** The model sometimes
   emits a chain-of-thought preamble or ignores the length
   instruction; a tight wire cap truncated titles mid-word. The

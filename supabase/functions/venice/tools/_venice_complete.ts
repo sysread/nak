@@ -78,6 +78,14 @@ export interface ToolCompletionOptions {
    * reasoning-capable models; non-reasoning tiers silently ignore.
    */
   reasoningEffort?: 'low' | 'medium' | 'high';
+  /**
+   * Opt-in to retrying a 429 (rate_limit) with backoff. Off by default
+   * so mid-turn tool calls keep surfacing a 429 to the model promptly
+   * (the round loop bounds them); the background curation agents that
+   * borrow this helper set it so a transient "model overloaded" doesn't
+   * fail the whole sub-call. Forwarded to veniceComplete.
+   */
+  retryRateLimit?: boolean;
 }
 
 export async function toolComplete(opts: ToolCompletionOptions): Promise<ToolCompletionResult> {
@@ -115,7 +123,11 @@ export async function toolComplete(opts: ToolCompletionOptions): Promise<ToolCom
     body.reasoning_effort = opts.reasoningEffort;
   }
 
-  const raw = await veniceComplete({ apiKey: opts.apiKey, body });
+  const raw = await veniceComplete({
+    apiKey: opts.apiKey,
+    body,
+    retryRateLimit: opts.retryRateLimit,
+  });
   return parseCompletion(raw);
 }
 

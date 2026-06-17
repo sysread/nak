@@ -175,6 +175,9 @@ async function summariseClaimedThread(
     const result = await toolComplete({
       apiKey,
       model: SUMMARY_MODEL,
+      // Background curation agent: ride out a transient 429 rather than
+      // failing the summary on one "model overloaded".
+      retryRateLimit: true,
       messages: convo,
       maxTokens: 2048,
     });

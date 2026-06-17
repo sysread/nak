@@ -270,6 +270,9 @@ async function observeThread(
     const result = await toolComplete({
       apiKey,
       model: BIAS_MODEL,
+      // Background curation agent: ride out a transient 429 rather than
+      // dropping the observation on one "model overloaded".
+      retryRateLimit: true,
       messages: [
         { role: 'system', content: BIAS_OBSERVER_PROMPT },
         { role: 'user', content: payload },

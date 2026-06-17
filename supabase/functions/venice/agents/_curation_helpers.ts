@@ -278,6 +278,10 @@ export async function completeJsonObject(opts: {
       max_completion_tokens: opts.maxTokens,
       response_format: { type: 'json_object' },
     },
+    // Every caller of this helper is a server-side curation agent with no
+    // browser rate-limit loop behind it, so ride out a transient 429
+    // rather than failing the whole cycle on one "model overloaded".
+    retryRateLimit: true,
   });
   if (typeof raw !== 'object' || raw === null) {
     throw new Error('Venice completion response was not an object.');

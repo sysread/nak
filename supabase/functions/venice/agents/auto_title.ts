@@ -27,11 +27,14 @@ import { toolComplete } from '../tools/_venice_complete.ts';
 import { sanitizeTitle } from '../tools/_title.ts';
 import { CURATION_CLAIM_TTL_SECONDS } from './_curation_helpers.ts';
 
-// Mirror of agentModel('autoTitle').id in src/lib/models/index.ts.
-// AGENT_MODELS is a static role->model map, NOT one of the per-user
-// configurable tiers, so the browser path resolved this same constant -
-// hardcoding it here stays faithful after the cutover.
-const AUTO_TITLE_MODEL = 'e2ee-gpt-oss-20b-p';
+// Shared with the other server-side curation agents (summary, topics,
+// bias, samskara): a cheap, fast, non-reasoning instruct model. Those
+// siblings already run the FULL thread content through this id, while
+// auto-title only ever sees the first user message - so isolating
+// titling on a separate (e2ee) model bought no real privacy, and one
+// shared id keeps the curation family on a single, better-provisioned
+// model rather than a small one prone to 429 overload.
+const AUTO_TITLE_MODEL = 'mistral-small-3-2-24b-instruct';
 
 /**
  * System prompt for the title-gen sub-call. Short on purpose: the
@@ -71,6 +74,10 @@ async function generateThreadTitle(
     const result = await toolComplete({
       apiKey,
       model: AUTO_TITLE_MODEL,
+      // Background curation agent, no browser rate-limit loop behind it:
+      // ride out a transient 429 instead of failing the title (the
+      // claim-release-and-retry-next-tick path is the longer backstop).
+      retryRateLimit: true,
       messages: [
         { role: 'system', content: TITLE_GEN_SYSTEM_PROMPT },
         { role: 'user', content: trimmed },

@@ -328,6 +328,10 @@ export async function runHeadlessAgent(
       tools: wireList,
       reasoningEffort: opts.reasoningEffort,
       disableThinking: opts.disableThinking,
+      // Headless agents (wiki, reflection, the librarians) run in the
+      // background with no browser rate-limit loop, so ride out a
+      // transient 429 rather than aborting the whole agent round.
+      retryRateLimit: true,
     });
 
     const roundText = completion.text;

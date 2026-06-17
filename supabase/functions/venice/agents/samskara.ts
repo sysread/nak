@@ -385,6 +385,9 @@ async function callOnce(
     const result = await toolComplete({
       apiKey,
       model: SAMSKARA_MODEL,
+      // Background curation agent: ride out a transient 429 rather than
+      // failing the assimilation on one "model overloaded".
+      retryRateLimit: true,
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPayload },
