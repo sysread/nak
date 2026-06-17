@@ -33,6 +33,10 @@ const MAX_THREAD_EMBED_INPUT_CHARS = 2000;
 // Mirrors MAX_WIKI_CONTENT_CHARS in src/lib/wiki.ts.
 const MAX_WIKI_CONTENT_CHARS = 16000;
 
+// Mirrors MAX_WIKI_RECORD_CONTENT_CHARS in src/lib/wiki.ts. Records are
+// short discrete jots, not consolidated articles, so the cap is tighter.
+const MAX_WIKI_RECORD_CONTENT_CHARS = 8000;
+
 // Substrate situation/outcome have no schema-level cap yet; these match the
 // memory-side order of magnitude and leave headroom for tokenizer inflation.
 const MAX_SUBSTRATE_SITUATION_CHARS = 6000;
@@ -90,6 +94,21 @@ export function buildWikiEmbedInput(title: string, content: string): string {
   const body =
     content.length > MAX_WIKI_CONTENT_CHARS ? content.slice(0, MAX_WIKI_CONTENT_CHARS) : content;
   return `${title}\n\n${body}`;
+}
+
+/**
+ * Compose the text Venice embeds for a wiki record. The ISO date leads
+ * verbatim (so "what happened in March" can match temporally) with a
+ * double-newline before the body. Tags are deliberately excluded - they
+ * are a filtering facet, not semantic content, and folding them in would
+ * let a noisy tag dominate the vector.
+ */
+export function buildWikiRecordEmbedInput(date: string, content: string): string {
+  const body =
+    content.length > MAX_WIKI_RECORD_CONTENT_CHARS
+      ? content.slice(0, MAX_WIKI_RECORD_CONTENT_CHARS)
+      : content;
+  return `${date}\n\n${body}`;
 }
 
 /**
@@ -161,6 +180,13 @@ export const EMBED_SOURCES: EmbedSource[] = [
     claimRpc: 'claim_next_pending_wiki_article', // returns (id, title, content, user_id)
     saveRpc: 'save_wiki_article_embedding_if_claimed',
     buildInput: (row) => buildWikiEmbedInput(str(row.title), str(row.content)),
+  },
+  {
+    name: 'wiki-records',
+    claimRpc: 'claim_next_pending_wiki_record', // returns (id, date, content, tags, user_id)
+    saveRpc: 'save_wiki_record_embedding_if_claimed',
+    // date arrives as an ISO 'YYYY-MM-DD' string over the RPC boundary.
+    buildInput: (row) => buildWikiRecordEmbedInput(str(row.date), str(row.content)),
   },
   {
     name: 'samskara-substrate',

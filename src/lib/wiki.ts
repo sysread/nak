@@ -17,7 +17,7 @@
  * hard error from the user's POV.
  */
 
-import type { SupabaseService, WikiArticle } from './supabase';
+import type { SupabaseService, WikiArticle, WikiRecord } from './supabase';
 import { VENICE_EMBEDDING_MODEL, padEmbeddingForStorage } from './models';
 
 export interface SearchWikiDeps {
@@ -71,6 +71,66 @@ export const MAX_WIKI_CONTENT_CHARS = 16000;
  * commit summary line gets; longer context belongs in the article body.
  */
 export const MAX_WIKI_CHANGELOG_MESSAGE_CHARS = 200;
+
+/**
+ * Length ceiling on a wiki record's body (8000 chars). Records are short
+ * discrete jots, not consolidated articles, so the cap is tighter than
+ * MAX_WIKI_CONTENT_CHARS. Mirrored in supabase/functions/_shared/
+ * embed-input.ts (MAX_WIKI_RECORD_CONTENT_CHARS) and enforced at the
+ * record write-tool boundary so a pre-cap row can't loop the backfill on
+ * an input Venice rejects.
+ */
+export const MAX_WIKI_RECORD_CONTENT_CHARS = 8000;
+
+/**
+ * Max number of tags per record. A filtering facet, not prose - a
+ * runaway model shouldn't be able to attach hundreds of keywords.
+ */
+export const MAX_WIKI_RECORD_TAGS = 24;
+
+/**
+ * Length ceiling on a single tag. Keeps the chip UI legible and the GIN
+ * index entries bounded.
+ */
+export const MAX_WIKI_RECORD_TAG_CHARS = 40;
+
+/**
+ * Semantic search across the user's wiki records, parallel to
+ * `searchWikiArticlesSemantic`. Embeds the query via Venice (silent
+ * ILIKE fallback on failure, same rationale as articles) and hands the
+ * embedding to `SupabaseService.searchWikiRecords`, which merges vector
+ * hits with ILIKE hits deduped by id. No sole-source filter - records
+ * have no provenance-exclusion semantic.
+ */
+export async function searchWikiRecordsSemantic(
+  query: string,
+  limit: number,
+  deps: { supabase: SupabaseService; signal?: AbortSignal },
+): Promise<WikiRecord[]> {
+  const { supabase, signal } = deps;
+  const trimmed = query.trim();
+  if (trimmed.length === 0) {
+    return supabase.searchWikiRecords({ query: '', queryEmbedding: null, limit });
+  }
+  let rawEmbedding: number[] | undefined;
+  try {
+    const response = await supabase.embed({
+      model: VENICE_EMBEDDING_MODEL,
+      input: trimmed,
+      signal,
+    });
+    rawEmbedding = response.data[0]?.embedding;
+  } catch {
+    // Silent fallback - a transient Venice error shouldn't blank the
+    // records search; ILIKE-only beats a hard error.
+    rawEmbedding = undefined;
+  }
+  const queryEmbedding =
+    rawEmbedding && rawEmbedding.length > 0
+      ? padEmbeddingForStorage(rawEmbedding)
+      : null;
+  return supabase.searchWikiRecords({ query: trimmed, queryEmbedding, limit });
+}
 
 export async function searchWikiArticlesSemantic(
   query: string,

@@ -25,6 +25,29 @@ export interface WikiArticle {
 }
 
 /**
+ * One dated record linked to a wiki article. Records document the
+ * topic's journey (discrete events, experiments, observations) while
+ * the article body owns the consolidated "current state". `date` is the
+ * calendar day the event occurred (distinct from `created_at`, when the
+ * row was written); `tags` is a freeform keyword array used for
+ * filtering; `source_conversation_id` carries extraction provenance and
+ * is null for manually-added records. See the matching table + RLS in
+ * `supabase/schema.sql:wiki_records`.
+ */
+export interface WikiRecord {
+  id: string;
+  article_id: string;
+  date: string;
+  content: string;
+  tags: string[];
+  source_conversation_id: string | null;
+  created_at: string;
+  updated_at: string;
+  /** Populated only by `searchWikiRecordsByEmbedding`. */
+  similarity?: number;
+}
+
+/**
  * One row of the bibliography shown beneath a wiki article: a thread
  * that contributed to the article, with the thread's title and the
  * timestamp this attribution was last refreshed (re-processing the
@@ -107,6 +130,44 @@ export function coerceWikiArticle(raw: Record<string, unknown>): WikiArticle {
     id: String(raw.id),
     title: typeof raw.title === 'string' ? raw.title : '',
     content: typeof raw.content === 'string' ? raw.content : '',
+    created_at: String(raw.created_at ?? raw.updated_at ?? ''),
+    updated_at: String(raw.updated_at ?? raw.created_at ?? ''),
+    similarity:
+      typeof raw.similarity === 'number' ? (raw.similarity as number) : undefined,
+  };
+}
+
+/**
+ * Defensive coercion of a wiki_records row (or a search hit). `tags`
+ * may arrive as a JSONB array, a JSON string (older clients), or be
+ * absent; normalize to a string array. `source_conversation_id` and
+ * `similarity` are optional.
+ */
+export function coerceWikiRecord(raw: Record<string, unknown>): WikiRecord {
+  let tags: string[] = [];
+  const rawTags = raw.tags;
+  if (Array.isArray(rawTags)) {
+    tags = rawTags.filter((t): t is string => typeof t === 'string');
+  } else if (typeof rawTags === 'string' && rawTags.length > 0) {
+    try {
+      const parsed = JSON.parse(rawTags);
+      if (Array.isArray(parsed)) {
+        tags = parsed.filter((t): t is string => typeof t === 'string');
+      }
+    } catch {
+      // Malformed tag payload from a legacy row - treat as untagged
+      // rather than throwing in a read path.
+    }
+  }
+  const srcRaw = raw.source_conversation_id;
+  return {
+    id: String(raw.id),
+    article_id: String(raw.article_id ?? ''),
+    date: typeof raw.date === 'string' ? raw.date : '',
+    content: typeof raw.content === 'string' ? raw.content : '',
+    tags,
+    source_conversation_id:
+      typeof srcRaw === 'string' && srcRaw.length > 0 ? srcRaw : null,
     created_at: String(raw.created_at ?? raw.updated_at ?? ''),
     updated_at: String(raw.updated_at ?? raw.created_at ?? ''),
     similarity:

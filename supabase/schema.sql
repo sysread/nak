@@ -8986,6 +8986,204 @@ begin
   end loop;
 end $$;
 
+-- Wiki records. A linked table of discrete, dated entries scoped to a
+-- single wiki article. The split is deliberate: the article body is the
+-- consolidated "current state" of a topic (what is true now), while
+-- records preserve the dated journey (specific events, experiments,
+-- observations, milestones - "baked a loaf", "doctor visit"). The
+-- article worker + librarian read records and promote durable learnings
+-- into the body without deleting the records, so the narrative stays
+-- current while the history survives.
+--
+-- Records attach to an article (article_id NOT NULL, cascade on article
+-- delete). Unlike wiki_articles there's no (user_id, title) uniqueness:
+-- many records per article is the whole point, and two records on the
+-- same date are legal (two events, one day).
+--
+-- Embedding mirrors wiki_articles exactly: 2048-padded vector written by
+-- the shared server-side backfill loop, same claim/save protocol, same
+-- invalidation-on-edit trigger. tags is a JSONB array of freeform
+-- keyword strings for filtering; it is not part of the embedded text.
+create table if not exists public.wiki_records (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  article_id uuid not null references public.wiki_articles(id) on delete cascade,
+  -- Calendar date the event occurred (user-specified or extracted),
+  -- distinct from created_at (when the row was written). The records
+  -- list sorts by this column descending.
+  date date not null,
+  content text not null,
+  tags jsonb not null default '[]'::jsonb,
+  -- Provenance for extraction-agent writes; null for manually-added
+  -- records. set null (not cascade) so deleting the source thread
+  -- leaves the record intact - the event still happened.
+  source_conversation_id uuid references public.threads(id) on delete set null,
+  embedding vector(2048),
+  embedding_model text,
+  -- No _at suffix to match the convention from memories / wiki_articles.
+  embedding_claim_holder text,
+  embedding_claim_expires timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- Reverse-chronological list by article (the article-view Records
+-- section). date desc matches the rendered order.
+create index if not exists wiki_records_article_date_idx
+  on public.wiki_records (article_id, date desc);
+-- Cross-article chronological queries for one user.
+create index if not exists wiki_records_user_date_idx
+  on public.wiki_records (user_id, date desc);
+-- Tag filtering. GIN over the JSONB array supports `tags ? 'x'` /
+-- `tags @> '["x"]'` containment without scanning every row.
+create index if not exists wiki_records_tags_idx
+  on public.wiki_records using gin (tags);
+
+-- Stamp updated_at on every UPDATE. wiki_articles relies on its write
+-- tools to set updated_at by hand; records are written from three
+-- surfaces (UI, chat tools, background agents), so a trigger is the
+-- single source of truth rather than three callers that must remember.
+create or replace function public.touch_wiki_record_updated_at()
+  returns trigger language plpgsql as $$
+begin
+  new.updated_at := now();
+  return new;
+end $$;
+
+drop trigger if exists touch_wiki_record_updated_at on public.wiki_records;
+create trigger touch_wiki_record_updated_at
+  before update on public.wiki_records
+  for each row execute function public.touch_wiki_record_updated_at();
+
+-- Same invariant as wiki_articles: when the text that produced the
+-- embedding changes, null the embedding so the backfill worker re-embeds
+-- on its next poll. The embed input is date + content (see
+-- buildWikiRecordEmbedInput), so both fields gate invalidation. Null the
+-- claim columns too so an in-flight worker save (which guards on holder
+-- + expires > now()) cannot land a stale vector against the new text.
+create or replace function public.clear_wiki_record_embedding_on_change()
+  returns trigger language plpgsql as $$
+begin
+  if new.content is distinct from old.content
+     or new.date is distinct from old.date then
+    new.embedding := null;
+    new.embedding_model := null;
+    new.embedding_claim_holder := null;
+    new.embedding_claim_expires := null;
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists clear_wiki_record_embedding_on_change on public.wiki_records;
+create trigger clear_wiki_record_embedding_on_change
+  before update on public.wiki_records
+  for each row execute function public.clear_wiki_record_embedding_on_change();
+
+alter table public.wiki_records enable row level security;
+
+drop policy if exists "wiki_records are self-selectable" on public.wiki_records;
+create policy "wiki_records are self-selectable" on public.wiki_records
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "wiki_records are self-insertable" on public.wiki_records;
+create policy "wiki_records are self-insertable" on public.wiki_records
+  for insert with check (auth.uid() = user_id);
+
+drop policy if exists "wiki_records are self-updatable" on public.wiki_records;
+create policy "wiki_records are self-updatable" on public.wiki_records
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "wiki_records are self-deletable" on public.wiki_records;
+create policy "wiki_records are self-deletable" on public.wiki_records
+  for delete using (auth.uid() = user_id);
+
+-- Embeddings pipeline RPCs for wiki records. Same claim/save/search
+-- shape as wiki_articles (see that trio above), same security posture:
+-- definer global sweep for claim/save (cron-driven service role, no
+-- auth.uid()), invoker for search (RLS + explicit user_id guard).
+drop function if exists public.claim_next_pending_wiki_record(text, int);
+create or replace function public.claim_next_pending_wiki_record(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns table (id uuid, date date, content text, tags jsonb, user_id uuid)
+language sql security definer
+set search_path = public as $$
+  with candidate as (
+    select r.id
+      from public.wiki_records r
+     where r.embedding is null
+       and (r.embedding_claim_expires is null
+            or r.embedding_claim_expires < now())
+     order by r.updated_at desc
+     limit 1
+     for update skip locked
+  )
+  update public.wiki_records r
+     set embedding_claim_holder = p_holder_id,
+         embedding_claim_expires = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c
+   where r.id = c.id
+  returning r.id, r.date, r.content, r.tags, r.user_id;
+$$;
+
+drop function if exists public.save_wiki_record_embedding_if_claimed(uuid, text, vector, text);
+create or replace function public.save_wiki_record_embedding_if_claimed(
+  p_id uuid,
+  p_holder_id text,
+  p_embedding vector(2048),
+  p_embedding_model text
+) returns boolean
+language plpgsql security definer
+set search_path = public as $$
+declare
+  updated int;
+begin
+  update public.wiki_records
+     set embedding = p_embedding,
+         embedding_model = p_embedding_model,
+         embedding_claim_holder = null,
+         embedding_claim_expires = null
+   where id = p_id
+     and embedding_claim_holder = p_holder_id
+     and embedding_claim_expires > now();
+  get diagnostics updated = row_count;
+  return updated > 0;
+end $$;
+
+revoke all on function public.claim_next_pending_wiki_record(text, int) from public, anon, authenticated;
+revoke all on function public.save_wiki_record_embedding_if_claimed(uuid, text, vector, text) from public, anon, authenticated;
+grant execute on function public.claim_next_pending_wiki_record(text, int) to service_role;
+grant execute on function public.save_wiki_record_embedding_if_claimed(uuid, text, vector, text) to service_role;
+
+-- Similarity search RPC. Plain cosine ranking, same shape as
+-- search_wiki_articles_by_embedding. Returns article_id so a caller can
+-- group hits by their owning article. Scoped by RLS plus an explicit
+-- user_id guard (b-strict escape hatch; see search_memories_by_embedding).
+drop function if exists public.search_wiki_records_by_embedding(vector, int, uuid);
+create or replace function public.search_wiki_records_by_embedding(
+  query_embedding vector(2048),
+  match_limit int,
+  p_user_id uuid default null
+) returns table (
+  id uuid,
+  article_id uuid,
+  date date,
+  content text,
+  tags jsonb,
+  created_at timestamptz,
+  updated_at timestamptz,
+  similarity real
+)
+language sql stable security invoker as $$
+  select id, article_id, date, content, tags, created_at, updated_at,
+         (1 - (embedding <=> query_embedding))::real as similarity
+    from public.wiki_records
+   where user_id = coalesce(p_user_id, auth.uid())
+     and embedding is not null
+   order by embedding <=> query_embedding asc
+   limit match_limit
+$$;
+
 -- Wipe-and-rewind for the wiki subsystem. Called from Settings ->
 -- Wiki -> Reset. Two side effects under RLS scoping:
 --
@@ -9018,6 +9216,10 @@ begin
     raise exception 'reset_wiki_data: not authenticated'
       using errcode = '28000';
   end if;
+  -- Records cascade on wiki_articles delete (article_id is NOT NULL,
+  -- on delete cascade), but delete them explicitly first so the wipe
+  -- reads clearly and doesn't depend on cascade ordering.
+  delete from public.wiki_records where user_id = v_user;
   delete from public.wiki_articles where user_id = v_user;
   -- A wipe is a fresh start. Surviving changelog rows would point at
   -- nothing (article_id nulled by the FK cascade) and read confusingly
@@ -10104,6 +10306,19 @@ begin
   ) then
     alter publication supabase_realtime add table public.recipes;
   end if;
+  -- wiki_records feeds the browser's emitWikiChange refresh alongside
+  -- wiki_articles: the extraction agent, the librarian, and the chat
+  -- record tools all write records server-side, so an open article view
+  -- learns about record changes through a user-scoped postgres_changes
+  -- subscription (see subscribeToWikiRecordChanges).
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'wiki_records'
+  ) then
+    alter publication supabase_realtime add table public.wiki_records;
+  end if;
   -- samskaras is deliberately NOT a member. Mint toasts ride a private
   -- samskara-mint Broadcast event (insertMint -> _shared/samskara-mint.ts
   -- + the owner-subscribe policy below), never a postgres_changes echo.
@@ -10167,6 +10382,9 @@ alter table public.wiki_articles replica identity using index wiki_articles_repl
 create unique index if not exists memories_replident_idx
   on public.memories (id, user_id);
 alter table public.memories replica identity using index memories_replident_idx;
+create unique index if not exists wiki_records_replident_idx
+  on public.wiki_records (id, user_id);
+alter table public.wiki_records replica identity using index wiki_records_replident_idx;
 
 -- ---------------------------------------------------------------------------
 -- Realtime Broadcast authorization (streaming-root channels)
