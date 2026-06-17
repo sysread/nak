@@ -8,6 +8,7 @@
 
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { appendWikiChangelog } from './_wiki_helpers.ts';
+import { ArgErrors } from './_validate.ts';
 
 // Mirror of MAX_WIKI_CHANGELOG_MESSAGE_CHARS in src/lib/wiki.ts.
 const MAX_WIKI_CHANGELOG_MESSAGE_CHARS = 200;
@@ -16,14 +17,17 @@ export const wikiDelete: ToolDef = {
   name: 'wiki_delete',
   async execute(args: Record<string, unknown>, ctx: ToolContext) {
     const id = typeof args.id === 'string' ? args.id : '';
-    if (!id) throw new Error('id is required');
     const message = typeof args.message === 'string' ? args.message.trim() : '';
-    if (!message) throw new Error('message is required');
-    if (message.length > MAX_WIKI_CHANGELOG_MESSAGE_CHARS) {
-      throw new Error(
+
+    const errs = new ArgErrors();
+    if (!id) errs.add('id is required');
+    if (!message) errs.add('message is required');
+    else if (message.length > MAX_WIKI_CHANGELOG_MESSAGE_CHARS) {
+      errs.add(
         `message exceeds ${MAX_WIKI_CHANGELOG_MESSAGE_CHARS}-char limit (got ${message.length})`,
       );
     }
+    errs.throwIfAny();
 
     // Capture the title BEFORE the delete so the changelog row can
     // carry a meaningful title_at_change snapshot. The FK on

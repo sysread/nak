@@ -28,6 +28,7 @@ import {
   attachWikiArticleSources,
   findExistingThreadIds,
 } from './_wiki_helpers.ts';
+import { ArgErrors } from './_validate.ts';
 
 // Mirror of MAX_WIKI_TITLE_CHARS / MAX_WIKI_CONTENT_CHARS /
 // MAX_WIKI_CHANGELOG_MESSAGE_CHARS in src/lib/wiki.ts.
@@ -58,11 +59,13 @@ export const wikiUpdate: ToolDef = {
   name: 'wiki_update',
   async execute(args: Record<string, unknown>, ctx: ToolContext) {
     const id = typeof args.id === 'string' ? args.id : '';
-    if (!id) throw new Error('id is required');
     const message = typeof args.message === 'string' ? args.message.trim() : '';
-    if (!message) throw new Error('message is required');
-    if (message.length > MAX_WIKI_CHANGELOG_MESSAGE_CHARS) {
-      throw new Error(
+
+    const errs = new ArgErrors();
+    if (!id) errs.add('id is required');
+    if (!message) errs.add('message is required');
+    else if (message.length > MAX_WIKI_CHANGELOG_MESSAGE_CHARS) {
+      errs.add(
         `message exceeds ${MAX_WIKI_CHANGELOG_MESSAGE_CHARS}-char limit (got ${message.length})`,
       );
     }
@@ -70,23 +73,26 @@ export const wikiUpdate: ToolDef = {
     if (typeof args.title === 'string' && args.title.trim().length > 0) {
       const title = args.title.trim();
       if (title.length > MAX_WIKI_TITLE_CHARS) {
-        throw new Error(
-          `title exceeds ${MAX_WIKI_TITLE_CHARS}-char limit (got ${title.length})`,
-        );
+        errs.add(`title exceeds ${MAX_WIKI_TITLE_CHARS}-char limit (got ${title.length})`);
+      } else {
+        patch.title = title;
       }
-      patch.title = title;
     }
     if (typeof args.content === 'string' && args.content.length > 0) {
       if (args.content.length > MAX_WIKI_CONTENT_CHARS) {
-        throw new Error(
+        errs.add(
           `content exceeds ${MAX_WIKI_CONTENT_CHARS}-char limit (got ${args.content.length}); split or trim`,
         );
+      } else {
+        patch.content = args.content;
       }
-      patch.content = args.content;
     }
-    if (Object.keys(patch).length === 0) {
-      throw new Error('provide at least one of title or content');
+    // Empty-patch only complains when nothing else is wrong; a malformed
+    // title/content left its patch key unset and is already reported.
+    if (Object.keys(patch).length === 0 && !errs.any) {
+      errs.add('provide at least one of title or content');
     }
+    errs.throwIfAny();
 
     // RLS OFF: the user_id filter scopes the patch to the owner. A
     // foreign or unknown id matches zero rows and .single() surfaces

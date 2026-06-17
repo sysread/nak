@@ -8,6 +8,7 @@
 
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { appendMemoryChangelog } from './_memory_changelog.ts';
+import { ArgErrors } from './_validate.ts';
 
 const MAX_MEMORY_CHANGELOG_MESSAGE_CHARS = 200;
 
@@ -15,14 +16,17 @@ export const memoryDelete: ToolDef = {
   name: 'memory_delete',
   async execute(args: Record<string, unknown>, ctx: ToolContext) {
     const id = typeof args.id === 'string' ? args.id : '';
-    if (!id) throw new Error('id is required');
     const message = typeof args.message === 'string' ? args.message.trim() : '';
-    if (!message) throw new Error('message is required');
-    if (message.length > MAX_MEMORY_CHANGELOG_MESSAGE_CHARS) {
-      throw new Error(
+
+    const errs = new ArgErrors();
+    if (!id) errs.add('id is required');
+    if (!message) errs.add('message is required');
+    else if (message.length > MAX_MEMORY_CHANGELOG_MESSAGE_CHARS) {
+      errs.add(
         `message exceeds ${MAX_MEMORY_CHANGELOG_MESSAGE_CHARS}-char limit (got ${message.length})`,
       );
     }
+    errs.throwIfAny();
 
     // RLS OFF: filter by userId. Read the label first so the
     // changelog row carries a snapshot - the row is about to be

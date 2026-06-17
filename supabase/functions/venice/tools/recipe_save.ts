@@ -10,6 +10,7 @@
 // if that file's check list grows, mirror the additions here.
 
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
+import { ArgErrors } from './_validate.ts';
 
 const MAX_RECIPE_TITLE_CHARS = 200;
 const MAX_RECIPE_COOKLANG_CHARS = 16_000;
@@ -51,27 +52,33 @@ export const recipeSave: ToolDef = {
       typeof args.source_url === 'string' && args.source_url.trim().length > 0
         ? args.source_url.trim()
         : null;
+    const errs = new ArgErrors();
     let rating: number | null = null;
     if (typeof args.rating === 'number') {
       if (!Number.isInteger(args.rating) || args.rating < 1 || args.rating > 5) {
-        throw new Error('rating must be an integer between 1 and 5');
+        errs.add('rating must be an integer between 1 and 5');
+      } else {
+        rating = args.rating;
       }
-      rating = args.rating;
     }
-    if (!title) throw new Error('title is required');
-    if (!cooklang) throw new Error('cooklang is required');
-    if (cooklang.length > MAX_RECIPE_COOKLANG_CHARS) {
-      throw new Error(
+    if (!title) errs.add('title is required');
+    else if (title.length > MAX_RECIPE_TITLE_CHARS) {
+      errs.add(`title exceeds ${MAX_RECIPE_TITLE_CHARS}-char limit (got ${title.length})`);
+    }
+    if (!cooklang) errs.add('cooklang is required');
+    else if (cooklang.length > MAX_RECIPE_COOKLANG_CHARS) {
+      errs.add(
         `cooklang exceeds ${MAX_RECIPE_COOKLANG_CHARS}-char limit (got ${cooklang.length})`,
       );
+    } else {
+      // Syntax check only on a present, length-legal body - running it on an
+      // oversize blob just stacks a second complaint about the same field.
+      const cooklangErrors = validateCooklangSource(cooklang);
+      if (cooklangErrors.length > 0) {
+        errs.add(`cooklang validation failed:\n- ${cooklangErrors.join('\n- ')}`);
+      }
     }
-    const cooklangErrors = validateCooklangSource(cooklang);
-    if (cooklangErrors.length > 0) {
-      throw new Error(`cooklang validation failed:\n- ${cooklangErrors.join('\n- ')}`);
-    }
-    if (title.length > MAX_RECIPE_TITLE_CHARS) {
-      throw new Error(`title exceeds ${MAX_RECIPE_TITLE_CHARS}-char limit (got ${title.length})`);
-    }
+    errs.throwIfAny();
     // A save is always a recipe's first version, so an omitted
     // change_message defaults rather than erroring - there is no prior
     // state to describe a delta against, and the model routinely forgets

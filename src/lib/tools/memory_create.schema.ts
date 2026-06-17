@@ -6,29 +6,24 @@ import { MAX_MEMORY_CHANGELOG_MESSAGE_CHARS } from '../memories';
 
 export const memoryCreateSchema = {
   name: 'memory_create',
-  // Description leads with the three REQUIRED fields named together
-  // (label, data, message) before the one optional field. Models were
-  // observed omitting `message` and then asserting the spec didn't
-  // define it - the failure mode was the required `message` being
-  // buried mid-paragraph after the optional `confidence`, and the
-  // trailing return-shape list (which omits `message`, since the
-  // changelog summary is not part of the memory row) reading as the
-  // authoritative field set. Naming all three required inputs up front
-  // and dropping the field-by-field return list removes both cues.
+  // Two required fields lead the description: label (the handle) and data
+  // (the content). `message` is the changelog summary the user reviews, not
+  // part of the memory; it is optional and defaults to a label-derived line
+  // server-side when omitted. It is named last and explicitly as optional so
+  // it does not read as a third place the content belongs - models were
+  // observed dumping the full body into `message` and then round-tripping
+  // its 200-char cap.
   description:
-    'Save a new memory. Three required fields: label (short handle, ' +
-    `1-80 chars), data (the full content, max ${MAX_MEMORY_DATA_CHARS} ` +
-    'chars - split if longer), and message (a one-line, commit-style ' +
-    'summary of what you saved and why, which lands in the memory ' +
-    'changelog the user reviews). Optional confidence (1.0..10.0, ' +
-    'default 1.0) marks a memory as already-corroborated; raise above ' +
-    'default only with converging evidence in the current exchange. ' +
-    'Returns the created memory row.',
+    'Save a new memory. Two required fields: label (short handle, ' +
+    `1-80 chars) and data (the full content, max ${MAX_MEMORY_DATA_CHARS} ` +
+    'chars - split if longer). Optional message is a one-line, commit-style ' +
+    'summary of what you saved and why, which lands in the memory changelog ' +
+    'the user reviews; omit it to auto-derive one from the label. Optional ' +
+    'confidence (1.0..10.0, default 1.0) marks a memory as already-' +
+    'corroborated; raise above default only with converging evidence in the ' +
+    'current exchange. Returns the created memory row.',
   shortDescription: 'save a new note',
-  // Property order mirrors the required-first framing in the
-  // description: the three required fields lead, optional `confidence`
-  // trails. An optional field sitting between required ones invites
-  // models to treat the later required field as optional too.
+  // Property order: the two required fields lead, optional fields trail.
   parameters: {
     type: 'object',
     properties: {
@@ -49,8 +44,10 @@ export const memoryCreateSchema = {
         minLength: 1,
         maxLength: MAX_MEMORY_CHANGELOG_MESSAGE_CHARS,
         description:
-          'Required. One-line, commit-style summary of what this memory ' +
-          'captures and why you saved it. Lands in the memory changelog.',
+          'Optional. One-line, commit-style summary of what this memory ' +
+          'captures and why you saved it; lands in the memory changelog. ' +
+          'Omit to auto-derive from the label. Not a place for the content - ' +
+          'that goes in data.',
       },
       confidence: {
         type: 'number',
@@ -61,7 +58,7 @@ export const memoryCreateSchema = {
           'Raise only with converging evidence in the current exchange.',
       },
     },
-    required: ['label', 'data', 'message'],
+    required: ['label', 'data'],
     additionalProperties: false,
   },
 } as const;

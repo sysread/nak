@@ -24,6 +24,7 @@
 
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { appendMemoryChangelog } from './_memory_changelog.ts';
+import { ArgErrors } from './_validate.ts';
 
 // Mirror of MAX_MEMORY_DATA_CHARS in src/lib/memories.ts.
 const MAX_MEMORY_DATA_CHARS = 8000;
@@ -37,19 +38,23 @@ export const memoryConsolidate: ToolDef = {
     const label = typeof args.label === 'string' ? args.label.trim() : '';
     const data = typeof args.data === 'string' ? args.data : '';
 
-    if (!survivorId) throw new Error('survivor_id is required');
-    if (!loserId) throw new Error('loser_id is required');
-    if (survivorId === loserId) {
-      throw new Error('survivor_id and loser_id must differ');
+    const errs = new ArgErrors();
+    if (!survivorId) errs.add('survivor_id is required');
+    if (!loserId) errs.add('loser_id is required');
+    // Only meaningful once both ids are present; otherwise the empty-string
+    // pair would spuriously read as equal.
+    if (survivorId && loserId && survivorId === loserId) {
+      errs.add('survivor_id and loser_id must differ');
     }
-    if (label.length === 0) throw new Error('label is required');
-    if (data.length === 0) throw new Error('data is required');
-    if (data.length > MAX_MEMORY_DATA_CHARS) {
-      throw new Error(
+    if (label.length === 0) errs.add('label is required');
+    if (data.length === 0) errs.add('data is required');
+    else if (data.length > MAX_MEMORY_DATA_CHARS) {
+      errs.add(
         `data exceeds ${MAX_MEMORY_DATA_CHARS}-char limit (got ${data.length}); ` +
           'consolidation needs a single condensed body, not the concatenation of two',
       );
     }
+    errs.throwIfAny();
 
     // Snapshot the loser's label before the merge so the changelog
     // message reads "Merged X into this". Best-effort and resilient:

@@ -16,6 +16,7 @@ import {
   appendWikiChangelog,
   attachWikiArticleSources,
 } from './_wiki_helpers.ts';
+import { ArgErrors } from './_validate.ts';
 
 // Mirror of MAX_WIKI_TITLE_CHARS / MAX_WIKI_CONTENT_CHARS /
 // MAX_WIKI_CHANGELOG_MESSAGE_CHARS in src/lib/wiki.ts.
@@ -29,24 +30,24 @@ export const wikiCreate: ToolDef = {
     const title = typeof args.title === 'string' ? args.title.trim() : '';
     const content = typeof args.content === 'string' ? args.content : '';
     const message = typeof args.message === 'string' ? args.message.trim() : '';
-    if (!title) throw new Error('title is required');
-    if (!content) throw new Error('content is required');
-    if (!message) throw new Error('message is required');
-    if (title.length > MAX_WIKI_TITLE_CHARS) {
-      throw new Error(
-        `title exceeds ${MAX_WIKI_TITLE_CHARS}-char limit (got ${title.length})`,
-      );
+    const errs = new ArgErrors();
+    if (!title) errs.add('title is required');
+    else if (title.length > MAX_WIKI_TITLE_CHARS) {
+      errs.add(`title exceeds ${MAX_WIKI_TITLE_CHARS}-char limit (got ${title.length})`);
     }
-    if (content.length > MAX_WIKI_CONTENT_CHARS) {
-      throw new Error(
+    if (!content) errs.add('content is required');
+    else if (content.length > MAX_WIKI_CONTENT_CHARS) {
+      errs.add(
         `content exceeds ${MAX_WIKI_CONTENT_CHARS}-char limit (got ${content.length}); split or trim`,
       );
     }
-    if (message.length > MAX_WIKI_CHANGELOG_MESSAGE_CHARS) {
-      throw new Error(
+    if (!message) errs.add('message is required');
+    else if (message.length > MAX_WIKI_CHANGELOG_MESSAGE_CHARS) {
+      errs.add(
         `message exceeds ${MAX_WIKI_CHANGELOG_MESSAGE_CHARS}-char limit (got ${message.length})`,
       );
     }
+    errs.throwIfAny();
 
     // RLS OFF: user_id stamped on insert - service-role would
     // otherwise let a row land under any owner.

@@ -8,6 +8,7 @@
 // Wire schema lives in src/lib/tools/memory_relate.schema.ts.
 
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
+import { ArgErrors } from './_validate.ts';
 
 // Mirror of RELATION_KINDS / MEMORY_RELATE_MAX_NOTE_CHARS in
 // src/lib/tools/memory_relate.schema.ts.
@@ -25,31 +26,35 @@ export const memoryRelate: ToolDef = {
     const fromId = typeof args.from_id === 'string' ? args.from_id : '';
     const toId = typeof args.to_id === 'string' ? args.to_id : '';
     const kindArg = typeof args.kind === 'string' ? args.kind : '';
-    if (!fromId) throw new Error('from_id is required');
-    if (!toId) throw new Error('to_id is required');
-    if (!kindArg) throw new Error('kind is required');
-    if (fromId === toId) {
-      throw new Error('from_id and to_id must differ (no self-loops)');
+    const errs = new ArgErrors();
+    if (!fromId) errs.add('from_id is required');
+    if (!toId) errs.add('to_id is required');
+    if (!kindArg) errs.add('kind is required');
+    // Self-loop check needs both ids; the empty-string pair would read as
+    // equal before either id is supplied.
+    if (fromId && toId && fromId === toId) {
+      errs.add('from_id and to_id must differ (no self-loops)');
     }
-    if (!RELATION_KINDS.includes(kindArg)) {
-      throw new Error(
-        `kind must be one of ${RELATION_KINDS.join(', ')} (got ${kindArg})`,
-      );
+    // Enum check only once a kind was supplied - an empty kind already drew
+    // the required error above.
+    if (kindArg && !RELATION_KINDS.includes(kindArg)) {
+      errs.add(`kind must be one of ${RELATION_KINDS.join(', ')} (got ${kindArg})`);
     }
 
     let note: string | null = null;
     if (args.note !== undefined) {
       if (typeof args.note !== 'string') {
-        throw new Error('note must be a string');
-      }
-      if (args.note.length > MEMORY_RELATE_MAX_NOTE_CHARS) {
-        throw new Error(
+        errs.add('note must be a string');
+      } else if (args.note.length > MEMORY_RELATE_MAX_NOTE_CHARS) {
+        errs.add(
           `note exceeds ${MEMORY_RELATE_MAX_NOTE_CHARS}-char limit (got ${args.note.length})`,
         );
+      } else {
+        const trimmed = args.note.trim();
+        note = trimmed.length > 0 ? trimmed : null;
       }
-      const trimmed = args.note.trim();
-      note = trimmed.length > 0 ? trimmed : null;
     }
+    errs.throwIfAny();
 
     // RLS OFF: filter by userId. memory_relations.user_id stamped
     // on insert.

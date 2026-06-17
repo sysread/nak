@@ -12,6 +12,7 @@
 // needs to see the current photos.
 
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
+import { ArgErrors } from './_validate.ts';
 
 const MAX_RECIPE_TITLE_CHARS = 200;
 const MAX_RECIPE_COOKLANG_CHARS = 16_000;
@@ -39,36 +40,42 @@ export const recipeUpdate: ToolDef = {
   name: 'recipe_update',
   async execute(args: Record<string, unknown>, ctx: ToolContext) {
     const id = typeof args.id === 'string' ? args.id : '';
-    if (!id) throw new Error('id is required');
+
+    const errs = new ArgErrors();
+    if (!id) errs.add('id is required');
 
     // Build the RPC arg bundle from the patch shape. The RPC uses
     // p_set_<field> + p_<field> pairs: explicit null clears, omission
-    // leaves alone.
+    // leaves alone. A malformed field records an error and stays unset, so
+    // the throw below fires before the RPC ever runs.
     let setTitle = false;
     let titleVal: string | null = null;
     if (typeof args.title === 'string' && args.title.trim().length > 0) {
       const t = args.title.trim();
       if (t.length > MAX_RECIPE_TITLE_CHARS) {
-        throw new Error(`title exceeds ${MAX_RECIPE_TITLE_CHARS}-char limit (got ${t.length})`);
+        errs.add(`title exceeds ${MAX_RECIPE_TITLE_CHARS}-char limit (got ${t.length})`);
+      } else {
+        setTitle = true;
+        titleVal = t;
       }
-      setTitle = true;
-      titleVal = t;
     }
 
     let setCooklang = false;
     let cooklangVal: string | null = null;
     if (typeof args.cooklang === 'string' && args.cooklang.length > 0) {
       if (args.cooklang.length > MAX_RECIPE_COOKLANG_CHARS) {
-        throw new Error(
+        errs.add(
           `cooklang exceeds ${MAX_RECIPE_COOKLANG_CHARS}-char limit (got ${args.cooklang.length})`,
         );
+      } else {
+        const cooklangErrors = validateCooklangSource(args.cooklang);
+        if (cooklangErrors.length > 0) {
+          errs.add(`cooklang validation failed:\n- ${cooklangErrors.join('\n- ')}`);
+        } else {
+          setCooklang = true;
+          cooklangVal = args.cooklang;
+        }
       }
-      const cooklangErrors = validateCooklangSource(args.cooklang);
-      if (cooklangErrors.length > 0) {
-        throw new Error(`cooklang validation failed:\n- ${cooklangErrors.join('\n- ')}`);
-      }
-      setCooklang = true;
-      cooklangVal = args.cooklang;
     }
 
     let setSource = false;
@@ -99,20 +106,25 @@ export const recipeUpdate: ToolDef = {
         ratingVal = null;
       } else if (typeof args.rating === 'number') {
         if (!Number.isInteger(args.rating) || args.rating < 1 || args.rating > 5) {
-          throw new Error('rating must be an integer between 1 and 5, or null to clear');
+          errs.add('rating must be an integer between 1 and 5, or null to clear');
+        } else {
+          setRating = true;
+          ratingVal = args.rating;
         }
-        setRating = true;
-        ratingVal = args.rating;
       }
     }
 
-    if (!setTitle && !setCooklang && !setSource && !setSourceUrl && !setRating) {
-      throw new Error('provide at least one of title, cooklang, source, source_url, or rating');
+    // Empty-patch is only a real complaint when nothing else is wrong - a
+    // malformed field already left its set-flag false, and double-reporting
+    // it as "provide at least one of" would mislead.
+    if (!setTitle && !setCooklang && !setSource && !setSourceUrl && !setRating && !errs.any) {
+      errs.add('provide at least one of title, cooklang, source, source_url, or rating');
     }
 
     const changeMessage =
       typeof args.change_message === 'string' ? args.change_message.trim() : '';
-    if (!changeMessage) throw new Error('change_message is required');
+    if (!changeMessage) errs.add('change_message is required');
+    errs.throwIfAny();
 
     const { data, error } = await ctx.adminClient.rpc('recipe_update_with_version', {
       p_id: id,

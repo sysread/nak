@@ -477,6 +477,37 @@ Edge dispatch (`supabase/functions/venice/`):
   always-on set is "reads plus reflexes" by design; any new tool
   that wants always-on placement needs the same no-writes property
   or it belongs in a gated write box.
+- **Wire-schema constraints are advisory, not enforced.** The
+  `required`, `minLength`, `maxLength`, and enum bounds in a
+  `.schema.ts` are prompt text the model reads, not a contract the
+  runtime checks - Venice does no constrained decoding against the
+  JSON schema. The edge `execute()` is the only real gate, so a
+  malformed call lands there and must be rejected with a message the
+  model can act on. Tightening the schema alone never stops a fumble;
+  the server-side check is what does.
+- **Write tools validate arguments all-at-once, not first-fail.**
+  Each tool's `execute()` collects every argument problem into an
+  `ArgErrors` accumulator (`tools/_validate.ts`) and throws once via
+  `throwIfAny()`, rather than throwing on the first bad field. The
+  reason: a model supplying several malformed args against a fail-fast
+  check learns one problem per round trip and tends to fix one field
+  while dropping another - a single memory_create save was observed
+  taking five attempts this way. The combined throw preserves each
+  problem string verbatim (substring test assertions still pass) and
+  joins multiple with "; ". Dependent checks guard on their
+  prerequisite (a self-loop/"differ" check only fires once both ids
+  are present; an empty-patch "provide at least one of" only fires
+  when nothing else is wrong) so one root cause never doubles up as
+  two errors.
+- **`memory_create` `message` is optional; the changelog line is
+  derived when omitted.** Unlike the other changelog-bearing writes,
+  memory_create defaults `message` to `Created: <label>` server-side.
+  Models kept dumping the full memory body into `message` and then
+  round-tripping its 200-char cap; making it optional removes the
+  field as a failure surface for the common save-a-fact path. The
+  content always belongs in `data`. memory_update/wiki_* keep
+  `message` required - an edit/delete has no sensible label-derived
+  default and the user wants the "why" recorded.
 - **The research_docs corpus is a build artifact.** Doc edits do
   not reach the edge tool until `scripts/bundle-research-docs.mjs`
   regenerates `_generated/research-docs-corpus.ts` and the

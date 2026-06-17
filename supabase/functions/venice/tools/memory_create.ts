@@ -6,6 +6,7 @@
 
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { appendMemoryChangelog } from './_memory_changelog.ts';
+import { ArgErrors } from './_validate.ts';
 
 // Mirror of MAX_MEMORY_DATA_CHARS / MAX_MEMORY_CHANGELOG_MESSAGE_CHARS
 // in src/lib/memories.ts.
@@ -18,30 +19,41 @@ export const memoryCreate: ToolDef = {
     const label = typeof args.label === 'string' ? args.label.trim() : '';
     const data = typeof args.data === 'string' ? args.data : '';
     const message = typeof args.message === 'string' ? args.message.trim() : '';
-    if (!label) throw new Error('label is required');
-    if (!data) throw new Error('data is required');
-    if (!message) throw new Error('message is required');
-    if (message.length > MAX_MEMORY_CHANGELOG_MESSAGE_CHARS) {
-      throw new Error(
-        `message exceeds ${MAX_MEMORY_CHANGELOG_MESSAGE_CHARS}-char limit (got ${message.length})`,
+
+    const errs = new ArgErrors();
+    if (!label) errs.add('label is required');
+    if (!data) errs.add('data is required');
+    else if (data.length > MAX_MEMORY_DATA_CHARS) {
+      errs.add(
+        `data exceeds ${MAX_MEMORY_DATA_CHARS}-char limit (got ${data.length}); split across multiple memories`,
       );
     }
-    if (data.length > MAX_MEMORY_DATA_CHARS) {
-      throw new Error(
-        `data exceeds ${MAX_MEMORY_DATA_CHARS}-char limit (got ${data.length}); split across multiple memories`,
+
+    // The changelog message is the one-line summary the user reviews, not
+    // part of the memory itself. It is optional: when the model omits it we
+    // synthesize one from the label so a save never blocks on it. A supplied
+    // message still gets the changelog length cap. Models were observed
+    // dumping the full memory body into `message` and then round-tripping the
+    // 200-char rejection; defaulting removes the field as a failure surface.
+    const changelogMessage = message || `Created: ${label}`;
+    if (changelogMessage.length > MAX_MEMORY_CHANGELOG_MESSAGE_CHARS) {
+      errs.add(
+        `message exceeds ${MAX_MEMORY_CHANGELOG_MESSAGE_CHARS}-char limit (got ${changelogMessage.length})`,
       );
     }
 
     let confidence: number | undefined;
     if (args.confidence !== undefined) {
       if (typeof args.confidence !== 'number' || !Number.isFinite(args.confidence)) {
-        throw new Error('confidence must be a finite number');
+        errs.add('confidence must be a finite number');
+      } else if (args.confidence < 1.0 || args.confidence > 10.0) {
+        errs.add(`confidence must be in [1.0, 10.0] (got ${args.confidence})`);
+      } else {
+        confidence = args.confidence;
       }
-      if (args.confidence < 1.0 || args.confidence > 10.0) {
-        throw new Error(`confidence must be in [1.0, 10.0] (got ${args.confidence})`);
-      }
-      confidence = args.confidence;
     }
+
+    errs.throwIfAny();
 
     // RLS OFF: filter by userId. memories.user_id stamped on insert -
     // service-role would otherwise let any row be created.
@@ -66,7 +78,7 @@ export const memoryCreate: ToolDef = {
         memory_id: (row as { id: string }).id,
         kind: 'create',
         label_at_change: (row as { label: string }).label,
-        message,
+        message: changelogMessage,
       });
     } catch {
       // best-effort by design

@@ -7,6 +7,7 @@
 
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { appendMemoryChangelog } from './_memory_changelog.ts';
+import { ArgErrors } from './_validate.ts';
 
 const MAX_MEMORY_DATA_CHARS = 8000;
 const MAX_MEMORY_CHANGELOG_MESSAGE_CHARS = 200;
@@ -15,11 +16,13 @@ export const memoryUpdate: ToolDef = {
   name: 'memory_update',
   async execute(args: Record<string, unknown>, ctx: ToolContext) {
     const id = typeof args.id === 'string' ? args.id : '';
-    if (!id) throw new Error('id is required');
     const message = typeof args.message === 'string' ? args.message.trim() : '';
-    if (!message) throw new Error('message is required');
-    if (message.length > MAX_MEMORY_CHANGELOG_MESSAGE_CHARS) {
-      throw new Error(
+
+    const errs = new ArgErrors();
+    if (!id) errs.add('id is required');
+    if (!message) errs.add('message is required');
+    else if (message.length > MAX_MEMORY_CHANGELOG_MESSAGE_CHARS) {
+      errs.add(
         `message exceeds ${MAX_MEMORY_CHANGELOG_MESSAGE_CHARS}-char limit (got ${message.length})`,
       );
     }
@@ -30,15 +33,20 @@ export const memoryUpdate: ToolDef = {
     }
     if (typeof args.data === 'string' && args.data.length > 0) {
       if (args.data.length > MAX_MEMORY_DATA_CHARS) {
-        throw new Error(
+        errs.add(
           `data exceeds ${MAX_MEMORY_DATA_CHARS}-char limit (got ${args.data.length}); split across multiple memories`,
         );
+      } else {
+        patch.data = args.data;
       }
-      patch.data = args.data;
     }
-    if (Object.keys(patch).length === 0) {
-      throw new Error('provide at least one of label or data');
+    if (Object.keys(patch).length === 0 && !errs.any) {
+      // Only a meaningful complaint once the required fields and the data
+      // length are otherwise clean - an empty patch alongside a bad data
+      // arg would be a misleading second error for the same root cause.
+      errs.add('provide at least one of label or data');
     }
+    errs.throwIfAny();
     patch.updated_at = new Date().toISOString();
 
     // RLS OFF: filter by userId. id + user_id eq matches RLS scope.
