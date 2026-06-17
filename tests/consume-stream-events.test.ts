@@ -1,9 +1,8 @@
 /**
  * Tests for the shared `consumeStreamEvents` helper - the consumer that
  * turns the function's StreamEvent stream into slot-handler calls plus
- * the ChatLoopResult fields. It drives the live turn (runChatLoop), so
- * it stays internal to chat-loop.ts and is reached here through the
- * `__test` hook.
+ * the ChatLoopResult fields. It drives the live turn (runChatLoop) and
+ * lives in src/lib/chat/stream-events.ts.
  *
  * The transport (Broadcast channel -> StreamEvent mapping) is covered by
  * tests/venice.test.ts. This file feeds consumeStreamEvents a hand-rolled
@@ -14,11 +13,10 @@
  * persisted-row hydration through supabase.getMessage.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { __test, type ChatLoopHandlers } from '../src/lib/chat-loop';
+import { consumeStreamEvents } from '../src/lib/chat/stream-events';
+import type { ChatLoopHandlers } from '../src/lib/chat/types';
 import { VeniceError, type StreamEvent } from '../src/lib/venice';
 import type { Message, SupabaseService } from '../src/lib/supabase';
-
-const { consumeStreamEvents } = __test;
 
 // Async iterable from a fixed list, with a microtask between yields so
 // the consumer's awaits (getMessage on round_committed / END) interleave

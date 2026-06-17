@@ -9,12 +9,12 @@
  * so the .svelte template stays glue (it picks a value, it doesn't
  * derive one).
  *
- * The `SubconsciousOp` type import from `$lib/chat-loop` is the signal
+ * The `SubconsciousOp` type import from `$lib/chat/types` is the signal
  * vocabulary the chat-loop emits; importing it here keeps the label map
  * keyed off the same union the producer uses, so adding a fourth
  * pipeline is a compile error here until its label is supplied.
  */
-import type { SubconsciousOp } from '../chat-loop';
+import type { SubconsciousOp } from '../chat/types';
 
 /**
  * A pipeline is 'running' from its onSubconsciousStart until its

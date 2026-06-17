@@ -78,7 +78,7 @@
 
 import { SvelteMap } from 'svelte/reactivity';
 import type { Message } from '../supabase';
-import type { SubconsciousOp } from '../chat-loop';
+import type { SubconsciousOp } from '../chat/types';
 import type { SubconsciousStatus } from '../ui/subconscious-status';
 
 interface StreamingError {

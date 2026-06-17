@@ -9,7 +9,7 @@
  * would reuse this module untouched.
  */
 import { describe, it, expect } from 'vitest';
-import type { SubconsciousOp } from '../src/lib/chat-loop';
+import type { SubconsciousOp } from '../src/lib/chat/types';
 import {
   orderedSubconsciousRows,
   subconsciousLabel,
