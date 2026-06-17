@@ -11,9 +11,18 @@ feature works end to end:
   `src/lib/intuition/triggers.ts`: cold-start fires
   unconditionally, then a same-round debounce, then a mood-shift
   check (valence band index OR confidence column changed), then the
-  `STALE_FUSE_ROUNDS` (8) fuse. Pre-round is the only live trigger;
+  staleness fuse. The fuse has two arms, either of which fires
+  `'stale'`: `STALE_FUSE_ROUNDS` (8) user-rounds, OR `STALE_FUSE_MS`
+  (1h) wall-clock since `computed_at_at` (the resume-after-a-pause
+  case the round counter misses). Pre-round is the only live trigger;
   the `'title'` member of `IntuitionTrigger` is legacy-only (the
   mid-turn title trigger died when tool dispatch moved server-side).
+- **Injection guard** - `isPayloadFreshForInjection` in
+  `src/lib/intuition/triggers.ts`: before `runChatLoop` splices the
+  `<think>` block it checks the cached payload is younger than
+  `STALE_FUSE_MS`. A stale payload (refresh errored, deduped, or
+  feature off) is suppressed, not injected - so a day-old synthesis
+  never steers a turn. Same bound as the wall-clock trigger.
 - **Cache read/coerce** - `threads.intuition_payload` jsonb is the
   single source of truth. `coerceIntuitionPayload` in
   `src/lib/intuition/types.ts` rejects drift / unknown-version /
@@ -176,6 +185,45 @@ live pipeline and is **[hosted]**-flavored (needs Venice creds).
 
    The fire's `trigger` must be `'stale'`, not `'mood'` or `'cold'`.
 
+7. **[hosted]** Wall-clock stale fuse. On a thread with a current
+   cache and the live mood UNCHANGED, leave `computed_at_round` close
+   to the live round (so the round arm does NOT trip) but backdate
+   the wall-clock stamp past one hour, reload, and send a message:
+
+   ```sql
+   update public.threads
+      set intuition_payload = jsonb_set(
+            intuition_payload,
+            '{computed_at_at}',
+            to_jsonb((extract(epoch from now()) * 1000)::bigint - 3700000))
+    where id = '<thread-id>'
+      and intuition_payload is not null;
+   ```
+
+   (3,700,000 ms ~ 61.7 min.) The fire's `trigger` must be `'stale'`
+   even though only one round elapsed - the wall-clock arm carried it.
+
+8. **Injection guard suppression.** Backdate the wall-clock stamp
+   past one hour AND set `computed_at_round` to the live round so the
+   same-round debounce blocks any refresh this turn (forcing the
+   "refresh could not run" path). Reload, open the Logs drawer at
+   `Debug` with source filter `chat-loop`, and send a message:
+
+   ```sql
+   update public.threads
+      set intuition_payload = jsonb_set(
+            jsonb_set(intuition_payload, '{computed_at_at}',
+              to_jsonb((extract(epoch from now()) * 1000)::bigint - 3700000)),
+            '{computed_at_round}',
+            -- set to the CURRENT live user-round count for this thread
+            '<live-round>')
+    where id = '<thread-id>'
+      and intuition_payload is not null;
+   ```
+
+   Read the `venice request wire` debug line's `messages` array. The
+   stale intuition `<think>` block must be ABSENT from the wire.
+
 ## Expected
 
 - (1) A single `pipeline starting` Info line with
@@ -218,6 +266,17 @@ live pipeline and is **[hosted]**-flavored (needs Venice creds).
   this only reads `stale` when the live mood matches the cached
   snapshot; if mood differs you will see `mood` instead - that is
   correct, re-run with the mood held steady.
+- (7) **[hosted]** The fire carries `trigger = stale` driven by the
+  wall-clock arm alone (one round elapsed, mood unchanged). This is
+  the regression guard for the resume-after-a-pause bug: a payload
+  computed the night before must re-perceive on the next-day turn
+  rather than inject yesterday's pulse.
+- (8) The `chat-loop` `venice request wire` debug line shows the
+  `messages` array with NO stale intuition `<think>` block: the
+  same-round debounce blocked the refresh, so the guard suppressed
+  the day-old payload rather than steering the turn with it. (The
+  conscious response still runs; it just runs un-primed this turn,
+  which is correct - better un-primed than mis-primed.)
 
 ## Cleanup
 
@@ -231,6 +290,11 @@ live pipeline and is **[hosted]**-flavored (needs Venice creds).
   whole payload, so the backdate does not persist. If you abort
   before the fire, run step 1's null + a fresh turn to get a clean
   payload back, or leave it - the next mood/stale trigger self-heals.
+- Steps 7-8 backdate `computed_at_at` (and step 8 `computed_at_round`).
+  Step 7's stale fire overwrites the payload; step 8 deliberately
+  suppresses the refresh, so its backdated stamp persists - the next
+  trigger (a later round or the 1h fuse) self-heals it. Run step 1's
+  null + a fresh turn if you want an immediately clean payload.
 - The cache holds only the most recent payload (no history table),
   so there is nothing else to undo.
 

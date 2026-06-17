@@ -60,16 +60,16 @@ const log = createLogger('intuition');
  * samskara and summary agents use; reasoning content on the response
  * is ignored, only the body text contributes.
  *
- * disableThinking is a defensive pin, not a per-call necessity. The
- * intuition slot in AGENT_MODELS resolves to mistral-small, which is
- * non-reasoning by spec - so the flag is a no-op on the current model.
- * It stays set because the slot is swappable: if the pin ever moves to
- * a reasoning model (one that emits chain-of-thought through
- * `reasoning_content` BEFORE writing any text into `content`),
- * disableThinking keeps the 2048-token budget on the answer instead of
- * letting a CoT preamble eat the cap. Web_search hit that trap with a
- * reasoning model and fixed it the same way; for an internal-monologue
- * prompt the reasoning pass wouldn't add much anyway.
+ * disableThinking is load-bearing here. The intuition slot in
+ * AGENT_MODELS resolves to tencent-hy3-preview, a reasoning-capable
+ * model (it emits chain-of-thought through `reasoning_content` BEFORE
+ * writing any text into `content`). Without the pin a CoT preamble
+ * would eat the 2048-token answer budget; with it, the budget stays
+ * on the answer. Web_search - also on hy3-preview - hit that trap and
+ * fixes it the same way. For an internal-monologue prompt the
+ * reasoning pass would not add much anyway. (The flag is a harmless
+ * no-op on a non-reasoning model, so it also survives a future
+ * re-point to one.)
  */
 async function callOnce(
   supabase: SupabaseService,
@@ -386,6 +386,11 @@ export interface MaybeRunIntuitionInputs
   modelId: string | undefined;
   /** Current cached payload off the thread row; null = cold start. */
   cache: IntuitionPayload | null;
+  /** Current wall-clock time, ms since epoch. Feeds the wall-clock
+   *  staleness fuse in the trigger evaluator; the caller passes one
+   *  Date.now() snapshot shared with the context-recall run and the
+   *  injection guard so all three agree on "now". */
+  nowMs: number;
   /**
    * Fires at the moment the pipeline commits to running, before the
    * first model call - the caller hangs its UI status signal here.
@@ -412,6 +417,7 @@ export function maybeRunIntuitionPipeline(
     cache: inputs.cache,
     round: inputs.round,
     mood: inputs.mood,
+    nowMs: inputs.nowMs,
   });
   if (!trigger) return Promise.resolve(null);
   inputs.onWillRun?.(trigger);

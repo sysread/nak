@@ -93,11 +93,20 @@ of the dead mid-turn title trigger):
   the feature lands on every thread by the first response.
 - **`mood`** - the user's valence band or confidence column changed
   since the last write.
-- **`stale`** - `STALE_FUSE_ROUNDS` (8 user-rounds) have passed
-  without a refresh.
+- **`stale`** - either staleness fuse tripped: `STALE_FUSE_ROUNDS`
+  (8 user-rounds) without a refresh, OR `STALE_FUSE_MS` (1 hour)
+  wall-clock since the cached payload was written. The wall-clock arm
+  catches a conversation resumed after a pause, where the round
+  counter barely advanced. See intuition.md for the full rationale -
+  the evaluator is shared, so the fuse behaves identically here.
 
 The same-round debounce primitive (`computed_at_round`) is shared:
-two triggers landing in the same round collapse to one run.
+two triggers landing in the same round collapse to one run. The
+chat-loop also applies an **injection guard** to the context-recall
+`<think>` push: a payload older than `STALE_FUSE_MS` is suppressed
+rather than spliced onto the wire, the backstop for when a refresh
+errored, deduped, or the feature was off this turn (again shared with
+intuition - see intuition.md).
 
 ## Query derivation
 
@@ -336,11 +345,13 @@ readable content. Registered in the always-on toolbox.
 - **The two pipelines have independent inflight registries.** A
   context-recall refresh in flight does NOT block an intuition
   refresh on the same thread (or vice versa).
-- **The mid-turn title trigger replaces both blocks.** A stale
-  `<think>` block computed against the pre-rename perception fights
-  the fresh one for influence. Each surface owns its own slot index
-  (`intuitionMessageIdx`, `contextRecallMessageIdx`); the refresh
-  splices into the same index, or appends if the slot was empty.
+- **Priming is built once per turn, pre-round.** There is no
+  mid-turn replacement of the `<think>` blocks - the old mid-turn
+  title trigger that re-spliced them died when tool dispatch moved
+  server-side (see intuition.md). Both blocks are assembled once at
+  the start of the turn from the post-refresh cache, and the
+  injection guard (above) drops either if its payload is older than
+  `STALE_FUSE_MS`.
 - **Conversation/wiki ids are leads, not content.** The system
   prompt spells out that the model must `conversation_get` / `wiki_get`
   before relying on a referenced thread or article - otherwise it

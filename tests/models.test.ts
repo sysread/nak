@@ -141,14 +141,16 @@ describe('AGENT_MODELS (background agents)', () => {
     expect(AGENT_MODELS.recall).toBe('deepseek-v4-flash');
     expect(AGENT_MODELS.conversationRecall).toBe('deepseek-v4-flash');
     expect(AGENT_MODELS.wikiRecall).toBe('deepseek-v4-flash');
-    // The lone Hy3 slot: web search, kept distinct so the search agent
-    // can be retuned without dragging the deepseek-backed agents along.
+    // Two Hy3 slots: web search and intuition. Both are latency-bound
+    // sub-calls that pin disable_thinking, so they ride the fast tier;
+    // kept on a distinct id from the deepseek-backed agents so they can
+    // be retuned without dragging those along. Intuition moved here off
+    // mistral-small because the pre-turn pulse is awaited on the turn's
+    // critical path. (The bias and samskara agents still run
+    // mistral-small, but they live server-side now - see BIAS_MODEL and
+    // SAMSKARA_MODEL under supabase/functions/venice/agents/.)
     expect(AGENT_MODELS.webSearch).toBe('tencent-hy3-preview');
-    // One mistral-small slot: intuition. (The bias and samskara
-    // agents also run mistral-small, but they live server-side now -
-    // see BIAS_MODEL and SAMSKARA_MODEL under
-    // supabase/functions/venice/agents/.)
-    expect(AGENT_MODELS.intuition).toBe('mistral-small-3-2-24b-instruct');
+    expect(AGENT_MODELS.intuition).toBe('tencent-hy3-preview');
     // No vision slot here: analyze_image's vision sub-call runs
     // server-side in the venice edge function, which holds the primary
     // (e2ee-qwen3-vl-30b-a3b-p) and uncensored-fallback

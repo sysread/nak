@@ -33,7 +33,16 @@ cache (no payload yet on this thread) it fires unconditionally with
 reason `cold`. Otherwise it compares the cached payload's mood
 snapshot against the current mood and refreshes if the valence band
 index or the confidence column changed. The staleness fuse refreshes
-after `STALE_FUSE_ROUNDS` user rounds without one.
+on either of two independent conditions, whichever trips first:
+`STALE_FUSE_ROUNDS` user rounds since the last refresh (within-session
+drift), or `STALE_FUSE_MS` wall-clock milliseconds (one hour) since
+the cached payload was written. The wall-clock arm exists because the
+round counter barely moves across a pause - a conversation resumed the
+next day with a couple of fresh turns would otherwise re-inject a
+day-old pulse aimed at a situation that is gone. `nowMs` is a single
+`Date.now()` snapshot the chat-loop takes at priming time and threads
+into both pipelines' trigger evaluation and the injection guard, so
+all three judge staleness against the same instant.
 
 There used to be a second, mid-turn trigger (refresh after a
 successful `update_title` tool result, splicing the replacement
@@ -73,7 +82,8 @@ thread by the first response.
   removing it drops the "lean in" pressure across the ring.
 - `src/lib/intuition/types.ts` - the canonical `IntuitionPayload`
   shape, `coerceIntuitionPayload` (defensive jsonb reader),
-  `STALE_FUSE_ROUNDS`, and `countUserRounds` (the round-id
+  `STALE_FUSE_ROUNDS`, `STALE_FUSE_MS` (the wall-clock fuse and
+  the injection-guard bound), and `countUserRounds` (the round-id
   counter). Schema-versioned (`v: 1`); a drift / unknown-version
   row reads as null and triggers a fresh refresh.
 - `src/lib/intuition/pipeline.ts` - `runIntuitionPipeline` plus
@@ -120,7 +130,24 @@ thread by the first response.
 
 - **Pipeline runtime**: `runChatLoop` in `src/lib/chat-loop.ts`.
   The pre-round trigger lives directly after the opening-recall
-  `<think>` push.
+  `<think>` push. An **injection guard** sits at the push site: a
+  cached payload older than `STALE_FUSE_MS` is never spliced onto
+  the wire, even as a `<think>` block. Normally the trigger has
+  already refreshed anything that old, so the just-written cache
+  passes; the guard is the backstop for the cases the refresh can't
+  cover - the pipeline erroring, an inflight-dedup returning null,
+  or the feature being off this turn - where a stale snapshot would
+  otherwise still inject. A day-old synthesis is an imperative aimed
+  at a vanished situation, so the guard suppresses rather than
+  poisons; the next triggering turn recomputes. The same guard
+  covers the context-recall `<think>` push.
+- **Wire forensics**: `runChatLoop` emits a `debug`-level
+  `venice request wire` log (source `chat-loop`) carrying the full
+  `requestMessages` array for the turn's opening round, including
+  the spliced priming `<think>` chain. It is the round-1 wire only -
+  later tool rounds run server-side in `getStreamingResponse` and
+  are not visible to the browser drawer. Drop the log filter to
+  `Debug+` to see exactly what steered a response.
 - **UI mount**: `Chat.svelte`. The Pill mounts inside
   `.messages-wrap` above `SamskaraToasts` and the
   `.scroll-to-bottom` arrow; the modal mounts in the

@@ -7,10 +7,18 @@
 import { describe, it, expect } from 'vitest';
 import {
   evaluatePreRoundTrigger,
+  isPayloadFreshForInjection,
   countUserRounds,
   STALE_FUSE_ROUNDS,
+  STALE_FUSE_MS,
   type IntuitionPayload,
 } from '../src/lib/intuition';
+
+// Fixed "now" that matches the payload helper's computed_at_at, so the
+// wall-clock fuse reads zero elapsed unless a case deliberately
+// advances nowMs. Lets the round/mood/debounce cases isolate their own
+// trigger without the wall-clock fuse firing underneath them.
+const NOW = 1_700_000_000_000;
 
 function payload(overrides: Partial<IntuitionPayload> = {}): IntuitionPayload {
   return {
@@ -75,6 +83,7 @@ describe('evaluatePreRoundTrigger', () => {
         cache: null,
         round: 1,
         mood: { band: 2, column: 'confident' },
+        nowMs: NOW,
       })
     ).toBe('cold');
   });
@@ -85,6 +94,7 @@ describe('evaluatePreRoundTrigger', () => {
         cache: null,
         round: 1,
         mood: null,
+        nowMs: NOW,
       })
     ).toBe('cold');
   });
@@ -95,6 +105,7 @@ describe('evaluatePreRoundTrigger', () => {
         cache: payload({ computed_at_round: 3 }),
         round: 3,
         mood: { band: 2, column: 'confident' },
+        nowMs: NOW,
       })
     ).toBeNull();
   });
@@ -108,6 +119,7 @@ describe('evaluatePreRoundTrigger', () => {
         cache: payload({ computed_at_round: 5 }),
         round: 3,
         mood: { band: 2, column: 'confident' },
+        nowMs: NOW,
       })
     ).toBeNull();
   });
@@ -118,6 +130,7 @@ describe('evaluatePreRoundTrigger', () => {
         cache: payload({ computed_at_round: 1, computed_at_band: 0 }),
         round: 2,
         mood: { band: 3, column: 'confident' },
+        nowMs: NOW,
       })
     ).toBe('mood');
   });
@@ -132,6 +145,7 @@ describe('evaluatePreRoundTrigger', () => {
         }),
         round: 2,
         mood: { band: 2, column: 'tentative' },
+        nowMs: NOW,
       })
     ).toBe('mood');
   });
@@ -148,6 +162,7 @@ describe('evaluatePreRoundTrigger', () => {
         }),
         round: 3,
         mood: { band: 2, column: 'confident' },
+        nowMs: NOW,
       })
     ).toBeNull();
   });
@@ -160,6 +175,7 @@ describe('evaluatePreRoundTrigger', () => {
         cache: payload({ computed_at_round: 2 }),
         round: 3,
         mood: null,
+        nowMs: NOW,
       })
     ).toBeNull();
   });
@@ -174,6 +190,7 @@ describe('evaluatePreRoundTrigger', () => {
         }),
         round: 1 + STALE_FUSE_ROUNDS,
         mood: { band: 2, column: 'confident' },
+        nowMs: NOW,
       })
     ).toBe('stale');
   });
@@ -190,8 +207,75 @@ describe('evaluatePreRoundTrigger', () => {
         }),
         round: 1 + STALE_FUSE_ROUNDS,
         mood: { band: 4, column: 'tentative' },
+        nowMs: NOW,
       })
     ).toBe('mood');
+  });
+
+  it('fires "stale" on the wall-clock fuse even when rounds and mood held', () => {
+    // The bug this guards: a conversation resumed the next day. Only a
+    // couple of user turns elapsed (round fuse untripped) and the mood
+    // band never moved, but the cached pulse is aimed at a situation
+    // hours gone. Wall-clock elapsed past STALE_FUSE_MS must force a
+    // refresh on its own.
+    expect(
+      evaluatePreRoundTrigger({
+        cache: payload({
+          computed_at_round: 2,
+          computed_at_band: 2,
+          computed_at_column: 'confident',
+          computed_at_at: NOW,
+        }),
+        round: 3,
+        mood: { band: 2, column: 'confident' },
+        nowMs: NOW + STALE_FUSE_MS,
+      })
+    ).toBe('stale');
+  });
+
+  it('does not fire on the wall-clock fuse just under the threshold', () => {
+    // A response triggered and returned to within the hour - the
+    // common single-user pattern - must not force a needless recompute.
+    expect(
+      evaluatePreRoundTrigger({
+        cache: payload({
+          computed_at_round: 2,
+          computed_at_band: 2,
+          computed_at_column: 'confident',
+          computed_at_at: NOW,
+        }),
+        round: 3,
+        mood: { band: 2, column: 'confident' },
+        nowMs: NOW + STALE_FUSE_MS - 1,
+      })
+    ).toBeNull();
+  });
+});
+
+describe('isPayloadFreshForInjection', () => {
+  it('injects a payload written within the staleness window', () => {
+    expect(isPayloadFreshForInjection({ computed_at_at: NOW }, NOW)).toBe(true);
+    expect(
+      isPayloadFreshForInjection(
+        { computed_at_at: NOW },
+        NOW + STALE_FUSE_MS - 1
+      )
+    ).toBe(true);
+  });
+
+  it('suppresses a payload at or past the staleness window', () => {
+    // The bound matches the wall-clock refresh trigger exactly: at
+    // STALE_FUSE_MS the trigger fires "stale" and this guard suppresses,
+    // so a refresh-that-could-not-run never leaks a stale <think> block.
+    expect(
+      isPayloadFreshForInjection({ computed_at_at: NOW }, NOW + STALE_FUSE_MS)
+    ).toBe(false);
+    expect(
+      isPayloadFreshForInjection(
+        { computed_at_at: NOW },
+        NOW + STALE_FUSE_MS * 24
+      )
+    ).toBe(false);
   });
 });
 

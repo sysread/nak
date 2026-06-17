@@ -592,11 +592,14 @@ export type AgentRole =
  *     reasoning knob at the call site - rides deepseek's default
  *     effort, same as the other deepseek slots.
  *
- *   intuition - mistral-small-3-2-24b-instruct. The pre-turn pulse
- *     fires before every assistant turn; latency is the primary
- *     constraint. Mistral-small is non-reasoning by spec, which
- *     matches the call site's disable_thinking pin and avoids any
- *     CoT overhead per call.
+ *   intuition - tencent-hy3-preview. The pre-turn pulse fires before
+ *     every assistant turn AND the turn waits on it (the chat-loop
+ *     awaits the pipeline before assembling the wire), so latency is
+ *     the primary constraint - hy3-preview is the fast tier, the same
+ *     id webSearch rides. It is reasoning-capable, but the call site
+ *     pins disable_thinking to keep the token budget on the answer
+ *     and skip the CoT pass (see callOnce in intuition/pipeline.ts),
+ *     so there is no per-call reasoning overhead.
  *
  *
  *   recall - deepseek-v4-flash. Memory-recall agent: read the live
@@ -635,7 +638,7 @@ export const AGENT_MODELS = {
   rem:                'deepseek-v4-flash',
   webSearch:          'tencent-hy3-preview',
   researchDocs:       'deepseek-v4-flash',
-  intuition:          'mistral-small-3-2-24b-instruct',
+  intuition:          'tencent-hy3-preview',
   recall:             'deepseek-v4-flash',
   conversationRecall: 'deepseek-v4-flash',
   wikiRecall:         'deepseek-v4-flash',

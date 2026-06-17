@@ -90,6 +90,7 @@ import { createLogger } from './logger.svelte';
 import {
   buildIntuitionThinkMessage,
   countUserRounds,
+  isPayloadFreshForInjection,
   maybeRunIntuitionPipeline,
   readIntuitionCache,
   writeIntuitionCache,
@@ -1194,6 +1195,10 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   // flashes a status chip.
   let intuitionStarted = false;
   let contextRecallStarted = false;
+  // One wall-clock snapshot shared by both pipelines' staleness fuse
+  // and the injection guard below, so "should we refresh" and "is the
+  // cache fresh enough to inject" judge against the same instant.
+  const nowMs = Date.now();
   const [freshIntuition, freshContextRecall] = await Promise.all([
     maybeRunIntuitionPipeline({
       supabase,
@@ -1204,6 +1209,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       signal,
       round: currentUserRound,
       mood: intuitionMood ?? null,
+      nowMs,
       onWillRun: () => {
         intuitionStarted = true;
         handlers?.onSubconsciousStart?.('intuition');
@@ -1220,6 +1226,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       signal,
       round: currentUserRound,
       mood: intuitionMood ?? null,
+      nowMs,
       onWillRun: () => {
         contextRecallStarted = true;
         handlers?.onSubconsciousStart?.('recall');
@@ -1281,7 +1288,22 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   // cold-start thread with no compound summary, a turn where the fire
   // top-k came back empty, an intuition-disabled thread - any of those
   // skips its push so we never burn tokens on an empty `<think>` block.
-  if (contextRecallCache) {
+  // Injection guard: a payload older than the staleness fuse never
+  // reaches the wire, even as a <think> block. Normally the trigger
+  // above already refreshed anything this old, so the freshly-written
+  // cache passes. The guard is the backstop for the cases the refresh
+  // could not cover - the pipeline erroring out, an inflight-dedup
+  // returning null, or the feature being off this turn - where the
+  // cache would otherwise still hold a stale snapshot. Injecting a
+  // day-old intuition synthesis (an imperative aimed at a situation
+  // that no longer exists) actively steers the model wrong, so we
+  // suppress rather than poison; the next triggering turn recomputes.
+  // isPayloadFreshForInjection shares STALE_FUSE_MS with the refresh
+  // trigger so the two judgments stay in lockstep.
+  if (
+    contextRecallCache &&
+    isPayloadFreshForInjection(contextRecallCache, nowMs)
+  ) {
     const msg = buildContextRecallThinkMessage(contextRecallCache);
     if (msg !== null) history.push(msg);
   }
@@ -1297,7 +1319,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       content: `<think>\n${priming.fireThink}\n</think>`,
     });
   }
-  if (intuitionCache) {
+  if (intuitionCache && isPayloadFreshForInjection(intuitionCache, nowMs)) {
     history.push(buildIntuitionThinkMessage(intuitionCache));
   }
 
@@ -1383,6 +1405,21 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     ...conversation,
     metadataMessage,
   ];
+
+  // The exact message array handed to Venice for this turn's opening
+  // round, dumped at debug so it never clutters the default drawer but
+  // is one filter-drop away when a turn answers the wrong thing. This
+  // is the round-1 wire only - subsequent tool rounds run server-side
+  // in getStreamingResponse and are not visible to the browser drawer.
+  // It carries the priming <think> chain (context-recall, samskara,
+  // intuition) spliced above, which is exactly what you need to see
+  // when a stale or misfired prime steered the response.
+  log.debug('venice request wire', {
+    round: currentUserRound,
+    model: modelId,
+    messageCount: requestMessages.length,
+    messages: requestMessages,
+  });
 
   const consumed = await consumeStreamEvents({
     events: venice.streamChat({

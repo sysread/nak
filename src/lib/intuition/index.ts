@@ -20,6 +20,7 @@ export {
 
 export {
   STALE_FUSE_ROUNDS,
+  STALE_FUSE_MS,
   coerceIntuitionPayload,
   countUserRounds,
   pickFresherIntuitionPayload,
@@ -30,6 +31,6 @@ export { maybeRunIntuitionPipeline } from './pipeline';
 
 export { readIntuitionCache, writeIntuitionCache } from './cache';
 
-export { evaluatePreRoundTrigger } from './triggers';
+export { evaluatePreRoundTrigger, isPayloadFreshForInjection } from './triggers';
 
 export { buildIntuitionThinkMessage } from './ephemeral';

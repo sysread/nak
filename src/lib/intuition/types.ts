@@ -84,6 +84,21 @@ export type IntuitionTrigger = 'title' | 'mood' | 'stale' | 'cold';
  *  fresh read eventually. */
 export const STALE_FUSE_ROUNDS = 8;
 
+/** Wall-clock companion to STALE_FUSE_ROUNDS. The round fuse only
+ *  counts user turns, so a conversation resumed hours or days later
+ *  with a couple of fresh turns never trips it - and the cached
+ *  payload is a snapshot of a moment (perception, drives, synthesis
+ *  aimed at the situation as it stood), which goes stale the instant
+ *  the user steps away and comes back to a different context. One
+ *  hour: long enough that triggering a response and wandering off
+ *  mid-turn (the common single-user pattern) does not force a
+ *  needless recompute, short enough that a next-day resume
+ *  re-perceives instead of injecting yesterday's pulse as if it were
+ *  live. Both the refresh trigger and the injection guard read this
+ *  same bound, so "old enough to refresh" and "too old to steer on"
+ *  stay in lockstep. */
+export const STALE_FUSE_MS = 60 * 60 * 1000;
+
 /**
  * Count user messages in a history array. The user requested that the
  * round-id correspond to user-message rounds, not chat-loop streaming

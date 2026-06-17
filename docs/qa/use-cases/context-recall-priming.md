@@ -83,7 +83,15 @@ ILIKE searches and inlines the result verbatim.
   and the pipeline fires unconditionally on the first response. This is
   the cleanest controlled boundary - no mood manipulation or
   round-counting needed. (`mood` and `stale` are the other two live
-  triggers; the `title` member of the union is legacy-only.)
+  triggers; the `title` member of the union is legacy-only.) The
+  `stale` arm fires on EITHER `STALE_FUSE_ROUNDS` user-rounds OR
+  `STALE_FUSE_MS` (1h) wall-clock since the cached write - the shared
+  evaluator behaves identically for both pipelines. The injection of
+  this `<think>` block is also gated by `isPayloadFreshForInjection`:
+  a payload older than `STALE_FUSE_MS` is suppressed rather than
+  injected. Both behaviors are exercised in depth by
+  [intuition-pipeline](./intuition-pipeline.md) steps 7-8 against the
+  shared code; not re-forged here.
 
 ## Steps
 

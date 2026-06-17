@@ -148,6 +148,11 @@ export interface MaybeRunContextRecallInputs
   enabled: boolean | undefined;
   /** Current cached payload off the thread row; null = cold start. */
   cache: ContextRecallPayload | null;
+  /** Current wall-clock time, ms since epoch. Feeds the wall-clock
+   *  staleness fuse in the shared trigger evaluator; same Date.now()
+   *  snapshot the chat-loop hands the intuition run and the injection
+   *  guard. */
+  nowMs: number;
   /**
    * Fires at the moment the pipeline commits to running, before the
    * gather starts - the caller hangs its UI status signal here.
@@ -172,6 +177,7 @@ export function maybeRunContextRecallPipeline(
     cache: inputs.cache,
     round: inputs.round,
     mood: inputs.mood,
+    nowMs: inputs.nowMs,
   });
   if (!trigger) return Promise.resolve(null);
   inputs.onWillRun?.(trigger);
