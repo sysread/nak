@@ -31,8 +31,11 @@ feature docs have a shared vocabulary to refer back to.
 
 ## Phase state machine
 
-`src/lib/state.svelte.ts` owns the single reactive `app` object that
-every screen reads. Three phases:
+`src/lib/state.svelte.ts` is the facade (`$lib/state.svelte`) over
+`src/lib/app-state/` - `root.svelte.ts` holds the single reactive `app`
+object every screen reads, `settings.ts` the setters / persistence /
+server-blob hydration, and `lifecycle.ts` the phase transitions and
+service construction. Three phases:
 
 ```text
  loading -------- setup       (no stored config)
@@ -390,7 +393,7 @@ perspective (which functions exist, what each one owns, the
 
 | Scope | Where | What |
 | --- | --- | --- |
-| Reactive, in-memory | `app` rune in `state.svelte.ts` | Phase, services, user defaults, theme, system prompts, web-search toggle |
+| Reactive, in-memory | `app` rune in `app-state/root.svelte.ts` (facade: `state.svelte.ts`) | Phase, services, user defaults, theme, system prompts, web-search toggle |
 | Ephemeral per-tab | `sessionStorage` (last-active thread id) | The id the next refresh re-opens; cleared on sign-out |
 | Auth session | `localStorage['sb-<project>-auth-token']` | Supabase JWT + refresh token; owned by supabase-js |
 | Persistent per-origin | `localStorage['nak:config:v2']` | Plaintext Supabase URL + publishable key (no Venice key) |
