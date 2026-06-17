@@ -79,6 +79,7 @@ import type {
   SimilarMemory,
   MemoryRelation,
   WikiArticle,
+  WikiRecord,
   WikiArticleSource,
   WikiArticleRelated,
   WikiChangelogKind,
@@ -103,6 +104,7 @@ import {
   coerceAttachmentRow,
   coerceMemoryChangelogEntry,
   coerceWikiArticle,
+  coerceWikiRecord,
   coerceWikiChangelogEntry,
   parseTopicVocabulary,
   coerceDocument,
@@ -784,6 +786,13 @@ export class SupabaseService {
         delete merged.wikiAutomaticEnabled;
       } else if (typeof patch.wikiAutomaticEnabled === 'boolean') {
         merged.wikiAutomaticEnabled = patch.wikiAutomaticEnabled;
+      }
+    }
+    if ('wikiRecordExtractionEnabled' in patch) {
+      if (patch.wikiRecordExtractionEnabled === undefined) {
+        delete merged.wikiRecordExtractionEnabled;
+      } else if (typeof patch.wikiRecordExtractionEnabled === 'boolean') {
+        merged.wikiRecordExtractionEnabled = patch.wikiRecordExtractionEnabled;
       }
     }
     if ('wikiLibrarianEnabled' in patch) {
@@ -2298,6 +2307,177 @@ export class SupabaseService {
   async deleteWikiArticle(id: string): Promise<void> {
     const { error } = await this.client.from('wiki_articles').delete().eq('id', id);
     if (error) throw new SupabaseError(error.message);
+  }
+
+  // Wiki records ---------------------------------------------------------
+  //
+  // Dated entries linked to a wiki article. The article body owns the
+  // consolidated "current state"; records preserve the dated journey.
+  // RLS owner-scopes every query; the `wiki_records` table cascades on
+  // article delete. updated_at is stamped by a DB trigger, not here.
+
+  /**
+   * List records for one article, reverse-chronological by event date.
+   * Optional date-range (inclusive) and tag filters. Tags use JSONB
+   * containment (`tags @> [...]`) so a row must carry every requested
+   * tag (AND semantics) - the GIN index on `tags` backs this.
+   */
+  async listWikiRecords(
+    articleId: string,
+    filters: { fromDate?: string; toDate?: string; tags?: string[]; limit?: number } = {}
+  ): Promise<WikiRecord[]> {
+    let query = this.client
+      .from('wiki_records')
+      .select(
+        'id, article_id, date, content, tags, source_conversation_id, created_at, updated_at'
+      )
+      .eq('article_id', articleId)
+      .order('date', { ascending: false })
+      .order('created_at', { ascending: false });
+    if (filters.fromDate) query = query.gte('date', filters.fromDate);
+    if (filters.toDate) query = query.lte('date', filters.toDate);
+    if (filters.tags && filters.tags.length > 0) query = query.contains('tags', filters.tags);
+    if (filters.limit) query = query.limit(filters.limit);
+    const { data, error } = await query;
+    if (error) throw new SupabaseError(error.message);
+    return (data ?? []).map((row) => coerceWikiRecord(row as Record<string, unknown>));
+  }
+
+  async getWikiRecord(id: string): Promise<WikiRecord | null> {
+    const { data, error } = await this.client
+      .from('wiki_records')
+      .select(
+        'id, article_id, date, content, tags, source_conversation_id, created_at, updated_at'
+      )
+      .eq('id', id)
+      .maybeSingle();
+    if (error) throw new SupabaseError(error.message);
+    return data ? coerceWikiRecord(data as Record<string, unknown>) : null;
+  }
+
+  async createWikiRecord(args: {
+    articleId: string;
+    date: string;
+    content: string;
+    tags?: string[];
+    sourceConversationId?: string | null;
+  }): Promise<WikiRecord> {
+    const session = await this.getSession();
+    if (!session) throw new SupabaseError('Not authenticated.');
+    const { data, error } = await this.client
+      .from('wiki_records')
+      .insert({
+        user_id: session.user.id,
+        article_id: args.articleId,
+        date: args.date,
+        content: args.content,
+        tags: args.tags ?? [],
+        source_conversation_id: args.sourceConversationId ?? null,
+      })
+      .select(
+        'id, article_id, date, content, tags, source_conversation_id, created_at, updated_at'
+      )
+      .single();
+    if (error) throw new SupabaseError(error.message);
+    return coerceWikiRecord(data as Record<string, unknown>);
+  }
+
+  /**
+   * Patch a record's date, content, or tags. RLS owner-scopes the
+   * update. The `clear_wiki_record_embedding_on_change` trigger nulls
+   * the embedding + claim columns when date or content changes so the
+   * worker re-embeds; `touch_wiki_record_updated_at` stamps updated_at.
+   */
+  async updateWikiRecord(
+    id: string,
+    patch: { date?: string; content?: string; tags?: string[] }
+  ): Promise<WikiRecord> {
+    const { data, error } = await this.client
+      .from('wiki_records')
+      .update(patch)
+      .eq('id', id)
+      .select(
+        'id, article_id, date, content, tags, source_conversation_id, created_at, updated_at'
+      )
+      .single();
+    if (error) throw new SupabaseError(error.message);
+    return coerceWikiRecord(data as Record<string, unknown>);
+  }
+
+  async deleteWikiRecord(id: string): Promise<void> {
+    const { error } = await this.client.from('wiki_records').delete().eq('id', id);
+    if (error) throw new SupabaseError(error.message);
+  }
+
+  /**
+   * Semantic + substring search across ALL the user's records (every
+   * article). Mirrors `searchWikiArticles`: vector hits first, then
+   * ILIKE hits the vector path missed, deduped by id, capped at `limit`.
+   * Empty query short-circuits to a recent-first listing.
+   */
+  async searchWikiRecords(opts: {
+    query: string;
+    queryEmbedding: number[] | null;
+    limit?: number;
+  }): Promise<WikiRecord[]> {
+    const query = opts.query.trim();
+    const limit = opts.limit ?? 20;
+    if (query.length === 0) {
+      const { data, error } = await this.client
+        .from('wiki_records')
+        .select(
+          'id, article_id, date, content, tags, source_conversation_id, created_at, updated_at'
+        )
+        .order('date', { ascending: false })
+        .limit(limit);
+      if (error) throw new SupabaseError(error.message);
+      return (data ?? []).map((row) => coerceWikiRecord(row as Record<string, unknown>));
+    }
+
+    const pattern = ilikeLogicTreePattern(query);
+    const ilikePromise = this.client
+      .from('wiki_records')
+      .select(
+        'id, article_id, date, content, tags, source_conversation_id, created_at, updated_at'
+      )
+      .ilike('content', pattern)
+      .order('date', { ascending: false })
+      .limit(limit);
+
+    const semanticPromise = opts.queryEmbedding
+      ? this.client.rpc('search_wiki_records_by_embedding', {
+          query_embedding: opts.queryEmbedding,
+          match_limit: limit,
+        })
+      : Promise.resolve({ data: [] as unknown[], error: null });
+
+    const [ilikeRes, semRes] = await Promise.all([ilikePromise, semanticPromise]);
+    if (ilikeRes.error) throw new SupabaseError(ilikeRes.error.message);
+    const ilikeRows = (ilikeRes.data ?? []).map((row) =>
+      coerceWikiRecord(row as Record<string, unknown>)
+    );
+    const semanticRows =
+      semRes.error !== null
+        ? []
+        : ((semRes.data ?? []) as unknown[]).map((row) =>
+            coerceWikiRecord(row as Record<string, unknown>)
+          );
+
+    const out: WikiRecord[] = [];
+    const seen = new Set<string>();
+    for (const r of semanticRows) {
+      if (seen.has(r.id)) continue;
+      seen.add(r.id);
+      out.push(r);
+      if (out.length >= limit) return out;
+    }
+    for (const r of ilikeRows) {
+      if (seen.has(r.id)) continue;
+      seen.add(r.id);
+      out.push(r);
+      if (out.length >= limit) return out;
+    }
+    return out;
   }
 
   // Documents (Library) --------------------------------------------------
@@ -3826,6 +4006,34 @@ export class SupabaseService {
           event: '*',
           schema: 'public',
           table: 'wiki_articles',
+          filter: `user_id=eq.${userId}`,
+        },
+        () => {
+          onChange();
+        }
+      )
+      .subscribe();
+    return () => {
+      void this.client.removeChannel(channel);
+    };
+  }
+
+  /**
+   * Subscribe to any change on the signed-in user's wiki records. Twin
+   * of subscribeToWikiArticleChanges - the extraction agent, the
+   * librarian, the chat record tools, and the in-app compose form all
+   * write records, so the open article view refetches its Records
+   * section on a coarse "something changed" signal.
+   */
+  subscribeToWikiRecordChanges(userId: string, onChange: () => void): () => void {
+    const channel = this.client
+      .channel(`wiki_records:${userId}`)
+      .on(
+        'postgres_changes' as never,
+        {
+          event: '*',
+          schema: 'public',
+          table: 'wiki_records',
           filter: `user_id=eq.${userId}`,
         },
         () => {

@@ -55,6 +55,7 @@ import { wikiSearch } from '../tools/wiki_search.ts';
 import { wikiCreate } from '../tools/wiki_create.ts';
 import { wikiUpdate } from '../tools/wiki_update.ts';
 import { wikiDelete } from '../tools/wiki_delete.ts';
+import { recordList } from '../tools/record_list.ts';
 import {
   runHeadlessAgent,
   type AgentTool,
@@ -319,6 +320,37 @@ const WIKI_DELETE_WIRE_SCHEMA: AgentTool['wire'] = {
   },
 };
 
+// record_list rides READ-ONLY so the agent can consult an article's
+// dated records (its journey) and fold durable learnings into the body
+// (its current state). The wiki agent never creates or deletes records -
+// that is the extraction agent's job and the user's; this is a read so
+// the article body can reflect what the records have established.
+const RECORD_LIST_WIRE_SCHEMA: AgentTool['wire'] = {
+  type: 'function',
+  function: {
+    name: 'record_list',
+    description:
+      "List a wiki article's dated records (the topic's journey: specific " +
+      'events, experiments, observations). Returns {records: [{id, date, ' +
+      'content, tags, created_at}]}. Read-only here - use it to see what the ' +
+      "records have established so the article BODY (the topic's current " +
+      'state) reflects durable learnings. Do not restate every record; ' +
+      'summarise the settled outcome.',
+    parameters: {
+      type: 'object',
+      properties: {
+        article_id: {
+          type: 'string',
+          description: 'UUID of the article (from wiki_search / wiki_list).',
+        },
+        limit: { type: 'integer', minimum: 1, maximum: 200 },
+      },
+      required: ['article_id'],
+      additionalProperties: false,
+    },
+  },
+};
+
 // ---------------------------------------------------------------------------
 // Prompt. The framing layers each encode a production failure mode and
 // must not be softened casually:
@@ -574,6 +606,21 @@ time in), wiki_create is appropriate - but write the article so
 its first dated statements form the start of a longitudinal
 record, not a one-off summary of this conversation.
 
+**Article body vs records: two layers, and you own only one.** Each
+article also has a linked set of dated RECORDS - the topic's journey,
+specific events logged with a date ("baked an 80%-hydration loaf",
+"doctor visit", "shipped the auth flow"). You do NOT create, edit, or
+delete records (a separate extraction agent and the user own those).
+What you DO is the inverse: the article BODY is the current-state view,
+so before updating an article, call record_list on it to see what its
+records have established, and fold the DURABLE learnings into the body -
+the settled outcome, the pattern that emerged, the current best
+approach. Summarise; do not transcribe every record into the body (the
+records already preserve the blow-by-blow). A record says "Oct 3:
+doubled the salt, too salty"; the body says "the recipe settled on 1.5%
+salt by late 2026 after earlier batches ran salty." Records are the
+journey; the body is where it landed.
+
 **Scope: this wiki is about the user, not the world.** Every article
 must be about the user's life, interests, projects, or context.
 External topics that came up in conversation but have no specific
@@ -787,6 +834,7 @@ function buildWikiToolbox(): Toolbox {
       asAgentTool(wikiCreate, WIKI_CREATE_WIRE_SCHEMA),
       asAgentTool(wikiUpdate, WIKI_UPDATE_WIRE_SCHEMA),
       asAgentTool(wikiDelete, WIKI_DELETE_WIRE_SCHEMA),
+      asAgentTool(recordList, RECORD_LIST_WIRE_SCHEMA),
       asAgentTool(memorySearch, MEMORY_SEARCH_WIRE_SCHEMA),
     ],
   };

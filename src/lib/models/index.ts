@@ -503,6 +503,7 @@ export function effectiveTierSpec(tier: ModelTier, tierModels?: TierModels): Tie
 export type AgentRole =
   | 'reflection'
   | 'wiki'
+  | 'wikiRecords'
   | 'wikiLibrarian'
   | 'deepSleep'
   | 'rem'
@@ -642,6 +643,7 @@ export type AgentRole =
 export const AGENT_MODELS = {
   reflection:         'deepseek-v4-flash',
   wiki:               'deepseek-v4-flash',
+  wikiRecords:        'deepseek-v4-flash',
   wikiLibrarian:      'deepseek-v4-flash',
   deepSleep:          'deepseek-v4-flash',
   rem:                'deepseek-v4-flash',

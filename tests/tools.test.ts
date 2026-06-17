@@ -64,6 +64,9 @@ describe('tool registry', () => {
         'memory_search',
         'recipe_get',
         'recipe_list',
+        'record_get',
+        'record_list',
+        'record_search',
         'research_docs',
         'toggle_toolbox',
         'update_title',
@@ -97,6 +100,9 @@ describe('tool registry', () => {
       'recipe_photos_reorder',
       'recipe_photo_label_set',
       'wiki_librarian',
+      'record_create',
+      'record_update',
+      'record_delete',
       'doc_create',
       'doc_update',
       'doc_delete',
@@ -180,6 +186,7 @@ describe('tool registry', () => {
       'cooking',
       'memories',
       'wiki',
+      'wiki_records',
       'library',
       'images',
     ]);
@@ -190,6 +197,7 @@ describe('tool registry', () => {
       'cooking',
       'memories',
       'wiki',
+      'wiki_records',
       'library',
       'images',
     ]);
@@ -205,6 +213,7 @@ describe('tool registry', () => {
       'cooking',
       'memories',
       'wiki',
+      'wiki_records',
       'library',
       'images',
     ]);
@@ -243,6 +252,27 @@ describe('tool registry', () => {
     expect(wikiToolbox.tools.map((t: ToolDef) => t.name)).toEqual([
       'wiki_librarian',
     ]);
+  });
+
+  it('buildToolList(["wiki_records"]) exposes record writes; reads stay always-on', () => {
+    // Records DIVERGE from the wiki article policy: unlike the article
+    // write tools (agent-only, never chat-reachable - all chat edits go
+    // through the librarian), the record write tools ARE direct chat
+    // tools. Records are discrete low-stakes jots, not the single shared
+    // article body the librarian protects. The reads stay always-on like
+    // every other read surface.
+    const names = buildToolList(['wiki_records']).map((t) => t.function.name);
+    expect(names).toContain('record_create');
+    expect(names).toContain('record_update');
+    expect(names).toContain('record_delete');
+    // Record reads are always-on, not in the gated toolbox.
+    expect(names).toContain('record_list');
+    expect(names).toContain('record_get');
+    expect(names).toContain('record_search');
+    // The article write tools remain agent-only at every toggle state.
+    expect(names).not.toContain('wiki_create');
+    expect(names).not.toContain('wiki_update');
+    expect(names).not.toContain('wiki_delete');
   });
 
   it('buildToolList(["wiki"]) exposes the librarian; reads stay always-on', () => {

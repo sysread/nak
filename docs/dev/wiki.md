@@ -487,6 +487,16 @@ Docs:
 - **Manual retry**: the Skipped panel's Retry button ->
   `SupabaseService.retryWikiThread(threadId)` -> `POST /wiki-retry`
   (user JWT) -> `retryWikiThread(adminClient, userId, threadId)`.
+- **Record extraction sweep**: pg_cron job `nak-wiki-records-sweep`
+  (hourly, minute 17, offset from the wiki sweep at 7 and the
+  librarian at 37) -> `nak_trigger_wiki_records_sweep()` -> pg_net
+  `POST /wiki-records-sweep` -> `runWikiRecordsSweepTick(adminClient)`
+  in `agents/wiki_records.ts`. Claims settled threads whose owner has
+  `wikiRecordExtractionEnabled` and at least one article, and logs
+  discrete dated events as records via `record_create`. Independent
+  per-thread pointer (`last_wiki_record_processed_msg_id`) and claim
+  columns so it runs concurrently with the article sweep. The dev shim
+  ticks this route too.
 - **Librarian cron sweep**: pg_cron job `nak-wiki-librarian-sweep`
   (hourly, minute 37) -> `nak_trigger_wiki_librarian_sweep()` ->
   pg_net `POST /wiki-librarian-sweep` with the service-role bearer ->
@@ -587,6 +597,55 @@ These are independent of the memory-reflection
 (`last_reflected_msg_id`) and journal (`last_journaled_msg_id`)
 pointers. All three agents can run concurrently against the same
 thread.
+
+`wiki_records` (the dated journey layer):
+
+- `id uuid pk`, `user_id uuid not null references auth.users on
+  delete cascade`.
+- `article_id uuid not null references wiki_articles on delete
+  cascade` - a record always belongs to exactly one article and dies
+  with it. There is deliberately NO uniqueness constraint: many
+  records per article (and two records on one date) are the point.
+- `date date not null` - the day the event occurred, distinct from
+  `created_at` (when the row was written). The list sorts by `date
+  desc`.
+- `content text not null` (Markdown), `tags jsonb not null default
+  '[]'` (a freeform keyword array for filtering).
+- `source_conversation_id uuid references threads on delete set null`
+  - extraction provenance; `set null` (not cascade) so deleting the
+  source thread leaves the record - the event still happened.
+- Same embedding/claim quartet as `wiki_articles`
+  (`embedding vector(2048)`, `embedding_model`,
+  `embedding_claim_holder`, `embedding_claim_expires`). The embed
+  input is `date + content` (`buildWikiRecordEmbedInput`); tags are
+  excluded so a noisy tag can't dominate the vector.
+- Indexes: `(article_id, date desc)` (the per-article list),
+  `(user_id, date desc)` (cross-article chronological), and a GIN
+  index on `tags` (containment filtering). No ANN index - rows are
+  claimed by `updated_at`-ordered scan, same as `wiki_articles`.
+- Triggers: `touch_wiki_record_updated_at` (BEFORE UPDATE stamps
+  `updated_at`, since three surfaces write records and none can be
+  trusted to set it), and `clear_wiki_record_embedding_on_change`
+  (nulls the embedding/claim columns when `content` or `date`
+  changes).
+- Member of `supabase_realtime` with a `(id, user_id)` replica-
+  identity index so DELETE events reach the browser's user-filtered
+  subscription (the same gotcha as `wiki_articles` / memories).
+- Embedding RPCs `claim_next_pending_wiki_record` /
+  `save_wiki_record_embedding_if_claimed` /
+  `search_wiki_records_by_embedding` clone the article trio;
+  `wiki-records` is registered in `EMBED_SOURCES` so the generic
+  backfill loop drains it.
+
+`threads` extension columns for the extraction agent
+(`last_wiki_record_processed_msg_id`, `wiki_record_claim_holder`,
+`wiki_record_claim_expires_at`, `wiki_record_failure_count`,
+`wiki_record_last_skip_at`, `wiki_record_last_skip_reason`) mirror the
+article agent's, minus the content-filter fallback flag (the
+extraction model has no uncensored-fallback path). Independent pointer
+so extraction and article maintenance run concurrently.
+`reset_wiki_data` clears these alongside the article columns and
+deletes `wiki_records` rows explicitly.
 
 ### Eligibility predicate
 
@@ -939,6 +998,40 @@ explicit instructions), and output shape (tool calls vs JSON).
   Composition is asserted in
   `supabase/functions/tests/wiki_librarian.test.ts`.
 
+### Record toolbox split
+
+Records DIVERGE from the article write policy, and the divergence is
+deliberate. Article writes are agent-only (the chat reaches them only
+through the librarian's read-then-plan loop); record writes are direct
+gated chat tools. The rationale: a record is a discrete, low-stakes,
+append-oriented jot (one event, one row), whereas the article body is
+the single shared consolidated narrative the librarian protects. A
+stray record is cheap to delete; a clobbered article is not.
+
+- `alwaysOnToolbox` carries the record READS - `record_list` (one
+  article's timeline), `record_get` (by id), `record_search`
+  (semantic across every article's records). They ride every request
+  like the wiki reads.
+- `wikiRecordsToolbox` (gated, `name: 'wiki_records'`) carries the
+  WRITES - `record_create` / `record_update` / `record_delete`.
+  Gated via the composer popover / `toggle_toolbox` like the cooking
+  and memory write boxes. The membership tripwire lives in
+  `tests/tools.test.ts`.
+- The extraction agent's toolbox (`buildWikiRecordsToolbox` in
+  `agents/wiki_records.ts`) is read-heavy with exactly one write,
+  `record_create`: `wiki_search` + `wiki_list` find the home article,
+  `record_list` dedupes, read-only `memory_search` grounds. It never
+  touches article bodies or memory. Asserted in
+  `supabase/functions/tests/wiki_records.test.ts`.
+- The article worker gains read-only `record_list`; the librarian
+  gains `record_list` + `record_update` + `record_delete`. Both
+  prompts encode the body/records separation: the article BODY is the
+  current state, records are the journey. The worker and librarian
+  fold durable learnings from records INTO the body but never delete
+  a record merely because its learning was promoted - records are
+  historical documentation. The librarian additionally cleans up
+  duplicate/outdated records.
+
 ## Interactions
 
 - **Memory** (`docs/dev/memory.md`) - the wiki agent grounds article
@@ -957,7 +1050,11 @@ explicit instructions), and output shape (tool calls vs JSON).
   every article change; the server-side backfill re-embeds. The wiki
   sweep's cron dispatch (`nak_trigger_wiki_sweep`) is a clone of the
   backfill's vault + pg_net pattern, offset to minute 7; the
-  librarian's (`nak_trigger_wiki_librarian_sweep`) to minute 37.
+  librarian's (`nak_trigger_wiki_librarian_sweep`) to minute 37; the
+  record extraction sweep's (`nak_trigger_wiki_records_sweep`) to
+  minute 17. `wiki_records` is an `EMBED_SOURCES` member, so records
+  embed through the same backfill loop
+  (`buildWikiRecordEmbedInput` = date + content).
 - **Logging** (`docs/dev/logging.md`) - the agents' edge loggers
   relay to the in-app Logs drawer over the `logs:<userId>`
   Broadcast channel; drawer source tags `wiki` (autonomous agent),
@@ -968,25 +1065,32 @@ explicit instructions), and output shape (tool calls vs JSON).
   same transport + flush-before-respond contract as the log relay.
 - **Chat / tools** (`docs/dev/chat.md`, `docs/dev/tools.md`) -
   `wiki_search` and the other read tools are always-on in every chat
-  request; the gated `wikiToolbox` delegates writes to the
-  `wiki_librarian` sub-agent.
+  request; the gated `wikiToolbox` delegates article writes to the
+  `wiki_librarian` sub-agent. Record reads (`record_list`,
+  `record_get`, `record_search`) are always-on; record writes
+  (`record_create` / `record_update` / `record_delete`) are direct,
+  gated behind `wikiRecordsToolbox` - the deliberate divergence from
+  the article write policy (see Record toolbox split above).
 - **Edge function auth** (`docs/dev/edge-function-auth.md`) - the
-  venice function is b-strict: `/wiki-sweep` and
-  `/wiki-librarian-sweep` are gated on `isServiceRole`;
-  `/wiki-retry` and `/wiki-librarian-run` on the gateway-validated
-  user JWT. `claim_next_user_for_wiki_librarian` is a SECURITY
+  venice function is b-strict: `/wiki-sweep`,
+  `/wiki-records-sweep`, and `/wiki-librarian-sweep` are gated on
+  `isServiceRole`; `/wiki-retry` and `/wiki-librarian-run` on the
+  gateway-validated user JWT. `claim_next_user_for_wiki_librarian` is a SECURITY
   DEFINER global sweep locked to `service_role`; the in-flight guard
   pair carries the `coalesce(p_user_id, auth.uid())` b-strict escape
   hatch; and every wiki tool / helper / RPC carries explicit
   `user_id` scoping because the service-role client bypasses RLS.
 - **Settings** (`docs/dev/settings.md`) - the `wiki` group exposes
-  the two toggles, both consumed server-side by claim predicates:
-  `wikiAutomaticEnabled` by the wiki sweep, `wikiLibrarianEnabled`
-  by the librarian sweep. `displayTimezone` (owned by the journal
-  pane) is consumed server-side by the day-gate.
+  three toggles, all consumed server-side by claim predicates:
+  `wikiAutomaticEnabled` by the wiki sweep,
+  `wikiRecordExtractionEnabled` by the record extraction sweep,
+  `wikiLibrarianEnabled` by the librarian sweep. `displayTimezone`
+  (owned by the journal pane) is consumed server-side by the
+  day-gate.
 - **Local stack** (`docs/dev/local-stack.md`) - no pg_cron / pg_net
-  locally; `scripts/dev-backfill-cron.mjs` ticks `/wiki-sweep` and
-  `/wiki-librarian-sweep` alongside `/backfill`.
+  locally; `scripts/dev-backfill-cron.mjs` ticks `/wiki-sweep`,
+  `/wiki-records-sweep`, and `/wiki-librarian-sweep` alongside
+  `/backfill`.
 
 ## Gotchas
 

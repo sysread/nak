@@ -94,6 +94,12 @@ import { wikiSearchSchema } from './wiki_search.schema';
 import { wikiListSchema } from './wiki_list.schema';
 import { wikiGetSchema } from './wiki_get.schema';
 import { wikiLibrarianSchema } from './wiki_librarian.schema';
+import { recordListSchema } from './record_list.schema';
+import { recordGetSchema } from './record_get.schema';
+import { recordSearchSchema } from './record_search.schema';
+import { recordCreateSchema } from './record_create.schema';
+import { recordUpdateSchema } from './record_update.schema';
+import { recordDeleteSchema } from './record_delete.schema';
 import { docListSchema } from './doc_list.schema';
 import { docGetSchema } from './doc_get.schema';
 import { docGrepSchema } from './doc_grep.schema';
@@ -152,6 +158,12 @@ const wikiSearch = serverSideTool(wikiSearchSchema);
 const wikiList = serverSideTool(wikiListSchema);
 const wikiGet = serverSideTool(wikiGetSchema);
 const wikiLibrarian = serverSideTool(wikiLibrarianSchema);
+const recordList = serverSideTool(recordListSchema);
+const recordGet = serverSideTool(recordGetSchema);
+const recordSearch = serverSideTool(recordSearchSchema);
+const recordCreate = serverSideTool(recordCreateSchema);
+const recordUpdate = serverSideTool(recordUpdateSchema);
+const recordDelete = serverSideTool(recordDeleteSchema);
 const docList = serverSideTool(docListSchema);
 const docGet = serverSideTool(docGetSchema);
 const docGrep = serverSideTool(docGrepSchema);
@@ -207,6 +219,14 @@ const generateImage = serverSideTool(generateImageSchema);
  *     recipe pair below; together they let the model survey wiki
  *     shape and read a specific article without paying for a
  *     vector search when it already knows the id.
+ *   - `record_list` / `record_get` / `record_search` - read paths
+ *     for wiki records (dated entries linked to an article: the
+ *     topic's journey, vs the article body's current state).
+ *     `record_list` walks one article's timeline, `record_get`
+ *     fetches one by id, `record_search` runs semantic search
+ *     across every article's records. Reads ride always-on like
+ *     the wiki reads; the record writes gate behind
+ *     `wikiRecordsToolbox`.
  *   - `recipe_list` / `recipe_get` - browse and fetch the user's
  *     saved recipes.
  *   - `research_docs` - bounded sub-agent that answers
@@ -247,6 +267,9 @@ export const alwaysOnToolbox: Toolbox = {
     wikiSearch,
     wikiList,
     wikiGet,
+    recordList,
+    recordGet,
+    recordSearch,
     recipeList,
     recipeGet,
     docList,
@@ -347,6 +370,32 @@ export const wikiToolbox: Toolbox = {
 };
 
 /**
+ * Wiki records write toolbox. Record reads (record_list, record_get,
+ * record_search) live in the always-on set; this toolbox carries the
+ * writes (create, update, delete a dated record).
+ *
+ * Deliberate divergence from `wikiToolbox`, which exposes NO direct
+ * writes - all chat-driven article edits go through the librarian's
+ * read-then-plan loop so an autonomous turn can't scribble over the
+ * consolidated narrative. Records get direct write tools instead because
+ * they are discrete, low-stakes, append-oriented jots (one event, one
+ * row), not the single shared article body the librarian protects. A
+ * stray record is cheap to delete; a clobbered article is not. The
+ * background extraction agent and the librarian also read records and
+ * promote durable learnings into the article body without deleting the
+ * records - see supabase/functions/venice/agents/.
+ */
+export const wikiRecordsToolbox: Toolbox = {
+  name: 'wiki_records',
+  description:
+    'Create, edit, and delete dated records linked to a wiki article ' +
+    "(the topic's journey, distinct from the article body's current " +
+    'state). Read paths (record_list, record_get, record_search) are ' +
+    'always-on; this toolbox carries the writes.',
+  tools: [recordCreate, recordUpdate, recordDelete],
+};
+
+/**
  * Image-generation toolbox. Gated rather than always-on: generating an
  * image spends Venice credits and writes a persistent attachment row,
  * so it gets the same deliberate user-or-model gate the cookbook /
@@ -401,6 +450,7 @@ export const TOOLBOXES: readonly Toolbox[] = [
   cookingToolbox,
   memoriesToolbox,
   wikiToolbox,
+  wikiRecordsToolbox,
   libraryToolbox,
   imagesToolbox,
 ];

@@ -53,6 +53,9 @@ import { conversationGet } from '../tools/conversation_get.ts';
 import { memorySearch } from '../tools/memory_search.ts';
 import { wikiUpdate } from '../tools/wiki_update.ts';
 import { wikiDelete } from '../tools/wiki_delete.ts';
+import { recordList } from '../tools/record_list.ts';
+import { recordUpdate } from '../tools/record_update.ts';
+import { recordDelete } from '../tools/record_delete.ts';
 import { asAgentTool } from './_agent_tools.ts';
 import {
   runHeadlessAgent,
@@ -237,6 +240,75 @@ const WIKI_DELETE_WIRE_SCHEMA: AgentTool['wire'] = {
   },
 };
 
+// Record tools. The librarian reads an article's records (the topic's
+// journey) to decide what durable learnings belong in the body, and may
+// clean up the records themselves: merge duplicates, fix outdated ones,
+// delete the irrelevant. It does NOT delete a record merely because it
+// promoted that record's learning into the article body - records are
+// historical documentation and survive promotion.
+const RECORD_LIST_WIRE_SCHEMA: AgentTool['wire'] = {
+  type: 'function',
+  function: {
+    name: 'record_list',
+    description:
+      "List a wiki article's dated records (the topic's journey). Returns " +
+      '{records: [{id, date, content, tags, created_at}]}. Use it to find ' +
+      'durable learnings to fold into the article body, and to spot ' +
+      'duplicate or outdated records worth cleaning up.',
+    parameters: {
+      type: 'object',
+      properties: {
+        article_id: { type: 'string', description: 'Article id whose records to list.' },
+        limit: { type: 'integer', minimum: 1, maximum: 200 },
+      },
+      required: ['article_id'],
+      additionalProperties: false,
+    },
+  },
+};
+
+const RECORD_UPDATE_WIRE_SCHEMA: AgentTool['wire'] = {
+  type: 'function',
+  function: {
+    name: 'record_update',
+    description:
+      "Edit a record's date, content, or tags. Use to correct an outdated " +
+      'record or merge a duplicate\'s detail into the one you keep. Pass id ' +
+      'and any subset of date, content, tags (tags replaces the whole array).',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Record id to edit.' },
+        date: { type: 'string', description: 'New ISO "YYYY-MM-DD" date.' },
+        content: { type: 'string', description: 'New Markdown body.' },
+        tags: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['id'],
+      additionalProperties: false,
+    },
+  },
+};
+
+const RECORD_DELETE_WIRE_SCHEMA: AgentTool['wire'] = {
+  type: 'function',
+  function: {
+    name: 'record_delete',
+    description:
+      'Delete a record. Use ONLY for a true duplicate or a clearly ' +
+      'irrelevant entry. NEVER delete a record just because you promoted ' +
+      'its learning into the article body - records are historical ' +
+      'documentation and must survive promotion.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Record id to delete.' },
+      },
+      required: ['id'],
+      additionalProperties: false,
+    },
+  },
+};
+
 /**
  * Like asAgentTool, but blanks the context's threadId before the
  * registered execute() sees it. The registered wiki write tools
@@ -269,8 +341,11 @@ function buildLibrarianToolbox(): Toolbox {
       asAgentTool(conversationSearch, CONVERSATION_SEARCH_WIRE_SCHEMA),
       asAgentTool(conversationGet, CONVERSATION_GET_WIRE_SCHEMA),
       asAgentTool(memorySearch, MEMORY_SEARCH_WIRE_SCHEMA),
+      asAgentTool(recordList, RECORD_LIST_WIRE_SCHEMA),
       asAgentToolNoThread(wikiUpdate, WIKI_UPDATE_WIRE_SCHEMA),
       asAgentToolNoThread(wikiDelete, WIKI_DELETE_WIRE_SCHEMA),
+      asAgentToolNoThread(recordUpdate, RECORD_UPDATE_WIRE_SCHEMA),
+      asAgentToolNoThread(recordDelete, RECORD_DELETE_WIRE_SCHEMA),
     ],
   };
 }
@@ -760,6 +835,33 @@ ${WIKI_LIBRARIAN_TOOLS_BLOCK}
    is what gives the article its longitudinal value, and the
    per-conversation agent depends on it for the freshness
    signal it uses on the next pass.
+7. **Promote learnings from records, and clean the records up.**
+   Each article has a linked set of dated RECORDS - the topic's
+   journey (specific events, experiments, observations the user
+   logged or the extraction agent captured). The two layers split
+   responsibility: records hold the blow-by-blow; the article BODY
+   holds the consolidated current state. For each article you are
+   already touching (and any whose body looks thin relative to an
+   active topic), call record_list and:
+
+   (a) **Promote durable learnings into the body.** When the records
+       have established a settled outcome or a pattern - the recipe
+       converged on a hydration, an experiment reached a conclusion,
+       a habit stuck - wiki_update the article body to state that
+       current-state learning (with a date marker, same as any other
+       fact). Summarise; do not transcribe each record into the body.
+
+   (b) **Do NOT delete a record after promoting it.** Records are
+       historical documentation and survive promotion - the body
+       gains the conclusion, the records keep the journey. This is
+       the single most important record rule.
+
+   (c) **Clean up the records themselves.** record_update to merge a
+       true duplicate's unique detail into the one you keep or to fix
+       an outdated record; record_delete ONLY for a genuine duplicate
+       or a clearly irrelevant entry. When in doubt, leave the record
+       alone - a stray record is low-cost, a wrongly-deleted event is
+       lost history.
 
 ${WIKI_LIBRARIAN_DISCIPLINE_BLOCK}
 

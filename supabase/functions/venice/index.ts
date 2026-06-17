@@ -49,6 +49,7 @@ import {
 import { streamChannelName } from '../_shared/venice-stream.ts';
 import { getStreamingResponse } from './getStreamingResponse.ts';
 import { retryWikiThread, runWikiSweepTick } from './agents/wiki.ts';
+import { runWikiRecordsSweepTick } from './agents/wiki_records.ts';
 import { runReflectionSweepTick } from './agents/reflection.ts';
 import { runCurationSweepTick } from './agents/curation.ts';
 import { runBiasSweepTick } from './agents/bias.ts';
@@ -744,6 +745,7 @@ function detachedManualRunHandler(
 // tick/run functions carry the fleet semantics and their doc
 // comments.
 const handleWikiSweep = sweepHandler(runWikiSweepTick);
+const handleWikiRecordsSweep = sweepHandler(runWikiRecordsSweepTick);
 const handleWikiLibrarianSweep = sweepHandler(runWikiLibrarianSweepTick);
 const handleRemSweep = sweepHandler(runRemSweepTick);
 const handleDeepSleepSweep = sweepHandler(runDeepSleepSweepTick);
@@ -1147,6 +1149,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
   if (route === 'models' && req.method === 'POST') return handleModels();
   if (route === 'backfill' && req.method === 'POST') return handleBackfill(req);
   if (route === 'wiki-sweep' && req.method === 'POST') return handleWikiSweep(req);
+  if (route === 'wiki-records-sweep' && req.method === 'POST') return handleWikiRecordsSweep(req);
   if (route === 'reflection-sweep' && req.method === 'POST') return handleReflectionSweep(req);
   if (route === 'curation-sweep' && req.method === 'POST') return handleCurationSweep(req);
   if (route === 'bias-sweep' && req.method === 'POST') return handleBiasSweep(req);

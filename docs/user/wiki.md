@@ -181,6 +181,49 @@ inventing facts, the agent emits a "no change applied" note with its
 reasoning instead of a preview. You can Try Again with sharper
 instructions or close the dialog.
 
+## Records
+
+Below every article is a **Records** section. Records are dated
+entries that document a topic's *journey* - the specific events,
+experiments, and observations along the way - while the article body
+stays the *current state* (what's true now). The split keeps an
+article from bloating into a chronological log while still preserving
+the history: "baked an 80%-hydration loaf, too slack" is a record;
+"the recipe settled on 75% hydration by mid-2026" is the article body.
+
+Each record has:
+
+- a **date** (the day the event happened, which can differ from when
+  you logged it),
+- a **Markdown body** describing what happened and what you learned,
+  and
+- optional **tags** for filtering.
+
+What you can do in the Records section:
+
+- **Add record** - opens a compose form with a date picker (defaults
+  to today), a Markdown content field, and a comma-separated tags
+  field. Save to log it.
+- **Filter** - narrow the list by a date range (From / To) and by a
+  single tag.
+- **Search** - the search bar runs a *semantic* search across the
+  records on *every* article (not just this one), ranked by meaning
+  rather than keywords. A hit that belongs to another article is
+  marked "(other article)". Clear the search to return to this
+  article's list.
+- **Expand** - click a record row to read its full Markdown. The
+  expanded view has **Edit**, **Export**, and **Delete** actions.
+- **Export** - **Export** on a single record downloads it as a
+  Markdown file (`yyyy-mm-dd-<slug>.md`). **Export all** in the
+  Records header downloads a ZIP containing the article as
+  `article.md` plus every record under `records/`.
+
+Records are filled both by hand (the Add button) and automatically by
+a background agent that scans your conversations for discrete events
+and logs them on the matching article - see
+[Automatic records](#automatic-records-extraction) below. Deleting a
+record is a hard delete, like deleting an article.
+
 ## The autonomous background agent
 
 A background agent reads conversations a day after they settle and
@@ -263,6 +306,30 @@ Retry button; if you can wait, the sweep will get to them.
 
 If the panel is empty, the autonomous agent hasn't given up on
 anything - that's the steady state.
+
+### Automatic records extraction
+
+A separate background agent fills in [records](#records) the same way
+the article agent fills in articles. It scans settled conversations
+for discrete, dated events - a bake, a doctor visit, a shipped
+feature, a measurement - and logs each as a record on the matching
+article. It only adds records to articles that already exist (records
+need a home), and it checks for duplicates before logging, so the same
+event isn't recorded twice.
+
+Like the article agent it's conservative: most conversations contain
+no record-worthy event, and that's the expected outcome. General
+discussion and Q&A don't become records; specific things that
+*happened* do.
+
+You can turn this off in **Settings -> Wiki -> Automatic records**
+independently of the article agent. With it off, the background agent
+stops creating records but you can still add and edit them by hand,
+and existing records are untouched. When the librarian reorganises an
+article it reads its records, promotes durable learnings into the
+article body, and tidies up duplicate or outdated records - but it
+never deletes a record just because it folded that learning into the
+body. Records stay as the historical log.
 
 ## The librarian
 
@@ -439,20 +506,24 @@ topic (or the title) directly - that's the cue for `wiki_search`.
 
 ## Settings controls
 
-The **Settings -> Wiki** pane has two independent toggles plus a
+The **Settings -> Wiki** pane has three independent toggles plus a
 reset button:
 
 - **Automatic articles** - whether the per-conversation wiki agent
   runs in the background after threads settle.
+- **Automatic records** - whether the background extraction agent
+  scans conversations and logs dated [records](#records) on your
+  existing articles. Independent of the article toggle; manually-
+  added records always work.
 - **Librarian** - whether the periodic librarian agent runs in the
   background to consolidate and fact-check.
 - **Reset wiki data** - lives at the bottom of the pane. Permanently
-  deletes every wiki article and clears the per-conversation wiki
-  state so the agent re-evaluates your threads from scratch.
-  Irreversible. There's a confirmation prompt. If the automatic
-  toggle is still on, the wiki agent will begin rewriting articles
-  on its next sweep - flip it off first if you want a permanent
-  wipe.
+  deletes every wiki article (and its records) and clears the per-
+  conversation wiki state so the agent re-evaluates your threads from
+  scratch. Irreversible. There's a confirmation prompt. If the
+  automatic toggle is still on, the wiki agent will begin rewriting
+  articles on its next sweep - flip it off first if you want a
+  permanent wipe.
 
-Both toggles are on by default. The wiki uses the display timezone
-you set under Settings -> AI -> About you.
+All three toggles are on by default. The wiki uses the display
+timezone you set under Settings -> AI -> About you.

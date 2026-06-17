@@ -19,9 +19,14 @@
 import { assertEquals, assertStringIncludes } from '@std/assert';
 import { __test } from '../venice/agents/wiki_librarian.ts';
 
-Deno.test('librarian toolbox is reads + wiki writes, in declared order', () => {
+Deno.test('librarian toolbox is reads + wiki/record writes, in declared order', () => {
   const toolbox = __test.buildLibrarianToolbox();
   assertEquals(toolbox.name, 'wikiLibrarian');
+  // record_list (read) lets the librarian promote durable learnings from
+  // records into article bodies; record_update / record_delete let it
+  // clean up duplicate/outdated records. It still has NO wiki_create
+  // (consolidation only) - records are the one thing it can create
+  // indirectly via the extraction agent, not directly.
   assertEquals(
     toolbox.tools.map((t) => t.name),
     [
@@ -29,8 +34,11 @@ Deno.test('librarian toolbox is reads + wiki writes, in declared order', () => {
       'conversation_search',
       'conversation_get',
       'memory_search',
+      'record_list',
       'wiki_update',
       'wiki_delete',
+      'record_update',
+      'record_delete',
     ],
   );
 });

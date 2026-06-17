@@ -165,7 +165,7 @@
     wikiStore,
     runWikiSearch,
   } from '$lib/wiki-store.svelte';
-  import { onWikiChange, emitWikiChange } from '$lib/wiki-events';
+  import { onWikiChange, emitWikiChange, emitWikiRecordChange } from '$lib/wiki-events';
   import {
     wikiLibrarianLease,
     memoryLibrarianLease,
@@ -1814,6 +1814,16 @@
   $effect(() => {
     if (!app.supabase || !session) return;
     return app.supabase.subscribeToWikiArticleChanges(session.user.id, emitWikiChange);
+  });
+
+  // Realtime: relay server-side wiki-record writes into the record
+  // change bus. Same rationale as the article subscription above - the
+  // extraction agent and librarian write records in the venice function
+  // where emitWikiRecordChange is unreachable, so an open article's
+  // Records section learns about background writes through this relay.
+  $effect(() => {
+    if (!app.supabase || !session) return;
+    return app.supabase.subscribeToWikiRecordChanges(session.user.id, emitWikiRecordChange);
   });
 
   // Watch the wiki-librarian in-flight lease so every client knows when a

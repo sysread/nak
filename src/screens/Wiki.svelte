@@ -95,6 +95,7 @@
   import Markdown from '../components/Markdown.svelte';
   import WikiChangelogPanel from '../components/WikiChangelogPanel.svelte';
   import WikiSkippedPanel from '../components/WikiSkippedPanel.svelte';
+  import WikiRecords from '../components/WikiRecords.svelte';
 
   interface Props {
     /**
@@ -1620,6 +1621,14 @@
             </aside>
           {/if}
         </article>
+
+        <!-- Records section: dated entries linked to this article (the
+             topic's journey), rendered below the article body (the
+             current state). Keyed on a.id so switching articles remounts
+             with a fresh load rather than leaking the prior list. -->
+        {#key a.id}
+          <WikiRecords article={a} />
+        {/key}
 
         {#if deletingId === a.id}
           <div class="wiki-confirm-strip">

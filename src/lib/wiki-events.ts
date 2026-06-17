@@ -22,3 +22,26 @@ export function onWikiChange(handler: () => void): () => void {
   window.addEventListener(WIKI_CHANGE_EVENT, listener);
   return () => window.removeEventListener(WIKI_CHANGE_EVENT, listener);
 }
+
+/**
+ * Separate channel for wiki-record writes (the dated entries linked to
+ * an article). Kept distinct from WIKI_CHANGE_EVENT so a record write
+ * refetches only the open article's Records section, not the whole
+ * article drawer listing. Fired by the in-app compose form and by the
+ * wiki_records realtime subscription relaying server-side writes (the
+ * extraction agent, the librarian, the chat record tools; see
+ * SupabaseService.subscribeToWikiRecordChanges).
+ */
+const WIKI_RECORD_CHANGE_EVENT = 'nak:wiki-record-change';
+
+export function emitWikiRecordChange(): void {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent(WIKI_RECORD_CHANGE_EVENT));
+}
+
+export function onWikiRecordChange(handler: () => void): () => void {
+  if (typeof window === 'undefined') return () => undefined;
+  const listener = (): void => handler();
+  window.addEventListener(WIKI_RECORD_CHANGE_EVENT, listener);
+  return () => window.removeEventListener(WIKI_RECORD_CHANGE_EVENT, listener);
+}
