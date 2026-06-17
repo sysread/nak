@@ -20,7 +20,8 @@
    */
   import { onMount } from 'svelte';
   import { app, activate, setTheme } from '$lib/state.svelte';
-  import { hasStoredConfig, loadConfig } from '$lib/config';
+  import { hasStoredConfig, loadConfig, saveConfig } from '$lib/config';
+  import { devConfigFromEnv, devAutoLogin } from '$lib/dev-bootstrap';
   import { applyTheme } from '$lib/theme';
   import { initUpdateWatcher } from '$lib/update.svelte';
   import { initRouting } from '$lib/routing.svelte';
@@ -55,10 +56,26 @@
     // Setup - the same outcome as a fresh browser - which doubles as
     // the hard-reset path for users coming from the old encrypted
     // v1 blob.
+    // DEV-only seam: `mise run dev-start` writes local Supabase config +
+    // dev creds into .env.local, so a fresh browser (or a headless QA
+    // agent) skips Setup + sign-in. Seed only when nothing is stored, so
+    // a dev server pointed at a cloud project is never clobbered. Inert
+    // in production (vars absent; import.meta.env.DEV folds the branch).
+    if (import.meta.env.DEV && !hasStoredConfig()) {
+      const devCfg = devConfigFromEnv();
+      if (devCfg) saveConfig(devCfg);
+    }
+
     if (hasStoredConfig()) {
       const cfg = loadConfig();
-      if (cfg) activate(cfg);
-      else app.phase = 'setup';
+      if (cfg) {
+        activate(cfg);
+        // Auto-login the seeded dev user when .env.local supplied creds.
+        // No-ops without them or when a session is already live.
+        if (import.meta.env.DEV && app.supabase) void devAutoLogin(app.supabase);
+      } else {
+        app.phase = 'setup';
+      }
     } else {
       app.phase = 'setup';
     }

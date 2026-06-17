@@ -198,6 +198,13 @@ description = "Stop the local Supabase stack. The crash-cleanup fallback for a d
 run = "supabase stop"
 raw = true
 
+[tasks.dev-sql]
+description = "Run SQL against the LOCAL Supabase stack via psql (loopback-guarded). SQL from args or stdin: `mise run dev-sql \"select count(*) from public.threads\"`. The local stack must be up (dev-start); the MCP/cloud tools can't see it. Read-only by habit, but it's raw psql - it'll run whatever you give it."
+# raw = true so args and stdin reach the script verbatim (multi-line SQL,
+# quoted identifiers) instead of going through mise's own arg parsing.
+run = "node scripts/dev-sql.mjs"
+raw = true
+
 [tasks.dev-backfill-cron]
 description = "DEV SHIM: poll the local /backfill route on an interval, standing in for the hosted pg_cron job (the local stack has no pg_cron). dev-start runs this by default; use the task standalone to drive backfill against an already-running stack or with a custom interval. Arg or NAK_BACKFILL_INTERVAL = seconds (default 60)."
 # raw = true so Ctrl-C reaches the script and its tick logs stream to the TTY.

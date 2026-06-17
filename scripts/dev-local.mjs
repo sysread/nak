@@ -29,7 +29,7 @@
 // into a migrations tree would fork it from the file the deploy workflow
 // re-applies. Provisioning is idempotent, so reuse and restart are safe.
 import { spawn } from 'node:child_process';
-import { writeFileSync, watch } from 'node:fs';
+import { writeFileSync, watch, existsSync, unlinkSync } from 'node:fs';
 import { resolve, dirname, basename } from 'node:path';
 import { runInherit, runCapture, which } from './lib/shell.mjs';
 import { banner, step, info, ok, warn, hint, bail, ask, style } from './lib/ui.mjs';
@@ -37,6 +37,14 @@ import { banner, step, info, ok, warn, hint, bail, ask, style } from './lib/ui.m
 const REPO_ROOT = resolve(import.meta.dirname, '..');
 const SCHEMA_PATH = resolve(REPO_ROOT, 'supabase/schema.sql');
 const CONFIG_OUT = resolve(REPO_ROOT, 'nak-local-config.json');
+// DEV-only convenience: Vite reads .env.local at startup, so writing the
+// local Supabase URL/key + dev creds here lets the DEV build auto-seed
+// config and auto-login (src/lib/dev-bootstrap.ts) - a fresh browser or a
+// headless QA agent skips Setup + sign-in entirely. We only write it when
+// the developer has no .env.local of their own (never clobber), and only
+// remove it on teardown if we were the ones who wrote it.
+const ENV_LOCAL = resolve(REPO_ROOT, '.env.local');
+let wroteEnvLocal = false;
 
 // Seeded login. Overridable so a project owner can mirror their real
 // email locally, but the defaults are fine for a throwaway stack.
@@ -353,6 +361,25 @@ function writeConfig(apiUrl, appClientKey) {
   };
   writeFileSync(CONFIG_OUT, `${JSON.stringify(config, null, 2)}\n`);
   ok(`wrote ${style.bold('nak-local-config.json')}`);
+
+  // The DEV auto-config/auto-login seam. Skip if the developer keeps their
+  // own .env.local - theirs wins, and we must not delete it on teardown.
+  if (existsSync(ENV_LOCAL)) {
+    hint('.env.local already exists - leaving it; dev auto-login seam not installed.');
+    return;
+  }
+  const env =
+    '# Written by `mise run dev-start`; removed on teardown. Gitignored.\n' +
+    '# Read only under import.meta.env.DEV (src/lib/dev-bootstrap.ts) to\n' +
+    '# auto-seed local Supabase config and auto-login the dev user, so a\n' +
+    '# fresh browser or a headless QA agent skips Setup + sign-in.\n' +
+    `VITE_NAK_DEV_SUPABASE_URL=${apiUrl}\n` +
+    `VITE_NAK_DEV_SUPABASE_KEY=${appClientKey}\n` +
+    `VITE_NAK_DEV_EMAIL=${DEV_EMAIL}\n` +
+    `VITE_NAK_DEV_PASSWORD=${DEV_PASSWORD}\n`;
+  writeFileSync(ENV_LOCAL, env);
+  wroteEnvLocal = true;
+  ok(`wrote ${style.bold('.env.local')} (dev auto-login seam)`);
 }
 
 // Edge functions are a Deno island. When any exist (i.e. once the
@@ -447,6 +474,16 @@ async function shutdown(code) {
   if (shuttingDown) return;
   shuttingDown = true;
   await Promise.all([killChild(viteChild), killChild(funcsChild), killChild(backfillChild)]);
+  // Remove the auto-login seam we installed so it can't leak into a later
+  // `dev-frontend` (cloud-pointed) session. Only touch a file we wrote.
+  if (wroteEnvLocal) {
+    try {
+      unlinkSync(ENV_LOCAL);
+    } catch {
+      // Already gone (developer deleted it, or a racing teardown). Nothing
+      // to clean up - the next dev-start rewrites it from scratch.
+    }
+  }
   console.log(`\n  ${style.dim('Stopping the local stack...')}`);
   // Best-effort: even if `supabase stop` fails (already down, daemon gone),
   // we still exit. `mise run dev-stop` is the manual fallback.

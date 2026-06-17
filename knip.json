@@ -6,6 +6,7 @@
     "scripts/branch-cleanup.mjs",
     "scripts/dev-backfill-cron.mjs",
     "scripts/dev-local.mjs",
+    "scripts/dev-sql.mjs",
     "scripts/doctor.mjs",
     "scripts/setup-pages.mjs",
     "scripts/setup-supabase.mjs",
