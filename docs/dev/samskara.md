@@ -1431,7 +1431,8 @@ that same simplification.)
   detail + provenance; for a tier-2 the provenance is its tier-1
   children. Backed by `listSamskarasPage`,
   `searchSamskarasByEmbedding` / `searchSamskarasByText`,
-  `samskara_cluster_corpus`, and `samskara_provenance_detail`.
+  `samskara_cluster_corpus`, `samskara_provenance_detail`, and
+  `samskara_verdict_counts` (the per-samskara lifetime verdict tally).
   Pieces: `src/screens/Samskaras.svelte`,
   `src/components/SamskaraBrowseList.svelte`,
   `src/lib/samskara-browse-store.svelte.ts`,
@@ -1484,6 +1485,20 @@ that same simplification.)
     normal resting state. This is the instrument that makes the tier-2
     detector's liveness visible - the "empty every sweep" stall the lift
     redesign fixed used to need a manual self-join to diagnose.
+
+**Verdict legibility.** The four judge verdicts (held / contradicted /
+not-borne-out / not-engaged) surface on three reads so the soft-miss
+bucket is never invisible: the Overview **verdict mix** (windowed,
+`samskara_rates` -> `verdictBreakdown`), the Corpus detail's **lifetime
+per-samskara tally** (`samskara_verdict_counts` -> `verdictCountList`,
+with a trailing `pending` count of fired-but-unjudged), and **per fire**
+in the inline `CohortPanel` (each fire badged via `fireVerdictLabel` /
+`fireVerdictStatusClass`, since fires in one cohort can carry different
+verdicts - the judge rules per samskara). The per-samskara
+`confirm`/`disconfirm` stat is the recency-discounted posterior input;
+the verdict tally beside it is the raw lifetime count, so not-borne-out
+reads as its own bucket instead of folding silently into disconfirm.
+These are diagnostic summary reads, not user-facing controls.
 
 Read-only by design - no delete/pin/edit. Curation would re-open the
 "operator games the bias model" question; if it's ever wanted it's a

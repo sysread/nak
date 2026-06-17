@@ -302,6 +302,28 @@ export function verdictBreakdown(rates: {
 }
 
 /**
+ * Lifetime verdict breakdown for a single samskara's detail pane. Same
+ * order as verdictBreakdown plus a trailing `pending` (fired but not yet
+ * judged), which is meaningful per-samskara - it shows how much of this
+ * prediction's firing history the judge has caught up on.
+ */
+export function verdictCountList(counts: {
+  held: number;
+  contradicted: number;
+  notBorneOut: number;
+  notEngaged: number;
+  pending: number;
+}): VerdictCount[] {
+  return [
+    { label: 'held', count: counts.held },
+    { label: 'contradicted', count: counts.contradicted },
+    { label: 'not-borne-out', count: counts.notBorneOut },
+    { label: 'not-engaged', count: counts.notEngaged },
+    { label: 'pending', count: counts.pending },
+  ];
+}
+
+/**
  * Health-panel readout for the tier-2 detector: how many tier-1 members
  * it would currently hand the minter. Size is 0 (nothing offerable) or
  * >= the minter's 3-member floor; the singular branch is defensive.

@@ -7915,6 +7915,30 @@ language sql stable security invoker as $$
    order by p.weight desc;
 $$;
 
+-- Per-samskara verdict tally over its fires, for the diagnostics detail
+-- pane (Samskaras screen). The row's confirm_count/disconfirm_count are
+-- the EWMA-discounted posterior inputs (fractional, recency-weighted);
+-- this is the raw LIFETIME count by verdict so the soft-miss
+-- (not-borne-out) bucket is legible next to held / contradicted /
+-- not-engaged rather than being folded invisibly into disconfirm_count.
+-- pending = fired but not yet judged (null verdict). security invoker so
+-- the samskara_fires RLS select policy scopes the read; the explicit
+-- user_id filter is belt-and-braces (mirrors samskara_provenance_detail).
+drop function if exists public.samskara_verdict_counts(uuid);
+create or replace function public.samskara_verdict_counts(p_samskara_id uuid)
+returns table (held int, contradicted int, not_borne_out int, not_engaged int, pending int)
+language sql stable security invoker set search_path = public as $$
+  select
+    count(*) filter (where verdict = 'held')::int,
+    count(*) filter (where verdict = 'contradicted')::int,
+    count(*) filter (where verdict = 'not-borne-out')::int,
+    count(*) filter (where verdict = 'not-engaged')::int,
+    count(*) filter (where verdict is null)::int
+  from public.samskara_fires
+  where samskara_id = p_samskara_id
+    and user_id = auth.uid();
+$$;
+
 -- One-row corpus-wide health snapshot for the Health panel. Each column
 -- maps to a pipeline pathology the operator otherwise can't see:
 --   - pending_assimilate / pending_embed: backlog the formation/embed

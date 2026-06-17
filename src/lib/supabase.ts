@@ -4209,7 +4209,7 @@ export class SupabaseService {
     const { data, error } = await this.client
       .from('samskara_fires')
       .select(
-        'id, cohort_id, samskara_id, score, fired_at, was_confirmed, user_round, samskaras(tier, prediction, inner_voice, valence, confidence, health)'
+        'id, cohort_id, samskara_id, score, fired_at, was_confirmed, verdict, user_round, samskaras(tier, prediction, inner_voice, valence, confidence, health)'
       )
       .eq('thread_id', threadId)
       .order('fired_at', { ascending: false });
@@ -4233,6 +4233,7 @@ export class SupabaseService {
       score: number;
       fired_at: string;
       was_confirmed: boolean | null;
+      verdict: string | null;
       user_round: number | null;
       samskaras: EmbeddedSamskara | EmbeddedSamskara[] | null;
     }[];
@@ -4247,6 +4248,7 @@ export class SupabaseService {
         score: r.score,
         firedAt: r.fired_at,
         wasConfirmed: r.was_confirmed,
+        verdict: r.verdict,
         userRound: r.user_round,
         samskara: joined
           ? {
@@ -4502,6 +4504,27 @@ export class SupabaseService {
       contradicted: r?.contradicted ?? 0,
       notBorneOut: r?.not_borne_out ?? 0,
       notEngaged: r?.not_engaged ?? 0,
+    };
+  }
+
+  /**
+   * Lifetime verdict tally for one samskara's fires, for the detail
+   * pane. Raw counts (not the EWMA-discounted confirm/disconfirm the row
+   * carries) so the soft-miss bucket reads next to the others. pending =
+   * fired but not yet judged.
+   */
+  async samskaraVerdictCounts(samskaraId: string): Promise<SamskaraVerdictCounts> {
+    const { data, error } = await this.client.rpc('samskara_verdict_counts', {
+      p_samskara_id: samskaraId,
+    });
+    if (error) throw new SupabaseError(error.message);
+    const r = (Array.isArray(data) ? data[0] : data) as Record<string, number> | null;
+    return {
+      held: r?.held ?? 0,
+      contradicted: r?.contradicted ?? 0,
+      notBorneOut: r?.not_borne_out ?? 0,
+      notEngaged: r?.not_engaged ?? 0,
+      pending: r?.pending ?? 0,
     };
   }
 
@@ -4943,6 +4966,16 @@ export interface SamskaraRates {
   notEngaged: number;
 }
 
+/** Lifetime per-samskara verdict counts (raw fire counts, not the
+ *  discounted posterior tallies). `pending` = fired but unjudged. */
+export interface SamskaraVerdictCounts {
+  held: number;
+  contradicted: number;
+  notBorneOut: number;
+  notEngaged: number;
+  pending: number;
+}
+
 /** Map a snake-case corpus row (select or RPC) to the camelCase UI shape. */
 function mapSamskaraCorpusRow(r: SamskaraCorpusRpcRow): SamskaraCorpusRow {
   return {
@@ -4992,6 +5025,11 @@ export interface SamskaraFireDiagnosticRow {
   score: number;
   firedAt: string;
   wasConfirmed: boolean | null;
+  /** The next-day judge's verdict for this fire: 'held' / 'contradicted'
+   *  / 'not-borne-out' / 'not-engaged', or null until judged. Carries the
+   *  soft-miss distinction that wasConfirmed (a boolean) collapses - the
+   *  cohort panel renders it per fire. */
+  verdict: string | null;
   /** 1-based index of the user message that triggered this cohort, as
    *  counted by the chat loop at fire time. Null for legacy rows
    *  written before the column existed and not yet covered by the

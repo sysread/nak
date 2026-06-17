@@ -16,6 +16,7 @@ import {
   HEALTH_THRESHOLDS,
   groupProvenance,
   verdictBreakdown,
+  verdictCountList,
   tier2CandidateLabel,
   samskaraCountPhrase,
   type CollapsedRow,
@@ -195,6 +196,26 @@ describe('verdictBreakdown', () => {
       'not-engaged',
     ]);
     expect(out.map((v) => v.count)).toEqual([5, 2, 3, 7]);
+  });
+});
+
+describe('verdictCountList', () => {
+  it('emits the four verdicts plus a trailing pending, in order', () => {
+    const out = verdictCountList({
+      held: 5,
+      contradicted: 2,
+      notBorneOut: 3,
+      notEngaged: 7,
+      pending: 11,
+    });
+    expect(out.map((v) => v.label)).toEqual([
+      'held',
+      'contradicted',
+      'not-borne-out',
+      'not-engaged',
+      'pending',
+    ]);
+    expect(out.map((v) => v.count)).toEqual([5, 2, 3, 7, 11]);
   });
 });
 

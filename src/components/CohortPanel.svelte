@@ -30,6 +30,8 @@
   import {
     assimilationStatus,
     clusterFires,
+    fireVerdictLabel,
+    fireVerdictStatusClass,
     formatRelative,
     formatValence,
     isCollapsedView,
@@ -194,6 +196,17 @@
 {#snippet fireRow(fire: SamskaraFireDiagnosticRow)}
   <div class="fire-head">
     <span class="fire-tier">T{fire.samskara?.tier ?? '?'}</span>
+    <!-- Per-fire verdict from the next-day judge. Distinct from the
+         cohort header's single resolution read (off the boolean
+         was_confirmed): fires in a cohort can carry DIFFERENT verdicts -
+         one prediction held, another did not pan out, another was not
+         engaged - so the honest read is per fire. -->
+    <span
+      class="fire-verdict status-{fireVerdictStatusClass(fire.verdict)}"
+      title="The next-day judge's verdict for this prediction on the conversation it fired in"
+    >
+      {fireVerdictLabel(fire.verdict)}
+    </span>
     <span
       class="fire-score"
       title="cosine^1.3 * sqrt(health * confidence) * sample-size bonus"
@@ -272,6 +285,12 @@
     background: color-mix(in srgb, var(--accent) 18%, transparent);
     color: var(--accent);
   }
+  /* not-engaged: no fair test, so it reads as muted rather than as a
+     positive or negative outcome. */
+  .status-neutral {
+    background: color-mix(in srgb, var(--muted) 18%, transparent);
+    color: var(--muted);
+  }
   .cohort-count {
     color: var(--muted);
     font-size: 0.78rem;
@@ -329,6 +348,17 @@
   .fire-tier {
     font-weight: 600;
     color: var(--text);
+  }
+  /* Per-fire verdict pill. Reuses the .status-* colorways (shared with
+     the cohort header) but at the smaller weight of the fire-head meta
+     row so it sits inline beside tier and score without dominating. */
+  .fire-verdict {
+    font-size: 0.66rem;
+    font-weight: 600;
+    padding: 0 0.35rem;
+    border-radius: 2px;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
   }
   .fire-prediction {
     margin: 0;

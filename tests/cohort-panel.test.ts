@@ -14,6 +14,8 @@ import type {
 import {
   assimilationStatus,
   clusterFires,
+  fireVerdictLabel,
+  fireVerdictStatusClass,
   formatRelative,
   formatValence,
   isCollapsedView,
@@ -193,6 +195,29 @@ describe('resolutionStatusClass', () => {
     expect(resolutionStatusClass(true)).toBe('confirm');
     expect(resolutionStatusClass(false)).toBe('disconfirm');
     expect(resolutionStatusClass(null)).toBe('pending');
+  });
+});
+
+describe('fireVerdictLabel', () => {
+  it('keeps the soft miss distinct from a hard contradiction', () => {
+    expect(fireVerdictLabel('held')).toBe('held');
+    expect(fireVerdictLabel('contradicted')).toBe('contradicted');
+    expect(fireVerdictLabel('not-borne-out')).toBe('not borne out');
+    expect(fireVerdictLabel('not-engaged')).toBe('not engaged');
+  });
+  it('treats null (and any unknown) as pending', () => {
+    expect(fireVerdictLabel(null)).toBe('pending');
+    expect(fireVerdictLabel('garbage')).toBe('pending');
+  });
+});
+
+describe('fireVerdictStatusClass', () => {
+  it('maps each verdict to its colorway, soft miss separate from hard', () => {
+    expect(fireVerdictStatusClass('held')).toBe('confirm');
+    expect(fireVerdictStatusClass('contradicted')).toBe('disconfirm');
+    expect(fireVerdictStatusClass('not-borne-out')).toBe('partial');
+    expect(fireVerdictStatusClass('not-engaged')).toBe('neutral');
+    expect(fireVerdictStatusClass(null)).toBe('pending');
   });
 });
 

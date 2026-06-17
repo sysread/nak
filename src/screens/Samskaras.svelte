@@ -34,8 +34,9 @@
     formatValence,
     relativeTime,
     groupProvenance,
+    verdictCountList,
   } from '$lib/ui/samskara-browse';
-  import type { SamskaraProvenanceRow } from '$lib/supabase';
+  import type { SamskaraProvenanceRow, SamskaraVerdictCounts } from '$lib/supabase';
   import SamskaraHealthPanel from '../components/SamskaraHealthPanel.svelte';
 
   interface Props {
@@ -126,6 +127,33 @@
   // association, the association-mint case) renders one headed section
   // per kind instead of mislabeling the whole list off the first row.
   const provenanceGroups = $derived(groupProvenance(provenance));
+
+  // Lifetime verdict tally for the selected samskara. The stats dl shows
+  // the discounted confirm/disconfirm posterior inputs; this shows the
+  // raw count by verdict so the soft-miss (not-borne-out) bucket is
+  // legible rather than folded into disconfirm. Loaded on selection, same
+  // best-effort shape as provenance - a failure leaves it null and the
+  // section just doesn't render.
+  let verdictCounts = $state<SamskaraVerdictCounts | null>(null);
+  $effect(() => {
+    const id = route.samskara_id;
+    if (!id || !app.supabase) {
+      verdictCounts = null;
+      return;
+    }
+    let cancelled = false;
+    void app.supabase
+      .samskaraVerdictCounts(id)
+      .then((c) => {
+        if (!cancelled) verdictCounts = c;
+      })
+      .catch(() => {
+        if (!cancelled) verdictCounts = null;
+      });
+    return () => {
+      cancelled = true;
+    };
+  });
 </script>
 
 <div class="samskara-panel">
@@ -172,6 +200,19 @@
           <div><dt>last fired</dt><dd>{relativeTime(selected.lastFiredAt)}</dd></div>
           <div><dt>created</dt><dd>{relativeTime(selected.createdAt)}</dd></div>
         </dl>
+
+        {#if verdictCounts}
+          <!-- Lifetime verdict tally. The confirm/disconfirm above are
+               the recency-discounted posterior inputs; this is the raw
+               count by verdict, so not-borne-out (the soft miss) reads
+               next to held / contradicted / not-engaged instead of
+               vanishing into the disconfirm number. -->
+          <dl class="samskara-stats samskara-verdicts">
+            {#each verdictCountList(verdictCounts) as v (v.label)}
+              <div><dt>{v.label}</dt><dd>{v.count}</dd></div>
+            {/each}
+          </dl>
+        {/if}
 
         {#if provLoading}
           <h3 class="samskara-prov-head">Provenance</h3>
@@ -274,6 +315,14 @@
   .samskara-stats dd {
     margin: 0;
     font-variant-numeric: tabular-nums;
+  }
+  /* Verdict tally reuses the stats grid but is set off by a top rule and
+     tighter top margin so it reads as a related sub-block under the core
+     stats rather than a second equal-weight section. */
+  .samskara-verdicts {
+    margin-top: 0;
+    padding-top: 0.6rem;
+    border-top: 1px dashed color-mix(in srgb, var(--border) 70%, transparent);
   }
   .samskara-prov-head {
     font-size: 0.74rem;

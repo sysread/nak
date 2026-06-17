@@ -124,6 +124,52 @@ export function resolutionStatusClass(
 }
 
 /**
+ * Per-fire verdict label for the cohort panel. Unlike resolutionLabel
+ * (which reads the three-state was_confirmed boolean and so cannot tell
+ * a soft miss from a hard one), this reads the judge's verdict string
+ * and keeps not-borne-out distinct from contradicted. Fires in one
+ * cohort can carry different verdicts - the judge rules per samskara -
+ * so this renders per fire, not per cohort. Null = fired, not yet judged.
+ */
+export function fireVerdictLabel(verdict: string | null): string {
+  switch (verdict) {
+    case 'held':
+      return 'held';
+    case 'contradicted':
+      return 'contradicted';
+    case 'not-borne-out':
+      return 'not borne out';
+    case 'not-engaged':
+      return 'not engaged';
+    default:
+      return 'pending';
+  }
+}
+
+/**
+ * Verdict to status-class key, parallel to fireVerdictLabel. not-borne-out
+ * gets its own 'partial' bucket (a soft miss, visually amber) so it reads
+ * as distinct from the hard-red contradicted; not-engaged is 'neutral'
+ * (no fair test); null is 'pending'.
+ */
+export function fireVerdictStatusClass(
+  verdict: string | null
+): 'confirm' | 'disconfirm' | 'partial' | 'neutral' | 'pending' {
+  switch (verdict) {
+    case 'held':
+      return 'confirm';
+    case 'contradicted':
+      return 'disconfirm';
+    case 'not-borne-out':
+      return 'partial';
+    case 'not-engaged':
+      return 'neutral';
+    default:
+      return 'pending';
+  }
+}
+
+/**
  * Substrate lifecycle label. Tracks how far the formation worker
  * has carried this row: situation+outcome filled by the
  * assimilator, embedding model filled by the embedder.
