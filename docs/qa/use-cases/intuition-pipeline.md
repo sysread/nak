@@ -302,3 +302,4 @@ live pipeline and is **[hosted]**-flavored (needs Venice creds).
 
 | Date | Env | Commit | Result | Notes |
 | ---- | --- | ------ | ------ | ----- |
+| 2026-06-17 | local (mise dev-start) | 33165ce | partial pass | Playwright cold-fire turn: intuition fired on tencent-hy3-preview (pill enabled, `pipeline complete`, no reasoning-param 4xx), context-recall fired, and the new `venice request wire` debug log carried the full opening-round message array incl. the priming `<think>` chain. Steps 7-8 (wall-clock fuse + injection guard via SQL forge) not run by hand - covered by unit tests in `tests/intuition-triggers.test.ts`. Aside: auto-title agent hit a transient Venice 429, unrelated. |
