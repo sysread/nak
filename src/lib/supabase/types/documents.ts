@@ -59,3 +59,53 @@ export interface DocumentStat {
   updated_at: string;
 }
 
+
+export function coerceDocument(raw: Record<string, unknown>): Document {
+  const status = raw.extraction_status;
+  return {
+    id: String(raw.id),
+    title: typeof raw.title === 'string' ? raw.title : '',
+    description: typeof raw.description === 'string' ? raw.description : '',
+    filename: typeof raw.filename === 'string' ? raw.filename : '',
+    mime_type: typeof raw.mime_type === 'string' ? raw.mime_type : '',
+    size_bytes: typeof raw.size_bytes === 'number' ? raw.size_bytes : Number(raw.size_bytes ?? 0),
+    storage_path: typeof raw.storage_path === 'string' ? raw.storage_path : null,
+    extracted_text: typeof raw.extracted_text === 'string' ? raw.extracted_text : null,
+    extraction_status:
+      status === 'done' || status === 'failed' ? status : 'pending',
+    extraction_error: typeof raw.extraction_error === 'string' ? raw.extraction_error : null,
+    created_at: String(raw.created_at ?? raw.updated_at ?? ''),
+    updated_at: String(raw.updated_at ?? raw.created_at ?? ''),
+  };
+}
+
+export function coerceDocumentGrepHit(raw: Record<string, unknown>): DocumentGrepHit {
+  const toLines = (v: unknown): string[] =>
+    Array.isArray(v) ? v.map((x) => (typeof x === 'string' ? x : String(x ?? ''))) : [];
+  return {
+    document_id: String(raw.document_id),
+    title: typeof raw.title === 'string' ? raw.title : '',
+    line_number: typeof raw.line_number === 'number' ? raw.line_number : Number(raw.line_number ?? 0),
+    line_text: typeof raw.line_text === 'string' ? raw.line_text : '',
+    context_before: toLines(raw.context_before),
+    context_after: toLines(raw.context_after),
+  };
+}
+
+export function coerceDocumentStat(raw: Record<string, unknown>): DocumentStat {
+  const status = raw.extraction_status;
+  return {
+    id: String(raw.id),
+    title: typeof raw.title === 'string' ? raw.title : '',
+    description: typeof raw.description === 'string' ? raw.description : '',
+    filename: typeof raw.filename === 'string' ? raw.filename : '',
+    mime_type: typeof raw.mime_type === 'string' ? raw.mime_type : '',
+    size_bytes: typeof raw.size_bytes === 'number' ? raw.size_bytes : Number(raw.size_bytes ?? 0),
+    extraction_status: status === 'done' || status === 'failed' ? status : 'pending',
+    extraction_error: typeof raw.extraction_error === 'string' ? raw.extraction_error : null,
+    has_text: raw.has_text === true,
+    total_lines: typeof raw.total_lines === 'number' ? raw.total_lines : Number(raw.total_lines ?? 0),
+    created_at: String(raw.created_at ?? raw.updated_at ?? ''),
+    updated_at: String(raw.updated_at ?? raw.created_at ?? ''),
+  };
+}

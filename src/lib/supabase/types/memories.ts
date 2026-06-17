@@ -116,3 +116,29 @@ export type DeepSleepRunResult =
   | { kind: 'busy' }
   | { kind: 'error'; error: string };
 
+
+export function coerceMemoryChangelogKind(raw: unknown): MemoryChangelogKind | null {
+  if (raw === 'create' || raw === 'update' || raw === 'delete') return raw;
+  return null;
+}
+
+export function coerceMemoryChangelogEntry(
+  raw: Record<string, unknown>
+): MemoryChangelogEntry | null {
+  const id = raw.id;
+  const kind = coerceMemoryChangelogKind(raw.kind);
+  if (typeof id !== 'string' || !kind) return null;
+  const memoryIdRaw = raw.memory_id;
+  return {
+    id,
+    memory_id:
+      typeof memoryIdRaw === 'string' && memoryIdRaw.length > 0
+        ? memoryIdRaw
+        : null,
+    kind,
+    label_at_change:
+      typeof raw.label_at_change === 'string' ? raw.label_at_change : '',
+    message: typeof raw.message === 'string' ? raw.message : '',
+    created_at: String(raw.created_at ?? ''),
+  };
+}

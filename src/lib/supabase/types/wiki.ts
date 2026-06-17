@@ -101,3 +101,41 @@ export type WikiLibrarianRunResult =
   | { kind: 'busy' }
   | { kind: 'error'; error: string };
 
+
+export function coerceWikiArticle(raw: Record<string, unknown>): WikiArticle {
+  return {
+    id: String(raw.id),
+    title: typeof raw.title === 'string' ? raw.title : '',
+    content: typeof raw.content === 'string' ? raw.content : '',
+    created_at: String(raw.created_at ?? raw.updated_at ?? ''),
+    updated_at: String(raw.updated_at ?? raw.created_at ?? ''),
+    similarity:
+      typeof raw.similarity === 'number' ? (raw.similarity as number) : undefined,
+  };
+}
+
+export function coerceWikiChangelogKind(raw: unknown): WikiChangelogKind | null {
+  if (raw === 'create' || raw === 'update' || raw === 'delete') return raw;
+  return null;
+}
+
+export function coerceWikiChangelogEntry(
+  raw: Record<string, unknown>
+): WikiChangelogEntry | null {
+  const id = raw.id;
+  const kind = coerceWikiChangelogKind(raw.kind);
+  if (typeof id !== 'string' || !kind) return null;
+  const articleIdRaw = raw.article_id;
+  return {
+    id,
+    article_id:
+      typeof articleIdRaw === 'string' && articleIdRaw.length > 0
+        ? articleIdRaw
+        : null,
+    kind,
+    title_at_change:
+      typeof raw.title_at_change === 'string' ? raw.title_at_change : '',
+    message: typeof raw.message === 'string' ? raw.message : '',
+    created_at: String(raw.created_at ?? ''),
+  };
+}

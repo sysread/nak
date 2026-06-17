@@ -20,7 +20,6 @@ import {
   coerceTierModels,
   isModelTier,
   isReasoningEffort,
-  isThinkingLevel,
   isVerbosity,
   type ModelTier,
   type ThinkingLevel,
@@ -98,7 +97,6 @@ import type {
   DocumentStat,
   UserSettings,
   SystemPrompt,
-  TopicCount,
   TopicVocabulary,
   OffsetPage,
   AgentRunProgressEvent,
@@ -107,113 +105,25 @@ import type {
 import {
   coerceSettings,
   coerceSystemPrompt,
+  coerceThread,
+  coerceAttachmentRow,
+  coerceMemoryChangelogEntry,
+  coerceWikiArticle,
+  coerceWikiChangelogEntry,
+  parseTopicVocabulary,
+  coerceDocument,
+  coerceDocumentGrepHit,
+  coerceDocumentStat,
   USER_PROFILE_FIELD_MAX,
   UNTAGGED_TOPIC_SENTINEL,
   DEFAULT_THREAD_PAGE_SIZE,
 } from './supabase/types';
 
 
-/**
- * Coerce the raw row from Supabase. The `model` column is `text` without a
- * CHECK constraint, so scrub unexpected values to null. `toolboxes_enabled`
- * defaults to an empty array if the column is missing (older row before
- * the migration, or a coerce on a freshly-minted draft) and non-string
- * elements inside the array are filtered out so a drifting row can never
- * poison the UI's `.includes()` checks.
- */
-function coerceThread(row: Record<string, unknown>): Thread {
-  const model = isModelTier(row.model) ? row.model : null;
-  const reasoning_effort = isThinkingLevel(row.reasoning_effort)
-    ? row.reasoning_effort
-    : null;
-  const verbosity = isVerbosity(row.verbosity) ? row.verbosity : null;
-  const toolboxes_enabled = Array.isArray(row.toolboxes_enabled)
-    ? row.toolboxes_enabled.filter((v): v is string => typeof v === 'string')
-    : [];
-  // Drift-tolerant: a row predating the topics column (or one a drift-
-  // injected non-array got into) shows up as "untagged" rather than
-  // crashing the drawer. The save path is parameterised through the
-  // RPC so non-string elements can't reach here from us; the filter is
-  // a belt-and-suspenders against an out-of-band write.
-  const topics = Array.isArray(row.topics)
-    ? row.topics.filter((v): v is string => typeof v === 'string')
-    : [];
-  return {
-    id: String(row.id),
-    user_id: String(row.user_id),
-    title: String(row.title ?? ''),
-    model,
-    reasoning_effort,
-    verbosity,
-    toolboxes_enabled,
-    archived: row.archived === true,
-    title_manually_set: row.title_manually_set === true,
-    // Pass jsonb through unchanged. The intuition module owns the
-    // parse/coerce - see src/lib/intuition/cache.ts. A drifting row
-    // that doesn't match the expected shape is treated as "no cache"
-    // there and a fresh refresh runs on the next trigger.
-    intuition_payload: row.intuition_payload ?? null,
-    // Same posture as intuition_payload: pass jsonb through unchanged.
-    // The context-recall module owns the parse/coerce - see
-    // src/lib/context-recall/cache.ts. A drifting row that doesn't match
-    // the expected shape is treated as "no cache" there and a fresh
-    // refresh runs on the next trigger.
-    context_recall_payload: row.context_recall_payload ?? null,
-    topics,
-    // Cross-device response-claim columns. Pass through unchanged so
-    // an observer device that reads a row mid-stream sees the claim
-    // immediately. A non-string holder is treated as null (drift-
-    // tolerant), and an expires_at without a holder is also treated
-    // as cleared since the holder is the authoritative half of the
-    // pair.
-    response_holder_id:
-      typeof row.response_holder_id === 'string' && row.response_holder_id.length > 0
-        ? row.response_holder_id
-        : null,
-    response_claim_expires_at:
-      typeof row.response_holder_id === 'string' && row.response_holder_id.length > 0
-        ? typeof row.response_claim_expires_at === 'string'
-          ? row.response_claim_expires_at
-          : null
-        : null,
-    // Pass jsonb through unchanged. The error-card renderer owns the
-    // parse - a row predating the column reads as null, and a drifted
-    // shape that doesn't match the expected `{kind, message, ...}`
-    // envelope falls through to a generic "Error" card. Same posture
-    // as intuition_payload / context_recall_payload above.
-    last_error: row.last_error ?? null,
-    created_at: String(row.created_at),
-    updated_at: String(row.updated_at),
-  };
-}
 
 
 
-function coerceMemoryChangelogKind(raw: unknown): MemoryChangelogKind | null {
-  if (raw === 'create' || raw === 'update' || raw === 'delete') return raw;
-  return null;
-}
 
-function coerceMemoryChangelogEntry(
-  raw: Record<string, unknown>
-): MemoryChangelogEntry | null {
-  const id = raw.id;
-  const kind = coerceMemoryChangelogKind(raw.kind);
-  if (typeof id !== 'string' || !kind) return null;
-  const memoryIdRaw = raw.memory_id;
-  return {
-    id,
-    memory_id:
-      typeof memoryIdRaw === 'string' && memoryIdRaw.length > 0
-        ? memoryIdRaw
-        : null,
-    kind,
-    label_at_change:
-      typeof raw.label_at_change === 'string' ? raw.label_at_change : '',
-    message: typeof raw.message === 'string' ? raw.message : '',
-    created_at: String(raw.created_at ?? ''),
-  };
-}
 
 
 
@@ -236,25 +146,6 @@ function base64ToBytes(base64: string): Uint8Array {
   return bytes;
 }
 
-/**
- * Map a `message_attachments` row (which may carry a joined `messages`
- * object from a thread-scoped lookup) to an Attachment, ignoring any
- * extra join columns.
- */
-function coerceAttachmentRow(raw: Record<string, unknown>): Attachment {
-  return {
-    id: String(raw.id),
-    message_id: String(raw.message_id),
-    position: typeof raw.position === 'number' ? raw.position : Number(raw.position ?? 0),
-    filename: typeof raw.filename === 'string' ? raw.filename : '',
-    mime_type: typeof raw.mime_type === 'string' ? raw.mime_type : '',
-    size_bytes: typeof raw.size_bytes === 'number' ? raw.size_bytes : Number(raw.size_bytes ?? 0),
-    storage_path: typeof raw.storage_path === 'string' ? raw.storage_path : null,
-    extracted_text: typeof raw.extracted_text === 'string' ? raw.extracted_text : null,
-    expired_at: typeof raw.expired_at === 'string' ? raw.expired_at : null,
-    created_at: String(raw.created_at ?? ''),
-  };
-}
 
 
 
@@ -287,17 +178,6 @@ function splitPhotoInputs(photos: RecipePhotoInput[]): {
 }
 
 
-function coerceWikiArticle(raw: Record<string, unknown>): WikiArticle {
-  return {
-    id: String(raw.id),
-    title: typeof raw.title === 'string' ? raw.title : '',
-    content: typeof raw.content === 'string' ? raw.content : '',
-    created_at: String(raw.created_at ?? raw.updated_at ?? ''),
-    updated_at: String(raw.updated_at ?? raw.created_at ?? ''),
-    similarity:
-      typeof raw.similarity === 'number' ? (raw.similarity as number) : undefined,
-  };
-}
 
 
 
@@ -308,31 +188,7 @@ function coerceWikiArticle(raw: Record<string, unknown>): WikiArticle {
 
 
 
-function coerceWikiChangelogKind(raw: unknown): WikiChangelogKind | null {
-  if (raw === 'create' || raw === 'update' || raw === 'delete') return raw;
-  return null;
-}
 
-function coerceWikiChangelogEntry(
-  raw: Record<string, unknown>
-): WikiChangelogEntry | null {
-  const id = raw.id;
-  const kind = coerceWikiChangelogKind(raw.kind);
-  if (typeof id !== 'string' || !kind) return null;
-  const articleIdRaw = raw.article_id;
-  return {
-    id,
-    article_id:
-      typeof articleIdRaw === 'string' && articleIdRaw.length > 0
-        ? articleIdRaw
-        : null,
-    kind,
-    title_at_change:
-      typeof raw.title_at_change === 'string' ? raw.title_at_change : '',
-    message: typeof raw.message === 'string' ? raw.message : '',
-    created_at: String(raw.created_at ?? ''),
-  };
-}
 
 
 class SupabaseError extends Error {
@@ -347,27 +203,6 @@ class SupabaseError extends Error {
 
 
 
-/**
- * Coerce the jsonb a `list_user_*_topics` RPC returns into a
- * `TopicVocabulary`. This is a system boundary (the Supabase wire), so
- * it validates rather than trusting the shape: a missing/garbage field
- * collapses to the empty vocabulary instead of throwing, keeping the
- * dropdown usable across a malformed response.
- */
-function parseTopicVocabulary(data: unknown): TopicVocabulary {
-  if (!data || typeof data !== 'object') return { topics: [], untagged: 0 };
-  const obj = data as { topics?: unknown; untagged?: unknown };
-  const topics = Array.isArray(obj.topics)
-    ? obj.topics.flatMap((entry): TopicCount[] => {
-        if (!entry || typeof entry !== 'object') return [];
-        const { topic, count } = entry as { topic?: unknown; count?: unknown };
-        if (typeof topic !== 'string') return [];
-        return [{ topic, count: typeof count === 'number' ? count : 0 }];
-      })
-    : [];
-  const untagged = typeof obj.untagged === 'number' ? obj.untagged : 0;
-  return { topics, untagged };
-}
 
 /**
  * Split a selectedTopics list into the two predicates the query
@@ -518,57 +353,10 @@ async function veniceFunctionError(error: unknown): Promise<VeniceError> {
 }
 
 
-function coerceDocument(raw: Record<string, unknown>): Document {
-  const status = raw.extraction_status;
-  return {
-    id: String(raw.id),
-    title: typeof raw.title === 'string' ? raw.title : '',
-    description: typeof raw.description === 'string' ? raw.description : '',
-    filename: typeof raw.filename === 'string' ? raw.filename : '',
-    mime_type: typeof raw.mime_type === 'string' ? raw.mime_type : '',
-    size_bytes: typeof raw.size_bytes === 'number' ? raw.size_bytes : Number(raw.size_bytes ?? 0),
-    storage_path: typeof raw.storage_path === 'string' ? raw.storage_path : null,
-    extracted_text: typeof raw.extracted_text === 'string' ? raw.extracted_text : null,
-    extraction_status:
-      status === 'done' || status === 'failed' ? status : 'pending',
-    extraction_error: typeof raw.extraction_error === 'string' ? raw.extraction_error : null,
-    created_at: String(raw.created_at ?? raw.updated_at ?? ''),
-    updated_at: String(raw.updated_at ?? raw.created_at ?? ''),
-  };
-}
 
 
-function coerceDocumentGrepHit(raw: Record<string, unknown>): DocumentGrepHit {
-  const toLines = (v: unknown): string[] =>
-    Array.isArray(v) ? v.map((x) => (typeof x === 'string' ? x : String(x ?? ''))) : [];
-  return {
-    document_id: String(raw.document_id),
-    title: typeof raw.title === 'string' ? raw.title : '',
-    line_number: typeof raw.line_number === 'number' ? raw.line_number : Number(raw.line_number ?? 0),
-    line_text: typeof raw.line_text === 'string' ? raw.line_text : '',
-    context_before: toLines(raw.context_before),
-    context_after: toLines(raw.context_after),
-  };
-}
 
 
-function coerceDocumentStat(raw: Record<string, unknown>): DocumentStat {
-  const status = raw.extraction_status;
-  return {
-    id: String(raw.id),
-    title: typeof raw.title === 'string' ? raw.title : '',
-    description: typeof raw.description === 'string' ? raw.description : '',
-    filename: typeof raw.filename === 'string' ? raw.filename : '',
-    mime_type: typeof raw.mime_type === 'string' ? raw.mime_type : '',
-    size_bytes: typeof raw.size_bytes === 'number' ? raw.size_bytes : Number(raw.size_bytes ?? 0),
-    extraction_status: status === 'done' || status === 'failed' ? status : 'pending',
-    extraction_error: typeof raw.extraction_error === 'string' ? raw.extraction_error : null,
-    has_text: raw.has_text === true,
-    total_lines: typeof raw.total_lines === 'number' ? raw.total_lines : Number(raw.total_lines ?? 0),
-    created_at: String(raw.created_at ?? raw.updated_at ?? ''),
-    updated_at: String(raw.updated_at ?? raw.created_at ?? ''),
-  };
-}
 
 /**
  * Maximum attempts (initial + retries) before `SupabaseService.complete`

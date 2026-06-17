@@ -3,7 +3,14 @@
  * projections), messages, and message attachments. Re-exported through
  * `../../supabase.ts` so consumers keep importing from `$lib/supabase`.
  */
-import type { ModelTier, ThinkingLevel, Verbosity } from '../../models';
+import {
+  isModelTier,
+  isThinkingLevel,
+  isVerbosity,
+  type ModelTier,
+  type ThinkingLevel,
+  type Verbosity,
+} from '../../models';
 import type { Citation, TokenUsage } from '../../venice';
 import type { OpenAIToolCall } from '../../tools/types';
 
@@ -376,3 +383,97 @@ export const DEFAULT_THREAD_PAGE_SIZE = 25;
  */
 export const RECENT_THREAD_CUTOFF_MS = 3 * 24 * 60 * 60 * 1000;
 
+
+/**
+ * Coerce the raw row from Supabase. The `model` column is `text` without a
+ * CHECK constraint, so scrub unexpected values to null. `toolboxes_enabled`
+ * defaults to an empty array if the column is missing (older row before
+ * the migration, or a coerce on a freshly-minted draft) and non-string
+ * elements inside the array are filtered out so a drifting row can never
+ * poison the UI's `.includes()` checks.
+ */
+export function coerceThread(row: Record<string, unknown>): Thread {
+  const model = isModelTier(row.model) ? row.model : null;
+  const reasoning_effort = isThinkingLevel(row.reasoning_effort)
+    ? row.reasoning_effort
+    : null;
+  const verbosity = isVerbosity(row.verbosity) ? row.verbosity : null;
+  const toolboxes_enabled = Array.isArray(row.toolboxes_enabled)
+    ? row.toolboxes_enabled.filter((v): v is string => typeof v === 'string')
+    : [];
+  // Drift-tolerant: a row predating the topics column (or one a drift-
+  // injected non-array got into) shows up as "untagged" rather than
+  // crashing the drawer. The save path is parameterised through the
+  // RPC so non-string elements can't reach here from us; the filter is
+  // a belt-and-suspenders against an out-of-band write.
+  const topics = Array.isArray(row.topics)
+    ? row.topics.filter((v): v is string => typeof v === 'string')
+    : [];
+  return {
+    id: String(row.id),
+    user_id: String(row.user_id),
+    title: String(row.title ?? ''),
+    model,
+    reasoning_effort,
+    verbosity,
+    toolboxes_enabled,
+    archived: row.archived === true,
+    title_manually_set: row.title_manually_set === true,
+    // Pass jsonb through unchanged. The intuition module owns the
+    // parse/coerce - see src/lib/intuition/cache.ts. A drifting row
+    // that doesn't match the expected shape is treated as "no cache"
+    // there and a fresh refresh runs on the next trigger.
+    intuition_payload: row.intuition_payload ?? null,
+    // Same posture as intuition_payload: pass jsonb through unchanged.
+    // The context-recall module owns the parse/coerce - see
+    // src/lib/context-recall/cache.ts. A drifting row that doesn't match
+    // the expected shape is treated as "no cache" there and a fresh
+    // refresh runs on the next trigger.
+    context_recall_payload: row.context_recall_payload ?? null,
+    topics,
+    // Cross-device response-claim columns. Pass through unchanged so
+    // an observer device that reads a row mid-stream sees the claim
+    // immediately. A non-string holder is treated as null (drift-
+    // tolerant), and an expires_at without a holder is also treated
+    // as cleared since the holder is the authoritative half of the
+    // pair.
+    response_holder_id:
+      typeof row.response_holder_id === 'string' && row.response_holder_id.length > 0
+        ? row.response_holder_id
+        : null,
+    response_claim_expires_at:
+      typeof row.response_holder_id === 'string' && row.response_holder_id.length > 0
+        ? typeof row.response_claim_expires_at === 'string'
+          ? row.response_claim_expires_at
+          : null
+        : null,
+    // Pass jsonb through unchanged. The error-card renderer owns the
+    // parse - a row predating the column reads as null, and a drifted
+    // shape that doesn't match the expected `{kind, message, ...}`
+    // envelope falls through to a generic "Error" card. Same posture
+    // as intuition_payload / context_recall_payload above.
+    last_error: row.last_error ?? null,
+    created_at: String(row.created_at),
+    updated_at: String(row.updated_at),
+  };
+}
+
+/**
+ * Map a `message_attachments` row (which may carry a joined `messages`
+ * object from a thread-scoped lookup) to an Attachment, ignoring any
+ * extra join columns.
+ */
+export function coerceAttachmentRow(raw: Record<string, unknown>): Attachment {
+  return {
+    id: String(raw.id),
+    message_id: String(raw.message_id),
+    position: typeof raw.position === 'number' ? raw.position : Number(raw.position ?? 0),
+    filename: typeof raw.filename === 'string' ? raw.filename : '',
+    mime_type: typeof raw.mime_type === 'string' ? raw.mime_type : '',
+    size_bytes: typeof raw.size_bytes === 'number' ? raw.size_bytes : Number(raw.size_bytes ?? 0),
+    storage_path: typeof raw.storage_path === 'string' ? raw.storage_path : null,
+    extracted_text: typeof raw.extracted_text === 'string' ? raw.extracted_text : null,
+    expired_at: typeof raw.expired_at === 'string' ? raw.expired_at : null,
+    created_at: String(raw.created_at ?? ''),
+  };
+}

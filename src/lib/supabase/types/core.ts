@@ -114,3 +114,25 @@ export interface OffsetPage<T> {
 /** Default page size for the offset-paginated browse listings. */
 export const DEFAULT_LIST_PAGE_SIZE = 50;
 
+
+/**
+ * Coerce the jsonb a `list_user_*_topics` RPC returns into a
+ * `TopicVocabulary`. This is a system boundary (the Supabase wire), so
+ * it validates rather than trusting the shape: a missing/garbage field
+ * collapses to the empty vocabulary instead of throwing, keeping the
+ * dropdown usable across a malformed response.
+ */
+export function parseTopicVocabulary(data: unknown): TopicVocabulary {
+  if (!data || typeof data !== 'object') return { topics: [], untagged: 0 };
+  const obj = data as { topics?: unknown; untagged?: unknown };
+  const topics = Array.isArray(obj.topics)
+    ? obj.topics.flatMap((entry): TopicCount[] => {
+        if (!entry || typeof entry !== 'object') return [];
+        const { topic, count } = entry as { topic?: unknown; count?: unknown };
+        if (typeof topic !== 'string') return [];
+        return [{ topic, count: typeof count === 'number' ? count : 0 }];
+      })
+    : [];
+  const untagged = typeof obj.untagged === 'number' ? obj.untagged : 0;
+  return { topics, untagged };
+}
