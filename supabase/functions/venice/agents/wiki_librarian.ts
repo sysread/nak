@@ -54,6 +54,7 @@ import { memorySearch } from '../tools/memory_search.ts';
 import { wikiUpdate } from '../tools/wiki_update.ts';
 import { wikiDelete } from '../tools/wiki_delete.ts';
 import { recordList } from '../tools/record_list.ts';
+import { recordCreate } from '../tools/record_create.ts';
 import { recordUpdate } from '../tools/record_update.ts';
 import { recordDelete } from '../tools/record_delete.ts';
 import { asAgentTool } from './_agent_tools.ts';
@@ -267,6 +268,36 @@ const RECORD_LIST_WIRE_SCHEMA: AgentTool['wire'] = {
   },
 };
 
+// record_create is scoped to MIGRATION: moving a dated entry that is
+// baked into an article BODY out into a record so the body can become
+// clean current-state prose. Like the worker, the librarian must
+// record_list first and skip events that are already records - the
+// extraction agent or the user may have logged them.
+const RECORD_CREATE_WIRE_SCHEMA: AgentTool['wire'] = {
+  type: 'function',
+  function: {
+    name: 'record_create',
+    description:
+      'Migrate one dated entry out of an article body into a record. ' +
+      'article_id is the article; date is the entry\'s ISO "YYYY-MM-DD" day; ' +
+      'content is the entry text (Markdown). Use ONLY to relocate dated ' +
+      'history already written in a body. ALWAYS record_list first: if the ' +
+      'event is already a record, do not duplicate it. After the record ' +
+      'exists, trim the line from the body.',
+    parameters: {
+      type: 'object',
+      properties: {
+        article_id: { type: 'string', description: 'Article the record belongs to.' },
+        date: { type: 'string', description: 'ISO "YYYY-MM-DD" date of the entry.' },
+        content: { type: 'string', minLength: 1, description: 'The dated entry text, Markdown.' },
+        tags: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['article_id', 'date', 'content'],
+      additionalProperties: false,
+    },
+  },
+};
+
 const RECORD_UPDATE_WIRE_SCHEMA: AgentTool['wire'] = {
   type: 'function',
   function: {
@@ -344,6 +375,7 @@ function buildLibrarianToolbox(): Toolbox {
       asAgentTool(recordList, RECORD_LIST_WIRE_SCHEMA),
       asAgentToolNoThread(wikiUpdate, WIKI_UPDATE_WIRE_SCHEMA),
       asAgentToolNoThread(wikiDelete, WIKI_DELETE_WIRE_SCHEMA),
+      asAgentToolNoThread(recordCreate, RECORD_CREATE_WIRE_SCHEMA),
       asAgentToolNoThread(recordUpdate, RECORD_UPDATE_WIRE_SCHEMA),
       asAgentToolNoThread(recordDelete, RECORD_DELETE_WIRE_SCHEMA),
     ],
@@ -498,14 +530,17 @@ const WIKI_LIBRARIAN_DISCIPLINE_BLOCK = `**Discipline**:
   another, every concrete fact from the absorbed article must
   appear in the merged result unless you are confident it is
   wrong (and conversation_search corroborates the contradiction).
-- Preserve dates. Articles carry month + year date markers
-  ("as of March 2026", "in late 2025") that anchor when each
-  fact was added. When you wiki_update for any reason -
-  consolidation, fact-correction, name-fix, scope-cleanup link-
-  in - leave existing date markers in the prose verbatim. They
-  are the article's historical record. New statements you add
-  during a librarian update should themselves carry a fresh
-  date marker (a recent month + year is fine).
+- Preserve dates - don't discard them, relocate them. Articles
+  carry month + year date markers ("as of March 2026", "in late
+  2025") that anchor when each fact was added. When you wiki_update
+  for any reason - consolidation, fact-correction, name-fix,
+  scope-cleanup link-in - do not drop a dated line from the body.
+  If you are reducing a body to current-state prose, the dated
+  entries must first be migrated into records (step 7b); only then
+  may a dated line leave the body. A current-state body still
+  carries ONE freshness date anchor ("As of November 2026, ...");
+  any new statement you add during a librarian update carries a
+  fresh marker too.
 - Do not fabricate. Only assert facts that appear in the
   existing articles, in conversations you searched, or in the
   excerpts above. Do not import outside knowledge.
@@ -680,19 +715,21 @@ ${WIKI_LIBRARIAN_TOOLS_BLOCK}
      conversation_search to find more recent threads, then
      conversation_get to read what was actually said. If you
      find a clear contradiction in newer conversations,
-     wiki_update the article: APPEND the new dated statement
-     ("As of March 2026, Maya is at Foo. As of November 2026,
-     she has moved to Bar.") rather than overwriting the old
-     one. The historical record is part of the value.
+     wiki_update the body to the NEW current state ("As of
+     November 2026, Maya is at Bar"). The superseded value is
+     not lost: the prior state lives in the records (and the
+     change itself may already be a record), so the body holds
+     where things stand now, not a running "was X, now Y" log.
    - When an excerpt makes a specific claim with NO date marker,
      use conversation_search to find when the fact was last
      mentioned and consider wiki_update to retrofit a date
      marker so future librarian passes have a freshness anchor.
    - When you find no contradiction and no recent mention,
      leave the article alone - undated or old-dated facts
-     without contradiction are just history, not stale.
-   - Preserve all existing date markers verbatim when you
-     wiki_update; never strip a date from an earlier statement.
+     without contradiction are just current state, not stale.
+   - Never strip a dated entry from the body without first
+     migrating it into a record (step 7b) - relocate, don't
+     discard.
 5. **Tighten subject boundaries.** When two articles cover
    adjacent topics that confusingly bleed into each other (a
    "Maya" article and a "household" article that both cover
@@ -830,19 +867,22 @@ ${WIKI_LIBRARIAN_TOOLS_BLOCK}
    Renaming changes the title, not the body; reordering
    moves prose around without rewriting it; moving and
    splitting carry every dated statement across to its new
-   home verbatim. Do not collapse multiple dated entries
-   into a single "current state" summary - the dated history
-   is what gives the article its longitudinal value, and the
-   per-conversation agent depends on it for the freshness
-   signal it uses on the next pass.
-7. **Promote learnings from records, and clean the records up.**
-   Each article has a linked set of dated RECORDS - the topic's
-   journey (specific events, experiments, observations the user
-   logged or the extraction agent captured). The two layers split
-   responsibility: records hold the blow-by-blow; the article BODY
-   holds the consolidated current state. For each article you are
-   already touching (and any whose body looks thin relative to an
-   active topic), call record_list and:
+   home verbatim. The dated history is what gives a subject
+   its longitudinal value - but its home is the article's
+   RECORDS, not the body. So do not DISCARD dated history;
+   relocate it. You MAY reduce a body to current-state prose,
+   but only after migrating its dated entries into records
+   (step 7). Until then, carry every dated line across a
+   reorganisation verbatim - never drop one with no record to
+   catch it.
+7. **Promote learnings, migrate inline dated history, and clean the
+   records up.** Each article has a linked set of dated RECORDS -
+   the topic's journey (specific events, experiments, observations
+   the user logged or the extraction agent captured). The two
+   layers split responsibility: records hold the blow-by-blow; the
+   article BODY holds the consolidated current state. For each
+   article you are already touching (and any whose body still
+   carries an inline dated log), call record_list and:
 
    (a) **Promote durable learnings into the body.** When the records
        have established a settled outcome or a pattern - the recipe
@@ -851,12 +891,30 @@ ${WIKI_LIBRARIAN_TOOLS_BLOCK}
        current-state learning (with a date marker, same as any other
        fact). Summarise; do not transcribe each record into the body.
 
-   (b) **Do NOT delete a record after promoting it.** Records are
+   (b) **Migrate inline dated history OUT of the body into records.**
+       Many existing bodies were written as a running dated log
+       ("March 2026: started the starter. April: first sour loaf.").
+       Move each such entry into a record, then trim the body to
+       current-state prose. STRICT ORDER, because a misstep loses
+       data:
+       - **Check first - it may ALREADY be a record.** The extraction
+         agent or the user may have logged the same event. Compare
+         the body line against record_list by date + substance. If a
+         matching record exists, do NOT create a duplicate - just
+         trim the line from the body.
+       - For each remaining inline dated entry, record_create with
+         its date + text and confirm it returned a row.
+       - ONLY THEN trim that line from the body. NEVER remove a dated
+         line before its record exists.
+
+   (c) **Do NOT delete a record after promoting it.** Records are
        historical documentation and survive promotion - the body
        gains the conclusion, the records keep the journey. This is
-       the single most important record rule.
+       the single most important record rule. (Migration in (b) is
+       the one case where a dated line LEAVES the body - but only
+       because an equivalent record now holds it.)
 
-   (c) **Clean up the records themselves.** record_update to merge a
+   (d) **Clean up the records themselves.** record_update to merge a
        true duplicate's unique detail into the one you keep or to fix
        an outdated record; record_delete ONLY for a genuine duplicate
        or a clearly irrelevant entry. When in doubt, leave the record

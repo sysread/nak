@@ -61,6 +61,11 @@ backfill for records, and the `wikiRecordExtractionEnabled` toggle.
 8. Librarian: run the librarian (Wiki panel sparkles button, or
    `POST /wiki-librarian-sweep`) against a topic that has records
    establishing a settled outcome.
+8a. Migration: hand-author an article body that contains an inline
+   dated log (e.g. "March 2026: started starter. April: first sour
+   loaf."), then run the worker on a thread touching that topic (or
+   the librarian). Pre-seed one of those entries as an existing
+   record to exercise the dedup path.
 9. Toggle **Settings -> Wiki -> Automatic records** off, re-arm the
    thread pointer (precondition SQL), and `POST /wiki-records-sweep`
    again.
@@ -97,6 +102,11 @@ backfill for records, and the `wikiRecordExtractionEnabled` toggle.
   tidy records - but every promoted record still exists afterward
   (records survive promotion). The open article's body refreshes via
   the realtime relay.
+- (8a) The inline dated entries are **migrated** into `wiki_records`
+  rows and the body is trimmed to current-state prose. The entry that
+  was pre-seeded as a record is NOT duplicated (dedup via record_list);
+  no dated line is removed from the body without a matching record
+  existing first.
 - (9) With extraction off, the sweep claims nothing for that user
   (the claim predicate gates on `wikiRecordExtractionEnabled`); no
   new record appears. Manual add (step 1) still works.

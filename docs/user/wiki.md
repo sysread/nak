@@ -249,10 +249,17 @@ snapshot. It listens for what the latest conversation advances
 about a subject the wiki is already tracking - a new tweak to a
 recipe you're iterating on, a finished chapter of a book you're
 working through, a new PR on a hobby you practice, a milestone on
-a project, a job change, a family update - and appends a fresh
-dated entry to the relevant article rather than rewriting it.
-Articles accumulate as a development log of their subject; reading
-one in a year shows the trajectory, not just where things landed.
+a project, a job change, a family update - and brings the
+article's **current state** up to date. The dated trajectory
+itself lives in that article's [records](#records): the agent
+updates the body to say where things stand now, while the
+individual dated events accumulate as records. If an older article
+still has a dated log written into its body, the agent (and the
+librarian) gradually **migrate** those entries into records and
+trim the body to current-state prose - checking first so nothing
+that's already a record gets duplicated, and never removing a
+dated line until its record exists. Nothing is lost in the move;
+the history just shifts to where it belongs.
 
 You can disable the autonomous agent in **Settings -> Wiki**. Manual
 edits and the per-article "Ask agent to update" flow keep working

@@ -1023,14 +1023,28 @@ stray record is cheap to delete; a clobbered article is not.
   `record_list` dedupes, read-only `memory_search` grounds. It never
   touches article bodies or memory. Asserted in
   `supabase/functions/tests/wiki_records.test.ts`.
-- The article worker gains read-only `record_list`; the librarian
-  gains `record_list` + `record_update` + `record_delete`. Both
-  prompts encode the body/records separation: the article BODY is the
-  current state, records are the journey. The worker and librarian
-  fold durable learnings from records INTO the body but never delete
-  a record merely because its learning was promoted - records are
-  historical documentation. The librarian additionally cleans up
-  duplicate/outdated records.
+- The article worker gets `record_list` + `record_create`; the
+  librarian gets `record_list` + `record_create` + `record_update` +
+  `record_delete`. Both prompts encode the body/records separation:
+  the article BODY is the current state, records are the journey. Two
+  behaviours follow:
+  - **Promote**: fold durable learnings from records INTO the body,
+    but never delete a record because its learning was promoted -
+    records are historical documentation.
+  - **Migrate**: relocate inline dated history that legacy bodies
+    accreted (the pre-records worker prompt told it to append dated
+    entries to the body) OUT into records, then trim the body to
+    current-state prose. `record_create` here is scoped to MIGRATION
+    only - neither agent re-extracts new conversation events into
+    records (that stays with the extraction agent). The discipline is
+    strict and dedup-first: `record_list` to check the event is not
+    already a record (the extraction agent or the user may have logged
+    it), `record_create`, and only THEN trim the body line - never
+    drop a dated line before its record exists. The worker also stops
+    appending NEW dated entries to bodies; the journey goes to records.
+  The librarian additionally cleans up duplicate/outdated records
+  (`record_update` / `record_delete`); the worker does not edit or
+  delete records.
 
 ## Interactions
 
