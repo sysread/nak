@@ -11,7 +11,7 @@ export const updateTitleSchema = {
     'Rename the current conversation. Call when the topic has ' +
     'meaningfully shifted from the title, or on the first turn when ' +
     'the title is still the default placeholder. 3-6 words, no ' +
-    'trailing punctuation, no quotes, plain text.',
+    'trailing punctuation, no quotes, no Markdown formatting, plain text.',
   shortDescription: 'rename this conversation',
   parameters: {
     type: 'object',
@@ -21,7 +21,8 @@ export const updateTitleSchema = {
         minLength: 1,
         maxLength: TITLE_MAX_CHARS,
         description:
-          '3-6 word title. No trailing punctuation, no quotes, plain text.',
+          '3-6 word title. No trailing punctuation, no quotes, no ' +
+          'Markdown formatting, plain text.',
       },
     },
     required: ['title'],

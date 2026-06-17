@@ -6,13 +6,11 @@
 // tools[] array against that schema and ships it to /stream, so this
 // file only needs the runtime name and the execute logic.
 //
-// Sanitization rules mirror the browser version exactly - trim, first
-// non-empty line, strip wrapping/trailing quotes and punctuation,
-// 80-char cap, upper-case the first character. Keeping the rules in
-// lock-step matters because both sides have to render the same final
-// title back to the model on the next round; any divergence shows up
-// as the model "thinking" it renamed the thread to something the
-// drawer doesn't display.
+// Sanitization is the shared rule in tools/_title.ts, run by both this tool
+// and the background auto-title unit. Keeping it in one place matters
+// because both paths have to render the same final title back to the model
+// on the next round; any divergence shows up as the model "thinking" it
+// renamed the thread to something the drawer doesn't display.
 //
 // Auth model: b-strict per docs/dev/edge-function-auth.md. The
 // /stream handler validated `ctx.threadId` against `ctx.userId` at
@@ -22,40 +20,7 @@
 // even if the threadId-binding logic upstream regresses.
 
 import { requireThreadId, registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
-
-const TITLE_MAX_CHARS = 80;
-
-/**
- * Trim, collapse to the first non-empty line, strip wrapping quotes
- * and trailing punctuation, cap at TITLE_MAX_CHARS, upper-case the
- * first character. The regex covers ASCII and Unicode "smart" quotes
- * because models alternate between the two unpredictably.
- *
- * First-line split rationale: models occasionally ignore the
- * "concise 3-6 word title" instruction and dump their whole reply
- * into the argument. The first non-empty line recovers the intended
- * title in the common case (line 1 is the title, line 2+ is
- * spillover); at worst we keep a single truncated sentence rather
- * than a multi-line garbage string.
- *
- * First-char upper-case: title-gen prompt accepts lower-case
- * ("troubleshooting the refrigerator"); we force the first character
- * so model-generated titles match the visual weight of
- * manually-named threads in the drawer.
- */
-function sanitizeTitle(raw: string): string {
-  const firstLine =
-    raw
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .find((line) => line.length > 0) ?? '';
-  const trimmed = firstLine
-    .replace(/^["'“”‘’]+|["'“”‘’.!?]+$/g, '')
-    .trim()
-    .slice(0, TITLE_MAX_CHARS);
-  if (trimmed.length === 0) return trimmed;
-  return trimmed.charAt(0).toLocaleUpperCase() + trimmed.slice(1);
-}
+import { sanitizeTitle } from './_title.ts';
 
 export const updateTitle: ToolDef = {
   name: 'update_title',

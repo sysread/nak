@@ -494,7 +494,8 @@ function buildMetadataSystemMessage(
           `("${DEFAULT_THREAD_TITLE}") in the conversation drawer. Before`,
           'replying, call `update_title` with a concise 3-6 word title',
           'describing what the user is actually asking about. Plain',
-          'text, no quotes, no trailing punctuation.',
+          'text, no quotes, no trailing punctuation, no Markdown',
+          'formatting (the title is a plain label, not prose).',
         ].join('\n'),
       );
     } else {

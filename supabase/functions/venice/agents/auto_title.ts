@@ -24,6 +24,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { createEdgeLogger, type EdgeLogger } from '../../_shared/edge-log.ts';
 import { readVeniceKey } from '../tools/_venice_key.ts';
 import { toolComplete } from '../tools/_venice_complete.ts';
+import { sanitizeTitle } from '../tools/_title.ts';
 import { CURATION_CLAIM_TTL_SECONDS } from './_curation_helpers.ts';
 
 // Mirror of agentModel('autoTitle').id in src/lib/models/index.ts.
@@ -31,53 +32,6 @@ import { CURATION_CLAIM_TTL_SECONDS } from './_curation_helpers.ts';
 // configurable tiers, so the browser path resolved this same constant -
 // hardcoding it here stays faithful after the cutover.
 const AUTO_TITLE_MODEL = 'e2ee-gpt-oss-20b-p';
-
-// Mirror of TITLE_MAX_CHARS in src/lib/tools/update_title.schema.ts -
-// the storage-side cap shared by tool-driven renames and this unit,
-// so both paths land titles with the same shape.
-const TITLE_MAX_CHARS = 80;
-
-/**
- * Trim, collapse to the first non-empty line, strip wrapping / trailing
- * punctuation, cap length, capitalize the first character. The model's
- * raw output is the only source for an auto-generated title, so this is
- * where it gets made presentable. The regex matches both ASCII and
- * Unicode "smart" quotes, plus trailing periods / exclamation / question
- * marks that the model sometimes adds despite the system prompt saying
- * not to.
- *
- * First-line split: the model sometimes ignores the "concise 3-6 word
- * title" instruction and stuffs its full response into the argument
- * ("Holy Spirit Origins in Christianity\n\nThe concept of the ..."). A
- * straight 80-char slice would then store a multi-line string whose
- * second line is a truncated paragraph - the sidebar renders that as
- * wrapped garbage. Taking only the first non-empty line recovers the
- * intended title in the common case (line 1 is the title, line 2+ is
- * spillover) and at worst yields a single truncated sentence rather
- * than a multi-line one.
- *
- * First-letter capitalization: the title-gen prompt says title-case is
- * fine but not required, so smaller / instruction-loose models routinely
- * emit lowercase ("troubleshooting the refrigerator", "how to bake
- * sourdough"). Those land in the sidebar looking unfinished and
- * inconsistent with manually-named threads. We force the first character
- * to uppercase so every model-generated title lands looking the same.
- * Only the first character is touched; "iOS upgrade" style mid-word
- * casing the model deliberately chose stays intact past char 0.
- */
-function sanitizeTitle(raw: string): string {
-  const firstLine =
-    raw
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .find((line) => line.length > 0) ?? '';
-  const trimmed = firstLine
-    .replace(/^["'“”‘’]+|["'“”‘’.!?]+$/g, '')
-    .trim()
-    .slice(0, TITLE_MAX_CHARS);
-  if (trimmed.length === 0) return trimmed;
-  return trimmed.charAt(0).toLocaleUpperCase() + trimmed.slice(1);
-}
 
 /**
  * System prompt for the title-gen sub-call. Short on purpose: the
@@ -88,8 +42,9 @@ function sanitizeTitle(raw: string): string {
  */
 const TITLE_GEN_SYSTEM_PROMPT = [
   'Read the user message below and return a 3-6 word title for the',
-  'conversation it would open. Plain text, no quotes, no trailing',
-  'punctuation, no preamble. Title-case is fine but not required.',
+  'conversation it would open. Plain text only: no quotes, no trailing',
+  'punctuation, no Markdown formatting (no *, _, backticks, or #), no',
+  'preamble. Title-case is fine but not required.',
   'If the message is a greeting or pleasantry, look past it to the',
   'underlying topic the user actually wants to discuss; only fall',
   "back to a generic title (\"Casual chat\", \"Quick question\") when",
@@ -346,8 +301,8 @@ export async function sweepClaimAndTitle(
   }
 }
 
-// Test-only surface: the sanitiser's first-line / quote-strip / cap /
-// capitalisation rules are behavior parity with the browser title-gen
-// (src/lib/title-gen.ts) and get asserted in
-// supabase/functions/tests/curation.test.ts.
+// Test-only surface: re-exports the shared sanitiser (tools/_title.ts) so
+// supabase/functions/tests/curation.test.ts can assert its first-line /
+// quote-strip / Markdown-strip / cap / capitalisation rules. update_title
+// runs the same function, so these assertions cover both title paths.
 export const __test = { sanitizeTitle };

@@ -32,6 +32,25 @@ Deno.test('sanitizeTitle trims, strips wrapping quotes and trailing punctuation'
   assertEquals(autoTitle.sanitizeTitle('  "Casual Howdy Greeting."  '), 'Casual Howdy Greeting');
 });
 
+Deno.test('sanitizeTitle strips wrapping Markdown emphasis the model adds', () => {
+  // The chat surface primes the model toward **bold**/*italics* in prose and
+  // the small auto-title model wraps titles the same way; the strip is what
+  // keeps the markup out of the drawer.
+  assertEquals(autoTitle.sanitizeTitle('**Crested Butte Weekend Trip**'), 'Crested Butte Weekend Trip');
+  assertEquals(autoTitle.sanitizeTitle('*Refrigerator Repair*'), 'Refrigerator Repair');
+  assertEquals(autoTitle.sanitizeTitle('`git rebase workflow`'), 'Git rebase workflow');
+  assertEquals(autoTitle.sanitizeTitle('## Sourdough Starter Tips'), 'Sourdough Starter Tips');
+  // Combined wrapping: bold around a quoted, period-terminated title.
+  assertEquals(autoTitle.sanitizeTitle('**"Holy Spirit Origins."**'), 'Holy Spirit Origins');
+});
+
+Deno.test('sanitizeTitle preserves Markdown-like characters mid-title', () => {
+  // Only anchored wrapping markers are stripped; interior characters that
+  // happen to be Markdown punctuation are part of the real title.
+  assertEquals(autoTitle.sanitizeTitle('A* search vs Dijkstra'), 'A* search vs Dijkstra');
+  assertEquals(autoTitle.sanitizeTitle('C# vs F# performance'), 'C# vs F# performance');
+});
+
 Deno.test('sanitizeTitle caps a long single line at 80 chars', () => {
   const raw =
     'Hafa adai is a Chamorro greeting from Guam meaning hello and it is not a band, common';
