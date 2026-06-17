@@ -11,7 +11,7 @@ empirical-Bayes posterior, not an accumulator:
   - the verdict-apply the next-day evaluation sweep calls: discount
   prior evidence by `d = 0.5^(1/L)`, fold in the verdict (held ->
   confirm, contradicted -> disconfirm, not-borne-out -> disconfirm
-  `+= w_soft` (0.5, the soft miss), not-engaged -> neither), then
+  `+= w_soft` (0.25, the soft miss), not-engaged -> neither), then
   recompute `health = confidence = (confirm + k*p0)/(confirm +
   disconfirm + k)` (k = 5).
 - `samskara_population_p0(user)` - the prior: the user's aggregate
@@ -64,7 +64,7 @@ producing the verdicts) is the **[hosted]** tail below.
    select public.samskara_apply_evaluation('<user>', '{}'::uuid[], array['<row-A>']::uuid[], '{}'::uuid[], '{}'::uuid[]);
    select confirm_count, disconfirm_count, round(health::numeric,4) h, round(confidence::numeric,4) c
      from samskaras where id = '<row-A>';
-   -- not-borne-out -> a SOFT miss (folds in w_soft = 0.5 disconfirm)
+   -- not-borne-out -> a SOFT miss (folds in w_soft = 0.25 disconfirm)
    select public.samskara_apply_evaluation('<user>', '{}'::uuid[], '{}'::uuid[], array['<row-A>']::uuid[], '{}'::uuid[]);
    select confirm_count, disconfirm_count, round(health::numeric,4) h, round(confidence::numeric,4) c
      from samskaras where id = '<row-A>';
@@ -95,9 +95,9 @@ producing the verdicts) is the **[hosted]** tail below.
   After `held`: `confirm_count = 1`, `health = (1 + 5*p0)/(1 + 5)`
   (e.g. `0.7167` at `p0 = 0.66`). After `contradicted`: confirm
   discounts to `1*d` and a full disconfirm folds in, so health drops
-  below the held value. After `not-borne-out`: a `0.5` disconfirm folds
+  below the held value. After `not-borne-out`: a `0.25` disconfirm folds
   in on top of the discounted priors, so health drops but by less than a
-  full contradiction would (the soft miss is half-weight). After
+  full contradiction would (the soft miss is quarter-weight). After
   `not-engaged`: both counts just discount by `d` and health regresses
   slightly toward `p0`. (`apply_evaluation` returns the count of rows
   touched: `1` each call.)

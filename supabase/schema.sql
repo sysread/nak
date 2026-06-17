@@ -6800,10 +6800,17 @@ declare
   d constant real := 0.5 ^ (1.0 / l_halflife);  -- per-evaluation discount
   -- Soft-miss weight: a "not-borne-out" (situation arose, tendency did not
   -- appear) is real but weaker evidence against the prediction than a flat
-  -- contradiction, so it counts as half a miss. This is the one deliberately
-  -- hand-chosen magnitude in the model (k, L, and p0 are data-derived); it is
-  -- the knob to calibrate if the corpus decays too hard or too softly.
-  w_soft constant real := 0.5;
+  -- contradiction, so it counts as a fraction of a miss. This is the one
+  -- deliberately hand-chosen magnitude in the model (k, L, and p0 are
+  -- data-derived). It is set deliberately GENTLE for launch: a counterfactual
+  -- of the live corpus showed only the product w_soft * (not-borne-out rate)
+  -- is identifiable, and that rate is unknown until the judge runs - at 0.25
+  -- the effective decay stays in the healthy band even if every not-engaged
+  -- turns out to be an on-topic miss, whereas a larger value risks driving the
+  -- whole corpus below the reap floor. Recalibrate from the observed live
+  -- not-borne-out rate once it exists (raise to hit a target median health);
+  -- under-decay is a one-line bump, over-decay needs ~L cycles to re-earn.
+  w_soft constant real := 0.25;
   v_p0 real;
   affected int;
 begin

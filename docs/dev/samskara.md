@@ -770,7 +770,7 @@ discount prior evidence (the forgetting):
 fold in this evaluation's verdict:
   held          -> confirm_count    += 1
   contradicted  -> disconfirm_count += 1
-  not-borne-out -> disconfirm_count += w_soft   -- soft miss, w_soft = 0.5
+  not-borne-out -> disconfirm_count += w_soft   -- soft miss, w_soft = 0.25
   not-engaged   -> neither (the discount above is its only effect)
 recompute the posterior (written to BOTH health and confidence):
   health = confidence = (confirm_count + k*p0) / (confirm_count + disconfirm_count + k)
@@ -779,8 +779,13 @@ recompute the posterior (written to BOTH health and confidence):
 `not-borne-out` is the verdict that gives health teeth. The situation
 arose and the predicted tendency did not appear - real but weaker
 evidence against the prediction than an active contradiction, so it
-counts as a fractional miss (`w_soft = 0.5`, the one hand-chosen
-magnitude; `k`, `L`, and `p0` are data-derived). Because `p0` is itself
+counts as a fractional miss (`w_soft = 0.25`, the one hand-chosen
+magnitude; `k`, `L`, and `p0` are data-derived). The value is a gentle
+launch setting: a counterfactual over the live corpus showed only the
+product `w_soft * not-borne-out-rate` is identifiable (the rate is
+unknown until the judge runs), and `0.25` keeps the effective decay in
+the healthy band even if that rate is high - recalibrate upward from the
+observed rate if health under-discriminates. Because `p0` is itself
 computed from these tallies, soft misses also pull the population prior
 down off its ceiling, so the *whole* corpus gains a discriminating
 baseline rather than every row sitting at a near-1 `p0`. There is no
