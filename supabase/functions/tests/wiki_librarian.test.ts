@@ -23,10 +23,12 @@ Deno.test('librarian toolbox is reads + wiki/record writes, in declared order', 
   const toolbox = __test.buildLibrarianToolbox();
   assertEquals(toolbox.name, 'wikiLibrarian');
   // record_list (read) lets the librarian promote durable learnings from
-  // records into article bodies; record_update / record_delete let it
-  // clean up duplicate/outdated records. It still has NO wiki_create
-  // (consolidation only) - records are the one thing it can create
-  // indirectly via the extraction agent, not directly.
+  // records into bodies and dedup before migrating; record_create is
+  // scoped to MIGRATION (relocating inline dated body history into
+  // records); record_update / record_delete clean up duplicate/outdated
+  // records. It still has NO wiki_create - it never originates ARTICLES,
+  // only consolidates them. record_create is the one creation it does,
+  // and only to move existing body history into records.
   assertEquals(
     toolbox.tools.map((t) => t.name),
     [
@@ -37,6 +39,7 @@ Deno.test('librarian toolbox is reads + wiki/record writes, in declared order', 
       'record_list',
       'wiki_update',
       'wiki_delete',
+      'record_create',
       'record_update',
       'record_delete',
     ],

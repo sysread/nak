@@ -56,6 +56,7 @@ import { wikiCreate } from '../tools/wiki_create.ts';
 import { wikiUpdate } from '../tools/wiki_update.ts';
 import { wikiDelete } from '../tools/wiki_delete.ts';
 import { recordList } from '../tools/record_list.ts';
+import { recordCreate } from '../tools/record_create.ts';
 import {
   runHeadlessAgent,
   type AgentTool,
@@ -320,11 +321,11 @@ const WIKI_DELETE_WIRE_SCHEMA: AgentTool['wire'] = {
   },
 };
 
-// record_list rides READ-ONLY so the agent can consult an article's
-// dated records (its journey) and fold durable learnings into the body
-// (its current state). The wiki agent never creates or deletes records -
-// that is the extraction agent's job and the user's; this is a read so
-// the article body can reflect what the records have established.
+// record_list reads an article's dated records (its journey). The worker
+// uses it two ways: to fold durable learnings into the body (current
+// state), AND to dedup before migrating - some inline body entries may
+// already be records (logged by the extraction agent or the user), so the
+// worker MUST check here before record_create.
 const RECORD_LIST_WIRE_SCHEMA: AgentTool['wire'] = {
   type: 'function',
   function: {
@@ -332,10 +333,12 @@ const RECORD_LIST_WIRE_SCHEMA: AgentTool['wire'] = {
     description:
       "List a wiki article's dated records (the topic's journey: specific " +
       'events, experiments, observations). Returns {records: [{id, date, ' +
-      'content, tags, created_at}]}. Read-only here - use it to see what the ' +
-      "records have established so the article BODY (the topic's current " +
-      'state) reflects durable learnings. Do not restate every record; ' +
-      'summarise the settled outcome.',
+      'content, tags, created_at}]}. Use it to see what the records have ' +
+      "established so the article BODY (the topic's current state) reflects " +
+      'durable learnings - and ALWAYS call it before record_create when ' +
+      'migrating an inline dated entry, to check the event is not already a ' +
+      'record. Do not restate every record in the body; summarise the ' +
+      'settled outcome.',
     parameters: {
       type: 'object',
       properties: {
@@ -346,6 +349,52 @@ const RECORD_LIST_WIRE_SCHEMA: AgentTool['wire'] = {
         limit: { type: 'integer', minimum: 1, maximum: 200 },
       },
       required: ['article_id'],
+      additionalProperties: false,
+    },
+  },
+};
+
+// record_create is scoped to MIGRATION only: moving a dated entry that is
+// currently baked into an article BODY out into a record, so the body can
+// become clean current-state prose. The worker does NOT re-extract new
+// events from the conversation into records - the dedicated extraction
+// agent owns that. The discipline (check record_list first, create, THEN
+// trim the body) lives in the prompt body.
+const RECORD_CREATE_WIRE_SCHEMA: AgentTool['wire'] = {
+  type: 'function',
+  function: {
+    name: 'record_create',
+    description:
+      'Migrate one dated entry out of an article body into a record. ' +
+      'article_id is the article it belongs to; date is the entry\'s ISO ' +
+      '"YYYY-MM-DD" day; content is the entry text (Markdown). Use ONLY to ' +
+      'relocate dated history already written in a body - NOT to log new ' +
+      'events from the conversation (the extraction agent does that). ALWAYS ' +
+      'record_list first: if the event is already a record, do not duplicate ' +
+      'it. After the record exists, remove the line from the body.',
+    parameters: {
+      type: 'object',
+      properties: {
+        article_id: {
+          type: 'string',
+          description: 'UUID of the article this record belongs to.',
+        },
+        date: {
+          type: 'string',
+          description: 'ISO 8601 date of the entry being migrated ("YYYY-MM-DD").',
+        },
+        content: {
+          type: 'string',
+          minLength: 1,
+          description: 'The dated entry text, as Markdown.',
+        },
+        tags: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional keyword tags for filtering.',
+        },
+      },
+      required: ['article_id', 'date', 'content'],
       additionalProperties: false,
     },
   },
@@ -362,9 +411,12 @@ const RECORD_LIST_WIRE_SCHEMA: AgentTool['wire'] = {
 //     (explanations, suggestions, the options it laid out) to the user.
 //   - anti-name-fabrication (renderUserProfileBlock): the model once
 //     named the user after a friend mentioned in conversation.
-//   - prime directive, longitudinal accretion, update-over-create
-//     bias, sterility test (WIKI_AUTONOMOUS_BODY_LINES): keep the wiki
-//     user-centric and additive rather than a per-conversation dump.
+//   - prime directive, body-is-current-state (the journey lives in
+//     records, not appended to the body; migrate inline dated logs out
+//     via record_create, dedup-checked against record_list first),
+//     update-over-create bias, sterility test
+//     (WIKI_AUTONOMOUS_BODY_LINES): keep the wiki user-centric, keep the
+//     body a clean current-state view, and don't dump a conversation.
 // renderUserProfileBlock + the body began as a port of the deleted
 // src/lib/agents/wiki/prompt.ts, whose preamble documented the history
 // of the ported layers; re-read that history in git before touching
@@ -556,70 +608,100 @@ and chitchat.
 The user's life is a moving target: recipes get tweaked, hobbies
 deepen, skills accumulate, projects advance through phases, jobs
 change, families grow up. Each article is the longitudinal home
-for one of those subjects - a place where what's new today gets
-appended to what was true last month, with the dates intact, so
-the article reads as that subject's history with the user. Your
-job is to listen for what the latest conversation **advances**
-about a subject the wiki is already tracking, not just what it
-"covers".
+for one of those subjects - but the longitudinal HISTORY lives in
+the article's dated RECORDS, not in the body. The body is the
+subject's CURRENT STATE: what is true now. Your job is to listen
+for what the latest conversation **advances** about a subject the
+wiki is already tracking and bring the body's current state up to
+date - NOT to append another dated line to a growing log in the
+prose.
 
-Concrete iteration signals to listen for - each of these usually
-calls for a wiki_update on the relevant existing article rather
-than a new article:
+Concrete iteration signals to listen for - each usually calls for
+a wiki_update that refreshes the existing article's current state.
+The individual dated event itself is captured as a RECORD by the
+separate extraction agent; you do not re-log it. You update where
+the subject stands now:
 
 - Recipes the user is refining ("doubled the salt this time",
   "next bake I'll try a colder retard", "this version is the
-  keeper"). The article is the recipe's evolving notebook; each
-  iteration is a dated entry.
+  keeper"). Update the body to the current best version; the
+  individual bakes are records.
 - Hobbies the user is practising ("hit a new 5K PR", "finished
   the under-painting", "tournament result", "garden harvest").
-  These advance an ongoing hobby article.
+  Update the current standing; the sessions are records.
 - Learning that's accumulating ("started chapter 6 of the Rust
   book", "finished the Coursera course", "moved on to derived
-  categories"). The article tracks the learning arc, not the
-  single session.
+  categories"). Update where the learning stands now.
 - Projects moving through phases ("shipped the auth flow", "in
   beta", "rewrote the worker pool", "paused for a month").
-  Project articles read as a development log.
+  Update the project's current phase.
 - Career changes and milestones ("got the promotion", "starting
-  a new role at Foo in May", "finished probation"). The article
-  about the user (or the relevant job) gains a dated entry.
+  a new role at Foo in May", "finished probation"). Update the
+  current role / status.
 - Family and relationship developments ("Maya started kindergarten",
-  "we moved", "got engaged", "the cat's eating again"). These
-  extend the relevant person / household article.
+  "we moved", "got engaged", "the cat's eating again"). Update the
+  person / household article's current state.
 - Habits and experiments being tracked ("week 8 of the running
   streak", "starter is finally lively", "down to 1 coffee a day").
 
 Each of these warrants a wiki_search for the relevant existing
-article followed by wiki_update that APPENDS the new dated
-statement to the article's existing prose. Do not rewrite earlier
-dated entries; do not condense the article down to "current
-state". The accumulated history is the value - a reader skimming
-the article in a year wants to see the trajectory, not just
-where things landed.
+article followed by wiki_update that brings the body's current
+state up to date. Anchor the current state in time with a single
+date marker ("As of November 2026, the recipe uses 75% hydration")
+so the librarian keeps a freshness signal - but do NOT append the
+event as one more line in a growing dated log. The dated trajectory
+belongs in records.
 
 If the latest conversation advances a subject the wiki does not
 yet have an article for, and the subject is one the user is
 genuinely likely to look up by name later (a project they keep
 returning to, a recurring person, a hobby they're investing
-time in), wiki_create is appropriate - but write the article so
-its first dated statements form the start of a longitudinal
-record, not a one-off summary of this conversation.
+time in), wiki_create is appropriate - but write the article as a
+current-state description of the subject, not a one-off summary of
+this conversation.
 
-**Article body vs records: two layers, and you own only one.** Each
-article also has a linked set of dated RECORDS - the topic's journey,
+**Article body vs records: two layers, and how to move between them.**
+Each article has a linked set of dated RECORDS - the topic's journey,
 specific events logged with a date ("baked an 80%-hydration loaf",
-"doctor visit", "shipped the auth flow"). You do NOT create, edit, or
-delete records (a separate extraction agent and the user own those).
-What you DO is the inverse: the article BODY is the current-state view,
-so before updating an article, call record_list on it to see what its
-records have established, and fold the DURABLE learnings into the body -
-the settled outcome, the pattern that emerged, the current best
-approach. Summarise; do not transcribe every record into the body (the
-records already preserve the blow-by-blow). A record says "Oct 3:
-doubled the salt, too salty"; the body says "the recipe settled on 1.5%
-salt by late 2026 after earlier batches ran salty." Records are the
-journey; the body is where it landed.
+"doctor visit", "shipped the auth flow"). The BODY is the CURRENT STATE
+(what is true now); records are the JOURNEY (how it got there).
+
+You do NOT re-extract new events from the conversation into records - a
+separate extraction agent owns that. You have record_create for ONE
+purpose: migrating dated history that is currently baked into an article
+BODY out into records, so the body can become clean current-state prose.
+
+Two things you do with records:
+
+1. **Promote.** Before updating an article, call record_list and fold
+   the DURABLE learnings its records have established into the body -
+   the settled outcome, the pattern that emerged, the current best
+   approach. Summarise; do not transcribe every record (they already
+   hold the blow-by-blow). A record says "Oct 3: doubled the salt, too
+   salty"; the body says "the recipe settled on 1.5% salt by late 2026
+   after earlier batches ran salty."
+
+2. **Migrate.** If a body you are touching carries an inline dated log -
+   prose or bullets like "March 2026: started the starter. April: first
+   sour loaf. June: switched to 80% hydration" - move each dated entry
+   into a record, then rewrite the body to current-state prose.
+   Discipline, in this exact order:
+   - **Check first - some entries may ALREADY be records.** The
+     extraction agent or the user may have logged the same event. Call
+     record_list and compare by date + substance before creating
+     anything. If a matching record already exists, do NOT create a
+     duplicate - just remove the line from the body.
+   - For each remaining inline dated entry, call record_create with the
+     entry's date and text, and confirm it returned a row.
+   - ONLY THEN remove that line from the body. NEVER delete a dated line
+     from a body before its record exists - that loses the data.
+   - Once the dated lines are migrated, the body is free to read as
+     current-state prose with a single freshness date anchor.
+
+   Migrate opportunistically - when you are already updating an article
+   whose body still carries an inline log. You do not need to sweep
+   every article for migration on every run; the librarian does the
+   wiki-wide pass.
 
 **Scope: this wiki is about the user, not the world.** Every article
 must be about the user's life, interests, projects, or context.
@@ -703,21 +785,22 @@ not a failure - reply with a single word and stop.
   "you mentioned" or "I noted"; write the fact directly.
 - One topic per article. If a conversation surfaces multiple topics,
   consider multiple separate updates.
-- **Anchor information in time.** When you add a new fact or update
-  an existing one, attach a date marker drawn from the conversation
+- **Anchor the current state in time.** When you update an article's
+  current state, attach a date marker drawn from the conversation
   you're processing - use the latest message timestamp in the
   thread, rendered as month + year ("March 2026", "early 2026",
-  "late 2025"). This lets articles accumulate as a progressive
-  history rather than a flat snapshot, and gives the librarian a
-  freshness signal it can use. Examples:
-    "Jeff began learning Rust in March 2026."
+  "late 2025"). This gives the librarian a freshness signal it can
+  use. Examples:
     "As of November 2026, the recipe project is in beta."
+    "Jeff has been learning Rust since March 2026."
     "Maya started a new role at Foo in late 2025."
   Month + year granularity is enough; you don't need exact dates.
-  When you add a NEW fact to an existing article, do not rewrite
-  earlier dated statements - leave them as the historical record.
-  Append the new fact with its own date marker so the article
-  reads like an entry that's been added to over time.
+  The body carries the CURRENT-STATE date anchor, not a running log:
+  do not append the new fact as one more dated line stacked on the
+  old ones. The dated trajectory is the records' job. When the body
+  already holds an older current-state line that this conversation
+  supersedes, update it in place (the record layer keeps the prior
+  value, so you are not losing history by rewriting the body).
 
 **Workflow for each topic the conversation actually deserves an
 edit on**:
@@ -734,14 +817,14 @@ edit on**:
 2. **If anything related exists, prefer wiki_update.** Even a
    loosely-related existing article is usually the right home
    for new information - extend it rather than fragment the wiki.
-   A "Maya" article gains a paragraph about her job change; a
+   A "Maya" article gains a line about her job change; a
    "household" article gains a section about Maya. Preserve every
-   existing fact (and every existing date marker) unless the
-   conversation explicitly contradicts it. Add new information
-   with a fresh date marker drawn from the current conversation;
-   do not rewrite earlier dated statements or condense for tone.
-   The article should read as a stack of dated developments over
-   time, not a single rewritten snapshot.
+   existing fact unless the conversation explicitly contradicts it,
+   and fold the new information into the body's CURRENT STATE rather
+   than appending a dated log entry. If the existing body still
+   carries an inline dated log, migrate it to records first (see
+   "Article body vs records" above) so the body you leave behind is
+   current-state prose, not a stack of dated snapshots.
 3. **wiki_create is the last resort.** Only call wiki_create
    when you have run wiki_search at least twice with different
    angles AND none of the results could plausibly be extended to
@@ -835,6 +918,7 @@ function buildWikiToolbox(): Toolbox {
       asAgentTool(wikiUpdate, WIKI_UPDATE_WIRE_SCHEMA),
       asAgentTool(wikiDelete, WIKI_DELETE_WIRE_SCHEMA),
       asAgentTool(recordList, RECORD_LIST_WIRE_SCHEMA),
+      asAgentTool(recordCreate, RECORD_CREATE_WIRE_SCHEMA),
       asAgentTool(memorySearch, MEMORY_SEARCH_WIRE_SCHEMA),
     ],
   };
