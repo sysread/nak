@@ -5,10 +5,12 @@
 // the synthesized answer plus web_search_citations, and returns them
 // to the model. Wire schema lives in src/lib/tools/web_search.schema.ts.
 //
-// disable_thinking is on because the search model is reasoning-capable
-// (tencent-hy3-preview defaults to high reasoning_effort) and its CoT
-// pass would otherwise eat the token budget before any answer text
-// lands. 8196-token cap matches the browser-side ceiling for
+// The search model is mistral-small, a non-reasoning instruct model -
+// the right class here because faithfulness is the priority (a
+// confabulated summary of live results is worse than none) and a CoT
+// pass would only burn the answer budget. disable_thinking stays on as
+// a harmless no-op so the call survives a future re-point to a
+// reasoning id. 8196-token cap matches the browser-side ceiling for
 // citation-heavy summaries.
 //
 // Empty-text-with-citations is treated as an error rather than a
@@ -20,7 +22,7 @@ import { toolComplete } from './_venice_complete.ts';
 
 // Mirror of agentModel('webSearch') in src/lib/models/index.ts. Same
 // same-PR sync discipline as the other browser-mirror constants.
-const WEB_SEARCH_MODEL = 'tencent-hy3-preview';
+const WEB_SEARCH_MODEL = 'mistral-small-3-2-24b-instruct';
 
 const WEB_SEARCH_SYSTEM_PROMPT = [
   'You are a research-savvy search assistant. Given the query below,',

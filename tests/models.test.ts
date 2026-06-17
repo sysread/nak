@@ -128,10 +128,10 @@ describe('AGENT_MODELS (background agents)', () => {
     }
   });
   it('groups roles by model id as expected', () => {
-    // Deepseek slots: everything except web search. reflection, the
-    // recall trio, and research_docs were briefly on tencent-hy3-preview
-    // but moved back; only web_search stayed on Hy3. See the per-slot
-    // rationale block in src/lib/models/index.ts.
+    // Deepseek backs every slot except the two latency-bound,
+    // non-reasoning sub-calls: web search (mistral-small) and intuition
+    // (nemotron-nano). See the per-slot rationale block in
+    // src/lib/models/index.ts.
     expect(AGENT_MODELS.reflection).toBe('deepseek-v4-flash');
     expect(AGENT_MODELS.wiki).toBe('deepseek-v4-flash');
     expect(AGENT_MODELS.wikiLibrarian).toBe('deepseek-v4-flash');
@@ -141,16 +141,19 @@ describe('AGENT_MODELS (background agents)', () => {
     expect(AGENT_MODELS.recall).toBe('deepseek-v4-flash');
     expect(AGENT_MODELS.conversationRecall).toBe('deepseek-v4-flash');
     expect(AGENT_MODELS.wikiRecall).toBe('deepseek-v4-flash');
-    // Two Hy3 slots: web search and intuition. Both are latency-bound
-    // sub-calls that pin disable_thinking, so they ride the fast tier;
-    // kept on a distinct id from the deepseek-backed agents so they can
-    // be retuned without dragging those along. Intuition moved here off
-    // mistral-small because the pre-turn pulse is awaited on the turn's
-    // critical path. (The bias and samskara agents still run
-    // mistral-small, but they live server-side now - see BIAS_MODEL and
-    // SAMSKARA_MODEL under supabase/functions/venice/agents/.)
-    expect(AGENT_MODELS.webSearch).toBe('tencent-hy3-preview');
-    expect(AGENT_MODELS.intuition).toBe('tencent-hy3-preview');
+    // Web search and intuition are both latency-bound sub-calls that
+    // pin disable_thinking, and both want a NON-reasoning model (no CoT
+    // pass to burn the budget). Web search is on mistral-small, a
+    // faithful summariser - faithfulness is the priority where it
+    // synthesises live results. Intuition is on nemotron-nano (30B MoE,
+    // 3B active), the fastest non-reasoning id, since the pre-turn pulse
+    // is a primal-drive gut read awaited on the turn's critical path.
+    // Distinct ids from the deepseek-backed agents so they retune
+    // independently. (The bias and samskara agents also run
+    // mistral-small, but server-side - see BIAS_MODEL and SAMSKARA_MODEL
+    // under supabase/functions/venice/agents/.)
+    expect(AGENT_MODELS.webSearch).toBe('mistral-small-3-2-24b-instruct');
+    expect(AGENT_MODELS.intuition).toBe('nvidia-nemotron-3-nano-30b-a3b');
     // No vision slot here: analyze_image's vision sub-call runs
     // server-side in the venice edge function, which holds the primary
     // (e2ee-qwen3-vl-30b-a3b-p) and uncensored-fallback

@@ -226,16 +226,18 @@ export const MODELS = {
     // See ModelSpec.leaksSpecialTokens.
     leaksSpecialTokens: true,
   },
-  'tencent-hy3-preview': {
-    id: 'tencent-hy3-preview',
-    // 295B-param MoE (21B active) from Tencent Hy. Backs the web_search
-    // tool's sub-completion. Beta model on Venice (model_spec.betaModel),
-    // so expect occasional churn in availability.
-    contextWindow: 256_000,
-    // Reasoning-capable: reasoning_effort options are none/low/high
-    // (default high). The web_search sub-call zeroes the CoT via
-    // disable_thinking so the budget goes to answer text, not reasoning.
-    supportsReasoning: true,
+  'nvidia-nemotron-3-nano-30b-a3b': {
+    id: 'nvidia-nemotron-3-nano-30b-a3b',
+    // 30B-total MoE with only 3B ACTIVE params from NVIDIA - the
+    // fastest/cheapest non-reasoning text model on Venice. Backs the
+    // intuition pulse, whose only requirement is low latency on the
+    // pre-turn critical path (a "primal drive", not a reasoned take, so
+    // a low active-param count is a feature, not a compromise).
+    contextWindow: 128_000,
+    // Non-reasoning: no chain-of-thought pass, so disableThinking is a
+    // clean no-op and reasoning_effort must never go on the wire (Venice
+    // 4xxs on the field for non-reasoning ids).
+    supportsReasoning: false,
     supportsVision: false,
     supportsResponseFormat: true,
   },
@@ -244,8 +246,10 @@ export const MODELS = {
     contextWindow: 256_000,
     // Venice's mistral-small does NOT accept reasoning_effort. Sending
     // the field returns a 4xx, so every agent pinned to this id
-    // (intuition browser-side; samskara and bias server-side) omits
-    // it on the wire.
+    // (samskara and bias server-side, web_search's synthesis sub-call)
+    // omits it on the wire. A faithful, non-reasoning summarizer - the
+    // right profile for web_search, where hallucination is the risk and
+    // a CoT pass would only burn the answer budget.
     supportsReasoning: false,
     supportsVision: false,
     supportsResponseFormat: true,
@@ -528,8 +532,9 @@ export type AgentRole =
  *
  *     NOTE on capacity: the Balanced and Fast foreground tiers front
  *     deepseek-v4-flash (Smart is on qwen-3-7-plus). Every background
- *     agent here except webSearch (which is on tencent-hy3-preview)
- *     shares that id, so they share capacity with those tiers; the
+ *     agent here except webSearch (mistral-small-3-2-24b-instruct) and
+ *     intuition (nvidia-nemotron-3-nano-30b-a3b) shares that id, so
+ *     they share capacity with those tiers; the
  *     earlier policy of "background agents must not share capacity with
  *     foreground tiers" has been deliberately relaxed. If overload
  *     errors return under the shared-capacity shape, the next move is
@@ -578,13 +583,16 @@ export type AgentRole =
  *     final output). Pinned to the same id as `wiki` so a future
  *     swap of the wiki family flows through both surfaces.
  *
- *   webSearch - tencent-hy3-preview. The `web_search` tool's sub-
- *     completion summarises Venice-provided results into 2-4
- *     sentences with citation markers. Bounded synthesis; the call
- *     site forces disable_thinking so the model can't burn the
- *     output budget on a CoT preamble. Distinct id from the recall/
- *     wiki family so the search agent can be retuned without
- *     dragging the deepseek-backed agents along.
+ *   webSearch - mistral-small-3-2-24b-instruct. The `web_search`
+ *     tool's sub-completion summarises Venice-provided results into
+ *     2-4 sentences with citation markers. Faithfulness is the
+ *     priority here (a confabulated summary of live results is worse
+ *     than none), so a non-reasoning instruct model is the right
+ *     class: no CoT pass to burn the output budget, and a steady
+ *     summariser rather than a model that might reason its way off
+ *     the sources. The call site still pins disable_thinking, now a
+ *     harmless no-op. Shares the id with the server-side samskara /
+ *     bias agents but is a distinct slot, so it can be retuned alone.
  *
  *   researchDocs - deepseek-v4-flash. The `research_docs` tool's
  *     sub-completion reads the bundled docs and answers in 2-5
@@ -592,14 +600,15 @@ export type AgentRole =
  *     reasoning knob at the call site - rides deepseek's default
  *     effort, same as the other deepseek slots.
  *
- *   intuition - tencent-hy3-preview. The pre-turn pulse fires before
- *     every assistant turn AND the turn waits on it (the chat-loop
- *     awaits the pipeline before assembling the wire), so latency is
- *     the primary constraint - hy3-preview is the fast tier, the same
- *     id webSearch rides. It is reasoning-capable, but the call site
- *     pins disable_thinking to keep the token budget on the answer
- *     and skip the CoT pass (see callOnce in intuition/pipeline.ts),
- *     so there is no per-call reasoning overhead.
+ *   intuition - nvidia-nemotron-3-nano-30b-a3b. The pre-turn pulse
+ *     fires before every assistant turn AND the turn waits on it (the
+ *     chat-loop awaits the pipeline before assembling the wire), so
+ *     latency is the ONLY constraint that matters - the pulse is a
+ *     primal-drive gut read, not a reasoned take. Nemotron-nano is the
+ *     fastest non-reasoning model on Venice (30B MoE, 3B active), so a
+ *     low active-param count is exactly the right trade: cheap, fast,
+ *     and reasoning would be wrong here anyway. The call site pins
+ *     disable_thinking, a no-op on a non-reasoning id.
  *
  *
  *   recall - deepseek-v4-flash. Memory-recall agent: read the live
@@ -636,9 +645,9 @@ export const AGENT_MODELS = {
   wikiLibrarian:      'deepseek-v4-flash',
   deepSleep:          'deepseek-v4-flash',
   rem:                'deepseek-v4-flash',
-  webSearch:          'tencent-hy3-preview',
+  webSearch:          'mistral-small-3-2-24b-instruct',
   researchDocs:       'deepseek-v4-flash',
-  intuition:          'tencent-hy3-preview',
+  intuition:          'nvidia-nemotron-3-nano-30b-a3b',
   recall:             'deepseek-v4-flash',
   conversationRecall: 'deepseek-v4-flash',
   wikiRecall:         'deepseek-v4-flash',

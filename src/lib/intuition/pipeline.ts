@@ -64,16 +64,14 @@ const log = createLogger('intuition');
  * samskara and summary agents use; reasoning content on the response
  * is ignored, only the body text contributes.
  *
- * disableThinking is load-bearing here. The intuition slot in
- * AGENT_MODELS resolves to tencent-hy3-preview, a reasoning-capable
- * model (it emits chain-of-thought through `reasoning_content` BEFORE
- * writing any text into `content`). Without the pin a CoT preamble
- * would eat the 2048-token answer budget; with it, the budget stays
- * on the answer. Web_search - also on hy3-preview - hit that trap and
- * fixes it the same way. For an internal-monologue prompt the
- * reasoning pass would not add much anyway. (The flag is a harmless
- * no-op on a non-reasoning model, so it also survives a future
- * re-point to one.)
+ * disableThinking is set defensively. The intuition slot resolves to a
+ * non-reasoning model (nvidia-nemotron-3-nano-30b-a3b - the pulse is a
+ * primal-drive gut read where latency is everything and reasoning would
+ * be wrong), so the flag is a no-op today. It stays on so the call
+ * survives a re-point to a reasoning id: such a model emits
+ * chain-of-thought through `reasoning_content` before any `content`,
+ * and an unsuppressed CoT preamble would eat the 2048-token answer
+ * budget. web_search keeps the same pin for the same reason.
  */
 async function callOnce(
   supabase: SupabaseService,
