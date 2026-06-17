@@ -7,10 +7,11 @@ The self-calibrating health model that replaced wall-clock decay
 posterior" / "Decay: relevance-gated forgetting"). Health is a derived
 empirical-Bayes posterior, not an accumulator:
 
-- `samskara_apply_evaluation(user, held[], contradicted[], not_engaged[])`
+- `samskara_apply_evaluation(user, held[], contradicted[], not_borne_out[], not_engaged[])`
   - the verdict-apply the next-day evaluation sweep calls: discount
   prior evidence by `d = 0.5^(1/L)`, fold in the verdict (held ->
-  confirm, contradicted -> disconfirm, not-engaged -> neither), then
+  confirm, contradicted -> disconfirm, not-borne-out -> disconfirm
+  `+= w_soft` (0.5, the soft miss), not-engaged -> neither), then
   recompute `health = confidence = (confirm + k*p0)/(confirm +
   disconfirm + k)` (k = 5).
 - `samskara_population_p0(user)` - the prior: the user's aggregate
@@ -54,16 +55,21 @@ producing the verdicts) is the **[hosted]** tail below.
    begin;
    update samskaras set confirm_count = 0, disconfirm_count = 0,
           health = 0.1, confidence = 0.1 where id = '<row-A>';
+   -- arg order: (user, held[], contradicted[], not_borne_out[], not_engaged[])
    -- held -> a hit
-   select public.samskara_apply_evaluation('<user>', array['<row-A>']::uuid[], '{}'::uuid[], '{}'::uuid[]);
+   select public.samskara_apply_evaluation('<user>', array['<row-A>']::uuid[], '{}'::uuid[], '{}'::uuid[], '{}'::uuid[]);
    select confirm_count, disconfirm_count, round(health::numeric,4) h, round(confidence::numeric,4) c
      from samskaras where id = '<row-A>';
-   -- contradicted -> a miss (discounts the prior confirm, folds in a disconfirm)
-   select public.samskara_apply_evaluation('<user>', '{}'::uuid[], array['<row-A>']::uuid[], '{}'::uuid[]);
+   -- contradicted -> a full miss (discounts the prior confirm, folds in a disconfirm)
+   select public.samskara_apply_evaluation('<user>', '{}'::uuid[], array['<row-A>']::uuid[], '{}'::uuid[], '{}'::uuid[]);
+   select confirm_count, disconfirm_count, round(health::numeric,4) h, round(confidence::numeric,4) c
+     from samskaras where id = '<row-A>';
+   -- not-borne-out -> a SOFT miss (folds in w_soft = 0.5 disconfirm)
+   select public.samskara_apply_evaluation('<user>', '{}'::uuid[], '{}'::uuid[], array['<row-A>']::uuid[], '{}'::uuid[]);
    select confirm_count, disconfirm_count, round(health::numeric,4) h, round(confidence::numeric,4) c
      from samskaras where id = '<row-A>';
    -- not-engaged -> discount only (no hit, no miss)
-   select public.samskara_apply_evaluation('<user>', '{}'::uuid[], '{}'::uuid[], array['<row-A>']::uuid[]);
+   select public.samskara_apply_evaluation('<user>', '{}'::uuid[], '{}'::uuid[], '{}'::uuid[], array['<row-A>']::uuid[]);
    select confirm_count, disconfirm_count, round(health::numeric,4) h, round(confidence::numeric,4) c
      from samskaras where id = '<row-A>';
    rollback;
@@ -88,10 +94,13 @@ producing the verdicts) is the **[hosted]** tail below.
 - (2) `health` and `confidence` are EQUAL at every step (the merge).
   After `held`: `confirm_count = 1`, `health = (1 + 5*p0)/(1 + 5)`
   (e.g. `0.7167` at `p0 = 0.66`). After `contradicted`: confirm
-  discounts to `1*d` and a disconfirm folds in, so health drops below
-  the held value. After `not-engaged`: both counts just discount by
-  `d` and health regresses slightly toward `p0`. (`apply_evaluation`
-  returns the count of rows touched: `1` each call.)
+  discounts to `1*d` and a full disconfirm folds in, so health drops
+  below the held value. After `not-borne-out`: a `0.5` disconfirm folds
+  in on top of the discounted priors, so health drops but by less than a
+  full contradiction would (the soft miss is half-weight). After
+  `not-engaged`: both counts just discount by `d` and health regresses
+  slightly toward `p0`. (`apply_evaluation` returns the count of rows
+  touched: `1` each call.)
 - (3) `<row-A>` (below floor AND quiet 15d) is deleted; `<row-B>`
   (below floor but fired today) survives - the reaper spares anything
   fired within `quiet_days`.
@@ -100,7 +109,8 @@ producing the verdicts) is the **[hosted]** tail below.
   samskaras, the `nak-samskara-evaluation-sweep` tick claims it, judges
   each fired prediction, and applies the verdicts. Watch the in-app
   Logs drawer (source `samskara-eval`) for `judged thread <id>: N/M
-  predictions; held=.. contradicted=.. not-engaged=..`, then verify the
+  predictions; held=.. contradicted=.. not-borne-out=.. not-engaged=..`,
+  then verify the
   `samskara_fires.verdict` writes and the moved `health`. This is the
   Venice path; run it against the hosted project post-deploy.
 

@@ -290,11 +290,13 @@ export interface VerdictCount {
 export function verdictBreakdown(rates: {
   held: number;
   contradicted: number;
+  notBorneOut: number;
   notEngaged: number;
 }): VerdictCount[] {
   return [
     { label: 'held', count: rates.held },
     { label: 'contradicted', count: rates.contradicted },
+    { label: 'not-borne-out', count: rates.notBorneOut },
     { label: 'not-engaged', count: rates.notEngaged },
   ];
 }

@@ -681,11 +681,17 @@ logs and yields to the next phase.
   `nak-samskara-evaluation-sweep` cron. NOT on the turn tail: it waits
   until a conversation has settled (same next-day + `>= 2`-round gate as
   reflection), then runs one structured completion to judge every
-  samskara that FIRED in the thread (`held` / `contradicted` /
-  `not-engaged`) and routes the verdicts through
+  samskara that FIRED in the thread and routes the verdicts through
   `samskara_apply_evaluation` - the sole writer of the verdict tallies
-  and the derived health posterior. Firing is the relevance gate, so an
-  untested prediction is never judged. It replaced a live 1-10 minute
+  and the derived health posterior. The judge answers a situation-first
+  decision tree: did the prediction's situation actually arise? If not,
+  `not-engaged` (a loose topical fire, no fair test). If so, `held`
+  (acted as predicted), `contradicted` (did the opposite), or
+  `not-borne-out` (situation arose but the tendency did not appear - a
+  soft miss). Firing is recall; this four-way is precision - splitting
+  the old single `not-engaged` bucket is what lets health discriminate
+  (see Health: the verdict posterior). Firing is the relevance gate, so
+  an untested prediction is never judged. It replaced a live 1-10 minute
   reaction classifier (`agentClassifyReaction` + `samskara_apply_reaction`)
   that resolved only ~4% of fires; `was_confirmed` is now set by the
   judge (`held` -> true, `contradicted` -> false) for the legacy panels
@@ -754,7 +760,7 @@ prediction hold? `health` and `confidence` are the SAME number now (the
 merge): both are this posterior, so the fire score's
 `sqrt(health * confidence)` collapses to it.
 
-`samskara_apply_evaluation(user, held[], contradicted[], not_engaged[])`
+`samskara_apply_evaluation(user, held[], contradicted[], not_borne_out[], not_engaged[])`
 updates each fired samskara online, one discount step plus the verdict:
 
 ```text
@@ -762,12 +768,26 @@ discount prior evidence (the forgetting):
   confirm_count    *= d        -- d = 0.5 ^ (1/L), L = half-life in evaluations
   disconfirm_count *= d
 fold in this evaluation's verdict:
-  held         -> confirm_count    += 1
-  contradicted -> disconfirm_count += 1
-  not-engaged  -> neither (the discount above is its only effect)
+  held          -> confirm_count    += 1
+  contradicted  -> disconfirm_count += 1
+  not-borne-out -> disconfirm_count += w_soft   -- soft miss, w_soft = 0.5
+  not-engaged   -> neither (the discount above is its only effect)
 recompute the posterior (written to BOTH health and confidence):
   health = confidence = (confirm_count + k*p0) / (confirm_count + disconfirm_count + k)
 ```
+
+`not-borne-out` is the verdict that gives health teeth. The situation
+arose and the predicted tendency did not appear - real but weaker
+evidence against the prediction than an active contradiction, so it
+counts as a fractional miss (`w_soft = 0.5`, the one hand-chosen
+magnitude; `k`, `L`, and `p0` are data-derived). Because `p0` is itself
+computed from these tallies, soft misses also pull the population prior
+down off its ceiling, so the *whole* corpus gains a discriminating
+baseline rather than every row sitting at a near-1 `p0`. There is no
+backfill: already-judged threads keep their verdicts, so the corpus
+migrates to the new calibration forward, over roughly `L` evaluation
+cycles per samskara, as new conversations are judged - a gradual
+re-weighting, not a one-time mass decay.
 
 `p0` is the **population's aggregate hit rate** (`samskara_population_p0`:
 `sum(confirm) / sum(confirm + disconfirm)` across the user's corpus, weak

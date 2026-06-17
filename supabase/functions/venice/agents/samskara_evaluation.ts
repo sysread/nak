@@ -58,15 +58,27 @@ const EVALUATION_MAX_TOKENS = 2048;
 // Kill switch. While true the judge records verdicts but never writes
 // health (the slice-1 shadow phase). False routes each verdict through
 // samskara_apply_evaluation, which recomputes health as the
-// empirical-Bayes posterior. There are NO per-verdict delta constants
-// under the derived model - held / contradicted / not-engaged are hit /
-// miss / no-evidence, and the magnitude falls out of the posterior and
-// its population prior, not a hand-tuned step.
+// empirical-Bayes posterior. The four verdicts are hit / full-miss /
+// soft-miss / no-evidence; the magnitude falls out of the posterior and
+// its population prior, with one hand-chosen knob - the soft-miss weight -
+// living in the RPC, not here.
 const SHADOW_MODE = false;
 
-type VerdictKind = 'held' | 'contradicted' | 'not-engaged';
+// The judge's four-way verdict. The split that matters is between the two
+// "fired but didn't hold" outcomes: not-borne-out means the prediction's
+// situation actually arose and the predicted tendency simply did not show
+// (a soft miss - real evidence against), while not-engaged means the
+// situation never really came up (a loose topical fire - no fair test, no
+// evidence either way). Collapsing those two is what left health unable to
+// discriminate; firing is recall, this verdict is precision.
+type VerdictKind = 'held' | 'contradicted' | 'not-borne-out' | 'not-engaged';
 
-const VERDICT_KINDS: readonly VerdictKind[] = ['held', 'contradicted', 'not-engaged'];
+const VERDICT_KINDS: readonly VerdictKind[] = [
+  'held',
+  'contradicted',
+  'not-borne-out',
+  'not-engaged',
+];
 
 function isVerdict(v: unknown): v is VerdictKind {
   return typeof v === 'string' && (VERDICT_KINDS as readonly string[]).includes(v);
@@ -109,23 +121,30 @@ function buildVerdictRequest(predictions: { tag: string; text: string }[]): stri
   const lines = predictions.map((p) => `${p.tag}: ${p.text}`);
   return [
     'Below are predictions that were live during the conversation above.',
-    'For EACH one, judge how the conversation bore on it:',
+    'For EACH one, first ask: did the SITUATION the prediction is about',
+    'actually come up in this conversation?',
     '',
-    '- "held": clear evidence in the conversation that the prediction was',
-    '  borne out.',
-    '- "contradicted": clear evidence the prediction was wrong (the user',
-    '  did the opposite).',
-    '- "not-engaged": the conversation did not clearly test the prediction',
-    '  - the topic did not really come up, or there is no clear signal.',
-    '  DEFAULT to this when uncertain; only choose held or contradicted',
-    '  with explicit evidence from the transcript.',
+    '- If the situation did NOT really come up (the prediction was only',
+    '  loosely related to what was discussed), the verdict is',
+    '  "not-engaged": there was no fair test of it.',
+    '- If the situation DID come up, judge how the user behaved:',
+    '  - "held": the user did what the prediction says they tend to do.',
+    '  - "contradicted": the user did the OPPOSITE of the prediction.',
+    '  - "not-borne-out": the situation arose but the predicted tendency',
+    '    simply did not appear - neither clearly confirmed nor clearly',
+    '    contradicted, it just did not happen this time.',
+    '',
+    'Be skeptical and require explicit evidence from the transcript.',
+    'DEFAULT to "not-engaged" when you are unsure whether the situation',
+    'genuinely came up; reserve held / contradicted / not-borne-out for',
+    'when the prediction was actually put to the test.',
     '',
     'Predictions:',
     ...lines,
     '',
     'Respond with ONLY a JSON object mapping every prediction id to its',
     'verdict, e.g. {"p1":"held","p2":"not-engaged"}. Include every id and',
-    'use only the three verdict strings above. No other text.',
+    'use only the four verdict strings above. No other text.',
   ].join('\n');
 }
 
@@ -295,6 +314,7 @@ async function evaluateClaimedThread(
   const byVerdict: Record<VerdictKind, string[]> = {
     held: [],
     contradicted: [],
+    'not-borne-out': [],
     'not-engaged': [],
   };
   for (const p of predictions) {
@@ -304,14 +324,20 @@ async function evaluateClaimedThread(
 
   // Record the verdicts on the fire rows. One update per verdict group,
   // stamping every fire row of each samskara in this thread. was_confirmed
-  // is set alongside (held -> true, contradicted -> false, not-engaged ->
-  // null) so the legacy readers of that column - the Health panel's
-  // resolution stats, CohortPanel, BiasProfile - keep working now that the
-  // live reaction classifier (its former writer) no longer runs.
+  // is set alongside so the legacy readers of that column - the Health
+  // panel's resolution stats, CohortPanel, BiasProfile - keep working now
+  // that the live reaction classifier (its former writer) no longer runs.
+  // Both miss verdicts map to false (not-borne-out is a soft miss, but it
+  // is still "not confirmed" to a boolean reader); not-engaged stays null
+  // (untested), the same as before the soft-miss split.
   for (const kind of VERDICT_KINDS) {
     const ids = byVerdict[kind];
     if (ids.length === 0) continue;
-    const wasConfirmed = kind === 'held' ? true : kind === 'contradicted' ? false : null;
+    const wasConfirmed = kind === 'held'
+      ? true
+      : kind === 'not-engaged'
+      ? null
+      : false;
     const { error: updErr } = await adminClient
       .from('samskara_fires')
       .update({ verdict: kind, was_confirmed: wasConfirmed })
@@ -321,8 +347,7 @@ async function evaluateClaimedThread(
     if (updErr) throw new Error(`recording verdict '${kind}' failed: ${updErr.message}`);
   }
 
-  const judged = byVerdict.held.length + byVerdict.contradicted.length +
-    byVerdict['not-engaged'].length;
+  const judged = VERDICT_KINDS.reduce((n, k) => n + byVerdict[k].length, 0);
   const verdictSummary = VERDICT_KINDS.map((k) => `${k}=${byVerdict[k].length}`).join(' ');
 
   if (SHADOW_MODE) {
@@ -334,14 +359,15 @@ async function evaluateClaimedThread(
   } else {
     // Live: fold the verdicts into the self-calibrating posterior.
     // samskara_apply_evaluation discounts prior evidence, applies this
-    // round's hit/miss, and recomputes health = confidence = the
-    // posterior shrunk toward the population prior `p0`. The not-engaged
-    // ids ride along so their prior evidence is discounted (the
-    // forgetting) even though they add no hit or miss.
+    // round's hit / full-miss / soft-miss, and recomputes health =
+    // confidence = the posterior shrunk toward the population prior `p0`.
+    // The not-engaged ids ride along so their prior evidence is discounted
+    // (the forgetting) even though they add no hit or miss.
     const { error: applyErr } = await adminClient.rpc('samskara_apply_evaluation', {
       p_user_id: userId,
       p_held: byVerdict.held,
       p_contradicted: byVerdict.contradicted,
+      p_not_borne_out: byVerdict['not-borne-out'],
       p_not_engaged: byVerdict['not-engaged'],
     });
     if (applyErr) throw new Error(`samskara_apply_evaluation failed: ${applyErr.message}`);

@@ -186,10 +186,15 @@ describe('relativeTime / formatValence / emptyMessage', () => {
 });
 
 describe('verdictBreakdown', () => {
-  it('emits the three verdicts in the panel stack order', () => {
-    const out = verdictBreakdown({ held: 5, contradicted: 2, notEngaged: 7 });
-    expect(out.map((v) => v.label)).toEqual(['held', 'contradicted', 'not-engaged']);
-    expect(out.map((v) => v.count)).toEqual([5, 2, 7]);
+  it('emits the four verdicts in the panel stack order', () => {
+    const out = verdictBreakdown({ held: 5, contradicted: 2, notBorneOut: 3, notEngaged: 7 });
+    expect(out.map((v) => v.label)).toEqual([
+      'held',
+      'contradicted',
+      'not-borne-out',
+      'not-engaged',
+    ]);
+    expect(out.map((v) => v.count)).toEqual([5, 2, 3, 7]);
   });
 });
 

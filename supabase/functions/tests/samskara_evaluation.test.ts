@@ -12,11 +12,14 @@ import { __test } from '../venice/agents/samskara_evaluation.ts';
 const { parseVerdicts, buildVerdictRequest } = __test;
 
 Deno.test('parseVerdicts keeps well-formed enum verdicts', () => {
-  const m = parseVerdicts('{"p1":"held","p2":"contradicted","p3":"not-engaged"}');
-  assertEquals(m.size, 3);
+  const m = parseVerdicts(
+    '{"p1":"held","p2":"contradicted","p3":"not-borne-out","p4":"not-engaged"}',
+  );
+  assertEquals(m.size, 4);
   assertEquals(m.get('p1'), 'held');
   assertEquals(m.get('p2'), 'contradicted');
-  assertEquals(m.get('p3'), 'not-engaged');
+  assertEquals(m.get('p3'), 'not-borne-out');
+  assertEquals(m.get('p4'), 'not-engaged');
 });
 
 Deno.test('parseVerdicts drops out-of-enum values but keeps valid siblings', () => {
@@ -40,17 +43,20 @@ Deno.test('parseVerdicts returns empty on non-object JSON', () => {
   assertEquals(parseVerdicts('null').size, 0);
 });
 
-Deno.test('buildVerdictRequest names the three verdicts, the tags, and the JSON contract', () => {
+Deno.test('buildVerdictRequest names the four verdicts, the tags, and the JSON contract', () => {
   const req = buildVerdictRequest([
     { tag: 'p1', text: 'in situations like X the user tends to Y' },
     { tag: 'p2', text: 'when discussing Z the user gets terse' },
   ]);
-  for (const v of ['"held"', '"contradicted"', '"not-engaged"']) {
+  for (const v of ['"held"', '"contradicted"', '"not-borne-out"', '"not-engaged"']) {
     assert(req.includes(v), `missing verdict ${v}`);
   }
   assert(req.includes('p1:') && req.includes('p2:'), 'missing prediction tags');
   assert(req.includes('in situations like X'), 'missing prediction text');
   assert(req.includes('JSON object'), 'missing JSON-object instruction');
   // The skeptical default is load-bearing - pin that the prompt states it.
-  assert(req.includes('DEFAULT to this when uncertain'), 'missing skeptical default');
+  assert(req.includes('DEFAULT to "not-engaged"'), 'missing skeptical default');
+  // The situation-first decision tree is the whole point of the split;
+  // pin that the prompt asks the situation question before the outcome.
+  assert(req.includes('did the SITUATION'), 'missing situation-first gate');
 });

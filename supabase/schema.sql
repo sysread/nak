@@ -6755,22 +6755,42 @@ grant execute on function public.samskara_population_p0(uuid) to service_role;
 -- Verdict-apply for the evaluation sweep - the self-calibrating successor
 -- to samskara_apply_reaction. For every samskara that fired in a judged
 -- thread, age its prior evidence by the discount d, fold in this
--- evaluation's verdict (held -> a hit, contradicted -> a miss,
--- not-engaged -> no evidence, discount only), then recompute health as the
--- empirical-Bayes posterior shrunk toward p0. health and confidence are
--- kept EQUAL - both ARE the posterior, the single "earning its keep" score
--- the fire RPC's sqrt(health*confidence) collapses to (so no fire-score
--- change is needed). The posterior is a weighted average of {0,1} outcomes
--- and p0 in [0,1], so it is inherently bounded to [0,1] - it cannot run
--- away the way the old accumulator could. Two model knobs: k (prior
--- strength) and the evidence half-life L (in evaluations) behind the
--- discount d = 0.5^(1/L). Caller (the service-role sweep) must pass each
--- fired samskara in exactly one of the three arrays.
+-- evaluation's verdict, then recompute health as the empirical-Bayes
+-- posterior shrunk toward p0. The four verdicts map to hit/miss evidence:
+--   held         -> a full hit       (confirm += 1)
+--   contradicted -> a full miss       (disconfirm += 1) - the user did the opposite
+--   not-borne-out -> a SOFT miss      (disconfirm += w_soft) - the prediction's
+--                    situation arose but the predicted tendency did not appear;
+--                    weaker evidence than an active contradiction, so it counts
+--                    fractionally. This is the verdict that gives health its
+--                    discriminating power: without it, an on-topic prediction
+--                    that fires constantly and never lands stays pinned at the
+--                    prior because not-engaged is neutral.
+--   not-engaged  -> no evidence       (discount only) - the situation never really
+--                    arose (a loose topical fire); no fair test, so neither tally
+--                    moves. This is also why p0 stays meaningful: only genuine
+--                    tests (held / contradicted / not-borne-out) feed the prior.
+-- health and confidence are kept EQUAL - both ARE the posterior, the single
+-- "earning its keep" score the fire RPC's sqrt(health*confidence) collapses
+-- to (so no fire-score change is needed). The posterior is a weighted
+-- average of {0,1} outcomes and p0 in [0,1], so it is inherently bounded to
+-- [0,1] - it cannot run away the way the old accumulator could. Model knobs:
+-- k (prior strength), the evidence half-life L (in evaluations) behind the
+-- discount d = 0.5^(1/L), and w_soft (the soft-miss weight). Caller (the
+-- service-role sweep) must pass each fired samskara in exactly one of the
+-- four arrays.
+--
+-- The first drop clears the pre-soft-miss 4-arg signature on existing
+-- databases; the second makes re-applying the new 5-arg form idempotent
+-- (adding a parameter is a new overload, so CREATE OR REPLACE alone would
+-- leave the old arity resolvable - see CLAUDE.md on RPC signature changes).
 drop function if exists public.samskara_apply_evaluation(uuid, uuid[], uuid[], uuid[]);
+drop function if exists public.samskara_apply_evaluation(uuid, uuid[], uuid[], uuid[], uuid[]);
 create or replace function public.samskara_apply_evaluation(
   p_user_id uuid,
   p_held uuid[],
   p_contradicted uuid[],
+  p_not_borne_out uuid[],
   p_not_engaged uuid[]
 ) returns int
 language plpgsql security definer set search_path = public as $$
@@ -6778,6 +6798,12 @@ declare
   k constant real := 5.0;                       -- prior strength (pseudo-count)
   l_halflife constant real := 10.0;             -- evidence half-life, in evaluations
   d constant real := 0.5 ^ (1.0 / l_halflife);  -- per-evaluation discount
+  -- Soft-miss weight: a "not-borne-out" (situation arose, tendency did not
+  -- appear) is real but weaker evidence against the prediction than a flat
+  -- contradiction, so it counts as half a miss. This is the one deliberately
+  -- hand-chosen magnitude in the model (k, L, and p0 are data-derived); it is
+  -- the knob to calibrate if the corpus decays too hard or too softly.
+  w_soft constant real := 0.5;
   v_p0 real;
   affected int;
 begin
@@ -6786,11 +6812,13 @@ begin
   v_p0 := public.samskara_population_p0(p_user_id);
 
   with judged as (
-    select unnest(p_held)        as id, 1.0::real as h, 0.0::real as m
+    select unnest(p_held)         as id, 1.0::real as h, 0.0::real   as m
     union all
-    select unnest(p_contradicted) as id, 0.0::real as h, 1.0::real as m
+    select unnest(p_contradicted) as id, 0.0::real as h, 1.0::real   as m
     union all
-    select unnest(p_not_engaged)  as id, 0.0::real as h, 0.0::real as m
+    select unnest(p_not_borne_out) as id, 0.0::real as h, w_soft     as m
+    union all
+    select unnest(p_not_engaged)  as id, 0.0::real as h, 0.0::real   as m
   ),
   computed as (
     select s.id,
@@ -6812,9 +6840,9 @@ begin
   get diagnostics affected = row_count;
   return affected;
 end $$;
-revoke all on function public.samskara_apply_evaluation(uuid, uuid[], uuid[], uuid[])
+revoke all on function public.samskara_apply_evaluation(uuid, uuid[], uuid[], uuid[], uuid[])
   from public, anon, authenticated;
-grant execute on function public.samskara_apply_evaluation(uuid, uuid[], uuid[], uuid[])
+grant execute on function public.samskara_apply_evaluation(uuid, uuid[], uuid[], uuid[], uuid[])
   to service_role;
 
 -- Reaper: delete repeatedly-contradicted, long-quiet samskaras. Under
@@ -7985,13 +8013,14 @@ returns table (
   resolution_pct real,
   held int,
   contradicted int,
+  not_borne_out int,
   not_engaged int
 )
 language sql stable security invoker as $$
   -- "Resolved" = the next-day evaluation sweep has judged the fire
-  -- (verdict is set). held/contradicted/not-engaged break that down; an
-  -- unjudged fire (same-day thread, or under the 2-round gate) has a
-  -- null verdict and counts as unresolved.
+  -- (verdict is set). held/contradicted/not-borne-out/not-engaged break
+  -- that down; an unjudged fire (same-day thread, or under the 2-round
+  -- gate) has a null verdict and counts as unresolved.
   with w as (
     select f.verdict
       from public.samskara_fires f
@@ -8011,6 +8040,7 @@ language sql stable security invoker as $$
                 / (select count(*) from w)::real * 100.0) end)::real,
     (select count(*) from w where verdict = 'held')::int,
     (select count(*) from w where verdict = 'contradicted')::int,
+    (select count(*) from w where verdict = 'not-borne-out')::int,
     (select count(*) from w where verdict = 'not-engaged')::int
 $$;
 

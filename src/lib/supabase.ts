@@ -4500,6 +4500,7 @@ export class SupabaseService {
       resolutionPct: r?.resolution_pct ?? 0,
       held: r?.held ?? 0,
       contradicted: r?.contradicted ?? 0,
+      notBorneOut: r?.not_borne_out ?? 0,
       notEngaged: r?.not_engaged ?? 0,
     };
   }
@@ -4938,6 +4939,7 @@ export interface SamskaraRates {
   resolutionPct: number;
   held: number;
   contradicted: number;
+  notBorneOut: number;
   notEngaged: number;
 }
 
