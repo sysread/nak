@@ -418,6 +418,36 @@ function sleepCancellable(
   });
 }
 
+/**
+ * The browser's single handle on the user's Supabase project. One class,
+ * ~160 methods, grouped by domain with `// --- <group> ---` banners in
+ * declaration order. Grep a banner to jump to its block:
+ *
+ *   Auth & session            sign-in / out, session, password
+ *   Settings & Venice proxies user settings + the /complete, /embed,
+ *                             /usage, /models, /generate-image, text
+ *                             extraction edge-function calls
+ *   Threads                   list / search / CRUD / per-thread setters
+ *   Memories                  memory CRUD + changelog + paging
+ *   Cookbook                  recipes, versions, photos
+ *   Wiki articles             article CRUD + paging
+ *   Library / documents       document CRUD, upload, grep, stat
+ *   Wiki sources, changelog & agent runs
+ *                             bibliography, See-Also, changelog, the
+ *                             wiki/rem/deep-sleep run + retry routes
+ *   Thread response claims    cross-device "responding here" claim
+ *   Topic vocabularies        list_user_*_topics
+ *   Memory confidence, search & relations
+ *                             reaffirm/doubt, embedding search, graph
+ *   Messages & attachments    message read/write, attachment storage
+ *   Realtime subscriptions & message fetch
+ *                             subscribe* + getMessage + inflight lease
+ *   Samskara                  fire / substrate / health / clustering
+ *   Bias profile              bias summary + observations + reactions
+ *
+ * Row types and their coercers live in ./supabase/types/*; this file
+ * keeps the class plus its query/util helpers.
+ */
 export class SupabaseService {
   readonly client: SupabaseClient;
 
@@ -443,6 +473,8 @@ export class SupabaseService {
         },
       });
   }
+
+  // --- Auth & session --------------------------------------------------
 
   async getSession(): Promise<Session | null> {
     const { data, error } = await this.client.auth.getSession();
@@ -504,6 +536,8 @@ export class SupabaseService {
     const { error } = await this.client.auth.updateUser({ password: newPassword });
     if (error) throw new SupabaseError(error.message);
   }
+
+  // --- Settings & Venice API proxies -----------------------------------
 
   async getSettings(): Promise<UserSettings> {
     const session = await this.getSession();
@@ -868,6 +902,8 @@ export class SupabaseService {
     if (error) throw new SupabaseError(error.message);
     return merged;
   }
+
+  // --- Threads ---------------------------------------------------------
 
   /**
    * One page of threads. `nextCursor === null` means the query has been
@@ -1431,6 +1467,8 @@ export class SupabaseService {
   // select/update/delete. Inserts do need to set user_id explicitly (RLS
   // checks with_check against the row, and there's no default).
 
+  // --- Memories --------------------------------------------------------
+
   /**
    * Case-insensitive substring search over `label || data`. Empty query
    * lists all memories (most-recent first). Results are capped at `limit`
@@ -1641,6 +1679,8 @@ export class SupabaseService {
   // through the shared embeddings worker so a fuzzy query ("fluffy
   // potato side") can find a recipe by meaning rather than title
   // substring. Same claim/save/search RPC trio as the wiki source.
+
+  // --- Cookbook --------------------------------------------------------
 
   /**
    * List recipes, optionally filtered by a case-insensitive `title`
@@ -2421,6 +2461,8 @@ export class SupabaseService {
 
   // User wiki -------------------------------------------------------------
 
+  // --- Wiki articles ---------------------------------------------------
+
   /**
    * Alphabetical listing of every wiki article for the current user.
    * Sort key is `lower(title)` so case differences ("Apple" vs
@@ -2551,6 +2593,8 @@ export class SupabaseService {
   // Splitting it this way means a row always exists for the UI to show a
   // "processing" placeholder, and a crash mid-upload leaves a recoverable
   // pending row rather than an orphaned bucket object.
+
+  // --- Library / documents ---------------------------------------------
 
   async createDocument(args: {
     title: string;
@@ -2827,6 +2871,8 @@ export class SupabaseService {
     if (rows.length === 0) return null;
     return coerceDocumentStat(rows[0]);
   }
+
+  // --- Wiki sources, changelog & agent runs ----------------------------
 
   /**
    * Attribute one or more source conversations to a wiki article.
@@ -3290,6 +3336,8 @@ export class SupabaseService {
   // singletons partitioned by `workerKind`; these are per-thread,
   // keyed on the thread row itself.
 
+  // --- Thread response claims ------------------------------------------
+
   /**
    * Try to take the response claim on `threadId`. Returns true iff we
    * hold it after the call. Atomic: the underlying SQL update only
@@ -3345,6 +3393,8 @@ export class SupabaseService {
     if (error) throw new SupabaseError(error.message);
   }
 
+  // --- Topic vocabularies ----------------------------------------------
+
   /**
    * Topic vocabulary + per-topic counts for the current user. Backs the
    * drawer's topic-filter dropdown; called on drawer mount and
@@ -3384,6 +3434,8 @@ export class SupabaseService {
     if (error) throw new SupabaseError(error.message);
     return parseTopicVocabulary(data);
   }
+
+  // --- Memory confidence, search & relations ---------------------------
 
   /**
    * Chat-side reaffirm: +0.5 capped at 10.0. Gentler than the reflection
@@ -3582,6 +3634,8 @@ export class SupabaseService {
     if (error) throw new SupabaseError(error.message);
     return (data ?? []) as Memory[];
   }
+
+  // --- Messages & attachments ------------------------------------------
 
   async listMessages(threadId: string): Promise<Message[]> {
     const { data, error } = await this.client
@@ -4036,6 +4090,8 @@ export class SupabaseService {
     return data as Message;
   }
 
+  // --- Realtime subscriptions & message fetch --------------------------
+
   /**
    * Realtime: stream INSERTs for a single thread's messages. Keeps a
    * thread open on two devices in sync — when device A's chat-loop
@@ -4482,6 +4538,8 @@ export class SupabaseService {
   // assimilate / mint / dedup / compound-regen) runs server-side in
   // supabase/functions/venice/agents/samskara.ts against the same SQL
   // surface via its p_user_id overloads.
+
+  // --- Samskara --------------------------------------------------------
 
   /**
    * Top-K cosine fire over the user's samskaras. Ranks by
