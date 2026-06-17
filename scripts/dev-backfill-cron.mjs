@@ -156,6 +156,11 @@ async function tickWikiSweep(apiUrl, serviceRoleKey) {
   await postRoute(apiUrl, serviceRoleKey, 'wiki-sweep', stamp);
 }
 
+async function tickWikiRecordsSweep(apiUrl, serviceRoleKey) {
+  const stamp = new Date().toISOString().slice(11, 19);
+  await postRoute(apiUrl, serviceRoleKey, 'wiki-records-sweep', stamp);
+}
+
 async function tickWikiLibrarianSweep(apiUrl, serviceRoleKey) {
   const stamp = new Date().toISOString().slice(11, 19);
   await postRoute(apiUrl, serviceRoleKey, 'wiki-librarian-sweep', stamp);
@@ -212,6 +217,7 @@ const SLOW_TICK_MULTIPLE = 10;
 async function tick(apiUrl, serviceRoleKey, count) {
   await tickBackfill(apiUrl, serviceRoleKey);
   await tickWikiSweep(apiUrl, serviceRoleKey);
+  await tickWikiRecordsSweep(apiUrl, serviceRoleKey);
   await tickWikiLibrarianSweep(apiUrl, serviceRoleKey);
   await tickRemSweep(apiUrl, serviceRoleKey);
   await tickDeepSleepSweep(apiUrl, serviceRoleKey);

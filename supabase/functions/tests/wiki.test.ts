@@ -23,13 +23,24 @@
 import { assertEquals, assertStringIncludes } from '@std/assert';
 import { __test } from '../venice/agents/wiki.ts';
 
-Deno.test('wiki toolbox is wiki CRUD + read-only memory_search, in declared order', () => {
+Deno.test('wiki toolbox is wiki CRUD + read-only record_list + memory_search, in declared order', () => {
   const toolbox = __test.buildWikiToolbox();
   assertEquals(toolbox.name, 'wiki');
+  // record_list rides READ-ONLY so the worker can fold durable learnings
+  // from an article's dated records into the article body; it never gets
+  // record_create / record_update / record_delete (the extraction agent
+  // and the librarian own record writes).
   assertEquals(
     toolbox.tools.map((t) => t.name),
-    ['wiki_search', 'wiki_create', 'wiki_update', 'wiki_delete', 'memory_search'],
+    ['wiki_search', 'wiki_create', 'wiki_update', 'wiki_delete', 'record_list', 'memory_search'],
   );
+});
+
+Deno.test('wiki toolbox excludes record writes', () => {
+  const names = __test.buildWikiToolbox().tools.map((t) => t.name);
+  for (const forbidden of ['record_create', 'record_update', 'record_delete']) {
+    assertEquals(names.includes(forbidden), false, `${forbidden} must not be reachable`);
+  }
 });
 
 Deno.test('wiki toolbox excludes memory writes, hard-deletes, and the UI tool', () => {

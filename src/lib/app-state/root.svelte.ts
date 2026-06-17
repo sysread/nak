@@ -132,6 +132,17 @@ interface AppState {
    */
   wikiAutomaticEnabled: boolean;
   /**
+   * Wiki record extraction: when true, the background extraction agent
+   * scans settled conversations and creates dated records on the user's
+   * existing wiki articles. Independent of `wikiAutomaticEnabled` so a
+   * user can keep article maintenance on while turning off automatic
+   * record extraction (manually-added records still work). Default true;
+   * overwritten from Supabase `profiles.settings.wikiRecordExtractionEnabled`
+   * on unlock. The cron sweep's claim predicate reads the persisted form
+   * per candidate thread.
+   */
+  wikiRecordExtractionEnabled: boolean;
+  /**
    * Wiki librarian: when true, the periodic librarian agent runs in
    * the background (12h minimum interval, atomically gated across
    * devices). Independent of `wikiAutomaticEnabled` so the two wiki
@@ -208,6 +219,7 @@ export const app = $state<AppState>({
   emphasisMarkdown: false,
   notifyOnComplete: false,
   wikiAutomaticEnabled: true,
+  wikiRecordExtractionEnabled: true,
   wikiLibrarianEnabled: true,
   memoryLibrarianEnabled: true,
   displayTimezone: detectTimezone(),

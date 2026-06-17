@@ -788,6 +788,13 @@ export class SupabaseService {
         merged.wikiAutomaticEnabled = patch.wikiAutomaticEnabled;
       }
     }
+    if ('wikiRecordExtractionEnabled' in patch) {
+      if (patch.wikiRecordExtractionEnabled === undefined) {
+        delete merged.wikiRecordExtractionEnabled;
+      } else if (typeof patch.wikiRecordExtractionEnabled === 'boolean') {
+        merged.wikiRecordExtractionEnabled = patch.wikiRecordExtractionEnabled;
+      }
+    }
     if ('wikiLibrarianEnabled' in patch) {
       if (patch.wikiLibrarianEnabled === undefined) {
         delete merged.wikiLibrarianEnabled;

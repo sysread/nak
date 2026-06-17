@@ -113,6 +113,19 @@ function setWikiAutomaticEnabled(enabled: boolean): void {
 }
 
 /**
+ * Flip the in-memory wiki-record-extraction flag. Independent of the
+ * automatic wiki agent - a user can keep article maintenance on while
+ * turning extraction off (manual records still work). The live switch
+ * is the persisted setting: the extraction sweep's claim predicate
+ * reads profiles.settings.wikiRecordExtractionEnabled server-side, so
+ * there is no worker to start or stop here. Does NOT persist;
+ * user-driven changes route through `persistWikiRecordExtractionEnabled`.
+ */
+function setWikiRecordExtractionEnabled(enabled: boolean): void {
+  app.wikiRecordExtractionEnabled = enabled;
+}
+
+/**
  * Flip the in-memory wiki-librarian flag. Independent of the
  * automatic wiki agent - the user can disable autonomy on one or the
  * other without losing the other. The live switch is the persisted
@@ -323,6 +336,18 @@ export async function persistWikiAutomaticEnabled(enabled: boolean): Promise<voi
   }
 }
 
+export async function persistWikiRecordExtractionEnabled(enabled: boolean): Promise<void> {
+  if (!app.supabase) throw new Error(NOT_CONNECTED);
+  const prev = app.wikiRecordExtractionEnabled;
+  setWikiRecordExtractionEnabled(enabled);
+  try {
+    await app.supabase.updateSettings({ wikiRecordExtractionEnabled: enabled });
+  } catch (err) {
+    setWikiRecordExtractionEnabled(prev);
+    throw err;
+  }
+}
+
 export async function persistWikiLibrarianEnabled(enabled: boolean): Promise<void> {
   if (!app.supabase) throw new Error(NOT_CONNECTED);
   const prev = app.wikiLibrarianEnabled;
@@ -430,6 +455,7 @@ export function applyServerSettings(s: UserSettings): void {
   // the blob disables; absent key falls through to the seed (also
   // true).
   setWikiAutomaticEnabled(s.wikiAutomaticEnabled ?? true);
+  setWikiRecordExtractionEnabled(s.wikiRecordExtractionEnabled ?? true);
   setWikiLibrarianEnabled(s.wikiLibrarianEnabled ?? true);
   setMemoryLibrarianEnabled(s.memoryLibrarianEnabled ?? true);
   if (s.displayTimezone) setDisplayTimezone(s.displayTimezone);

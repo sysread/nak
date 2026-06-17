@@ -66,6 +66,7 @@
     persistEmphasisMarkdown,
     persistNotifyOnComplete,
     persistWikiAutomaticEnabled,
+    persistWikiRecordExtractionEnabled,
     persistWikiLibrarianEnabled,
     persistMemoryLibrarianEnabled,
     persistDisplayTimezone,
@@ -245,6 +246,7 @@
   // state.svelte.ts so the worker starts/stops in real time, and
   // persists on `profiles.settings.wikiAutomaticEnabled`.
   let wikiAutomaticEnabled = $state<boolean>(app.wikiAutomaticEnabled);
+  let wikiRecordExtractionEnabled = $state<boolean>(app.wikiRecordExtractionEnabled);
   let wikiLibrarianEnabled = $state<boolean>(app.wikiLibrarianEnabled);
   let memoryLibrarianEnabled = $state<boolean>(app.memoryLibrarianEnabled);
   let memoryLibrarianInfo = $state<string | null>(null);
@@ -1192,6 +1194,22 @@
     }
   }
 
+  async function onToggleWikiRecordExtraction(next: boolean): Promise<void> {
+    wikiError = null;
+    wikiInfo = null;
+    const prev = wikiRecordExtractionEnabled;
+    wikiRecordExtractionEnabled = next;
+    try {
+      await persistWikiRecordExtractionEnabled(next);
+      wikiInfo = next
+        ? 'Automatic record extraction enabled.'
+        : 'Automatic record extraction disabled. Manually-added records still work; the background agent will stop creating new ones.';
+    } catch (err) {
+      wikiRecordExtractionEnabled = prev;
+      wikiError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
   async function onToggleWikiLibrarian(next: boolean): Promise<void> {
     wikiError = null;
     wikiInfo = null;
@@ -1862,6 +1880,24 @@
             you chat. Turning this off stops the per-conversation
             agent; manual edits and the per-article "ask agent to
             update" button still work, and existing articles are
+            untouched.
+          </span>
+        </label>
+
+        <h3 class="pane-section">Automatic records</h3>
+        <label class="form-row toggle-row">
+          <input
+            type="checkbox"
+            name="wiki-record-extraction"
+            checked={wikiRecordExtractionEnabled}
+            onchange={(e) => onToggleWikiRecordExtraction(e.currentTarget.checked)}
+          />
+          <span>
+            Let Nak scan your conversations for discrete events
+            (a bake, a doctor visit, a milestone) and log them as dated
+            records on the matching wiki article. Turning this off stops
+            the background extraction agent; you can still add and edit
+            records by hand on any article, and existing records are
             untouched.
           </span>
         </label>

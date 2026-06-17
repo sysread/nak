@@ -9184,6 +9184,198 @@ language sql stable security invoker as $$
    limit match_limit
 $$;
 
+-- Per-thread pointer + claim columns for the background wiki-record
+-- extraction agent. Independent of the wiki article pointer
+-- (last_wiki_processed_msg_id) so extraction and article maintenance
+-- run concurrently against the same thread without crowding each other's
+-- pointers. Simpler than the article agent's per-thread state: no
+-- content-filter fallback tracking (the extraction model has no
+-- uncensored-fallback path), just a failure counter that advances the
+-- pointer past a permanently-failing terminal message at the cap.
+alter table public.threads
+  add column if not exists last_wiki_record_processed_msg_id uuid references public.messages(id) on delete set null,
+  add column if not exists wiki_record_claim_holder text,
+  add column if not exists wiki_record_claim_expires_at timestamptz,
+  add column if not exists wiki_record_failure_count int not null default 0,
+  add column if not exists wiki_record_last_skip_at timestamptz,
+  add column if not exists wiki_record_last_skip_reason text;
+
+-- Claim the next thread eligible for record extraction, across ALL
+-- users. SECURITY DEFINER global sweep, same posture as
+-- claim_next_thread_for_wiki: cron-driven service role, EXECUTE locked
+-- to service_role below. Eligibility differs from the article sweep in
+-- two ways:
+--   - gated on settings->>'wikiRecordExtractionEnabled' (only the literal
+--     string 'false' disables, matching the client's `?? true` default);
+--   - the user must already have at least one wiki article, since records
+--     attach to an article - there is nothing for the extraction agent to
+--     hang a record on otherwise.
+-- Same day-gate (settle before processing) and >=2-user-message floor as
+-- the article sweep.
+drop function if exists public.claim_next_thread_for_wiki_records(text, int);
+create or replace function public.claim_next_thread_for_wiki_records(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns table (
+  thread_id uuid,
+  user_id uuid,
+  terminal_msg_id uuid,
+  title text,
+  newest_msg_at timestamptz
+)
+language sql security definer
+set search_path = public as $$
+  with candidate as (
+    select
+      t.id as thread_id,
+      t.user_id as user_id,
+      term.msg_id as terminal_msg_id,
+      t.title as title,
+      newest.created_at as newest_msg_at
+      from public.threads t
+      inner join public.profiles p on p.user_id = t.user_id
+      cross join lateral (
+        select public.nak_safe_timezone(p.settings->>'displayTimezone') as tz
+      ) usertz
+      cross join lateral (
+        select m.id as msg_id
+          from public.messages m
+         where m.thread_id = t.id
+           and m.role = 'assistant'
+           and (m.tool_calls is null
+                or jsonb_typeof(m.tool_calls) <> 'array'
+                or jsonb_array_length(m.tool_calls) = 0)
+           and m.content is not null
+           and length(m.content) > 0
+         order by m.created_at desc
+         limit 1
+      ) term
+      cross join lateral (
+        select m2.created_at
+          from public.messages m2
+         where m2.thread_id = t.id
+         order by m2.created_at desc
+         limit 1
+      ) newest
+     where (p.settings->>'wikiRecordExtractionEnabled') is distinct from 'false'
+       and (t.wiki_record_claim_expires_at is null
+            or t.wiki_record_claim_expires_at < now())
+       -- Records hang off an article; skip users with an empty wiki.
+       and exists (
+         select 1 from public.wiki_articles wa where wa.user_id = t.user_id
+       )
+       and (
+         select count(*)
+           from public.messages m3
+          where m3.thread_id = t.id
+            and m3.role = 'user'
+       ) >= 2
+       and term.msg_id is distinct from t.last_wiki_record_processed_msg_id
+       and (newest.created_at at time zone usertz.tz)::date
+           < (now() at time zone usertz.tz)::date
+     order by newest.created_at asc
+     limit 1
+     for update of t skip locked
+  )
+  update public.threads t
+     set wiki_record_claim_holder = p_holder_id,
+         wiki_record_claim_expires_at = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c
+   where t.id = c.thread_id
+  returning t.id as thread_id, t.user_id as user_id, c.terminal_msg_id,
+            c.title, c.newest_msg_at;
+$$;
+
+revoke all on function public.claim_next_thread_for_wiki_records(text, int)
+  from public, anon, authenticated;
+grant execute on function public.claim_next_thread_for_wiki_records(text, int)
+  to service_role;
+
+-- Advance the per-thread record pointer IF our claim is still ours.
+-- Called after every successful extraction run (even a no-op run that
+-- found no event advances the pointer so the thread is not re-scanned
+-- every tick). Resets the failure counter + clears any skip marker.
+drop function if exists public.mark_thread_wiki_record_processed_if_claimed(uuid, text, uuid, uuid);
+create or replace function public.mark_thread_wiki_record_processed_if_claimed(
+  p_thread_id uuid,
+  p_holder_id text,
+  p_msg_id uuid,
+  p_user_id uuid default null
+) returns boolean
+language plpgsql security invoker as $$
+declare
+  updated int;
+begin
+  update public.threads
+     set last_wiki_record_processed_msg_id = p_msg_id,
+         wiki_record_claim_holder = null,
+         wiki_record_claim_expires_at = null,
+         wiki_record_failure_count = 0,
+         wiki_record_last_skip_at = null,
+         wiki_record_last_skip_reason = null
+   where id = p_thread_id
+     and user_id = coalesce(p_user_id, auth.uid())
+     and wiki_record_claim_holder = p_holder_id
+     and wiki_record_claim_expires_at > now();
+  get diagnostics updated = row_count;
+  return updated > 0;
+end $$;
+
+grant execute on function
+  public.mark_thread_wiki_record_processed_if_claimed(uuid, text, uuid, uuid)
+  to service_role;
+
+-- Record an extraction failure against the claimed thread. Below the
+-- cap: increment + release the claim for a fast retry. At the cap:
+-- advance the pointer past this terminal message + stamp a skip marker
+-- so a permanently-failing conversation does not pin the queue. Returns
+-- 'released' | 'skipped' | 'claim-lost'. Simpler than the article RPC:
+-- no content-filter fallback flag (the extraction model has no fallback).
+drop function if exists public.record_wiki_record_failure_or_skip(uuid, text, uuid, int, text, uuid);
+create or replace function public.record_wiki_record_failure_or_skip(
+  p_thread_id uuid,
+  p_holder_id text,
+  p_msg_id uuid,
+  p_max_failures int,
+  p_reason text default null,
+  p_user_id uuid default null
+) returns text
+language plpgsql security invoker as $$
+declare
+  v_new_count int;
+begin
+  update public.threads
+     set wiki_record_failure_count = wiki_record_failure_count + 1
+   where id = p_thread_id
+     and user_id = coalesce(p_user_id, auth.uid())
+     and wiki_record_claim_holder = p_holder_id
+     and wiki_record_claim_expires_at > now()
+  returning wiki_record_failure_count into v_new_count;
+  if not found then
+    return 'claim-lost';
+  end if;
+  if v_new_count >= p_max_failures then
+    update public.threads
+       set last_wiki_record_processed_msg_id = p_msg_id,
+           wiki_record_claim_holder = null,
+           wiki_record_claim_expires_at = null,
+           wiki_record_failure_count = 0,
+           wiki_record_last_skip_at = now(),
+           wiki_record_last_skip_reason = nullif(left(coalesce(p_reason, ''), 500), '')
+     where id = p_thread_id;
+    return 'skipped';
+  end if;
+  update public.threads
+     set wiki_record_claim_holder = null,
+         wiki_record_claim_expires_at = null
+   where id = p_thread_id;
+  return 'released';
+end $$;
+
+grant execute on function
+  public.record_wiki_record_failure_or_skip(uuid, text, uuid, int, text, uuid)
+  to service_role;
+
 -- Wipe-and-rewind for the wiki subsystem. Called from Settings ->
 -- Wiki -> Reset. Two side effects under RLS scoping:
 --
@@ -9233,7 +9425,16 @@ begin
          wiki_failure_count = 0,
          wiki_last_skip_at = null,
          wiki_last_skip_reason = null,
-         wiki_skip_fallback_attempted = false
+         wiki_skip_fallback_attempted = false,
+         -- Clear the record-extraction pointer too so the extraction
+         -- agent re-scans each thread from scratch after a reset, the
+         -- same way the article agent does.
+         last_wiki_record_processed_msg_id = null,
+         wiki_record_claim_holder = null,
+         wiki_record_claim_expires_at = null,
+         wiki_record_failure_count = 0,
+         wiki_record_last_skip_at = null,
+         wiki_record_last_skip_reason = null
    where user_id = v_user;
 end $$;
 
@@ -10955,6 +11156,75 @@ begin
   end if;
 exception when others then
   raise notice 'wiki sweep cron setup skipped: %', sqlerrm;
+end
+$cron$;
+
+-- ---------------------------------------------------------------------------
+-- Scheduled wiki-record extraction sweep
+-- (pg_cron -> pg_net -> venice/wiki-records-sweep)
+--
+-- Drives the background record extraction agent: claims settled threads
+-- whose owner has record extraction enabled and at least one article,
+-- and logs discrete events as dated records. Same Vault-secret custody
+-- and no-op-until-seeded behavior as the wiki sweep above. Minute 17,
+-- offset from the wiki sweep (minute 7) and the librarian (minute 37) so
+-- the three pg_net dispatches don't stack on one tick.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.nak_trigger_wiki_records_sweep()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $fn$
+declare
+  v_url text;
+  v_key text;
+begin
+  begin
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'project_url' $q$ into v_url;
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'service_role_key' $q$ into v_key;
+  exception when others then
+    return;  -- vault not installed or unreadable; nothing to dispatch
+  end;
+  if v_url is null or v_key is null then
+    return;  -- secrets not seeded yet
+  end if;
+  begin
+    execute format(
+      $q$ select net.http_post(
+            url := %L,
+            headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', %L),
+            body := '{}'::jsonb
+          ) $q$,
+      v_url || '/functions/v1/venice/wiki-records-sweep',
+      'Bearer ' || v_key
+    );
+  exception when others then
+    raise notice 'nak_trigger_wiki_records_sweep: dispatch failed: %', sqlerrm;
+  end;
+end;
+$fn$;
+
+revoke all on function public.nak_trigger_wiki_records_sweep() from public, anon, authenticated;
+
+do $cron$
+begin
+  if exists (select 1 from pg_available_extensions where name = 'pg_cron')
+     and exists (select 1 from pg_available_extensions where name = 'pg_net') then
+    create extension if not exists pg_cron;
+    create extension if not exists pg_net;
+    if exists (select 1 from cron.job where jobname = 'nak-wiki-records-sweep') then
+      perform cron.unschedule('nak-wiki-records-sweep');
+    end if;
+    perform cron.schedule(
+      'nak-wiki-records-sweep',
+      '17 * * * *',
+      $job$ select public.nak_trigger_wiki_records_sweep(); $job$
+    );
+  end if;
+exception when others then
+  raise notice 'wiki records sweep cron setup skipped: %', sqlerrm;
 end
 $cron$;
 

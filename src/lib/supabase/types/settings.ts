@@ -133,6 +133,14 @@ export interface UserSettings {
    */
   wikiAutomaticEnabled?: boolean;
   /**
+   * Wiki record extraction: when true, a background agent scans settled
+   * conversations and creates dated records on the user's existing wiki
+   * articles. Independent of `wikiAutomaticEnabled` - extraction can be
+   * off while article maintenance stays on. Manual record add/edit is
+   * unaffected by this flag. Default-on like the other wiki toggles.
+   */
+  wikiRecordExtractionEnabled?: boolean;
+  /**
    * Wiki librarian: when true, a separate background agent runs every
    * ~12 hours, reads the full wiki, and consolidates duplicates +
    * fact-checks against conversation history. Independent of
@@ -217,6 +225,9 @@ export function coerceSettings(raw: unknown): UserSettings {
   }
   if (typeof r.notifyOnComplete === 'boolean') {
     out.notifyOnComplete = r.notifyOnComplete;
+  }
+  if (typeof r.wikiRecordExtractionEnabled === 'boolean') {
+    out.wikiRecordExtractionEnabled = r.wikiRecordExtractionEnabled;
   }
   if (typeof r.wikiAutomaticEnabled === 'boolean') {
     out.wikiAutomaticEnabled = r.wikiAutomaticEnabled;
