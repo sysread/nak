@@ -102,6 +102,31 @@ export const MAX_WIKI_RECORD_TAG_CHARS = 40;
  * hits with ILIKE hits deduped by id. No sole-source filter - records
  * have no provenance-exclusion semantic.
  */
+/**
+ * Build the one-line changelog message for a record write. Records reuse
+ * the article changelog (scoped to the parent article), so each
+ * create/edit/delete lands a row whose message reads like a commit
+ * summary: "Added record (2026-06-17): baked an 80% loaf". Capped at
+ * MAX_WIKI_CHANGELOG_MESSAGE_CHARS to satisfy the column CHECK.
+ *
+ * Mirrored verbatim in supabase/functions/venice/tools/_record_helpers.ts
+ * (buildRecordChangelogMessage) so the chat/agent path and the in-app
+ * compose path produce identical wording. Keep the two in sync.
+ */
+export function buildRecordChangelogMessage(
+  kind: 'record_create' | 'record_update' | 'record_delete',
+  date: string,
+  content?: string,
+): string {
+  const verb =
+    kind === 'record_create' ? 'Added' : kind === 'record_update' ? 'Edited' : 'Removed';
+  const base = `${verb} record (${date})`;
+  const preview =
+    typeof content === 'string' ? content.replace(/\s+/g, ' ').trim().slice(0, 120) : '';
+  const full = preview ? `${base}: ${preview}` : base;
+  return full.slice(0, MAX_WIKI_CHANGELOG_MESSAGE_CHARS);
+}
+
 export async function searchWikiRecordsSemantic(
   query: string,
   limit: number,

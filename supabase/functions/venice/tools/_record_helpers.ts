@@ -11,6 +11,10 @@
 // the backfill loop then chokes on.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { appendWikiChangelog } from './_wiki_helpers.ts';
+
+// Mirror of MAX_WIKI_CHANGELOG_MESSAGE_CHARS in src/lib/wiki.ts.
+const MAX_WIKI_CHANGELOG_MESSAGE_CHARS = 200;
 
 export const MAX_WIKI_RECORD_CONTENT_CHARS = 8000;
 export const MAX_WIKI_RECORD_TAGS = 24;
@@ -62,22 +66,66 @@ export function normalizeRecordDate(raw: unknown): { date: string | null; error:
 }
 
 /**
- * Confirm an article id belongs to the caller. Returns true when the
- * row exists under ctx.userId. Used by record_create before inserting a
- * child row against an article the service-role client could otherwise
- * write under any owner.
+ * Confirm an article id belongs to the caller, returning its title (or
+ * null when the article doesn't exist / isn't owned). Used by
+ * record_create before inserting a child row against an article the
+ * service-role client could otherwise write under any owner, and as the
+ * title source for the record's changelog entry.
  */
-export async function userOwnsArticle(
+export async function getOwnedArticleTitle(
   adminClient: SupabaseClient,
   userId: string,
   articleId: string,
-): Promise<boolean> {
+): Promise<string | null> {
   const { data, error } = await adminClient
     .from('wiki_articles')
-    .select('id')
+    .select('title')
     .eq('user_id', userId)
     .eq('id', articleId)
     .maybeSingle();
   if (error) throw new Error(`article ownership check failed: ${error.message}`);
-  return !!data;
+  return data && typeof data.title === 'string' ? data.title : null;
+}
+
+/**
+ * One-line changelog message for a record write. Mirror of
+ * buildRecordChangelogMessage in src/lib/wiki.ts - keep the wording in
+ * sync so the chat/agent path and the in-app compose path read
+ * identically in the changelog.
+ */
+export function buildRecordChangelogMessage(
+  kind: 'record_create' | 'record_update' | 'record_delete',
+  date: string,
+  content?: string,
+): string {
+  const verb =
+    kind === 'record_create' ? 'Added' : kind === 'record_update' ? 'Edited' : 'Removed';
+  const base = `${verb} record (${date})`;
+  const preview =
+    typeof content === 'string' ? content.replace(/\s+/g, ' ').trim().slice(0, 120) : '';
+  const full = preview ? `${base}: ${preview}` : base;
+  return full.slice(0, MAX_WIKI_CHANGELOG_MESSAGE_CHARS);
+}
+
+/**
+ * Append a wiki_changelog row for a record write, scoped to the parent
+ * article. Best-effort: the caller wraps this so a changelog failure
+ * never fails the record mutation itself. Looks up the article title
+ * (snapshot for title_at_change) under the caller's user_id.
+ */
+export async function appendRecordChangelog(
+  adminClient: SupabaseClient,
+  userId: string,
+  articleId: string,
+  kind: 'record_create' | 'record_update' | 'record_delete',
+  date: string,
+  content?: string,
+): Promise<void> {
+  const title = (await getOwnedArticleTitle(adminClient, userId, articleId)) ?? '(record)';
+  await appendWikiChangelog(adminClient, userId, {
+    article_id: articleId,
+    kind,
+    title_at_change: title,
+    message: buildRecordChangelogMessage(kind, date, content),
+  });
 }

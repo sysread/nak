@@ -14,9 +14,10 @@ import { ArgErrors } from './_validate.ts';
 import {
   MAX_WIKI_RECORD_CONTENT_CHARS,
   RECORD_COLUMNS,
+  appendRecordChangelog,
+  getOwnedArticleTitle,
   normalizeRecordDate,
   normalizeRecordTags,
-  userOwnsArticle,
 } from './_record_helpers.ts';
 
 export const recordCreate: ToolDef = {
@@ -40,8 +41,10 @@ export const recordCreate: ToolDef = {
 
     // Verify the article belongs to the caller before inserting a child
     // row - the admin client bypasses RLS, so without this a record
-    // could be parented to another user's article.
-    if (!(await userOwnsArticle(ctx.adminClient, ctx.userId, articleId))) {
+    // could be parented to another user's article. The title doubles as
+    // the changelog snapshot below.
+    const articleTitle = await getOwnedArticleTitle(ctx.adminClient, ctx.userId, articleId);
+    if (articleTitle === null) {
       throw new Error(
         `No wiki article with id "${articleId}" found for this user. Run wiki_search or wiki_list to find a valid article id.`,
       );
@@ -60,6 +63,21 @@ export const recordCreate: ToolDef = {
       .select(RECORD_COLUMNS)
       .single();
     if (error) throw new Error(`createWikiRecord failed: ${error.message}`);
+
+    // Best-effort changelog (scoped to the parent article). A failure
+    // here must not fail the record write - the row already landed.
+    try {
+      await appendRecordChangelog(
+        ctx.adminClient,
+        ctx.userId,
+        articleId,
+        'record_create',
+        date as string,
+        content,
+      );
+    } catch {
+      // swallow - audit row is a convenience, the record is the truth.
+    }
     return row;
   },
 };

@@ -39,10 +39,16 @@ describe('PAGE_SIZE', () => {
 });
 
 describe('kindLabel', () => {
-  it('maps each kind to its past-tense chip label', () => {
+  it('maps each article kind to its past-tense chip label', () => {
     expect(kindLabel('create')).toBe('Added');
     expect(kindLabel('update')).toBe('Edited');
     expect(kindLabel('delete')).toBe('Deleted');
+  });
+
+  it('qualifies record kinds so they read apart from article kinds', () => {
+    expect(kindLabel('record_create')).toBe('Added record');
+    expect(kindLabel('record_update')).toBe('Edited record');
+    expect(kindLabel('record_delete')).toBe('Removed record');
   });
 });
 
@@ -77,6 +83,14 @@ describe('canOpenArticle', () => {
 
   it('is false when article_id has been cleared', () => {
     expect(canOpenArticle(makeEntry({ article_id: null }))).toBe(false);
+  });
+
+  it('opens for record kinds - the parent article survives a record write', () => {
+    // record_delete removes a record, not the article, so the row still
+    // links through to the (surviving) parent.
+    expect(canOpenArticle(makeEntry({ kind: 'record_create' }))).toBe(true);
+    expect(canOpenArticle(makeEntry({ kind: 'record_update' }))).toBe(true);
+    expect(canOpenArticle(makeEntry({ kind: 'record_delete' }))).toBe(true);
   });
 });
 
