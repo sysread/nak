@@ -209,9 +209,9 @@ Each record has:
 
 What you can do in the Records section:
 
-- **Add record** - opens a compose form with a date picker (defaults
-  to today), a Markdown content field, and a comma-separated tags
-  field. Save to log it.
+- **Add record** (the **+** icon in the Records header) - opens a
+  compose form with a date picker (defaults to today), a Markdown
+  content field, and a comma-separated tags field. Save to log it.
 - **Filter** - narrow the list by a date range (From / To) and by a
   single tag.
 - **Search** - the search bar runs a *semantic* search across the
@@ -222,7 +222,7 @@ What you can do in the Records section:
 - **Expand** - click a record row to read its full Markdown. The
   expanded view has **Edit**, **Export**, and **Delete** actions.
 - **Export** - **Export** on a single record downloads it as a
-  Markdown file (`yyyy-mm-dd-<slug>.md`). **Export all** in the
+  Markdown file (`yyyy-mm-dd-<slug>.md`). The **download** icon in the
   Records header downloads a ZIP containing the article as
   `article.md` plus every record under `records/`.
 

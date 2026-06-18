@@ -221,12 +221,56 @@
         <!-- Exports this article's records (filters/search aside) plus the
              article body as a ZIP. Uses the unfiltered `records` rather
              than `visible` so a download is always the full set. -->
-        <button type="button" onclick={() => downloadArticleZip(article, records)}>
-          Export all
+        <button
+          type="button"
+          class="icon-btn"
+          onclick={() => downloadArticleZip(article, records)}
+          title="Export all records"
+          aria-label="Export all records"
+        >
+          <!-- Feather "download" - matches the 16x16 stroke icons in the
+               app footer / top bar. -->
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="7 10 12 15 17 10" />
+            <line x1="12" y1="15" x2="12" y2="3" />
+          </svg>
         </button>
       {/if}
       {#if !composing}
-        <button type="button" class="primary" onclick={startCompose}>Add record</button>
+        <button
+          type="button"
+          class="icon-btn"
+          onclick={startCompose}
+          title="Add record"
+          aria-label="Add record"
+        >
+          <!-- Feather "plus". -->
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
+        </button>
       {/if}
     </div>
   </header>
