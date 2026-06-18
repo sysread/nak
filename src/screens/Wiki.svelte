@@ -84,6 +84,11 @@
   } from '$lib/supabase';
   import { extractHeadings, uniqueSlug, type HeadingEntry } from '$lib/markdown';
   import {
+    buildSectionTocLinks,
+    WIKI_SOURCES_ANCHOR,
+    WIKI_SEE_ALSO_ANCHOR,
+  } from '$lib/ui/wiki-toc-sections';
+  import {
     appendProgressStep,
     finalizeLibrarianSteps,
     librarianRunButtonLabel,
@@ -1015,10 +1020,16 @@
       // bring the heading into view without scrolling the page.
       const id = href.slice(1);
       if (!id || !articleEl) return;
-      const heading = articleEl.querySelector<HTMLElement>(`#${CSS.escape(id)}`);
-      if (!heading) return;
+      // In-article headings live inside `articleEl`; the appended-section
+      // anchors (Sources / See also are inside, but Records renders as a
+      // sibling OUTSIDE `<article>`), so fall back to a document lookup so
+      // a "Records" ToC link still resolves.
+      const targetEl =
+        articleEl.querySelector<HTMLElement>(`#${CSS.escape(id)}`) ??
+        document.getElementById(id);
+      if (!targetEl) return;
       event.preventDefault();
-      heading.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      targetEl.scrollIntoView({ block: 'start', behavior: 'smooth' });
       return;
     }
 
@@ -1092,6 +1103,36 @@
   // Nested for rendering; flat count drives the >=2 visibility gate.
   // A single-entry outline is more visual chrome than navigation.
   const tocItems = $derived<TocNode[]>(nestHeadings(tocHeadings));
+
+  // Record count for the open article, reported up by WikiRecords after
+  // each unfiltered load. Drives whether the ToC gets a "Records" link.
+  let recordCount = $state(0);
+
+  // Clear the count when the SELECTED ARTICLE changes (not on a body
+  // updated_at bump - WikiRecords only re-reports on a record change, so
+  // resetting on every content edit would wrongly drop the link until
+  // the next record write). The remounted WikiRecords re-reports the new
+  // article's count after its load.
+  let lastRecordArticleId: string | null = null;
+  $effect(() => {
+    const id = selectedArticle?.id ?? null;
+    if (id !== lastRecordArticleId) {
+      lastRecordArticleId = id;
+      recordCount = 0;
+    }
+  });
+
+  // The appended-section links shown at the bottom of the ToC (Sources /
+  // See also / Records), one per section actually present on this
+  // article. When non-empty they also relax the ToC's >=2-heading gate
+  // so a short article still gets navigation to its sections.
+  const sectionTocLinks = $derived(
+    buildSectionTocLinks({
+      hasSources: (sourceRows?.length ?? 0) > 0,
+      hasSeeAlso: (relatedRows?.length ?? 0) > 0,
+      recordCount,
+    }),
+  );
 
   // `bind:this` target for the rendered article. Used by:
   //   - the post-render effect below, to attach heading ids;
@@ -1546,7 +1587,7 @@
               </button>
             </div>
           </header>
-          {#if tocHeadings.length >= 2}
+          {#if tocHeadings.length >= 2 || sectionTocLinks.length > 0}
             <!--
               Table of contents. Rendered before the article body so the
               reader sees the outline first; clicking an entry scrolls
@@ -1554,11 +1595,31 @@
               onArticleClick (which sits on the surrounding <article>
               and intercepts both `#anchor` and `?cid=` links).
               Headings nest by level via nestHeadings(); a flat-with-
-              one-heading article skips the section entirely.
+              one-heading article skips the heading list but still shows
+              the appended-section links below when present.
             -->
             <nav class="wiki-toc" aria-label="Table of contents">
               <h2>Contents</h2>
-              {@render tocList(tocItems)}
+              {#if tocHeadings.length >= 2}
+                {@render tocList(tocItems)}
+              {/if}
+              {#if sectionTocLinks.length > 0}
+                <!--
+                  Links to the article's appended sections (Sources, See
+                  also, Records). Records lives outside <article>, so its
+                  anchor resolves via the document-lookup fallback in
+                  onArticleClick. Separated from the heading list with a
+                  rule when both are present.
+                -->
+                <ul
+                  class="wiki-toc-sections"
+                  class:has-divider={tocHeadings.length >= 2}
+                >
+                  {#each sectionTocLinks as link (link.id)}
+                    <li><a href={`#${link.id}`}>{link.label}</a></li>
+                  {/each}
+                </ul>
+              {/if}
             </nav>
           {/if}
           <div class="wiki-content">
@@ -1573,7 +1634,7 @@
               (cascade not yet caught up) render as a non-link placeholder
               rather than a broken link.
             -->
-            <aside class="wiki-sources" aria-label="Sources">
+            <aside class="wiki-sources" id={WIKI_SOURCES_ANCHOR} aria-label="Sources">
               <h2>Sources</h2>
               <ul>
                 {#each sourceRows as src (src.thread_id)}
@@ -1603,7 +1664,7 @@
               don't clear the floor never reach us, so an empty section
               is the honest "no real neighbors" answer.
             -->
-            <aside class="wiki-related" aria-label="See also">
+            <aside class="wiki-related" id={WIKI_SEE_ALSO_ANCHOR} aria-label="See also">
               <h2>See also</h2>
               <ul>
                 {#each relatedRows as rel (rel.id)}
@@ -1627,7 +1688,7 @@
              current state). Keyed on a.id so switching articles remounts
              with a fresh load rather than leaking the prior list. -->
         {#key a.id}
-          <WikiRecords article={a} />
+          <WikiRecords article={a} onCount={(n) => (recordCount = n)} />
         {/key}
 
         {#if deletingId === a.id}
@@ -2017,5 +2078,14 @@
   .wiki-toc a:hover,
   .wiki-toc a:focus-visible {
     text-decoration: underline;
+  }
+  /* Appended-section links (Sources / See also / Records) inherit the
+     ToC list styling above. When the heading outline is also present,
+     a hairline rule + spacing separates the two groups so the section
+     jumps read as a distinct cluster below the content outline. */
+  .wiki-toc-sections.has-divider {
+    margin-top: 0.6rem;
+    padding-top: 0.6rem;
+    border-top: 1px solid var(--border);
   }
 </style>

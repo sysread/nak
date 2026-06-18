@@ -34,11 +34,18 @@
     todayIso,
   } from '$lib/ui/wiki-records';
   import Markdown from './Markdown.svelte';
+  import { WIKI_RECORDS_ANCHOR } from '$lib/ui/wiki-toc-sections';
 
   interface Props {
     article: WikiArticle;
+    /**
+     * Fired after each load with this article's record count, so the
+     * parent (Wiki.svelte) can decide whether to show a "Records" link
+     * in the article ToC. Fires with 0 when the article has no records.
+     */
+    onCount?: (count: number) => void;
   }
-  const { article }: Props = $props();
+  const { article, onCount }: Props = $props();
   const articleId = $derived(article.id);
 
   // --- list + filter state ---------------------------------------------
@@ -80,12 +87,17 @@
     if (!app.supabase || !articleId) return;
     loading = true;
     loadError = null;
+    const filtersActive = !!(fromDate || toDate || tagFilter);
     try {
       records = await app.supabase.listWikiRecords(articleId, {
         fromDate: fromDate || undefined,
         toDate: toDate || undefined,
         tags: tagFilter ? [tagFilter] : undefined,
       });
+      // Report the article's true record count for the ToC link only on
+      // an unfiltered load - a filtered list of 0 doesn't mean the
+      // article has no records, so leave the last reported count standing.
+      if (!filtersActive) onCount?.(records.length);
     } catch (err) {
       loadError = err instanceof Error ? err.message : 'Failed to load records.';
     } finally {
@@ -201,7 +213,7 @@
   }
 </script>
 
-<section class="wiki-records" aria-label="Records">
+<section class="wiki-records" id={WIKI_RECORDS_ANCHOR} aria-label="Records">
   <header class="wiki-records-header">
     <h2>{recordsHeadline(searchResults ? searchResults.length : records.length)}</h2>
     <div class="wiki-records-header-actions">
