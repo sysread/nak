@@ -73,8 +73,11 @@ backfill for records, and the `wikiRecordExtractionEnabled` toggle.
 ## Expected
 
 - (1) The record appears at the top of the list, date formatted
-  "Mon D, YYYY", tags shown as chips, content preview truncated. A
-  new `wiki_records` row exists with `article_id` set and
+  "Mon D, YYYY", tags shown as chips, content preview truncated. The
+  wiki **changelog** (Wiki tab, no article selected) gains an "Added
+  record" row scoped to the parent article (linking through to it);
+  editing/deleting a record adds "Edited record" / "Removed record"
+  rows. A new `wiki_records` row exists with `article_id` set and
   `source_conversation_id` null (manual add).
 - (2) The edit persists; `updated_at` advances (trigger) and
   `embedding` is nulled (content change re-arms the backfill).

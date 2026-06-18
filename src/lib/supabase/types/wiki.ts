@@ -89,7 +89,17 @@ export interface WikiArticleRelated {
  * row still reads meaningfully without a join. See the matching table
  * + RLS in `supabase/schema.sql:wiki_changelog`.
  */
-export type WikiChangelogKind = 'create' | 'update' | 'delete';
+// Article writes use create/update/delete; record writes reuse the same
+// changelog (scoped to the parent article) with the record_* kinds so
+// the audit surface tells "added a record to X" apart from "edited
+// article X". See supabase/schema.sql:wiki_changelog.
+export type WikiChangelogKind =
+  | 'create'
+  | 'update'
+  | 'delete'
+  | 'record_create'
+  | 'record_update'
+  | 'record_delete';
 export interface WikiChangelogEntry {
   id: string;
   article_id: string | null;
@@ -175,9 +185,19 @@ export function coerceWikiRecord(raw: Record<string, unknown>): WikiRecord {
   };
 }
 
+const WIKI_CHANGELOG_KINDS: readonly WikiChangelogKind[] = [
+  'create',
+  'update',
+  'delete',
+  'record_create',
+  'record_update',
+  'record_delete',
+];
+
 export function coerceWikiChangelogKind(raw: unknown): WikiChangelogKind | null {
-  if (raw === 'create' || raw === 'update' || raw === 'delete') return raw;
-  return null;
+  return WIKI_CHANGELOG_KINDS.includes(raw as WikiChangelogKind)
+    ? (raw as WikiChangelogKind)
+    : null;
 }
 
 export function coerceWikiChangelogEntry(

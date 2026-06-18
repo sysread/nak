@@ -23,7 +23,7 @@
    */
   import { app } from '$lib/state.svelte';
   import { navigate } from '$lib/routing.svelte';
-  import { onWikiChange } from '$lib/wiki-events';
+  import { onWikiChange, onWikiRecordChange } from '$lib/wiki-events';
   import type { WikiChangelogEntry } from '$lib/supabase';
   import {
     PAGE_SIZE,
@@ -99,12 +99,20 @@
     void loadFirstPage();
     // Keep the panel in sync with cross-surface writes while it's
     // mounted. The wiki-change event fires from the tool path, the
-    // librarian, and the in-panel direct edits - any of them could
-    // have appended a row.
-    const off = onWikiChange(() => {
+    // librarian, and the in-panel direct edits; the record-change event
+    // fires from record writes (compose form, chat tools, extraction
+    // agent, librarian migration) - any of them could have appended a
+    // changelog row, since records now log to the same changelog.
+    const offArticle = onWikiChange(() => {
       void loadFirstPage();
     });
-    return () => off();
+    const offRecord = onWikiRecordChange(() => {
+      void loadFirstPage();
+    });
+    return () => {
+      offArticle();
+      offRecord();
+    };
   });
 
   function openArticle(articleId: string): void {
@@ -226,10 +234,12 @@
     gap: 0.5rem;
     margin-bottom: 0.25rem;
   }
-  /* Three kind chips - colored to read at a glance. Greens for adds,
-     amber for edits, red for deletes. Each pairs a tint background
-     with a darker border so the chip survives both light and dark
-     themes without per-theme overrides. */
+  /* Kind chips - colored to read at a glance. Greens for adds, amber
+     for edits, red for deletes. Each pairs a tint background with a
+     darker border so the chip survives both light and dark themes
+     without per-theme overrides. Record writes (record_*) reuse the
+     same colour family as their article counterpart; the "record"
+     qualifier in the label is what tells them apart. */
   .wiki-changelog-kind {
     font-size: 0.75rem;
     font-weight: 600;
@@ -239,17 +249,20 @@
     border-radius: 999px;
     border: 1px solid transparent;
   }
-  .wiki-changelog-kind.kind-create {
+  .wiki-changelog-kind.kind-create,
+  .wiki-changelog-kind.kind-record_create {
     background: color-mix(in srgb, #15803d 15%, transparent);
     border-color: color-mix(in srgb, #15803d 40%, transparent);
     color: #15803d;
   }
-  .wiki-changelog-kind.kind-update {
+  .wiki-changelog-kind.kind-update,
+  .wiki-changelog-kind.kind-record_update {
     background: color-mix(in srgb, #b45309 15%, transparent);
     border-color: color-mix(in srgb, #b45309 40%, transparent);
     color: #b45309;
   }
-  .wiki-changelog-kind.kind-delete {
+  .wiki-changelog-kind.kind-delete,
+  .wiki-changelog-kind.kind-record_delete {
     background: color-mix(in srgb, #b91c1c 15%, transparent);
     border-color: color-mix(in srgb, #b91c1c 40%, transparent);
     color: #b91c1c;

@@ -8811,9 +8811,19 @@ create table if not exists public.wiki_changelog (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
   article_id uuid references public.wiki_articles(id) on delete set null,
-  -- 'create' | 'update' | 'delete'. Constrained at the column level so a
-  -- typo'd kind value can't land silently.
-  kind text not null check (kind in ('create', 'update', 'delete')),
+  -- 'create' | 'update' | 'delete' for ARTICLE writes, plus
+  -- 'record_create' | 'record_update' | 'record_delete' for writes to
+  -- the article's dated records (records reuse this same changelog,
+  -- scoped to the parent article_id). Constrained so a typo'd kind
+  -- can't land silently. Named explicitly so the widening migration
+  -- below can replace it idempotently on databases created before the
+  -- record kinds existed.
+  kind text not null constraint wiki_changelog_kind_check check (
+    kind in (
+      'create', 'update', 'delete',
+      'record_create', 'record_update', 'record_delete'
+    )
+  ),
   -- Snapshot of the article title as it was at the time of this change.
   -- For create/update this is the new title; for delete it's the title
   -- the article had immediately before deletion. Allows the changelog
@@ -8848,6 +8858,35 @@ create policy "wiki_changelog are self-insertable" on public.wiki_changelog
 -- No update or delete policies. The changelog is append-only from the
 -- client's perspective; bulk wipes go through reset_wiki_data which
 -- runs as the security-definer owner and isn't subject to RLS.
+
+-- Widen the kind CHECK on databases that predate the record kinds.
+-- `create table if not exists` above is a no-op once the table exists,
+-- so the inline constraint change never reaches an existing DB; replace
+-- it here. Drop ANY check constraint currently guarding `kind` (older
+-- DBs carry the auto-generated `wiki_changelog_kind_check` from the
+-- inline `check (...)`; the name is stable but we match by definition to
+-- be safe), then add the widened named constraint.
+do $$
+declare
+  c text;
+begin
+  for c in
+    select conname
+      from pg_constraint
+     where conrelid = 'public.wiki_changelog'::regclass
+       and contype = 'c'
+       and pg_get_constraintdef(oid) ilike '%kind%'
+  loop
+    execute format('alter table public.wiki_changelog drop constraint %I', c);
+  end loop;
+  alter table public.wiki_changelog
+    add constraint wiki_changelog_kind_check check (
+      kind in (
+        'create', 'update', 'delete',
+        'record_create', 'record_update', 'record_delete'
+      )
+    );
+end $$;
 
 -- See Also RPC. Returns wiki articles topically related to the
 -- target article, using a dynamically-calibrated similarity floor:

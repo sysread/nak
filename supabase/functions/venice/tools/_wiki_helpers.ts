@@ -11,7 +11,16 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-export type WikiChangelogKind = 'create' | 'update' | 'delete';
+// Article writes use create/update/delete; record writes reuse the same
+// changelog (scoped to the parent article) with the record_* kinds.
+// Mirror of src/lib/supabase/types/wiki.ts.
+export type WikiChangelogKind =
+  | 'create'
+  | 'update'
+  | 'delete'
+  | 'record_create'
+  | 'record_update'
+  | 'record_delete';
 
 export interface WikiChangelogEntry {
   /** Null for deletes - the article row is already gone. */

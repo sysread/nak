@@ -459,22 +459,27 @@ sparkles-button run uses, instead of a one-shot scribble.
 
 ## Changelog
 
-Every change to the wiki - article added, edited, deleted, by you or
-by either agent - is recorded as a one-line entry in the **wiki
-changelog**. The changelog is the Wiki tab's default view - open the
-**Wiki** tab with no article selected and it fills the panel. While
-reading an article, the **clock** action in the Wiki top bar (grouped
-with the librarian and skipped actions) clears the selection and
-lands you back on the changelog.
+Every change to the wiki - article added, edited, deleted, **and
+record added, edited, or removed** - by you or by either agent is
+recorded as a one-line entry in the **wiki changelog**. The changelog
+is the Wiki tab's default view - open the **Wiki** tab with no article
+selected and it fills the panel. While reading an article, the
+**clock** action in the Wiki top bar (grouped with the librarian and
+skipped actions) clears the selection and lands you back on the
+changelog.
 
 Each entry shows:
 
-- A **kind chip** (Added / Edited / Deleted) so you can scan the
-  history at a glance.
-- The **article title** at the time of the change. For Added and
-  Edited entries the title is a link - clicking it switches to the
-  Wiki tab and opens that article. For Deleted entries the title is
-  plain text (the article no longer exists to open).
+- A **kind chip** (Added / Edited / Deleted for articles; **Added
+  record / Edited record / Removed record** for record writes) so you
+  can scan the history at a glance. Record entries reuse this same
+  changelog, scoped to their parent article.
+- The **article title** at the time of the change. For everything
+  except an article deletion the title is a link - clicking it
+  switches to the Wiki tab and opens that article. (A "Removed record"
+  entry still links through: removing a record leaves the article
+  intact.) For a deleted **article** the title is plain text (the
+  article no longer exists to open).
 - The **timestamp** the change was applied.
 - The **one-line message** explaining what changed and why - written
   by whoever made the change. The autonomous agent and the librarian

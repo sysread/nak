@@ -11,6 +11,7 @@ import { ArgErrors } from './_validate.ts';
 import {
   MAX_WIKI_RECORD_CONTENT_CHARS,
   RECORD_COLUMNS,
+  appendRecordChangelog,
   normalizeRecordDate,
   normalizeRecordTags,
 } from './_record_helpers.ts';
@@ -54,6 +55,20 @@ export const recordUpdate: ToolDef = {
       .maybeSingle();
     if (error) throw new Error(`updateWikiRecord failed: ${error.message}`);
     if (!row) throw new Error(`No record with id "${id}" found for this user.`);
+
+    const r = row as { article_id: string; date: string; content: string };
+    try {
+      await appendRecordChangelog(
+        ctx.adminClient,
+        ctx.userId,
+        r.article_id,
+        'record_update',
+        r.date,
+        r.content,
+      );
+    } catch {
+      // swallow - best-effort audit row.
+    }
     return row;
   },
 };

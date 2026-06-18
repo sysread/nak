@@ -19,6 +19,7 @@ import {
   collectTags,
   todayIso,
 } from '../src/lib/ui/wiki-records';
+import { buildRecordChangelogMessage } from '../src/lib/wiki';
 
 function makeRecord(over: Partial<WikiRecord> = {}): WikiRecord {
   return {
@@ -121,5 +122,23 @@ describe('collectTags', () => {
 describe('todayIso', () => {
   it('returns a YYYY-MM-DD string', () => {
     expect(todayIso()).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+});
+
+describe('buildRecordChangelogMessage', () => {
+  it('leads with a verb + date and appends a content preview', () => {
+    expect(buildRecordChangelogMessage('record_create', '2026-06-17', 'Baked a loaf')).toBe(
+      'Added record (2026-06-17): Baked a loaf',
+    );
+    expect(buildRecordChangelogMessage('record_update', '2026-06-17', 'x')).toMatch(/^Edited record/);
+    expect(buildRecordChangelogMessage('record_delete', '2026-06-17', 'x')).toMatch(/^Removed record/);
+  });
+  it('omits the preview when no content is given', () => {
+    expect(buildRecordChangelogMessage('record_update', '2026-06-17')).toBe('Edited record (2026-06-17)');
+  });
+  it('collapses whitespace and stays within the 200-char column cap', () => {
+    const msg = buildRecordChangelogMessage('record_create', '2026-06-17', 'a\n\n  b'.repeat(200));
+    expect(msg.length).toBeLessThanOrEqual(200);
+    expect(msg).not.toContain('\n');
   });
 });

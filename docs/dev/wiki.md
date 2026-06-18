@@ -105,7 +105,14 @@ Schema (`supabase/schema.sql`):
   RLS (select + insert only, no update/delete) and a
   `(user_id, created_at desc)` index for the panel's cursor-paged
   listing. `reset_wiki_data` clears `wiki_changelog` alongside
-  `wiki_articles` so a wipe leaves no orphan history.
+  `wiki_articles` so a wipe leaves no orphan history. The `kind` CHECK
+  is a NAMED constraint (`wiki_changelog_kind_check`) covering both the
+  article kinds (`create`/`update`/`delete`) and the record kinds
+  (`record_create`/`record_update`/`record_delete`); RECORD writes
+  reuse this same changelog, scoped to the parent `article_id`. A
+  guarded `do $$` block widens the constraint on databases created
+  before the record kinds existed (drop-by-introspection, then add the
+  named constraint - idempotent).
 - Embeddings RPCs: `claim_next_pending_wiki_article`,
   `save_wiki_article_embedding_if_claimed`,
   `search_wiki_articles_by_embedding`.
@@ -636,6 +643,16 @@ thread.
   `search_wiki_records_by_embedding` clone the article trio;
   `wiki-records` is registered in `EMBED_SOURCES` so the generic
   backfill loop drains it.
+- Changelog: every record write (create / update / delete) appends a
+  `wiki_changelog` row scoped to the parent `article_id`, with a
+  `record_*` kind. Both write paths do it: the edge tools via
+  `appendRecordChangelog` in `tools/_record_helpers.ts` (best-effort,
+  swallowed on failure), and the in-app compose form via
+  `SupabaseService.appendRecordChangelog`. The message wording is built
+  by `buildRecordChangelogMessage`, mirrored in `src/lib/wiki.ts` and
+  `_record_helpers.ts` so both paths read identically
+  ("Added record (2026-06-17): ..."). The `WikiChangelogPanel`
+  refetches on `onWikiRecordChange` as well as `onWikiChange`.
 
 `threads` extension columns for the extraction agent
 (`last_wiki_record_processed_msg_id`, `wiki_record_claim_holder`,

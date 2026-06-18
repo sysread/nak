@@ -21,14 +21,27 @@ import type { WikiChangelogEntry } from '../supabase';
 export const PAGE_SIZE = 50;
 
 /**
- * Display label for a changelog kind. Maps the database verbs
- * (`create` / `update` / `delete`) to the user-facing past
- * tenses the chip carries (`Added` / `Edited` / `Deleted`).
+ * Display label for a changelog kind. Maps the database verbs to the
+ * user-facing past tenses the chip carries. The record_* kinds (writes
+ * to an article's dated records, which reuse this changelog) carry a
+ * "record" qualifier so the chip distinguishes "added a record to X"
+ * from "added article X".
  */
 export function kindLabel(kind: WikiChangelogEntry['kind']): string {
-  if (kind === 'create') return 'Added';
-  if (kind === 'update') return 'Edited';
-  return 'Deleted';
+  switch (kind) {
+    case 'create':
+      return 'Added';
+    case 'update':
+      return 'Edited';
+    case 'delete':
+      return 'Deleted';
+    case 'record_create':
+      return 'Added record';
+    case 'record_update':
+      return 'Edited record';
+    case 'record_delete':
+      return 'Removed record';
+  }
 }
 
 /**
@@ -51,12 +64,14 @@ export function formatChangelogStamp(iso: string): string {
 
 /**
  * Whether the row's title should render as a clickable link to
- * the underlying article. False when the article was deleted
- * (`kind === 'delete'`) or when the FK was cleared by the
- * on-delete-set-null trigger. The delete-kind guard is
- * belt-and-braces - the FK clear should have fired - but the
- * second check costs nothing and prevents a link to a row that
- * may already be gone in some race.
+ * the underlying article. False only when the ARTICLE itself was
+ * deleted (`kind === 'delete'`) or when the FK was cleared by the
+ * on-delete-set-null trigger. Note `kind !== 'delete'` deliberately
+ * still opens for `record_delete`: removing a record leaves the
+ * parent article intact, so that row links through to the surviving
+ * article. The delete-kind guard is belt-and-braces - the FK clear
+ * should have fired - but the second check costs nothing and prevents
+ * a link to a row that may already be gone in some race.
  */
 export function canOpenArticle(entry: WikiChangelogEntry): boolean {
   return entry.article_id !== null && entry.kind !== 'delete';

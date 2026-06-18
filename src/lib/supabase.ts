@@ -112,6 +112,11 @@ import {
   UNTAGGED_TOPIC_SENTINEL,
   DEFAULT_THREAD_PAGE_SIZE,
 } from './supabase/types';
+// Pure helper for the record-changelog message wording; mirrored
+// edge-side in venice/tools/_record_helpers.ts. The `import type` cycle
+// back to this file from ./wiki is erased at runtime, so this value
+// import is one-way.
+import { buildRecordChangelogMessage } from './wiki';
 
 
 
@@ -2379,7 +2384,14 @@ export class SupabaseService {
       )
       .single();
     if (error) throw new SupabaseError(error.message);
-    return coerceWikiRecord(data as Record<string, unknown>);
+    const record = coerceWikiRecord(data as Record<string, unknown>);
+    await this.appendRecordChangelog(
+      record.article_id,
+      'record_create',
+      record.date,
+      record.content
+    );
+    return record;
   }
 
   /**
@@ -2401,12 +2413,67 @@ export class SupabaseService {
       )
       .single();
     if (error) throw new SupabaseError(error.message);
-    return coerceWikiRecord(data as Record<string, unknown>);
+    const record = coerceWikiRecord(data as Record<string, unknown>);
+    await this.appendRecordChangelog(
+      record.article_id,
+      'record_update',
+      record.date,
+      record.content
+    );
+    return record;
   }
 
   async deleteWikiRecord(id: string): Promise<void> {
+    // Read the record first so the changelog row (logged against the
+    // surviving parent article) can carry its date + content preview;
+    // the record itself is gone after the delete.
+    const doomed = await this.getWikiRecord(id);
     const { error } = await this.client.from('wiki_records').delete().eq('id', id);
     if (error) throw new SupabaseError(error.message);
+    if (doomed) {
+      await this.appendRecordChangelog(
+        doomed.article_id,
+        'record_delete',
+        doomed.date,
+        doomed.content
+      );
+    }
+  }
+
+  /**
+   * Append a wiki_changelog row for a record write, scoped to the parent
+   * article. Best-effort: a record write must not fail because its audit
+   * row didn't land (the record is the source of truth; the changelog is
+   * a convenience). title_at_change is the parent article's current
+   * title, fetched here so the changelog UI renders the row without a
+   * join even after the article is later deleted.
+   */
+  private async appendRecordChangelog(
+    articleId: string,
+    kind: 'record_create' | 'record_update' | 'record_delete',
+    date: string,
+    content?: string
+  ): Promise<void> {
+    try {
+      const { data } = await this.client
+        .from('wiki_articles')
+        .select('title')
+        .eq('id', articleId)
+        .maybeSingle();
+      const title =
+        data && typeof (data as { title?: unknown }).title === 'string'
+          ? (data as { title: string }).title
+          : '(record)';
+      await this.createWikiChangelogEntry({
+        article_id: articleId,
+        kind,
+        title_at_change: title,
+        message: buildRecordChangelogMessage(kind, date, content),
+      });
+    } catch {
+      // Best-effort - see the doc comment. Swallow so the record write
+      // the caller already completed still resolves successfully.
+    }
   }
 
   /**
