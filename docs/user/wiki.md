@@ -133,8 +133,16 @@ disturbing the surrounding chrome.
 
 The outline is built from the article's own Markdown headings (`#`,
 `##`, etc.) so it stays in sync with edits automatically - rewrite a
-heading and the entry updates the next render. Articles with no
-headings, or with only a single heading, skip the section entirely.
+heading and the entry updates the next render.
+
+Below the heading outline, the Contents box also links to the
+article's appended sections that are present: **Sources**, **See
+also**, and **Records**. These jump-links appear even when the body
+has fewer than two headings (so a short article with records still
+gets a quick way down to them) - so an article with no headings but a
+populated Records section shows a Contents box with just the section
+links. A bare article with no headings and none of those sections has
+no Contents box at all.
 
 ## Deleting
 

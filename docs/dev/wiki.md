@@ -399,7 +399,18 @@ UI:
   the `.wiki-body` scroll container instead of letting the browser
   append the fragment to the page URL. Heading extraction shares the
   slug helpers with `Help.svelte` (see the Heading slugger section
-  of `$lib/markdown`).
+  of `$lib/markdown`). Below the heading outline the ToC also lists
+  links to the article's appended sections that are present - Sources,
+  See also, Records - assembled by buildSectionTocLinks in
+  `$lib/ui/wiki-toc-sections.ts`, which also owns the prefixed anchor
+  ids (wiki-sources / wiki-see-also / wiki-records, prefixed so they
+  can't collide with a bare heading slug). These section links relax
+  the two-heading visibility gate, so a short article with records
+  still gets navigation. Because the Records section renders outside
+  the article element, onArticleClick falls back to
+  document.getElementById when the in-article lookup misses. The
+  record count that gates the Records link is reported up from the
+  WikiRecords component via its onCount prop on each unfiltered load.
 - `src/components/WikiChangelogPanel.svelte` - the inline changelog.
   Cursor-paged list (`listWikiChangelog`); kind chips
   (Added/Edited/Deleted), per-entry article link when the article
