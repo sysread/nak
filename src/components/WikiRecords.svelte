@@ -286,8 +286,30 @@
         if (e.key === 'Enter') void runSearch();
       }}
     />
-    <button type="button" onclick={() => void runSearch()} disabled={searching}>
-      {searching ? 'Searching…' : 'Search'}
+    <button
+      type="button"
+      class="icon-btn"
+      onclick={() => void runSearch()}
+      disabled={searching}
+      title="Search records"
+      aria-label={searching ? 'Searching records' : 'Search records'}
+    >
+      <!-- Feather "search" (magnifying glass) - matches the +/download
+           icon buttons in the Records header. -->
+      <svg
+        width="16"
+        height="16"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        aria-hidden="true"
+      >
+        <circle cx="11" cy="11" r="8" />
+        <line x1="21" y1="21" x2="16.65" y2="16.65" />
+      </svg>
     </button>
     {#if searchResults}
       <button type="button" onclick={clearSearch}>Clear</button>
