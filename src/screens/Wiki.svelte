@@ -75,11 +75,6 @@
     MAX_WIKI_CHANGELOG_MESSAGE_CHARS,
   } from '$lib/wiki';
   import { onWikiChange, emitWikiChange, emitWikiRecordChange } from '$lib/wiki-events';
-  import {
-    WikiAgent,
-    type WikiUpdateOneResult,
-    type RecordOp,
-  } from '$lib/agents/wiki/agent';
   import { describeRecordOps, recordOpsHeadline } from '$lib/ui/wiki-manual';
   import { contentPreview } from '$lib/ui/wiki-records';
   import type {
@@ -87,6 +82,8 @@
     WikiArticleSource,
     WikiArticleRelated,
     WikiLibrarianRunResult,
+    WikiManualUpdateResult,
+    RecordOp,
     WikiRecord,
   } from '$lib/supabase';
   import { extractHeadings, uniqueSlug, type HeadingEntry } from '$lib/markdown';
@@ -574,17 +571,19 @@
   // alongside the preview so the UI can show it AND use it as the
   // changelog message when the user accepts. `recordOps` are the
   // proposed record create/update/delete operations, previewed and
-  // applied on Accept alongside the body edit. See WikiAgent.updateOne.
+  // applied on Accept alongside the body edit. The agent runs server-side
+  // (/wiki-manual-update, SupabaseService.runWikiManualUpdate).
   let manualPreview = $state<{
     title: string;
     content: string;
     reason: string;
     recordOps: RecordOp[];
   } | null>(null);
-  // The article's records as loaded at submit time. Passed to the agent
-  // (so it can reference them by id) AND used to render update/delete
-  // op previews - an update shows the record's existing values for the
-  // fields it leaves unchanged; a delete shows what would be removed.
+  // The article's records as loaded at submit time, used to render
+  // update/delete op previews - an update shows the record's existing
+  // values for the fields it leaves unchanged; a delete shows what would
+  // be removed. The agent reads records server-side; this copy is for
+  // display only.
   let manualRecords = $state<WikiRecord[]>([]);
   let manualNoop = $state<{ reason: string } | null>(null);
   let manualError = $state<string | null>(null);
@@ -675,19 +674,21 @@
     manualNoop = null;
     manualError = null;
     try {
-      // Load the article's records so the agent can reference them by id
-      // (to update/delete) and dedup before proposing a create. An empty
-      // list is fine - the agent then only ever proposes record creates.
+      // Load the article's records so the preview can resolve update /
+      // delete ops against the record they touch (describeRecordOps shows
+      // the old value). The agent itself reads the records server-side -
+      // these are for display only.
       const records = await app.supabase.listWikiRecords(article.id);
       if (manualController !== ctl || manualTargetId !== article.id) return;
-      const agent = new WikiAgent(app.supabase);
-      const result: WikiUpdateOneResult = await agent.updateOne({
+      // The whole run - prompt build, the single JSON completion, the
+      // article + record reads - happens server-side; this is a thin
+      // authenticated POST. A parse/read failure comes back as a thrown
+      // error (the catch below shows the banner); only preview / noop
+      // resolve. There is no abort signal: functions.invoke can't be
+      // cancelled, but the stale-result guard below drops a late reply.
+      const result: WikiManualUpdateResult = await app.supabase.runWikiManualUpdate({
         articleId: article.id,
-        currentTitle: article.title,
-        currentContent: article.content,
-        currentRecords: records,
-        userInstructions: instructions,
-        signal: ctl.signal,
+        instructions,
       });
       // Stale-result guard - a concurrent cancel/restart should not
       // resurface a stale preview.

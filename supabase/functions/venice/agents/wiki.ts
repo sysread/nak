@@ -71,6 +71,11 @@ import {
   messageToVenice,
   type VeniceWireMessage,
 } from './_recall_helpers.ts';
+import {
+  loadWikiProfile,
+  renderUserProfileBlock,
+  type WikiUserProfile,
+} from './_wiki_profile.ts';
 
 // Mirror of agentModel('wiki').id in src/lib/models/index.ts.
 // AGENT_MODELS is a static role->model map, NOT one of the per-user
@@ -464,96 +469,19 @@ const RECORD_DELETE_WIRE_SCHEMA: AgentTool['wire'] = {
 //     user-facts - assistant turns are AI output. Guards the
 //     regression where the agent attributed the assistant's statements
 //     (explanations, suggestions, the options it laid out) to the user.
-//   - anti-name-fabrication (renderUserProfileBlock): the model once
-//     named the user after a friend mentioned in conversation.
+//   - anti-name-fabrication: the model once named the user after a
+//     friend mentioned in conversation. This rule lives in the shared
+//     renderUserProfileBlock (./_wiki_profile.ts), reused by the
+//     manual agent so both render an identical "About the user" block.
 //   - prime directive, body-is-current-state (the journey lives in
 //     records, not appended to the body; migrate inline dated logs out
 //     via record_create, dedup-checked against record_list first),
 //     update-over-create bias, sterility test
 //     (WIKI_AUTONOMOUS_BODY_LINES): keep the wiki user-centric, keep the
 //     body a clean current-state view, and don't dump a conversation.
-// renderUserProfileBlock + the body began as a port of the deleted
-// src/lib/agents/wiki/prompt.ts, whose preamble documented the history
-// of the ported layers; re-read that history in git before touching
-// them.
+// The body lines below began as a port of the browser wiki agent; the
+// per-layer history lives in git - re-read it before softening them.
 // ---------------------------------------------------------------------------
-
-/**
- * The user's name + location from Settings -> AI -> About you. Both
- * fields optional; null means "not set".
- */
-export interface WikiUserProfile {
-  name: string | null;
-  location: string | null;
-}
-
-/**
- * Render the "About the user" block. Returns the empty string when
- * the profile is null or both fields are empty - a fresh account that
- * hasn't filled the Settings form pays zero tokens for the section.
- *
- * Two distinct rules around the name, both load-bearing:
- *
- *   1. POSITIVE: prefer the configured name over "the user" -
- *      articles read like a personal wiki rather than session notes.
- *   2. NEGATIVE: never invent another name. Production traffic showed
- *      the model writing articles about "Elliot" when the configured
- *      name was "Jeff", because the conversation mentioned a friend
- *      named Elliot and the model conflated the user with someone
- *      else in context.
- *
- * The unknown-name path (location set, name not) is split out so we
- * don't tell the model to "use their name" when no name was supplied.
- */
-function renderUserProfileBlock(profile: WikiUserProfile | null): string {
-  if (!profile) return '';
-  const name =
-    profile.name && profile.name.trim().length > 0 ? profile.name.trim() : null;
-  const location =
-    profile.location && profile.location.trim().length > 0
-      ? profile.location.trim()
-      : null;
-  if (!name && !location) return '';
-  const lines: string[] = ['**About the user:**', ''];
-  if (name) {
-    lines.push(`The user's name is **${name}**.`);
-    lines.push(
-      `**Use "${name}" by default when an article refers to the user.** ` +
-        `Avoid the generic phrase "the user" wherever "${name}" fits ` +
-        `the sentence. This applies in articles ABOUT the user (the ` +
-        `subject is ${name}), articles about projects ${name} is ` +
-        `building ("${name} started this project in ..."), articles ` +
-        `about people in ${name}'s life ("Maya is ${name}'s sister"), ` +
-        `and any other place the user appears. A natural pronoun ` +
-        `("they", "their") is also fine where prose flows better than ` +
-        `repeating the name.`,
-    );
-    lines.push(
-      `The name is **${name}** and ONLY ${name}. NEVER invent another ` +
-        `name for the user, even if other names appear in the ` +
-        `conversation - those other names belong to other people the ` +
-        `user knows. If the conversation mentions a friend named ` +
-        `Maya, an article about the user does not call the user ` +
-        `Maya; it calls the user ${name}. If you are uncertain ` +
-        `whether the article subject IS the user, default to using ` +
-        `the literal name from context (Maya, Elliot, etc.) for that ` +
-        `subject and reserve "${name}" for explicit references to ` +
-        `the user.`,
-    );
-  } else {
-    lines.push(
-      'The user has not supplied a name in Settings. When an article ' +
-        'refers to the user themselves, use a natural pronoun ' +
-        '("they") or the phrase "the user". NEVER invent a name ' +
-        'for the user, even if other names appear in the conversation ' +
-        '- those names belong to other people the user knows.',
-    );
-  }
-  if (location) {
-    lines.push(`Their location is ${location}.`);
-  }
-  return lines.join('\n');
-}
 
 export function buildWikiAutonomousPrompt(
   opts: { userProfile: WikiUserProfile | null } = { userProfile: null },
@@ -995,30 +923,6 @@ function buildWikiToolbox(): Toolbox {
       asAgentTool(memorySearch, MEMORY_SEARCH_WIRE_SCHEMA),
     ],
   };
-}
-
-/**
- * Read the user's name + location (Settings -> AI -> About you) for
- * the prompt's "About the user" block. Null when unset or both fields
- * empty, which suppresses the block entirely - same semantics as the
- * browser worker's buildProfile.
- */
-async function loadWikiProfile(
-  adminClient: SupabaseClient,
-  userId: string,
-): Promise<WikiUserProfile | null> {
-  const { data, error } = await adminClient
-    .from('profiles')
-    .select('settings')
-    .eq('user_id', userId)
-    .maybeSingle<{ settings: Record<string, unknown> | null }>();
-  if (error || !data?.settings) return null;
-  const rawName = data.settings.userName;
-  const rawLocation = data.settings.userLocation;
-  const name = typeof rawName === 'string' ? rawName.trim() : '';
-  const location = typeof rawLocation === 'string' ? rawLocation.trim() : '';
-  if (!name && !location) return null;
-  return { name: name || null, location: location || null };
 }
 
 /** Normalise the model's operator summary for the single-line log convention. */

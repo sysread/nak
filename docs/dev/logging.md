@@ -141,8 +141,8 @@ Pick a short, stable source tag. Existing tags:
 - `embeddings` - the cron embed backfill's per-user "embedded N
   item(s)" summary (edge-side); ticks that drain nothing emit
   nothing
-- `wiki-manual` - the browser-side per-article "Ask agent to
-  update" flow (a main-thread completion)
+- `wiki-manual` - the per-article "Ask agent to update" flow
+  (edge-side, the `/wiki-manual-update` route's single completion)
 - `samskara` - the samskara formation pipeline (edge-side, turn
   tail + hourly sweep, via the Broadcast log channel) plus the
   browser chat-loop helpers in `src/lib/samskara/` (fire, stub,

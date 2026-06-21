@@ -49,6 +49,7 @@ import {
 import { streamChannelName } from '../_shared/venice-stream.ts';
 import { getStreamingResponse } from './getStreamingResponse.ts';
 import { retryWikiThread, runWikiSweepTick } from './agents/wiki.ts';
+import { runWikiManualUpdate } from './agents/wiki_manual.ts';
 import { runWikiRecordsSweepTick } from './agents/wiki_records.ts';
 import { runReflectionSweepTick } from './agents/reflection.ts';
 import { runCurationSweepTick } from './agents/curation.ts';
@@ -819,6 +820,38 @@ async function handleWikiRetry(req: Request): Promise<Response> {
   return json(result);
 }
 
+/**
+ * User-triggered per-article manual wiki update (the "Ask agent to
+ * update" panel on Wiki.svelte). Synchronous - one non-streaming JSON
+ * completion, no tool loop - so it returns the preview in the response
+ * body (no runId / progress channel, unlike the librarian's detached
+ * run). Authenticated as the calling user; the gateway-validated id
+ * scopes the article + record reads. Responds with the
+ * WikiManualUpdateResult union; parse / read failures are an
+ * application outcome (kind: 'error'), not a transport error, so the
+ * browser turns them into a retry banner without sniffing status codes.
+ */
+async function handleWikiManualUpdate(req: Request): Promise<Response> {
+  const userId = userIdFromJwt(req);
+  if (!userId) return json({ error: 'unauthorized' }, 401);
+  const admin = requireAdmin();
+  if (admin instanceof Response) return admin;
+
+  let body: { articleId?: unknown; instructions?: unknown };
+  try {
+    body = await req.json();
+  } catch {
+    return json({ error: 'invalid JSON body' }, 400);
+  }
+  const articleId = typeof body.articleId === 'string' ? body.articleId : '';
+  const instructions = typeof body.instructions === 'string' ? body.instructions : '';
+  if (!articleId) return json({ error: 'articleId is required' }, 400);
+  if (!instructions.trim()) return json({ error: 'instructions are required' }, 400);
+
+  const result = await runWikiManualUpdate(admin, userId, { articleId, instructions });
+  return json(result);
+}
+
 interface StreamRequestBody {
   threadId?: string;
   userMessageId?: string;
@@ -1158,6 +1191,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     return handleSamskaraEvaluationSweep(req);
   }
   if (route === 'wiki-retry' && req.method === 'POST') return handleWikiRetry(req);
+  if (route === 'wiki-manual-update' && req.method === 'POST') return handleWikiManualUpdate(req);
   if (route === 'wiki-librarian-sweep' && req.method === 'POST') return handleWikiLibrarianSweep(req);
   if (route === 'wiki-librarian-run' && req.method === 'POST') return handleWikiLibrarianRun(req);
   if (route === 'rem-sweep' && req.method === 'POST') return handleRemSweep(req);

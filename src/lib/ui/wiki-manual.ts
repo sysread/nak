@@ -1,15 +1,14 @@
 /**
  * Framework-free UI primitives for the wiki manual-update preview
  * (the "Ask agent to update" flow in src/screens/Wiki.svelte). The
- * agent (src/lib/agents/wiki/agent.ts) returns a body edit plus a list
- * of proposed RecordOps; these pure functions turn each op into the
- * display-ready shape the preview renders, and pluralize the change
- * count. A React/Solid/Vue port would keep them verbatim. Tested via
- * vitest in tests/wiki-manual.test.ts.
+ * manual agent (server-side, /wiki-manual-update) returns a body edit
+ * plus a list of proposed RecordOps; these pure functions turn each op
+ * into the display-ready shape the preview renders, and pluralize the
+ * change count. A React/Solid/Vue port would keep them verbatim. Tested
+ * via vitest in tests/wiki-manual.test.ts.
  */
 
-import type { RecordOp } from '../agents/wiki/agent';
-import type { WikiRecord } from '../supabase';
+import type { RecordOp, WikiRecord } from '../supabase';
 import { formatRecordDate } from './wiki-records';
 
 /**

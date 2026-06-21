@@ -17,11 +17,16 @@ tab; two distinct background agents keep them healthy:
   the most-overdue eligible user on a 12h cadence, the Wiki panel's
   manual-run (sparkles) button, and the chat-dispatched
   `wiki_librarian` tool. A per-user in-flight guard makes the three
-  paths mutually exclusive. No wiki feature code runs in the browser
-  except the Wiki UI itself and the manual `updateOne` flow.
+  paths mutually exclusive.
 
-Both agents share the encyclopedic-third-person voice and the
-"preserve facts unless explicitly contradicted" discipline.
+A third flow is **user-triggered, not autonomous**: the per-article
+**manual update** ("Ask agent to update") also runs server-side in the
+venice edge function, as one non-streaming JSON completion with no tool
+loop. No wiki feature code runs in the browser except the Wiki UI
+itself - every wiki agent completion is server-side.
+
+Both background agents share the encyclopedic-third-person voice and
+the "preserve facts unless explicitly contradicted" discipline.
 
 ## Role
 
@@ -121,9 +126,9 @@ Edge function (`supabase/functions/venice/`):
 
 - `agents/wiki.ts` - the autonomous agent. Exports
   `runWikiSweepTick` (cron path) and `retryWikiThread` (user path).
-  Owns the autonomous prompt (`buildWikiAutonomousPrompt` plus the
-  "About the user" profile block, read fresh from
-  `profiles.settings.userName` / `userLocation` per run), the wiki
+  Owns the autonomous prompt (`buildWikiAutonomousPrompt`; the
+  "About the user" profile block comes from the shared
+  `agents/_wiki_profile.ts`), the wiki
   tool wire schemas, `buildWikiToolbox`, the content-filter sentinel
   and fallback constants, and the per-run tunables: model
   `deepseek-v4-flash` (hardcoded mirror of `agentModel('wiki')` -
@@ -131,6 +136,29 @@ Edge function (`supabase/functions/venice/`):
   fallback `arcee-trinity-large-thinking`, `reasoningEffort:
   'medium'`, claim TTL 600s, failure cap 3, sweep bound 3
   threads/tick. Test-only invariants exported via `__test`.
+- `agents/wiki_manual.ts` - the per-article manual agent (the "Ask
+  agent to update" flow). Exports `runWikiManualUpdate(adminClient,
+  userId, { articleId, instructions })`: reads the persisted article
+  and its records server-side (b-strict, explicit `user_id` filter),
+  builds the manual prompt (`buildWikiManualPrompt`, shares the
+  profile block via `_wiki_profile.ts`), runs ONE non-streaming JSON
+  completion via `completeJsonObject` (no tool loop) pinned to
+  `reasoningEffort: 'low'`, parses + validates the model's
+  `RecordOp`s (hallucinated-id rejection against the records it
+  actually showed), and returns the `WikiManualUpdateResult` union
+  (`preview` / `noop` / `error`). Non-throwing by contract; writes
+  nothing (the browser persists on Accept). Model mirror
+  `WIKI_MANUAL_MODEL` (`deepseek-v4-flash`). Test-only invariants
+  (the parser + prompt) exported via `__test`. Logger source
+  `wiki-manual`.
+- `agents/_wiki_profile.ts` - the shared "About the user" block:
+  `WikiUserProfile`, `renderUserProfileBlock` (the
+  anti-name-fabrication rules), and `loadWikiProfile` (reads
+  `profiles.settings.userName` / `userLocation`). Imported by both
+  the autonomous (`wiki.ts`) and manual (`wiki_manual.ts`) agents so
+  the two render an identical block. The librarian
+  (`wiki_librarian.ts`) keeps its OWN renderer - a CORRECTIVE
+  variant, not a copy to fold in here.
 - `agents/_agent_tools.ts` - shared agent-toolbox plumbing:
   `asAgentTool` (wraps a registered `ToolDef` with a pinned wire
   schema so agent writes stay byte-identical to the chat-side
@@ -183,12 +211,18 @@ Edge function (`supabase/functions/venice/`):
   flush-before-respond contract as `edge-log.ts`.
 - `index.ts` - routes: `POST /wiki-sweep` and
   `POST /wiki-librarian-sweep` (both gated by `isServiceRole`);
-  `POST /wiki-retry` and `POST /wiki-librarian-run` (user JWT; the
-  gateway-validated id scopes every RPC). The librarian-run route
+  `POST /wiki-retry`, `POST /wiki-manual-update`, and
+  `POST /wiki-librarian-run` (user JWT; the gateway-validated id
+  scopes every RPC). The librarian-run route
   takes `{ instructions, runId }`, builds the progress publisher
   when a runId is present (capped at 64 chars - an opaque demux key,
   not identity), and awaits `publisher.flush()` before responding so
-  the `done` event can't be dropped behind the response body.
+  the `done` event can't be dropped behind the response body. The
+  manual-update route (`handleWikiManualUpdate`) takes
+  `{ articleId, instructions }` and is synchronous - one JSON
+  completion, no runId / progress channel - returning the
+  `WikiManualUpdateResult` union in the response body, the same shape
+  as `/wiki-retry`.
 - `supabase/functions/_shared/embed-input.ts` - the `wiki` entry in
   `EMBED_SOURCES` builds the embed input for the server-side
   backfill.
@@ -209,7 +243,11 @@ Browser data layer:
   `deleteWikiArticle`, `searchWikiArticles`,
   `listWikiSkippedThreads`, `retryWikiThread` (a thin authenticated
   POST to `/wiki-retry`; boundary-validates the result union),
-  `subscribeToWikiArticleChanges` (user-scoped `postgres_changes`
+  `runWikiManualUpdate` (a thin authenticated POST to
+  `/wiki-manual-update`; boundary-validates the
+  `WikiManualUpdateResult` preview / noop union and converts the
+  function's `kind:'error'` into a thrown Error so the panel shows a
+  retry banner), `subscribeToWikiArticleChanges` (user-scoped `postgres_changes`
   subscription on `wiki_articles`; coarse "something changed"
   notification, no per-event payloads), `runWikiLibrarian` (a thin
   authenticated POST to `/wiki-librarian-run`; boundary-validates the
@@ -257,54 +295,42 @@ Browser tools:
   entry in `src/lib/tools/index.ts` - the main-chat delegation
   surface (see "Tool toolbox split" below).
 
-Browser agents:
+Browser preview UI (no browser agent code):
 
-- `src/lib/agents/wiki/agent.ts` - the `WikiAgent` class, which owns
-  only the manual flow: `updateOne()` for the per-article "Ask agent
-  to update" preview. Single Venice completion, `response_format`
-  pinned to JSON, no tool loop. The JSON output carries the body edit
-  AND a `records` array of proposed create/update/delete operations
-  (the `RecordOp` type): the article's current records are fed into the
-  prompt so the model can reference them by id, and the parser drops any
-  `update`/`delete` op whose id was not in that list (hallucinated-id
-  rejection). The browser previews body + record ops together and
-  applies both on Accept - the manual flow is still a no-tool
-  single-completion (the article's record set is small enough to pass
-  in-context), it just proposes record changes alongside the body.
-  `__test` exposes the parser/validator for `tests/wiki-manual.test.ts`.
-  Logger source `wiki-manual`.
+- There is no `src/lib/agents/wiki/` directory anymore - the manual
+  flow moved into `supabase/functions/venice/agents/wiki_manual.ts`
+  (see Edge function above). The browser's only manual-flow code is
+  the thin POST (`SupabaseService.runWikiManualUpdate`) and the
+  preview-display primitives below; the `RecordOp` /
+  `WikiManualUpdateResult` types live in
+  `src/lib/supabase/types/wiki.ts`.
 - `src/lib/ui/wiki-manual.ts` - pure preview primitives:
   `describeRecordOps` projects the proposed `RecordOp`s into display
-  rows (resolving update/delete against the loaded records),
-  `recordOpsHeadline` pluralizes the count. Unit-tested in
-  `tests/wiki-manual.test.ts`.
-- `src/lib/agents/wiki/prompt.ts` - `buildWikiManualPrompt({
-  userProfile })` plus the `WikiUserProfile` type. Folds an "About
-  the user" block into the prompt when the profile carries a name or
-  location (Settings -> AI -> About you). The autonomous prompt is a
-  separate copy living with its agent in
-  `supabase/functions/venice/agents/wiki.ts`; the two share the
-  encyclopedic voice and the anti-name-fabrication rules but differ
-  in framing (autonomous reads a conversation and decides per-topic;
-  manual applies explicit instructions to one article). The
-  librarian has no browser agent code at all - its prompt and runner
-  live entirely in `supabase/functions/venice/agents/wiki_librarian.ts`.
+  rows (resolving update/delete against the records the panel loaded
+  for display), `recordOpsHeadline` pluralizes the count. Unit-tested
+  in `tests/wiki-manual.test.ts`. The agent's JSON parser +
+  record-op validation now live edge-side with the agent (covered by
+  `supabase/functions/tests/wiki_manual.test.ts`); this module is the
+  framework-free rendering layer only.
 
 Model registry:
 
 - `src/lib/models/index.ts` - `AgentRole` includes `'wiki'` and
   `'wikiLibrarian'`; `AGENT_MODELS.wiki` and
   `AGENT_MODELS.wikiLibrarian` both pinned to `deepseek-v4-flash`
-  (rationale documented inline above the table). The manual flow
-  resolves `agentModel('wiki')` at runtime; the edge agents hardcode
-  the mirror constants `WIKI_MODEL` (agents/wiki.ts) and
-  `WIKI_LIBRARIAN_MODEL` (agents/wiki_librarian.ts) - keep them in
-  sync with the registry.
+  (rationale documented inline above the table). This registry is now
+  the canonical source the edge mirror constants document; no browser
+  code resolves `agentModel('wiki')` at runtime any more (the manual
+  flow that used to is server-side). The edge agents hardcode the
+  mirror constants `WIKI_MODEL` (agents/wiki.ts), `WIKI_MANUAL_MODEL`
+  (agents/wiki_manual.ts), and `WIKI_LIBRARIAN_MODEL`
+  (agents/wiki_librarian.ts) - keep them in sync with the registry.
 
 Main-thread plumbing:
 
 - `src/lib/state.svelte.ts` - no wiki workers or managers at all;
-  both wiki agents run server-side. `app.wikiAutomaticEnabled` and
+  every wiki agent (autonomous, librarian, and the per-article
+  manual update) runs server-side. `app.wikiAutomaticEnabled` and
   `app.wikiLibrarianEnabled` are plain persisted settings - the live
   switches are `profiles.settings.wikiAutomaticEnabled` (read by the
   wiki sweep's claim predicate) and
@@ -510,10 +536,14 @@ Tests:
   the completion seam scripting model rounds, the progress hook's
   event stream, and the `activity` param injection staying
   conditional on an attached listener.
-- `tests/wiki-manual.test.ts` - the manual flow's record-ops logic:
-  the agent-side parser/validator (hallucinated-id rejection, the
-  records-only-noop detection, per-op normalisation) and the
-  `wiki-manual.ts` preview primitives.
+- `supabase/functions/tests/wiki_manual.test.ts` - the manual
+  agent's parser/validator (hallucinated-id rejection, the
+  records-only-noop detection, per-op normalisation) and prompt
+  invariants (the anti-name-fabrication block, the do-not-discard-
+  facts rule). Deno; runs against `agents/wiki_manual.ts`'s `__test`.
+- `tests/wiki-manual.test.ts` - the browser preview-display
+  primitives only (`describeRecordOps` / `recordOpsHeadline`). The
+  parser coverage moved to the Deno suite above with the agent.
 
 Docs:
 
@@ -558,14 +588,19 @@ Docs:
 - **Librarian chat dispatch**: the gated `wikiToolbox`'s registered
   `wiki_librarian` ToolDef, always the custom-instructions prompt
   variant, run inline in the chat round's tool call.
-- `WikiAgent.updateOne({ articleId, currentTitle, currentContent,
-  currentRecords, userInstructions, signal })` - the main-thread
-  per-article manual entry. Single Venice completion with
-  `response_format: {type: 'json_object'}`, no tool loop. Returns
-  `{ kind: 'preview', title, content, reason, recordOps }` or
-  `{ kind: 'noop', reason }`. `currentRecords` (the article's records,
-  loaded by the caller) scope the record `update`/`delete` ops the
-  model may propose; `noop` means body unchanged AND no record ops.
+- **Manual per-article update**: the article view's "Ask agent to
+  update" panel -> `SupabaseService.runWikiManualUpdate({ articleId,
+  instructions })` -> `POST /wiki-manual-update` (user JWT) ->
+  `runWikiManualUpdate(adminClient, userId, ...)`. Reads the
+  persisted article + its records server-side, runs ONE completion
+  with `response_format: {type: 'json_object'}` (no tool loop), and
+  returns `{ kind: 'preview', title, content, reason, recordOps }` or
+  `{ kind: 'noop', reason }` (or `{ kind: 'error', error }`, which the
+  browser method turns into a thrown banner). The article's own
+  records scope the record `update`/`delete` ops the model may
+  propose (hallucinated-id rejection); `noop` means body unchanged
+  AND no record ops. Writes nothing - the browser persists the
+  article + records on Accept.
 - `wiki_search` tool - registered in `alwaysOnToolbox.tools` so
   every chat request can reach it without a toolbox toggle.
 
@@ -968,8 +1003,9 @@ flushes per thread so a later infrastructure failure can't drop
 lines an earlier thread earned. Drawer source tag: `wiki`. The
 librarian logs as `wiki-librarian` on all three of its trigger paths
 (each entry point binds `createEdgeLogger(userId, 'wiki-librarian')`
-and flushes in its `finally`); the browser-side manual article flow
-logs as `wiki-manual`.
+and flushes in its `finally`); the manual per-article flow logs as
+`wiki-manual` (also edge-side now - `createEdgeLogger(userId,
+'wiki-manual')`, flushed in `runWikiManualUpdate`'s `finally`).
 
 ### Embedding pipeline
 
@@ -987,23 +1023,27 @@ as memories and journal entries.
 
 ### Autonomous vs manual agent split
 
-Two distinct flows, two distinct homes:
+Two distinct flows, both server-side, but different shapes:
 
-| Aspect      | Autonomous (edge)   | Manual (`updateOne`) |
-| ----------- | ------------------- | -------------------- |
-| Runs in     | venice function     | Browser main thread  |
-| Trigger     | Cron / Retry button | User clicks button   |
-| Inputs      | Whole conversation  | One article + its records + instructions |
-| Tools       | Yes (`buildWikiToolbox`) | No              |
-| Output      | Tool side effects   | JSON preview (body + record ops) |
-| Persistence | Tool calls write    | UI persists article + records on Accept |
-| Prompt      | `buildWikiAutonomousPrompt` (edge) | `buildWikiManualPrompt` (browser) |
+| Aspect      | Autonomous (`wiki.ts`) | Manual (`wiki_manual.ts`) |
+| ----------- | ---------------------- | ------------------------- |
+| Runs in     | venice function        | venice function           |
+| Trigger     | Cron / Retry button    | User clicks "Ask agent to update" |
+| Route       | `/wiki-sweep`, `/wiki-retry` | `/wiki-manual-update` |
+| Inputs      | Whole conversation     | One article + its records + instructions |
+| Tools       | Yes (`buildWikiToolbox`) | No (one JSON completion) |
+| Output      | Tool side effects      | JSON preview (body + record ops) |
+| Persistence | Tool calls write       | Browser persists article + records on Accept |
+| Prompt      | `buildWikiAutonomousPrompt` | `buildWikiManualPrompt` |
 
 Both run `deepseek-v4-flash` and share the encyclopedic-third-person
 voice, the "preserve facts unless explicitly contradicted"
-discipline, and the anti-name-fabrication profile rules. They differ
-on scope (whole wiki vs one article), input shape (conversation vs
-explicit instructions), and output shape (tool calls vs JSON).
+discipline, and - now that both live in the same runtime - the
+literal `renderUserProfileBlock` from `agents/_wiki_profile.ts`. They
+differ on scope (whole wiki vs one article), input shape
+(conversation vs explicit instructions), output shape (tool calls vs
+JSON), and whether they write (the manual flow proposes a preview the
+browser persists, the autonomous flow's tool calls ARE the writes).
 
 ### Tool toolbox split
 
@@ -1138,7 +1178,7 @@ stray record is cheap to delete; a clobbered article is not.
   relay to the in-app Logs drawer over the `logs:<userId>`
   Broadcast channel; drawer source tags `wiki` (autonomous agent),
   `wiki-librarian` (librarian, all three paths), `wiki-manual`
-  (browser manual flow). The librarian's manual run additionally
+  (the per-article manual update, edge-side). The librarian's manual run additionally
   publishes live step events over the sibling `agent-runs:<userId>`
   Broadcast topic (`_shared/agent-progress.ts`), which follows the
   same transport + flush-before-respond contract as the log relay.
@@ -1153,8 +1193,10 @@ stray record is cheap to delete; a clobbered article is not.
 - **Edge function auth** (`docs/dev/edge-function-auth.md`) - the
   venice function is b-strict: `/wiki-sweep`,
   `/wiki-records-sweep`, and `/wiki-librarian-sweep` are gated on
-  `isServiceRole`; `/wiki-retry` and `/wiki-librarian-run` on the
-  gateway-validated user JWT. `claim_next_user_for_wiki_librarian` is a SECURITY
+  `isServiceRole`; `/wiki-retry`, `/wiki-manual-update`, and
+  `/wiki-librarian-run` on the gateway-validated user JWT (the manual
+  route reads the article + records under that id, never trusting the
+  client to supply them). `claim_next_user_for_wiki_librarian` is a SECURITY
   DEFINER global sweep locked to `service_role`; the in-flight guard
   pair carries the `coalesce(p_user_id, auth.uid())` b-strict escape
   hatch; and every wiki tool / helper / RPC carries explicit
@@ -1331,10 +1373,10 @@ stray record is cheap to delete; a clobbered article is not.
 - **Manual agent must NOT discard facts unless told to.** The
   "rewrite for tone" / "fix paragraph 2" / "add a sentence" patterns
   all preserve the rest of the article. This is encoded in the
-  manual prompt and is load-bearing for the trust contract with the
-  user. Reviewer note: a future change that broadens the prompt to
-  "make it better" would silently rewrite parts the user wanted left
-  alone.
+  manual prompt (`buildWikiManualPrompt` in `agents/wiki_manual.ts`)
+  and is load-bearing for the trust contract with the user. Reviewer
+  note: a future change that broadens the prompt to "make it better"
+  would silently rewrite parts the user wanted left alone.
 - **Pointer-advance is unconditional on `done`.** Even a no-op cycle
   (agent issued zero tool calls) advances the pointer. Without this,
   every sweep would re-process the same "the model decided this
@@ -1350,16 +1392,21 @@ stray record is cheap to delete; a clobbered article is not.
   X" by reading those summaries in the log drawer, and the
   librarian's "two articles I considered merging but left alone"
   case is only visible there.
-- **Two prompt copies, two pairs of model constants.** The manual
-  prompt (browser) and the autonomous prompt (edge) live in
-  different runtimes and cannot share an import; same for
-  `agentModel('wiki')` / `agentModel('wikiLibrarian')` vs the edge
-  mirrors `WIKI_MODEL` / `WIKI_LIBRARIAN_MODEL`, and the char caps
-  in `src/lib/wiki.ts` vs the mirrors in the function tools. A
-  change to the voice rules, the anti-name-fabrication block, a
-  model pin, or the caps has to land on both sides. (The librarian
-  prompt itself has a single copy - it lives only in
-  `agents/wiki_librarian.ts`.)
+- **Three prompt bodies, one shared profile block.** The autonomous
+  (`agents/wiki.ts`), manual (`agents/wiki_manual.ts`), and librarian
+  (`agents/wiki_librarian.ts`) prompts now all live in the venice
+  function, so they CAN share imports - and the autonomous + manual
+  agents share the literal `renderUserProfileBlock` from
+  `agents/_wiki_profile.ts` (the librarian keeps its own CORRECTIVE
+  variant). The three prompt BODIES stay separate by design (different
+  framing per surface), so a change to the voice rules or the
+  body-vs-records discipline still has to land on each body it
+  applies to - but the anti-name-fabrication block is now edited in
+  exactly one place. Model pins are edge mirrors of the registry:
+  `WIKI_MODEL`, `WIKI_MANUAL_MODEL`, `WIKI_LIBRARIAN_MODEL` (all
+  `deepseek-v4-flash`) mirror `AGENT_MODELS` in
+  `src/lib/models/index.ts`; the char caps in `src/lib/wiki.ts`
+  mirror the function tools. Keep mirrors in sync.
 - **`embedding_claim_expires` (no `_at`).** Schema convention for
   the embedding-side claim columns matches memories and
   journal_entries. The thread-side claim columns

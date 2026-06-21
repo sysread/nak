@@ -134,6 +134,42 @@ export type WikiLibrarianRunResult =
   | { kind: 'busy' }
   | { kind: 'error'; error: string };
 
+/**
+ * A proposed change to one of an article's dated records, returned by
+ * the manual wiki agent (/wiki-manual-update) for the preview the user
+ * accepts or rejects. Discriminated by `op`; `update`/`delete` carry an
+ * `id` the function-side parser has already confirmed belongs to a
+ * record the model was shown (a hallucinated id never reaches here).
+ * Mirror of the RecordOp in
+ * supabase/functions/venice/agents/wiki_manual.ts.
+ */
+export type RecordOp =
+  | { op: 'create'; date: string; content: string; tags: string[] }
+  | { op: 'update'; id: string; date?: string; content?: string; tags?: string[] }
+  | { op: 'delete'; id: string };
+
+/**
+ * Success outcome of a server-side manual wiki update (the venice
+ * function's /wiki-manual-update route; see runWikiManualUpdate below).
+ * `preview` carries the would-be final title/content (equal to the
+ * current article on a records-only edit), the proposed record ops, and
+ * the agent's one-line `reason` (rendered next to the preview AND used
+ * as the changelog message on Accept). `noop` means nothing changed:
+ * body identical AND no record ops. The function's own union also has a
+ * kind:'error' for parse/read/transport failures; runWikiManualUpdate
+ * converts that into a thrown Error so the panel shows a retry banner,
+ * so it is intentionally absent from this consumed type.
+ */
+export type WikiManualUpdateResult =
+  | {
+      kind: 'preview';
+      title: string;
+      content: string;
+      reason: string;
+      recordOps: RecordOp[];
+    }
+  | { kind: 'noop'; reason: string };
+
 
 export function coerceWikiArticle(raw: Record<string, unknown>): WikiArticle {
   return {

@@ -269,15 +269,26 @@ export async function completeJsonObject(opts: {
   model: string;
   messages: readonly VeniceWireMessage[];
   maxTokens: number;
+  /**
+   * Optional reasoning_effort knob, forwarded verbatim to Venice. The
+   * topics units omit it (they take the model default); the manual
+   * wiki agent pins 'low' to match its browser-era completion. Left
+   * absent the wire body carries no reasoning_effort field at all.
+   */
+  reasoningEffort?: 'low' | 'medium' | 'high';
 }): Promise<string> {
+  const body: Record<string, unknown> = {
+    model: opts.model,
+    messages: opts.messages,
+    max_completion_tokens: opts.maxTokens,
+    response_format: { type: 'json_object' },
+  };
+  if (opts.reasoningEffort !== undefined) {
+    body.reasoning_effort = opts.reasoningEffort;
+  }
   const raw = await veniceComplete({
     apiKey: opts.apiKey,
-    body: {
-      model: opts.model,
-      messages: opts.messages,
-      max_completion_tokens: opts.maxTokens,
-      response_format: { type: 'json_object' },
-    },
+    body,
     // Every caller of this helper is a server-side curation agent with no
     // browser rate-limit loop behind it, so ride out a transient 429
     // rather than failing the whole cycle on one "model overloaded".

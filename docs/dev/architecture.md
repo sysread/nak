@@ -225,12 +225,12 @@ the function-side wire shape:
   yields the function-published event union. Used only by the
   main user-facing chat (`chat-loop.ts`).
 - `SupabaseService.complete(req)` - non-streaming one-shot,
-  routed through the venice/complete route. Used only by the two
-  intentional browser-side completion paths: the intuition
-  pipeline and the per-article manual wiki-update preview flow.
-  Both are turn- or UI-scoped exceptions, not migration residue.
-  The server-side agent fleets (reflection, samskara, curation,
-  bias, the recall agents) run inside the venice function and
+  routed through the venice/complete route. Used only by the one
+  intentional browser-side completion path left: the intuition
+  pipeline, a turn-scoped exception (not migration residue). The
+  server-side agent fleets (reflection, samskara, curation, bias,
+  the recall agents, and both wiki agents - autonomous and the
+  per-article manual update) run inside the venice function and
   call Venice directly rather than routing through this browser
   method.
 - `SupabaseService.embed(req)` - per-query vector. Routes through
