@@ -23,15 +23,16 @@
 import { assertEquals, assertStringIncludes } from '@std/assert';
 import { __test } from '../venice/agents/wiki.ts';
 
-Deno.test('wiki toolbox is wiki CRUD + record_list/create + memory_search, in declared order', () => {
+Deno.test('wiki toolbox is wiki CRUD + full record management + memory_search, in declared order', () => {
   const toolbox = __test.buildWikiToolbox();
   assertEquals(toolbox.name, 'wiki');
   // record_list reads the journey (to promote learnings into the body and
   // to dedup before migrating); record_create is scoped to MIGRATION only
-  // (relocating inline dated history out of a body into records). The
-  // worker never edits or deletes records - record_update / record_delete
-  // stay with the librarian; new-event capture stays with the extraction
-  // agent.
+  // (relocating inline dated history out of a body into records - new-event
+  // capture stays with the extraction agent); record_update / record_delete
+  // are opportunistic cleanup on the records of articles the worker is
+  // already touching (correct/merge/dedup), same discipline as the
+  // librarian.
   assertEquals(
     toolbox.tools.map((t) => t.name),
     [
@@ -41,16 +42,17 @@ Deno.test('wiki toolbox is wiki CRUD + record_list/create + memory_search, in de
       'wiki_delete',
       'record_list',
       'record_create',
+      'record_update',
+      'record_delete',
       'memory_search',
     ],
   );
 });
 
-Deno.test('wiki toolbox has record_create (migration) but not record edit/delete', () => {
+Deno.test('wiki toolbox manages records (list/create/update/delete) but never extracts new events', () => {
   const names = __test.buildWikiToolbox().tools.map((t) => t.name);
-  assertEquals(names.includes('record_create'), true, 'record_create is the migration tool');
-  for (const forbidden of ['record_update', 'record_delete']) {
-    assertEquals(names.includes(forbidden), false, `${forbidden} must not be reachable`);
+  for (const expected of ['record_list', 'record_create', 'record_update', 'record_delete']) {
+    assertEquals(names.includes(expected), true, `${expected} must be reachable`);
   }
 });
 

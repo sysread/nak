@@ -262,7 +262,22 @@ Browser agents:
 - `src/lib/agents/wiki/agent.ts` - the `WikiAgent` class, which owns
   only the manual flow: `updateOne()` for the per-article "Ask agent
   to update" preview. Single Venice completion, `response_format`
-  pinned to JSON, no tool loop. Logger source `wiki-manual`.
+  pinned to JSON, no tool loop. The JSON output carries the body edit
+  AND a `records` array of proposed create/update/delete operations
+  (the `RecordOp` type): the article's current records are fed into the
+  prompt so the model can reference them by id, and the parser drops any
+  `update`/`delete` op whose id was not in that list (hallucinated-id
+  rejection). The browser previews body + record ops together and
+  applies both on Accept - the manual flow is still a no-tool
+  single-completion (the article's record set is small enough to pass
+  in-context), it just proposes record changes alongside the body.
+  `__test` exposes the parser/validator for `tests/wiki-manual.test.ts`.
+  Logger source `wiki-manual`.
+- `src/lib/ui/wiki-manual.ts` - pure preview primitives:
+  `describeRecordOps` projects the proposed `RecordOp`s into display
+  rows (resolving update/delete against the loaded records),
+  `recordOpsHeadline` pluralizes the count. Unit-tested in
+  `tests/wiki-manual.test.ts`.
 - `src/lib/agents/wiki/prompt.ts` - `buildWikiManualPrompt({
   userProfile })` plus the `WikiUserProfile` type. Folds an "About
   the user" block into the prompt when the profile carries a name or
@@ -329,7 +344,14 @@ UI:
   required one-line change-message input that lands in the wiki
   changelog after the mutation. The "ask agent to update" preview
   surfaces the agent's `reason` field as the changelog entry it
-  would write; Accept passes it through. When no article is selected
+  would write (only when the body actually changes - a records-only
+  edit writes no body changelog row); Accept passes it through. The
+  same preview lists the agent's proposed record operations
+  (Add/Edit/Delete rows from `describeRecordOps`), and Accept applies
+  them via `createWikiRecord`/`updateWikiRecord`/`deleteWikiRecord`
+  after the body write, firing `emitWikiRecordChange` so the
+  `WikiRecords` section refreshes. A preview can carry record ops with
+  no body change at all. When no article is selected
   (and the user isn't composing), the panel renders
   `WikiChangelogPanel` as its default view - the changelog is the
   wiki tab's "home page", not a modal off to one side. The compose
@@ -467,7 +489,8 @@ UI:
 Tests:
 
 - `supabase/functions/tests/wiki.test.ts` - the safety-critical
-  composition guards: toolbox membership (wiki CRUD + read-only
+  composition guards: toolbox membership (wiki CRUD + full record
+  management `record_list`/`create`/`update`/`delete` + read-only
   memory_search, no memory writes, no ask_user), the content-filter
   sentinel match staying narrow, and the prompt invariants
   (anti-name-fabrication, profile-block rendering rules).
@@ -487,6 +510,10 @@ Tests:
   the completion seam scripting model rounds, the progress hook's
   event stream, and the `activity` param injection staying
   conditional on an attached listener.
+- `tests/wiki-manual.test.ts` - the manual flow's record-ops logic:
+  the agent-side parser/validator (hallucinated-id rejection, the
+  records-only-noop detection, per-op normalisation) and the
+  `wiki-manual.ts` preview primitives.
 
 Docs:
 
@@ -532,11 +559,13 @@ Docs:
   `wiki_librarian` ToolDef, always the custom-instructions prompt
   variant, run inline in the chat round's tool call.
 - `WikiAgent.updateOne({ articleId, currentTitle, currentContent,
-  userInstructions, signal })` - the main-thread per-article manual
-  entry. Single Venice completion with
+  currentRecords, userInstructions, signal })` - the main-thread
+  per-article manual entry. Single Venice completion with
   `response_format: {type: 'json_object'}`, no tool loop. Returns
-  `{ kind: 'preview', title, content, reason }` or
-  `{ kind: 'noop', reason }`.
+  `{ kind: 'preview', title, content, reason, recordOps }` or
+  `{ kind: 'noop', reason }`. `currentRecords` (the article's records,
+  loaded by the caller) scope the record `update`/`delete` ops the
+  model may propose; `noop` means body unchanged AND no record ops.
 - `wiki_search` tool - registered in `alwaysOnToolbox.tools` so
   every chat request can reach it without a toolbox toggle.
 
@@ -964,10 +993,10 @@ Two distinct flows, two distinct homes:
 | ----------- | ------------------- | -------------------- |
 | Runs in     | venice function     | Browser main thread  |
 | Trigger     | Cron / Retry button | User clicks button   |
-| Inputs      | Whole conversation  | One article + instructions |
+| Inputs      | Whole conversation  | One article + its records + instructions |
 | Tools       | Yes (`buildWikiToolbox`) | No              |
-| Output      | Tool side effects   | JSON preview         |
-| Persistence | Tool calls write    | UI persists on Accept |
+| Output      | Tool side effects   | JSON preview (body + record ops) |
+| Persistence | Tool calls write    | UI persists article + records on Accept |
 | Prompt      | `buildWikiAutonomousPrompt` (edge) | `buildWikiManualPrompt` (browser) |
 
 Both run `deepseek-v4-flash` and share the encyclopedic-third-person
@@ -1051,10 +1080,10 @@ stray record is cheap to delete; a clobbered article is not.
   `record_list` dedupes, read-only `memory_search` grounds. It never
   touches article bodies or memory. Asserted in
   `supabase/functions/tests/wiki_records.test.ts`.
-- The article worker gets `record_list` + `record_create`; the
-  librarian gets `record_list` + `record_create` + `record_update` +
+- The article worker and the librarian both get the full record-
+  management set: `record_list` + `record_create` + `record_update` +
   `record_delete`. Both prompts encode the body/records separation:
-  the article BODY is the current state, records are the journey. Two
+  the article BODY is the current state, records are the journey. Three
   behaviours follow:
   - **Promote**: fold durable learnings from records INTO the body,
     but never delete a record because its learning was promoted -
@@ -1070,9 +1099,17 @@ stray record is cheap to delete; a clobbered article is not.
     it), `record_create`, and only THEN trim the body line - never
     drop a dated line before its record exists. The worker also stops
     appending NEW dated entries to bodies; the journey goes to records.
-  The librarian additionally cleans up duplicate/outdated records
-  (`record_update` / `record_delete`); the worker does not edit or
-  delete records.
+  - **Clean up**: `record_update` to correct or merge a record,
+    `record_delete` for a true duplicate or clearly-irrelevant entry -
+    opportunistic on the records of articles the agent is already
+    touching (the librarian also runs the wiki-wide pass). The hard
+    rule on both: never `record_delete` a record because its learning
+    was promoted; records survive promotion.
+  The worker scopes its record edits to the article whose subject the
+  current conversation is about; the librarian works wiki-wide. Only
+  `record_create`-from-conversation stays carved out to the extraction
+  agent, so the worker and librarian never duplicate its event-capture
+  job.
 
 ## Interactions
 

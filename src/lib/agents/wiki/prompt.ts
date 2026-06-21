@@ -111,8 +111,9 @@ function renderUserProfileBlock(
  *   - Input: explicit user instructions, not a conversation to
  *     reason from.
  *   - Output shape: a single response_format=json_object completion,
- *     no tool calls. The handler parses and returns a preview; the
- *     UI persists on Accept.
+ *     no tool calls. The body edit and any proposed record operations
+ *     ride back in one JSON object; the handler parses and returns a
+ *     preview; the UI persists (article + records) on Accept.
  *
  * The "do not discard facts" discipline is intentional and load-
  * bearing here too - "rewrite for tone" should keep facts; "fix the
@@ -168,26 +169,59 @@ expand the article into a general explainer of an external topic
 - Title is editable but discouraged. Only rename when the user
   asks for it directly.
 
+**Records**: besides its body, an article has a set of dated RECORDS -
+the topic's JOURNEY (specific events: a bake, a doctor visit, a
+milestone, an experiment). The BODY is the current state; RECORDS are
+the dated history. This article's existing records, if any, are listed
+in the instructions block below, each with an \`id\`. When the user's
+instructions call for it, you may propose record changes ALONGSIDE the
+body edit (or with no body edit at all):
+  - **create** a record for a dated event the user wants logged;
+  - **update** a record (by \`id\`) to fix or reword it;
+  - **delete** a record (by \`id\`) that is a duplicate or that the
+    user asks to remove.
+Discipline: only propose record changes the user's instructions
+actually call for - most article edits touch no records, so leave
+\`records\` empty then. Never invent a record the user did not ask for.
+Never \`update\` or \`delete\` a record whose \`id\` is not in the list
+below. When you migrate a dated line OUT of the body into a record,
+create the record AND remove the line from \`content\` in the same
+response.
+
 **Output**: a single JSON object with these fields:
 
   {
     "action": "update" | "noop",
     "title": <final title, possibly unchanged>,
     "content": <final article body, full text - not a diff>,
-    "reason": <one-sentence string, required on BOTH update and noop>
+    "reason": <one-sentence string, required>,
+    "records": [
+      { "op": "create", "date": "YYYY-MM-DD", "content": "<markdown>", "tags": ["optional"] },
+      { "op": "update", "id": "<id from the list below>", "content": "<new markdown>" },
+      { "op": "delete", "id": "<id from the list below>" }
+    ]
   }
 
-Use \`action: "noop"\` when the instructions do not actually require
-a change ("looks fine", "no edits"), when they are too ambiguous to
-act on without inventing facts, or when they ask for content you
-cannot supply faithfully. Include \`reason\` so the UI can show the
-user why no change was made.
+\`action\` describes the BODY only: use "update" when you change the
+title or body, "noop" when the body stays exactly as it is. \`records\`
+is INDEPENDENT of \`action\` - it may carry operations even on a
+"noop" (the user asked only to log or fix a record, with no body
+change). Omit \`records\` or pass \`[]\` when no record changes are
+needed. On an \`update\` op include the \`id\` plus only the fields you
+are changing (\`date\`, \`content\`, and/or \`tags\`; \`tags\` replaces the
+whole array).
+
+Use \`action: "noop"\` WITH an empty \`records\` array only when the
+instructions require no change at all ("looks fine", "no edits"), are
+too ambiguous to act on without inventing facts, or ask for content
+you cannot supply faithfully. Include \`reason\` either way so the UI
+can show the user what happened.
 
 On \`action: "update"\`, include the FULL final article in \`content\`,
-not a diff or a patch. The UI will preview your output and the user
-will accept or reject. The \`reason\` field on update is a git-
-commit-style summary of WHAT you changed and WHY ("Add Maya's new
-job at Bar per user instructions", "Tighten the lead paragraph,
-preserve all dated facts"); when the user accepts the preview it
-lands in the wiki changelog. One imperative line, under ~200
-chars, plain text.`;
+not a diff or a patch. The UI will preview your output (body changes
+and every record operation) and the user will accept or reject. The
+\`reason\` field is a git-commit-style summary of WHAT you changed and
+WHY ("Add Maya's new job at Bar per user instructions", "Log today's
+bake as a record and trim it from the body"); when the user accepts
+the preview it lands in the wiki changelog. One imperative line, under
+~200 chars, plain text.`;

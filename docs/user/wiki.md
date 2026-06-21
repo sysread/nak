@@ -165,13 +165,23 @@ sentence noting that Maya prefers green tea", "fix the date in
 paragraph two", "rewrite the second paragraph for tone but keep the
 facts") and click **Ask agent**.
 
+The agent can change the article body **and** its
+[records](#records) in one request. It sees the article's existing
+records, so you can ask it to "log today's bake as a record", "fix
+the date on the doctor-visit record", or "delete the duplicate
+record from last week" - on its own or together with a body edit.
+
 The agent runs on the spot and shows a preview. While the update is
 open the article above picks up a red outline (the same "marked for
 replacement" cue you get on chat messages when you regenerate a
-turn). You then have three choices:
+turn). The preview shows the changed body (when the body changed) and
+a list of any proposed record changes, each tagged **Add record**,
+**Edit record**, or **Delete record**. You then have three choices:
 
-- **Accept** - persist the agent's version. The original fades out
-  and the new content snaps in; the listing reflects the change.
+- **Accept** - persist the agent's version: the body edit and every
+  listed record change land together. The original fades out and the
+  new content snaps in; the listing and the Records section reflect
+  the changes.
 - **Try again** - throw away the preview and run the agent again.
   Useful if the agent's interpretation didn't quite match what you
   wanted.
@@ -181,7 +191,8 @@ The agent is told to do exactly what you ask AND to preserve every
 fact already in the article unless you explicitly say to remove or
 replace it. So "add a sentence" adds without rewriting; "rewrite the
 second paragraph" rewrites only that paragraph; "fix the date in
-paragraph 2" patches that single value.
+paragraph 2" patches that single value. It only proposes record
+changes you actually asked for - most body edits touch no records.
 
 If your instructions don't actually require a change ("looks fine",
 "no edits"), or are too ambiguous to act on without the agent

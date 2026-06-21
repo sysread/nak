@@ -57,6 +57,8 @@ import { wikiUpdate } from '../tools/wiki_update.ts';
 import { wikiDelete } from '../tools/wiki_delete.ts';
 import { recordList } from '../tools/record_list.ts';
 import { recordCreate } from '../tools/record_create.ts';
+import { recordUpdate } from '../tools/record_update.ts';
+import { recordDelete } from '../tools/record_delete.ts';
 import {
   runHeadlessAgent,
   type AgentTool,
@@ -400,6 +402,59 @@ const RECORD_CREATE_WIRE_SCHEMA: AgentTool['wire'] = {
   },
 };
 
+// record_update / record_delete let the worker CLEAN UP the records on an
+// article it is already touching - correcting an outdated record, merging a
+// duplicate's detail into the one it keeps, removing a true duplicate or a
+// clearly-irrelevant entry. Same discipline the librarian applies: NEVER
+// delete a record just because its learning was promoted into the body
+// (records survive promotion), and never edit/delete records on articles
+// outside the current subject. New-event capture is still NOT the worker's
+// job - the extraction agent owns that, and record_create here stays
+// migration-only.
+const RECORD_UPDATE_WIRE_SCHEMA: AgentTool['wire'] = {
+  type: 'function',
+  function: {
+    name: 'record_update',
+    description:
+      "Edit a record's date, content, or tags. Use to correct an outdated " +
+      "record or merge a duplicate's detail into the one you keep. Pass id " +
+      'and any subset of date, content, tags (tags replaces the whole array). ' +
+      'Only touch records on the article whose subject this conversation is ' +
+      'about.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Record id (from record_list).' },
+        date: { type: 'string', description: 'New ISO "YYYY-MM-DD" date.' },
+        content: { type: 'string', minLength: 1, description: 'New Markdown body.' },
+        tags: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['id'],
+      additionalProperties: false,
+    },
+  },
+};
+
+const RECORD_DELETE_WIRE_SCHEMA: AgentTool['wire'] = {
+  type: 'function',
+  function: {
+    name: 'record_delete',
+    description:
+      'Delete a record. Use ONLY for a true duplicate or a clearly ' +
+      'irrelevant entry. NEVER delete a record just because you promoted ' +
+      'its learning into the article body - records are historical ' +
+      'documentation and must survive promotion.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Record id (from record_list).' },
+      },
+      required: ['id'],
+      additionalProperties: false,
+    },
+  },
+};
+
 // ---------------------------------------------------------------------------
 // Prompt. The framing layers each encode a production failure mode and
 // must not be softened casually:
@@ -667,11 +722,14 @@ specific events logged with a date ("baked an 80%-hydration loaf",
 (what is true now); records are the JOURNEY (how it got there).
 
 You do NOT re-extract new events from the conversation into records - a
-separate extraction agent owns that. You have record_create for ONE
-purpose: migrating dated history that is currently baked into an article
+separate extraction agent owns that, so record_create has ONE purpose
+here: migrating dated history that is currently baked into an article
 BODY out into records, so the body can become clean current-state prose.
+You CAN, however, tidy the records that already hang off an article you
+are touching: record_update to correct or merge a record, record_delete
+to drop a true duplicate or a clearly-irrelevant entry.
 
-Two things you do with records:
+Three things you do with records:
 
 1. **Promote.** Before updating an article, call record_list and fold
    the DURABLE learnings its records have established into the body -
@@ -702,6 +760,19 @@ Two things you do with records:
    whose body still carries an inline log. You do not need to sweep
    every article for migration on every run; the librarian does the
    wiki-wide pass.
+
+3. **Clean up.** While record_list shows you the records of an article
+   you are touching, fix what is plainly broken: record_update to
+   correct an outdated record or merge a duplicate's unique detail into
+   the one you keep, record_delete for a genuine duplicate or a clearly-
+   irrelevant entry. Two hard rules: NEVER record_delete a record just
+   because you promoted its learning into the body (records survive
+   promotion - the body gains the conclusion, the records keep the
+   journey), and only touch records on the article whose subject this
+   conversation is actually about. When in doubt, leave the record
+   alone - a stray record is low-cost; a wrongly-deleted event is lost
+   history. This is opportunistic cleanup on articles you already have
+   open, not a wiki-wide records audit - that is the librarian's pass.
 
 **Scope: this wiki is about the user, not the world.** Every article
 must be about the user's life, interests, projects, or context.
@@ -919,6 +990,8 @@ function buildWikiToolbox(): Toolbox {
       asAgentTool(wikiDelete, WIKI_DELETE_WIRE_SCHEMA),
       asAgentTool(recordList, RECORD_LIST_WIRE_SCHEMA),
       asAgentTool(recordCreate, RECORD_CREATE_WIRE_SCHEMA),
+      asAgentTool(recordUpdate, RECORD_UPDATE_WIRE_SCHEMA),
+      asAgentTool(recordDelete, RECORD_DELETE_WIRE_SCHEMA),
       asAgentTool(memorySearch, MEMORY_SEARCH_WIRE_SCHEMA),
     ],
   };
