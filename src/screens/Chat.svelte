@@ -201,6 +201,7 @@
   } from '$lib/ui/recall';
   import { formatMessageStamp } from '$lib/ui/message-timestamp';
   import { isReasoningOnlyStall, isCutOffPartialText } from '$lib/ui/incomplete-turn';
+  import { selectRecoveryBanner } from '$lib/ui/recovery-banner';
   import { headingFor, parseLastError } from '$lib/ui/last-error';
   import { computeRegenerateRangeIds, persistedRowIds } from '$lib/ui/regenerate';
   import { computeDeleteFromRangeIds } from '$lib/ui/message-delete';
@@ -5794,6 +5795,46 @@
   });
 
   /**
+   * Single recovery surface for the transcript tail. The tail can satisfy
+   * several "this turn did not finish" conditions at once - most visibly a
+   * session that died with a persisted user row AND a leftover IndexedDB
+   * streaming draft trips both `incompleteTurnTail` and `interruptedDraft`,
+   * which used to render as two stacked, near-identical retry boxes.
+   * `selectRecoveryBanner` collapses error / interrupted-draft / cut-off
+   * into one banner by precedence (error > interrupted-draft > cut-off);
+   * here we only bind each source's retry/dismiss closures and gate them.
+   *
+   * Gating mirrors the prior per-banner conditions: the interrupted-draft
+   * source is suppressed while a foreign device holds a live claim
+   * (`respondingElsewhere`) or a local turn is sending, and `displayedError`
+   * already wins precedence so the cut-off / draft variants never compete
+   * with an explained error. `incompleteTurnTail` self-suppresses on
+   * sending / streamingError / respondingElsewhere (see its derivation).
+   */
+  const recoveryBanner = $derived(
+    selectRecoveryBanner({
+      error: displayedError,
+      interruptedDraft:
+        interruptedDraft && !respondingElsewhere && !activeSlot?.sending
+          ? {
+              retry: () => void retryInterrupted(),
+              dismiss: () => {
+                void deleteDraft(interruptedDraft!.threadId).catch(() => {});
+                interruptedDraft = null;
+              },
+            }
+          : null,
+      cutOff: incompleteTurnTail
+        ? {
+            retry: () => {
+              void retryIncompleteTurn();
+            },
+          }
+        : null,
+    }),
+  );
+
+  /**
    * Best-effort clear of `threads.last_error` when the user dismisses
    * the persistent error card. Optimistic local patch fires first so
    * the card vanishes immediately; the DB UPDATE follows. If the write
@@ -7110,142 +7151,63 @@
               </div>
             {/if}
           {/each}
-          {#if !displayedError && incompleteTurnTail}
-            <!-- Generic "tail looks abandoned" banner. Fires only when
-                 we have an orphan tail (assistant row with tool_calls
-                 but no follow-up, reasoning-only stall, etc.) AND no
-                 explained error from the function (thread.last_error
-                 is null) AND no session-level error on the slot. This
-                 is the case for a user who closed the tab mid-turn
-                 before the function's END could fire - we have no
-                 record of why; we just offer a retry. When a
-                 function-side error DID land, `displayedError` carries
-                 the explanation + retry button together, so this
-                 banner stays hidden to avoid two near-identical retry
-                 surfaces stacked. -->
-            <div class="msg assistant msg-incomplete" role="note">
-              <div class="msg-incomplete-body">
-                <div class="msg-incomplete-text">
-                  The response appears to have been cut off. Click to retry.
-                </div>
-                <button
-                  type="button"
-                  class="secondary icon-btn msg-incomplete-retry"
-                  onclick={() => { void retryIncompleteTurn(); }}
-                  disabled={activeSlot?.sending}
-                  aria-label="Retry"
-                  title="Retry"
-                >
-                  <!-- Refresh / circular-arrow icon (Feather "refresh-cw"),
-                       matching the regenerate and rate-limit retry buttons. -->
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
-                       stroke="currentColor" stroke-width="2" stroke-linecap="round"
-                       stroke-linejoin="round" aria-hidden="true">
-                    <polyline points="23 4 23 10 17 10" />
-                    <polyline points="1 20 1 14 7 14" />
-                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10" />
-                    <path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14" />
-                  </svg>
-                </button>
-              </div>
-            </div>
-          {/if}
-          {#if interruptedDraft && !respondingElsewhere && !activeSlot?.sending && !displayedError}
-            <!-- Orphaned-draft recovery banner. Shown when thread load
-                 finds an IndexedDB streaming draft whose user message
-                 has no committed assistant response - meaning the prior
-                 session ended abruptly (tab close, Chrome mobile freeze,
-                 power loss) before the LLM response landed. Offers a
-                 one-click retry (re-runs the exchange against the same
-                 user message) and a dismiss to discard the draft and
-                 move on. Rendered at the tail of the transcript so it
-                 sits right after the orphaned user message.
+          {#if recoveryBanner}
+            {@const isError = recoveryBanner.variant === 'error'}
+            <!-- Unified recovery surface for the transcript tail. ONE
+                 banner for every "this turn did not finish" state, chosen
+                 by precedence in selectRecoveryBanner (error > recovered
+                 interrupted-draft > generic cut-off tail). These used to
+                 render as up to three independent stacked banners: a
+                 session that died with a persisted user row AND a leftover
+                 IndexedDB streaming draft satisfied two at once and showed
+                 two near-identical retry boxes (the cut-off note plus the
+                 interrupted-draft note). Collapsing to a single descriptor
+                 guarantees exactly one banner - one message, one retry
+                 path - on desktop and mobile alike.
 
-                 Suppressed while `respondingElsewhere` is true: a
-                 different device holds a live claim and is producing the
-                 reply right now, so this isn't an orphan to recover -
-                 the observer Scanner below covers the wait, and the
-                 assistant row will arrive over realtime.
-
-                 Suppressed while `activeSlot.sending` is true: a local
-                 exchange is currently producing the reply, which
-                 dominates whatever interruptedDraft was captured at
-                 thread-load time. runExchange clears the field at its
-                 start (see "Clear any orphaned-draft recovery banner"
-                 comment in runExchange) but a race - e.g. a thread
-                 reload between the slot allocation and the
-                 sending=true flip - could re-set it; the render-level
-                 guard keeps the throbber + banner from ever showing
-                 simultaneously regardless. -->
-            <div class="msg assistant msg-incomplete" role="note">
-              <div class="msg-incomplete-body">
-                <div class="msg-incomplete-text">
-                  Previous response was interrupted. Retry to generate a new one.
-                </div>
-                <button
-                  type="button"
-                  class="secondary icon-btn msg-incomplete-retry"
-                  onclick={() => void retryInterrupted()}
-                  disabled={activeSlot?.sending}
-                  aria-label="Retry interrupted response"
-                  title="Retry"
-                >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
-                       stroke="currentColor" stroke-width="2" stroke-linecap="round"
-                       stroke-linejoin="round" aria-hidden="true">
-                    <polyline points="23 4 23 10 17 10" />
-                    <polyline points="1 20 1 14 7 14" />
-                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10" />
-                    <path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14" />
-                  </svg>
-                </button>
-                <button
-                  type="button"
-                  class="secondary icon-btn msg-incomplete-dismiss"
-                  onclick={() => {
-                    void deleteDraft(interruptedDraft!.threadId).catch(() => {});
-                    interruptedDraft = null;
-                  }}
-                  aria-label="Dismiss"
-                  title="Dismiss"
-                >×</button>
-              </div>
-            </div>
-          {/if}
-          {#if displayedError}
-            <!-- Canonical error surface for the transcript tail. Driven
-                 by `displayedError`, which combines:
-                   - activeSlot.streamingError (session-local, the live
-                     turn just hit something)
-                   - currentThread.last_error (persistent, written by
-                     the streaming function on the terminal error path;
-                     cleared by commit_assistant_message on success).
-                 The .error-bar banner above the composer is still
-                 reserved for non-exchange errors (attachment upload,
-                 thread rename, pre-send guards) that don't have a
-                 transcript anchor. Retry button only fires when the
-                 source flagged the error as recoverable; auth and
-                 certain commit conflicts render dismiss-only so the
-                 user is steered toward the real fix. -->
-            <div class="msg assistant msg-error" role="alert">
-              <div class="msg-error-body">
-                <span class="msg-error-icon" aria-hidden="true">!</span>
-                <div class="msg-error-text">
-                  {#if displayedError.heading}
-                    <strong class="msg-error-heading">{displayedError.heading}</strong>
+                 The 'error' variant keeps the danger-tinted .msg-error
+                 styling: leading "!" icon, an optional kind heading, and a
+                 pre-wrap body so multi-line server errors (stack traces,
+                 JSON) keep their structure. Fed by `displayedError`
+                 (session streamingError or persisted thread.last_error);
+                 the .error-bar above the composer still owns non-exchange
+                 errors with no transcript anchor. The 'incomplete' variant
+                 is the muted, italic note. Retry is disabled while a local
+                 turn is sending; dismiss renders only when the source
+                 offers one (error cards and the recoverable draft, never
+                 the generic cut-off tail). See docs/dev/exchange.md for the
+                 respondingElsewhere suppression that keeps the recovery
+                 variants from offering a competing retry while a foreign
+                 device holds a live claim. -->
+            <div
+              class="msg assistant"
+              class:msg-error={isError}
+              class:msg-incomplete={!isError}
+              role={isError ? 'alert' : 'note'}
+            >
+              <div class:msg-error-body={isError} class:msg-incomplete-body={!isError}>
+                {#if isError}
+                  <span class="msg-error-icon" aria-hidden="true">!</span>
+                {/if}
+                <div class:msg-error-text={isError} class:msg-incomplete-text={!isError}>
+                  {#if recoveryBanner.heading}
+                    <strong class="msg-error-heading">{recoveryBanner.heading}</strong>
                   {/if}
-                  {displayedError.text}
+                  {recoveryBanner.text}
                 </div>
-                {#if displayedError.retry}
+                {#if recoveryBanner.retry}
                   <button
                     type="button"
-                    class="secondary icon-btn msg-error-retry"
-                    onclick={displayedError.retry}
+                    class="secondary icon-btn"
+                    class:msg-error-retry={isError}
+                    class:msg-incomplete-retry={!isError}
+                    onclick={recoveryBanner.retry}
                     disabled={activeSlot?.sending}
                     aria-label="Retry"
                     title="Retry"
                   >
-                    <!-- Refresh / circular-arrow icon (Feather "refresh-cw"). -->
+                    <!-- Refresh / circular-arrow icon (Feather "refresh-cw"),
+                         matching the regenerate and rate-limit retry buttons. -->
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
                          stroke="currentColor" stroke-width="2" stroke-linecap="round"
                          stroke-linejoin="round" aria-hidden="true">
@@ -7256,13 +7218,16 @@
                     </svg>
                   </button>
                 {/if}
-                <button
-                  type="button"
-                  class="secondary icon-btn msg-error-dismiss"
-                  onclick={displayedError.dismiss}
-                  aria-label="Dismiss error"
-                  title="Dismiss"
-                >×</button>
+                {#if recoveryBanner.dismiss}
+                  <button
+                    type="button"
+                    class="secondary icon-btn"
+                    class:msg-error-dismiss={isError}
+                    onclick={recoveryBanner.dismiss}
+                    aria-label={isError ? 'Dismiss error' : 'Dismiss'}
+                    title="Dismiss"
+                  >×</button>
+                {/if}
               </div>
             </div>
           {/if}
