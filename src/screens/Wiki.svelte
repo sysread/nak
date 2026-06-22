@@ -75,6 +75,7 @@
     MAX_WIKI_CHANGELOG_MESSAGE_CHARS,
   } from '$lib/wiki';
   import { onWikiChange, emitWikiChange, emitWikiRecordChange } from '$lib/wiki-events';
+  import { createLogger } from '$lib/logger.svelte';
   import { describeRecordOps, recordOpsHeadline } from '$lib/ui/wiki-manual';
   import { contentPreview } from '$lib/ui/wiki-records';
   import type {
@@ -562,8 +563,12 @@
   // --- "Ask agent to update" flow ---------------------------------------
   //
   // Mirrors `regenerateAutomaticEntry` in Journal.svelte. The agent
-  // runs synchronously on the main thread; the user sees a preview
-  // and chooses Accept / Try Again / Cancel before any DB write.
+  // runs server-side (/wiki-manual-update); the user sees a preview and
+  // chooses Accept / Try Again / Cancel before any DB write. The
+  // preview-stage outcome logs edge-side under `wiki-manual`; this
+  // browser logger reuses the SAME tag so the user's accept/decline
+  // choice and the DB commit group under one drawer filter with it.
+  const manualLog = createLogger('wiki-manual');
   let manualTargetId = $state<string | null>(null);
   let manualInstructions = $state('');
   let manualBusy = $state(false);
@@ -645,6 +650,22 @@
     manualNoop = null;
     manualError = null;
     manualAccepting = false;
+  }
+
+  // Explicit user dismissal of a manual-update RESULT (the Cancel /
+  // Close buttons in the preview and noop states), as opposed to the
+  // teardown callers of cancelManualUpdate (unmount, navigation, a
+  // fresh restart). Log the declined choice only when a result is
+  // actually on screen - the fresh-form Cancel and the teardown paths
+  // dismiss nothing, so they call cancelManualUpdate directly without a
+  // misleading "user declined" line.
+  function declineManualUpdate(): void {
+    if (manualPreview) {
+      manualLog.debug(`user declined preview for article ${manualTargetId}`);
+    } else if (manualNoop) {
+      manualLog.debug(`user dismissed noop for article ${manualTargetId}`);
+    }
+    cancelManualUpdate();
   }
 
   // Tear down any in-flight manual-update when the panel unmounts so
@@ -762,6 +783,12 @@
     // "update" changelog row.
     const bodyChanged =
       targetTitle !== article.title || targetContent !== article.content;
+    // The user's choice: they accepted the preview. The edge logged the
+    // preview-stage outcome; this is the acceptance half of the pair.
+    manualLog.debug(
+      `user accepted preview for article ${article.id} ` +
+        `(body ${bodyChanged ? 'changed' : 'unchanged'}, ${recordOps.length} record op(s))`
+    );
     manualAccepting = true;
     try {
       // Records first, independent of the body write. Refresh the
@@ -770,6 +797,10 @@
       if (recordOps.length > 0) {
         try {
           await applyRecordOps(recordOps, article.id);
+          // The DB commit itself - per-write breadcrumb, trace tier.
+          manualLog.trace(
+            `committed ${recordOps.length} record op(s) for article ${article.id}`
+          );
         } finally {
           emitWikiRecordChange();
         }
@@ -780,6 +811,7 @@
           title: targetTitle,
           content: targetContent,
         });
+        manualLog.trace(`committed body update for article ${article.id}`);
         // Append the changelog row. Best-effort, same as the direct-
         // edit path - the article already updated; a failed log write
         // shouldn't surface as an error to the user.
@@ -1580,7 +1612,7 @@
                   >
                     Try again
                   </button>
-                  <button type="button" onclick={cancelManualUpdate}>Close</button>
+                  <button type="button" onclick={declineManualUpdate}>Close</button>
                 </div>
               </div>
             {:else if manualPreview}
@@ -1652,7 +1684,7 @@
                   </button>
                   <button
                     type="button"
-                    onclick={cancelManualUpdate}
+                    onclick={declineManualUpdate}
                     disabled={manualAccepting}
                   >
                     Cancel

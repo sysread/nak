@@ -488,6 +488,10 @@ export async function runWikiManualUpdate(
     const knownIds = new Set(records.map((r) => r.id));
     const decision = parseManualDecision(text, knownIds);
     if (decision === null) {
+      // The completion came back, but its body wasn't parseable JSON -
+      // log it at debug so a "the model returned a response we couldn't
+      // parse" retry banner has a server-side counterpart to correlate.
+      log.debug('completion returned unparseable output; surfacing a retry error');
       return {
         kind: 'error',
         error: "The model returned a response we couldn't parse. Try again.",
@@ -514,7 +518,9 @@ export async function runWikiManualUpdate(
       finalTitle !== article.title || finalContent !== article.content;
     const recordOps = decision.records;
     if (!bodyChanged && recordOps.length === 0) {
-      return { kind: 'noop', reason: decision.reason ?? 'No change applied.' };
+      const reason = decision.reason ?? 'No change applied.';
+      log.debug(`completion ok: noop (${reason})`);
+      return { kind: 'noop', reason };
     }
 
     // Older / non-conforming completions may omit `reason`. Fall back to
@@ -524,6 +530,10 @@ export async function runWikiManualUpdate(
       decision.reason && decision.reason.length > 0
         ? decision.reason
         : `Manual edit: ${instructions.slice(0, 140)}`;
+    log.debug(
+      `completion ok: preview (body ${bodyChanged ? 'changed' : 'unchanged'}, ` +
+        `${recordOps.length} record op(s))`,
+    );
     return { kind: 'preview', title: finalTitle, content: finalContent, reason, recordOps };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

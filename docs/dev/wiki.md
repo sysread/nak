@@ -1003,9 +1003,15 @@ flushes per thread so a later infrastructure failure can't drop
 lines an earlier thread earned. Drawer source tag: `wiki`. The
 librarian logs as `wiki-librarian` on all three of its trigger paths
 (each entry point binds `createEdgeLogger(userId, 'wiki-librarian')`
-and flushes in its `finally`); the manual per-article flow logs as
-`wiki-manual` (also edge-side now - `createEdgeLogger(userId,
-'wiki-manual')`, flushed in `runWikiManualUpdate`'s `finally`).
+and flushes in its `finally`); the manual per-article flow uses
+`wiki-manual` for BOTH halves of the lifecycle (one tag, same as
+`samskara` / `bias`): the edge `/wiki-manual-update` route logs the
+start (info) and the preview-stage outcome - preview / noop /
+unparseable (debug) - via `createEdgeLogger(userId, 'wiki-manual')`
+flushed in `runWikiManualUpdate`'s `finally`, and the browser panel
+(`Wiki.svelte`, `createLogger('wiki-manual')`) logs the user's
+accept/decline choice (debug) and, on Accept, the record-op and body
+commits (trace).
 
 ### Embedding pipeline
 
