@@ -74,13 +74,18 @@
     MAX_WIKI_CONTENT_CHARS,
     MAX_WIKI_CHANGELOG_MESSAGE_CHARS,
   } from '$lib/wiki';
-  import { onWikiChange, emitWikiChange } from '$lib/wiki-events';
-  import { WikiAgent, type WikiUpdateOneResult } from '$lib/agents/wiki/agent';
+  import { onWikiChange, emitWikiChange, emitWikiRecordChange } from '$lib/wiki-events';
+  import { createLogger } from '$lib/logger.svelte';
+  import { describeRecordOps, recordOpsHeadline } from '$lib/ui/wiki-manual';
+  import { contentPreview } from '$lib/ui/wiki-records';
   import type {
     WikiArticle,
     WikiArticleSource,
     WikiArticleRelated,
     WikiLibrarianRunResult,
+    WikiManualUpdateResult,
+    RecordOp,
+    WikiRecord,
   } from '$lib/supabase';
   import { extractHeadings, uniqueSlug, type HeadingEntry } from '$lib/markdown';
   import {
@@ -558,20 +563,45 @@
   // --- "Ask agent to update" flow ---------------------------------------
   //
   // Mirrors `regenerateAutomaticEntry` in Journal.svelte. The agent
-  // runs synchronously on the main thread; the user sees a preview
-  // and chooses Accept / Try Again / Cancel before any DB write.
+  // runs server-side (/wiki-manual-update); the user sees a preview and
+  // chooses Accept / Try Again / Cancel before any DB write. The
+  // preview-stage outcome logs edge-side under `wiki-manual`; this
+  // browser logger reuses the SAME tag so the user's accept/decline
+  // choice and the DB commit group under one drawer filter with it.
+  const manualLog = createLogger('wiki-manual');
   let manualTargetId = $state<string | null>(null);
   let manualInstructions = $state('');
   let manualBusy = $state(false);
   // `reason` is the agent's one-line commit-style summary - carried
   // alongside the preview so the UI can show it AND use it as the
-  // changelog message when the user accepts. See WikiAgent.updateOne.
-  let manualPreview = $state<{ title: string; content: string; reason: string } | null>(null);
+  // changelog message when the user accepts. `recordOps` are the
+  // proposed record create/update/delete operations, previewed and
+  // applied on Accept alongside the body edit. The agent runs server-side
+  // (/wiki-manual-update, SupabaseService.runWikiManualUpdate).
+  let manualPreview = $state<{
+    title: string;
+    content: string;
+    reason: string;
+    recordOps: RecordOp[];
+  } | null>(null);
+  // The article's records as loaded at submit time, used to render
+  // update/delete op previews - an update shows the record's existing
+  // values for the fields it leaves unchanged; a delete shows what would
+  // be removed. The agent reads records server-side; this copy is for
+  // display only.
+  let manualRecords = $state<WikiRecord[]>([]);
   let manualNoop = $state<{ reason: string } | null>(null);
   let manualError = $state<string | null>(null);
   let manualAccepting = $state(false);
   let manualController: AbortController | null = null;
   let manualTextarea = $state<HTMLTextAreaElement | null>(null);
+
+  // Display-ready projection of the proposed record ops for the preview,
+  // resolved against the records loaded at submit time. Empty when there
+  // is no preview or the agent proposed no record changes.
+  const manualRecordOpViews = $derived(
+    manualPreview ? describeRecordOps(manualPreview.recordOps, manualRecords) : []
+  );
 
   // Focus the instructions textarea as soon as the form mounts so the
   // user can start typing without an extra click. The bound element
@@ -599,6 +629,7 @@
     manualInstructions = '';
     manualBusy = false;
     manualPreview = null;
+    manualRecords = [];
     manualNoop = null;
     manualError = null;
     manualAccepting = false;
@@ -615,9 +646,26 @@
     manualInstructions = '';
     manualBusy = false;
     manualPreview = null;
+    manualRecords = [];
     manualNoop = null;
     manualError = null;
     manualAccepting = false;
+  }
+
+  // Explicit user dismissal of a manual-update RESULT (the Cancel /
+  // Close buttons in the preview and noop states), as opposed to the
+  // teardown callers of cancelManualUpdate (unmount, navigation, a
+  // fresh restart). Log the declined choice only when a result is
+  // actually on screen - the fresh-form Cancel and the teardown paths
+  // dismiss nothing, so they call cancelManualUpdate directly without a
+  // misleading "user declined" line.
+  function declineManualUpdate(): void {
+    if (manualPreview) {
+      manualLog.debug(`user declined preview for article ${manualTargetId}`);
+    } else if (manualNoop) {
+      manualLog.debug(`user dismissed noop for article ${manualTargetId}`);
+    }
+    cancelManualUpdate();
   }
 
   // Tear down any in-flight manual-update when the panel unmounts so
@@ -647,22 +695,32 @@
     manualNoop = null;
     manualError = null;
     try {
-      const agent = new WikiAgent(app.supabase);
-      const result: WikiUpdateOneResult = await agent.updateOne({
+      // Load the article's records so the preview can resolve update /
+      // delete ops against the record they touch (describeRecordOps shows
+      // the old value). The agent itself reads the records server-side -
+      // these are for display only.
+      const records = await app.supabase.listWikiRecords(article.id);
+      if (manualController !== ctl || manualTargetId !== article.id) return;
+      // The whole run - prompt build, the single JSON completion, the
+      // article + record reads - happens server-side; this is a thin
+      // authenticated POST. A parse/read failure comes back as a thrown
+      // error (the catch below shows the banner); only preview / noop
+      // resolve. There is no abort signal: functions.invoke can't be
+      // cancelled, but the stale-result guard below drops a late reply.
+      const result: WikiManualUpdateResult = await app.supabase.runWikiManualUpdate({
         articleId: article.id,
-        currentTitle: article.title,
-        currentContent: article.content,
-        userInstructions: instructions,
-        signal: ctl.signal,
+        instructions,
       });
       // Stale-result guard - a concurrent cancel/restart should not
       // resurface a stale preview.
       if (manualController !== ctl || manualTargetId !== article.id) return;
       if (result.kind === 'preview') {
+        manualRecords = records;
         manualPreview = {
           title: result.title,
           content: result.content,
           reason: result.reason,
+          recordOps: result.recordOps,
         };
       } else {
         manualNoop = { reason: result.reason };
@@ -679,46 +737,106 @@
     }
   }
 
+  // Apply the agent's proposed record operations in the order it
+  // proposed them. Each supabase method auto-appends its own record-
+  // changelog row. Sequential (not parallel) so a mid-batch failure
+  // leaves a deterministic prefix applied rather than a scattered
+  // partial set.
+  async function applyRecordOps(
+    ops: readonly RecordOp[],
+    articleId: string
+  ): Promise<void> {
+    if (!app.supabase) return;
+    for (const op of ops) {
+      if (op.op === 'create') {
+        await app.supabase.createWikiRecord({
+          articleId,
+          date: op.date,
+          content: op.content,
+          tags: op.tags,
+        });
+      } else if (op.op === 'update') {
+        await app.supabase.updateWikiRecord(op.id, {
+          date: op.date,
+          content: op.content,
+          tags: op.tags,
+        });
+      } else {
+        await app.supabase.deleteWikiRecord(op.id);
+      }
+    }
+  }
+
   async function acceptManualUpdate(article: WikiArticle): Promise<void> {
     if (!app.supabase || !manualPreview) return;
-    // Snapshot the agent's reason BEFORE the await so a stale-result
-    // race (which cancels manualPreview) can't null it out mid-flight.
-    // The reason is the changelog message for this edit - the agent
-    // produced it alongside the preview content, so it always
-    // accurately describes what's being applied here.
+    // Snapshot the preview BEFORE the awaits so a stale-result race
+    // (which nulls manualPreview) can't tear out the values mid-flight.
+    // The reason is the changelog message for the body edit - the agent
+    // produced it alongside the content, so it describes what lands.
     const reason = manualPreview.reason;
     const targetTitle = manualPreview.title;
     const targetContent = manualPreview.content;
+    const recordOps = manualPreview.recordOps;
+    // The body may be unchanged (a records-only edit). Only write +
+    // changelog + fade the article when its title or content actually
+    // changed - re-writing identical content would mint a spurious
+    // "update" changelog row.
+    const bodyChanged =
+      targetTitle !== article.title || targetContent !== article.content;
+    // The user's choice: they accepted the preview. The edge logged the
+    // preview-stage outcome; this is the acceptance half of the pair.
+    manualLog.debug(
+      `user accepted preview for article ${article.id} ` +
+        `(body ${bodyChanged ? 'changed' : 'unchanged'}, ${recordOps.length} record op(s))`
+    );
     manualAccepting = true;
     try {
-      const updated = await app.supabase.updateWikiArticle(article.id, {
-        title: targetTitle,
-        content: targetContent,
-      });
-      // Append the changelog row. Best-effort, same as the direct-
-      // edit path - the article already updated; a failed log write
-      // shouldn't surface as an error to the user.
-      try {
-        await app.supabase.createWikiChangelogEntry({
-          article_id: updated.id,
-          kind: 'update',
-          title_at_change: updated.title,
-          message: reason,
-        });
-      } catch {
-        // best-effort; see comment above.
+      // Records first, independent of the body write. Refresh the
+      // records list in a finally so even a partial apply (some ops
+      // landed, a later one threw) surfaces what actually changed.
+      if (recordOps.length > 0) {
+        try {
+          await applyRecordOps(recordOps, article.id);
+          // The DB commit itself - per-write breadcrumb, trace tier.
+          manualLog.trace(
+            `committed ${recordOps.length} record op(s) for article ${article.id}`
+          );
+        } finally {
+          emitWikiRecordChange();
+        }
       }
-      // Fade out the original article BEFORE the in-store patch so
-      // the user sees the old version dissolve, then the new content
-      // snaps in. The DB write has already succeeded at this point;
-      // the fade is purely visual sequencing. If the user navigates
-      // away mid-fade the panel unmounts cleanly - the fade target
-      // is keyed by article id so a stale fade won't bleed onto a
-      // different article.
-      fadingArticleId = article.id;
-      await new Promise<void>((resolve) => window.setTimeout(resolve, FADE_OUT_MS));
-      patchWikiRow(article.id, updated);
-      emitWikiChange();
+
+      if (bodyChanged) {
+        const updated = await app.supabase.updateWikiArticle(article.id, {
+          title: targetTitle,
+          content: targetContent,
+        });
+        manualLog.trace(`committed body update for article ${article.id}`);
+        // Append the changelog row. Best-effort, same as the direct-
+        // edit path - the article already updated; a failed log write
+        // shouldn't surface as an error to the user.
+        try {
+          await app.supabase.createWikiChangelogEntry({
+            article_id: updated.id,
+            kind: 'update',
+            title_at_change: updated.title,
+            message: reason,
+          });
+        } catch {
+          // best-effort; see comment above.
+        }
+        // Fade out the original article BEFORE the in-store patch so
+        // the user sees the old version dissolve, then the new content
+        // snaps in. The DB write has already succeeded at this point;
+        // the fade is purely visual sequencing. If the user navigates
+        // away mid-fade the panel unmounts cleanly - the fade target
+        // is keyed by article id so a stale fade won't bleed onto a
+        // different article.
+        fadingArticleId = article.id;
+        await new Promise<void>((resolve) => window.setTimeout(resolve, FADE_OUT_MS));
+        patchWikiRow(article.id, updated);
+        emitWikiChange();
+      }
       // Guard the manualX-state clears on `manualTargetId ===
       // article.id`. If the user navigated to a different article
       // and re-opened the Ask-agent form on it (or even started a
@@ -1494,7 +1612,7 @@
                   >
                     Try again
                   </button>
-                  <button type="button" onclick={cancelManualUpdate}>Close</button>
+                  <button type="button" onclick={declineManualUpdate}>Close</button>
                 </div>
               </div>
             {:else if manualPreview}
@@ -1505,20 +1623,49 @@
                     Title would change to: <strong>{manualPreview.title}</strong>
                   </p>
                 {/if}
-                <!-- Show the agent's commit-style summary so the user
-                     knows what will land in the wiki changelog if they
-                     accept. The agent supplied this alongside the
-                     content; no separate input is needed. -->
-                <p class="subtle wiki-preview-reason">
-                  Changelog entry: <em>{manualPreview.reason}</em>
-                </p>
-                <div
-                  class="wiki-content"
-                  role="presentation"
-                  onclick={onArticleClick}
-                >
-                  <Markdown content={manualPreview.content} />
-                </div>
+                <!-- The reason is the changelog message for the BODY
+                     edit, so only surface it when the body actually
+                     changes. A records-only edit writes no body
+                     changelog row (each record write logs its own). -->
+                {#if manualPreview.title !== a.title || manualPreview.content !== a.content}
+                  <p class="subtle wiki-preview-reason">
+                    Changelog entry: <em>{manualPreview.reason}</em>
+                  </p>
+                {/if}
+                {#if manualPreview.content !== a.content}
+                  <div
+                    class="wiki-content"
+                    role="presentation"
+                    onclick={onArticleClick}
+                  >
+                    <Markdown content={manualPreview.content} />
+                  </div>
+                {:else if manualRecordOpViews.length > 0}
+                  <p class="subtle">
+                    The article body is unchanged; only the records below
+                    will change.
+                  </p>
+                {/if}
+                {#if manualRecordOpViews.length > 0}
+                  <div class="wiki-preview-records">
+                    <h5>{recordOpsHeadline(manualRecordOpViews.length)}</h5>
+                    <ul class="wiki-preview-record-list">
+                      {#each manualRecordOpViews as op, i (i)}
+                        <li class="wiki-preview-record wiki-preview-record-{op.kind}">
+                          <span class="wiki-record-op-label">{op.label}</span>
+                          {#if op.date}
+                            <span class="subtle wiki-record-op-date">{op.date}</span>
+                          {/if}
+                          {#if op.content}
+                            <span class="wiki-record-op-content">
+                              {contentPreview(op.content, 160)}
+                            </span>
+                          {/if}
+                        </li>
+                      {/each}
+                    </ul>
+                  </div>
+                {/if}
                 <div class="row">
                   <button
                     type="button"
@@ -1537,7 +1684,7 @@
                   </button>
                   <button
                     type="button"
-                    onclick={cancelManualUpdate}
+                    onclick={declineManualUpdate}
                     disabled={manualAccepting}
                   >
                     Cancel
@@ -1957,6 +2104,60 @@
   }
   .wiki-preview h4 {
     margin: 0 0 0.5rem 0;
+  }
+
+  /* Proposed record changes, previewed beneath the body diff. Each row
+     leads with a kind-coloured action label (Add/Edit/Delete) so the
+     user can scan the batch before accepting. */
+  .wiki-preview-records {
+    margin-top: 1rem;
+    padding-top: 0.75rem;
+    border-top: 1px dashed var(--border);
+  }
+  .wiki-preview-records h5 {
+    margin: 0 0 0.5rem 0;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .wiki-preview-record-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+  .wiki-preview-record {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.4rem;
+    font-size: 0.9rem;
+  }
+  .wiki-record-op-label {
+    font-weight: 600;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    white-space: nowrap;
+  }
+  .wiki-preview-record-create .wiki-record-op-label {
+    color: var(--success, #2e7d32);
+  }
+  .wiki-preview-record-update .wiki-record-op-label {
+    color: var(--accent, var(--text));
+  }
+  /* Delete reuses the destructive cue the .danger button uses. */
+  .wiki-preview-record-delete .wiki-record-op-label {
+    color: var(--danger, #c62828);
+  }
+  .wiki-record-op-content {
+    flex: 1 1 12rem;
+    min-width: 0;
+    color: var(--text);
   }
 
   /* Sources and See Also share a visual contract: small heading, tight

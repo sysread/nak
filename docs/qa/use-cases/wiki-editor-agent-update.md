@@ -28,9 +28,21 @@ per-article `Ask agent to update` workflow ([dev: wiki](../../dev/wiki.md)).
    click `Cancel`.
 9. Run `Ask agent to update` once more, wait for the preview, and click
    `Accept`.
-10. Open the article's `Delete` flow, enter `qa cleanup`, then click
+10. In the article's `Records` section, click the `+` to add a record
+    dated today with content `QA baseline record`, and save.
+11. Click `Ask agent to update` and instruct it to `log a record dated
+    today: "QA agent-logged event"` (no body change). Wait for the
+    preview.
+12. Confirm the preview shows an `Add record` row and a "body is
+    unchanged" note, then click `Accept`. Confirm the new record appears
+    in the Records section.
+13. Click `Ask agent to update` and instruct it to `delete the record
+    that says "QA baseline record"`. Confirm the preview shows a
+    `Delete record` row, then click `Accept` and confirm that record is
+    gone from the Records section.
+14. Open the article's `Delete` flow, enter `qa cleanup`, then click
     `Cancel`.
-11. Re-open `Delete`, enter `qa cleanup`, and confirm the delete.
+15. Re-open `Delete`, enter `qa cleanup`, and confirm the delete.
 
 ## Expected
 
@@ -47,7 +59,13 @@ per-article `Ask agent to update` workflow ([dev: wiki](../../dev/wiki.md)).
   immediately; `Try again` requests another preview, `Cancel` leaves the
   stored article unchanged, and `Accept` replaces the article body with the
   previewed update.
-- (10-11) Delete uses an inline confirmation strip; `Cancel` dismisses it,
+- (10-13) The agent can also propose record changes: a records-only request
+  previews an `Add record` (or `Edit`/`Delete record`) row with a
+  body-unchanged note and writes no body changelog row; `Accept` applies the
+  record change and the Records section refreshes to match. The agent only
+  acts on records it was shown - a delete/edit targets the named existing
+  record, and a hallucinated record id never reaches the preview.
+- (14-15) Delete uses an inline confirmation strip; `Cancel` dismisses it,
   and the confirmed delete removes the article from the drawer while
   leaving the app usable.
 

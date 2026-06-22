@@ -85,6 +85,7 @@ import type {
   WikiChangelogKind,
   WikiChangelogEntry,
   WikiRetryResult,
+  WikiManualUpdateResult,
   Recipe,
   RecipeVersion,
   RecipePhoto,
@@ -3079,6 +3080,65 @@ export class SupabaseService {
       return { kind: 'error', error: result.error };
     }
     return { kind: 'error', error: 'wiki-retry returned an unrecognised response' };
+  }
+
+  /**
+   * Ask the venice function to run the manual per-article wiki agent
+   * (the "Ask agent to update" panel). The prompt build, the single
+   * JSON completion, and the article + record reads all happen
+   * server-side; this is a thin authenticated POST. Returns the
+   * preview / noop the panel renders. The function's union also has a
+   * kind:'error' for parse / read / transport failures - this method
+   * turns that (and any transport/auth failure) into a thrown Error so
+   * the panel's existing catch shows a retry banner; callers only ever
+   * see preview or noop on a resolved promise.
+   */
+  async runWikiManualUpdate(args: {
+    articleId: string;
+    instructions: string;
+  }): Promise<WikiManualUpdateResult> {
+    const { data, error } = await this.client.functions.invoke('venice/wiki-manual-update', {
+      body: { articleId: args.articleId, instructions: args.instructions },
+    });
+    if (error) throw await veniceFunctionError(error);
+    // Boundary validation: the function returns the preview / noop /
+    // error union below. An error outcome becomes a throw (the panel
+    // wants a banner, not an inline kind); an unrecognised shape throws
+    // too rather than masquerading as a no-op.
+    const result = data as
+      | Partial<WikiManualUpdateResult>
+      | { kind?: string; error?: unknown }
+      | null;
+    if (
+      result &&
+      result.kind === 'preview' &&
+      typeof (result as { title?: unknown }).title === 'string' &&
+      typeof (result as { content?: unknown }).content === 'string'
+    ) {
+      const preview = result as Extract<WikiManualUpdateResult, { kind: 'preview' }>;
+      return {
+        kind: 'preview',
+        title: preview.title,
+        content: preview.content,
+        reason: typeof preview.reason === 'string' ? preview.reason : '',
+        recordOps: Array.isArray(preview.recordOps) ? preview.recordOps : [],
+      };
+    }
+    if (result && result.kind === 'noop') {
+      const reason =
+        typeof (result as { reason?: unknown }).reason === 'string'
+          ? (result as { reason: string }).reason
+          : 'No change applied.';
+      return { kind: 'noop', reason };
+    }
+    if (
+      result &&
+      result.kind === 'error' &&
+      typeof (result as { error?: unknown }).error === 'string'
+    ) {
+      throw new Error((result as { error: string }).error);
+    }
+    throw new Error('wiki-manual-update returned an unrecognised response');
   }
 
   /**
