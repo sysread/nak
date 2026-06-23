@@ -236,7 +236,7 @@ aborts any in-flight exchange before the next sign-in.
 ### Retry affordances suppressed under `respondingElsewhere`
 
 The `incompleteTurnTail` derivation and the orphaned-draft
-(`interruptedDraft`) banner both return / render nothing while
+(`interruptedDraft`) source both return / render nothing while
 `respondingElsewhere` is true. A foreign device holding a live claim is
 actively producing the reply, so a transcript that ends on a user row
 only LOOKS incomplete from the observer side - the assistant row arrives
@@ -244,6 +244,29 @@ over realtime. Offering retry there invites a competing turn the claim
 exists to prevent (and whose acquire would just fail with "another
 device is responding"). The observer Scanner bubble covers the wait
 instead.
+
+### One recovery banner, not three (`selectRecoveryBanner`)
+
+The transcript tail can satisfy several "this turn did not finish, want
+to retry?" conditions at once. The most visible overlap: a session that
+died with a persisted user row AND a leftover IndexedDB streaming draft
+trips both `incompleteTurnTail` (generic cut-off tail) and
+`interruptedDraft` (recoverable draft), so the tail rendered two
+near-identical retry boxes stacked. A third, parallel surface -
+`displayedError` (session `streamingError` or persisted
+`thread.last_error`) - is the danger-tinted alert.
+
+`src/lib/ui/recovery-banner.ts` (`selectRecoveryBanner`) collapses these
+to a single banner by precedence: **error > interrupted-draft >
+cut-off**. `Chat.svelte` binds each source's retry/dismiss closures
+(gating the recovery sources on `respondingElsewhere` / `sending` as
+above) and renders the one descriptor the selector returns. The `error`
+variant keeps the `.msg-error` styling (icon, optional kind heading,
+pre-wrap body); the `incomplete` variant is the muted `.msg-incomplete`
+note. `dismiss` renders only when the source offers one - error cards and
+the recoverable draft, never the generic cut-off tail. Precedence and the
+banner copy live in the helper because they are framework-agnostic; the
+component owns only the markup and the runes that feed it.
 
 ## Contracts
 

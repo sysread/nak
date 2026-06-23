@@ -90,6 +90,10 @@ One file per use-case under [`use-cases/`](./use-cases/), named
 - [chat-cutoff-retry](./use-cases/chat-cutoff-retry.md) - retrying a
   dead tail (partial-text cutoff or reasoning-only stall) red-outlines
   and replaces it rather than appending a continuation.
+- [chat-recovery-banner](./use-cases/chat-recovery-banner.md) - one
+  recovery banner at the transcript tail, never stacked: precedence
+  error > interrupted-draft > cut-off, suppressed while a live claim
+  means the detached run is still finishing.
 - [exchange-per-thread-slots](./use-cases/exchange-per-thread-slots.md) -
   per-thread streaming slot isolation: navigate away mid-stream and
   back, concurrent multi-thread streams, no throbber/text bleed.
