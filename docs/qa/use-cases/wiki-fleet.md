@@ -43,6 +43,10 @@ run with live progress narration
    sparkles button, optionally with instructions; watch the
    progress strip AND the drawer.
 5. Cadence gate: immediately re-tick step 3.
+6. Retry reload-recovery: in the Wiki Skipped panel, click **Retry**
+   on a skipped row; before it finishes, reload the page and reopen
+   the Skipped panel. Separately, while one retry is in flight, fire a
+   second `/wiki-retry` for the same thread.
 
 ## Expected
 
@@ -64,6 +68,13 @@ run with live progress narration
 - (5) `{"accepted":true}` but the drawer shows no librarian run -
   the 12h cadence stamp from step 3 refuses the claim (slot
   consumed, by design).
+- (6) After reload the row re-renders the disabled **Retrying...**
+  button (the `retrying` flag from `list_wiki_skipped_threads`,
+  backed by the per-thread `wiki_claim_*` claim) rather than looking
+  idle; the run finishes server-side (EdgeRuntime.waitUntil) and the
+  skip clears on success. The second concurrent `/wiki-retry` returns
+  `{kind:'busy'}` and does not start a second run; the claim's TTL is
+  the backstop that clears a stale `retrying` flag if a run dies.
 
 ## Cleanup
 
