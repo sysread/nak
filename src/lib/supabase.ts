@@ -3031,6 +3031,14 @@ export class SupabaseService {
       title: string | null;
       lastSkipAt: string;
       lastSkipReason: string | null;
+      /**
+       * A per-thread wiki claim is currently held - a manual retry (or
+       * the sweep's recovery branch) is processing this thread. The
+       * Skipped panel renders it as "Retrying..." and recovers the
+       * in-flight state across a reload, since the claim is durable
+       * server state rather than the panel's in-memory spinner.
+       */
+      retrying: boolean;
     }[]
   > {
     const { data, error } = await this.client.rpc('list_wiki_skipped_threads');
@@ -3040,24 +3048,28 @@ export class SupabaseService {
       title: string | null;
       last_skip_at: string;
       last_skip_reason: string | null;
+      retrying: boolean | null;
     }[];
     return rows.map((r) => ({
       threadId: r.thread_id,
       title: r.title,
       lastSkipAt: r.last_skip_at,
       lastSkipReason: r.last_skip_reason,
+      retrying: r.retrying === true,
     }));
   }
 
   /**
    * Ask the venice function to re-run the wiki agent against one
-   * skipped thread (the Skipped panel's Retry button). The whole
-   * claim-free retry cycle - terminal-message resolution, the agent's
-   * tool loop with the content-filter fallback, the pointer advance
-   * that clears the skip marker - runs server-side; this is a thin
-   * authenticated POST. Agent-level failures come back as
-   * `kind: 'error'` in the union (an application outcome, not a
-   * transport error); only transport/auth failures throw.
+   * skipped thread (the Skipped panel's Retry button). The whole retry
+   * cycle - per-thread claim, terminal-message resolution, the agent's
+   * tool loop with the content-filter fallback, the pointer advance that
+   * clears the skip marker, claim release - runs server-side under
+   * EdgeRuntime.waitUntil, so it survives a reload mid-retry; this is a
+   * thin authenticated POST. `busy` means the thread was already claimed
+   * (the sweep, or a concurrent retry). Agent-level failures come back as
+   * `kind: 'error'` in the union (an application outcome, not a transport
+   * error); only transport/auth failures throw.
    */
   async retryWikiThread(threadId: string): Promise<WikiRetryResult> {
     const { data, error } = await this.client.functions.invoke('venice/wiki-retry', {

@@ -807,6 +807,14 @@ const handleDeepSleepRun = detachedManualRunHandler('deep-sleep', (admin, userId
  * failures are an application outcome (kind: 'error'), not a
  * transport error, so the panel can render them without sniffing
  * status codes.
+ *
+ * Detached-survival: the retry claims the thread and runs the agent;
+ * `edgeWaitUntil` keeps that work alive if the client disconnects
+ * (a reload mid-retry), so the run finishes and the claim/skip-marker
+ * settle even though this response never reaches the reloaded tab. The
+ * connected client still gets the result synchronously (the same promise
+ * is awaited). Liveness is recovered on the reloaded side from the
+ * per-thread claim, surfaced by list_wiki_skipped_threads as `retrying`.
  */
 async function handleWikiRetry(req: Request): Promise<Response> {
   const userId = userIdFromJwt(req);
@@ -823,7 +831,12 @@ async function handleWikiRetry(req: Request): Promise<Response> {
   const threadId = typeof body.threadId === 'string' ? body.threadId : '';
   if (!threadId) return json({ error: 'threadId is required' }, 400);
 
-  const result = await retryWikiThread(admin, userId, threadId);
+  const run = retryWikiThread(admin, userId, threadId);
+  // Survive a client disconnect (reload mid-retry): the same promise is
+  // awaited for the connected client's response AND registered with the
+  // runtime so a dropped request doesn't kill the run.
+  edgeWaitUntil(run);
+  const result = await run;
   return json(result);
 }
 

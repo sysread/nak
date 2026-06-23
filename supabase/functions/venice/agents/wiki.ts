@@ -1313,21 +1313,27 @@ export type WikiRetryResult =
       reasoning: string;
     }
   | { kind: 'no-op'; reason: string }
+  | { kind: 'busy' }
   | { kind: 'error'; error: string };
 
 /**
  * User-triggered retry of a skipped thread (the Wiki Skipped panel's
- * Retry button). Bypasses the claim protocol - there is no concurrent
- * sweep to coordinate with from the user's point of view, and the
- * worst-case race (a sweep claims the thread mid-retry) just means
- * two agent runs whose tool-level writes are idempotent (wiki_create
- * collides on the unique title and falls through to wiki_update).
+ * Retry button). Claims the named thread first (the per-thread
+ * wiki_claim_* columns, via claim_wiki_thread_for_retry) so the run is a
+ * durable, reload-recoverable server fact: a held claim is what
+ * list_wiki_skipped_threads reports as `retrying`, so the panel shows the
+ * in-flight state and recovers it across a browser reload, and a sweep
+ * (or a second retry) can't process the same thread concurrently. Returns
+ * `busy` when the thread is already claimed (by the sweep or another
+ * retry).
  *
  * On success the pointer-advance goes through
- * manual_advance_wiki_pointer, which also clears the skip marker so
- * the panel row drops. On error the skip marker stays put so the user
- * can see the thread is still problematic. NON-throwing: the route
- * maps the result union straight onto the response body.
+ * manual_advance_wiki_pointer, which also clears the skip marker AND the
+ * claim so the panel row drops. On error the skip marker stays put so the
+ * user can see the thread is still problematic; the claim is released in
+ * the finally (holder-checked, so a no-op when the success path already
+ * cleared it). NON-throwing: the route maps the result union straight
+ * onto the response body.
  */
 export async function retryWikiThread(
   adminClient: SupabaseClient,
@@ -1336,7 +1342,31 @@ export async function retryWikiThread(
   opts: { complete?: AgentCompleteFn } = {},
 ): Promise<WikiRetryResult> {
   const log = createEdgeLogger(userId, 'wiki');
+  // Fresh holder per retry, shared only with this run's release call -
+  // same single-holder discipline as the sweep's claim/mark pair.
+  const holderId = crypto.randomUUID();
+  let held = false;
   try {
+    const { data: claimData, error: claimErr } = await adminClient.rpc(
+      'claim_wiki_thread_for_retry',
+      {
+        p_thread_id: threadId,
+        p_holder_id: holderId,
+        p_ttl_seconds: WIKI_CLAIM_TTL_SECONDS,
+        p_user_id: userId,
+      },
+    );
+    if (claimErr) {
+      return { kind: 'error', error: `claim_wiki_thread_for_retry failed: ${claimErr.message}` };
+    }
+    held = claimData === true;
+    if (!held) {
+      // The sweep, or another retry, already holds this thread. The panel
+      // shows it as `retrying` from the same claim; nothing to do here.
+      log.info(`manual retry on thread ${threadId} skipped - already claimed`);
+      return { kind: 'busy' };
+    }
+
     const { data: terminalData, error: termErr } = await adminClient.rpc(
       'compute_wiki_terminal_msg_id',
       { p_thread_id: threadId, p_user_id: userId },
@@ -1391,6 +1421,19 @@ export async function retryWikiThread(
   } catch (err) {
     return { kind: 'error', error: err instanceof Error ? err.message : String(err) };
   } finally {
+    // Release our claim if we still hold it. Holder-checked, so it's a
+    // no-op when the success path (manual_advance_wiki_pointer) already
+    // cleared it, or when a sweep stole a lapsed claim mid-run.
+    if (held) {
+      const { error: relErr } = await adminClient.rpc('release_wiki_thread_retry_claim', {
+        p_thread_id: threadId,
+        p_holder_id: holderId,
+        p_user_id: userId,
+      });
+      if (relErr) {
+        log.warn(`release_wiki_thread_retry_claim failed: ${relErr.message}`);
+      }
+    }
     // Flush before the route responds so the outcome line lands in
     // the drawer alongside the panel's own refresh.
     await log.flush();

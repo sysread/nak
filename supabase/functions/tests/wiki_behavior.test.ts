@@ -88,9 +88,11 @@ Deno.test('retry: classifier rejection on the primary retries the uncensored fal
   const models: string[] = [];
   const { admin, rpcCalls } = makeAdmin({
     rpc: (name) =>
-      name === 'compute_wiki_terminal_msg_id'
-        ? { data: 'a1', error: null }
-        : { data: null, error: null },
+      name === 'claim_wiki_thread_for_retry'
+        ? { data: true, error: null }
+        : name === 'compute_wiki_terminal_msg_id'
+          ? { data: 'a1', error: null }
+          : { data: null, error: null },
     tables: HAPPY_TABLES,
   });
 
@@ -125,9 +127,11 @@ Deno.test('retry: a non-classifier error does NOT trigger the fallback and leave
   const models: string[] = [];
   const { admin, rpcCalls } = makeAdmin({
     rpc: (name) =>
-      name === 'compute_wiki_terminal_msg_id'
-        ? { data: 'a1', error: null }
-        : { data: null, error: null },
+      name === 'claim_wiki_thread_for_retry'
+        ? { data: true, error: null }
+        : name === 'compute_wiki_terminal_msg_id'
+          ? { data: 'a1', error: null }
+          : { data: null, error: null },
     tables: HAPPY_TABLES,
   });
 
@@ -155,9 +159,11 @@ Deno.test('retry: both attempts failing surfaces the FALLBACK error', async () =
   const models: string[] = [];
   const { admin } = makeAdmin({
     rpc: (name) =>
-      name === 'compute_wiki_terminal_msg_id'
-        ? { data: 'a1', error: null }
-        : { data: null, error: null },
+      name === 'claim_wiki_thread_for_retry'
+        ? { data: true, error: null }
+        : name === 'compute_wiki_terminal_msg_id'
+          ? { data: 'a1', error: null }
+          : { data: null, error: null },
     tables: HAPPY_TABLES,
   });
 
@@ -181,8 +187,8 @@ Deno.test('retry: no terminal assistant message is a no-op that never reaches Ve
   let completeCalls = 0;
   const { admin, rpcCalls } = makeAdmin({
     rpc: (name) =>
-      name === 'compute_wiki_terminal_msg_id'
-        ? { data: null, error: null }
+      name === 'claim_wiki_thread_for_retry'
+        ? { data: true, error: null }
         : { data: null, error: null },
     tables: HAPPY_TABLES,
   });
@@ -203,9 +209,45 @@ Deno.test('retry: no terminal assistant message is a no-op that never reaches Ve
   );
 });
 
+Deno.test('retry: an already-claimed thread is busy and never reaches Venice', async () => {
+  let completeCalls = 0;
+  const { admin, rpcCalls } = makeAdmin({
+    // The thread is already claimed (the sweep, or a concurrent retry):
+    // claim_wiki_thread_for_retry returns false.
+    rpc: (name) =>
+      name === 'claim_wiki_thread_for_retry'
+        ? { data: false, error: null }
+        : { data: null, error: null },
+    tables: HAPPY_TABLES,
+  });
+
+  const result = await retryWikiThread(admin, 'u', 't-1', {
+    // deno-lint-ignore require-await
+    complete: async () => {
+      completeCalls += 1;
+      return completion({ text: 'should not run' });
+    },
+  });
+
+  assertEquals(result.kind, 'busy');
+  // No work happened: never resolved a terminal message, never called
+  // the model, never advanced the pointer. And nothing to release - we
+  // never held the claim.
+  assertEquals(completeCalls, 0);
+  assertEquals(
+    rpcCalls.some((c) => c.name === 'compute_wiki_terminal_msg_id'),
+    false,
+  );
+  assertEquals(
+    rpcCalls.some((c) => c.name === 'release_wiki_thread_retry_claim'),
+    false,
+  );
+});
+
 Deno.test('retry: a pointer-advance failure after a successful run surfaces as an error', async () => {
   const { admin } = makeAdmin({
     rpc: (name) => {
+      if (name === 'claim_wiki_thread_for_retry') return { data: true, error: null };
       if (name === 'compute_wiki_terminal_msg_id') return { data: 'a1', error: null };
       if (name === 'manual_advance_wiki_pointer') return { data: null, error: { message: 'RPC blew up' } };
       return { data: null, error: null };

@@ -120,6 +120,10 @@ export interface WikiChangelogEntry {
 export type WikiRetryResult =
   | { kind: 'ok'; terminalMsgId: string; toolCalls: number; reasoning: string }
   | { kind: 'no-op'; reason: string }
+  // The thread is already claimed - the hourly sweep, or another retry -
+  // so this run did not start. The panel surfaces the in-flight state from
+  // the same claim (the row's `retrying` flag) rather than as an error.
+  | { kind: 'busy' }
   | { kind: 'error'; error: string };
 
 /**

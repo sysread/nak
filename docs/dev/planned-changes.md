@@ -15,8 +15,6 @@ investigation cycles and the lessons learned are worth saving.
 - [Retire the browser supervisor](#retire-the-browser-supervisor)
   (shipped 2026-06-11 as item C1 of the de-browser-background-jobs
   milestone; analysis kept here as the historical record)
-- [Give wiki-retry the detached-run + liveness treatment](#give-wiki-retry-the-detached-run--liveness-treatment)
-  (not started)
 - [Biometric unlock for the master password](#biometric-unlock-for-the-master-password)
   (obsolete - the master-password layer was removed; kept as WebAuthn PRF reference)
 
@@ -129,65 +127,6 @@ same pattern. Intuition and samskara stay browser-side with no open
 question. Per the project's planning rhythm, target-state design
 beyond this paragraph is deliberately deferred to whenever this
 becomes the active milestone.
-
-## Give wiki-retry the detached-run + liveness treatment
-
-**Status:** not started. Scoped 2026-06-23 in the same audit.
-
-### The gap
-
-The Wiki Skipped-panel Retry button (`SupabaseService.retryWikiThread`
--> `POST /wiki-retry`, run by `handleWikiRetry` in `venice/index.ts`) is
-the one browser-triggered server-side agent run with **no state
-coordination at all**:
-
-- It is **synchronous**, not detached (no `EdgeRuntime.waitUntil`), so a
-  reload aborts the in-flight HTTP request while the agent's `wiki_*`
-  tool writes may have already partially landed server-side.
-- It holds **no lease** - `retryWikiThread` is a claim-free retry by
-  design (it bypasses the sweep's claim protocol), so there is no
-  server fact a reloaded client can read to know a retry is in flight.
-- The per-row spinner + result chip in `WikiSkippedPanel.svelte` are
-  in-memory and explicitly not persisted across panel teardown.
-
-Net: a reload mid-retry loses the spinner, re-enables the button, and
-gives no liveness or outcome recovery.
-
-### Approach (sketch, not committed)
-
-Bring it up to the librarian pattern:
-
-- Convert `/wiki-retry` to the `detachedManualRunHandler` shape
-  (waitUntil + `{accepted:true}` + progress/result over the agent-runs
-  channel), so the run survives the request and the worst-case
-  partial-write window shrinks.
-- Give it a liveness signal a reloaded client can read. Two options:
-  reuse the **per-thread** `wiki_claim_holder` / `wiki_claim_expires_at`
-  columns (retry claims the thread the way the sweep does; the Skipped
-  panel reads claim state per row to disable/spin across reload), or
-  add a per-user inflight lease like the librarians. Per-thread claim
-  is the better fit - retry is thread-scoped and the columns already
-  exist - and it doubles as real mutual exclusion against a concurrent
-  sweep claim.
-- Touch points: `venice/index.ts` (route shape), `retryWikiThread`
-  (claim instead of claim-free; reconcile with
-  `manual_advance_wiki_pointer`), `WikiSkippedPanel.svelte` (read claim
-  state for the per-row in-flight UI), and the wiki dev doc's "Manual
-  retry" contract section.
-
-### Dependency note
-
-The outcome-recovery mechanism the librarians now use shipped
-2026-06-23: `detachedManualRunHandler` persists a
-`{ runId, source, finishedAt, result }` envelope to a
-`*_last_run_outcome` profiles column
-(`_shared/manual-run-outcome.ts`), recovered client-side by
-`createLastRunOutcomeWatcher` (`src/lib/agents/inflight-lease.svelte.ts`).
-If wiki-retry moves onto `detachedManualRunHandler`, it inherits that
-recovery for free by adding a `wiki-retry` -> outcome-column entry to
-`OUTCOME_COLUMN` rather than building a second mechanism. The retry
-result chip in `WikiSkippedPanel.svelte` would read the recovered
-outcome the same way the librarian strips do.
 
 ## Biometric unlock for the master password
 

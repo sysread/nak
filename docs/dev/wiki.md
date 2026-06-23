@@ -905,40 +905,56 @@ conversation.
 
 ### Manual retry (Skipped panel)
 
-The Skipped panel's Retry button bypasses the sweep and the claim
-protocol entirely. The browser side is a thin authenticated POST
+The Skipped panel's Retry button is a thin authenticated POST
 (`SupabaseService.retryWikiThread` -> `/wiki-retry`); the whole
 cycle runs server-side in `retryWikiThread`:
 
-1. `compute_wiki_terminal_msg_id(threadId, userId)` resolves the
+1. `claim_wiki_thread_for_retry(threadId, holder, ttl, userId)` claims
+   the named thread via the per-thread `wiki_claim_*` columns. A held
+   claim (the sweep, or a concurrent retry) returns `kind: 'busy'` -
+   the run does not start. This is the change from the original
+   claim-free retry: claiming makes the run a durable, reload-
+   recoverable fact (see "Reload recovery" below) and gives real mutual
+   exclusion against a concurrent sweep claim.
+2. `compute_wiki_terminal_msg_id(threadId, userId)` resolves the
    same anchor the sweep's claim RPC would have picked. Null (no
    assistant message to process) returns `kind: 'no-op'`.
-2. `runWikiAgentOnThread` runs the primary -> fallback two-shot. The
+3. `runWikiAgentOnThread` runs the primary -> fallback two-shot. The
    wiki tools commit their writes immediately, so any tool-call side
    effects land regardless of what happens next.
-3. On success, `manual_advance_wiki_pointer(threadId, msgId,
-   userId)` clears the skip marker and advances
-   `last_wiki_processed_msg_id`. This bypasses the claim guard
-   `mark_thread_wiki_processed_if_claimed` uses - the manual button
-   never went through the claim protocol, so requiring a claim would
-   block it. The RPC is scoped to the owning user (`auth.uid()` or
-   the gateway-validated id the service-role caller passes).
-4. On error, the skip marker is left in place. The user sees the
-   failure inline on the row and can retry again.
+4. On success, `manual_advance_wiki_pointer(threadId, msgId,
+   userId)` clears the skip marker, advances
+   `last_wiki_processed_msg_id`, AND nulls the claim. The RPC is scoped
+   to the owning user (`auth.uid()` or the gateway-validated id the
+   service-role caller passes).
+5. On any exit, the `finally` calls
+   `release_wiki_thread_retry_claim(threadId, holder, userId)` -
+   holder-checked, so it is a no-op when step 4 already cleared the
+   claim or when a sweep stole a lapsed one. On error the skip marker
+   is left in place so the user sees the thread is still problematic.
 
 The route responds with the `WikiRetryResult` union -
 `{ kind: 'ok', terminalMsgId, toolCalls, reasoning }` /
-`{ kind: 'no-op', reason }` / `{ kind: 'error', error }`.
+`{ kind: 'no-op', reason }` / `{ kind: 'busy' }` / `{ kind: 'error', error }`.
 Agent-level failures are an application outcome (`kind: 'error'`),
 not a transport error, so the panel renders them without sniffing
 status codes; only transport/auth failures throw on the browser
 side. `SupabaseService.retryWikiThread` boundary-validates the shape
 and collapses anything unrecognised to an error result.
 
-The worst-case race (a sweep claims the thread mid-retry) just means
-two agent runs whose tool-level writes are idempotent at the
-contract level - `wiki_create` collides on the unique title and
-falls through to `wiki_update`.
+**Reload recovery.** `handleWikiRetry` runs the retry under
+`edgeWaitUntil`, so a reload mid-retry doesn't kill the run - it
+finishes and the claim/skip-marker settle even though the response
+never reaches the reloaded tab. The reloaded tab recovers the
+in-flight state from the claim: `list_wiki_skipped_threads` returns a
+`retrying` flag (`wiki_claim_expires_at` in the future), and
+`WikiSkippedPanel` renders the disabled "Retrying..." button from
+`retrying[threadId] || row.retrying` - the local in-memory flag for the
+responding tab, the server claim for everyone else. This is liveness
+recovery only: the result chip (tool-call count + reasoning) stays
+in-memory and is not recovered across a reload. The claim's TTL (the
+sweep's `WIKI_CLAIM_TTL_SECONDS`) is the backstop that clears a stale
+`retrying` flag if a run dies without releasing.
 
 ### Librarian cadence and mutual exclusion
 
