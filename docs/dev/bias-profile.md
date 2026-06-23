@@ -35,9 +35,10 @@ lower bound clears the soft threshold (0.15) render a per-turn
 compensation bullet into the system prompt; clearing the strong
 threshold (0.30) renders the same bullet with stronger phrasing.
 
-The chat-loop reads the cached `bias_summary` row set once per
-turn entry and threads the rendered block into every round's
-`buildSystemPrompt` call. Pipeline side: the hourly
+The venice edge function's priming stage reads the cached
+`bias_summary` row set once per turn entry and appends the rendered
+block to the system prompt the browser POSTed, reused across every
+round. Pipeline side: the hourly
 `nak-bias-sweep` pg_cron job (minute :03) drives the venice edge
 function's `bias-sweep` route, which runs two phases per tick
 (analyze, then aggregate). Cron is the ONLY driver - there is no
@@ -95,16 +96,22 @@ interval lower bound (not the mean) as the surfacing gate.
   path and the modal; the mirror feeds the observer agent's
   prompt and ingest validation. `tests/bias-catalog-parity.test.ts`
   deep-compares the two sides so the mirror cannot drift silently.
-- `src/lib/bias/format.ts` - pure renderer for the system-prompt
-  block. Filters `bias_summary` rows to soft+strong, sorts tier-
-  then-CI-descending, caps at `RENDER_CAP`, emits one bullet per
-  bias using the catalog's pre-written guidance plus a static
-  block of general framing rules and the whimsy exception.
-- `src/lib/bias/index.ts` - the chat-loop-facing public surface.
-  Owns `getBiasProfileBlock` (cached SELECT + format pass; returns
-  null on cold start) and `notifyBiasNewUserMessage` (fire-and-
-  forget RPC that clears the pipeline's processed state on a
-  thread after a new user message lands).
+- `supabase/functions/_shared/bias-format.ts` - pure renderer for
+  the system-prompt block, run server-side. Filters `bias_summary`
+  rows to soft+strong, sorts tier-then-CI-descending, caps at
+  `RENDER_CAP`, emits one bullet per bias using the catalog's
+  pre-written guidance plus a static block of general framing rules
+  and the whimsy exception. Logic twin of the retired browser
+  `src/lib/bias/format.ts` (mirror-with-pointer-comment convention -
+  the catalog/math data it reads is the parity-tested pair).
+- `supabase/functions/venice/priming.ts` - the server-side turn-entry
+  priming stage. `applyBiasPriming` reads `bias_summary` (scoped by
+  the JWT user id - the service-role client has no `auth.uid()`),
+  renders the block via `bias-format.ts`, appends it to the row-0
+  system message, then fires the active-set snapshot and the
+  new-user-message `bias_clear_thread` RPC. Runs inside
+  `getStreamingResponse` under the same `EdgeRuntime.waitUntil` as
+  the streaming loop, so priming survives a browser disconnect.
 - `supabase/functions/venice/agents/bias.ts` - the whole pipeline.
   Owns the observer/reactor system prompt (built dynamically from
   the catalog mirror so a catalog edit flows automatically; five
@@ -151,17 +158,22 @@ interval lower bound (not the mean) as the surfacing gate.
 
 ## Entry points
 
-- **`runChatLoop` turn-entry** - in `src/lib/chat-loop.ts`,
-  alongside the samskara priming bundle. Two calls:
-  `getBiasProfileBlock(supabase)` reads the cached rows and
-  renders the system-prompt section once per turn (reused across
-  rounds); `notifyBiasNewUserMessage(supabase, thread.id)` is
-  fire-and-forget and clears the pipeline's processed state on the
-  thread so the sweep re-analyzes with the fresh message.
-- **`buildSystemPrompt({ biasProfile })`** - in
-  `src/lib/chat-prompt.ts`, the rendered block lands at the end
-  of the baseline system prompt (after the toolbox catalog) when
-  non-null. Absent entirely on cold start - no placeholder text.
+- **`applyBiasPriming` server-side turn-entry** - in
+  `supabase/functions/venice/priming.ts`, the opening stage of
+  `getStreamingResponse` before the first round. Reads the cached
+  rows (scoped by the JWT user id), renders the system-prompt
+  section, and appends it to the row-0 system message the browser
+  POSTed. In the same pass it snapshots the rendered active set into
+  `threads.bias_active_at_turn` and fires `bias_clear_thread`
+  (passing `p_user_id`) so the sweep re-analyzes with the fresh
+  message. All three writes swallow their errors - bias never blocks
+  a turn.
+- **`buildSystemPrompt()`** - in `src/lib/chat-prompt.ts`, builds the
+  baseline only. The browser ships a bias-free system prompt; the
+  server appends the bias block with the same blank-line separator
+  `buildSystemPrompt` uses between sections, so the wire bytes are
+  unchanged - the assembly site moved server-side, the output did
+  not. Absent entirely on cold start - no placeholder text.
 - **`nak-bias-sweep` pg_cron job** - hourly at minute :03 (the
   x7 ladder is full; :03 starts a new column clear of the */5
   embed ticks and the :13/:43 samskara decay). The job calls
@@ -312,11 +324,14 @@ produces zero rows.
   service-role client has no `auth.uid()`, so it passes the
   claimed row's owner explicitly; an authenticated caller omits
   it and gets `auth.uid()` scoping.
-- `bias_clear_thread(thread_id)` - delete observations AND
-  reactions for the thread, clear `bias_processed_at`,
-  `bias_processed_msg_count`, the claim columns, and
-  `bias_active_at_turn`. Called from the chat-loop on every
-  user-message send. Idempotent and cheap.
+- `bias_clear_thread(p_thread_id, p_user_id default null)` - delete
+  observations AND reactions for the thread, clear
+  `bias_processed_at`, `bias_processed_msg_count`, the claim
+  columns, and `bias_active_at_turn`. Called from the server-side
+  priming stage on every user-message send, passing `p_user_id`
+  (the b-strict overload pattern - the service-role client has no
+  `auth.uid()`); authenticated callers omit it and get `auth.uid()`
+  scoping. Idempotent and cheap.
 - `bias_processed_threads_for_bias(p_bias, p_user_id)` -
   aggregation input. Joins every processed thread against the
   per-thread noisy-OR-collapsed probability for the specified
@@ -340,25 +355,31 @@ spam errors.
 
 ## Contracts
 
-### Chat-loop side (synchronous, no LLM)
+### Turn-entry side (server, synchronous, no LLM)
 
-- `getBiasProfileBlock(supabase): Promise<{block, activeBiases}>` -
-  reads `bias_summary`, filters to soft+strong, renders. Returns
-  `{block: null, activeBiases: []}` on cold start, on no
-  clearing rows, or on any read error. The `activeBiases` set
-  is post tier-filter and post render-cap so the chat-loop's
-  snapshot reflects what was on the wire, not the broader pool.
-  Errors are swallowed; bias must never fail a chat turn.
-- `notifyBiasNewUserMessage(supabase, threadId): Promise<void>` -
-  fire-and-forget. Calls `bias_clear_thread`; no-op when the
-  thread was never processed.
-- `snapshotBiasActiveBiases(supabase, threadId, biases):
-  Promise<void>` (v2) - fire-and-forget. Writes the active set
-  to `threads.bias_active_at_turn` so the sweep's reactor can
-  read it via the claim RPC. Empty array is a valid write.
-- `formatBiasProfileBlock(rows): string | null` - pure. Used by
-  the modal preview and by tests. The chat-loop reader's
-  internal call.
+All in `supabase/functions/venice/priming.ts`'s `applyBiasPriming`,
+which runs as the opening stage of `getStreamingResponse`. The
+service-role admin client has no `auth.uid()`, so every read/write
+scopes by the explicit JWT user id.
+
+- read `bias_summary` for the user, filter to soft+strong, render
+  via `bias-format.ts`'s `formatBiasProfileBlock`. Cold start, no
+  clearing rows, or a read error all yield no block - the system
+  prompt is left unchanged. The rendered active set is post
+  tier-filter and post render-cap so the snapshot reflects what was
+  on the wire, not the broader pool.
+- snapshot the active set to `threads.bias_active_at_turn` (scoped
+  `.eq('user_id', userId)`) so the sweep's reactor can read it via
+  the claim RPC. Empty array is a valid write.
+- fire `bias_clear_thread` with `p_user_id` (no-op when the thread
+  was never processed) so the sweep re-analyzes against the fresh
+  message.
+
+All three swallow their errors; bias must never fail a chat turn.
+`formatBiasProfileBlock(rows): string | null` is pure - the server
+calls it here, and the diagnostics modal renders its own preview
+from `bias-format`'s browser-side counterparts in
+`src/lib/bias/catalog` + `types`.
 
 ### Sweep side (async, fast-model agent calls)
 

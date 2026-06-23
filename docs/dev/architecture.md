@@ -296,12 +296,13 @@ Mutual exclusion between a tail and the sweep that backs it up
 is the per-row claim columns ("Claim-RPC pattern" above) - no
 leases, no locks.
 
-What the browser still owns is UI-scoped or ongoing-chat-scoped
-by definition: the intuition and context-recall priming layers
-(per-turn, main-thread), and the chat-scoped half of samskara
-(the cosine fire, the substrate stub write, the compound-summary
-read, the priming format, the mood pill). Losing any of it on
-tab close costs nothing - the next turn re-runs it.
+What the browser still owns is UI-scoped: the mood pill, the
+Intuition / Recall / Bias diagnostics modals, and the end-of-turn
+samskara substrate stub write. The priming layers themselves
+(intuition, context recall, the samskara cosine fire + compound read,
+the bias appendix) moved into `getStreamingResponse`'s priming stage so
+they survive a disconnect; the browser only renders their feedback off
+the priming events the function publishes.
 
 A representative server agent:
 `supabase/functions/venice/agents/reflection.ts` fires from the
@@ -336,16 +337,20 @@ Three categories of work:
    on - work registered with it survives the request that
    triggered it.
 
-3. **Per-turn derivation scoped to the live conversation —
-   browser owns.** Intuition, context recall, and the
-   chat-scoped samskara half (the cosine fire, the substrate
-   stub, the priming block). These run as part of assembling
-   the next turn; losing one on tab close isn't a correctness
-   problem, just an unprimed turn. Anything with a longer
-   lifecycle than the turn in front of the user - the agent
-   fleets, the curation units, the samskara formation loop -
-   lives in the venice function off the chat-turn tail and the
-   cron sweeps (see "Background-job model").
+3. **Per-turn priming scoped to the live conversation — function
+   owns.** Intuition, context recall, the samskara cosine fire +
+   compound read, and the bias appendix all run as the opening stage of
+   `getStreamingResponse` (`supabase/functions/venice/priming.ts`
+   `runServerPriming`), under the same `EdgeRuntime.waitUntil` as the
+   streaming loop, so a tab that closes mid-priming still comes back to
+   a fully-primed, finished turn rather than an unprimed or dropped one.
+   The browser keeps only the deterministic metadata inputs (user-round
+   count, attachment inventory) and the end-of-turn samskara substrate
+   stub (`recordSubstrateStub`), neither of which is LLM priming.
+   Anything with a longer lifecycle than the turn - the agent fleets,
+   the curation units, the samskara formation loop - lives in the venice
+   function off the chat-turn tail and the cron sweeps (see
+   "Background-job model").
 
 Each row in the database has exactly **one writer-of-record**, set
 by which production path birthed it. The shared table is fine
@@ -367,6 +372,8 @@ turn:
 | `threads.title` (auto-title) | Function | Curation tail after a completed turn + hourly sweep |
 | `threads.status` / streaming row state | Function | Round loop terminal kinds |
 | `threads.last_error` | Function | Terminal-error path in `getStreamingResponse` |
+| `threads.intuition_payload` / `context_recall_payload` | Function | Priming stage in `getStreamingResponse` |
+| `threads.bias_active_at_turn` | Function | Bias priming in `getStreamingResponse` |
 | `topics`, recipe edits, memory rows, settings | Browser | Direct user action UIs |
 | `topics` / `summary` derivations | Function | Curation tail after a completed turn + hourly sweep |
 | Embedding rows | Function | `pg_cron` + venice `/embed-backfill` |

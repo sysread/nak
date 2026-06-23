@@ -1,17 +1,17 @@
 /**
  * Public surface of the intuition module.
  *
- * The chat-loop is the only consumer that runs the pipeline; the UI
- * layer reads cached payloads via the SupabaseService Thread shape
- * and renders the modal / inline card.
+ * Pre-turn priming runs server-side in the venice edge function; the
+ * browser no longer runs the pipeline. The UI layer reads cached
+ * payloads via the SupabaseService Thread shape and renders the modal
+ * / inline card, and the injection-side freshness guard
+ * (isPayloadFreshForInjection) is consumed by the UI staleness verdict
+ * in src/lib/ui/payload-freshness.ts.
  *
- * Anything internal (prompts, ephemeral think-marker, the
- * test-only inflight reset, sub-module types like
- * `IntuitionTrigger` / `RunIntuitionInputs` / `RoundCacheSnapshot` /
- * `TriggerContext`) is intentionally not re-exported here. The two
- * sub-modules that need those (pipeline, triggers) import them
- * directly from `./types` so the barrel doesn't accumulate a wide
- * public surface no consumer reads.
+ * DRIVE_NAMES / DriveName feed the Intuition modal's per-drive layout
+ * and the payload's `drives` map; the staleness constants and payload
+ * coercion/merge helpers are read by the UI and the realtime thread
+ * merge.
  */
 export {
   DRIVE_NAMES,
@@ -19,7 +19,6 @@ export {
 } from './prompts';
 
 export {
-  STALE_FUSE_ROUNDS,
   STALE_FUSE_MS,
   coerceIntuitionPayload,
   countUserRounds,
@@ -27,10 +26,4 @@ export {
   type IntuitionPayload,
 } from './types';
 
-export { maybeRunIntuitionPipeline } from './pipeline';
-
-export { readIntuitionCache, writeIntuitionCache } from './cache';
-
-export { evaluatePreRoundTrigger, isPayloadFreshForInjection } from './triggers';
-
-export { buildIntuitionThinkMessage } from './ephemeral';
+export { isPayloadFreshForInjection } from './triggers';

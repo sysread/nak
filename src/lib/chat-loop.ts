@@ -44,14 +44,19 @@
  * so the function-side Venice call and the local UI tear down in
  * lock step.
  *
- * Sibling modules, all under `./chat/`: `preturn-priming.ts`
- * (`runPreTurnPriming` - the samskara/intuition/context-recall/bias
- * priming run + `<think>` splice), `prompt-assembly.ts` (the pure
+ * Turn-entry priming (the samskara/intuition/context-recall <think>
+ * chain + the bias appendix) runs server-side now, in the venice edge
+ * function's priming stage (supabase/functions/venice/priming.ts), so
+ * it survives a browser disconnect along with the streaming loop; the
+ * browser passes its inputs through `streamCtx.priming` and renders the
+ * feedback off the priming events the server publishes. Sibling
+ * modules, all under `./chat/`: `prompt-assembly.ts` (the pure
  * request-message builders), `stream-events.ts` (`consumeStreamEvents`,
- * the StreamEvent -> UI-handler mapper), and `types.ts` (the option /
- * result / handler contract). This file is the conductor: prime,
- * assemble the request, issue the single `streamChat` call, consume the
- * stream, write the end-of-turn substrate stub, return.
+ * the StreamEvent -> UI-handler mapper, including the priming events),
+ * and `types.ts` (the option / result / handler contract). This file is
+ * the conductor: assemble the request, issue the single `streamChat`
+ * call, consume the stream, write the end-of-turn substrate stub,
+ * return.
  */
 
 import type { VeniceMessage } from './venice';
@@ -60,7 +65,7 @@ import { buildSystemPrompt } from './chat-prompt';
 import { recordSubstrateStub } from './samskara';
 import { createLogger } from './logger.svelte';
 import { consumeStreamEvents } from './chat/stream-events';
-import { runPreTurnPriming } from './chat/preturn-priming';
+import { countUserRounds } from './intuition';
 import {
   buildMetadataSystemMessage,
   splitSystemPreamble,
@@ -80,7 +85,6 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     venice,
     supabase,
     thread,
-    userId,
     modelId,
     signal,
     handlers,
@@ -123,25 +127,21 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   // tool-using row, whichever the loop ends on.
   let lastAssistantId: string | null = null;
 
-  // Turn-open priming, computed once before the streaming round: the
-  // samskara compound + situational-fire bundle, the attachments
-  // inventory, the bias-profile block, and the intuition /
-  // context-recall pipelines. It splices the synthetic `<think>` chain
-  // onto `history` in the contracted order (see
-  // docs/dev/prompt-augmentation.md) and returns the three values the
-  // request assembly consumes.
-  const { currentUserRound, attachmentSummaries, biasProfileBlock } =
-    await runPreTurnPriming({
-      supabase,
-      thread,
-      userId,
-      history,
-      signal,
-      handlers,
-      intuitionModelId,
-      intuitionMood,
-      contextRecallEnabled,
-    });
+  // Turn-open metadata inputs. The samskara/context-recall/intuition
+  // <think> chain and the bias appendix that used to be assembled here
+  // (runPreTurnPriming) now run server-side in the venice edge
+  // function's priming stage (supabase/functions/venice/priming.ts), so
+  // the whole turn - priming included - survives a browser disconnect.
+  // What remains browser-side are the two deterministic inputs the
+  // metadata system message needs: the user-round index and the
+  // thread-attachments inventory (neither is LLM priming).
+  const currentUserRound = countUserRounds(history);
+  // Per-turn thread-attachments inventory. A single thread-scoped SELECT
+  // feeding buildMetadataSystemMessage; failure is swallowed - the model
+  // falls back to the per-message inline note from buildUserVeniceContent.
+  const attachmentSummaries = await supabase
+    .listAttachmentSummariesForThread(thread.id)
+    .catch(() => []);
 
   // System-prompt assembly with the per-turn metadata pinned LAST.
   // The baseline prompt (identity, voice, recall framing, toolbox
@@ -216,10 +216,13 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   });
   const requestMessages: VeniceMessage[] = [
     {
+      // Baseline system prompt only. The bias-profile appendix that
+      // used to ride at the end here is appended server-side now, in
+      // the edge function's priming stage, so the browser ships a
+      // bias-free baseline and the orchestrator renders + appends the
+      // block before the first round.
       role: 'system',
-      content: buildSystemPrompt({
-        biasProfile: biasProfileBlock,
-      }),
+      content: buildSystemPrompt(),
     },
     ...userSystem,
     ...conversation,
@@ -250,7 +253,17 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       reasoningEffort,
       disableThinking,
       verbosity,
-      streamCtx: { threadId: thread.id, userMessageId, supersededIds },
+      // Priming inputs ride to the server's priming stage, which runs
+      // the samskara/context-recall/intuition pipelines and the bias
+      // appendix before the first round. They used to be consumed by
+      // runPreTurnPriming browser-side; that work moved server-side so
+      // the whole turn (priming included) survives a browser disconnect.
+      streamCtx: {
+        threadId: thread.id,
+        userMessageId,
+        supersededIds,
+        priming: { intuitionModelId, intuitionMood, contextRecallEnabled },
+      },
     }),
     signal,
     supabase,

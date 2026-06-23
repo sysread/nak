@@ -6196,9 +6196,11 @@ create policy "samskara compound summary self-deletable"
 -- volume the chat-loop emits. Caller is trusted to pass a reasonable
 -- value; this RPC just honours it.
 drop function if exists public.samskara_fire_top_k(vector, int);
+drop function if exists public.samskara_fire_top_k(vector, int, uuid);
 create or replace function public.samskara_fire_top_k(
   p_query_embedding vector(2048),
-  p_k_max int
+  p_k_max int,
+  p_user_id uuid default null
 ) returns table (
   id uuid,
   prediction text,
@@ -6247,7 +6249,11 @@ language sql stable security invoker as $$
            * (1 + 0.1 * ln(1 + s.confirm_count + s.disconfirm_count))
          )::real as score
     from public.samskaras s
-   where s.user_id = auth.uid()
+   -- p_user_id: priming runs server-side now, where the service-role
+   -- client has no auth.uid(); the orchestrator passes the JWT user id
+   -- explicitly. Authenticated callers omit it and fall back to
+   -- auth.uid() (the b-strict overload pattern, as on the bias RPCs).
+   where s.user_id = coalesce(p_user_id, auth.uid())
      and s.prediction_embedding is not null
    order by score desc
    limit p_k_max
@@ -6265,16 +6271,24 @@ $$;
 -- can't silently insert NULL user_round rows.
 drop function if exists public.samskara_record_fires(uuid, uuid, jsonb);
 drop function if exists public.samskara_record_fires(uuid, uuid, integer, jsonb);
+drop function if exists public.samskara_record_fires(uuid, uuid, integer, jsonb, uuid);
 create or replace function public.samskara_record_fires(
   p_cohort_id uuid,
   p_thread_id uuid,
   p_user_round integer,
-  p_fires jsonb
+  p_fires jsonb,
+  -- p_user_id: priming runs server-side now, where the service-role
+  -- client has no auth.uid(); the orchestrator passes the JWT user id
+  -- explicitly. Authenticated callers omit it (b-strict overload).
+  p_user_id uuid default null
 ) returns void
 language plpgsql security invoker as $$
 declare
-  v_uid uuid := auth.uid();
+  v_uid uuid := coalesce(p_user_id, auth.uid());
 begin
+  if v_uid is null then
+    return;
+  end if;
   if jsonb_typeof(p_fires) <> 'array' or jsonb_array_length(p_fires) = 0 then
     return;
   end if;
@@ -10343,38 +10357,49 @@ begin
 end;
 $$;
 
--- Clear a thread's bias-processed state. Called from the chat loop
--- when a new user message lands on a thread that was previously
--- processed: the conversation has new content the worker hasn't
--- seen, so the prior observations are stale. We delete the
--- observations outright (cheaper than tracking "stale" flags) and
--- clear the processed-at so the worker's next scan picks the
--- thread up.
-create or replace function public.bias_clear_thread(p_thread_id uuid)
+-- Clear a thread's bias-processed state. Called at turn entry when a
+-- new user message lands on a thread that was previously processed:
+-- the conversation has new content the worker hasn't seen, so the
+-- prior observations are stale. We delete the observations outright
+-- (cheaper than tracking "stale" flags) and clear the processed-at so
+-- the worker's next scan picks the thread up.
+-- p_user_id: priming runs server-side in the venice edge function now,
+-- where the service-role client has no auth.uid(); the orchestrator
+-- passes the JWT-derived user id explicitly. Authenticated callers omit
+-- it and fall back to auth.uid() (same overload pattern as
+-- bias_processed_threads_for_bias).
+drop function if exists public.bias_clear_thread(uuid, uuid);
+create or replace function public.bias_clear_thread(
+  p_thread_id uuid,
+  p_user_id uuid default null
+)
 returns void
 security invoker
 language plpgsql
 as $$
+declare
+  v_uid uuid := coalesce(p_user_id, auth.uid());
 begin
-  if auth.uid() is null then
+  if v_uid is null then
     return;
   end if;
-  -- Guard ownership before deleting; RLS would too, but the explicit
-  -- check keeps the failure path clear.
+  -- Guard ownership before deleting. RLS would scope an authenticated
+  -- caller too, but the service-role orchestrator bypasses RLS, so the
+  -- explicit v_uid filter is what keeps the writes user-scoped.
   delete from public.bias_observations
-    where thread_id = p_thread_id and user_id = auth.uid();
+    where thread_id = p_thread_id and user_id = v_uid;
   -- v2: also clear reactions. The snapshot column gets reset to
   -- empty - a re-analyze on the next worker pass will see whatever
   -- the chat-loop renders on the next turn.
   delete from public.bias_reactions
-    where thread_id = p_thread_id and user_id = auth.uid();
+    where thread_id = p_thread_id and user_id = v_uid;
   update public.threads
     set bias_processed_at = null,
         bias_processed_msg_count = null,
         bias_claim_holder = null,
         bias_claim_expires = null,
         bias_active_at_turn = '{}'::text[]
-    where id = p_thread_id and user_id = auth.uid();
+    where id = p_thread_id and user_id = v_uid;
 end;
 $$;
 

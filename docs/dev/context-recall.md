@@ -8,6 +8,19 @@ assembles a works-cited index, and injects it as a synthetic
 `<think>` assistant turn that the conscious response sees as its own
 prior recollection.
 
+> **Where it runs:** the pipeline runs server-side, as part of the
+> priming stage of `getStreamingResponse`
+> (`supabase/functions/venice/priming/context-recall.ts`, orchestrated
+> by `runServerPriming` in `priming.ts`), reusing the function-side
+> memory/wiki search cores; it survives a browser disconnect mid-turn.
+> The three vector-search RPCs already accept `p_user_id`, which the
+> service-role client passes explicitly. The browser keeps the payload
+> type + coercer (`src/lib/context-recall/types.ts`) and the Recall
+> modal, rendering off the `priming_start/end` + `context_recall_payload`
+> events the function publishes (see
+> [`prompt-augmentation.md`](./prompt-augmentation.md) -> Observability).
+> "chat-loop" below refers to that server-side stage, not the browser.
+
 The index is deterministic - raw search, no LLM. Matching memory
 facts are inlined verbatim; related conversations and wiki articles
 come in as a `title (id: ...)` list that the model opens on demand

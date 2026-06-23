@@ -878,6 +878,17 @@ interface StreamRequestBody {
    * plain sends.
    */
   supersededIds?: string[];
+  /**
+   * Turn-entry priming inputs forwarded to getStreamingResponse's
+   * priming stage. The browser used to consume these in
+   * runPreTurnPriming; priming runs server-side now, so they ride in
+   * the POST. Absent leaves each pipeline at its disabled/cold default.
+   */
+  priming?: {
+    intuitionModelId?: string;
+    intuitionMood?: { band: number; column: 'confident' | 'tentative' } | null;
+    contextRecallEnabled?: boolean;
+  };
 }
 
 // Boundary check for StreamRequestBody.supersededIds entries. The
@@ -1108,6 +1119,7 @@ async function handleStreamFresh(
     supersededIds,
     bodyTemplate: body.body as Record<string, unknown>,
     adminClient: ctx.admin,
+    priming: body.priming,
   });
   edgeWaitUntil(promise);
 

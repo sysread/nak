@@ -80,6 +80,10 @@ One file per use-case under [`use-cases/`](./use-cases/), named
   subconscious perception / drive / synthesis pipeline, its
   trigger and cache logic on `threads.intuition_payload`, and the
   `<think>`-tagged injection ahead of the next completion.
+- [priming-disconnect-survival](./use-cases/priming-disconnect-survival.md)
+  - proves turn-entry priming runs server-side under `waitUntil`: a turn
+  whose tab closes mid-priming comes back fully primed, and the spinner
+  / modals / log sources stay driven by the published priming events.
 - [chat-ask-user](./use-cases/chat-ask-user.md) - the ask_user
   tool's suspend/resume lifecycle and the AskUserCard's
   pre-populated question/options.

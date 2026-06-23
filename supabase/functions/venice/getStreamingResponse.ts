@@ -74,6 +74,7 @@ import { reflectOneThread } from './agents/reflection.ts';
 import { curateOnTurnTail } from './agents/curation.ts';
 import { samskaraOnTurnTail } from './agents/samskara.ts';
 import { createEdgeLogger } from '../_shared/edge-log.ts';
+import { runServerPriming, type PrimingInputs } from './priming.ts';
 
 // Magic flag the ask_user tool returns to suspend the round chain
 // pending a user answer. Mirrors src/lib/tools/ask_user.ts'
@@ -180,6 +181,13 @@ export interface OrchestratorOpts {
   bodyTemplate: VeniceWireBody;
   /** Admin Supabase client (service role) for DB writes and Realtime. */
   adminClient: SupabaseClient;
+  /**
+   * Turn-entry priming inputs (intuition model/mood, context-recall
+   * gate) forwarded from the /stream request body. The priming stage
+   * consumes them before the first round; absent leaves each pipeline
+   * at its disabled/cold default.
+   */
+  priming?: PrimingInputs;
   /**
    * Override the wall deadline for tests so the suite is not slow.
    * Defaults to WALL_DEADLINE_MS.
@@ -362,6 +370,26 @@ export async function getStreamingResponse(
   let history: VeniceMessage[] = [...(opts.bodyTemplate.messages ?? [])];
 
   try {
+    // Turn-entry priming, before the first round. Runs server-side so
+    // it survives browser disconnect under the same waitUntil as the
+    // streaming loop. Assembles the bias system-prompt appendix and the
+    // samskara/context-recall/intuition <think> chain onto `history`,
+    // and publishes the priming liveness + payload events the browser
+    // renders as the subconscious spinner + Intuition/Recall modals.
+    // Never throws - every pipeline swallows its own errors so a priming
+    // hiccup degrades to "less context this turn," never a broken turn.
+    await runServerPriming({
+      adminClient: opts.adminClient,
+      userId: opts.userId,
+      threadId: opts.threadId,
+      apiKey: opts.apiKey,
+      history,
+      publisher,
+      priming: opts.priming,
+      signal: ctl.signal,
+      runId,
+    });
+
     await publisher.publish({ type: 'BEGIN' });
 
     roundLoop: for (round = 0; round < MAX_ROUNDS; round += 1) {

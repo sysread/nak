@@ -6,9 +6,14 @@ together they form a layer with no single owner - the **prompt
 augmentation layer**. This doc is that layer's contract: who may inject
 what, in what order, when it counts as fresh, how it degrades on
 failure, and where it is observable. The code that enforces the
-contract lives in `src/lib/chat-loop.ts` (`runChatLoop` -> the priming
-block + `requestMessages` assembly); this doc is the spec that code
-implements.
+contract lives in two places: the browser assembles the baseline system
+prompt + conversation + metadata in `src/lib/chat-loop.ts`
+(`runChatLoop` -> `requestMessages`), and the server's priming stage
+(`supabase/functions/venice/priming.ts` `runServerPriming`, the opening
+stage of `getStreamingResponse`) appends the bias appendix and splices
+the `<think>` chain before the first round. Priming runs server-side so
+the whole turn survives a browser disconnect; this doc is the spec both
+halves implement.
 
 Read this before adding a new turn-time injector, changing the order of
 the existing ones, or touching the freshness fuses - a regression here
@@ -34,8 +39,11 @@ Two distinct injection surfaces:
 
 - **The baseline system prompt (row 1)** carries the slowly-changing,
   always-on context: the tool catalog and the bias-profile appendix.
-  Assembled by `buildSystemPrompt({ biasProfile })` in
-  `src/lib/chat-prompt.ts`.
+  The tool catalog is assembled by `buildSystemPrompt()` in
+  `src/lib/chat-prompt.ts` (browser); the bias-profile appendix is
+  rendered and appended server-side by `applyBiasPriming`
+  (`supabase/functions/venice/priming.ts`) before the first round,
+  joined with the same blank-line separator so the wire bytes match.
 - **The priming `<think>` chain (rows 4-7)** carries the volatile,
   per-turn context. These are synthetic `assistant` rows the model
   reads as its own immediately-prior thoughts, so they sit at the tail
@@ -51,11 +59,11 @@ Two distinct injection surfaces:
 
 | Injector | Surface | Source | Cache | Freshness gate |
 | --- | --- | --- | --- | --- |
-| Bias profile | system appendix (row 1) | `getBiasProfileBlock` (`src/lib/bias`) | `bias_summary` row | read once per turn; tier + render-cap filtered |
-| Context recall | `<think>` (row 4) | `maybeRunContextRecallPipeline` (`src/lib/context-recall`) | `threads.context_recall_payload` | `isPayloadFreshForInjection` (STALE_FUSE_MS) |
-| Samskara compound | `<think>` (row 5) | `getCompoundSummary` (`src/lib/samskara`) | cached prose row | always-on; no fuse |
-| Samskara fire | `<think>` (row 6) | `fireSamskaras` (`src/lib/samskara`) | computed per turn | raced against `SAMSKARA_PRIMING_TIMEOUT_MS` |
-| Intuition | `<think>` (row 7) | `maybeRunIntuitionPipeline` (`src/lib/intuition`) | `threads.intuition_payload` | `isPayloadFreshForInjection` (STALE_FUSE_MS) |
+| Bias profile | system appendix (row 1) | `applyBiasPriming` (`supabase/functions/venice/priming.ts`) | `bias_summary` row | read once per turn; tier + render-cap filtered |
+| Context recall | `<think>` (row 4) | `runContextRecallPipeline` (`venice/priming/context-recall.ts`) | `threads.context_recall_payload` | `isPayloadFreshForInjection` (STALE_FUSE_MS) |
+| Samskara compound | `<think>` (row 5) | `getCompoundSummary` (`venice/priming/samskara.ts`) | cached prose row | always-on; no fuse |
+| Samskara fire | `<think>` (row 6) | `fireSamskaras` (`venice/priming/samskara.ts`) | computed per turn | raced against `SAMSKARA_PRIMING_TIMEOUT_MS` |
+| Intuition | `<think>` (row 7) | `runIntuitionPipeline` (`venice/priming/intuition.ts`) | `threads.intuition_payload` | `isPayloadFreshForInjection` (STALE_FUSE_MS) |
 | Tool catalog | system (row 1) | `buildSystemPrompt` / `buildToolList` (`src/lib/tools`) | n/a (derived from enabled toolboxes) | per-turn snapshot of `toolboxes_enabled` |
 | Metadata block | system (row 8) | `buildMetadataSystemMessage` (`src/lib/chat-loop`) | n/a | rebuilt every turn |
 
@@ -107,30 +115,41 @@ Every injector is best-effort and MUST NOT block or fail a turn:
   `SAMSKARA_PRIMING_TIMEOUT_MS`; on timeout both resolve null and are
   skipped (the underlying fire keeps running so its cohort log still
   lands). A slow Venice never adds visible latency to the first token.
-- `maybeRunIntuitionPipeline` / `maybeRunContextRecallPipeline` swallow
-  their own errors and return null -> the block is skipped.
-- `getBiasProfileBlock` swallows errors -> the appendix is omitted.
+- `runIntuitionPipeline` / `runContextRecallPipeline` swallow their own
+  errors (the orchestrator wraps each in try/catch returning null) ->
+  the block is skipped.
+- `applyBiasPriming` swallows errors -> the appendix is omitted (and
+  its snapshot + clear writes are detached and swallowed too).
 - Cold-start threads produce null for every `<think>` block and the
-  conditional `history.push` calls skip them entirely; a fresh thread's
-  first turn ships with no priming chain at all.
+  conditional splice skips them entirely; a fresh thread's first turn
+  ships with no priming chain at all.
 
 The invariant: a priming failure degrades to "less context this turn,"
 never to a broken or delayed turn.
 
 ## Observability
 
-- **`onSubconsciousStart(op)` / `onSubconsciousEnd(op)`** - a liveness
-  pair per pipeline (`'samskara' | 'intuition' | 'recall'`) the UI
-  renders as per-pipeline throbbers. Every Start gets exactly one End
-  regardless of outcome.
-- **`onIntuitionUpdate` / `onContextRecallUpdate`** - fire once per
-  cache refresh with the freshly-computed payload, so the UI patches
-  the in-memory thread row without waiting for a refetch.
-- **The debug wire dump** - `runChatLoop` logs the full assembled
-  `requestMessages` array at debug level (`'venice request wire'`).
-  When a turn answers the wrong thing because a stale or misfired prime
-  steered it, this is where you see the exact `<think>` chain that
-  shipped. One filter-drop away in the logs drawer.
+Priming runs server-side, so its feedback rides the stream Broadcast
+channel as `PrimingEvent`s (defined in `_shared/venice-stream.ts`) rather
+than the local callbacks it used to fire. `venice.ts` decodes them and
+`consumeStreamEvents` routes them into the same UI handlers, so the
+browser surface is unchanged:
+
+- **`priming_start` / `priming_end` (carrying a `SubconsciousOp`:
+  `'samskara' | 'intuition' | 'recall'`)** -> the browser's
+  `onSubconsciousStart` / `onSubconsciousEnd`, rendered as per-pipeline
+  throbbers. The server publishes the pair around each pipeline; every
+  start gets exactly one end regardless of outcome.
+- **`intuition_payload` / `context_recall_payload`** -> the browser's
+  `onIntuitionUpdate` / `onContextRecallUpdate`, fired once per cache
+  refresh so the UI patches the in-memory thread row without a refetch.
+  The payload is coerced at decode, so a drifting wire shape is dropped.
+- **The edge logs** - the priming stage logs under three drawer sources
+  (`samskara`, `intuition`, `context-recall`) plus `bias`, round-tripped
+  to the drawer via the edge-log Broadcast relay. The full assembled
+  wire (the `<think>` chain spliced in) is the server's
+  `'venice request wire'`-equivalent round dump under the `stream`
+  source.
 
 ## Interactions
 
@@ -142,8 +161,11 @@ never to a broken or delayed turn.
   each owns its own pipeline, cache, and trigger policy.
 - [`tools.md`](./tools.md) - the tool catalog + toolbox-state halves of
   the system prompt.
-- The assembly + ordering live in `src/lib/chat-loop.ts`; the baseline
-  prompt + catalog in `src/lib/chat-prompt.ts`.
+- The baseline prompt + catalog are browser-side
+  (`src/lib/chat-prompt.ts`); the bias appendix + `<think>`-chain
+  assembly + ordering are server-side
+  (`supabase/functions/venice/priming.ts`), with the trigger evaluator
+  mirrored in `_shared/priming-triggers.ts`.
 
 ## Gotchas
 

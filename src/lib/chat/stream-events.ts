@@ -288,6 +288,25 @@ export async function consumeStreamEvents(opts: {
           }
           break;
         }
+        case 'priming_start':
+          // Turn-entry priming liveness. Toggles the subconscious
+          // spinner for this op; the server runs the pipeline now, but
+          // the UI feedback is identical to the old local callback.
+          handlers?.onSubconsciousStart?.(ev.op);
+          break;
+        case 'priming_end':
+          handlers?.onSubconsciousEnd?.(ev.op);
+          break;
+        case 'intuition_payload':
+          // Fresh intuition cache from the server's priming run. Routes
+          // to the same handler the local pipeline used, so the
+          // Intuition modal + pill update exactly as before. Already
+          // coerced at decode.
+          handlers?.onIntuitionUpdate?.(ev.payload);
+          break;
+        case 'context_recall_payload':
+          handlers?.onContextRecallUpdate?.(ev.payload);
+          break;
         case 'error':
           // The server reported a terminal stream failure. Stash it
           // with a kind matching the original VeniceError categorization

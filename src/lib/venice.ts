@@ -43,6 +43,17 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ReasoningEffort, Verbosity } from './models';
 import type { OpenAIToolDef, OpenAIToolCall } from './tools/types';
+// Priming payload types + coercers. The server publishes the fresh
+// intuition / context-recall caches over the stream channel as the
+// priming stage runs; the decode below coerces the raw JSON through
+// these the same way the thread-row read path does, so a drifting /
+// older-version payload is dropped rather than handed to the modal.
+// Imported from the leaf type modules (not the barrels) so this stays
+// runtime-cycle-free - those modules carry only type-level imports.
+import type { IntuitionPayload } from './intuition/types';
+import { coerceIntuitionPayload } from './intuition/types';
+import type { ContextRecallPayload } from './context-recall/types';
+import { coerceContextRecallPayload } from './context-recall/types';
 // Re-export so callers consuming a ChatCompletion (ChatCompletion.toolCalls
 // is OpenAIToolCall[]) can pull the type from the same module without
 // reaching into ./tools/types.
@@ -169,9 +180,10 @@ export interface ChatRequest {
    * the model will continue or replace it - on the fast tier
    * (GLM-4.7 via Venice) that shape made the model echo the system
    * prompt body verbatim as its `content`, persisting the prompt
-   * into a synthesis field instead of producing a synthesis. See
-   * src/lib/intuition/pipeline.ts stage 3 for the live regression
-   * and the conventional shape that fixed it; if you need to feed
+   * into a synthesis field instead of producing a synthesis. The
+   * intuition synthesis stage that surfaced this lives server-side now
+   * (supabase/functions/venice/priming/intuition.ts); the conventional
+   * shape that fixed it is preserved there. If you need to feed
    * the model "prior internal voices" content, fold it into the
    * user turn rather than passing it as an assistant message.
    */
@@ -294,6 +306,25 @@ export interface ChatRequest {
      * Omitted on plain sends.
      */
     supersededIds?: readonly string[];
+    /**
+     * Turn-entry priming inputs the server's priming stage needs. These
+     * used to be consumed browser-side by runPreTurnPriming; priming now
+     * runs server-side in getStreamingResponse, so they ride in the
+     * /stream POST instead. Omitted leaves each pipeline at its
+     * disabled / cold default.
+     */
+    priming?: {
+      /** Fast-tier model id the intuition pipeline runs on. Absent
+       *  skips intuition entirely. */
+      intuitionModelId?: string;
+      /** Live mood snapshot for the trigger evaluator + payload stamp. */
+      intuitionMood?: {
+        band: number;
+        column: 'confident' | 'tentative';
+      } | null;
+      /** Gate for the context-recall pipeline. */
+      contextRecallEnabled?: boolean;
+    };
   };
 }
 
@@ -344,6 +375,18 @@ export type StreamEvent =
    * terminal round is signaled by `end`, not this event.
    */
   | { type: 'round_committed'; id: string }
+  // Turn-entry priming events. The server runs priming (samskara,
+  // context-recall, intuition) as the opening stage of the streaming
+  // function and publishes these so the browser drives the same
+  // feedback the local preturn-priming callbacks used to: the
+  // start/end pair toggles the subconscious spinner per op, and the
+  // payload events refresh the Intuition / Recall modals. The payloads
+  // are already coerced at decode (setupStreamSubscription), so a
+  // drifting wire shape never reaches the consumer.
+  | { type: 'priming_start'; op: 'samskara' | 'intuition' | 'recall' }
+  | { type: 'priming_end'; op: 'samskara' | 'intuition' | 'recall' }
+  | { type: 'intuition_payload'; payload: IntuitionPayload }
+  | { type: 'context_recall_payload'; payload: ContextRecallPayload }
   // Server-driven events from the function-side round chain. The
   // Broadcast channel publishes the wire shape from
   // $shared/venice-stream and we translate to these for the browser
@@ -1107,6 +1150,10 @@ async function* streamChatViaFunction(
           ...(ctx.supersededIds && ctx.supersededIds.length > 0
             ? { supersededIds: ctx.supersededIds }
             : {}),
+          // Priming inputs for the server-side priming stage. Sent only
+          // when present so a caller that does no priming (sub-completion
+          // paths never reach here, but be explicit) keeps the wire lean.
+          ...(ctx.priming ? { priming: ctx.priming } : {}),
           body,
         },
       },
@@ -1421,6 +1468,32 @@ function setupStreamSubscription(
     if (typeof p.id === 'string' && p.id.length > 0) {
       push({ type: 'round_committed', id: p.id });
     }
+  });
+  // Priming liveness + payload refreshes, published by the server's
+  // priming stage before BEGIN. The start/end pair is 1:1 (every start
+  // gets one end); the consumer toggles the subconscious spinner per
+  // op. Payload events carry the freshly-computed cache as raw JSON; we
+  // coerce here (same drift guard the thread-row read uses) and drop
+  // the event if the shape doesn't clear the coercer.
+  const isPrimingOp = (op: unknown): op is 'samskara' | 'intuition' | 'recall' =>
+    op === 'samskara' || op === 'intuition' || op === 'recall';
+  channel.on('broadcast', { event: 'priming_start' }, ({ payload }) => {
+    const p = payload as { op?: unknown };
+    if (isPrimingOp(p.op)) push({ type: 'priming_start', op: p.op });
+  });
+  channel.on('broadcast', { event: 'priming_end' }, ({ payload }) => {
+    const p = payload as { op?: unknown };
+    if (isPrimingOp(p.op)) push({ type: 'priming_end', op: p.op });
+  });
+  channel.on('broadcast', { event: 'intuition_payload' }, ({ payload }) => {
+    const p = payload as { payload?: unknown };
+    const coerced = coerceIntuitionPayload(p.payload);
+    if (coerced) push({ type: 'intuition_payload', payload: coerced });
+  });
+  channel.on('broadcast', { event: 'context_recall_payload' }, ({ payload }) => {
+    const p = payload as { payload?: unknown };
+    const coerced = coerceContextRecallPayload(p.payload);
+    if (coerced) push({ type: 'context_recall_payload', payload: coerced });
   });
   channel.on('broadcast', { event: 'END' }, ({ payload }) => {
     const p = payload as {
