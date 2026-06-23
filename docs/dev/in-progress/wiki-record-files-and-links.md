@@ -249,8 +249,17 @@ module; the `.svelte` file stays glue.
    wiring, `reset_wiki_data` extension. All idempotent. NOT yet verified
    against a live DB (`mise run sync`) - SQL correctness is the one thing
    the gate can't check.
-2. **Browser data layer**: types, coercers, SupabaseService I/O +
-   CRUD, realtime relay.
+2. **Browser data layer** [DONE]: `WikiRecordFile` / `WikiRecordLink` /
+   `WikiRecordLinkView` types + coercers; `MAX_RECORD_LINK_LABEL_CHARS`
+   + the file/link changelog message builders in `wiki.ts`;
+   SupabaseService file I/O (`listWikiRecordFiles`,
+   `createWikiRecordFileSignedUrls`, `downloadWikiRecordFileBlob`,
+   `uploadAndAttachWikiRecordFile`, `deleteWikiRecordFile`) and link CRUD
+   (`listWikiRecordLinks`, `createWikiRecordLink`, `deleteWikiRecordLink`);
+   `appendRecordChangelogMessage` refactor so file/link writes reuse the
+   record_update changelog; the `subscribeToWikiRecordChanges` relay
+   widened to all three tables. (The tool-side `record_file_attach`
+   copy-from-thread path is milestone 4.)
 3. **UI**: files + links in `WikiRecords.svelte` + primitives + tests.
    (Usable end-to-end by hand at this point.)
 4. **Edge reads + write tools**: widen `record_get`/`record_list`, the

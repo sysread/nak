@@ -95,6 +95,13 @@ export const MAX_WIKI_RECORD_TAGS = 24;
 export const MAX_WIKI_RECORD_TAG_CHARS = 40;
 
 /**
+ * Cap on a record cross-link's freeform label ("based on", "supersedes").
+ * Enforced in the link form and mirrored on the function-side
+ * record_link_create tool.
+ */
+export const MAX_RECORD_LINK_LABEL_CHARS = 120;
+
+/**
  * Semantic search across the user's wiki records, parallel to
  * `searchWikiArticlesSemantic`. Embeds the query via Venice (silent
  * ILIKE fallback on failure, same rationale as articles) and hands the
@@ -125,6 +132,45 @@ export function buildRecordChangelogMessage(
     typeof content === 'string' ? content.replace(/\s+/g, ' ').trim().slice(0, 120) : '';
   const full = preview ? `${base}: ${preview}` : base;
   return full.slice(0, MAX_WIKI_CHANGELOG_MESSAGE_CHARS);
+}
+
+/**
+ * Changelog message for a file attach/remove on a record. Reuses the
+ * record_update changelog kind (a file change IS a record change), so
+ * the panel renders it under the "Edited" chip; only the wording differs
+ * from a content edit. "Attached image (2026-06-17): crumb.jpg".
+ * Mirrored edge-side in _record_helpers.ts.
+ */
+export function buildRecordFileChangelogMessage(
+  action: 'attach' | 'remove',
+  recordDate: string,
+  filename: string,
+  isImage: boolean,
+): string {
+  const noun = isImage ? 'image' : 'file';
+  const verb = action === 'attach' ? 'Attached' : 'Removed';
+  const name = filename.replace(/\s+/g, ' ').trim().slice(0, 120);
+  const msg = `${verb} ${noun} (${recordDate})${name ? `: ${name}` : ''}`;
+  return msg.slice(0, MAX_WIKI_CHANGELOG_MESSAGE_CHARS);
+}
+
+/**
+ * Changelog message for a cross-link create/delete on a record. The
+ * target is identified by its date + a short content snippet (records
+ * have no title). "Linked to (2026-06-12) baked an 80% loaf - based on".
+ * Mirrored edge-side in _record_helpers.ts.
+ */
+export function buildRecordLinkChangelogMessage(
+  action: 'create' | 'delete',
+  targetDate: string,
+  targetContent: string,
+  label?: string | null,
+): string {
+  const verb = action === 'create' ? 'Linked to' : 'Removed link to';
+  const snippet = targetContent.replace(/\s+/g, ' ').trim().slice(0, 80);
+  const labelText = action === 'create' && label ? ` - ${label}` : '';
+  const msg = `${verb} (${targetDate})${snippet ? ` ${snippet}` : ''}${labelText}`;
+  return msg.slice(0, MAX_WIKI_CHANGELOG_MESSAGE_CHARS);
 }
 
 export async function searchWikiRecordsSemantic(
