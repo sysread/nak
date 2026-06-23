@@ -65,3 +65,7 @@ import './record_get.ts';
 import './record_list.ts';
 import './record_search.ts';
 import './record_update.ts';
+import './record_file_attach.ts';
+import './record_file_remove.ts';
+import './record_link_create.ts';
+import './record_link_delete.ts';

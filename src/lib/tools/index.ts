@@ -100,6 +100,10 @@ import { recordSearchSchema } from './record_search.schema';
 import { recordCreateSchema } from './record_create.schema';
 import { recordUpdateSchema } from './record_update.schema';
 import { recordDeleteSchema } from './record_delete.schema';
+import { recordFileAttachSchema } from './record_file_attach.schema';
+import { recordFileRemoveSchema } from './record_file_remove.schema';
+import { recordLinkCreateSchema } from './record_link_create.schema';
+import { recordLinkDeleteSchema } from './record_link_delete.schema';
 import { docListSchema } from './doc_list.schema';
 import { docGetSchema } from './doc_get.schema';
 import { docGrepSchema } from './doc_grep.schema';
@@ -164,6 +168,10 @@ const recordSearch = serverSideTool(recordSearchSchema);
 const recordCreate = serverSideTool(recordCreateSchema);
 const recordUpdate = serverSideTool(recordUpdateSchema);
 const recordDelete = serverSideTool(recordDeleteSchema);
+const recordFileAttach = serverSideTool(recordFileAttachSchema);
+const recordFileRemove = serverSideTool(recordFileRemoveSchema);
+const recordLinkCreate = serverSideTool(recordLinkCreateSchema);
+const recordLinkDelete = serverSideTool(recordLinkDeleteSchema);
 const docList = serverSideTool(docListSchema);
 const docGet = serverSideTool(docGetSchema);
 const docGrep = serverSideTool(docGrepSchema);
@@ -390,9 +398,18 @@ export const wikiRecordsToolbox: Toolbox = {
   description:
     'Create, edit, and delete dated records linked to a wiki article ' +
     "(the topic's journey, distinct from the article body's current " +
-    'state). Read paths (record_list, record_get, record_search) are ' +
+    'state); attach conversation files to a record and cross-link related ' +
+    'records. Read paths (record_list, record_get, record_search) are ' +
     'always-on; this toolbox carries the writes.',
-  tools: [recordCreate, recordUpdate, recordDelete],
+  tools: [
+    recordCreate,
+    recordUpdate,
+    recordDelete,
+    recordFileAttach,
+    recordFileRemove,
+    recordLinkCreate,
+    recordLinkDelete,
+  ],
 };
 
 /**

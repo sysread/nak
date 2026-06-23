@@ -274,8 +274,19 @@ module; the `.svelte` file stays glue.
    same-article); widening the picker is a later polish. NOT browser-
    verified (cloud agent) - the upload/thumbnail/lightbox/picker
    interaction wants a manual pass.
-4. **Edge reads + write tools**: widen `record_get`/`record_list`, the
-   four gated tools, membership tests.
+4. **Edge reads + write tools** [DONE]: `record_get` widened to return
+   `files` (metadata + bounded `extracted_text` for docs) and `links`
+   (outgoing/incoming w/ the other endpoint's dated excerpt);
+   `record_list` annotates each row w/ `file_count` / `link_count`. Four
+   new gated tools in `wikiRecordsToolbox`: `record_file_attach`
+   (promotes a thread file - user upload OR generate_image - onto a
+   record, copying bytes into the persistent bucket; b-strict, expired-
+   source error), `record_file_remove`, `record_link_create` (upsert on
+   the unique pair, self-link + hallucinated-id rejection),
+   `record_link_delete`. Edge-side changelog builders mirror the browser.
+   Membership tripwire updated in `tests/tools.test.ts`. (No direct
+   execute() unit tests - the existing record tools have none either;
+   they need a live DB and are covered by the QA use-case in M6.)
 5. **Agent awareness**: extraction-agent link verb + prompt, librarian
    link-prune verb + prompt, agent tests.
 6. **Docs + QA**: graduate design into `wiki.md` / `file-storage.md`,

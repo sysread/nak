@@ -9,7 +9,9 @@ export const recordListSchema = {
     'article_id (from wiki_search / wiki_list) and optional filters: ' +
     'from_date / to_date (inclusive ISO 8601 bounds) and tags (a record ' +
     'must carry every listed tag). Returns {records: [{id, date, content, ' +
-    'tags, created_at}]}. Use this to survey a topic\'s journey before ' +
+    'tags, created_at, file_count, link_count}]}. file_count / link_count ' +
+    'flag which records carry attached files or cross-links (fetch the ' +
+    'detail with record_get). Use this to survey a topic\'s journey before ' +
     'writing or updating its article body.',
   shortDescription: 'list an article\'s records',
   parameters: {

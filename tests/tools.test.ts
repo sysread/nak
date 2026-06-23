@@ -265,6 +265,11 @@ describe('tool registry', () => {
     expect(names).toContain('record_create');
     expect(names).toContain('record_update');
     expect(names).toContain('record_delete');
+    // File + link writes are gated with the record writes.
+    expect(names).toContain('record_file_attach');
+    expect(names).toContain('record_file_remove');
+    expect(names).toContain('record_link_create');
+    expect(names).toContain('record_link_delete');
     // Record reads are always-on, not in the gated toolbox.
     expect(names).toContain('record_list');
     expect(names).toContain('record_get');
