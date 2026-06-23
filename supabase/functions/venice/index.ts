@@ -66,6 +66,7 @@ import {
   runDeepSleepSweepTick,
 } from './agents/deep_sleep.ts';
 import { createAgentProgressPublisher } from '../_shared/agent-progress.ts';
+import { persistManualRunOutcome } from '../_shared/manual-run-outcome.ts';
 import { createEdgeLogger } from '../_shared/edge-log.ts';
 // Side-effect import: every tool module under ./tools/ calls
 // registerTool() at module-load via this barrel, populating the
@@ -733,6 +734,12 @@ function detachedManualRunHandler(
           await log.flush();
           result = { kind: 'error', error: 'internal error during manual run' };
         }
+        // Persist the outcome to the profiles row BEFORE broadcasting it,
+        // so a tab that reloaded mid-run can recover "what the run did"
+        // even if it never sees this fire-and-forget `result` event. The
+        // write produces a profiles UPDATE the client's outcome watcher
+        // picks up; persist is best-effort and never blocks the broadcast.
+        await persistManualRunOutcome(admin, userId, logSource, runId, result);
         // Terminal event - the outcome the HTTP body used to carry.
         publisher.publish({ kind: 'result', result });
         await publisher.flush();
@@ -800,6 +807,14 @@ const handleDeepSleepRun = detachedManualRunHandler('deep-sleep', (admin, userId
  * failures are an application outcome (kind: 'error'), not a
  * transport error, so the panel can render them without sniffing
  * status codes.
+ *
+ * Detached-survival: the retry claims the thread and runs the agent;
+ * `edgeWaitUntil` keeps that work alive if the client disconnects
+ * (a reload mid-retry), so the run finishes and the claim/skip-marker
+ * settle even though this response never reaches the reloaded tab. The
+ * connected client still gets the result synchronously (the same promise
+ * is awaited). Liveness is recovered on the reloaded side from the
+ * per-thread claim, surfaced by list_wiki_skipped_threads as `retrying`.
  */
 async function handleWikiRetry(req: Request): Promise<Response> {
   const userId = userIdFromJwt(req);
@@ -816,7 +831,12 @@ async function handleWikiRetry(req: Request): Promise<Response> {
   const threadId = typeof body.threadId === 'string' ? body.threadId : '';
   if (!threadId) return json({ error: 'threadId is required' }, 400);
 
-  const result = await retryWikiThread(admin, userId, threadId);
+  const run = retryWikiThread(admin, userId, threadId);
+  // Survive a client disconnect (reload mid-retry): the same promise is
+  // awaited for the connected client's response AND registered with the
+  // runtime so a dropped request doesn't kill the run.
+  edgeWaitUntil(run);
+  const result = await run;
   return json(result);
 }
 

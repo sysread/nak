@@ -323,6 +323,13 @@ you can retry again once you've made changes. The agent's writes
 (any new wiki articles, any updates) land regardless, since the
 wiki tools commit each call individually.
 
+The retry runs on the server, so a page reload mid-retry is safe:
+the run keeps going, and the row shows **Retrying...** again when you
+come back rather than looking idle. A row already being processed -
+by your retry, or by the background sweep picking it up at the same
+time - shows the same in-progress state, and the result lands once
+whichever run finishes.
+
 The autonomous agent also processes skipped rows on its own
 schedule. Adding or editing turns in the conversation is not the
 trigger - skipped threads bypass the usual "wait a day after the

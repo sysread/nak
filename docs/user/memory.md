@@ -365,8 +365,12 @@ single overflow (**...**) menu to keep the bar uncluttered. The
 panel shows a live step-by-step progress strip while the run
 executes and a one-sentence summary of what the agent did when it
 finishes; you can switch to another drawer tab mid-run and come
-back - the strip picks up where it left off. A manual run does not reset the
-12-hour clock for the next scheduled one.
+back - the strip picks up where it left off. A full page reload is
+also safe: the run keeps going on the server, the button stays
+disabled until it actually finishes, and the last run's summary is
+restored when you come back (the live step-by-step list is not - only
+the final summary). A manual run does not reset the 12-hour clock for
+the next scheduled one.
 
 The scheduled runs can be turned off under **Settings -> Memory ->
 Memory librarian**. The manual buttons keep working with the toggle

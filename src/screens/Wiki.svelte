@@ -97,11 +97,15 @@
     appendProgressStep,
     finalizeLibrarianSteps,
     librarianRunButtonLabel,
+    outcomeToLibrarianResult,
     LIBRARIAN_PARTIAL_SAVE_NOTE,
     type LibrarianStep,
   } from '$lib/ui/wiki-librarian-run';
   import { awaitDetachedRun } from '$lib/agents/detached-run';
-  import { wikiLibrarianLease } from '$lib/agents/inflight-lease.svelte';
+  import {
+    wikiLibrarianLease,
+    wikiLibrarianOutcome,
+  } from '$lib/agents/inflight-lease.svelte';
   import Markdown from '../components/Markdown.svelte';
   import WikiChangelogPanel from '../components/WikiChangelogPanel.svelte';
   import WikiSkippedPanel from '../components/WikiSkippedPanel.svelte';
@@ -931,6 +935,29 @@
   // when the `done` broadcast never arrives (gateway-timeout case).
   let librarianSteps = $state<LibrarianStep[]>([]);
 
+  // The runId whose result this strip currently shows. Set by a live run
+  // (submitLibrarianRun) and by the recovered-outcome bridge below, so the
+  // bridge neither overwrites a live result nor re-applies the same outcome
+  // on every realtime tick.
+  let librarianShownRunId = $state<string | null>(null);
+
+  // Recover the last run's result card after a reload. wikiLibrarianOutcome
+  // reads the persisted outcome on mount and watches the profiles realtime
+  // UPDATE the venice function writes when a run finishes; this bridges that
+  // into the local result state. Guarded so a live run in this tab (busy) or
+  // an already-shown runId wins - the live path keeps full step fidelity,
+  // this only fills the gap a reload leaves. No step rows: they're gone after
+  // a reload, but the result card is the part worth recovering.
+  $effect(() => {
+    const outcome = wikiLibrarianOutcome.outcome;
+    if (!outcome || librarianBusy || outcome.runId === librarianShownRunId) return;
+    const result = outcomeToLibrarianResult(outcome);
+    if (!result) return;
+    librarianResult = result;
+    librarianSteps = [];
+    librarianShownRunId = outcome.runId;
+  });
+
   // Watch the trigger from the top-bar button. Opens the confirmation
   // strip (and only the strip - the run itself is gated behind the
   // user clicking "Run librarian"). Resets the trigger so the parent
@@ -1036,6 +1063,10 @@
     // rule streaming chat follows). The runId filter keeps a stale or
     // concurrent run's events out of this strip's step list.
     const runId = crypto.randomUUID();
+    // This tab owns this runId's display - so the recovered-outcome bridge
+    // won't overwrite the live result when this run's outcome later arrives
+    // over the profiles realtime UPDATE.
+    librarianShownRunId = runId;
     try {
       const session = await app.supabase.getSession();
       if (!session) {

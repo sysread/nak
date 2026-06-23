@@ -1358,7 +1358,15 @@ alter table public.profiles
   add column if not exists deep_sleep_last_run_at timestamptz,
   add column if not exists rem_last_run_at timestamptz,
   add column if not exists memory_librarian_inflight_holder text,
-  add column if not exists memory_librarian_inflight_expires_at timestamptz;
+  add column if not exists memory_librarian_inflight_expires_at timestamptz,
+  -- Terminal outcome of the most recent manual memory-librarian run
+  -- (rem or deep-sleep), persisted so any client can recover "what the
+  -- last run did" after a browser reload - the live result rides a
+  -- fire-and-forget Broadcast a reloaded tab never re-subscribes to.
+  -- Shape: { runId, source, finishedAt, result } (the fleet result
+  -- union under `result`); written by detachedManualRunHandler on
+  -- completion, read on mount + via the profiles realtime UPDATE.
+  add column if not exists memory_librarian_last_run_outcome jsonb;
 
 -- Claim the next user due for a scheduled deep-sleep run, across ALL
 -- users. Gated on the memory-librarian Settings toggle (only the
@@ -8548,13 +8556,22 @@ returns table (
   thread_id uuid,
   title text,
   last_skip_at timestamptz,
-  last_skip_reason text
+  last_skip_reason text,
+  -- True while a held per-thread wiki claim is in flight - the manual
+  -- Retry runs under this claim (claim_wiki_thread_for_retry), and the
+  -- hourly sweep's recovery branch can hold it too. The Skipped panel
+  -- renders this as "Retrying..." and recovers the in-flight state across
+  -- a browser reload (the claim is a durable server fact, unlike the
+  -- panel's in-memory per-row spinner).
+  retrying boolean
 )
 language sql security invoker as $$
   select t.id as thread_id,
          t.title as title,
          t.wiki_last_skip_at as last_skip_at,
-         t.wiki_last_skip_reason as last_skip_reason
+         t.wiki_last_skip_reason as last_skip_reason,
+         (t.wiki_claim_expires_at is not null
+          and t.wiki_claim_expires_at > now()) as retrying
     from public.threads t
    where t.user_id = auth.uid()
      and t.wiki_last_skip_at is not null
@@ -8627,6 +8644,63 @@ $$;
 
 grant execute on function
   public.manual_advance_wiki_pointer(uuid, uuid, uuid) to service_role;
+
+-- Targeted per-thread claim for the manual Skipped-panel retry. Unlike
+-- claim_next_thread_for_wiki (the global sweep that PICKS the next
+-- eligible thread), this claims ONE named thread, making the retry's run
+-- a durable server fact: a held wiki_claim_expires_at is what
+-- list_wiki_skipped_threads reports as `retrying`, so the panel shows the
+-- in-flight state and recovers it across a browser reload. Claims IFF the
+-- thread is the caller's and currently unclaimed (or its claim lapsed); a
+-- thread the sweep or another retry already holds returns false and the
+-- route surfaces that as a `busy` result. b-strict: the /wiki-retry route
+-- runs service-role and passes the gateway-validated id.
+drop function if exists public.claim_wiki_thread_for_retry(uuid, text, int, uuid);
+create or replace function public.claim_wiki_thread_for_retry(
+  p_thread_id uuid,
+  p_holder_id text,
+  p_ttl_seconds int,
+  p_user_id uuid default null
+) returns boolean
+language plpgsql security invoker as $$
+declare
+  updated int;
+begin
+  update public.threads
+     set wiki_claim_holder = p_holder_id,
+         wiki_claim_expires_at = now() + make_interval(secs => p_ttl_seconds)
+   where id = p_thread_id
+     and user_id = coalesce(p_user_id, auth.uid())
+     and (wiki_claim_holder is null
+          or wiki_claim_expires_at is null
+          or wiki_claim_expires_at < now());
+  get diagnostics updated = row_count;
+  return updated > 0;
+end $$;
+
+grant execute on function
+  public.claim_wiki_thread_for_retry(uuid, text, int, uuid) to service_role;
+
+-- Release a manual-retry thread claim IF it is still ours. Holder-checked
+-- (a lapsed-and-stolen claim is left to its new owner), and a no-op when
+-- the success path (manual_advance_wiki_pointer) already cleared it.
+drop function if exists public.release_wiki_thread_retry_claim(uuid, text, uuid);
+create or replace function public.release_wiki_thread_retry_claim(
+  p_thread_id uuid,
+  p_holder_id text,
+  p_user_id uuid default null
+) returns void
+language sql security invoker as $$
+  update public.threads
+     set wiki_claim_holder = null,
+         wiki_claim_expires_at = null
+   where id = p_thread_id
+     and user_id = coalesce(p_user_id, auth.uid())
+     and wiki_claim_holder = p_holder_id;
+$$;
+
+grant execute on function
+  public.release_wiki_thread_retry_claim(uuid, text, uuid) to service_role;
 
 -- Embeddings pipeline RPCs for wiki articles. Same claim/save shape
 -- as memories, same 2048-dim padded vectors,
@@ -9518,7 +9592,14 @@ end $$;
 alter table public.profiles
   add column if not exists wiki_librarian_last_run_at timestamptz,
   add column if not exists wiki_librarian_inflight_holder text,
-  add column if not exists wiki_librarian_inflight_expires_at timestamptz;
+  add column if not exists wiki_librarian_inflight_expires_at timestamptz,
+  -- Terminal outcome of the most recent manual wiki-librarian run,
+  -- persisted for reload recovery. Twin of
+  -- memory_librarian_last_run_outcome (see the memory-librarian block);
+  -- the `_outcome` suffix keeps it distinct from the
+  -- wiki_librarian_last_run_at cadence stamp above. Shape:
+  -- { runId, source, finishedAt, result: WikiLibrarianRunResult }.
+  add column if not exists wiki_librarian_last_run_outcome jsonb;
 
 -- Claim the next user due for a scheduled librarian run, across ALL
 -- users. SECURITY DEFINER global sweep (same posture as

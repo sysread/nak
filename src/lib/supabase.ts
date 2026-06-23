@@ -97,6 +97,8 @@ import type {
   OffsetPage,
   AgentRunProgressEvent,
   InflightLeaseColumn,
+  LastRunOutcomeColumn,
+  ManualRunOutcome,
 } from './supabase/types';
 import {
   coerceSettings,
@@ -104,6 +106,7 @@ import {
   coerceThread,
   coerceAttachmentRow,
   coerceMemoryChangelogEntry,
+  coerceManualRunOutcome,
   coerceWikiArticle,
   coerceWikiRecord,
   coerceWikiChangelogEntry,
@@ -3028,6 +3031,14 @@ export class SupabaseService {
       title: string | null;
       lastSkipAt: string;
       lastSkipReason: string | null;
+      /**
+       * A per-thread wiki claim is currently held - a manual retry (or
+       * the sweep's recovery branch) is processing this thread. The
+       * Skipped panel renders it as "Retrying..." and recovers the
+       * in-flight state across a reload, since the claim is durable
+       * server state rather than the panel's in-memory spinner.
+       */
+      retrying: boolean;
     }[]
   > {
     const { data, error } = await this.client.rpc('list_wiki_skipped_threads');
@@ -3037,24 +3048,28 @@ export class SupabaseService {
       title: string | null;
       last_skip_at: string;
       last_skip_reason: string | null;
+      retrying: boolean | null;
     }[];
     return rows.map((r) => ({
       threadId: r.thread_id,
       title: r.title,
       lastSkipAt: r.last_skip_at,
       lastSkipReason: r.last_skip_reason,
+      retrying: r.retrying === true,
     }));
   }
 
   /**
    * Ask the venice function to re-run the wiki agent against one
-   * skipped thread (the Skipped panel's Retry button). The whole
-   * claim-free retry cycle - terminal-message resolution, the agent's
-   * tool loop with the content-filter fallback, the pointer advance
-   * that clears the skip marker - runs server-side; this is a thin
-   * authenticated POST. Agent-level failures come back as
-   * `kind: 'error'` in the union (an application outcome, not a
-   * transport error); only transport/auth failures throw.
+   * skipped thread (the Skipped panel's Retry button). The whole retry
+   * cycle - per-thread claim, terminal-message resolution, the agent's
+   * tool loop with the content-filter fallback, the pointer advance that
+   * clears the skip marker, claim release - runs server-side under
+   * EdgeRuntime.waitUntil, so it survives a reload mid-retry; this is a
+   * thin authenticated POST. `busy` means the thread was already claimed
+   * (the sweep, or a concurrent retry). Agent-level failures come back as
+   * `kind: 'error'` in the union (an application outcome, not a transport
+   * error); only transport/auth failures throw.
    */
   async retryWikiThread(threadId: string): Promise<WikiRetryResult> {
     const { data, error } = await this.client.functions.invoke('venice/wiki-retry', {
@@ -4116,6 +4131,63 @@ export class SupabaseService {
             return;
           }
           onChange(new Date(exp).getTime() > Date.now() ? exp : null);
+        }
+      )
+      .subscribe();
+    return () => {
+      void this.client.removeChannel(channel);
+    };
+  }
+
+  /**
+   * Read the most-recent manual-run outcome for this user from the
+   * `*_last_run_outcome` profiles column. Returns the coerced envelope
+   * (runId / source / finishedAt / result) or null when no run has
+   * finished yet or the stored shape is unrecognised. Paired with
+   * subscribeToLastRunOutcome: this is the on-mount read that recovers a
+   * run that finished while the tab was away; the subscription delivers
+   * one that finishes while the tab is open. RLS lets a user read their
+   * own profile.
+   */
+  async getLastRunOutcome(
+    userId: string,
+    column: LastRunOutcomeColumn
+  ): Promise<ManualRunOutcome | null> {
+    const { data, error } = await this.client
+      .from('profiles')
+      .select(column)
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (error) throw new Error(`getLastRunOutcome failed: ${error.message}`);
+    return coerceManualRunOutcome((data as Record<string, unknown> | null)?.[column]);
+  }
+
+  /**
+   * Subscribe to manual-run-outcome writes for this user via realtime
+   * profiles UPDATEs (the same row + publication the in-flight lease
+   * rides). The venice function writes the outcome column when a detached
+   * run finishes, so the UPDATE's new tuple carries the fresh envelope -
+   * delivering it race-free without a re-read. Calls back with the
+   * coerced outcome, or null if the new tuple's column is empty/garbage.
+   * Returns an unsubscribe.
+   */
+  subscribeToLastRunOutcome(
+    userId: string,
+    column: LastRunOutcomeColumn,
+    onOutcome: (outcome: ManualRunOutcome | null) => void
+  ): () => void {
+    const channel = this.client
+      .channel(`last_run_outcome:${column}:${userId}`)
+      .on(
+        'postgres_changes' as never,
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'profiles',
+          filter: `user_id=eq.${userId}`,
+        },
+        (payload: { new?: Record<string, unknown> | null }) => {
+          onOutcome(coerceManualRunOutcome(payload.new?.[column]));
         }
       )
       .subscribe();

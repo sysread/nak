@@ -45,6 +45,10 @@ the ONE shared in-flight guard across all four paths
    select release_memory_librarian_inflight('qa-holder', '<user>');
    ```
 
+6. Reload recovery: start a manual run (step 3), then reload the page
+   mid-run and reopen the Memories tab. After it finishes, reload
+   again.
+
 ## Expected
 
 - (1) `{"accepted":true}`; drawer shows
@@ -64,6 +68,12 @@ the ONE shared in-flight guard across all four paths
 - (4) The manual run returns busy (the strip shows the busy
   message); no cadence stamp is consumed.
 - (5) After release, a manual run proceeds normally.
+- (6) Reloading mid-run keeps the Run button disabled (the in-flight
+  lease, recovered by its initial read) and shows the "running in the
+  background" spinner; the run finishes server-side. After it
+  finishes, a reload restores the last run's result summary from
+  `memory_librarian_last_run_outcome` (read on mount). The live
+  step-by-step list is NOT restored - only the final summary line.
 
 ## Cleanup
 

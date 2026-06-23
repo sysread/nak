@@ -36,6 +36,7 @@
 import type {
   AgentRunProgressEvent,
   DeepSleepRunResult,
+  ManualRunOutcome,
   RemRunResult,
   SupabaseService,
 } from '../supabase';
@@ -45,6 +46,7 @@ import {
   pushStep,
   deepSleepResultLine,
   remResultLine,
+  recoveredOutcomeUpdate,
   type MemoryLibrarianPass,
   type MemoryLibrarianStep,
 } from '../ui/memory-librarian';
@@ -67,6 +69,12 @@ const state = $state<LibrarianRunState>({
   error: null,
   running: false,
 });
+
+// The runId whose outcome this store is currently displaying. Set when a
+// live run starts (this tab owns that runId's display) and when a recovered
+// outcome is applied. Guards applyOutcome from re-applying the same run's
+// outcome over a live result, or re-applying it on every realtime tick.
+let displayedRunId: string | null = null;
 
 interface StartDeps {
   supabase: SupabaseService;
@@ -144,6 +152,33 @@ export const librarianRun = {
   },
 
   /**
+   * Render a persisted manual-run outcome recovered after a reload (read
+   * on mount, or delivered by the profiles realtime UPDATE when a run
+   * finishes while this tab watches). Bridged in from the
+   * `memoryLibrarianOutcome` watcher. No-ops when:
+   *  - a live run is in flight here (it owns the display);
+   *  - we already show this runId (the live path set it, or a prior
+   *    realtime tick applied it - the subscription fires on every profiles
+   *    UPDATE, so the same outcome arrives repeatedly);
+   *  - the outcome isn't a memory-librarian one (wrong source / busy).
+   * The recovered strip carries no step rows - those are gone after a
+   * reload - just the pass header and the result line/text.
+   */
+  applyOutcome(outcome: ManualRunOutcome): void {
+    const display = recoveredOutcomeUpdate(outcome, {
+      running: state.running,
+      shownRunId: displayedRunId,
+    });
+    if (!display) return;
+    state.pass = display.pass;
+    state.steps = [];
+    state.resultLine = display.resultLine;
+    state.resultText = display.resultText;
+    state.error = display.error;
+    displayedRunId = outcome.runId;
+  },
+
+  /**
    * Kick off a manual pass and stream its progress into this store.
    * Guards against double-submitting locally; everything else
    * (collisions with scheduled runs or the other pass) is the
@@ -159,6 +194,10 @@ export const librarianRun = {
     state.error = null;
 
     const runId = crypto.randomUUID();
+    // This tab owns this runId's display now - so the recovered-outcome
+    // bridge (applyOutcome) won't later overwrite the live result when the
+    // same run's outcome arrives over the profiles realtime UPDATE.
+    displayedRunId = runId;
     try {
       const session = await deps.supabase.getSession();
       if (!session) {

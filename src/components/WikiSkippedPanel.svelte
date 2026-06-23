@@ -17,8 +17,10 @@
    *
    * Clicking a row navigates to the underlying conversation. The
    * Retry button asks the venice function (/wiki-retry) to re-run the
-   * agent against the thread immediately; a successful run clears the
-   * skip marker server-side and the row gains an inline result chip.
+   * agent against the thread; the run claims the thread and executes
+   * under EdgeRuntime.waitUntil, so it survives a reload mid-retry. A
+   * successful run clears the skip marker server-side and the row gains
+   * an inline result chip.
    * Editing the conversation also naturally re-eligibilises the
    * thread for the background sweep (the eligibility predicate in
    * `claim_next_thread_for_wiki` gates on the terminal message id
@@ -26,8 +28,11 @@
    * the skip marker via `mark_thread_wiki_processed_if_claimed`,
    * draining the row from this list.
    *
-   * Holds an in-memory snapshot; nothing here is persisted across
-   * panel teardown, so flipping tabs and back fetches fresh.
+   * The result chip and per-row error are in-memory and reset on panel
+   * teardown. The retry IN-FLIGHT state is not: each row carries a
+   * server-side `retrying` flag (a held per-thread wiki claim), so a tab
+   * that reloaded while a retry was running re-renders the disabled
+   * "Retrying..." button from that durable claim rather than losing it.
    */
   import { app } from '$lib/state.svelte';
   import { navigate } from '$lib/routing.svelte';
@@ -43,6 +48,11 @@
     title: string | null;
     lastSkipAt: string;
     lastSkipReason: string | null;
+    // Server-side claim state: a manual retry (or the sweep's recovery
+    // branch) is processing this thread right now. Durable, unlike the
+    // in-memory `retrying` map below, so a tab that reloaded mid-retry
+    // recovers the in-flight state from this rather than losing it.
+    retrying: boolean;
   }
 
   let rows = $state<SkippedRow[]>([]);
@@ -118,6 +128,14 @@
         };
         retryResult = { ...retryResult };
         emitWikiChange();
+        return;
+      }
+      if (result.kind === 'busy') {
+        // The thread was already claimed (the hourly sweep, or a
+        // concurrent retry from another tab). Not an error - refresh so
+        // the row's server `retrying` flag reflects the live claim and
+        // the button shows the in-flight state instead.
+        await load();
         return;
       }
       retryError[row.threadId] =
@@ -241,14 +259,20 @@
                 Dismiss
               </button>
             {:else}
+              <!-- In-flight when THIS tab is retrying (local map) OR the
+                   server reports a held claim (row.retrying) - the latter
+                   is how a reloaded tab recovers the state. For the
+                   responding tab row.retrying stays stale-false (the claim
+                   landed after the last load), so its own local flag drives
+                   the spinner and clears it cleanly when the run settles. -->
               <button
                 type="button"
                 class="wiki-skipped-retry"
                 onclick={() => retryRow(row)}
-                disabled={retrying[row.threadId]}
+                disabled={retrying[row.threadId] || row.retrying}
                 title="Re-run the wiki agent against this conversation now"
               >
-                {retrying[row.threadId] ? 'Retrying...' : 'Retry'}
+                {retrying[row.threadId] || row.retrying ? 'Retrying...' : 'Retry'}
               </button>
               {#if retryError[row.threadId]}
                 <span class="wiki-skipped-retry-error" role="status">
