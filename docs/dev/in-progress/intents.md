@@ -11,6 +11,18 @@
 > and retire this file per the in-progress doc rules in
 > `CLAUDE.md`.
 
+**Build status.** Landed so far: the pure honest-loop math
+core (`supabase/functions/_shared/intent-math.ts`) - sample
+classification against a matched control, the efficacy
+posterior, the population baseline, and the two backtest
+kernels (efficacy/employment correlation, matched-control
+lift) - with full vitest coverage
+(`tests/intent-math.test.ts`). This is the integrity core the
+rest stands on; nothing is wired into a chat turn yet and the
+feature has zero observable behavior until minting + injection
+land behind the toggle. Everything below marked "(proposed)"
+is still design.
+
 Intents are the first layer in nak that is **normative**
 rather than descriptive. Every other user-model the app
 builds - samskara (predictions), bias profile (observed
