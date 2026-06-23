@@ -242,6 +242,29 @@ export interface PrimingInputs {
   contextRecallEnabled?: boolean;
 }
 
+/**
+ * The Venice/RPC-coupled pipeline functions the orchestration calls.
+ * Injectable so the orchestration's pure logic (splice order, the
+ * liveness/payload event sequence, the timeout race, freshness
+ * suppression) can be unit-tested with stubs, without standing up
+ * Venice. Production passes DEFAULT_PRIMING_DEPS.
+ */
+export interface ServerPrimingDeps {
+  applyBiasPriming: typeof applyBiasPriming;
+  getCompoundSummary: typeof getCompoundSummary;
+  fireSamskaras: typeof fireSamskaras;
+  runIntuitionPipeline: typeof runIntuitionPipeline;
+  runContextRecallPipeline: typeof runContextRecallPipeline;
+}
+
+const DEFAULT_PRIMING_DEPS: ServerPrimingDeps = {
+  applyBiasPriming,
+  getCompoundSummary,
+  fireSamskaras,
+  runIntuitionPipeline,
+  runContextRecallPipeline,
+};
+
 export interface ServerPrimingOpts {
   adminClient: SupabaseClient;
   userId: string;
@@ -256,6 +279,8 @@ export interface ServerPrimingOpts {
   signal?: AbortSignal;
   /** The orchestrator's per-turn correlator, for log lines. */
   runId: string;
+  /** Test-only pipeline overrides. Omitted in production. */
+  deps?: ServerPrimingDeps;
 }
 
 /**
@@ -273,6 +298,7 @@ export interface ServerPrimingOpts {
 export async function runServerPriming(opts: ServerPrimingOpts): Promise<void> {
   const { adminClient, userId, threadId, apiKey, history, publisher, signal } =
     opts;
+  const deps = opts.deps ?? DEFAULT_PRIMING_DEPS;
   const biasLog = createEdgeLogger(userId, 'bias');
   const samskaraLog = createEdgeLogger(userId, 'samskara');
   const intuitionLog = createEdgeLogger(userId, 'intuition');
@@ -280,7 +306,7 @@ export async function runServerPriming(opts: ServerPrimingOpts): Promise<void> {
 
   try {
     await Promise.all([
-      applyBiasPriming({ adminClient, userId, threadId, history, log: biasLog }),
+      deps.applyBiasPriming({ adminClient, userId, threadId, history, log: biasLog }),
       runThinkChain({
         adminClient,
         userId,
@@ -293,6 +319,7 @@ export async function runServerPriming(opts: ServerPrimingOpts): Promise<void> {
         samskaraLog,
         intuitionLog,
         recallLog,
+        deps,
       }),
     ]);
   } finally {
@@ -320,6 +347,7 @@ interface ThinkChainOpts {
   samskaraLog: EdgeLogger;
   intuitionLog: EdgeLogger;
   recallLog: EdgeLogger;
+  deps: ServerPrimingDeps;
 }
 
 async function runThinkChain(opts: ThinkChainOpts): Promise<void> {
@@ -335,6 +363,7 @@ async function runThinkChain(opts: ThinkChainOpts): Promise<void> {
     samskaraLog,
     intuitionLog,
     recallLog,
+    deps,
   } = opts;
 
   const userText = extractUserText(history);
@@ -366,9 +395,9 @@ async function runThinkChain(opts: ThinkChainOpts): Promise<void> {
   };
   const samskaraWork = (async () => {
     const [compoundSummary, fire] = await Promise.all([
-      getCompoundSummary(adminClient, userId, samskaraLog),
+      deps.getCompoundSummary(adminClient, userId, samskaraLog),
       trackSamskara(
-        fireSamskaras({
+        deps.fireSamskaras({
           admin: adminClient,
           userId,
           apiKey,
@@ -382,15 +411,23 @@ async function runThinkChain(opts: ThinkChainOpts): Promise<void> {
     ]);
     return formatPrimingThinks({ compoundSummary, fire });
   })();
+  // Clear the timeout when the bundle wins the race - otherwise the
+  // timer stays pending for the full window on every fast turn (a
+  // harmless leak in production, but a dangling op the test sanitizer
+  // flags). When the timeout wins, clearing an already-fired timer is a
+  // no-op and the underlying fire stays detached (its cohort still
+  // records under the orchestrator's waitUntil).
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   const samskaraThinks = await Promise.race([
     samskaraWork,
-    new Promise<{ compound: string | null; fire: string | null }>((resolve) =>
-      setTimeout(
+    new Promise<{ compound: string | null; fire: string | null }>((resolve) => {
+      timeoutHandle = setTimeout(
         () => resolve({ compound: null, fire: null }),
         SAMSKARA_PRIMING_TIMEOUT_MS,
-      ),
-    ),
+      );
+    }),
   ]);
+  if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
 
   // Subconscious-priming pipelines. Each reads the shared trigger
   // evaluator independently (per-cache computed_at_round, so the same
@@ -411,7 +448,7 @@ async function runThinkChain(opts: ThinkChainOpts): Promise<void> {
       if (!intuitionModelId || !intuitionTrigger) return null;
       void publisher.publish({ type: 'priming_start', op: 'intuition' });
       try {
-        return await runIntuitionPipeline({
+        return await deps.runIntuitionPipeline({
           admin: adminClient,
           userId,
           apiKey,
@@ -436,7 +473,7 @@ async function runThinkChain(opts: ThinkChainOpts): Promise<void> {
       if (!contextRecallEnabled || !recallTrigger) return null;
       void publisher.publish({ type: 'priming_start', op: 'recall' });
       try {
-        return await runContextRecallPipeline({
+        return await deps.runContextRecallPipeline({
           admin: adminClient,
           userId,
           apiKey,
