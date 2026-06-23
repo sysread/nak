@@ -1,12 +1,16 @@
-// context-recall-payload (function-side mirror)
+// context-recall-payload (function-side payload shape + coercer)
 //
-// Logic mirror of src/lib/context-recall/{types,ephemeral}.ts
-// (mirror-with-pointer-comment convention; see
+// The persisted ContextRecallPayload shape and its coercer, plus the
+// ephemeral <think>-message builder the orchestrator splices onto the
+// wire. The payload TYPE + coercer shape are shared with the surviving
+// browser copy in src/lib/context-recall/types.ts: the browser coerces
+// realtime echo payloads off the stream channel, the server coerces the
+// jsonb DB row, so both runtimes read the same persisted shape and must
+// agree on it (mirror-with-pointer-comment convention; see
 // tests/bias-catalog-parity.test.ts header). The two runtimes cannot
 // share an import (Deno needs .ts-suffixed relative specifiers; the
-// vite/tsc side forbids them), so the persisted payload shape, its
-// coercer, and the ephemeral <think>-message builder live twice. Keep
-// this in lockstep with the browser copies when either changes.
+// vite/tsc side forbids them), so the shape lives twice - keep them in
+// lockstep when either changes.
 //
 // The persisted shape (ContextRecallPayload) is what lands in
 // threads.context_recall_payload jsonb. The orchestrator owns the

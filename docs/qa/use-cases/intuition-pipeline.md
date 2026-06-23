@@ -8,7 +8,7 @@ completion with a `<think>`-tagged internal monologue
 feature works end to end:
 
 - **Trigger evaluation** - `evaluatePreRoundTrigger` in
-  `src/lib/intuition/triggers.ts`: cold-start fires
+  `supabase/functions/_shared/priming-triggers.ts`: cold-start fires
   unconditionally, then a same-round debounce, then a mood-shift
   check (valence band index OR confidence column changed), then the
   staleness fuse. The fuse has two arms, either of which fires
@@ -18,28 +18,31 @@ feature works end to end:
   the `'title'` member of `IntuitionTrigger` is legacy-only (the
   mid-turn title trigger died when tool dispatch moved server-side).
 - **Injection guard** - `isPayloadFreshForInjection` in
-  `src/lib/intuition/triggers.ts`: before `runChatLoop` splices the
-  `<think>` block it checks the cached payload is younger than
-  `STALE_FUSE_MS`. A stale payload (refresh errored, deduped, or
-  feature off) is suppressed, not injected - so a day-old synthesis
-  never steers a turn. Same bound as the wall-clock trigger.
+  `supabase/functions/_shared/priming-triggers.ts`: before
+  `runServerPriming` splices the `<think>` block it checks the cached
+  payload is younger than `STALE_FUSE_MS`. A stale payload (refresh
+  errored, deduped, or feature off) is suppressed, not injected - so a
+  day-old synthesis never steers a turn. Same bound as the wall-clock
+  trigger.
 - **Cache read/coerce** - `threads.intuition_payload` jsonb is the
   single source of truth. `coerceIntuitionPayload` in
-  `src/lib/intuition/types.ts` rejects drift / unknown-version /
-  prompt-echo rows as null, which downgrades the next turn to a cold
-  fire.
+  `supabase/functions/venice/priming/intuition-payload.ts` rejects
+  drift / unknown-version / prompt-echo rows as null, which downgrades
+  the next turn to a cold fire.
 - **Think-block injection** - `buildIntuitionThinkMessage` in
-  `src/lib/intuition/ephemeral.ts` projects the cached synthesis into
-  `<think>{marker}\n{synthesis}\n</think>` on a synthetic assistant
-  message, spliced into the in-memory history by `runChatLoop`
-  (`src/lib/chat-loop.ts`). The message is never persisted to
-  `messages` - it is rebuilt from the cache every round.
+  `supabase/functions/venice/priming/intuition-payload.ts` projects
+  the cached synthesis into `<think>{marker}\n{synthesis}\n</think>`
+  on a synthetic assistant message, spliced into the request history
+  by `runServerPriming` (`supabase/functions/venice/priming.ts`). The
+  message is never persisted to `messages` - it is rebuilt from the
+  cache every turn.
 
 The seven-model-call pipeline itself (perception + 5 drives +
-synthesis) runs BROWSER-side via `supabase.complete` (the
-venice/complete edge function), not a server-side agent module - so
-a live pipeline run needs Venice credentials and is the **[hosted]**
-tail below. The samskara cases are the closest siblings
+synthesis) runs SERVER-side, as the priming stage of
+`getStreamingResponse` (`runIntuitionPipeline` in
+`supabase/functions/venice/priming/intuition.ts`), so a live pipeline
+run needs Venice credentials and is the **[hosted]** tail below. The
+samskara cases are the closest siblings
 ([samskara-formation](./samskara-formation.md),
 [samskara-decay](./samskara-decay.md)): a subconscious layer
 exercised deterministically by forging its cache via SQL.
@@ -132,9 +135,10 @@ live pipeline and is **[hosted]**-flavored (needs Venice creds).
    count. A re-fire in the same round must NOT run the pipeline.
 
 4. **Coerce rejection -> cold downgrade.** Forge a drifted payload
-   and confirm the reader treats it as no-cache. The reader runs in
-   the browser, so verify behaviorally: write a bad row, reload,
-   send a message, and watch for a `cold` fire rather than a reuse.
+   and confirm the reader treats it as no-cache. The coercer runs
+   server-side in the priming stage, so verify behaviorally: write a
+   bad row, send a message, and watch the `intuition` source for a
+   `cold` fire rather than a reuse.
 
    ```sql
    begin;
@@ -206,8 +210,8 @@ live pipeline and is **[hosted]**-flavored (needs Venice creds).
 8. **Injection guard suppression.** Backdate the wall-clock stamp
    past one hour AND set `computed_at_round` to the live round so the
    same-round debounce blocks any refresh this turn (forcing the
-   "refresh could not run" path). Reload, open the Logs drawer at
-   `Debug` with source filter `chat-loop`, and send a message:
+   "refresh could not run" path). Open the Logs drawer at `Debug` with
+   source filter `intuition`, and send a message:
 
    ```sql
    update public.threads
@@ -221,8 +225,14 @@ live pipeline and is **[hosted]**-flavored (needs Venice creds).
       and intuition_payload is not null;
    ```
 
-   Read the `venice request wire` debug line's `messages` array. The
-   stale intuition `<think>` block must be ABSENT from the wire.
+   No `pipeline starting` line should appear (the same-round debounce
+   blocked the refresh), and the priming stage must NOT splice the
+   stale intuition `<think>` block - `isPayloadFreshForInjection`
+   suppresses a payload past `STALE_FUSE_MS`. The browser's
+   `venice request wire` log no longer reflects this (the splice
+   happens server-side after the POST); confirm the suppression with
+   the `nak-inspect-thread` skill (the cached payload's age flags as
+   stale) plus the conscious response reading un-primed.
 
 ## Expected
 
@@ -271,12 +281,15 @@ live pipeline and is **[hosted]**-flavored (needs Venice creds).
   the regression guard for the resume-after-a-pause bug: a payload
   computed the night before must re-perceive on the next-day turn
   rather than inject yesterday's pulse.
-- (8) The `chat-loop` `venice request wire` debug line shows the
-  `messages` array with NO stale intuition `<think>` block: the
-  same-round debounce blocked the refresh, so the guard suppressed
-  the day-old payload rather than steering the turn with it. (The
-  conscious response still runs; it just runs un-primed this turn,
-  which is correct - better un-primed than mis-primed.)
+- (8) No `pipeline starting` line under source `intuition` (the
+  same-round debounce blocked the refresh), and the priming stage
+  splices NO intuition `<think>` block - the guard suppressed the
+  day-old payload rather than steering the turn with it. The browser
+  wire log can't show this directly (the splice is server-side); the
+  proof is the absent refresh plus the conscious response running
+  un-primed. (The conscious response still runs; it just runs
+  un-primed this turn, which is correct - better un-primed than
+  mis-primed.)
 
 ## Cleanup
 

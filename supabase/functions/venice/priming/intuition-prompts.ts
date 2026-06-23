@@ -1,12 +1,11 @@
-// logic mirror of src/lib/intuition/prompts.ts
-//
 // Subconscious-layer prompts: perception, drive reactions, synthesis.
-// The browser side documents the design rationale at length; this Deno
-// copy carries the verbatim prompt strings and the DriveName / DRIVE_NAMES
-// vocabulary so the server-side pipeline primes the model identically.
-// Keep the literals byte-for-byte with the browser file - the two copies
-// must stay diff-identical so a re-point of the priming pipeline produces
-// the same model behavior whichever runtime drove it.
+// These prompt strings are the canonical copy - the pipeline that reads
+// them runs server-side (./intuition.ts), and only this module holds the
+// literals. The DriveName / DRIVE_NAMES vocabulary is also kept by the
+// surviving browser module src/lib/intuition/prompts.ts (the UI and
+// diagnostics modal still need the drive names); that vocab must stay in
+// agreement across the two, but the prompt strings themselves live only
+// here.
 
 /**
  * The perception prompt. The objective-observer voice - it reads the

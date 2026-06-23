@@ -1,18 +1,13 @@
-// Deno mirror of src/lib/samskara/{format,types}.ts.
+// The samskara priming formatter + the tunables it reads. This is the
+// canonical implementation (the pure half of the turn-entry priming
+// block; the IO half lives in ./samskara.ts), extracted from the browser
+// during the priming relocation. Renders the compound summary and the
+// fired samskaras into the <think>-block bodies the orchestrator splices
+// onto the wire: hedge bands, bullet shape, two-stage budget trim,
+// orientation sentence, and the topKForCorpusSize/log10 math.
 //
-// Pre-turn samskara priming runs server-side now (see the streaming
-// orchestrator in venice/getStreamingResponse.ts), and the Deno island
-// cannot import from the Vite/tsc app: Deno requires .ts-suffixed
-// relative specifiers, the app side forbids them. So the priming
-// formatter + the tunables it reads exist twice by the established
-// mirror-with-pointer-comment convention (embed-input, edge-log,
-// error-translate; see the header of tests/bias-catalog-parity.test.ts).
-// Keep this byte-for-byte behavior-equivalent to the browser copy:
-// hedge bands, bullet shape, two-stage budget trim, orientation
-// sentence, and the topKForCorpusSize/log10 math must all match.
-//
-// Self-contained on purpose (no relative imports), which is what lets a
-// parity tripwire load it and what keeps the duplication safe.
+// Self-contained on purpose (no relative imports) so it stays a pure,
+// trivially-testable module with no Supabase/Venice import drag.
 
 /**
  * One samskara that fired this turn. Mirrors the

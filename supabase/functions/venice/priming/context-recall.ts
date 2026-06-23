@@ -1,23 +1,24 @@
 // context-recall (function-side pipeline)
 //
-// Logic port of src/lib/context-recall/{pipeline,gather}.ts: the cheap
-// survey tier of context recall. On a topic-boundary trigger it runs
-// three deterministic vector searches across the persistent layers
-// (memories / conversations / wiki), assembles a works-cited index, and
-// renders it into a short first-person note that the orchestrator
-// injects as a synthetic assistant <think> turn before the live round.
+// The cheap survey tier of context recall - the canonical implementation,
+// extracted from the browser during the priming relocation. On a
+// topic-boundary trigger it runs three deterministic vector searches
+// across the persistent layers (memories / conversations / wiki),
+// assembles a works-cited index, and renders it into a short first-person
+// note that the orchestrator injects as a synthetic assistant <think>
+// turn before the live round.
 //
-// Why deterministic gather, not LLM synthesis: the prior browser design
-// ran headless recall sub-agents that synthesized first-person notes -
-// that synthesis hallucinated (paraphrasing a memory into a claim the
-// store never made) and cost three model round-trips on every topic
-// boundary. The index includes memory facts verbatim and references
-// conversations / wiki articles by id for on-demand drill-down
-// (conversation_get / wiki_get).
+// Why deterministic gather, not LLM synthesis: an earlier design ran
+// headless recall sub-agents that synthesized first-person notes - that
+// synthesis hallucinated (paraphrasing a memory into a claim the store
+// never made) and cost three model round-trips on every topic boundary.
+// The index includes memory facts verbatim and references conversations /
+// wiki articles by id for on-demand drill-down (conversation_get /
+// wiki_get).
 //
-// Server-side adaptations vs the browser:
+// Service-side specifics:
 //   - Embeddings go through veniceEmbed with the shared key handed in by
-//     the orchestrator (no SupabaseService.embed indirection).
+//     the orchestrator.
 //   - The three searches hit the same RPCs the memory_search / wiki_search
 //     tools use, called with an explicit p_user_id arg because the admin
 //     client has no auth.uid().
@@ -25,7 +26,7 @@
 //     passes (not a listMessages DB read - the orchestrator already holds
 //     the turn's messages).
 //
-// Failure model (preserved from the browser):
+// Failure model:
 //   - Each search layer degrades independently inside the gather; one
 //     throwing or returning nothing contributes an empty list rather than
 //     failing the whole run.
@@ -46,8 +47,8 @@ import { veniceEmbed } from '../../_shared/venice.ts';
 // port; reuse it so the bands cannot drift between the tool and recall.
 import { classifyMemoryConfidence } from '../tools/memory_search.ts';
 
-// Per-layer caps. Mirror CONTEXT_*_LIMIT in src/lib/context-recall/gather.ts.
-// Memories ride inline so the cap also bounds injected token cost;
+// Per-layer caps. Memories ride inline so the cap also bounds injected
+// token cost;
 // conversations and wiki are id lists, so their caps bound how many
 // drill-down candidates the model weighs.
 const CONTEXT_MEMORY_LIMIT = 6;
@@ -279,8 +280,7 @@ async function gatherContextIndex(
 
 // Memory layer: vector search via search_memories_by_embedding, ILIKE
 // fallback when the query couldn't be embedded. Memories ride inline
-// (verbatim text cannot hallucinate). Mirrors gatherMemories +
-// searchMemoriesSemantic.
+// (verbatim text cannot hallucinate).
 async function gatherMemories(
   opts: RunContextRecallOptions,
   query: string,
@@ -331,7 +331,6 @@ async function ilikeMemories(
 
 // Conversation layer: exact-title ILIKE plus a semantic RPC, deduped,
 // with the current thread excluded so a thread never recalls itself.
-// Mirrors the browser searchThreads merge + gatherConversations filter.
 async function gatherConversations(
   opts: RunContextRecallOptions,
   query: string,
@@ -364,7 +363,7 @@ async function gatherConversations(
     throw new Error(`searchThreads (exact) failed: ${exactRes.error.message}`);
   }
   // A semantic failure shouldn't kill the whole layer - fall back to
-  // exact-only, same posture as the browser's searchThreads.
+  // exact-only.
   const semanticRows =
     semRes.error !== null ? [] : ((semRes.data ?? []) as ThreadHit[]);
 
@@ -386,15 +385,14 @@ async function gatherConversations(
 // Wiki layer: semantic-only via search_wiki_articles_by_embedding, with
 // the sole-source exclusion (drop articles whose only source row is THIS
 // thread, so a thread does not recall its own synthesised article).
-// Mirrors gatherWiki + searchWikiArticlesSemantic's sole-source filter.
 async function gatherWiki(
   opts: RunContextRecallOptions,
   queryEmbedding: number[] | null,
 ): Promise<ContextIndexRef[]> {
   const { admin, userId, threadId } = opts;
-  // No embedding -> no vector hits. The browser would still try an ILIKE
-  // listing, but the function-side wiki_search tool likewise treats an
-  // un-embeddable query as "no wiki hits"; match that simpler posture.
+  // No embedding -> no vector hits. The function-side wiki_search tool
+  // likewise treats an un-embeddable query as "no wiki hits"; match that
+  // simpler posture rather than an ILIKE title listing.
   if (!queryEmbedding) return [];
 
   // Overfetch a small constant so trimming sole-source rows rarely drops

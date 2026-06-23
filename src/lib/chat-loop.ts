@@ -128,13 +128,13 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   let lastAssistantId: string | null = null;
 
   // Turn-open metadata inputs. The samskara/context-recall/intuition
-  // <think> chain and the bias appendix that used to be assembled here
-  // (runPreTurnPriming) now run server-side in the venice edge
-  // function's priming stage (supabase/functions/venice/priming.ts), so
-  // the whole turn - priming included - survives a browser disconnect.
-  // What remains browser-side are the two deterministic inputs the
-  // metadata system message needs: the user-round index and the
-  // thread-attachments inventory (neither is LLM priming).
+  // <think> chain and the bias appendix are assembled server-side in the
+  // venice edge function's priming stage
+  // (supabase/functions/venice/priming.ts), so the whole turn - priming
+  // included - survives a browser disconnect. What remains browser-side
+  // are the two deterministic inputs the metadata system message needs:
+  // the user-round index and the thread-attachments inventory (neither
+  // is LLM priming).
   const currentUserRound = countUserRounds(history);
   // Per-turn thread-attachments inventory. A single thread-scoped SELECT
   // feeding buildMetadataSystemMessage; failure is swallowed - the model
@@ -229,14 +229,15 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     metadataMessage,
   ];
 
-  // The exact message array handed to Venice for this turn's opening
-  // round, dumped at debug so it never clutters the default drawer but
-  // is one filter-drop away when a turn answers the wrong thing. This
-  // is the round-1 wire only - subsequent tool rounds run server-side
-  // in getStreamingResponse and are not visible to the browser drawer.
-  // It carries the priming <think> chain (context-recall, samskara,
-  // intuition) spliced above, which is exactly what you need to see
-  // when a stale or misfired prime steered the response.
+  // The exact message array the browser hands to Venice for this turn's
+  // opening round, dumped at debug so it never clutters the default
+  // drawer but is one filter-drop away when a turn answers the wrong
+  // thing. This is the browser's view of the wire only - it does NOT
+  // include the priming <think> chain (context-recall, samskara,
+  // intuition) or the bias appendix, which the edge function's priming
+  // stage splices in server-side after this POST. To see what a stale or
+  // misfired prime actually put on the wire, read the priming stage's
+  // logs (source intuition / context-recall) rather than this line.
   log.debug('venice request wire', {
     round: currentUserRound,
     model: modelId,
@@ -255,9 +256,9 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       verbosity,
       // Priming inputs ride to the server's priming stage, which runs
       // the samskara/context-recall/intuition pipelines and the bias
-      // appendix before the first round. They used to be consumed by
-      // runPreTurnPriming browser-side; that work moved server-side so
-      // the whole turn (priming included) survives a browser disconnect.
+      // appendix before the first round. The pipelines run server-side
+      // so the whole turn (priming included) survives a browser
+      // disconnect; the browser only forwards their inputs.
       streamCtx: {
         threadId: thread.id,
         userMessageId,

@@ -15,9 +15,7 @@ the next completion as `<think>`-tagged content.
 > the throbber + modal off the `priming_start/end` + `intuition_payload`
 > events the function publishes on the stream channel (see
 > [`prompt-augmentation.md`](./prompt-augmentation.md) -> Observability).
-> The trigger evaluator is mirrored in `_shared/priming-triggers.ts`.
-> File paths below that point into `src/lib/intuition/` for the pipeline
-> body now describe the Deno port under `venice/priming/`.
+> The trigger evaluator lives in `_shared/priming-triggers.ts`.
 
 Adapted from fnord's
 [`lib/ai/agent/intuition.ex`](https://github.com/sysread/fnord/blob/main/lib/ai/agent/intuition.ex);
@@ -31,17 +29,16 @@ The intuition layer is the conscious agent's prior. It does NOT
 respond to the user; it produces an internal-monologue prompt that
 seeds the conscious agent's response strategy.
 
-Per turn the chat loop reads the cached payload from
-`threads.intuition_payload`. If the cache is current and no trigger
-fires, the existing payload is reused as-is. If a trigger does
-fire, the pipeline runs synchronously, writes the new payload to
-the cache, and the synthesis is wrapped in a `<think>` block on a
-synthetic assistant message that is appended to the in-memory
-history right after the user's turn. The next streamChat call sees
-the `<think>` block as if it were the assistant's own prior
-thought.
+Per turn the priming stage (`runServerPriming`) reads the cached
+payload from `threads.intuition_payload`. If the cache is current
+and no trigger fires, the existing payload is reused as-is. If a
+trigger does fire, the pipeline runs synchronously, writes the new
+payload to the cache, and the synthesis is wrapped in a `<think>`
+block on a synthetic assistant message spliced into the request
+history right after the user's turn. The completion sees the
+`<think>` block as if it were the assistant's own prior thought.
 
-One trigger site: **pre-round** (start of `runChatLoop`). On cold
+One trigger site: **pre-round** (start of `runServerPriming`). On cold
 cache (no payload yet on this thread) it fires unconditionally with
 reason `cold`. Otherwise it compares the cached payload's mood
 snapshot against the current mood and refreshes if the valence band
@@ -53,7 +50,7 @@ the cached payload was written. The wall-clock arm exists because the
 round counter barely moves across a pause - a conversation resumed the
 next day with a couple of fresh turns would otherwise re-inject a
 day-old pulse aimed at a situation that is gone. `nowMs` is a single
-`Date.now()` snapshot the chat-loop takes at priming time and threads
+`Date.now()` snapshot `runServerPriming` takes at priming time and threads
 into both pipelines' trigger evaluation and the injection guard, so
 all three judge staleness against the same instant.
 
@@ -85,48 +82,56 @@ thread by the first response.
 
 ## Files
 
-- `src/lib/intuition/prompts.ts` - the perception, synthesis, and
-  five drive prompts plus `DriveName` / `DRIVE_NAMES` /
-  `DRIVE_PROMPTS`. The drives form a tension ring: Attunement vs
+- `supabase/functions/venice/priming/intuition-prompts.ts` - the
+  perception, synthesis, and five drive prompts plus the canonical
+  prompt literals. The drives form a tension ring: Attunement vs
   Candor (warmth vs truth), Curiosity vs Pragmatism (depth vs
   utility), Standing vs Pragmatism (effort-up vs effort-down).
   Standing is intentionally retained from fnord as an effort-
   amplifier hooked into LLMs' competence-signaling attractor;
-  removing it drops the "lean in" pressure across the ring.
-- `src/lib/intuition/types.ts` - the canonical `IntuitionPayload`
-  shape, `coerceIntuitionPayload` (defensive jsonb reader),
-  `STALE_FUSE_ROUNDS`, `STALE_FUSE_MS` (the wall-clock fuse and
-  the injection-guard bound), and `countUserRounds` (the round-id
-  counter). Schema-versioned (`v: 1`); a drift / unknown-version
-  row reads as null and triggers a fresh refresh.
-- `src/lib/intuition/pipeline.ts` - `runIntuitionPipeline` plus
-  `maybeRunIntuitionPipeline`, the chat-loop's entry point: it owns
-  the feature gate (no model id = off), the trigger evaluation, and
-  the per-thread inflight dedup, and exposes an `onWillRun` hook the
-  chat-loop hangs its UI status signal on. Each pipeline stage hits
-  Venice's non-streaming `completeChat` and reads the
-  single text response, the same pattern the samskara and summary
-  agents use. Per-drive failures are tolerated (the drive is
-  omitted from `payload.drives` and synthesis runs against the
-  rest); perception or synthesis failure aborts the run and
-  returns null so the caller leaves the prior cache in place.
-- `src/lib/intuition/cache.ts` - `readIntuitionCache` /
-  `writeIntuitionCache` plus `withIntuitionInflight`, a tab-local
-  registry that collapses two near-simultaneous triggers onto
-  one Promise.
-- `src/lib/intuition/triggers.ts` - `evaluatePreRoundTrigger`,
-  built on the `computed_at_round` debounce primitive: a trigger
-  that lands in the same round as the last cache write no-ops.
-- `src/lib/intuition/ephemeral.ts` -
-  `buildIntuitionThinkMessage`, the wire-shape projection from
-  cached payload to ephemeral assistant message
-  (`<think>{INTUITION_THINK_MARKER}\n{synthesis}\n</think>`).
-  The HTML-comment marker is inside the `<think>` block so the
-  LLM ignores it; the UI uses it (or could; not currently
-  rendered) to identify synthetic intuition turns when listing
-  message blocks.
-- `src/lib/intuition/index.ts` - public re-exports. Chat-loop and
-  Chat.svelte import only from here.
+  removing it drops the "lean in" pressure across the ring. The
+  surviving browser module `src/lib/intuition/prompts.ts` keeps only
+  `DriveName` / `DRIVE_NAMES` for the UI; the prompt strings live
+  server-side now.
+- `supabase/functions/venice/priming/intuition-payload.ts` - the
+  server-side `IntuitionPayload` shape, `coerceIntuitionPayload`
+  (defensive jsonb reader), and `buildIntuitionThinkMessage` +
+  `INTUITION_THINK_MARKER`. The payload type + coercer shape are
+  shared with the surviving browser `src/lib/intuition/types.ts`,
+  which the realtime-echo decoder and the diagnostics modal still
+  read; both runtimes coerce the same persisted shape (the browser
+  off the stream channel, the server off the jsonb row).
+  Schema-versioned (`v: 1`); a drift / unknown-version row reads as
+  null and triggers a fresh refresh.
+- `src/lib/intuition/types.ts` - the surviving browser copy of the
+  payload shape + `coerceIntuitionPayload` + `pickFresherIntuitionPayload`,
+  plus `STALE_FUSE_MS` (the injection-guard bound) and
+  `countUserRounds` (the round-id counter). Read by the realtime
+  decoder and the diagnostics modal.
+- `supabase/functions/venice/priming/intuition.ts` -
+  `runIntuitionPipeline`, the pipeline body. The feature gate (no
+  model id = off) and the per-thread orchestration live in
+  `runServerPriming`; this module runs the seven-call pipeline and
+  returns a fresh payload. Each stage hits Venice's non-streaming
+  completion endpoint and reads the single text response, the same
+  pattern the samskara and summary agents use. Per-drive failures
+  are tolerated (the drive is omitted from `payload.drives` and
+  synthesis runs against the rest); perception or synthesis failure
+  aborts the run and returns null so the orchestrator leaves the
+  prior cache in place.
+- `supabase/functions/_shared/priming-triggers.ts` -
+  `evaluatePreRoundTrigger`, built on the `computed_at_round`
+  debounce primitive: a trigger that lands in the same round as the
+  last cache write no-ops. Shared by intuition and context-recall.
+  Also holds `STALE_FUSE_ROUNDS` (server-only) and the canonical
+  `STALE_FUSE_MS` / `countUserRounds` (twinned with the browser
+  `types.ts` for the injection guard and round-id display).
+  `buildIntuitionThinkMessage` (in `intuition-payload.ts`) projects
+  the cached payload to the synthetic assistant message
+  (`<think>{INTUITION_THINK_MARKER}\n{synthesis}\n</think>`) - the
+  HTML-comment marker is inside the `<think>` block so the LLM
+  ignores it; a UI could use it to identify synthetic intuition
+  turns when listing message blocks.
 - `src/components/IntuitionPill.svelte` - brain icon that opens
   the modal. Absolutely positioned inside `.messages-wrap`,
   stacked at the top of a vertical column with
@@ -141,26 +146,27 @@ thread by the first response.
 
 ## Entry points
 
-- **Pipeline runtime**: `runChatLoop` in `src/lib/chat-loop.ts`.
-  The pre-round trigger lives directly after the opening-recall
-  `<think>` push. An **injection guard** sits at the push site: a
-  cached payload older than `STALE_FUSE_MS` is never spliced onto
-  the wire, even as a `<think>` block. Normally the trigger has
-  already refreshed anything that old, so the just-written cache
-  passes; the guard is the backstop for the cases the refresh can't
-  cover - the pipeline erroring, an inflight-dedup returning null,
-  or the feature being off this turn - where a stale snapshot would
-  otherwise still inject. A day-old synthesis is an imperative aimed
-  at a vanished situation, so the guard suppresses rather than
-  poisons; the next triggering turn recomputes. The same guard
-  covers the context-recall `<think>` push.
-- **Wire forensics**: `runChatLoop` emits a `debug`-level
-  `venice request wire` log (source `chat-loop`) carrying the full
-  `requestMessages` array for the turn's opening round, including
-  the spliced priming `<think>` chain. It is the round-1 wire only -
-  later tool rounds run server-side in `getStreamingResponse` and
-  are not visible to the browser drawer. Drop the log filter to
-  `Debug+` to see exactly what steered a response.
+- **Pipeline runtime**: `runServerPriming` in
+  `supabase/functions/venice/priming.ts`. The pre-round trigger runs
+  there, and an **injection guard** sits at the splice site: a cached
+  payload older than `STALE_FUSE_MS` is never spliced onto the wire,
+  even as a `<think>` block (`isPayloadFreshForInjection`). Normally
+  the trigger has already refreshed anything that old, so the
+  just-written cache passes; the guard is the backstop for the cases
+  the refresh can't cover - the pipeline erroring, an inflight-dedup
+  returning null, or the feature being off this turn - where a stale
+  snapshot would otherwise still inject. A day-old synthesis is an
+  imperative aimed at a vanished situation, so the guard suppresses
+  rather than poisons; the next triggering turn recomputes. The same
+  guard covers the context-recall `<think>` push.
+- **Wire forensics**: the priming stage logs the spliced `<think>`
+  chain under the `intuition` / `context-recall` edge sources, and
+  the resulting feedback reaches the browser as PrimingEvents on the
+  stream channel. The browser's own `venice request wire` log
+  (source `chat-loop`, in `runChatLoop`) carries only the messages
+  the browser POSTs - it does NOT include the server-spliced priming
+  chain, so read the priming stage's logs to see what actually
+  steered a response.
 - **UI mount**: `Chat.svelte`. The Pill mounts inside
   `.messages-wrap` above `SamskaraToasts` and the
   `.scroll-to-bottom` arrow; the modal mounts in the
@@ -232,14 +238,13 @@ demand.
 
 ## Interactions
 
-- **Chat ([./chat.md](./chat.md))** - the chat-loop is the only
-  caller of `maybeRunIntuitionPipeline`, which owns the fire
-  decision; the call site lives inside `runChatLoop`; the `intuitionModelId` and
-  `intuitionMood` options on `ChatLoopOptions` are how the
-  caller wires the feature on. The synthesis lands as a
-  `<think>` block on a synthetic assistant message in the
-  in-memory `history` array, mirroring the existing opening-
-  recall ephemeral pattern.
+- **Chat ([./chat.md](./chat.md))** - `runServerPriming` owns the
+  fire decision and calls `runIntuitionPipeline`; the browser only
+  forwards the `intuitionModelId` and `intuitionMood` options
+  (through `streamCtx.priming` on the `/stream` POST) that wire the
+  feature on. The synthesis lands as a `<think>` block on a synthetic
+  assistant message spliced into the request history, mirroring the
+  context-recall ephemeral pattern.
 - **Samskara ([./samskara.md](./samskara.md))** - the mood
   trigger reads `moodState.current` (the same rune the mood
   pill uses) and projects it through `bandIndexFor` /
@@ -283,7 +288,8 @@ demand.
   `objective *perception*` (unique to the perception prompt)
   and `# Your Drive: <Name>` for individual drives.
 - **Pipeline is non-streaming.** Each stage hits Venice's
-  one-shot `completeChat` and reads the single text response.
+  one-shot completion endpoint (`veniceComplete`) and reads the
+  single text response.
   The user visually sees the latency as a longer pause before
   the conscious response starts streaming - 7 calls on the fast
   tier collapse to ~3 sequential roundtrips because the 5
