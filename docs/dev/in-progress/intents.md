@@ -11,17 +11,28 @@
 > and retire this file per the in-progress doc rules in
 > `CLAUDE.md`.
 
-**Build status.** Landed so far: the pure honest-loop math
-core (`supabase/functions/_shared/intent-math.ts`) - sample
-classification against a matched control, the efficacy
-posterior, the population baseline, and the two backtest
-kernels (efficacy/employment correlation, matched-control
-lift) - with full vitest coverage
-(`tests/intent-math.test.ts`). This is the integrity core the
-rest stands on; nothing is wired into a chat turn yet and the
+**Build status.** Landed so far:
+
+1. The pure honest-loop math core
+   (`supabase/functions/_shared/intent-math.ts`) - sample
+   classification against a matched control, the efficacy
+   posterior, the population baseline, and the two backtest
+   kernels (efficacy/employment correlation, matched-control
+   lift) - with full vitest coverage
+   (`tests/intent-math.test.ts`).
+2. The storage layer in `supabase/schema.sql` (the `intents`
+   section at the end of the file): all five tables below with
+   RLS, indexes, and `auth.uid()` defaults, mirroring the
+   samskara/bias table families. Applied to the linked project
+   on the next merge-to-main via the deploy's `sync-supabase`
+   job; the table columns match the Data model section below.
+
+Not yet built: the minting sweep, the priming injection, the
+evaluation sweep, the backtest harness, and the settings
+toggle. Nothing reads or writes these tables yet and the
 feature has zero observable behavior until minting + injection
-land behind the toggle. Everything below marked "(proposed)"
-is still design.
+land behind the toggle. Sections still marked "(proposed)"
+describe the consuming pipelines, not the storage.
 
 Intents are the first layer in nak that is **normative**
 rather than descriptive. Every other user-model the app
@@ -138,12 +149,15 @@ that already exist:
   sampler appends *efficacy* time-series points. Parallel to
   `samskara_evaluation.ts`.
 
-## Data model (proposed)
+## Data model
 
-All tables RLS-scoped to `auth.uid() = user_id`, all
-`create table if not exists`, all policies drop-then-recreate
-per the schema idempotency convention. Mirrors the
-samskara/bias table families.
+Built - see the `intents` section at the end of
+`supabase/schema.sql`. All tables RLS-scoped to
+`auth.uid() = user_id`, all `create table if not exists`, all
+policies drop-then-recreate per the schema idempotency
+convention. Mirrors the samskara/bias table families.
+Provenance and target-samples are append-only (no UPDATE
+policy); the rest get full CRUD.
 
 ### `intents`
 
