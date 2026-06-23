@@ -1242,7 +1242,9 @@ stray record is cheap to delete; a clobbered article is not.
   `agents/wiki_records.ts`) is read-heavy with three writes,
   `record_create` + `record_link_create` + `record_file_attach`:
   `wiki_search` + `wiki_list` find the home article, `record_list`
-  dedupes, read-only `memory_search` grounds. It conservatively
+  dedupes, read-only `memory_search` grounds, and `analyze_image` lets
+  the text-tier model verify a posted photo before attaching it. It
+  conservatively
   cross-links a continuation (only when the conversation explicitly
   frames the new event as a follow-up to a specific prior record) and,
   because it creates a record from a live event, can attach a photo the
@@ -1294,13 +1296,34 @@ stray record is cheap to delete; a clobbered article is not.
   `record_create`-from-conversation stays carved out to the extraction
   agent, so the worker and librarian never duplicate its event-capture
   job.
-- **File attach is per-thread.** The worker and the extraction agent both
-  get `record_file_attach` - each processes a specific conversation, so a
-  photo the user posted there (a crumb shot, a scanned card) can be hung
-  on the record that documents it. The librarian does NOT: it runs
-  wiki-wide with no conversation in context (`asAgentToolNoThread` blanks
-  the thread), so it has no chat file to pull from. Asserted in
-  `supabase/functions/tests/wiki_records.test.ts`,
+- **File attach is per-thread, and needs perception plumbing.** The
+  worker and the extraction agent both get `record_file_attach` - each
+  processes a specific conversation, so a photo the user posted there (a
+  crumb shot, a scanned card) can be hung on the record that documents it.
+  The librarian does NOT: it runs wiki-wide with no conversation in
+  context (`asAgentToolNoThread` blanks the thread), so it has no chat
+  file to pull from.
+
+  Two facts make a naive wiring useless, so both per-thread agents get the
+  same support the non-vision chat tiers get:
+  - **The agent can't see attachment filenames.** `loadThreadSliceUpTo`
+    selects only message text - no attachment join - and the chat path's
+    `<thread_attachments>` note is assembled per-turn in the browser
+    (`src/lib/chat/prompt-assembly.ts`), never stored. So the agents call
+    `loadThreadAttachmentsNote` (`agents/_agent_tools.ts`) and prepend a
+    `<thread_attachments>` note (live image + file filenames) to their
+    final prompt turn. Without it the model has no real filename to pass
+    and `record_file_attach` is uncallable.
+  - **The agent model is text-tier** (`deepseek-v4-flash`,
+    `supportsVision: false`) - it cannot see image pixels. So both agents
+    also get `analyze_image` (read-only, thread-scoped via
+    `requireThreadId`), the same vision-sub-model indirection the chat
+    path uses for non-vision tiers. The prompt requires verifying an
+    image with `analyze_image` before attaching when more than one image
+    is present, so the agent can't blind-guess the wrong photo onto a
+    record.
+
+  Asserted in `supabase/functions/tests/wiki_records.test.ts`,
   `wiki_librarian.test.ts`, and `wiki.test.ts`.
 
 ## Interactions

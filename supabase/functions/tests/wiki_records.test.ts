@@ -17,9 +17,12 @@
 import { assertEquals, assertStringIncludes } from '@std/assert';
 import { __test } from '../venice/agents/wiki_records.ts';
 
-Deno.test('extraction toolbox is reads + record_create + record_link_create + record_file_attach, in declared order', () => {
+Deno.test('extraction toolbox is reads + record_create/link/attach + analyze_image, in declared order', () => {
   const toolbox = __test.buildWikiRecordsToolbox();
   assertEquals(toolbox.name, 'wiki_records');
+  // analyze_image rides so the text-tier model can verify what an image
+  // shows before record_file_attach hangs it on a record (it cannot see
+  // images directly).
   assertEquals(
     toolbox.tools.map((t) => t.name),
     [
@@ -29,6 +32,7 @@ Deno.test('extraction toolbox is reads + record_create + record_link_create + re
       'record_create',
       'record_link_create',
       'record_file_attach',
+      'analyze_image',
       'memory_search',
     ],
   );

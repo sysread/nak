@@ -34,7 +34,9 @@ Deno.test('wiki toolbox is wiki CRUD + full record management + memory_search, i
   // already touching (correct/merge/dedup), same discipline as the
   // librarian. record_link_create chains continuation records; the worker
   // processes the triggering thread, so record_file_attach can hang a
-  // photo the user posted in that conversation onto a record.
+  // photo the user posted in that conversation onto a record, and
+  // analyze_image lets the text-tier model verify what that image shows
+  // before attaching it (it cannot see images directly).
   assertEquals(
     toolbox.tools.map((t) => t.name),
     [
@@ -48,6 +50,7 @@ Deno.test('wiki toolbox is wiki CRUD + full record management + memory_search, i
       'record_delete',
       'record_link_create',
       'record_file_attach',
+      'analyze_image',
       'memory_search',
     ],
   );

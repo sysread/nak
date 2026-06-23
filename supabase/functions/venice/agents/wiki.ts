@@ -48,6 +48,8 @@ import { readVeniceKey } from '../tools/_venice_key.ts';
 import {
   asAgentTool,
   loadThreadSliceUpTo,
+  loadThreadAttachmentsNote,
+  ANALYZE_IMAGE_WIRE_SCHEMA,
   MEMORY_SEARCH_WIRE_SCHEMA,
 } from './_agent_tools.ts';
 import { memorySearch } from '../tools/memory_search.ts';
@@ -61,6 +63,7 @@ import { recordUpdate } from '../tools/record_update.ts';
 import { recordDelete } from '../tools/record_delete.ts';
 import { recordLinkCreate } from '../tools/record_link_create.ts';
 import { recordFileAttach } from '../tools/record_file_attach.ts';
+import { analyzeImage } from '../tools/analyze_image.ts';
 import {
   runHeadlessAgent,
   type AgentTool,
@@ -787,14 +790,17 @@ Five things you do with records:
    it actually was. Link only when the relationship is explicit in the
    records; never invent one on a vague resemblance.
 
-5. **Attach the user's photos.** If this conversation includes an image
-   the user posted that documents one of these records - a crumb shot, a
-   finished dish, a scanned card - call record_file_attach with the
-   record id and the image's exact filename so the evidence lives with
-   the record. Use ONLY a filename actually present in this conversation;
-   never invent one, and do not attach an image that doesn't clearly
-   belong to the record. This is the one place a file the user shared in
-   chat becomes permanent wiki evidence.
+5. **Attach the user's photos.** The live files the user shared in this
+   conversation are listed in a <thread_attachments> note above (if any).
+   You CANNOT see images yourself. If a listed image documents one of
+   these records - a crumb shot, a finished dish, a scanned card - first
+   call analyze_image(filename, query) to confirm what it shows
+   (ESPECIALLY when more than one image is present - do not guess which is
+   which), then call record_file_attach with the record id and that exact
+   filename so the evidence lives with the record. Use ONLY a filename
+   from the <thread_attachments> note; never invent one, and never attach
+   an image you have not verified belongs to the record. This is the one
+   place a file the user shared in chat becomes permanent wiki evidence.
 
 **Scope: this wiki is about the user, not the world.** Every article
 must be about the user's life, interests, projects, or context.
@@ -1016,6 +1022,7 @@ function buildWikiToolbox(): Toolbox {
       asAgentTool(recordDelete, RECORD_DELETE_WIRE_SCHEMA),
       asAgentTool(recordLinkCreate, RECORD_LINK_CREATE_WIRE_SCHEMA),
       asAgentTool(recordFileAttach, RECORD_FILE_ATTACH_WIRE_SCHEMA),
+      asAgentTool(analyzeImage, ANALYZE_IMAGE_WIRE_SCHEMA),
       asAgentTool(memorySearch, MEMORY_SEARCH_WIRE_SCHEMA),
     ],
   };
@@ -1065,12 +1072,17 @@ async function runWikiAgentOnThread(
 
     const profile = await loadWikiProfile(adminClient, userId);
     convo = slice.map(messageToVenice);
+    // Surface the thread's live attachment filenames so the (text-tier)
+    // model knows what it can inspect with analyze_image and attach with
+    // record_file_attach - the raw slice carries no attachment metadata.
+    const attachmentsNote = await loadThreadAttachmentsNote(adminClient, threadId);
     // Wiki instruction as the final user turn - the "switch modes"
     // idiom. The model sees the whole prior conversation in its
     // native shape and reads this as "now do this different task."
+    const prompt = buildWikiAutonomousPrompt({ userProfile: profile });
     convo.push({
       role: 'user',
-      content: buildWikiAutonomousPrompt({ userProfile: profile }),
+      content: attachmentsNote ? `${attachmentsNote}\n\n${prompt}` : prompt,
     });
   } catch (err) {
     // History fetch / prompt build failed before any Venice call. No
