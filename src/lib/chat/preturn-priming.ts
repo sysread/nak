@@ -2,15 +2,20 @@
  * Pre-turn priming orchestration: everything `runChatLoop` runs once,
  * before the first streaming round, to shape the turn. It races the
  * samskara compound + situational-fire bundle against a timeout, reads
- * the thread-attachments inventory and the bias-profile block, fires the
- * intuition and context-recall pipelines (each owns its own fire policy
- * via its `maybeRun*` entry point), and splices the resulting synthetic
+ * the thread-attachments inventory, fires the intuition and
+ * context-recall pipelines (each owns its own fire policy via its
+ * `maybeRun*` entry point), and splices the resulting synthetic
  * `<think>` chain onto the `history` baton in the contracted order.
+ *
+ * The bias-profile appendix used to be read here too; it now renders
+ * server-side in the venice edge function (supabase/functions/venice/
+ * priming.ts) as part of relocating priming into the durable streaming
+ * function, so it survives a browser disconnect mid-turn.
  *
  * The fire-decision, freshness, and injection-order rules this module
  * implements are specified in docs/dev/prompt-augmentation.md. It mutates
  * the passed `history` in place (pushing the `<think>` rows) and returns
- * the three values the request assembly needs back.
+ * the values the request assembly needs back.
  */
 import type { SupabaseService, Thread, ThreadAttachmentSummary } from '../supabase';
 import type { VeniceMessage } from '../venice';
@@ -20,11 +25,6 @@ import {
   getCompoundSummary,
   type FireResult,
 } from '../samskara';
-import {
-  getBiasProfileBlock,
-  notifyBiasNewUserMessage,
-  snapshotBiasActiveBiases,
-} from '../bias';
 import {
   buildIntuitionThinkMessage,
   countUserRounds,
@@ -71,7 +71,6 @@ export interface PreTurnPrimingOptions {
 export interface PreTurnPrimingResult {
   currentUserRound: number;
   attachmentSummaries: ThreadAttachmentSummary[];
-  biasProfileBlock: string | null;
 }
 
 // Extract the plain text of a user message, flattening the multimodal
@@ -179,38 +178,6 @@ export async function runPreTurnPriming(
   const attachmentSummaries: ThreadAttachmentSummary[] = await supabase
     .listAttachmentSummariesForThread(thread.id)
     .catch(() => []);
-
-  // Bias-profile block. One cached SELECT against bias_summary; null
-  // on cold start (no observations yet) or when no row clears the
-  // elided tier. The block rides at the end of the baseline system
-  // prompt rather than as a per-turn ambient context message because
-  // the profile is a slowly-changing structural claim about the user,
-  // not turn-specific weather. Read once at turn entry; reused across
-  // every round of this turn. Errors are swallowed inside
-  // getBiasProfileBlock; `activeBiases` is the set that actually
-  // rendered (post tier filter, post render cap) and feeds the v2
-  // snapshot write below.
-  const { block: biasProfileBlock, activeBiases: biasActiveBiases } =
-    await getBiasProfileBlock(supabase);
-
-  // Bias-profile invalidation. Each chat-loop invocation corresponds
-  // to one new user message on this thread. If the thread had been
-  // analyzed by the bias sweep before, the prior observations are
-  // now based on a stale view of the conversation; clear them. The
-  // RPC is a no-op when the thread was never processed, so calling
-  // unconditionally is correct and cheap. Fire-and-forget: bias
-  // plumbing must never block a chat turn.
-  void notifyBiasNewUserMessage(supabase, thread.id);
-
-  // Bias-profile active-set snapshot (v2). Persist the bias keys
-  // that just rendered into the system prompt to
-  // threads.bias_active_at_turn so the bias sweep's reactor pass
-  // knows which biases the user's messages on this turn could have
-  // been reacting to. Empty array is a valid write and means "no
-  // compensation guidance was active this turn" - the reactor
-  // pass produces zero rows and the feedback EMA stays unchanged.
-  // Fire-and-forget; errors swallowed inside the helper.
-  void snapshotBiasActiveBiases(supabase, thread.id, biasActiveBiases);
 
   // Subconscious-priming layer: two parallel pipelines, fired on the
   // same trigger machinery (cold-start, mid-turn title shift, mood
@@ -378,5 +345,5 @@ export async function runPreTurnPriming(
     history.push(buildIntuitionThinkMessage(intuitionCache));
   }
 
-  return { currentUserRound, attachmentSummaries, biasProfileBlock };
+  return { currentUserRound, attachmentSummaries };
 }

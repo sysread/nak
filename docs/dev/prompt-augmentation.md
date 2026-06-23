@@ -34,8 +34,11 @@ Two distinct injection surfaces:
 
 - **The baseline system prompt (row 1)** carries the slowly-changing,
   always-on context: the tool catalog and the bias-profile appendix.
-  Assembled by `buildSystemPrompt({ biasProfile })` in
-  `src/lib/chat-prompt.ts`.
+  The tool catalog is assembled by `buildSystemPrompt()` in
+  `src/lib/chat-prompt.ts` (browser); the bias-profile appendix is
+  rendered and appended server-side by `applyBiasPriming`
+  (`supabase/functions/venice/priming.ts`) before the first round,
+  joined with the same blank-line separator so the wire bytes match.
 - **The priming `<think>` chain (rows 4-7)** carries the volatile,
   per-turn context. These are synthetic `assistant` rows the model
   reads as its own immediately-prior thoughts, so they sit at the tail
@@ -51,7 +54,7 @@ Two distinct injection surfaces:
 
 | Injector | Surface | Source | Cache | Freshness gate |
 | --- | --- | --- | --- | --- |
-| Bias profile | system appendix (row 1) | `getBiasProfileBlock` (`src/lib/bias`) | `bias_summary` row | read once per turn; tier + render-cap filtered |
+| Bias profile | system appendix (row 1) | `applyBiasPriming` (`supabase/functions/venice/priming.ts`) | `bias_summary` row | read once per turn; tier + render-cap filtered |
 | Context recall | `<think>` (row 4) | `maybeRunContextRecallPipeline` (`src/lib/context-recall`) | `threads.context_recall_payload` | `isPayloadFreshForInjection` (STALE_FUSE_MS) |
 | Samskara compound | `<think>` (row 5) | `getCompoundSummary` (`src/lib/samskara`) | cached prose row | always-on; no fuse |
 | Samskara fire | `<think>` (row 6) | `fireSamskaras` (`src/lib/samskara`) | computed per turn | raced against `SAMSKARA_PRIMING_TIMEOUT_MS` |
@@ -109,7 +112,8 @@ Every injector is best-effort and MUST NOT block or fail a turn:
   lands). A slow Venice never adds visible latency to the first token.
 - `maybeRunIntuitionPipeline` / `maybeRunContextRecallPipeline` swallow
   their own errors and return null -> the block is skipped.
-- `getBiasProfileBlock` swallows errors -> the appendix is omitted.
+- `applyBiasPriming` swallows errors -> the appendix is omitted (and
+  its snapshot + clear writes are detached and swallowed too).
 - Cold-start threads produce null for every `<think>` block and the
   conditional `history.push` calls skip them entirely; a fresh thread's
   first turn ships with no priming chain at all.

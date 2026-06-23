@@ -55,25 +55,12 @@ const GATED_TOOLBOXES: readonly Toolbox[] = TOOLBOXES.filter(
  * request assembly in `chat-loop.ts`). The
  * samskara/intuition/context-recall priming projections ride as
  * assistant `<think>` messages after the user turn, not as appendix
- * text. Keeping this module's surface to "baseline only" lets the
- * recall/think layers evolve independently of the prompt copy.
+ * text. The bias-profile appendix that used to ride at the end here is
+ * now rendered and appended server-side in the venice edge function's
+ * priming stage (supabase/functions/venice/priming.ts), so this
+ * module's surface is "baseline only" and the recall/think/bias layers
+ * evolve independently of the prompt copy.
  */
-export interface SystemPromptOptions {
-  /**
-   * Pre-rendered "User profile - observed cognitive patterns" block
-   * from the bias-profile feature. When non-null it rides at the
-   * end of the baseline system prompt as a structural fact about
-   * the user (parallel to identity / voice / recall framing); when
-   * null the section is absent entirely - no placeholder text. See
-   * src/lib/bias/format.ts for the renderer and
-   * docs/dev/bias-profile.md for the rationale on putting this in
-   * the baseline rather than as a per-turn ambient context
-   * message: the bias profile is a slowly-changing structural
-   * claim about the user, not turn-specific weather like datetime
-   * or attachments.
-   */
-  biasProfile?: string | null;
-}
 
 // Identity. Has to be present every turn, even when the user has stacked
 // custom system prompts on top, because custom prompts are allowed to reshape
@@ -398,7 +385,7 @@ export function buildToolboxStateBlock(enabled: readonly string[]): string {
  * it varies per turn, which is what lets it anchor the prompt-prefix
  * cache.
  */
-export function buildSystemPrompt(opts: SystemPromptOptions = {}): string {
+export function buildSystemPrompt(): string {
   const sections = [
     IDENTITY_BLOCK,
     VOICE_BLOCK,
@@ -411,12 +398,9 @@ export function buildSystemPrompt(opts: SystemPromptOptions = {}): string {
     ACTIVITY_BLOCK,
     buildCatalog(),
   ];
-  // Bias profile rides at the end of the baseline. Conditional so a
-  // cold-start user (no row in bias_summary clears soft/strong)
-  // sees no block at all - cleaner than rendering "(no patterns
-  // observed)" placeholder copy.
-  if (opts.biasProfile && opts.biasProfile.length > 0) {
-    sections.push(opts.biasProfile);
-  }
+  // Baseline only. The bias-profile appendix that used to be pushed
+  // here is appended server-side now (the edge function's priming
+  // stage joins it with the same blank-line separator), so the wire
+  // bytes are unchanged - the assembly site moved, not the output.
   return sections.join('\n\n');
 }

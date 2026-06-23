@@ -110,10 +110,10 @@ Pick a short, stable source tag. Existing tags:
   wiki librarian, the two memory-librarian passes, and the bias
   pipeline (analyze + aggregate), which run in the venice edge
   function and reach the drawer over the Broadcast log channel
-  (see "Edge-to-main relay"). The `bias`
-  tag is deliberately shared with the browser chat-loop's
-  profile-block helpers (src/lib/bias/index.ts) - both halves of
-  the feature group under one drawer filter
+  (see "Edge-to-main relay"). The bias-profile turn-entry render
+  (`applyBiasPriming` in the venice function's priming stage) is
+  edge-side too, so the whole feature groups under one drawer
+  filter
 - `auto-title`, `topics`, `summary`, `memory-topics`,
   `recipe-topics` - the five curation units (also edge-side, in the
   venice function), driven by the chat-turn tail and the hourly

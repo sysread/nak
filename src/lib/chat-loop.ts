@@ -125,12 +125,13 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
 
   // Turn-open priming, computed once before the streaming round: the
   // samskara compound + situational-fire bundle, the attachments
-  // inventory, the bias-profile block, and the intuition /
-  // context-recall pipelines. It splices the synthetic `<think>` chain
-  // onto `history` in the contracted order (see
-  // docs/dev/prompt-augmentation.md) and returns the three values the
-  // request assembly consumes.
-  const { currentUserRound, attachmentSummaries, biasProfileBlock } =
+  // inventory, and the intuition / context-recall pipelines. It splices
+  // the synthetic `<think>` chain onto `history` in the contracted
+  // order (see docs/dev/prompt-augmentation.md) and returns the values
+  // the request assembly consumes. The bias-profile appendix is no
+  // longer assembled here - it renders server-side in the venice edge
+  // function's priming stage (supabase/functions/venice/priming.ts).
+  const { currentUserRound, attachmentSummaries } =
     await runPreTurnPriming({
       supabase,
       thread,
@@ -216,10 +217,13 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   });
   const requestMessages: VeniceMessage[] = [
     {
+      // Baseline system prompt only. The bias-profile appendix that
+      // used to ride at the end here is appended server-side now, in
+      // the edge function's priming stage, so the browser ships a
+      // bias-free baseline and the orchestrator renders + appends the
+      // block before the first round.
       role: 'system',
-      content: buildSystemPrompt({
-        biasProfile: biasProfileBlock,
-      }),
+      content: buildSystemPrompt(),
     },
     ...userSystem,
     ...conversation,

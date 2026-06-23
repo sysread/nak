@@ -10343,38 +10343,49 @@ begin
 end;
 $$;
 
--- Clear a thread's bias-processed state. Called from the chat loop
--- when a new user message lands on a thread that was previously
--- processed: the conversation has new content the worker hasn't
--- seen, so the prior observations are stale. We delete the
--- observations outright (cheaper than tracking "stale" flags) and
--- clear the processed-at so the worker's next scan picks the
--- thread up.
-create or replace function public.bias_clear_thread(p_thread_id uuid)
+-- Clear a thread's bias-processed state. Called at turn entry when a
+-- new user message lands on a thread that was previously processed:
+-- the conversation has new content the worker hasn't seen, so the
+-- prior observations are stale. We delete the observations outright
+-- (cheaper than tracking "stale" flags) and clear the processed-at so
+-- the worker's next scan picks the thread up.
+-- p_user_id: priming runs server-side in the venice edge function now,
+-- where the service-role client has no auth.uid(); the orchestrator
+-- passes the JWT-derived user id explicitly. Authenticated callers omit
+-- it and fall back to auth.uid() (same overload pattern as
+-- bias_processed_threads_for_bias).
+drop function if exists public.bias_clear_thread(uuid, uuid);
+create or replace function public.bias_clear_thread(
+  p_thread_id uuid,
+  p_user_id uuid default null
+)
 returns void
 security invoker
 language plpgsql
 as $$
+declare
+  v_uid uuid := coalesce(p_user_id, auth.uid());
 begin
-  if auth.uid() is null then
+  if v_uid is null then
     return;
   end if;
-  -- Guard ownership before deleting; RLS would too, but the explicit
-  -- check keeps the failure path clear.
+  -- Guard ownership before deleting. RLS would scope an authenticated
+  -- caller too, but the service-role orchestrator bypasses RLS, so the
+  -- explicit v_uid filter is what keeps the writes user-scoped.
   delete from public.bias_observations
-    where thread_id = p_thread_id and user_id = auth.uid();
+    where thread_id = p_thread_id and user_id = v_uid;
   -- v2: also clear reactions. The snapshot column gets reset to
   -- empty - a re-analyze on the next worker pass will see whatever
   -- the chat-loop renders on the next turn.
   delete from public.bias_reactions
-    where thread_id = p_thread_id and user_id = auth.uid();
+    where thread_id = p_thread_id and user_id = v_uid;
   update public.threads
     set bias_processed_at = null,
         bias_processed_msg_count = null,
         bias_claim_holder = null,
         bias_claim_expires = null,
         bias_active_at_turn = '{}'::text[]
-    where id = p_thread_id and user_id = auth.uid();
+    where id = p_thread_id and user_id = v_uid;
 end;
 $$;
 

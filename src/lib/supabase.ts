@@ -4879,39 +4879,11 @@ export class SupabaseService {
   }
 
   // --- Bias profile ------------------------------------------------------
-
-  /**
-   * Chat-loop: snapshot the set of bias keys that just got
-   * rendered into the system prompt. Written per chat-loop turn so
-   * the worker's claim RPC can hand the active set to the merged
-   * observer/reactor agent. RLS handles ownership; the update is
-   * a no-op when the thread doesn't belong to the calling user.
-   * Fire-and-forget; errors swallowed by the caller.
-   */
-  async biasSnapshotActiveBiases(
-    threadId: string,
-    biases: readonly string[]
-  ): Promise<void> {
-    const { error } = await this.client
-      .from('threads')
-      .update({ bias_active_at_turn: Array.from(biases) })
-      .eq('id', threadId);
-    if (error) throw new SupabaseError(error.message);
-  }
-
-  /**
-   * Chat-loop: on a new user message, clear bias-processed state
-   * for the thread and delete its observations. The aggregation
-   * cache (`bias_summary`) is left alone; the worker's next
-   * aggregate pass catches up. Tolerates a missing thread; the
-   * caller is fire-and-forget.
-   */
-  async biasClearThread(threadId: string): Promise<void> {
-    const { error } = await this.client.rpc('bias_clear_thread', {
-      p_thread_id: threadId,
-    });
-    if (error) throw new SupabaseError(error.message);
-  }
+  //
+  // The per-turn bias writes (active-set snapshot + new-message clear)
+  // moved server-side when priming relocated into the venice edge
+  // function (supabase/functions/venice/priming.ts). The browser keeps
+  // only biasListSummary, the read the diagnostics modal renders from.
 
   /**
    * Chat-loop: read every cached aggregate for the user. Returns
