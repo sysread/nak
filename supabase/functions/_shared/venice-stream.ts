@@ -257,6 +257,33 @@ export type OrchestratorEvent =
     };
 
 /**
+ * Turn-entry priming events, published before the first round's BEGIN.
+ * Priming runs server-side as the opening stage of getStreamingResponse
+ * (supabase/functions/venice/priming.ts); these events drive the same
+ * browser-side feedback the local callbacks used to: the spinner's
+ * start/end liveness pair and the Intuition/Recall modal payload
+ * refreshes.
+ *
+ * `op` matches the browser's SubconsciousOp vocabulary
+ * ('samskara' | 'intuition' | 'recall'). The start/end pair must stay
+ * 1:1 - every start gets exactly one end regardless of outcome - the
+ * same contract the local liveness pair held.
+ *
+ * The payload events carry the freshly-computed cache as JSON; the
+ * browser runs it through its coercers (coerceIntuitionPayload /
+ * coerceContextRecallPayload) at decode, so the wire type is `unknown`
+ * here rather than coupling this module to the per-pipeline payload
+ * mirrors.
+ */
+export type PrimingOp = 'samskara' | 'intuition' | 'recall';
+
+export type PrimingEvent =
+  | { type: 'priming_start'; op: PrimingOp }
+  | { type: 'priming_end'; op: PrimingOp }
+  | { type: 'intuition_payload'; payload: unknown }
+  | { type: 'context_recall_payload'; payload: unknown };
+
+/**
  * Full event union published over the Broadcast channel. Consumers
  * discriminate by `type`. The browser's streamChat re-emits this union
  * to its caller (chat-loop today) as an async iterator;
@@ -266,7 +293,8 @@ export type OrchestratorEvent =
 export type StreamEvent =
   | CompletionEvent
   | StreamSignal
-  | OrchestratorEvent;
+  | OrchestratorEvent
+  | PrimingEvent;
 
 // ---------------------------------------------------------------------------
 // SSE frame parsing.

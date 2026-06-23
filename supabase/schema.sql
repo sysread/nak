@@ -6196,9 +6196,11 @@ create policy "samskara compound summary self-deletable"
 -- volume the chat-loop emits. Caller is trusted to pass a reasonable
 -- value; this RPC just honours it.
 drop function if exists public.samskara_fire_top_k(vector, int);
+drop function if exists public.samskara_fire_top_k(vector, int, uuid);
 create or replace function public.samskara_fire_top_k(
   p_query_embedding vector(2048),
-  p_k_max int
+  p_k_max int,
+  p_user_id uuid default null
 ) returns table (
   id uuid,
   prediction text,
@@ -6247,7 +6249,11 @@ language sql stable security invoker as $$
            * (1 + 0.1 * ln(1 + s.confirm_count + s.disconfirm_count))
          )::real as score
     from public.samskaras s
-   where s.user_id = auth.uid()
+   -- p_user_id: priming runs server-side now, where the service-role
+   -- client has no auth.uid(); the orchestrator passes the JWT user id
+   -- explicitly. Authenticated callers omit it and fall back to
+   -- auth.uid() (the b-strict overload pattern, as on the bias RPCs).
+   where s.user_id = coalesce(p_user_id, auth.uid())
      and s.prediction_embedding is not null
    order by score desc
    limit p_k_max
@@ -6265,16 +6271,24 @@ $$;
 -- can't silently insert NULL user_round rows.
 drop function if exists public.samskara_record_fires(uuid, uuid, jsonb);
 drop function if exists public.samskara_record_fires(uuid, uuid, integer, jsonb);
+drop function if exists public.samskara_record_fires(uuid, uuid, integer, jsonb, uuid);
 create or replace function public.samskara_record_fires(
   p_cohort_id uuid,
   p_thread_id uuid,
   p_user_round integer,
-  p_fires jsonb
+  p_fires jsonb,
+  -- p_user_id: priming runs server-side now, where the service-role
+  -- client has no auth.uid(); the orchestrator passes the JWT user id
+  -- explicitly. Authenticated callers omit it (b-strict overload).
+  p_user_id uuid default null
 ) returns void
 language plpgsql security invoker as $$
 declare
-  v_uid uuid := auth.uid();
+  v_uid uuid := coalesce(p_user_id, auth.uid());
 begin
+  if v_uid is null then
+    return;
+  end if;
   if jsonb_typeof(p_fires) <> 'array' or jsonb_array_length(p_fires) = 0 then
     return;
   end if;
