@@ -46,7 +46,7 @@ import {
   pushStep,
   deepSleepResultLine,
   remResultLine,
-  outcomeToMemoryDisplay,
+  recoveredOutcomeUpdate,
   type MemoryLibrarianPass,
   type MemoryLibrarianStep,
 } from '../ui/memory-librarian';
@@ -165,9 +165,10 @@ export const librarianRun = {
    * reload - just the pass header and the result line/text.
    */
   applyOutcome(outcome: ManualRunOutcome): void {
-    if (state.running) return;
-    if (outcome.runId === displayedRunId) return;
-    const display = outcomeToMemoryDisplay(outcome);
+    const display = recoveredOutcomeUpdate(outcome, {
+      running: state.running,
+      shownRunId: displayedRunId,
+    });
     if (!display) return;
     state.pass = display.pass;
     state.steps = [];

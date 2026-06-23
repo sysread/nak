@@ -273,3 +273,24 @@ export function outcomeToMemoryDisplay(outcome: {
 
   return null;
 }
+
+/**
+ * Decide whether a recovered manual-run outcome should overwrite the
+ * librarian strip's current display, and if so what to show. The guard
+ * the `librarianRun` store applies when a persisted outcome arrives (on
+ * mount or via the profiles realtime UPDATE), lifted out of the store so
+ * it's testable without driving module-level runes:
+ *  - a live run in this tab owns the display (`running`) -> skip;
+ *  - the outcome we already show (`shownRunId`) -> skip, since the
+ *    subscription re-fires on every profiles tick;
+ *  - a non-memory outcome (wrong source / busy) -> skip (null display).
+ * Returns the display to apply, or null to leave the strip untouched.
+ */
+export function recoveredOutcomeUpdate(
+  outcome: { runId: string; source: string; result: unknown },
+  ctx: { running: boolean; shownRunId: string | null }
+): MemoryLibrarianDisplay | null {
+  if (ctx.running) return null;
+  if (outcome.runId === ctx.shownRunId) return null;
+  return outcomeToMemoryDisplay(outcome);
+}

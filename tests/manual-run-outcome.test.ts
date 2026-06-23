@@ -7,7 +7,10 @@
  */
 import { describe, it, expect } from 'vitest';
 import { coerceManualRunOutcome } from '../src/lib/supabase';
-import { outcomeToMemoryDisplay } from '../src/lib/ui/memory-librarian';
+import {
+  outcomeToMemoryDisplay,
+  recoveredOutcomeUpdate,
+} from '../src/lib/ui/memory-librarian';
 import { outcomeToLibrarianResult } from '../src/lib/ui/wiki-librarian-run';
 
 describe('coerceManualRunOutcome', () => {
@@ -70,6 +73,41 @@ describe('outcomeToMemoryDisplay', () => {
     expect(outcomeToMemoryDisplay({ source: 'wiki-librarian', result: { kind: 'ok' } })).toBeNull();
     expect(outcomeToMemoryDisplay({ source: 'rem', result: { kind: 'busy' } })).toBeNull();
     expect(outcomeToMemoryDisplay({ source: 'rem', result: {} })).toBeNull();
+  });
+});
+
+describe('recoveredOutcomeUpdate', () => {
+  const remOk = {
+    runId: 'run-1',
+    source: 'rem',
+    result: { kind: 'ok', finalText: 'linked three', conversationsProcessed: 2, toolCalls: 5 },
+  };
+
+  it('applies a fresh outcome when idle and the runId is new', () => {
+    const d = recoveredOutcomeUpdate(remOk, { running: false, shownRunId: null });
+    expect(d?.pass).toBe('rem');
+    expect(d?.resultLine).toBe('Processed 2 conversations with 5 tool calls.');
+    expect(d?.resultText).toBe('linked three');
+  });
+
+  it('skips while a live run owns the display (running)', () => {
+    expect(recoveredOutcomeUpdate(remOk, { running: true, shownRunId: null })).toBeNull();
+  });
+
+  it('skips an outcome already shown (runId matches) - the subscription re-fires on every profiles tick', () => {
+    expect(recoveredOutcomeUpdate(remOk, { running: false, shownRunId: 'run-1' })).toBeNull();
+    // A different runId is NOT deduped.
+    expect(recoveredOutcomeUpdate(remOk, { running: false, shownRunId: 'run-0' })).not.toBeNull();
+  });
+
+  it('skips a non-memory outcome (wrong source) even when idle and new', () => {
+    const wiki = { runId: 'r9', source: 'wiki-librarian', result: { kind: 'ok' } };
+    expect(recoveredOutcomeUpdate(wiki, { running: false, shownRunId: null })).toBeNull();
+  });
+
+  it('running guard takes precedence over an otherwise-applicable outcome', () => {
+    // New runId, valid memory outcome, but a live run is in flight -> skip.
+    expect(recoveredOutcomeUpdate(remOk, { running: true, shownRunId: 'other' })).toBeNull();
   });
 });
 
