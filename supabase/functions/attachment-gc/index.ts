@@ -6,7 +6,7 @@
 // inline remove, or any object predating it). Cron-triggered (pg_cron ->
 // pg_net -> here; nak_trigger_attachment_gc in schema.sql). Service-role only.
 //
-// Standalone like expire-attachments / recipe-image-gc: it only touches
+// Standalone like recipe-image-gc: it only touches
 // Postgres + Storage, never Venice, so it isn't a venice route. The auth/client
 // helpers are duplicated from venice/index.ts on purpose - independent
 // functions over a shared module. The sweep orchestration is pure and

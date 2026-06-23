@@ -5,7 +5,7 @@
 // (pg_cron -> pg_net -> here; nak_trigger_recipe_image_gc in schema.sql).
 // Service-role only.
 //
-// Standalone like expire-attachments: it only touches Postgres + Storage,
+// Standalone like attachment-gc: it only touches Postgres + Storage,
 // never Venice, so it isn't a venice route. The auth/client helpers are
 // duplicated from venice/index.ts on purpose - independent functions over a
 // shared module. The sweep orchestration is pure and unit-tested in

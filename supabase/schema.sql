@@ -565,10 +565,10 @@ create index if not exists message_attachments_storage_path_idx
   on public.message_attachments (storage_path)
   where storage_path is not null;
 
--- Partial index used by the expiry sweep. Only carries live (non-
--- expired) rows - those with an object still in the bucket - so the
--- scan to find expirable attachments stays tiny in steady state; the
--- bulk of history is expired and excluded from the index.
+-- Partial index over live (non-expired) rows - those with an object still
+-- in the bucket. Keeps per-message live-attachment lookups (render
+-- partition, thread summaries, generated-image filename resolution) cheap
+-- by excluding the bulk of history, which is deleted/expired.
 drop index if exists public.message_attachments_live_idx;
 create index if not exists message_attachments_live_idx
   on public.message_attachments (message_id)
@@ -676,12 +676,12 @@ create policy "attachments bucket is self-deletable" on storage.objects
   );
 
 -- The legacy per-caller expiry RPC is retired: attachment bytes live in
--- the `attachments` bucket now, and the server-side expiry sweep (the
--- expire-attachments edge function + nak_trigger_attachment_expiry near
--- the embeddings cron) deletes the objects and marks the rows. SQL can't
--- delete a Storage object, so this RPC's null-the-base64 approach no
--- longer applies. Dropped so a sync removes it from any project that ran
--- the earlier schema; idempotent, a no-op once gone.
+-- the `attachments` bucket now, and attachments are no longer reclaimed on
+-- a timer - they persist until the user deletes them from the Artifacts
+-- tab (a client-side mark-expired + object remove). SQL can't delete a
+-- Storage object, so this RPC's null-the-base64 approach no longer
+-- applies. Dropped so a sync removes it from any project that ran the
+-- earlier schema; idempotent, a no-op once gone.
 drop function if exists public.expire_old_attachments(int);
 
 -- Reflection pipeline ----------------------------------------------------
@@ -12241,141 +12241,33 @@ end
 $cron$;
 
 -- ---------------------------------------------------------------------------
--- Scheduled attachment expiry (pg_cron -> pg_net -> expire-attachments)
+-- Retired: scheduled attachment expiry
 --
--- Stage 2 of the attachments-storage migration
--- (docs/dev/in-progress/attachments-storage-migration.md). Replaces the old
--- browser attachment_expiry worker: a cron tick POSTs to the standalone
--- `expire-attachments` edge function, which deletes the bucket objects for
--- attachments whose owning thread has been dormant 30 days, then nulls
--- storage_path + stamps expired_at. SQL can't delete a Storage object, so the
--- deletion has to happen in the function (service-role storage client); these
--- RPCs only select the batch and mark the rows.
+-- Attachments are no longer reclaimed on a timer. Images are compressed in
+-- the browser on upload (so they land small at the source) and every
+-- attachment persists until the user deletes it from the Artifacts tab.
+-- The old hourly sweep (the `expire-attachments` edge function, its cron
+-- dispatcher, and the batch RPCs) is gone; these statements drop it from
+-- any project that ran the earlier schema. Idempotent, no-ops once gone.
 --
--- Reuses the same Vault secrets as the embedding backfill (project_url +
--- service_role_key, seeded by `mise run supabase-init`). The function is NOT
--- the venice function - expiry never calls Venice, it only touches Storage -
--- so it deploys separately (see .github/workflows/deploy.yml).
---
--- Both RPCs are security definer with no auth.uid() filter (cron has no user
--- session; the sweep spans every member) and EXECUTE-locked to service_role -
--- the same boundary as the embedding claim/save pair. The edge function
--- (service role) is their only caller.
-
--- Select a bounded batch of live attachments eligible for expiry: object still
--- present (storage_path not null) and the owning thread dormant for p_days.
--- Returns (id, storage_path, user_id) so the function knows which objects to
--- delete, which rows to mark, and which user's Logs drawer to notify (the
--- per-user expiry summary; attachments carry no user_id column, so the owner
--- comes off the thread join). No claim/TTL: deletion + marking are idempotent
--- (removing an already-gone object is a no-op, re-marking an expired row is a
--- no-op), so two overlapping ticks can't corrupt anything - the FOR UPDATE
--- SKIP LOCKED just keeps them from contending on the same rows within a tick.
-drop function if exists public.list_expirable_attachments(int, int);
-create or replace function public.list_expirable_attachments(
-  p_days int,
-  p_limit int
-) returns table (id uuid, storage_path text, user_id uuid)
-language sql security definer
-set search_path = public as $$
-  select a.id, a.storage_path, t.user_id
-    from public.message_attachments a
-    join public.messages m on m.id = a.message_id
-    join public.threads t on t.id = m.thread_id
-   where a.storage_path is not null
-     and t.updated_at < now() - make_interval(days => p_days)
-   order by t.updated_at asc
-   limit p_limit
-   for update of a skip locked
-$$;
-
--- Mark the given attachments expired once their objects are deleted: null
--- storage_path (the liveness signal) and stamp expired_at. extracted_text and
--- the other metadata stay, so the row still renders as an expired chip.
-drop function if exists public.mark_attachments_expired(uuid[]);
-create or replace function public.mark_attachments_expired(
-  p_ids uuid[]
-) returns int
-language plpgsql security definer
-set search_path = public as $$
-declare
-  affected int;
-begin
-  update public.message_attachments
-     set storage_path = null,
-         expired_at = now()
-   where id = any(p_ids);
-  get diagnostics affected = row_count;
-  return affected;
-end $$;
-
-revoke all on function public.list_expirable_attachments(int, int) from public, anon, authenticated;
-revoke all on function public.mark_attachments_expired(uuid[]) from public, anon, authenticated;
-grant execute on function public.list_expirable_attachments(int, int) to service_role;
-grant execute on function public.mark_attachments_expired(uuid[]) to service_role;
-
--- Cron dispatcher, same shape + Vault-secret custody as
--- nak_trigger_embed_backfill above. Dynamic SQL so it compiles where pg_net /
--- vault are absent (local stack); no-ops until the secrets are seeded.
-create or replace function public.nak_trigger_attachment_expiry()
-returns void
-language plpgsql
-security definer
-set search_path = public
-as $fn$
-declare
-  v_url text;
-  v_key text;
-begin
-  begin
-    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'project_url' $q$ into v_url;
-    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'service_role_key' $q$ into v_key;
-  exception when others then
-    return;  -- vault not installed or unreadable; nothing to dispatch
-  end;
-  if v_url is null or v_key is null then
-    return;  -- secrets not seeded yet
-  end if;
-  begin
-    execute format(
-      $q$ select net.http_post(
-            url := %L,
-            headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', %L),
-            body := '{}'::jsonb
-          ) $q$,
-      v_url || '/functions/v1/expire-attachments',
-      'Bearer ' || v_key
-    );
-  exception when others then
-    raise notice 'nak_trigger_attachment_expiry: dispatch failed: %', sqlerrm;
-  end;
-end;
-$fn$;
-
-revoke all on function public.nak_trigger_attachment_expiry() from public, anon, authenticated;
-
--- Schedule the sweep hourly (dormancy is measured in days, so hourly is ample
--- and keeps each tick's batch small). Guarded on extension availability +
--- idempotent reschedule, same as the backfill cron.
+-- The "expired" row state (null storage_path + stamped expired_at) and its
+-- placeholder rendering survive - manual delete now produces it, and
+-- attachment-gc below still reclaims the objects of deleted-thread rows.
 do $cron$
 begin
-  if exists (select 1 from pg_available_extensions where name = 'pg_cron')
-     and exists (select 1 from pg_available_extensions where name = 'pg_net') then
+  if exists (select 1 from pg_available_extensions where name = 'pg_cron') then
     create extension if not exists pg_cron;
-    create extension if not exists pg_net;
     if exists (select 1 from cron.job where jobname = 'nak-attachment-expiry') then
       perform cron.unschedule('nak-attachment-expiry');
     end if;
-    perform cron.schedule(
-      'nak-attachment-expiry',
-      '17 * * * *',
-      $job$ select public.nak_trigger_attachment_expiry(); $job$
-    );
   end if;
 exception when others then
-  raise notice 'attachment expiry cron setup skipped: %', sqlerrm;
+  raise notice 'attachment-expiry cron teardown skipped: %', sqlerrm;
 end
 $cron$;
+drop function if exists public.nak_trigger_attachment_expiry();
+drop function if exists public.list_expirable_attachments(int, int);
+drop function if exists public.mark_attachments_expired(uuid[]);
 
 -- Orphan-object GC for the attachments bucket (pg_cron -> pg_net -> attachment-gc)
 --
@@ -12385,18 +12277,18 @@ $cron$;
 -- leaves its attachment + generated-image objects stranded in the bucket. The
 -- client's deleteThread best-effort removes them inline, but a failed remove
 -- (offline, partial error) or any object predating that path stays orphaned
--- forever: the expiry sweep can't see it (no row to drive the dormancy join).
+-- forever: nothing else reclaims them (there is no per-row dormancy sweep,
+-- and an orphan has no row to drive one anyway).
 --
 -- This daily sweep is the backstop. It lists bucket objects with no live row
 -- pointing at them and deletes the objects in the attachment-gc edge function
 -- (service-role Storage client). Same Vault-secret custody + local-stack guards
--- as the expiry / recipe-image-gc crons; no-ops until the secrets are seeded.
+-- as the recipe-image-gc cron; no-ops until the secrets are seeded.
 --
--- Distinct from expire-attachments: expiry reclaims objects of LIVE rows whose
--- thread went dormant (row survives, marked expired); this reclaims objects
--- whose row is already GONE. The two never overlap - an expired row's
--- storage_path is null, so its object was already deleted and can't resurface
--- here as a false orphan.
+-- Only reclaims objects whose row is already GONE (a deleted thread or
+-- message). A manually-deleted-but-still-present attachment row has a null
+-- storage_path, so its object was already removed and can't resurface here
+-- as a false orphan.
 
 -- List a bounded batch of attachments-bucket objects with no live
 -- message_attachments row. p_min_age_seconds is a grace window: an in-flight
@@ -12430,7 +12322,7 @@ revoke all on function public.list_orphan_attachment_objects(int, int) from publ
 grant execute on function public.list_orphan_attachment_objects(int, int) to service_role;
 
 -- Cron dispatcher, same shape + Vault-secret custody as
--- nak_trigger_attachment_expiry above. Dynamic SQL so it compiles where pg_net /
+-- nak_trigger_embed_backfill above. Dynamic SQL so it compiles where pg_net /
 -- vault are absent (local stack); no-ops until the secrets are seeded.
 create or replace function public.nak_trigger_attachment_gc()
 returns void

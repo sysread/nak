@@ -5,19 +5,21 @@
 Per-message file attachments - queued in the composer, the original
 bytes stored in the private `attachments` Storage bucket, surfaced to
 Venice chat requests as signed URLs (images) or fenced extracted text
-(documents), and reclaimed 30 days after the owning thread goes dormant.
+(documents). Images are compressed in the browser on upload so they land
+small at the source; attachments then persist until the user deletes them
+from the Artifacts tab (there's no timed expiry sweep).
 
 Byte storage follows the app-wide model in
 [`./file-storage.md`](./file-storage.md) (private buckets, signed-URL
-reads, `storage_path` pointers, server-side expiry sweep). This doc
+reads, `storage_path` pointers, server-side orphan GC). This doc
 covers the attachment-specific pieces.
 
 ## Files
 
-- `supabase/schema.sql` - the `message_attachments` table + RLS, the
-  `attachments` bucket + its `storage.objects` policies, and the expiry
-  sweep RPCs (`list_expirable_attachments`,
-  `mark_attachments_expired`) + cron dispatcher.
+- `supabase/schema.sql` - the `message_attachments` table + RLS and the
+  `attachments` bucket + its `storage.objects` policies. (The old timed
+  expiry sweep RPCs + cron are retired - see the "Retired: scheduled
+  attachment expiry" block.)
 - `src/lib/attachments.ts` - pure helpers: size validation,
   `isConsumableBy` predicate, base64 helpers (composer-side, in-memory),
   canvas-based `compressImage` (the shared upload/generate compressor -
@@ -76,10 +78,6 @@ covers the attachment-specific pieces.
   `generatedImageToNewAttachment`, `GENERATED_IMAGE_RESULT_KEY`.
 - `src/components/ExtractedTextDrawer.svelte` - full-height right-side
   drawer: filename header, extracted text as a `<pre>` body.
-- `supabase/functions/expire-attachments/index.ts` +
-  `_shared/expire-attachments.ts` - the server-side expiry sweep
-  (replaced the old browser `attachment_expiry` worker). See
-  [`./file-storage.md`](./file-storage.md).
 - `supabase/functions/attachment-gc/index.ts` +
   `_shared/attachment-gc.ts` - the daily orphan-object GC sweep, backed by
   the `list_orphan_attachment_objects` RPC. Reclaims bucket objects with no
@@ -114,9 +112,11 @@ covers the attachment-specific pieces.
   table, and the assistant row was already echoed), so
   `GeneratedImageCard` resolves the image by filename instead - see
   "Generated-image rendering" under Gotchas.
-- **Expiry** - the `expire-attachments` edge function (hourly cron)
-  deletes bucket objects whose thread is 30 days dormant, then nulls
-  `storage_path` + stamps `expired_at`. No open tab required.
+- **Manual delete** - from the Artifacts tab, `deleteAttachment` marks
+  the row expired (null `storage_path` + stamp `expired_at`, RLS-scoped to
+  the owner) and best-effort removes the bucket object; the `attachment-gc`
+  sweep reclaims the object if that remove misses. This is the only path
+  that reclaims an attachment now - there is no timed expiry.
 - **Thread deletion** - `SupabaseService.deleteThread` collects the
   thread's live attachment keys before the cascade removes their rows, then
   best-effort removes those bucket objects after the thread is gone. The
@@ -154,9 +154,9 @@ parent - `messages.thread_id -> threads.user_id = auth.uid()`.
 - **"Live" vs "expired"**: `storage_path is not null` is live;
   `storage_path is null AND expired_at is not null` is expired.
   `extracted_text` is independent and survives the transition.
-- **Conversation "last updated"**: `threads.updated_at`, bumped by
-  `SupabaseService.addMessage`. The expiry sweep reads it for the
-  30-day dormancy gate.
+- **"Expired" is now user-initiated**: the null-`storage_path` +
+  `expired_at` state and its placeholder rendering survive, but a manual
+  delete from the Artifacts tab is what produces it - no timer does.
 - **`isConsumableBy(attachment, spec)`**: single source of truth for
   whether the pre-send guard allows a file along. Image -> true (vision
   inlines it; non-vision tiers get an analyze_image note); non-empty
@@ -175,7 +175,7 @@ parent - `messages.thread_id -> threads.user_id = auth.uid()`.
   upload on the round's assistant-with-tool-calls row (per-round, not at
   terminal commit - so a same-turn `recipe_photos_attach` can resolve
   the image by filename). Otherwise identical to uploads - same bucket,
-  same expiry sweep, same RLS chain.
+  same RLS chain, same manual-delete path.
 - **`<thread_attachments>` system block**: built once per turn from
   `listAttachmentSummariesForThread` (metadata-only projection). Lists
   live images, live documents, and expired filenames; empty sections add
@@ -195,7 +195,7 @@ parent - `messages.thread_id -> threads.user_id = auth.uid()`.
 ## Interactions
 
 - **File storage** ([`./file-storage.md`](./file-storage.md)) - the
-  bucket, signed-URL reads, and the `expire-attachments` sweep follow the
+  bucket, signed-URL reads, and the `attachment-gc` orphan sweep follow the
   shared model; that doc is canonical for the storage mechanics.
 - **Chat** ([`./chat.md`](./chat.md)) - composer paste/drag-drop UX +
   the `send()` path that materialises attachments and pre-resolves the
