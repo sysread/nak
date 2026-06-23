@@ -17,16 +17,24 @@
 import { assertEquals, assertStringIncludes } from '@std/assert';
 import { __test } from '../venice/agents/wiki_records.ts';
 
-Deno.test('extraction toolbox is reads + record_create + record_link_create, in declared order', () => {
+Deno.test('extraction toolbox is reads + record_create + record_link_create + record_file_attach, in declared order', () => {
   const toolbox = __test.buildWikiRecordsToolbox();
   assertEquals(toolbox.name, 'wiki_records');
   assertEquals(
     toolbox.tools.map((t) => t.name),
-    ['wiki_search', 'wiki_list', 'record_list', 'record_create', 'record_link_create', 'memory_search'],
+    [
+      'wiki_search',
+      'wiki_list',
+      'record_list',
+      'record_create',
+      'record_link_create',
+      'record_file_attach',
+      'memory_search',
+    ],
   );
 });
 
-Deno.test('extraction toolbox excludes article writes, record edit/delete, file attach, and memory writes', () => {
+Deno.test('extraction toolbox excludes article writes, record edit/delete, and memory writes', () => {
   const names = __test.buildWikiRecordsToolbox().tools.map((t) => t.name);
   for (const forbidden of [
     'wiki_create',
@@ -34,9 +42,8 @@ Deno.test('extraction toolbox excludes article writes, record edit/delete, file 
     'wiki_delete',
     'record_update',
     'record_delete',
-    // File attach stays a user/chat-driven act - the extraction agent
-    // must not promote conversation images on its own.
-    'record_file_attach',
+    // It attaches the user's photos but never DETACHES - removal is a
+    // user/maintenance act, not part of event capture.
     'record_file_remove',
     'record_link_delete',
     'memory_create',
