@@ -56,13 +56,40 @@ export function todayIso(): string {
 }
 
 /**
- * First ~n characters of a record body for the collapsed list row,
- * collapsing whitespace/newlines to single spaces so Markdown structure
- * doesn't leak into the one-line preview. Appends an ellipsis when
- * truncated.
+ * Reduce Markdown to its visible text for a single-line preview. The
+ * collapsed record row renders as plain text (no Markdown -> HTML pass,
+ * unlike the expanded body), so without this a record whose content opens
+ * with `**bold**` or a `# heading` shows the literal syntax characters.
+ *
+ * This is a lightweight token strip, not a parser - it targets the inline
+ * marks that actually appear in record prose (emphasis, code, links,
+ * images) plus line-leading block markers (headings, blockquotes, list
+ * bullets). It runs BEFORE the whitespace collapse so the `^`-anchored
+ * block-marker pass still sees real line starts. Underscores are left
+ * alone on purpose: stripping them would mangle snake_case identifiers,
+ * and `**`/`*` cover the emphasis case we actually see.
+ */
+function stripMarkdown(content: string): string {
+  return content
+    // images ![alt](url) -> alt, then links [text](url) -> text
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    // line-leading block markers: heading hashes, blockquote, list bullets
+    .replace(/^\s{0,3}(?:#{1,6}\s+|>\s?|[-*+]\s+|\d+\.\s+)/gm, '')
+    // inline emphasis (** and *) and code backticks
+    .replace(/\*\*/g, '')
+    .replace(/\*/g, '')
+    .replace(/`+/g, '');
+}
+
+/**
+ * First ~n characters of a record body for the collapsed list row.
+ * Strips Markdown to visible text and collapses whitespace/newlines to
+ * single spaces so neither syntax characters nor structure leak into the
+ * one-line preview. Appends an ellipsis when truncated.
  */
 export function contentPreview(content: string, n = 100): string {
-  const flat = content.replace(/\s+/g, ' ').trim();
+  const flat = stripMarkdown(content).replace(/\s+/g, ' ').trim();
   if (flat.length <= n) return flat;
   return flat.slice(0, n).trimEnd() + '…';
 }

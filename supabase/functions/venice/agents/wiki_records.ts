@@ -26,6 +26,8 @@ import { readVeniceKey } from '../tools/_venice_key.ts';
 import {
   asAgentTool,
   loadThreadSliceUpTo,
+  loadThreadAttachmentsNote,
+  ANALYZE_IMAGE_WIRE_SCHEMA,
   MEMORY_SEARCH_WIRE_SCHEMA,
 } from './_agent_tools.ts';
 import { memorySearch } from '../tools/memory_search.ts';
@@ -34,6 +36,8 @@ import { wikiList } from '../tools/wiki_list.ts';
 import { recordCreate } from '../tools/record_create.ts';
 import { recordList } from '../tools/record_list.ts';
 import { recordLinkCreate } from '../tools/record_link_create.ts';
+import { recordFileAttach } from '../tools/record_file_attach.ts';
+import { analyzeImage } from '../tools/analyze_image.ts';
 import {
   runHeadlessAgent,
   type AgentTool,
@@ -222,6 +226,41 @@ const RECORD_LINK_CREATE_WIRE_SCHEMA: AgentTool['wire'] = {
   },
 };
 
+// record_file_attach hangs a file the user posted in THIS conversation
+// (an upload, or an image generated earlier in the thread) onto the record
+// being logged, copying the bytes into permanent record storage. This is
+// the moment a record is created from a live event, so the crumb photo or
+// scan the user just shared can live with it.
+const RECORD_FILE_ATTACH_WIRE_SCHEMA: AgentTool['wire'] = {
+  type: 'function',
+  function: {
+    name: 'record_file_attach',
+    description:
+      'Attach a file the user posted in THIS conversation (by its exact ' +
+      'filename) to a record you just logged, copying it into permanent ' +
+      'record storage so it outlives the chat attachment. Use for a photo ' +
+      'or scan the user shared that documents the event - a crumb shot, a ' +
+      'finished dish, a scanned card. ONLY use a filename actually present ' +
+      "in this conversation; never invent one, and don't attach an image " +
+      'that does not clearly belong to the record.',
+    parameters: {
+      type: 'object',
+      properties: {
+        record_id: {
+          type: 'string',
+          description: 'UUID of the record to attach to (from the record_create you just ran).',
+        },
+        filename: {
+          type: 'string',
+          description: 'Exact filename of a file the user posted in this conversation.',
+        },
+      },
+      required: ['record_id', 'filename'],
+      additionalProperties: false,
+    },
+  },
+};
+
 // ---------------------------------------------------------------------------
 // Prompt
 // ---------------------------------------------------------------------------
@@ -254,6 +293,8 @@ The wiki has two layers, and you only touch one of them. Each article's BODY is 
 
 5. **Cross-link a continuation (only when explicit).** If the conversation frames the new event as a direct follow-up to a SPECIFIC earlier record you can see in record_list ("attempt 3", "same dough as last week but wetter", "the rematch"), call record_link_create from the new record's id to that prior record's id, with a short label ("based on", "supersedes"). This is the exception, not the rule: most records stand alone. Never link on a vague thematic resemblance, never invent a relationship the user did not state, and never link to a record you did not actually find via record_list. When unsure, skip the link.
 
+6. **Attach a photo the user posted (when one documents the event).** The live files the user shared in this conversation are listed in a <thread_attachments> note above (if any). You CANNOT see images yourself. If a listed image plausibly documents this exact record - a crumb shot of the loaf they just baked, a photo of the finished dish, a scanned card - first call analyze_image(filename, query) to confirm what it actually shows, ESPECIALLY when more than one image is present (do not guess which is which). Once confirmed, call record_file_attach with the new record's id and that exact filename so the evidence lives with the record permanently. Use ONLY a filename from the <thread_attachments> note; never invent one, and never attach an image you have not verified belongs to the record. Most records have no photo - that is fine; only attach when the user actually shared one for this event.
+
 **Dates.** Anchor every record on the day the event happened, not the day you process it. If the user says "yesterday I baked", compute the date from the conversation's timestamps. Month-level precision is fine when the day is unknown - but prefer a concrete day when the conversation gives one.
 
 **Grounding.** Use memory_search (read-only) to confirm a subject when you're unsure which article an event belongs to. Never fabricate an event the user didn't describe.
@@ -275,6 +316,8 @@ function buildWikiRecordsToolbox(): Toolbox {
       asAgentTool(recordList, RECORD_LIST_WIRE_SCHEMA),
       asAgentTool(recordCreate, RECORD_CREATE_WIRE_SCHEMA),
       asAgentTool(recordLinkCreate, RECORD_LINK_CREATE_WIRE_SCHEMA),
+      asAgentTool(recordFileAttach, RECORD_FILE_ATTACH_WIRE_SCHEMA),
+      asAgentTool(analyzeImage, ANALYZE_IMAGE_WIRE_SCHEMA),
       asAgentTool(memorySearch, MEMORY_SEARCH_WIRE_SCHEMA),
     ],
   };
@@ -310,7 +353,14 @@ async function runExtractionOnThread(
     apiKey = key;
 
     convo = slice.map(messageToVenice);
-    convo.push({ role: 'user', content: WIKI_RECORDS_PROMPT });
+    // Surface the thread's live attachment filenames so the (text-tier)
+    // model knows what it can inspect with analyze_image and attach with
+    // record_file_attach - the raw slice carries no attachment metadata.
+    const attachmentsNote = await loadThreadAttachmentsNote(adminClient, threadId);
+    convo.push({
+      role: 'user',
+      content: attachmentsNote ? `${attachmentsNote}\n\n${WIKI_RECORDS_PROMPT}` : WIKI_RECORDS_PROMPT,
+    });
   } catch (err) {
     return { kind: 'error', error: err instanceof Error ? err.message : String(err) };
   }
@@ -526,11 +576,12 @@ export async function runWikiRecordsSweepTick(
 }
 
 // Test-only surface. The toolbox composition is a safety invariant - the
-// extraction agent gets read-only memory access and exactly two write
-// tools (record_create + record_link_create), never wiki_create /
-// wiki_update / memory writes, and NOT record_file_attach (it must not
-// promote conversation images autonomously - too easy to grab the wrong
-// one; file attach stays a user/chat-driven act).
+// extraction agent gets read-only memory + image access (memory_search,
+// analyze_image) and three write tools (record_create + record_link_create
+// + record_file_attach: it creates a record from a live event, so it can
+// verify a photo the user posted in the same conversation and hang it on
+// the record). It never gets wiki_create / wiki_update / memory writes -
+// article bodies and memory stay off-limits.
 export const __test = {
   buildWikiRecordsToolbox,
   WIKI_RECORDS_PROMPT,

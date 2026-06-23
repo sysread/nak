@@ -48,6 +48,8 @@ import { readVeniceKey } from '../tools/_venice_key.ts';
 import {
   asAgentTool,
   loadThreadSliceUpTo,
+  loadThreadAttachmentsNote,
+  ANALYZE_IMAGE_WIRE_SCHEMA,
   MEMORY_SEARCH_WIRE_SCHEMA,
 } from './_agent_tools.ts';
 import { memorySearch } from '../tools/memory_search.ts';
@@ -59,6 +61,9 @@ import { recordList } from '../tools/record_list.ts';
 import { recordCreate } from '../tools/record_create.ts';
 import { recordUpdate } from '../tools/record_update.ts';
 import { recordDelete } from '../tools/record_delete.ts';
+import { recordLinkCreate } from '../tools/record_link_create.ts';
+import { recordFileAttach } from '../tools/record_file_attach.ts';
+import { analyzeImage } from '../tools/analyze_image.ts';
 import {
   runHeadlessAgent,
   type AgentTool,
@@ -460,6 +465,70 @@ const RECORD_DELETE_WIRE_SCHEMA: AgentTool['wire'] = {
   },
 };
 
+// Mirror of MAX_RECORD_LINK_LABEL_CHARS in src/lib/wiki.ts.
+const MAX_RECORD_LINK_LABEL_CHARS = 120;
+
+// record_link_create cross-links two records into a directed continuation
+// chain ("revision 2 based on revision 1"). The worker links the records
+// of an article it is already touching when the journey is explicitly a
+// sequence; it never invents a relationship.
+const RECORD_LINK_CREATE_WIRE_SCHEMA: AgentTool['wire'] = {
+  type: 'function',
+  function: {
+    name: 'record_link_create',
+    description:
+      'Link one record to another with a short relationship label. ' +
+      'DIRECTED (from -> to): link the newer/derived record to the prior ' +
+      'one it builds on. Use when the records of this article form an ' +
+      'explicit chain (one attempt is a revision of, supersedes, or is ' +
+      'based on another). Get both ids from record_list. Re-linking a pair ' +
+      'updates the label. Never invent a relationship the records do not ' +
+      'actually state.',
+    parameters: {
+      type: 'object',
+      properties: {
+        from_record_id: { type: 'string', description: 'Newer/derived record id.' },
+        to_record_id: { type: 'string', description: 'Prior record id it builds on.' },
+        label: {
+          type: 'string',
+          maxLength: MAX_RECORD_LINK_LABEL_CHARS,
+          description: 'Short relationship label ("based on", "supersedes", "revision of").',
+        },
+      },
+      required: ['from_record_id', 'to_record_id'],
+      additionalProperties: false,
+    },
+  },
+};
+
+// record_file_attach hangs a file the user posted in THIS conversation
+// (an upload, or an image generated earlier in the thread) onto a record,
+// copying the bytes into permanent record storage. The worker has the
+// triggering thread in context, so a crumb photo or scanned card the user
+// shared can live with the record that documents it.
+const RECORD_FILE_ATTACH_WIRE_SCHEMA: AgentTool['wire'] = {
+  type: 'function',
+  function: {
+    name: 'record_file_attach',
+    description:
+      'Attach a file the user posted in THIS conversation (by its exact ' +
+      'filename) to a record, copying it into permanent record storage so ' +
+      'it outlives the chat attachment. Use for a photo or scan the user ' +
+      'shared that documents a record (a crumb shot, a finished dish, a ' +
+      'scanned recipe card). ONLY use a filename actually present in this ' +
+      "conversation - never invent one, and don't attach unrelated images.",
+    parameters: {
+      type: 'object',
+      properties: {
+        record_id: { type: 'string', description: 'Record to attach the file to (from record_list).' },
+        filename: { type: 'string', description: 'Exact filename of a file posted in this conversation.' },
+      },
+      required: ['record_id', 'filename'],
+      additionalProperties: false,
+    },
+  },
+};
+
 // ---------------------------------------------------------------------------
 // Prompt. The framing layers each encode a production failure mode and
 // must not be softened casually:
@@ -657,15 +726,25 @@ You CAN, however, tidy the records that already hang off an article you
 are touching: record_update to correct or merge a record, record_delete
 to drop a true duplicate or a clearly-irrelevant entry.
 
-Three things you do with records:
+Five things you do with records:
 
-1. **Promote.** Before updating an article, call record_list and fold
-   the DURABLE learnings its records have established into the body -
-   the settled outcome, the pattern that emerged, the current best
-   approach. Summarise; do not transcribe every record (they already
-   hold the blow-by-blow). A record says "Oct 3: doubled the salt, too
-   salty"; the body says "the recipe settled on 1.5% salt by late 2026
-   after earlier batches ran salty."
+1. **Promote - without duplicating.** Before updating an article, call
+   record_list and fold the DURABLE learnings its records have
+   established into the body - the settled outcome, the pattern that
+   emerged, the current best approach. Summarise; do not transcribe
+   every record (they already hold the blow-by-blow). A record says
+   "Oct 3: doubled the salt, too salty"; the body says "the recipe
+   settled on 1.5% salt by late 2026 after earlier batches ran salty."
+   The body and the records must not say the SAME thing. A dated,
+   blow-by-blow narrative of one attempt belongs in a record, not the
+   body. The clearest smell is a **date-titled section** in the body -
+   a header like "Dutch oven boule (late June 2026)" or "Banana bread
+   (May 2026)" recounting a specific bake. That is a journey entry
+   wearing a body header: if a record already holds it, strip the dated
+   detail from the body and keep only the distilled current state; if no
+   record holds it yet, migrate it (item 2) first. The body answers
+   "what is true now"; it should not re-narrate what the records already
+   document.
 
 2. **Migrate.** If a body you are touching carries an inline dated log -
    prose or bullets like "March 2026: started the starter. April: first
@@ -701,6 +780,27 @@ Three things you do with records:
    alone - a stray record is low-cost; a wrongly-deleted event is lost
    history. This is opportunistic cleanup on articles you already have
    open, not a wiki-wide records audit - that is the librarian's pass.
+
+4. **Link the journey.** When the records of an article you are touching
+   form an explicit chain - one attempt is a revision of, supersedes, or
+   is based on another ("second cake-crumb revision of the loaf", "same
+   dough as last week but wetter") - call record_link_create from the
+   newer record to the prior one with a short label ("revision of",
+   "based on", "supersedes"). This turns a flat list into the trajectory
+   it actually was. Link only when the relationship is explicit in the
+   records; never invent one on a vague resemblance.
+
+5. **Attach the user's photos.** The live files the user shared in this
+   conversation are listed in a <thread_attachments> note above (if any).
+   You CANNOT see images yourself. If a listed image documents one of
+   these records - a crumb shot, a finished dish, a scanned card - first
+   call analyze_image(filename, query) to confirm what it shows
+   (ESPECIALLY when more than one image is present - do not guess which is
+   which), then call record_file_attach with the record id and that exact
+   filename so the evidence lives with the record. Use ONLY a filename
+   from the <thread_attachments> note; never invent one, and never attach
+   an image you have not verified belongs to the record. This is the one
+   place a file the user shared in chat becomes permanent wiki evidence.
 
 **Scope: this wiki is about the user, not the world.** Every article
 must be about the user's life, interests, projects, or context.
@@ -920,6 +1020,9 @@ function buildWikiToolbox(): Toolbox {
       asAgentTool(recordCreate, RECORD_CREATE_WIRE_SCHEMA),
       asAgentTool(recordUpdate, RECORD_UPDATE_WIRE_SCHEMA),
       asAgentTool(recordDelete, RECORD_DELETE_WIRE_SCHEMA),
+      asAgentTool(recordLinkCreate, RECORD_LINK_CREATE_WIRE_SCHEMA),
+      asAgentTool(recordFileAttach, RECORD_FILE_ATTACH_WIRE_SCHEMA),
+      asAgentTool(analyzeImage, ANALYZE_IMAGE_WIRE_SCHEMA),
       asAgentTool(memorySearch, MEMORY_SEARCH_WIRE_SCHEMA),
     ],
   };
@@ -969,12 +1072,17 @@ async function runWikiAgentOnThread(
 
     const profile = await loadWikiProfile(adminClient, userId);
     convo = slice.map(messageToVenice);
+    // Surface the thread's live attachment filenames so the (text-tier)
+    // model knows what it can inspect with analyze_image and attach with
+    // record_file_attach - the raw slice carries no attachment metadata.
+    const attachmentsNote = await loadThreadAttachmentsNote(adminClient, threadId);
     // Wiki instruction as the final user turn - the "switch modes"
     // idiom. The model sees the whole prior conversation in its
     // native shape and reads this as "now do this different task."
+    const prompt = buildWikiAutonomousPrompt({ userProfile: profile });
     convo.push({
       role: 'user',
-      content: buildWikiAutonomousPrompt({ userProfile: profile }),
+      content: attachmentsNote ? `${attachmentsNote}\n\n${prompt}` : prompt,
     });
   } catch (err) {
     // History fetch / prompt build failed before any Venice call. No

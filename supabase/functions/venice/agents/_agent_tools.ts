@@ -255,3 +255,106 @@ export async function loadThreadSliceUpTo(
   const idx = all.findIndex((m) => m.id === terminalMsgId);
   return idx >= 0 ? all.slice(0, idx + 1) : all;
 }
+
+/**
+ * Build a `<thread_attachments>` note listing the LIVE files (bytes still
+ * present) the user posted in this thread, so a text-tier agent knows what
+ * filenames exist to pass to analyze_image / record_file_attach. The chat
+ * path assembles an equivalent note per-turn in src/lib/chat/prompt-assembly.ts;
+ * the agents load a raw message slice (loadThreadSliceUpTo strips
+ * attachments), so without this they have no filename to reference - the
+ * file tools would be uncallable. Returns null when the thread has no live
+ * attachments (the common case), so the caller appends nothing.
+ *
+ * Best-effort: a query failure returns null rather than throwing - a
+ * missing attachments note must never fail the extraction/article run.
+ */
+export async function loadThreadAttachmentsNote(
+  adminClient: SupabaseClient,
+  threadId: string,
+): Promise<string | null> {
+  const { data, error } = await adminClient
+    .from('message_attachments')
+    .select('filename, mime_type, storage_path, created_at, messages!inner(thread_id)')
+    .eq('messages.thread_id', threadId)
+    .order('created_at', { ascending: true });
+  if (error) return null;
+  const rows = (data ?? []) as Array<{
+    filename: string;
+    mime_type: string | null;
+    storage_path: string | null;
+  }>;
+
+  const images: string[] = [];
+  const files: string[] = [];
+  const seenImage = new Set<string>();
+  const seenFile = new Set<string>();
+  for (const r of rows) {
+    // storage_path null => the attachment expired; its bytes are gone, so
+    // it can't be attached to a record. Skip it from the actionable list.
+    if (!r.storage_path) continue;
+    const isImage = (r.mime_type ?? '').startsWith('image/');
+    if (isImage) {
+      if (!seenImage.has(r.filename)) {
+        seenImage.add(r.filename);
+        images.push(r.filename);
+      }
+    } else if (!seenFile.has(r.filename)) {
+      seenFile.add(r.filename);
+      files.push(r.filename);
+    }
+  }
+  if (images.length === 0 && files.length === 0) return null;
+
+  const lines = ['<thread_attachments>'];
+  if (images.length > 0) {
+    lines.push(
+      `Live images the user posted: ${images.join(', ')}. You CANNOT see images directly - ` +
+        'call analyze_image(filename, query) to learn what one shows before deciding it ' +
+        'documents a record, then record_file_attach(record_id, filename) to hang it on the record.',
+    );
+  }
+  if (files.length > 0) {
+    lines.push(
+      `Live files the user posted: ${files.join(', ')}. ` +
+        'Attach one with record_file_attach(record_id, filename) when it documents a record.',
+    );
+  }
+  lines.push('</thread_attachments>');
+  return lines.join('\n');
+}
+
+/**
+ * Wire schema for analyze_image as an agent tool. Lets a text-tier agent
+ * (no native vision) inspect an image the user posted before attaching it,
+ * the same indirection the chat path uses for non-vision tiers.
+ */
+export const ANALYZE_IMAGE_WIRE_SCHEMA: AgentTool['wire'] = {
+  type: 'function',
+  function: {
+    name: 'analyze_image',
+    description:
+      'Inspect an image the user posted in THIS conversation, by its exact ' +
+      'filename (see <thread_attachments>). Returns a text description from a ' +
+      'vision model. You cannot see images directly, so use this to confirm ' +
+      'what an image actually shows before attaching it to a record - never ' +
+      'attach an image whose subject you have not verified when more than one ' +
+      'is present.',
+    parameters: {
+      type: 'object',
+      properties: {
+        filename: {
+          type: 'string',
+          description: 'Exact filename of a live image in this conversation.',
+        },
+        query: {
+          type: 'string',
+          description:
+            'What to look for (e.g. "what does this image show?", "is this a baked loaf?").',
+        },
+      },
+      required: ['filename', 'query'],
+      additionalProperties: false,
+    },
+  },
+};
