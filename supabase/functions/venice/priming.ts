@@ -23,7 +23,38 @@ import {
   formatBiasProfileBlock,
   pickRenderable,
 } from '../_shared/bias-format.ts';
-import { type EdgeLogger } from '../_shared/edge-log.ts';
+import { createEdgeLogger, type EdgeLogger } from '../_shared/edge-log.ts';
+import {
+  countUserRounds,
+  evaluatePreRoundTrigger,
+  type IntuitionTrigger,
+  isPayloadFreshForInjection,
+} from '../_shared/priming-triggers.ts';
+import { type BroadcastPublisher } from './broadcast.ts';
+import {
+  fireSamskaras,
+  getCompoundSummary,
+} from './priming/samskara.ts';
+import { formatPrimingThinks } from './priming/samskara-format.ts';
+import {
+  type IntuitionPayload,
+  buildIntuitionThinkMessage,
+  coerceIntuitionPayload,
+} from './priming/intuition-payload.ts';
+import { runIntuitionPipeline } from './priming/intuition.ts';
+import {
+  type ContextRecallPayload,
+  buildContextRecallThinkMessage,
+  coerceContextRecallPayload,
+} from './priming/context-recall-payload.ts';
+import { runContextRecallPipeline } from './priming/context-recall.ts';
+
+// Hard cap on the wait for samskara priming before the first round
+// starts. The common case lands well under this; the cap exists so a
+// slow Venice or a hiccup in the cosine RPC cannot add visible latency
+// to the first token. Mirrors SAMSKARA_PRIMING_TIMEOUT_MS in the
+// retired browser src/lib/chat/preturn-priming.ts.
+const SAMSKARA_PRIMING_TIMEOUT_MS = 1500;
 
 // Minimal structural shape of a wire message the priming step mutates.
 // Matches getStreamingResponse's local VeniceMessage without importing
@@ -192,4 +223,356 @@ async function clearBiasThread(
     p_user_id: userId,
   });
   if (error) throw new Error(error.message);
+}
+
+// --- The <think>-chain priming stage ----------------------------------------
+//
+// Ports src/lib/chat/preturn-priming.ts: the samskara compound+fire
+// bundle (raced against a timeout), plus the intuition and
+// context-recall pipelines (each gated by the shared trigger
+// evaluator), spliced as a synthetic <think> chain onto the history
+// baton in the contracted order. Each pipeline's liveness + payload
+// refresh is published over the stream channel so the browser drives
+// the same spinner + modal feedback the local callbacks used to.
+
+/** Turn-entry priming inputs forwarded from the /stream request body. */
+export interface PrimingInputs {
+  intuitionModelId?: string;
+  intuitionMood?: { band: number; column: 'confident' | 'tentative' } | null;
+  contextRecallEnabled?: boolean;
+}
+
+export interface ServerPrimingOpts {
+  adminClient: SupabaseClient;
+  userId: string;
+  threadId: string;
+  apiKey: string;
+  /** Mutated in place: bias appends to row 0, the <think> chain splices
+   *  in before the trailing metadata system row. */
+  history: PrimingMessage[];
+  /** Publishes priming liveness + payload events on the stream channel. */
+  publisher: BroadcastPublisher;
+  priming?: PrimingInputs;
+  signal?: AbortSignal;
+  /** The orchestrator's per-turn correlator, for log lines. */
+  runId: string;
+}
+
+/**
+ * Run the full turn-entry priming stage: bias appendix + the <think>
+ * chain (samskara, context-recall, intuition). Bias and the chain are
+ * independent (bias appends to the row-0 system message; the chain
+ * splices before the trailing metadata row), so they run concurrently.
+ * Never throws - every pipeline swallows its own errors so a priming
+ * hiccup degrades to "less context this turn," never a broken or
+ * delayed turn. Three source-tagged edge loggers (samskara, intuition,
+ * context-recall) plus the bias logger round-trip to the drawer; all
+ * are flushed before this resolves so the waitUntil budget does not
+ * cut their broadcasts off.
+ */
+export async function runServerPriming(opts: ServerPrimingOpts): Promise<void> {
+  const { adminClient, userId, threadId, apiKey, history, publisher, signal } =
+    opts;
+  const biasLog = createEdgeLogger(userId, 'bias');
+  const samskaraLog = createEdgeLogger(userId, 'samskara');
+  const intuitionLog = createEdgeLogger(userId, 'intuition');
+  const recallLog = createEdgeLogger(userId, 'context-recall');
+
+  try {
+    await Promise.all([
+      applyBiasPriming({ adminClient, userId, threadId, history, log: biasLog }),
+      runThinkChain({
+        adminClient,
+        userId,
+        threadId,
+        apiKey,
+        history,
+        publisher,
+        priming: opts.priming ?? {},
+        signal,
+        samskaraLog,
+        intuitionLog,
+        recallLog,
+      }),
+    ]);
+  } finally {
+    // Flush the drawer broadcasts before the caller's waitUntil budget
+    // can reclaim the isolate. allSettled inside each flush; this never
+    // throws.
+    await Promise.allSettled([
+      biasLog.flush(),
+      samskaraLog.flush(),
+      intuitionLog.flush(),
+      recallLog.flush(),
+    ]);
+  }
+}
+
+interface ThinkChainOpts {
+  adminClient: SupabaseClient;
+  userId: string;
+  threadId: string;
+  apiKey: string;
+  history: PrimingMessage[];
+  publisher: BroadcastPublisher;
+  priming: PrimingInputs;
+  signal?: AbortSignal;
+  samskaraLog: EdgeLogger;
+  intuitionLog: EdgeLogger;
+  recallLog: EdgeLogger;
+}
+
+async function runThinkChain(opts: ThinkChainOpts): Promise<void> {
+  const {
+    adminClient,
+    userId,
+    threadId,
+    apiKey,
+    history,
+    publisher,
+    priming,
+    signal,
+    samskaraLog,
+    intuitionLog,
+    recallLog,
+  } = opts;
+
+  const userText = extractUserText(history);
+  const currentUserRound = countUserRounds(history);
+  // One wall-clock snapshot shared by both pipelines' staleness fuse and
+  // the injection guard, so "should we refresh" and "is the cache fresh
+  // enough to inject" judge against the same instant.
+  const nowMs = Date.now();
+  const mood = priming.intuitionMood ?? null;
+  const intuitionModelId = priming.intuitionModelId;
+  const contextRecallEnabled = priming.contextRecallEnabled ?? false;
+
+  let { intuition: intuitionCache, contextRecall: contextRecallCache } =
+    await readThreadCaches(adminClient, userId, threadId, recallLog);
+
+  // Samskara priming bundle: compound summary (always-on across turns) +
+  // situational fire (top-k for THIS user text), raced against the
+  // timeout so a slow Venice never delays the first token. The fire's
+  // start/end liveness brackets the underlying fire promise (not the
+  // raced one), so the spinner end fires when the fire actually settles
+  // - which may be after the timeout resolved the race with nulls; the
+  // detached fire still records its cohort under the orchestrator's
+  // waitUntil. Mirrors preturn-priming's trackSubconscious('samskara').
+  const trackSamskara = <T>(work: Promise<T>): Promise<T> => {
+    void publisher.publish({ type: 'priming_start', op: 'samskara' });
+    return work.finally(() => {
+      void publisher.publish({ type: 'priming_end', op: 'samskara' });
+    });
+  };
+  const samskaraWork = (async () => {
+    const [compoundSummary, fire] = await Promise.all([
+      getCompoundSummary(adminClient, userId, samskaraLog),
+      trackSamskara(
+        fireSamskaras({
+          admin: adminClient,
+          userId,
+          apiKey,
+          threadId,
+          userRound: currentUserRound,
+          userText,
+          signal,
+          log: samskaraLog,
+        }),
+      ),
+    ]);
+    return formatPrimingThinks({ compoundSummary, fire });
+  })();
+  const samskaraThinks = await Promise.race([
+    samskaraWork,
+    new Promise<{ compound: string | null; fire: string | null }>((resolve) =>
+      setTimeout(
+        () => resolve({ compound: null, fire: null }),
+        SAMSKARA_PRIMING_TIMEOUT_MS,
+      ),
+    ),
+  ]);
+
+  // Subconscious-priming pipelines. Each reads the shared trigger
+  // evaluator independently (per-cache computed_at_round, so the same
+  // turn can refresh one and debounce the other) and is gated by its
+  // feature switch. The onWillRun-equivalent liveness publish fires only
+  // when a pipeline commits to running, so a no-trigger turn never
+  // flashes a spinner. Run in parallel: the wall-clock cost is
+  // max(intuition, recall), not additive.
+  const intuitionTrigger: IntuitionTrigger | null = intuitionModelId
+    ? evaluatePreRoundTrigger({ cache: intuitionCache, round: currentUserRound, mood, nowMs })
+    : null;
+  const recallTrigger: IntuitionTrigger | null = contextRecallEnabled
+    ? evaluatePreRoundTrigger({ cache: contextRecallCache, round: currentUserRound, mood, nowMs })
+    : null;
+
+  const [freshIntuition, freshRecall] = await Promise.all([
+    (async (): Promise<IntuitionPayload | null> => {
+      if (!intuitionModelId || !intuitionTrigger) return null;
+      void publisher.publish({ type: 'priming_start', op: 'intuition' });
+      try {
+        return await runIntuitionPipeline({
+          admin: adminClient,
+          userId,
+          apiKey,
+          threadId,
+          modelId: intuitionModelId,
+          history,
+          round: currentUserRound,
+          mood,
+          nowMs,
+          trigger: intuitionTrigger,
+          signal,
+          log: intuitionLog,
+        });
+      } catch (err) {
+        intuitionLog.debug('intuition pipeline failed', err);
+        return null;
+      } finally {
+        void publisher.publish({ type: 'priming_end', op: 'intuition' });
+      }
+    })(),
+    (async (): Promise<ContextRecallPayload | null> => {
+      if (!contextRecallEnabled || !recallTrigger) return null;
+      void publisher.publish({ type: 'priming_start', op: 'recall' });
+      try {
+        return await runContextRecallPipeline({
+          admin: adminClient,
+          userId,
+          apiKey,
+          threadId,
+          history,
+          round: currentUserRound,
+          mood,
+          nowMs,
+          trigger: recallTrigger,
+          signal,
+          log: recallLog,
+        });
+      } catch (err) {
+        recallLog.debug('context-recall pipeline failed', err);
+        return null;
+      } finally {
+        void publisher.publish({ type: 'priming_end', op: 'recall' });
+      }
+    })(),
+  ]);
+
+  // Persist the fresh payloads before publishing their refresh events -
+  // same ordering preturn-priming enforced: a realtime echo that arrives
+  // between the patch and the write must see the persisted payload, not
+  // a transient null.
+  if (freshIntuition) {
+    intuitionCache = freshIntuition;
+    await persistThreadCache(adminClient, userId, threadId, 'intuition_payload', freshIntuition, intuitionLog);
+  }
+  if (freshRecall) {
+    contextRecallCache = freshRecall;
+    await persistThreadCache(adminClient, userId, threadId, 'context_recall_payload', freshRecall, recallLog);
+  }
+  if (freshIntuition) {
+    void publisher.publish({ type: 'intuition_payload', payload: freshIntuition });
+  }
+  if (freshRecall) {
+    void publisher.publish({ type: 'context_recall_payload', payload: freshRecall });
+  }
+
+  // Splice the synthetic <think> chain in the contracted order (broadest
+  // to most turn-specific): context-recall, samskara compound, samskara
+  // fire, intuition. The injection guard suppresses a payload older than
+  // the staleness fuse even as a <think> block - a stale prime steers
+  // the model wrong, worse than no prime. Insert before the trailing
+  // metadata system row (the last element); an empty chain is a no-op.
+  const thinks: PrimingMessage[] = [];
+  if (contextRecallCache && isPayloadFreshForInjection(contextRecallCache, nowMs)) {
+    const msg = buildContextRecallThinkMessage(contextRecallCache);
+    if (msg !== null) thinks.push(msg);
+  }
+  if (samskaraThinks.compound !== null) {
+    thinks.push({ role: 'assistant', content: `<think>\n${samskaraThinks.compound}\n</think>` });
+  }
+  if (samskaraThinks.fire !== null) {
+    thinks.push({ role: 'assistant', content: `<think>\n${samskaraThinks.fire}\n</think>` });
+  }
+  if (intuitionCache && isPayloadFreshForInjection(intuitionCache, nowMs)) {
+    thinks.push(buildIntuitionThinkMessage(intuitionCache));
+  }
+  if (thinks.length > 0) {
+    const insertAt = Math.max(0, history.length - 1);
+    history.splice(insertAt, 0, ...thinks);
+  }
+}
+
+// Extract the plain text of the latest user message, flattening a
+// multimodal content-part array to its text parts. Seeds the samskara
+// fire embed with the turn's user text. Scans from the tail because the
+// trailing metadata system row sits after the latest user turn.
+function extractUserText(history: PrimingMessage[]): string {
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    if (history[i].role !== 'user') continue;
+    const c = history[i].content as unknown;
+    if (typeof c === 'string') return c;
+    if (Array.isArray(c)) {
+      return c
+        .filter(
+          (p): p is { type: 'text'; text: string } =>
+            !!p && typeof p === 'object' && (p as { type?: unknown }).type === 'text',
+        )
+        .map((p) => p.text)
+        .join('\n');
+    }
+    return '';
+  }
+  return '';
+}
+
+async function readThreadCaches(
+  adminClient: SupabaseClient,
+  userId: string,
+  threadId: string,
+  log: EdgeLogger,
+): Promise<{
+  intuition: IntuitionPayload | null;
+  contextRecall: ContextRecallPayload | null;
+}> {
+  try {
+    const { data, error } = await adminClient
+      .from('threads')
+      .select('intuition_payload, context_recall_payload')
+      .eq('id', threadId)
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    const row = data as {
+      intuition_payload?: unknown;
+      context_recall_payload?: unknown;
+    } | null;
+    return {
+      intuition: coerceIntuitionPayload(row?.intuition_payload),
+      contextRecall: coerceContextRecallPayload(row?.context_recall_payload),
+    };
+  } catch (err) {
+    log.debug('priming: thread cache read failed', err);
+    return { intuition: null, contextRecall: null };
+  }
+}
+
+async function persistThreadCache(
+  adminClient: SupabaseClient,
+  userId: string,
+  threadId: string,
+  column: 'intuition_payload' | 'context_recall_payload',
+  payload: IntuitionPayload | ContextRecallPayload,
+  log: EdgeLogger,
+): Promise<void> {
+  try {
+    const { error } = await adminClient
+      .from('threads')
+      .update({ [column]: payload })
+      .eq('id', threadId)
+      .eq('user_id', userId);
+    if (error) throw new Error(error.message);
+  } catch (err) {
+    log.debug(`priming: ${column} write failed`, err);
+  }
 }
