@@ -78,13 +78,11 @@ export interface IntuitionPayload {
  *  below keeps accepting it. */
 export type IntuitionTrigger = 'title' | 'mood' | 'stale' | 'cold';
 
-/** Configurable cap on the staleness fuse. Forces a refresh after
- *  this many user-rounds without one, so a slow conversation that
- *  drifts under both the title and mood thresholds still gets a
- *  fresh read eventually. */
-export const STALE_FUSE_ROUNDS = 8;
-
-/** Wall-clock companion to STALE_FUSE_ROUNDS. The round fuse only
+/** Wall-clock companion to the round-based staleness fuse (the
+ *  STALE_FUSE_ROUNDS half lives server-side in
+ *  supabase/functions/_shared/priming-triggers.ts now, where the
+ *  trigger scheduling runs; the browser only needs the wall-clock
+ *  bound for the injection-side freshness guard). The round fuse only
  *  counts user turns, so a conversation resumed hours or days later
  *  with a couple of fresh turns never trips it - and the cached
  *  payload is a snapshot of a moment (perception, drives, synthesis

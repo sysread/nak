@@ -180,9 +180,10 @@ export interface ChatRequest {
    * the model will continue or replace it - on the fast tier
    * (GLM-4.7 via Venice) that shape made the model echo the system
    * prompt body verbatim as its `content`, persisting the prompt
-   * into a synthesis field instead of producing a synthesis. See
-   * src/lib/intuition/pipeline.ts stage 3 for the live regression
-   * and the conventional shape that fixed it; if you need to feed
+   * into a synthesis field instead of producing a synthesis. The
+   * intuition synthesis stage that surfaced this lives server-side now
+   * (supabase/functions/venice/priming/intuition.ts); the conventional
+   * shape that fixed it is preserved there. If you need to feed
    * the model "prior internal voices" content, fold it into the
    * user turn rather than passing it as an assistant message.
    */

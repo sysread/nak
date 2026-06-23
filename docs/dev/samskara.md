@@ -10,6 +10,19 @@ opposite of "born yesterday" - every conversation carries some
 calibrated bias from prior conversations with the same user,
 without having to cram the entire history into a context window.
 
+> **Where the chat-time half runs:** the cosine fire + compound-summary
+> read run server-side, as part of the priming stage of
+> `getStreamingResponse` (`supabase/functions/venice/priming/samskara.ts`,
+> orchestrated by `runServerPriming` in `priming.ts`), so they survive a
+> browser disconnect mid-turn. `samskara_fire_top_k` and
+> `samskara_record_fires` gained a `p_user_id` parameter for the
+> service-role caller. The fire's throbber rides the `priming_start/end`
+> (op `'samskara'`) events. The **end-of-turn substrate stub write**
+> (`recordSubstrateStub`) stays browser-side - it is not priming. The
+> formation pipeline + sweeps remain server-side as before. File
+> references below into `src/lib/samskara/` for fire/compound/format
+> describe the Deno port under `venice/priming/`.
+
 ## Role in the app
 
 A samskara is a one-line predictive claim ("in situations like

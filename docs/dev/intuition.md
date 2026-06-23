@@ -6,6 +6,19 @@ parallel, and a synthesis agent collapses the reactions into a
 single first-person internal monologue that gets injected ahead of
 the next completion as `<think>`-tagged content.
 
+> **Where it runs:** the pipeline runs server-side, as the priming
+> stage of `getStreamingResponse`
+> (`supabase/functions/venice/priming/intuition.ts`, orchestrated by
+> `runServerPriming` in `priming.ts`), so it survives a browser
+> disconnect mid-turn. The browser keeps the payload type + coercer
+> (`src/lib/intuition/types.ts`) and the diagnostics modal, rendering
+> the throbber + modal off the `priming_start/end` + `intuition_payload`
+> events the function publishes on the stream channel (see
+> [`prompt-augmentation.md`](./prompt-augmentation.md) -> Observability).
+> The trigger evaluator is mirrored in `_shared/priming-triggers.ts`.
+> File paths below that point into `src/lib/intuition/` for the pipeline
+> body now describe the Deno port under `venice/priming/`.
+
 Adapted from fnord's
 [`lib/ai/agent/intuition.ex`](https://github.com/sysread/fnord/blob/main/lib/ai/agent/intuition.ex);
 nak retunes the drives for a personal-assistant register (vs.

@@ -420,15 +420,17 @@ export function coerceThread(row: Record<string, unknown>): Thread {
     archived: row.archived === true,
     title_manually_set: row.title_manually_set === true,
     // Pass jsonb through unchanged. The intuition module owns the
-    // parse/coerce - see src/lib/intuition/cache.ts. A drifting row
-    // that doesn't match the expected shape is treated as "no cache"
-    // there and a fresh refresh runs on the next trigger.
+    // parse/coerce - see coerceIntuitionPayload in
+    // src/lib/intuition/types.ts. A drifting row that doesn't match the
+    // expected shape is coerced to "no cache" there and the edge
+    // function recomputes on the next trigger.
     intuition_payload: row.intuition_payload ?? null,
     // Same posture as intuition_payload: pass jsonb through unchanged.
     // The context-recall module owns the parse/coerce - see
-    // src/lib/context-recall/cache.ts. A drifting row that doesn't match
-    // the expected shape is treated as "no cache" there and a fresh
-    // refresh runs on the next trigger.
+    // coerceContextRecallPayload in src/lib/context-recall/types.ts. A
+    // drifting row that doesn't match the expected shape is coerced to
+    // "no cache" there and the edge function recomputes on the next
+    // trigger.
     context_recall_payload: row.context_recall_payload ?? null,
     topics,
     // Cross-device response-claim columns. Pass through unchanged so
