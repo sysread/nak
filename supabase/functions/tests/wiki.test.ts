@@ -32,7 +32,9 @@ Deno.test('wiki toolbox is wiki CRUD + full record management + memory_search, i
   // capture stays with the extraction agent); record_update / record_delete
   // are opportunistic cleanup on the records of articles the worker is
   // already touching (correct/merge/dedup), same discipline as the
-  // librarian.
+  // librarian. record_link_create chains continuation records; the worker
+  // processes the triggering thread, so record_file_attach can hang a
+  // photo the user posted in that conversation onto a record.
   assertEquals(
     toolbox.tools.map((t) => t.name),
     [
@@ -44,14 +46,23 @@ Deno.test('wiki toolbox is wiki CRUD + full record management + memory_search, i
       'record_create',
       'record_update',
       'record_delete',
+      'record_link_create',
+      'record_file_attach',
       'memory_search',
     ],
   );
 });
 
-Deno.test('wiki toolbox manages records (list/create/update/delete) but never extracts new events', () => {
+Deno.test('wiki toolbox manages records (list/create/update/delete/link/attach) but never extracts new events', () => {
   const names = __test.buildWikiToolbox().tools.map((t) => t.name);
-  for (const expected of ['record_list', 'record_create', 'record_update', 'record_delete']) {
+  for (const expected of [
+    'record_list',
+    'record_create',
+    'record_update',
+    'record_delete',
+    'record_link_create',
+    'record_file_attach',
+  ]) {
     assertEquals(names.includes(expected), true, `${expected} must be reachable`);
   }
 });

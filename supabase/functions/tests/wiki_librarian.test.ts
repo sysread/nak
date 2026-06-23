@@ -26,9 +26,9 @@ Deno.test('librarian toolbox is reads + wiki/record writes, in declared order', 
   // records into bodies and dedup before migrating; record_create is
   // scoped to MIGRATION (relocating inline dated body history into
   // records); record_update / record_delete clean up duplicate/outdated
-  // records. It still has NO wiki_create - it never originates ARTICLES,
-  // only consolidates them. record_create is the one creation it does,
-  // and only to move existing body history into records.
+  // records; record_link_create / record_link_delete wire up and prune
+  // continuation chains during the wiki-wide pass. It still has NO
+  // wiki_create - it never originates ARTICLES, only consolidates them.
   assertEquals(
     toolbox.tools.map((t) => t.name),
     [
@@ -42,6 +42,7 @@ Deno.test('librarian toolbox is reads + wiki/record writes, in declared order', 
       'record_create',
       'record_update',
       'record_delete',
+      'record_link_create',
       'record_link_delete',
     ],
   );
@@ -51,10 +52,10 @@ Deno.test('librarian toolbox excludes creation, memory writes, and the UI tool',
   const names = __test.buildLibrarianToolbox().tools.map((t) => t.name);
   for (const forbidden of [
     'wiki_create',
-    // The librarian prunes broken cross-links but never originates them
-    // (linking is the extraction agent's job), same as no wiki_create.
-    'record_link_create',
-    // File attach is a user/chat-driven act, never a maintenance op.
+    // File attach needs a conversation to pull the file from; the librarian
+    // runs wiki-wide with no thread (asAgentToolNoThread blanks it), so the
+    // file tools are unreachable here - they live on the per-thread worker
+    // and extraction agents instead.
     'record_file_attach',
     'record_file_remove',
     'memory_create',

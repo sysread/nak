@@ -1251,12 +1251,17 @@ stray record is cheap to delete; a clobbered article is not.
   Asserted in `supabase/functions/tests/wiki_records.test.ts`.
 - The article worker and the librarian both get the full record-
   management set: `record_list` + `record_create` + `record_update` +
-  `record_delete`. Both prompts encode the body/records separation:
-  the article BODY is the current state, records are the journey. Three
-  behaviours follow:
-  - **Promote**: fold durable learnings from records INTO the body,
-    but never delete a record because its learning was promoted -
-    records are historical documentation.
+  `record_delete` + `record_link_create`. Both prompts encode the
+  body/records separation: the article BODY is the current state,
+  records are the journey. Behaviours that follow:
+  - **Promote - without duplicating**: fold durable learnings from
+    records INTO the body, but never delete a record because its
+    learning was promoted (records are historical documentation), and
+    never let the body re-narrate what a record already holds. Both
+    prompts call out the **date-titled body section** (a header like
+    "Dutch oven boule (late June 2026)" recounting one bake) as the
+    duplication smell to migrate out and replace with distilled
+    current-state prose.
   - **Migrate**: relocate inline dated history that legacy bodies
     accreted (the pre-records worker prompt told it to append dated
     entries to the body) OUT into records, then trim the body to
@@ -1274,17 +1279,26 @@ stray record is cheap to delete; a clobbered article is not.
     touching (the librarian also runs the wiki-wide pass). The hard
     rule on both: never `record_delete` a record because its learning
     was promoted; records survive promotion.
+  - **Link**: `record_link_create` to wire up an explicit continuation
+    chain (one record is a revision of / based on / supersedes another)
+    the records state but were never linked; conservative, never
+    invented on a vague resemblance. The librarian ALSO gets
+    `record_link_delete` to prune a link a merge/delete left dangling or
+    a redundant reverse edge (the worker leaves pruning to the
+    wiki-wide pass).
   The worker scopes its record edits to the article whose subject the
   current conversation is about; the librarian works wiki-wide. Only
   `record_create`-from-conversation stays carved out to the extraction
   agent, so the worker and librarian never duplicate its event-capture
   job.
-- The librarian ALSO gets `record_link_delete` (prune-only): it removes
-  a cross-link left dangling by a merge/delete or a redundant reverse
-  edge, but never originates links - mirroring its no-`wiki_create`
-  posture (linking is the extraction agent's job). Neither the librarian
-  nor the article worker gets the file tools. Asserted in
-  `supabase/functions/tests/wiki_librarian.test.ts`.
+- **File attach is per-thread.** The worker also gets
+  `record_file_attach` - it processes the triggering conversation, so a
+  photo the user posted there (a crumb shot, a scanned card) can be
+  hung on the record that documents it. The librarian does NOT: it runs
+  wiki-wide with no conversation in context (`asAgentToolNoThread` blanks
+  the thread), so it has no chat file to pull from. The extraction agent
+  also does not attach files (see above). Asserted in
+  `supabase/functions/tests/wiki_librarian.test.ts` and `wiki.test.ts`.
 
 ## Interactions
 

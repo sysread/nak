@@ -57,6 +57,7 @@ import { recordList } from '../tools/record_list.ts';
 import { recordCreate } from '../tools/record_create.ts';
 import { recordUpdate } from '../tools/record_update.ts';
 import { recordDelete } from '../tools/record_delete.ts';
+import { recordLinkCreate } from '../tools/record_link_create.ts';
 import { recordLinkDelete } from '../tools/record_link_delete.ts';
 import { asAgentTool } from './_agent_tools.ts';
 import {
@@ -341,16 +342,50 @@ const RECORD_DELETE_WIRE_SCHEMA: AgentTool['wire'] = {
   },
 };
 
+// Mirror of MAX_RECORD_LINK_LABEL_CHARS in src/lib/wiki.ts.
+const MAX_RECORD_LINK_LABEL_CHARS = 120;
+
+// record_link_create lets the librarian wire up continuation chains it
+// finds during the wiki-wide pass - records that are revisions of or based
+// on one another but were never linked. Directed; conservative.
+const RECORD_LINK_CREATE_WIRE_SCHEMA: AgentTool['wire'] = {
+  type: 'function',
+  function: {
+    name: 'record_link_create',
+    description:
+      'Link one record to another with a short relationship label. ' +
+      'DIRECTED (from -> to): link the newer/derived record to the prior ' +
+      'one it builds on. Use when you find records of an article that form ' +
+      'an explicit chain (one is a revision of, supersedes, or is based on ' +
+      'another) but are not yet linked. Get both ids from record_list. ' +
+      'Re-linking a pair updates the label. Never invent a relationship the ' +
+      'records do not actually state.',
+    parameters: {
+      type: 'object',
+      properties: {
+        from_record_id: { type: 'string', description: 'Newer/derived record id.' },
+        to_record_id: { type: 'string', description: 'Prior record id it builds on.' },
+        label: {
+          type: 'string',
+          maxLength: MAX_RECORD_LINK_LABEL_CHARS,
+          description: 'Short relationship label ("based on", "supersedes", "revision of").',
+        },
+      },
+      required: ['from_record_id', 'to_record_id'],
+      additionalProperties: false,
+    },
+  },
+};
+
 const RECORD_LINK_DELETE_WIRE_SCHEMA: AgentTool['wire'] = {
   type: 'function',
   function: {
     name: 'record_link_delete',
     description:
-      'Remove a directed cross-link between two records. Use ONLY to ' +
-      'prune a link that is now wrong or redundant (e.g. it points at a ' +
-      'record you just merged away, or duplicates the relationship in the ' +
-      'other direction). Direction matters: removes the (from -> to) edge ' +
-      'only. You cannot create links - only prune clearly-broken ones.',
+      'Remove a directed cross-link between two records. Use to prune a ' +
+      'link that is now wrong or redundant (e.g. it points at a record you ' +
+      'just merged away, or duplicates the relationship in the other ' +
+      'direction). Direction matters: removes the (from -> to) edge only.',
     parameters: {
       type: 'object',
       properties: {
@@ -401,6 +436,7 @@ function buildLibrarianToolbox(): Toolbox {
       asAgentToolNoThread(recordCreate, RECORD_CREATE_WIRE_SCHEMA),
       asAgentToolNoThread(recordUpdate, RECORD_UPDATE_WIRE_SCHEMA),
       asAgentToolNoThread(recordDelete, RECORD_DELETE_WIRE_SCHEMA),
+      asAgentToolNoThread(recordLinkCreate, RECORD_LINK_CREATE_WIRE_SCHEMA),
       asAgentToolNoThread(recordLinkDelete, RECORD_LINK_DELETE_WIRE_SCHEMA),
     ],
   };
@@ -908,12 +944,22 @@ ${WIKI_LIBRARIAN_TOOLS_BLOCK}
    article you are already touching (and any whose body still
    carries an inline dated log), call record_list and:
 
-   (a) **Promote durable learnings into the body.** When the records
-       have established a settled outcome or a pattern - the recipe
-       converged on a hydration, an experiment reached a conclusion,
-       a habit stuck - wiki_update the article body to state that
-       current-state learning (with a date marker, same as any other
-       fact). Summarise; do not transcribe each record into the body.
+   (a) **Promote durable learnings into the body - without duplicating
+       the records.** When the records have established a settled
+       outcome or a pattern - the recipe converged on a hydration, an
+       experiment reached a conclusion, a habit stuck - wiki_update the
+       article body to state that current-state learning (with a date
+       marker, same as any other fact). Summarise; do not transcribe
+       each record into the body. The body and the records must not say
+       the SAME thing: a dated, blow-by-blow account of one attempt
+       belongs in a record, not the body. The clearest smell is a
+       **date-titled section** in the body - a header like "Dutch oven
+       boule (late June 2026)" recounting a specific bake. That is a
+       journey entry wearing a body header. If a record already holds
+       it, strip the dated detail from the body and keep only the
+       distilled current state; if no record holds it, migrate it (b)
+       first. After promotion the body answers "what is true now"; it
+       must not re-narrate what the records already document.
 
    (b) **Migrate inline dated history OUT of the body into records.**
        Many existing bodies were written as a running dated log
@@ -945,14 +991,18 @@ ${WIKI_LIBRARIAN_TOOLS_BLOCK}
        alone - a stray record is low-cost, a wrongly-deleted event is
        lost history.
 
-   (e) **Prune broken cross-links.** Records can link to each other
-       ("attempt 3 based on attempt 2"). If you merge or delete a record
-       and a surviving record's link now points somewhere wrong, or you
-       find a redundant edge duplicating the relationship in the other
-       direction, use record_link_delete to remove it. You can only
-       prune links, never create them (the extraction agent owns
-       linking). Conservative by default: a harmless link is not worth
-       removing.
+   (e) **Link the journey, and prune broken links.** Records can link to
+       each other ("revision 3 based on revision 2"). When you find
+       records of an article that form an explicit chain - one is a
+       revision of, supersedes, or is based on another - but are not yet
+       linked, use record_link_create from the newer record to the prior
+       one with a short label ("revision of", "based on"). Conversely, if
+       you merge or delete a record and a surviving link now points
+       somewhere wrong, or you find a redundant edge duplicating the
+       relationship in the other direction, use record_link_delete to
+       remove it. Conservative both ways: link only an explicit
+       relationship the records actually state, and a harmless link is
+       not worth removing.
 
 ${WIKI_LIBRARIAN_DISCIPLINE_BLOCK}
 
