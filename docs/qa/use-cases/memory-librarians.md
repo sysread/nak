@@ -61,10 +61,13 @@ the ONE shared in-flight guard across all four paths
   visited and skips Venice; a real neighborhood produces memory
   graph edits (consolidations halve the loser's confidence and
   append a "Merged ... into this memory." changelog row).
-- (3) Live narrated steps in the strip (manual runs carry the
-  activity param); results fold into the strip's result line; the
-  Memories list refreshes without a manual reload (the memories
-  realtime relay).
+- (3) On Run the progress strip appears immediately and stays put -
+  the panel's changelog default surface must NOT flash through in the
+  gap before the first streamed step (the strip is visible from the
+  synchronous instant the run starts, not only once a step arrives).
+  Live narrated steps in the strip (manual runs carry the activity
+  param); results fold into the strip's result line; the Memories list
+  refreshes without a manual reload (the memories realtime relay).
 - (4) The manual run returns busy (the strip shows the busy
   message); no cadence stamp is consumed.
 - (5) After release, a manual run proceeds normally.
