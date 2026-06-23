@@ -19,10 +19,20 @@
    * bus - see Chat.svelte).
    */
   import { app } from '$lib/state.svelte';
-  import { searchWikiRecordsSemantic, MAX_WIKI_RECORD_CONTENT_CHARS } from '$lib/wiki';
-  import type { WikiArticle, WikiRecord } from '$lib/supabase';
+  import {
+    searchWikiRecordsSemantic,
+    MAX_WIKI_RECORD_CONTENT_CHARS,
+    MAX_RECORD_LINK_LABEL_CHARS,
+  } from '$lib/wiki';
+  import type { WikiArticle, WikiRecord, WikiRecordFile, WikiRecordLinkView } from '$lib/supabase';
   import { downloadRecordMarkdown, downloadArticleZip } from '$lib/wiki-export';
   import { emitWikiRecordChange, onWikiRecordChange } from '$lib/wiki-events';
+  import {
+    validateFile,
+    isImageMimeType,
+    maybeDownscaleImage,
+    arrayBufferToBase64,
+  } from '$lib/attachments';
   import {
     formatRecordDate,
     contentPreview,
@@ -32,6 +42,11 @@
     recordsEmptyMessage,
     collectTags,
     todayIso,
+    partitionRecordFiles,
+    formatRecordFileMeta,
+    describeLink,
+    linkCandidates,
+    validateLinkLabel,
   } from '$lib/ui/wiki-records';
   import Markdown from './Markdown.svelte';
   import { WIKI_RECORDS_ANCHOR } from '$lib/ui/wiki-toc-sections';
@@ -65,6 +80,174 @@
 
   // --- expand/collapse -------------------------------------------------
   let expandedId = $state<string | null>(null);
+
+  // --- files + links for the expanded record ---------------------------
+  // Loaded lazily for whichever record is open (only one at a time), so
+  // the list view stays a cheap single query; the heavier file/link
+  // fetches happen only on expand. Keyed implicitly by expandedId via the
+  // load effect below.
+  let expandedFiles = $state<WikiRecordFile[]>([]);
+  let expandedFileUrls = $state<Map<string, string>>(new Map());
+  let expandedLinks = $state<WikiRecordLinkView[]>([]);
+  let extrasError = $state<string | null>(null);
+  let uploadBusy = $state(false);
+  let dragOver = $state(false);
+
+  // Link compose state.
+  let linkTargetId = $state('');
+  let linkLabel = $state('');
+  let linkBusy = $state(false);
+  let linkError = $state<string | null>(null);
+
+  const partitionedFiles = $derived(partitionRecordFiles(expandedFiles, expandedFileUrls));
+  const linkOptions = $derived(
+    expandedId ? linkCandidates(records, expandedId, expandedLinks) : []
+  );
+
+  async function loadExtras(recordId: string): Promise<void> {
+    if (!app.supabase) return;
+    extrasError = null;
+    try {
+      const [files, links] = await Promise.all([
+        app.supabase.listWikiRecordFiles(recordId),
+        app.supabase.listWikiRecordLinks(recordId),
+      ]);
+      expandedFiles = files;
+      expandedLinks = links;
+      expandedFileUrls = await app.supabase.createWikiRecordFileSignedUrls(files);
+    } catch (err) {
+      extrasError = err instanceof Error ? err.message : 'Failed to load files and links.';
+    }
+  }
+
+  // (Re)load the open record's files + links on expand and on any record
+  // write (the bus also fires for file/link mutations via the realtime
+  // relay). Collapsing clears the extras so a stale set never flashes when
+  // a different record is opened next.
+  $effect(() => {
+    const id = expandedId;
+    if (!id) {
+      expandedFiles = [];
+      expandedLinks = [];
+      expandedFileUrls = new Map();
+      return;
+    }
+    void loadExtras(id);
+    const off = onWikiRecordChange(() => void loadExtras(id));
+    return () => off();
+  });
+
+  async function attachFiles(record: WikiRecord, files: FileList | File[]): Promise<void> {
+    if (!app.supabase || files.length === 0) return;
+    uploadBusy = true;
+    extrasError = null;
+    try {
+      let position = expandedFiles.length;
+      for (const original of Array.from(files)) {
+        const sizeError = validateFile(original);
+        if (sizeError) {
+          extrasError = sizeError;
+          continue;
+        }
+        // Images get the same canvas downscale the chat composer applies
+        // before upload; a null return means "leave the original alone".
+        const isImage = isImageMimeType(original.type);
+        const file = isImage ? ((await maybeDownscaleImage(original)) ?? original) : original;
+        const base64 = arrayBufferToBase64(await file.arrayBuffer());
+        // Extract text for non-image docs so the chat model can read the
+        // attachment via record_get. Best-effort: a parser failure still
+        // attaches the file, just without searchable text.
+        let extractedText: string | null = null;
+        if (!isImage) {
+          try {
+            extractedText = await app.supabase.extractText(file, file.name);
+          } catch {
+            extractedText = null;
+          }
+        }
+        await app.supabase.uploadAndAttachWikiRecordFile({
+          recordId: record.id,
+          articleId: record.article_id,
+          recordDate: record.date,
+          position: position++,
+          filename: file.name,
+          mimeType: file.type || original.type || null,
+          sizeBytes: file.size,
+          dataBase64: base64,
+          extractedText,
+        });
+      }
+      emitWikiRecordChange();
+    } catch (err) {
+      extrasError = err instanceof Error ? err.message : 'Failed to attach file.';
+    } finally {
+      uploadBusy = false;
+    }
+  }
+
+  function onFileInput(record: WikiRecord, e: Event): void {
+    const input = e.target as HTMLInputElement;
+    if (input.files && input.files.length > 0) void attachFiles(record, input.files);
+    input.value = '';
+  }
+
+  function onDrop(record: WikiRecord, e: DragEvent): void {
+    e.preventDefault();
+    dragOver = false;
+    const files = e.dataTransfer?.files;
+    if (files && files.length > 0) void attachFiles(record, files);
+  }
+
+  async function removeFile(fileId: string): Promise<void> {
+    if (!app.supabase) return;
+    if (!confirm('Remove this file? This cannot be undone.')) return;
+    try {
+      await app.supabase.deleteWikiRecordFile(fileId);
+      emitWikiRecordChange();
+    } catch (err) {
+      extrasError = err instanceof Error ? err.message : 'Failed to remove file.';
+    }
+  }
+
+  async function addLink(record: WikiRecord): Promise<void> {
+    if (!app.supabase || !linkTargetId) return;
+    const labelErr = validateLinkLabel(linkLabel);
+    if (labelErr) {
+      linkError = labelErr;
+      return;
+    }
+    linkBusy = true;
+    linkError = null;
+    try {
+      await app.supabase.createWikiRecordLink({
+        fromRecordId: record.id,
+        toRecordId: linkTargetId,
+        label: linkLabel.trim() || null,
+      });
+      linkTargetId = '';
+      linkLabel = '';
+      emitWikiRecordChange();
+    } catch (err) {
+      linkError = err instanceof Error ? err.message : 'Failed to link records.';
+    } finally {
+      linkBusy = false;
+    }
+  }
+
+  async function removeLink(record: WikiRecord, view: WikiRecordLinkView): Promise<void> {
+    if (!app.supabase) return;
+    // The stored edge runs from the link's "from" record to its "to"
+    // record; reconstruct the original direction so the delete matches the
+    // unique pair regardless of which end we're viewing from.
+    const fromId = view.direction === 'outgoing' ? record.id : view.record.id;
+    const toId = view.direction === 'outgoing' ? view.record.id : record.id;
+    try {
+      await app.supabase.deleteWikiRecordLink({ fromRecordId: fromId, toRecordId: toId });
+      emitWikiRecordChange();
+    } catch (err) {
+      extrasError = err instanceof Error ? err.message : 'Failed to remove link.';
+    }
+  }
 
   // --- compose / edit form ---------------------------------------------
   let composing = $state(false);
@@ -431,6 +614,134 @@
           {#if expandedId === record.id}
             <div class="wiki-record-body">
               <Markdown content={record.content} />
+
+              {#if extrasError}
+                <p class="error">{extrasError}</p>
+              {/if}
+
+              <!-- Files: image thumbnails + document download chips, plus a
+                   drag/drop + picker upload zone. Bytes land in the
+                   persistent wiki-record-files bucket. -->
+              <div class="wiki-record-files">
+                {#if partitionedFiles.images.length > 0}
+                  <div class="wiki-record-thumbs">
+                    {#each partitionedFiles.images as view (view.file.id)}
+                      <div class="wiki-record-thumb">
+                        {#if view.url}
+                          <a href={view.url} target="_blank" rel="noopener noreferrer">
+                            <img src={view.url} alt={view.file.filename} loading="lazy" />
+                          </a>
+                        {:else}
+                          <div class="wiki-record-thumb-placeholder" aria-hidden="true"></div>
+                        {/if}
+                        <button
+                          type="button"
+                          class="wiki-record-file-remove"
+                          title="Remove file"
+                          aria-label={`Remove ${view.file.filename}`}
+                          onclick={() => void removeFile(view.file.id)}
+                        >×</button>
+                      </div>
+                    {/each}
+                  </div>
+                {/if}
+                {#if partitionedFiles.docs.length > 0}
+                  <ul class="wiki-record-docs">
+                    {#each partitionedFiles.docs as view (view.file.id)}
+                      <li class="wiki-record-doc">
+                        {#if view.url}
+                          <a href={view.url} target="_blank" rel="noopener noreferrer">
+                            {formatRecordFileMeta(view.file)}
+                          </a>
+                        {:else}
+                          <span>{formatRecordFileMeta(view.file)}</span>
+                        {/if}
+                        <button
+                          type="button"
+                          class="wiki-record-file-remove"
+                          title="Remove file"
+                          aria-label={`Remove ${view.file.filename}`}
+                          onclick={() => void removeFile(view.file.id)}
+                        >×</button>
+                      </li>
+                    {/each}
+                  </ul>
+                {/if}
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
+                <div
+                  class="wiki-record-dropzone"
+                  class:drag-over={dragOver}
+                  ondragover={(e) => {
+                    e.preventDefault();
+                    dragOver = true;
+                  }}
+                  ondragleave={() => (dragOver = false)}
+                  ondrop={(e) => onDrop(record, e)}
+                >
+                  <label class="wiki-record-upload-label">
+                    {uploadBusy ? 'Uploading…' : 'Attach a file or drop here'}
+                    <input
+                      type="file"
+                      multiple
+                      disabled={uploadBusy}
+                      onchange={(e) => onFileInput(record, e)}
+                    />
+                  </label>
+                </div>
+              </div>
+
+              <!-- Cross-links: this record's relationships to others
+                   ("attempt #3 based on attempt #2"). -->
+              <div class="wiki-record-links">
+                {#if expandedLinks.length > 0}
+                  <ul class="wiki-record-link-list">
+                    {#each expandedLinks as view (view.id)}
+                      {@const d = describeLink(view)}
+                      <li class="wiki-record-link">
+                        <span class="wiki-record-link-arrow" aria-hidden="true">{d.arrow}</span>
+                        <span class="wiki-record-link-label">{d.label}</span>
+                        <span class="wiki-record-link-preview subtle">{d.preview}</span>
+                        <button
+                          type="button"
+                          class="wiki-record-file-remove"
+                          title="Remove link"
+                          aria-label="Remove link"
+                          onclick={() => void removeLink(record, view)}
+                        >×</button>
+                      </li>
+                    {/each}
+                  </ul>
+                {/if}
+                {#if linkOptions.length > 0}
+                  <div class="wiki-record-link-form form-row">
+                    <select bind:value={linkTargetId} disabled={linkBusy} aria-label="Record to link">
+                      <option value="">Link to a record…</option>
+                      {#each linkOptions as candidate (candidate.id)}
+                        <option value={candidate.id}>
+                          {formatRecordDate(candidate.date)} - {contentPreview(candidate.content, 40)}
+                        </option>
+                      {/each}
+                    </select>
+                    <input
+                      type="text"
+                      bind:value={linkLabel}
+                      disabled={linkBusy}
+                      maxlength={MAX_RECORD_LINK_LABEL_CHARS}
+                      placeholder="label (e.g. based on)"
+                      autocomplete="off"
+                    />
+                    <button
+                      type="button"
+                      onclick={() => void addLink(record)}
+                      disabled={linkBusy || !linkTargetId}
+                    >Link</button>
+                  </div>
+                  {#if linkError}
+                    <p class="error">{linkError}</p>
+                  {/if}
+                {/if}
+              </div>
+
               <div class="row wiki-record-actions">
                 <button type="button" onclick={() => startEdit(record)}>Edit</button>
                 <button type="button" onclick={() => downloadRecordMarkdown(record)}>
@@ -557,6 +868,128 @@
   }
   .wiki-record-actions {
     margin-top: 0.5rem;
+  }
+  .wiki-record-files {
+    margin-top: 0.75rem;
+  }
+  .wiki-record-thumbs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+  }
+  .wiki-record-thumb {
+    position: relative;
+    width: 96px;
+    height: 96px;
+  }
+  .wiki-record-thumb img {
+    width: 96px;
+    height: 96px;
+    object-fit: cover;
+    border-radius: 6px;
+    border: 1px solid var(--border, rgba(128, 128, 128, 0.3));
+    display: block;
+  }
+  .wiki-record-thumb-placeholder {
+    width: 96px;
+    height: 96px;
+    border-radius: 6px;
+    border: 1px solid var(--border, rgba(128, 128, 128, 0.3));
+    background: var(--chip-bg, rgba(128, 128, 128, 0.18));
+  }
+  .wiki-record-docs {
+    list-style: none;
+    margin: 0 0 0.5rem;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+  .wiki-record-doc {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  /* Small circular "remove" affordance shared by file thumbs, doc rows,
+     and link rows. Absolutely positioned on a thumb, inline elsewhere. */
+  .wiki-record-file-remove {
+    border: none;
+    background: var(--chip-bg, rgba(128, 128, 128, 0.25));
+    color: inherit;
+    border-radius: 999px;
+    width: 1.25rem;
+    height: 1.25rem;
+    line-height: 1;
+    cursor: pointer;
+    flex: 0 0 auto;
+    padding: 0;
+  }
+  .wiki-record-file-remove:hover {
+    background: var(--danger-bg, rgba(220, 80, 80, 0.25));
+  }
+  .wiki-record-thumb .wiki-record-file-remove {
+    position: absolute;
+    top: -0.4rem;
+    right: -0.4rem;
+  }
+  .wiki-record-dropzone {
+    border: 1px dashed var(--border, rgba(128, 128, 128, 0.4));
+    border-radius: 6px;
+    padding: 0.5rem 0.75rem;
+    text-align: center;
+    font-size: 0.85em;
+  }
+  .wiki-record-dropzone.drag-over {
+    background: var(--hover-bg, rgba(128, 128, 128, 0.12));
+    border-color: var(--accent, rgba(128, 128, 255, 0.6));
+  }
+  .wiki-record-upload-label {
+    cursor: pointer;
+    display: inline-block;
+  }
+  .wiki-record-upload-label input[type='file'] {
+    display: none;
+  }
+  .wiki-record-links {
+    margin-top: 0.75rem;
+  }
+  .wiki-record-link-list {
+    list-style: none;
+    margin: 0 0 0.5rem;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+  .wiki-record-link {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+  }
+  .wiki-record-link-arrow {
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    flex: 0 0 auto;
+  }
+  .wiki-record-link-label {
+    font-weight: 600;
+    flex: 0 0 auto;
+  }
+  .wiki-record-link-preview {
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .wiki-record-link-form {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .wiki-record-link-form select {
+    flex: 1 1 12rem;
   }
   /* On a narrow viewport the row's single line gets cramped; let the
      preview wrap under the date instead of clipping aggressively. */

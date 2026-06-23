@@ -251,7 +251,7 @@ module; the `.svelte` file stays glue.
    the gate can't check.
 2. **Browser data layer** [DONE]: `WikiRecordFile` / `WikiRecordLink` /
    `WikiRecordLinkView` types + coercers; `MAX_RECORD_LINK_LABEL_CHARS`
-   + the file/link changelog message builders in `wiki.ts`;
+   plus the file/link changelog message builders in `wiki.ts`;
    SupabaseService file I/O (`listWikiRecordFiles`,
    `createWikiRecordFileSignedUrls`, `downloadWikiRecordFileBlob`,
    `uploadAndAttachWikiRecordFile`, `deleteWikiRecordFile`) and link CRUD
@@ -260,8 +260,20 @@ module; the `.svelte` file stays glue.
    record_update changelog; the `subscribeToWikiRecordChanges` relay
    widened to all three tables. (The tool-side `record_file_attach`
    copy-from-thread path is milestone 4.)
-3. **UI**: files + links in `WikiRecords.svelte` + primitives + tests.
-   (Usable end-to-end by hand at this point.)
+3. **UI** [DONE]: files + links live in the EXPANDED record body (not the
+   compose form - a new record has no id yet, so file/link management
+   sits where the record definitely exists, beside Edit/Export/Delete).
+   `WikiRecords.svelte` gains the upload zone (drag/drop + picker, image
+   downscale + doc text-extract reusing the composer helpers), the
+   thumbnail/doc strip, and the link picker (target select + label).
+   Primitives (`partitionRecordFiles`, `describeLink`, `linkCandidates`,
+   `validateLinkLabel`, `formatRecordFileMeta`, `recordFileIsImage`) +
+   vitest coverage. User doc updated (Records section). Usable end-to-end
+   by hand. NOTE: cross-article linking is supported by the schema but the
+   picker currently offers only THIS article's records (the bread case is
+   same-article); widening the picker is a later polish. NOT browser-
+   verified (cloud agent) - the upload/thumbnail/lightbox/picker
+   interaction wants a manual pass.
 4. **Edge reads + write tools**: widen `record_get`/`record_list`, the
    four gated tools, membership tests.
 5. **Agent awareness**: extraction-agent link verb + prompt, librarian
