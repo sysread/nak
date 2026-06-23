@@ -1358,7 +1358,15 @@ alter table public.profiles
   add column if not exists deep_sleep_last_run_at timestamptz,
   add column if not exists rem_last_run_at timestamptz,
   add column if not exists memory_librarian_inflight_holder text,
-  add column if not exists memory_librarian_inflight_expires_at timestamptz;
+  add column if not exists memory_librarian_inflight_expires_at timestamptz,
+  -- Terminal outcome of the most recent manual memory-librarian run
+  -- (rem or deep-sleep), persisted so any client can recover "what the
+  -- last run did" after a browser reload - the live result rides a
+  -- fire-and-forget Broadcast a reloaded tab never re-subscribes to.
+  -- Shape: { runId, source, finishedAt, result } (the fleet result
+  -- union under `result`); written by detachedManualRunHandler on
+  -- completion, read on mount + via the profiles realtime UPDATE.
+  add column if not exists memory_librarian_last_run_outcome jsonb;
 
 -- Claim the next user due for a scheduled deep-sleep run, across ALL
 -- users. Gated on the memory-librarian Settings toggle (only the
@@ -9518,7 +9526,14 @@ end $$;
 alter table public.profiles
   add column if not exists wiki_librarian_last_run_at timestamptz,
   add column if not exists wiki_librarian_inflight_holder text,
-  add column if not exists wiki_librarian_inflight_expires_at timestamptz;
+  add column if not exists wiki_librarian_inflight_expires_at timestamptz,
+  -- Terminal outcome of the most recent manual wiki-librarian run,
+  -- persisted for reload recovery. Twin of
+  -- memory_librarian_last_run_outcome (see the memory-librarian block);
+  -- the `_outcome` suffix keeps it distinct from the
+  -- wiki_librarian_last_run_at cadence stamp above. Shape:
+  -- { runId, source, finishedAt, result: WikiLibrarianRunResult }.
+  add column if not exists wiki_librarian_last_run_outcome jsonb;
 
 -- Claim the next user due for a scheduled librarian run, across ALL
 -- users. SECURITY DEFINER global sweep (same posture as

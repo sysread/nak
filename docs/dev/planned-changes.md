@@ -15,8 +15,6 @@ investigation cycles and the lessons learned are worth saving.
 - [Retire the browser supervisor](#retire-the-browser-supervisor)
   (shipped 2026-06-11 as item C1 of the de-browser-background-jobs
   milestone; analysis kept here as the historical record)
-- [Persist manual agent-run outcomes for reload recovery](#persist-manual-agent-run-outcomes-for-reload-recovery)
-  (not started)
 - [Give wiki-retry the detached-run + liveness treatment](#give-wiki-retry-the-detached-run--liveness-treatment)
   (not started)
 - [Biometric unlock for the master password](#biometric-unlock-for-the-master-password)
@@ -132,57 +130,6 @@ question. Per the project's planning rhythm, target-state design
 beyond this paragraph is deliberately deferred to whenever this
 becomes the active milestone.
 
-## Persist manual agent-run outcomes for reload recovery
-
-**Status:** not started. Scoped 2026-06-23 while auditing
-browser-vs-edge agent ownership.
-
-### The gap
-
-The manual librarian runs (wiki librarian, memory rem + deep-sleep)
-recover **run liveness** across a browser reload via the in-flight
-lease (`*_inflight_expires_at` on `profiles`, watched by
-`createInflightLeaseWatcher` in `src/lib/agents/inflight-lease.svelte.ts`,
-which does an initial read on `start()`). So after a reload the Run
-button comes back disabled while the run is really going and re-enables
-when the lease lapses.
-
-What does NOT recover is the **run outcome** - the step list and the
-"here's what the run did" result card. Those live in ephemeral browser
-singletons (`librarianRun` in
-`src/lib/agents/memory-librarian-run.svelte.ts`; the strip state in
-`Wiki.svelte`) and are delivered over a per-run Broadcast topic keyed to
-a **client-minted** `runId`. A reloaded tab never re-subscribes to that
-runId, so it shows "running in the background" and then the button just
-silently re-enables with no summary. The underlying data changes still
-surface via the coarse refetch buses (`emitMemoryChange`, the wiki
-changelog), so nothing is lost - but the per-run report is.
-
-### Approach (sketch, not committed)
-
-Persist the terminal outcome server-side so any client reads it on
-mount instead of depending on a live broadcast subscription:
-
-- Likely shape: a `last_<agent>_run` jsonb (or a few columns) on
-  `profiles`, written by `detachedManualRunHandler`'s completion path
-  alongside releasing the lease - matches the existing lease-lives-on-
-  profiles pattern and stays latest-only. A separate `agent_runs`
-  history table is the heavier alternative; only justified if we want
-  run history, which today we don't.
-- Client: after the lease's initial read, also read the last-run
-  outcome; if its runId/finished-at is newer than what the strip
-  shows, render it. The lease watcher is the natural place to fold the
-  read into, or a sibling read in the run singletons.
-- Touch points: `supabase/schema.sql` (column), the three run
-  functions' terminal path + `detachedManualRunHandler`
-  (`venice/index.ts`), a `SupabaseService` read method, and the
-  Memories + Wiki strips.
-
-### Open question
-
-Latest-only (profiles column) vs. a small history table. Default to
-latest-only unless a use-case for run history shows up.
-
 ## Give wiki-retry the detached-run + liveness treatment
 
 **Status:** not started. Scoped 2026-06-23 in the same audit.
@@ -230,10 +177,17 @@ Bring it up to the librarian pattern:
 
 ### Dependency note
 
-The retry result chip has the same ephemerality as the librarian
-outcome cards, so the outcome-recovery half overlaps with the first
-plan above - decide whether to share one persistence mechanism rather
-than building two.
+The outcome-recovery mechanism the librarians now use shipped
+2026-06-23: `detachedManualRunHandler` persists a
+`{ runId, source, finishedAt, result }` envelope to a
+`*_last_run_outcome` profiles column
+(`_shared/manual-run-outcome.ts`), recovered client-side by
+`createLastRunOutcomeWatcher` (`src/lib/agents/inflight-lease.svelte.ts`).
+If wiki-retry moves onto `detachedManualRunHandler`, it inherits that
+recovery for free by adding a `wiki-retry` -> outcome-column entry to
+`OUTCOME_COLUMN` rather than building a second mechanism. The retry
+result chip in `WikiSkippedPanel.svelte` would read the recovered
+outcome the same way the librarian strips do.
 
 ## Biometric unlock for the master password
 

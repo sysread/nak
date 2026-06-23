@@ -97,6 +97,8 @@ import type {
   OffsetPage,
   AgentRunProgressEvent,
   InflightLeaseColumn,
+  LastRunOutcomeColumn,
+  ManualRunOutcome,
 } from './supabase/types';
 import {
   coerceSettings,
@@ -104,6 +106,7 @@ import {
   coerceThread,
   coerceAttachmentRow,
   coerceMemoryChangelogEntry,
+  coerceManualRunOutcome,
   coerceWikiArticle,
   coerceWikiRecord,
   coerceWikiChangelogEntry,
@@ -4116,6 +4119,63 @@ export class SupabaseService {
             return;
           }
           onChange(new Date(exp).getTime() > Date.now() ? exp : null);
+        }
+      )
+      .subscribe();
+    return () => {
+      void this.client.removeChannel(channel);
+    };
+  }
+
+  /**
+   * Read the most-recent manual-run outcome for this user from the
+   * `*_last_run_outcome` profiles column. Returns the coerced envelope
+   * (runId / source / finishedAt / result) or null when no run has
+   * finished yet or the stored shape is unrecognised. Paired with
+   * subscribeToLastRunOutcome: this is the on-mount read that recovers a
+   * run that finished while the tab was away; the subscription delivers
+   * one that finishes while the tab is open. RLS lets a user read their
+   * own profile.
+   */
+  async getLastRunOutcome(
+    userId: string,
+    column: LastRunOutcomeColumn
+  ): Promise<ManualRunOutcome | null> {
+    const { data, error } = await this.client
+      .from('profiles')
+      .select(column)
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (error) throw new Error(`getLastRunOutcome failed: ${error.message}`);
+    return coerceManualRunOutcome((data as Record<string, unknown> | null)?.[column]);
+  }
+
+  /**
+   * Subscribe to manual-run-outcome writes for this user via realtime
+   * profiles UPDATEs (the same row + publication the in-flight lease
+   * rides). The venice function writes the outcome column when a detached
+   * run finishes, so the UPDATE's new tuple carries the fresh envelope -
+   * delivering it race-free without a re-read. Calls back with the
+   * coerced outcome, or null if the new tuple's column is empty/garbage.
+   * Returns an unsubscribe.
+   */
+  subscribeToLastRunOutcome(
+    userId: string,
+    column: LastRunOutcomeColumn,
+    onOutcome: (outcome: ManualRunOutcome | null) => void
+  ): () => void {
+    const channel = this.client
+      .channel(`last_run_outcome:${column}:${userId}`)
+      .on(
+        'postgres_changes' as never,
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'profiles',
+          filter: `user_id=eq.${userId}`,
+        },
+        (payload: { new?: Record<string, unknown> | null }) => {
+          onOutcome(coerceManualRunOutcome(payload.new?.[column]));
         }
       )
       .subscribe();

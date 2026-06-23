@@ -437,6 +437,25 @@ UI:
   `createInflightLeaseWatcher(column)` + the `getInflightLeaseExpiry` /
   `subscribeToInflightLease` data methods; the memory librarians flip to
   the detached route + a lease watcher the same way once confirmed.
+  **Run outcome = the persisted last-run envelope, for reload recovery.**
+  The lease recovers "is a run happening"; its twin recovers "what the
+  last run did", so a reloaded tab can re-render the result card the
+  fire-and-forget `result` broadcast already delivered and lost. When a
+  detached run finishes, `detachedManualRunHandler` writes a
+  `{ runId, source, finishedAt, result }` envelope to
+  `profiles.wiki_librarian_last_run_outcome` (the venice function's
+  `_shared/manual-run-outcome.ts`; a `busy` result is skipped - no run
+  happened). The browser recovers it via `wikiLibrarianOutcome`
+  (`createLastRunOutcomeWatcher`, the lease watcher's twin: initial read
+  on mount + a `subscribeToLastRunOutcome` subscription on the SAME
+  profiles realtime UPDATE, so a run that finishes while the tab watches
+  arrives in the new tuple race-free). A `$effect` in `Wiki.svelte`
+  bridges the watched outcome into `librarianResult` through the
+  `outcomeToLibrarianResult` transform. A `librarianShownRunId` guard
+  keeps a live run in this tab at full step fidelity and stops the same
+  runId being re-applied on every profiles tick. The recovered strip
+  carries no step rows (they are gone after a reload) - just the result
+  card.
   Renders a nested **table of contents** at the top of the article
   (between the title header and the body) for articles with two or
   more Markdown headings. ToC entries link to `#slug` anchors; a

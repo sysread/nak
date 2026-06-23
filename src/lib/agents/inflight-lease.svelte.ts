@@ -16,7 +16,12 @@
 // "lease". Generic across fleets via the column; the wiki singleton is
 // exported here, the memory librarians get their own the same way.
 
-import type { InflightLeaseColumn, SupabaseService } from '../supabase';
+import type {
+  InflightLeaseColumn,
+  LastRunOutcomeColumn,
+  ManualRunOutcome,
+  SupabaseService,
+} from '../supabase';
 
 export interface InflightLeaseWatcher {
   /** True while a run (any client, manual or scheduled) still holds the TTL-backed inflight expiry. */
@@ -109,4 +114,73 @@ export const wikiLibrarianLease = createInflightLeaseWatcher(
 // started in Chat.svelte alongside the wiki one.
 export const memoryLibrarianLease = createInflightLeaseWatcher(
   'memory_librarian_inflight_expires_at'
+);
+
+// Outcome-recovery watcher - the run-liveness lease's twin. The lease
+// answers "is a run happening"; this answers "what did the last run do",
+// so a tab that reloaded can re-render the result card the live Broadcast
+// already delivered and lost. It reads the `*_last_run_outcome` profiles
+// column on start (recovering a run that finished while away) and watches
+// the same profiles realtime UPDATE the lease rides (recovering one that
+// finishes while the tab is open - the venice function's outcome write is
+// itself a profiles UPDATE, so the new tuple carries the fresh envelope).
+//
+// No expiry timer: an outcome is a sticky last-value, not a TTL fact. The
+// consuming panel guards against re-showing an outcome over a fresher live
+// run (by runId), so this watcher just surfaces the latest stored value.
+export interface LastRunOutcomeWatcher {
+  /** The most-recent stored manual-run outcome, or null if none/unreadable. */
+  readonly outcome: ManualRunOutcome | null;
+  /** Begin watching. Idempotent - a second call while active is a no-op. */
+  start(deps: { supabase: SupabaseService; userId: string }): void;
+  /** Stop watching and clear state (sign-out / teardown). */
+  stop(): void;
+}
+
+export function createLastRunOutcomeWatcher(
+  column: LastRunOutcomeColumn
+): LastRunOutcomeWatcher {
+  const state = $state<{ outcome: ManualRunOutcome | null }>({ outcome: null });
+  let unsubscribe: (() => void) | null = null;
+  let active = false;
+
+  return {
+    get outcome(): ManualRunOutcome | null {
+      return state.outcome;
+    },
+    start(deps): void {
+      if (active) return;
+      active = true;
+      unsubscribe = deps.supabase.subscribeToLastRunOutcome(deps.userId, column, (o) => {
+        if (active) state.outcome = o;
+      });
+      // Initial read so an outcome that landed while the tab was away (the
+      // reload-after-finish case) shows immediately. Don't clobber a
+      // realtime value that may have already arrived - seed only while unset.
+      void deps.supabase
+        .getLastRunOutcome(deps.userId, column)
+        .then((o) => {
+          if (active && state.outcome === null) state.outcome = o;
+        })
+        .catch(() => {
+          // Best-effort; the next realtime UPDATE corrects it.
+        });
+    },
+    stop(): void {
+      active = false;
+      unsubscribe?.();
+      unsubscribe = null;
+      state.outcome = null;
+    },
+  };
+}
+
+// Outcome-recovery singletons, twins of the two lease singletons above.
+// Started/stopped in Chat.svelte with the session; read by the Wiki panel
+// (librarian result card) and bridged into the memory librarianRun store.
+export const wikiLibrarianOutcome = createLastRunOutcomeWatcher(
+  'wiki_librarian_last_run_outcome'
+);
+export const memoryLibrarianOutcome = createLastRunOutcomeWatcher(
+  'memory_librarian_last_run_outcome'
 );

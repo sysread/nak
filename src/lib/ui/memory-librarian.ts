@@ -194,3 +194,82 @@ export function remResultLine(input: RemResultLineInput): string {
   const calls = input.toolCalls === 1 ? 'call' : 'calls';
   return `Processed ${input.conversationsProcessed} ${c} with ${input.toolCalls} tool ${calls}.`;
 }
+
+/**
+ * The displayed shape of a memory-librarian run result - what the strip
+ * renders once a run settles. The live run path in the librarianRun store
+ * computes these fields inline from the result union; this is the same
+ * derivation applied to a PERSISTED outcome recovered after a reload, so
+ * a recovered run renders identically to one watched live.
+ */
+export interface MemoryLibrarianDisplay {
+  pass: MemoryLibrarianPass;
+  resultLine: string;
+  resultText: string | null;
+  error: string | null;
+}
+
+/**
+ * Derive the displayed result fields from a persisted manual-run outcome
+ * envelope (`{ source, result }`). Returns null when the outcome is not a
+ * memory-librarian one (unknown source) or carries a non-terminal `busy`
+ * result (which is never persisted, but guarded defensively). `source`
+ * picks the pass and the matching result-line builder; the result union
+ * supplies the counts.
+ */
+export function outcomeToMemoryDisplay(outcome: {
+  source: string;
+  result: unknown;
+}): MemoryLibrarianDisplay | null {
+  const result = outcome.result as { kind?: string; finalText?: string; error?: string };
+  const kind = result?.kind;
+  if (!kind || kind === 'busy') return null;
+
+  if (outcome.source === 'deep-sleep') {
+    const r = result as {
+      kind: 'ok' | 'no-eligible' | 'too-small' | 'error';
+      finalText?: string;
+      error?: string;
+      batchSize?: number;
+      toolCalls?: number;
+    };
+    return {
+      pass: 'deep-sleep',
+      resultLine: deepSleepResultLine({
+        kind: r.kind,
+        batchSize: r.batchSize ?? 0,
+        toolCalls: r.toolCalls ?? 0,
+      }),
+      resultText:
+        r.kind === 'ok' && (r.finalText ?? '').trim().length > 0
+          ? (r.finalText ?? '').trim()
+          : null,
+      error: r.kind === 'error' ? (r.error ?? 'Deep-sleep run failed.') : null,
+    };
+  }
+
+  if (outcome.source === 'rem') {
+    const r = result as {
+      kind: 'ok' | 'empty-queue' | 'error';
+      finalText?: string;
+      error?: string;
+      conversationsProcessed?: number;
+      toolCalls?: number;
+    };
+    return {
+      pass: 'rem',
+      resultLine: remResultLine({
+        kind: r.kind,
+        conversationsProcessed: r.conversationsProcessed ?? 0,
+        toolCalls: r.toolCalls ?? 0,
+      }),
+      resultText:
+        r.kind === 'ok' && (r.finalText ?? '').trim().length > 0
+          ? (r.finalText ?? '').trim()
+          : null,
+      error: r.kind === 'error' ? (r.error ?? 'Rem run failed.') : null,
+    };
+  }
+
+  return null;
+}

@@ -52,6 +52,50 @@ export type InflightLeaseColumn =
   | 'memory_librarian_inflight_expires_at';
 
 /**
+ * The profiles columns that hold a fleet's most-recent manual-run
+ * OUTCOME (the `{ runId, source, finishedAt, result }` envelope the
+ * venice function writes when a detached run finishes). Distinct from the
+ * in-flight lease (which answers "is a run happening"); this answers
+ * "what did the last run do", so a reloaded tab can re-render the result
+ * card the live Broadcast already delivered and lost. One column per
+ * fleet - the memory librarian's two passes share theirs, with `source`
+ * naming the pass.
+ */
+export type LastRunOutcomeColumn =
+  | 'wiki_librarian_last_run_outcome'
+  | 'memory_librarian_last_run_outcome';
+
+/**
+ * The persisted manual-run outcome envelope. `result` is the fleet's own
+ * run-result union (WikiLibrarianRunResult / RemRunResult /
+ * DeepSleepRunResult); consumers narrow it by `source`. Mirror of the
+ * edge-side `ManualRunOutcome` in `_shared/manual-run-outcome.ts`.
+ */
+export interface ManualRunOutcome<T = unknown> {
+  runId: string;
+  source: string;
+  finishedAt: string;
+  result: T;
+}
+
+/**
+ * Defensive coercion of a raw jsonb value read from a
+ * `*_last_run_outcome` column. Returns null for anything missing the
+ * required envelope fields - the column is null until a run finishes,
+ * and older rows could predate the shape. `result` is passed through
+ * untyped; the caller narrows it against the fleet's union.
+ */
+export function coerceManualRunOutcome(raw: unknown): ManualRunOutcome | null {
+  if (raw === null || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  if (typeof o.runId !== 'string' || o.runId.length === 0) return null;
+  if (typeof o.source !== 'string' || o.source.length === 0) return null;
+  if (typeof o.finishedAt !== 'string') return null;
+  if (!('result' in o)) return null;
+  return { runId: o.runId, source: o.source, finishedAt: o.finishedAt, result: o.result };
+}
+
+/**
  * Sentinel value the drawer's topic-filter dropdown uses to mean "rows
  * whose `topics` column is empty." It's not a real topic - the worker
  * never emits this string - but threading it through the selectedTopics

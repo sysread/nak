@@ -66,6 +66,7 @@ import {
   runDeepSleepSweepTick,
 } from './agents/deep_sleep.ts';
 import { createAgentProgressPublisher } from '../_shared/agent-progress.ts';
+import { persistManualRunOutcome } from '../_shared/manual-run-outcome.ts';
 import { createEdgeLogger } from '../_shared/edge-log.ts';
 // Side-effect import: every tool module under ./tools/ calls
 // registerTool() at module-load via this barrel, populating the
@@ -733,6 +734,12 @@ function detachedManualRunHandler(
           await log.flush();
           result = { kind: 'error', error: 'internal error during manual run' };
         }
+        // Persist the outcome to the profiles row BEFORE broadcasting it,
+        // so a tab that reloaded mid-run can recover "what the run did"
+        // even if it never sees this fire-and-forget `result` event. The
+        // write produces a profiles UPDATE the client's outcome watcher
+        // picks up; persist is best-effort and never blocks the broadcast.
+        await persistManualRunOutcome(admin, userId, logSource, runId, result);
         // Terminal event - the outcome the HTTP body used to carry.
         publisher.publish({ kind: 'result', result });
         await publisher.flush();

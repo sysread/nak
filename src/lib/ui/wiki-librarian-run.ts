@@ -13,7 +13,7 @@
 // settles that row from the POST's own outcome, so the spinner can't outlive
 // the request regardless of whether `done` arrived.
 
-import type { AgentRunProgressEvent } from '$lib/supabase';
+import type { AgentRunProgressEvent, WikiLibrarianRunResult } from '$lib/supabase';
 
 export type LibrarianStepStatus = 'pending' | 'ok' | 'error';
 
@@ -111,4 +111,21 @@ export function finalizeLibrarianSteps(
 ): LibrarianStep[] {
   const settled = settleTrailing(steps, outcome);
   return outcome === 'ok' ? [...settled, { label: 'Done', status: 'ok' }] : settled;
+}
+
+// Narrow a persisted manual-run outcome envelope to a WikiLibrarianRunResult
+// for the result card to render after a reload. Returns null when the outcome
+// is not a wiki-librarian one (wrong source) or carries a non-terminal `busy`
+// result (never persisted, but guarded). The strip pairs this with an empty
+// step list - the live step rows are gone after a reload, but the result card
+// is the part worth recovering.
+export function outcomeToLibrarianResult(outcome: {
+  source: string;
+  result: unknown;
+}): WikiLibrarianRunResult | null {
+  if (outcome.source !== 'wiki-librarian') return null;
+  const r = outcome.result as { kind?: string };
+  if (!r || r.kind === 'busy') return null;
+  if (r.kind === 'ok' || r.kind === 'error') return outcome.result as WikiLibrarianRunResult;
+  return null;
 }

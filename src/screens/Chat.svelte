@@ -169,6 +169,8 @@
   import {
     wikiLibrarianLease,
     memoryLibrarianLease,
+    wikiLibrarianOutcome,
+    memoryLibrarianOutcome,
   } from '$lib/agents/inflight-lease.svelte';
   import { emitMemoryChange } from '$lib/memory-events';
   import {
@@ -1847,6 +1849,23 @@
     if (!app.supabase || !session) return;
     memoryLibrarianLease.start({ supabase: app.supabase, userId: session.user.id });
     return () => memoryLibrarianLease.stop();
+  });
+
+  // Outcome-recovery watchers - the leases' twins. The lease re-disables a
+  // button across a reload; these recover the result CARD so the strip can
+  // re-render "what the last run did" (read on mount + watched via the same
+  // profiles realtime UPDATE). The Wiki panel reads wikiLibrarianOutcome
+  // directly; the memory one is bridged into the librarianRun store in
+  // Memories.svelte. Start/stop with the session, same as the leases.
+  $effect(() => {
+    if (!app.supabase || !session) return;
+    wikiLibrarianOutcome.start({ supabase: app.supabase, userId: session.user.id });
+    return () => wikiLibrarianOutcome.stop();
+  });
+  $effect(() => {
+    if (!app.supabase || !session) return;
+    memoryLibrarianOutcome.start({ supabase: app.supabase, userId: session.user.id });
+    return () => memoryLibrarianOutcome.stop();
   });
 
   // Realtime: the memories twin of the wiki relay above. Every memory

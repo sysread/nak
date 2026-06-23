@@ -327,7 +327,17 @@ in `docs/user/memory.md`. The dev side has five moving parts:
   strip), and the lease instead disables the confirm strip's **Run**
   submit and renders a "running in the background" spinner when a pass
   is in flight elsewhere. A collision still folds into a `busy`
-  result. Manual runs never touch the cadence stamps.
+  result. Manual runs never touch the cadence stamps. Run OUTCOME
+  recovers across a reload the same way the wiki librarian's does: the
+  detached handler writes a `{ runId, source, finishedAt, result }`
+  envelope to `profiles.memory_librarian_last_run_outcome` (one column
+  for both passes; `source` names rem vs deep-sleep), and
+  `memoryLibrarianOutcome` (`createLastRunOutcomeWatcher`) reads it on
+  mount + watches the profiles realtime UPDATE. A `$effect` in
+  `Memories.svelte` bridges the watched outcome into
+  `librarianRun.applyOutcome`, which re-renders the result strip via
+  `outcomeToMemoryDisplay` (guarded by the store's `displayedRunId` so a
+  live run isn't clobbered).
 - **User memory CRUD through the assistant** — user asks "what
   do you remember about me?" or "forget that I liked X"; the
   main model calls `memory_search` / `memory_update` /

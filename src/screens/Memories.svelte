@@ -43,7 +43,10 @@
   import Markdown from '../components/Markdown.svelte';
   import MemoryChangelogPanel from '../components/MemoryChangelogPanel.svelte';
   import { librarianRun } from '$lib/agents/memory-librarian-run.svelte';
-  import { memoryLibrarianLease } from '$lib/agents/inflight-lease.svelte';
+  import {
+    memoryLibrarianLease,
+    memoryLibrarianOutcome,
+  } from '$lib/agents/inflight-lease.svelte';
   import {
     librarianPassInfo,
     type MemoryLibrarianPass,
@@ -908,6 +911,16 @@
   const runInFlightElsewhere = $derived(
     memoryLibrarianLease.running && !librarianRun.running,
   );
+
+  // Bridge a recovered manual-run outcome into the librarianRun store so a
+  // reload (or a run that finished while this tab watched without local
+  // step fidelity) re-renders the result strip. The store's applyOutcome
+  // guards against clobbering a live run or re-applying the same runId, so
+  // this can fire freely whenever the watched outcome changes.
+  $effect(() => {
+    const outcome = memoryLibrarianOutcome.outcome;
+    if (outcome) librarianRun.applyOutcome(outcome);
+  });
 
   // The top-bar buttons set the trigger flags; we translate that into
   // "open the confirm strip for this pass" rather than running. The
