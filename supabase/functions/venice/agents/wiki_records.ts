@@ -33,6 +33,7 @@ import { wikiSearch } from '../tools/wiki_search.ts';
 import { wikiList } from '../tools/wiki_list.ts';
 import { recordCreate } from '../tools/record_create.ts';
 import { recordList } from '../tools/record_list.ts';
+import { recordLinkCreate } from '../tools/record_link_create.ts';
 import {
   runHeadlessAgent,
   type AgentTool,
@@ -56,6 +57,7 @@ const DEFAULT_SWEEP_MAX_THREADS = 3;
 const MAX_WIKI_RECORD_CONTENT_CHARS = 8000;
 const MAX_WIKI_RECORD_TAGS = 24;
 const MAX_WIKI_RECORD_TAG_CHARS = 40;
+const MAX_RECORD_LINK_LABEL_CHARS = 120;
 
 const WIKI_SEARCH_DEFAULT_LIMIT = 8;
 const WIKI_SEARCH_MAX_LIMIT = 25;
@@ -185,6 +187,41 @@ const RECORD_CREATE_WIRE_SCHEMA: AgentTool['wire'] = {
   },
 };
 
+const RECORD_LINK_CREATE_WIRE_SCHEMA: AgentTool['wire'] = {
+  type: 'function',
+  function: {
+    name: 'record_link_create',
+    description:
+      'Link one record to another with a short relationship label. ' +
+      'DIRECTED (from -> to): create it from the NEW record you just ' +
+      'logged to the PRIOR record it continues. Use ONLY when the ' +
+      'conversation explicitly frames the new event as a follow-up to a ' +
+      'specific earlier one ("same as last time but...", "attempt 3"). ' +
+      'Get the prior record id from record_list and the new id from ' +
+      'record_create. Never invent a relationship the user did not state.',
+    parameters: {
+      type: 'object',
+      properties: {
+        from_record_id: {
+          type: 'string',
+          description: 'UUID of the new/derived record (from record_create).',
+        },
+        to_record_id: {
+          type: 'string',
+          description: 'UUID of the prior record it builds on (from record_list).',
+        },
+        label: {
+          type: 'string',
+          maxLength: MAX_RECORD_LINK_LABEL_CHARS,
+          description: 'Short relationship label ("based on", "supersedes").',
+        },
+      },
+      required: ['from_record_id', 'to_record_id'],
+      additionalProperties: false,
+    },
+  },
+};
+
 // ---------------------------------------------------------------------------
 // Prompt
 // ---------------------------------------------------------------------------
@@ -215,6 +252,8 @@ The wiki has two layers, and you only touch one of them. Each article's BODY is 
 
 4. Call record_create with the article_id, the event's date (ISO "YYYY-MM-DD" - read it from the conversation; use the message timestamps when the user doesn't state a date), a short Markdown description of what happened and what was learned, and a few filtering tags.
 
+5. **Cross-link a continuation (only when explicit).** If the conversation frames the new event as a direct follow-up to a SPECIFIC earlier record you can see in record_list ("attempt 3", "same dough as last week but wetter", "the rematch"), call record_link_create from the new record's id to that prior record's id, with a short label ("based on", "supersedes"). This is the exception, not the rule: most records stand alone. Never link on a vague thematic resemblance, never invent a relationship the user did not state, and never link to a record you did not actually find via record_list. When unsure, skip the link.
+
 **Dates.** Anchor every record on the day the event happened, not the day you process it. If the user says "yesterday I baked", compute the date from the conversation's timestamps. Month-level precision is fine when the day is unknown - but prefer a concrete day when the conversation gives one.
 
 **Grounding.** Use memory_search (read-only) to confirm a subject when you're unsure which article an event belongs to. Never fabricate an event the user didn't describe.
@@ -235,6 +274,7 @@ function buildWikiRecordsToolbox(): Toolbox {
       asAgentTool(wikiList, WIKI_LIST_WIRE_SCHEMA),
       asAgentTool(recordList, RECORD_LIST_WIRE_SCHEMA),
       asAgentTool(recordCreate, RECORD_CREATE_WIRE_SCHEMA),
+      asAgentTool(recordLinkCreate, RECORD_LINK_CREATE_WIRE_SCHEMA),
       asAgentTool(memorySearch, MEMORY_SEARCH_WIRE_SCHEMA),
     ],
   };
@@ -486,8 +526,11 @@ export async function runWikiRecordsSweepTick(
 }
 
 // Test-only surface. The toolbox composition is a safety invariant - the
-// extraction agent gets read-only memory access and exactly one write
-// tool (record_create), never wiki_create / wiki_update / memory writes.
+// extraction agent gets read-only memory access and exactly two write
+// tools (record_create + record_link_create), never wiki_create /
+// wiki_update / memory writes, and NOT record_file_attach (it must not
+// promote conversation images autonomously - too easy to grab the wrong
+// one; file attach stays a user/chat-driven act).
 export const __test = {
   buildWikiRecordsToolbox,
   WIKI_RECORDS_PROMPT,

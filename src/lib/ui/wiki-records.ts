@@ -11,8 +11,10 @@
 import {
   MAX_WIKI_RECORD_TAGS,
   MAX_WIKI_RECORD_TAG_CHARS,
+  MAX_RECORD_LINK_LABEL_CHARS,
 } from '../wiki';
-import type { WikiRecord } from '../supabase';
+import { formatBytes } from '../attachments';
+import type { WikiRecord, WikiRecordFile, WikiRecordLinkView } from '../supabase';
 
 /**
  * Format a record's ISO date ("2026-06-17") as "Jun 17, 2026". Date-only
@@ -152,4 +154,98 @@ export function collectTags(records: readonly WikiRecord[]): string[] {
     for (const t of r.tags) set.add(t);
   }
   return Array.from(set).sort((a, b) => a.localeCompare(b));
+}
+
+// --- record files ------------------------------------------------------
+
+/** True when a record file is an image (renders as a thumbnail). */
+export function recordFileIsImage(file: Pick<WikiRecordFile, 'mime_type'>): boolean {
+  return (file.mime_type ?? '').startsWith('image/');
+}
+
+/**
+ * One-line metadata for a record file row: "crumb.jpg - 1.2 MB". The size
+ * suffix is dropped when unknown so a row never reads "... - " with a
+ * dangling separator.
+ */
+export function formatRecordFileMeta(
+  file: Pick<WikiRecordFile, 'filename' | 'size_bytes'>
+): string {
+  const size = typeof file.size_bytes === 'number' ? formatBytes(file.size_bytes) : '';
+  return size ? `${file.filename} - ${size}` : file.filename;
+}
+
+export interface RecordFileView {
+  file: WikiRecordFile;
+  /** Signed URL when resolved (live object), else null (still resolving or reclaimed). */
+  url: string | null;
+}
+
+/**
+ * Split a record's files into images (thumbnail strip) and documents
+ * (download chips), pairing each with its resolved signed URL from
+ * `urlById`. Render order is the list order (already position-sorted by
+ * the query). A file with no URL yet still renders - the image shows a
+ * placeholder, the doc a non-link chip - rather than vanishing mid-resolve.
+ */
+export function partitionRecordFiles(
+  files: readonly WikiRecordFile[],
+  urlById: Map<string, string>
+): { images: RecordFileView[]; docs: RecordFileView[] } {
+  const images: RecordFileView[] = [];
+  const docs: RecordFileView[] = [];
+  for (const file of files) {
+    const view: RecordFileView = { file, url: urlById.get(file.id) ?? null };
+    if (recordFileIsImage(file)) images.push(view);
+    else docs.push(view);
+  }
+  return { images, docs };
+}
+
+// --- record cross-links ------------------------------------------------
+
+/**
+ * Display projection of a record link from the current record's point of
+ * view. `arrow` shows edge direction ("->" outgoing, "<-" incoming),
+ * `label` is the relationship (or a neutral "linked" when unlabelled),
+ * `preview` is the other record's dated snippet for the clickable row.
+ */
+export function describeLink(view: WikiRecordLinkView): {
+  arrow: string;
+  label: string;
+  preview: string;
+} {
+  return {
+    arrow: view.direction === 'outgoing' ? '->' : '<-',
+    label: view.label && view.label.trim() ? view.label.trim() : 'linked',
+    preview: `${formatRecordDate(view.record.date)} - ${contentPreview(view.record.content, 60)}`,
+  };
+}
+
+/**
+ * Candidate target records for a new link: every record except the
+ * current one and any already linked to it (in either direction).
+ * Pure filter so the picker's option list derives from the data. The
+ * caller passes the records it has loaded (this article's, plus any
+ * cross-article search hits).
+ */
+export function linkCandidates(
+  records: readonly WikiRecord[],
+  currentRecordId: string,
+  existingLinks: readonly WikiRecordLinkView[]
+): WikiRecord[] {
+  const excluded = new Set<string>([currentRecordId]);
+  for (const l of existingLinks) excluded.add(l.record.id);
+  return records.filter((r) => !excluded.has(r.id));
+}
+
+/**
+ * Validate a link label. Empty is allowed (an unlabelled edge is valid);
+ * only over-length is an error. Returns an error string or null.
+ */
+export function validateLinkLabel(label: string): string | null {
+  if (label.length > MAX_RECORD_LINK_LABEL_CHARS) {
+    return `Label must be ${MAX_RECORD_LINK_LABEL_CHARS} characters or fewer.`;
+  }
+  return null;
 }

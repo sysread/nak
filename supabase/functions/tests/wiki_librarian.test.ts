@@ -42,6 +42,7 @@ Deno.test('librarian toolbox is reads + wiki/record writes, in declared order', 
       'record_create',
       'record_update',
       'record_delete',
+      'record_link_delete',
     ],
   );
 });
@@ -50,6 +51,12 @@ Deno.test('librarian toolbox excludes creation, memory writes, and the UI tool',
   const names = __test.buildLibrarianToolbox().tools.map((t) => t.name);
   for (const forbidden of [
     'wiki_create',
+    // The librarian prunes broken cross-links but never originates them
+    // (linking is the extraction agent's job), same as no wiki_create.
+    'record_link_create',
+    // File attach is a user/chat-driven act, never a maintenance op.
+    'record_file_attach',
+    'record_file_remove',
     'memory_create',
     'memory_update',
     'memory_invalidate',

@@ -43,10 +43,15 @@ The main chat model sees toolboxes as the unit of enablement:
 - **`always_on`** - rides every request regardless of the thread's
   `toolboxes_enabled` array. Carries every read-only surface plus a
   few reflexes (below).
-- **`cooking`**, **`memories`**, **`wiki`**, **`library`**,
-  **`images`** - gated toolboxes carrying only writes. Included in
-  the wire catalog only when their name appears in
-  `threads.toolboxes_enabled`.
+- **`cooking`**, **`memories`**, **`wiki`**, **`wiki_records`**,
+  **`library`**, **`images`** - gated toolboxes carrying only writes.
+  Included in the wire catalog only when their name appears in
+  `threads.toolboxes_enabled`. `wiki_records` carries the record writes
+  (`record_create` / `record_update` / `record_delete`) plus the file +
+  link writes (`record_file_attach` / `record_file_remove` /
+  `record_link_create` / `record_link_delete`); the record reads
+  (`record_list` / `record_get` / `record_search`) stay always-on. See
+  `docs/dev/wiki.md` for the record files + cross-links design.
 
 The principle: reads are idempotent and cheap, so gating them was
 forcing the model to weigh "do I need this badly enough to flip a

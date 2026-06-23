@@ -80,6 +80,9 @@ import type {
   MemoryRelation,
   WikiArticle,
   WikiRecord,
+  WikiRecordFile,
+  WikiRecordLink,
+  WikiRecordLinkView,
   WikiArticleSource,
   WikiArticleRelated,
   WikiChangelogKind,
@@ -109,6 +112,8 @@ import {
   coerceManualRunOutcome,
   coerceWikiArticle,
   coerceWikiRecord,
+  coerceWikiRecordFile,
+  coerceWikiRecordLink,
   coerceWikiChangelogEntry,
   parseTopicVocabulary,
   coerceDocument,
@@ -120,7 +125,11 @@ import {
 // edge-side in venice/tools/_record_helpers.ts. The `import type` cycle
 // back to this file from ./wiki is erased at runtime, so this value
 // import is one-way.
-import { buildRecordChangelogMessage } from './wiki';
+import {
+  buildRecordChangelogMessage,
+  buildRecordFileChangelogMessage,
+  buildRecordLinkChangelogMessage,
+} from './wiki';
 
 
 
@@ -2458,6 +2467,26 @@ export class SupabaseService {
     date: string,
     content?: string
   ): Promise<void> {
+    await this.appendRecordChangelogMessage(
+      articleId,
+      kind,
+      buildRecordChangelogMessage(kind, date, content)
+    );
+  }
+
+  /**
+   * Lower-level changelog append that takes a pre-built message, so the
+   * file/link mutations (which reuse the record_update kind but need
+   * different wording than a content edit - "Attached image ...",
+   * "Linked to ...") can land a history row through the same path. Same
+   * best-effort contract: a failed audit insert never fails the caller's
+   * already-completed write.
+   */
+  private async appendRecordChangelogMessage(
+    articleId: string,
+    kind: 'record_create' | 'record_update' | 'record_delete',
+    message: string
+  ): Promise<void> {
     try {
       const { data } = await this.client
         .from('wiki_articles')
@@ -2472,7 +2501,7 @@ export class SupabaseService {
         article_id: articleId,
         kind,
         title_at_change: title,
-        message: buildRecordChangelogMessage(kind, date, content),
+        message,
       });
     } catch {
       // Best-effort - see the doc comment. Swallow so the record write
@@ -2549,6 +2578,288 @@ export class SupabaseService {
       if (out.length >= limit) return out;
     }
     return out;
+  }
+
+  // --- wiki record files -----------------------------------------------
+
+  async listWikiRecordFiles(recordId: string): Promise<WikiRecordFile[]> {
+    const { data, error } = await this.client
+      .from('wiki_record_files')
+      .select(
+        'id, record_id, position, filename, mime_type, size_bytes, storage_path, extracted_text, created_at'
+      )
+      .eq('record_id', recordId)
+      .order('position', { ascending: true })
+      .order('created_at', { ascending: true });
+    if (error) throw new SupabaseError(error.message);
+    return (data ?? []).map((row) => coerceWikiRecordFile(row as Record<string, unknown>));
+  }
+
+  /**
+   * Short-lived signed URLs per file id, for image previews / download
+   * links. Skips rows with no `storage_path` (reclaimed). Batched into one
+   * Storage call; best-effort per the attachment twin above.
+   */
+  async createWikiRecordFileSignedUrls(
+    files: readonly Pick<WikiRecordFile, 'id' | 'storage_path'>[],
+    expiresInSeconds = 3600
+  ): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    const live = files.filter(
+      (f): f is { id: string; storage_path: string } => typeof f.storage_path === 'string'
+    );
+    if (live.length === 0) return out;
+    const { data, error } = await this.client.storage
+      .from('wiki-record-files')
+      .createSignedUrls(
+        live.map((f) => f.storage_path),
+        expiresInSeconds
+      );
+    if (error) throw new SupabaseError(error.message);
+    const urlByPath = new Map<string, string>();
+    for (const entry of data ?? []) {
+      if (entry.signedUrl && typeof entry.path === 'string') {
+        urlByPath.set(entry.path, entry.signedUrl);
+      }
+    }
+    for (const f of live) {
+      const url = urlByPath.get(f.storage_path);
+      if (url) out.set(f.id, url);
+    }
+    return out;
+  }
+
+  async downloadWikiRecordFileBlob(storagePath: string): Promise<Blob> {
+    const { data, error } = await this.client.storage
+      .from('wiki-record-files')
+      .download(storagePath);
+    if (error) throw new SupabaseError(error.message);
+    return data;
+  }
+
+  /**
+   * Upload bytes to the persistent wiki-record-files bucket and insert the
+   * metadata row, then changelog the attach against the parent article.
+   * The id is minted client-side so the upload key and the row reference
+   * one path in a single pass (same as addAttachments). `articleId` +
+   * `recordDate` come from the caller's already-loaded record so the
+   * changelog row reads without an extra fetch.
+   */
+  async uploadAndAttachWikiRecordFile(args: {
+    recordId: string;
+    articleId: string;
+    recordDate: string;
+    position: number;
+    filename: string;
+    mimeType: string | null;
+    sizeBytes: number | null;
+    dataBase64: string;
+    extractedText?: string | null;
+  }): Promise<WikiRecordFile> {
+    const session = await this.getSession();
+    if (!session) throw new SupabaseError('Not authenticated.');
+    const userId = session.user.id;
+    const id = crypto.randomUUID();
+    const path = `${userId}/${id}/${args.filename}`;
+    const { error: upErr } = await this.client.storage
+      .from('wiki-record-files')
+      .upload(path, base64ToBytes(args.dataBase64), {
+        contentType: args.mimeType ?? undefined,
+        upsert: true,
+      });
+    if (upErr) throw new SupabaseError(upErr.message);
+    const { data, error } = await this.client
+      .from('wiki_record_files')
+      .insert({
+        id,
+        user_id: userId,
+        record_id: args.recordId,
+        position: args.position,
+        filename: args.filename,
+        mime_type: args.mimeType,
+        size_bytes: args.sizeBytes,
+        storage_path: path,
+        extracted_text: args.extractedText ?? null,
+      })
+      .select(
+        'id, record_id, position, filename, mime_type, size_bytes, storage_path, extracted_text, created_at'
+      )
+      .single();
+    if (error) throw new SupabaseError(error.message);
+    const file = coerceWikiRecordFile(data as Record<string, unknown>);
+    await this.appendRecordChangelogMessage(
+      args.articleId,
+      'record_update',
+      buildRecordFileChangelogMessage(
+        'attach',
+        args.recordDate,
+        file.filename,
+        (file.mime_type ?? '').startsWith('image/')
+      )
+    );
+    return file;
+  }
+
+  /**
+   * Delete a record file: remove the bucket object (best-effort - the
+   * daily wiki-record-file-gc sweep reclaims a miss) then the row, and
+   * changelog the removal. Reads the file + its record up front so the
+   * changelog row can name the file even though both are gone afterward.
+   */
+  async deleteWikiRecordFile(id: string): Promise<void> {
+    const { data: fileRow } = await this.client
+      .from('wiki_record_files')
+      .select('id, record_id, filename, mime_type, storage_path')
+      .eq('id', id)
+      .maybeSingle();
+    const file = fileRow ? coerceWikiRecordFile(fileRow as Record<string, unknown>) : null;
+    const record = file ? await this.getWikiRecord(file.record_id) : null;
+    if (file?.storage_path) {
+      // Best-effort: a failed object remove is reclaimed by the GC sweep.
+      await this.client.storage.from('wiki-record-files').remove([file.storage_path]);
+    }
+    const { error } = await this.client.from('wiki_record_files').delete().eq('id', id);
+    if (error) throw new SupabaseError(error.message);
+    if (file && record) {
+      await this.appendRecordChangelogMessage(
+        record.article_id,
+        'record_update',
+        buildRecordFileChangelogMessage(
+          'remove',
+          record.date,
+          file.filename,
+          (file.mime_type ?? '').startsWith('image/')
+        )
+      );
+    }
+  }
+
+  // --- wiki record links -----------------------------------------------
+
+  /**
+   * Every link touching `recordId`, projected from that record's point of
+   * view: outgoing edges (this record -> other) and incoming edges (other
+   * -> this record), each carrying the OTHER record's date + content for
+   * the row label. Two queries plus one batched fetch of the endpoints -
+   * avoids the two-FK-to-one-table PostgREST embedding ambiguity.
+   */
+  async listWikiRecordLinks(recordId: string): Promise<WikiRecordLinkView[]> {
+    const [outRes, inRes] = await Promise.all([
+      this.client
+        .from('wiki_record_links')
+        .select('id, from_record_id, to_record_id, label, created_at')
+        .eq('from_record_id', recordId),
+      this.client
+        .from('wiki_record_links')
+        .select('id, from_record_id, to_record_id, label, created_at')
+        .eq('to_record_id', recordId),
+    ]);
+    if (outRes.error) throw new SupabaseError(outRes.error.message);
+    if (inRes.error) throw new SupabaseError(inRes.error.message);
+    const outgoing = (outRes.data ?? []).map((r) =>
+      coerceWikiRecordLink(r as Record<string, unknown>)
+    );
+    const incoming = (inRes.data ?? []).map((r) =>
+      coerceWikiRecordLink(r as Record<string, unknown>)
+    );
+    // The other endpoint of each edge.
+    const otherIds = new Set<string>();
+    for (const l of outgoing) otherIds.add(l.to_record_id);
+    for (const l of incoming) otherIds.add(l.from_record_id);
+    if (otherIds.size === 0) return [];
+    const { data: recRows, error: recErr } = await this.client
+      .from('wiki_records')
+      .select('id, article_id, date, content')
+      .in('id', Array.from(otherIds));
+    if (recErr) throw new SupabaseError(recErr.message);
+    const byId = new Map<
+      string,
+      { id: string; article_id: string; date: string; content: string }
+    >();
+    for (const r of recRows ?? []) {
+      const row = r as Record<string, unknown>;
+      byId.set(String(row.id), {
+        id: String(row.id),
+        article_id: String(row.article_id ?? ''),
+        date: typeof row.date === 'string' ? row.date : '',
+        content: typeof row.content === 'string' ? row.content : '',
+      });
+    }
+    const views: WikiRecordLinkView[] = [];
+    for (const l of outgoing) {
+      const other = byId.get(l.to_record_id);
+      if (other) views.push({ id: l.id, direction: 'outgoing', label: l.label, record: other });
+    }
+    for (const l of incoming) {
+      const other = byId.get(l.from_record_id);
+      if (other) views.push({ id: l.id, direction: 'incoming', label: l.label, record: other });
+    }
+    return views;
+  }
+
+  /**
+   * Create or relabel a directed edge between two records. The unique
+   * (from, to) constraint makes this an upsert on the pair - re-linking
+   * updates the label rather than duplicating the edge. Changelogs the
+   * link against the FROM record's article, naming the target record.
+   */
+  async createWikiRecordLink(args: {
+    fromRecordId: string;
+    toRecordId: string;
+    label?: string | null;
+  }): Promise<WikiRecordLink> {
+    const session = await this.getSession();
+    if (!session) throw new SupabaseError('Not authenticated.');
+    const { data, error } = await this.client
+      .from('wiki_record_links')
+      .upsert(
+        {
+          user_id: session.user.id,
+          from_record_id: args.fromRecordId,
+          to_record_id: args.toRecordId,
+          label: args.label ?? null,
+        },
+        { onConflict: 'from_record_id,to_record_id' }
+      )
+      .select('id, from_record_id, to_record_id, label, created_at')
+      .single();
+    if (error) throw new SupabaseError(error.message);
+    const link = coerceWikiRecordLink(data as Record<string, unknown>);
+    const [fromRec, toRec] = await Promise.all([
+      this.getWikiRecord(args.fromRecordId),
+      this.getWikiRecord(args.toRecordId),
+    ]);
+    if (fromRec && toRec) {
+      await this.appendRecordChangelogMessage(
+        fromRec.article_id,
+        'record_update',
+        buildRecordLinkChangelogMessage('create', toRec.date, toRec.content, link.label)
+      );
+    }
+    return link;
+  }
+
+  async deleteWikiRecordLink(args: {
+    fromRecordId: string;
+    toRecordId: string;
+  }): Promise<void> {
+    const [fromRec, toRec] = await Promise.all([
+      this.getWikiRecord(args.fromRecordId),
+      this.getWikiRecord(args.toRecordId),
+    ]);
+    const { error } = await this.client
+      .from('wiki_record_links')
+      .delete()
+      .eq('from_record_id', args.fromRecordId)
+      .eq('to_record_id', args.toRecordId);
+    if (error) throw new SupabaseError(error.message);
+    if (fromRec && toRec) {
+      await this.appendRecordChangelogMessage(
+        fromRec.article_id,
+        'record_update',
+        buildRecordLinkChangelogMessage('delete', toRec.date, toRec.content, null)
+      );
+    }
   }
 
   // Documents (Library) --------------------------------------------------
@@ -4225,21 +4536,28 @@ export class SupabaseService {
    * section on a coarse "something changed" signal.
    */
   subscribeToWikiRecordChanges(userId: string, onChange: () => void): () => void {
-    const channel = this.client
-      .channel(`wiki_records:${userId}`)
-      .on(
+    // One channel, three tables: the record rows plus their two relations
+    // (files + links). A server-side write on any of them - chat tool,
+    // extraction agent, librarian - flows into the same coarse
+    // "something changed" notification, and an open article view refetches
+    // its records / files / links. Each table's DELETE delivery rides its
+    // (id, user_id) replica-identity index (see schema.sql).
+    const channel = this.client.channel(`wiki_records:${userId}`);
+    for (const table of ['wiki_records', 'wiki_record_files', 'wiki_record_links']) {
+      channel.on(
         'postgres_changes' as never,
         {
           event: '*',
           schema: 'public',
-          table: 'wiki_records',
+          table,
           filter: `user_id=eq.${userId}`,
         },
         () => {
           onChange();
         }
-      )
-      .subscribe();
+      );
+    }
+    channel.subscribe();
     return () => {
       void this.client.removeChannel(channel);
     };

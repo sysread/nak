@@ -225,6 +225,81 @@ export function coerceWikiRecord(raw: Record<string, unknown>): WikiRecord {
   };
 }
 
+/**
+ * One file attached to a wiki record (crumb photo, scanned recipe card,
+ * a PDF). Bytes live in the persistent `wiki-record-files` bucket; this
+ * row is metadata + a `storage_path` pointer. `extracted_text` carries
+ * the Venice text-parser output for non-image documents (null for
+ * images). `storage_path` is non-null in practice (the bucket is
+ * persistent) but typed nullable for symmetry with the attachment shape.
+ * See `supabase/schema.sql:wiki_record_files`.
+ */
+export interface WikiRecordFile {
+  id: string;
+  record_id: string;
+  position: number;
+  filename: string;
+  mime_type: string | null;
+  size_bytes: number | null;
+  storage_path: string | null;
+  extracted_text: string | null;
+  created_at: string;
+}
+
+/**
+ * One directed edge in the record cross-link graph: `from_record_id`
+ * points at `to_record_id` with a freeform `label` ("based on",
+ * "supersedes"). A simple directed graph - one edge per ordered pair -
+ * so re-linking the same pair updates the label rather than adding a
+ * parallel edge. See `supabase/schema.sql:wiki_record_links`.
+ */
+export interface WikiRecordLink {
+  id: string;
+  from_record_id: string;
+  to_record_id: string;
+  label: string | null;
+  created_at: string;
+}
+
+/**
+ * A record link projected for display from the perspective of ONE
+ * record: `direction` says whether the edge points away from
+ * ('outgoing') or toward ('incoming') that record, and `record` is the
+ * OTHER endpoint (date + a content snippet for the row label). Built by
+ * `SupabaseService.listWikiRecordLinks`.
+ */
+export interface WikiRecordLinkView {
+  id: string;
+  direction: 'outgoing' | 'incoming';
+  label: string | null;
+  record: { id: string; article_id: string; date: string; content: string };
+}
+
+export function coerceWikiRecordFile(raw: Record<string, unknown>): WikiRecordFile {
+  const sp = raw.storage_path;
+  return {
+    id: String(raw.id),
+    record_id: String(raw.record_id ?? ''),
+    position: typeof raw.position === 'number' ? raw.position : 0,
+    filename: typeof raw.filename === 'string' ? raw.filename : '',
+    mime_type: typeof raw.mime_type === 'string' ? raw.mime_type : null,
+    size_bytes: typeof raw.size_bytes === 'number' ? raw.size_bytes : null,
+    storage_path: typeof sp === 'string' && sp.length > 0 ? sp : null,
+    extracted_text: typeof raw.extracted_text === 'string' ? raw.extracted_text : null,
+    created_at: String(raw.created_at ?? ''),
+  };
+}
+
+export function coerceWikiRecordLink(raw: Record<string, unknown>): WikiRecordLink {
+  return {
+    id: String(raw.id),
+    from_record_id: String(raw.from_record_id ?? ''),
+    to_record_id: String(raw.to_record_id ?? ''),
+    label: typeof raw.label === 'string' && raw.label.length > 0 ? raw.label : null,
+    created_at: String(raw.created_at ?? ''),
+  };
+}
+
 const WIKI_CHANGELOG_KINDS: readonly WikiChangelogKind[] = [
   'create',
   'update',

@@ -204,6 +204,12 @@ parent - `messages.thread_id -> threads.user_id = auth.uid()`.
   `doc_create`, `recipe_photos_attach` all read attachment bytes via the
   bucket (signed URL or `downloadAttachmentBlob`).
 - **Models** - `ModelSpec.supportsVision` gates inline images.
+- **Wiki records** (`docs/dev/wiki.md`) - the `record_file_attach` tool
+  reuses the thread-scoped filename resolver (the `analyze_image` lookup)
+  to find a file in the conversation, then copies its bytes out of the
+  `attachments` bucket into the persistent `wiki-record-files` bucket. So
+  a chat attachment (user upload or `generate_image` output) can be
+  promoted onto a wiki record and outlive the 30-day attachment expiry.
 - **Realtime**: `subscribeToMessages` echoes a `messages` INSERT without
   the joined attachments, so `Chat.svelte` fires a follow-up
   `listAttachmentsByMessageIds` for USER-role inserts and re-runs

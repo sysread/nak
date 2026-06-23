@@ -40,7 +40,52 @@ export const recordList: ToolDef = {
 
     const { data, error } = await query;
     if (error) throw new Error(`listWikiRecords failed: ${error.message}`);
-    return { records: data ?? [] };
+    const records = (data ?? []) as Array<{ id: string }>;
+
+    // Annotate each record with how many files + links it carries, so the
+    // model can tell which entries hold evidence (photos, docs) or sit in
+    // a relationship without a per-record record_get. Two batched queries
+    // over the listed ids, tallied here - not N+1.
+    const ids = records.map((r) => r.id);
+    const fileCount = new Map<string, number>();
+    const linkCount = new Map<string, number>();
+    if (ids.length > 0) {
+      const [fileRows, fromRows, toRows] = await Promise.all([
+        ctx.adminClient
+          .from('wiki_record_files')
+          .select('record_id')
+          .eq('user_id', ctx.userId)
+          .in('record_id', ids),
+        ctx.adminClient
+          .from('wiki_record_links')
+          .select('from_record_id')
+          .eq('user_id', ctx.userId)
+          .in('from_record_id', ids),
+        ctx.adminClient
+          .from('wiki_record_links')
+          .select('to_record_id')
+          .eq('user_id', ctx.userId)
+          .in('to_record_id', ids),
+      ]);
+      for (const r of fileRows.data ?? []) {
+        const key = String((r as { record_id: string }).record_id);
+        fileCount.set(key, (fileCount.get(key) ?? 0) + 1);
+      }
+      for (const r of fromRows.data ?? []) {
+        const key = String((r as { from_record_id: string }).from_record_id);
+        linkCount.set(key, (linkCount.get(key) ?? 0) + 1);
+      }
+      for (const r of toRows.data ?? []) {
+        const key = String((r as { to_record_id: string }).to_record_id);
+        linkCount.set(key, (linkCount.get(key) ?? 0) + 1);
+      }
+    }
+    const annotated = records.map((r) => ({
+      ...r,
+      file_count: fileCount.get(r.id) ?? 0,
+      link_count: linkCount.get(r.id) ?? 0,
+    }));
+    return { records: annotated };
   },
 };
 

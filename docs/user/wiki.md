@@ -231,17 +231,45 @@ What you can do in the Records section:
   marked "(other article)". Clear the search to return to this
   article's list.
 - **Expand** - click a record row to read its full Markdown. The
-  expanded view has **Edit**, **Export**, and **Delete** actions.
+  expanded view has **Edit**, **Export**, and **Delete** actions, plus
+  the **files** and **linked records** controls below.
 - **Export** - **Export** on a single record downloads it as a
   Markdown file (`yyyy-mm-dd-<slug>.md`). The **download** icon in the
   Records header downloads a ZIP containing the article as
   `article.md` plus every record under `records/`.
 
+### Attaching files to a record
+
+Expand a record and you'll find a small upload zone: **drop a file on
+it, or click to pick one.** Images attach as thumbnails (click to open
+the full size); other files - PDFs, scanned recipe cards - attach as
+download links. A record can carry as many files as you like. This is
+the place for the crumb photos and process shots that document an
+experiment. Each file has an **x** to remove it.
+
+Unlike chat attachments (which are reclaimed a month after a
+conversation goes quiet), record files are **permanent** - they live
+with the record for as long as it does. The assistant can also attach a
+file you posted earlier in the chat to a record, and can read an
+attached document when it looks at the record.
+
+### Linking records together
+
+The same expanded view has a **"Link to a record..."** control: pick
+another record and give the relationship a short **label** ("based on",
+"supersedes", "same dough"). The link is directional and shows up on
+both records - an arrow (`->` / `<-`) tells you which way it points.
+This is how you express "attempt #3 is based on attempt #2 with more
+hydration" as a navigable relationship instead of a sentence. The
+**x** on a link row removes it.
+
 Records are filled both by hand (the Add button) and automatically by
 a background agent that scans your conversations for discrete events
 and logs them on the matching article - see
-[Automatic records](#automatic-records-extraction) below. Deleting a
-record is a hard delete, like deleting an article.
+[Automatic records](#automatic-records-extraction) below. The
+assistant can also cross-link related records and attach chat files to
+them on your behalf. Deleting a record is a hard delete, like deleting
+an article; its files and links go with it.
 
 ## The autonomous background agent
 

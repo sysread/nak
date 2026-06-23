@@ -230,7 +230,7 @@ description = "Type-check every edge-function entrypoint with deno check"
 # bundle-docs first: venice imports the gitignored research-docs
 # corpus, which doesn't exist on a fresh clone until the bundler runs.
 depends = ["bundle-docs"]
-run = "deno check --config supabase/functions/deno.json supabase/functions/venice/index.ts supabase/functions/expire-attachments/index.ts supabase/functions/recipe-image-gc/index.ts supabase/functions/attachment-gc/index.ts"
+run = "deno check --config supabase/functions/deno.json supabase/functions/venice/index.ts supabase/functions/expire-attachments/index.ts supabase/functions/recipe-image-gc/index.ts supabase/functions/attachment-gc/index.ts supabase/functions/wiki-record-file-gc/index.ts"
 
 [tasks.bundle-docs]
 description = "Bundle docs/user + docs/dev into the function-side research_docs corpus (supabase/functions/venice/_generated/research-docs-corpus.ts). Gitignored output; dev-start, functions-serve, and functions-deploy all depend on it."

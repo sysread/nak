@@ -19,6 +19,8 @@ const MAX_WIKI_CHANGELOG_MESSAGE_CHARS = 200;
 export const MAX_WIKI_RECORD_CONTENT_CHARS = 8000;
 export const MAX_WIKI_RECORD_TAGS = 24;
 export const MAX_WIKI_RECORD_TAG_CHARS = 40;
+// Mirror of MAX_RECORD_LINK_LABEL_CHARS in src/lib/wiki.ts.
+export const MAX_RECORD_LINK_LABEL_CHARS = 120;
 
 // Columns every record tool selects, kept in one place so the returned
 // shape stays identical across create / update / get / list.
@@ -121,11 +123,97 @@ export async function appendRecordChangelog(
   date: string,
   content?: string,
 ): Promise<void> {
+  await appendRecordChangelogMessage(
+    adminClient,
+    userId,
+    articleId,
+    kind,
+    buildRecordChangelogMessage(kind, date, content),
+  );
+}
+
+/**
+ * Lower-level changelog append taking a pre-built message, so the
+ * file/link tools (which reuse the record_update kind but need different
+ * wording than a content edit) land a history row through the same path.
+ * Mirror of SupabaseService.appendRecordChangelogMessage on the browser.
+ */
+export async function appendRecordChangelogMessage(
+  adminClient: SupabaseClient,
+  userId: string,
+  articleId: string,
+  kind: 'record_create' | 'record_update' | 'record_delete',
+  message: string,
+): Promise<void> {
   const title = (await getOwnedArticleTitle(adminClient, userId, articleId)) ?? '(record)';
   await appendWikiChangelog(adminClient, userId, {
     article_id: articleId,
     kind,
     title_at_change: title,
-    message: buildRecordChangelogMessage(kind, date, content),
+    message,
   });
+}
+
+/**
+ * Changelog message for a file attach/remove on a record. Mirror of
+ * buildRecordFileChangelogMessage in src/lib/wiki.ts. File/link changes
+ * reuse the record_update kind, so the panel renders them under "Edited".
+ */
+export function buildRecordFileChangelogMessage(
+  action: 'attach' | 'remove',
+  recordDate: string,
+  filename: string,
+  isImage: boolean,
+): string {
+  const noun = isImage ? 'image' : 'file';
+  const verb = action === 'attach' ? 'Attached' : 'Removed';
+  const name = filename.replace(/\s+/g, ' ').trim().slice(0, 120);
+  const msg = `${verb} ${noun} (${recordDate})${name ? `: ${name}` : ''}`;
+  return msg.slice(0, MAX_WIKI_CHANGELOG_MESSAGE_CHARS);
+}
+
+/**
+ * Changelog message for a cross-link create/delete. Mirror of
+ * buildRecordLinkChangelogMessage in src/lib/wiki.ts.
+ */
+export function buildRecordLinkChangelogMessage(
+  action: 'create' | 'delete',
+  targetDate: string,
+  targetContent: string,
+  label?: string | null,
+): string {
+  const verb = action === 'create' ? 'Linked to' : 'Removed link to';
+  const snippet = targetContent.replace(/\s+/g, ' ').trim().slice(0, 80);
+  const labelText = action === 'create' && label ? ` - ${label}` : '';
+  const msg = `${verb} (${targetDate})${snippet ? ` ${snippet}` : ''}${labelText}`;
+  return msg.slice(0, MAX_WIKI_CHANGELOG_MESSAGE_CHARS);
+}
+
+/**
+ * Fetch a record the caller owns, returning the fields the file/link
+ * tools need for ownership checks + changelog wording (or null when the
+ * record doesn't exist / isn't owned).
+ */
+export async function getOwnedRecord(
+  adminClient: SupabaseClient,
+  userId: string,
+  recordId: string,
+): Promise<{ id: string; article_id: string; date: string; content: string } | null> {
+  const { data, error } = await adminClient
+    .from('wiki_records')
+    .select('id, article_id, date, content')
+    .eq('user_id', userId)
+    .eq('id', recordId)
+    .maybeSingle();
+  if (error) throw new Error(`record ownership check failed: ${error.message}`);
+  if (!data) return null;
+  return {
+    id: String(data.id),
+    article_id: String((data as { article_id?: unknown }).article_id ?? ''),
+    date: typeof (data as { date?: unknown }).date === 'string' ? (data as { date: string }).date : '',
+    content:
+      typeof (data as { content?: unknown }).content === 'string'
+        ? (data as { content: string }).content
+        : '',
+  };
 }
