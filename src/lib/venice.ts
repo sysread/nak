@@ -307,11 +307,10 @@ export interface ChatRequest {
      */
     supersededIds?: readonly string[];
     /**
-     * Turn-entry priming inputs the server's priming stage needs. These
-     * used to be consumed browser-side by runPreTurnPriming; priming now
-     * runs server-side in getStreamingResponse, so they ride in the
-     * /stream POST instead. Omitted leaves each pipeline at its
-     * disabled / cold default.
+     * Turn-entry priming inputs the server's priming stage needs.
+     * Priming runs server-side in getStreamingResponse, so these ride in
+     * the /stream POST as the inputs that stage consumes. Omitted leaves
+     * each pipeline at its disabled / cold default.
      */
     priming?: {
       /** Fast-tier model id the intuition pipeline runs on. Absent

@@ -1,16 +1,19 @@
 // priming-triggers -----------------------------------------------------------
 //
-// Deno mirror of the intuition/context-recall trigger evaluator. Both
-// subconscious-priming pipelines schedule off this one evaluator, and
-// both now run server-side in the venice edge function's priming stage,
-// so the evaluator needs a Deno copy.
+// The trigger evaluator both subconscious-priming pipelines
+// (intuition + context-recall) schedule off, run as part of the venice
+// edge function's priming stage. This is the canonical home for the
+// scheduling decision: evaluatePreRoundTrigger and the STALE_FUSE_ROUNDS
+// round fuse live ONLY here (the browser no longer schedules priming).
 //
-// Logic twin of src/lib/intuition/triggers.ts (plus the STALE_FUSE_*
-// constants and countUserRounds, which live in src/lib/intuition/
-// types.ts on the browser side). Mirror-with-pointer-comment convention
-// (see tests/bias-catalog-parity.test.ts): the two runtimes cannot
-// share an import, so this logic lives twice. Keep the fuse constants
-// and the fire/inject decisions in lockstep with the browser file.
+// Two members here keep a browser twin and must stay in agreement with
+// it - the runtimes cannot share an import (Deno needs .ts-suffixed
+// relative specifiers; the vite/tsc side forbids them):
+//   - isPayloadFreshForInjection - twin in src/lib/intuition/triggers.ts,
+//     the UI's injection-side freshness verdict.
+//   - STALE_FUSE_MS + countUserRounds - twins in
+//     src/lib/intuition/types.ts (the browser keeps the wall-clock bound
+//     for the injection guard and the round-id counter for display).
 //
 // Pure - no Supabase / Venice. The trigger tests drive it
 // deterministically by passing nowMs in.
@@ -23,8 +26,9 @@ export type IntuitionTrigger = 'title' | 'mood' | 'stale' | 'cold';
 
 /** Forces a refresh after this many user-rounds without one, so a slow
  *  conversation that drifts under the mood threshold still gets a fresh
- *  read eventually. Mirrors STALE_FUSE_ROUNDS in src/lib/intuition/
- *  types.ts. */
+ *  read eventually. Server-only - the round fuse feeds the scheduling
+ *  decision, which lives here; the browser keeps only the wall-clock
+ *  bound (STALE_FUSE_MS) for its injection guard. */
 export const STALE_FUSE_ROUNDS = 8;
 
 /** Wall-clock companion to STALE_FUSE_ROUNDS (one hour). The round fuse

@@ -1,26 +1,18 @@
 // bias-format -----------------------------------------------------------------
 //
-// Deno mirror of src/lib/bias/format.ts. Renders the "User profile -
-// observed cognitive patterns" block that rides in the main chat LLM's
-// system prompt, from the sweep-maintained bias_summary cache. The
-// browser used to render this at turn entry and bake it into the
-// system prompt it POSTed; priming now runs server-side, so the
-// orchestrator renders it here instead and appends it to the system
-// message before the first round.
+// The canonical renderer for the "User profile - observed cognitive
+// patterns" block that rides in the main chat LLM's system prompt, built
+// from the sweep-maintained bias_summary cache. Priming runs server-side,
+// so applyBiasPriming (venice/priming.ts) calls this to render the block
+// and append it to the system message before the first round.
 //
-// Mirror-with-pointer-comment convention (see the header of
-// tests/bias-catalog-parity.test.ts): the two runtimes cannot share an
-// import, so the render logic lives twice. The DATA it reads (the
-// catalog, the tier math) is the parity-tested pair bias-catalog.ts /
-// bias-math.ts; this file is the logic twin of src/lib/bias/format.ts.
-// Keep the two in lockstep - a change to the block copy or the
-// render-cap ordering here must land in the browser file too (and vice
-// versa) until the browser copy is retired.
-//
-// One deliberate divergence from the browser twin: that file
-// dynamic-imports BIAS_CATALOG to keep the bulky descriptions table out
-// of the main chunk. Deno has no chunk-splitting concern, so this file
-// static-imports it and renders synchronously.
+// The DATA this reads is shared with the browser: the catalog
+// (bias-catalog.ts) and the tier math (bias-math.ts) are the
+// parity-tested twins of src/lib/bias/catalog.ts + types.ts, deep-compared
+// by tests/bias-catalog-parity.test.ts so the two sides cannot drift. The
+// render logic itself lives only here; the diagnostics modal renders its
+// own preview from those shared catalog/types primitives rather than from
+// this module.
 import { type BiasKey, isBiasKey, BIAS_CATALOG } from './bias-catalog.ts';
 import { type Tier } from './bias-math.ts';
 

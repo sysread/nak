@@ -9925,8 +9925,8 @@ alter table public.threads
   add column if not exists bias_claim_expires timestamptz;
 
 -- Snapshot of the bias keys that were rendered into the system
--- prompt on the most recent chat-loop turn against this thread.
--- Overwritten per turn (the chat-loop's `getBiasProfileBlock`
+-- prompt on the most recent turn against this thread.
+-- Overwritten per turn (the priming stage's `applyBiasPriming`
 -- writes whatever it just rendered). The worker reads this in its
 -- analyze phase so the merged observer/reactor agent knows which
 -- biases the user's messages could have been reacting to.

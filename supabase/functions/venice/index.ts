@@ -880,9 +880,9 @@ interface StreamRequestBody {
   supersededIds?: string[];
   /**
    * Turn-entry priming inputs forwarded to getStreamingResponse's
-   * priming stage. The browser used to consume these in
-   * runPreTurnPriming; priming runs server-side now, so they ride in
-   * the POST. Absent leaves each pipeline at its disabled/cold default.
+   * priming stage. Priming runs server-side, so the browser sends these
+   * inputs in the POST for that stage to consume. Absent leaves each
+   * pipeline at its disabled/cold default.
    */
   priming?: {
     intuitionModelId?: string;

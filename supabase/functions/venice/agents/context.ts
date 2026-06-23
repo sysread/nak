@@ -1,12 +1,12 @@
-// context tool (function-side port)
+// context tool (function-side)
 //
 // Umbrella tool the main chat model calls for broad lookups of
-// persistent RAG about the user. Mirror of src/lib/tools/context.ts +
-// src/lib/context-recall/gather.ts at the function side: runs the
-// three persistent-layer searches in parallel and assembles a works-
-// cited index - memories verbatim, conversations + wiki articles by
-// (id, title) so the model can drill down via conversation_get /
-// wiki_get when one looks relevant.
+// persistent RAG about the user - the canonical implementation, run
+// inside the venice edge function (extracted from the browser during the
+// priming relocation). Runs the three persistent-layer searches in
+// parallel and assembles a works-cited index - memories verbatim,
+// conversations + wiki articles by (id, title) so the model can drill
+// down via conversation_get / wiki_get when one looks relevant.
 //
 // Deterministic by design: this is the cheap survey tier. memory_recall
 // / conversation_recall / wiki_recall remain the LLM-synthesized,

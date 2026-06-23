@@ -2,7 +2,7 @@
 
 A topic-boundary recall pipeline that runs alongside intuition: at
 the start of a thread, after a title shift, after a mood shift, or
-after a long stretch without a refresh, the chat-loop searches the
+after a long stretch without a refresh, the priming stage searches the
 three persistent layers (memories, prior conversations, wiki),
 assembles a works-cited index, and injects it as a synthetic
 `<think>` assistant turn that the conscious response sees as its own
@@ -19,7 +19,6 @@ prior recollection.
 > modal, rendering off the `priming_start/end` + `context_recall_payload`
 > events the function publishes (see
 > [`prompt-augmentation.md`](./prompt-augmentation.md) -> Observability).
-> "chat-loop" below refers to that server-side stage, not the browser.
 
 The index is deterministic - raw search, no LLM. Matching memory
 facts are inlined verbatim; related conversations and wiki articles
@@ -73,7 +72,7 @@ own recollection. Two pipelines (intuition and context-recall) ride
 the SAME trigger evaluator and write to SIBLING jsonb columns on
 `threads`; their failure modes and refresh costs are independent.
 
-Per turn, the chat-loop reads `threads.context_recall_payload` and
+Per turn, the priming stage reads `threads.context_recall_payload` and
 treats it like the intuition cache: reuse if current, refresh if a
 trigger fires, and rebuild the synthetic `<think>` block from the
 cache at request time.
@@ -82,21 +81,22 @@ When both pipelines fire on the same trigger evaluation they run in
 parallel via `Promise.all`. Wall-clock cost is `max(intuition,
 context_recall) + persist`, not additive. Inside the context-recall
 pipeline the three layer searches likewise run in parallel via
-`Promise.all` (see `gatherContextIndex`).
+`Promise.allSettled` (see `gatherContextIndex` in
+`supabase/functions/venice/priming/context-recall.ts`).
 
 ## Triggers
 
 Context recall reuses `evaluatePreRoundTrigger` from
-`src/lib/intuition/triggers.ts` - the same evaluator that schedules
-an intuition refresh schedules a context-recall refresh. The
-evaluator's `cache` parameter is declared as a structural
+`supabase/functions/_shared/priming-triggers.ts` - the same evaluator
+that schedules an intuition refresh schedules a context-recall
+refresh. The evaluator's `cache` parameter is declared as a structural
 `RoundCacheSnapshot` shape so both `IntuitionPayload` and
 `ContextRecallPayload` flow through without a cast at the call
-site. The evaluation itself runs inside
-`maybeRunContextRecallPipeline` (pipeline.ts) - the chat-loop's
-entry point, which owns the feature gate, the trigger decision, and
-the per-thread inflight dedup; the chat-loop supplies inputs and
-sequencing only.
+site. The evaluation runs inside `runServerPriming`
+(`venice/priming.ts`), which owns the feature gate, the trigger
+decision, and per-thread sequencing; `runContextRecallPipeline`
+(`venice/priming/context-recall.ts`) is just the gather + stitch body
+it calls when a trigger fires.
 
 Three trigger reasons fire context recall (the `'title'` member of
 the trigger union is legacy-only - see intuition.md for the history
@@ -115,7 +115,7 @@ of the dead mid-turn title trigger):
 
 The same-round debounce primitive (`computed_at_round`) is shared:
 two triggers landing in the same round collapse to one run. The
-chat-loop also applies an **injection guard** to the context-recall
+priming stage also applies an **injection guard** to the context-recall
 `<think>` push: a payload older than `STALE_FUSE_MS` is suppressed
 rather than spliced onto the wire, the backstop for when a refresh
 errored, deduped, or the feature was off this turn (again shared with
@@ -130,8 +130,8 @@ prior assistant turn carries the context the user's latest message is
 responding to, which sharpens retrieval on short follow-ups ("what
 about the second option?") that would embed to noise on their own.
 The query is anchored on the last USER turn, so any in-flight
-assistant / tool tail the chat-loop persisted on its way into recall
-is ignored. The query is capped at a character budget (keeping the
+assistant / tool tail in the history handed to the priming stage is
+ignored. The query is capped at a character budget (keeping the
 tail, where the user's message sits) so an unbounded assistant turn
 doesn't blow the embedding model's window.
 
@@ -140,37 +140,33 @@ for the derived query; everything downstream is identical.
 
 ## Files
 
-- `src/lib/context-recall/types.ts` - `ContextRecallPayload`,
-  `coerceContextRecallPayload`, `pickFresherContextRecallPayload`.
-  Schema-versioned (`v: 1`); a drift / unknown-version row reads as
-  null and triggers a fresh refresh. An empty `note` is a VALID
-  cached state representing "nothing matched this round" - cached so
-  the same-round debounce holds.
-- `src/lib/context-recall/gather.ts` - the deterministic retrieval +
-  render core, shared by the pipeline and the `context` tool.
-  `deriveRecallQuery` (query from messages), `gatherContextIndex`
-  (the three parallel searches -> `ContextIndex`), `renderContextThink`
-  (index -> the `<think>` body). Per-layer caps live here
-  (`CONTEXT_MEMORY_LIMIT`, `CONTEXT_CONVERSATION_LIMIT`,
-  `CONTEXT_WIKI_LIMIT`). Each layer degrades independently: a search
-  that throws or returns nothing contributes an empty list.
-- `src/lib/context-recall/pipeline.ts` -
-  `runContextRecallPipeline`, the cached / triggered entry point. Runs
-  `gatherContextIndex`, renders the note via `renderContextThink`,
-  returns a cache-ready payload (with `note: ''` when every layer was
-  empty).
-- `src/lib/context-recall/cache.ts` - `readContextRecallCache` /
-  `writeContextRecallCache` plus `withContextRecallInflight`, a
-  tab-local registry that collapses two near-simultaneous triggers
-  onto one Promise. Distinct from the intuition inflight registry.
-- `src/lib/context-recall/ephemeral.ts` -
-  `buildContextRecallThinkMessage`, the wire-shape projection from
-  cached payload to ephemeral assistant message
-  (`<think>{CONTEXT_RECALL_THINK_MARKER}\n{note}\n</think>`).
-  Returns `null` for an empty-note payload so the caller can skip
-  the injection rather than push an empty `<think>` block.
-- `src/lib/context-recall/index.ts` - public re-exports. Chat-loop
-  and Chat.svelte import only from here.
+- `supabase/functions/venice/priming/context-recall-payload.ts` - the
+  server-side `ContextRecallPayload` shape, `coerceContextRecallPayload`,
+  and `buildContextRecallThinkMessage` + `CONTEXT_RECALL_THINK_MARKER`.
+  The wire-shape projection returns `null` for an empty-note payload so
+  the caller can skip the injection rather than push an empty `<think>`
+  block. The payload type + coercer shape are shared with the surviving
+  browser `src/lib/context-recall/types.ts` (below); both runtimes coerce
+  the same persisted shape. Schema-versioned (`v: 1`); a drift /
+  unknown-version row reads as null and triggers a fresh refresh. An empty
+  `note` is a VALID cached state representing "nothing matched this round"
+  - cached so the same-round debounce holds.
+- `src/lib/context-recall/types.ts` - the surviving browser copy of
+  `ContextRecallPayload`, `coerceContextRecallPayload`,
+  `pickFresherContextRecallPayload`. Read by the realtime-echo decoder
+  and the Recall diagnostics modal.
+- `supabase/functions/venice/priming/context-recall.ts` - the
+  deterministic retrieval + render core. `deriveRecallQuery` (query from
+  messages), `gatherContextIndex` (the three parallel searches ->
+  `ContextIndex`), `renderContextThink` (index -> the `<think>` body),
+  and `runContextRecallPipeline`, the triggered entry point the
+  orchestrator calls (runs `gatherContextIndex`, renders the note,
+  returns a cache-ready payload with `note: ''` when every layer was
+  empty). Per-layer caps live here (`CONTEXT_MEMORY_LIMIT`,
+  `CONTEXT_CONVERSATION_LIMIT`, `CONTEXT_WIKI_LIMIT`). Each layer degrades
+  independently via `Promise.allSettled`: a search that throws or returns
+  nothing contributes an empty list. The umbrella `context` tool's own
+  gather lives separately in `venice/agents/context.ts`.
 
 ## The injected `<think>` body
 
@@ -314,11 +310,11 @@ readable content. Registered in the always-on toolbox.
 
 ## Interactions
 
-- **Chat ([./chat.md](./chat.md))** - the chat-loop is the only
-  caller of `runContextRecallPipeline`. Both trigger sites (pre-round
-  and mid-turn title) handle context-recall and intuition in the same
-  `Promise.all` fan-out. The `contextRecallEnabled` boolean on
-  `ChatLoopOptions` is how the caller wires the feature on.
+- **Chat ([./chat.md](./chat.md))** - `runServerPriming` is the only
+  caller of `runContextRecallPipeline`, fanning context-recall and
+  intuition out in one `Promise.all` at the single pre-round trigger
+  site. The `contextRecallEnabled` boolean rides from the browser in
+  `streamCtx.priming` to wire the feature on.
 - **Intuition ([./intuition.md](./intuition.md))** - shares the
   trigger evaluator. Independent caches, always co-fired via
   `Promise.all` to keep wall-clock cost bounded by the slower of the
@@ -354,7 +350,7 @@ readable content. Registered in the always-on toolbox.
 - **Empty-note injection short-circuits.** When every layer is empty
   the pipeline writes a payload with `note: ''` (cached negative
   result), but `buildContextRecallThinkMessage` returns `null` so the
-  chat-loop doesn't push an empty `<think>` block. Tests pin this.
+  priming stage doesn't push an empty `<think>` block. Tests pin this.
 - **The two pipelines have independent inflight registries.** A
   context-recall refresh in flight does NOT block an intuition
   refresh on the same thread (or vice versa).

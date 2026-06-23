@@ -1,5 +1,6 @@
-// Server-side port of the intuition turn-entry priming pipeline
-// (logic mirror of src/lib/intuition/pipeline.ts). Three stages:
+// The intuition turn-entry priming pipeline - the canonical
+// implementation, run inside the venice edge function (extracted from the
+// browser during the priming relocation). Three stages:
 //
 //   1. Perception - one fast-model call. Reads the transcript,
 //      classifies the prompt, and produces an objective-observer
@@ -53,9 +54,8 @@ import { type IntuitionPayload } from './intuition-payload.ts';
 const MAX_TOKENS = 2048;
 
 /**
- * Drive a single non-streaming Venice completion. Same shape the browser
- * pipeline's callOnce used: a system + user pair, the body text trimmed,
- * reasoning content ignored.
+ * Drive a single non-streaming Venice completion: a system + user pair,
+ * the body text trimmed, reasoning content ignored.
  *
  * disable_thinking is set defensively. The intuition slot resolves to a
  * non-reasoning model today, so the flag is a no-op; it stays on so the

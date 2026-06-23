@@ -19,9 +19,7 @@ without having to cram the entire history into a context window.
 > service-role caller. The fire's throbber rides the `priming_start/end`
 > (op `'samskara'`) events. The **end-of-turn substrate stub write**
 > (`recordSubstrateStub`) stays browser-side - it is not priming. The
-> formation pipeline + sweeps remain server-side as before. File
-> references below into `src/lib/samskara/` for fire/compound/format
-> describe the Deno port under `venice/priming/`.
+> formation pipeline + sweeps remain server-side as before.
 
 ## Role in the app
 
@@ -63,23 +61,27 @@ toast is just a glance cue that the bias model is forming.
 
 ## Files
 
-- `src/lib/samskara/index.ts` - the chat-loop-facing public
-  surface. Owns `fireSamskaras`, `getCompoundSummary`,
-  `recordSubstrateStub`, re-exports `formatPriming` and the
-  tunable constants. Every samskara-side failure path is
-  swallowed here so a samskara failure never blocks a chat turn.
-- `src/lib/samskara/format.ts` - pure formatter for the priming
-  block. Renders the compound summary as a leading paragraph
-  and the fired samskaras as bullets below, token-budget capped
-  via `PRIMING_CHAR_BUDGET`. Weakest-but-relevant fires fall
-  back to an abbreviated form before being dropped, so the long
-  tail stays visible when budget tightens.
-- `src/lib/samskara/types.ts` - shared `FireResult` /
-  `FiredSamskara` / `PrimingInput` types and the tunable
-  constants (`K_BASE`, `PRIMING_CHAR_BUDGET`,
-  `STALE_CEILING_HOURS`). Kept separate from `./index.ts` so
-  consumers of the types don't drag the Supabase/Venice imports
-  along.
+- `supabase/functions/venice/priming/samskara.ts` - the
+  turn-entry IO half. Owns `getCompoundSummary` and
+  `fireSamskaras`, run by `runServerPriming` as part of the
+  priming stage. Every samskara-side failure path is swallowed
+  here (returns null, never throws) so a samskara failure never
+  blocks a chat turn.
+- `supabase/functions/venice/priming/samskara-format.ts` - the pure
+  priming-block formatter plus the shared `FireResult` /
+  `FiredSamskara` / `PrimingInput` types and the tunable constants
+  (`K_BASE`, `PRIMING_CHAR_BUDGET`, `STALE_CEILING_HOURS`,
+  `FIRE_SCORE_FLOOR`, `topKForCorpusSize`). `formatPrimingThinks`
+  renders the compound summary as one `<think>` body and the fired
+  samskaras as bullets in another, token-budget capped via
+  `PRIMING_CHAR_BUDGET`. Weakest-but-relevant fires fall back to an
+  abbreviated form before being dropped, so the long tail stays
+  visible when budget tightens. Self-contained (no relative imports)
+  so it stays a pure, trivially-testable module.
+- `src/lib/samskara/index.ts` - the surviving browser surface.
+  Owns `recordSubstrateStub`, the end-of-turn fire-and-forget
+  substrate stub write (not priming - it runs after the terminal
+  assistant row persists).
 - `src/lib/samskara/events.ts` - main-thread event bridge
   (rune-free). Defines `SAMSKARA_MINT_EVENT`, `valenceToEmoji`,
   `valenceToMoodLabel`, `notifySamskaraMint`, the `MOOD_TABLE`
@@ -214,20 +216,18 @@ toast is just a glance cue that the bias model is forming.
 
 ## Entry points
 
-- **`runChatLoop` round-1 entry** - in `src/lib/chat-loop.ts`,
-  before the first round's `requestMessages` is assembled, the
-  loop races `getCompoundSummary(supabase)` and
-  `fireSamskaras(supabase, threadId, currentUserRound,
-  userText, signal)` in parallel under a
-  `SAMSKARA_PRIMING_TIMEOUT_MS` (1500ms) cap. `currentUserRound`
-  is hoisted up to fire time from `countUserRounds(history)` so
-  each cohort row carries the user-message index it anchors to.
-  The resulting appendix is passed into `buildSystemPrompt({
-  promptAppendix })` so every round this turn sees the same
-  compound + fire signal (one cohort id per user turn, not per
-  round). Underlying Promises keep running on timeout; the
-  worst case is one cohort logged but never reaction-classified,
-  which the classifier's resolution window drops naturally.
+- **`runServerPriming` turn-entry** - in
+  `supabase/functions/venice/priming.ts`, before the first round's
+  messages go to Venice, the priming stage races `getCompoundSummary`
+  and `fireSamskaras` (both in `venice/priming/samskara.ts`) in
+  parallel under a 1500ms cap. The user-round index is computed from
+  `countUserRounds` so each cohort row carries the user-message index
+  it anchors to. The resulting bodies become the samskara `<think>`
+  blocks the orchestrator splices ahead of the round (one cohort id
+  per user turn, not per round). Underlying Promises keep running on
+  timeout; the worst case is one cohort logged but never
+  reaction-classified, which the classifier's resolution window drops
+  naturally.
 - **Inline `CohortPanel` in `Chat.svelte`** - on thread load,
   `Chat.svelte` calls `samskaraListFiresForThread`,
   `samskaraListSubstrateForThread`, and
@@ -502,35 +502,41 @@ at the top of every system prompt.
 
 ## Contracts
 
-### Chat-loop side (synchronous, no LLM)
+### Turn-entry side (server, synchronous, no LLM)
 
-- `getCompoundSummary(supabase): Promise<string | null>` -
+The IO half (`getCompoundSummary`, `fireSamskaras`) lives in
+`venice/priming/samskara.ts`; the pure formatter
+(`formatPrimingThinks`) in `venice/priming/samskara-format.ts`. The
+service-role admin client has no `auth.uid()`, so the RPCs are called
+with an explicit `p_user_id`.
+
+- `getCompoundSummary(admin, userId, log): Promise<string | null>` -
   reads the cache row. Returns null on cold start (no row yet
   or `summary` is null/empty) and when `last_regen_at` is older
-  than `STALE_CEILING_HOURS` (24h). Network errors are
-  swallowed and surface as null so a transient offline moment
-  doesn't propagate into the chat-loop's error path.
-- `fireSamskaras(supabase, threadId, userRound, userText,
-  signal?): Promise<FireResult | null>` - embeds `userText` via
-  Venice, pads the query, runs `samskara_fire_top_k`, and
-  persists a `samskara_fires` row per hit via
-  `samskara_record_fires`. `cohort_id` is generated client-side
-  (crypto.randomUUID with a Math.random fallback). Returns null
+  than `STALE_CEILING_HOURS` (24h). Fetch/RPC errors are
+  swallowed and surface as null so a transient blip doesn't
+  propagate into the orchestrator's priming path.
+- `fireSamskaras({ admin, userId, apiKey, threadId, userRound,
+  userText, signal?, log }): Promise<FireResult | null>` - embeds
+  `userText` via Venice, pads the query, runs `samskara_fire_top_k`,
+  drops dead-tail rows below `FIRE_SCORE_FLOOR`, and persists a
+  `samskara_fires` row per surviving hit via `samskara_record_fires`.
+  `cohort_id` is generated with `crypto.randomUUID`. Returns null
   on empty corpus, empty input, embedding failure, or RPC
-  failure; errors are logged at `console.debug` so a chat turn
-  is never blocked.
+  failure; errors are logged at debug so a chat turn is never blocked.
 - `recordSubstrateStub(supabase, threadId, userMessageId,
-  assistantMessageId | null): Promise<void>` - one INSERT via
+  assistantMessageId | null): Promise<void>` - the surviving
+  browser end-of-turn write; one INSERT via
   `samskara_record_substrate`. `situation` / `outcome` /
   `valence` / `situation_embedding` all null; the formation
   pipeline fills them. Errors swallowed; fire-and-forget.
-- `formatPriming({ compoundSummary, fire }): string` - pure.
-  Renders the appendix block with the compound paragraph first
-  and the fire bullets below, sorted by score descending. Keeps
-  the top three fires in full form and abbreviates the rest
-  when total length exceeds `PRIMING_CHAR_BUDGET` (2400 chars);
-  drops the weakest entries one by one if abbreviation alone
-  doesn't fit.
+- `formatPrimingThinks({ compoundSummary, fire }): { compound,
+  fire }` - pure. Returns the two `<think>`-block bodies (or null
+  per field when the signal is absent): the compound paragraph and
+  the fire bullets sorted by score descending. Keeps the top three
+  fires in full form and abbreviates the rest when total length
+  exceeds `PRIMING_CHAR_BUDGET` (2400 chars); drops the weakest
+  entries one by one if abbreviation alone doesn't fit.
 - `topKForCorpusSize(n, kBase): number` - computes
   `max(1, ceil(kBase * log10(n + 10)))`. The fire call passes
   `topKForCorpusSize(100, K_BASE) * 2 = 22` as a generous upper

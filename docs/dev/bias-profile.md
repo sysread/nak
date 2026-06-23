@@ -101,9 +101,11 @@ interval lower bound (not the mean) as the surfacing gate.
   rows to soft+strong, sorts tier-then-CI-descending, caps at
   `RENDER_CAP`, emits one bullet per bias using the catalog's
   pre-written guidance plus a static block of general framing rules
-  and the whimsy exception. Logic twin of the retired browser
-  `src/lib/bias/format.ts` (mirror-with-pointer-comment convention -
-  the catalog/math data it reads is the parity-tested pair).
+  and the whimsy exception. The canonical renderer; the catalog/math
+  data it reads (`bias-catalog.ts` / `bias-math.ts`) is the
+  parity-tested pair with the browser `src/lib/bias/catalog.ts` +
+  `types.ts`, which the diagnostics modal reads to render its own
+  preview.
 - `supabase/functions/venice/priming.ts` - the server-side turn-entry
   priming stage. `applyBiasPriming` reads `bias_summary` (scoped by
   the JWT user id - the service-role client has no `auth.uid()`),
@@ -511,12 +513,13 @@ closes the block.
 
 ## Interactions with other features
 
-- **Chat ([./chat.md](./chat.md))** - the chat loop is the only
-  reader of `bias_summary` on the synchronous path.
-  `runChatLoop` reads the block at turn entry and threads it
-  into every round's `buildSystemPrompt`. It also fires
-  `notifyBiasNewUserMessage` once per turn (cheap, idempotent).
-  See `./chat.md`.
+- **Chat ([./chat.md](./chat.md))** - the priming stage is the only
+  reader of `bias_summary` on the synchronous path. `applyBiasPriming`
+  (`venice/priming.ts`) reads the rows at turn entry, renders the
+  block, and appends it to the row-0 system message. In the same pass
+  it fires the `bias_clear_thread` RPC (with `p_user_id`) once per turn
+  (cheap, idempotent) so a previously-analyzed thread gets re-observed
+  against the fresh message. See `./chat.md`.
 - **Samskara ([./samskara.md](./samskara.md))** - sibling
   feature, no data flow. Bias profile rides at the END of the
   baseline system prompt; samskara's compound summary rides as
@@ -626,10 +629,10 @@ closes the block.
   `bias_save_observations` rejects the save because
   `count(messages where role='user')` no longer matches
   `expected_count`. The sweep drops the work and the thread
-  becomes re-eligible. The chat-loop's
-  `notifyBiasNewUserMessage` call helps by clearing
-  `bias_processed_at` directly, but the save-side guard is
-  what actually prevents stale observations from landing.
+  becomes re-eligible. The priming stage's `bias_clear_thread`
+  RPC call helps by clearing `bias_processed_at` directly, but the
+  save-side guard is what actually prevents stale observations from
+  landing.
 - **`survivorship_bias` is intentionally absent from the
   catalog.** It requires a counterfactual ("the cases we don't
   see") that an LLM cannot infer from a single transcript.

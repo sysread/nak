@@ -1,17 +1,16 @@
 // priming ---------------------------------------------------------------------
 //
-// Server-side turn-entry priming. The browser used to run priming
-// before POSTing /stream (src/lib/chat/preturn-priming.ts); it now runs
-// here as the opening stage of getStreamingResponse, under the same
-// EdgeRuntime.waitUntil that keeps streaming alive across browser
-// disconnect, so "come back to a finished answer" holds for the whole
-// turn rather than just the streaming half.
+// Server-side turn-entry priming - the opening stage of
+// getStreamingResponse. It runs under the same EdgeRuntime.waitUntil
+// that keeps streaming alive across a browser disconnect, so "come back
+// to a finished answer" holds for the whole turn rather than just the
+// streaming half (the reason priming lives here rather than in the
+// browser before the /stream POST).
 //
-// This file is being built one pipeline at a time (see the plan in the
-// branch description). Bias is first: it is a system-prompt appendix
-// rather than a <think> row and carries no per-turn UI wire event, so
-// it is the smallest complete slice. Intuition, context-recall, and
-// samskara follow.
+// Four pipelines feed the priming chain: bias renders a system-prompt
+// appendix (no per-turn UI wire event); intuition, context-recall, and
+// samskara each contribute a synthetic <think> row and publish their
+// PrimingEvents on the stream channel.
 //
 // Admin-client scoping: the orchestrator holds a service-role client
 // with no auth.uid(), so every read/write here scopes by the explicit
@@ -52,8 +51,7 @@ import { runContextRecallPipeline } from './priming/context-recall.ts';
 // Hard cap on the wait for samskara priming before the first round
 // starts. The common case lands well under this; the cap exists so a
 // slow Venice or a hiccup in the cosine RPC cannot add visible latency
-// to the first token. Mirrors SAMSKARA_PRIMING_TIMEOUT_MS in the
-// retired browser src/lib/chat/preturn-priming.ts.
+// to the first token.
 const SAMSKARA_PRIMING_TIMEOUT_MS = 1500;
 
 // Minimal structural shape of a wire message the priming step mutates.
@@ -80,10 +78,9 @@ export interface BiasPrimingOpts {
  * and fire the two best-effort bias-sweep writes (active-set snapshot
  * and new-user-message clear).
  *
- * Swallow contract mirrors the browser's getBiasProfileBlock /
- * snapshotBiasActiveBiases / notifyBiasNewUserMessage: bias plumbing
- * never throws and never fails a turn. A read failure or cold-start
- * cache leaves the system prompt unchanged.
+ * Swallow contract: bias plumbing never throws and never fails a turn.
+ * A read failure or cold-start cache leaves the system prompt
+ * unchanged.
  */
 export async function applyBiasPriming(opts: BiasPrimingOpts): Promise<void> {
   const { adminClient, userId, threadId, history, log } = opts;
@@ -143,8 +140,7 @@ export async function applyBiasPriming(opts: BiasPrimingOpts): Promise<void> {
  * by explicit user_id (admin client has no auth.uid()). Unknown-key
  * rows are dropped - a key not in the catalog means the catalog was
  * edited but the cache is stale; safer to skip than to render an entry
- * whose guidance we cannot resolve. Mirrors the browser's
- * biasListSummary + getBiasProfileBlock row coercion.
+ * whose guidance we cannot resolve.
  */
 async function readBiasSummary(
   adminClient: SupabaseClient,
@@ -190,8 +186,7 @@ async function readBiasSummary(
 
 /**
  * Persist the rendered bias keys into threads.bias_active_at_turn,
- * scoped by user_id (admin client). Mirrors the browser's
- * biasSnapshotActiveBiases UPDATE.
+ * scoped by user_id (admin client).
  */
 async function snapshotBiasActiveBiases(
   adminClient: SupabaseClient,
@@ -209,9 +204,8 @@ async function snapshotBiasActiveBiases(
 
 /**
  * Clear the sweep's processed state for a thread on a new user
- * message. Mirrors the browser's notifyBiasNewUserMessage; passes
- * p_user_id because the admin client has no auth.uid() for the RPC's
- * internal ownership scoping.
+ * message. Passes p_user_id because the admin client has no auth.uid()
+ * for the RPC's internal ownership scoping.
  */
 async function clearBiasThread(
   adminClient: SupabaseClient,

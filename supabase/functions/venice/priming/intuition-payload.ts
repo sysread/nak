@@ -1,12 +1,15 @@
-// logic mirror of src/lib/intuition/{types,ephemeral}.ts
+// The persisted intuition payload shape + coercer, plus the ephemeral
+// <think>-message builder the orchestrator splices onto the wire.
 //
-// The persisted intuition shape (IntuitionPayload) lands in
+// The persisted shape (IntuitionPayload) lands in
 // `threads.intuition_payload` jsonb; coerceIntuitionPayload is the
-// read-side coercion for a drifting / older-version row. The ephemeral
-// half (buildIntuitionThinkMessage + INTUITION_THINK_MARKER) projects a
-// cached payload into the synthetic assistant <think> message the
-// orchestrator splices onto the wire. Keep these in lockstep with the
-// browser file - both runtimes write the same jsonb shape.
+// read-side coercion for a drifting / older-version row. The
+// IntuitionPayload TYPE + coercer shape are shared with the surviving
+// browser copy in src/lib/intuition/types.ts: the browser coerces
+// realtime echo payloads off the stream channel, the server coerces the
+// jsonb DB row, so both runtimes read the same persisted shape and must
+// agree on it. The two runtimes cannot share an import, so the shape
+// lives twice - keep them in lockstep when either changes.
 
 import { type DriveName } from './intuition-prompts.ts';
 import { type IntuitionTrigger } from '../../_shared/priming-triggers.ts';

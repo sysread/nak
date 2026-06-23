@@ -1,10 +1,9 @@
-// Server-side port of the samskara turn-entry priming IO half
-// (src/lib/samskara/index.ts getCompoundSummary + fireSamskaras),
-// relocated behind the venice edge function so pre-turn priming runs in
-// the durable streaming function rather than the browser. The pure
-// formatter and the tunables live in ./samskara-format.ts (a Deno
-// mirror of src/lib/samskara/{format,types}.ts); this file owns the
-// Supabase + Venice IO.
+// The samskara turn-entry priming IO half: getCompoundSummary +
+// fireSamskaras, run inside the venice edge function so pre-turn priming
+// rides the durable streaming function rather than the browser. This is
+// the canonical implementation (extracted from the browser during the
+// priming relocation). The pure formatter and the tunables live in
+// ./samskara-format.ts; this file owns the Supabase + Venice IO.
 //
 // Adjacent server-side modules this leans on:
 //   - ../../_shared/venice.ts        veniceEmbed (POST /embeddings)
@@ -12,17 +11,16 @@
 //                                    zero-extension padding helper
 //   - ../../_shared/edge-log.ts      the drawer-mirroring EdgeLogger
 //
-// Both exports preserve the browser contract exactly: they return null
-// on ANY failure and never throw, because a priming failure must never
-// fail the user's chat turn. The orchestrator continues with no
-// compound block / no fire appendix when either returns null.
+// Both exports return null on ANY failure and never throw, because a
+// priming failure must never fail the user's chat turn. The orchestrator
+// continues with no compound block / no fire appendix when either
+// returns null.
 //
-// Server-side adaptations vs the browser version:
+// Two service-side specifics:
 //   - The service-role admin client has no auth.uid(), so both RPCs are
 //     called with the explicit p_user_id the orchestrator passes
 //     through (the b-strict overload the schema added).
-//   - Embedding goes through veniceEmbed with the shared key rather than
-//     the browser's SupabaseService.embed proxy.
+//   - Embedding goes through veniceEmbed with the shared key.
 
 import { type SupabaseClient } from '@supabase/supabase-js';
 import { type EdgeLogger } from '../../_shared/edge-log.ts';
