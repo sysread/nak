@@ -132,10 +132,9 @@ Pick a short, stable source tag. Existing tags:
   preview at debug, run summary at info, failures at error
 - `context` - the umbrella context-gather tool (edge-side): derived
   query at debug, per-layer counts at info, layer failures at error
-- `attachment-expiry` - the cron attachment-expiry sweep's per-user
-  "expired N dormant attachment(s)" summary (edge-side); restores
-  the visibility the retired browser `attachment-expiry-worker`
-  source provided before the server move
+- `attachment-gc` - the cron attachment orphan-object GC sweep's
+  per-user "reclaimed N orphaned attachment object(s)" summary
+  (edge-side); reclaims bucket objects left behind by a deleted thread
 - `recipe-image-gc` - the cron recipe-image GC sweep's per-user
   "reclaimed N orphaned recipe image(s)" summary (edge-side)
 - `embeddings` - the cron embed backfill's per-user "embedded N

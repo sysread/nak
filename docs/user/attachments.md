@@ -18,10 +18,11 @@ There are three ways to queue a file for the next send:
   you hover.
 
 Each queued file appears as a chip above the textarea. A dashed chip
-means Nak is still processing the file (downscaling a large image,
-asking Venice to extract text from a document). The chip fills in
-once processing finishes; the send button unlocks when every chip is
-ready.
+means Nak is still processing the file (compressing a large image,
+asking Venice to extract text from a document). When Nak shrinks an
+oversized image the chip shows the result - "Reduced from 2.7 MB to
+845 KB" - so you can see what was saved. The chip fills in once
+processing finishes; the send button unlocks when every chip is ready.
 
 Click the × on a chip to remove it before sending.
 
@@ -42,11 +43,11 @@ Click the × on a chip to remove it before sending.
   content.
 - **Cross-turn recall**. Every chat turn the model also receives a
   short summary of every file ever attached to the conversation -
-  live filenames it can still inspect, plus filenames of any expired
-  attachments so it can tell you "I had that file but its data has
-  been reclaimed" rather than pretending it never existed. This
-  means you can re-ask about an image you sent five turns ago and
-  the model can re-analyze it without you re-uploading.
+  live filenames it can still inspect, plus filenames of any deleted
+  attachments so it can tell you "I had that file but it's been
+  removed" rather than pretending it never existed. This means you
+  can re-ask about an image you sent five turns ago and the model can
+  re-analyze it without you re-uploading.
 
 ## After sending
 
@@ -76,10 +77,8 @@ exactly like an image you uploaded yourself.
 - Nak often turns the Images toolbox on by itself when you clearly
   ask for a picture, the same way it reaches for other capabilities
   mid-conversation. If nothing happens, check the toolbox is enabled.
-- Generated images are **stored and expired on the same 30-day
-  schedule as your uploads** (see below) - they're kept in your Nak
-  storage, freed automatically a month after the conversation goes
-  quiet.
+- Generated images are **stored exactly like your uploads** - kept in
+  your Nak storage and managed from the same Artifacts tab (below).
 - Because a generated image is a normal attachment, you can ask Nak
   to look at it again later ("what's in the background of that image?")
   and it will inspect the picture it made, just like re-asking about
@@ -90,20 +89,32 @@ exactly like an image you uploaded yourself.
   Venice plans force the watermark regardless, so it may still
   appear depending on your account.
 
-## Expiration
+## Managing your files (the Artifacts tab)
 
-Attachments are reclaimed 30 days after a conversation's last
-update. After that:
+Your files are **kept until you delete them** - nothing expires on a
+timer. (Images are shrunk on upload, so they don't pile up the way
+full-resolution originals would.)
 
-- The file itself is deleted from Nak's storage (your space is
-  freed).
-- The filename, size, and extracted text **stay** so the
-  conversation is still legible — you'll see the filename with a
-  small clock icon, and the "Text" button keeps working.
+To review or clean up everything you've attached, open the
+**Artifacts** tab in the left drawer. It lists every file across all
+your conversations, newest first, with:
 
-Keep the conversation alive (reply to it) to reset the clock; any
-new message resets the 30-day timer for every attachment in that
-thread.
+- **Search** by filename.
+- **Filter** by type - All, Images, or Files.
+- **Sort** by Newest or Largest, so the biggest space hogs are easy
+  to find.
+- A **thumbnail** for images and the **conversation** each file
+  belongs to. Click a row to jump straight to that conversation.
+- A **trash button** to delete a file.
+
+When you delete a file:
+
+- The file itself is removed from Nak's storage (your space is freed).
+- The filename, size, and extracted text **stay** in the conversation
+  so it's still legible — you'll see the filename with a small clock
+  icon, and the "Text" button keeps working.
+
+Deleting is permanent and can't be undone.
 
 ## Size limits
 
@@ -111,9 +122,12 @@ thread.
 - **Per message**: 25 MB total across all attached files.
 - **Per message**: up to 20 files.
 
-Images over 2048 px on the long edge are downscaled automatically
-before storage — vision models don't benefit from more, and the
-downscale keeps row sizes predictable.
+Large images are compressed automatically before storage: Nak caps
+the long edge at 2048 px (vision models don't benefit from more) and
+re-encodes toward roughly 1 MB, so a multi-megabyte phone photo lands
+small without you doing anything. It's a target, not a hard cut - a
+detailed image may stay a little over, and an image that's already
+small passes through untouched.
 
 ## Where to go next
 
@@ -122,4 +136,4 @@ downscale keeps row sizes predictable.
 - [Models & reasoning](./models.md) — tier tradeoffs and
   capabilities.
 - [What runs in the background](./background.md) — including the
-  scheduled storage cleanup that reclaims expired attachments.
+  orphan storage sweep that tidies up after deleted conversations.

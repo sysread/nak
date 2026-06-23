@@ -3245,6 +3245,32 @@ button.composer-wharf-trigger {
   color: var(--danger, #c0392b);
 }
 
+/* "Reduced from X to Y" after an oversized image is compressed on add.
+   Tinted with the ok colour so the saving reads as a win; the full
+   sentence is longer than a plain size, so let this chip grow wider than
+   the 18rem default and keep the label on one line. */
+.composer-attachment-chip .chip-size.compressed {
+  color: var(--ok);
+  white-space: nowrap;
+}
+.composer-attachment-chip:has(.chip-size.compressed) {
+  max-width: 26rem;
+}
+
+/* Inline spinner while compressImage re-encodes an oversized image - a
+   small rotating ring reusing the tool-status keyframe. */
+.composer-attachment-chip .chip-spinner {
+  width: 0.7rem;
+  height: 0.7rem;
+  border: 2px solid var(--border);
+  border-top-color: var(--muted);
+  border-radius: 50%;
+  animation: tool-spin 0.8s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .composer-attachment-chip .chip-spinner { animation: none; }
+}
+
 .composer-attachment-chip .chip-remove {
   background: transparent;
   border: 0;

@@ -9,9 +9,10 @@ The Deno half of nak. Three functions today:
   backfill (the `/embed-backfill` route). See
   `../docs/dev/in-progress/venice-edge-functions/` for the
   feature-level architecture notes.
-- **`expire-attachments/`** - I/O-free orchestration for the
-  attachment-expiry sweep, kicked by `pg_cron`. Replaces the
-  old browser-side `attachment_expiry` worker.
+- **`attachment-gc/`** - I/O-free orchestration for the daily
+  attachment-bucket orphan GC sweep, kicked by `pg_cron`.
+  Reclaims objects whose `message_attachments` row is gone (a
+  deleted thread/message).
 - **`recipe-image-gc/`** - I/O-free orchestration for the
   recipe-image GC sweep, kicked by `pg_cron`. Replaces the old
   AFTER DELETE orphan trigger; covered in
@@ -86,7 +87,7 @@ supabase/functions/
 │   ├── error-translate.ts     - VeniceError + dispatch errors -> last_error
 │   ├── backfill.ts            - embedding backfill orchestration
 │   ├── embed-input.ts         - per-source embed-text composition
-│   ├── expire-attachments.ts  - attachment expiry orchestration
+│   ├── attachment-gc.ts       - attachment-bucket orphan GC orchestration
 │   └── recipe-image-gc.ts     - recipe image GC orchestration
 ├── venice/
 │   ├── index.ts               - HTTP routing (/stream, /embed, /complete, /usage, etc.)
@@ -97,7 +98,7 @@ supabase/functions/
 │   ├── stream-guards.ts       - special-token-leak guard + retry temperature schedule
 │   ├── tools/                 - one file per ported tool
 │   └── agents/                - one file per ported recall agent + headless tool loop
-├── expire-attachments/
+├── attachment-gc/
 │   └── index.ts               - cron-driven entry point
 └── recipe-image-gc/
     └── index.ts               - cron-driven entry point
@@ -112,7 +113,7 @@ mise run test                  # vitest run includes function-side tests under t
 The function-side tests use a fake fetch (no network, no Venice
 calls) and exercise the round loop, tool dispatch, error
 translation, and broadcast buffering in isolation. Pure
-orchestration logic (`backfill.ts`, `expire-attachments.ts`,
+orchestration logic (`backfill.ts`, `attachment-gc.ts`,
 `recipe-image-gc.ts`) is I/O-injected for the same reason -
 runs under vitest, no Deno-only mocks needed.
 

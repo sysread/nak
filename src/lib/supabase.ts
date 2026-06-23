@@ -68,6 +68,7 @@ import type {
   Thread,
   Attachment,
   NewAttachment,
+  ArtifactListRow,
   ThreadAttachmentSummary,
   Message,
   ThreadCursor,
@@ -3993,6 +3994,120 @@ export class SupabaseService {
       if (url) out.set(a.id, url);
     }
     return out;
+  }
+
+  /**
+   * Page through the signed-in user's LIVE attachments across every
+   * conversation, for the Artifacts management tab. Joins each attachment
+   * to its owning thread's title so the list can show (and link to) the
+   * conversation a file lives in. Filterable by filename substring and by
+   * kind (image vs other), orderable newest- or largest-first.
+   *
+   * Only live rows (non-null `storage_path`) are returned - an
+   * already-deleted attachment has no object to manage. RLS scopes the
+   * whole query to the caller via the attachment -> message -> thread
+   * chain, so the embedded `messages`/`threads` resolve only the user's
+   * own rows.
+   *
+   * Fetches one extra row past `pageSize` to compute `hasMore` without a
+   * separate count query.
+   */
+  async listArtifacts(opts: {
+    offset: number;
+    pageSize: number;
+    query?: string;
+    kind?: 'all' | 'image' | 'file';
+    sort?: 'newest' | 'largest';
+  }): Promise<{ rows: ArtifactListRow[]; hasMore: boolean }> {
+    const { offset, pageSize, query, kind = 'all', sort = 'newest' } = opts;
+    let q = this.client
+      .from('message_attachments')
+      .select(
+        'id, filename, mime_type, size_bytes, storage_path, created_at, messages!inner(thread_id, threads!inner(title))'
+      )
+      .not('storage_path', 'is', null);
+    const trimmed = (query ?? '').trim();
+    // ilike wildcards in the user's text are escaped so a literal % or _
+    // in a filename doesn't widen the match.
+    if (trimmed.length > 0) {
+      const escaped = trimmed.replace(/[%_\\]/g, '\\$&');
+      q = q.ilike('filename', `%${escaped}%`);
+    }
+    if (kind === 'image') q = q.ilike('mime_type', 'image/%');
+    else if (kind === 'file') q = q.not('mime_type', 'ilike', 'image/%');
+    q =
+      sort === 'largest'
+        ? q.order('size_bytes', { ascending: false })
+        : q.order('created_at', { ascending: false });
+    q = q.range(offset, offset + pageSize);
+    const { data, error } = await q;
+    if (error) throw new SupabaseError(error.message);
+    const raw = (data ?? []) as Array<{
+      id: string;
+      filename: string;
+      mime_type: string;
+      size_bytes: number;
+      storage_path: string;
+      created_at: string;
+      // PostgREST returns a to-one embed as an object; older typings can
+      // surface it as a single-element array, so accept either shape.
+      messages?:
+        | { thread_id: string; threads?: { title?: string } | { title?: string }[] | null }
+        | { thread_id: string; threads?: { title?: string } | { title?: string }[] | null }[]
+        | null;
+    }>;
+    const hasMore = raw.length > pageSize;
+    const rows: ArtifactListRow[] = raw.slice(0, pageSize).map((r) => {
+      const msg = Array.isArray(r.messages) ? r.messages[0] : r.messages;
+      const thr = Array.isArray(msg?.threads) ? msg?.threads[0] : msg?.threads;
+      return {
+        id: r.id,
+        filename: r.filename,
+        mime_type: r.mime_type,
+        size_bytes: r.size_bytes,
+        storage_path: r.storage_path,
+        created_at: r.created_at,
+        thread_id: msg?.thread_id ?? '',
+        thread_title: thr?.title ?? 'Untitled conversation',
+      };
+    });
+    return { rows, hasMore };
+  }
+
+  /**
+   * Delete one attachment from the Artifacts tab: mark the row expired
+   * (null `storage_path` + stamp `expired_at`) so the conversation
+   * re-renders the file as the greyed placeholder, then best-effort remove
+   * the bucket object. The row is UPDATED, not deleted, so the message it
+   * belongs to still reads sensibly (filename + extracted_text survive).
+   *
+   * Row-first ordering (the inverse of deleteMessages): nulling the path
+   * first stops the row from referencing the object, so a Storage hiccup
+   * can't strand a live row pointing at a deleted object - the daily
+   * `attachment-gc` sweep reclaims the object if the remove below misses.
+   * The "attachments are self-updatable via thread" RLS policy scopes the
+   * update to the caller's own rows.
+   */
+  async deleteAttachment(attachmentId: string): Promise<void> {
+    const { data, error: selErr } = await this.client
+      .from('message_attachments')
+      .select('storage_path')
+      .eq('id', attachmentId)
+      .maybeSingle();
+    if (selErr) throw new SupabaseError(selErr.message);
+    const path = (data as { storage_path: string | null } | null)?.storage_path ?? null;
+
+    const { error: updErr } = await this.client
+      .from('message_attachments')
+      .update({ storage_path: null, expired_at: new Date().toISOString() })
+      .eq('id', attachmentId);
+    if (updErr) throw new SupabaseError(updErr.message);
+
+    if (path) {
+      // Swallowed on purpose: attachment-gc reclaims any object the remove
+      // misses, and the row is already marked expired regardless.
+      await this.client.storage.from('attachments').remove([path]);
+    }
   }
 
   /**

@@ -130,7 +130,7 @@ by hand:
    want the in-app **Usage** view (billing needs admin scope; a standard key
    covers chat and embeddings).
 5. **Deploy the edge functions** to your project:
-   `supabase functions deploy venice` (plus `expire-attachments` and
+   `supabase functions deploy venice` (plus `attachment-gc` and
    `recipe-image-gc`). The `venice` function is what holds the key and relays
    every Venice call - the app does not work without it.
 6. **Whitelist** your `https://<you>.github.io/<repo>/` URL in Supabase
@@ -299,7 +299,7 @@ and billing call routes through, and CI is what deploys it.** Wire it up once:
 
 From the next deploy onward, every merge to `main` re-applies `schema.sql`,
 merges your Pages URL into the auth allowlist, and deploys the `venice`,
-`expire-attachments`, and `recipe-image-gc` functions before the site is
+`attachment-gc`, and `recipe-image-gc` functions before the site is
 rebuilt. A schema or function failure fails the deploy, so you can't ship app
 code whose backend is out of sync with it. If you never add these secrets, the
 sync and function-deploy steps are skipped - which means no edge functions get

@@ -5,32 +5,52 @@
 Per-message file attachments - queued in the composer, the original
 bytes stored in the private `attachments` Storage bucket, surfaced to
 Venice chat requests as signed URLs (images) or fenced extracted text
-(documents), and reclaimed 30 days after the owning thread goes dormant.
+(documents). Images are compressed in the browser on upload so they land
+small at the source; attachments then persist until the user deletes them
+from the Artifacts tab (there's no timed expiry sweep).
 
 Byte storage follows the app-wide model in
 [`./file-storage.md`](./file-storage.md) (private buckets, signed-URL
-reads, `storage_path` pointers, server-side expiry sweep). This doc
+reads, `storage_path` pointers, server-side orphan GC). This doc
 covers the attachment-specific pieces.
 
 ## Files
 
-- `supabase/schema.sql` - the `message_attachments` table + RLS, the
-  `attachments` bucket + its `storage.objects` policies, and the expiry
-  sweep RPCs (`list_expirable_attachments`,
-  `mark_attachments_expired`) + cron dispatcher.
+- `supabase/schema.sql` - the `message_attachments` table + RLS and the
+  `attachments` bucket + its `storage.objects` policies. (The old timed
+  expiry sweep RPCs + cron are retired - see the "Retired: scheduled
+  attachment expiry" block.)
 - `src/lib/attachments.ts` - pure helpers: size validation,
   `isConsumableBy` predicate, base64 helpers (composer-side, in-memory),
-  canvas-based `maybeDownscaleImage`, and the `buildUserVeniceContent`
-  transformer that builds the string-vs-content-array wire shape (it
-  takes pre-resolved image URLs; it does not read bytes).
+  canvas-based `compressImage` (the shared upload/generate compressor -
+  caps the long edge AND walks a quality/dimension search toward
+  `IMAGE_COMPRESSION_TARGET_BYTES`, returning before/after sizes),
+  `maybeDownscaleImage` (the recipe-photo resizer - long-edge cap only, no
+  byte target), and the `buildUserVeniceContent` transformer that builds
+  the string-vs-content-array wire shape (it takes pre-resolved image URLs;
+  it does not read bytes).
+- `src/lib/ui/composer-attachments.ts` - pure `chipStatus` /
+  `compressionLabel` primitives that resolve a pending attachment to its
+  one chip state (compressing / pending / error / compressed / ready) and
+  render the "Reduced from X to Y" note.
 - `src/lib/supabase.ts` - `Attachment` / `NewAttachment` types,
   `addAttachments` (uploads to the bucket, stores `storage_path`),
   `listAttachmentsByMessageIds` (projects `storage_path`, no bytes),
   `createAttachmentSignedUrls` (batched), `downloadAttachmentBlob`,
   `findImageByFilenameInThread`, `findAttachmentByFilenameInThread`,
-  `listAttachmentSummariesForThread`. `listMessages` co-fetches
-  attachments for user AND assistant rows (assistant rows can carry
-  generate_image output).
+  `listAttachmentSummariesForThread`, `listArtifacts` (the cross-thread
+  Artifacts listing, joined to each owning thread's title), and
+  `deleteAttachment` (the Artifacts-tab per-file delete: mark expired +
+  best-effort object remove). `listMessages` co-fetches attachments for
+  user AND assistant rows (assistant rows can carry generate_image output).
+- `src/lib/artifacts-store.svelte.ts` - reactive store for the Artifacts
+  tab (results + query/kind/sort filters + paging), driven by
+  `listArtifacts` with a monotonic load token guarding stale results.
+- `src/lib/ui/artifacts-list.ts` - pure primitives for the tab: the
+  kind/sort option tables, the empty/scanner labels, the image predicate.
+- `src/components/ArtifactsList.svelte` - the Artifacts drawer list:
+  filename search + type/sort filters, image thumbnails (batched signed
+  URLs), per-row delete, click-to-open-conversation.
 - `src/lib/venice.ts` - `VeniceMessage.content` widened to
   `string | ContentPart[]`.
 - `src/lib/supabase.ts` - `SupabaseService.extractText(blob, filename)`
@@ -68,10 +88,6 @@ covers the attachment-specific pieces.
   `generatedImageToNewAttachment`, `GENERATED_IMAGE_RESULT_KEY`.
 - `src/components/ExtractedTextDrawer.svelte` - full-height right-side
   drawer: filename header, extracted text as a `<pre>` body.
-- `supabase/functions/expire-attachments/index.ts` +
-  `_shared/expire-attachments.ts` - the server-side expiry sweep
-  (replaced the old browser `attachment_expiry` worker). See
-  [`./file-storage.md`](./file-storage.md).
 - `supabase/functions/attachment-gc/index.ts` +
   `_shared/attachment-gc.ts` - the daily orphan-object GC sweep, backed by
   the `list_orphan_attachment_objects` RPC. Reclaims bucket objects with no
@@ -84,8 +100,9 @@ covers the attachment-specific pieces.
 ## Entry points
 
 - **User picks a file** - `addAttachment(file)` in `Chat.svelte`.
-  Validates size, downscales images via `maybeDownscaleImage`,
-  base64-encodes into the in-memory `pendingAttachments` (a
+  Validates size, compresses oversized images via `compressImage` (the chip
+  shows a "Compressing large image..." spinner, then "Reduced from X to Y"
+  when it shrank), base64-encodes into the in-memory `pendingAttachments` (a
   `LocalAttachment`), calls `app.supabase.extractText` for non-image files.
 - **User sends** - `send()`: pre-send guard, `addMessage` for the user
   row, then `addAttachments` which uploads each file's bytes to the
@@ -105,15 +122,41 @@ covers the attachment-specific pieces.
   table, and the assistant row was already echoed), so
   `GeneratedImageCard` resolves the image by filename instead - see
   "Generated-image rendering" under Gotchas.
-- **Expiry** - the `expire-attachments` edge function (hourly cron)
-  deletes bucket objects whose thread is 30 days dormant, then nulls
-  `storage_path` + stamps `expired_at`. No open tab required.
+- **Manual delete** - from the Artifacts tab, `deleteAttachment` marks
+  the row expired (null `storage_path` + stamp `expired_at`, RLS-scoped to
+  the owner) and best-effort removes the bucket object; the `attachment-gc`
+  sweep reclaims the object if that remove misses. This is the only path
+  that reclaims an attachment now - there is no timed expiry.
 - **Thread deletion** - `SupabaseService.deleteThread` collects the
   thread's live attachment keys before the cascade removes their rows, then
   best-effort removes those bucket objects after the thread is gone. The
   daily `attachment-gc` sweep is the backstop for whatever that misses (a
   failed inline remove, or objects from threads deleted before this path
   existed). See [`./file-storage.md`](./file-storage.md).
+
+## Artifacts tab
+
+A drawer tab (`drawer=artifacts`, routed alongside the other tabs in
+`routing.svelte.ts`) that lists every LIVE attachment the user owns,
+across all conversations, for review and cleanup. It's a management
+surface, not a panel: clicking a row navigates to the file's
+conversation (`navigate({ cid })`), so the tab shares the chats
+main-view + top-bar rather than rendering its own panel (the
+`drawerTab === 'chats' || 'artifacts'` branches in `Chat.svelte`).
+
+- **Listing** - `listArtifacts` pages `message_attachments` newest- or
+  largest-first, filtered by filename substring and kind (image vs
+  file), with each row joined to its owning thread's title. Only live
+  rows (`storage_path` non-null) are listed; RLS scopes the whole query
+  (including the embedded `messages`/`threads`) to the caller. One extra
+  row past the page size drives `hasMore` without a count query.
+- **Delete** - `deleteAttachment` marks the row expired client-side
+  (null `storage_path` + stamp `expired_at`, allowed by the
+  self-update RLS policy) then best-effort removes the object. The row
+  survives, so the message still renders the greyed placeholder;
+  `attachment-gc` reclaims the object if the remove missed.
+- **Thumbnails** - image rows resolve previews through the same batched
+  `createAttachmentSignedUrls` the message renderer uses.
 
 ## Data model
 
@@ -145,9 +188,9 @@ parent - `messages.thread_id -> threads.user_id = auth.uid()`.
 - **"Live" vs "expired"**: `storage_path is not null` is live;
   `storage_path is null AND expired_at is not null` is expired.
   `extracted_text` is independent and survives the transition.
-- **Conversation "last updated"**: `threads.updated_at`, bumped by
-  `SupabaseService.addMessage`. The expiry sweep reads it for the
-  30-day dormancy gate.
+- **"Expired" is now user-initiated**: the null-`storage_path` +
+  `expired_at` state and its placeholder rendering survive, but a manual
+  delete from the Artifacts tab is what produces it - no timer does.
 - **`isConsumableBy(attachment, spec)`**: single source of truth for
   whether the pre-send guard allows a file along. Image -> true (vision
   inlines it; non-vision tiers get an analyze_image note); non-empty
@@ -166,7 +209,7 @@ parent - `messages.thread_id -> threads.user_id = auth.uid()`.
   upload on the round's assistant-with-tool-calls row (per-round, not at
   terminal commit - so a same-turn `recipe_photos_attach` can resolve
   the image by filename). Otherwise identical to uploads - same bucket,
-  same expiry sweep, same RLS chain.
+  same RLS chain, same manual-delete path.
 - **`<thread_attachments>` system block**: built once per turn from
   `listAttachmentSummariesForThread` (metadata-only projection). Lists
   live images, live documents, and expired filenames; empty sections add
@@ -186,7 +229,7 @@ parent - `messages.thread_id -> threads.user_id = auth.uid()`.
 ## Interactions
 
 - **File storage** ([`./file-storage.md`](./file-storage.md)) - the
-  bucket, signed-URL reads, and the `expire-attachments` sweep follow the
+  bucket, signed-URL reads, and the `attachment-gc` orphan sweep follow the
   shared model; that doc is canonical for the storage mechanics.
 - **Chat** ([`./chat.md`](./chat.md)) - composer paste/drag-drop UX +
   the `send()` path that materialises attachments and pre-resolves the
@@ -250,8 +293,12 @@ parent - `messages.thread_id -> threads.user_id = auth.uid()`.
   Content-Type unset so the runtime writes the multipart boundary
   itself. Don't add a Content-Type override; doing so trashes the
   boundary parameter and Venice rejects the upload.
-- **Canvas downscale is main-thread**: `maybeDownscaleImage` blocks while
-  painting to a canvas. One-off on user action; acceptable.
+- **Canvas compression is main-thread**: `compressImage` (uploads) and
+  `maybeDownscaleImage` (recipe photos) block while painting to a canvas.
+  A worker/OffscreenCanvas path is rejected on purpose - Safari < 16.4
+  lacks the decode+encode it needs, and the composer ships to every modern
+  browser. The bounded quality/dimension search keeps it a sub-second
+  one-off on user action; acceptable.
 - **Extracted text outlives the object by design**: a year-old
   conversation with expired files still reads sensibly because
   `extracted_text` doesn't expire.
