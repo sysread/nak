@@ -758,6 +758,88 @@ so extraction and article maintenance run concurrently.
 `reset_wiki_data` clears these alongside the article columns and
 deletes `wiki_records` rows explicitly.
 
+### Record files and cross-links
+
+Two relations hang off `wiki_records`, both keyed by their own
+`user_id` (direct RLS, not via-parent) and members of
+`supabase_realtime` with `(id, user_id)` replica-identity indexes for
+DELETE delivery:
+
+`wiki_record_files` (per-record attachments - crumb photos, scanned
+cards, PDFs):
+
+- `id`, `user_id`, `record_id uuid not null references wiki_records on
+  delete cascade`, `position int`, `filename`, `mime_type`,
+  `size_bytes`, `storage_path text not null`, `extracted_text` (Venice
+  text-parser output for non-image docs, so `record_get` can hand the
+  model a document's text; null for images), `created_at`.
+- Bytes live in the **persistent** `wiki-record-files` Storage bucket
+  (key `<user_id>/<file_id>/<filename>`), following the
+  `docs/dev/file-storage.md` model. Unlike `attachments` it never
+  expires - a record is permanent, so its evidence is too. Orphaned
+  objects (left when a record/article delete cascades the row away) are
+  reclaimed by the daily `wiki-record-file-gc` edge function backed by
+  `list_orphan_wiki_record_file_objects` (a clone of `attachment-gc`).
+- The browser uploads through `SupabaseService.uploadAndAttachWikiRecordFile`
+  (image downscale + non-image text-extract reuse the chat composer's
+  helpers) and reads via `listWikiRecordFiles` +
+  `createWikiRecordFileSignedUrls`. The chat reaches files through the
+  `record_file_attach` tool, which **promotes a file the conversation
+  already holds** (a user upload OR a `generate_image` output - both are
+  `message_attachments` rows) by copying the bytes from the
+  `attachments` bucket into `wiki-record-files`. The model can't upload
+  bytes; it names a live thread file by filename (expired source ->
+  actionable error). See the Attachments interaction.
+
+`wiki_record_links` (a directed, labelled graph between records):
+
+- `id`, `user_id`, `from_record_id` / `to_record_id` (both `references
+  wiki_records on delete cascade`), `label text` (freeform, capped at
+  `MAX_RECORD_LINK_LABEL_CHARS` = 120), `created_at`.
+- `check (from_record_id <> to_record_id)` (no self-links) +
+  `unique (from_record_id, to_record_id)` - a **simple directed graph**:
+  one edge per ordered pair, the label is the edge's editable attribute,
+  A->B and B->A are distinct rows. Re-linking a pair updates the label
+  (the create path is an upsert on the pair).
+- `SupabaseService.listWikiRecordLinks` projects a record's edges from
+  its own point of view (`WikiRecordLinkView`: direction + the other
+  endpoint's date/content). The chat reaches links through
+  `record_link_create` / `record_link_delete`.
+
+**Changelog.** File and link mutations ARE record changes, so each lands
+a `wiki_changelog` row reusing the **`record_update`** kind (no
+constraint change) with descriptive wording - "Attached image (date):
+crumb.jpg", "Linked to (date) ... - based on" - built by
+`buildRecordFileChangelogMessage` / `buildRecordLinkChangelogMessage`,
+mirrored in `src/lib/wiki.ts` and edge
+`tools/_record_helpers.ts` so the in-app and tool/agent paths read
+identically. They render under the panel's "Edited" chip.
+
+**Reads.** `record_get` returns the record plus its `files` (metadata +
+bounded `extracted_text`) and `links` (outgoing/incoming with the other
+endpoint's dated excerpt); `record_list` annotates each row with
+`file_count` / `link_count` (two batched queries over the listed ids,
+not N+1).
+
+**Embeddings unchanged.** A record's embed input stays `date + content`;
+attached-file text does NOT feed the record vector (a noisy OCR dump
+shouldn't dominate retrieval). Files reach the model through
+`record_get`, not through search ranking.
+
+**UI.** Files + links live in the EXPANDED record body in
+`WikiRecords.svelte` (a new record has no id yet, so management sits
+where the record exists, beside Edit/Export/Delete): an upload zone
+(drag/drop + picker), an image-thumbnail / doc-download strip, and a
+link picker (target select + label). Decision logic is in the
+`src/lib/ui/wiki-records.ts` primitives (`partitionRecordFiles`,
+`describeLink`, `linkCandidates`, `validateLinkLabel`,
+`formatRecordFileMeta`, `recordFileIsImage`), unit-tested in
+`tests/wiki-records.test.ts`. The `subscribeToWikiRecordChanges` relay
+covers all three tables, so a server-side file/link write refreshes an
+open article view. The link picker currently offers only the current
+article's records (the same-article "attempt N based on attempt N-1"
+case); the schema supports cross-article links for a later widening.
+
 ### Eligibility predicate
 
 `claim_next_thread_for_wiki` is a global sweep: one SECURITY DEFINER
@@ -1151,16 +1233,22 @@ stray record is cheap to delete; a clobbered article is not.
   (semantic across every article's records). They ride every request
   like the wiki reads.
 - `wikiRecordsToolbox` (gated, `name: 'wiki_records'`) carries the
-  WRITES - `record_create` / `record_update` / `record_delete`.
-  Gated via the composer popover / `toggle_toolbox` like the cooking
-  and memory write boxes. The membership tripwire lives in
-  `tests/tools.test.ts`.
+  WRITES - `record_create` / `record_update` / `record_delete` plus the
+  file + link writes `record_file_attach` / `record_file_remove` /
+  `record_link_create` / `record_link_delete`. Gated via the composer
+  popover / `toggle_toolbox` like the cooking and memory write boxes. The
+  membership tripwire lives in `tests/tools.test.ts`.
 - The extraction agent's toolbox (`buildWikiRecordsToolbox` in
-  `agents/wiki_records.ts`) is read-heavy with exactly one write,
-  `record_create`: `wiki_search` + `wiki_list` find the home article,
-  `record_list` dedupes, read-only `memory_search` grounds. It never
-  touches article bodies or memory. Asserted in
-  `supabase/functions/tests/wiki_records.test.ts`.
+  `agents/wiki_records.ts`) is read-heavy with two writes,
+  `record_create` + `record_link_create`: `wiki_search` + `wiki_list`
+  find the home article, `record_list` dedupes, read-only
+  `memory_search` grounds, and it conservatively cross-links a
+  continuation (only when the conversation explicitly frames the new
+  event as a follow-up to a specific prior record). It never touches
+  article bodies or memory, and deliberately does NOT get
+  `record_file_attach` - autonomously promoting conversation images is
+  too easy to get wrong, so file attach stays a user/chat-driven act.
+  Asserted in `supabase/functions/tests/wiki_records.test.ts`.
 - The article worker and the librarian both get the full record-
   management set: `record_list` + `record_create` + `record_update` +
   `record_delete`. Both prompts encode the body/records separation:
@@ -1191,9 +1279,23 @@ stray record is cheap to delete; a clobbered article is not.
   `record_create`-from-conversation stays carved out to the extraction
   agent, so the worker and librarian never duplicate its event-capture
   job.
+- The librarian ALSO gets `record_link_delete` (prune-only): it removes
+  a cross-link left dangling by a merge/delete or a redundant reverse
+  edge, but never originates links - mirroring its no-`wiki_create`
+  posture (linking is the extraction agent's job). Neither the librarian
+  nor the article worker gets the file tools. Asserted in
+  `supabase/functions/tests/wiki_librarian.test.ts`.
 
 ## Interactions
 
+- **File storage** (`docs/dev/file-storage.md`) - record files use the
+  persistent `wiki-record-files` bucket and the signed-URL read model;
+  the `wiki-record-file-gc` orphan sweep is a clone of `attachment-gc`.
+- **Attachments** (`docs/dev/attachments.md`) - `record_file_attach`
+  promotes a thread file (user upload OR `generate_image` output) onto a
+  record by copying its bytes out of the `attachments` bucket, reusing
+  the thread-scoped filename resolver `analyze_image` uses. The chat
+  attachment can expire; the record copy is permanent.
 - **Memory** (`docs/dev/memory.md`) - the wiki agent grounds article
   content via read-only `memory_search`; the wiki's embedding shape
   and claim-protocol columns are clones of memories.

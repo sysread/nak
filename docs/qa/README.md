@@ -105,6 +105,10 @@ One file per use-case under [`use-cases/`](./use-cases/), named
 - [wiki-records](./use-cases/wiki-records.md) - dated records:
   manual add/edit/filter/search/export, the extraction sweep, the
   librarian promoting learnings while preserving records.
+- [wiki-record-files-and-links](./use-cases/wiki-record-files-and-links.md) -
+  attaching files to a record (panel + the record_file_attach tool's
+  copy-from-chat), the directed labelled cross-link graph, and the
+  wiki-record-file-gc orphan sweep.
 - [memory-librarians](./use-cases/memory-librarians.md) - rem and
   deep-sleep sweeps, manual runs from the Memories panel, the
   shared in-flight guard.

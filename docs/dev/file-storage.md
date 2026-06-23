@@ -33,6 +33,7 @@ on conflict do nothing`).
 | `documents` | Library uploads | `<user_id>/<document_id>/<filename>` | persistent |
 | `attachments` | chat message files + generated images | `<user_id>/<attachment_id>/<filename>` | expire 30d after the thread goes dormant |
 | `recipe-images` | cookbook photos | `<user_id>/<sha256>` (content-addressed) | persistent; reclaimed when orphaned |
+| `wiki-record-files` | files attached to wiki records | `<user_id>/<file_id>/<filename>` | persistent; reclaimed when orphaned |
 
 The key's top folder is always `<user_id>` - that's what the RLS policy
 keys on. `recipe-images` is content-addressed (the sha256, which is also
@@ -96,6 +97,15 @@ and deployed via its own line in `.github/workflows/deploy.yml`.
   `delete_orphan_recipe_images`; the delete re-checks "still no link" to
   skip a row re-linked mid-sweep. Replaced the old in-transaction orphan
   trigger, which could only delete the row, never the object.
+- **`wiki-record-file-gc`** (daily): deletes wiki-record-files bucket
+  objects with no `wiki_record_files` row - the orphans a record/article
+  delete cascade leaves behind (the cascade drops the rows; SQL can't drop
+  the objects). Backed by `list_orphan_wiki_record_file_objects` (a
+  `storage.objects` anti-join with an age grace window). The client's
+  record-file delete + the `record_file_remove` tool remove objects
+  inline; this is the backstop. A direct clone of `attachment-gc` (the
+  orphan IS the object - no row-vs-object re-check). See
+  [Wiki](./wiki.md).
 - **`documents`** has no sweep - Library docs are persistent and deleted
   explicitly by the user (`deleteDocument` removes the object then the
   row).
