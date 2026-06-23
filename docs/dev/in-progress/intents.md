@@ -321,6 +321,71 @@ appendix. It is NOT a `<think>` block - intents are stable
 standing guidance, not volatile per-turn synthesis. Update the
 contributors table in that doc when this lands.
 
+### Appendix budget and conflict
+
+Two distinct hazards live where the intent appendix meets the
+bias appendix on row-1. The second is the load-bearing one.
+
+**Budget (the mild hazard).** Bias caps its compensation
+bullets at `RENDER_CAP` (4) because more than four behavioral
+rules "crowd out the actual instruction surface" (see
+`bias-profile.md`). Intents add their own ~3-5. Treat the two
+as **one shared ceiling (~6), not two independent caps**, so a
+second feature doesn't silently double the total guidance load
+past the point bias already found the ceiling to be. Intents
+yield to bias when both are full: bias is evidence-backed,
+intents are aspirational.
+
+**Conflict (the real hazard).** Unlike two descriptive
+features, bias compensation and an intent can issue *opposing*
+behavioral directives in the same prompt. Three kinds, worst
+first:
+
+1. **Intent vs. the user's explicit system prompts.** The user
+   set "just answer, don't coach me" and an emergent intent
+   wants to coach. This is NOT a tie to break - the user's
+   stated instruction always wins. An intent that fights an
+   explicit user wish IS the "agenda without a brake" failure
+   the whole design exists to contain. The minter must never
+   seat an intent that contradicts the user's system prompts,
+   and render-time precedence puts user instructions above
+   everything emergent.
+2. **Intent vs. bias compensation.** Bias says "name a
+   contrary view, introduce doubt about overconfident claims";
+   an intent aimed at building self-trust says "affirm their
+   capacity to decide." Opposite pulls, same prompt.
+3. **Intent vs. intent.** The active set could hold "help them
+   sit with discomfort" and "help them stop ruminating and
+   act."
+
+Resolution, mostly via framing altitude:
+
+- **Render intents as dispositional leans, not turn commands.**
+  Bias compensation is an in-the-moment imperative ("do this
+  *this turn*"). Phrase intents as "when it's natural, incline
+  toward X" so they shade the model's default stance instead of
+  issuing a competing order. A bias imperative and an intent
+  lean then coexist - the model names the contrary view AND
+  does it in a way that affirms the user's capacity, a richer
+  behavior rather than a contradiction. Most apparent conflicts
+  dissolve here. This makes the rendered phrasing of an intent
+  load-bearing, not cosmetic.
+- **The minter owns coherence at formation.** It already reads
+  the bias summary and the user's system prompts as seeding
+  inputs, so "do not form an intent that contradicts active
+  compensation or the user's explicit instructions" is an
+  explicit minting constraint. Conflicts are cheapest to
+  prevent at birth, by the one agent that sees both layers.
+- **Explicit precedence in the rendered block** for residual
+  cases: user instructions > bias compensation > intents.
+  Stated, not implied by ordering (the prose-ordering
+  precedence the `<think>` chain relies on is too weak for
+  directives that actively oppose each other).
+- **Intent x intent**: the minter owns the active set, so it
+  should not seat two directly-opposing intents. If growth
+  genuinely pulls both ways, that is ONE intent about holding
+  the tension, not two fighting ones.
+
 ## Evaluation: how we know it works
 
 The product question that gates this feature: given an
@@ -418,10 +483,11 @@ new control).
 - **Bias profile** (`./bias-profile.md`) - intents READ
   `bias_summary` (for seeding and for bias-target efficacy).
   Never write. Injection sits alongside the bias appendix on
-  row-1; both are capped so they don't crowd the instruction
-  surface - the combined cap budget needs a look when this
-  lands (bias `RENDER_CAP` 4 + intents ~3-5 could be a lot of
-  appendix).
+  row-1 under a shared budget, and the two can issue opposing
+  directives - see **Injection -> Appendix budget and
+  conflict** for both the shared-cap rule and the conflict
+  resolution (dispositional framing, minter-owned coherence,
+  explicit user > bias > intent precedence).
 - **Prompt augmentation** (`./prompt-augmentation.md`) - adds
   a row-1 baseline-appendix contributor. Update the
   contributors table and ordering notes.
@@ -449,6 +515,19 @@ new control).
   that works makes the pattern *rarer*, not *less
   predictable*. Wiring efficacy to health would invert the
   signal. See **The C efficacy model**.
+- **The user's explicit instructions are not negotiable.** An
+  intent that contradicts the user's own system prompts is a
+  bug, not a tradeoff - the minter must refuse to seat it and
+  render-time precedence must subordinate every intent to user
+  instructions. This is the bright line between "a participant
+  that helps you grow" and "an agenda about your life with no
+  brake." See **Injection -> Appendix budget and conflict**.
+- **Intent phrasing is load-bearing, not cosmetic.** Intents
+  render as dispositional leans ("when natural, incline toward
+  X"), never as turn imperatives ("do X"), specifically so they
+  cannot hard-conflict with bias compensation's in-the-moment
+  imperatives. A minter that emits commanding phrasing
+  reintroduces the conflict the framing was chosen to avoid.
 - **Free-form intents never gain a posterior.** A `'none'`
   target with a non-null efficacy is a bug - it means
   something self-graded its way to a score.
