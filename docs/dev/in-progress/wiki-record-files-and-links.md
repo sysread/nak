@@ -86,11 +86,29 @@ Directed many-to-many between records, with a freeform label.
   against the user explicitly since RLS is bypassed there.
 - `supabase_realtime` member + `(id, user_id)` replica identity.
 
+### Changelog
+
+File and link mutations ARE record changes, so they append a
+`wiki_changelog` row scoped to the parent `article_id` - same as a
+record content edit. They reuse the existing **`record_update`** kind
+(no `wiki_changelog.kind` constraint change needed); only the message
+text is new. The changelog panel renders them under the "Edited" chip.
+Messages (extend `buildRecordChangelogMessage`, mirrored in
+`src/lib/wiki.ts` and edge `tools/_record_helpers.ts` so both write
+paths read identically):
+
+- `Attached image (2026-06-17): crumb.jpg`
+- `Removed file (2026-06-17): recipe-card.pdf`
+- `Linked to "Attempt #2" - based on`
+- `Removed link to "Attempt #2"`
+
+Every write path - Wiki panel, chat tools, extraction agent - lands the
+history row identically (the browser via
+`SupabaseService.appendRecordChangelog`, the edge tools via
+`appendRecordChangelog` in `_record_helpers.ts`).
+
 ### Out of scope (non-goals)
 
-- No changelog rows for file/link mutations (the `wiki_changelog`
-  `kind` check stays as-is). Records themselves still changelog;
-  sub-record attachments don't. Revisit if the user wants it.
 - Record embedding input stays `date + content` - attached-file
   `extracted_text` does NOT feed the record vector (a noisy OCR dump
   shouldn't dominate retrieval). Files reach the model through
