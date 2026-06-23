@@ -193,20 +193,19 @@ No toggle.
 
 ## Storage cleanup
 
-Files you attach to a chat (and images Nak generates) don't live
-forever. Thirty days after a conversation's last message, a scheduled
-job on your Supabase project deletes the stored file bytes and frees
-the space. The filename, size, and any extracted text stay behind so
-the conversation still reads sensibly - see
-[Attachments](./attachments.md#expiration) for exactly what survives.
+Files you attach to a chat (and images Nak generates) are **kept until
+you delete them** - there's no timer. You manage them yourself from the
+[Artifacts tab](./attachments.md#managing-your-files-the-artifacts-tab);
+images are shrunk on upload so they stay small in storage.
 
-Like embeddings, this runs server-side on a schedule, so it reclaims
-space even with no tab open. Replying to a thread resets the 30-day
-clock for every file in it.
+The only thing that runs in the background here is an **orphan sweep**:
+when you delete a whole conversation, its files' bookkeeping rows go
+with it, but the stored bytes can take a moment to clear. A scheduled
+job on your Supabase project mops up any leftover bytes that the inline
+delete missed.
 
-What you see: nothing while it runs. An expired attachment picks up a
-small clock icon in the conversation; its **Text** button keeps
-working.
+What you see: nothing. This is invisible housekeeping - it never
+touches files that still belong to a live conversation.
 
 Cost: none - it only deletes, no model calls.
 

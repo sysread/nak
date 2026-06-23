@@ -33,8 +33,8 @@ You can reach these pages two ways:
 - [The chat interface](./chat.md) — composer, streaming, thinking mode,
   regeneration, copy/edit/delete.
 - [Attachments](./attachments.md) — attach files to a message; how
-  they're stored, which tiers can see what, and the 30-day
-  expiration policy.
+  they're stored, which tiers can see what, on-upload image
+  compression, and managing files from the Artifacts tab.
 - [Threads](./threads.md) — the conversation drawer, pinning,
   archiving, renaming, deleting.
 - [Memory](./memory.md) — the long-term store Nak builds up about you

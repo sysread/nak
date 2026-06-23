@@ -1,13 +1,13 @@
-# Background maintenance: backfill, expiry, GC, and their drawer lines
+# Background maintenance: backfill, orphan GC, and their drawer lines
 
 ## Covers
 
-The embed backfill sweep, the attachment-expiry function, the
+The embed backfill sweep, the attachment orphan-object GC function, the
 recipe-image GC function, and each one's per-user drawer summary
 ([dev: embeddings](../../dev/embeddings.md),
 [dev: attachments](../../dev/attachments.md),
 [dev: logging](../../dev/logging.md) sources `embeddings`,
-`attachment-expiry`, `recipe-image-gc`).
+`attachment-gc`, `recipe-image-gc`).
 
 ## Preconditions
 
@@ -21,16 +21,18 @@ recipe-image GC function, and each one's per-user drawer summary
    where id = (select id from memories limit 1);
   ```
 
-- Expiry work: an attachment row whose owning thread has been
-  dormant past the window (forge by backdating the thread's newest
-  message); GC work: an orphaned recipe_images row (delete its
-  version links).
+- Attachment GC work: an orphaned attachments-bucket object - a bucket
+  object with no `message_attachments` row. Forge by deleting an
+  attachment's row in SQL while leaving its object in place (its object
+  is older than the GC grace window, so the sweep won't mistake it for
+  an in-flight upload). Recipe GC work: an orphaned recipe_images row
+  (delete its version links).
 
 ## Steps
 
 1. Backfill: POST `/backfill` (venice function, service bearer).
-2. Expiry: POST the `expire-attachments` function root.
-3. GC: POST the `recipe-image-gc` function root.
+2. Attachment GC: POST the `attachment-gc` function root.
+3. Recipe GC: POST the `recipe-image-gc` function root.
 
 ## Expected
 
@@ -40,10 +42,9 @@ recipe-image GC function, and each one's per-user drawer summary
   `[embeddings] embedded N item(s) in the background` info line for
   the affected user. A tick with an empty queue emits no drawer
   line.
-- (2) Expired rows flip (`storage_path` nulled / marked), bucket
-  objects removed, and the drawer shows
-  `[attachment-expiry] expired N dormant attachment(s)` for each
-  affected user.
+- (2) The orphaned bucket object is removed, and the drawer shows
+  `[attachment-gc] reclaimed N orphaned attachment object(s)` for each
+  affected user. A run with no orphans emits no drawer line.
 - (3) Orphan rows deleted with their bucket objects, and
   `[recipe-image-gc] reclaimed N orphaned recipe image(s)` per
   user. Rows re-linked between list and delete are skipped (the

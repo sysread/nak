@@ -148,6 +148,7 @@
   import WikiList from '../components/WikiList.svelte';
   import SamskaraBrowseList from '../components/SamskaraBrowseList.svelte';
   import LibraryList from '../components/LibraryList.svelte';
+  import ArtifactsList from '../components/ArtifactsList.svelte';
   import IntuitionPill from '../components/IntuitionPill.svelte';
   import BiasPill from '../components/BiasPill.svelte';
   import RecallPill from '../components/RecallPill.svelte';
@@ -178,6 +179,10 @@
     documentStore,
     runDocumentSearch,
   } from '$lib/documents-store.svelte';
+  import {
+    artifactStore,
+    loadArtifactsFirstPage,
+  } from '$lib/artifacts-store.svelte';
   import { onDocumentChange } from '$lib/document-events';
   import { moodState } from '$lib/samskara/mood.svelte';
   import {
@@ -473,9 +478,9 @@
    * replaceState so a tab flip doesn't fill history with UI-chrome
    * entries.
    */
-  const drawerTab = $derived<'chats' | 'recipes' | 'memories' | 'wiki' | 'library' | 'samskara'>(
-    route.drawer ?? 'chats'
-  );
+  const drawerTab = $derived<
+    'chats' | 'recipes' | 'memories' | 'wiki' | 'library' | 'artifacts' | 'samskara'
+  >(route.drawer ?? 'chats');
   // Recipe and memory search/listing state has moved to the
   // RecipeList / MemoryList sidebar components.
 
@@ -519,6 +524,16 @@
     navigate({ drawer: 'library' }, { replace: true });
     if (app.supabase && !documentStore.loaded && !documentStore.loading) {
       void runDocumentSearch(app.supabase);
+    }
+  }
+
+  // Artifacts drawer tab. Like the library tab - kick the first load on
+  // pick so the listing is populated immediately; the $effect below covers
+  // a direct ?drawer=artifacts landing.
+  function onPickArtifactsTab(): void {
+    navigate({ drawer: 'artifacts' }, { replace: true });
+    if (app.supabase && !artifactStore.loaded && !artifactStore.loading) {
+      void loadArtifactsFirstPage(app.supabase);
     }
   }
 
@@ -569,6 +584,15 @@
     if (!app.supabase) return;
     if (documentStore.loaded || documentStore.loading) return;
     void runDocumentSearch(app.supabase);
+  });
+
+  // Parallel for the artifacts tab. Same `loaded`-gate rationale - an
+  // account with zero attachments would re-fire the load forever otherwise.
+  $effect(() => {
+    if (route.drawer !== 'artifacts') return;
+    if (!app.supabase) return;
+    if (artifactStore.loaded || artifactStore.loading) return;
+    void loadArtifactsFirstPage(app.supabase);
   });
 
   // Wiki cross-surface change channel. The chat-side wiki_* tool calls
@@ -1487,7 +1511,8 @@
   });
 
   // Drawer-tab return handling. The messages container + composer both
-  // live inside {#if drawerTab === 'chats'}, so switching to recipes /
+  // live inside {#if drawerTab === 'chats' || 'artifacts'} (the Artifacts
+  // tab shares the chat main view), so switching to recipes /
   // memories / wiki fully unmounts them. When the user comes back to
   // chats with the same thread still active, selectThread no-ops
   // (route.cid still matches activeThreadId), so the focus + post-load
@@ -1501,21 +1526,24 @@
   //      transcript instead of the newest message, breaking the
   //      "opening a conversation jumps to the end" UX.
   //
-  // Both fire on the same prev != 'chats' -> 'chats' edge, so they
-  // share one effect. prevTab === null skips the initial mount: the
-  // selectThread path that ran during syncFromUrl already handled both.
+  // Both fire on the edge INTO the {chats, artifacts} group from a tab
+  // that unmounted the container, so they share one effect. Transitions
+  // within the group (chats <-> artifacts) don't remount it, so they're
+  // skipped. prevTab === null skips the initial mount: the selectThread
+  // path that ran during syncFromUrl already handled both.
+  const sharesChatView = (t: typeof drawerTab | null): boolean =>
+    t === 'chats' || t === 'artifacts';
   let prevDrawerTab: typeof drawerTab | null = null;
   $effect(() => {
     const tab = drawerTab;
     const prev = prevDrawerTab;
     prevDrawerTab = tab;
     if (prev === null) return;
-    if (tab !== 'chats' || prev === 'chats') return;
-    // Wait a tick for the {#if drawerTab === 'chats'} block to commit
-    // the remounted composer + messages container before touching
-    // either.
+    if (!sharesChatView(tab) || sharesChatView(prev)) return;
+    // Wait a tick for the chat main-view block to commit the remounted
+    // composer + messages container before touching either.
     void tick().then(() => {
-      if (drawerTab !== 'chats') return;
+      if (!sharesChatView(drawerTab)) return;
       if (!composerIsMobile) composerEl?.focus();
       if (activeThreadId !== null && messages.length > 0 && messagesEl) {
         followBottom = true;
@@ -6279,6 +6307,16 @@
               type="button"
               role="tab"
               class="thread grow"
+              class:active={drawerTab === 'artifacts'}
+              aria-selected={drawerTab === 'artifacts'}
+              onclick={() => onPickArtifactsTab()}
+            >Artifacts</button>
+          </div>
+          <div class="row thread-row">
+            <button
+              type="button"
+              role="tab"
+              class="thread grow"
               class:active={drawerTab === 'memories'}
               aria-selected={drawerTab === 'memories'}
               onclick={() => onPickMemoriesTab()}
@@ -6541,6 +6579,12 @@
              search, the tier/sort/hide-similar controls, and selection.
              onSelect mirrors the other tabs on mobile. -->
         <SamskaraBrowseList onSelect={closeDrawerOnMobile} />
+      {:else if drawerTab === 'artifacts'}
+        <!-- Artifacts tab. ArtifactsList owns the filename search, the
+             type/sort filters, and per-file delete. Clicking a row jumps
+             to the conversation the file lives in; onSelect closes the
+             drawer on mobile. -->
+        <ArtifactsList onSelect={closeDrawerOnMobile} />
       {:else}
         <!-- Library tab. LibraryList owns the search and newest-first
              listing. Clicking a document surfaces it in the main panel.
@@ -6720,10 +6764,13 @@
             <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
           </svg>
         {/snippet}
-        {#if drawerTab === 'chats'}
+        {#if drawerTab === 'chats' || drawerTab === 'artifacts'}
           <!-- Chats top-bar: new-thread + title (inline-renameable). The
                logs-toggle that used to live here moved out of the per-tab
-               branches so it appears on every section. -->
+               branches so it appears on every section. The Artifacts tab is
+               a drawer-only management surface - it shares the chats
+               top-bar + transcript so the main view stays the conversation
+               while the user reviews files in the drawer. -->
           {@const actions = [
             {
               id: 'new-thread',
@@ -6930,7 +6977,7 @@
         </button>
       </div>
 
-      {#if drawerTab === 'chats'}
+      {#if drawerTab === 'chats' || drawerTab === 'artifacts'}
       <div class="messages-wrap">
         <!--
           ontouchmove: not a user-facing interaction - the handler is a

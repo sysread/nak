@@ -1,16 +1,17 @@
 # Library
 
 Persistent, user-uploaded reference documents. A peer to chats,
-memories, recipes, and the wiki. Unlike message attachments (which
-expire on a 30-day sweep), Library documents are long-term reference
-material the user curates and the LLM searches.
+memories, recipes, and the wiki. Like message attachments, Library
+documents are kept until the user deletes them - but they're curated
+long-term reference material the LLM searches, surfaced in their own
+tab rather than riding along with a single chat message.
 
 ## Role
 
 Two surfaces with deliberately different lifetimes:
 
 - **Attachments** (`docs/dev/attachments.md`) - per-message files,
-  reclaimed after 30 days dormancy.
+  kept until the user deletes them (from the Artifacts tab).
 - **Library** (this doc) - whole uploaded documents kept forever. The
   original binary lives in a private Storage bucket; the extracted text
   is stored alongside and searched directly. Reached only through the

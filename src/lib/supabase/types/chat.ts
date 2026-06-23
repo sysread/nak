@@ -175,9 +175,9 @@ export interface Attachment {
   size_bytes: number;
   /**
    * Object key in the `attachments` bucket
-   * (`<user_id>/<attachment_id>/<filename>`), or `null` once the expiry
-   * sweep has deleted the object (or for a legacy pre-bucket row).
-   * Non-null iff the attachment is live.
+   * (`<user_id>/<attachment_id>/<filename>`), or `null` once the object
+   * has been deleted (a manual delete from the Artifacts tab, or a legacy
+   * pre-bucket row). Non-null iff the attachment is live.
    */
   storage_path: string | null;
   /**
@@ -186,7 +186,7 @@ export interface Attachment {
    * model saw outlives the original object.
    */
   extracted_text: string | null;
-  /** Timestamp at which the object was deleted by the expiry sweep; null when live. */
+  /** Timestamp at which the object was deleted (manual delete); null when live. */
   expired_at: string | null;
   created_at: string;
 }
@@ -207,6 +207,26 @@ export interface NewAttachment {
 }
 
 /**
+ * One row in the Artifacts tab - a live attachment projected with its
+ * owning conversation's title, so the management list can show "which
+ * chat is this file in" and link back to it. Only live attachments
+ * (non-null `storage_path`) are listed; deleting one marks it expired and
+ * drops it from the listing. No bytes, no `extracted_text` - the row
+ * carries just what the list renders plus the signed-URL inputs.
+ */
+export interface ArtifactListRow {
+  id: string;
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+  /** Always non-null here (the listing filters to live rows). */
+  storage_path: string;
+  created_at: string;
+  thread_id: string;
+  thread_title: string;
+}
+
+/**
  * Lightweight projection of a thread's attachments for the per-turn
  * `<thread_attachments>` system block. Carries only what the block
  * formatter and the model need (filename + categorisation flags) - no
@@ -218,7 +238,7 @@ export interface ThreadAttachmentSummary {
   mime_type: string;
   /** Image MIME types route through the analyze_image tool branch in the block. */
   is_image: boolean;
-  /** True when the binary has been reclaimed by the expiry worker. */
+  /** True when the binary has been deleted (a manual Artifacts-tab delete). */
   expired: boolean;
   /** Insert timestamp, used by the block formatter for stable ordering. */
   created_at: string;

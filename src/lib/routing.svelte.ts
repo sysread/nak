@@ -54,7 +54,14 @@ export type Modal =
   | 'intuition'
   | 'bias-profile'
   | 'recall';
-export type DrawerTab = 'chats' | 'recipes' | 'memories' | 'wiki' | 'library' | 'samskara';
+export type DrawerTab =
+  | 'chats'
+  | 'recipes'
+  | 'memories'
+  | 'wiki'
+  | 'library'
+  | 'artifacts'
+  | 'samskara';
 
 export interface Route {
   cid: string | null;
@@ -117,6 +124,7 @@ const DRAWER_VALUES: readonly DrawerTab[] = [
   'memories',
   'wiki',
   'library',
+  'artifacts',
   'samskara',
 ];
 

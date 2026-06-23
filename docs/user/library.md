@@ -16,8 +16,8 @@ different jobs:
 
 - **Attachments** (the paperclip in the composer) ride along with a
   single message. They're great for "look at this and tell me what you
-  think" in the moment. They expire after 30 days to keep your account
-  lean.
+  think" in the moment. They stay until you delete them (from the
+  Artifacts tab), and images are shrunk on upload to keep storage lean.
 - **Library documents** are permanent. They don't expire, they live in
   their own tab, and the assistant can search across all of them at
   once. This is the right home for paperwork you'll want to ask about

@@ -38,9 +38,19 @@ covers the attachment-specific pieces.
   `listAttachmentsByMessageIds` (projects `storage_path`, no bytes),
   `createAttachmentSignedUrls` (batched), `downloadAttachmentBlob`,
   `findImageByFilenameInThread`, `findAttachmentByFilenameInThread`,
-  `listAttachmentSummariesForThread`. `listMessages` co-fetches
-  attachments for user AND assistant rows (assistant rows can carry
-  generate_image output).
+  `listAttachmentSummariesForThread`, `listArtifacts` (the cross-thread
+  Artifacts listing, joined to each owning thread's title), and
+  `deleteAttachment` (the Artifacts-tab per-file delete: mark expired +
+  best-effort object remove). `listMessages` co-fetches attachments for
+  user AND assistant rows (assistant rows can carry generate_image output).
+- `src/lib/artifacts-store.svelte.ts` - reactive store for the Artifacts
+  tab (results + query/kind/sort filters + paging), driven by
+  `listArtifacts` with a monotonic load token guarding stale results.
+- `src/lib/ui/artifacts-list.ts` - pure primitives for the tab: the
+  kind/sort option tables, the empty/scanner labels, the image predicate.
+- `src/components/ArtifactsList.svelte` - the Artifacts drawer list:
+  filename search + type/sort filters, image thumbnails (batched signed
+  URLs), per-row delete, click-to-open-conversation.
 - `src/lib/venice.ts` - `VeniceMessage.content` widened to
   `string | ContentPart[]`.
 - `src/lib/supabase.ts` - `SupabaseService.extractText(blob, filename)`
@@ -123,6 +133,30 @@ covers the attachment-specific pieces.
   daily `attachment-gc` sweep is the backstop for whatever that misses (a
   failed inline remove, or objects from threads deleted before this path
   existed). See [`./file-storage.md`](./file-storage.md).
+
+## Artifacts tab
+
+A drawer tab (`drawer=artifacts`, routed alongside the other tabs in
+`routing.svelte.ts`) that lists every LIVE attachment the user owns,
+across all conversations, for review and cleanup. It's a management
+surface, not a panel: clicking a row navigates to the file's
+conversation (`navigate({ cid })`), so the tab shares the chats
+main-view + top-bar rather than rendering its own panel (the
+`drawerTab === 'chats' || 'artifacts'` branches in `Chat.svelte`).
+
+- **Listing** - `listArtifacts` pages `message_attachments` newest- or
+  largest-first, filtered by filename substring and kind (image vs
+  file), with each row joined to its owning thread's title. Only live
+  rows (`storage_path` non-null) are listed; RLS scopes the whole query
+  (including the embedded `messages`/`threads`) to the caller. One extra
+  row past the page size drives `hasMore` without a count query.
+- **Delete** - `deleteAttachment` marks the row expired client-side
+  (null `storage_path` + stamp `expired_at`, allowed by the
+  self-update RLS policy) then best-effort removes the object. The row
+  survives, so the message still renders the greyed placeholder;
+  `attachment-gc` reclaims the object if the remove missed.
+- **Thumbnails** - image rows resolve previews through the same batched
+  `createAttachmentSignedUrls` the message renderer uses.
 
 ## Data model
 
