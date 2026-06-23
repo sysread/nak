@@ -100,6 +100,21 @@ describe('contentPreview', () => {
   it('returns short content unchanged', () => {
     expect(contentPreview('short', 100)).toBe('short');
   });
+  it('strips Markdown syntax so the collapsed row reads as plain text', () => {
+    // The reported bug: a record opening with **bold** showed the literal
+    // asterisks in the single-line preview.
+    expect(contentPreview('**Second cake-crumb revision of Fermented Bread Loaf.** After', 100)).toBe(
+      'Second cake-crumb revision of Fermented Bread Loaf. After',
+    );
+  });
+  it('strips headings, bullets, code, and links but keeps their text', () => {
+    expect(contentPreview('# Title\n- first point\n`code` and [a link](http://x)', 200)).toBe(
+      'Title first point code and a link',
+    );
+  });
+  it('leaves snake_case identifiers intact', () => {
+    expect(contentPreview('use record_file_attach here', 100)).toBe('use record_file_attach here');
+  });
 });
 
 describe('parseTags / serializeTags', () => {
