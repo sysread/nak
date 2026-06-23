@@ -124,16 +124,28 @@ export const librarianRun = {
     return state.error;
   },
   /**
-   * True once a run has emitted at least one step or settled into a
-   * result/error - i.e. the progress strip should be visible. False
-   * before the first step and after `clear()`.
+   * Whether the progress strip should be visible. True for the whole
+   * lifecycle of a run: from the synchronous instant `start()` flips
+   * `running` (BEFORE any step has streamed back), through the live run,
+   * and after it settles into a result/error that lingers until
+   * `clear()`.
+   *
+   * `running` is the load-bearing clause for the start of the run. The
+   * confirm strip closes synchronously when the user hits Run, but the
+   * first progress step only arrives after a network round-trip; without
+   * `running` here the strip would be absent in that gap and the panel's
+   * default surface (the changelog) would flash through before the strip
+   * reappeared. The steps/result/error clause keeps the strip up after
+   * `running` drops to false on completion, and covers a recovered
+   * outcome (applyOutcome sets a result line with running already false).
    */
   get active(): boolean {
     return (
-      state.pass !== null &&
-      (state.steps.length > 0 ||
-        state.resultLine !== null ||
-        state.error !== null)
+      state.running ||
+      (state.pass !== null &&
+        (state.steps.length > 0 ||
+          state.resultLine !== null ||
+          state.error !== null))
     );
   },
   /** True while a manual run (either pass) is mid-flight. */
