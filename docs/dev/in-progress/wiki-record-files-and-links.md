@@ -32,8 +32,8 @@ Follows the `documents` / attachments pattern in `file-storage.md`
 is **persistent** (records are forever) - NOT the 30-day-expiry
 `attachments` bucket.
 
-- `id uuid pk default gen_random_uuid()` (minted client-side so upload
-  + insert share the key, like attachments)
+- `id uuid pk default gen_random_uuid()` (minted client-side so the
+  upload and the insert share the key, like attachments)
 - `user_id uuid not null references auth.users on delete cascade`
 - `record_id uuid not null references wiki_records on delete cascade`
 - `position int not null default 0` - render order within the record
@@ -76,9 +76,11 @@ Directed many-to-many between records, with a freeform label.
   120) - "based on", "iteration of", "supersedes"
 - `created_at timestamptz default now()`
 - `check (from_record_id <> to_record_id)` - no self-links
-- `unique (from_record_id, to_record_id)` - one directed edge per pair;
-  the label is the edge's editable attribute. (A<-B and A->B are two
-  distinct rows; both directions allowed.)
+- `unique (from_record_id, to_record_id)` - simple directed graph: at
+  most one edge per ordered pair, the label is the edge's editable
+  attribute. A->B and B->A are two distinct rows (both directions
+  allowed); no multigraph (no two simultaneous A->B edges with different
+  labels).
 - Indexes `(from_record_id)`, `(to_record_id)` (forward + reverse
   lookup; a record's view shows outgoing AND incoming links).
 - RLS direct `user_id = auth.uid()`. Both endpoints belong to the same
@@ -121,7 +123,7 @@ history row identically (the browser via
 - `record_get` (`tools/record_get.ts`) returns, alongside the record:
   attached files (filename, mime, `size_bytes`, a freshly-minted signed
   URL for images, inline `extracted_text` for docs) and links (outgoing
-  + incoming, each `{ record_id, label, date, content-excerpt }`). This
+  and incoming, each `{ record_id, label, date, content-excerpt }`). This
   is how the chat model "sees" a record's photos and relationships.
 - `record_list` gains a lightweight per-row `file_count` / `link_count`
   so a timeline read can tell which entries carry evidence without N
@@ -134,13 +136,17 @@ history row identically (the browser via
   (unique-pair violation rephrased to "edge exists, use
   record_link_update" or just updates the label).
 - `record_link_delete(from_record_id, to_record_id)` (or by link id).
-- `record_file_attach(record_id, filename)` - resolves an image the
-  conversation already produced/holds (thread-scoped
-  `message_attachments` lookup by filename, same resolver
-  `analyze_image` / generated images use), copies the bytes into
-  `wiki-record-files`, inserts the row. This is the "attach the crumb
-  photo I posted in chat" path - the model can't upload arbitrary
-  bytes, but it CAN promote a thread image/doc onto a record.
+- `record_file_attach(record_id, filename)` - resolves ANY file the
+  thread holds, by filename (thread-scoped `message_attachments` lookup,
+  same resolver `analyze_image` uses). Source-agnostic: a user upload
+  AND a `generate_image` output are both `message_attachments` rows, so
+  either can be attached - image or document. Copies the bytes into the
+  persistent `wiki-record-files` bucket (the chat attachment expires
+  ~30d after thread dormancy; the record copy is permanent), so the file
+  must be LIVE (unexpired, `storage_path` non-null) at attach time -
+  else an actionable "file has expired" error, like `analyze_image`.
+  The model can't upload arbitrary bytes; it promotes an existing thread
+  file onto a record.
 - `record_file_remove(file_id)`.
 
 All b-strict (explicit `user_id`), membership-tripwired in
@@ -234,8 +240,15 @@ module; the `.svelte` file stays glue.
 
 ## Milestones (suggested landing order)
 
-1. **Schema + storage**: tables, RLS, realtime, bucket, GC sweep +
-   RPCs, deploy.yml line, `reset_wiki_data` extension. Idempotent.
+1. **Schema + storage** [DONE]: `wiki_record_files` + `wiki_record_links`
+   tables, RLS, realtime membership + replica-identity indexes, the
+   persistent `wiki-record-files` bucket + storage policies, the
+   `list_orphan_wiki_record_file_objects` RPC + `nak_trigger_wiki_record_file_gc`
+   dispatcher + daily cron, the `wiki-record-file-gc` edge function (driver
+   in `_shared/`, glue in its dir, deno test), deploy.yml + functions-check
+   wiring, `reset_wiki_data` extension. All idempotent. NOT yet verified
+   against a live DB (`mise run sync`) - SQL correctness is the one thing
+   the gate can't check.
 2. **Browser data layer**: types, coercers, SupabaseService I/O +
    CRUD, realtime relay.
 3. **UI**: files + links in `WikiRecords.svelte` + primitives + tests.

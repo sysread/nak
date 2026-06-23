@@ -9524,6 +9524,140 @@ grant execute on function
 -- consolidate).
 --
 -- Single plpgsql transaction so the user can't end up half-reset.
+-- ---------------------------------------------------------------------------
+-- Wiki record files + cross-links
+-- ---------------------------------------------------------------------------
+--
+-- Two relations hung off wiki_records (the dated "journey" layer under each
+-- article):
+--   - wiki_record_files: per-record file attachments (crumb photos, scanned
+--     recipe cards, PDFs). Bytes in the persistent `wiki-record-files` bucket;
+--     the row holds metadata + a storage_path pointer, same model as documents
+--     / attachments (see docs/dev/file-storage.md). Unlike attachments these
+--     never expire - a record is permanent, so its evidence is too.
+--   - wiki_record_links: a directed, labelled graph between records ("attempt
+--     #3 is based on attempt #2"). Simple directed graph: at most one edge per
+--     ordered pair, the label is the edge's editable attribute; both directions
+--     are distinct rows.
+
+create table if not exists public.wiki_record_files (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  record_id uuid not null references public.wiki_records(id) on delete cascade,
+  -- Stable render order within the record's file strip.
+  position int not null default 0,
+  filename text not null,
+  mime_type text,
+  size_bytes int,
+  -- Object key in the `wiki-record-files` bucket:
+  -- `<user_id>/<file_id>/<filename>`. NOT NULL: records are permanent, so the
+  -- object is never reclaimed while the row lives (the GC sweep only removes
+  -- objects whose row is already gone). A record/article delete cascades the
+  -- row away and the wiki-record-file-gc sweep reclaims the orphaned object.
+  storage_path text not null,
+  -- Venice text-parser output for non-image documents, so the chat model can
+  -- read an attached PDF via record_get without re-fetching bytes. NULL for
+  -- images (they reach the model as a signed URL / analyze_image instead).
+  extracted_text text,
+  created_at timestamptz not null default now()
+);
+
+-- Per-record fetch in render order.
+create index if not exists wiki_record_files_record_idx
+  on public.wiki_record_files (record_id, position);
+-- Anti-join support for the orphan-object GC sweep
+-- (list_orphan_wiki_record_file_objects): the sweep LEFT-anti-joins
+-- storage.objects to this column, so a row's storage_path must be
+-- index-probable.
+create index if not exists wiki_record_files_storage_path_idx
+  on public.wiki_record_files (storage_path);
+
+alter table public.wiki_record_files enable row level security;
+
+-- Direct user_id scoping, same as wiki_records (which also carries user_id) -
+-- no via-parent chain needed.
+drop policy if exists "wiki_record_files are self-selectable" on public.wiki_record_files;
+create policy "wiki_record_files are self-selectable" on public.wiki_record_files
+  for select using (auth.uid() = user_id);
+drop policy if exists "wiki_record_files are self-insertable" on public.wiki_record_files;
+create policy "wiki_record_files are self-insertable" on public.wiki_record_files
+  for insert with check (auth.uid() = user_id);
+drop policy if exists "wiki_record_files are self-updatable" on public.wiki_record_files;
+create policy "wiki_record_files are self-updatable" on public.wiki_record_files
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+drop policy if exists "wiki_record_files are self-deletable" on public.wiki_record_files;
+create policy "wiki_record_files are self-deletable" on public.wiki_record_files
+  for delete using (auth.uid() = user_id);
+
+-- Private bucket for record file bytes. Same shape as documents / attachments:
+-- public = false, self-prefix RLS on storage.objects, key
+-- `<user_id>/<file_id>/<filename>`. Persistent (no expiry sweep); orphaned
+-- objects (post-cascade) reclaimed by wiki-record-file-gc.
+insert into storage.buckets (id, name, public)
+  values ('wiki-record-files', 'wiki-record-files', false)
+  on conflict (id) do nothing;
+
+drop policy if exists "wiki-record-files bucket is self-readable" on storage.objects;
+create policy "wiki-record-files bucket is self-readable" on storage.objects
+  for select to authenticated
+  using (
+    bucket_id = 'wiki-record-files'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
+drop policy if exists "wiki-record-files bucket is self-writable" on storage.objects;
+create policy "wiki-record-files bucket is self-writable" on storage.objects
+  for insert to authenticated
+  with check (
+    bucket_id = 'wiki-record-files'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
+drop policy if exists "wiki-record-files bucket is self-deletable" on storage.objects;
+create policy "wiki-record-files bucket is self-deletable" on storage.objects
+  for delete to authenticated
+  using (
+    bucket_id = 'wiki-record-files'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+create table if not exists public.wiki_record_links (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  from_record_id uuid not null references public.wiki_records(id) on delete cascade,
+  to_record_id uuid not null references public.wiki_records(id) on delete cascade,
+  -- Freeform relationship label ("based on", "supersedes"); capped to match
+  -- MAX_RECORD_LINK_LABEL_CHARS (120) on the client + tools.
+  label text,
+  created_at timestamptz not null default now(),
+  -- No self-links.
+  constraint wiki_record_links_no_self check (from_record_id <> to_record_id),
+  -- Simple directed graph: one edge per ordered pair. A->B and B->A are
+  -- distinct rows; re-linking the same pair updates the label rather than
+  -- adding a parallel edge.
+  constraint wiki_record_links_unique_pair unique (from_record_id, to_record_id)
+);
+
+-- Forward (a record's outgoing links) and reverse (incoming) lookups; a
+-- record's view shows both.
+create index if not exists wiki_record_links_from_idx
+  on public.wiki_record_links (from_record_id);
+create index if not exists wiki_record_links_to_idx
+  on public.wiki_record_links (to_record_id);
+
+alter table public.wiki_record_links enable row level security;
+
+drop policy if exists "wiki_record_links are self-selectable" on public.wiki_record_links;
+create policy "wiki_record_links are self-selectable" on public.wiki_record_links
+  for select using (auth.uid() = user_id);
+drop policy if exists "wiki_record_links are self-insertable" on public.wiki_record_links;
+create policy "wiki_record_links are self-insertable" on public.wiki_record_links
+  for insert with check (auth.uid() = user_id);
+drop policy if exists "wiki_record_links are self-updatable" on public.wiki_record_links;
+create policy "wiki_record_links are self-updatable" on public.wiki_record_links
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+drop policy if exists "wiki_record_links are self-deletable" on public.wiki_record_links;
+create policy "wiki_record_links are self-deletable" on public.wiki_record_links
+  for delete using (auth.uid() = user_id);
+
 drop function if exists public.reset_wiki_data();
 create or replace function public.reset_wiki_data()
 returns void
@@ -9535,6 +9669,13 @@ begin
     raise exception 'reset_wiki_data: not authenticated'
       using errcode = '28000';
   end if;
+  -- Record files + links cascade on wiki_records delete (record_id is NOT
+  -- NULL, on delete cascade), but delete them explicitly first so the wipe
+  -- reads clearly and doesn't depend on cascade ordering. The bucket OBJECTS
+  -- behind wiki_record_files are NOT removed here (SQL can't touch Storage);
+  -- the wiki-record-file-gc sweep reclaims them once the rows are gone.
+  delete from public.wiki_record_files where user_id = v_user;
+  delete from public.wiki_record_links where user_id = v_user;
   -- Records cascade on wiki_articles delete (article_id is NOT NULL,
   -- on delete cascade), but delete them explicitly first so the wipe
   -- reads clearly and doesn't depend on cascade ordering.
@@ -10665,6 +10806,26 @@ begin
   ) then
     alter publication supabase_realtime add table public.wiki_records;
   end if;
+  -- wiki_record_files / wiki_record_links: an open article view learns about
+  -- file attach/remove and link create/delete (from the chat tools and the
+  -- extraction/librarian agents, all server-side) through the same user-scoped
+  -- postgres_changes relay as wiki_records (see subscribeToWikiRecordChanges).
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'wiki_record_files'
+  ) then
+    alter publication supabase_realtime add table public.wiki_record_files;
+  end if;
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'wiki_record_links'
+  ) then
+    alter publication supabase_realtime add table public.wiki_record_links;
+  end if;
   -- samskaras is deliberately NOT a member. Mint toasts ride a private
   -- samskara-mint Broadcast event (insertMint -> _shared/samskara-mint.ts
   -- + the owner-subscribe policy below), never a postgres_changes echo.
@@ -10731,6 +10892,12 @@ alter table public.memories replica identity using index memories_replident_idx;
 create unique index if not exists wiki_records_replident_idx
   on public.wiki_records (id, user_id);
 alter table public.wiki_records replica identity using index wiki_records_replident_idx;
+create unique index if not exists wiki_record_files_replident_idx
+  on public.wiki_record_files (id, user_id);
+alter table public.wiki_record_files replica identity using index wiki_record_files_replident_idx;
+create unique index if not exists wiki_record_links_replident_idx
+  on public.wiki_record_links (id, user_id);
+alter table public.wiki_record_links replica identity using index wiki_record_links_replident_idx;
 
 -- ---------------------------------------------------------------------------
 -- Realtime Broadcast authorization (streaming-root channels)
@@ -12323,5 +12490,98 @@ begin
   end if;
 exception when others then
   raise notice 'attachment gc cron setup skipped: %', sqlerrm;
+end
+$cron$;
+
+-- Orphan-object GC for the wiki-record-files bucket. A record/article delete
+-- cascades the wiki_record_files rows away (record_id on delete cascade), but
+-- SQL cannot delete the Storage objects, so they linger. The client's
+-- record-delete path best-effort removes them inline; this daily sweep is the
+-- backstop (and the only reclaim path for objects orphaned before that path
+-- existed). Same shape as list_orphan_attachment_objects: list a bounded batch
+-- of bucket objects with no row, anti-joined on storage_path, with a grace
+-- window so a freshly-uploaded object whose row insert hasn't committed yet is
+-- not mistaken for an orphan. No FOR UPDATE / claim: object deletion is
+-- idempotent. security definer + service-role-only.
+drop function if exists public.list_orphan_wiki_record_file_objects(int, int);
+create or replace function public.list_orphan_wiki_record_file_objects(
+  p_min_age_seconds int,
+  p_limit int
+) returns table (name text)
+language sql security definer
+set search_path = public as $$
+  select o.name
+    from storage.objects o
+   where o.bucket_id = 'wiki-record-files'
+     and o.created_at < now() - make_interval(secs => p_min_age_seconds)
+     and not exists (
+       select 1 from public.wiki_record_files f
+        where f.storage_path = o.name
+     )
+   order by o.created_at asc
+   limit p_limit
+$$;
+
+revoke all on function public.list_orphan_wiki_record_file_objects(int, int) from public, anon, authenticated;
+grant execute on function public.list_orphan_wiki_record_file_objects(int, int) to service_role;
+
+-- Cron dispatcher, same shape + Vault-secret custody as nak_trigger_attachment_gc.
+create or replace function public.nak_trigger_wiki_record_file_gc()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $fn$
+declare
+  v_url text;
+  v_key text;
+begin
+  begin
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'project_url' $q$ into v_url;
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'service_role_key' $q$ into v_key;
+  exception when others then
+    return;  -- vault not installed or unreadable; nothing to dispatch
+  end;
+  if v_url is null or v_key is null then
+    return;  -- secrets not seeded yet
+  end if;
+  begin
+    execute format(
+      $q$ select net.http_post(
+            url := %L,
+            headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', %L),
+            body := '{}'::jsonb
+          ) $q$,
+      v_url || '/functions/v1/wiki-record-file-gc',
+      'Bearer ' || v_key
+    );
+  exception when others then
+    raise notice 'nak_trigger_wiki_record_file_gc: dispatch failed: %', sqlerrm;
+  end;
+end;
+$fn$;
+
+revoke all on function public.nak_trigger_wiki_record_file_gc() from public, anon, authenticated;
+
+-- Daily sweep, offset from the attachment-gc tick. Orphans appear only on
+-- record/article deletion and the client removes objects inline, so once a day
+-- is enough. Guarded + idempotent reschedule, same as the other GC crons.
+do $cron$
+begin
+  if exists (select 1 from pg_available_extensions where name = 'pg_cron')
+     and exists (select 1 from pg_available_extensions where name = 'pg_net') then
+    create extension if not exists pg_cron;
+    create extension if not exists pg_net;
+    if exists (select 1 from cron.job where jobname = 'nak-wiki-record-file-gc') then
+      perform cron.unschedule('nak-wiki-record-file-gc');
+    end if;
+    perform cron.schedule(
+      'nak-wiki-record-file-gc',
+      '43 4 * * *',
+      $job$ select public.nak_trigger_wiki_record_file_gc(); $job$
+    );
+  end if;
+exception when others then
+  raise notice 'wiki record file gc cron setup skipped: %', sqlerrm;
 end
 $cron$;
