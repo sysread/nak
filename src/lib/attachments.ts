@@ -49,6 +49,47 @@ export const MAX_ATTACHMENTS_PER_MESSAGE = 20;
 const IMAGE_MAX_EDGE_PX = 2048;
 
 /**
+ * Byte size the composer aims for when compressing an oversized image on
+ * upload. A goal, not a hard cap: `compressImage` stops at the first encode
+ * under this size, but if even its smallest quality/dimension pass stays
+ * above it the best (smallest) result is kept rather than the image degraded
+ * further. 1 MiB keeps realtime frames, row fetches, and vision payloads
+ * light without visibly hurting a screenshot or phone photo.
+ */
+export const IMAGE_COMPRESSION_TARGET_BYTES = 1024 * 1024;
+
+/**
+ * Quality ladder tried at each dimension pass, highest first. The search
+ * takes the first encode under the byte target, so a near-target image
+ * settles at 0.82 and only a stubborn one drops to 0.58.
+ */
+const COMPRESSION_QUALITY_STEPS = [0.82, 0.7, 0.58] as const;
+
+/**
+ * Extra dimension passes after the initial long-edge cap. When the lowest
+ * quality still overshoots the byte target, the long edge is shrunk by
+ * COMPRESSION_DIMENSION_STEP and the quality ladder retried. Three passes
+ * total - enough to tame a poster-sized PNG without an unbounded loop on
+ * the main thread.
+ */
+const COMPRESSION_DIMENSION_PASSES = 3;
+const COMPRESSION_DIMENSION_STEP = 0.75;
+
+/**
+ * Outcome of `compressImage`. `changed` is true only when a smaller
+ * re-encoded file was actually produced; when the original is already small
+ * enough (or re-encoding wouldn't shrink it) the input File is returned
+ * untouched and `beforeBytes === afterBytes`. The byte fields drive the
+ * composer chip's "Reduced from X to Y" note.
+ */
+export interface ImageCompressionResult {
+  file: File;
+  beforeBytes: number;
+  afterBytes: number;
+  changed: boolean;
+}
+
+/**
  * One attachment the user has queued in the composer but not sent
  * yet. `data_base64` is populated for images (after any downscale) at
  * add time so the send path can inline immediately without a second
@@ -79,6 +120,19 @@ export interface LocalAttachment {
    * attachment finishes.
    */
   pending: boolean;
+  /**
+   * True while `compressImage` is re-encoding an oversized image. A
+   * narrower signal than `pending` (which also covers text extraction) so
+   * the chip can show a "Compressing large image..." state distinct from
+   * the generic spinner.
+   */
+  compressing: boolean;
+  /**
+   * Set when compression actually shrank the image, carrying the original
+   * and resulting sizes for the chip's "Reduced from X to Y" note. Null
+   * when the image passed through untouched or the file isn't an image.
+   */
+  compression: { beforeBytes: number; afterBytes: number } | null;
   /** If set, the attachment failed to process — render as an error chip. */
   error: string | null;
 }
@@ -267,6 +321,133 @@ export async function maybeDownscaleImage(file: File): Promise<File | null> {
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+/**
+ * Compress an oversized image File toward IMAGE_COMPRESSION_TARGET_BYTES,
+ * re-encoding as WebP (best ratio, alpha-capable, universal in current
+ * browsers). Shared by the composer's add path and the generate_image
+ * tool's result handler so both shrink images the same way and report the
+ * same before/after.
+ *
+ * Distinct from `maybeDownscaleImage` (the recipe-photo resizer), which only
+ * caps the long edge and never targets a byte size. `compressImage`
+ * supersedes that behaviour for chat attachments: it caps the long edge AND
+ * walks a quality/dimension search until an encode lands under the target.
+ *
+ * Returns the input File untouched (`changed: false`) when it's already
+ * under the byte target and within the pixel cap, when it's a vector/SVG, or
+ * when no re-encode beat the original size. Throws when the browser can't
+ * decode the image (corrupt/unsupported); the caller turns that into an
+ * error chip.
+ *
+ * Main-thread canvas, not a worker: an OffscreenCanvas worker path would
+ * need decode+encode that Safari < 16.4 lacks, and the composer ships to
+ * every modern browser. The bounded search keeps this a sub-second one-off
+ * on user action, the same tradeoff `maybeDownscaleImage` already makes.
+ */
+export async function compressImage(file: File): Promise<ImageCompressionResult> {
+  const unchanged = (): ImageCompressionResult => ({
+    file,
+    beforeBytes: file.size,
+    afterBytes: file.size,
+    changed: false,
+  });
+  if (!isImageMimeType(file.type)) return unchanged();
+  if (file.type === 'image/svg+xml') return unchanged();
+
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await loadImage(url);
+    const longEdge = Math.max(img.naturalWidth, img.naturalHeight);
+    // Already small enough and within the pixel cap - skip the canvas
+    // round-trip so an already-optimised upload passes through untouched.
+    if (file.size <= IMAGE_COMPRESSION_TARGET_BYTES && longEdge <= IMAGE_MAX_EDGE_PX) {
+      return unchanged();
+    }
+
+    // PNG/GIF/WebP sources can carry transparency; a JPEG fallback would
+    // flatten it to black, so the encoder keeps these on an alpha-capable
+    // format.
+    const hasAlpha =
+      file.type === 'image/png' || file.type === 'image/gif' || file.type === 'image/webp';
+
+    let best: Blob | null = null;
+    let edgeCap = Math.min(longEdge, IMAGE_MAX_EDGE_PX);
+    let done = false;
+    for (let pass = 0; pass < COMPRESSION_DIMENSION_PASSES && !done; pass++) {
+      const { width, height } = scaleToEdge(img.naturalWidth, img.naturalHeight, edgeCap);
+      const canvas = drawScaled(img, width, height);
+      if (!canvas) break;
+      for (const quality of COMPRESSION_QUALITY_STEPS) {
+        const blob = await encodeImage(canvas, hasAlpha, quality);
+        if (!blob) continue;
+        if (!best || blob.size < best.size) best = blob;
+        if (blob.size <= IMAGE_COMPRESSION_TARGET_BYTES) {
+          done = true;
+          break;
+        }
+      }
+      edgeCap = Math.round(edgeCap * COMPRESSION_DIMENSION_STEP);
+    }
+
+    // Never beat the original (e.g. an already-compressed-but-large JPEG):
+    // keep the source rather than ship a bigger file.
+    if (!best || best.size >= file.size) return unchanged();
+    // Keep the original filename so the user recognises the download; the
+    // Content-Type header from `best.type` is authoritative if the new
+    // extension no longer matches.
+    const out = new File([best], file.name, { type: best.type });
+    return { file: out, beforeBytes: file.size, afterBytes: out.size, changed: true };
+  } catch {
+    throw new Error('Could not decode image.');
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+/** Aspect-preserving target dimensions for a given long-edge cap. */
+function scaleToEdge(
+  w: number,
+  h: number,
+  edgeCap: number
+): { width: number; height: number } {
+  const longEdge = Math.max(w, h);
+  if (longEdge <= edgeCap) return { width: w, height: h };
+  const scale = edgeCap / longEdge;
+  return { width: Math.max(1, Math.round(w * scale)), height: Math.max(1, Math.round(h * scale)) };
+}
+
+function drawScaled(
+  img: HTMLImageElement,
+  width: number,
+  height: number
+): HTMLCanvasElement | null {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  ctx.drawImage(img, 0, 0, width, height);
+  return canvas;
+}
+
+/**
+ * Encode a canvas, preferring WebP. Safari < 16 silently substitutes PNG for
+ * an unsupported `toBlob` type (the returned blob's type won't be
+ * `image/webp`); when that happens to an opaque image we re-encode as JPEG so
+ * a photo doesn't balloon into a lossless PNG. Transparent images keep the
+ * PNG fallback to preserve their alpha.
+ */
+async function encodeImage(
+  canvas: HTMLCanvasElement,
+  hasAlpha: boolean,
+  quality: number
+): Promise<Blob | null> {
+  const webp = await canvasToBlob(canvas, 'image/webp', quality);
+  if (webp && webp.type === 'image/webp') return webp;
+  if (hasAlpha) return webp ?? canvasToBlob(canvas, 'image/png', quality);
+  return canvasToBlob(canvas, 'image/jpeg', quality);
 }
 
 function loadImage(url: string): Promise<HTMLImageElement> {

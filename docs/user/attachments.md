@@ -18,10 +18,11 @@ There are three ways to queue a file for the next send:
   you hover.
 
 Each queued file appears as a chip above the textarea. A dashed chip
-means Nak is still processing the file (downscaling a large image,
-asking Venice to extract text from a document). The chip fills in
-once processing finishes; the send button unlocks when every chip is
-ready.
+means Nak is still processing the file (compressing a large image,
+asking Venice to extract text from a document). When Nak shrinks an
+oversized image the chip shows the result - "Reduced from 2.7 MB to
+845 KB" - so you can see what was saved. The chip fills in once
+processing finishes; the send button unlocks when every chip is ready.
 
 Click the × on a chip to remove it before sending.
 
@@ -111,9 +112,12 @@ thread.
 - **Per message**: 25 MB total across all attached files.
 - **Per message**: up to 20 files.
 
-Images over 2048 px on the long edge are downscaled automatically
-before storage — vision models don't benefit from more, and the
-downscale keeps row sizes predictable.
+Large images are compressed automatically before storage: Nak caps
+the long edge at 2048 px (vision models don't benefit from more) and
+re-encodes toward roughly 1 MB, so a multi-megabyte phone photo lands
+small without you doing anything. It's a target, not a hard cut - a
+detailed image may stay a little over, and an image that's already
+small passes through untouched.
 
 ## Where to go next
 

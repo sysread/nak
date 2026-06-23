@@ -20,9 +20,17 @@ covers the attachment-specific pieces.
   `mark_attachments_expired`) + cron dispatcher.
 - `src/lib/attachments.ts` - pure helpers: size validation,
   `isConsumableBy` predicate, base64 helpers (composer-side, in-memory),
-  canvas-based `maybeDownscaleImage`, and the `buildUserVeniceContent`
-  transformer that builds the string-vs-content-array wire shape (it
-  takes pre-resolved image URLs; it does not read bytes).
+  canvas-based `compressImage` (the shared upload/generate compressor -
+  caps the long edge AND walks a quality/dimension search toward
+  `IMAGE_COMPRESSION_TARGET_BYTES`, returning before/after sizes),
+  `maybeDownscaleImage` (the recipe-photo resizer - long-edge cap only, no
+  byte target), and the `buildUserVeniceContent` transformer that builds
+  the string-vs-content-array wire shape (it takes pre-resolved image URLs;
+  it does not read bytes).
+- `src/lib/ui/composer-attachments.ts` - pure `chipStatus` /
+  `compressionLabel` primitives that resolve a pending attachment to its
+  one chip state (compressing / pending / error / compressed / ready) and
+  render the "Reduced from X to Y" note.
 - `src/lib/supabase.ts` - `Attachment` / `NewAttachment` types,
   `addAttachments` (uploads to the bucket, stores `storage_path`),
   `listAttachmentsByMessageIds` (projects `storage_path`, no bytes),
@@ -84,8 +92,9 @@ covers the attachment-specific pieces.
 ## Entry points
 
 - **User picks a file** - `addAttachment(file)` in `Chat.svelte`.
-  Validates size, downscales images via `maybeDownscaleImage`,
-  base64-encodes into the in-memory `pendingAttachments` (a
+  Validates size, compresses oversized images via `compressImage` (the chip
+  shows a "Compressing large image..." spinner, then "Reduced from X to Y"
+  when it shrank), base64-encodes into the in-memory `pendingAttachments` (a
   `LocalAttachment`), calls `app.supabase.extractText` for non-image files.
 - **User sends** - `send()`: pre-send guard, `addMessage` for the user
   row, then `addAttachments` which uploads each file's bytes to the
@@ -250,8 +259,12 @@ parent - `messages.thread_id -> threads.user_id = auth.uid()`.
   Content-Type unset so the runtime writes the multipart boundary
   itself. Don't add a Content-Type override; doing so trashes the
   boundary parameter and Venice rejects the upload.
-- **Canvas downscale is main-thread**: `maybeDownscaleImage` blocks while
-  painting to a canvas. One-off on user action; acceptable.
+- **Canvas compression is main-thread**: `compressImage` (uploads) and
+  `maybeDownscaleImage` (recipe photos) block while painting to a canvas.
+  A worker/OffscreenCanvas path is rejected on purpose - Safari < 16.4
+  lacks the decode+encode it needs, and the composer ships to every modern
+  browser. The bounded quality/dimension search keeps it a sub-second
+  one-off on user action; acceptable.
 - **Extracted text outlives the object by design**: a year-old
   conversation with expired files still reads sensibly because
   `extracted_text` doesn't expire.

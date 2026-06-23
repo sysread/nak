@@ -86,16 +86,17 @@
   import { drainSharesForComposer } from '$lib/share-intake';
   import {
     arrayBufferToBase64,
+    compressImage,
     formatBytes,
     isConsumableBy,
     isImageMimeType,
-    maybeDownscaleImage,
     MAX_ATTACHMENTS_PER_MESSAGE,
     MAX_MESSAGE_AGGREGATE_BYTES,
     toNewAttachment,
     validateFile,
     type LocalAttachment,
   } from '$lib/attachments';
+  import { chipStatus } from '$lib/ui/composer-attachments';
   import {
     DEFAULT_REASONING_EFFORT,
     DEFAULT_TIER,
@@ -1298,17 +1299,27 @@
       data_base64: '',
       extracted_text: null,
       pending: true,
+      compressing: false,
+      compression: null,
       error: null,
     };
     pendingAttachments = [...pendingAttachments, draft];
 
     try {
-      // Images: downscale if oversize, then encode. Non-images: encode
-      // as-is and hit Venice text-parser.
-      let finalFile: File | null = file;
+      // Images: compress toward the byte target (resize + re-encode), then
+      // encode. Non-images: encode as-is and hit Venice text-parser.
+      let finalFile: File = file;
+      let compression: { beforeBytes: number; afterBytes: number } | null = null;
       if (isImageMimeType(file.type)) {
-        finalFile = await maybeDownscaleImage(file);
-        if (!finalFile) throw new Error('Could not decode image.');
+        patchAttachment(id, { compressing: true });
+        // compressImage throws on an undecodable image; the outer catch
+        // turns that into an error chip.
+        const result = await compressImage(file);
+        finalFile = result.file;
+        if (result.changed) {
+          compression = { beforeBytes: result.beforeBytes, afterBytes: result.afterBytes };
+        }
+        patchAttachment(id, { compressing: false });
       }
       const buffer = await finalFile.arrayBuffer();
       const base64 = arrayBufferToBase64(buffer);
@@ -1339,12 +1350,13 @@
         mime_type: finalFile.type || draft.mime_type,
         data_base64: base64,
         extracted_text: extractedText,
+        compression,
         pending: false,
         error: null,
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      patchAttachment(id, { pending: false, error: msg });
+      patchAttachment(id, { pending: false, compressing: false, error: msg });
     }
   }
 
@@ -7558,18 +7570,31 @@
           {#if pendingAttachments.length > 0}
             <div class="composer-attachments" role="list">
               {#each pendingAttachments as a (a.id)}
+                {@const status = chipStatus(a)}
                 <div
                   class="composer-attachment-chip"
                   class:pending={a.pending}
                   class:errored={!!a.error}
                   role="listitem"
-                  title={a.error ?? ''}
+                  title={a.error ?? (status.kind === 'compressed' ? status.label : '')}
                 >
                   <span class="chip-name">{a.filename}</span>
-                  <span class="chip-size">{formatBytes(a.size_bytes)}</span>
-                  {#if a.pending}
+                  {#if status.kind === 'compressed'}
+                    <!-- Replaces the plain size with the reduction so the
+                         user sees the payoff; the full label is also the
+                         chip's tooltip above. -->
+                    <span class="chip-size compressed">{status.label}</span>
+                  {:else}
+                    <span class="chip-size">{formatBytes(a.size_bytes)}</span>
+                  {/if}
+                  {#if status.kind === 'compressing'}
+                    <span
+                      class="chip-status chip-spinner"
+                      aria-label="Compressing large image"
+                    ></span>
+                  {:else if status.kind === 'pending'}
                     <span class="chip-status" aria-label="Processing">…</span>
-                  {:else if a.error}
+                  {:else if status.kind === 'error'}
                     <span class="chip-status chip-error" aria-label="Error">!</span>
                   {/if}
                   <button
