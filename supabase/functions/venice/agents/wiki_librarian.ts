@@ -57,6 +57,7 @@ import { recordList } from '../tools/record_list.ts';
 import { recordCreate } from '../tools/record_create.ts';
 import { recordUpdate } from '../tools/record_update.ts';
 import { recordDelete } from '../tools/record_delete.ts';
+import { recordLinkDelete } from '../tools/record_link_delete.ts';
 import { asAgentTool } from './_agent_tools.ts';
 import {
   runHeadlessAgent,
@@ -340,6 +341,28 @@ const RECORD_DELETE_WIRE_SCHEMA: AgentTool['wire'] = {
   },
 };
 
+const RECORD_LINK_DELETE_WIRE_SCHEMA: AgentTool['wire'] = {
+  type: 'function',
+  function: {
+    name: 'record_link_delete',
+    description:
+      'Remove a directed cross-link between two records. Use ONLY to ' +
+      'prune a link that is now wrong or redundant (e.g. it points at a ' +
+      'record you just merged away, or duplicates the relationship in the ' +
+      'other direction). Direction matters: removes the (from -> to) edge ' +
+      'only. You cannot create links - only prune clearly-broken ones.',
+    parameters: {
+      type: 'object',
+      properties: {
+        from_record_id: { type: 'string', description: 'Source record id of the edge.' },
+        to_record_id: { type: 'string', description: 'Target record id of the edge.' },
+      },
+      required: ['from_record_id', 'to_record_id'],
+      additionalProperties: false,
+    },
+  },
+};
+
 /**
  * Like asAgentTool, but blanks the context's threadId before the
  * registered execute() sees it. The registered wiki write tools
@@ -378,6 +401,7 @@ function buildLibrarianToolbox(): Toolbox {
       asAgentToolNoThread(recordCreate, RECORD_CREATE_WIRE_SCHEMA),
       asAgentToolNoThread(recordUpdate, RECORD_UPDATE_WIRE_SCHEMA),
       asAgentToolNoThread(recordDelete, RECORD_DELETE_WIRE_SCHEMA),
+      asAgentToolNoThread(recordLinkDelete, RECORD_LINK_DELETE_WIRE_SCHEMA),
     ],
   };
 }
@@ -920,6 +944,15 @@ ${WIKI_LIBRARIAN_TOOLS_BLOCK}
        or a clearly irrelevant entry. When in doubt, leave the record
        alone - a stray record is low-cost, a wrongly-deleted event is
        lost history.
+
+   (e) **Prune broken cross-links.** Records can link to each other
+       ("attempt 3 based on attempt 2"). If you merge or delete a record
+       and a surviving record's link now points somewhere wrong, or you
+       find a redundant edge duplicating the relationship in the other
+       direction, use record_link_delete to remove it. You can only
+       prune links, never create them (the extraction agent owns
+       linking). Conservative by default: a harmless link is not worth
+       removing.
 
 ${WIKI_LIBRARIAN_DISCIPLINE_BLOCK}
 

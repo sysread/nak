@@ -287,8 +287,18 @@ module; the `.svelte` file stays glue.
    Membership tripwire updated in `tests/tools.test.ts`. (No direct
    execute() unit tests - the existing record tools have none either;
    they need a live DB and are covered by the QA use-case in M6.)
-5. **Agent awareness**: extraction-agent link verb + prompt, librarian
-   link-prune verb + prompt, agent tests.
+5. **Agent awareness** [DONE]: extraction agent (`agents/wiki_records.ts`)
+   gains `record_link_create` (wire schema + toolbox + a conservative
+   prompt step 5: cross-link a continuation ONLY when the conversation
+   explicitly frames the new event as a follow-up to a specific prior
+   record). Librarian (`agents/wiki_librarian.ts`) gains
+   `record_link_delete` (prune-only - it never originates links, mirroring
+   its no-`wiki_create` posture - plus a workflow step (e) for pruning
+   broken/redundant edges). Neither gets `record_file_attach` (file
+   promotion stays a user/chat-driven act). Toolbox membership tripwires
+   updated in both Deno suites (extraction now reads + record_create +
+   record_link_create; librarian adds record_link_delete; both assert the
+   file tools + the other's link verb stay OUT).
 6. **Docs + QA**: graduate design into `wiki.md` / `file-storage.md`,
    user doc, QA use-case; retire this in-progress doc.
 
