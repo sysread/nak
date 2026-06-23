@@ -1,0 +1,467 @@
+# Intents (in progress)
+
+> **Status: design, not built.** This doc is the sign-off
+> artifact for a feature that does not exist in the codebase
+> yet. It records the decisions made in design discussion plus
+> the evaluation plan that gates the merge. Ships **off by
+> default** behind a settings toggle, and stays
+> off-by-default until the backtest below clears its
+> falsifiable bar. When the first milestone lands, graduate
+> the durable parts into a permanent `docs/dev/intents.md`
+> and retire this file per the in-progress doc rules in
+> `CLAUDE.md`.
+
+Intents are the first layer in nak that is **normative**
+rather than descriptive. Every other user-model the app
+builds - samskara (predictions), bias profile (observed
+tendencies), memories, wiki - *describes* the user. An intent
+is a self-authored standing goal the chat model forms *about
+how it wants to help the user grow*: "help them notice when
+they're seeking confirmation rather than testing a belief,"
+"lean on their strength at reframing when they're stuck." It
+is the line between nak-as-recorder and nak-as-participant.
+
+That shift carries an ethical weight the descriptive layers
+do not, and the design is shaped around containing it. See
+**The normative asymmetry** below before changing anything
+about visibility or efficacy.
+
+## Decisions already settled
+
+These came out of design discussion and are not open
+questions; they are the constraints the rest of the doc
+builds on.
+
+1. **Surfaced, not steerable - the samskara parallel.**
+   Intents are inspectable in a debug surface (a pill +
+   modal/tab, like the bias profile's diagnostics modal and
+   samskara's mood modal), but they are NOT user-editable
+   controls. They are emergent internal state, same contract
+   samskara already run under. The user can see what the
+   model is working toward; they cannot hand-author or
+   directly delete an intent any more than they can
+   hand-author a samskara.
+
+2. **The efficacy model is "C" (split employment from
+   efficacy).** See **The C efficacy model**. The retrospective
+   agent records *employment* (what the model did, whether it
+   got an opening, how the user reacted) as neutral process
+   telemetry. *Efficacy* (the health posterior that decides
+   whether an intent strengthens or retires) is measured by
+   movement in the descriptive layer the intent targets -
+   never by the model's own read of how it went. The model
+   structurally cannot grade its own homework.
+
+3. **Injection rides the bias-appendix path, not the
+   `<think>` chain.** Intents are standing behavioral guidance
+   ("here is what I'm working toward with this person"), the
+   same shape as bias compensation guidance - not
+   internal-monologue state. So a capped, rendered appendix on
+   the row-0 system message, assembled server-side in the
+   priming stage alongside `applyBiasPriming`. See
+   `prompt-augmentation.md` - this adds a row-1 (baseline
+   system) contributor, NOT a new `<think>` block.
+
+4. **Gated behind a settings toggle, off by default.** A new
+   AI-pane (or its own pane) toggle persisted to
+   `profiles.settings`. When off: no minting, no injection, no
+   evaluation - the whole pipeline is inert. See **Settings**.
+
+## The normative asymmetry
+
+Samskara are descriptive, so "visible but not steerable" is
+ethically free: there is nothing to consent to in a
+prediction. Intents are normative, so the same UI means the
+user can watch the model pursue an agenda about their life
+without a brake. Two things contain this, and both are
+load-bearing - do not weaken either without re-opening the
+discussion:
+
+- **Visibility is the anti-covertness guarantee.** An intent
+  in an inspectable tab is not a covert manipulation; the
+  user can see exactly what the model is trying to do to
+  them. The inspector copy must therefore be honest about the
+  *goal*, not just the existence of the intent - it states
+  "I'm working toward X with you," not a euphemism.
+- **The honest loop is the anti-self-justification
+  guarantee.** Because efficacy reads the descriptive layer
+  and not the model's self-assessment, an intent cannot
+  manufacture its own evidence of working. This is the same
+  discipline the bias math uses against the observer agent's
+  own biases, applied to the normative layer. The shadow-work
+  use case is exactly where self-confirmation would be most
+  seductive and most damaging, which is why the loop is built
+  this way and not the flexible-but-self-graded way.
+
+The implicit user veto is the same one samskara have: the
+patterns decay when unfed, and the user can always push back
+in conversation or (via the same affordance samskara will
+eventually get) retire state they reject.
+
+## Role in the app
+
+An intent is a one-or-two-line first-person goal statement
+with provenance (what seeded it), an optional descriptive-layer
+**target** binding, an efficacy posterior (only when a target
+exists), and a status (active / dormant / retired). A small
+active set (cap ~3-5, mirroring the bias `RENDER_CAP` of 4)
+renders into the system prompt every turn as standing guidance.
+
+Everything that forms, scores, and retires intents runs
+server-side on the existing background-job fleet. Nothing
+needs a tab open. Three pipelines, all parallel to mechanisms
+that already exist:
+
+- **Minting** - a daily per-user cron sweep reads the
+  descriptive layer (samskara compound + summary, bias
+  summary, memories, wiki, recent settled threads) and
+  creates / updates / retires intents. Parallel to the
+  memory-librarian and wiki-librarian daily passes.
+- **Injection** - the priming stage renders the active set
+  into the system prompt. Parallel to `applyBiasPriming`.
+- **Evaluation** - a next-day retrospective agent processes
+  settled threads (same 2-round + prior-calendar-day gate as
+  the samskara evaluation sweep and reflection) to write
+  *employment* records, and a separate descriptive-layer
+  sampler appends *efficacy* time-series points. Parallel to
+  `samskara_evaluation.ts`.
+
+## Data model (proposed)
+
+All tables RLS-scoped to `auth.uid() = user_id`, all
+`create table if not exists`, all policies drop-then-recreate
+per the schema idempotency convention. Mirrors the
+samskara/bias table families.
+
+### `intents`
+
+The unit.
+
+- `id uuid primary key default gen_random_uuid()`.
+- `user_id uuid` (FK to `auth.users`).
+- `statement text not null` - the first-person goal the
+  minter wrote ("help them notice when ...").
+- `rationale text` - why the minter formed it; shown in the
+  inspector.
+- `status text check in ('active', 'dormant', 'retired')`.
+  Active = renders + scored. Dormant = kept but not rendered
+  (e.g. its seeding pattern has gone quiet but not long enough
+  to retire). Retired = tombstoned, kept for the inspector's
+  history, never rendered.
+- **Target binding** (the heart of efficacy model C):
+  - `target_kind text check in ('bias', 'samskara', 'none')`.
+  - `target_ref text` - the bias catalog key (for `'bias'`)
+    or the `samskaras.id` (for `'samskara'`). Null for
+    `'none'` (free-form).
+  - `target_direction text check in ('reduce', 'reinforce')`.
+    Which way "better" runs for this target.
+- `efficacy real` / `confidence real` - the posterior. NULL
+  for free-form intents (no target -> no honest signal -> no
+  posterior). See **The C efficacy model**.
+- `last_minted_at`, `created_at`, `updated_at`, plus claim
+  columns if the minter needs per-row coordination (likely
+  per-user, not per-intent - see Minting).
+
+### `intent_provenance`
+
+Audit of what seeded each intent. Direct analog of
+`samskara_provenance` - kept even if the referenced row is
+later deleted (no FK on `ref_id`); debugging beats
+normalization.
+
+- `intent_id` (FK on cascade), `user_id`,
+  `kind text check in ('samskara', 'bias', 'memory',
+  'wiki', 'thread')`, `ref_id uuid` (or text for the bias
+  key), `weight real default 1.0`.
+- Primary key `(intent_id, kind, ref_id)`.
+
+### `intent_employments`
+
+The retrospective *process* telemetry. One row per (intent,
+settled thread) where the evaluation agent judged the model
+acted on the intent. **Neutral - never feeds efficacy.** This
+is the part that lets us answer "is the model actually using
+its intents" without letting the answer leak into "are they
+working."
+
+- `id`, `user_id`, `intent_id` (FK on cascade),
+  `thread_id` (FK on cascade).
+- `acted boolean` - did the model get an opening and take it.
+- `opening boolean` - did the conversation even present a
+  chance (distinguishes "no opening" from "opening missed").
+- `user_reaction text check in ('receptive', 'neutral',
+  'resistant', null)` - how the user responded, three-state +
+  null like `bias_reactions.was_confirmed`. Recorded as
+  *observation only*; explicitly NOT an efficacy input (see
+  Gotchas - "engagement is not efficacy").
+- `reasoning text not null`, `created_at`.
+
+### `intent_target_samples`
+
+The efficacy time-series. One row per (intent, evaluation
+cycle) capturing the targeted descriptive-layer metric's value
+at that time, plus the matched-control value. **This table is
+what makes the feature provable** (see Evaluation) - without a
+time series we cannot distinguish a real decline from
+regression to the mean, and cannot compute "faster than
+control."
+
+- `id`, `user_id`, `intent_id` (FK on cascade).
+- `sampled_at timestamptz`.
+- `target_value real` - the targeted metric at sample time.
+  For a bias target: the `bias_summary.posterior_mean` (or
+  `ci_lower`) for `target_ref`. For a samskara target: the
+  fire-frequency / fire-score of the targeted prediction over
+  a trailing window (see below).
+- `control_value real` - the same metric averaged over a
+  matched cohort that is NOT an intent target (comparable
+  biases / comparable-valence samskaras). The counterfactual
+  baseline.
+- Null `control_value` is allowed when no comparable cohort
+  exists yet; the row still records `target_value` so the
+  series is unbroken.
+
+### `intent_compound_summary`
+
+Cached rendered prose, one row per user, the always-on block
+injected into the prompt. Direct analog of
+`samskara_compound_summary` - per-row regen claim so multiple
+devices coordinate instead of duplicating the render.
+
+- `user_id uuid primary key`, `summary text`,
+  `intent_count_at_regen int`, `last_regen_at timestamptz`,
+  `regen_claim_holder text`, `regen_claim_expires timestamptz`.
+
+## The C efficacy model
+
+This is the load-bearing design choice and the part most
+likely to be subtly wrong. The rule: **the intent layer only
+reads descriptive-layer signals; it writes none of them.** Bias
+posteriors come from the bias sweep; samskara fire verdicts
+come from the samskara evaluation sweep. The intent layer
+cannot fake the numbers that judge it.
+
+Three target kinds, three efficacy treatments:
+
+- **Bias target** - `{kind:'bias', ref:'confirmation_bias',
+  direction:'reduce'}`. Efficacy = movement in that bias's
+  `bias_summary` posterior over the intent's life. For
+  `direction:'reduce'`, a falling posterior is a confirm; a
+  rising one is a disconfirm; flat is a soft miss. The
+  posterior is already recency-decayed and CI-gated by the
+  bias math, so the signal is conservative by construction.
+
+- **Samskara target** - `{kind:'samskara', ref:<samskara_id>,
+  direction:'reduce'|'reinforce'}`. The subtle part:
+  efficacy is NOT samskara `health`. Health measures
+  *prediction accuracy* - a negative behavioral pattern can
+  stay perfectly predictable (high health) while the user is
+  actively improving. Using health would reward the intent
+  for making the model better at predicting the behavior it
+  is supposed to be reducing. Instead, efficacy =
+  movement in the **fire frequency / fire score** of the
+  targeted prediction over a trailing window, read from
+  `samskara_fires`. "The pattern shows up less" is the honest
+  signal for a reduce-intent; "the pattern shows up more
+  reliably" for a reinforce-intent.
+
+- **Free-form** - `{kind:'none'}`. No measurable target ("help
+  them build a healthier relationship with food" has no
+  structured metric, only conversation). These get employment
+  records but **no efficacy posterior**. They persist while
+  their seeding pattern persists and fade when the minter no
+  longer re-seeds them - decay by absence, not by self-graded
+  success. This is the deliberate graceful-degradation case:
+  free-form intents are allowed to exist but are never allowed
+  to claim they work.
+
+Posterior math (proposed, to settle during build): reuse the
+samskara verdict-posterior shape - a recency-discounted hit
+rate with a population-prior shrinkage, recomputed online from
+the `intent_target_samples` deltas. A sample whose target moved
+the right way is a confirm; wrong way a disconfirm; flat a
+soft miss (fractional, like samskara's `not-borne-out`
+`w_soft`). The exact constants are data-derived during the
+backtest, not eyeballed now.
+
+## Minting (proposed)
+
+Daily per-user cron, parallel to the librarian passes. The
+minter agent (fast model, like the samskara/bias agents) reads:
+
+- samskara compound summary + the top samskaras by health,
+- `bias_summary` (the soft+strong tier rows),
+- recent memories + relevant wiki articles,
+- recent settled threads (with read tools, like the wiki
+  agent).
+
+It then proposes a small set of create / update / retire
+operations against `intents`, respecting the active cap. An
+intent that targets a bias or samskara records that binding;
+one that can't name a measurable target is minted free-form.
+Provenance rows capture what it read. The cap and the
+once-a-day cadence are the rate limit - nothing rotates
+continuously, same discipline as the samskara phases.
+
+## Injection (proposed)
+
+In the priming stage (`supabase/functions/venice/priming.ts`),
+a new `applyIntentPriming` reads `intent_compound_summary`
+(and/or the active `intents` rows), renders a capped appendix
+via a pure formatter, and appends it to the row-0 system
+message with the same blank-line separator
+`applyBiasPriming` uses. Same failure contract as every
+priming injector: swallow errors, omit the block, never block
+or delay a turn. When the settings toggle is off, the read is
+skipped entirely.
+
+Per `prompt-augmentation.md`, this is a new **row-1 (baseline
+system appendix)** contributor sitting alongside the bias
+appendix. It is NOT a `<think>` block - intents are stable
+standing guidance, not volatile per-turn synthesis. Update the
+contributors table in that doc when this lands.
+
+## Evaluation: how we know it works
+
+The product question that gates this feature: given an
+existing samskara corpus and existing bias findings, how do we
+know the algorithm and implementation choices are effective,
+before we trust them and before we ever default the toggle on?
+
+### The trap: regression to the mean
+
+The failure mode that would make this *look* like it works
+when it doesn't. A bias posterior spikes (a noisy stretch of
+threads). The minter sees the spike and forms an intent
+targeting it. The bias reverts on its own - because spikes
+revert. The intent claims the win, its efficacy climbs, it
+strengthens, and we congratulate the machine. The honest-loop
+firewall does NOT catch this: the movement is real; the
+*attribution* is fake. This is the confirmation engine
+relocated from self-grading to false causal credit.
+
+### The bar: beat a matched control
+
+The single metric that separates real from theater. Do
+bias/samskara targets that received an intent decline faster
+than comparable targets that did NOT? `intent_target_samples`
+carries both the target series and the matched-control series
+precisely so this is computable. **Falsifiable bar, committed
+up front: if targeted patterns do not beat matched controls
+within N evaluation cycles, the feature stays off by default
+and is labeled experimental.** Stating this before we have
+results we like is the discipline; deciding it after is not.
+
+### The layered metric set
+
+1. **Offline backtest on the existing corpus** (the pre-merge
+   gate - this is what the corpus history is for):
+   - **Grounding rate** - every minted intent binds to a
+     target that actually exists and is live. Target 100%;
+     hallucinated or orphaned targets are a hard fail.
+   - **Provenance integrity** - each intent traces to real
+     seeding evidence in the snapshot it was minted from.
+   - **Selection quality** - replay minting against historical
+     snapshots; do intents cluster on the high-confidence,
+     high-valence-cost patterns, or wander? Score against a
+     small hand-labeled "worth working on" set.
+
+2. **Honest-loop validation** (proves the firewall holds):
+   - **Efficacy must NOT correlate with employment count.**
+     The key check. If an intent the model "worked hard on"
+     gains efficacy regardless of whether its target moved,
+     the descriptive/normative separation has leaked. Target:
+     correlation near zero. Negative control: a
+     high-employment + flat-target intent must stay
+     low-efficacy.
+   - **Efficacy MUST track target movement** - diverge
+     correctly between a target that genuinely declined and
+     one that stayed flat.
+
+3. **The causal control** - metric #2 from "The bar" above:
+   targeted-vs-untargeted decline rate over the matched
+   cohort.
+
+4. **Operational sanity** (continuous, cheap; lands as a QA
+   use-case): active count under cap, zero orphaned targets,
+   retirement fires when seeding decays, minting cost/latency
+   bounded.
+
+### Backtest harness
+
+The pre-merge gate (#1, #2, #3) runs as an offline harness
+against the live corpus: snapshot the descriptive layer at
+historical points, run the minter, bind targets, then replay
+forward to measure target-vs-control movement and the
+efficacy/employment correlation. Scope TBD at build time -
+this is real engineering cost and may warrant its own
+milestone before the pipeline is wired into live priming.
+
+## Settings (proposed)
+
+One toggle, persisted to `profiles.settings` (new key, e.g.
+`intentsEnabled`, default false), coerced in `coerceSettings`
+like every other settings field. Auto-apply with rollback, the
+pane convention. Off disables minting, injection, and
+evaluation wholesale. Per the bias-profile precedent, the
+efficacy/minting math constants are NOT user-facing knobs -
+the toggle is the only control. Update `settings.md` and
+`docs/user/` when this lands (new observable behavior +
+new control).
+
+## Interactions (anticipated)
+
+- **Samskara** (`./samskara.md`) - intents READ samskara
+  (compound summary + the corpus for seeding, `samskara_fires`
+  for samskara-target efficacy). Intents NEVER write samskara
+  state. One-way dependency, descriptive -> normative.
+- **Bias profile** (`./bias-profile.md`) - intents READ
+  `bias_summary` (for seeding and for bias-target efficacy).
+  Never write. Injection sits alongside the bias appendix on
+  row-1; both are capped so they don't crowd the instruction
+  surface - the combined cap budget needs a look when this
+  lands (bias `RENDER_CAP` 4 + intents ~3-5 could be a lot of
+  appendix).
+- **Prompt augmentation** (`./prompt-augmentation.md`) - adds
+  a row-1 baseline-appendix contributor. Update the
+  contributors table and ordering notes.
+- **Memory / Wiki** (`./memory.md`, `./wiki.md`) - read as
+  minting inputs; the librarian cron cadence is the model to
+  mirror for the minting sweep.
+- **Settings** (`./settings.md`) - the enable toggle.
+- **Logging** (`./logging.md`) - the sweeps write through
+  per-claim edge loggers (new source `intent`) so the Logs
+  drawer surfaces minting / evaluation lifecycle.
+
+## Gotchas (anticipated - fill in as built)
+
+- **Engagement is not efficacy.** `user_reaction` on
+  `intent_employments` is tempting to read as "is it working"
+  - a receptive user feels like success. It is NOT an efficacy
+  input. A user can be warmly receptive to a nudge that
+  changes nothing, and resistant to one that lands. Efficacy
+  comes only from descriptive-layer movement. This is the
+  single most likely place for the firewall to leak during
+  implementation; the table separation exists to make the
+  wrong wiring obvious in review.
+- **Samskara-target efficacy reads fire frequency, not
+  health.** Health is prediction accuracy; a reduce-intent
+  that works makes the pattern *rarer*, not *less
+  predictable*. Wiring efficacy to health would invert the
+  signal. See **The C efficacy model**.
+- **Free-form intents never gain a posterior.** A `'none'`
+  target with a non-null efficacy is a bug - it means
+  something self-graded its way to a score.
+- **Off-by-default is part of the contract, not a soft
+  launch.** The toggle defaults off until the backtest clears
+  the matched-control bar. Flipping the default is a separate,
+  evidence-gated decision.
+
+## QA
+
+A `docs/qa/use-cases/` walkthrough ships with the first
+milestone (per `CLAUDE.md`): minting forms a grounded intent,
+the inspector shows it honestly, injection renders it, and the
+evaluation sweep appends a target sample without efficacy ever
+reading employment. The operational-sanity metrics above are
+its expected-results checklist.
