@@ -23,6 +23,7 @@ function makeRecord(over: Partial<WikiRecord> = {}): WikiRecord {
     source_conversation_id: null,
     created_at: '2026-06-17T00:00:00Z',
     updated_at: '2026-06-17T00:00:00Z',
+    fileCount: 0,
     ...over,
   };
 }

@@ -131,6 +131,11 @@ import {
   buildRecordFileChangelogMessage,
   buildRecordLinkChangelogMessage,
 } from './wiki';
+// sha256Hex lives in attachments.ts (recipe-photo dedup); reused here for
+// wiki-record-file dedup so the manual UI attach and the agent-side
+// record_file_attach key duplicates the same way. attachments.ts only
+// `import type`s from this module, so this value import has no runtime cycle.
+import { sha256Hex } from './attachments';
 
 
 
@@ -2348,7 +2353,9 @@ export class SupabaseService {
     let query = this.client
       .from('wiki_records')
       .select(
-        'id, article_id, date, content, tags, source_conversation_id, created_at, updated_at'
+        // wiki_record_files(count) embeds a per-record attachment count so a
+        // collapsed row can show an attachment badge without N+1 file fetches.
+        'id, article_id, date, content, tags, source_conversation_id, created_at, updated_at, wiki_record_files(count)'
       )
       .eq('article_id', articleId)
       .order('date', { ascending: false })
@@ -2660,11 +2667,33 @@ export class SupabaseService {
     const session = await this.getSession();
     if (!session) throw new SupabaseError('Not authenticated.');
     const userId = session.user.id;
+    const bytes = base64ToBytes(args.dataBase64);
+    // base64ToBytes allocates a fresh (never shared) ArrayBuffer, so the
+    // narrowing off ArrayBufferLike is safe; the cast just satisfies the DOM
+    // lib's ArrayBuffer-vs-SharedArrayBuffer split.
+    const contentHash = await sha256Hex(bytes.buffer as ArrayBuffer);
+
+    // Per-record content dedup, matching the agent-side record_file_attach.
+    // Re-attaching the identical file to a record is never wanted (it stacks
+    // a duplicate thumbnail), so probe by (record_id, content_hash) first and
+    // short-circuit to the existing row - no upload, no insert, no changelog.
+    const { data: dup, error: dupErr } = await this.client
+      .from('wiki_record_files')
+      .select(
+        'id, record_id, position, filename, mime_type, size_bytes, storage_path, extracted_text, created_at'
+      )
+      .eq('record_id', args.recordId)
+      .eq('content_hash', contentHash)
+      .limit(1)
+      .maybeSingle();
+    if (dupErr) throw new SupabaseError(dupErr.message);
+    if (dup) return coerceWikiRecordFile(dup as Record<string, unknown>);
+
     const id = crypto.randomUUID();
     const path = `${userId}/${id}/${args.filename}`;
     const { error: upErr } = await this.client.storage
       .from('wiki-record-files')
-      .upload(path, base64ToBytes(args.dataBase64), {
+      .upload(path, bytes, {
         contentType: args.mimeType ?? undefined,
         upsert: true,
       });
@@ -2680,6 +2709,7 @@ export class SupabaseService {
         mime_type: args.mimeType,
         size_bytes: args.sizeBytes,
         storage_path: path,
+        content_hash: contentHash,
         extracted_text: args.extractedText ?? null,
       })
       .select(

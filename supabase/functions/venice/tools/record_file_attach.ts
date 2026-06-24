@@ -27,6 +27,18 @@ interface SourceAttachment {
   extracted_text: string | null;
 }
 
+// Lowercase hex SHA-256 of the file bytes. Drives the per-record dedup
+// below: the extraction/wiki agent can run a second pass and name the same
+// source file again, which would otherwise stack a duplicate row (same
+// image twice in the record's strip). Content-keyed, not filename - two
+// genuinely different files that share a name still both attach.
+async function sha256Hex(buffer: ArrayBuffer): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', buffer);
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
 export const recordFileAttach: ToolDef = {
   name: 'record_file_attach',
   async execute(args: Record<string, unknown>, ctx: ToolContext) {
@@ -70,7 +82,24 @@ export const recordFileAttach: ToolDef = {
     if (dlErr || !blob) {
       throw new Error(`File "${filename}" could not be read for attaching. Try again.`);
     }
-    const bytes = new Uint8Array(await blob.arrayBuffer());
+    const arrayBuffer = await blob.arrayBuffer();
+    const bytes = new Uint8Array(arrayBuffer);
+    const contentHash = await sha256Hex(arrayBuffer);
+
+    // Per-record dedup. A second extraction/wiki pass over the same thread
+    // re-names the same source file; without this it stacks an identical
+    // copy on the record. Probe by content (record_id + hash) so the same
+    // bytes never land twice, then no-op: no upload, no insert, no
+    // changelog. Returns the existing row so the caller sees success.
+    const { data: dup, error: dupErr } = await ctx.adminClient
+      .from('wiki_record_files')
+      .select('id, record_id, position, filename, mime_type, size_bytes, created_at')
+      .eq('record_id', recordId)
+      .eq('content_hash', contentHash)
+      .limit(1)
+      .maybeSingle();
+    if (dupErr) throw new Error(`record file dedup lookup failed: ${dupErr.message}`);
+    if (dup) return { attached: false, already_present: true, file: dup };
 
     const id = crypto.randomUUID();
     const path = `${ctx.userId}/${id}/${filename}`;
@@ -96,6 +125,7 @@ export const recordFileAttach: ToolDef = {
         mime_type: data.mime_type,
         size_bytes: data.size_bytes,
         storage_path: path,
+        content_hash: contentHash,
         // Carry the source doc's extracted text so record_get can show it
         // (images have none).
         extracted_text: data.extracted_text ?? null,

@@ -13,6 +13,7 @@ import {
   parseTags,
   serializeTags,
   recordsHeadline,
+  recordFileBadgeLabel,
   recordSlug,
   recordExportFilename,
   recordsEmptyMessage,
@@ -43,6 +44,7 @@ function makeRecord(over: Partial<WikiRecord> = {}): WikiRecord {
     source_conversation_id: null,
     created_at: '2026-06-17T00:00:00Z',
     updated_at: '2026-06-17T00:00:00Z',
+    fileCount: 0,
     ...over,
   };
 }
@@ -136,6 +138,19 @@ describe('recordsHeadline', () => {
   });
   it('shows the count otherwise', () => {
     expect(recordsHeadline(12)).toBe('Records (12)');
+  });
+});
+
+describe('recordFileBadgeLabel', () => {
+  it('returns null when the record has no files (no "0 files" badge)', () => {
+    expect(recordFileBadgeLabel(0)).toBeNull();
+    expect(recordFileBadgeLabel(-1)).toBeNull();
+  });
+  it('singularizes one file', () => {
+    expect(recordFileBadgeLabel(1)).toBe('1 attached file');
+  });
+  it('pluralizes more than one', () => {
+    expect(recordFileBadgeLabel(3)).toBe('3 attached files');
   });
 });
 

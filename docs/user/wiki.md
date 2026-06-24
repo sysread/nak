@@ -232,7 +232,10 @@ What you can do in the Records section:
   article's list.
 - **Expand** - click a record row to read its full Markdown. The
   expanded view has **Edit**, **Export**, and **Delete** actions, plus
-  the **files** and **linked records** controls below.
+  the **files** and **linked records** controls below. A collapsed row
+  shows a small **paperclip with a count** when the record has files
+  attached, so you can spot the documented entries without expanding
+  each one.
 - **Export** - **Export** on a single record downloads it as a
   Markdown file (`yyyy-mm-dd-<slug>.md`). The **download** icon in the
   Records header downloads a ZIP containing the article as
@@ -252,6 +255,12 @@ conversation goes quiet), record files are **permanent** - they live
 with the record for as long as it does. The assistant can also attach a
 file you posted earlier in the chat to a record, and can read an
 attached document when it looks at the record.
+
+Attaching the **same file twice** to one record is a no-op - whether
+you do it or the assistant does, Nak compares the file's contents (not
+just its name) and keeps a single copy. So if the background agent
+revisits a conversation it already logged, it won't stack a duplicate
+of a photo it attached earlier.
 
 ### Linking records together
 
