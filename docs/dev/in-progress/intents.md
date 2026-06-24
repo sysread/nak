@@ -26,13 +26,24 @@
    samskara/bias table families. Applied to the linked project
    on the next merge-to-main via the deploy's `sync-supabase`
    job; the table columns match the Data model section below.
+3. The pure injection renderer
+   (`supabase/functions/_shared/intent-format.ts`) - the
+   "Working intentions" system-prompt block, with the
+   dispositional-lean framing and the explicit user > accuracy
+   > intents precedence baked in - plus full vitest coverage
+   (`tests/intent-format.test.ts`). This is the pure half of
+   injection; the server orchestration that calls it (an
+   `applyIntentPriming` in `venice/priming.ts`, gated on the
+   toggle, computing the bias-aware combined cap) is Deno and
+   lands with the pipeline.
 
-Not yet built: the minting sweep, the priming injection, the
-evaluation sweep, the backtest harness, and the settings
-toggle. Nothing reads or writes these tables yet and the
-feature has zero observable behavior until minting + injection
-land behind the toggle. Sections still marked "(proposed)"
-describe the consuming pipelines, not the storage.
+Not yet built: the minting sweep, the server-side priming
+orchestration that calls the renderer, the evaluation sweep,
+the backtest harness, and the settings toggle. Nothing reads
+or writes these tables yet and the feature has zero observable
+behavior until minting + the priming orchestration land behind
+the toggle. Sections still marked "(proposed)" describe the
+consuming pipelines, not the parts above.
 
 Intents are the first layer in nak that is **normative**
 rather than descriptive. Every other user-model the app
@@ -329,17 +340,28 @@ Provenance rows capture what it read. The cap and the
 once-a-day cadence are the rate limit - nothing rotates
 continuously, same discipline as the samskara phases.
 
-## Injection (proposed)
+## Injection
 
-In the priming stage (`supabase/functions/venice/priming.ts`),
-a new `applyIntentPriming` reads `intent_compound_summary`
-(and/or the active `intents` rows), renders a capped appendix
-via a pure formatter, and appends it to the row-0 system
-message with the same blank-line separator
-`applyBiasPriming` uses. Same failure contract as every
-priming injector: swallow errors, omit the block, never block
-or delay a turn. When the settings toggle is off, the read is
-skipped entirely.
+The pure renderer is built
+(`supabase/functions/_shared/intent-format.ts`,
+`formatIntentsBlock`): it filters to active rows, caps at a
+caller-supplied bias-aware budget, and emits the "Working
+intentions" block with the dispositional-lean framing and the
+explicit user > accuracy > intents precedence. Returns null to
+mean "omit the section" (the bias/samskara null convention).
+
+Still to build (Deno, lands with the pipeline): in the priming
+stage (`supabase/functions/venice/priming.ts`), a new
+`applyIntentPriming` reads the active `intents` rows (and/or
+`intent_compound_summary`), computes the intent cap as
+`min(INTENT_RENDER_CAP, COMBINED_APPENDIX_CEILING - biasRendered)`,
+calls `formatIntentsBlock`, and appends the result to the row-0
+system message with the same blank-line separator
+`applyBiasPriming` uses - rendered AFTER the bias block so the
+precedence note's "guidance above" resolves correctly. Same
+failure contract as every priming injector: swallow errors,
+omit the block, never block or delay a turn. When the settings
+toggle is off, the read is skipped entirely.
 
 Per `prompt-augmentation.md`, this is a new **row-1 (baseline
 system appendix)** contributor sitting alongside the bias
