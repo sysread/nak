@@ -73,9 +73,10 @@ One file per use-case under [`use-cases/`](./use-cases/), named
   mid-turn recall agents (memory_recall and siblings), their drawer
   sources, and memory_conversation seeding.
 - [context-recall-priming](./use-cases/context-recall-priming.md) - the
-  boundary-triggered deterministic recall pipeline, its works-cited
-  index, the synthetic `<think>` injection, and the umbrella `context`
-  tool.
+  boundary-triggered recall pipeline: the smoothed, laundered, cited
+  `<think>` recollection, its citations UI, the timeless reflection
+  writer + librarian reshape that keep the store clean, and the umbrella
+  `context` tool.
 - [intuition-pipeline](./use-cases/intuition-pipeline.md) - the
   subconscious perception / drive / synthesis pipeline, its
   trigger and cache logic on `threads.intuition_payload`, and the
