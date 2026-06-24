@@ -36,8 +36,19 @@
    `applyIntentPriming` in `venice/priming.ts`, gated on the
    toggle, computing the bias-aware combined cap) is Deno and
    lands with the pipeline.
+4. The pure minting proposal processor
+   (`supabase/functions/_shared/intent-mint.ts`) - the trusted
+   boundary that coerces, validates, dedups, and caps the
+   minter agent's raw create/retire proposals into a
+   deterministic `MintPlan` - plus full vitest coverage
+   (`tests/intent-mint.test.ts`). Enforces the mechanical
+   invariants (coherent target bindings, exact-after-normalize
+   dedup, active-set cap trimming low-priority creates). The
+   agent prompt + orchestration + claim RPCs that produce the
+   raw proposals are Deno and still to build.
 
-Not yet built: the minting sweep, the server-side priming
+Not yet built: the minter agent itself (prompt + orchestration
++ claim/save RPCs + cron), the server-side priming
 orchestration that calls the renderer, the evaluation sweep,
 the backtest harness, and the settings toggle. Nothing reads
 or writes these tables yet and the feature has zero observable
@@ -321,10 +332,25 @@ soft miss (fractional, like samskara's `not-borne-out`
 `w_soft`). The exact constants are data-derived during the
 backtest, not eyeballed now.
 
-## Minting (proposed)
+## Minting
 
-Daily per-user cron, parallel to the librarian passes. The
-minter agent (fast model, like the samskara/bias agents) reads:
+The pure proposal processor is built
+(`supabase/functions/_shared/intent-mint.ts`,
+`processMintProposals`): it is the trusted boundary that turns
+the agent's fallible raw output into a deterministic plan -
+coercing/validating each create, dropping incoherent target
+bindings, deduping by normalized statement, and capping the
+active set (trimming low-priority creates, never existing
+intents). It deliberately does NOT judge semantic conflict
+with bias compensation or the user's system prompts - that is
+the agent's job (it is handed both in its prompt); a pure
+function cannot read intent.
+
+Still to build (Deno, the product-shaping part): the minter
+agent prompt + orchestration + claim/save RPCs + the daily
+cron. Daily per-user cron, parallel to the librarian passes.
+The minter agent (fast model, like the samskara/bias agents)
+reads:
 
 - samskara compound summary + the top samskaras by health,
 - `bias_summary` (the soft+strong tier rows),
