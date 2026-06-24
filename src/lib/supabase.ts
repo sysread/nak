@@ -4052,8 +4052,18 @@ export class SupabaseService {
     const { offset, pageSize, query, kind = 'all', sort = 'newest' } = opts;
     let q = this.client
       .from('message_attachments')
+      // The `threads` embed is hinted with the FK constraint name
+      // (`messages_thread_id_fkey`) because `messages` and `threads` are
+      // joined by more than one relationship: `messages.thread_id ->
+      // threads.id` (the one we want) plus six reverse cursor columns on
+      // `threads` (last_reflected_msg_id, last_evaluated_msg_id,
+      // last_summarised_msg_id, last_topics_msg_id, last_wiki_processed_msg_id,
+      // last_wiki_record_processed_msg_id) that each reference messages.id.
+      // Without the hint PostgREST can't choose and fails the whole query
+      // with "more than one relationship was found for 'messages' and
+      // 'threads'".
       .select(
-        'id, filename, mime_type, size_bytes, storage_path, created_at, messages!inner(thread_id, threads!inner(title))'
+        'id, filename, mime_type, size_bytes, storage_path, created_at, messages!inner(thread_id, threads!messages_thread_id_fkey!inner(title))'
       )
       .not('storage_path', 'is', null);
     const trimmed = (query ?? '').trim();

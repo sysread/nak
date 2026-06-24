@@ -285,6 +285,19 @@ parent - `messages.thread_id -> threads.user_id = auth.uid()`.
   `tool_call_response` that makes the card appear, so the first lookup
   almost always wins; the retry is just insurance.
 
+- **`listArtifacts` must hint the `threads` embed.** `messages` and
+  `threads` are joined by more than one relationship: the forward
+  `messages.thread_id -> threads.id` plus six reverse cursor columns on
+  `threads` (`last_reflected_msg_id`, `last_evaluated_msg_id`,
+  `last_summarised_msg_id`, `last_topics_msg_id`,
+  `last_wiki_processed_msg_id`, `last_wiki_record_processed_msg_id`) that
+  each reference `messages.id`. An unqualified `threads(...)` embed inside
+  `messages` is ambiguous and PostgREST fails the whole query with "more
+  than one relationship was found for 'messages' and 'threads'", so the
+  select hints the FK constraint name:
+  `threads!messages_thread_id_fkey!inner(title)`. Any new sweep that adds
+  another `threads -> messages` cursor column inherits this - the hint is
+  what keeps the artifacts listing from regressing.
 - **Liveness is `storage_path`, not bytes.** Reads project `storage_path`
   and mint signed URLs; a thread full of images no longer ships base64 on
   every open. See [`./file-storage.md`](./file-storage.md).
