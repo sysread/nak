@@ -47,9 +47,9 @@
    agent prompt + orchestration + claim RPCs that produce the
    raw proposals are Deno and still to build.
 
-Not yet built: the minter agent itself (prompt + orchestration
-+ claim/save RPCs + cron), the server-side priming
-orchestration that calls the renderer, the evaluation sweep,
+Not yet built: the minter agent itself (its prompt,
+orchestration, claim/save RPCs, and cron), the server-side
+priming orchestration that calls the renderer, the evaluation sweep,
 the backtest harness, and the settings toggle. Nothing reads
 or writes these tables yet and the feature has zero observable
 behavior until minting + the priming orchestration land behind
