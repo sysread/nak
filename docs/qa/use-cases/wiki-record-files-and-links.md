@@ -10,7 +10,10 @@ file-storage](../../dev/file-storage.md)), the gated chat tools
 `record_file_attach` / `record_file_remove` / `record_link_create` /
 `record_link_delete` ([dev: tools](../../dev/tools.md)), and the
 extraction agent's conservative auto-linking. The record_update changelog
-rows that file/link mutations land are the audit anchor.
+rows that file/link mutations land are the audit anchor. Also covers the
+per-record content-hash dedup (re-attaching the same bytes is a no-op on
+both the in-app and chat-tool paths) and the collapsed-row attachment
+badge fed by the `wiki_record_files(count)` embed.
 
 ## Preconditions
 
@@ -68,10 +71,26 @@ rows that file/link mutations land are the audit anchor.
 10. Ask: `What files and links does that record have?` and confirm the
     model answers from `record_get` (it should name the file and the
     linked record, not guess).
-11. **Part C - orphan GC.** Delete the record (Wiki panel, **Delete** on
+11. **Part D - content dedup + collapsed-row badge.** With the record
+    still carrying its attached image, **collapse** it (click the row).
+    Confirm the collapsed row shows a **paperclip + the file count**
+    matching what the expanded strip held.
+12. Re-attach the **identical image file** to the same record (in-app
+    upload zone). Confirm NO second thumbnail appears and the count badge
+    is unchanged, and that no new row landed:
+
+    ```sql
+    select count(*) as rows, count(distinct content_hash) as distinct_bytes
+      from wiki_record_files where record_id = '<record>';
+    ```
+
+13. In chat, ask the model to attach the same already-attached image to
+    that record again. Confirm the tool returns `already_present` and no
+    new row / changelog row lands.
+14. **Part C - orphan GC.** Delete the record (Wiki panel, **Delete** on
     the expanded record). Its `wiki_record_files` rows cascade away but
     the bucket objects linger until the sweep.
-12. Tick the GC sweep with the service-role key:
+15. Tick the GC sweep with the service-role key:
 
     ```sh
     curl -s -X POST "$SUPABASE_URL/functions/v1/wiki-record-file-gc" \
@@ -99,7 +118,13 @@ rows that file/link mutations land are the audit anchor.
   changelog rows.
 - (10) The answer names the actual attached file + linked record,
   sourced from `record_get` (visible as a `record_get` tool call).
-- (11-12) After the sweep, the deleted record's objects are gone from
+- (11) The collapsed row shows a paperclip glyph and the file count
+  (e.g. `2`); a record with no files shows no badge.
+- (12-13) Re-attaching identical bytes is a no-op on both paths: `rows`
+  stays equal to `distinct_bytes` (no duplicate row), no new thumbnail,
+  no new `record_update` changelog row; the chat tool result carries
+  `already_present: true`.
+- (14-15) After the sweep, the deleted record's objects are gone from
   the bucket and the curl returns a JSON summary with a non-zero
   `reclaimed` count; the Logs drawer shows a `wiki-record-file-gc` line.
 

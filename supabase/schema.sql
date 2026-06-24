@@ -9559,6 +9559,13 @@ create table if not exists public.wiki_record_files (
   -- read an attached PDF via record_get without re-fetching bytes. NULL for
   -- images (they reach the model as a signed URL / analyze_image instead).
   extracted_text text,
+  -- Lowercase hex SHA-256 of the file bytes. Drives the per-record dedup in
+  -- record_file_attach: a re-run of the extraction/wiki agent that names the
+  -- same source file must not stack a second identical row on the record.
+  -- Content-keyed (not filename) so a filename collision between two
+  -- genuinely different files still attaches both. NULL for legacy rows
+  -- written before the column existed; the dedup probe simply misses them.
+  content_hash text,
   created_at timestamptz not null default now()
 );
 
@@ -9571,6 +9578,15 @@ create index if not exists wiki_record_files_record_idx
 -- index-probable.
 create index if not exists wiki_record_files_storage_path_idx
   on public.wiki_record_files (storage_path);
+
+-- content_hash added after the initial ship: guard for existing installs
+-- (create table if not exists won't add it to a populated table).
+alter table public.wiki_record_files
+  add column if not exists content_hash text;
+-- Probe for the per-record dedup in record_file_attach: "does this record
+-- already hold a file with these exact bytes?"
+create index if not exists wiki_record_files_record_hash_idx
+  on public.wiki_record_files (record_id, content_hash);
 
 alter table public.wiki_record_files enable row level security;
 

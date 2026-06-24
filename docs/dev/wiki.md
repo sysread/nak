@@ -790,6 +790,25 @@ cards, PDFs):
   `attachments` bucket into `wiki-record-files`. The model can't upload
   bytes; it names a live thread file by filename (expired source ->
   actionable error). See the Attachments interaction.
+- **Per-record content dedup.** Both write paths key on
+  `wiki_record_files.content_hash` (lowercase hex SHA-256 of the bytes)
+  and probe `(record_id, content_hash)` before writing - if the record
+  already holds those exact bytes they no-op (no upload, no insert, no
+  changelog) and return the existing row. This is load-bearing for the
+  agent path: a second extraction/wiki pass over the same thread re-names
+  the same source file, and without the probe it stacked a duplicate
+  thumbnail on the record. Content-keyed, not filename, so two genuinely
+  different files that share a name still both attach. `content_hash` is
+  NULL on legacy rows written before the column; the probe simply misses
+  them (so a fresh attach onto a pre-existing legacy copy can still dup
+  once - a one-time data condition, not an ongoing leak).
+- **Collapsed-row attachment badge.** `listWikiRecords` embeds
+  `wiki_record_files(count)` (-> `WikiRecord.fileCount`) so a collapsed
+  record row shows a paperclip + count without fetching each record's
+  file strip. `recordFileBadgeLabel` (in `ui/wiki-records.ts`) owns the
+  pluralization / null-when-zero; the badge hides while the row is
+  expanded (the strip itself is then visible). The row reloads via the
+  `onWikiRecordChange` bus, so the count refreshes after attach/remove.
 
 `wiki_record_links` (a directed, labelled graph between records):
 

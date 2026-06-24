@@ -130,6 +130,16 @@ export function recordsHeadline(count: number): string {
 }
 
 /**
+ * Title / aria-label for the collapsed-row attachment badge. Returns null
+ * when the record has no files, so the caller renders nothing rather than a
+ * "0 files" badge.
+ */
+export function recordFileBadgeLabel(count: number): string | null {
+  if (count <= 0) return null;
+  return count === 1 ? '1 attached file' : `${count} attached files`;
+}
+
+/**
  * Filename slug for a record's export file. Lowercase, alphanumerics +
  * hyphens, derived from the content preview so the file is recognizable
  * in the ZIP without opening it. Always non-empty (falls back to the id

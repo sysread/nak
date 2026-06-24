@@ -39,6 +39,7 @@
     parseTags,
     serializeTags,
     recordsHeadline,
+    recordFileBadgeLabel,
     recordsEmptyMessage,
     collectTags,
     todayIso,
@@ -600,6 +601,36 @@
             <span class="wiki-record-preview">
               {expandedId === record.id ? '' : contentPreview(record.content)}
             </span>
+            <!-- Attachment badge: collapsed rows don't load the file strip,
+                 so a count from the list query stands in. Hidden when the
+                 record has no files or while it's expanded (the strip itself
+                 is then visible). -->
+            {#if expandedId !== record.id && recordFileBadgeLabel(record.fileCount)}
+              <span
+                class="wiki-record-files-badge"
+                title={recordFileBadgeLabel(record.fileCount)}
+                aria-label={recordFileBadgeLabel(record.fileCount)}
+              >
+                <!-- Feather "paperclip" - generic attachment glyph (a record
+                     may hold images and/or documents). -->
+                <svg
+                  width="13"
+                  height="13"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"
+                  />
+                </svg>
+                {record.fileCount}
+              </span>
+            {/if}
             {#if record.tags.length > 0}
               <span class="wiki-record-tags">
                 {#each record.tags as tag (tag)}
@@ -845,6 +876,21 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--text-muted, inherit);
+  }
+  .wiki-record-files-badge {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
+    font-size: 0.72em;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-muted, inherit);
+    /* baseline-aligned row, but the glyph reads better nudged down a hair */
+  }
+  .wiki-record-files-badge svg {
+    flex: 0 0 auto;
+    transform: translateY(1px);
+    opacity: 0.85;
   }
   .wiki-record-tags {
     flex: 0 0 auto;

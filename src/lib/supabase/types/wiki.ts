@@ -45,6 +45,13 @@ export interface WikiRecord {
   updated_at: string;
   /** Populated only by `searchWikiRecordsByEmbedding`. */
   similarity?: number;
+  /**
+   * Count of attached files, so a collapsed row can show an attachment
+   * badge without fetching each record's file strip. Populated by
+   * `listWikiRecords` (via a `wiki_record_files(count)` embed); defaults
+   * to 0 on read paths that don't request the embed.
+   */
+  fileCount: number;
 }
 
 /**
@@ -222,7 +229,19 @@ export function coerceWikiRecord(raw: Record<string, unknown>): WikiRecord {
     updated_at: String(raw.updated_at ?? raw.created_at ?? ''),
     similarity:
       typeof raw.similarity === 'number' ? (raw.similarity as number) : undefined,
+    fileCount: coerceFileCount(raw.wiki_record_files),
   };
+}
+
+// A `wiki_record_files(count)` PostgREST embed arrives as
+// `[{ count: N }]`; absent when the select didn't request it. Coerce to a
+// plain number so callers never branch on the embed shape.
+function coerceFileCount(raw: unknown): number {
+  if (Array.isArray(raw) && raw.length > 0) {
+    const c = (raw[0] as Record<string, unknown>)?.count;
+    if (typeof c === 'number') return c;
+  }
+  return 0;
 }
 
 /**
