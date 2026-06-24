@@ -2,24 +2,29 @@
 // deep-sleep). Both passes get the SAME surface - the difference
 // between them is the seed-selection strategy upstream
 // (co-occurrence batches for rem, similarity neighborhoods for
-// deep-sleep), not the tool kit. Function-side port of the browser
-// src/lib/tools/memory_librarian_toolbox.ts.
+// deep-sleep), not the tool kit. Runs server-side only; the browser no
+// longer carries a librarian toolbox.
 //
 // Shape contract vs reflection's toolbox (the other write-capable
 // memory toolbox):
 //
-//   - memory_consolidate is the librarian's content-write primitive.
-//     Reflection's memory_update auto-bumps confidence on every
-//     write; the librarian needs max-confidence semantics on merges
-//     and a single atomic step over the four-table sequence
-//     (memories, memory_conversation, memory_relations, the loser's
-//     confidence). Reflection doesn't see this tool.
+//   - memory_consolidate is the librarian's two-row content-write
+//     primitive: it adopts max-confidence semantics on a merge and runs
+//     a single atomic step over the four-table sequence (memories,
+//     memory_conversation, memory_relations, the loser's confidence).
+//     Reflection doesn't see this tool.
 //
-//   - memory_update is ABSENT. The librarian doesn't rephrase
-//     individual rows - consolidation collapses two; relations
-//     annotate without rewriting; doubt nudges confidence. Surfacing
-//     memory_update would reintroduce the auto-bump path we
-//     deliberately ruled out for the librarian.
+//   - memory_reshape is the librarian's one-row content-hygiene
+//     primitive: rewrite a row's FRAMING (label/data) without changing
+//     its facts or confidence, so encoding-time poison heals over time.
+//     Distinct from memory_update by contract - it reframes, it does not
+//     refine or generate.
+//
+//   - memory_update is ABSENT. That is reflection's / the main chat's
+//     "refine a fact" verb. The librarian neither generates nor freely
+//     rewrites facts; memory_reshape covers the one rewrite it is
+//     allowed (framing only), so memory_update's broader contract stays
+//     out.
 //
 //   - memory_create is ABSENT. Reinforces "librarian collapses,
 //     reflection generates." No invention.
@@ -57,6 +62,7 @@ import {
 } from './_agent_tools.ts';
 import { memorySearch } from '../tools/memory_search.ts';
 import { memoryConsolidate } from '../tools/memory_consolidate.ts';
+import { memoryReshape } from '../tools/memory_reshape.ts';
 import { memoryInvalidate } from '../tools/memory_invalidate.ts';
 import { memoryDoubt } from '../tools/memory_doubt.ts';
 import { memoryRelate } from '../tools/memory_relate.ts';
@@ -126,12 +132,75 @@ const MEMORY_CONSOLIDATE_WIRE_SCHEMA: AgentTool['wire'] = {
   },
 };
 
+// memory_reshape: the librarian's narrow content-hygiene primitive.
+// Rewrites a row's FRAMING (label/data) without changing its facts or
+// confidence, so encoding-time poison the reflection writer baked into
+// older rows ("this conversation", session narration, write-time dates)
+// can heal over time instead of relying on read-time laundering forever.
+// Distinct from memory_consolidate (which collapses two rows) and from
+// reflection's memory_update (which generates / refines facts); see
+// memory_reshape.ts for the contract.
+const MEMORY_RESHAPE_WIRE_SCHEMA: AgentTool['wire'] = {
+  type: 'function',
+  function: {
+    name: 'memory_reshape',
+    description:
+      "Rewrite ONE memory's framing without changing the facts it " +
+      'encodes. Use this ONLY to clean encoding-time poison: first-person ' +
+      "session narration (\"I had to verify...\", \"PROTOCOL EXERCISED\"), " +
+      '"this conversation" / "this session" / "today" phrasing, and dates ' +
+      'that say WHEN the memory was written (NOT dates that are part of a ' +
+      'fact). Rewrite into a timeless statement of the same facts: ' +
+      'preserve every number, name, decision, metric, and fact-bearing ' +
+      'date exactly; do not add, drop, or alter any fact; do not touch ' +
+      "confidence. The row's real created_at already records when it was " +
+      'learned. Supply the cleaned label and/or data plus a one-line ' +
+      'message for the changelog. Returns the updated row.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: {
+          type: 'string',
+          description: 'UUID of the memory to reshape.',
+        },
+        label: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 80,
+          description:
+            'Cleaned short name (omit to leave the label unchanged).',
+        },
+        data: {
+          type: 'string',
+          minLength: 1,
+          maxLength: MAX_MEMORY_DATA_CHARS,
+          description:
+            `Cleaned body, same facts, no write-time framing (max ${MAX_MEMORY_DATA_CHARS} ` +
+            'chars; omit to leave the body unchanged). Provide at least one ' +
+            'of label or data.',
+        },
+        message: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 200,
+          description:
+            'One-line, commit-style note of what framing you cleaned. ' +
+            'Lands in the memory changelog the user reviews.',
+        },
+      },
+      required: ['id', 'message'],
+      additionalProperties: false,
+    },
+  },
+};
+
 export function buildMemoryLibrarianToolbox(): Toolbox {
   return {
     name: 'memory-librarian',
     tools: [
       asAgentTool(memorySearch, MEMORY_SEARCH_WIRE_SCHEMA),
       asAgentTool(memoryConsolidate, MEMORY_CONSOLIDATE_WIRE_SCHEMA),
+      asAgentTool(memoryReshape, MEMORY_RESHAPE_WIRE_SCHEMA),
       asAgentTool(memoryInvalidate, MEMORY_INVALIDATE_WIRE_SCHEMA),
       asAgentTool(memoryDoubt, MEMORY_DOUBT_WIRE_SCHEMA),
       asAgentTool(memoryRelate, MEMORY_RELATE_WIRE_SCHEMA),

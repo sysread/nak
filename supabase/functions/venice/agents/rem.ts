@@ -74,8 +74,8 @@ const REM_MAX_CONVERSATIONS_PER_CYCLE = 3;
 const REM_MIN_BATCH_SIZE = 2;
 
 // ---------------------------------------------------------------------------
-// Prompt. Verbatim port of src/lib/agents/rem/prompt.ts so the model
-// gets identical guidance after the cutover.
+// Prompt. Runs server-side only - the browser no longer carries a rem
+// prompt module.
 // ---------------------------------------------------------------------------
 
 const TOOLS_BLOCK = `**Tools you can use**:
@@ -102,10 +102,19 @@ const TOOLS_BLOCK = `**Tools you can use**:
   for clear contradictions surfaced by the batch.
 - \`memory_doubt\` - gentle decay (×0.7). Use when a memory smells
   stale but you don't have direct contradiction.
+- \`memory_reshape\` - rewrite ONE memory's framing without changing
+  its facts or confidence. Use it ONLY to clean encoding-time poison:
+  first-person session narration, "this conversation" / "this session"
+  / "today" phrasing, or a date that records when the memory was
+  WRITTEN (not a date that is part of a fact). Rewrite into a timeless
+  statement of the same facts - preserve every number, name, decision,
+  and fact-bearing date exactly. The row's created_at already records
+  when it was learned.
 
 You do NOT have \`memory_create\` or \`memory_update\` - same
 discipline as deep-sleep: librarian collapses, reflection
-generates.`;
+generates. The one rewrite you ARE allowed is \`memory_reshape\`
+(above): cleaning a memory's framing, never its facts.`;
 
 const DISCIPLINE_BLOCK = `**Discipline**:
 
@@ -187,7 +196,11 @@ ${DISCIPLINE_BLOCK}
 3. For any rare duplicate, call \`memory_consolidate\`.
 4. For any contradiction surfaced by the batch, call
    \`memory_invalidate\` (or \`memory_doubt\` if you're unsure).
-5. Leave the rest alone.
+5. For any row whose TEXT carries encoding-time framing - "this
+   conversation" / "this session", a write-date narration, or
+   first-person AI narration - call \`memory_reshape\` to rewrite it
+   timeless, preserving every fact. Leave already-clean rows alone.
+6. Leave the rest alone.
 
 ${FINAL_REPLY_BLOCK}`;
 }

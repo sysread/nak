@@ -14,8 +14,19 @@
 // Pure: buildReflectionToolbox() just assembles the toolbox object from
 // already-registered ToolDefs, no DB or network.
 
-import { assertEquals } from '@std/assert';
+import { assertEquals, assertStringIncludes } from '@std/assert';
 import { __test } from '../venice/agents/reflection.ts';
+
+Deno.test('reflection prompt instructs timeless, non-self-narrating memories', () => {
+  // The writer must not bake encoding-time framing ("this session", a
+  // write-date, AI self-narration) into a memory body - read back later
+  // that framing reads as a current-chat event. See context-recall
+  // smoothing / the librarian reshape pass that clean up legacy rows.
+  const p = __test.REFLECTION_PROMPT;
+  assertStringIncludes(p, 'Write memories timeless');
+  assertStringIncludes(p, 'this session');
+  assertStringIncludes(p, "Don't narrate yourself or the exchange");
+});
 
 Deno.test('reflection toolbox is the soft-decay memory set, in declared order', () => {
   const toolbox = __test.buildReflectionToolbox();

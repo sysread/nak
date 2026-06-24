@@ -125,7 +125,11 @@ in `docs/user/memory.md`. The dev side has five moving parts:
 - `supabase/functions/venice/agents/reflection.ts` — the reflection
   agent. Exports `reflectOneThread(adminClient, userId)`; runs
   write-scoped with no return value (side effects = memory tool
-  calls).
+  calls). Its prompt instructs TIMELESS memories - no "this session",
+  no write-date narration, no first-person AI self-logging - because a
+  body that stamps when it was written reads back later as a
+  current-chat event (the row's `created_at` already records when it
+  was learned). `__test.REFLECTION_PROMPT` pins that guidance.
 - `supabase/functions/venice/agents/deep_sleep.ts` — the memory
   librarian's slow-wave consolidation pass. Per run it picks the
   longest-unvisited memory as the seed, embeds it, fetches the
@@ -148,11 +152,23 @@ in `docs/user/memory.md`. The dev side has five moving parts:
   successful run. Exports `runRemSweepTick` and `runRemManual`.
 - `supabase/functions/venice/agents/_memory_librarian_tools.ts` —
   the toolbox shared by both librarian passes
-  (`buildMemoryLibrarianToolbox`: consolidate, search,
+  (`buildMemoryLibrarianToolbox`: consolidate, reshape, search,
   relate/unrelate, invalidate, doubt, conversation_search -
   deliberately no create / update / reaffirm) plus the shared
   in-flight guard helpers (`claimMemoryLibrarianInflight` /
   `releaseMemoryLibrarianInflight`).
+- `supabase/functions/venice/tools/memory_reshape.ts` — the
+  librarian's framing-only content rewrite: change a row's label/data
+  to strip encoding-time poison ("this conversation", write-date
+  narration, first-person AI self-logging) WITHOUT changing facts or
+  confidence. Mechanically memory_update minus the contract: a distinct
+  tool so the librarian's "reframe, don't generate" boundary stays
+  legible (the toolbox excludes memory_update by name). Logs an
+  `update` changelog row; the embedding-clear trigger re-embeds the
+  cleaned text. The rem / deep-sleep prompts scope it to de-poisoning,
+  so memories heal over time rather than relying on read-time laundering
+  forever (see [`context-recall.md`](./context-recall.md) -> "Keeping
+  the store clean").
 - `supabase/functions/venice/tools/memory_consolidate.ts` — the
   librarian's content-write primitive (wire schema lives with the
   toolbox above; not reachable from reflection or the main chat).

@@ -41,6 +41,7 @@ import './memory_get.ts';
 import './memory_invalidate.ts';
 import './memory_reaffirm.ts';
 import './memory_relate.ts';
+import './memory_reshape.ts';
 import './memory_search.ts';
 import './memory_unrelate.ts';
 import './memory_update.ts';
