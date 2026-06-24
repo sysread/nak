@@ -90,12 +90,20 @@
    pinned by a sequencing test;
    [`prompt-augmentation.md`](../prompt-augmentation.md) updated.
 
-Not yet built: the settings toggle UI (the backend reads
-`profiles.settings.intentsEnabled`, but nothing writes it yet,
-so the feature stays inert by default), the
-employment-classification half of evaluation (now unblocked -
-the priming snapshot exists), the inspector UI, and the
-backtest harness. Sections still marked "(proposed)" describe the
+9. The settings toggle (`profiles.settings.intentsEnabled`,
+   default OFF) wired through the type + `coerceSettings` +
+   `updateSettings` patch, the app-state seed/reset/setter +
+   `persistIntentsEnabled`, and a "Working intentions" control
+   in the Settings AI pane. Plus the user doc
+   (`docs/user/intents.md` + README link). This is the switch
+   that activates the whole pipeline; until a user flips it on,
+   everything above stays inert.
+
+Not yet built: the employment-classification half of evaluation
+(now unblocked - the priming snapshot exists), the inspector UI
+(the read-only surface to see one's intentions - the "surfaced"
+half of "surfaced, not steerable"), and the backtest harness.
+Sections still marked "(proposed)" describe the
 consuming pipelines, not the parts above.
 
 Intents are the first layer in nak that is **normative**

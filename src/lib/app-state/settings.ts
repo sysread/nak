@@ -113,6 +113,17 @@ function setWikiAutomaticEnabled(enabled: boolean): void {
 }
 
 /**
+ * Flip the in-memory intents flag. Like the wiki/memory toggles the
+ * live switch is the persisted setting: the minting + evaluation sweeps
+ * and applyIntentPriming all read profiles.settings.intentsEnabled
+ * server-side, so there is no worker to start or stop here. Does NOT
+ * persist; user-driven changes route through `persistIntentsEnabled`.
+ */
+function setIntentsEnabled(enabled: boolean): void {
+  app.intentsEnabled = enabled;
+}
+
+/**
  * Flip the in-memory wiki-record-extraction flag. Independent of the
  * automatic wiki agent - a user can keep article maintenance on while
  * turning extraction off (manual records still work). The live switch
@@ -336,6 +347,18 @@ export async function persistWikiAutomaticEnabled(enabled: boolean): Promise<voi
   }
 }
 
+export async function persistIntentsEnabled(enabled: boolean): Promise<void> {
+  if (!app.supabase) throw new Error(NOT_CONNECTED);
+  const prev = app.intentsEnabled;
+  setIntentsEnabled(enabled);
+  try {
+    await app.supabase.updateSettings({ intentsEnabled: enabled });
+  } catch (err) {
+    setIntentsEnabled(prev);
+    throw err;
+  }
+}
+
 export async function persistWikiRecordExtractionEnabled(enabled: boolean): Promise<void> {
   if (!app.supabase) throw new Error(NOT_CONNECTED);
   const prev = app.wikiRecordExtractionEnabled;
@@ -455,6 +478,9 @@ export function applyServerSettings(s: UserSettings): void {
   // the blob disables; absent key falls through to the seed (also
   // true).
   setWikiAutomaticEnabled(s.wikiAutomaticEnabled ?? true);
+  // Intents opt-in: default OFF. Only an explicit true in the blob
+  // turns the self-developing pipeline on.
+  setIntentsEnabled(s.intentsEnabled ?? false);
   setWikiRecordExtractionEnabled(s.wikiRecordExtractionEnabled ?? true);
   setWikiLibrarianEnabled(s.wikiLibrarianEnabled ?? true);
   setMemoryLibrarianEnabled(s.memoryLibrarianEnabled ?? true);

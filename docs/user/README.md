@@ -62,6 +62,9 @@ You can reach these pages two ways:
   chat: the read-only Samskara tab (browse the whole corpus, tier-1 and
   tier-2 compounds, plus a pipeline-health readout), the per-conversation
   mood pill, and the per-message "what fired this turn" dropdown.
+- [Working intentions](./intents.md) — the opt-in feature that lets Nak
+  form and pursue standing goals about how to help you grow, and decide
+  on its own when one isn't working. Off by default.
 - [Search](./search.md) — finding a thread, recipe, or wiki article
   by meaning across your history.
 - [Keyboard shortcuts](./shortcuts.md) — the keys that save you the

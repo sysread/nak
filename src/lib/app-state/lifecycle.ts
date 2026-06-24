@@ -56,6 +56,7 @@ function seedProfileDefaults(): void {
   app.emphasisMarkdown = false;
   app.notifyOnComplete = false;
   app.wikiAutomaticEnabled = true;
+  app.intentsEnabled = false;
   app.wikiLibrarianEnabled = true;
   app.memoryLibrarianEnabled = true;
   app.displayTimezone = detectTimezone();

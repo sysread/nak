@@ -31,6 +31,7 @@ export {
   persistUserName,
   persistUserLocation,
   persistWikiAutomaticEnabled,
+  persistIntentsEnabled,
   persistWikiRecordExtractionEnabled,
   persistWikiLibrarianEnabled,
   persistMemoryLibrarianEnabled,

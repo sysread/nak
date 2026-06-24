@@ -51,8 +51,13 @@ landing tab move together.
   browser's Notification permission), the **About you** profile
   fields (`userName` / `userLocation`, free-form strings injected
   into the per-turn appendix's "User profile" block - opt-in, both
-  blank skips the block), and the system-prompt library. All
-  preferences persist to `profiles.settings`.
+  blank skips the block), the **Working intentions** opt-in
+  (`profiles.settings.intentsEnabled`, default OFF - gates the whole
+  intents pipeline: minting sweep, efficacy evaluation, and the
+  `applyIntentPriming` system-prompt block; see
+  [`in-progress/intents.md`](./in-progress/intents.md)), and the
+  system-prompt library. All preferences persist to
+  `profiles.settings`.
 
   The **Models** subsection is the per-tier configuration UI: each of
   Smart/Balanced/Fast gets a fuzzy-search model combobox
