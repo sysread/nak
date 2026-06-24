@@ -665,6 +665,16 @@ new control).
 
 ## Gotchas (anticipated - fill in as built)
 
+- **The toggle gates at the claim, not just at injection.**
+  `applyIntentPriming` checks `intentsEnabled`, but that only
+  governs the chat-turn side. Minting AND the efficacy
+  evaluation that rides inside the per-user pass would otherwise
+  run for any user with a descriptive layer, writing intents to
+  the DB while the user has the feature off - violating "off =
+  inert". `intent_mint_claim_next_user` therefore joins
+  `profiles` and requires `settings->>'intentsEnabled' = 'true'`,
+  so an opted-out user is never claimed. Both gates are
+  load-bearing; removing either re-opens the leak.
 - **Engagement is not efficacy.** `user_reaction` on
   `intent_employments` is tempting to read as "is it working"
   - a receptive user feels like success. It is NOT an efficacy
@@ -702,9 +712,23 @@ new control).
 
 ## QA
 
-A `docs/qa/use-cases/` walkthrough ships with the first
-milestone (per `CLAUDE.md`): minting forms a grounded intent,
-the inspector shows it honestly, injection renders it, and the
-evaluation sweep appends a target sample without efficacy ever
-reading employment. The operational-sanity metrics above are
-its expected-results checklist.
+Two `docs/qa/use-cases/` walkthroughs cover what is built:
+
+- [`intent-mint-pipeline`](../../qa/use-cases/intent-mint-pipeline.md)
+  - the daily pass: the toggle-gated claim, efficacy
+  evaluation (target-vs-control sampling into the posterior),
+  the create/retire/dormant/revive plan, the run stamp.
+- [`intent-injection-toggle`](../../qa/use-cases/intent-injection-toggle.md)
+  - the toggle, the "Working intentions" system-prompt block
+  after the bias appendix under the shared cap, the
+  `intent_active_at_turn` snapshot.
+
+Both were authored alongside the feature but NOT yet executed -
+the cloud authoring environment has no live stack, so the
+first run is pending (the CLI session against
+`mise run dev-start`). The inspector-UI and
+employment-classification cases ship with those pieces.
+
+Writing the mint-pipeline case is what surfaced the toggle-gate
+bug (below) - the use-case's step 1 ("off -> nothing minted")
+would have failed against the pre-fix claim.

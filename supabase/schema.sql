@@ -12816,6 +12816,14 @@ language sql security definer set search_path = public as $$
         union
         select user_id from public.bias_summary
       ) u
+      -- Gate on the per-user opt-in: minting AND the efficacy
+      -- evaluation that rides inside the per-user pass run ONLY for
+      -- users who turned intents on. Off means the whole pipeline is
+      -- inert (the injection side is gated separately in
+      -- applyIntentPriming). A missing/false flag excludes the user.
+      join public.profiles p
+        on p.user_id = u.user_id
+       and p.settings->>'intentsEnabled' = 'true'
       left join public.intent_mint_runs r on r.user_id = u.user_id
      where r.user_id is null
         or (

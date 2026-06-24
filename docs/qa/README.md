@@ -80,6 +80,14 @@ One file per use-case under [`use-cases/`](./use-cases/), named
   subconscious perception / drive / synthesis pipeline, its
   trigger and cache logic on `threads.intuition_payload`, and the
   `<think>`-tagged injection ahead of the next completion.
+- [intent-mint-pipeline](./use-cases/intent-mint-pipeline.md) - the
+  daily intent pass: the toggle-gated claim, efficacy evaluation
+  (target-vs-control sampling into the posterior), the minter's
+  create/retire/dormant/revive portfolio plan, and the run stamp.
+- [intent-injection-toggle](./use-cases/intent-injection-toggle.md)
+  - the chat-turn side: the `intentsEnabled` toggle, the "Working
+  intentions" system-prompt block after the bias appendix under the
+  shared cap, and the `intent_active_at_turn` snapshot.
 - [priming-disconnect-survival](./use-cases/priming-disconnect-survival.md)
   - proves turn-entry priming runs server-side under `waitUntil`: a turn
   whose tab closes mid-priming comes back fully primed, and the spinner
