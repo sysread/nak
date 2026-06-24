@@ -47,12 +47,29 @@
    legality with retire > dormant > revive precedence,
    exact-after-normalize dedup where dormant blocks a twin but
    retired does not, active-set cap trimming low-priority
-   creates). The agent prompt + orchestration + claim RPCs that
-   produce the raw proposals are Deno and still to build.
+   creates).
+5. The minter agent core (`venice/agents/intent.ts`) - the
+   judgment-shaping system prompt, the payload builder, and the
+   response parser - pinned by a Deno suite
+   (`supabase/functions/tests/intent.test.ts`).
+6. The minting sweep orchestration (also `venice/agents/intent.ts`,
+   `runIntentMintSweep`) plus its coordination schema in
+   `supabase/schema.sql` (`intent_mint_runs` + the
+   `intent_mint_claim_next_user` / `intent_mint_finish` RPCs +
+   the daily `nak-intent-mint-sweep` cron) and its route in
+   `venice/index.ts`. Drains due users, gathers the descriptive
+   layer + portfolio, runs the minter, validates via
+   `processMintProposals`, applies the plan (create + provenance,
+   status sets), and stamps the run. Type-checked through the
+   full venice graph by `functions-check`; the DB I/O itself is
+   review-verified only (no live DB here). v1 gather feeds
+   intents+employment, samskara compound + top samskaras,
+   surfaced biases, and the user's enabled system prompts +
+   recent memories; wiki articles and per-thread summaries are a
+   deliberate follow-up.
 
-Not yet built: the minter agent itself (its prompt,
-orchestration, claim/save RPCs, and cron), the server-side
-priming orchestration that calls the renderer, the evaluation sweep,
+Not yet built: the server-side priming orchestration that
+calls the renderer, the evaluation sweep,
 the backtest harness, and the settings toggle. Nothing reads
 or writes these tables yet and the feature has zero observable
 behavior until minting + the priming orchestration land behind
@@ -377,11 +394,15 @@ compensation or the user's system prompts - that is the
 agent's job (it is handed both in its prompt); a pure function
 cannot read intent.
 
-Still to build (Deno, the product-shaping part): the minter
-agent prompt + orchestration + claim/save RPCs + the daily
-cron. Daily per-user cron, parallel to the librarian passes.
-The minter agent (fast model, like the samskara/bias agents)
-reads:
+Built (Deno): the minter agent core in
+`venice/agents/intent.ts` (prompt, payload builder, parser,
+Deno-tested) and the sweep orchestration
+(`runIntentMintSweep` + the `intent_mint_runs`
+coordination table, the claim/finish RPCs, the daily
+`nak-intent-mint-sweep` cron, and the route). The DB I/O is
+review-verified only - no live DB in this environment. Daily
+per-user cron, parallel to the librarian passes. The minter
+agent (fast model, like the samskara/bias agents) reads:
 
 - samskara compound summary + the top samskaras by health,
 - `bias_summary` (the soft+strong tier rows),

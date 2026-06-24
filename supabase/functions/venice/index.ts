@@ -55,6 +55,7 @@ import { runReflectionSweepTick } from './agents/reflection.ts';
 import { runCurationSweepTick } from './agents/curation.ts';
 import { runBiasSweepTick } from './agents/bias.ts';
 import { runSamskaraSweepTick } from './agents/samskara.ts';
+import { runIntentMintSweep } from './agents/intent.ts';
 import { runSamskaraEvaluationSweepTick } from './agents/samskara_evaluation.ts';
 import {
   runWikiLibrarianManual,
@@ -772,6 +773,10 @@ const handleReflectionSweep = sweepHandler(runReflectionSweepTick);
 const handleCurationSweep = sweepHandler(runCurationSweepTick);
 const handleBiasSweep = sweepHandler(runBiasSweepTick);
 const handleSamskaraSweep = sweepHandler(runSamskaraSweepTick);
+// Daily intent minting sweep: per-user portfolio review that forms,
+// pauses, revives, and retires the user's growth intentions from their
+// descriptive layer. See agents/intent.ts.
+const handleIntentMintSweep = sweepHandler(runIntentMintSweep);
 // Samskara evaluation sweep: the next-day retrospective judge that
 // scores each fired samskara against the conversation it fired in
 // (relevance-gated decay). Shadow mode in slice 1 - records verdicts
@@ -1219,6 +1224,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
   if (route === 'curation-sweep' && req.method === 'POST') return handleCurationSweep(req);
   if (route === 'bias-sweep' && req.method === 'POST') return handleBiasSweep(req);
   if (route === 'samskara-sweep' && req.method === 'POST') return handleSamskaraSweep(req);
+  if (route === 'intent-mint-sweep' && req.method === 'POST') return handleIntentMintSweep(req);
   if (route === 'samskara-evaluation-sweep' && req.method === 'POST') {
     return handleSamskaraEvaluationSweep(req);
   }

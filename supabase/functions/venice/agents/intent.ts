@@ -17,7 +17,15 @@
 // Minting is judgment-heavy but low-volume (once per active user per
 // day), so a small model with a careful prompt is the right tradeoff.
 
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { toolComplete } from '../tools/_venice_complete.ts';
+import { createEdgeLogger, type EdgeLogger } from '../../_shared/edge-log.ts';
+import { readVeniceKey } from '../tools/_venice_key.ts';
+import { BIAS_CATALOG, isBiasKey, type BiasKey } from '../../_shared/bias-catalog.ts';
+import {
+  processMintProposals,
+  type ExistingIntent,
+} from '../../_shared/intent-mint.ts';
 
 const INTENT_MODEL = 'mistral-small-3-2-24b-instruct';
 
@@ -214,6 +222,317 @@ export async function runMinter(
     return null;
   }
   return parseMinterResponse(raw);
+}
+
+// --- Sweep orchestration ---------------------------------------------------
+//
+// The daily cron POSTs /venice/intent-mint-sweep, which calls
+// runIntentMintSweep. It drains up to MINT_SWEEP_CAP due users per tick;
+// per user it gathers the descriptive layer + current portfolio, runs
+// the minter, validates the plan through processMintProposals, applies
+// it, and stamps the run. Best-effort by contract: nothing here may
+// throw into the sweep handler, and a per-user failure logs and yields
+// to the next user.
+
+const INTENT_MINT_CLAIM_TTL_SECONDS = 300;
+// ~daily cadence. A user minted less than this many hours ago is not
+// re-picked, so the once-a-day intent is enforced even if the cron
+// double-fires.
+const INTENT_MINT_MIN_AGE_HOURS = 20;
+// Users processed per tick. The cron runs daily, so this bounds a
+// single day's worst-case Venice spend (one completion per user); a
+// backlog larger than the cap drains across days, acceptable for the
+// least time-critical fleet in the app.
+const INTENT_MINT_SWEEP_CAP = 25;
+// How far back employment telemetry is summarized for the minter's
+// pruning decisions.
+const EMPLOYMENT_LOOKBACK_DAYS = 30;
+// Top samskaras (by health) offered as samskara-target candidates.
+const TOP_SAMSKARA_LIMIT = 12;
+const RECENT_MEMORY_LIMIT = 20;
+
+interface IntentRow {
+  id: string;
+  statement: string;
+  status: 'active' | 'dormant' | 'retired';
+  target_kind: string;
+  target_ref: string | null;
+  target_direction: string | null;
+  efficacy: number | null;
+}
+
+/**
+ * Read the user's descriptive layer + current portfolio into the
+ * minter payload, and return the existing rows the processor needs to
+ * validate the plan against. v1 feeds intents+employment, the samskara
+ * compound + top samskaras, the surfaced biases, and the user's enabled
+ * system prompts + recent memories. Wiki articles and per-thread
+ * summaries are a deliberate follow-up - left out here rather than
+ * guessed - and the minter handles their absence (empty arrays).
+ */
+async function gatherMinterInput(
+  admin: SupabaseClient,
+  userId: string,
+): Promise<{ input: MinterInput; existing: ExistingIntent[] }> {
+  const since = new Date(
+    Date.now() - EMPLOYMENT_LOOKBACK_DAYS * 24 * 60 * 60 * 1000,
+  ).toISOString();
+
+  const [intentsRes, empRes, compoundRes, samskaraRes, biasRes, profileRes, memRes] =
+    await Promise.all([
+      admin
+        .from('intents')
+        .select('id,statement,status,target_kind,target_ref,target_direction,efficacy')
+        .eq('user_id', userId)
+        .in('status', ['active', 'dormant']),
+      admin
+        .from('intent_employments')
+        .select('intent_id,opening,acted,user_reaction,created_at')
+        .eq('user_id', userId)
+        .gte('created_at', since),
+      admin
+        .from('intent_compound_summary')
+        .select('summary')
+        .eq('user_id', userId)
+        .maybeSingle(),
+      admin
+        .from('samskaras')
+        .select('id,prediction,valence,health')
+        .eq('user_id', userId)
+        .order('health', { ascending: false })
+        .limit(TOP_SAMSKARA_LIMIT),
+      admin
+        .from('bias_summary')
+        .select('bias,tier')
+        .eq('user_id', userId)
+        .in('tier', ['soft', 'strong']),
+      admin.from('profiles').select('settings').eq('user_id', userId).maybeSingle(),
+      admin
+        .from('memories')
+        .select('label,data')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(RECENT_MEMORY_LIMIT),
+    ]);
+
+  const intentRows = (intentsRes.data ?? []) as IntentRow[];
+
+  // Aggregate employment telemetry per intent: opening/acted counts and
+  // the recent reaction labels. These are what let the minter judge
+  // "the lever is not landing" vs "the pattern has gone quiet".
+  const empByIntent = new Map<
+    string,
+    { openings: number; acted: number; reactions: string[] }
+  >();
+  for (const row of (empRes.data ?? []) as Array<{
+    intent_id: string;
+    opening: boolean;
+    acted: boolean;
+    user_reaction: string | null;
+  }>) {
+    const agg = empByIntent.get(row.intent_id) ?? { openings: 0, acted: 0, reactions: [] };
+    if (row.opening) agg.openings += 1;
+    if (row.acted) agg.acted += 1;
+    if (row.user_reaction) agg.reactions.push(row.user_reaction);
+    empByIntent.set(row.intent_id, agg);
+  }
+
+  const existing: ExistingIntent[] = intentRows.map((r) => ({
+    id: r.id,
+    statement: r.statement,
+    status: r.status,
+  }));
+
+  const existingIntents: MinterIntentView[] = intentRows.map((r) => {
+    const agg = empByIntent.get(r.id) ?? { openings: 0, acted: 0, reactions: [] };
+    return {
+      id: r.id,
+      statement: r.statement,
+      status: r.status === 'dormant' ? 'dormant' : 'active',
+      target:
+        r.target_kind === 'none'
+          ? { kind: 'none', ref: null, direction: null }
+          : { kind: r.target_kind, ref: r.target_ref, direction: r.target_direction },
+      efficacy: r.efficacy,
+      openings: agg.openings,
+      acted: agg.acted,
+      reactions: agg.reactions,
+    };
+  });
+
+  const biases = ((biasRes.data ?? []) as Array<{ bias: string; tier: string }>)
+    .filter((b) => isBiasKey(b.bias))
+    .map((b) => ({
+      key: b.bias,
+      label: BIAS_CATALOG[b.bias as BiasKey].label,
+      tier: b.tier,
+    }));
+
+  // Enabled user system prompts - the explicit instructions an intent
+  // may never contradict.
+  const settings = (profileRes.data?.settings ?? {}) as {
+    systemPrompts?: Array<{ body?: unknown; enabledByDefault?: unknown }>;
+  };
+  const userSystemPrompts = Array.isArray(settings.systemPrompts)
+    ? settings.systemPrompts
+        .filter((p) => p && p.enabledByDefault === true && typeof p.body === 'string')
+        .map((p) => (p.body as string).trim())
+        .filter((b) => b.length > 0)
+    : [];
+
+  const memories = ((memRes.data ?? []) as Array<{ label: string; data: string }>).map(
+    (m) => `${m.label}: ${m.data}`,
+  );
+
+  const input: MinterInput = {
+    existingIntents,
+    samskaraSummary: (compoundRes.data?.summary as string | undefined) ?? null,
+    topSamskaras: ((samskaraRes.data ?? []) as Array<{
+      id: string;
+      prediction: string;
+      valence: number;
+      health: number;
+    }>).map((s) => ({
+      id: s.id,
+      prediction: s.prediction,
+      valence: s.valence,
+      health: s.health,
+    })),
+    biases,
+    userSystemPrompts,
+    memories,
+    wiki: [],
+    recentThreads: [],
+  };
+
+  return { input, existing };
+}
+
+/**
+ * Apply a validated plan via direct admin-client writes (the samskara
+ * mint pattern - not a single transactional RPC). The writes are
+ * individually idempotent enough that a mid-failure self-heals on the
+ * next daily run: retire/dormant/revive are status sets, and a create
+ * that landed before a crash is deduped by processMintProposals next
+ * time because it reads the existing rows first. Provenance in v1
+ * records only the target binding (kind + ref) as the formation link -
+ * richer source citation waits for the agent to return cited sources.
+ */
+async function applyMintPlan(
+  admin: SupabaseClient,
+  userId: string,
+  plan: ReturnType<typeof processMintProposals>,
+  log: EdgeLogger,
+): Promise<void> {
+  const nowIso = new Date().toISOString();
+
+  for (const intent of plan.toCreate) {
+    const { data, error } = await admin
+      .from('intents')
+      .insert({
+        user_id: userId,
+        statement: intent.statement,
+        rationale: intent.rationale,
+        status: 'active',
+        target_kind: intent.target.kind,
+        target_ref: intent.target.ref,
+        target_direction: intent.target.direction,
+        last_minted_at: nowIso,
+      })
+      .select('id')
+      .single();
+    if (error || !data) {
+      log.warn(`create failed: ${error?.message ?? 'no row returned'}`);
+      continue;
+    }
+    if (intent.target.kind !== 'none' && intent.target.ref) {
+      const { error: provErr } = await admin.from('intent_provenance').insert({
+        intent_id: data.id,
+        user_id: userId,
+        kind: intent.target.kind,
+        ref_id: intent.target.ref,
+      });
+      if (provErr) log.warn(`provenance failed: ${provErr.message}`);
+    }
+  }
+
+  const setStatus = async (ids: string[], status: 'retired' | 'dormant' | 'active') => {
+    if (ids.length === 0) return;
+    const { error } = await admin
+      .from('intents')
+      .update({ status, updated_at: nowIso })
+      .eq('user_id', userId)
+      .in('id', ids);
+    if (error) log.warn(`status->${status} failed: ${error.message}`);
+  };
+  await setStatus(plan.toRetire, 'retired');
+  await setStatus(plan.toDormant, 'dormant');
+  await setStatus(plan.toRevive, 'active');
+}
+
+/**
+ * One mint pass for a single claimed user.
+ */
+async function mintForUser(
+  admin: SupabaseClient,
+  apiKey: string,
+  userId: string,
+  log: EdgeLogger,
+): Promise<void> {
+  const { input, existing } = await gatherMinterInput(admin, userId);
+  const raw = await runMinter(apiKey, input);
+  if (!raw) {
+    log.info('minter returned no plan (completion or parse failure); skipping');
+    return;
+  }
+  const plan = processMintProposals({
+    rawCreates: raw.rawCreates,
+    rawRetires: raw.rawRetires,
+    rawDormant: raw.rawDormant,
+    rawRevive: raw.rawRevive,
+    existing,
+  });
+  if (plan.droppedForCap > 0) {
+    log.info(`dropped ${plan.droppedForCap} create(s) over the active cap`);
+  }
+  await applyMintPlan(admin, userId, plan, log);
+  log.info(
+    `minted: +${plan.toCreate.length} create, ${plan.toRetire.length} retire, ` +
+      `${plan.toDormant.length} dormant, ${plan.toRevive.length} revive`,
+  );
+}
+
+/**
+ * Cron entry: drain up to MINT_SWEEP_CAP due users. Non-throwing by
+ * contract - every per-user failure is caught and logged so one bad
+ * user never stops the drain, and the finish RPC always runs to release
+ * the claim.
+ */
+export async function runIntentMintSweep(admin: SupabaseClient): Promise<void> {
+  const apiKey = await readVeniceKey(admin);
+  if (!apiKey) return; // no Venice key configured; nothing to do
+
+  const holderId = crypto.randomUUID();
+  for (let i = 0; i < INTENT_MINT_SWEEP_CAP; i++) {
+    const { data: userId, error } = await admin.rpc('intent_mint_claim_next_user', {
+      p_holder_id: holderId,
+      p_ttl_seconds: INTENT_MINT_CLAIM_TTL_SECONDS,
+      p_min_age_hours: INTENT_MINT_MIN_AGE_HOURS,
+    });
+    if (error || !userId) break; // queue dry or claim error - stop this tick
+
+    const log = createEdgeLogger(userId as string, 'intent');
+    try {
+      await mintForUser(admin, apiKey, userId as string, log);
+    } catch (err) {
+      log.warn(`mint pass failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      await admin.rpc('intent_mint_finish', {
+        p_user_id: userId as string,
+        p_holder_id: holderId,
+      });
+    }
+  }
 }
 
 export const __test = {
