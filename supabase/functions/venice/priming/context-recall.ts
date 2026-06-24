@@ -37,7 +37,11 @@
 
 import { type SupabaseClient } from '@supabase/supabase-js';
 import { type EdgeLogger } from '../../_shared/edge-log.ts';
-import { type ContextRecallPayload } from './context-recall-payload.ts';
+import {
+  type ContextRecallPayload,
+  type ContextRecallCitation,
+} from './context-recall-payload.ts';
+import { smoothContextRecall } from './context-recall-smoothing.ts';
 import {
   padEmbeddingForStorage,
   VENICE_EMBEDDING_MODEL,
@@ -61,19 +65,23 @@ const CONTEXT_WIKI_LIMIT = 3;
 // message sits at the end and carries the strongest topic signal.
 const MAX_RECALL_QUERY_CHARS = 4000;
 
-interface ContextIndexMemory {
+export interface ContextIndexMemory {
   id: string;
   label: string;
   data: string;
   confidence_tag: string | null;
+  // Real recorded date (ISO timestamptz). The smoothing pass anchors
+  // the recollection on this instead of any stale "(this session)"
+  // framing baked into the memory body.
+  created_at: string;
 }
 
-interface ContextIndexRef {
+export interface ContextIndexRef {
   id: string;
   title: string;
 }
 
-interface ContextIndex {
+export interface ContextIndex {
   memories: ContextIndexMemory[];
   conversations: ContextIndexRef[];
   wiki: ContextIndexRef[];
@@ -84,6 +92,7 @@ interface MemoryRow {
   label: string;
   data: string;
   confidence: number | null;
+  created_at: string;
 }
 
 interface ThreadHit {
@@ -143,11 +152,43 @@ export async function runContextRecallPipeline(
 
   if (signal?.aborted) return null;
 
-  const note = renderContextThink(index);
+  // Recall-time narrative smoothing: compress the gathered index into a
+  // first-person, past-anchored, relevance-bridged recollection with
+  // `^N^` citations. Skip the model call when the gather found nothing -
+  // an all-empty index is a valid cached negative the trigger debounce
+  // relies on, and there is nothing to smooth.
+  let note = '';
+  let citations: ContextRecallCitation[] = [];
+  const hasHits =
+    index.memories.length > 0 ||
+    index.conversations.length > 0 ||
+    index.wiki.length > 0;
+  if (hasHits) {
+    try {
+      const smoothed = await smoothContextRecall({
+        index,
+        recentExchange: deriveRecallQuery(opts.history),
+        apiKey: opts.apiKey,
+        log,
+      });
+      note = smoothed.note;
+      citations = smoothed.citations;
+    } catch (err) {
+      // Smoothing is the only place a raw, un-laundered block could
+      // leak onto the wire. On failure, inject nothing this round rather
+      // than the raw index: return null and the caller leaves the prior
+      // cache in place. Same posture as a gather failure above.
+      log.warn('context-recall smoothing failed; skipping recall this round', err);
+      return null;
+    }
+  }
+
+  if (signal?.aborted) return null;
 
   const payload: ContextRecallPayload = {
-    v: 1,
+    v: 2,
     note,
+    citations,
     computed_at_round: round,
     computed_at_band: mood?.band ?? null,
     computed_at_column: mood?.column ?? null,
@@ -163,6 +204,7 @@ export async function runContextRecallPipeline(
     memoryCount: index.memories.length,
     conversationCount: index.conversations.length,
     wikiCount: index.wiki.length,
+    citationCount: citations.length,
     noteLength: note.length,
     elapsedMs: Date.now() - startedAt,
   });
@@ -308,6 +350,7 @@ async function gatherMemories(
     label: m.label,
     data: m.data,
     confidence_tag: classifyMemoryConfidence(m.confidence),
+    created_at: m.created_at,
   }));
 }
 
@@ -320,7 +363,7 @@ async function ilikeMemories(
   const pattern = `%${query.replace(/[\\%_]/g, (m) => `\\${m}`)}%`;
   const { data, error } = await opts.admin
     .from('memories')
-    .select('id, label, data, confidence')
+    .select('id, label, data, confidence, created_at')
     .eq('user_id', opts.userId)
     .or(`label.ilike.${pattern},data.ilike.${pattern}`)
     .order('updated_at', { ascending: false })
@@ -454,58 +497,3 @@ async function listSourceThreadIdsForArticles(
   return out;
 }
 
-/**
- * Render the index into the body of the synthetic `<think>` turn. Returns
- * the inner text only - the orchestrator wraps it in `<think>` tags and
- * the marker comment via buildContextRecallThinkMessage. An all-empty
- * index renders to the empty string, which the caller caches as the
- * negative result and skips injecting.
- *
- * Voice: first person, framed as the assistant's own recollection plus an
- * offer to look up the referenced items. Memory facts are verbatim; the
- * conversation and wiki sections name the drill-down tool so the model
- * knows the ids are actionable.
- */
-function renderContextThink(index: ContextIndex): string {
-  const sections: string[] = [];
-
-  if (index.memories.length > 0) {
-    const lines = index.memories.map(renderMemoryLine).join('\n');
-    sections.push(`I recall some related things about this topic:\n\n${lines}`);
-  }
-
-  if (index.conversations.length > 0) {
-    const bullets = index.conversations
-      .map((c) => `- ${c.title} (id: ${c.id})`)
-      .join('\n');
-    sections.push(
-      'We have talked about related topics before. I can call ' +
-        'conversation_get with one of these ids to pull up what was ' +
-        `said if it would help:\n${bullets}`,
-    );
-  }
-
-  if (index.wiki.length > 0) {
-    const bullets = index.wiki
-      .map((w) => `- ${w.title} (id: ${w.id})`)
-      .join('\n');
-    sections.push(
-      'We have documented some possibly-related information in the ' +
-        'wiki. I can call wiki_get with one of these ids to read the ' +
-        `full article if it would help:\n${bullets}`,
-    );
-  }
-
-  return sections.join('\n\n');
-}
-
-function renderMemoryLine(m: ContextIndexMemory): string {
-  // Flag a low-confidence recollection inline so the model can hedge or
-  // verify rather than asserting it. Corroborated / unset tags read as
-  // plain facts and need no annotation.
-  const hedge =
-    m.confidence_tag === 'hedged' || m.confidence_tag === 'shaky'
-      ? ` (${m.confidence_tag} recollection)`
-      : '';
-  return `- ${m.data}${hedge}`;
-}

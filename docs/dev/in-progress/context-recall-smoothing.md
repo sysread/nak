@@ -1,9 +1,10 @@
 # Context recall: narrative smoothing + citations (in progress)
 
-Status: design agreed, not yet built. This doc is the milestone
-tracker; when a milestone ships, graduate its durable design into
+Status: **M1 landed** (smoothing pass + payload shape); M2-M4 open.
+This doc is the milestone tracker; when the work is complete, graduate
+its durable design into
 [`../context-recall.md`](../context-recall.md) / [`../memory.md`](../memory.md)
-and trim it here (see the root `CLAUDE.md` on retiring in-progress docs).
+and retire it (see the root `CLAUDE.md` on retiring in-progress docs).
 
 ## The problem
 
@@ -116,7 +117,7 @@ UI.
 2. **Smoothing pass** (new) - replaces `renderContextThink`. One
    `deepseek-v4-flash` completion (already `REFLECTION_MODEL`;
    `disableThinking: true`, like `web_search`), reads the gathered index
-   + recent turns + per-memory real timestamps, returns
+   plus recent turns and per-memory real timestamps, returning
    `{ note, citations }`: the note carries inline `^N^` markers, the
    citation array resolves them. Runs only when recall actually fires
    (the existing trigger cadence), so cost is bounded - not per turn.
@@ -140,11 +141,13 @@ UI.
 
 ## Build order
 
-- **M1 - symptom fix.** Smoothing pass + payload shape (note +
-  citations) + gather carrying memory id/created_at + wiring through
-  `runServerPriming`. Ships the de-poisoned, compressed,
-  relevance-bridged `<think>` block. Citation *markers* land here; the
-  citation list is persisted but need not be drill-down-actionable yet.
+- **M1 - symptom fix. [LANDED]** Smoothing pass
+  (`context-recall-smoothing.ts`, `deepseek-v4-flash`, thinking off)
+  replaces `renderContextThink`; payload bumped to `v: 2` with a
+  `citations[]` field (both runtime mirrors); the memory gather threads
+  `created_at` through for temporal anchoring. Smoothing failure returns
+  null (inject nothing) rather than leak the raw block. The citation
+  markers and persisted citation list land here; drill-down + UI are M2.
   This alone fixes the reported bug.
 - **M2 - citations end-to-end.** `memory_get` tool + `CitationsPanel`
   generalization + the `Citation` type's `kind` discriminator + the
