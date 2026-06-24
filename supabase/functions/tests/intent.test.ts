@@ -13,6 +13,8 @@ const {
   buildMinterPayload,
   parseMinterResponse,
   stripJsonFence,
+  biasTargetMetric,
+  samskaraTargetMetric,
 } = __test;
 
 // --- Prompt contract -------------------------------------------------------
@@ -128,4 +130,57 @@ Deno.test('parseMinterResponse coerces a non-array key to an empty array', () =>
   const out = parseMinterResponse('{"create":"oops","retire":["a"]}')!;
   assertEquals(out.rawCreates, []);
   assertEquals(out.rawRetires, ['a']);
+});
+
+// --- Target-metric / matched-control helpers -------------------------------
+
+Deno.test('biasTargetMetric: control excludes other targeted biases', () => {
+  const rows = [
+    { bias: 'confirmation_bias', posterior_mean: 0.3 }, // the target
+    { bias: 'anchoring', posterior_mean: 0.5 }, // untargeted -> control
+    { bias: 'sunk_cost', posterior_mean: 0.7 }, // also targeted -> excluded
+  ];
+  const targeted = new Set(['confirmation_bias', 'sunk_cost']);
+  const m = biasTargetMetric('confirmation_bias', rows, targeted)!;
+  assertEquals(m.target, 0.3);
+  assertEquals(m.control, 0.5); // only anchoring counts toward the control
+});
+
+Deno.test('biasTargetMetric: null when the target bias has no summary row', () => {
+  assertEquals(biasTargetMetric('missing', [{ bias: 'x', posterior_mean: 0.4 }], new Set()), null);
+});
+
+Deno.test('biasTargetMetric: null control when no untargeted biases exist', () => {
+  const rows = [{ bias: 'a', posterior_mean: 0.3 }];
+  const m = biasTargetMetric('a', rows, new Set(['a']))!;
+  assertEquals(m.control, null);
+});
+
+Deno.test('samskaraTargetMetric: control is same-valence-sign untargeted samskaras, zeros included', () => {
+  const valence = new Map([
+    ['t', -0.5], // target (negative)
+    ['c1', -0.3], // negative, untargeted -> control (fired 2x)
+    ['c2', -0.1], // negative, untargeted -> control (never fired -> 0)
+    ['p', 0.4], // positive -> excluded by sign
+    ['x', -0.2], // negative but targeted -> excluded
+  ]);
+  const fires = new Map([
+    ['t', 5],
+    ['c1', 2],
+  ]);
+  const targeted = new Set(['t', 'x']);
+  const m = samskaraTargetMetric('t', valence, fires, targeted)!;
+  assertEquals(m.target, 5);
+  assertEquals(m.control, 1); // mean of [2, 0]
+});
+
+Deno.test('samskaraTargetMetric: target with no fires reads as zero, not null', () => {
+  const valence = new Map([['t', -0.4], ['c', -0.2]]);
+  const m = samskaraTargetMetric('t', valence, new Map([['c', 3]]), new Set(['t']))!;
+  assertEquals(m.target, 0);
+  assertEquals(m.control, 3);
+});
+
+Deno.test('samskaraTargetMetric: null when the target samskara is gone', () => {
+  assertEquals(samskaraTargetMetric('gone', new Map([['x', -0.1]]), new Map(), new Set()), null);
 });

@@ -27,6 +27,7 @@ import {
   populationP0,
   pearson,
   matchedControlLift,
+  stepEfficacy,
   EFFICACY_DEFAULT_P0,
   EFFICACY_SOFT_MISS_WEIGHT,
   type EfficacyEvidence,
@@ -224,6 +225,57 @@ describe('pearson - the efficacy/employment firewall check', () => {
     expect(pearson([], [])).toBe(0);
     expect(pearson([1], [1])).toBe(0);
     expect(pearson([2, 2, 2], [1, 2, 3])).toBe(0); // zero variance in xs
+  });
+});
+
+describe('stepEfficacy - the per-cycle evaluation step', () => {
+  const zero: EfficacyEvidence = { confirmCount: 0, disconfirmCount: 0 };
+
+  it('establishes a baseline on the first sample: no verdict, efficacy stays null', () => {
+    const out = stepEfficacy({
+      direction: 'reduce',
+      prev: null,
+      curr: { target: 0.5, control: 0.5 },
+      evidence: zero,
+    });
+    expect(out.verdict).toBeNull();
+    expect(out.efficacy).toBeNull();
+    expect(out.evidence).toEqual(zero);
+  });
+
+  it('scores a real improvement over control as a confirm and lifts efficacy', () => {
+    const out = stepEfficacy({
+      direction: 'reduce',
+      prev: { target: 0.5, control: 0.5 },
+      curr: { target: 0.3, control: 0.48 }, // target fell far more than control
+      evidence: zero,
+      p0: 0.5,
+    });
+    expect(out.verdict).toBe('confirm');
+    expect(out.efficacy!).toBeGreaterThan(0.5);
+  });
+
+  it('scores a self-reverting spike (target and control fall together) as a soft miss', () => {
+    const out = stepEfficacy({
+      direction: 'reduce',
+      prev: { target: 0.6, control: 0.6 },
+      curr: { target: 0.4, control: 0.4 },
+      evidence: zero,
+      p0: 0.5,
+    });
+    expect(out.verdict).toBe('soft-miss');
+    expect(out.efficacy!).toBeLessThan(0.5);
+  });
+
+  it('handles a null control by falling back to absolute movement', () => {
+    const out = stepEfficacy({
+      direction: 'reduce',
+      prev: { target: 0.5, control: null },
+      curr: { target: 0.3, control: null },
+      evidence: zero,
+      p0: 0.5,
+    });
+    expect(out.verdict).toBe('confirm');
   });
 });
 

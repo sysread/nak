@@ -67,13 +67,26 @@
    surfaced biases, and the user's enabled system prompts +
    recent memories; wiki articles and per-thread summaries are a
    deliberate follow-up.
+7. Efficacy evaluation, folded into the same daily per-user pass
+   (`evaluateTargetedIntents` in `venice/agents/intent.ts`, run
+   FIRST so the minter prunes on fresh scores). For each targeted
+   active intent it reads the current descriptive-layer metric +
+   a matched control, appends an `intent_target_samples` row, and
+   folds the movement-vs-control into the efficacy posterior via
+   `stepEfficacy`. The control-cohort logic (`biasTargetMetric` /
+   `samskaraTargetMetric`) is pure and Deno-tested; the math step
+   is vitest-tested. Per-intent sampling is gated to
+   `SAMPLE_INTERVAL_DAYS` (weekly) because bias posteriors move
+   too slowly for daily deltas to clear the deadband. This is the
+   only writer of `intents.efficacy`.
 
 Not yet built: the server-side priming orchestration that
-calls the renderer, the evaluation sweep,
-the backtest harness, and the settings toggle. Nothing reads
-or writes these tables yet and the feature has zero observable
-behavior until minting + the priming orchestration land behind
-the toggle. Sections still marked "(proposed)" describe the
+calls the renderer, the employment-classification half of
+evaluation (it needs a per-thread active-intent snapshot that
+only exists once priming writes it), the backtest harness, and
+the settings toggle. The feature has zero observable behavior
+until the priming orchestration lands behind the toggle.
+Sections still marked "(proposed)" describe the
 consuming pipelines, not the parts above.
 
 Intents are the first layer in nak that is **normative**

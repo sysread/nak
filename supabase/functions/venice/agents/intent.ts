@@ -26,6 +26,12 @@ import {
   processMintProposals,
   type ExistingIntent,
 } from '../../_shared/intent-mint.ts';
+import {
+  stepEfficacy,
+  populationP0,
+  type EfficacyEvidence,
+  type TargetDirection,
+} from '../../_shared/intent-math.ts';
 
 const INTENT_MODEL = 'mistral-small-3-2-24b-instruct';
 
@@ -250,6 +256,210 @@ const EMPLOYMENT_LOOKBACK_DAYS = 30;
 // Top samskaras (by health) offered as samskara-target candidates.
 const TOP_SAMSKARA_LIMIT = 12;
 const RECENT_MEMORY_LIMIT = 20;
+// How often a targeted intent is re-sampled and re-scored. Daily would
+// be too fast: bias posteriors decay on a 60-day half-life, so day-to-
+// day movement is within the deadband and every sample would read as a
+// soft miss even while the bias genuinely declines over weeks. Weekly
+// spacing gives the metric room to move measurably between samples.
+const SAMPLE_INTERVAL_DAYS = 7;
+// Trailing window for a samskara target's fire-frequency metric: how
+// many recent days of fires count as "the pattern is showing up".
+const FIRE_WINDOW_DAYS = 14;
+
+interface BiasSummaryMetricRow {
+  bias: string;
+  posterior_mean: number;
+}
+
+/**
+ * Current bias-target metric + matched control. Target value is the
+ * bias's posterior mean; the control is the mean posterior across the
+ * user's OTHER biases that are NOT themselves the target of an active
+ * intent - the untreated cohort. A target that declines faster than
+ * that cohort is real movement, not the whole population drifting.
+ * Returns null when the target bias has no summary row (nothing to
+ * sample yet).
+ */
+export function biasTargetMetric(
+  ref: string,
+  rows: readonly BiasSummaryMetricRow[],
+  targetedRefs: ReadonlySet<string>,
+): { target: number; control: number | null } | null {
+  const targetRow = rows.find((r) => r.bias === ref);
+  if (!targetRow) return null;
+  const controls = rows.filter((r) => !targetedRefs.has(r.bias)).map((r) => r.posterior_mean);
+  const control = controls.length
+    ? controls.reduce((a, b) => a + b, 0) / controls.length
+    : null;
+  return { target: targetRow.posterior_mean, control };
+}
+
+/**
+ * Current samskara-target metric + matched control. Target value is the
+ * windowed FIRE COUNT of the targeted prediction (how often the pattern
+ * showed up lately) - NOT its health, because a reduce-intent that
+ * works makes the pattern rarer, not less predictable. The control is
+ * the mean windowed fire count across other untargeted samskaras of the
+ * SAME valence sign (a negative pattern is compared against other
+ * negative patterns), counting non-firing ones as zero. Returns null
+ * when the target samskara no longer exists.
+ */
+export function samskaraTargetMetric(
+  ref: string,
+  valence: ReadonlyMap<string, number>,
+  fireCounts: ReadonlyMap<string, number>,
+  targetedRefs: ReadonlySet<string>,
+): { target: number; control: number | null } | null {
+  if (!valence.has(ref)) return null;
+  const targetSign = Math.sign(valence.get(ref) as number);
+  const controls: number[] = [];
+  for (const [id, v] of valence) {
+    if (id === ref || targetedRefs.has(id)) continue;
+    if (Math.sign(v) !== targetSign) continue;
+    controls.push(fireCounts.get(id) ?? 0);
+  }
+  const control = controls.length
+    ? controls.reduce((a, b) => a + b, 0) / controls.length
+    : null;
+  return { target: fireCounts.get(ref) ?? 0, control };
+}
+
+function ageDays(iso: string): number {
+  return (Date.now() - Date.parse(iso)) / 86_400_000;
+}
+
+interface TargetedIntentRow {
+  id: string;
+  target_kind: string;
+  target_ref: string | null;
+  target_direction: string | null;
+  efficacy: number | null;
+  confirm_count: number;
+  disconfirm_count: number;
+}
+
+/**
+ * Sample each targeted active intent's descriptive-layer metric, append
+ * an intent_target_samples row, and fold the movement-vs-control into
+ * the efficacy posterior. Runs at the START of a user's daily pass so
+ * the minter then sees fresh efficacy. Per-intent cadence is gated to
+ * SAMPLE_INTERVAL_DAYS (the bias posterior moves too slowly for daily
+ * deltas to mean anything). The honest-loop core: this is the only
+ * writer of intents.efficacy, and it reads only descriptive-layer
+ * signals the intent layer does not produce.
+ */
+async function evaluateTargetedIntents(
+  admin: SupabaseClient,
+  userId: string,
+  log: EdgeLogger,
+): Promise<void> {
+  const { data: intentsData } = await admin
+    .from('intents')
+    .select('id,target_kind,target_ref,target_direction,efficacy,confirm_count,disconfirm_count')
+    .eq('user_id', userId)
+    .eq('status', 'active')
+    .in('target_kind', ['bias', 'samskara']);
+  const intents = (intentsData ?? []) as TargetedIntentRow[];
+  if (intents.length === 0) return;
+
+  const p0 = populationP0(
+    intents.map((i) => ({ confirmCount: i.confirm_count, disconfirmCount: i.disconfirm_count })),
+  );
+
+  const targetedBiasRefs = new Set(
+    intents.filter((i) => i.target_kind === 'bias' && i.target_ref).map((i) => i.target_ref as string),
+  );
+  const targetedSamskaraRefs = new Set(
+    intents.filter((i) => i.target_kind === 'samskara' && i.target_ref).map((i) => i.target_ref as string),
+  );
+
+  // Preload the metric sources once per user.
+  let biasRows: BiasSummaryMetricRow[] = [];
+  if (targetedBiasRefs.size > 0) {
+    const { data } = await admin
+      .from('bias_summary')
+      .select('bias,posterior_mean')
+      .eq('user_id', userId);
+    biasRows = (data ?? []) as BiasSummaryMetricRow[];
+  }
+  const valence = new Map<string, number>();
+  const fireCounts = new Map<string, number>();
+  if (targetedSamskaraRefs.size > 0) {
+    const { data: sams } = await admin
+      .from('samskaras')
+      .select('id,valence')
+      .eq('user_id', userId);
+    for (const s of (sams ?? []) as Array<{ id: string; valence: number }>) {
+      valence.set(s.id, s.valence ?? 0);
+    }
+    const since = new Date(Date.now() - FIRE_WINDOW_DAYS * 86_400_000).toISOString();
+    const { data: fires } = await admin
+      .from('samskara_fires')
+      .select('samskara_id')
+      .eq('user_id', userId)
+      .gte('fired_at', since);
+    for (const f of (fires ?? []) as Array<{ samskara_id: string }>) {
+      fireCounts.set(f.samskara_id, (fireCounts.get(f.samskara_id) ?? 0) + 1);
+    }
+  }
+
+  for (const intent of intents) {
+    if (!intent.target_ref) continue;
+
+    // Cadence gate: skip if sampled within the interval.
+    const { data: last } = await admin
+      .from('intent_target_samples')
+      .select('target_value,control_value,sampled_at')
+      .eq('intent_id', intent.id)
+      .order('sampled_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (last && ageDays(last.sampled_at as string) < SAMPLE_INTERVAL_DAYS) continue;
+
+    const metric =
+      intent.target_kind === 'bias'
+        ? biasTargetMetric(intent.target_ref, biasRows, targetedBiasRefs)
+        : samskaraTargetMetric(intent.target_ref, valence, fireCounts, targetedSamskaraRefs);
+    if (!metric) continue; // target metric unavailable (row/samskara gone)
+
+    const { error: insErr } = await admin.from('intent_target_samples').insert({
+      user_id: userId,
+      intent_id: intent.id,
+      target_value: metric.target,
+      control_value: metric.control,
+    });
+    if (insErr) {
+      log.warn(`target sample insert failed: ${insErr.message}`);
+      continue;
+    }
+
+    const prev = last
+      ? { target: last.target_value as number, control: (last.control_value as number | null) ?? null }
+      : null;
+    const step = stepEfficacy({
+      direction: (intent.target_direction as TargetDirection) ?? 'reduce',
+      prev,
+      curr: metric,
+      evidence: {
+        confirmCount: intent.confirm_count,
+        disconfirmCount: intent.disconfirm_count,
+      } as EfficacyEvidence,
+      p0,
+    });
+    if (step.efficacy !== null) {
+      const { error: updErr } = await admin
+        .from('intents')
+        .update({
+          efficacy: step.efficacy,
+          confirm_count: step.evidence.confirmCount,
+          disconfirm_count: step.evidence.disconfirmCount,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', intent.id);
+      if (updErr) log.warn(`efficacy update failed: ${updErr.message}`);
+    }
+  }
+}
 
 interface IntentRow {
   id: string;
@@ -479,6 +689,10 @@ async function mintForUser(
   userId: string,
   log: EdgeLogger,
 ): Promise<void> {
+  // Update efficacy from descriptive-layer movement FIRST, so the
+  // minter's pruning sees fresh scores when it decides what to retire.
+  await evaluateTargetedIntents(admin, userId, log);
+
   const { input, existing } = await gatherMinterInput(admin, userId);
   const raw = await runMinter(apiKey, input);
   if (!raw) {
@@ -542,4 +756,6 @@ export const __test = {
   buildMinterPayload,
   parseMinterResponse,
   stripJsonFence,
+  biasTargetMetric,
+  samskaraTargetMetric,
 };

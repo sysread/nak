@@ -225,6 +225,49 @@ export function populationP0(
   return confirm / total;
 }
 
+/**
+ * One efficacy evaluation step for a targeted intent, composing
+ * classifySample + updateEfficacy with the baseline/first-sample
+ * handling. The evaluation sweep gathers the current target + control
+ * metric and the most recent prior sample, and calls this.
+ *
+ * The FIRST sample for an intent has no prior to diff against, so it
+ * establishes a baseline only: no verdict, efficacy stays null (the
+ * intent is targeted but not yet scored). Every subsequent sample diffs
+ * against the prior one - the per-cycle differential - and folds the
+ * verdict into the posterior.
+ *
+ * `prev` is the prior sample's (target, control); null on the first
+ * sample. `evidence` is the intent's running tally (zero on first
+ * verdict). Returns the verdict (null on baseline), the new efficacy
+ * (null on baseline - leave the row's efficacy untouched), and the new
+ * evidence to persist.
+ */
+export function stepEfficacy(args: {
+  direction: TargetDirection;
+  prev: { target: number; control: number | null } | null;
+  curr: { target: number; control: number | null };
+  evidence: EfficacyEvidence;
+  p0?: number;
+  deadband?: number;
+}): { verdict: IntentVerdict | null; efficacy: number | null; evidence: EfficacyEvidence } {
+  if (!args.prev) {
+    // Baseline sample: record it (the caller inserts the row) but do
+    // not score - there is nothing to diff against yet.
+    return { verdict: null, efficacy: null, evidence: args.evidence };
+  }
+  const verdict = classifySample({
+    direction: args.direction,
+    prev: args.prev.target,
+    curr: args.curr.target,
+    controlPrev: args.prev.control,
+    controlCurr: args.curr.control,
+    deadband: args.deadband,
+  });
+  const { evidence, efficacy } = updateEfficacy(args.evidence, verdict, { p0: args.p0 });
+  return { verdict, efficacy, evidence };
+}
+
 // --- Backtest metrics ------------------------------------------------------
 //
 // These are the pure kernels behind the Evaluation plan's two
