@@ -56,10 +56,29 @@ export interface ExistingIntent {
   status: 'active' | 'dormant' | 'retired';
 }
 
-/** The deterministic plan the sweep applies after processing. */
+/**
+ * The deterministic plan the sweep applies after processing. The four
+ * verbs are the minter's portfolio vocabulary - the machinery of
+ * "changing its mind" rather than only ever accumulating:
+ *
+ *   - toCreate  - pursue a new intent.
+ *   - toRetire  - abandon one for good (tombstoned; its statement is
+ *     free to re-form later if the pattern strongly returns).
+ *   - toDormant - pause an active intent whose lever is not landing or
+ *     whose pattern has gone quiet. It stays in the table (so dedup
+ *     blocks re-minting a twin - the decision sticks) but stops
+ *     rendering. This is what prevents the minter from re-proposing the
+ *     same goal every single day; pausing is a real decision, not a
+ *     deletion.
+ *   - toRevive  - resume a dormant intent (the pattern came back, or
+ *     the minter wants to retry it, possibly alongside a re-framed
+ *     create).
+ */
 export interface MintPlan {
   toCreate: ProposedIntent[];
   toRetire: string[];
+  toDormant: string[];
+  toRevive: string[];
 }
 
 /**
@@ -143,20 +162,27 @@ export function coerceProposedIntent(raw: unknown): ProposedIntent | null {
 /**
  * Turn raw minter output into a deterministic MintPlan. The pipeline:
  *
- *   1. Coerce + structurally validate each proposed create; drop the
+ *   1. Resolve the status-change verbs (retire / dormant / revive)
+ *      against the existing rows, validating each against the status
+ *      it is legal from and assigning each id to at most one verb. A
+ *      single id named by several verbs resolves by precedence
+ *      retire > dormant > revive (the more final decision wins), so a
+ *      contradictory batch can never half-apply.
+ *   2. Coerce + structurally validate each proposed create; drop the
  *      invalid ones.
- *   2. Validate retires: each must name a real existing intent id;
- *      unknown ids are dropped (the agent hallucinated or raced a
- *      delete).
- *   3. Dedup creates against (a) existing NON-retired intents and (b)
- *      earlier creates in the same batch, by normalized statement.
+ *   3. Dedup creates against (a) every existing intent that is NOT
+ *      retired in the resulting state and (b) earlier creates in the
+ *      same batch, by normalized statement. A dormant intent still
+ *      blocks a twin - pausing is not a deletion - while a retired
+ *      one's statement is free to re-form.
  *   4. Enforce the active-set cap. The resulting active count is
- *      (existing active not being retired) + surviving creates. When
- *      that exceeds `cap`, creates are trimmed from the END - the
- *      agent emits its proposals in priority order, so the lowest-
- *      priority new intents are the ones dropped, never an existing
- *      one. A cap overflow is reported via `droppedForCap` so the
- *      sweep can log it rather than silently swallowing work.
+ *      (existing intents whose final status is active) + surviving
+ *      creates; dormant and retired do not count, so pausing an intent
+ *      frees a slot. When the total exceeds `cap`, creates are trimmed
+ *      from the END - the agent emits proposals in priority order, so
+ *      the lowest-priority new intents drop, never an existing one. A
+ *      cap overflow is reported via `droppedForCap` so the sweep can
+ *      log it rather than silently swallowing work.
  *
  * Cap is a parameter (defaults to ACTIVE_INTENT_CAP) so tests can pin
  * the trim behavior at small sizes.
@@ -164,50 +190,74 @@ export function coerceProposedIntent(raw: unknown): ProposedIntent | null {
 export function processMintProposals(args: {
   rawCreates: readonly unknown[];
   rawRetires: readonly unknown[];
+  rawDormant?: readonly unknown[];
+  rawRevive?: readonly unknown[];
   existing: readonly ExistingIntent[];
   cap?: number;
 }): MintPlan & { droppedForCap: number } {
   const cap = args.cap ?? ACTIVE_INTENT_CAP;
+  const byId = new Map(args.existing.map((e) => [e.id, e]));
 
-  // (2) Validate retires against the existing id set.
-  const existingIds = new Set(args.existing.map((e) => e.id));
-  const toRetire: string[] = [];
-  const retireSet = new Set<string>();
-  for (const raw of args.rawRetires) {
-    if (typeof raw === 'string' && existingIds.has(raw) && !retireSet.has(raw)) {
-      retireSet.add(raw);
-      toRetire.push(raw);
+  // (1) Resolve status-change verbs. `claimed` enforces one verb per
+  // id; precedence is the iteration order below (retire, then dormant,
+  // then revive). Each verb validates the status it is legal from:
+  // retire from active|dormant, dormant from active, revive from
+  // dormant. An id that fails its legality check is simply dropped.
+  const claimed = new Set<string>();
+  const collect = (
+    raws: readonly unknown[] | undefined,
+    legalFrom: (s: ExistingIntent['status']) => boolean,
+  ): string[] => {
+    const out: string[] = [];
+    for (const raw of raws ?? []) {
+      if (typeof raw !== 'string' || claimed.has(raw)) continue;
+      const row = byId.get(raw);
+      if (!row || !legalFrom(row.status)) continue;
+      claimed.add(raw);
+      out.push(raw);
     }
-  }
+    return out;
+  };
+  const toRetire = collect(args.rawRetires, (s) => s === 'active' || s === 'dormant');
+  const toDormant = collect(args.rawDormant, (s) => s === 'active');
+  const toRevive = collect(args.rawRevive, (s) => s === 'dormant');
 
-  // (3) Build the dedup set: normalized statements of existing intents
-  // that are NOT retired (a retired intent's statement is free to be
-  // re-minted - the user's pattern came back).
+  const retireSet = new Set(toRetire);
+  const dormantSet = new Set(toDormant);
+  const reviveSet = new Set(toRevive);
+
+  // Final status of an existing intent after the plan applies.
+  const finalStatus = (e: ExistingIntent): ExistingIntent['status'] => {
+    if (retireSet.has(e.id)) return 'retired';
+    if (dormantSet.has(e.id)) return 'dormant';
+    if (reviveSet.has(e.id)) return 'active';
+    return e.status;
+  };
+
+  // (3) Dedup set: normalized statements of every intent that ends up
+  // non-retired. Dormant counts (a paused intent blocks its twin);
+  // retired does not (its pattern is free to re-form).
   const seen = new Set<string>();
   for (const e of args.existing) {
-    if (e.status !== 'retired' && !retireSet.has(e.id)) {
-      seen.add(normalizeStatement(e.statement));
-    }
+    if (finalStatus(e) !== 'retired') seen.add(normalizeStatement(e.statement));
   }
 
+  // (2) + (3) coerce and dedup creates.
   const coerced: ProposedIntent[] = [];
   for (const raw of args.rawCreates) {
     const intent = coerceProposedIntent(raw);
     if (!intent) continue;
     const key = normalizeStatement(intent.statement);
-    if (seen.has(key)) continue; // dup of an existing or earlier-in-batch
+    if (seen.has(key)) continue; // dup of a surviving existing or earlier create
     seen.add(key);
     coerced.push(intent);
   }
 
-  // (4) Cap. Active after the plan = (existing active, minus retired) +
-  // creates. Trim creates from the end if over.
-  const survivingActive = args.existing.filter(
-    (e) => e.status === 'active' && !retireSet.has(e.id),
-  ).length;
+  // (4) Cap on the resulting active set.
+  const survivingActive = args.existing.filter((e) => finalStatus(e) === 'active').length;
   const room = Math.max(0, cap - survivingActive);
   const toCreate = coerced.slice(0, room);
   const droppedForCap = coerced.length - toCreate.length;
 
-  return { toCreate, toRetire, droppedForCap };
+  return { toCreate, toRetire, toDormant, toRevive, droppedForCap };
 }

@@ -39,13 +39,16 @@
 4. The pure minting proposal processor
    (`supabase/functions/_shared/intent-mint.ts`) - the trusted
    boundary that coerces, validates, dedups, and caps the
-   minter agent's raw create/retire proposals into a
-   deterministic `MintPlan` - plus full vitest coverage
+   minter agent's raw proposals into a deterministic `MintPlan`
+   across the four portfolio verbs (create / retire / dormant /
+   revive) - plus full vitest coverage
    (`tests/intent-mint.test.ts`). Enforces the mechanical
-   invariants (coherent target bindings, exact-after-normalize
-   dedup, active-set cap trimming low-priority creates). The
-   agent prompt + orchestration + claim RPCs that produce the
-   raw proposals are Deno and still to build.
+   invariants (coherent target bindings, status-transition
+   legality with retire > dormant > revive precedence,
+   exact-after-normalize dedup where dormant blocks a twin but
+   retired does not, active-set cap trimming low-priority
+   creates). The agent prompt + orchestration + claim RPCs that
+   produce the raw proposals are Deno and still to build.
 
 Not yet built: the minter agent itself (its prompt,
 orchestration, claim/save RPCs, and cron), the server-side
@@ -111,6 +114,32 @@ builds on.
    AI-pane (or its own pane) toggle persisted to
    `profiles.settings`. When off: no minting, no injection, no
    evaluation - the whole pipeline is inert. See **Settings**.
+
+5. **No topic restriction on what an intent may target.** The
+   minter may form intents about anything the descriptive layer
+   surfaces, including emotionally sensitive / shadow-work
+   material (self-worth, grief, relationships). The alternative
+   - fencing the minter to lighter cognitive/behavioral ground
+   until the loop is proven - was considered and declined; the
+   original "help the user navigate growth and shadow work"
+   vision is the point. The brakes that contain this are
+   subject-agnostic (visibility, dispositional framing, the
+   user-instruction precedence, the honest loop), so they hold
+   regardless of topic. "Never clinical, never diagnostic,
+   supportive-dispositional" stays as prompt hygiene, not as a
+   topic gate.
+
+6. **Free will means the ability to abandon.** The minter is
+   not append-only with a hard cap (that is hoarding until
+   full). It actively reconsiders: an intent whose lever is not
+   landing or whose pattern has gone quiet is *paused*
+   (dormant), one that is genuinely done is *retired*, one
+   worth retrying is *revived* - possibly re-framed. The four
+   verbs (create / retire / dormant / revive) are the portfolio
+   vocabulary that makes "deciding something is not working" a
+   real action. Dormancy also prevents churn: a paused intent
+   still exists, so the dedup blocks the minter from
+   re-proposing the same goal the next day. See **Minting**.
 
 ## The normative asymmetry
 
@@ -337,14 +366,16 @@ backtest, not eyeballed now.
 The pure proposal processor is built
 (`supabase/functions/_shared/intent-mint.ts`,
 `processMintProposals`): it is the trusted boundary that turns
-the agent's fallible raw output into a deterministic plan -
-coercing/validating each create, dropping incoherent target
-bindings, deduping by normalized statement, and capping the
-active set (trimming low-priority creates, never existing
-intents). It deliberately does NOT judge semantic conflict
-with bias compensation or the user's system prompts - that is
-the agent's job (it is handed both in its prompt); a pure
-function cannot read intent.
+the agent's fallible raw output into a deterministic plan over
+the four portfolio verbs - coercing/validating each create,
+dropping incoherent target bindings, deduping by normalized
+statement (dormant blocks a twin, retired does not), resolving
+status-change legality and precedence, and capping the active
+set (trimming low-priority creates, never existing intents). It
+deliberately does NOT judge semantic conflict with bias
+compensation or the user's system prompts - that is the
+agent's job (it is handed both in its prompt); a pure function
+cannot read intent.
 
 Still to build (Deno, the product-shaping part): the minter
 agent prompt + orchestration + claim/save RPCs + the daily
@@ -354,17 +385,25 @@ reads:
 
 - samskara compound summary + the top samskaras by health,
 - `bias_summary` (the soft+strong tier rows),
+- the existing intents WITH their efficacy posteriors and
+  recent employment records (what it has been trying, and
+  whether the levers are landing - this is what lets it decide
+  to pause or abandon, not just add),
 - recent memories + relevant wiki articles,
 - recent settled threads (with read tools, like the wiki
   agent).
 
-It then proposes a small set of create / update / retire
-operations against `intents`, respecting the active cap. An
+It then proposes a portfolio plan - create / retire / dormant /
+revive - against `intents`, respecting the active cap. An
 intent that targets a bias or samskara records that binding;
 one that can't name a measurable target is minted free-form.
-Provenance rows capture what it read. The cap and the
-once-a-day cadence are the rate limit - nothing rotates
-continuously, same discipline as the samskara phases.
+Provenance rows capture what it read. Because it sees efficacy
+and employment, a daily run is as much pruning as adding: a
+low-efficacy intent whose situations keep arising (the lever is
+wrong) gets retired or re-framed; one whose pattern has gone
+quiet gets paused. The cap and the once-a-day cadence are the
+rate limit - nothing rotates continuously, same discipline as
+the samskara phases.
 
 ## Injection
 

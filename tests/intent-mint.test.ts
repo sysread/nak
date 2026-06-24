@@ -191,3 +191,96 @@ describe('processMintProposals', () => {
     expect(plan.droppedForCap).toBe(2);
   });
 });
+
+describe('processMintProposals - portfolio verbs (changing its mind)', () => {
+  const ex = (id: string, statement: string, status: ExistingIntent['status'] = 'active'): ExistingIntent => ({
+    id,
+    statement,
+    status,
+  });
+
+  it('pauses an active intent (dormant) and frees a cap slot', () => {
+    // The minter decides an intent is not landing: it pauses it and
+    // pursues a fresh one in the freed slot.
+    const plan = processMintProposals({
+      rawCreates: [{ statement: 'fresh angle' }],
+      rawRetires: [],
+      rawDormant: ['1'],
+      existing: [ex('1', 'old lever'), ex('2', 'keep me')],
+      cap: 2,
+    });
+    expect(plan.toDormant).toEqual(['1']);
+    // 2 active - 1 paused = 1 surviving active; cap 2 => room for 1.
+    expect(plan.toCreate.map((c) => c.statement)).toEqual(['fresh angle']);
+    expect(plan.droppedForCap).toBe(0);
+  });
+
+  it('a paused intent still blocks re-minting its twin (the decision sticks)', () => {
+    const plan = processMintProposals({
+      rawCreates: [{ statement: 'old lever' }], // same as the paused one
+      rawRetires: [],
+      rawDormant: ['1'],
+      existing: [ex('1', 'old lever')],
+    });
+    expect(plan.toDormant).toEqual(['1']);
+    expect(plan.toCreate).toEqual([]); // dedup against the now-dormant statement
+  });
+
+  it('revives a dormant intent only from dormant status', () => {
+    const plan = processMintProposals({
+      rawCreates: [],
+      rawRetires: [],
+      rawRevive: ['1', '2'],
+      existing: [ex('1', 'paused', 'dormant'), ex('2', 'already active', 'active')],
+    });
+    expect(plan.toRevive).toEqual(['1']); // '2' is not dormant, dropped
+  });
+
+  it('reviving counts against the active cap', () => {
+    const plan = processMintProposals({
+      rawCreates: [{ statement: 'new' }],
+      rawRetires: [],
+      rawRevive: ['1'],
+      existing: [ex('1', 'paused', 'dormant'), ex('2', 'active one')],
+      cap: 2,
+    });
+    // 1 active + 1 revived = 2 = cap; no room for the create.
+    expect(plan.toRevive).toEqual(['1']);
+    expect(plan.toCreate).toEqual([]);
+    expect(plan.droppedForCap).toBe(1);
+  });
+
+  it('dormant is only legal from active, not from retired', () => {
+    const plan = processMintProposals({
+      rawCreates: [],
+      rawRetires: [],
+      rawDormant: ['1'],
+      existing: [ex('1', 'gone', 'retired')],
+    });
+    expect(plan.toDormant).toEqual([]);
+  });
+
+  it('resolves a contradictory batch by precedence retire > dormant > revive', () => {
+    // The agent named the same id under multiple verbs; the most final
+    // decision (retire) wins and the id appears in no other bucket.
+    const plan = processMintProposals({
+      rawCreates: [],
+      rawRetires: ['1'],
+      rawDormant: ['1'],
+      existing: [ex('1', 'conflicted')],
+    });
+    expect(plan.toRetire).toEqual(['1']);
+    expect(plan.toDormant).toEqual([]);
+  });
+
+  it('a re-frame: retire one lever and create a differently-worded goal for the same aim', () => {
+    const plan = processMintProposals({
+      rawCreates: [{ statement: 'try the gentler framing instead' }],
+      rawRetires: ['1'],
+      existing: [ex('1', 'push them directly')],
+      cap: 2,
+    });
+    expect(plan.toRetire).toEqual(['1']);
+    expect(plan.toCreate.map((c) => c.statement)).toEqual(['try the gentler framing instead']);
+  });
+});
