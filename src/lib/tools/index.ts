@@ -76,6 +76,7 @@ import { memoryUpdateSchema } from './memory_update.schema';
 import { memoryDeleteSchema } from './memory_delete.schema';
 import { memoryReaffirmSchema } from './memory_reaffirm.schema';
 import { memoryDoubtSchema } from './memory_doubt.schema';
+import { memoryGetSchema } from './memory_get.schema';
 import { memoryRelateSchema } from './memory_relate.schema';
 import { memoryUnrelateSchema } from './memory_unrelate.schema';
 import { conversationSearchSchema } from './conversation_search.schema';
@@ -144,6 +145,7 @@ const memoryUpdate = serverSideTool(memoryUpdateSchema);
 const memoryDelete = serverSideTool(memoryDeleteSchema);
 const memoryReaffirm = serverSideTool(memoryReaffirmSchema);
 const memoryDoubt = serverSideTool(memoryDoubtSchema);
+const memoryGet = serverSideTool(memoryGetSchema);
 const memoryRelate = serverSideTool(memoryRelateSchema);
 const memoryUnrelate = serverSideTool(memoryUnrelateSchema);
 const conversationSearch = serverSideTool(conversationSearchSchema);
@@ -260,7 +262,7 @@ export const alwaysOnToolbox: Toolbox = {
     'toggled. The umbrella `context` recall, the three per-layer ' +
     'recall tools, and read-only surfaces (search across ' +
     'memories / conversations / wiki / cookbook / app docs; ' +
-    'plus get for conversations and wiki, and list/get for cookbook) ' +
+    'plus get for memories, conversations, and wiki, and list/get for cookbook) ' +
     'plus web search, ' +
     'update_title, analyze_image, ask_user, and the toggle_toolbox meta-tool.',
   tools: [
@@ -270,6 +272,7 @@ export const alwaysOnToolbox: Toolbox = {
     conversationRecall,
     wikiRecall,
     memorySearch,
+    memoryGet,
     conversationSearch,
     conversationGet,
     wikiSearch,

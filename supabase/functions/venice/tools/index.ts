@@ -37,6 +37,7 @@ import './memory_consolidate.ts';
 import './memory_create.ts';
 import './memory_delete.ts';
 import './memory_doubt.ts';
+import './memory_get.ts';
 import './memory_invalidate.ts';
 import './memory_reaffirm.ts';
 import './memory_relate.ts';

@@ -1,6 +1,7 @@
 # Context recall: narrative smoothing + citations (in progress)
 
-Status: **M1 landed** (smoothing pass + payload shape); M2-M4 open.
+Status: **M1 + M2 landed** - the smoothing pass, the cited payload, the
+`memory_get` tool, and the citations UI. M3-M4 open.
 This doc is the milestone tracker; when the work is complete, graduate
 its durable design into
 [`../context-recall.md`](../context-recall.md) / [`../memory.md`](../memory.md)
@@ -149,10 +150,15 @@ UI.
   null (inject nothing) rather than leak the raw block. The citation
   markers and persisted citation list land here; drill-down + UI are M2.
   This alone fixes the reported bug.
-- **M2 - citations end-to-end.** `memory_get` tool + `CitationsPanel`
-  generalization + the `Citation` type's `kind` discriminator + the
-  in-body `^N^` click wiring for internal routes. Turns the citation
-  list into the "trace the context behind this response" UX.
+- **M2 - citations end-to-end. [LANDED]** `memory_get` tool (Deno impl,
+  browser schema, always-on registration). `CitationsPanel`
+  generalized from web-`Citation` to a normalized `DisplayCitation`
+  (external URL vs internal `?route`), with `src/lib/ui/citations.ts`
+  owning the kind->route / label / pluralization decisions. New
+  `RecallEntry.svelte` renders each Recall-modal entry's note + a
+  sources slide-down, wiring `^N^` superscript clicks (open + flash)
+  and citation-row clicks (navigate + close modal). `AssistantBody`
+  maps its web citations through the same panel.
 - **M3 - self-healing.** Teach REM / deep-sleep to reshape a poisoned
   memory they visit. See the open sub-decision below.
 - **M4 - writer fast-follow.** Stop the reflection writer baking

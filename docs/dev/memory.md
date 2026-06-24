@@ -1,7 +1,7 @@
 # Memory
 
 Long-term memory: the `memories` table, the `memory_*` CRUD
-tools (search / create / update / reaffirm / doubt / relate /
+tools (search / get / create / update / reaffirm / doubt / relate /
 unrelate / invalidate / delete), the top-level `memory_recall`
 tool, the reflection agent that writes memories after
 conversations settle, and the recall agent that reads them
@@ -97,11 +97,16 @@ in `docs/user/memory.md`. The dev side has five moving parts:
   same pipeline; keep the two in step so a human and the model
   can't disagree on what "search a memory" means.
 - `src/lib/tools/memory_*.schema.ts` — the browser side of every
-  chat-facing memory tool (search / create / update / delete /
+  chat-facing memory tool (search / get / create / update / delete /
   reaffirm / doubt / relate / unrelate / recall). Schema-only
   `serverSideTool` registrations: the browser ships the wire
   `tools` array and the venice function dispatches. No memory
   tool executes in the browser.
+- `supabase/functions/venice/tools/memory_get.ts` — by-id fetch of
+  one memory (`{found, memory: {id, label, data, confidence,
+  created_at, updated_at}}`), the read-only drill-down behind the
+  recall block's memory citations. Parallel to `conversation_get` /
+  `wiki_get`; always-on, b-strict (`user_id` filter).
 - `supabase/functions/venice/tools/memory_*.ts` — the tool
   implementations. Invalidate halves confidence; delete
   hard-removes; reaffirm +0.5 cap 10.0 and doubt ×0.7 no floor,
