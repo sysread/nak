@@ -22,6 +22,13 @@ import {
   formatBiasProfileBlock,
   pickRenderable,
 } from '../_shared/bias-format.ts';
+import {
+  formatIntentsBlock,
+  pickRenderable as pickRenderableIntents,
+  INTENT_RENDER_CAP,
+  COMBINED_APPENDIX_CEILING,
+  type IntentRenderRow,
+} from '../_shared/intent-format.ts';
 import { createEdgeLogger, type EdgeLogger } from '../_shared/edge-log.ts';
 import {
   countUserRounds,
@@ -135,6 +142,121 @@ export async function applyBiasPriming(opts: BiasPrimingOpts): Promise<void> {
   );
 }
 
+export interface IntentPrimingOpts {
+  adminClient: SupabaseClient;
+  userId: string;
+  threadId: string;
+  /** Mutated in place: the intents block is appended to the row-0
+   *  system message AFTER the bias block. */
+  history: PrimingMessage[];
+  log: EdgeLogger;
+}
+
+/**
+ * Gated on the per-user intents toggle (off by default). When enabled,
+ * read the active intents, render the "Working intentions" block under
+ * a bias-aware combined cap, and append it to the row-0 system message
+ * AFTER the bias block - so the block's precedence note ("any
+ * compensation guidance above") resolves correctly. Also snapshot the
+ * rendered intent ids into threads.intent_active_at_turn for the
+ * employment-classification half of evaluation (not yet built).
+ *
+ * MUST run sequenced after applyBiasPriming: both mutate the row-0
+ * system message, so running them concurrently would race and lose one
+ * block. runServerPriming chains them in one closure for this reason.
+ *
+ * Swallow contract: never throws, never fails a turn. Toggle off,
+ * cold-start, or any read failure leaves the prompt unchanged.
+ */
+export async function applyIntentPriming(opts: IntentPrimingOpts): Promise<void> {
+  const { adminClient, userId, threadId, history, log } = opts;
+
+  // Toggle gate: a missing or false flag is a hard no-op - no intents
+  // read, no injection, no snapshot.
+  let enabled = false;
+  try {
+    const { data } = await adminClient
+      .from('profiles')
+      .select('settings')
+      .eq('user_id', userId)
+      .maybeSingle();
+    enabled =
+      (data?.settings as { intentsEnabled?: unknown } | null)?.intentsEnabled === true;
+  } catch (err) {
+    log.debug('intent priming: settings read failed', err);
+  }
+  if (!enabled) return;
+
+  let rows: Array<{ id: string; statement: string }>;
+  try {
+    const { data, error } = await adminClient
+      .from('intents')
+      .select('id, statement')
+      .eq('user_id', userId)
+      .eq('status', 'active')
+      .order('last_minted_at', { ascending: false });
+    if (error) throw new Error(error.message);
+    rows = (data ?? []) as Array<{ id: string; statement: string }>;
+  } catch (err) {
+    log.debug('intent priming: active intents read failed', err);
+    return;
+  }
+  if (rows.length === 0) return;
+
+  // Bias-aware combined cap: the bias appendix and this block share one
+  // ceiling so two features cannot together crowd the instruction
+  // surface. Count what bias actually rendered (cheap cached read) and
+  // give intents the remainder, capped at their own ceiling.
+  let biasRendered = 0;
+  try {
+    biasRendered = pickRenderable(await readBiasSummary(adminClient, userId)).length;
+  } catch (err) {
+    log.debug('intent priming: bias-count read failed; assuming 0', err);
+  }
+  const cap = Math.min(INTENT_RENDER_CAP, COMBINED_APPENDIX_CEILING - biasRendered);
+
+  const renderRows: IntentRenderRow[] = rows.map((r) => ({
+    statement: r.statement,
+    status: 'active',
+  }));
+  const picked = pickRenderableIntents(renderRows, cap);
+  // The rendered set is the first picked.length rows in the order the
+  // renderer kept (active-filter is a no-op here - all are active - and
+  // the cap is a head slice), so map those ids back for the snapshot.
+  const renderedIds = rows.slice(0, picked.length).map((r) => r.id);
+
+  const block = formatIntentsBlock(renderRows, { cap });
+  if (block && block.length > 0) {
+    const systemRow = history[0];
+    if (systemRow && systemRow.role === 'system') {
+      const base = systemRow.content ?? '';
+      systemRow.content = base.length > 0 ? `${base}\n\n${block}` : block;
+    } else {
+      log.debug('intent priming: no leading system row; skipped injection');
+    }
+  }
+
+  // Snapshot which intents were live in the prompt this turn. Empty is a
+  // valid write ("none rendered"). Detached + swallowed - never blocks
+  // or fails the turn.
+  void snapshotIntentActive(adminClient, threadId, userId, renderedIds).catch((err) =>
+    log.debug('intent priming: snapshot failed', err),
+  );
+}
+
+async function snapshotIntentActive(
+  adminClient: SupabaseClient,
+  threadId: string,
+  userId: string,
+  intentIds: string[],
+): Promise<void> {
+  await adminClient
+    .from('threads')
+    .update({ intent_active_at_turn: intentIds })
+    .eq('id', threadId)
+    .eq('user_id', userId);
+}
+
 /**
  * Read every cached aggregate for the user from bias_summary, scoped
  * by explicit user_id (admin client has no auth.uid()). Unknown-key
@@ -245,6 +367,7 @@ export interface PrimingInputs {
  */
 export interface ServerPrimingDeps {
   applyBiasPriming: typeof applyBiasPriming;
+  applyIntentPriming: typeof applyIntentPriming;
   getCompoundSummary: typeof getCompoundSummary;
   fireSamskaras: typeof fireSamskaras;
   runIntuitionPipeline: typeof runIntuitionPipeline;
@@ -253,6 +376,7 @@ export interface ServerPrimingDeps {
 
 const DEFAULT_PRIMING_DEPS: ServerPrimingDeps = {
   applyBiasPriming,
+  applyIntentPriming,
   getCompoundSummary,
   fireSamskaras,
   runIntuitionPipeline,
@@ -294,13 +418,22 @@ export async function runServerPriming(opts: ServerPrimingOpts): Promise<void> {
     opts;
   const deps = opts.deps ?? DEFAULT_PRIMING_DEPS;
   const biasLog = createEdgeLogger(userId, 'bias');
+  const intentLog = createEdgeLogger(userId, 'intent');
   const samskaraLog = createEdgeLogger(userId, 'samskara');
   const intuitionLog = createEdgeLogger(userId, 'intuition');
   const recallLog = createEdgeLogger(userId, 'context-recall');
 
   try {
     await Promise.all([
-      deps.applyBiasPriming({ adminClient, userId, threadId, history, log: biasLog }),
+      // Bias then intents, SEQUENCED: both append to the row-0 system
+      // message, so running them concurrently would race and drop a
+      // block. Intents render after bias so the precedence note's
+      // "guidance above" resolves. This pair runs concurrently with the
+      // <think> chain, which touches a different part of history.
+      (async () => {
+        await deps.applyBiasPriming({ adminClient, userId, threadId, history, log: biasLog });
+        await deps.applyIntentPriming({ adminClient, userId, threadId, history, log: intentLog });
+      })(),
       runThinkChain({
         adminClient,
         userId,
@@ -322,6 +455,7 @@ export async function runServerPriming(opts: ServerPrimingOpts): Promise<void> {
     // throws.
     await Promise.allSettled([
       biasLog.flush(),
+      intentLog.flush(),
       samskaraLog.flush(),
       intuitionLog.flush(),
       recallLog.flush(),

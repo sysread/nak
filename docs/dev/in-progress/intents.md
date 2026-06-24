@@ -79,14 +79,23 @@
    `SAMPLE_INTERVAL_DAYS` (weekly) because bias posteriors move
    too slowly for daily deltas to clear the deadband. This is the
    only writer of `intents.efficacy`.
+8. The server-side priming orchestration (`applyIntentPriming`
+   in `venice/priming.ts`): gated on the `intentsEnabled`
+   toggle, reads active intents, renders the block under the
+   bias-aware combined cap, appends it to the row-0 system
+   message SEQUENCED after the bias appendix (they share the
+   row, so concurrent mutation would race), and snapshots the
+   rendered ids into `threads.intent_active_at_turn` for
+   employment classification. Wired into `runServerPriming` and
+   pinned by a sequencing test;
+   [`prompt-augmentation.md`](../prompt-augmentation.md) updated.
 
-Not yet built: the server-side priming orchestration that
-calls the renderer, the employment-classification half of
-evaluation (it needs a per-thread active-intent snapshot that
-only exists once priming writes it), the backtest harness, and
-the settings toggle. The feature has zero observable behavior
-until the priming orchestration lands behind the toggle.
-Sections still marked "(proposed)" describe the
+Not yet built: the settings toggle UI (the backend reads
+`profiles.settings.intentsEnabled`, but nothing writes it yet,
+so the feature stays inert by default), the
+employment-classification half of evaluation (now unblocked -
+the priming snapshot exists), the inspector UI, and the
+backtest harness. Sections still marked "(proposed)" describe the
 consuming pipelines, not the parts above.
 
 Intents are the first layer in nak that is **normative**

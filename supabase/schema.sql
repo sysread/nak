@@ -12517,6 +12517,15 @@ $cron$;
 -- separate milestones; until they land nothing reads or writes these
 -- tables and the feature has zero observable behavior.
 
+-- Snapshot of the intent ids that rendered into the system prompt on
+-- the most recent chat turn for this thread, written by
+-- applyIntentPriming. The employment-classification half of evaluation
+-- (not yet built) reads it to know which intentions the user's messages
+-- this turn could have been responding to - the intent analog of
+-- threads.bias_active_at_turn. Default empty: no intents active.
+alter table public.threads
+  add column if not exists intent_active_at_turn text[] not null default '{}'::text[];
+
 -- The unit. A small active set renders into the system prompt as
 -- standing behavioral guidance; the rest stay as dormant/retired
 -- history for the inspector.

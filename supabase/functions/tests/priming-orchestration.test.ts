@@ -113,6 +113,7 @@ function fireResult(): FireResult {
 function makeDeps(over: Partial<ServerPrimingDeps> = {}): ServerPrimingDeps {
   return {
     applyBiasPriming: () => Promise.resolve(),
+    applyIntentPriming: () => Promise.resolve(),
     getCompoundSummary: () => Promise.resolve('COMPOUND PROSE'),
     fireSamskaras: () => Promise.resolve(fireResult()),
     runIntuitionPipeline: () => Promise.resolve(intuitionPayload()),
@@ -150,6 +151,36 @@ Deno.test('full chain: splices <think> in contracted order before the metadata r
   assert(history[4].content!.includes("Some things I've come to expect"), 'row 6 = samskara fire');
   assert(history[5].content!.includes(INTUITION_THINK_MARKER), 'row 7 = intuition');
   assert(history[5].content!.includes('SYNTH'));
+});
+
+Deno.test('bias and intent appendices are sequenced: intent renders after bias on row 0', async () => {
+  // Both append to the row-0 system message; running them concurrently
+  // would race and drop one. The orchestration must chain them, bias
+  // first so the intent block's "guidance above" precedence resolves.
+  const history = baseHistory();
+  await runServerPriming({
+    adminClient: makeAdmin({ intuition_payload: null, context_recall_payload: null }, []),
+    userId: 'u',
+    threadId: 't',
+    apiKey: 'k',
+    history,
+    publisher: makePublisher([]),
+    priming: { intuitionModelId: 'fast', intuitionMood: { band: 1, column: 'confident' }, contextRecallEnabled: true },
+    runId: 'test',
+    deps: makeDeps({
+      applyBiasPriming: ({ history }) => {
+        history[0].content += '\n\nBIAS';
+        return Promise.resolve();
+      },
+      applyIntentPriming: ({ history }) => {
+        history[0].content += '\n\nINTENT';
+        return Promise.resolve();
+      },
+    }),
+  });
+  const row0 = history[0].content!;
+  assert(row0.startsWith('BASELINE'));
+  assert(row0.indexOf('BIAS') < row0.indexOf('INTENT'), 'intent must append after bias');
 });
 
 Deno.test('full chain: 1:1 liveness pairs + payload events, and caches persisted', async () => {

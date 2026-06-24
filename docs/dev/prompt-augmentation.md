@@ -25,7 +25,7 @@ gate won't catch it.
 `runChatLoop` assembles a `VeniceMessage[]` in this exact order:
 
 ```text
-1. system   baseline prompt  - identity, voice, tool catalog, + bias appendix
+1. system   baseline prompt  - identity, voice, tool catalog, + bias appendix, + intents appendix
 2. system   user-configured system prompts (Settings -> "you are a pirate")
 3. ...       the conversation history (prior turns + the latest user message)
 4. assistant <think>  context-recall note      | the priming chain, spliced
@@ -60,6 +60,7 @@ Two distinct injection surfaces:
 | Injector | Surface | Source | Cache | Freshness gate |
 | --- | --- | --- | --- | --- |
 | Bias profile | system appendix (row 1) | `applyBiasPriming` (`supabase/functions/venice/priming.ts`) | `bias_summary` row | read once per turn; tier + render-cap filtered |
+| Intents | system appendix (row 1, after bias) | `applyIntentPriming` (`supabase/functions/venice/priming.ts`) | active `intents` rows | gated on the toggle; bias-aware combined cap; off by default |
 | Context recall | `<think>` (row 4) | `runContextRecallPipeline` (`venice/priming/context-recall.ts`) | `threads.context_recall_payload` | `isPayloadFreshForInjection` (STALE_FUSE_MS) |
 | Samskara compound | `<think>` (row 5) | `getCompoundSummary` (`venice/priming/samskara.ts`) | cached prose row | always-on; no fuse |
 | Samskara fire | `<think>` (row 6) | `fireSamskaras` (`venice/priming/samskara.ts`) | computed per turn | raced against `SAMSKARA_PRIMING_TIMEOUT_MS` |
@@ -74,6 +75,16 @@ The order in the table is the contract, and it is load-bearing:
 - **Bias leads** because it is a structural claim about the user, not
   turn weather - it belongs with identity/voice in the cached baseline,
   not in the volatile tail.
+- **Intents follow bias** on the same row-1 surface. The two share one
+  combined render budget (`COMBINED_APPENDIX_CEILING`) so two features
+  cannot together crowd the instruction surface, and intents yield to
+  bias when both are full. Because both mutate the row-0 system message,
+  `applyBiasPriming` and `applyIntentPriming` run SEQUENCED (bias first),
+  not concurrently - and intents render after bias so the intent block's
+  stated precedence ("any compensation guidance above") resolves. The
+  whole appendix pair runs concurrently with the `<think>` chain, which
+  touches a different part of history. Intents are off by default behind
+  a settings toggle; see [`in-progress/intents.md`](./in-progress/intents.md).
 - **The `<think>` chain is recency-ordered**: context recall (what the
   stores hold) first, the samskara layers (predictive priors) next,
   intuition (the most-synthesized read) last, closest to the model's
