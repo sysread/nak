@@ -1,13 +1,13 @@
 # Intents (in progress)
 
-> **Status: backend pipeline + inspector built and QA'd;
-> employment classification and the backtest still open.** The
-> full self-developing loop (minting, efficacy evaluation, the
+> **Status: feature complete except the backtest, which is
+> blocked on field data.** The full self-developing loop
+> (minting, efficacy evaluation, employment classification, the
 > system-prompt injection) plus the read-only inspector are
-> implemented behind the settings toggle; the pipeline is
-> verified by two live-passing QA walkthroughs and the inspector
-> by its own. What remains is employment classification and the
-> backtest harness. The feature ships **off by default**
+> implemented behind the settings toggle, with unit + Deno
+> coverage and live-passing QA walkthroughs. The only remaining
+> build is the backtest harness, and it waits on weeks of real
+> opted-in usage to have anything to backtest against. The feature ships **off by default**
 > and stays off-by-default until the backtest clears its
 > falsifiable bar. This doc records the design decisions plus
 > the evaluation plan; the Build status below is the live
@@ -113,11 +113,26 @@
     rationale. All logic is in the tested primitives
     (`src/lib/ui/intents-inspector.ts`); the data read is
     `listIntents()`. No write controls - the minter owns the set.
+11. Employment classification - the settled-thread judge
+    (`venice/agents/intent_employment.ts`,
+    `runIntentEmploymentSweepTick`) that reads each settled
+    thread whose `intent_active_at_turn` snapshot is non-empty
+    and records, per active intention, what happened with it
+    (opening / acted / reaction) into `intent_employments`.
+    Mirrors the bias analyze phase: per-thread claim
+    (`intent_employment_claim_next_thread`, toggle-gated +
+    day-gated), save under the message-count guard
+    (`intent_employment_save`), independent claim columns on
+    `threads`, hourly `nak-intent-employment-sweep` cron, route
+    in `index.ts`. Pure prompt + parser Deno-tested. This is the
+    minter's pruning telemetry and feeds the gather it already
+    reads - and is NEVER an efficacy input (the firewall).
 
-Not yet built: the employment-classification half of evaluation
-(now unblocked - the priming snapshot exists) and the backtest
-harness. The sections below document the design and the
-realized behavior; those two are the only open work.
+Not yet built: the backtest harness (blocked on field data -
+it needs intents + target samples + employment accumulated over
+weeks of real opted-in use). The sections below document the
+design and the realized behavior; the backtest is the only open
+build, and it waits on data regardless.
 
 Intents are the first layer in nak that is **normative**
 rather than descriptive. Every other user-model the app
@@ -753,8 +768,10 @@ rendered ids - as the faithful proxy, with byte-ordering left to
 the orchestration test. The QA run also caught real precondition
 bugs (nondeterministic `$UID` on a multi-profile volume, the
 gateway needing the legacy-JWT service key, and the
-evaluation-runs-before-minting timing). The inspector-UI and
-employment-classification cases ship with those pieces.
+evaluation-runs-before-minting timing). The inspector and
+employment cases shipped with those pieces
+([`intent-inspector`](../../qa/use-cases/intent-inspector.md),
+[`intent-employment`](../../qa/use-cases/intent-employment.md)).
 
 Writing the mint-pipeline case is what surfaced the toggle-gate
 bug (below) - the use-case's step 1 ("off -> nothing minted")

@@ -92,6 +92,10 @@ One file per use-case under [`use-cases/`](./use-cases/), named
   surfacing: the toggle-gated seedling pill, the inspector modal's
   active/paused/let-go grouping, the honest efficacy labels, and the
   empty state.
+- [intent-employment](./use-cases/intent-employment.md) - the
+  settled-thread judge: the toggle/day-gated claim, the per-intention
+  opening/acted/reaction writes to `intent_employments`, the
+  efficacy-firewall check, and the minter consuming the telemetry.
 - [priming-disconnect-survival](./use-cases/priming-disconnect-survival.md)
   - proves turn-entry priming runs server-side under `waitUntil`: a turn
   whose tab closes mid-priming comes back fully primed, and the spinner
