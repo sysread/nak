@@ -1,15 +1,19 @@
 # Intents (in progress)
 
-> **Status: design, not built.** This doc is the sign-off
-> artifact for a feature that does not exist in the codebase
-> yet. It records the decisions made in design discussion plus
-> the evaluation plan that gates the merge. Ships **off by
-> default** behind a settings toggle, and stays
-> off-by-default until the backtest below clears its
-> falsifiable bar. When the first milestone lands, graduate
-> the durable parts into a permanent `docs/dev/intents.md`
-> and retire this file per the in-progress doc rules in
-> `CLAUDE.md`.
+> **Status: backend pipeline built + QA'd; UI surfacing and
+> the backtest still open.** The full self-developing loop
+> (minting, efficacy evaluation, and the system-prompt
+> injection) is implemented behind the settings toggle and
+> verified by two live-passing QA walkthroughs; what remains is
+> the inspector UI (the "surfaced" half), employment
+> classification, and the backtest harness. The feature ships **off by default**
+> and stays off-by-default until the backtest clears its
+> falsifiable bar. This doc records the design decisions plus
+> the evaluation plan; the Build status below is the live
+> ledger of what exists. When the remaining pieces land and the
+> work closes, graduate the durable parts into a permanent
+> `docs/dev/intents.md` and retire this file per the in-progress
+> doc rules in `CLAUDE.md`.
 
 **Build status.** Landed so far:
 
@@ -103,8 +107,8 @@ Not yet built: the employment-classification half of evaluation
 (now unblocked - the priming snapshot exists), the inspector UI
 (the read-only surface to see one's intentions - the "surfaced"
 half of "surfaced, not steerable"), and the backtest harness.
-Sections still marked "(proposed)" describe the
-consuming pipelines, not the parts above.
+The sections below document the design and the realized
+behavior; the three items here are the only open work.
 
 Intents are the first layer in nak that is **normative**
 rather than descriptive. Every other user-model the app
@@ -399,14 +403,16 @@ Three target kinds, three efficacy treatments:
   free-form intents are allowed to exist but are never allowed
   to claim they work.
 
-Posterior math (proposed, to settle during build): reuse the
-samskara verdict-posterior shape - a recency-discounted hit
-rate with a population-prior shrinkage, recomputed online from
-the `intent_target_samples` deltas. A sample whose target moved
-the right way is a confirm; wrong way a disconfirm; flat a
-soft miss (fractional, like samskara's `not-borne-out`
-`w_soft`). The exact constants are data-derived during the
-backtest, not eyeballed now.
+Posterior math (built: `intent-math.ts` `classifySample` +
+`updateEfficacy` + `stepEfficacy`): the samskara
+verdict-posterior shape - a recency-discounted hit rate with a
+population-prior shrinkage, recomputed online from the
+`intent_target_samples` deltas. A sample whose target moved the
+right way RELATIVE TO ITS CONTROL is a confirm; wrong way a
+disconfirm; flat a soft miss (fractional, like samskara's
+`not-borne-out` `w_soft`). The constants are LAUNCH PLACEHOLDERS,
+clearly marked in the module; the backtest derives the real
+values - they are not yet data-fit.
 
 ## Minting
 
@@ -466,24 +472,26 @@ intentions" block with the dispositional-lean framing and the
 explicit user > accuracy > intents precedence. Returns null to
 mean "omit the section" (the bias/samskara null convention).
 
-Still to build (Deno, lands with the pipeline): in the priming
-stage (`supabase/functions/venice/priming.ts`), a new
-`applyIntentPriming` reads the active `intents` rows (and/or
-`intent_compound_summary`), computes the intent cap as
+Built (Deno): in the priming stage
+(`supabase/functions/venice/priming.ts`), `applyIntentPriming`
+gates on the toggle, reads the active `intents` rows, computes
+the intent cap as
 `min(INTENT_RENDER_CAP, COMBINED_APPENDIX_CEILING - biasRendered)`,
 calls `formatIntentsBlock`, and appends the result to the row-0
 system message with the same blank-line separator
-`applyBiasPriming` uses - rendered AFTER the bias block so the
-precedence note's "guidance above" resolves correctly. Same
-failure contract as every priming injector: swallow errors,
-omit the block, never block or delay a turn. When the settings
-toggle is off, the read is skipped entirely.
+`applyBiasPriming` uses - rendered AFTER the bias block, run
+SEQUENCED after `applyBiasPriming` (they share the row, so
+concurrent mutation would race) so the precedence note's
+"guidance above" resolves. Same failure contract as every
+priming injector: swallow errors, omit the block, never block
+or delay a turn. It also snapshots the rendered ids into
+`threads.intent_active_at_turn` for employment classification.
 
-Per `prompt-augmentation.md`, this is a new **row-1 (baseline
-system appendix)** contributor sitting alongside the bias
-appendix. It is NOT a `<think>` block - intents are stable
-standing guidance, not volatile per-turn synthesis. Update the
-contributors table in that doc when this lands.
+Per `prompt-augmentation.md` (contributors table updated), this
+is a new **row-1 (baseline system appendix)** contributor
+sitting alongside the bias appendix. It is NOT a `<think>`
+block - intents are stable standing guidance, not volatile
+per-turn synthesis.
 
 ### Appendix budget and conflict
 
@@ -626,19 +634,22 @@ efficacy/employment correlation. Scope TBD at build time -
 this is real engineering cost and may warrant its own
 milestone before the pipeline is wired into live priming.
 
-## Settings (proposed)
+## Settings
 
-One toggle, persisted to `profiles.settings` (new key, e.g.
-`intentsEnabled`, default false), coerced in `coerceSettings`
-like every other settings field. Auto-apply with rollback, the
-pane convention. Off disables minting, injection, and
-evaluation wholesale. Per the bias-profile precedent, the
-efficacy/minting math constants are NOT user-facing knobs -
-the toggle is the only control. Update `settings.md` and
-`docs/user/` when this lands (new observable behavior +
-new control).
+Built: one toggle, `profiles.settings.intentsEnabled` (default
+false), coerced in `coerceSettings`, patched in `updateSettings`,
+seeded/reset in app-state, and surfaced as the "Working
+intentions" control in the Settings AI pane (auto-apply with
+rollback, the pane convention). Off disables minting, injection,
+AND evaluation wholesale - gated at the injection side in
+`applyIntentPriming` and at the source in
+`intent_mint_claim_next_user` (the claim requires the flag, so an
+opted-out user is never picked up - see Gotchas). Per the
+bias-profile precedent, the efficacy/minting math constants are
+NOT user-facing knobs - the toggle is the only control.
+`settings.md` and `docs/user/intents.md` document it.
 
-## Interactions (anticipated)
+## Interactions
 
 - **Samskara** (`./samskara.md`) - intents READ samskara
   (compound summary + the corpus for seeding, `samskara_fires`
@@ -663,7 +674,7 @@ new control).
   per-claim edge loggers (new source `intent`) so the Logs
   drawer surfaces minting / evaluation lifecycle.
 
-## Gotchas (anticipated - fill in as built)
+## Gotchas
 
 - **The toggle gates at the claim, not just at injection.**
   `applyIntentPriming` checks `intentsEnabled`, but that only
@@ -723,12 +734,20 @@ Two `docs/qa/use-cases/` walkthroughs cover what is built:
   after the bias appendix under the shared cap, the
   `intent_active_at_turn` snapshot.
 
-Both were authored alongside the feature but NOT yet executed -
-the cloud authoring environment has no live stack, so the
-first run is pending (the CLI session against
-`mise run dev-start`). The inspector-UI and
+Both were **executed live against `mise run dev-start` and
+pass** (see each case's results log). The injection case had its
+verification rewritten during that run: the original "read the
+block in the `stream` wire" step was not observable (the block
+is spliced server-side after the browser logs its pre-priming
+wire), so it now reads `threads.intent_active_at_turn` - the
+rendered ids - as the faithful proxy, with byte-ordering left to
+the orchestration test. The QA run also caught real precondition
+bugs (nondeterministic `$UID` on a multi-profile volume, the
+gateway needing the legacy-JWT service key, and the
+evaluation-runs-before-minting timing). The inspector-UI and
 employment-classification cases ship with those pieces.
 
 Writing the mint-pipeline case is what surfaced the toggle-gate
 bug (below) - the use-case's step 1 ("off -> nothing minted")
-would have failed against the pre-fix claim.
+failed against the pre-fix claim, which is exactly why the rule
+to ship the walkthrough with the feature exists.

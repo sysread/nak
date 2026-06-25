@@ -155,12 +155,23 @@ browser surface is unchanged:
   `onIntuitionUpdate` / `onContextRecallUpdate`, fired once per cache
   refresh so the UI patches the in-memory thread row without a refetch.
   The payload is coerced at decode, so a drifting wire shape is dropped.
-- **The edge logs** - the priming stage logs under three drawer sources
-  (`samskara`, `intuition`, `context-recall`) plus `bias`, round-tripped
-  to the drawer via the edge-log Broadcast relay. The full assembled
-  wire (the `<think>` chain spliced in) is the server's
-  `'venice request wire'`-equivalent round dump under the `stream`
-  source.
+- **The edge logs** - the priming stage logs under four drawer sources
+  (`samskara`, `intuition`, `context-recall`, `intent`) plus `bias`,
+  round-tripped to the drawer via the edge-log Broadcast relay.
+  **The assembled prompt is NOT surfaced in any drawer wire dump.** The
+  browser logs its own *pre-priming* view of the request under source
+  `chat` ("venice request wire", in `chat-loop.ts`) before it POSTs;
+  the server then appends the bias + intent appendices and splices the
+  `<think>` chain server-side, so those additions never appear in that
+  dump. The server-side `stream` source carries only operational lines
+  (round index, `historyLen`, terminal kind), not prompt content. To
+  confirm a server-appended block actually rendered, read its side
+  effect, not a wire dump: the bias appendix snapshots into
+  `threads.bias_active_at_turn`, the intent block into
+  `threads.intent_active_at_turn` (the rendered ids), and the `<think>`
+  chain's payloads cache on the thread row. Byte-level ordering (e.g.
+  intent block after bias on row 0) is asserted in
+  `supabase/functions/tests/priming-orchestration.test.ts`.
 
 ## Interactions
 
