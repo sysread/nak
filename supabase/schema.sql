@@ -12929,3 +12929,226 @@ exception when others then
   raise notice 'intent mint sweep cron setup skipped: %', sqlerrm;
 end
 $cron$;
+
+-- intent employment ---------------------------------------------------------
+--
+-- The settled-thread judge that fills intent_employments: per intention
+-- that was active during a conversation (the threads.intent_active_at_turn
+-- snapshot), what happened with it - opening, acted, reaction. Process
+-- telemetry for the minter's pruning; NEVER an efficacy input. Shape
+-- mirrors the bias analyze phase (per-thread claim + message-count
+-- guard + processed stamp), with INDEPENDENT claim columns so the
+-- employment sweep and the bias sweep never fight over the same thread.
+
+alter table public.threads
+  add column if not exists intent_employment_processed_at timestamptz,
+  add column if not exists intent_employment_processed_msg_count int,
+  add column if not exists intent_employment_claim_holder text,
+  add column if not exists intent_employment_claim_expires timestamptz;
+
+-- Claim the most-overdue settled thread whose intents-active snapshot is
+-- non-empty, for an opted-in user. Mirrors bias_claim_next_thread_for_sweep:
+-- the day-gate (updated_at on a prior calendar day in the owner's
+-- timezone) excludes today's still-live conversations, and the
+-- user-message-count predicate lives inline in the WHERE (before the
+-- LIMIT) so a one-shot thread at the queue head cannot wedge the
+-- pipeline (the starvation fix). The intentsEnabled join is the opt-in
+-- gate - an opted-out user is never claimed, so employment is inert when
+-- the feature is off, matching minting.
+create or replace function public.intent_employment_claim_next_thread(
+  p_holder_id text,
+  p_ttl_seconds int,
+  p_min_user_messages int
+) returns table (
+  thread_id uuid,
+  user_message_count int,
+  active_intent_ids text[],
+  user_id uuid
+)
+language sql security definer
+set search_path = public as $$
+  with candidate as (
+    select t.id as thread_id,
+           (select count(*)::int from public.messages m
+             where m.thread_id = t.id and m.role = 'user') as user_message_count,
+           coalesce(t.intent_active_at_turn, '{}'::text[]) as active_intent_ids,
+           t.user_id as user_id
+      from public.threads t
+      inner join public.profiles p on p.user_id = t.user_id
+        and p.settings->>'intentsEnabled' = 'true'
+      cross join lateral (
+        select public.nak_safe_timezone(p.settings->>'displayTimezone') as tz
+      ) usertz
+     where (t.updated_at at time zone usertz.tz)::date
+             < (now() at time zone usertz.tz)::date
+       and coalesce(array_length(t.intent_active_at_turn, 1), 0) >= 1
+       and (
+         t.intent_employment_processed_at is null
+         or t.intent_employment_processed_at < t.updated_at
+       )
+       and (
+         t.intent_employment_claim_holder is null
+         or t.intent_employment_claim_expires < now()
+       )
+       and (
+         select count(*) from public.messages m
+           where m.thread_id = t.id and m.role = 'user'
+       ) >= p_min_user_messages
+     order by t.updated_at asc
+     limit 1
+     for update of t skip locked
+  )
+  update public.threads t
+     set intent_employment_claim_holder = p_holder_id,
+         intent_employment_claim_expires = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c
+   where t.id = c.thread_id
+  returning t.id, c.user_message_count, c.active_intent_ids, t.user_id;
+$$;
+
+revoke all on function public.intent_employment_claim_next_thread(text, int, int)
+  from public, anon, authenticated;
+grant execute on function public.intent_employment_claim_next_thread(text, int, int)
+  to service_role;
+
+-- Save the judge's employment rows under the claim + message-count
+-- guard, fully replacing any prior rows for the thread, and stamp
+-- processed. Mirrors bias_save_observations. `security invoker`: the
+-- sweep's service-role caller bypasses RLS, and user_id is passed
+-- explicitly (the column default auth.uid() is null under service role).
+create or replace function public.intent_employment_save(
+  p_thread_id uuid,
+  p_holder_id text,
+  p_expected_msg_count int,
+  p_employments jsonb,
+  p_user_id uuid default null
+)
+returns boolean
+security invoker
+language plpgsql
+as $$
+declare
+  v_uid uuid := coalesce(p_user_id, auth.uid());
+  v_actual_count int;
+  v_e jsonb;
+begin
+  if v_uid is null then
+    return false;
+  end if;
+
+  perform 1 from public.threads
+    where id = p_thread_id
+      and user_id = v_uid
+      and intent_employment_claim_holder = p_holder_id
+      and (intent_employment_claim_expires is null or intent_employment_claim_expires > now());
+  if not found then
+    return false;
+  end if;
+
+  select count(*)::int into v_actual_count
+    from public.messages
+    where thread_id = p_thread_id and role = 'user';
+  if v_actual_count <> p_expected_msg_count then
+    -- A new user message landed during the judge call; the verdicts are
+    -- now stale. Release the claim and let the thread re-eligible.
+    update public.threads
+      set intent_employment_claim_holder = null, intent_employment_claim_expires = null
+      where id = p_thread_id;
+    return false;
+  end if;
+
+  -- Fully replace prior employment rows for the thread (a re-evaluation
+  -- after a new message supersedes the old read).
+  delete from public.intent_employments
+    where thread_id = p_thread_id and user_id = v_uid;
+
+  if jsonb_array_length(p_employments) > 0 then
+    for v_e in select * from jsonb_array_elements(p_employments) loop
+      insert into public.intent_employments
+        (user_id, intent_id, thread_id, opening, acted, user_reaction, reasoning)
+      values (
+        v_uid,
+        (v_e->>'intent_id')::uuid,
+        p_thread_id,
+        (v_e->>'opening')::boolean,
+        (v_e->>'acted')::boolean,
+        nullif(v_e->>'user_reaction', ''),
+        v_e->>'reasoning'
+      );
+    end loop;
+  end if;
+
+  update public.threads
+    set intent_employment_processed_at = now(),
+        intent_employment_processed_msg_count = p_expected_msg_count,
+        intent_employment_claim_holder = null,
+        intent_employment_claim_expires = null
+    where id = p_thread_id;
+  return true;
+end;
+$$;
+
+revoke all on function public.intent_employment_save(uuid, text, int, jsonb, uuid)
+  from public, anon;
+
+-- Hourly employment sweep cron. Settled threads accumulate daily; an
+-- hourly drain keeps intent_employments fresh for the daily mint pass
+-- without a heavy per-tick cost (one judge per claimed thread, capped).
+-- Minute :33 is clear of the other ticks (:03 bias, :13/:23 samskara,
+-- :43 GC).
+create or replace function public.nak_trigger_intent_employment_sweep()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $fn$
+declare
+  v_url text;
+  v_key text;
+begin
+  begin
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'project_url' $q$ into v_url;
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'service_role_key' $q$ into v_key;
+  exception when others then
+    return;
+  end;
+  if v_url is null or v_key is null then
+    return;
+  end if;
+  begin
+    execute format(
+      $q$ select net.http_post(
+            url := %L,
+            headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', %L),
+            body := '{}'::jsonb
+          ) $q$,
+      v_url || '/functions/v1/venice/intent-employment-sweep',
+      'Bearer ' || v_key
+    );
+  exception when others then
+    raise notice 'nak_trigger_intent_employment_sweep: dispatch failed: %', sqlerrm;
+  end;
+end;
+$fn$;
+
+revoke all on function public.nak_trigger_intent_employment_sweep() from public, anon, authenticated;
+
+do $cron$
+begin
+  if exists (select 1 from pg_available_extensions where name = 'pg_cron')
+     and exists (select 1 from pg_available_extensions where name = 'pg_net') then
+    create extension if not exists pg_cron;
+    create extension if not exists pg_net;
+    if exists (select 1 from cron.job where jobname = 'nak-intent-employment-sweep') then
+      perform cron.unschedule('nak-intent-employment-sweep');
+    end if;
+    perform cron.schedule(
+      'nak-intent-employment-sweep',
+      '33 * * * *',
+      $job$ select public.nak_trigger_intent_employment_sweep(); $job$
+    );
+  end if;
+exception when others then
+  raise notice 'intent employment sweep cron setup skipped: %', sqlerrm;
+end
+$cron$;
