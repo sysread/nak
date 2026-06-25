@@ -28,6 +28,16 @@ Deno.test('reflection prompt instructs timeless, non-self-narrating memories', (
   assertStringIncludes(p, "Don't narrate yourself or the exchange");
 });
 
+Deno.test('reflection prompt does not promise a confidence bump on update', () => {
+  // memory_update rewrites wording only; it does not change confidence
+  // (the function-side impl never bumps). The prompt must not tell the
+  // model otherwise - corroboration is memory_reaffirm's job. This pins
+  // the "correct the instruction" decision over "restore a bump".
+  const p = __test.REFLECTION_PROMPT;
+  assertEquals(p.includes('bumps confidence'), false);
+  assertStringIncludes(p, 'memory_reaffirm to nudge its confidence');
+});
+
 Deno.test('reflection toolbox is the soft-decay memory set, in declared order', () => {
   const toolbox = __test.buildReflectionToolbox();
   assertEquals(toolbox.name, 'reflection');

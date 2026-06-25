@@ -263,8 +263,10 @@ Workflow for each memory you consider writing:
 1. Call memory_search with a related query FIRST. Check whether a
    similar memory already exists.
 2. If one exists and your new insight is a refinement, call
-   memory_update on it (which also bumps confidence — corroborated
-   memories rank higher). Don't create a near-duplicate.
+   memory_update on it rather than creating a near-duplicate.
+   memory_update only rewrites the wording - it does NOT change
+   confidence. If the exchange genuinely corroborates the memory,
+   call memory_reaffirm to nudge its confidence up.
 3. If a new insight contradicts an existing memory, call
    memory_invalidate on the stale one. This doesn't delete it, it
    halves its confidence so search stops surfacing it. Repeated

@@ -390,11 +390,14 @@ in `docs/user/memory.md`. The dev side has five moving parts:
     claim for the embeddings backfill
   - `confidence real default 1.0` — starts at 1.0 on create;
     `memory_invalidate` halves it (reflection-only, ×0.5);
-    `memory_update` calls the `bump_memory_confidence` RPC which
-    adds 1.0 up to 10.0; the chat-side `memory_reaffirm` calls
-    `reaffirm_memory_confidence` (+0.5 cap 10.0) and
-    `memory_doubt` calls `doubt_memory_confidence` (×0.7 no
-    floor). Search floors at 0.05 and applies a log boost so
+    `memory_update` and `memory_reshape` rewrite content only and do
+    NOT change confidence (corroboration is its own explicit signal,
+    not a side effect of an edit); the `memory_reaffirm` lever calls
+    `reaffirm_memory_confidence` (+0.5 cap 10.0) and `memory_doubt`
+    calls `doubt_memory_confidence` (×0.7 no floor). The
+    `bump_memory_confidence` RPC exists in the schema but is currently
+    unreferenced - no tool calls it. Search floors at 0.05 and applies
+    a log boost so
     corroborated memories rank higher. `classifyMemoryConfidence`
     in `src/lib/memories.ts` is the single source of truth for
     the qualitative-tag thresholds (>=5.0 corroborated, >=1.5
@@ -518,10 +521,10 @@ from the same ports); the browser carries only the wire schemas.
   next pass. `message` is required (commit-style) and appends a
   `create` changelog row.
 - `memory_update.execute({ id, label?, data?, message })` —
-  writes changed fields, calls `bump_memory_confidence`, and
-  relies on the trigger to null the embedding if either text
-  changed. `message` is required and appends an `update`
-  changelog row.
+  writes the changed fields and relies on the trigger to null the
+  embedding if either text changed. Does NOT change confidence (a
+  rewrite is not corroboration). `message` is required and appends an
+  `update` changelog row.
 - `memory_invalidate.execute({ id })` — halves confidence via
   `decay_memory_confidence` RPC. Not destructive. No changelog
   entry (confidence-only).
