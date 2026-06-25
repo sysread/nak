@@ -1701,18 +1701,16 @@
           nothing when the reply is short enough that emphasis
           would be noise.
         </p>
-        <div class="form-row" style="display:flex;gap:0.5rem;align-items:center">
-          <label style="display:flex;gap:0.5rem;align-items:center">
-            <input
-              type="checkbox"
-              name="emphasis-markdown"
-              checked={emphasisMarkdown}
-              onchange={(e) =>
-                onToggleEmphasis((e.currentTarget as HTMLInputElement).checked)}
-            />
-            <span>Ask the model to highlight save-points</span>
-          </label>
-        </div>
+        <label class="form-row toggle-row">
+          <input
+            type="checkbox"
+            name="emphasis-markdown"
+            checked={emphasisMarkdown}
+            onchange={(e) =>
+              onToggleEmphasis((e.currentTarget as HTMLInputElement).checked)}
+          />
+          <span>Ask the model to highlight save-points</span>
+        </label>
 
         <h3 class="pane-section">Working intentions</h3>
         <p class="subtle">
@@ -1726,18 +1724,16 @@
           develop with you rather than only record; it's off by default
           and a deliberate opt-in.
         </p>
-        <div class="form-row" style="display:flex;gap:0.5rem;align-items:center">
-          <label style="display:flex;gap:0.5rem;align-items:center">
-            <input
-              type="checkbox"
-              name="intents-enabled"
-              checked={intentsEnabled}
-              onchange={(e) =>
-                onToggleIntents((e.currentTarget as HTMLInputElement).checked)}
-            />
-            <span>Let Nak develop and pursue growth intentions</span>
-          </label>
-        </div>
+        <label class="form-row toggle-row">
+          <input
+            type="checkbox"
+            name="intents-enabled"
+            checked={intentsEnabled}
+            onchange={(e) =>
+              onToggleIntents((e.currentTarget as HTMLInputElement).checked)}
+          />
+          <span>Let Nak develop and pursue growth intentions</span>
+        </label>
         {#if intentsError}<p class="error">{intentsError}</p>{/if}
         {#if intentsInfo}<p class="subtle">{intentsInfo}</p>{/if}
 
@@ -1755,18 +1751,16 @@
             the home screen to receive OS notifications.
           {/if}
         </p>
-        <div class="form-row" style="display:flex;gap:0.5rem;align-items:center">
-          <label style="display:flex;gap:0.5rem;align-items:center">
-            <input
-              type="checkbox"
-              name="notify-on-complete"
-              checked={notifyOnComplete}
-              onchange={(e) =>
-                onToggleNotifyOnComplete((e.currentTarget as HTMLInputElement).checked)}
-            />
-            <span>Notify me when replies finish</span>
-          </label>
-        </div>
+        <label class="form-row toggle-row">
+          <input
+            type="checkbox"
+            name="notify-on-complete"
+            checked={notifyOnComplete}
+            onchange={(e) =>
+              onToggleNotifyOnComplete((e.currentTarget as HTMLInputElement).checked)}
+          />
+          <span>Notify me when replies finish</span>
+        </label>
         {#if notifyOnComplete && notificationsSupported() && notifyPermission !== 'granted'}
           <!-- Per-device reconciliation: the account-level setting is
                on but this browser hasn't granted the OS-level permission
