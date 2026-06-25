@@ -22,6 +22,7 @@
 import { assert, assertAlmostEquals, assertEquals } from 'jsr:@std/assert';
 import {
   runBacktest,
+  buildCorpus,
   intentWindows,
   BAR_MIN_WINDOWS,
   type BacktestIntent,
@@ -157,6 +158,96 @@ Deno.test('reports control coverage and excludes free-form intents from windows'
   const r = runBacktest(withFreeform);
   assertEquals(r.nTargeted, CLEARS.length); // free-form not counted
   assert(r.controlCoverage > 0 && r.controlCoverage <= 1);
+});
+
+// === buildCorpus: the DB-rows -> corpus mapper ==============================
+
+Deno.test('buildCorpus groups samples per intent and orders them oldest-first', () => {
+  const corpus = buildCorpus({
+    intents: [{ id: 'a', target_kind: 'samskara', target_direction: 'reduce', efficacy: 0.4 }],
+    // deliberately out of order by sampled_at
+    samples: [
+      { intent_id: 'a', target_value: 3, control_value: 30, sampled_at: '2026-06-10T00:00:00Z' },
+      { intent_id: 'a', target_value: 1, control_value: 10, sampled_at: '2026-06-01T00:00:00Z' },
+      { intent_id: 'a', target_value: 2, control_value: 20, sampled_at: '2026-06-05T00:00:00Z' },
+    ],
+    employments: [],
+  });
+  assertEquals(corpus.length, 1);
+  assertEquals(corpus[0].samples.map((s) => s.target), [1, 2, 3]); // sorted
+  assertEquals(corpus[0].samples.map((s) => s.control), [10, 20, 30]);
+  assertEquals(corpus[0].targeted, true);
+  assertEquals(corpus[0].direction, 'reduce');
+});
+
+Deno.test('buildCorpus counts employment as ACTED rows only (the firewall x-axis)', () => {
+  const corpus = buildCorpus({
+    intents: [{ id: 'a', target_kind: 'samskara', target_direction: 'reinforce', efficacy: 0.5 }],
+    samples: [],
+    employments: [
+      { intent_id: 'a', acted: true },
+      { intent_id: 'a', acted: false }, // opening with no action - not counted
+      { intent_id: 'a', acted: true },
+    ],
+  });
+  assertEquals(corpus[0].employmentCount, 2);
+});
+
+Deno.test('buildCorpus marks free-form intents untargeted and defaults direction', () => {
+  const corpus = buildCorpus({
+    intents: [
+      { id: 'free', target_kind: 'none', target_direction: null, efficacy: null },
+      { id: 'tgt', target_kind: 'bias', target_direction: null, efficacy: 0.3 },
+    ],
+    samples: [],
+    employments: [],
+  });
+  assertEquals(corpus.find((c) => c.id === 'free')!.targeted, false);
+  // a targeted row with a null direction defaults to reduce (the common case)
+  assertEquals(corpus.find((c) => c.id === 'tgt')!.direction, 'reduce');
+});
+
+Deno.test('buildCorpus ignores sample/employment rows for unknown intents', () => {
+  const corpus = buildCorpus({
+    intents: [{ id: 'a', target_kind: 'samskara', target_direction: 'reduce', efficacy: 0.4 }],
+    samples: [{ intent_id: 'ghost', target_value: 1, control_value: 1, sampled_at: '2026-06-01T00:00:00Z' }],
+    employments: [{ intent_id: 'ghost', acted: true }],
+  });
+  assertEquals(corpus.length, 1);
+  assertEquals(corpus[0].samples.length, 0);
+  assertEquals(corpus[0].employmentCount, 0);
+});
+
+Deno.test('end-to-end: DB-shaped rows -> buildCorpus -> runBacktest', () => {
+  // A small DB-shaped fixture exercising the full path. Two targeted
+  // intents, weekly samples, target moving with control (no real lift) -
+  // the honest expectation. Verifies the mapper feeds the aggregator a
+  // shape it can score without error.
+  const intents = [
+    { id: 'i1', target_kind: 'samskara', target_direction: 'reduce', efficacy: 0.5 },
+    { id: 'i2', target_kind: 'samskara', target_direction: 'reinforce', efficacy: 0.55 },
+  ];
+  const mkSamples = (id: string, vals: number[]) =>
+    vals.map((v, k) => ({
+      intent_id: id,
+      target_value: v,
+      control_value: v, // moves with the target -> ~0 differential
+      sampled_at: `2026-06-${String(k + 1).padStart(2, '0')}T00:00:00Z`,
+    }));
+  const corpus = buildCorpus({
+    intents,
+    samples: [...mkSamples('i1', [10, 8, 6, 4]), ...mkSamples('i2', [1, 2, 3, 4])],
+    employments: [
+      { intent_id: 'i1', acted: true },
+      { intent_id: 'i2', acted: true },
+      { intent_id: 'i2', acted: true },
+    ],
+  });
+  const r = runBacktest(corpus);
+  assertEquals(r.nTargeted, 2);
+  assert(r.nWindows === 6); // 3 windows per intent
+  assertAlmostEquals(r.lift as number, 0, 1e-6); // target moved exactly with control
+  assertEquals(corpus.find((c) => c.id === 'i2')!.employmentCount, 2);
 });
 
 // === TRIPWIRE ===============================================================

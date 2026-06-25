@@ -44,6 +44,81 @@ export interface BacktestIntent {
   employmentCount: number;
 }
 
+// --- DB-row -> corpus assembly -----------------------------------------------
+//
+// The pure mapper from the shapes the prod query returns into the
+// BacktestIntent[] the aggregator eats. This is the layer most likely to
+// carry a bug when real data lands (sample ordering, per-intent grouping,
+// the employment-count definition), so it is unit-tested with DB-shaped
+// fixtures. The only piece NOT covered by tests is the literal SQL that
+// produces these rows - a thin wrapper that needs real data to mean
+// anything.
+
+/** A row from `intents` (the metadata the corpus needs). */
+export interface IntentMetaRow {
+  id: string;
+  target_kind: string;
+  target_direction: string | null;
+  efficacy: number | null;
+}
+
+/** A row from `intent_target_samples`. */
+export interface TargetSampleRow {
+  intent_id: string;
+  target_value: number;
+  control_value: number | null;
+  /** ISO timestamp; the mapper sorts by this to order the series. */
+  sampled_at: string;
+}
+
+/** A row from `intent_employments`. */
+export interface EmploymentRow {
+  intent_id: string;
+  acted: boolean;
+}
+
+/**
+ * Assemble the corpus from raw DB-shaped rows. Pure. Groups samples by
+ * intent and orders each series oldest-first by `sampled_at`; counts
+ * employment as the number of rows where the model ACTUALLY ACTED on the
+ * intent (not mere openings) - that is the firewall's x-axis, "how much
+ * did the model lean on this", which is what must NOT predict efficacy.
+ * An intent with no samples yields an empty series (no windows), and
+ * sample/employment rows pointing at an unknown intent are ignored.
+ */
+export function buildCorpus(args: {
+  intents: readonly IntentMetaRow[];
+  samples: readonly TargetSampleRow[];
+  employments: readonly EmploymentRow[];
+}): BacktestIntent[] {
+  const samplesByIntent = new Map<string, TargetSampleRow[]>();
+  for (const s of args.samples) {
+    const list = samplesByIntent.get(s.intent_id);
+    if (list) list.push(s);
+    else samplesByIntent.set(s.intent_id, [s]);
+  }
+
+  const actedByIntent = new Map<string, number>();
+  for (const e of args.employments) {
+    if (!e.acted) continue; // only actual leans count toward employment
+    actedByIntent.set(e.intent_id, (actedByIntent.get(e.intent_id) ?? 0) + 1);
+  }
+
+  return args.intents.map((meta) => {
+    const rows = (samplesByIntent.get(meta.id) ?? [])
+      .slice()
+      .sort((a, b) => a.sampled_at.localeCompare(b.sampled_at));
+    return {
+      id: meta.id,
+      targeted: meta.target_kind === 'bias' || meta.target_kind === 'samskara',
+      direction: meta.target_direction === 'reinforce' ? 'reinforce' : 'reduce',
+      samples: rows.map((r) => ({ target: r.target_value, control: r.control_value })),
+      efficacy: meta.efficacy,
+      employmentCount: actedByIntent.get(meta.id) ?? 0,
+    };
+  });
+}
+
 // --- The falsifiable bar -----------------------------------------------------
 //
 // PLACEHOLDERS. The entire point of the backtest is to set these from

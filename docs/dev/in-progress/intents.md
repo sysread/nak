@@ -674,11 +674,21 @@ that fails after 2026-07-16** to force replacing them with real
 data. The `BAR_*` thresholds are eyeballed placeholders the
 real data must re-derive.
 
-**Not built: the DB-reading harness** that builds the corpus
-from `intent_target_samples` + `intent_employments`. It has
-nothing to read until weeks of opted-in usage accrue, so the
-aggregator runs on fixtures for now and the live harness is a
-later piece.
+Also built: the pure **DB-rows -> corpus mapper**
+(`buildCorpus`) that groups `intent_target_samples` into
+per-intent time-series (ordered by `sampled_at`), counts
+`intent_employments` ACTED rows as the firewall's
+employment axis, and joins efficacy/target metadata into the
+`BacktestIntent[]` the aggregator eats. Deno-tested with
+DB-shaped fixtures, plus an end-to-end test (DB-shaped rows ->
+buildCorpus -> runBacktest). So the whole fixture-driven test
+runs the full path.
+
+**Not built: the literal SQL query** that pulls those rows from
+prod into `buildCorpus`. It is a thin I/O wrapper that needs
+real data to mean anything, so it waits on weeks of opted-in
+usage; the pure logic it will feed (mapper + aggregator) is
+complete and tested.
 
 ### What the June 2026 prod inspection taught the backtest
 
