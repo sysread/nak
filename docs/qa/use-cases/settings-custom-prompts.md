@@ -36,9 +36,13 @@ read the same array order ([dev: chat](../../dev/chat.md)).
    hovered drop target shows a colored top edge.
 9. Wait for the save indicator, leave Settings, and re-open the
    `Custom prompts` tab.
-10. Open a new chat and open the composer's system-prompt toggle
+10. On a touchscreen (or browser device-emulation with touch), press
+    and hold a card's grip handle for ~1 second without moving, then
+    slide to another card and lift to drop. Separately, start a hold
+    and immediately flick the finger to scroll the pane.
+11. Open a new chat and open the composer's system-prompt toggle
     list.
-11. Delete `Bravo` from the Custom prompts pane via its trash icon.
+12. Delete `Bravo` from the Custom prompts pane via its trash icon.
 
 ## Expected
 
@@ -54,10 +58,15 @@ read the same array order ([dev: chat](../../dev/chat.md)).
   `Charlie, Alpha, Bravo`.
 - (9) The reordered order persists across close/reopen (the reorder
   was written to `profiles.settings.systemPrompts`, not just local).
-- (10) The composer's prompt toggles list the prompts in the same
+- (10) The held card lifts after ~1s (accent border + raised shadow +
+  slight scale, and a haptic tick on supporting hardware), follows the
+  finger to the drop target, and the order updates + persists on
+  lift-off. The hold-then-flick gesture does NOT pick the card up - it
+  scrolls the pane normally, confirming the slop cancel.
+- (11) The composer's prompt toggles list the prompts in the same
   order shown in the pane, with `Alpha` pre-toggled (its `Default`
   flag) for the new conversation.
-- (11) Deleting `Bravo` removes its card immediately and the
+- (12) Deleting `Bravo` removes its card immediately and the
   deletion persists on reopen.
 
 ## Cleanup

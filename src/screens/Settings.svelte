@@ -355,6 +355,73 @@
     dragOverId = null;
   }
 
+  // --- Touch long-press reorder (mobile) ---
+  // Native HTML5 DnD never fires on touch, so phones get a parallel path:
+  // press and hold the grip for LONG_PRESS_MS and the card "lifts" (the
+  // .touch-dragging style + a haptic tick where supported), after which
+  // sliding the finger over another card marks it as the drop target and
+  // lifting the finger drops there. A finger that travels more than
+  // TOUCH_SLOP before the timer fires is read as a scroll attempt, not a
+  // hold, and cancels the press. Touch events all dispatch to the
+  // touchstart target (the grip) for the life of the gesture, so we
+  // resolve the card actually under the finger via elementFromPoint.
+  const LONG_PRESS_MS = 1000;
+  const TOUCH_SLOP = 10; // px of travel that still counts as "held still"
+  let touchDragId = $state<string | null>(null);
+  let longPressTimer: ReturnType<typeof setTimeout> | null = null;
+  let touchStartY = 0;
+
+  function clearLongPress(): void {
+    if (longPressTimer !== null) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+  }
+
+  function onPromptTouchStart(id: string, e: TouchEvent): void {
+    const t = e.touches[0];
+    if (!t) return;
+    touchStartY = t.clientY;
+    clearLongPress();
+    longPressTimer = setTimeout(() => {
+      longPressTimer = null;
+      touchDragId = id;
+      dragOverId = id;
+      // Haptic confirmation that the card is now liftable. Optional
+      // chaining: most desktop browsers and iOS Safari don't implement
+      // Vibration, and a missing API must not break the activation.
+      navigator.vibrate?.(15);
+    }, LONG_PRESS_MS);
+  }
+
+  function onPromptTouchMove(e: TouchEvent): void {
+    const t = e.touches[0];
+    if (!t) return;
+    if (touchDragId === null) {
+      // Pre-activation: a finger that wanders is scrolling, not holding.
+      if (Math.abs(t.clientY - touchStartY) > TOUCH_SLOP) clearLongPress();
+      return;
+    }
+    // Active drag: stop the pane scrolling under the finger and track
+    // which card the finger is currently over.
+    e.preventDefault();
+    const el = document.elementFromPoint(t.clientX, t.clientY);
+    const card = el?.closest<HTMLElement>('.prompt-card[data-prompt-id]');
+    if (card?.dataset.promptId) dragOverId = card.dataset.promptId;
+  }
+
+  function onPromptTouchEnd(): void {
+    clearLongPress();
+    if (touchDragId === null) return;
+    const from = promptsDraft.findIndex((p) => p.id === touchDragId);
+    const to = promptsDraft.findIndex((p) => p.id === dragOverId);
+    touchDragId = null;
+    dragOverId = null;
+    if (from === -1 || to === -1 || from === to) return;
+    promptsDraft = prompts.reorderPrompts(promptsDraft, from, to);
+    schedulePromptsSave();
+  }
+
   function schedulePromptsSave(): void {
     // Transition to 'saving' immediately on edit so the icon reflects
     // intent even during the debounce window — otherwise the user might
@@ -1834,8 +1901,10 @@
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div
               class="prompt-card"
-              class:drag-over={dragOverId === p.id && dragId !== p.id}
+              class:drag-over={dragOverId === p.id && dragId !== p.id && touchDragId !== p.id}
               class:dragging={dragId === p.id}
+              class:touch-dragging={touchDragId === p.id}
+              data-prompt-id={p.id}
               ondragover={(e) => onPromptDragOver(p.id, e)}
               ondrop={(e) => onPromptDrop(p.id, e)}
             >
@@ -1845,10 +1914,14 @@
                   role="button"
                   tabindex="-1"
                   draggable="true"
-                  title="Drag to reorder"
+                  title="Drag to reorder (press and hold on touch)"
                   aria-label="Drag to reorder prompt"
                   ondragstart={(e) => onPromptDragStart(p.id, e)}
                   ondragend={onPromptDragEnd}
+                  ontouchstart={(e) => onPromptTouchStart(p.id, e)}
+                  ontouchmove={onPromptTouchMove}
+                  ontouchend={onPromptTouchEnd}
+                  ontouchcancel={onPromptTouchEnd}
                 >
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                     <circle cx="9" cy="6" r="1.6" />

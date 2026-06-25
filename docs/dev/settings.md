@@ -82,11 +82,22 @@ landing tab move together.
   array through `persistSystemPrompts` -> `updateSystemPrompts` (wholesale
   replace, not per-prompt). Cards reorder by **drag** - a grip handle
   carries `draggable=true` (so dragging from inside the name input or body
-  textarea still selects text) and the cards are the drop targets; native
-  HTML5 DnD, so it is pointer-only (no keyboard / touch reorder). The pure
-  list transforms (add / update / delete / reorder / the resync equality
-  check) live in `src/lib/ui/prompts.ts`. The order in the array is the
-  order shown in the chat composer's prompt toggles.
+  textarea still selects text) and the cards are the drop targets. Two
+  reorder paths share the same `dragOverId` target state and the same
+  `reorderPrompts` array move: pointer uses native HTML5 DnD
+  (`onPromptDragStart/Over/Drop/End`); touch uses a long-press path
+  (`onPromptTouchStart/Move/End`) because DnD never fires on touch - a
+  1s press on the grip lifts the card (the `.touch-dragging` style + a
+  `navigator.vibrate` tick), then finger-slide tracks the card under the
+  pointer via `elementFromPoint` (cards carry `data-prompt-id` for the
+  lookup) and lift-off drops. A pre-activation finger travel past a small
+  slop threshold cancels the press as a scroll. There is no keyboard
+  reorder path yet. The pure list transforms (add / update / delete /
+  reorder / the resync equality check) live in `src/lib/ui/prompts.ts`.
+  The order in the array is significant: it is both the order shown in the
+  chat composer's prompt toggles AND the order the enabled prompts are
+  injected as system messages on each turn (see `chat.md`), so a reorder
+  is a deliberate behavioral change, not just cosmetic.
 - **Usage** — a date-ranged snapshot of per-model token spend
   against the Venice API key. Read-only: it calls Venice's beta
   `/billing/usage` endpoint and aggregates the rows client-side.

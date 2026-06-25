@@ -82,10 +82,11 @@ Your library of named system prompts - reusable instructions you can
 flip on or off per conversation from the chat composer. Each card has
 a name, a **Default** checkbox (seeds the active set for new
 conversations), and the prompt body. Add, edit, and delete save
-automatically. **Drag the grip handle** on the left of a card to
-reorder the list; the order here is the order the toggles appear in
-the composer. See [System prompts](./models.md#system-prompts) for
-the full picture.
+automatically. Reorder by the grip handle on the left of a card -
+**drag** it with a mouse, or **press and hold** it for a second on a
+touchscreen to pick the card up, then move it. The order here is the
+order the toggles appear in the composer. See
+[System prompts](./models.md#system-prompts) for the full picture.
 
 ### Usage
 
