@@ -1375,9 +1375,13 @@
     font-size: 0.85rem;
     font-weight: 600;
     text-align: left;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    /* Wrap long thread titles instead of widening the card. The item
+       sits in a grid track whose default min-width:auto lets a
+       nowrap title expand the column past the modal edge on mobile
+       (the ellipsis never triggers - the track just grows). Wrapping
+       plus overflow-wrap:anywhere breaks even an unbroken token so
+       the link always stays within the card. */
+    overflow-wrap: anywhere;
   }
 
   .bias-evidence-link:hover {
