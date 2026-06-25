@@ -47,8 +47,13 @@ absent for the off-by-default majority.
 
 - (1) With intents OFF, no seedling pill renders - the column starts
   at the recall/bias pills as before. No `intents` query fires.
-- (2) With intents ON, the seedling pill (leaf glyph) appears at the
-  top of the column; the mobile menu gains the matching tile.
+- (2) With intents ON: on desktop the seedling pill (leaf glyph)
+  appears at the top of the bottom-right column. On mobile
+  (<=720px) the whole column is hidden, so the pill must NOT appear
+  there - it lives only as the matching tile in the composer
+  diagnostics menu. (Regression guard: the intents pill once leaked
+  onto mobile by being absent from the column's mobile-hide rule in
+  `styles.css`.)
 - (3) The modal opens with the "Working intentions" header + the
   read-only blurb. There are NO edit/delete controls anywhere.
 - (4) Three sections render in order - **Active** (the two active
