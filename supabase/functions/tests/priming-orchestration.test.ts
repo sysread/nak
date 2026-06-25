@@ -90,8 +90,9 @@ function intuitionPayload(over: Partial<IntuitionPayload> = {}): IntuitionPayloa
 }
 function recallPayload(over: Partial<ContextRecallPayload> = {}): ContextRecallPayload {
   return {
-    v: 1,
+    v: 2,
     note: 'NOTE',
+    citations: [],
     computed_at_round: 1,
     computed_at_band: null,
     computed_at_column: null,

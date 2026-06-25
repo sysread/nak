@@ -206,14 +206,11 @@ const MEMORY_REAFFIRM_WIRE_SCHEMA: AgentTool['wire'] = {
 
 
 
-// Reflection's user-turn instruction. Verbatim port of REFLECTION_PROMPT
-// in src/lib/agents/reflection/prompt.ts so the model gets identical
-// guidance whichever path triggered it. ASCII em-dashes in the browser
-// original are preserved here to keep the two literals diff-identical;
-// this is the one place the repo's ASCII-only rule yields to "the prompt
-// text must match the browser byte-for-byte." (Smart punctuation in a
-// prompt is invisible to the model and harmless; a drift between the two
-// copies during the migration window is the real risk.)
+// Reflection's user-turn instruction. Runs server-side only - the
+// browser no longer carries a reflection prompt module. The em-dashes
+// below are grandfathered from the browser-era original; they're
+// invisible to the model, so they stay rather than churn the literal.
+// New lines use ASCII per the repo default.
 const REFLECTION_PROMPT = `You've just finished the conversation above. Now step out of that
 role. You're not talking to the user anymore — nobody will read this
 reply. Your job is to update long-term memory based on what
@@ -245,13 +242,31 @@ the most valuable to get right — fact extraction is the floor, not the
 goal. A future turn improves more from knowing how this person likes
 to be talked to than from another stored fact.
 
+Write memories timeless. A memory is read back weeks or months later
+and must read true THEN, not just today. The store records when it
+learned each fact on its own, so:
+
+- Don't anchor a memory to the moment you wrote it. No "this
+  conversation", "this session", "today", or "just now", and no date
+  whose only job is to stamp when you learned the fact. State the fact
+  itself - "the user reduced besan to 25g and it worked", not "BESAN
+  UPDATE (this session): reduced besan to 25g". Keep a date only when
+  it is part of the fact (an event, a deadline, a milestone).
+- Don't narrate yourself or the exchange. Write a fact about the user,
+  not a log of this turn - "the user double-checks claims against
+  primary sources" not "EVIDENCE-CHECKING PROTOCOL EXERCISED this
+  conversation: I had to verify my claim". Drop "what I got wrong",
+  "I had to", "this validates".
+
 Workflow for each memory you consider writing:
 
 1. Call memory_search with a related query FIRST. Check whether a
    similar memory already exists.
 2. If one exists and your new insight is a refinement, call
-   memory_update on it (which also bumps confidence — corroborated
-   memories rank higher). Don't create a near-duplicate.
+   memory_update on it rather than creating a near-duplicate.
+   memory_update only rewrites the wording - it does NOT change
+   confidence. If the exchange genuinely corroborates the memory,
+   call memory_reaffirm to nudge its confidence up.
 3. If a new insight contradicts an existing memory, call
    memory_invalidate on the stale one. This doesn't delete it, it
    halves its confidence so search stops surfacing it. Repeated
@@ -543,4 +558,4 @@ async function markReflected(
 // memory_delete, no ask_user) is a safety invariant - background agents
 // must never hard-delete or reach for a UI tool - so it gets its own
 // assertion in supabase/functions/tests/reflection.test.ts.
-export const __test = { buildReflectionToolbox };
+export const __test = { buildReflectionToolbox, REFLECTION_PROMPT };

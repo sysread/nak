@@ -10,4 +10,5 @@ export {
   coerceContextRecallPayload,
   pickFresherContextRecallPayload,
   type ContextRecallPayload,
+  type ContextRecallCitation,
 } from './types';

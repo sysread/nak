@@ -60,6 +60,7 @@ describe('tool registry', () => {
         'doc_grep',
         'doc_list',
         'doc_read',
+        'memory_get',
         'memory_recall',
         'memory_search',
         'recipe_get',

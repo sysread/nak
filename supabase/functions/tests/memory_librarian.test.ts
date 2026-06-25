@@ -5,11 +5,13 @@
 // invariants live here:
 //
 //   - The shared toolbox is reads (memory/conversation search) plus
-//     graph maintenance (consolidate, invalidate, doubt, relate,
-//     unrelate). NO memory_create (the librarian never invents), no
-//     memory_update (auto-bump would systematically inflate across
-//     consolidation passes), no memory_reaffirm (global-view agents
-//     would over-corroborate), no memory_delete, no ask_user.
+//     content + graph maintenance (consolidate, reshape, invalidate,
+//     doubt, relate, unrelate). memory_reshape is the one sanctioned
+//     content rewrite - framing only, no fact or confidence change.
+//     NO memory_create (the librarian never invents), no memory_update
+//     (reflection's refine-a-fact verb, not the librarian's), no
+//     memory_reaffirm (global-view agents would over-corroborate), no
+//     memory_delete, no ask_user.
 //   - Each agent's prompt names its own attractor (co-occurrence for
 //     rem, similarity for deep-sleep) and frames "no changes" as the
 //     default outcome.
@@ -33,6 +35,7 @@ Deno.test('librarian toolbox is reads + graph maintenance, in declared order', (
     [
       'memory_search',
       'memory_consolidate',
+      'memory_reshape',
       'memory_invalidate',
       'memory_doubt',
       'memory_relate',
@@ -85,6 +88,20 @@ Deno.test('deep-sleep prompt names the similarity attractor and score tiers', ()
   assertStringIncludes(prompt, 'The librarian collapses; reflection generates.');
   assertStringIncludes(prompt, 'Score is a signal, not a verdict.');
   assertStringIncludes(prompt, '- [SEED] (conf=1.00, id=m1) `cat name` - Mochi');
+});
+
+Deno.test('both librarian prompts grant memory_reshape for de-poisoning, facts preserved', () => {
+  const rem = buildRemPrompt({ batchList: '- (conf=1.00, id=m1) `x` - y', batchSize: 1 });
+  const deep = buildDeepSleepPrompt({
+    batchList: '- [SEED] (conf=1.00, id=m1) `x` - y',
+    batchSize: 1,
+  });
+  for (const prompt of [rem, deep]) {
+    assertStringIncludes(prompt, 'memory_reshape');
+    // Scoped to encoding-time framing, not fact edits.
+    assertStringIncludes(prompt, 'this conversation');
+    assertStringIncludes(prompt, 'preserve every number, name, decision');
+  }
 });
 
 Deno.test('rem batch renderer squashes whitespace and tags confidence bands', () => {

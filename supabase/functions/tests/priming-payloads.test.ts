@@ -56,8 +56,9 @@ Deno.test('intuition: drops drive entries that are not known names / non-string'
 
 Deno.test('context-recall: a well-formed payload coerces through', () => {
   const out = coerceContextRecallPayload({
-    v: 1,
-    note: 'I remember we discussed X.',
+    v: 2,
+    note: 'I remember we discussed X ^1^.',
+    citations: [{ index: 1, kind: 'memory', id: 'm1', label: 'X' }],
     computed_at_round: 2,
     computed_at_band: null,
     computed_at_column: null,
@@ -65,16 +66,19 @@ Deno.test('context-recall: a well-formed payload coerces through', () => {
     trigger: 'stale',
   });
   assert(out !== null);
-  assertEquals(out!.note, 'I remember we discussed X.');
+  assertEquals(out!.note, 'I remember we discussed X ^1^.');
+  assertEquals(out!.citations.length, 1);
+  assertEquals(out!.citations[0].id, 'm1');
 });
 
 Deno.test('context-recall: an empty note is a VALID cached state (not null)', () => {
-  // note === '' means "both children returned empty this round" - a real
+  // note === '' means "nothing relevant surfaced this round" - a real
   // cached negative the trigger debounce relies on; it must NOT coerce
   // to null.
   const out = coerceContextRecallPayload({
-    v: 1,
+    v: 2,
     note: '',
+    citations: [],
     computed_at_round: 2,
     computed_at_band: null,
     computed_at_column: null,
@@ -85,7 +89,31 @@ Deno.test('context-recall: an empty note is a VALID cached state (not null)', ()
   assertEquals(out!.note, '');
 });
 
+Deno.test('context-recall: the pre-smoothing v1 shape coerces to null', () => {
+  // v1 (note only, no citations) must read as "no cache" so the next
+  // trigger recomputes into the v2 smoothed shape.
+  assertEquals(
+    coerceContextRecallPayload({ v: 1, note: 'x', computed_at_round: 1, computed_at_at: 1 }),
+    null,
+  );
+});
+
 Deno.test('context-recall: wrong version / non-string note -> null', () => {
   assertEquals(coerceContextRecallPayload({ v: 9, note: 'x', computed_at_round: 1, computed_at_at: 1 }), null);
-  assertEquals(coerceContextRecallPayload({ v: 1, note: 123, computed_at_round: 1, computed_at_at: 1 }), null);
+  assertEquals(coerceContextRecallPayload({ v: 2, note: 123, citations: [], computed_at_round: 1, computed_at_at: 1 }), null);
+});
+
+Deno.test('context-recall: malformed citations degrade to [] without dropping the payload', () => {
+  const out = coerceContextRecallPayload({
+    v: 2,
+    note: 'recollection ^1^',
+    citations: 'not-an-array',
+    computed_at_round: 2,
+    computed_at_band: null,
+    computed_at_column: null,
+    computed_at_at: 1_000,
+    trigger: 'cold',
+  });
+  assert(out !== null);
+  assertEquals(out!.citations, []);
 });

@@ -1,12 +1,16 @@
 <!--
-  Citations panel — list of Venice's `web_search_citations` for one
-  assistant turn.
+  Citations panel — list of sources for one turn, shown as a slide-down
+  under the message action bar (web-search citations) or under a recall
+  injection (context-recall citations). Rows are the normalized
+  `DisplayCitation` shape, so external web URLs and internal in-app
+  routes render through one component; the caller maps its native
+  citation type via `src/lib/ui/citations.ts`.
 
-  Expands from the message action bar. Each row corresponds to a `^N^`
-  superscript in the message body (1-based). Two entry points:
+  Each row corresponds to a `^N^` superscript in the body (1-based). Two
+  entry points:
 
-    1. User clicks the "Citations" button in `.msg-actions` → panel
-       toggles open/closed.
+    1. User clicks the "Citations" / "Sources" button in the action bar
+       → panel toggles open/closed.
     2. User clicks a `^N^` superscript inside the body → parent
        component opens the panel AND bumps `flashCite` to trigger a
        background-color pulse on row N, so the eye lands on the
@@ -22,10 +26,10 @@
 <script lang="ts">
   import { slide } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
-  import type { Citation } from '$lib/supabase';
+  import type { DisplayCitation } from '$lib/ui/citations';
 
   interface Props {
-    citations: Citation[];
+    citations: DisplayCitation[];
     open: boolean;
     /**
      * Bump `key` to re-trigger a row flash even when `index` didn't
@@ -100,19 +104,23 @@
           <span class="citation-index" aria-hidden="true">{c.index}</span>
         {/key}
         <div class="citation-body">
+          <!-- External web sources open in a new tab; internal recall
+               routes (?memory= / ?cid= / ?wiki_article_id=) carry no
+               target/rel so the parent's click delegation can intercept
+               them and navigate in-app. -->
           <a
             class="citation-title"
-            href={c.url}
-            target="_blank"
-            rel="noopener noreferrer nofollow"
+            href={c.href}
+            target={c.external ? '_blank' : undefined}
+            rel={c.external ? 'noopener noreferrer nofollow' : undefined}
           >
-            {c.title || c.url}
+            {c.label}
           </a>
-          {#if c.date}
-            <span class="citation-date">{c.date}</span>
+          {#if c.meta}
+            <span class="citation-date">{c.meta}</span>
           {/if}
-          {#if c.content}
-            <div class="citation-snippet">{c.content}</div>
+          {#if c.snippet}
+            <div class="citation-snippet">{c.snippet}</div>
           {/if}
         </div>
       </li>

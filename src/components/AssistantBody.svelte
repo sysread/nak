@@ -44,6 +44,7 @@
     parseCitationRefHref,
     showCitationsControls,
   } from '$lib/ui/assistant-body';
+  import { webCitationToDisplay } from '$lib/ui/citations';
   import { formatMessageStamp } from '$lib/ui/message-timestamp';
 
   interface Props {
@@ -132,7 +133,7 @@
   let flashCite = $state<{ index: number; key: number } | null>(null);
   let flashCounter = 0;
 
-  const citationList = $derived(citations ?? []);
+  const citationList = $derived((citations ?? []).map(webCitationToDisplay));
   const hasCitations = $derived(citationList.length > 0);
   const hasRefs = $derived(hasCitationRefsInBody(content));
   const citationsUnavailable = $derived(

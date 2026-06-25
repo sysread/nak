@@ -14,8 +14,9 @@ function payload(
   overrides: Partial<ContextRecallPayload> = {}
 ): ContextRecallPayload {
   return {
-    v: 1,
+    v: 2,
     note: 'I remember the user prefers concrete examples.',
+    citations: [],
     computed_at_round: 1,
     computed_at_band: 2,
     computed_at_column: 'confident',
@@ -34,9 +35,11 @@ describe('coerceContextRecallPayload', () => {
     expect(coerceContextRecallPayload([])).toBeNull();
   });
 
-  it('returns null when version is anything other than 1', () => {
-    expect(coerceContextRecallPayload({ ...payload(), v: 2 })).toBeNull();
-    expect(coerceContextRecallPayload({ ...payload(), v: 0 })).toBeNull();
+  it('returns null when version is anything other than 2', () => {
+    // v1 is the pre-smoothing shape (note only, no citations); it must
+    // coerce to null so the next trigger recomputes into the v2 shape.
+    expect(coerceContextRecallPayload({ ...payload(), v: 1 })).toBeNull();
+    expect(coerceContextRecallPayload({ ...payload(), v: 3 })).toBeNull();
   });
 
   it('treats an empty note as a valid cached state', () => {
@@ -98,11 +101,44 @@ describe('coerceContextRecallPayload', () => {
 
   it('round-trips a valid payload unchanged', () => {
     const p = payload({
-      note: 'I remember X. From earlier conversations, Y.',
+      note: 'I remember X ^1^. From earlier conversations, Y ^2^.',
+      citations: [
+        { index: 1, kind: 'memory', id: 'm1', label: 'X fact' },
+        { index: 2, kind: 'conversation', id: 'c1', label: 'Y thread' },
+      ],
       computed_at_round: 5,
       trigger: 'title',
     });
     expect(coerceContextRecallPayload(p)).toEqual(p);
+  });
+
+  it('treats a missing or non-array citations field as empty (best-effort)', () => {
+    // Citations are metadata, not load-bearing like note - a glitch must
+    // not invalidate the whole payload and drop the recollection.
+    const withoutCitations: Record<string, unknown> = { ...payload() };
+    delete withoutCitations.citations;
+    expect(coerceContextRecallPayload(withoutCitations)?.citations).toEqual([]);
+    expect(
+      coerceContextRecallPayload({ ...payload(), citations: 'nope' })?.citations
+    ).toEqual([]);
+  });
+
+  it('drops malformed citation entries but keeps the clean ones', () => {
+    const out = coerceContextRecallPayload(
+      payload({
+        citations: [
+          { index: 1, kind: 'memory', id: 'm1', label: 'ok' },
+          { index: 2, kind: 'bogus', id: 'x', label: 'bad kind' },
+          { index: 3, kind: 'wiki', id: '', label: 'empty id' },
+          { kind: 'memory', id: 'm2', label: 'no index' },
+          { index: 4, kind: 'conversation', id: 'c1', label: 'ok2' },
+        ] as unknown as ContextRecallPayload['citations'],
+      })
+    );
+    expect(out?.citations).toEqual([
+      { index: 1, kind: 'memory', id: 'm1', label: 'ok' },
+      { index: 4, kind: 'conversation', id: 'c1', label: 'ok2' },
+    ]);
   });
 });
 

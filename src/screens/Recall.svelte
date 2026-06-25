@@ -29,34 +29,21 @@
    * rather than a blank panel.
    *
    * Sibling to Intuition.svelte and Samskara.svelte - same chrome,
-   * distinct content. The chapter-opener light-bulb glyph is a
-   * float-dropped initial at the start of each injection's prose,
-   * marking the "internal monologue" voice visually distinct from
-   * the user prompt above it.
-   *
-   * The notes render through the shared Markdown component, the same
-   * pipeline a chat reply uses, so any light formatting the stitch
-   * emits (emphasis, lists, the occasional inline code) lands the way
-   * it does in the conversation. The first-person voice ("I
-   * remember...", "Last time we talked about this...") is already in
-   * the right register; italic styling reinforces the internal-
-   * monologue framing.
+   * distinct content. This file owns the modal chrome and the
+   * most-recent-first list; each turn-entry (the user prompt, the
+   * injected note, and its cited sources) is rendered by the companion
+   * RecallEntry.svelte, which owns the note markup, the chapter-opener
+   * light-bulb drop cap, and the per-entry citations panel + click
+   * interaction.
    */
   import { route } from '$lib/routing.svelte';
-  import Markdown from '../components/Markdown.svelte';
+  import RecallEntry from '../components/RecallEntry.svelte';
   import {
     coerceContextRecallPayload,
     type ContextRecallPayload,
   } from '$lib/context-recall';
-  import {
-    buildRecallEntries,
-    formatRecallTimestamp,
-    formatRecallTrigger,
-  } from '$lib/ui/recall';
-  import {
-    formatRelativeAge,
-    isStaleForDisplay,
-  } from '$lib/ui/payload-freshness';
+  import { buildRecallEntries } from '$lib/ui/recall';
+  import { isStaleForDisplay } from '$lib/ui/payload-freshness';
   import type { Message, Thread } from '$lib/supabase';
 
   interface Props {
@@ -153,64 +140,17 @@
           {#if i > 0}
             <hr class="entry-sep" />
           {/if}
-          {@const userMsg = userMessageByRound.get(entry.computed_at_round)}
-          <section class="entry">
-            <h2 class="turn-heading">Turn {entry.computed_at_round}</h2>
-
-            <h3 class="sub-heading">User</h3>
-            {#if userMsg && userMsg.content.trim().length > 0}
-              <p class="user-prompt">{userMsg.content}</p>
-            {:else}
-              <!-- A round number with no matching user message in
-                   the loaded transcript - the row may have been
-                   edited or deleted since the injection fired.
-                   Keep the diagnostic visible rather than dropping
-                   the entry entirely; the injection still tells
-                   the user what Nak was thinking about. -->
-              <p class="user-prompt subtle missing">
-                (user message no longer available)
-              </p>
-            {/if}
-
-            <h3 class="sub-heading">Internal context</h3>
-            <!-- A div, not a p: the Markdown component emits block
-                 content (paragraphs, lists) which is invalid nested
-                 inside a <p>. The floated bulb is a sibling preceding
-                 the .md block, and .md is a plain block (not a BFC),
-                 so the note's first line still wraps around the drop
-                 cap exactly as verbatim text did. -->
-            <div class="recall-prose">
-              <!-- Drop-capped light bulb at the start of the first
-                   line - the chapter-opener metaphor from the brief.
-                   SVG (not emoji) so we get crisp rendering at the
-                   large drop-cap size across platforms; emoji
-                   presentation varies wildly between fonts at this
-                   scale. -->
-              <svg
-                class="recall-bulb"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.6"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                aria-hidden="true"
-              >
-                <path d="M9 18h6" />
-                <path d="M10 22h4" />
-                <path d="M12 2a7 7 0 0 0-4 12.7c.7.7 1 1.7 1 2.7V18h6v-.6c0-1 .3-2 1-2.7A7 7 0 0 0 12 2z" />
-              </svg>
-              <Markdown content={entry.note} />
-            </div>
-
-            <p class="entry-meta subtle">
-              {formatRecallTrigger(entry.trigger)} · {formatRecallTimestamp(entry.computed_at_at)}
-              ({formatRelativeAge(entry.computed_at_at, now)})
-              {#if i === 0 && payload !== null && isStaleForDisplay(entry.computed_at_at, now)}
-                <span class="stale-badge">stale</span>
-              {/if}
-            </p>
-          </section>
+          <!-- The stale badge applies only to the live cache entry
+               (entries[0] when `payload` is non-null); history entries
+               are past payloads, so staleness is moot for them. -->
+          <RecallEntry
+            {entry}
+            userMsg={userMessageByRound.get(entry.computed_at_round)}
+            stale={i === 0 &&
+              payload !== null &&
+              isStaleForDisplay(entry.computed_at_at, now)}
+            {now}
+          />
         {/each}
       {/if}
     </div>
@@ -291,120 +231,10 @@
     min-width: 0;
   }
 
-  .entry {
-    /* Each turn-entry stands on its own; the hr rule between entries
-       (rendered conditionally above) carries the visual separation,
-       so the section itself just needs internal rhythm. */
-    margin: 0;
-  }
-
   .entry-sep {
     border: 0;
     border-top: 1px solid var(--border);
     margin: 1.5rem 0;
-  }
-
-  .turn-heading {
-    font-size: 1rem;
-    margin: 0 0 0.5rem;
-    color: var(--text);
-  }
-
-  .sub-heading {
-    font-size: 0.8rem;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: color-mix(in srgb, var(--text) 70%, transparent);
-    margin: 0.85rem 0 0.3rem;
-    font-weight: 600;
-  }
-
-  .user-prompt {
-    margin: 0;
-    padding: 0.5rem 0.75rem;
-    border-left: 2px solid color-mix(in srgb, var(--accent) 35%, var(--border));
-    background: color-mix(in srgb, var(--bg-2) 70%, transparent);
-    border-radius: 0 6px 6px 0;
-    /* white-space:pre-wrap so the user's paragraphing and line
-       breaks survive verbatim into the rendered block. */
-    white-space: pre-wrap;
-    line-height: 1.45;
-    color: var(--text);
-    font-size: 0.9rem;
-    /* Keep an enormous prompt from dominating the modal; the user
-       can still scroll within the block if they need to read the
-       whole thing. */
-    max-height: 12rem;
-    overflow-y: auto;
-  }
-
-  .user-prompt.missing {
-    border-left-style: dashed;
-    font-style: italic;
-  }
-
-  /* Italic prose with a floated-left light bulb acting as a drop
-     cap. The float pulls subsequent lines to wrap around the bulb's
-     right edge - the printed-chapter effect from the brief. The
-     surrounding box (padding + tinted background + accent left
-     border) mirrors the .user-prompt blockquote above so the two
-     halves of an entry read as parallel artifacts: your input on
-     one side, the assistant's prior thought on the other. Without
-     the container, the italic prose read as a wall of text against
-     the modal background; the box gives the eye somewhere to land
-     and matches the visual weight of the user-prompt block. The
-     line-height is bumped well past body copy so the wrapped
-     italic lines have room to breathe. */
-  .recall-prose {
-    margin: 0;
-    padding: 0.65rem 0.85rem;
-    border-left: 2px solid color-mix(in srgb, var(--accent) 55%, var(--border));
-    background: color-mix(in srgb, var(--accent) 7%, transparent);
-    border-radius: 0 6px 6px 0;
-    font-style: italic;
-    line-height: 1.7;
-    color: var(--text);
-    /* No white-space:pre-wrap here - the Markdown component owns block
-       structure now, so paragraph breaks arrive as real <p> tags.
-       Leaving pre-wrap on would render the newlines between those tags
-       as visible whitespace and open extra vertical gaps. */
-    /* Contain the floated bulb so it can't hang out the bottom of
-       the colored box on a short note. flow-root establishes a
-       block formatting context without overflow:hidden's clipping
-       side-effects, which matters because a very long URL inside
-       the note shouldn't get cut off at the box edge. */
-    display: flow-root;
-  }
-
-  .recall-bulb {
-    float: left;
-    width: 2.4rem;
-    height: 2.4rem;
-    margin: 0.1rem 0.6rem 0 0;
-    color: color-mix(in srgb, var(--accent) 75%, var(--text));
-    /* Soft glow so the bulb reads as illuminated rather than just a
-       large icon. The shadow uses currentColor via the same accent
-       blend so it tints with the user's accent setting. */
-    filter: drop-shadow(0 0 6px color-mix(in srgb, var(--accent) 35%, transparent));
-  }
-
-  .entry-meta {
-    margin: 0.6rem 0 0;
-    font-size: 0.78rem;
-  }
-
-  /* "stale" chip on the live cache entry: old enough that the chat-loop
-     would suppress it at injection time. Warm hue = soft warning. */
-  .stale-badge {
-    display: inline-block;
-    margin-left: 0.4rem;
-    padding: 0 0.35rem;
-    border-radius: 0.4rem;
-    font-size: 0.7rem;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-    color: var(--bg);
-    background: var(--warning, #b8860b);
   }
 
   .empty {

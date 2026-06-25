@@ -111,6 +111,12 @@ horizontal rules. Each entry reports the trigger (cold start,
 topic shift, mood shift, or staleness fuse) and the timestamp it
 landed.
 
+Recalled facts cite their sources. Small superscript numbers in the
+note (like the ones web search adds) link to a **Sources** list under
+each entry; clicking a source opens the memory, prior conversation, or
+wiki article it came from, so you can trace exactly what Nak was
+drawing on.
+
 Recall injections are per-turn and ephemeral — each fire is only
 used by the round it was computed for; nothing about the
 injection survives into later turns of the conversation. The

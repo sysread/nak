@@ -1,7 +1,7 @@
 # Memory
 
 Long-term memory: the `memories` table, the `memory_*` CRUD
-tools (search / create / update / reaffirm / doubt / relate /
+tools (search / get / create / update / reaffirm / doubt / relate /
 unrelate / invalidate / delete), the top-level `memory_recall`
 tool, the reflection agent that writes memories after
 conversations settle, and the recall agent that reads them
@@ -97,11 +97,16 @@ in `docs/user/memory.md`. The dev side has five moving parts:
   same pipeline; keep the two in step so a human and the model
   can't disagree on what "search a memory" means.
 - `src/lib/tools/memory_*.schema.ts` — the browser side of every
-  chat-facing memory tool (search / create / update / delete /
+  chat-facing memory tool (search / get / create / update / delete /
   reaffirm / doubt / relate / unrelate / recall). Schema-only
   `serverSideTool` registrations: the browser ships the wire
   `tools` array and the venice function dispatches. No memory
   tool executes in the browser.
+- `supabase/functions/venice/tools/memory_get.ts` — by-id fetch of
+  one memory (`{found, memory: {id, label, data, confidence,
+  created_at, updated_at}}`), the read-only drill-down behind the
+  recall block's memory citations. Parallel to `conversation_get` /
+  `wiki_get`; always-on, b-strict (`user_id` filter).
 - `supabase/functions/venice/tools/memory_*.ts` — the tool
   implementations. Invalidate halves confidence; delete
   hard-removes; reaffirm +0.5 cap 10.0 and doubt ×0.7 no floor,
@@ -120,7 +125,11 @@ in `docs/user/memory.md`. The dev side has five moving parts:
 - `supabase/functions/venice/agents/reflection.ts` — the reflection
   agent. Exports `reflectOneThread(adminClient, userId)`; runs
   write-scoped with no return value (side effects = memory tool
-  calls).
+  calls). Its prompt instructs TIMELESS memories - no "this session",
+  no write-date narration, no first-person AI self-logging - because a
+  body that stamps when it was written reads back later as a
+  current-chat event (the row's `created_at` already records when it
+  was learned). `__test.REFLECTION_PROMPT` pins that guidance.
 - `supabase/functions/venice/agents/deep_sleep.ts` — the memory
   librarian's slow-wave consolidation pass. Per run it picks the
   longest-unvisited memory as the seed, embeds it, fetches the
@@ -143,11 +152,23 @@ in `docs/user/memory.md`. The dev side has five moving parts:
   successful run. Exports `runRemSweepTick` and `runRemManual`.
 - `supabase/functions/venice/agents/_memory_librarian_tools.ts` —
   the toolbox shared by both librarian passes
-  (`buildMemoryLibrarianToolbox`: consolidate, search,
+  (`buildMemoryLibrarianToolbox`: consolidate, reshape, search,
   relate/unrelate, invalidate, doubt, conversation_search -
   deliberately no create / update / reaffirm) plus the shared
   in-flight guard helpers (`claimMemoryLibrarianInflight` /
   `releaseMemoryLibrarianInflight`).
+- `supabase/functions/venice/tools/memory_reshape.ts` — the
+  librarian's framing-only content rewrite: change a row's label/data
+  to strip encoding-time poison ("this conversation", write-date
+  narration, first-person AI self-logging) WITHOUT changing facts or
+  confidence. Mechanically memory_update minus the contract: a distinct
+  tool so the librarian's "reframe, don't generate" boundary stays
+  legible (the toolbox excludes memory_update by name). Logs an
+  `update` changelog row; the embedding-clear trigger re-embeds the
+  cleaned text. The rem / deep-sleep prompts scope it to de-poisoning,
+  so memories heal over time rather than relying on read-time laundering
+  forever (see [`context-recall.md`](./context-recall.md) -> "Keeping
+  the store clean").
 - `supabase/functions/venice/tools/memory_consolidate.ts` — the
   librarian's content-write primitive (wire schema lives with the
   toolbox above; not reachable from reflection or the main chat).
@@ -369,11 +390,14 @@ in `docs/user/memory.md`. The dev side has five moving parts:
     claim for the embeddings backfill
   - `confidence real default 1.0` — starts at 1.0 on create;
     `memory_invalidate` halves it (reflection-only, ×0.5);
-    `memory_update` calls the `bump_memory_confidence` RPC which
-    adds 1.0 up to 10.0; the chat-side `memory_reaffirm` calls
-    `reaffirm_memory_confidence` (+0.5 cap 10.0) and
-    `memory_doubt` calls `doubt_memory_confidence` (×0.7 no
-    floor). Search floors at 0.05 and applies a log boost so
+    `memory_update` and `memory_reshape` rewrite content only and do
+    NOT change confidence (corroboration is its own explicit signal,
+    not a side effect of an edit); the `memory_reaffirm` lever calls
+    `reaffirm_memory_confidence` (+0.5 cap 10.0) and `memory_doubt`
+    calls `doubt_memory_confidence` (×0.7 no floor). The
+    `bump_memory_confidence` RPC exists in the schema but is currently
+    unreferenced - no tool calls it. Search floors at 0.05 and applies
+    a log boost so
     corroborated memories rank higher. `classifyMemoryConfidence`
     in `src/lib/memories.ts` is the single source of truth for
     the qualitative-tag thresholds (>=5.0 corroborated, >=1.5
@@ -497,10 +521,10 @@ from the same ports); the browser carries only the wire schemas.
   next pass. `message` is required (commit-style) and appends a
   `create` changelog row.
 - `memory_update.execute({ id, label?, data?, message })` —
-  writes changed fields, calls `bump_memory_confidence`, and
-  relies on the trigger to null the embedding if either text
-  changed. `message` is required and appends an `update`
-  changelog row.
+  writes the changed fields and relies on the trigger to null the
+  embedding if either text changed. Does NOT change confidence (a
+  rewrite is not corroboration). `message` is required and appends an
+  `update` changelog row.
 - `memory_invalidate.execute({ id })` — halves confidence via
   `decay_memory_confidence` RPC. Not destructive. No changelog
   entry (confidence-only).

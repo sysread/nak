@@ -83,8 +83,8 @@ const DEEP_SLEEP_MAX_NEIGHBORS = 8;
 const DEEP_SLEEP_MIN_BATCH_SIZE = 2;
 
 // ---------------------------------------------------------------------------
-// Prompt. Verbatim port of src/lib/agents/deep-sleep/prompt.ts so the
-// model gets identical guidance after the cutover.
+// Prompt. Runs server-side only - the browser no longer carries a
+// deep-sleep prompt module.
 //
 // Why score-in-prompt: cosine similarity is a noisy signal at the
 // 0.80-0.95 range. Showing the score per pair lets the agent self-
@@ -128,12 +128,20 @@ const TOOLS_BLOCK = `**Tools you can use**:
   than \`memory_invalidate\`). Use when a memory smells stale or
   questionable but you don't have direct contradiction. Five doubts
   from a fresh 1.0 land around 0.17 ([shaky] tag).
+- \`memory_reshape\` - rewrite ONE memory's framing without changing
+  its facts or confidence. Use it ONLY to clean encoding-time poison:
+  first-person session narration, "this conversation" / "this session"
+  / "today" phrasing, or a date that records when the memory was
+  WRITTEN (not a date that is part of a fact). Rewrite into a timeless
+  statement of the same facts - preserve every number, name, decision,
+  and fact-bearing date exactly. The row's created_at already records
+  when it was learned.
 
 You do NOT have \`memory_create\` (the librarian does not invent
-facts) or \`memory_update\` (auto-bumps confidence, which would
-systematically inflate across consolidation passes - use
-\`memory_consolidate\` instead, which preserves the stronger
-existing evidence).`;
+facts) or \`memory_update\` (reflection's verb for refining a fact,
+not yours). The one content rewrite you ARE allowed is
+\`memory_reshape\` (above): cleaning a row's framing, never its
+facts.`;
 
 const DISCIPLINE_BLOCK = `**Discipline**:
 
@@ -240,7 +248,11 @@ ${DISCIPLINE_BLOCK}
    \`memory_search\`), call \`memory_invalidate\` (clear
    contradiction) or \`memory_doubt\` (smells stale, no direct
    contradiction).
-5. Leave the rest alone.
+5. For any row whose TEXT carries encoding-time framing - "this
+   conversation" / "this session", a write-date narration, or
+   first-person AI narration - call \`memory_reshape\` to rewrite it
+   timeless, preserving every fact. Leave already-clean rows alone.
+6. Leave the rest alone.
 
 ${FINAL_REPLY_BLOCK}`;
 }

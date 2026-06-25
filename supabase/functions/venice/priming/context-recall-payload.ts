@@ -19,30 +19,53 @@
 import { type IntuitionTrigger } from '../../_shared/priming-triggers.ts';
 
 /**
+ * One citation resolved from a `^N^` superscript in the recall note.
+ * `index` is 1-based and matches the superscript; `kind` + `id` point
+ * at the source row so the UI can link to the in-app route and the
+ * model can drill down to verify. Mirror of ContextRecallCitation in
+ * src/lib/context-recall/types.ts - keep the two in lockstep.
+ */
+export interface ContextRecallCitation {
+  index: number;
+  kind: 'memory' | 'conversation' | 'wiki';
+  id: string;
+  label: string;
+}
+
+/**
  * One run of the context-recall pipeline, cached on the thread row.
  * Reused as-is across rounds until a trigger (cold-start, title
  * change, mood-band shift, stale fuse) invalidates it. The chat-loop
  * reconstructs the synthetic assistant <think> message at request
  * time from this payload.
  *
- * The `note` field carries the stitched first-person paragraph(s)
- * from the gathered index. Empty string is a legitimate cached state -
- * it means "nothing matched this round; cache the negative result so
- * the next trigger evaluation can debounce instead of re-running".
+ * The `note` field carries the smoothing pass's first-person
+ * recollection (with `^N^` citation superscripts). Empty string is a
+ * legitimate cached state - it means "nothing relevant surfaced this
+ * round; cache the negative result so the next trigger evaluation can
+ * debounce instead of re-running".
  */
 export interface ContextRecallPayload {
   /** Schema version. Bumped when the shape changes; the coercer treats
    *  an unknown version as "no cache" and triggers a fresh refresh on
    *  the next opportunity. */
-  v: 1;
+  v: 2;
 
   /**
-   * Stitched first-person note assembled from the three gathered
-   * layers. Empty string when every layer returned nothing - cached so
-   * we don't re-run the pipeline on the next trigger fire when the
-   * world hasn't changed.
+   * The smoothing pass's first-person recollection - compressed,
+   * past-anchored, relevance-bridged, with `^N^` superscripts keyed
+   * into `citations`. Empty string when nothing relevant surfaced -
+   * cached so we don't re-run the pipeline on the next trigger fire
+   * when the world hasn't changed.
    */
   note: string;
+
+  /**
+   * The sources the `^N^` superscripts in `note` resolve to. Empty
+   * when the note is empty or the smoothing pass cited nothing. Rows
+   * are keyed by `index`, not by array position.
+   */
+  citations: ContextRecallCitation[];
 
   /** User-message count at the time the cache was written. Used as the
    *  round-id - same value within all chat-loop iterations of one user
@@ -83,7 +106,7 @@ export function coerceContextRecallPayload(
 ): ContextRecallPayload | null {
   if (!raw || typeof raw !== 'object') return null;
   const r = raw as Record<string, unknown>;
-  if (r.v !== 1) return null;
+  if (r.v !== 2) return null;
   if (typeof r.note !== 'string') return null;
   if (
     typeof r.computed_at_round !== 'number' ||
@@ -123,14 +146,40 @@ export function coerceContextRecallPayload(
     return null;
   }
   return {
-    v: 1,
+    v: 2,
     note: r.note,
+    citations: coerceContextRecallCitations(r.citations),
     computed_at_round: r.computed_at_round,
     computed_at_band,
     computed_at_column,
     computed_at_at: r.computed_at_at,
     trigger,
   };
+}
+
+/**
+ * Coerce the persisted `citations` value into a clean array. Unlike
+ * `note` (a hard reject if malformed), citations are best-effort
+ * metadata: a glitch in one row must not invalidate the whole payload
+ * and drop the recollection, so a missing / non-array value reads as
+ * "no citations" ([]) and individual malformed entries are dropped.
+ * Mirror of the browser coercer in src/lib/context-recall/types.ts.
+ */
+function coerceContextRecallCitations(raw: unknown): ContextRecallCitation[] {
+  if (!Array.isArray(raw)) return [];
+  const out: ContextRecallCitation[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue;
+    const c = entry as Record<string, unknown>;
+    if (typeof c.index !== 'number' || !Number.isFinite(c.index)) continue;
+    if (c.kind !== 'memory' && c.kind !== 'conversation' && c.kind !== 'wiki') {
+      continue;
+    }
+    if (typeof c.id !== 'string' || c.id.length === 0) continue;
+    if (typeof c.label !== 'string') continue;
+    out.push({ index: c.index, kind: c.kind, id: c.id, label: c.label });
+  }
+  return out;
 }
 
 /** Minimal message shape the <think> builder emits. Deliberately not

@@ -4,9 +4,9 @@ A topic-boundary recall pipeline that runs alongside intuition: at
 the start of a thread, after a title shift, after a mood shift, or
 after a long stretch without a refresh, the priming stage searches the
 three persistent layers (memories, prior conversations, wiki),
-assembles a works-cited index, and injects it as a synthetic
-`<think>` assistant turn that the conscious response sees as its own
-prior recollection.
+compresses the hits into a first-person recollection with `^N^`
+citations, and injects it as a synthetic `<think>` assistant turn that
+the conscious response sees as its own prior recollection.
 
 > **Where it runs:** the pipeline runs server-side, as part of the
 > priming stage of `getStreamingResponse`
@@ -20,38 +20,67 @@ prior recollection.
 > events the function publishes (see
 > [`prompt-augmentation.md`](./prompt-augmentation.md) -> Observability).
 
-The index is deterministic - raw search, no LLM. Matching memory
-facts are inlined verbatim; related conversations and wiki articles
-come in as a `title (id: ...)` list that the model opens on demand
-with `conversation_get` / `wiki_get`. The same gather is exposed to
-the main model as the umbrella `context` tool, which returns the
-index structured rather than rendered.
+Retrieval is deterministic - raw vector search, no LLM - so the source
+facts can't drift at the point of retrieval. The memory, conversation,
+and wiki hits are gathered with their ids; the smoothing pass weaves
+them into the recollection and cites each by id (`^N^`), and the model
+opens any lead on demand with `memory_get` / `conversation_get` /
+`wiki_get`. The same gather is exposed to the main model as the
+umbrella `context` tool, which returns the index structured rather than
+rendered.
 
-## Why deterministic, not synthesized
+## Why deterministic retrieval, cited synthesis
 
 An earlier design fanned out three headless recall sub-agents
-(`RecallAgent`, `ConversationRecallAgent`, `WikiRecallAgent`) that
-each read the thread, ran their own searches, and synthesized a
-first-person note, which the pipeline stitched together. Two
-problems drove the rewrite:
+(`RecallAgent`, `ConversationRecallAgent`, `WikiRecallAgent`) that each
+read the thread, ran their OWN searches, and synthesized a first-person
+note. That synthesis hallucinated - it paraphrased, and sometimes
+invented, facts the stores never held - and fired three tool-loops on
+every boundary, on the live turn's critical path.
 
-- **Hallucination.** The synthesis step paraphrased - and sometimes
-  invented - facts the stores never held. Injecting that as the
-  model's own recollection is the worst place for a confabulation.
-- **Latency / cost.** Three headless tool-loops fired on every topic
-  boundary, on the live turn's critical path.
+The pipeline keeps that lesson but splits the two concerns:
 
-Inlining memory facts verbatim removes the hallucination surface
-(verbatim text cannot drift) and the per-layer searches replace three
-model round-trips with three vector queries. Conversations and wiki
-articles are large, so they ride as references rather than inline
-content: the model pays the drill-down cost (`conversation_get` /
-`wiki_get`) only when a lead looks worth pulling, instead of paying a
-synthesis cost on every boundary.
+- **Retrieval is deterministic.** The three layer searches are raw
+  vector queries (no LLM), so the source facts can't drift at the point
+  of retrieval, and the cost is three vector queries rather than three
+  agent loops.
+- **The render is one cited synthesis.** A single smoothing pass
+  (`context-recall-smoothing.ts`) compresses the gathered index into the
+  injected recollection - past-anchored, relevance-bridged - and cites
+  every claim by id (`^N^`). Because retrieval already produced
+  known-good rows that survive in the store and via `*_get` drill-down,
+  a synthesis drift is recoverable rather than an unfalsifiable
+  confabulation: the citation points back at the real row. That is the
+  line separating this from the reverted design - synthesis OVER a
+  verified retrieval, every claim traceable, not synthesis AS retrieval.
 
-The size-appropriate split is the design rule: small payloads
-(memory facts) inline; large payloads (transcripts, article bodies)
-by id.
+Conversations and wiki articles are large, so they ride as id
+references the model opens on demand (`conversation_get` / `wiki_get`);
+memories are small but also cited by id (`memory_get`), so a recalled
+specific can be checked against the verbatim row before the main model
+asserts it.
+
+## Keeping the store clean
+
+Read-time smoothing launders encoding-time poison (a memory body that
+says "this conversation" / "(June 2026, this session)") by anchoring on
+the row's real `created_at` and ignoring write-time framing. That
+laundering only sanitises the INJECTED note, though - the raw row stays
+reachable through the always-on drill-down tools (`memory_search` /
+`memory_get`), so a model that opens a poisoned row directly can still
+surface its encoding-time framing in the reply. That is why the two
+background reshape paths below matter: they clean the row at the source
+rather than papering over it at every read. Two background paths reduce
+that laundering burden over time so the stored rows get cleaner at the
+source:
+
+- **The reflection writer** (`agents/reflection.ts`) is instructed to
+  write memories TIMELESS - no "this session", no write-date narration,
+  no first-person AI self-logging - so new rows arrive clean.
+- **The memory librarians** (rem + deep-sleep) carry `memory_reshape`, a
+  framing-only rewrite (no fact or confidence change), and reshape any
+  poisoned row they visit on their cadence. See
+  [`memory.md`](./memory.md).
 
 ## The three layers
 
@@ -60,7 +89,7 @@ table; nothing substitutes for any of the others.
 
 | Layer | Table | What it carries | In the index |
 |---|---|---|---|
-| Memory | `memories` | Atomic facts and preferences ("Maya is the user's sister", "the user prefers tabs") | inline, verbatim (with a confidence tag on low-confidence rows) |
+| Memory | `memories` | Atomic facts and preferences ("Maya is the user's sister", "the user prefers tabs") | gathered with id, body, real `created_at`, and confidence tag; woven into the recollection and cited by id (`memory_get` to verify) |
 | Conversation | `threads` (titles + summaries) | What was worked through in prior threads | `title (id)` reference -> `conversation_get` |
 | Wiki | `wiki_articles` | Encyclopedic prose ABOUT topics in the user's life (projects, people, places) | `title (id)` reference -> `wiki_get` |
 
@@ -147,45 +176,60 @@ for the derived query; everything downstream is identical.
   the caller can skip the injection rather than push an empty `<think>`
   block. The payload type + coercer shape are shared with the surviving
   browser `src/lib/context-recall/types.ts` (below); both runtimes coerce
-  the same persisted shape. Schema-versioned (`v: 1`); a drift /
-  unknown-version row reads as null and triggers a fresh refresh. An empty
-  `note` is a VALID cached state representing "nothing matched this round"
-  - cached so the same-round debounce holds.
+  the same persisted shape. Schema-versioned (`v: 2` - `note` plus a
+  `citations[]` array; a drift / unknown / older-version row reads as
+  null and triggers a fresh refresh). An empty `note` is a VALID cached
+  state representing "nothing relevant surfaced this round" - cached so
+  the same-round debounce holds.
 - `src/lib/context-recall/types.ts` - the surviving browser copy of
-  `ContextRecallPayload`, `coerceContextRecallPayload`,
-  `pickFresherContextRecallPayload`. Read by the realtime-echo decoder
-  and the Recall diagnostics modal.
+  `ContextRecallPayload`, `ContextRecallCitation`,
+  `coerceContextRecallPayload`, `pickFresherContextRecallPayload`. Read
+  by the realtime-echo decoder and the Recall diagnostics modal.
 - `supabase/functions/venice/priming/context-recall.ts` - the
-  deterministic retrieval + render core. `deriveRecallQuery` (query from
+  deterministic retrieval core. `deriveRecallQuery` (query from
   messages), `gatherContextIndex` (the three parallel searches ->
-  `ContextIndex`), `renderContextThink` (index -> the `<think>` body),
-  and `runContextRecallPipeline`, the triggered entry point the
-  orchestrator calls (runs `gatherContextIndex`, renders the note,
-  returns a cache-ready payload with `note: ''` when every layer was
-  empty). Per-layer caps live here (`CONTEXT_MEMORY_LIMIT`,
-  `CONTEXT_CONVERSATION_LIMIT`, `CONTEXT_WIKI_LIMIT`). Each layer degrades
-  independently via `Promise.allSettled`: a search that throws or returns
-  nothing contributes an empty list. The umbrella `context` tool's own
-  gather lives separately in `venice/agents/context.ts`.
+  `ContextIndex`, memories now carrying `id` + `created_at`), and
+  `runContextRecallPipeline`, the triggered entry point the orchestrator
+  calls (gather, then hand off to the smoothing pass, returning a
+  cache-ready payload with `note: ''` when nothing surfaced). Per-layer
+  caps live here (`CONTEXT_MEMORY_LIMIT`, `CONTEXT_CONVERSATION_LIMIT`,
+  `CONTEXT_WIKI_LIMIT`). Each layer degrades independently via
+  `Promise.allSettled`. The umbrella `context` tool's own gather lives
+  separately in `venice/agents/context.ts`.
+- `supabase/functions/venice/priming/context-recall-smoothing.ts` - the
+  recall-time smoothing pass (replaces the old string-concat render).
+  `smoothContextRecall` runs one `deepseek-v4-flash` completion over the
+  gathered index + current exchange and returns `{ note, citations }`;
+  the source-numbering / source-block-render / citation-projection /
+  `^N^`-extraction helpers are pure and unit-tested via the `__test`
+  export.
 
 ## The injected `<think>` body
 
-`renderContextThink` assembles up to three sections, omitting any
-empty layer (an all-empty index renders to the empty string):
+The body is produced by the smoothing pass
+(`context-recall-smoothing.ts`), not assembled by string concat. One
+`deepseek-v4-flash` completion (reasoning disabled, like `web_search`)
+reads the gathered index plus the current exchange and emits a short
+first-person recollection that:
 
-- **Memories** - "I recall some related things about this topic:"
-  followed by each fact verbatim as a bullet. A `hedged` / `shaky`
-  confidence tag is appended inline so the model can hedge or verify
-  rather than asserting; `corroborated` / untagged rows read as plain
-  facts.
-- **Conversations** - a line naming `conversation_get` plus a
-  `- title (id: ...)` bullet per related thread.
-- **Wiki** - a line naming `wiki_get` plus a `- title (id: ...)`
-  bullet per related article.
+- **Anchors in the past** on each memory's real `created_at`, and
+  launders any encoding-time "this conversation" / "(June 2026)"
+  framing baked into the memory body (re-anchoring on the real date) so
+  the model can't read a recalled fact as a current-chat event.
+- **Bridges to the current turn** - every recalled thing states how it
+  connects to what the user just said, which keeps the model answering
+  the message rather than the recollection.
+- **Preserves specifics** (numbers, names, decisions, metrics, dates)
+  accurately without quoting, hedges inference, and flags `hedged` /
+  `shaky` memories as low-confidence.
+- **Cites by id** - `^N^` superscripts keyed to the payload's
+  `citations[]`, which the model drills into with `memory_get` /
+  `conversation_get` / `wiki_get` and which the Recall modal renders as
+  clickable source links.
 
-The voice is first-person recollection plus an explicit offer to look
-the referenced items up - the framing that makes the ids read as
-actionable leads, not as content the model has already read.
+An all-empty gather (or a smoothing pass that judges nothing relevant)
+yields an empty note, which the caller caches as the negative result
+and does not inject.
 
 ## The two recall tiers
 
@@ -201,12 +245,16 @@ remain LLM sub-agents - the **targeted drill-down tier**:
 - The pipeline and the `context` tool do NOT use those agents. They
   use `gatherContextIndex` instead.
 
-This divergence is deliberate: the automatic, every-boundary path is
-cheap and verbatim; the model reaches for an agent only when it wants
-one layer distilled rather than indexed. Don't "fix" the
-inconsistency by routing the pipeline back through the agents - that
-reintroduces the synthesis hallucination and the per-boundary cost
-the rewrite removed.
+This divergence is deliberate. The automatic, every-boundary path
+gathers deterministically and runs ONE cited smoothing pass over all
+three layers at once; the per-layer agents each run their own searches
+and distil a single layer in isolation - heavier (three loops) and,
+because the synthesis IS the retrieval there, with no citation back to a
+verified row. The model reaches for an agent only when it wants one
+layer deeply distilled. Don't "fix" the apparent inconsistency by
+routing the pipeline through those agents: that trades the shared
+deterministic gather and the traceable synthesis-over-verified-retrieval
+for the cost and the unfalsifiable confabulation the rewrite removed.
 
 ### Calibration drive on the recall agents
 
@@ -234,8 +282,9 @@ Shape (see `ContextRecallPayload` in
 
 ```ts
 {
-  v: 1,
-  note: string,                                       // empty string when every layer was empty
+  v: 2,
+  note: string,                                       // smoothed recollection with ^N^ markers; '' when nothing surfaced
+  citations: ContextRecallCitation[],                 // { index, kind: 'memory'|'conversation'|'wiki', id, label }
   computed_at_round: number,
   computed_at_band: number | null,
   computed_at_column: 'confident' | 'tentative' | null,
@@ -320,9 +369,11 @@ readable content. Registered in the always-on toolbox.
   `Promise.all` to keep wall-clock cost bounded by the slower of the
   two.
 - **Memory ([./memory.md](./memory.md))** - the pipeline reads the
-  memory layer via `searchMemoriesSemantic` and inlines hits verbatim
-  with `classifyMemoryConfidence` tags. The `memory_recall` TOOL still
-  wraps `RecallAgent` for the distilled read.
+  memory layer via `searchMemoriesSemantic` (carrying `id` +
+  `created_at` + `classifyMemoryConfidence` tags into the smoothing
+  pass). The smoothing pass cites memories by id; the model drills in
+  with the new `memory_get` tool. The `memory_recall` TOOL still wraps
+  `RecallAgent` for the distilled read.
 - **Conversation recall ([./conversation-recall.md](./conversation-recall.md))** -
   the pipeline reads the conversation layer via `searchThreads`
   (current thread excluded) and the model drills in with
@@ -334,11 +385,18 @@ readable content. Registered in the always-on toolbox.
   the model drills in with `wiki_get`. The `wiki_recall` TOOL still
   wraps `WikiRecallAgent`.
 - **Tools ([./tools.md](./tools.md))** - the umbrella `context`, the
-  three per-layer `*_recall` tools, the `*_search` tools, and the new
-  `conversation_get` are all in the always-on toolbox. The system
-  prompt's recall block frames the auto-injection as an INDEX (leads,
-  not content) and points the model at `conversation_get` / `wiki_get`
-  for drill-down.
+  three per-layer `*_recall` tools, the `*_search` tools, and the
+  `memory_get` / `conversation_get` / `wiki_get` drill-down trio are all
+  in the always-on toolbox. The smoothing pass cites sources by id and
+  the model drills into any of the three with the matching `*_get`.
+- **Recall modal / citations UI** - the Recall diagnostics modal
+  (`src/screens/Recall.svelte` + the per-entry
+  `src/components/RecallEntry.svelte`) renders each injected note and its
+  `citations[]` as a `CitationsPanel` slide-down; `^N^` superscripts open
+  the panel and each row links to the source's in-app route
+  (`?memory=` / `?cid=` / `?wiki_article_id=`). `src/lib/ui/citations.ts`
+  owns the citation->display and href->nav mapping, shared with the
+  web-search citations path (`AssistantBody`).
 - **Logging ([./logging.md](./logging.md))** - uses
   `createLogger('context-recall')`; the pipeline's complete log line
   carries per-layer hit counts (`memoryCount`, `conversationCount`,

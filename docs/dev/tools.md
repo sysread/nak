@@ -77,10 +77,12 @@ Notable members (the full ordered list is `alwaysOnToolbox` in
   recall passes, each running an LLM sub-agent that returns a
   synthesized note from one store. The targeted, more-expensive
   drill-down tier above the deterministic `context` survey.
-- Direct reads across every store: `memory_search`,
+- Direct reads across every store: `memory_search` / `memory_get`,
   `conversation_search` / `conversation_get`, `wiki_search` /
   `wiki_list` / `wiki_get`, `recipe_list` / `recipe_get`,
-  `doc_list` / `doc_get` / `doc_grep` / `doc_read`.
+  `doc_list` / `doc_get` / `doc_grep` / `doc_read`. The `*_get` trio
+  (`memory_get` / `conversation_get` / `wiki_get`) is the by-id
+  drill-down behind the recall block's `^N^` citations.
 - `research_docs` - one-shot sub-completion whose system prompt
   bundles the user-facing doc corpus (`docs/user/`), answering
   meta-questions about Nak itself; returns `{answer, sources}`.
