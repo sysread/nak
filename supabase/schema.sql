@@ -12493,3 +12493,439 @@ exception when others then
   raise notice 'wiki record file gc cron setup skipped: %', sqlerrm;
 end
 $cron$;
+
+-- intents ------------------------------------------------------------------
+--
+-- The first NORMATIVE layer in nak. Every other user-model the app
+-- builds (samskara, bias_summary, memories, wiki) describes who the
+-- user is; an intent is a self-authored standing GOAL the chat model
+-- forms about how it wants to help the user grow ("help them notice
+-- when they're seeking confirmation rather than testing a belief").
+-- See docs/dev/in-progress/intents.md for the full design.
+--
+-- The load-bearing integrity property: an intent's "is this working?"
+-- signal (its efficacy posterior) is read from descriptive-layer
+-- MOVEMENT relative to a matched control, never from the model's own
+-- read of how a conversation went. The two tables that could leak that
+-- firewall - intent_employments (what the model did) and
+-- intent_target_samples (what the descriptive layer did) - are kept
+-- physically separate so the wrong wiring is obvious in review. The
+-- math kernel is supabase/functions/_shared/intent-math.ts.
+--
+-- This is storage only. The minting sweep, the priming injection, the
+-- evaluation sweep, and the settings toggle that gates them all are
+-- separate milestones; until they land nothing reads or writes these
+-- tables and the feature has zero observable behavior.
+
+-- Snapshot of the intent ids that rendered into the system prompt on
+-- the most recent chat turn for this thread, written by
+-- applyIntentPriming. The employment-classification half of evaluation
+-- (not yet built) reads it to know which intentions the user's messages
+-- this turn could have been responding to - the intent analog of
+-- threads.bias_active_at_turn. Default empty: no intents active.
+alter table public.threads
+  add column if not exists intent_active_at_turn text[] not null default '{}'::text[];
+
+-- The unit. A small active set renders into the system prompt as
+-- standing behavioral guidance; the rest stay as dormant/retired
+-- history for the inspector.
+create table if not exists public.intents (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  -- First-person goal the minter wrote, and why it formed it.
+  statement text not null,
+  rationale text,
+  -- active = renders + scored; dormant = kept but not rendered (its
+  -- seeding pattern went quiet); retired = tombstoned for the
+  -- inspector's history, never rendered.
+  status text not null default 'active'
+    check (status in ('active', 'dormant', 'retired')),
+  -- Descriptive-layer target binding (the C efficacy model). 'bias' ->
+  -- target_ref is a bias catalog key; 'samskara' -> target_ref is a
+  -- samskaras.id (as text); 'none' -> free-form, no measurable target,
+  -- never gains an efficacy posterior. No FK on target_ref: a 'bias'
+  -- ref is a catalog key, not a row, and a samskara ref should survive
+  -- the samskara being reaped (debugging beats normalization, same as
+  -- samskara_provenance). Coupling between kind/ref/direction is the
+  -- minter's contract, not a DB check, to keep the table permissive.
+  target_kind text not null default 'none'
+    check (target_kind in ('bias', 'samskara', 'none')),
+  target_ref text,
+  target_direction text
+    check (target_direction is null or target_direction in ('reduce', 'reinforce')),
+  -- Efficacy posterior + its running evidence tallies. NULL efficacy =
+  -- a free-form intent that is never scored (a non-null efficacy on a
+  -- target_kind='none' row is a bug - the firewall leaked). The tallies
+  -- MUST be real, not int: the recency discount in updateEfficacy
+  -- multiplies them by a fraction every cycle, and an int column
+  -- truncating the sub-unit result to 0 is the exact bug that once
+  -- froze the samskara corpus at health 0.
+  efficacy real,
+  confirm_count real not null default 0,
+  disconfirm_count real not null default 0,
+  last_minted_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- The active-set read (priming) and the per-target efficacy-sampling
+-- lookup (evaluation sweep).
+create index if not exists intents_user_status_idx
+  on public.intents (user_id, status);
+create index if not exists intents_user_target_idx
+  on public.intents (user_id, target_kind, target_ref);
+
+alter table public.intents enable row level security;
+
+drop policy if exists "intents self-selectable" on public.intents;
+create policy "intents self-selectable" on public.intents
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "intents self-insertable" on public.intents;
+create policy "intents self-insertable" on public.intents
+  for insert with check (auth.uid() = user_id);
+
+drop policy if exists "intents self-updatable" on public.intents;
+create policy "intents self-updatable" on public.intents
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "intents self-deletable" on public.intents;
+create policy "intents self-deletable" on public.intents
+  for delete using (auth.uid() = user_id);
+
+alter table public.intents
+  alter column user_id set default auth.uid();
+
+-- Audit of what each intent was minted FROM. Direct analog of
+-- samskara_provenance: no FK on ref_id (kept even if the seeding row is
+-- later deleted - debugging beats normalization), and ref_id is text
+-- because a 'bias' provenance points at a catalog key while the others
+-- point at uuids.
+create table if not exists public.intent_provenance (
+  intent_id uuid not null references public.intents(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  kind text not null
+    check (kind in ('samskara', 'bias', 'memory', 'wiki', 'thread')),
+  ref_id text not null,
+  weight real not null default 1.0,
+  created_at timestamptz not null default now(),
+  primary key (intent_id, kind, ref_id)
+);
+
+alter table public.intent_provenance enable row level security;
+
+drop policy if exists "intent provenance self-selectable" on public.intent_provenance;
+create policy "intent provenance self-selectable" on public.intent_provenance
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "intent provenance self-insertable" on public.intent_provenance;
+create policy "intent provenance self-insertable" on public.intent_provenance
+  for insert with check (auth.uid() = user_id);
+
+drop policy if exists "intent provenance self-deletable" on public.intent_provenance;
+create policy "intent provenance self-deletable" on public.intent_provenance
+  for delete using (auth.uid() = user_id);
+
+alter table public.intent_provenance
+  alter column user_id set default auth.uid();
+
+-- Retrospective PROCESS telemetry: one row per (intent, settled thread)
+-- where the evaluation agent judged the model acted on the intent.
+-- Deliberately NEVER feeds efficacy - user_reaction is recorded as an
+-- observation, not a success signal. A receptive user can be reacting
+-- to a nudge that changed nothing, and a resistant one to a nudge that
+-- landed; only descriptive-layer movement (intent_target_samples)
+-- decides efficacy. Keeping this in its own table is what makes a
+-- wrong wiring obvious in review. One row per (intent, thread),
+-- replaced on re-analyze via the unique key (same contract as
+-- bias_reactions).
+create table if not exists public.intent_employments (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  intent_id uuid not null references public.intents(id) on delete cascade,
+  thread_id uuid not null references public.threads(id) on delete cascade,
+  -- did the model get an opening at all, and did it take it. The split
+  -- distinguishes "no chance arose" from "chance arose, missed".
+  opening boolean not null,
+  acted boolean not null,
+  -- three-state + null, like bias_reactions.was_confirmed. NOT an
+  -- efficacy input - see the table comment.
+  user_reaction text
+    check (user_reaction is null
+           or user_reaction in ('receptive', 'neutral', 'resistant')),
+  reasoning text not null,
+  created_at timestamptz not null default now(),
+  unique (intent_id, thread_id)
+);
+
+create index if not exists intent_employments_intent_idx
+  on public.intent_employments (intent_id);
+
+alter table public.intent_employments enable row level security;
+
+drop policy if exists "intent employments self-selectable" on public.intent_employments;
+create policy "intent employments self-selectable" on public.intent_employments
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "intent employments self-insertable" on public.intent_employments;
+create policy "intent employments self-insertable" on public.intent_employments
+  for insert with check (auth.uid() = user_id);
+
+drop policy if exists "intent employments self-updatable" on public.intent_employments;
+create policy "intent employments self-updatable" on public.intent_employments
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "intent employments self-deletable" on public.intent_employments;
+create policy "intent employments self-deletable" on public.intent_employments
+  for delete using (auth.uid() = user_id);
+
+alter table public.intent_employments
+  alter column user_id set default auth.uid();
+
+-- The efficacy TIME SERIES. One row per (intent, evaluation cycle)
+-- capturing the targeted descriptive-layer metric and a matched-control
+-- value at that time. This table is what makes the feature PROVABLE:
+-- without a series we cannot tell a real decline from regression to the
+-- mean, and cannot compute "faster than control" (matchedControlLift in
+-- the math kernel). control_value is nullable - when no comparable
+-- cohort exists yet the row still records target_value so the series
+-- stays unbroken, and the caller tracks control coverage as a health
+-- metric (a corpus where most samples lack a control cannot defend
+-- against regression to the mean, and that must be visible).
+create table if not exists public.intent_target_samples (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  intent_id uuid not null references public.intents(id) on delete cascade,
+  sampled_at timestamptz not null default now(),
+  target_value real not null,
+  control_value real
+);
+
+create index if not exists intent_target_samples_series_idx
+  on public.intent_target_samples (intent_id, sampled_at);
+
+alter table public.intent_target_samples enable row level security;
+
+drop policy if exists "intent target samples self-selectable"
+  on public.intent_target_samples;
+create policy "intent target samples self-selectable"
+  on public.intent_target_samples
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "intent target samples self-insertable"
+  on public.intent_target_samples;
+create policy "intent target samples self-insertable"
+  on public.intent_target_samples
+  for insert with check (auth.uid() = user_id);
+
+drop policy if exists "intent target samples self-deletable"
+  on public.intent_target_samples;
+create policy "intent target samples self-deletable"
+  on public.intent_target_samples
+  for delete using (auth.uid() = user_id);
+
+alter table public.intent_target_samples
+  alter column user_id set default auth.uid();
+
+-- Cached rendered prose, one row per user - the always-on block the
+-- priming stage injects. Direct analog of samskara_compound_summary,
+-- including the per-row regen claim so multiple devices coordinate the
+-- render instead of duplicating it.
+create table if not exists public.intent_compound_summary (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  summary text,
+  intent_count_at_regen int not null default 0,
+  last_regen_at timestamptz not null default now(),
+  regen_claim_holder text,
+  regen_claim_expires timestamptz
+);
+
+alter table public.intent_compound_summary enable row level security;
+
+drop policy if exists "intent compound summary self-selectable"
+  on public.intent_compound_summary;
+create policy "intent compound summary self-selectable"
+  on public.intent_compound_summary
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "intent compound summary self-insertable"
+  on public.intent_compound_summary;
+create policy "intent compound summary self-insertable"
+  on public.intent_compound_summary
+  for insert with check (auth.uid() = user_id);
+
+drop policy if exists "intent compound summary self-updatable"
+  on public.intent_compound_summary;
+create policy "intent compound summary self-updatable"
+  on public.intent_compound_summary
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "intent compound summary self-deletable"
+  on public.intent_compound_summary;
+create policy "intent compound summary self-deletable"
+  on public.intent_compound_summary
+  for delete using (auth.uid() = user_id);
+
+-- Per-user minting coordination. One row per user the mint sweep has
+-- ever touched: when it last minted, and the cross-tick claim. The
+-- daily mint sweep is per-USER (unlike bias/samskara which claim
+-- per-thread/per-substrate), so the claim lives on a per-user row
+-- rather than on a work item.
+create table if not exists public.intent_mint_runs (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  last_mint_at timestamptz,
+  mint_claim_holder text,
+  mint_claim_expires timestamptz
+);
+
+alter table public.intent_mint_runs enable row level security;
+
+-- Select-only for the owner (the inspector can show "last reviewed");
+-- all writes go through the security-definer RPCs below under the
+-- service role, so no owner insert/update/delete policy is needed.
+drop policy if exists "intent mint runs self-selectable" on public.intent_mint_runs;
+create policy "intent mint runs self-selectable" on public.intent_mint_runs
+  for select using (auth.uid() = user_id);
+
+-- Claim the next user due for a daily mint. Candidate set = users who
+-- have any descriptive layer to mint from (a samskara or a bias_summary
+-- row); eligible = never minted, or last minted older than
+-- p_min_age_hours with no live claim. Picks the most-overdue
+-- (last_mint_at asc nulls first) and claims atomically via the
+-- ON CONFLICT upsert. Returns the user_id or NULL when the queue is
+-- dry.
+--
+-- Concurrency note: unlike the per-thread claim RPCs this does NOT use
+-- `for update skip locked` across the candidate union (a never-minted
+-- user has no row to lock). The claim still serializes within one
+-- tick's drain (a just-claimed user has a live claim and drops out of
+-- the next candidate scan), and the daily cadence makes overlapping
+-- ticks racing the same never-minted user a sub-second, low-stakes
+-- window - a double-mint self-heals because processMintProposals dedups
+-- new creates against the intents already written by the first run.
+create or replace function public.intent_mint_claim_next_user(
+  p_holder_id text,
+  p_ttl_seconds int,
+  p_min_age_hours int
+) returns uuid
+language sql security definer set search_path = public as $$
+  with candidate as (
+    select u.user_id
+      from (
+        select user_id from public.samskaras
+        union
+        select user_id from public.bias_summary
+      ) u
+      -- Gate on the per-user opt-in: minting AND the efficacy
+      -- evaluation that rides inside the per-user pass run ONLY for
+      -- users who turned intents on. Off means the whole pipeline is
+      -- inert (the injection side is gated separately in
+      -- applyIntentPriming). A missing/false flag excludes the user.
+      join public.profiles p
+        on p.user_id = u.user_id
+       and p.settings->>'intentsEnabled' = 'true'
+      left join public.intent_mint_runs r on r.user_id = u.user_id
+     where r.user_id is null
+        or (
+          (r.last_mint_at is null
+            or r.last_mint_at < now() - make_interval(hours => p_min_age_hours))
+          and (r.mint_claim_holder is null or r.mint_claim_expires < now())
+        )
+     order by r.last_mint_at asc nulls first
+     limit 1
+  )
+  insert into public.intent_mint_runs (user_id, mint_claim_holder, mint_claim_expires)
+  select user_id, p_holder_id, now() + make_interval(secs => p_ttl_seconds)
+    from candidate
+  on conflict (user_id) do update
+     set mint_claim_holder = excluded.mint_claim_holder,
+         mint_claim_expires = excluded.mint_claim_expires
+  returning user_id;
+$$;
+
+revoke all on function public.intent_mint_claim_next_user(text, int, int)
+  from public, anon, authenticated;
+grant execute on function public.intent_mint_claim_next_user(text, int, int)
+  to service_role;
+
+-- Stamp a completed mint and release the claim. Holder-guarded so a
+-- claim that expired and was taken over by another tick is not clobbered
+-- by the original holder finishing late.
+create or replace function public.intent_mint_finish(
+  p_user_id uuid,
+  p_holder_id text
+) returns void
+language sql security definer set search_path = public as $$
+  update public.intent_mint_runs
+     set last_mint_at = now(),
+         mint_claim_holder = null,
+         mint_claim_expires = null
+   where user_id = p_user_id and mint_claim_holder = p_holder_id;
+$$;
+
+revoke all on function public.intent_mint_finish(uuid, text)
+  from public, anon, authenticated;
+grant execute on function public.intent_mint_finish(uuid, text) to service_role;
+
+-- Daily mint-sweep cron. Dispatches to the venice function's
+-- intent-mint-sweep route; the same Vault-secret + pg_net pattern every
+-- other trigger uses, a silent no-op when the secrets are not seeded
+-- (forks without automation). Daily at 05:37 - a free minute clear of
+-- the GC crons (04:xx), the bias sweep (:03), and the */10 samskara
+-- evaluation tick.
+create or replace function public.nak_trigger_intent_mint_sweep()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $fn$
+declare
+  v_url text;
+  v_key text;
+begin
+  begin
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'project_url' $q$ into v_url;
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'service_role_key' $q$ into v_key;
+  exception when others then
+    return;  -- vault not installed or unreadable; nothing to dispatch
+  end;
+  if v_url is null or v_key is null then
+    return;  -- secrets not seeded yet
+  end if;
+  begin
+    execute format(
+      $q$ select net.http_post(
+            url := %L,
+            headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', %L),
+            body := '{}'::jsonb
+          ) $q$,
+      v_url || '/functions/v1/venice/intent-mint-sweep',
+      'Bearer ' || v_key
+    );
+  exception when others then
+    raise notice 'nak_trigger_intent_mint_sweep: dispatch failed: %', sqlerrm;
+  end;
+end;
+$fn$;
+
+revoke all on function public.nak_trigger_intent_mint_sweep() from public, anon, authenticated;
+
+do $cron$
+begin
+  if exists (select 1 from pg_available_extensions where name = 'pg_cron')
+     and exists (select 1 from pg_available_extensions where name = 'pg_net') then
+    create extension if not exists pg_cron;
+    create extension if not exists pg_net;
+    if exists (select 1 from cron.job where jobname = 'nak-intent-mint-sweep') then
+      perform cron.unschedule('nak-intent-mint-sweep');
+    end if;
+    perform cron.schedule(
+      'nak-intent-mint-sweep',
+      '37 5 * * *',
+      $job$ select public.nak_trigger_intent_mint_sweep(); $job$
+    );
+  end if;
+exception when others then
+  raise notice 'intent mint sweep cron setup skipped: %', sqlerrm;
+end
+$cron$;

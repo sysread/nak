@@ -66,6 +66,7 @@
     persistEmphasisMarkdown,
     persistNotifyOnComplete,
     persistWikiAutomaticEnabled,
+    persistIntentsEnabled,
     persistWikiRecordExtractionEnabled,
     persistWikiLibrarianEnabled,
     persistMemoryLibrarianEnabled,
@@ -188,6 +189,12 @@
   // to use light Markdown emphasis as scan-points. Persisted on
   // `profiles.settings.emphasisMarkdown`.
   let emphasisMarkdown = $state<boolean>(app.emphasisMarkdown);
+  // Opt-in intents toggle (off by default). Persisted on
+  // `profiles.settings.intentsEnabled`; the minting/evaluation sweeps
+  // and applyIntentPriming all read it server-side.
+  let intentsEnabled = $state<boolean>(app.intentsEnabled);
+  let intentsError = $state<string | null>(null);
+  let intentsInfo = $state<string | null>(null);
   // Opt-in completion-notification toggle. Persisted on
   // `profiles.settings.notifyOnComplete`. Flipping on triggers a
   // browser permission prompt via onToggleNotifyOnComplete - if the
@@ -1081,6 +1088,22 @@
     }
   }
 
+  async function onToggleIntents(next: boolean): Promise<void> {
+    intentsError = null;
+    intentsInfo = null;
+    const prev = intentsEnabled;
+    intentsEnabled = next;
+    try {
+      await persistIntentsEnabled(next);
+      intentsInfo = next
+        ? 'Intents enabled. Nak will begin forming growth intentions from the next daily pass; nothing changes mid-conversation.'
+        : 'Intents disabled. Existing intentions stop influencing replies and the pipeline goes idle; they are kept, not deleted.';
+    } catch (err) {
+      intentsEnabled = prev;
+      intentsError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
   async function onToggleEmphasis(next: boolean): Promise<void> {
     modelError = null;
     modelInfo = null;
@@ -1690,6 +1713,33 @@
             <span>Ask the model to highlight save-points</span>
           </label>
         </div>
+
+        <h3 class="pane-section">Working intentions</h3>
+        <p class="subtle">
+          When on, Nak forms standing intentions about how to help you
+          grow over time - drawn from the patterns it already observes -
+          and quietly leans on them in conversation. It reviews them
+          daily: pursuing what helps, pausing what goes quiet, and
+          letting go of approaches that aren't landing. Intentions are
+          never announced as an agenda and never override what you
+          explicitly ask for. This is the one feature that lets Nak
+          develop with you rather than only record; it's off by default
+          and a deliberate opt-in.
+        </p>
+        <div class="form-row" style="display:flex;gap:0.5rem;align-items:center">
+          <label style="display:flex;gap:0.5rem;align-items:center">
+            <input
+              type="checkbox"
+              name="intents-enabled"
+              checked={intentsEnabled}
+              onchange={(e) =>
+                onToggleIntents((e.currentTarget as HTMLInputElement).checked)}
+            />
+            <span>Let Nak develop and pursue growth intentions</span>
+          </label>
+        </div>
+        {#if intentsError}<p class="error">{intentsError}</p>{/if}
+        {#if intentsInfo}<p class="subtle">{intentsInfo}</p>{/if}
 
         <h3 class="pane-section">Reply notifications</h3>
         <p class="subtle">

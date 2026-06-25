@@ -25,7 +25,7 @@ gate won't catch it.
 `runChatLoop` assembles a `VeniceMessage[]` in this exact order:
 
 ```text
-1. system   baseline prompt  - identity, voice, tool catalog, + bias appendix
+1. system   baseline prompt  - identity, voice, tool catalog, + bias appendix, + intents appendix
 2. system   user-configured system prompts (Settings -> "you are a pirate")
 3. ...       the conversation history (prior turns + the latest user message)
 4. assistant <think>  context-recall note      | the priming chain, spliced
@@ -60,6 +60,7 @@ Two distinct injection surfaces:
 | Injector | Surface | Source | Cache | Freshness gate |
 | --- | --- | --- | --- | --- |
 | Bias profile | system appendix (row 1) | `applyBiasPriming` (`supabase/functions/venice/priming.ts`) | `bias_summary` row | read once per turn; tier + render-cap filtered |
+| Intents | system appendix (row 1, after bias) | `applyIntentPriming` (`supabase/functions/venice/priming.ts`) | active `intents` rows | gated on the toggle; bias-aware combined cap; off by default |
 | Context recall | `<think>` (row 4) | `runContextRecallPipeline` (`venice/priming/context-recall.ts`) | `threads.context_recall_payload` | `isPayloadFreshForInjection` (STALE_FUSE_MS) |
 | Samskara compound | `<think>` (row 5) | `getCompoundSummary` (`venice/priming/samskara.ts`) | cached prose row | always-on; no fuse |
 | Samskara fire | `<think>` (row 6) | `fireSamskaras` (`venice/priming/samskara.ts`) | computed per turn | raced against `SAMSKARA_PRIMING_TIMEOUT_MS` |
@@ -74,6 +75,16 @@ The order in the table is the contract, and it is load-bearing:
 - **Bias leads** because it is a structural claim about the user, not
   turn weather - it belongs with identity/voice in the cached baseline,
   not in the volatile tail.
+- **Intents follow bias** on the same row-1 surface. The two share one
+  combined render budget (`COMBINED_APPENDIX_CEILING`) so two features
+  cannot together crowd the instruction surface, and intents yield to
+  bias when both are full. Because both mutate the row-0 system message,
+  `applyBiasPriming` and `applyIntentPriming` run SEQUENCED (bias first),
+  not concurrently - and intents render after bias so the intent block's
+  stated precedence ("any compensation guidance above") resolves. The
+  whole appendix pair runs concurrently with the `<think>` chain, which
+  touches a different part of history. Intents are off by default behind
+  a settings toggle; see [`in-progress/intents.md`](./in-progress/intents.md).
 - **The `<think>` chain is recency-ordered**: context recall (what the
   stores hold) first, the samskara layers (predictive priors) next,
   intuition (the most-synthesized read) last, closest to the model's
@@ -144,12 +155,23 @@ browser surface is unchanged:
   `onIntuitionUpdate` / `onContextRecallUpdate`, fired once per cache
   refresh so the UI patches the in-memory thread row without a refetch.
   The payload is coerced at decode, so a drifting wire shape is dropped.
-- **The edge logs** - the priming stage logs under three drawer sources
-  (`samskara`, `intuition`, `context-recall`) plus `bias`, round-tripped
-  to the drawer via the edge-log Broadcast relay. The full assembled
-  wire (the `<think>` chain spliced in) is the server's
-  `'venice request wire'`-equivalent round dump under the `stream`
-  source.
+- **The edge logs** - the priming stage logs under four drawer sources
+  (`samskara`, `intuition`, `context-recall`, `intent`) plus `bias`,
+  round-tripped to the drawer via the edge-log Broadcast relay.
+  **The assembled prompt is NOT surfaced in any drawer wire dump.** The
+  browser logs its own *pre-priming* view of the request under source
+  `chat` ("venice request wire", in `chat-loop.ts`) before it POSTs;
+  the server then appends the bias + intent appendices and splices the
+  `<think>` chain server-side, so those additions never appear in that
+  dump. The server-side `stream` source carries only operational lines
+  (round index, `historyLen`, terminal kind), not prompt content. To
+  confirm a server-appended block actually rendered, read its side
+  effect, not a wire dump: the bias appendix snapshots into
+  `threads.bias_active_at_turn`, the intent block into
+  `threads.intent_active_at_turn` (the rendered ids), and the `<think>`
+  chain's payloads cache on the thread row. Byte-level ordering (e.g.
+  intent block after bias on row 0) is asserted in
+  `supabase/functions/tests/priming-orchestration.test.ts`.
 
 ## Interactions
 

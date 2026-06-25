@@ -132,6 +132,14 @@ interface AppState {
    */
   wikiAutomaticEnabled: boolean;
   /**
+   * Intents: when true, the background intent pipeline runs (minting,
+   * efficacy evaluation, and the "Working intentions" system-prompt
+   * block). Seeded FALSE on activate() - this is the one opt-in
+   * self-developing feature; overwritten from
+   * `profiles.settings.intentsEnabled` on unlock.
+   */
+  intentsEnabled: boolean;
+  /**
    * Wiki record extraction: when true, the background extraction agent
    * scans settled conversations and creates dated records on the user's
    * existing wiki articles. Independent of `wikiAutomaticEnabled` so a
@@ -219,6 +227,7 @@ export const app = $state<AppState>({
   emphasisMarkdown: false,
   notifyOnComplete: false,
   wikiAutomaticEnabled: true,
+  intentsEnabled: false,
   wikiRecordExtractionEnabled: true,
   wikiLibrarianEnabled: true,
   memoryLibrarianEnabled: true,

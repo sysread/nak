@@ -133,6 +133,16 @@ export interface UserSettings {
    */
   wikiAutomaticEnabled?: boolean;
   /**
+   * Intents: when true, the background intent pipeline forms and pursues
+   * standing growth intentions about the user (the minting sweep,
+   * efficacy evaluation, and the "Working intentions" system-prompt
+   * block). Default OFF - the one self-developing feature that stays
+   * opt-in until its honest-loop backtest clears its bar. Absent or
+   * false means the whole pipeline is inert: no minting, no injection,
+   * no evaluation.
+   */
+  intentsEnabled?: boolean;
+  /**
    * Wiki record extraction: when true, a background agent scans settled
    * conversations and creates dated records on the user's existing wiki
    * articles. Independent of `wikiAutomaticEnabled` - extraction can be
@@ -231,6 +241,9 @@ export function coerceSettings(raw: unknown): UserSettings {
   }
   if (typeof r.wikiAutomaticEnabled === 'boolean') {
     out.wikiAutomaticEnabled = r.wikiAutomaticEnabled;
+  }
+  if (typeof r.intentsEnabled === 'boolean') {
+    out.intentsEnabled = r.intentsEnabled;
   }
   if (typeof r.wikiLibrarianEnabled === 'boolean') {
     out.wikiLibrarianEnabled = r.wikiLibrarianEnabled;

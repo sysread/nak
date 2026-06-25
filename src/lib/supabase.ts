@@ -812,6 +812,13 @@ export class SupabaseService {
         merged.wikiAutomaticEnabled = patch.wikiAutomaticEnabled;
       }
     }
+    if ('intentsEnabled' in patch) {
+      if (patch.intentsEnabled === undefined) {
+        delete merged.intentsEnabled;
+      } else if (typeof patch.intentsEnabled === 'boolean') {
+        merged.intentsEnabled = patch.intentsEnabled;
+      }
+    }
     if ('wikiRecordExtractionEnabled' in patch) {
       if (patch.wikiRecordExtractionEnabled === undefined) {
         delete merged.wikiRecordExtractionEnabled;
