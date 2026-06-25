@@ -64,9 +64,15 @@ asserts it.
 
 Read-time smoothing launders encoding-time poison (a memory body that
 says "this conversation" / "(June 2026, this session)") by anchoring on
-the row's real `created_at` and ignoring write-time framing. Two
-background paths reduce that laundering burden over time so the stored
-rows get cleaner at the source:
+the row's real `created_at` and ignoring write-time framing. That
+laundering only sanitises the INJECTED note, though - the raw row stays
+reachable through the always-on drill-down tools (`memory_search` /
+`memory_get`), so a model that opens a poisoned row directly can still
+surface its encoding-time framing in the reply. That is why the two
+background reshape paths below matter: they clean the row at the source
+rather than papering over it at every read. Two background paths reduce
+that laundering burden over time so the stored rows get cleaner at the
+source:
 
 - **The reflection writer** (`agents/reflection.ts`) is instructed to
   write memories TIMELESS - no "this session", no write-date narration,
