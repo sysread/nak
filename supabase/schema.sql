@@ -112,6 +112,55 @@ create trigger on_auth_user_created
 -- definer-lockdown convention used elsewhere in this file.
 revoke all on function public.handle_new_user() from public, anon, authenticated;
 
+-- Atomic merge of a settings patch into profiles.settings. The browser
+-- side (SupabaseService.updateSettings) builds a validated patch of the
+-- top-level keys it wants to set plus a list of keys to drop, and this
+-- function applies both in a single UPDATE against the live row.
+--
+-- Why this exists: the old write path read the whole jsonb blob, merged
+-- one key in JS, and wrote the blob back. Two overlapping writes - e.g.
+-- flipping the two adjacent AI-pane toggles in quick succession, or a
+-- fire-and-forget theme write racing a toggle - both read the
+-- pre-write blob, so the second write clobbered the first's change. The
+-- symptom was a setting that silently reverted now and then with no
+-- repeatable pattern, because it depended on the timing of two writes
+-- landing inside one Supabase round-trip. Doing the merge in one
+-- statement removes the read-then-write window for same-tab AND
+-- cross-tab concurrency.
+--
+-- `p_set` is shallow-merged over the current settings via `||`, so a
+-- top-level key replaces wholesale - exactly right for the nested
+-- values (tierModels, systemPrompts) the app treats as atomic
+-- snapshots. `p_remove` lists keys to delete (the caller sends these
+-- for "user cleared this field" and the legacy journalTimezone
+-- cleanup). Removal runs before the merge so the intent stays
+-- unambiguous if a key ever appeared in both. Returns the merged blob
+-- so the client can coerce it and adopt the canonical shape.
+--
+-- security invoker so the profiles RLS update policy (auth.uid() =
+-- user_id) scopes the write to the caller's own row; the explicit
+-- auth.uid() guard turns an unauthenticated call into a clear error
+-- rather than a silent zero-row no-op.
+drop function if exists public.merge_profile_settings(jsonb, text[]);
+create or replace function public.merge_profile_settings(p_set jsonb, p_remove text[])
+returns jsonb
+language plpgsql security invoker as $$
+declare
+  v_user uuid := auth.uid();
+  v_settings jsonb;
+begin
+  if v_user is null then
+    raise exception 'merge_profile_settings: not authenticated'
+      using errcode = '28000';
+  end if;
+  update public.profiles
+     set settings = (coalesce(settings, '{}'::jsonb) - coalesce(p_remove, '{}'::text[]))
+                    || coalesce(p_set, '{}'::jsonb)
+   where user_id = v_user
+   returning settings into v_settings;
+  return v_settings;
+end $$;
+
 -- app_config -------------------------------------------------------------
 --
 -- Project-global configuration shared by every member of this Supabase

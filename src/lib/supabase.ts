@@ -732,145 +732,160 @@ export class SupabaseService {
   }
 
   /**
-   * Merge a partial settings patch into the profiles.settings jsonb. Does a
-   * read-then-write — fine for a single-user app but not safe under
-   * concurrent writes from multiple tabs. If multi-tab concurrency ever
-   * becomes real (e.g. two open browsers both flipping theme), move this
-   * to a Postgres `jsonb_set` call so each field updates atomically.
+   * Merge a partial settings patch into the profiles.settings jsonb.
+   *
+   * Atomic via the `merge_profile_settings` RPC: this builds a validated
+   * `set` object (the top-level keys to write) plus a `remove` list (keys
+   * to drop) and the database applies both in one UPDATE against the live
+   * row. The earlier read-then-write shape (fetch the whole blob, merge a
+   * key in JS, write it back) lost a field whenever two writes overlapped
+   * - both read the pre-write blob, so the second clobbered the first.
+   * That bit single-tab too: flipping two adjacent toggles in quick
+   * succession, or a fire-and-forget theme write racing a toggle, dropped
+   * one of the changes intermittently. The merge happening server-side in
+   * a single statement removes that window. See `merge_profile_settings`
+   * in supabase/schema.sql.
+   *
+   * The scrub below is unchanged: only known keys pass, each validated.
+   * A `patch[field] === undefined` (or an empty profile string) deletes
+   * the field; a present-but-invalid value is silently ignored so it
+   * neither writes garbage nor clears the existing value.
    */
   async updateSettings(patch: Partial<UserSettings>): Promise<UserSettings> {
     const session = await this.getSession();
     if (!session) throw new SupabaseError('Not authenticated.');
-    const current = await this.getSettings();
-    // Scrub: only allow known keys through, and validate each.
-    const merged: UserSettings = { ...current };
+    // toSet: top-level keys to write (shallow-merged server-side).
+    // toRemove: keys to delete. A key lands in exactly one of the two,
+    // or neither when its patch value fails validation.
+    const toSet: Record<string, unknown> = {};
+    const toRemove: string[] = [];
     if ('defaultModel' in patch) {
-      if (patch.defaultModel === undefined) delete merged.defaultModel;
-      else if (isModelTier(patch.defaultModel)) merged.defaultModel = patch.defaultModel;
+      if (patch.defaultModel === undefined) toRemove.push('defaultModel');
+      else if (isModelTier(patch.defaultModel)) toSet.defaultModel = patch.defaultModel;
     }
     if ('tierModels' in patch) {
       // Re-run the coercer so a sloppy caller can't persist a malformed
       // snapshot; an all-empty result clears the key entirely.
       const cleaned = coerceTierModels(patch.tierModels);
-      if (cleaned) merged.tierModels = cleaned;
-      else delete merged.tierModels;
+      if (cleaned) toSet.tierModels = cleaned;
+      else toRemove.push('tierModels');
     }
     if ('defaultReasoningEffort' in patch) {
       if (patch.defaultReasoningEffort === undefined) {
-        delete merged.defaultReasoningEffort;
+        toRemove.push('defaultReasoningEffort');
       } else if (isReasoningEffort(patch.defaultReasoningEffort)) {
-        merged.defaultReasoningEffort = patch.defaultReasoningEffort;
+        toSet.defaultReasoningEffort = patch.defaultReasoningEffort;
       }
     }
     if ('defaultVerbosity' in patch) {
       if (patch.defaultVerbosity === undefined) {
-        delete merged.defaultVerbosity;
+        toRemove.push('defaultVerbosity');
       } else if (isVerbosity(patch.defaultVerbosity)) {
-        merged.defaultVerbosity = patch.defaultVerbosity;
+        toSet.defaultVerbosity = patch.defaultVerbosity;
       }
     }
     if ('colorMode' in patch) {
-      if (patch.colorMode === undefined) delete merged.colorMode;
-      else if (isColorMode(patch.colorMode)) merged.colorMode = patch.colorMode;
+      if (patch.colorMode === undefined) toRemove.push('colorMode');
+      else if (isColorMode(patch.colorMode)) toSet.colorMode = patch.colorMode;
     }
     if ('accent' in patch) {
-      if (patch.accent === undefined) delete merged.accent;
-      else if (isAccent(patch.accent)) merged.accent = patch.accent;
+      if (patch.accent === undefined) toRemove.push('accent');
+      else if (isAccent(patch.accent)) toSet.accent = patch.accent;
     }
     if ('systemPrompts' in patch) {
-      if (patch.systemPrompts === undefined) delete merged.systemPrompts;
+      if (patch.systemPrompts === undefined) toRemove.push('systemPrompts');
       else if (Array.isArray(patch.systemPrompts)) {
         // Run each prompt through the coercer so the stored shape is
         // always well-formed, regardless of caller sloppiness.
         const cleaned = patch.systemPrompts
           .map((p) => coerceSystemPrompt(p))
           .filter((p): p is SystemPrompt => p !== null);
-        merged.systemPrompts = cleaned;
+        toSet.systemPrompts = cleaned;
       }
     }
     if ('defaultLogLevel' in patch) {
-      if (patch.defaultLogLevel === undefined) delete merged.defaultLogLevel;
+      if (patch.defaultLogLevel === undefined) toRemove.push('defaultLogLevel');
       else if (isLogLevel(patch.defaultLogLevel)) {
-        merged.defaultLogLevel = patch.defaultLogLevel;
+        toSet.defaultLogLevel = patch.defaultLogLevel;
       }
     }
     if ('emphasisMarkdown' in patch) {
-      if (patch.emphasisMarkdown === undefined) delete merged.emphasisMarkdown;
+      if (patch.emphasisMarkdown === undefined) toRemove.push('emphasisMarkdown');
       else if (typeof patch.emphasisMarkdown === 'boolean') {
-        merged.emphasisMarkdown = patch.emphasisMarkdown;
+        toSet.emphasisMarkdown = patch.emphasisMarkdown;
       }
     }
     if ('notifyOnComplete' in patch) {
-      if (patch.notifyOnComplete === undefined) delete merged.notifyOnComplete;
+      if (patch.notifyOnComplete === undefined) toRemove.push('notifyOnComplete');
       else if (typeof patch.notifyOnComplete === 'boolean') {
-        merged.notifyOnComplete = patch.notifyOnComplete;
+        toSet.notifyOnComplete = patch.notifyOnComplete;
       }
     }
     if ('wikiAutomaticEnabled' in patch) {
       if (patch.wikiAutomaticEnabled === undefined) {
-        delete merged.wikiAutomaticEnabled;
+        toRemove.push('wikiAutomaticEnabled');
       } else if (typeof patch.wikiAutomaticEnabled === 'boolean') {
-        merged.wikiAutomaticEnabled = patch.wikiAutomaticEnabled;
+        toSet.wikiAutomaticEnabled = patch.wikiAutomaticEnabled;
       }
     }
     if ('intentsEnabled' in patch) {
       if (patch.intentsEnabled === undefined) {
-        delete merged.intentsEnabled;
+        toRemove.push('intentsEnabled');
       } else if (typeof patch.intentsEnabled === 'boolean') {
-        merged.intentsEnabled = patch.intentsEnabled;
+        toSet.intentsEnabled = patch.intentsEnabled;
       }
     }
     if ('wikiRecordExtractionEnabled' in patch) {
       if (patch.wikiRecordExtractionEnabled === undefined) {
-        delete merged.wikiRecordExtractionEnabled;
+        toRemove.push('wikiRecordExtractionEnabled');
       } else if (typeof patch.wikiRecordExtractionEnabled === 'boolean') {
-        merged.wikiRecordExtractionEnabled = patch.wikiRecordExtractionEnabled;
+        toSet.wikiRecordExtractionEnabled = patch.wikiRecordExtractionEnabled;
       }
     }
     if ('wikiLibrarianEnabled' in patch) {
       if (patch.wikiLibrarianEnabled === undefined) {
-        delete merged.wikiLibrarianEnabled;
+        toRemove.push('wikiLibrarianEnabled');
       } else if (typeof patch.wikiLibrarianEnabled === 'boolean') {
-        merged.wikiLibrarianEnabled = patch.wikiLibrarianEnabled;
+        toSet.wikiLibrarianEnabled = patch.wikiLibrarianEnabled;
       }
     }
     if ('memoryLibrarianEnabled' in patch) {
       if (patch.memoryLibrarianEnabled === undefined) {
-        delete merged.memoryLibrarianEnabled;
+        toRemove.push('memoryLibrarianEnabled');
       } else if (typeof patch.memoryLibrarianEnabled === 'boolean') {
-        merged.memoryLibrarianEnabled = patch.memoryLibrarianEnabled;
+        toSet.memoryLibrarianEnabled = patch.memoryLibrarianEnabled;
       }
     }
     if ('displayTimezone' in patch) {
-      if (patch.displayTimezone === undefined) delete merged.displayTimezone;
+      if (patch.displayTimezone === undefined) toRemove.push('displayTimezone');
       else if (
         typeof patch.displayTimezone === 'string' &&
         patch.displayTimezone.length > 0 &&
         patch.displayTimezone.length < 128
       ) {
-        merged.displayTimezone = patch.displayTimezone;
+        toSet.displayTimezone = patch.displayTimezone;
       }
       // Clear the legacy key in the same merge so a profile written
       // before the rename doesn't keep ghosting the old value
       // alongside the canonical one.
-      delete (merged as { journalTimezone?: string }).journalTimezone;
+      toRemove.push('journalTimezone');
     }
     // Profile strings: an empty string from the patch means "clear
     // it" (the user blanked the input and hit save), so we delete
-    // the merged key rather than persist `''`. coerceSettings drops
-    // empty strings on read too, but persisting the absence keeps
-    // the stored blob compact.
+    // the key rather than persist `''`. coerceSettings drops empty
+    // strings on read too, but persisting the absence keeps the
+    // stored blob compact.
     if ('userName' in patch) {
       if (
         patch.userName === undefined ||
         (typeof patch.userName === 'string' && patch.userName.length === 0)
       ) {
-        delete merged.userName;
+        toRemove.push('userName');
       } else if (
         typeof patch.userName === 'string' &&
         patch.userName.length <= USER_PROFILE_FIELD_MAX
       ) {
-        merged.userName = patch.userName;
+        toSet.userName = patch.userName;
       }
     }
     if ('userLocation' in patch) {
@@ -878,20 +893,23 @@ export class SupabaseService {
         patch.userLocation === undefined ||
         (typeof patch.userLocation === 'string' && patch.userLocation.length === 0)
       ) {
-        delete merged.userLocation;
+        toRemove.push('userLocation');
       } else if (
         typeof patch.userLocation === 'string' &&
         patch.userLocation.length <= USER_PROFILE_FIELD_MAX
       ) {
-        merged.userLocation = patch.userLocation;
+        toSet.userLocation = patch.userLocation;
       }
     }
-    const { error } = await this.client
-      .from('profiles')
-      .update({ settings: merged })
-      .eq('user_id', session.user.id);
+    const { data, error } = await this.client.rpc('merge_profile_settings', {
+      p_set: toSet,
+      p_remove: toRemove,
+    });
     if (error) throw new SupabaseError(error.message);
-    return merged;
+    // The RPC returns the post-merge blob; coerce it so callers adopt the
+    // canonical shape (e.g. an all-empty tierModels collapsing to absence)
+    // exactly as a fresh getSettings would have.
+    return coerceSettings(data);
   }
 
   // --- Threads ---------------------------------------------------------
