@@ -1,12 +1,13 @@
 # Intents (in progress)
 
-> **Status: backend pipeline built + QA'd; UI surfacing and
-> the backtest still open.** The full self-developing loop
-> (minting, efficacy evaluation, and the system-prompt
-> injection) is implemented behind the settings toggle and
-> verified by two live-passing QA walkthroughs; what remains is
-> the inspector UI (the "surfaced" half), employment
-> classification, and the backtest harness. The feature ships **off by default**
+> **Status: backend pipeline + inspector built and QA'd;
+> employment classification and the backtest still open.** The
+> full self-developing loop (minting, efficacy evaluation, the
+> system-prompt injection) plus the read-only inspector are
+> implemented behind the settings toggle; the pipeline is
+> verified by two live-passing QA walkthroughs and the inspector
+> by its own. What remains is employment classification and the
+> backtest harness. The feature ships **off by default**
 > and stays off-by-default until the backtest clears its
 > falsifiable bar. This doc records the design decisions plus
 > the evaluation plan; the Build status below is the live
@@ -102,13 +103,21 @@
    (`docs/user/intents.md` + README link). This is the switch
    that activates the whole pipeline; until a user flips it on,
    everything above stays inert.
+10. The inspector - the read-only "surfaced" surface. A
+    seedling pill (`src/components/IntentsPill.svelte`, mounted
+    in the bottom-right column + a mobile diag tile, gated on
+    `app.intentsEnabled`) opens a modal
+    (`src/screens/Intents.svelte`, route `modal: 'intents'`)
+    that lists the user's intents grouped active / paused / let
+    go, each with its target, an honest efficacy read, and the
+    rationale. All logic is in the tested primitives
+    (`src/lib/ui/intents-inspector.ts`); the data read is
+    `listIntents()`. No write controls - the minter owns the set.
 
 Not yet built: the employment-classification half of evaluation
-(now unblocked - the priming snapshot exists), the inspector UI
-(the read-only surface to see one's intentions - the "surfaced"
-half of "surfaced, not steerable"), and the backtest harness.
-The sections below document the design and the realized
-behavior; the three items here are the only open work.
+(now unblocked - the priming snapshot exists) and the backtest
+harness. The sections below document the design and the
+realized behavior; those two are the only open work.
 
 Intents are the first layer in nak that is **normative**
 rather than descriptive. Every other user-model the app

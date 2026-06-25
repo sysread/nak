@@ -88,6 +88,10 @@ One file per use-case under [`use-cases/`](./use-cases/), named
   - the chat-turn side: the `intentsEnabled` toggle, the "Working
   intentions" system-prompt block after the bias appendix under the
   shared cap, and the `intent_active_at_turn` snapshot.
+- [intent-inspector](./use-cases/intent-inspector.md) - the read-only
+  surfacing: the toggle-gated seedling pill, the inspector modal's
+  active/paused/let-go grouping, the honest efficacy labels, and the
+  empty state.
 - [priming-disconnect-survival](./use-cases/priming-disconnect-survival.md)
   - proves turn-entry priming runs server-side under `waitUntil`: a turn
   whose tab closes mid-priming comes back fully primed, and the spinner

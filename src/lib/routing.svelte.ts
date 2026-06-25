@@ -53,6 +53,7 @@ export type Modal =
   | 'samskara-mood'
   | 'intuition'
   | 'bias-profile'
+  | 'intents'
   | 'recall';
 export type DrawerTab =
   | 'chats'
@@ -116,6 +117,7 @@ const MODAL_VALUES: readonly Modal[] = [
   'samskara-mood',
   'intuition',
   'bias-profile',
+  'intents',
   'recall',
 ];
 const DRAWER_VALUES: readonly DrawerTab[] = [
