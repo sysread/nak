@@ -3101,15 +3101,17 @@ button.composer-wharf-trigger {
     font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif;
   }
 
-  /* Hide the bottom-right pill column on mobile - its four pills
-     now live in the diagnostic wharf above. The selectors hit the
-     four pill components' outer wrappers (RecallPill, BiasPill,
-     IntuitionPill, SamskaraToasts); the .scroll-to-bottom arrow
-     further below is deliberately NOT in this list and stays
-     visible. */
+  /* Hide the bottom-right pill column on mobile - its pills now live
+     in the diagnostic wharf above. The selectors hit each pill
+     component's outer wrapper (RecallPill, BiasPill, IntuitionPill,
+     SamskaraToasts, IntentsPill); the .scroll-to-bottom arrow further
+     below is deliberately NOT in this list and stays visible. Any new
+     pill added to the desktop column must be added here too, or it
+     leaks onto mobile (the intents pill did exactly that). */
   .recall-pill-wrap,
   .bias-pill-wrap,
   .intuition-pill-wrap,
+  .intents-pill-wrap,
   .samskara-mood {
     display: none;
   }
