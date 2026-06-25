@@ -28,9 +28,23 @@ descriptive-layer movement.
 - A descriptive layer to mint from: the dev user has at least one
   `samskaras` row or one `bias_summary` row. (Run the samskara or
   bias use-cases first if the corpus is empty.)
-- Know the dev user's id: `select user_id from profiles limit 1;`
-  (call it `$UID`). `SR` is the service-role key from
-  `supabase status -o json`.
+- Know the user's id (call it `$UID`). The claim joins the
+  descriptive-layer tables, so `$UID` MUST be a profile that owns a
+  `samskaras` or `bias_summary` row - a restored local volume can
+  carry the corpus under a different profile than the freshly seeded
+  dev login, and a bare `select user_id from profiles limit 1` is
+  nondeterministic. Pick the owner explicitly:
+
+  ```sql
+  select p.user_id from profiles p
+   where exists (select 1 from samskaras s where s.user_id = p.user_id)
+      or exists (select 1 from bias_summary b where b.user_id = p.user_id)
+   limit 1;
+  ```
+
+  `SR` is the service-role key from `supabase status -o json` (the
+  legacy JWT - the gateway validates the bearer as a JWT, so the
+  modern `sb_secret_` key is rejected).
 - Confirm the cron job is registered:
 
   ```sql
@@ -80,9 +94,16 @@ descriptive-layer movement.
    select last_mint_at, mint_claim_holder from intent_mint_runs where user_id = '$UID';
    ```
 
-4. **Efficacy sampling.** If step 3 produced a targeted intent
-   (`target_kind` in `bias`/`samskara`), confirm a baseline sample
-   landed:
+4. **Efficacy sampling.** Evaluation rides at the FRONT of the pass,
+   before minting, so an intent created in step 3 has no baseline
+   yet - the row didn't exist when `evaluateTargetedIntents` ran.
+   Backdate the run past the 20h gate and re-POST the sweep once so a
+   pass sees the now-existing targeted intents, then confirm a
+   baseline landed:
+
+   ```sql
+   update intent_mint_runs set last_mint_at = now() - interval '21 hours' where user_id = '$UID';
+   ```
 
    ```sql
    select intent_id, target_value, control_value, sampled_at
@@ -152,3 +173,4 @@ update profiles set settings = settings - 'intentsEnabled' where user_id = '$UID
 | Date | Env | Commit | Result | Notes |
 | ---- | --- | ------ | ------ | ----- |
 | 2026-06-24 | — | (this commit) | not run | Authored alongside the feature. The cloud authoring environment has no live Supabase stack, so first execution is pending - the CLI session will run it against `mise run dev-start`. The toggle-gate fix in this same commit (the claim now requires `settings->>'intentsEnabled' = 'true'`) is what step 1 proves. |
+| 2026-06-24 | local (dev-start) | f05168c | pass | First execution. Step 1 gate held (toggle off -> route `{accepted:true}`, zero intents, no run row, direct `intent_mint_claim_next_user` returns null). Step 2/3: toggle on -> 2 targeted samskara intents minted (one `reduce`, one `reinforce`), both dispositional leans w/ `target_ref` + `target_direction`, claim released, `last_mint_at` stamped. Step 4: baseline samples landed only after a second pass (eval-before-mint ordering); efficacy null at one sample, scored to 0.4762 (below 0.5 baseline, `disconfirm_count` 0.25, `confirm_count` 0) on the flat-metric second sample - honest-loop firewall confirmed (soft miss, no spurious confirm). Step 5: minter declined (+0) on a static corpus over passes 2-5; active set stayed at 2 <= cap(4); live retire/dormant not exercised (model-discretionary, needs corpus movement - covered by `intent-mint.test.ts`). Cron job registered at `37 5 * * *`; actual 05:37 fire is [hosted]-only. Fixed two doc defects found mid-run: nondeterministic `profiles limit 1` precondition (corpus was on a different profile than the seeded dev login) and the step-4 baseline-timing wording. |
