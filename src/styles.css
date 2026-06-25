@@ -662,6 +662,30 @@ label {
   align-items: center;
   gap: 0.45rem;
 }
+/* Drag handle for reordering. Only the grip is draggable so a drag that
+   starts inside the name input or body textarea still selects text. */
+.prompt-grip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  color: var(--muted);
+  cursor: grab;
+  touch-action: none;
+}
+.prompt-grip:active {
+  cursor: grabbing;
+}
+/* The card lifts away while it's the one being dragged. */
+.prompt-card.dragging {
+  opacity: 0.5;
+}
+/* Insertion target: a colored top edge shows where the dragged card will
+   land when dropped onto this one. */
+.prompt-card.drag-over {
+  border-top-color: var(--accent);
+  box-shadow: inset 0 2px 0 0 var(--accent);
+}
 .prompt-name {
   flex: 1;
   min-width: 0;

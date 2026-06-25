@@ -107,6 +107,7 @@
     refreshCatalog,
   } from '$lib/models-catalog.svelte';
   import type { SystemPrompt } from '$lib/supabase';
+  import * as prompts from '$lib/ui/prompts';
   import {
     ACCENTS,
     MODES,
@@ -140,6 +141,7 @@
   type Group =
     | 'keys'
     | 'ai'
+    | 'customprompts'
     | 'memory'
     | 'wiki'
     | 'appearance'
@@ -148,15 +150,20 @@
     | 'about';
   // Tabs are ordered by nearness of subject to the user: the app itself
   // (About), then the user's own presentation and personal data
-  // (Appearance, Memory, Wiki), then the assistant (AI), then the
+  // (Appearance, Memory, Wiki), then the assistant (AI, then the
+  // custom-prompt library that rides on top of it), then the
   // account/infrastructure tail furthest from day-to-day use (Usage,
-  // Security, API keys).
+  // Security, API keys). Custom prompts sit right after AI because they
+  // are the same subject (how the assistant behaves) but were split into
+  // their own tab to keep the AI pane's model/reasoning layout legible -
+  // the prompt cards are tall and pushed everything else below the fold.
   const GROUPS: { id: Group; label: string }[] = [
     { id: 'about', label: 'About' },
     { id: 'appearance', label: 'Appearance' },
     { id: 'memory', label: 'Memory' },
     { id: 'wiki', label: 'Wiki' },
     { id: 'ai', label: 'AI' },
+    { id: 'customprompts', label: 'Custom prompts' },
     { id: 'usage', label: 'Usage' },
     { id: 'security', label: 'Security' },
     { id: 'keys', label: 'API keys' },
@@ -286,41 +293,66 @@
     // keystroke would nuke the user's in-progress edit.
     if (promptsDebounce !== null || promptsSaving) return;
     const live = app.systemPrompts;
-    const same =
-      live.length === promptsDraft.length &&
-      live.every((p, i) => {
-        const local = promptsDraft[i];
-        return (
-          local.id === p.id &&
-          local.name === p.name &&
-          local.body === p.body &&
-          local.enabledByDefault === p.enabledByDefault
-        );
-      });
-    if (!same) promptsDraft = live.map((p) => ({ ...p }));
+    if (!prompts.promptsMatch(live, promptsDraft)) {
+      promptsDraft = live.map((p) => ({ ...p }));
+    }
   });
 
   function addPrompt(): void {
-    promptsDraft = [
-      ...promptsDraft,
-      {
-        id: crypto.randomUUID(),
-        name: 'New prompt',
-        body: '',
-        enabledByDefault: false,
-      },
-    ];
+    promptsDraft = prompts.addPrompt(promptsDraft);
     schedulePromptsSave();
   }
 
   function updatePrompt(id: string, patch: Partial<SystemPrompt>): void {
-    promptsDraft = promptsDraft.map((p) => (p.id === id ? { ...p, ...patch } : p));
+    promptsDraft = prompts.updatePrompt(promptsDraft, id, patch);
     schedulePromptsSave();
   }
 
   function deletePrompt(id: string): void {
-    promptsDraft = promptsDraft.filter((p) => p.id !== id);
+    promptsDraft = prompts.deletePrompt(promptsDraft, id);
     schedulePromptsSave();
+  }
+
+  // --- Drag-and-drop reorder ---
+  // Native HTML5 DnD. A grip handle on each card carries draggable=true
+  // (so dragging from inside the name input / body textarea still selects
+  // text); the cards themselves are the drop targets. `dragId` is the
+  // prompt being dragged, `dragOverId` is the card the pointer is hovering
+  // so the template can draw an insertion line. Both clear on drop / end.
+  let dragId = $state<string | null>(null);
+  let dragOverId = $state<string | null>(null);
+
+  function onPromptDragStart(id: string, e: DragEvent): void {
+    dragId = id;
+    // Required for Firefox to start a drag at all; the payload itself is
+    // unused since we track the dragged id in component state.
+    e.dataTransfer?.setData('text/plain', id);
+    if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+  }
+
+  function onPromptDragOver(id: string, e: DragEvent): void {
+    if (dragId === null) return;
+    // preventDefault is what marks this element as a valid drop target;
+    // without it the browser fires no drop event.
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+    dragOverId = id;
+  }
+
+  function onPromptDrop(targetId: string, e: DragEvent): void {
+    e.preventDefault();
+    const from = promptsDraft.findIndex((p) => p.id === dragId);
+    const to = promptsDraft.findIndex((p) => p.id === targetId);
+    dragId = null;
+    dragOverId = null;
+    if (from === -1 || to === -1 || from === to) return;
+    promptsDraft = prompts.reorderPrompts(promptsDraft, from, to);
+    schedulePromptsSave();
+  }
+
+  function onPromptDragEnd(): void {
+    dragId = null;
+    dragOverId = null;
   }
 
   function schedulePromptsSave(): void {
@@ -1450,7 +1482,11 @@
              matches the Appearance pane's "touch it and it sticks"
              behavior. -->
         <h2>AI</h2>
-        <p class="subtle">Default model and system prompts.</p>
+        <p class="subtle">
+          Default model, reasoning, and behavior preferences. Your named
+          system prompts moved to their own <strong>Custom prompts</strong>
+          tab.
+        </p>
 
         <h3 class="pane-section">About you</h3>
         <p class="subtle">
@@ -1780,17 +1816,49 @@
         {#if modelError}<p class="error">{modelError}</p>{/if}
         {#if modelInfo}<p class="subtle">{modelInfo}</p>{/if}
 
-        <h3 class="pane-section">System prompts</h3>
+      {:else if group === 'customprompts'}
+        <!-- Custom prompts split out of the AI pane: the cards are tall
+             and pushed the model/reasoning controls below the fold. The
+             list autosaves (debounced) on add / edit / delete / reorder,
+             matching the rest of the modal's touch-it-and-it-sticks
+             behavior. -->
+        <h2>Custom prompts</h2>
         <p class="subtle">
-          Named prompts you can toggle on or off from the chat composer. The
-          "Default" checkbox seeds the active set for new conversations.
-          Per-conversation toggles aren't saved — they only affect the
-          current thread.
+          Named system prompts you can toggle on or off from the chat
+          composer. The "Default" checkbox seeds the active set for new
+          conversations. Per-conversation toggles aren't saved — they only
+          affect the current thread. Drag the grip handle to reorder.
         </p>
         <div class="prompt-list">
           {#each promptsDraft as p (p.id)}
-            <div class="prompt-card">
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div
+              class="prompt-card"
+              class:drag-over={dragOverId === p.id && dragId !== p.id}
+              class:dragging={dragId === p.id}
+              ondragover={(e) => onPromptDragOver(p.id, e)}
+              ondrop={(e) => onPromptDrop(p.id, e)}
+            >
               <div class="prompt-row">
+                <span
+                  class="prompt-grip"
+                  role="button"
+                  tabindex="-1"
+                  draggable="true"
+                  title="Drag to reorder"
+                  aria-label="Drag to reorder prompt"
+                  ondragstart={(e) => onPromptDragStart(p.id, e)}
+                  ondragend={onPromptDragEnd}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <circle cx="9" cy="6" r="1.6" />
+                    <circle cx="15" cy="6" r="1.6" />
+                    <circle cx="9" cy="12" r="1.6" />
+                    <circle cx="15" cy="12" r="1.6" />
+                    <circle cx="9" cy="18" r="1.6" />
+                    <circle cx="15" cy="18" r="1.6" />
+                  </svg>
+                </span>
                 <input
                   type="text"
                   name="prompt-name-{p.id}"
