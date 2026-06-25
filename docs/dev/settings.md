@@ -1,9 +1,9 @@
 # Settings
 
 The settings modal plus everything it persists: the panes (About,
-Appearance, Memory, Wiki, AI, Usage, Security, API keys), the
-`profiles.settings` JSONB blob they read from and write to, and the
-theme system that lives alongside.
+Appearance, Memory, Wiki, AI, Custom prompts, Usage, Security, API
+keys), the `profiles.settings` JSONB blob they read from and write to,
+and the theme system that lives alongside.
 
 ## Role in the app
 
@@ -51,13 +51,14 @@ landing tab move together.
   browser's Notification permission), the **About you** profile
   fields (`userName` / `userLocation`, free-form strings injected
   into the per-turn appendix's "User profile" block - opt-in, both
-  blank skips the block), the **Working intentions** opt-in
+  blank skips the block), and the **Working intentions** opt-in
   (`profiles.settings.intentsEnabled`, default OFF - gates the whole
   intents pipeline: minting sweep, efficacy evaluation, and the
   `applyIntentPriming` system-prompt block; see
-  [`in-progress/intents.md`](./in-progress/intents.md)), and the
-  system-prompt library. All preferences persist to
-  `profiles.settings`.
+  [`in-progress/intents.md`](./in-progress/intents.md)). All preferences
+  persist to `profiles.settings`. The system-prompt library used to live
+  here too but moved to its own **Custom prompts** pane (below) - the
+  prompt cards are tall and pushed the Models layout below the fold.
 
   The **Models** subsection is the per-tier configuration UI: each of
   Smart/Balanced/Fast gets a fuzzy-search model combobox
@@ -74,6 +75,29 @@ landing tab move together.
   staleness/error-guard shape as the Usage pane. See
   [Models & tiers in Chat](./chat.md) for the resolution cascade and the
   `TierModelConfig` snapshot rationale.
+- **Custom prompts** — the named system-prompt library
+  (`profiles.settings.systemPrompts`, a `SystemPrompt[]`). Each card is a
+  name + "Default" checkbox + delete + body textarea; the list autosaves
+  (debounced 500ms) on add / edit / delete / reorder, pushing the whole
+  array through `persistSystemPrompts` -> `updateSystemPrompts` (wholesale
+  replace, not per-prompt). Cards reorder by **drag** - a grip handle
+  carries `draggable=true` (so dragging from inside the name input or body
+  textarea still selects text) and the cards are the drop targets. Two
+  reorder paths share the same `dragOverId` target state and the same
+  `reorderPrompts` array move: pointer uses native HTML5 DnD
+  (`onPromptDragStart/Over/Drop/End`); touch uses a long-press path
+  (`onPromptTouchStart/Move/End`) because DnD never fires on touch - a
+  1s press on the grip lifts the card (the `.touch-dragging` style + a
+  `navigator.vibrate` tick), then finger-slide tracks the card under the
+  pointer via `elementFromPoint` (cards carry `data-prompt-id` for the
+  lookup) and lift-off drops. A pre-activation finger travel past a small
+  slop threshold cancels the press as a scroll. There is no keyboard
+  reorder path yet. The pure list transforms (add / update / delete /
+  reorder / the resync equality check) live in `src/lib/ui/prompts.ts`.
+  The order in the array is significant: it is both the order shown in the
+  chat composer's prompt toggles AND the order the enabled prompts are
+  injected as system messages on each turn (see `chat.md`), so a reorder
+  is a deliberate behavioral change, not just cosmetic.
 - **Usage** — a date-ranged snapshot of per-model token spend
   against the Venice API key. Read-only: it calls Venice's beta
   `/billing/usage` endpoint and aggregates the rows client-side.
@@ -136,6 +160,11 @@ every update) so it's covered here rather than in its own file.
   `usage-store.svelte.ts` (lazy-on-open, 15-min staleness, lock-reset);
   exposes `catalog`, `refreshCatalog`, `resetCatalog`,
   `shouldAutoRefreshCatalog`, `isCatalogStale`, `CATALOG_STALE_MS`.
+- `src/lib/ui/prompts.ts` — pure list transforms for the Custom prompts
+  pane: `createPrompt`, `addPrompt`, `updatePrompt`, `deletePrompt`,
+  `reorderPrompts` (the drag-reorder array move), and `promptsMatch` (the
+  by-value equality that backs the resync-from-Supabase guard). Unit-tested
+  in `tests/prompts.test.ts`.
 - `src/lib/ui/model-picker.ts` — pure UI primitives for the picker:
   `tierRowView` (row view-model), `buildModelOptions`, `capabilityChips`,
   `formatContextWindow`, `formatPricing`, `tierConfigFromCatalog`,
@@ -277,7 +306,10 @@ every update) so it's covered here rather than in its own file.
   value. Returns the coerced post-merge blob.
 - `updateSystemPrompts(prompts: SystemPrompt[]): Promise<void>`
   — replaces the `systemPrompts` array wholesale (system-prompt
-  editing is a full-form save, not per-prompt).
+  editing is a full-form save, not per-prompt). Array order is
+  significant - it is the order the Custom prompts pane and the chat
+  composer's prompt toggles render in, so a drag-reorder is just another
+  wholesale write of the reordered array.
 - `setTheme(mode, accent)` — applies to DOM, caches locally,
   writes reactive state. Does NOT persist to Supabase; callers
   that want server persistence must also call

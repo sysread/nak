@@ -71,9 +71,22 @@ Covered in detail on [Wiki](./wiki.md).
 ### AI
 
 Covered in detail on [Models & reasoning](./models.md). Also holds
-the **Emphasis markdown** scan-aid toggle, **reply notifications**
+the **Emphasis markdown** scan-aid toggle and **reply notifications**
 (an optional desktop/mobile ping when a reply lands while you're
-looking elsewhere), and the system-prompt library.
+looking elsewhere). The named system prompts moved to their own
+**Custom prompts** pane.
+
+### Custom prompts
+
+Your library of named system prompts - reusable instructions you can
+flip on or off per conversation from the chat composer. Each card has
+a name, a **Default** checkbox (seeds the active set for new
+conversations), and the prompt body. Add, edit, and delete save
+automatically. Reorder by the grip handle on the left of a card -
+**drag** it with a mouse, or **press and hold** it for a second on a
+touchscreen to pick the card up, then move it. The order here is the
+order the toggles appear in the composer. See
+[System prompts](./models.md#system-prompts) for the full picture.
 
 ### Usage
 

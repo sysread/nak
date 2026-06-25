@@ -183,6 +183,9 @@ One file per use-case under [`use-cases/`](./use-cases/), named
 - [settings-account-and-updates](./use-cases/settings-account-and-updates.md) -
   Settings pane independence, update-check/reload flow, background-job
   toggles, usage refresh, and credential/export actions.
+- [settings-custom-prompts](./use-cases/settings-custom-prompts.md) - the
+  Custom prompts pane: add/edit/delete autosave, drag-and-drop reorder,
+  and the order flowing through to the chat composer's prompt toggles.
 - [setup-config-transfer](./use-cases/setup-config-transfer.md) - first
   launch setup, local config persistence, and config-only export/import
   across browsers.

@@ -662,6 +662,48 @@ label {
   align-items: center;
   gap: 0.45rem;
 }
+/* Drag handle for reordering. Only the grip is draggable so a drag that
+   starts inside the name input or body textarea still selects text. The
+   negative margin + padding give a finger-sized hit area for the mobile
+   long-press without visually enlarging the dotted icon. touch-action:
+   none keeps the browser from claiming the press as a scroll/zoom gesture
+   so the long-press timer can run. */
+.prompt-grip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  margin: -0.4rem;
+  padding: 0.4rem;
+  color: var(--muted);
+  cursor: grab;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.prompt-grip:active {
+  cursor: grabbing;
+}
+/* The card fades while it's the one being mouse-dragged. */
+.prompt-card.dragging {
+  opacity: 0.5;
+}
+/* Touch long-press "lifted" state. Unlike the mouse-drag fade, the
+   touch-dragged card stays fully opaque and reads as raised - on mobile
+   the finger covers the card, so the cue has to be visible around the
+   fingertip (accent border + lift shadow + slight scale) rather than a
+   fade hidden under the touch. */
+.prompt-card.touch-dragging {
+  border-color: var(--accent);
+  box-shadow: 0 6px 18px -4px color-mix(in srgb, var(--accent) 50%, transparent);
+  transform: scale(1.02);
+}
+/* Insertion target: a colored top edge shows where the dragged card will
+   land when dropped onto this one. */
+.prompt-card.drag-over {
+  border-top-color: var(--accent);
+  box-shadow: inset 0 2px 0 0 var(--accent);
+}
 .prompt-name {
   flex: 1;
   min-width: 0;

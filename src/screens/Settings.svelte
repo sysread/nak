@@ -107,6 +107,7 @@
     refreshCatalog,
   } from '$lib/models-catalog.svelte';
   import type { SystemPrompt } from '$lib/supabase';
+  import * as prompts from '$lib/ui/prompts';
   import {
     ACCENTS,
     MODES,
@@ -140,6 +141,7 @@
   type Group =
     | 'keys'
     | 'ai'
+    | 'customprompts'
     | 'memory'
     | 'wiki'
     | 'appearance'
@@ -148,15 +150,20 @@
     | 'about';
   // Tabs are ordered by nearness of subject to the user: the app itself
   // (About), then the user's own presentation and personal data
-  // (Appearance, Memory, Wiki), then the assistant (AI), then the
+  // (Appearance, Memory, Wiki), then the assistant (AI, then the
+  // custom-prompt library that rides on top of it), then the
   // account/infrastructure tail furthest from day-to-day use (Usage,
-  // Security, API keys).
+  // Security, API keys). Custom prompts sit right after AI because they
+  // are the same subject (how the assistant behaves) but were split into
+  // their own tab to keep the AI pane's model/reasoning layout legible -
+  // the prompt cards are tall and pushed everything else below the fold.
   const GROUPS: { id: Group; label: string }[] = [
     { id: 'about', label: 'About' },
     { id: 'appearance', label: 'Appearance' },
     { id: 'memory', label: 'Memory' },
     { id: 'wiki', label: 'Wiki' },
     { id: 'ai', label: 'AI' },
+    { id: 'customprompts', label: 'Custom prompts' },
     { id: 'usage', label: 'Usage' },
     { id: 'security', label: 'Security' },
     { id: 'keys', label: 'API keys' },
@@ -286,40 +293,132 @@
     // keystroke would nuke the user's in-progress edit.
     if (promptsDebounce !== null || promptsSaving) return;
     const live = app.systemPrompts;
-    const same =
-      live.length === promptsDraft.length &&
-      live.every((p, i) => {
-        const local = promptsDraft[i];
-        return (
-          local.id === p.id &&
-          local.name === p.name &&
-          local.body === p.body &&
-          local.enabledByDefault === p.enabledByDefault
-        );
-      });
-    if (!same) promptsDraft = live.map((p) => ({ ...p }));
+    if (!prompts.promptsMatch(live, promptsDraft)) {
+      promptsDraft = live.map((p) => ({ ...p }));
+    }
   });
 
   function addPrompt(): void {
-    promptsDraft = [
-      ...promptsDraft,
-      {
-        id: crypto.randomUUID(),
-        name: 'New prompt',
-        body: '',
-        enabledByDefault: false,
-      },
-    ];
+    promptsDraft = prompts.addPrompt(promptsDraft);
     schedulePromptsSave();
   }
 
   function updatePrompt(id: string, patch: Partial<SystemPrompt>): void {
-    promptsDraft = promptsDraft.map((p) => (p.id === id ? { ...p, ...patch } : p));
+    promptsDraft = prompts.updatePrompt(promptsDraft, id, patch);
     schedulePromptsSave();
   }
 
   function deletePrompt(id: string): void {
-    promptsDraft = promptsDraft.filter((p) => p.id !== id);
+    promptsDraft = prompts.deletePrompt(promptsDraft, id);
+    schedulePromptsSave();
+  }
+
+  // --- Drag-and-drop reorder ---
+  // Native HTML5 DnD. A grip handle on each card carries draggable=true
+  // (so dragging from inside the name input / body textarea still selects
+  // text); the cards themselves are the drop targets. `dragId` is the
+  // prompt being dragged, `dragOverId` is the card the pointer is hovering
+  // so the template can draw an insertion line. Both clear on drop / end.
+  let dragId = $state<string | null>(null);
+  let dragOverId = $state<string | null>(null);
+
+  function onPromptDragStart(id: string, e: DragEvent): void {
+    dragId = id;
+    // Required for Firefox to start a drag at all; the payload itself is
+    // unused since we track the dragged id in component state.
+    e.dataTransfer?.setData('text/plain', id);
+    if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+  }
+
+  function onPromptDragOver(id: string, e: DragEvent): void {
+    if (dragId === null) return;
+    // preventDefault is what marks this element as a valid drop target;
+    // without it the browser fires no drop event.
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+    dragOverId = id;
+  }
+
+  function onPromptDrop(targetId: string, e: DragEvent): void {
+    e.preventDefault();
+    const from = promptsDraft.findIndex((p) => p.id === dragId);
+    const to = promptsDraft.findIndex((p) => p.id === targetId);
+    dragId = null;
+    dragOverId = null;
+    if (from === -1 || to === -1 || from === to) return;
+    promptsDraft = prompts.reorderPrompts(promptsDraft, from, to);
+    schedulePromptsSave();
+  }
+
+  function onPromptDragEnd(): void {
+    dragId = null;
+    dragOverId = null;
+  }
+
+  // --- Touch long-press reorder (mobile) ---
+  // Native HTML5 DnD never fires on touch, so phones get a parallel path:
+  // press and hold the grip for LONG_PRESS_MS and the card "lifts" (the
+  // .touch-dragging style + a haptic tick where supported), after which
+  // sliding the finger over another card marks it as the drop target and
+  // lifting the finger drops there. A finger that travels more than
+  // TOUCH_SLOP before the timer fires is read as a scroll attempt, not a
+  // hold, and cancels the press. Touch events all dispatch to the
+  // touchstart target (the grip) for the life of the gesture, so we
+  // resolve the card actually under the finger via elementFromPoint.
+  const LONG_PRESS_MS = 1000;
+  const TOUCH_SLOP = 10; // px of travel that still counts as "held still"
+  let touchDragId = $state<string | null>(null);
+  let longPressTimer: ReturnType<typeof setTimeout> | null = null;
+  let touchStartY = 0;
+
+  function clearLongPress(): void {
+    if (longPressTimer !== null) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+  }
+
+  function onPromptTouchStart(id: string, e: TouchEvent): void {
+    const t = e.touches[0];
+    if (!t) return;
+    touchStartY = t.clientY;
+    clearLongPress();
+    longPressTimer = setTimeout(() => {
+      longPressTimer = null;
+      touchDragId = id;
+      dragOverId = id;
+      // Haptic confirmation that the card is now liftable. Optional
+      // chaining: most desktop browsers and iOS Safari don't implement
+      // Vibration, and a missing API must not break the activation.
+      navigator.vibrate?.(15);
+    }, LONG_PRESS_MS);
+  }
+
+  function onPromptTouchMove(e: TouchEvent): void {
+    const t = e.touches[0];
+    if (!t) return;
+    if (touchDragId === null) {
+      // Pre-activation: a finger that wanders is scrolling, not holding.
+      if (Math.abs(t.clientY - touchStartY) > TOUCH_SLOP) clearLongPress();
+      return;
+    }
+    // Active drag: stop the pane scrolling under the finger and track
+    // which card the finger is currently over.
+    e.preventDefault();
+    const el = document.elementFromPoint(t.clientX, t.clientY);
+    const card = el?.closest<HTMLElement>('.prompt-card[data-prompt-id]');
+    if (card?.dataset.promptId) dragOverId = card.dataset.promptId;
+  }
+
+  function onPromptTouchEnd(): void {
+    clearLongPress();
+    if (touchDragId === null) return;
+    const from = promptsDraft.findIndex((p) => p.id === touchDragId);
+    const to = promptsDraft.findIndex((p) => p.id === dragOverId);
+    touchDragId = null;
+    dragOverId = null;
+    if (from === -1 || to === -1 || from === to) return;
+    promptsDraft = prompts.reorderPrompts(promptsDraft, from, to);
     schedulePromptsSave();
   }
 
@@ -1450,7 +1549,11 @@
              matches the Appearance pane's "touch it and it sticks"
              behavior. -->
         <h2>AI</h2>
-        <p class="subtle">Default model and system prompts.</p>
+        <p class="subtle">
+          Default model, reasoning, and behavior preferences. Your named
+          system prompts moved to their own <strong>Custom prompts</strong>
+          tab.
+        </p>
 
         <h3 class="pane-section">About you</h3>
         <p class="subtle">
@@ -1780,17 +1883,55 @@
         {#if modelError}<p class="error">{modelError}</p>{/if}
         {#if modelInfo}<p class="subtle">{modelInfo}</p>{/if}
 
-        <h3 class="pane-section">System prompts</h3>
+      {:else if group === 'customprompts'}
+        <!-- Custom prompts split out of the AI pane: the cards are tall
+             and pushed the model/reasoning controls below the fold. The
+             list autosaves (debounced) on add / edit / delete / reorder,
+             matching the rest of the modal's touch-it-and-it-sticks
+             behavior. -->
+        <h2>Custom prompts</h2>
         <p class="subtle">
-          Named prompts you can toggle on or off from the chat composer. The
-          "Default" checkbox seeds the active set for new conversations.
-          Per-conversation toggles aren't saved — they only affect the
-          current thread.
+          Named system prompts you can toggle on or off from the chat
+          composer. The "Default" checkbox seeds the active set for new
+          conversations. Per-conversation toggles aren't saved — they only
+          affect the current thread. Drag the grip handle to reorder.
         </p>
         <div class="prompt-list">
           {#each promptsDraft as p (p.id)}
-            <div class="prompt-card">
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div
+              class="prompt-card"
+              class:drag-over={dragOverId === p.id && dragId !== p.id && touchDragId !== p.id}
+              class:dragging={dragId === p.id}
+              class:touch-dragging={touchDragId === p.id}
+              data-prompt-id={p.id}
+              ondragover={(e) => onPromptDragOver(p.id, e)}
+              ondrop={(e) => onPromptDrop(p.id, e)}
+            >
               <div class="prompt-row">
+                <span
+                  class="prompt-grip"
+                  role="button"
+                  tabindex="-1"
+                  draggable="true"
+                  title="Drag to reorder (press and hold on touch)"
+                  aria-label="Drag to reorder prompt"
+                  ondragstart={(e) => onPromptDragStart(p.id, e)}
+                  ondragend={onPromptDragEnd}
+                  ontouchstart={(e) => onPromptTouchStart(p.id, e)}
+                  ontouchmove={onPromptTouchMove}
+                  ontouchend={onPromptTouchEnd}
+                  ontouchcancel={onPromptTouchEnd}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <circle cx="9" cy="6" r="1.6" />
+                    <circle cx="15" cy="6" r="1.6" />
+                    <circle cx="9" cy="12" r="1.6" />
+                    <circle cx="15" cy="12" r="1.6" />
+                    <circle cx="9" cy="18" r="1.6" />
+                    <circle cx="15" cy="18" r="1.6" />
+                  </svg>
+                </span>
                 <input
                   type="text"
                   name="prompt-name-{p.id}"

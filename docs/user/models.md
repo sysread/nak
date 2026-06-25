@@ -188,6 +188,31 @@ reply reads as plain prose.
 
 ## System prompts
 
+A system prompt is a standing instruction the model sees before your
+message - "be concise," "answer in British English," "you are a
+patient tutor." Nak lets you keep a library of named prompts and
+toggle them on or off per conversation.
+
+- Manage them in Settings -> **Custom prompts**. Each prompt is a
+  card with a **Name**, a **Default** checkbox, and the prompt
+  **body**.
+- The **Default** checkbox seeds the active set for *new*
+  conversations. Leave it off for prompts you only want occasionally.
+- Per-conversation toggles live in the chat composer (the same place
+  you pick a model). Flipping a prompt on or off there only affects
+  the current thread - it is not saved back as a default.
+- Changes save automatically as you type; there is no Save button.
+- **Reorder** the library by the grip handle on the left edge of a
+  card. With a mouse or trackpad, drag the handle. On a touchscreen,
+  **press and hold** the handle for about a second - the card lifts
+  (and buzzes, on phones that support it) to show it is now moving,
+  then slide it to its new spot and lift your finger to drop.
+- The order you set is the order the toggles appear in the composer,
+  so put the ones you reach for most at the top. It also sets the
+  order the active prompts are stacked in the instructions sent to
+  the model, so when two prompts overlap, the higher one is read
+  first.
+
 ## Automatic glitch recovery
 
 Some models occasionally emit an internal control token (and a burst
