@@ -1,13 +1,15 @@
 # Intents (in progress)
 
-> **Status: feature complete except the backtest, which is
-> blocked on field data.** The full self-developing loop
-> (minting, efficacy evaluation, employment classification, the
-> system-prompt injection) plus the read-only inspector are
-> implemented behind the settings toggle, with unit + Deno
-> coverage and live-passing QA walkthroughs. The only remaining
-> build is the backtest harness, and it waits on weeks of real
-> opted-in usage to have anything to backtest against. The feature ships **off by default**
+> **Status: feature complete; only the backtest's real-corpus
+> harness remains, blocked on field data.** The full
+> self-developing loop (minting, efficacy evaluation, employment
+> classification, the system-prompt injection) plus the
+> read-only inspector are implemented behind the settings
+> toggle, with unit + Deno coverage and live-passing QA
+> walkthroughs. The backtest VERDICT logic is built and tested
+> on provisional fixtures (with a tripwire to refresh them); the
+> only piece left is the query that feeds it a real corpus,
+> which waits on weeks of opted-in usage. The feature ships **off by default**
 > and stays off-by-default until the backtest clears its
 > falsifiable bar. This doc records the design decisions plus
 > the evaluation plan; the Build status below is the live
@@ -127,12 +129,21 @@
     in `index.ts`. Pure prompt + parser Deno-tested. This is the
     minter's pruning telemetry and feeds the gather it already
     reads - and is NEVER an efficacy input (the firewall).
+12. The backtest aggregator
+    (`supabase/functions/_shared/intent-backtest.ts`,
+    `runBacktest`) - the corpus-level verdict (matched-control
+    lift + the efficacy/employment firewall correlation + a
+    data-volume floor) over the kernels, Deno-tested on
+    provisional fixtures with a 2026-07-16 tripwire. The
+    DB-reading harness that feeds it a real corpus is the one
+    remaining piece, blocked on field data.
 
-Not yet built: the backtest harness (blocked on field data -
-it needs intents + target samples + employment accumulated over
-weeks of real opted-in use). The sections below document the
-design and the realized behavior; the backtest is the only open
-build, and it waits on data regardless.
+Not yet built: the DB-reading half of the backtest harness
+(blocked on field data - it needs target samples + employment
+accumulated over weeks of real opted-in use). The pure verdict
+logic exists and is tested; only the real-corpus query and the
+data-derived thresholds remain. The sections below document the
+design and the realized behavior.
 
 Intents are the first layer in nak that is **normative**
 rather than descriptive. Every other user-model the app
@@ -650,13 +661,60 @@ results we like is the discipline; deciding it after is not.
 
 ### Backtest harness
 
-The pre-merge gate (#1, #2, #3) runs as an offline harness
-against the live corpus: snapshot the descriptive layer at
-historical points, run the minter, bind targets, then replay
-forward to measure target-vs-control movement and the
-efficacy/employment correlation. Scope TBD at build time -
-this is real engineering cost and may warrant its own
-milestone before the pipeline is wired into live priming.
+**Built: the pure corpus-level aggregator**
+(`supabase/functions/_shared/intent-backtest.ts`,
+`runBacktest`) that composes the kernels into the three-part
+verdict - matched-control lift > 0, |efficacy/employment corr|
+under `BAR_MAX_ABS_CORR` (the firewall holding), and enough
+movement windows - returning a `BacktestReport` with the
+reasons it did or didn't clear. Deno-tested
+(`supabase/functions/tests/intent-backtest.test.ts`) over
+**provisional, best-guess fixtures**, with a **tripwire test
+that fails after 2026-07-16** to force replacing them with real
+data. The `BAR_*` thresholds are eyeballed placeholders the
+real data must re-derive.
+
+**Not built: the DB-reading harness** that builds the corpus
+from `intent_target_samples` + `intent_employments`. It has
+nothing to read until weeks of opted-in usage accrue, so the
+aggregator runs on fixtures for now and the live harness is a
+later piece.
+
+### What the June 2026 prod inspection taught the backtest
+
+Inspected the live descriptive layer (the controls' source)
+and triggered the first mint. Findings the backtest must start
+from, baked into the fixtures:
+
+- **Bias targets are signal-less for the inspected user** - all
+  19 biases sit at `elided` with posteriors floored ~0.011. The
+  minter correctly formed zero bias-target intents. A backtest
+  on this account exercises only the samskara + free-form arms.
+- **Reduce and valence are decoupled.** The first mint bound a
+  `reduce` intent to a **+0.50** (positive) samskara - moderating
+  a competent-but-overused habit. So the valence-sign control
+  partition draws a reduce-target's cohort from the deep positive
+  pool, not the thin negative one; the earlier cohort-size worry
+  was misplaced.
+- **The real metric risk is topic-exogeneity, not cohort size.**
+  Negative samskaras' windowed fire counts swung 2->185 and
+  219->25 across adjacent 14-day windows - driven by what the
+  user happened to discuss, not by any intervention, and cohort
+  members moved in opposite directions at once. So the
+  matched-control differential on the fire-frequency metric is
+  expected to be ~0 (noise), and a reduce-target can score a
+  false "confirm" when its topic simply goes quiet. **Treat
+  samskara-target efficacy as suspect until the backtest says
+  otherwise; the fixtures encode lift ~ 0 as the honest default
+  expectation.** Candidate metric fixes if the backtest confirms
+  the problem: normalize each samskara by its own trailing
+  baseline rather than a cohort mean, lengthen the window, or
+  switch from fire-frequency to the samskara evaluation's
+  confirm/disconfirm verdicts.
+- **Data accrues slowly.** Efficacy sampling is weekly-gated per
+  intent and employment is hourly, so a usable corpus is weeks
+  out, and the volatility finding suggests the weekly sample gate
+  may want to be *longer*, not shorter.
 
 ## Settings
 
