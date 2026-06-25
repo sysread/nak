@@ -147,7 +147,9 @@ every update) so it's covered here rather than in its own file.
   `coerceTierModels`, and `effectiveTierSpec` (folds a user override over
   the built-in TierSpec).
 - `src/lib/supabase.ts` — `getSettings`, `updateSettings`,
-  `updateSystemPrompts`. Read-then-write against the
+  `updateSystemPrompts`. `updateSettings` validates the patch
+  then writes atomically via the `merge_profile_settings` RPC
+  (`supabase/schema.sql`); `getSettings` reads the
   `profiles.settings` JSONB column.
 - `src/lib/venice.ts` — `VeniceClient.fetchUsage` + `UsageRow` /
   `UsageCurrency` types. Backs the Usage pane; pages through
@@ -266,10 +268,13 @@ every update) so it's covered here rather than in its own file.
   and coerces. Missing row returns an empty object; unknown
   keys are dropped.
 - `updateSettings(patch: Partial<UserSettings>):
-  Promise<UserSettings>` — merges a patch with the current row
-  via read-then-write. Scrubs unknown keys and validates each
-  known field; a `patch[field] === undefined` deletes that
-  field from the stored object.
+  Promise<UserSettings>` — scrubs unknown keys and validates each
+  known field, then applies the patch atomically via the
+  `merge_profile_settings` RPC (one server-side UPDATE, no
+  read-then-write). A `patch[field] === undefined` (or an empty
+  profile string) deletes that field; a present-but-invalid value
+  is ignored so it neither writes garbage nor clears the existing
+  value. Returns the coerced post-merge blob.
 - `updateSystemPrompts(prompts: SystemPrompt[]): Promise<void>`
   — replaces the `systemPrompts` array wholesale (system-prompt
   editing is a full-form save, not per-prompt).
@@ -359,13 +364,21 @@ every update) so it's covered here rather than in its own file.
 
 ## Gotchas
 
-- **Read-then-write on `profiles.settings`.** Not safe under
-  concurrent writes from multiple tabs. If two tabs both
-  flip theme at the same moment, one write wins and the
-  other's change is lost. Acceptable for a single-user
-  single-device app; if multi-tab concurrency becomes a real
-  concern, move to a Postgres `jsonb_set` so each field
-  updates atomically.
+- **Settings writes are atomic, not read-then-write.**
+  `updateSettings` validates the patch client-side, then hands a
+  `set`/`remove` pair to the `merge_profile_settings` RPC
+  (`supabase/schema.sql`), which merges into the live row in one
+  UPDATE. This is deliberate: the old read-then-write shape (fetch
+  blob, merge in JS, write back) dropped a field whenever two
+  writes overlapped - both read the pre-write blob and the second
+  clobbered the first. That bit single-tab too (two adjacent
+  toggles flipped in quick succession, or a fire-and-forget theme
+  write racing a toggle), surfacing as a setting that reverted
+  intermittently with no repeatable pattern. The merge is a
+  top-level shallow merge (`||`), so nested values (`tierModels`,
+  `systemPrompts`) replace wholesale - correct, since the app
+  treats them as atomic snapshots. Don't reintroduce a
+  client-side blob read before the write.
 - **`setTheme` does not persist.** It writes local state +
   DOM + cache; server persistence is the caller's job. This
   is on purpose — the Appearance pane calls both; any
