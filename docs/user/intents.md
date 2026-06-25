@@ -31,6 +31,22 @@ When intentions are active, a short **"working intentions"** note rides
 in the background of Nak's instructions for the turn. It shapes *how*
 Nak engages - never *what* you can ask for.
 
+## Seeing them
+
+With intentions on, a **seedling pill** (the leaf icon) appears at the
+top of the bottom-right column in the chat view; on a narrow screen
+it's a tile in the diagnostics menu. Tapping it opens the
+**inspector** - a read-only view of what Nak is working toward,
+grouped into **Active** (shaping replies now), **Paused** (set aside
+while the pattern is quiet), and **Let go** (abandoned, kept for the
+record). Each one shows what it's trying to shift, an honest read of
+whether it's landing ("too new to tell", "landing", "not landing", or
+"open-ended" for ones with no measurable target), and why Nak formed
+it. You can see everything; you can't hand-edit an intention - Nak
+manages the set itself, the same way it manages its
+[instincts](./samskara.md). The pill is hidden entirely until you turn
+the feature on.
+
 ## The guardrails
 
 - **Your explicit instructions always win.** If you've told Nak to do

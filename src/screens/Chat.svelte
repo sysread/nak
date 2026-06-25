@@ -144,6 +144,7 @@
   type IntuitionComponent = typeof import('./Intuition.svelte').default;
   type SamskaraMoodComponent = typeof import('./SamskaraMood.svelte').default;
   type BiasProfileComponent = typeof import('./BiasProfile.svelte').default;
+  type IntentsComponent = typeof import('./Intents.svelte').default;
   type RecallComponent = typeof import('./Recall.svelte').default;
   import WikiList from '../components/WikiList.svelte';
   import SamskaraBrowseList from '../components/SamskaraBrowseList.svelte';
@@ -151,6 +152,7 @@
   import ArtifactsList from '../components/ArtifactsList.svelte';
   import IntuitionPill from '../components/IntuitionPill.svelte';
   import BiasPill from '../components/BiasPill.svelte';
+  import IntentsPill from '../components/IntentsPill.svelte';
   import RecallPill from '../components/RecallPill.svelte';
   import TopicsFilter from '../components/TopicsFilter.svelte';
   import BucketHeader from '../components/BucketHeader.svelte';
@@ -279,6 +281,7 @@
   const showIntuition = $derived(route.modal === 'intuition');
   const showSamskaraMood = $derived(route.modal === 'samskara-mood');
   const showBiasProfile = $derived(route.modal === 'bias-profile');
+  const showIntents = $derived(route.modal === 'intents');
   const showRecall = $derived(route.modal === 'recall');
 
   // Lazy components. Each holds the loaded constructor in $state
@@ -305,6 +308,7 @@
   let IntuitionComp: IntuitionComponent | null = $state(null);
   let SamskaraMoodComp: SamskaraMoodComponent | null = $state(null);
   let BiasProfileComp: BiasProfileComponent | null = $state(null);
+  let IntentsComp: IntentsComponent | null = $state(null);
   let RecallComp: RecallComponent | null = $state(null);
   $effect(() => {
     if (sessionLoaded && !session && !AuthComp) {
@@ -367,6 +371,11 @@
   $effect(() => {
     if (showBiasProfile && !BiasProfileComp) {
       void import('./BiasProfile.svelte').then((m) => (BiasProfileComp = m.default));
+    }
+  });
+  $effect(() => {
+    if (showIntents && !IntentsComp) {
+      void import('./Intents.svelte').then((m) => (IntentsComp = m.default));
     }
   });
   $effect(() => {
@@ -7567,6 +7576,12 @@
         <IntuitionPill payload={currentIntuitionPayload} />
         <BiasPill />
         <RecallPill payload={currentContextRecallPayload} />
+        <!-- Intents inspector pill, only when the user opted in. Tops
+             the column (its CSS bottom sits above the recall bulb); the
+             off-by-default majority never see it. -->
+        {#if app.intentsEnabled}
+          <IntentsPill />
+        {/if}
       </div>
       {#if error}
         <div class="error-bar">
@@ -7833,6 +7848,20 @@
                 >
                   <span class="emoji" aria-hidden="true">&#x1F4C8;</span>
                 </button>
+                {#if app.intentsEnabled}
+                  <button
+                    type="button"
+                    class="diag-tile"
+                    title="Working intentions - what Nak is working toward with you"
+                    aria-label="Open working intentions inspector"
+                    onclick={() => {
+                      closeMenus();
+                      navigate({ modal: 'intents' });
+                    }}
+                  >
+                    <span class="emoji" aria-hidden="true">&#x1F331;</span>
+                  </button>
+                {/if}
                 <button
                   type="button"
                   class="diag-tile"
@@ -8332,6 +8361,9 @@
   {/if}
   {#if showBiasProfile && BiasProfileComp}
     <BiasProfileComp onClose={() => navigate({ modal: null })} />
+  {/if}
+  {#if showIntents && IntentsComp}
+    <IntentsComp onClose={() => navigate({ modal: null })} />
   {/if}
   {#if showRecall && RecallComp}
     <RecallComp

@@ -136,6 +136,7 @@ import {
 // record_file_attach key duplicates the same way. attachments.ts only
 // `import type`s from this module, so this value import has no runtime cycle.
 import { sha256Hex } from './attachments';
+import type { IntentRow } from './ui/intents-inspector';
 
 
 
@@ -1755,6 +1756,23 @@ export class SupabaseService {
       .order('updated_at', { ascending: false });
     if (error) throw new SupabaseError(error.message);
     return (data ?? []) as Recipe[];
+  }
+
+  /**
+   * Every intent row for the inspector (the read-only "surfaced"
+   * surface). RLS scopes to the signed-in user. Includes retired rows -
+   * the inspector shows the full history (what Nak let go of), so no
+   * status filter here; the modal groups them. Ordered by recency.
+   */
+  async listIntents(): Promise<IntentRow[]> {
+    const { data, error } = await this.client
+      .from('intents')
+      .select(
+        'id, statement, rationale, status, target_kind, target_ref, target_direction, efficacy, created_at, updated_at, last_minted_at',
+      )
+      .order('updated_at', { ascending: false });
+    if (error) throw new SupabaseError(error.message);
+    return (data ?? []) as IntentRow[];
   }
 
   /** Every recipe flagged `favorite`. Same complete-bucket rationale as listUpcomingRecipes. */
