@@ -746,9 +746,9 @@ The sync job also merges the fork's Pages URL into the auth
 allowlist, but that's orthogonal to schema - don't dwell on it in PR
 descriptions for schema changes.
 
-# The user
+## The user
 
-This project is the user's attempt to release their _own_ samskaras and release
+This project is the user's attempt to release their *own* samskaras and release
 the need to fully grok the machine and state, control the code and
 organization, and to accept code completely managed by AI.
 
