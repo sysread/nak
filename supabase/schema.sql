@@ -183,6 +183,18 @@ create table if not exists public.app_config (
   constraint app_config_singleton check (id)
 );
 
+-- Optional project-wide model price ceilings, in USD per 1,000,000 tokens.
+-- Null on a dimension means "no cap on that side." Written only by
+-- `mise run setup` (service role, same as venice_api_key above - there is
+-- no in-app editor and no write policy); the venice edge function reads
+-- them to reject a user-triggered chat whose model's live Venice price
+-- exceeds the ceiling. Columns on the singleton rather than a new table,
+-- per the "columns over migrations" convention.
+alter table public.app_config
+  add column if not exists max_input_usd_per_m numeric;
+alter table public.app_config
+  add column if not exists max_output_usd_per_m numeric;
+
 alter table public.app_config enable row level security;
 
 -- RLS diverges from the per-user sibling tables on purpose. Every other

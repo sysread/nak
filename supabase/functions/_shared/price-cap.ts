@@ -1,21 +1,19 @@
 // Project-global model price-cap enforcement (edge side).
 //
-// The deployment owner ("root") sets an optional ceiling on the per-1M-
-// token input/output USD price of any model a user-triggered chat may
-// run. This module reads that ceiling from the embedded global root
-// config (./root-config.json) and rejects an over-cap model before the
-// venice function relays the turn to Venice.
+// The deployment owner sets an optional ceiling on the per-1M-token
+// input/output USD price of any model a user-triggered chat may run. The
+// ceiling lives on the project-global app_config row (the same singleton
+// that holds the shared Venice key), written only by `mise run setup` via
+// the service role - there is no in-app editor and no write policy. The
+// venice function reads it (see readPriceCaps in venice/index.ts) and
+// hands it to assertModelWithinCap, which rejects an over-cap model before
+// relaying the turn to Venice.
 //
-// Why it lives in _shared and embeds the JSON: the cap has to be enforced
-// server-side because the browser is fully user-controlled, and the only
-// build-time channel into the deployed edge bundle is a relative import
-// the deploy bundler (esbuild) can follow. The JSON sits beside this
-// module so `supabase functions deploy` inlines it; nothing reaches
-// outside the functions tree (the deploy bundles per-function and does
-// not pull in repo-root files). One file is the single source of truth -
-// the browser-side picker filter, when it lands, reads the same JSON by
-// importing upward into here (Vite resolves any path), so the two halves
-// can never disagree.
+// Why server-side: the cap has to be enforced where the browser cannot
+// reach it, since the browser is fully user-controlled. app_config is
+// readable by any authenticated member, so the browser-side picker filter
+// (when it lands) reads the SAME caps to hide over-cap models, but that is
+// UX only - this check is the boundary.
 //
 // Pricing is read from Venice's live /models catalog (veniceFetchModels),
 // TTL-cached at module scope so enforcement adds no Venice round trip to
@@ -30,7 +28,6 @@
 // price cap. The only hard stop is a model whose published price is
 // above a configured ceiling.
 
-import rootConfig from './root-config.json' with { type: 'json' };
 import { VeniceError, veniceFetchModels } from './venice.ts';
 
 /** A per-1M-token USD ceiling. null on a dimension means "no cap there". */
@@ -49,31 +46,36 @@ function asRecord(v: unknown): Record<string, unknown> | null {
   return typeof v === 'object' && v !== null ? (v as Record<string, unknown>) : null;
 }
 
-// A cap value is only meaningful as a finite, non-negative number; any
-// other shape (a hand-edit typo, a string, a negative) reads as "no cap"
-// so a malformed config degrades to inert rather than blocking everything.
+// A cap is only meaningful as a finite, non-negative number; anything else
+// (a typo, a negative) reads as "no cap" so a malformed value degrades to
+// inert rather than blocking everything. Accepts a numeric STRING as well
+// as a number: PostgREST serializes a `numeric` column as a JSON string to
+// preserve arbitrary precision, so a cap set in app_config arrives here as
+// e.g. "2.5". An empty / whitespace string is "unset", not 0.
 function capValue(v: unknown): number | null {
-  return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null;
+  let n: number;
+  if (typeof v === 'number') n = v;
+  else if (typeof v === 'string' && v.trim() !== '') n = Number(v);
+  else return null;
+  return Number.isFinite(n) && n >= 0 ? n : null;
 }
 
 /**
- * Read and validate the caps off the embedded root config. Defensive
- * because the JSON is hand-edited config, not trusted internal data -
- * validating here is the boundary check.
+ * Coerce a raw app_config row into caps. Defensive because the values are
+ * operator-entered config (via `mise run setup`), not trusted internal
+ * data - validating here is the boundary check. A non-number / negative /
+ * absent column reads as "no cap on that side."
  */
-export function readCaps(raw: unknown): ModelPriceCaps {
-  const caps = asRecord(asRecord(raw)?.modelPriceCaps) ?? {};
+export function coercePriceCaps(row: unknown): ModelPriceCaps {
+  const rec = asRecord(row) ?? {};
   return {
-    maxInputUsdPerM: capValue(caps.maxInputUsdPerM),
-    maxOutputUsdPerM: capValue(caps.maxOutputUsdPerM),
+    maxInputUsdPerM: capValue(rec.max_input_usd_per_m),
+    maxOutputUsdPerM: capValue(rec.max_output_usd_per_m),
   };
 }
 
-/** The caps from the embedded config, read once at module load. */
-const rootCaps: ModelPriceCaps = readCaps(rootConfig);
-
 /** True when at least one dimension carries a ceiling. */
-export function capsConfigured(caps: ModelPriceCaps = rootCaps): boolean {
+export function capsConfigured(caps: ModelPriceCaps): boolean {
   return caps.maxInputUsdPerM !== null || caps.maxOutputUsdPerM !== null;
 }
 
@@ -163,10 +165,10 @@ async function loadPrices(apiKey: string, fetchImpl?: typeof fetch): Promise<Map
 export async function assertModelWithinCap(opts: {
   model: unknown;
   apiKey: string;
-  caps?: ModelPriceCaps;
+  caps: ModelPriceCaps;
   fetchImpl?: typeof fetch;
 }): Promise<void> {
-  const caps = opts.caps ?? rootCaps;
+  const caps = opts.caps;
   if (!capsConfigured(caps)) return;
   if (typeof opts.model !== 'string' || opts.model.length === 0) return;
 
@@ -199,13 +201,11 @@ export async function assertModelWithinCap(opts: {
   }
 }
 
-// Test-only hooks: reset the module-scope cache between cases and reach
-// the embedded caps without re-reading the file. Kept out of the
-// production surface per CLAUDE.md's test-hook convention.
+// Test-only hook: reset the module-scope price cache between cases. Kept
+// out of the production surface per CLAUDE.md's test-hook convention.
 export const __test = {
   resetCache(): void {
     priceCache = null;
     priceCacheAt = 0;
   },
-  rootCaps,
 };

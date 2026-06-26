@@ -63,6 +63,24 @@ const CONFIG_FIELDS = [
       'Use a Venice ADMIN API key: the in-app Usage (billing) view calls Venice billing, which 401s on a standard key. A standard key still works for chat and embeddings. Keys: https://venice.ai/settings/api',
     secret: true,
   },
+  {
+    column: 'max_input_usd_per_m',
+    label: 'Max input price (USD per 1M tokens)',
+    description:
+      'project-wide ceiling on a chat model\'s input price; blank = no cap',
+    hint:
+      'Optional. The edge function blocks any user-chosen chat model whose Venice input price exceeds this, in USD per 1,000,000 tokens (e.g. 2.5). Leave blank for no input-side cap.',
+    numeric: true,
+  },
+  {
+    column: 'max_output_usd_per_m',
+    label: 'Max output price (USD per 1M tokens)',
+    description:
+      'project-wide ceiling on a chat model\'s output price; blank = no cap',
+    hint:
+      'Optional. Same as the input cap but for output tokens, in USD per 1,000,000 tokens (e.g. 10). Leave blank for no output-side cap.',
+    numeric: true,
+  },
 ];
 
 async function readAppConfig(ref) {
@@ -95,6 +113,16 @@ async function promptConfigField(field) {
   if (value !== null && [...value].some((c) => c.charCodeAt(0) < 0x20)) {
     warn('That value contains control characters; leaving it unchanged.');
     return null;
+  }
+  // Numeric fields (the price caps) must parse as a finite, non-negative
+  // number before they reach the numeric column; a non-numeric literal
+  // would error the upsert, and a negative cap is meaningless.
+  if (field.numeric === true && value !== null) {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n < 0) {
+      warn('That is not a valid non-negative number; leaving it unchanged.');
+      return null;
+    }
   }
   return value;
 }

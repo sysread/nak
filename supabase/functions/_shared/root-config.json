@@ -1,7 +1,0 @@
-{
-  "_comment": "Global root config - project-wide settings the deployment owner controls, embedded into the edge bundle at deploy time (see _shared/price-cap.ts). Not user-editable; change a value here and redeploy. modelPriceCaps caps the per-1,000,000-token USD price of any model a user-triggered chat may run; null on a dimension means no ceiling on that side. Caps are matched against Venice's live /models pricing.",
-  "modelPriceCaps": {
-    "maxInputUsdPerM": null,
-    "maxOutputUsdPerM": null
-  }
-}

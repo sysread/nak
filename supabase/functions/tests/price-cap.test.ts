@@ -8,9 +8,9 @@ import {
   __test,
   assertModelWithinCap,
   capsConfigured,
+  coercePriceCaps,
   extractModelPrices,
   overCapReason,
-  readCaps,
 } from '../_shared/price-cap.ts';
 import { VeniceError } from '../_shared/venice.ts';
 
@@ -74,16 +74,24 @@ Deno.test('overCapReason flags the breached dimension and passes within-cap', ()
   );
 });
 
-Deno.test('readCaps validates: non-number / negative -> null (inert)', () => {
-  assertEquals(readCaps({ modelPriceCaps: { maxInputUsdPerM: 2, maxOutputUsdPerM: 8 } }), {
+Deno.test('coercePriceCaps reads an app_config row; non-number / negative -> null', () => {
+  assertEquals(coercePriceCaps({ max_input_usd_per_m: 2, max_output_usd_per_m: 8 }), {
     maxInputUsdPerM: 2,
     maxOutputUsdPerM: 8,
   });
-  assertEquals(readCaps({ modelPriceCaps: { maxInputUsdPerM: '2', maxOutputUsdPerM: -1 } }), {
+  // A negative or non-numeric column degrades to "no cap on that side".
+  assertEquals(coercePriceCaps({ max_input_usd_per_m: -1, max_output_usd_per_m: 'x' }), {
     maxInputUsdPerM: null,
     maxOutputUsdPerM: null,
   });
-  assertEquals(readCaps({}), { maxInputUsdPerM: null, maxOutputUsdPerM: null });
+  // PostgREST serializes numeric columns as JSON strings - coerce them.
+  assertEquals(coercePriceCaps({ max_input_usd_per_m: '2.5', max_output_usd_per_m: '10' }), {
+    maxInputUsdPerM: 2.5,
+    maxOutputUsdPerM: 10,
+  });
+  // Unseeded row / absent columns.
+  assertEquals(coercePriceCaps({}), { maxInputUsdPerM: null, maxOutputUsdPerM: null });
+  assertEquals(coercePriceCaps(null), { maxInputUsdPerM: null, maxOutputUsdPerM: null });
   assertEquals(capsConfigured({ maxInputUsdPerM: null, maxOutputUsdPerM: null }), false);
   assertEquals(capsConfigured({ maxInputUsdPerM: 1, maxOutputUsdPerM: null }), true);
 });
