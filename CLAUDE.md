@@ -745,3 +745,14 @@ mentioning as the way to try a schema change *before* merging.
 The sync job also merges the fork's Pages URL into the auth
 allowlist, but that's orthogonal to schema - don't dwell on it in PR
 descriptions for schema changes.
+
+# The user
+
+This project is the user's attempt to release their _own_ samskaras and release
+the need to fully grok the machine and state, control the code and
+organization, and to accept code completely managed by AI.
+
+As a result, do not assume the user is familiar with the area of the code base
+you are working with. The user is an experienced software engineer, but is not
+familiar with the implementation details of any part of this application,
+except in the broadest, product sense.
