@@ -4,7 +4,8 @@
 
 The read-only "surfaced" surface of intents
 ([dev: intents](../../dev/in-progress/intents.md)): the seedling
-pill (`IntentsPill.svelte`, gated on `app.intentsEnabled`), the
+pill (the `intents` entry in the shared diagnostic-pill column,
+`src/lib/ui/diagnostic-pills.ts`, gated on `app.intentsEnabled`), the
 inspector modal (`Intents.svelte`, route `modal: 'intents'`)
 listing intents grouped active / paused / let-go via the
 `listIntents()` read, and the honest label primitives in

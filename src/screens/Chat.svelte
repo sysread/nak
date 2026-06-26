@@ -150,10 +150,8 @@
   import SamskaraBrowseList from '../components/SamskaraBrowseList.svelte';
   import LibraryList from '../components/LibraryList.svelte';
   import ArtifactsList from '../components/ArtifactsList.svelte';
-  import IntuitionPill from '../components/IntuitionPill.svelte';
-  import BiasPill from '../components/BiasPill.svelte';
-  import IntentsPill from '../components/IntentsPill.svelte';
-  import RecallPill from '../components/RecallPill.svelte';
+  import DiagnosticPills from '../components/DiagnosticPills.svelte';
+  import SamskaraMoodSync from '../components/SamskaraMoodSync.svelte';
   import TopicsFilter from '../components/TopicsFilter.svelte';
   import BucketHeader from '../components/BucketHeader.svelte';
   import {
@@ -190,8 +188,6 @@
   import {
     bandIndexFor,
     columnFor,
-    valenceToEmoji,
-    valenceToMoodLabel,
     notifySamskaraMint,
   } from '$lib/samskara/events';
   import {
@@ -258,7 +254,6 @@
   type MemoryListComponent = typeof import('../components/MemoryList.svelte').default;
   type CohortPanelComponent = typeof import('../components/CohortPanel.svelte').default;
   type AskUserCardComponent = typeof import('../components/AskUserCard.svelte').default;
-  type SamskaraToastsComponent = typeof import('../components/SamskaraToasts.svelte').default;
   import { extractedTextDrawer } from '$lib/extractedTextDrawer.svelte';
   import { logsDrawer, createLogger, appendFromEdge } from '$lib/logger.svelte';
 
@@ -296,7 +291,6 @@
   let MemoryListComp: MemoryListComponent | null = $state(null);
   let CohortPanelComp: CohortPanelComponent | null = $state(null);
   let AskUserCardComp: AskUserCardComponent | null = $state(null);
-  let SamskaraToastsComp: SamskaraToastsComponent | null = $state(null);
   let AuthComp: AuthComponent | null = $state(null);
   let CookbookComp: CookbookComponent | null = $state(null);
   let MemoriesComp: MemoriesComponent | null = $state(null);
@@ -416,17 +410,6 @@
     ) {
       void import('../components/AskUserCard.svelte').then(
         (m) => (AskUserCardComp = m.default)
-      );
-    }
-  });
-  // SamskaraToasts is always-on UI but late-firing: it seeds from its
-  // own samskaraGetLatestFireMood query on mount, so a chunk fetch
-  // that lands a tick or two after first paint misses nothing. The
-  // effect fires once after the initial render and never again.
-  $effect(() => {
-    if (!SamskaraToastsComp) {
-      void import('../components/SamskaraToasts.svelte').then(
-        (m) => (SamskaraToastsComp = m.default)
       );
     }
   });
@@ -6987,15 +6970,7 @@
       </div>
 
       {#if drawerTab === 'chats' || drawerTab === 'artifacts'}
-      <!-- --diag-base is the `bottom` of the lowest always-on diagnostic
-           pill (samskara mood). The intents pill, when enabled, takes the
-           bottom-most 3.6rem slot directly above the scroll arrow and the
-           always-on pills shift up one 2.5rem step (base 6.1rem). When
-           intents is off (the default), there is no bottom pill, so the
-           always-on column drops back down to sit flush above the arrow
-           (base 3.6rem) and no gap opens. The always-on pills read this
-           var via calc() so the whole column reflows from one toggle. -->
-      <div class="messages-wrap" style:--diag-base={app.intentsEnabled ? '6.1rem' : '3.6rem'}>
+      <div class="messages-wrap">
         <!--
           ontouchmove: not a user-facing interaction - the handler is a
           scroll-state sampler that re-runs onMessagesScroll during a
@@ -7566,35 +7541,23 @@
             </svg>
           </button>
         {/if}
-        <!-- Diagnostic pills stack above the scroll-to-bottom arrow in a
-             vertical column pinned to the bottom-right of the messages
-             pane, in this top-to-bottom order: recall, intuition, bias,
-             samskara mood, intents. They sit inside .messages-wrap (which
-             is position:relative) so they share a coordinate system with
-             .scroll-to-bottom; that keeps the column aligned regardless
-             of composer height. Mounting them here, rather than as
-             siblings of the shell at the bottom of this file, is what
-             couples the alignment to the scroll arrow. DOM order matches
-             the visual order so keyboard tab order reads top-to-bottom;
-             the actual vertical placement is driven by each pill's CSS
-             `bottom`, not this order. Each pill suppresses itself when
-             its backing data isn't present (no cached intuition / context-
-             recall payload, no samskara reading), so the column collapses
-             gracefully on cold threads. -->
-        <RecallPill payload={currentContextRecallPayload} />
-        <IntuitionPill payload={currentIntuitionPayload} />
-        <BiasPill />
-        {#if SamskaraToastsComp}
-          <SamskaraToastsComp />
-        {/if}
-        <!-- Intents inspector pill, only when the user opted in. Takes
-             the bottom-most slot directly above the scroll arrow; the
-             off-by-default majority never see it and the always-on pills
-             drop one slot to stay flush with the arrow (see --diag-base
-             on .messages-wrap). -->
-        {#if app.intentsEnabled}
-          <IntentsPill />
-        {/if}
+        <!-- Diagnostic pills (recall / intuition / bias / samskara mood /
+             intents), bottom-right of the messages pane. Mounted inside
+             .messages-wrap (position:relative) so the absolutely-
+             positioned column shares a coordinate system with
+             .scroll-to-bottom and stays aligned regardless of composer
+             height. The order, labels, and which pills show all live in
+             the registry the component loops (src/lib/ui/diagnostic-
+             pills.ts). The MOBILE twin of this surface is the
+             <DiagnosticPills variant="mobile"> in the composer bar below.
+             SamskaraMoodSync is the headless single owner of the mood
+             data both surfaces read - mounted once here. -->
+        <SamskaraMoodSync />
+        <DiagnosticPills
+          variant="desktop"
+          recall={currentContextRecallPayload}
+          intuition={currentIntuitionPayload}
+        />
       </div>
       {#if error}
         <div class="error-bar">
@@ -7760,150 +7723,26 @@
                 <circle cx="19" cy="19" r="1.8" />
               </svg>
             </button>
-            <!-- Mobile-only diagnostic wharf, docked right next to the
-                 composer-wharf-trigger so both drop-ups originate from
-                 the same neighborhood on the left. The .composer-diag-
-                 anchor wrapper is a local positioning context so the
-                 .composer-diag-wharf panel pops up directly above its
-                 trigger; without the wrapper the panel would anchor to
-                 .composer-bar and float off-center. Hidden on desktop -
-                 the pills live in the bottom-right column inside
-                 .messages-wrap there - and on mobile that column
-                 collides with readability so the pills move here. -->
-            <div class="composer-diag-anchor">
-              <button
-                type="button"
-                class="secondary icon-btn composer-diag-trigger"
-                class:open={composerDiagWharfOpen}
-                onclick={() => {
-                  const next = !composerDiagWharfOpen;
-                  closeMenus();
-                  composerDiagWharfOpen = next;
-                }}
-                title="Diagnostics menu"
-                aria-label="Diagnostics menu"
-                aria-haspopup="true"
-                aria-expanded={composerDiagWharfOpen}
-                aria-controls="composer-diag-wharf"
-              >
-                <!-- Three vertical dots, distinct from the adjacent
-                     wharf's 3x3 grid so the two affordances read as
-                     separate concerns at a glance. -->
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"
-                     aria-hidden="true">
-                  <circle cx="12" cy="5" r="1.8" />
-                  <circle cx="12" cy="12" r="1.8" />
-                  <circle cx="12" cy="19" r="1.8" />
-                </svg>
-              </button>
-
-              <!-- Drop-up panel with the diagnostic buttons, top-to-
-                   bottom: recall, intuition, bias, samskara mood, intents
-                   (intents only when opted in). Mirrors the desktop pill
-                   column's order. Hidden when the wharf is closed (CSS
-                   gates on .wharf-open); rendered as a vertical column
-                   anchored above the trigger via the .composer-diag-
-                   anchor positioning context. Buttons close the wharf
-                   on click via the shared closeMenus helper. -->
-              <div
-                id="composer-diag-wharf"
-                class="composer-diag-wharf"
-                class:wharf-open={composerDiagWharfOpen}
-              >
-                <button
-                  type="button"
-                  class="diag-tile"
-                  disabled={currentContextRecallPayload === null ||
-                    currentContextRecallPayload.note.trim().length === 0}
-                  title={currentContextRecallPayload !== null &&
-                    currentContextRecallPayload.note.trim().length > 0
-                    ? 'Recall - what Nak remembered before the next reply'
-                    : 'Recall - no data for this conversation yet'}
-                  aria-label={currentContextRecallPayload !== null &&
-                    currentContextRecallPayload.note.trim().length > 0
-                    ? 'Open recall diagnostics'
-                    : 'Recall diagnostics (no data yet)'}
-                  onclick={() => {
-                    closeMenus();
-                    if (
-                      currentContextRecallPayload !== null &&
-                      currentContextRecallPayload.note.trim().length > 0
-                    ) {
-                      navigate({ modal: 'recall' });
-                    }
-                  }}
-                >
-                  <span class="emoji" aria-hidden="true">&#x1F4A1;</span>
-                </button>
-                <button
-                  type="button"
-                  class="diag-tile"
-                  disabled={currentIntuitionPayload === null}
-                  title={currentIntuitionPayload !== null
-                    ? 'Intuition - perception, drives, synthesis'
-                    : 'Intuition - no data for this conversation yet'}
-                  aria-label={currentIntuitionPayload !== null
-                    ? 'Open intuition diagnostics'
-                    : 'Intuition diagnostics (no data yet)'}
-                  onclick={() => {
-                    closeMenus();
-                    if (currentIntuitionPayload !== null) {
-                      navigate({ modal: 'intuition' });
-                    }
-                  }}
-                >
-                  <span class="emoji" aria-hidden="true">&#x1F9E0;</span>
-                </button>
-                <button
-                  type="button"
-                  class="diag-tile"
-                  title="Bias profile - patterns observed across past conversations"
-                  aria-label="Open bias profile diagnostics"
-                  onclick={() => {
-                    closeMenus();
-                    navigate({ modal: 'bias-profile' });
-                  }}
-                >
-                  <span class="emoji" aria-hidden="true">&#x1F4C8;</span>
-                </button>
-                <button
-                  type="button"
-                  class="diag-tile"
-                  title={moodState.current
-                    ? `feelin' ${valenceToMoodLabel(moodState.current.valence, moodState.current.confidence)} - open this conversation's mood`
-                    : "Open this conversation's mood"}
-                  aria-label="Open conversation mood"
-                  onclick={() => {
-                    // The mood is per-conversation, so it opens a modal -
-                    // not the corpus-global Samskara tab. (Global corpus +
-                    // health live on the tab; per-round triggered
-                    // predictions live in the inline cohort dropdown.)
-                    closeMenus();
-                    navigate({ modal: 'samskara-mood' });
-                  }}
-                >
-                  <span class="emoji" aria-hidden="true">
-                    {moodState.current
-                      ? valenceToEmoji(moodState.current.valence, moodState.current.confidence)
-                      : '\u{1F4A4}'}
-                  </span>
-                </button>
-                {#if app.intentsEnabled}
-                  <button
-                    type="button"
-                    class="diag-tile"
-                    title="Working intentions - what Nak is working toward with you"
-                    aria-label="Open working intentions inspector"
-                    onclick={() => {
-                      closeMenus();
-                      navigate({ modal: 'intents' });
-                    }}
-                  >
-                    <span class="emoji" aria-hidden="true">&#x1F331;</span>
-                  </button>
-                {/if}
-              </div>
-            </div>
+            <!-- Mobile twin of the bottom-right desktop pill column (the
+                 <DiagnosticPills variant="desktop"> up in .messages-wrap).
+                 Docked next to the composer-wharf-trigger so both drop-ups
+                 originate from the same neighborhood on the left edge. The
+                 open state stays lifted here because closeMenus()
+                 coordinates this wharf with the sibling model-picker wharf
+                 and the outside-click handler keys on
+                 .composer-diag-wharf.wharf-open. -->
+            <DiagnosticPills
+              variant="mobile"
+              recall={currentContextRecallPayload}
+              intuition={currentIntuitionPayload}
+              open={composerDiagWharfOpen}
+              onToggle={() => {
+                const next = !composerDiagWharfOpen;
+                closeMenus();
+                composerDiagWharfOpen = next;
+              }}
+              onClose={closeMenus}
+            />
 
             <div class="composer-bar-left" id="composer-wharf" class:wharf-open={composerWharfOpen}>
               <!-- File picker: opens a native file chooser; selected

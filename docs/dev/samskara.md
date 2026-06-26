@@ -98,25 +98,31 @@ toast is just a glance cue that the bias model is forming.
   legend so the user-visible documentation can never drift from the live
   mapping.
 - `src/lib/samskara/mood.svelte.ts` - shared current-mood state
-  (`moodState`) read by both `SamskaraToasts.svelte` and
-  `SamskaraMoodLegend.svelte`. Holds the raw `{ valence, confidence, tier
-  } | null` triple. The pill is the sole writer (updates on mint
-  events and on the seed-from-history path; clears on thread
-  switch); the legend is a passive observer that uses it to plot
-  the "you are here" dot on the legend table. Lifting the triple
-  out of the pill keeps the dot perfectly aligned with the pill
-  the user clicked to open the tab - no separate fetch, no
-  listener race. Lives in its own .svelte.ts module rather than
-  `events.ts` because `events.ts` stays rune-free plain TS and
-  the shared mood triple needs `$state`.
-- `src/components/SamskaraToasts.svelte` - the persistent
-  mood-pill UI. Listens for `SAMSKARA_MINT_EVENT` on `window`,
-  renders the latest mint's emoji as a pill in the bottom-right
-  of the messages pane (between the IntuitionPill above and the
-  scroll-to-bottom arrow below), and stays visible until the
-  next mint (or a thread switch) so the user can connect the
-  glyph to whatever it reacted to. Whenever a thread is active (`route.cid` set)
-  the pill is visible. On thread open it seeds asynchronously
+  (`moodState`), written only by `SamskaraMoodSync.svelte` and
+  read by the pill (`DiagnosticPills.svelte`) and
+  `SamskaraMoodLegend.svelte`. Two fields: `current` (the raw
+  `{ valence, confidence, tier } | null` triple) plots the legend's
+  "you are here" dot; `visual` (glyph/label + transition id) is
+  what the pill renders. The sync component is the sole writer
+  (updates on mint events and on the seed-from-history path;
+  clears both on thread switch); the legend and pill are passive
+  observers. Lifting this out of the pill keeps the dot aligned
+  with the pill the user clicked - no separate fetch, no listener
+  race - and lets the pill be rendered twice (desktop + mobile)
+  as a pure reader. Lives in its own .svelte.ts module rather
+  than `events.ts` because `events.ts` stays rune-free plain TS
+  and the shared mood state needs `$state`.
+- `src/components/SamskaraMoodSync.svelte` - headless single owner
+  of the mood data. Renders nothing; listens for
+  `SAMSKARA_MINT_EVENT` on `window`, runs the thread-open
+  seed-from-history fetch and the `route.cid` reset effect, and
+  publishes to `moodState`. The mood *pill* itself is the
+  `samskara` entry in the shared diagnostic-pill column (see
+  [diagnostic-pills.md](./diagnostic-pills.md)) - bottom-right of
+  the messages pane on desktop, the wharf menu on mobile - and
+  shows the latest mint's emoji until the next mint (or a thread
+  switch). Present whenever a thread is active (`route.cid` set).
+  On thread open the sync owner seeds asynchronously
   from `samskaraGetLatestFireMood(cid)` (the most recent stored
   fire's joined valence + tier + confidence), so reopened
   conversations surface the model's last read instead of waiting
@@ -272,9 +278,10 @@ toast is just a glance cue that the bias model is forming.
   `_shared/samskara-mint.ts`. `Chat.svelte` subscribes through
   `SupabaseService.subscribeToSamskaraInserts` and routes the
   payload into `notifySamskaraMint`, which dispatches
-  `SAMSKARA_MINT_EVENT` on `window`; the `SamskaraToasts`
+  `SAMSKARA_MINT_EVENT` on `window`; the `SamskaraMoodSync`
   component mounted inside `Chat.svelte` listens for it and
-  renders the valence-mapped emoji pill. INSERT-only by design:
+  publishes the valence-mapped mood to `moodState`, which the
+  diagnostic-pill column renders. INSERT-only by design:
   `insertMint` is the sole insert path, so dedup-reinforce hits
   (which UPDATE an existing row) stay silent. Broadcast rather
   than a postgres_changes echo keeps `samskaras` out of the
@@ -1022,10 +1029,10 @@ summarizer reads samskaras to feed the agent.
   Function side, `getStreamingResponse`'s waitUntil tail drives
   `samskaraOnTurnTail` on every completed turn, sequenced
   curation -> samskara -> reflection. `Chat.svelte` mounts the
-  single `<SamskaraToasts />` component and owns the
+  single `<SamskaraMoodSync />` component and owns the
   `subscribeToSamskaraInserts` realtime subscription that turns
   `samskara-mint` Broadcast events into `SAMSKARA_MINT_EVENT`. See
-  `./chat.md`.
+  `./chat.md` and [diagnostic-pills.md](./diagnostic-pills.md).
 - **Embeddings** - `samskara-substrate` registers as a source
   in the server-side embed backfill (`_shared/embed-input.ts`)
   alongside memories and threads. Pure embed work; no LLM calls

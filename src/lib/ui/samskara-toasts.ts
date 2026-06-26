@@ -52,6 +52,17 @@ export interface MoodShape {
 }
 
 /**
+ * A `MoodShape` plus the monotonic id that keys the pill's fly
+ * transition. This is the shape the shared `moodState.visual` carries
+ * and the pills render; `SamskaraMoodSync.svelte` is its single writer.
+ * Monotonic id (not Date.now()) so back-to-back mints in the same ms
+ * still get distinct keys and the transition re-plays.
+ */
+export interface MoodVisual extends MoodShape {
+  id: number;
+}
+
+/**
  * Triple the shared `moodState` rune stores. Returned by the
  * transition primitives so the component never has to construct
  * the shape itself - that rule (the store stores valence +
