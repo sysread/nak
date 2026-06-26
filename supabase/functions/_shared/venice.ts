@@ -142,48 +142,35 @@ export async function veniceEmbed(opts: VeniceEmbedOptions): Promise<EmbeddingRe
   }
 }
 
-export interface UsagePageParams {
-  /** 1-based page index. */
-  page: number;
-  /** Rows per page; the browser loop pins this at 500. */
-  limit: number;
-  /** Venice sort direction, e.g. 'desc'. */
-  sortOrder: string;
-  /** ISO 8601 lower bound (inclusive). Omitted -> unbounded. */
+export interface UsageAnalyticsParams {
+  /** Inclusive lower bound, `YYYY-MM-DD`. Both bounds or neither. */
   startDate?: string;
-  /** ISO 8601 upper bound (exclusive, per Venice docs). Omitted -> unbounded. */
+  /** Inclusive upper bound, `YYYY-MM-DD`. Both bounds or neither. */
   endDate?: string;
-  /** Single-currency filter. Omitted -> every denomination. */
-  currency?: string;
 }
 
+// Default analytics window when the browser sends no explicit range. Matches
+// the Usage pane's rolling default; Venice clamps oversized lookbacks to 90d.
+const DEFAULT_ANALYTICS_LOOKBACK = '7d';
+
 /**
- * Assemble the Venice /billing/usage query string for one page. Pure so the
- * param shaping is unit-testable offline. Optional filters are dropped entirely
- * when unset - an empty `startDate=` could read upstream as an epoch bound
- * rather than "no bound", so omission, not an empty value, is what means
- * unbounded.
+ * Assemble the Venice /billing/usage-analytics query string. Pure so the param
+ * shaping is unit-testable offline. The endpoint takes EITHER an explicit
+ * `startDate`+`endDate` pair (date-only, both required together) OR a
+ * `lookback`; when the browser sends a full range we pass it through, otherwise
+ * we fall back to the default lookback so an unparameterized call still returns
+ * a sane window. A lone startDate or endDate is treated as "no range" rather
+ * than forwarded half-set, since Venice requires the pair.
  */
-export function buildUsageQuery(params: UsagePageParams): string {
+export function buildAnalyticsQuery(params: UsageAnalyticsParams): string {
   const qs = new URLSearchParams();
-  qs.set('limit', String(params.limit));
-  qs.set('page', String(params.page));
-  qs.set('sortOrder', params.sortOrder);
-  if (params.startDate) qs.set('startDate', params.startDate);
-  if (params.endDate) qs.set('endDate', params.endDate);
-  if (params.currency) qs.set('currency', params.currency);
+  if (params.startDate && params.endDate) {
+    qs.set('startDate', params.startDate);
+    qs.set('endDate', params.endDate);
+  } else {
+    qs.set('lookback', DEFAULT_ANALYTICS_LOOKBACK);
+  }
   return qs.toString();
-}
-
-/**
- * One page of usage as relayed to the browser: the raw Venice rows plus the
- * server-reported page count. Row coercion and the paging cap live in the
- * browser loop (src/lib/usage.ts), so this handler stays a thin authenticated
- * passthrough and does not need to know the UsageRow shape.
- */
-export interface UsagePage {
-  data: unknown[];
-  totalPages: number;
 }
 
 export interface VeniceCompleteOptions {
@@ -570,32 +557,36 @@ export async function veniceExtractText(opts: VeniceExtractTextOptions): Promise
   );
 }
 
-export interface VeniceUsageOptions {
+export interface VeniceUsageAnalyticsOptions {
   apiKey: string;
-  params: UsagePageParams;
+  params: UsageAnalyticsParams;
   baseUrl?: string;
   fetchImpl?: typeof fetch;
 }
 
 /**
- * GET one page of /billing/usage from Venice with the shared key. Mirrors
- * veniceEmbed's error mapping: 429 -> rate_limit (the one status the caller
- * backs off on), everything else -> http. Returns the raw rows and the
- * reported page count; the caller clamps that count to its own safety cap.
+ * GET /billing/usage-analytics from Venice with the shared key. Returns Venice's
+ * JSON body verbatim and lets the browser (src/lib/usage.ts) pick out and coerce
+ * the `byModel` slice - the same browser-coerces division of labour /models
+ * uses, keeping this handler free of UsageModelBucket knowledge. One cached
+ * response carries the whole per-model roll-up, so unlike the old /billing/usage
+ * proxy there is no paging. Mirrors veniceFetchModels' error mapping: 429 ->
+ * rate_limit, everything else -> http.
  */
-export async function veniceFetchUsagePage(opts: VeniceUsageOptions): Promise<UsagePage> {
+export async function veniceFetchUsageAnalytics(
+  opts: VeniceUsageAnalyticsOptions
+): Promise<unknown> {
   const baseUrl = (opts.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, '');
   const fetchImpl = opts.fetchImpl ?? fetch;
-  const qs = buildUsageQuery(opts.params);
+  const qs = buildAnalyticsQuery(opts.params);
 
   let res: Response;
   try {
-    res = await fetchImpl(`${baseUrl}/billing/usage?${qs}`, {
+    res = await fetchImpl(`${baseUrl}/billing/usage-analytics?${qs}`, {
       method: 'GET',
       // GET with no body: send only Authorization + Accept. A JSON
       // Content-Type here forces a needless preflight and some intermediaries
-      // choke on a body-less request that declares one. Pin Accept so a
-      // default of */* can't negotiate the CSV variant Venice also serves here.
+      // choke on a body-less request that declares one.
       headers: {
         Authorization: `Bearer ${opts.apiKey}`,
         Accept: 'application/json',
@@ -611,23 +602,17 @@ export async function veniceFetchUsagePage(opts: VeniceUsageOptions): Promise<Us
   if (!res.ok) {
     const body = await res.text().catch(() => '');
     throw new VeniceError(
-      `Venice billing/usage ${res.status}: ${body.slice(0, 200)}`,
+      `Venice billing/usage-analytics ${res.status}: ${body.slice(0, 200)}`,
       res.status === 429 ? 'rate_limit' : 'http',
       res.status
     );
   }
 
-  let payload: unknown;
   try {
-    payload = await res.json();
+    return await res.json();
   } catch {
-    throw new VeniceError('Failed to parse Venice usage response.', 'parse');
+    throw new VeniceError('Failed to parse Venice usage-analytics response.', 'parse');
   }
-  const obj = payload as { data?: unknown; pagination?: { totalPages?: number } };
-  const data = Array.isArray(obj.data) ? obj.data : [];
-  const totalPages =
-    typeof obj.pagination?.totalPages === 'number' ? obj.pagination.totalPages : 1;
-  return { data, totalPages };
 }
 
 export interface VeniceModelsOptions {

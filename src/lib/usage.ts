@@ -1,195 +1,98 @@
-// The Venice billing-usage domain. This lived on VeniceClient until usage moved
-// behind the `venice` edge function (the shared key is server-side now, so the
-// browser no longer holds a Venice key for this path). What stays here is the
-// part that is NOT transport: the row shape, the defensive coercion, the paging
-// cap, and the page-accumulation loop. The transport - one page fetched from
-// the edge function with the session JWT - is injected by the caller
-// (SupabaseService.fetchUsage). Keeping the loop transport-agnostic is what lets
-// it be unit-tested against a fake page fetcher with no network.
+// The Venice billing-usage domain. Usage lives behind the `venice` edge
+// function (the shared key is server-side, so the browser never holds a Venice
+// key for this path). What stays here is the part that is NOT transport: the
+// consumed bucket shape and the defensive coercion of Venice's
+// /billing/usage-analytics response into it. The transport - one request to the
+// edge function with the session JWT - is injected by the caller
+// (SupabaseService.fetchUsage).
+//
+// The pane reads the pre-aggregated `byModel` array from
+// /billing/usage-analytics: Venice does the per-model roll-up server-side and
+// returns it in one cached response, replacing what used to be a 20-page walk
+// over the per-request /billing/usage ledger. Everything else in the analytics
+// payload (byDate, byModelDaily, byKey, ...) is ignored - the Usage pane only
+// needs the per-model token + spend totals.
 
 /**
- * Currency codes Venice reports on billing rows. USD is the obvious fiat
- * denominator; VCU ("Venice Compute Units") is the credit unit on
- * prepaid/bundled plans; DIEM and BUNDLED_CREDITS show up on Venice's
- * token-economy and partner-credit tiers. Listed here as a union so the UI can
- * format the pill ("$0.07" vs "0.15 VCU") without having to guess.
+ * Currency codes the analytics endpoint reports spend in. Venice's `byModel`
+ * rows carry `totalUsd` and `totalDiem` only - the per-request ledger's legacy
+ * `VCU` and the `BUNDLED_CREDITS` denomination have no field in the analytics
+ * shape, so the pane reports USD and DIEM and nothing else. USD is prepaid
+ * fiat; DIEM is the staked-credit unit.
  *
- * Docs: https://docs.venice.ai/api-reference/endpoint/billing/usage
+ * Docs: https://docs.venice.ai/api-reference/endpoint/billing/usage-analytics
  */
-export type UsageCurrency = 'USD' | 'VCU' | 'DIEM' | 'BUNDLED_CREDITS';
+export type UsageCurrency = 'USD' | 'DIEM';
 
 /**
- * One row of the `/billing/usage` response. Each row is a single charge against
- * a product SKU - one chat completion, one embedding batch, one image
- * generation. LLM rows carry an `inferenceDetails` block with prompt/completion
- * token counts; non-LLM SKUs (image, video, etc.) leave it null. `units` is the
- * billable quantity in whatever unit the SKU bills in (typically output
- * mega-tokens for LLMs); `amount` is the cost in `currency`.
- *
- * Every field beyond the JSON-mandatory ones is treated as optional by the
- * parser - the endpoint is marked beta in Venice's docs and shape drift is
- * likely. See {@link coerceUsageRow}.
+ * One per-model bucket coerced from the analytics `byModel` array - the only
+ * slice of the response the Usage pane consumes. `tokens` is an actual token
+ * count (Venice reports `totalUnits` in millions of tokens, so the coercer
+ * multiplies by 1e6); it is 0 for non-LLM SKUs whose `unitType` isn't tokens
+ * (image, video, etc.), which still surface as a bucket so they appear in the
+ * list with a zero-width bar. `usd`/`diem` are the model's spend in each
+ * currency, already positive (the analytics endpoint reports spend as a
+ * positive figure, unlike the per-request ledger's signed debits).
  */
-export interface UsageRow {
-  timestamp: string;
-  sku: string;
-  pricePerUnitUsd: number;
-  units: number;
-  amount: number;
-  currency: UsageCurrency;
-  notes: string;
-  inferenceDetails: {
-    requestId?: string;
-    inferenceExecutionTime?: number;
-    promptTokens?: number;
-    completionTokens?: number;
-  } | null;
+export interface UsageModelBucket {
+  modelName: string;
+  tokens: number;
+  usd: number;
+  diem: number;
 }
 
 export interface UsageRequestOptions {
-  /** ISO 8601 lower bound (inclusive). Omitted -> unbounded. */
+  /**
+   * Inclusive lower bound as a `YYYY-MM-DD` date. Venice's analytics endpoint
+   * wants both bounds or neither; pass both for a custom range, or omit both to
+   * let the edge function fall back to its default lookback window.
+   */
   startDate?: string;
-  /** ISO 8601 upper bound (exclusive, per Venice docs). Omitted -> unbounded. */
+  /** Inclusive upper bound as a `YYYY-MM-DD` date. See {@link startDate}. */
   endDate?: string;
-  /**
-   * Filter to a single currency. Usually left unset so the caller sees every
-   * charge regardless of denomination - pill formatting downstream handles the
-   * mix.
-   */
-  currency?: UsageCurrency;
-  /**
-   * Fires once per page after that page lands. `page` is the 1-based index of
-   * the page that just arrived; `totalPages` is the server-reported page count
-   * clamped to {@link USAGE_MAX_PAGES}. Callers use this to surface a progress
-   * hint in the Usage pane - the first tick teaches the UI how many pages to
-   * expect, subsequent ticks advance the counter. Driving this per page is the
-   * whole reason the loop stays in the browser rather than the function: a
-   * single fat server-side response could not report page-by-page progress.
-   *
-   * Best-effort: a throw inside the callback is swallowed so a misbehaving UI
-   * listener can't abort the paging loop mid-window.
-   */
-  onProgress?: (info: { page: number; totalPages: number }) => void;
 }
 
-/**
- * Safety cap on usage paging. 20 x 500 = 10k rows - more than enough for a
- * month of heavy use, and bounded memory for a pathological response. Hitting
- * the cap is surfaced by the Usage pane as a truncation note so the user knows
- * to narrow the date range rather than silently seeing only the top slice.
- */
-export const USAGE_MAX_PAGES = 20;
-
-/** Rows per page requested from Venice. The cap above counts in these units. */
-const USAGE_PAGE_LIMIT = 500;
+/** Venice reports `totalUnits` in millions of tokens; scale to a raw count. */
+const TOKENS_PER_UNIT = 1_000_000;
 
 /**
- * Defensive reader for one `/billing/usage` row. Venice's docs mark the endpoint
- * beta and we've seen shape drift on other beta endpoints there - so every field
- * is validated and a row that fails any check is dropped entirely. Better to
- * lose one malformed row than crash the Usage pane on a single bad entry.
+ * Defensive reader over one `/billing/usage-analytics` `byModel` entry. The
+ * endpoint is marked Beta in Venice's docs and we've seen shape drift on other
+ * beta endpoints there, so an entry missing any field it needs is dropped
+ * rather than allowed to crash the Usage pane. A missing `totalUsd`/`totalDiem`
+ * coerces to 0 (the common case - a model billed in one currency reports 0 for
+ * the other) rather than dropping the row.
  */
-function coerceUsageRow(raw: unknown): UsageRow | null {
+function coerceModelBucket(raw: unknown): UsageModelBucket | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const r = raw as Record<string, unknown>;
-  const timestamp = typeof r.timestamp === 'string' ? r.timestamp : null;
-  const sku = typeof r.sku === 'string' ? r.sku : null;
-  const amount = typeof r.amount === 'number' ? r.amount : null;
-  const units = typeof r.units === 'number' ? r.units : null;
-  const pricePerUnitUsd =
-    typeof r.pricePerUnitUsd === 'number' ? r.pricePerUnitUsd : null;
-  const currency = isUsageCurrency(r.currency) ? r.currency : null;
-  if (!timestamp || !sku || amount === null || units === null || currency === null) {
-    return null;
-  }
-  const notes = typeof r.notes === 'string' ? r.notes : '';
-  let inferenceDetails: UsageRow['inferenceDetails'] = null;
-  if (typeof r.inferenceDetails === 'object' && r.inferenceDetails !== null) {
-    const d = r.inferenceDetails as Record<string, unknown>;
-    const details: NonNullable<UsageRow['inferenceDetails']> = {};
-    if (typeof d.requestId === 'string') details.requestId = d.requestId;
-    if (typeof d.inferenceExecutionTime === 'number') {
-      details.inferenceExecutionTime = d.inferenceExecutionTime;
-    }
-    if (typeof d.promptTokens === 'number') details.promptTokens = d.promptTokens;
-    if (typeof d.completionTokens === 'number') {
-      details.completionTokens = d.completionTokens;
-    }
-    inferenceDetails = details;
-  }
-  return {
-    timestamp,
-    sku,
-    pricePerUnitUsd: pricePerUnitUsd ?? 0,
-    units,
-    amount,
-    currency,
-    notes,
-    inferenceDetails,
-  };
+  const modelName = typeof r.modelName === 'string' ? r.modelName : null;
+  if (!modelName) return null;
+  // Only token-billed SKUs carry a meaningful token count; image/video/etc.
+  // bill in their own units and contribute 0 tokens (but still appear as a
+  // bucket so the spend shows up in the list).
+  const isTokens = r.unitType === 'tokens';
+  const totalUnits = typeof r.totalUnits === 'number' ? r.totalUnits : 0;
+  const tokens = isTokens ? Math.round(totalUnits * TOKENS_PER_UNIT) : 0;
+  const usd = typeof r.totalUsd === 'number' ? r.totalUsd : 0;
+  const diem = typeof r.totalDiem === 'number' ? r.totalDiem : 0;
+  return { modelName, tokens, usd, diem };
 }
-
-function isUsageCurrency(v: unknown): v is UsageCurrency {
-  return v === 'USD' || v === 'VCU' || v === 'DIEM' || v === 'BUNDLED_CREDITS';
-}
-
-/** The per-page request the loop hands its injected transport. */
-export interface UsagePageRequest {
-  page: number;
-  limit: number;
-  sortOrder: 'asc' | 'desc';
-  startDate?: string;
-  endDate?: string;
-  currency?: UsageCurrency;
-}
-
-/** One page as returned by the transport: raw rows plus the reported count. */
-export interface UsagePageResult {
-  /** Raw rows straight from the function; coerced by the loop below. */
-  rows: unknown[];
-  /** Server-reported total page count; the loop clamps it to the safety cap. */
-  totalPages: number;
-}
-
-type UsagePageFetcher = (req: UsagePageRequest) => Promise<UsagePageResult>;
 
 /**
- * Page through the usage range and return every coerced row. Transport-agnostic:
- * `fetchPage` does one round trip (today, a call to the venice function's /usage
- * route) and may throw on failure - that error propagates unchanged so callers
- * can render it. The loop owns coercion, the {@link USAGE_MAX_PAGES} clamp, the
- * per-page {@link UsageRequestOptions.onProgress} tick, and the break condition.
+ * Coerce the analytics response into the per-model buckets the pane renders.
+ * Reads only `byModel`; a non-array or missing `byModel` yields an empty list
+ * (rendered as "no usage in this range") rather than throwing. Transport-
+ * agnostic: the caller does the round trip and hands the parsed JSON body here.
  */
-export async function collectUsagePages(
-  fetchPage: UsagePageFetcher,
-  opts: UsageRequestOptions = {}
-): Promise<UsageRow[]> {
-  const out: UsageRow[] = [];
-  let page = 1;
-  for (;;) {
-    const { rows, totalPages: reported } = await fetchPage({
-      page,
-      limit: USAGE_PAGE_LIMIT,
-      sortOrder: 'desc',
-      startDate: opts.startDate,
-      endDate: opts.endDate,
-      currency: opts.currency,
-    });
-    for (const raw of rows) {
-      const row = coerceUsageRow(raw);
-      if (row) out.push(row);
-    }
-    // Clamp at the safety cap so a progress UI reading "page 19 of 384" doesn't
-    // promise rows the loop will never return. The truncated flag downstream is
-    // what tells the user the window was wider than the cap could pull.
-    const totalPages = Math.min(reported, USAGE_MAX_PAGES);
-    try {
-      opts.onProgress?.({ page, totalPages });
-    } catch {
-      // Best-effort: a listener throw must not abort paging.
-    }
-    if (page >= totalPages) break;
-    page++;
+export function coerceUsageAnalytics(raw: unknown): UsageModelBucket[] {
+  if (typeof raw !== 'object' || raw === null) return [];
+  const byModel = (raw as { byModel?: unknown }).byModel;
+  if (!Array.isArray(byModel)) return [];
+  const out: UsageModelBucket[] = [];
+  for (const entry of byModel) {
+    const bucket = coerceModelBucket(entry);
+    if (bucket) out.push(bucket);
   }
   return out;
 }
