@@ -12,6 +12,10 @@ import {
   recoveredOutcomeUpdate,
 } from '../src/lib/ui/memory-librarian';
 import { outcomeToLibrarianResult } from '../src/lib/ui/wiki-librarian-run';
+import {
+  recoveredOutcomeIsFresh,
+  MAX_RECOVERED_OUTCOME_AGE_MS,
+} from '../src/lib/ui/manual-run-recovery';
 
 describe('coerceManualRunOutcome', () => {
   it('accepts a well-formed envelope and passes result through untyped', () => {
@@ -73,6 +77,27 @@ describe('outcomeToMemoryDisplay', () => {
     expect(outcomeToMemoryDisplay({ source: 'wiki-librarian', result: { kind: 'ok' } })).toBeNull();
     expect(outcomeToMemoryDisplay({ source: 'rem', result: { kind: 'busy' } })).toBeNull();
     expect(outcomeToMemoryDisplay({ source: 'rem', result: {} })).toBeNull();
+  });
+});
+
+describe('recoveredOutcomeIsFresh', () => {
+  const NOW = Date.parse('2026-06-23T12:00:00Z');
+
+  it('treats an outcome within the window as fresh', () => {
+    const justNow = new Date(NOW).toISOString();
+    expect(recoveredOutcomeIsFresh(justNow, NOW)).toBe(true);
+    const edge = new Date(NOW - MAX_RECOVERED_OUTCOME_AGE_MS).toISOString();
+    expect(recoveredOutcomeIsFresh(edge, NOW)).toBe(true);
+  });
+
+  it('treats an outcome past the window as stale', () => {
+    const tooOld = new Date(NOW - MAX_RECOVERED_OUTCOME_AGE_MS - 1).toISOString();
+    expect(recoveredOutcomeIsFresh(tooOld, NOW)).toBe(false);
+  });
+
+  it('treats an absent or unparseable finishedAt as fresh (legacy envelope)', () => {
+    expect(recoveredOutcomeIsFresh(undefined, NOW)).toBe(true);
+    expect(recoveredOutcomeIsFresh('not-a-date', NOW)).toBe(true);
   });
 });
 

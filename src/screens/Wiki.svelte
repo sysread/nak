@@ -101,6 +101,7 @@
     LIBRARIAN_PARTIAL_SAVE_NOTE,
     type LibrarianStep,
   } from '$lib/ui/wiki-librarian-run';
+  import { recoveredOutcomeIsFresh } from '$lib/ui/manual-run-recovery';
   import { awaitDetachedRun } from '$lib/agents/detached-run';
   import {
     wikiLibrarianLease,
@@ -947,10 +948,14 @@
   // into the local result state. Guarded so a live run in this tab (busy) or
   // an already-shown runId wins - the live path keeps full step fidelity,
   // this only fills the gap a reload leaves. No step rows: they're gone after
-  // a reload, but the result card is the part worth recovering.
+  // a reload, but the result card is the part worth recovering. The
+  // recency guard keeps the sticky `*_last_run_outcome` column from caching
+  // an ancient run's result into the strip on a cold load (a fresh realtime
+  // outcome has finishedAt ~= now, so it still recovers).
   $effect(() => {
     const outcome = wikiLibrarianOutcome.outcome;
     if (!outcome || librarianBusy || outcome.runId === librarianShownRunId) return;
+    if (!recoveredOutcomeIsFresh(outcome.finishedAt, Date.now())) return;
     const result = outcomeToLibrarianResult(outcome);
     if (!result) return;
     librarianResult = result;

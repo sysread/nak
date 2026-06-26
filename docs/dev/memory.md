@@ -359,13 +359,15 @@ in `docs/user/memory.md`. The dev side has five moving parts:
   `librarianRun.applyOutcome`, which re-renders the result strip via
   `outcomeToMemoryDisplay` (guarded by the store's `displayedRunId` so a
   live run isn't clobbered). The outcome column is a sticky last-value
-  with no expiry, so the bridge also guards on age:
-  `recoveredOutcomeUpdate` skips an outcome that finished longer ago than
-  `MAX_RECOVERED_OUTCOME_AGE_MS` (10 min). Without that bound every cold
-  app load would resurface the strip from the last run ever - burying the
-  changelog default surface behind a stale "Rem finished" card. A fresh
-  realtime outcome (a run finishing while the tab is open) has
-  `finishedAt ~= now`, so it always passes.
+  with no expiry, so the bridge also guards on age: `recoveredOutcomeUpdate`
+  skips an outcome that finished longer ago than
+  `MAX_RECOVERED_OUTCOME_AGE_MS` (10 min) via `recoveredOutcomeIsFresh`
+  (`$lib/ui/manual-run-recovery`, shared w/ the wiki librarian's recovery
+  bridge). Without that bound every cold app load would resurface the
+  strip from the last run ever - burying the changelog default surface
+  behind a stale "Rem finished" card. A fresh realtime outcome (a run
+  finishing while the tab is open) has `finishedAt ~= now`, so it always
+  passes.
 - **User memory CRUD through the assistant** — user asks "what
   do you remember about me?" or "forget that I liked X"; the
   main model calls `memory_search` / `memory_update` /

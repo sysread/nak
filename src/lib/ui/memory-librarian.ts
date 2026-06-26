@@ -14,6 +14,8 @@
  * the user can't kick a second run on top of a first.
  */
 
+import { recoveredOutcomeIsFresh } from './manual-run-recovery';
+
 export interface MemoryLibrarianStep {
   label: string;
   status: 'pending' | 'ok' | 'error';
@@ -274,19 +276,6 @@ export function outcomeToMemoryDisplay(outcome: {
   return null;
 }
 
-// How recently a recovered run must have finished to auto-pop the result
-// strip. The `*_last_run_outcome` profiles column is a sticky last-value
-// with no expiry, so without this bound the bridge would resurface the
-// strip on EVERY cold app load - hiding the changelog default surface
-// behind a stale "Rem finished" card from a run that ran hours or days
-// ago. The recovery only exists for the reload-after-finish case (kick a
-// run, reload, land back and see the summary), so a short window is right:
-// 10 min comfortably covers a reload round-trip plus the longest plausible
-// run, while a genuinely new session never trips it. A fresh realtime
-// outcome (a run finishing while the tab is open) has finishedAt ~= now,
-// so it always passes.
-export const MAX_RECOVERED_OUTCOME_AGE_MS = 10 * 60 * 1000;
-
 /**
  * Decide whether a recovered manual-run outcome should overwrite the
  * librarian strip's current display, and if so what to show. The guard
@@ -296,10 +285,9 @@ export const MAX_RECOVERED_OUTCOME_AGE_MS = 10 * 60 * 1000;
  *  - a live run in this tab owns the display (`running`) -> skip;
  *  - the outcome we already show (`shownRunId`) -> skip, since the
  *    subscription re-fires on every profiles tick;
- *  - a stale outcome (finished longer ago than MAX_RECOVERED_OUTCOME_AGE_MS)
- *    -> skip, so a sticky last-run value can't bury the changelog on a
- *    cold load; an absent/unparseable finishedAt is treated as fresh so a
- *    legacy envelope without the field still recovers;
+ *  - a stale outcome (finished outside the recovery window) -> skip, so a
+ *    sticky last-run value can't bury the changelog on a cold load (see
+ *    recoveredOutcomeIsFresh);
  *  - a non-memory outcome (wrong source / busy) -> skip (null display).
  * Returns the display to apply, or null to leave the strip untouched.
  */
@@ -309,11 +297,6 @@ export function recoveredOutcomeUpdate(
 ): MemoryLibrarianDisplay | null {
   if (ctx.running) return null;
   if (outcome.runId === ctx.shownRunId) return null;
-  if (outcome.finishedAt) {
-    const finishedMs = Date.parse(outcome.finishedAt);
-    if (!Number.isNaN(finishedMs) && ctx.nowMs - finishedMs > MAX_RECOVERED_OUTCOME_AGE_MS) {
-      return null;
-    }
-  }
+  if (!recoveredOutcomeIsFresh(outcome.finishedAt, ctx.nowMs)) return null;
   return outcomeToMemoryDisplay(outcome);
 }
