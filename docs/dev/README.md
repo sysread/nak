@@ -110,6 +110,11 @@ changing a contract that other features depend on.
   Beta-Binomial posterior with recency decay, and injects
   compensation guidance for the strongest-evidence biases into
   the main chat LLM's system prompt.
+- [Diagnostic pills](./diagnostic-pills.md) — the shared
+  bottom-right glance column (recall / intuition / bias /
+  samskara mood / intents) and its mobile drop-up twin. One
+  registry + one component drive both surfaces; read before
+  adding a pill or touching either layout.
 - [Prompt augmentation](./prompt-augmentation.md) — the
   cross-feature contract for everything that shapes one chat
   turn: the injection order of the bias appendix + the

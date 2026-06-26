@@ -100,8 +100,9 @@ per invocation, at most.
 ## Seeing what was recalled
 
 There's a light-bulb glyph (💡) at the top of the bottom-right pill
-column on the conversation pane, stacked above the bias chart, the
-intuition brain, the mood pill, and the scroll-to-latest arrow.
+column on the conversation pane, stacked above the intuition brain,
+the bias chart, the mood pill, the working-intentions seedling (when
+enabled), and the scroll-to-latest arrow.
 Click it to open the **Recall** modal. Each injection is shown
 verbatim, in italic, the way a chapter opens with an illuminated
 initial, paired with the user prompt that triggered it. The most

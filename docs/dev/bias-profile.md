@@ -135,14 +135,19 @@ interval lower bound (not the mean) as the surfacing gate.
   `mistral-small-3-2-24b-instruct` - a static role-to-model
   mapping, not a per-user tier. Per-claim edge loggers use
   source `bias`.
-- `src/components/BiasPill.svelte` - chart-glyph pill that opens
-  the diagnostics modal. Mounted inside `.messages-wrap` in
-  `Chat.svelte`, stacked at the top of the bottom-right column
-  above the intuition brain. Suppressed when `bias_summary` is
-  empty (cold-start gate). Icon is static regardless of tier
-  state - revealing "something is shaping responses right now"
-  via the chrome itself violates the "absorption over disclaimer"
-  framing.
+- The chart-glyph pill that opens the diagnostics modal is the
+  `bias` entry in the shared diagnostic-pill column - the middle
+  slot, below the intuition brain and recall bulb, above the
+  samskara mood pill. Rendered by
+  `src/components/DiagnosticPills.svelte` from the registry in
+  `src/lib/ui/diagnostic-pills.ts`; see
+  [diagnostic-pills.md](./diagnostic-pills.md). Always present and
+  always enabled - unlike recall/intuition there is no cold-start
+  disabled state, because the modal carries useful chrome (the
+  full bias catalog with priors) even before the worker has
+  observed anything. The glyph is static regardless of tier state -
+  revealing "something is shaping responses right now" via the
+  chrome itself violates the "absorption over disclaimer" framing.
 - `src/screens/BiasProfile.svelte` - the diagnostics modal. Reads
   `bias_summary` and `biasListProcessedThreads` on mount;
   per-thread observations are pulled on demand when a row is
@@ -535,7 +540,7 @@ closes the block.
   mood / staleness triggers and produces a `<think>` block.
   Bias profile fires per-user across conversations and
   produces a system-prompt section. Both expose a pill in the
-  bottom-right column; bias stacks above intuition.
+  bottom-right column; bias stacks below intuition.
 - **Logging ([./logging.md](./logging.md))** - the sweep writes
   through per-claim edge loggers (`createEdgeLogger(userId,
   'bias')`), attributed to the claimed thread's owner and

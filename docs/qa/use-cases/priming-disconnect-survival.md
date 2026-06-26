@@ -43,7 +43,7 @@ The per-pipeline retrieval correctness lives in each feature's own case
 
 ## Steps
 
-1. Open the warm thread. Confirm the BiasPill (chart) and, once warm,
+1. Open the warm thread. Confirm the bias pill (chart) and, once warm,
    the Intuition (brain) and Recall (bulb) pills are present.
 2. Send a message whose content should trip a context-recall / samskara
    fire (reference a topic the thread's memories/samskaras cover).
@@ -55,7 +55,7 @@ The per-pipeline retrieval correctness lives in each feature's own case
 
 ## Expected
 
-- **(1)** The pills render; the BiasPill is always present, the
+- **(1)** The pills render; the bias pill is always present, the
   Intuition/Recall pills present on a warm thread.
 - **(2)** As priming runs, the subconscious spinner cycles its ops
   (recall / samskara / intuition) and the log drawer accrues entries

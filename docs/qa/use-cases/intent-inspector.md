@@ -4,7 +4,8 @@
 
 The read-only "surfaced" surface of intents
 ([dev: intents](../../dev/in-progress/intents.md)): the seedling
-pill (`IntentsPill.svelte`, gated on `app.intentsEnabled`), the
+pill (the `intents` entry in the shared diagnostic-pill column,
+`src/lib/ui/diagnostic-pills.ts`, gated on `app.intentsEnabled`), the
 inspector modal (`Intents.svelte`, route `modal: 'intents'`)
 listing intents grouped active / paused / let-go via the
 `listIntents()` read, and the honest label primitives in
@@ -33,9 +34,10 @@ absent for the off-by-default majority.
    (`update profiles set settings = settings - 'intentsEnabled' where user_id = '$UID';`),
    reload the chat view, and look at the bottom-right pill column.
 2. **Pill appears when on.** Settings -> AI -> check "Working
-   intentions". Return to chat; look at the top of the pill column
-   (above the recall bulb). On a narrow viewport, open the
-   diagnostics menu instead.
+   intentions". Return to chat; look at the bottom of the pill column
+   (below the samskara mood pill, directly above the scroll-to-bottom
+   arrow). On a narrow viewport, open the diagnostics menu instead -
+   the intents tile is the last entry there.
 3. **Open the inspector.** Click the seedling pill.
 4. **Read the groups.** Confirm the three sections and the per-card
    content.
@@ -48,7 +50,9 @@ absent for the off-by-default majority.
 - (1) With intents OFF, no seedling pill renders - the column starts
   at the recall/bias pills as before. No `intents` query fires.
 - (2) With intents ON: on desktop the seedling pill (leaf glyph)
-  appears at the top of the bottom-right column. On mobile
+  appears at the bottom of the bottom-right column (below the
+  samskara mood pill); the always-on pills shift up one slot to make
+  room so no gap opens above the scroll arrow. On mobile
   (<=720px) the whole column is hidden, so the pill must NOT appear
   there - it lives only as the matching tile in the composer
   diagnostics menu. (Regression guard: the intents pill once leaked

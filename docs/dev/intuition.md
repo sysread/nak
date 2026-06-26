@@ -132,13 +132,14 @@ thread by the first response.
   HTML-comment marker is inside the `<think>` block so the LLM
   ignores it; a UI could use it to identify synthetic intuition
   turns when listing message blocks.
-- `src/components/IntuitionPill.svelte` - brain icon that opens
-  the modal. Absolutely positioned inside `.messages-wrap`,
-  stacked at the top of a vertical column with
-  `SamskaraToasts.svelte` (middle) and the `.scroll-to-bottom`
-  arrow (bottom) - all three pinned to the bottom-right of the
-  messages pane. Suppressed when the active thread has no cached
-  payload.
+- The brain pill that opens the modal is the `intuition` entry in
+  the shared diagnostic-pill column - second from the top (recall
+  bulb above; bias, samskara mood, intents below). It is rendered
+  by `src/components/DiagnosticPills.svelte` from the registry in
+  `src/lib/ui/diagnostic-pills.ts`, not by a per-pill component. It
+  renders disabled when the active thread has no cached intuition
+  payload. See [diagnostic-pills.md](./diagnostic-pills.md) for the
+  column layout and the desktop/mobile two-mount model.
 - `src/screens/Intuition.svelte` - the diagnostics modal. Reads
   the active thread's payload, renders synthesis + perception +
   the five drives + a footer with the trigger reason and
@@ -167,10 +168,9 @@ thread by the first response.
   the browser POSTs - it does NOT include the server-spliced priming
   chain, so read the priming stage's logs to see what actually
   steered a response.
-- **UI mount**: `Chat.svelte`. The Pill mounts inside
-  `.messages-wrap` above `SamskaraToasts` and the
-  `.scroll-to-bottom` arrow; the modal mounts in the
-  modal-overlay block. The transcript itself shows no per-round
+- **UI mount**: `Chat.svelte`. The brain pill is part of the
+  shared `DiagnosticPills` column inside `.messages-wrap` (and its
+  mobile wharf twin); the modal mounts in the modal-overlay block. The transcript itself shows no per-round
   indicator - the brain pill at the bottom-right of the
   messages pane is the only surface, and it opens the same
   diagnostics modal regardless of which round the cached
@@ -266,7 +266,7 @@ demand.
   fires per-thread on trigger events and produces a `<think>`
   block; bias profile fires across conversations in the
   background and produces a system-prompt section. Both
-  surface as bottom-right pills (bias stacks above intuition)
+  surface as bottom-right pills (bias stacks below intuition)
   and open into their own diagnostics modal.
 - **Logging ([./logging.md](./logging.md))** - the pipeline
   uses `createLogger('intuition')`. The `FNORD_DEBUG_INTUITION`

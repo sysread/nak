@@ -106,8 +106,10 @@
    that activates the whole pipeline; until a user flips it on,
    everything above stays inert.
 10. The inspector - the read-only "surfaced" surface. A
-    seedling pill (`src/components/IntentsPill.svelte`, mounted
-    in the bottom-right column + a mobile diag tile, gated on
+    seedling pill (the `intents` entry in the shared
+    diagnostic-pill column, `src/lib/ui/diagnostic-pills.ts`,
+    rendered on both the desktop column and the mobile wharf by
+    `src/components/DiagnosticPills.svelte`, gated on
     `app.intentsEnabled`) opens a modal
     (`src/screens/Intents.svelte`, route `modal: 'intents'`)
     that lists the user's intents grouped active / paused / let
