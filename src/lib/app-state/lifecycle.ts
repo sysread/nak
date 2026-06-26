@@ -21,6 +21,7 @@ import { SupabaseService } from '../supabase';
 import { VeniceClient } from '../venice';
 import { resetUsage } from '../usage-store.svelte';
 import { resetCatalog } from '../models-catalog.svelte';
+import { resetImageCatalog } from '../image-models-catalog.svelte';
 import { detectTimezone } from '../timezone';
 import {
   DEFAULT_REASONING_EFFORT,
@@ -108,13 +109,15 @@ async function loadSettings(): Promise<void> {
 }
 
 /**
- * Wipe the per-session caches. The `resetUsage()` / `resetCatalog()`
- * calls keep billing rows and the model catalog from leaking across a
- * sign-out / sign-in-as-someone-else into the Settings panes' caches.
+ * Wipe the per-session caches. The `resetUsage()` / `resetCatalog()` /
+ * `resetImageCatalog()` calls keep billing rows and the model catalogs
+ * from leaking across a sign-out / sign-in-as-someone-else into the
+ * Settings panes' caches.
  */
 function resetSessionCaches(): void {
   resetUsage();
   resetCatalog();
+  resetImageCatalog();
 }
 
 /**

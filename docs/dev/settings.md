@@ -75,6 +75,21 @@ landing tab move together.
   staleness/error-guard shape as the Usage pane. See
   [Models & tiers in Chat](./chat.md) for the resolution cascade and the
   `TierModelConfig` snapshot rationale.
+  The **Image generation** subsection is a single `<select>` pointing the
+  `generate_image` tool at a Venice image model. Unlike the tier picker
+  it's a plain dropdown (no fuzzy search, no reasoning axis - image
+  generation has one backend, a handful of models, and no smart/balanced/
+  fast split), and unlike `tierModels` it persists a bare model id, not a
+  capability snapshot: the only consumer is the server-side tool, which
+  reads `profiles.settings.imageModel` at generation time and needs
+  nothing but the id. Options come from the live Venice **image** catalog
+  (`image-models-catalog.svelte.ts`, the `?type=image` twin of the text
+  catalog), each row labelled with its per-image price plus beta/retiring
+  badges. Picking the built-in default (`VENICE_DEFAULT_IMAGE_MODEL`)
+  clears the override so "default" reads as absence; any other pick writes
+  the id via `persistImageModel`. See
+  [generate_image](./tools.md) for the server-side resolution + the
+  one-dimension-table size assumption.
 - **Custom prompts** — the named system-prompt library
   (`profiles.settings.systemPrompts`, a `SystemPrompt[]`). Each card is a
   name + "Default" checkbox + delete + body textarea; the list autosaves
@@ -162,6 +177,19 @@ every update) so it's covered here rather than in its own file.
   `usage-store.svelte.ts` (lazy-on-open, 15-min staleness, lock-reset);
   exposes `catalog`, `refreshCatalog`, `resetCatalog`,
   `shouldAutoRefreshCatalog`, `isCatalogStale`, `CATALOG_STALE_MS`.
+- `src/lib/models/image-catalog.ts` — `ImageCatalogModel` type +
+  `coerceImageCatalog`, the defensive flatten of Venice's
+  `GET /models?type=image` response (per-image pricing + beta/deprecation,
+  no context/reasoning). Pure, unit-tested offline.
+- `src/lib/image-models-catalog.svelte.ts` — reactive cache for the live
+  image-model catalog backing the AI pane's Image generation dropdown.
+  Mirror of `models-catalog.svelte.ts`; exposes `imageCatalog`,
+  `refreshImageCatalog`, `resetImageCatalog`,
+  `shouldAutoRefreshImageCatalog`, `isImageCatalogStale`,
+  `IMAGE_CATALOG_STALE_MS`.
+- `src/lib/ui/image-model-picker.ts` — pure UI primitives for the Image
+  generation `<select>`: `buildImageModelOptions`, `imageModelLabel`,
+  `formatImagePrice`. Unit-tested in `tests/image-model-picker.test.ts`.
 - `src/lib/ui/prompts.ts` — pure list transforms for the Custom prompts
   pane: `createPrompt`, `addPrompt`, `updatePrompt`, `deletePrompt`,
   `reorderPrompts` (the drag-reorder array move), and `promptsMatch` (the
@@ -261,6 +289,11 @@ every update) so it's covered here rather than in its own file.
     tiers fall back to the built-in `TierSpec`. Validated by
     `coerceTierModels` on read; a malformed entry degrades to the
     built-in default rather than poisoning resolution.
+  - `imageModel`: `string` — Venice text-to-image model id for the
+    `generate_image` tool. A bare id, not a snapshot: the only consumer is
+    the server-side tool, which reads it at generation time. Absent means
+    fall back to `VENICE_DEFAULT_IMAGE_MODEL`. A non-empty string survives
+    `coerceSettings`; empty/non-string drops to absence.
   - `defaultReasoningEffort`: `ReasoningEffort`
   - `defaultVerbosity`: `Verbosity` (`'low' | 'medium' | 'high'`);
     absent falls back to `DEFAULT_VERBOSITY` (`medium`)

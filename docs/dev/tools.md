@@ -153,6 +153,19 @@ Notable members (the full ordered list is `alwaysOnToolbox` in
   (the per-round attach never echoes over realtime). See
   `./attachments.md`.
 
+  The backing image model is user-configurable: the tool reads
+  `profiles.settings.imageModel` (via the service-role client, keyed by
+  the dispatch's `userId`) and falls back to `DEFAULT_IMAGE_MODEL`
+  (`venice-sd35`, mirrored from `VENICE_DEFAULT_IMAGE_MODEL` in
+  `src/lib/models/index.ts`) when unset or on any read error - a missing
+  preference must never block an image. The choice is made in Settings ->
+  AI -> Image generation (see `./settings.md`). Aspect-ratio -> pixel
+  sizing stays a single table tuned to the default model's 1280px cap; v1
+  deliberately does not fetch per-model size constraints, so an exotic
+  pick with a tighter cap surfaces Venice's error rather than being
+  pre-validated. A per-model constraint lookup is the follow-up if that
+  bites.
+
 ## Files
 
 Browser catalog (`src/lib/tools/`):

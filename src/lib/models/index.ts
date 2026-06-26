@@ -676,6 +676,22 @@ export function agentModel(role: AgentRole): ModelSpec {
  */
 export const VENICE_EMBEDDING_MODEL = 'text-embedding-bge-m3';
 
+// --- Image generation ------------------------------------------------------
+
+/**
+ * Default text-to-image model for the generate_image tool. A single
+ * constant rather than a tier because image generation has no
+ * smart/balanced/fast axis - it's one backend the user can repoint.
+ *
+ * The user's choice lives in `profiles.settings.imageModel`; the
+ * generate_image tool (server-side) reads that and falls back to this id
+ * when unset. This is also the value the Settings image picker shows as
+ * the effective selection before the user picks anything. The edge tool
+ * keeps its own mirrored copy of this string (it can't import from
+ * src/lib) - keep the two in sync.
+ */
+export const VENICE_DEFAULT_IMAGE_MODEL = 'venice-sd35';
+
 /**
  * Native output dimension of VENICE_EMBEDDING_MODEL - the length of each
  * `embedding` array returned by /embeddings. bge-m3 emits 1024.

@@ -18,17 +18,52 @@ import { readVeniceKey } from './_venice_key.ts';
 import { veniceGenerateImage } from '../../_shared/venice.ts';
 import { GENERATED_IMAGE_RESULT_KEY } from './_generated_image.ts';
 
-// Mirror of VENICE_IMAGE_MODEL in src/lib/models/index.ts. Keep in sync
-// when the browser registry's image model changes; the model id is
-// part of the wire body the helper posts to Venice.
-const VENICE_IMAGE_MODEL = 'venice-sd35';
+// Fallback image model when the user hasn't configured one. Mirror of
+// VENICE_DEFAULT_IMAGE_MODEL in src/lib/models/index.ts (this file can't
+// import from src/lib) - keep the two in sync. The user's override, if
+// any, lives in profiles.settings.imageModel and is read per-call by
+// resolveImageModel below.
+const DEFAULT_IMAGE_MODEL = 'venice-sd35';
 
 /**
- * Map an aspect-ratio label to pixel dimensions for venice-sd35,
- * which is a pixel-dimensioned model (width/height up to 1280) rather
- * than an aspect-ratio one. All pairs stay within the 1280px-per-edge
- * cap and land near a ~1MP budget so generation cost + latency stay
- * comparable across ratios.
+ * Resolve the text-to-image model id for this user: their configured
+ * profiles.settings.imageModel, else DEFAULT_IMAGE_MODEL. Total and
+ * defensive - any read failure or malformed value degrades to the
+ * default rather than failing the generation, since a missing preference
+ * should never block an image. The Settings picker only ever writes ids
+ * the live Venice image catalog advertised, so no capability check is
+ * needed here.
+ */
+async function resolveImageModel(ctx: ToolContext): Promise<string> {
+  try {
+    const { data } = await ctx.adminClient
+      .from('profiles')
+      .select('settings')
+      .eq('user_id', ctx.userId)
+      .maybeSingle();
+    const configured = (data?.settings as { imageModel?: unknown } | null)?.imageModel;
+    if (typeof configured === 'string' && configured.length > 0) return configured;
+  } catch {
+    // Settings read failed (transient DB error, etc.) - fall back to the
+    // default model rather than aborting the user's image request.
+  }
+  return DEFAULT_IMAGE_MODEL;
+}
+
+/**
+ * Map an aspect-ratio label to pixel dimensions. Tuned for the default
+ * venice-sd35, a pixel-dimensioned model (width/height up to 1280): all
+ * pairs stay within the 1280px-per-edge cap and land near a ~1MP budget
+ * so generation cost + latency stay comparable across ratios.
+ *
+ * These dimensions are model-agnostic in the common case - most Venice
+ * image models accept this range - but a user-picked model with a tighter
+ * cap or a stricter width/height divisor could in principle reject them.
+ * v1 of the configurable-image-model feature deliberately keeps one
+ * dimension table rather than fetching each model's constraints; if a
+ * pick proves incompatible the generation surfaces Venice's error. A
+ * per-model constraint lookup is the follow-up if that becomes a real
+ * problem.
  */
 function dimensionsForAspectRatio(
   ratio: string,
@@ -80,9 +115,11 @@ export const generateImage: ToolDef = {
       throw new Error('no Venice key configured (app_config unseeded)');
     }
 
+    const model = await resolveImageModel(ctx);
+
     const result = await veniceGenerateImage({
       apiKey,
-      model: VENICE_IMAGE_MODEL,
+      model,
       prompt,
       negativePrompt: negativePrompt || undefined,
       stylePreset: stylePreset || undefined,

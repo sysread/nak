@@ -23,6 +23,7 @@ export {
   setTheme,
   persistDefaultModel,
   persistTierModels,
+  persistImageModel,
   persistDefaultReasoningEffort,
   persistDefaultVerbosity,
   persistDefaultLogLevel,

@@ -62,6 +62,16 @@ export interface UserSettings {
    */
   tierModels?: TierModels;
   /**
+   * Venice text-to-image model the generate_image tool uses, e.g.
+   * 'venice-sd35'. Absent means fall back to VENICE_DEFAULT_IMAGE_MODEL.
+   * Unlike tierModels this is a bare model id, not a capability snapshot:
+   * the only consumer is the server-side generate_image tool, which reads
+   * it from profiles.settings at generation time and needs nothing but
+   * the id (image generation has no synchronous client-side resolution
+   * path the way chat does). See VENICE_DEFAULT_IMAGE_MODEL in ../models.
+   */
+  imageModel?: string;
+  /**
    * User-level reasoning-effort default, used on reasoning-capable
    * models when the thread hasn't overridden it. Absent means fall
    * back to {@link DEFAULT_REASONING_EFFORT} in code (`low`) so an
@@ -215,6 +225,9 @@ export function coerceSettings(raw: unknown): UserSettings {
   if (isModelTier(r.defaultModel)) out.defaultModel = r.defaultModel;
   const tierModels = coerceTierModels(r.tierModels);
   if (tierModels) out.tierModels = tierModels;
+  if (typeof r.imageModel === 'string' && r.imageModel.length > 0) {
+    out.imageModel = r.imageModel;
+  }
   if (isReasoningEffort(r.defaultReasoningEffort)) {
     out.defaultReasoningEffort = r.defaultReasoningEffort;
   }
