@@ -60,6 +60,7 @@
     activate,
     persistDefaultModel,
     persistTierModels,
+    persistImageModel,
     persistDefaultReasoningEffort,
     persistDefaultVerbosity,
     persistDefaultLogLevel,
@@ -90,6 +91,7 @@
     VERBOSITIES,
     VERBOSITY_LABELS,
     effectiveTierSpec,
+    VENICE_DEFAULT_IMAGE_MODEL,
     type ModelTier,
     type ReasoningEffort,
     type ThinkingLevel,
@@ -101,11 +103,17 @@
     tierConfigFromCatalog,
     tierConfigFromSpec,
   } from '$lib/ui/model-picker';
+  import { buildImageModelOptions } from '$lib/ui/image-model-picker';
   import {
     catalog,
     shouldAutoRefreshCatalog,
     refreshCatalog,
   } from '$lib/models-catalog.svelte';
+  import {
+    imageCatalog,
+    shouldAutoRefreshImageCatalog,
+    refreshImageCatalog,
+  } from '$lib/image-models-catalog.svelte';
   import type { SystemPrompt } from '$lib/supabase';
   import * as prompts from '$lib/ui/prompts';
   import {
@@ -254,6 +262,11 @@
   );
   const tzDirty = $derived(displayTimezone.trim() !== tzSavedValue.trim());
   const tzCanSave = $derived(tzDirty && !tzSaving);
+
+  // Effective image-generation model: the user's override, or the
+  // built-in default when unset. Drives the picker's selected value and
+  // the synthetic "current" option when the id isn't in the live catalog.
+  const effectiveImageModel = $derived(app.imageModel ?? VENICE_DEFAULT_IMAGE_MODEL);
 
   // --- Wiki pane ---
   // Toggle for the autonomous wiki agent. The toggle pushes through
@@ -655,6 +668,16 @@
     }
   });
 
+  // Same lazy-on-open fetch for the image-model catalog, which backs the
+  // Image generation picker. Separate from the text catalog above because
+  // Venice serves the two slices independently (different model_spec
+  // shapes); same stale/in-flight/error guard.
+  $effect(() => {
+    if (group === 'ai' && shouldAutoRefreshImageCatalog() && app.supabase) {
+      void refreshImageCatalog(app.supabase);
+    }
+  });
+
   async function onUsageRefresh(): Promise<void> {
     if (!app.supabase) {
       customError = 'Not connected yet.';
@@ -1019,6 +1042,23 @@
       ? tierConfigFromCatalog(model, thinking)
       : tierConfigFromSpec(spec, thinking, app.tierModels[tier]?.label);
     void persistTierConfig(tier, config);
+  }
+
+  // Image-generation model. One bare id, no reasoning/tier axis. Picking
+  // the default id clears the override (stored as absence) so the blob
+  // stays compact and "default" reads as unset; any other id is persisted.
+  async function onPickImageModel(modelId: string): Promise<void> {
+    modelError = null;
+    modelInfo = null;
+    const next = modelId === VENICE_DEFAULT_IMAGE_MODEL ? undefined : modelId;
+    try {
+      await persistImageModel(next);
+      const label =
+        (imageCatalog.data ?? []).find((m) => m.id === modelId)?.name ?? modelId;
+      modelInfo = `Image generation now uses ${label}.`;
+    } catch (err) {
+      modelError = err instanceof Error ? err.message : String(err);
+    }
   }
 
   async function onPickReasoning(next: ReasoningEffort): Promise<void> {
@@ -1644,6 +1684,42 @@
             </p>
           {/if}
         </div>
+
+        <h3 class="pane-section">Image generation</h3>
+        <p class="subtle">
+          The model the assistant uses when you ask it to
+          <strong>generate an image</strong>. This is a backend choice -
+          it changes the look, cost, and content policy of generated
+          images without changing how you ask. The per-image
+          <strong>price</strong> comes from the live Venice catalog.
+        </p>
+        <div class="form-row" style="display:flex;gap:0.5rem;align-items:center">
+          <label for="image-model" class="sr-only">Image generation model</label>
+          <select
+            id="image-model"
+            value={effectiveImageModel}
+            disabled={imageCatalog.data === null}
+            onchange={(e) =>
+              onPickImageModel((e.currentTarget as HTMLSelectElement).value)}
+          >
+            {#each buildImageModelOptions(imageCatalog.data ?? [], effectiveImageModel) as opt (opt.id)}
+              <option value={opt.id}>{opt.label}</option>
+            {/each}
+          </select>
+        </div>
+        {#if imageCatalog.loading}
+          <p class="subtle">Loading image models from Venice…</p>
+        {/if}
+        {#if imageCatalog.error}
+          <p class="error">
+            Couldn't load the image-model catalog: {imageCatalog.error}
+            <button
+              type="button"
+              class="tier-reset"
+              onclick={() => app.supabase && refreshImageCatalog(app.supabase)}
+            >Retry</button>
+          </p>
+        {/if}
 
         <h3 class="pane-section">Default reasoning effort</h3>
         <p class="subtle">

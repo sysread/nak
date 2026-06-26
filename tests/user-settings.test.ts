@@ -54,6 +54,13 @@ describe('coerceSettings', () => {
     expect(coerceSettings({ tierModels: 'nope' })).toEqual({});
   });
 
+  it('passes through a non-empty imageModel string and drops bad values', () => {
+    expect(coerceSettings({ imageModel: 'flux-dev' })).toEqual({ imageModel: 'flux-dev' });
+    // Empty / non-string is "not set" - the server falls back to the default.
+    expect(coerceSettings({ imageModel: '' })).toEqual({});
+    expect(coerceSettings({ imageModel: 123 })).toEqual({});
+  });
+
   it('tolerates an empty object', () => {
     expect(coerceSettings({})).toEqual({});
   });

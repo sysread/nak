@@ -71,10 +71,11 @@ Covered in detail on [Wiki](./wiki.md).
 ### AI
 
 Covered in detail on [Models & reasoning](./models.md). Also holds
-the **Emphasis markdown** scan-aid toggle and **reply notifications**
-(an optional desktop/mobile ping when a reply lands while you're
-looking elsewhere). The named system prompts moved to their own
-**Custom prompts** pane.
+the **Image generation** model picker (which Venice model draws your
+pictures when you ask the assistant for one), the **Emphasis markdown**
+scan-aid toggle, and **reply notifications** (an optional desktop/mobile
+ping when a reply lands while you're looking elsewhere). The named
+system prompts moved to their own **Custom prompts** pane.
 
 ### Custom prompts
 

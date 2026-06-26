@@ -615,28 +615,41 @@ export async function veniceFetchUsageAnalytics(
   }
 }
 
+/** Venice `/models?type=` filters nak offers a picker for. */
+export type VeniceModelType = 'text' | 'image';
+
 export interface VeniceModelsOptions {
   apiKey: string;
+  /**
+   * Which catalog slice to fetch. Defaults to 'text' (the tier/vision
+   * pickers). 'image' backs the Settings image-generation picker - a
+   * different `model_spec` shape (per-image pricing, size constraints
+   * instead of context window / reasoning), coerced browser-side by
+   * src/lib/models/image-catalog.ts.
+   */
+  type?: VeniceModelType;
   baseUrl?: string;
   fetchImpl?: typeof fetch;
 }
 
 /**
- * GET /models?type=text from Venice with the shared key. Thin passthrough:
- * returns Venice's JSON body verbatim and lets the browser
- * (src/lib/models/catalog.ts) flatten and coerce it - the same division
- * of labour the usage page uses, keeping this handler free of any
- * CatalogModel knowledge. The `?type=text` filter is pinned here because
- * the tier/vision pickers only ever offer chat models. Mirrors
+ * GET /models?type=<text|image> from Venice with the shared key. Thin
+ * passthrough: returns Venice's JSON body verbatim and lets the browser
+ * (src/lib/models/catalog.ts for text, image-catalog.ts for image)
+ * flatten and coerce it - the same division of labour the usage page
+ * uses, keeping this handler free of any CatalogModel knowledge. The
+ * `type` filter is pinned to a closed set by the caller (handleModels)
+ * so an arbitrary value never reaches Venice. Mirrors
  * veniceFetchUsagePage's error mapping: 429 -> rate_limit, else http.
  */
 export async function veniceFetchModels(opts: VeniceModelsOptions): Promise<unknown> {
   const baseUrl = (opts.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, '');
   const fetchImpl = opts.fetchImpl ?? fetch;
+  const type = opts.type ?? 'text';
 
   let res: Response;
   try {
-    res = await fetchImpl(`${baseUrl}/models?type=text`, {
+    res = await fetchImpl(`${baseUrl}/models?type=${type}`, {
       method: 'GET',
       headers: {
         Authorization: `Bearer ${opts.apiKey}`,

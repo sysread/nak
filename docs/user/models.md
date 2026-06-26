@@ -129,6 +129,27 @@ controls how much hidden thinking happens before the reply.
 - Providers that don't recognize `text.verbosity` silently ignore
   it; the field is always safe to send.
 
+## Image generation
+
+When you ask the assistant to draw, paint, or render a picture, it
+calls an image-generation tool behind the scenes. The **Image
+generation** picker in Settings → AI chooses which Venice model that
+tool uses.
+
+- It's a single dropdown, not a per-tier setting - image generation
+  has one backend, not a Smart/Balanced/Fast split. Each option shows
+  the model's **per-image price** so you can weigh cost against the
+  look you want; a *beta* or *retiring* tag flags models that need
+  early access or are being phased out.
+- This is a **backend choice**, not a new knob in the conversation.
+  You still ask for pictures the same way; the model you pick changes
+  the style, cost, and content policy of what comes back. You don't
+  pick the size or style preset here - the assistant decides those per
+  request from what you asked for.
+- Leaving it untouched uses Nak's built-in default. The list is fetched
+  live from Venice the first time you open the AI pane, so it always
+  reflects the models currently available.
+
 ## Emphasis markdown
 
 A bionic-style scan aid for long replies. When it's on, Nak asks

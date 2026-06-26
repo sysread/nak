@@ -39,6 +39,7 @@ import {
   veniceFetchUsageAnalytics,
   veniceGenerateImage,
   VeniceError,
+  type VeniceModelType,
 } from '../_shared/venice.ts';
 import { EMBED_SOURCES } from '../_shared/embed-input.ts';
 import {
@@ -318,25 +319,40 @@ async function handleUsageAnalytics(req: Request): Promise<Response> {
 }
 
 /**
- * Browser-triggered proxy for GET /models?type=text. The Settings model
- * picker fetches this to populate the per-tier and vision model dropdowns
+ * Browser-triggered proxy for GET /models?type=<text|image>. The Settings
+ * model picker fetches this to populate the per-tier/vision dropdowns
+ * (type=text, the default) and the image-generation picker (type=image)
  * with the live Venice catalog. Authenticated as the calling user (the
  * gateway's verify_jwt has already validated the session JWT - same model
  * as /usage, no service-role check); the catalog is account-agnostic, so
  * any project member sees the same list against the one shared key.
  *
+ * The `type` rides in the POST body and is clamped to a closed set here
+ * so an arbitrary value never reaches Venice; an unknown/absent value
+ * falls back to 'text'.
+ *
  * Thin passthrough: relays Venice's JSON verbatim and lets the browser
- * (src/lib/models/catalog.ts) flatten and coerce it, keeping this handler
- * free of CatalogModel knowledge. POST from the browser (functions.invoke
- * is always POST) even though the upstream call is a GET.
+ * (src/lib/models/catalog.ts for text, image-catalog.ts for image)
+ * flatten and coerce it, keeping this handler free of CatalogModel
+ * knowledge. POST from the browser (functions.invoke is always POST)
+ * even though the upstream call is a GET.
  */
-async function handleModels(): Promise<Response> {
+async function handleModels(req: Request): Promise<Response> {
   const env = await requireVeniceEnv();
   if (env instanceof Response) return env;
   const { apiKey } = env;
 
+  // Body is optional - absent/garbage means the default text catalog.
+  let type: VeniceModelType = 'text';
   try {
-    const result = await veniceFetchModels({ apiKey });
+    const body = (await req.json()) as { type?: unknown };
+    if (body?.type === 'image') type = 'image';
+  } catch {
+    // No JSON body posted; keep the 'text' default.
+  }
+
+  try {
+    const result = await veniceFetchModels({ apiKey, type });
     return json(result);
   } catch (err) {
     if (err instanceof VeniceError) {
@@ -1213,7 +1229,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const route = new URL(req.url).pathname.split('/').filter(Boolean).pop();
   if (route === 'embed' && req.method === 'POST') return handleEmbed(req);
   if (route === 'usage-analytics' && req.method === 'POST') return handleUsageAnalytics(req);
-  if (route === 'models' && req.method === 'POST') return handleModels();
+  if (route === 'models' && req.method === 'POST') return handleModels(req);
   if (route === 'backfill' && req.method === 'POST') return handleBackfill(req);
   if (route === 'wiki-sweep' && req.method === 'POST') return handleWikiSweep(req);
   if (route === 'wiki-records-sweep' && req.method === 'POST') return handleWikiRecordsSweep(req);

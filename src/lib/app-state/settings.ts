@@ -36,6 +36,13 @@ function setTierModels(tierModels: TierModels): void {
   app.tierModels = tierModels;
 }
 
+// Empty string / undefined is "not set" - the server falls back to
+// VENICE_DEFAULT_IMAGE_MODEL. Stored as undefined locally so the picker's
+// effective-selection fallback is a single `?? default`.
+function setImageModel(modelId: string | undefined): void {
+  app.imageModel = modelId && modelId.length > 0 ? modelId : undefined;
+}
+
 function setDefaultReasoningEffort(effort: ReasoningEffort): void {
   app.defaultReasoningEffort = effort;
 }
@@ -223,6 +230,23 @@ export async function persistTierModels(tierModels: TierModels): Promise<void> {
     setTierModels(merged.tierModels ?? {});
   } catch (err) {
     setTierModels(prev);
+    throw err;
+  }
+}
+
+/**
+ * Persist the image-generation model id. A bare string (or undefined to
+ * clear), since the server-side generate_image tool needs only the id.
+ * Optimistic with rollback, like the other persist* wrappers.
+ */
+export async function persistImageModel(modelId: string | undefined): Promise<void> {
+  if (!app.supabase) throw new Error(NOT_CONNECTED);
+  const prev = app.imageModel;
+  setImageModel(modelId);
+  try {
+    await app.supabase.updateSettings({ imageModel: modelId });
+  } catch (err) {
+    setImageModel(prev);
     throw err;
   }
 }
@@ -466,6 +490,8 @@ export function applyServerSettings(s: UserSettings): void {
   // Always assign so a tier the user cleared on another tab (absent from
   // the blob) drops the stale local override rather than ghosting it.
   setTierModels(s.tierModels ?? {});
+  // Always assign so clearing the override on another tab drops it here too.
+  setImageModel(s.imageModel);
   if (s.defaultReasoningEffort) setDefaultReasoningEffort(s.defaultReasoningEffort);
   if (s.defaultVerbosity) setDefaultVerbosity(s.defaultVerbosity);
   if (s.defaultLogLevel) setDefaultLogLevel(s.defaultLogLevel);

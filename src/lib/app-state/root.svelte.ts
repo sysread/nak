@@ -73,6 +73,15 @@ interface AppState {
    */
   tierModels: TierModels;
   /**
+   * Venice text-to-image model id for generate_image, from
+   * `profiles.settings.imageModel`. Undefined on activate() and whenever
+   * the user hasn't overridden it - the server-side tool falls back to
+   * VENICE_DEFAULT_IMAGE_MODEL. Only the Settings image picker reads this
+   * in the browser; the chat send path never touches it (image-model
+   * resolution happens server-side at generation time).
+   */
+  imageModel?: string;
+  /**
    * User-level default reasoning-effort. Seeded to
    * DEFAULT_REASONING_EFFORT on activate(), then overwritten from
    * Supabase `profiles.settings.defaultReasoningEffort` on unlock.
@@ -218,6 +227,7 @@ export const app = $state<AppState>({
   venice: null,
   defaultModel: DEFAULT_TIER,
   tierModels: {},
+  imageModel: undefined,
   defaultReasoningEffort: DEFAULT_REASONING_EFFORT,
   defaultVerbosity: DEFAULT_VERBOSITY,
   colorMode: cachedTheme?.mode ?? DEFAULT_MODE,

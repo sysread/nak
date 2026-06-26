@@ -26,6 +26,7 @@ import {
   type Verbosity,
 } from './models';
 import { coerceCatalog, type CatalogModel } from './models/catalog';
+import { coerceImageCatalog, type ImageCatalogModel } from './models/image-catalog';
 import { isAccent, isColorMode } from './theme';
 import {
   isLogLevel,
@@ -606,6 +607,22 @@ export class SupabaseService {
   }
 
   /**
+   * Fetch the live Venice image-model catalog through the same /models
+   * route, passing `type: 'image'` so Venice returns the image slice
+   * (per-image pricing + size constraints rather than context window /
+   * reasoning). Coerced into the flat ImageCatalogModel shape the Settings
+   * image-generation picker reads; same degrade-on-malformed-row contract
+   * and same VeniceError surface as fetchModels.
+   */
+  async fetchImageModels(): Promise<ImageCatalogModel[]> {
+    const { data, error } = await this.client.functions.invoke('venice/models', {
+      body: { type: 'image' },
+    });
+    if (error) throw await veniceFunctionError(error);
+    return coerceImageCatalog(data);
+  }
+
+  /**
    * Generate an embedding through the venice edge function's /embed route,
    * replacing the browser's direct Venice call. The function reads the shared
    * key server-side; this keeps the same { model, input } request and
@@ -761,6 +778,15 @@ export class SupabaseService {
       const cleaned = coerceTierModels(patch.tierModels);
       if (cleaned) toSet.tierModels = cleaned;
       else toRemove.push('tierModels');
+    }
+    if ('imageModel' in patch) {
+      // A non-empty string sets the override; undefined / empty clears it
+      // so the server falls back to VENICE_DEFAULT_IMAGE_MODEL.
+      if (typeof patch.imageModel === 'string' && patch.imageModel.length > 0) {
+        toSet.imageModel = patch.imageModel;
+      } else {
+        toRemove.push('imageModel');
+      }
     }
     if ('defaultReasoningEffort' in patch) {
       if (patch.defaultReasoningEffort === undefined) {
