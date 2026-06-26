@@ -109,6 +109,13 @@ amount.
   shown. The gradient is driven by how each bucket compares to
   the median on a log scale, so one runaway workload stands out
   in red without flattening everything else into a single shade.
+- The spend pill's **border** is color-coded on the same
+  blue-green-red scale, but by **dollars spent** rather than
+  tokens. This is a second, independent read: a cheap-but-chatty
+  model (long green bar) can carry a blue-bordered pill, while an
+  expensive-but-terse one (short bar) shows a red-bordered pill -
+  so the row that *cost* the most pops even when it isn't the row
+  that produced the most tokens.
 - The last 7 days are fetched the first time you open this pane
   in a session and cached for 15 minutes; opening it again after
   that triggers a fresh fetch automatically. Change the dates and
