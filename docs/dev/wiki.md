@@ -453,7 +453,13 @@ UI:
   bridges the watched outcome into `librarianResult` through the
   `outcomeToLibrarianResult` transform. A `librarianShownRunId` guard
   keeps a live run in this tab at full step fidelity and stops the same
-  runId being re-applied on every profiles tick. The recovered strip
+  runId being re-applied on every profiles tick. The bridge also drops a
+  stale outcome via `recoveredOutcomeIsFresh`
+  (`$lib/ui/manual-run-recovery`, shared w/ the memory librarian): the
+  `*_last_run_outcome` column never expires, so without the recency bound
+  the sticky last result would re-enter the strip state on every cold
+  load. A fresh realtime outcome (a run finishing while the tab watches)
+  has `finishedAt ~= now`, so it still recovers. The recovered strip
   carries no step rows (they are gone after a reload) - just the result
   card.
   Renders a nested **table of contents** at the top of the article

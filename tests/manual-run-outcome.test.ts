@@ -12,6 +12,10 @@ import {
   recoveredOutcomeUpdate,
 } from '../src/lib/ui/memory-librarian';
 import { outcomeToLibrarianResult } from '../src/lib/ui/wiki-librarian-run';
+import {
+  recoveredOutcomeIsFresh,
+  MAX_RECOVERED_OUTCOME_AGE_MS,
+} from '../src/lib/ui/manual-run-recovery';
 
 describe('coerceManualRunOutcome', () => {
   it('accepts a well-formed envelope and passes result through untyped', () => {
@@ -76,38 +80,82 @@ describe('outcomeToMemoryDisplay', () => {
   });
 });
 
+describe('recoveredOutcomeIsFresh', () => {
+  const NOW = Date.parse('2026-06-23T12:00:00Z');
+
+  it('treats an outcome within the window as fresh', () => {
+    const justNow = new Date(NOW).toISOString();
+    expect(recoveredOutcomeIsFresh(justNow, NOW)).toBe(true);
+    const edge = new Date(NOW - MAX_RECOVERED_OUTCOME_AGE_MS).toISOString();
+    expect(recoveredOutcomeIsFresh(edge, NOW)).toBe(true);
+  });
+
+  it('treats an outcome past the window as stale', () => {
+    const tooOld = new Date(NOW - MAX_RECOVERED_OUTCOME_AGE_MS - 1).toISOString();
+    expect(recoveredOutcomeIsFresh(tooOld, NOW)).toBe(false);
+  });
+
+  it('treats an absent or unparseable finishedAt as fresh (legacy envelope)', () => {
+    expect(recoveredOutcomeIsFresh(undefined, NOW)).toBe(true);
+    expect(recoveredOutcomeIsFresh('not-a-date', NOW)).toBe(true);
+  });
+});
+
 describe('recoveredOutcomeUpdate', () => {
+  const NOW = Date.parse('2026-06-23T12:00:00Z');
   const remOk = {
     runId: 'run-1',
     source: 'rem',
+    finishedAt: '2026-06-23T12:00:00Z',
     result: { kind: 'ok', finalText: 'linked three', conversationsProcessed: 2, toolCalls: 5 },
   };
 
   it('applies a fresh outcome when idle and the runId is new', () => {
-    const d = recoveredOutcomeUpdate(remOk, { running: false, shownRunId: null });
+    const d = recoveredOutcomeUpdate(remOk, { running: false, shownRunId: null, nowMs: NOW });
     expect(d?.pass).toBe('rem');
     expect(d?.resultLine).toBe('Processed 2 conversations with 5 tool calls.');
     expect(d?.resultText).toBe('linked three');
   });
 
   it('skips while a live run owns the display (running)', () => {
-    expect(recoveredOutcomeUpdate(remOk, { running: true, shownRunId: null })).toBeNull();
+    expect(recoveredOutcomeUpdate(remOk, { running: true, shownRunId: null, nowMs: NOW })).toBeNull();
   });
 
   it('skips an outcome already shown (runId matches) - the subscription re-fires on every profiles tick', () => {
-    expect(recoveredOutcomeUpdate(remOk, { running: false, shownRunId: 'run-1' })).toBeNull();
+    expect(recoveredOutcomeUpdate(remOk, { running: false, shownRunId: 'run-1', nowMs: NOW })).toBeNull();
     // A different runId is NOT deduped.
-    expect(recoveredOutcomeUpdate(remOk, { running: false, shownRunId: 'run-0' })).not.toBeNull();
+    expect(recoveredOutcomeUpdate(remOk, { running: false, shownRunId: 'run-0', nowMs: NOW })).not.toBeNull();
   });
 
   it('skips a non-memory outcome (wrong source) even when idle and new', () => {
-    const wiki = { runId: 'r9', source: 'wiki-librarian', result: { kind: 'ok' } };
-    expect(recoveredOutcomeUpdate(wiki, { running: false, shownRunId: null })).toBeNull();
+    const wiki = { runId: 'r9', source: 'wiki-librarian', finishedAt: '2026-06-23T12:00:00Z', result: { kind: 'ok' } };
+    expect(recoveredOutcomeUpdate(wiki, { running: false, shownRunId: null, nowMs: NOW })).toBeNull();
   });
 
   it('running guard takes precedence over an otherwise-applicable outcome', () => {
     // New runId, valid memory outcome, but a live run is in flight -> skip.
-    expect(recoveredOutcomeUpdate(remOk, { running: true, shownRunId: 'other' })).toBeNull();
+    expect(recoveredOutcomeUpdate(remOk, { running: true, shownRunId: 'other', nowMs: NOW })).toBeNull();
+  });
+
+  it('skips a stale outcome that finished outside the recovery window', () => {
+    // The reload-after-finish window is 10 min; a run that finished an hour
+    // ago must NOT resurface the strip (the cold-load-buries-the-changelog
+    // bug). A run that finished 5 min ago still recovers.
+    const hourAgo = NOW + 60 * 60 * 1000;
+    expect(recoveredOutcomeUpdate(remOk, { running: false, shownRunId: null, nowMs: hourAgo })).toBeNull();
+    const fiveMinAgo = NOW + 5 * 60 * 1000;
+    expect(recoveredOutcomeUpdate(remOk, { running: false, shownRunId: null, nowMs: fiveMinAgo })).not.toBeNull();
+  });
+
+  it('treats an absent or unparseable finishedAt as fresh (legacy envelope)', () => {
+    const noStamp = {
+      runId: 'run-2',
+      source: 'rem',
+      result: { kind: 'ok', finalText: '', conversationsProcessed: 1, toolCalls: 1 },
+    };
+    expect(recoveredOutcomeUpdate(noStamp, { running: false, shownRunId: null, nowMs: NOW })).not.toBeNull();
+    const badStamp = { ...noStamp, finishedAt: 'not-a-date' };
+    expect(recoveredOutcomeUpdate(badStamp, { running: false, shownRunId: null, nowMs: NOW })).not.toBeNull();
   });
 });
 

@@ -14,6 +14,8 @@
  * the user can't kick a second run on top of a first.
  */
 
+import { recoveredOutcomeIsFresh } from './manual-run-recovery';
+
 export interface MemoryLibrarianStep {
   label: string;
   status: 'pending' | 'ok' | 'error';
@@ -283,14 +285,18 @@ export function outcomeToMemoryDisplay(outcome: {
  *  - a live run in this tab owns the display (`running`) -> skip;
  *  - the outcome we already show (`shownRunId`) -> skip, since the
  *    subscription re-fires on every profiles tick;
+ *  - a stale outcome (finished outside the recovery window) -> skip, so a
+ *    sticky last-run value can't bury the changelog on a cold load (see
+ *    recoveredOutcomeIsFresh);
  *  - a non-memory outcome (wrong source / busy) -> skip (null display).
  * Returns the display to apply, or null to leave the strip untouched.
  */
 export function recoveredOutcomeUpdate(
-  outcome: { runId: string; source: string; result: unknown },
-  ctx: { running: boolean; shownRunId: string | null }
+  outcome: { runId: string; source: string; finishedAt?: string; result: unknown },
+  ctx: { running: boolean; shownRunId: string | null; nowMs: number }
 ): MemoryLibrarianDisplay | null {
   if (ctx.running) return null;
   if (outcome.runId === ctx.shownRunId) return null;
+  if (!recoveredOutcomeIsFresh(outcome.finishedAt, ctx.nowMs)) return null;
   return outcomeToMemoryDisplay(outcome);
 }

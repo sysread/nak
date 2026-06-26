@@ -172,6 +172,9 @@ export const librarianRun = {
    *  - we already show this runId (the live path set it, or a prior
    *    realtime tick applied it - the subscription fires on every profiles
    *    UPDATE, so the same outcome arrives repeatedly);
+   *  - the outcome finished too long ago to be a reload-after-finish
+   *    recovery (see MAX_RECOVERED_OUTCOME_AGE_MS) - otherwise the sticky
+   *    last-run value would bury the changelog on every cold load;
    *  - the outcome isn't a memory-librarian one (wrong source / busy).
    * The recovered strip carries no step rows - those are gone after a
    * reload - just the pass header and the result line/text.
@@ -180,6 +183,7 @@ export const librarianRun = {
     const display = recoveredOutcomeUpdate(outcome, {
       running: state.running,
       shownRunId: displayedRunId,
+      nowMs: Date.now(),
     });
     if (!display) return;
     state.pass = display.pass;
