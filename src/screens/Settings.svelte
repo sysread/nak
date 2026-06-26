@@ -123,9 +123,8 @@
   import { updateState, applyUpdate, checkForUpdates } from '$lib/update.svelte';
   import { VeniceError } from '$lib/venice';
   import {
-    USAGE_MAX_PAGES,
     type UsageCurrency,
-    type UsageRow,
+    type UsageModelBucket,
   } from '$lib/usage';
   import {
     usage,
@@ -549,27 +548,31 @@
   }
 
   // --- Usage pane ---
-  // Backed by Venice's /billing/usage (beta per Venice docs). We pull
-  // all rows in the range, aggregate by (sku, currency), and show a
-  // token-scaled bar chart with a spend pill per row.
+  // Backed by Venice's /billing/usage-analytics (beta per Venice docs).
+  // Venice aggregates per-model spend + token totals server-side and
+  // returns them in one cached response; the pane renders that roll-up
+  // as a token-scaled bar chart with a spend pill per row.
   //
   // Date picker values are yyyy-mm-dd strings (the format
-  // `<input type="date">` produces and consumes). We convert to ISO
-  // 8601 at fetch time — startDate as 00:00:00Z of the picked day,
-  // endDate as 24:00:00Z of the picked day so the upper bound is
-  // inclusive of the whole end-of-range day despite Venice's exclusive
-  // cursor semantics.
+  // `<input type="date">` produces and consumes). The analytics endpoint
+  // takes date-only bounds and reads `endDate` as inclusive, so the
+  // picker values pass straight through with no ISO conversion.
 
-  /** One aggregated bucket for the Usage table. */
+  /**
+   * One row of the Usage table - a per-model, per-currency bucket. The
+   * analytics `byModel` roll-up gives one entry per model carrying both
+   * USD and DIEM totals; {@link aggregateUsage} fans that into one bucket
+   * per currency the model was billed in so a mixed USD+DIEM plan never
+   * sums unlike units.
+   */
   interface UsageBucket {
+    /** Model display name (analytics `modelName`), shown in the row label. */
     sku: string;
     currency: UsageCurrency;
-    /** Sum of prompt + completion tokens across LLM rows in this bucket. */
+    /** Token count for the model (0 for non-LLM SKUs). */
     tokens: number;
-    /** Sum of `amount` in this bucket's currency. */
+    /** Spend in this bucket's currency. */
     amount: number;
-    /** Row count — for the tooltip / debug, not displayed. */
-    requests: number;
   }
 
   function todayYmd(): string {
@@ -606,34 +609,18 @@
    * default-range poll doesn't have to re-fetch.
    */
   let usageSource = $state<'store' | 'custom'>('store');
-  let customRows = $state<UsageRow[] | null>(null);
+  let customData = $state<UsageModelBucket[] | null>(null);
   let customLoading = $state(false);
   let customError = $state<string | null>(null);
-  let customTruncated = $state(false);
-  // Per-page progress for the custom-range fetch. Mirrors the
-  // pagesLoaded/pagesTotal pair on the shared store so the in-pane
-  // progress indicator can read from a single derived signal
-  // regardless of which source the pane is currently displaying.
-  let customPagesLoaded = $state(0);
-  let customPagesTotal = $state(0);
 
-  const usageRows = $derived(
-    usageSource === 'store' ? usage.data : customRows
+  const usageData = $derived(
+    usageSource === 'store' ? usage.data : customData
   );
   const usageLoading = $derived(
     usageSource === 'store' ? usage.loading : customLoading
   );
   const usageError = $derived(
     usageSource === 'store' ? usage.error : customError
-  );
-  const usageTruncated = $derived(
-    usageSource === 'store' ? usage.truncated : customTruncated
-  );
-  const usagePagesLoaded = $derived(
-    usageSource === 'store' ? usage.pagesLoaded : customPagesLoaded
-  );
-  const usagePagesTotal = $derived(
-    usageSource === 'store' ? usage.pagesTotal : customPagesTotal
   );
 
   /**
@@ -686,11 +673,6 @@
     usageSource = 'custom';
     customError = null;
     customLoading = true;
-    customTruncated = false;
-    // Reset progress so a previous custom fetch's "5/5" doesn't read
-    // as complete while the new one is still on page 1.
-    customPagesLoaded = 0;
-    customPagesTotal = 0;
     // Snapshot the requested range so a user who edits the date
     // pickers and re-clicks Refresh before this fetch settles
     // doesn't see the prior range's rows land as if they were the
@@ -700,33 +682,15 @@
     const isStale = (): boolean =>
       usageStart !== requestedStart || usageEnd !== requestedEnd;
     try {
-      // End-of-day upper bound: the date picker reads as "through this
-      // whole day". Venice treats endDate as an exclusive cutoff, so
-      // we pass the *next* midnight to include the picked day itself.
-      const startIso = new Date(`${requestedStart}T00:00:00Z`).toISOString();
-      const endDay = new Date(`${requestedEnd}T00:00:00Z`);
-      endDay.setUTCDate(endDay.getUTCDate() + 1);
-      const endIso = endDay.toISOString();
-      const rows = await app.supabase.fetchUsage({
-        startDate: startIso,
-        endDate: endIso,
-        onProgress: ({ page, totalPages }) => {
-          // Late progress ticks from a stale fetch must not overwrite
-          // the counters the newer in-flight request is updating - the
-          // same staleness guard the row-assignment block below uses.
-          if (isStale()) return;
-          customPagesLoaded = page;
-          customPagesTotal = totalPages;
-        },
+      // The analytics endpoint reads date-only bounds with an inclusive
+      // endDate, so the picker values pass straight through - no ISO or
+      // exclusive-cursor adjustment needed.
+      const buckets = await app.supabase.fetchUsage({
+        startDate: requestedStart,
+        endDate: requestedEnd,
       });
       if (isStale()) return;
-      customRows = rows;
-      // Best-effort cap detection: if the response came back exactly at
-      // the page × per-page ceiling, we almost certainly hit the safety
-      // limit. Not perfect (a user with exactly 10k rows would also
-      // trip it) but close enough for a "your data may be truncated"
-      // hint — never shown when we're confidently under the cap.
-      customTruncated = rows.length >= USAGE_MAX_PAGES * 500;
+      customData = buckets;
     } catch (err) {
       if (isStale()) return;
       customError =
@@ -735,7 +699,7 @@
           : err instanceof Error
             ? err.message
             : String(err);
-      customRows = null;
+      customData = null;
     } finally {
       // Only flip the spinner off for our own request - a stale
       // response landing while a newer fetch is in flight would
@@ -746,55 +710,50 @@
   }
 
   /**
-   * Aggregate per (sku, currency). LLM rows contribute
-   * prompt+completion to `tokens`; non-LLM rows (image/video) have a
-   * null `inferenceDetails` and contribute 0 to tokens but still land
-   * in a bucket so they appear in the list (with a zero-width bar).
-   * Grouping by currency too keeps a user on a mixed USD+VCU plan
-   * from seeing nonsensical summed spend.
+   * Fan the analytics per-model roll-up into the table's per-(model,
+   * currency) buckets. Each `byModel` entry carries both a USD and a
+   * DIEM total; we emit one bucket per currency the model actually billed
+   * in (a nonzero total) so a mixed USD+DIEM plan never sums unlike units
+   * into one figure. Spend is already positive in the analytics shape, so
+   * no sign inversion (the per-request ledger's signed debits are gone).
    *
-   * `amount` is inverted before accumulation. Venice's ledger
-   * convention records charges as negative (debits against the
-   * balance); in a "what am I spending?" view we want those to read
-   * as positive costs — otherwise the pane reads as a balance sheet
-   * and sub-cent rows flashed `$-0.00` when the sign leaked through
-   * `.toFixed(2)` rounding.
+   * Tokens are reported per model, NOT split by currency. A model is
+   * almost always billed in a single currency within a window - Venice
+   * debits DIEM first and only falls through to USD once DIEM is
+   * exhausted - so the split is near-always 1:1. For the rare
+   * epoch-crossing model billed in both, the whole token count is
+   * attributed to the larger-spend currency and the minor row's bar is
+   * left empty; the tokens are still counted exactly once in the chart
+   * total.
    *
-   * Buckets whose inverted spend lands below one cent are dropped.
-   * Dust rows clutter the chart without telling the user anything
-   * they'd act on, and keeping them produced the `$0.00` / `$-0.00`
-   * cells that started this refinement.
+   * Buckets whose spend lands below one cent are dropped. Dust rows
+   * clutter the chart without telling the user anything they'd act on,
+   * and keeping them produced the `$0.00` cells this filter was added to
+   * remove.
    */
-  function aggregateUsage(rows: UsageRow[]): UsageBucket[] {
-    const buckets = new Map<string, UsageBucket>();
-    for (const row of rows) {
-      const key = `${row.sku}|${row.currency}`;
-      let b = buckets.get(key);
-      if (!b) {
-        b = {
-          sku: row.sku,
-          currency: row.currency,
-          tokens: 0,
-          amount: 0,
-          requests: 0,
-        };
-        buckets.set(key, b);
-      }
-      const d = row.inferenceDetails;
-      if (d) {
-        b.tokens += (d.promptTokens ?? 0) + (d.completionTokens ?? 0);
-      }
-      // Invert Venice's signed debit to a positive cost.
-      b.amount += -row.amount;
-      b.requests += 1;
+  function aggregateUsage(models: UsageModelBucket[]): UsageBucket[] {
+    const out: UsageBucket[] = [];
+    for (const m of models) {
+      const pairs: { currency: UsageCurrency; amount: number }[] = [];
+      if (m.usd > 0) pairs.push({ currency: 'USD', amount: m.usd });
+      if (m.diem > 0) pairs.push({ currency: 'DIEM', amount: m.diem });
+      // Larger-spend currency first so it gets the token attribution.
+      pairs.sort((a, b) => b.amount - a.amount);
+      pairs.forEach((p, i) => {
+        out.push({
+          sku: m.modelName,
+          currency: p.currency,
+          tokens: i === 0 ? m.tokens : 0,
+          amount: p.amount,
+        });
+      });
     }
     return (
-      Array.from(buckets.values())
+      out
         // One-cent dust filter. The USD display resolution is two
         // decimals, so anything under $0.01 renders as zero anyway;
-        // applying the same numeric threshold to credit currencies
-        // (VCU / DIEM / BUNDLED_CREDITS) drops equivalently trivial
-        // rows there too without needing a per-currency table.
+        // applying the same numeric threshold to DIEM drops equivalently
+        // trivial credit rows without needing a per-currency table.
         .filter((b) => b.amount >= 0.01)
         .sort((a, b) => {
           // Token-heavy rows first. Zero-token rows (image, video)
@@ -889,23 +848,15 @@
   }
 
   /**
-   * Human-facing tooltip text for a non-USD pill. Expands the wire-
-   * shape code into prose so a user who doesn't know what
-   * `BUNDLED_CREDITS` means on Venice's plan page still gets a
-   * readable hint. Unknown codes fall back to the raw identifier
-   * rather than silently hiding the distinction.
+   * Human-facing tooltip text for a non-USD pill. Only DIEM reaches
+   * here today (USD pills carry no tooltip), but a `default` keeps a
+   * future analytics currency from rendering blank - it falls back to
+   * the raw identifier rather than silently hiding the distinction.
    */
   function currencyTitle(currency: UsageCurrency): string {
-    switch (currency) {
-      case 'BUNDLED_CREDITS':
-        return 'Paid with bundled credits';
-      case 'VCU':
-        return 'Paid with Venice Compute Units';
-      case 'DIEM':
-        return 'Paid with DIEM credits';
-      default:
-        return `Paid with ${currency}`;
-    }
+    return currency === 'DIEM'
+      ? 'Paid with DIEM credits'
+      : `Paid with ${currency}`;
   }
 
   /**
@@ -2196,29 +2147,29 @@
         {#if appearanceInfo}<p class="subtle">{appearanceInfo}</p>{/if}
       {:else if group === 'usage'}
         <!--
-          Usage pane: a date-ranged snapshot of the Venice billing
-          ledger for this API key. Hits Venice's beta
-          `/billing/usage` endpoint, aggregates by (sku, currency),
-          and renders a bar chart scaled by total tokens with a spend
-          pill per row. The default rolling-7-day view is cached in
-          `$lib/usage-store.svelte` and fetched lazily on first open
-          of this pane in the session; the `$effect` above also
-          forces a refresh when the cache is older than
-          USAGE_STALE_MS. User-picked custom ranges bypass the cache
-          and fetch on-demand.
+          Usage pane: a date-ranged snapshot of Venice spend for this
+          API key. Hits Venice's beta `/billing/usage-analytics`
+          endpoint, which returns the per-model spend + token roll-up
+          pre-aggregated in one cached response; the pane fans that into
+          per-(model, currency) rows and renders a bar chart scaled by
+          total tokens with a spend pill per row. The default rolling-7-
+          day view is cached in `$lib/usage-store.svelte` and fetched
+          lazily on first open of this pane in the session; the `$effect`
+          above also forces a refresh when the cache is older than
+          USAGE_STALE_MS. User-picked custom ranges bypass the cache and
+          fetch on-demand.
         -->
         <h2>Usage</h2>
         <p class="subtle">
           Token spend against your Venice API key. Pulled from
-          Venice's billing ledger — the numbers below are what Venice
-          reports, not a Nak-side tally. The default 7-day view
+          Venice's billing analytics — the numbers below are what
+          Venice reports, not a Nak-side tally. The default 7-day view
           fetches the first time you open this pane and caches the
           result for 15 minutes; opening the pane again after that
           re-fetches automatically. Custom date ranges fetch when
-          you hit Refresh. Bars are scaled by
-          prompt + completion tokens; the pill on the right is the
-          raw billed amount in whatever currency each charge was
-          denominated in.
+          you hit Refresh. Bars are scaled by total tokens; the pill
+          on the right is the amount billed in whatever currency each
+          model was charged in.
         </p>
         <div class="usage-controls">
           <label class="usage-date">
@@ -2247,55 +2198,16 @@
             onclick={onUsageRefresh}
             disabled={usageLoading}
           >
-            {#if usageLoading && usagePagesTotal > 0}
-              Loading… {usagePagesLoaded}/{usagePagesTotal}
-            {:else if usageLoading}
+            {#if usageLoading}
               Loading…
             {:else}
               Refresh
             {/if}
           </button>
         </div>
-        {#if usageLoading}
-          <!--
-            The bar renders the moment the fetch starts so the user
-            isn't left staring at a frozen "Loading..." button while
-            Venice works on the first page (the slowest step - the
-            server computes the count + sort there, subsequent pages
-            return quickly). Until `pagesTotal` lands from the first
-            response we show an indeterminate marching bar; once the
-            count is known the bar flips to a determinate fill that
-            tracks `pagesLoaded / pagesTotal`. ARIA attributes drop
-            the value fields in the indeterminate phase per the WAI-
-            ARIA spec for an unknown-progress bar.
-          -->
-          {#if usagePagesTotal > 0}
-            <div
-              class="usage-progress"
-              role="progressbar"
-              aria-label="Loading usage pages"
-              aria-valuemin="0"
-              aria-valuemax={usagePagesTotal}
-              aria-valuenow={usagePagesLoaded}
-            >
-              <span
-                class="usage-progress-fill"
-                style="--usage-progress-pct:{(usagePagesLoaded / usagePagesTotal) * 100}%"
-              ></span>
-            </div>
-          {:else}
-            <div
-              class="usage-progress"
-              role="progressbar"
-              aria-label="Loading first page of usage data"
-            >
-              <span class="usage-progress-fill indeterminate"></span>
-            </div>
-          {/if}
-        {/if}
         {#if usageError}<p class="error">{usageError}</p>{/if}
-        {#if usageRows !== null && !usageError}
-          {@const buckets = aggregateUsage(usageRows)}
+        {#if usageData !== null && !usageError}
+          {@const buckets = aggregateUsage(usageData)}
           {@const maxTokens = buckets.reduce((m, b) => Math.max(m, b.tokens), 0)}
           {@const totalTokens = buckets.reduce((s, b) => s + b.tokens, 0)}
           {@const totalsByCurrency = aggregateTotalsByCurrency(buckets)}
@@ -2384,12 +2296,6 @@
                 </div>
               {/each}
             </div>
-          {/if}
-          {#if usageTruncated}
-            <p class="subtle" style="font-size:0.8rem">
-              Only the most recent {USAGE_MAX_PAGES * 500} rows were
-              loaded — narrow the date range to see the full picture.
-            </p>
           {/if}
         {/if}
       {:else if group === 'security'}

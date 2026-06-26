@@ -22,7 +22,7 @@
  * reload always costs one fetch when the pane is eventually opened.
  */
 import { VeniceError } from './venice';
-import { USAGE_MAX_PAGES, type UsageRequestOptions, type UsageRow } from './usage';
+import type { UsageRequestOptions, UsageModelBucket } from './usage';
 import { createLogger } from './logger.svelte';
 
 const log = createLogger('usage');
@@ -38,32 +38,11 @@ export const USAGE_STALE_MS = 15 * 60 * 1000;
 const DEFAULT_RANGE_DAYS = 7;
 
 interface UsageState {
-  data: UsageRow[] | null;
+  data: UsageModelBucket[] | null;
   /** `Date.now()` of the last successful fetch. Null until the first load lands. */
   lastFetchedAt: number | null;
   loading: boolean;
   error: string | null;
-  /**
-   * True when the last fetch came back exactly at the page x per-page
-   * ceiling, which almost certainly means the user's window hit the
-   * {@link USAGE_MAX_PAGES} safety cap. The Usage pane surfaces this
-   * as a footer hint so a truncated response isn't silently shown as
-   * the full picture.
-   */
-  truncated: boolean;
-  /**
-   * Page count reported by Venice on the most recent in-flight or
-   * completed fetch. Zero until the first page lands. Drives the
-   * Usage pane's progress indicator alongside {@link pagesLoaded}.
-   */
-  pagesTotal: number;
-  /**
-   * Number of pages that have arrived for the current fetch. Resets
-   * to zero on every {@link refreshUsage} entry so a stale total from
-   * the previous fetch can't read as "already finished" while the new
-   * one is still pulling page 1.
-   */
-  pagesLoaded: number;
 }
 
 export const usage = $state<UsageState>({
@@ -71,9 +50,6 @@ export const usage = $state<UsageState>({
   lastFetchedAt: null,
   loading: false,
   error: null,
-  truncated: false,
-  pagesTotal: 0,
-  pagesLoaded: 0,
 });
 
 /**
@@ -103,21 +79,22 @@ export function shouldAutoRefreshUsage(): boolean {
 }
 
 /**
- * Compute the default rolling-7-day range as a pair of ISO 8601
- * timestamps. Venice treats `endDate` as exclusive, so the upper bound
- * is the NEXT midnight after today - matching the transform the pane
- * does on its user-facing date pickers.
+ * Compute the default rolling window as a pair of `YYYY-MM-DD` dates that the
+ * analytics endpoint reads as an inclusive range. The bounds match the Usage
+ * pane's date pickers - today as the upper bound, `DEFAULT_RANGE_DAYS` days back
+ * as the lower - so the cached default view and a manual refresh of the
+ * unchanged pickers request the same window. Inclusive of both endpoints, that
+ * is `DEFAULT_RANGE_DAYS + 1` calendar days (today plus the week behind it),
+ * which is also the divisor the pane's avg-per-day pill uses.
  */
-function defaultRangeIso(): { startDate: string; endDate: string } {
+function defaultRangeYmd(): { startDate: string; endDate: string } {
   const now = new Date();
-  const endDay = new Date(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1)
-  );
-  const startDay = new Date(endDay);
-  startDay.setUTCDate(startDay.getUTCDate() - (DEFAULT_RANGE_DAYS + 1));
+  const end = new Date(now);
+  const start = new Date(now);
+  start.setUTCDate(start.getUTCDate() - DEFAULT_RANGE_DAYS);
   return {
-    startDate: startDay.toISOString(),
-    endDate: endDay.toISOString(),
+    startDate: start.toISOString().slice(0, 10),
+    endDate: end.toISOString().slice(0, 10),
   };
 }
 
@@ -127,7 +104,7 @@ function defaultRangeIso(): { startDate: string; endDate: string } {
  * the test can pass a bare stub).
  */
 interface UsageFetcher {
-  fetchUsage(opts: UsageRequestOptions): Promise<UsageRow[]>;
+  fetchUsage(opts: UsageRequestOptions): Promise<UsageModelBucket[]>;
 }
 
 /**
@@ -144,29 +121,11 @@ interface UsageFetcher {
 export async function refreshUsage(source: UsageFetcher): Promise<void> {
   usage.loading = true;
   usage.error = null;
-  // Reset progress so the UI doesn't paint a stale "5/5 done" state
-  // while the new fetch is still on page 1.
-  usage.pagesLoaded = 0;
-  usage.pagesTotal = 0;
   try {
-    const { startDate, endDate } = defaultRangeIso();
-    const rows = await source.fetchUsage({
-      startDate,
-      endDate,
-      onProgress: ({ page, totalPages }) => {
-        usage.pagesLoaded = page;
-        usage.pagesTotal = totalPages;
-      },
-    });
-    usage.data = rows;
+    const { startDate, endDate } = defaultRangeYmd();
+    const buckets = await source.fetchUsage({ startDate, endDate });
+    usage.data = buckets;
     usage.lastFetchedAt = Date.now();
-    // Best-effort cap detection: if the response came back exactly at
-    // the page x per-page ceiling, we almost certainly hit the safety
-    // limit. Not perfect (a user with exactly the cap's worth of rows
-    // would also trip it) but close enough for a "your data may be
-    // truncated" hint - never shown when we're confidently under the
-    // cap.
-    usage.truncated = rows.length >= USAGE_MAX_PAGES * 500;
   } catch (err) {
     const message =
       err instanceof VeniceError
@@ -192,8 +151,5 @@ export function resetUsage(): void {
   usage.lastFetchedAt = null;
   usage.loading = false;
   usage.error = null;
-  usage.truncated = false;
-  usage.pagesLoaded = 0;
-  usage.pagesTotal = 0;
   log.info('resetUsage');
 }

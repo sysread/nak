@@ -94,11 +94,11 @@ A date-ranged snapshot of what the project's Venice API key has
 been spending. The key is held in your Supabase project's
 `app_config` table - all browser callers reach Venice through an
 edge function that holds the key server-side. Pick a **From** and
-**To** date, hit **Refresh**, and the pane pulls the billing
-ledger from Venice via that function and groups it by model.
-Each row shows a horizontal bar scaled by total tokens
-(prompt + completion), the token count as a compact label (e.g.
-`72k`, `1.2M`), and a pill with the raw billed amount.
+**To** date, hit **Refresh**, and the pane pulls Venice's billing
+analytics via that function - already grouped by model. Each row
+shows a horizontal bar scaled by total tokens, the token count as
+a compact label (e.g. `72k`, `1.2M`), and a pill with the billed
+amount.
 
 - The bars are measured in **tokens**, not money. A cheap-but-chatty
   model shows a long bar with a small pill; an expensive-but-concise
@@ -112,28 +112,23 @@ Each row shows a horizontal bar scaled by total tokens
 - The last 7 days are fetched the first time you open this pane
   in a session and cached for 15 minutes; opening it again after
   that triggers a fresh fetch automatically. Change the dates and
-  click **Refresh** to re-fetch a custom range. While a refresh is
-  in flight, a thin progress bar appears
-  below the controls. It animates as an indeterminate marching
-  pill until Venice returns the first page of data (the slow
-  step - the server computes the page count there), then flips to
-  a determinate fill and the **Refresh** button label adds a
-  `Loading… N/M` page counter as the rest of the pages arrive.
+  click **Refresh** to re-fetch a custom range. The whole snapshot
+  arrives in a single request, so the **Refresh** button shows a
+  brief `Loading…` and the numbers land together.
 - Next to each currency's total spend pill sits a dashed-outline
   `$X/day` pill that divides the total by the inclusive day count
   of the picked range. A weeklong window's spend reads both as the
   headline figure and as the daily run rate it implies.
 - Spend is always dollar-formatted, e.g. `$0.07`. Rows billed in
-  credits instead of cash (VCU, DIEM, or bundled credits) render
-  as muted/grey pills so your eye skips past them to the cash
-  charges — hover for a tooltip that spells out which kind of
-  credit paid for the row. If you're on a mixed plan, a given
-  model can show up twice, once per currency.
+  DIEM credits instead of cash render as muted/grey pills so your
+  eye skips past them to the cash charges — hover for a tooltip
+  that says the credits paid for the row. If you're on a mixed
+  plan, a given model can show up twice, once per currency.
 - Models that rounded to under a cent in this range are hidden —
   the dust rows didn't add signal and produced `$0.00` cells that
   looked like bugs.
-- Numbers come from Venice's beta billing endpoint. The ledger can
-  lag live traffic by a few minutes, so a just-sent message may not
+- Numbers come from Venice's beta billing analytics, which Venice
+  caches for about 10 minutes - so a just-sent message may not
   appear immediately.
 
 ### Security

@@ -1,148 +1,72 @@
 /**
- * Unit coverage for collectUsagePages - the transport-agnostic usage paging
- * loop. The page transport is injected, so row coercion, multi-page
- * accumulation, the USAGE_MAX_PAGES clamp, onProgress, and error propagation are
- * all exercised against a fake fetchPage with no network. The HTTP wire shape
- * (query string, headers, Venice error mapping) lives on the function side and
- * is covered by supabase/functions/tests/usage.test.ts.
+ * Unit coverage for coerceUsageAnalytics - the defensive reader that turns
+ * Venice's /billing/usage-analytics response into the per-model buckets the
+ * Usage pane renders. Only the `byModel` slice is consumed; the coercer drops
+ * malformed entries rather than throwing, scales `totalUnits` (millions of
+ * tokens) to a raw count, and zeroes tokens for non-token SKUs. The HTTP wire
+ * shape (query string, headers, Venice error mapping) lives on the function
+ * side and is covered by supabase/functions/tests/usage.test.ts.
  */
 import { describe, it, expect } from 'vitest';
-import {
-  collectUsagePages,
-  USAGE_MAX_PAGES,
-  type UsagePageRequest,
-  type UsagePageResult,
-} from '../src/lib/usage';
+import { coerceUsageAnalytics } from '../src/lib/usage';
 
-function goodRow(overrides: Record<string, unknown> = {}) {
+function modelEntry(overrides: Record<string, unknown> = {}) {
   return {
-    timestamp: '2026-03-01T12:00:00Z',
-    sku: 'llm-output-mtokens-example',
-    pricePerUnitUsd: 0.002,
-    units: 72,
-    amount: 0.14,
-    currency: 'USD',
-    notes: '',
-    inferenceDetails: null,
+    modelName: 'GLM 5.1',
+    unitType: 'tokens',
+    modelType: 'LLM',
+    totalUsd: 0.4,
+    totalDiem: 0,
+    totalUnits: 0.05, // 0.05 million tokens = 50_000
     ...overrides,
   };
 }
 
-// A fetchPage that serves a fixed list of pages (each { rows, totalPages }),
-// recording the requests it received so the loop's paging math can be asserted.
-// Calls past the list reuse the last page - convenient for the cap test, where
-// every page reports the same pathological totalPages.
-function pager(pages: UsagePageResult[]): {
-  fetchPage: (req: UsagePageRequest) => Promise<UsagePageResult>;
-  requests: UsagePageRequest[];
-} {
-  const requests: UsagePageRequest[] = [];
-  let i = 0;
-  const fetchPage = (req: UsagePageRequest): Promise<UsagePageResult> => {
-    requests.push(req);
-    const page = pages[Math.min(i, pages.length - 1)];
-    i++;
-    return Promise.resolve(page);
-  };
-  return { fetchPage, requests };
-}
-
-describe('collectUsagePages', () => {
-  it('coerces a well-formed row', async () => {
-    const row = goodRow({
-      inferenceDetails: {
-        requestId: 'req_1',
-        promptTokens: 50_000,
-        completionTokens: 22_000,
-        inferenceExecutionTime: 1234,
-      },
-    });
-    const { fetchPage } = pager([{ rows: [row], totalPages: 1 }]);
-    const rows = await collectUsagePages(fetchPage);
-    expect(rows).toEqual([row]);
-  });
-
-  it('drops rows that fail coercion without failing the whole fetch', async () => {
-    // Defensive decoder drops any row missing a required scalar. The endpoint is
-    // marked beta and shape drift shouldn't crash the Usage pane; surviving rows
-    // still come through.
-    const bad = { sku: 'broken' }; // no timestamp, no amount
-    const good = goodRow({ sku: 'grok-41-fast' });
-    const { fetchPage } = pager([{ rows: [bad, good], totalPages: 1 }]);
-    const rows = await collectUsagePages(fetchPage);
-    expect(rows.map((r) => r.sku)).toEqual(['grok-41-fast']);
-  });
-
-  it('drops rows with an unrecognized currency', async () => {
-    const { fetchPage } = pager([{ rows: [goodRow({ currency: 'BTC' })], totalPages: 1 }]);
-    const rows = await collectUsagePages(fetchPage);
-    expect(rows).toEqual([]);
-  });
-
-  it('pages through every page the transport reports and concatenates', async () => {
-    const { fetchPage, requests } = pager([
-      { rows: [goodRow({ sku: 'a' })], totalPages: 2 },
-      { rows: [goodRow({ sku: 'b' })], totalPages: 2 },
-    ]);
-    const rows = await collectUsagePages(fetchPage);
-    expect(rows.map((r) => r.sku)).toEqual(['a', 'b']);
-    expect(requests.map((r) => r.page)).toEqual([1, 2]);
-  });
-
-  it('forwards the window and fixed page params to the transport', async () => {
-    const { fetchPage, requests } = pager([{ rows: [], totalPages: 1 }]);
-    await collectUsagePages(fetchPage, {
-      startDate: '2026-01-01T00:00:00Z',
-      endDate: '2026-02-01T00:00:00Z',
-      currency: 'USD',
-    });
-    expect(requests[0]).toMatchObject({
-      page: 1,
-      limit: 500,
-      sortOrder: 'desc',
-      startDate: '2026-01-01T00:00:00Z',
-      endDate: '2026-02-01T00:00:00Z',
-      currency: 'USD',
-    });
-  });
-
-  it('reports per-page progress through onProgress', async () => {
-    const { fetchPage } = pager([
-      { rows: [goodRow()], totalPages: 2 },
-      { rows: [goodRow()], totalPages: 2 },
-    ]);
-    const ticks: { page: number; totalPages: number }[] = [];
-    await collectUsagePages(fetchPage, { onProgress: (info) => ticks.push(info) });
-    expect(ticks).toEqual([
-      { page: 1, totalPages: 2 },
-      { page: 2, totalPages: 2 },
+describe('coerceUsageAnalytics', () => {
+  it('coerces a well-formed LLM model entry and scales tokens to a raw count', () => {
+    const buckets = coerceUsageAnalytics({ byModel: [modelEntry()] });
+    expect(buckets).toEqual([
+      { modelName: 'GLM 5.1', tokens: 50_000, usd: 0.4, diem: 0 },
     ]);
   });
 
-  it('clamps onProgress totalPages at USAGE_MAX_PAGES and survives a throwing listener', async () => {
-    // A pathologically large totalPages must not promise pages the cap will
-    // never let the loop pull, and a misbehaving UI listener must not abort
-    // paging.
-    const { fetchPage } = pager([{ rows: [], totalPages: 9999 }]);
-    const ticks: { page: number; totalPages: number }[] = [];
-    await collectUsagePages(fetchPage, {
-      onProgress: (info) => {
-        ticks.push(info);
-        throw new Error('listener throws should not abort paging');
-      },
+  it('carries both USD and DIEM totals through', () => {
+    const buckets = coerceUsageAnalytics({
+      byModel: [modelEntry({ totalUsd: 1.5, totalDiem: 2.25 })],
     });
-    expect(ticks).toHaveLength(USAGE_MAX_PAGES);
-    expect(ticks[0]).toEqual({ page: 1, totalPages: USAGE_MAX_PAGES });
-    expect(ticks[ticks.length - 1]).toEqual({
-      page: USAGE_MAX_PAGES,
-      totalPages: USAGE_MAX_PAGES,
-    });
+    expect(buckets[0].usd).toBe(1.5);
+    expect(buckets[0].diem).toBe(2.25);
   });
 
-  it('propagates a transport error', async () => {
-    // The transport (SupabaseService.fetchUsagePage) throws VeniceError on a
-    // failed page; the loop must not swallow it.
-    const fetchPage = () => Promise.reject(new Error('boom'));
-    await expect(collectUsagePages(fetchPage)).rejects.toThrow('boom');
+  it('zeroes tokens for a non-token SKU but still emits the bucket', () => {
+    // Image/video models bill in their own units; they contribute no tokens
+    // but must still appear so their spend shows in the list.
+    const buckets = coerceUsageAnalytics({
+      byModel: [modelEntry({ unitType: 'images', totalUnits: 12, totalUsd: 0.3 })],
+    });
+    expect(buckets).toEqual([
+      { modelName: 'GLM 5.1', tokens: 0, usd: 0.3, diem: 0 },
+    ]);
+  });
+
+  it('defaults a missing currency total to 0 rather than dropping the entry', () => {
+    const buckets = coerceUsageAnalytics({
+      byModel: [{ modelName: 'X', unitType: 'tokens', totalUnits: 0.001 }],
+    });
+    expect(buckets).toEqual([{ modelName: 'X', tokens: 1_000, usd: 0, diem: 0 }]);
+  });
+
+  it('drops entries missing a model name without failing the whole parse', () => {
+    const buckets = coerceUsageAnalytics({
+      byModel: [{ totalUsd: 1 }, modelEntry({ modelName: 'kept' })],
+    });
+    expect(buckets.map((b) => b.modelName)).toEqual(['kept']);
+  });
+
+  it('returns an empty list when byModel is absent or not an array', () => {
+    expect(coerceUsageAnalytics({})).toEqual([]);
+    expect(coerceUsageAnalytics({ byModel: 'nope' })).toEqual([]);
+    expect(coerceUsageAnalytics(null)).toEqual([]);
+    expect(coerceUsageAnalytics(undefined)).toEqual([]);
   });
 });

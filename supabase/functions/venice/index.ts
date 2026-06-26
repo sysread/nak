@@ -36,7 +36,7 @@ import {
   veniceEmbed,
   veniceExtractText,
   veniceFetchModels,
-  veniceFetchUsagePage,
+  veniceFetchUsageAnalytics,
   veniceGenerateImage,
   VeniceError,
 } from '../_shared/venice.ts';
@@ -269,32 +269,30 @@ async function handleEmbed(req: Request): Promise<Response> {
   }
 }
 
-interface UsageRequestBody {
-  page?: number;
-  limit?: number;
-  sortOrder?: string;
+interface UsageAnalyticsRequestBody {
   startDate?: string;
   endDate?: string;
-  currency?: string;
 }
 
 /**
- * Browser-triggered single-page proxy for GET /billing/usage. The browser's
- * paging loop (src/lib/usage.ts) calls this once per page, so the per-page
- * progress indicator in the Usage pane keeps working - a single fat response
- * could not report page-by-page progress. Authenticated as the calling user:
- * the gateway's verify_jwt has already validated the session JWT (same model as
- * /embed, no service-role check). Usage is account-scoped, so any project member
- * sees the one shared key's usage - consistent with the shared-key trust model.
+ * Browser-triggered proxy for GET /billing/usage-analytics. The Usage pane
+ * fetches this once and reads the pre-aggregated per-model roll-up Venice
+ * computes server-side - one cached response in place of the multi-page walk
+ * over the per-request /billing/usage ledger this route used to proxy.
+ * Authenticated as the calling user: the gateway's verify_jwt has already
+ * validated the session JWT (same model as /embed, no service-role check).
+ * Usage is account-scoped, so any project member sees the one shared key's
+ * usage - consistent with the shared-key trust model.
  *
- * Forwards one page to Venice with the shared key and relays the rows verbatim;
- * row coercion and the paging cap live in the browser loop, keeping this a thin
- * passthrough with no UsageRow knowledge.
+ * Relays Venice's JSON verbatim; the browser (src/lib/usage.ts) picks out and
+ * coerces the `byModel` slice, keeping this a thin passthrough with no
+ * UsageModelBucket knowledge. POST from the browser (functions.invoke is always
+ * POST) even though the upstream call is a GET.
  */
-async function handleUsage(req: Request): Promise<Response> {
-  let body: UsageRequestBody;
+async function handleUsageAnalytics(req: Request): Promise<Response> {
+  let body: UsageAnalyticsRequestBody;
   try {
-    body = (await req.json()) as UsageRequestBody;
+    body = (await req.json()) as UsageAnalyticsRequestBody;
   } catch {
     return json({ error: 'invalid JSON body' }, 400);
   }
@@ -304,22 +302,15 @@ async function handleUsage(req: Request): Promise<Response> {
   const { apiKey } = env;
 
   try {
-    const result = await veniceFetchUsagePage({
+    const result = await veniceFetchUsageAnalytics({
       apiKey,
-      params: {
-        page: typeof body.page === 'number' ? body.page : 1,
-        limit: typeof body.limit === 'number' ? body.limit : 500,
-        sortOrder: typeof body.sortOrder === 'string' ? body.sortOrder : 'desc',
-        startDate: body.startDate,
-        endDate: body.endDate,
-        currency: body.currency,
-      },
+      params: { startDate: body.startDate, endDate: body.endDate },
     });
     return json(result);
   } catch (err) {
     if (err instanceof VeniceError) {
-      // Mirror handleEmbed: surface Venice's 429 as a 429 so the browser loop
-      // can back off; everything else collapses to 502 (bad upstream).
+      // Mirror handleEmbed: surface Venice's 429 as a 429 so the browser can
+      // back off; everything else collapses to 502 (bad upstream).
       return json({ error: err.message, kind: err.kind }, err.kind === 'rate_limit' ? 429 : 502);
     }
     return json({ error: (err as Error).message }, 500);
@@ -1221,7 +1212,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
   // lands here with a trailing `embed`.
   const route = new URL(req.url).pathname.split('/').filter(Boolean).pop();
   if (route === 'embed' && req.method === 'POST') return handleEmbed(req);
-  if (route === 'usage' && req.method === 'POST') return handleUsage(req);
+  if (route === 'usage-analytics' && req.method === 'POST') return handleUsageAnalytics(req);
   if (route === 'models' && req.method === 'POST') return handleModels();
   if (route === 'backfill' && req.method === 'POST') return handleBackfill(req);
   if (route === 'wiki-sweep' && req.method === 'POST') return handleWikiSweep(req);

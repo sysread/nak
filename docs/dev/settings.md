@@ -100,25 +100,24 @@ landing tab move together.
   is a deliberate behavioral change, not just cosmetic.
 - **Usage** — a date-ranged snapshot of per-model token spend
   against the Venice API key. Read-only: it calls Venice's beta
-  `/billing/usage` endpoint and aggregates the rows client-side.
+  `/billing/usage-analytics` endpoint, which returns the per-model
+  spend + token roll-up pre-aggregated in one cached response, and
+  fans that into per-(model, currency) rows client-side
+  (`aggregateUsage`). One request replaces the multi-page walk over
+  the per-request `/billing/usage` ledger this pane used to do.
   The default rolling-7-day window is cached in
   `usage-store.svelte.ts` and fetched lazily the first time the
   user lands on this pane in the session; opens within
   `USAGE_STALE_MS` reuse the cache, opens after it re-fetch.
   Custom date ranges bypass the cache and fetch on-demand. Nothing
   persists to disk — the cache is in-memory only and gets wiped on
-  sign-out (`resetForSignOut`). While paging through
-  a wider window, `fetchUsage`'s `onProgress` callback feeds a
-  `pagesLoaded`/`pagesTotal` pair into both the shared store and
-  the pane's custom-range state. The pane renders a thin progress
-  bar between the controls and the totals strip the moment loading
-  starts: an indeterminate marching variant while `pagesTotal`
-  is still 0 (the wait on Venice's first-page response, which is
-  the slowest step), then a determinate fill once the count is
-  known, with the **Refresh** button label adding `Loading… N/M`
-  in the determinate phase. The totals strip itself pairs each
-  currency's total spend pill with an avg-per-day pill that
-  divides the total by the inclusive day count of the picked range.
+  sign-out (`resetForSignOut`). The analytics endpoint reports
+  spend in USD and DIEM only (the per-request ledger's legacy `VCU`
+  and `BUNDLED_CREDITS` denominations have no field in the analytics
+  shape), so the pane reports those two currencies and nothing else.
+  The totals strip pairs each currency's total spend pill with an
+  avg-per-day pill that divides the total by the inclusive day count
+  of the picked range.
 - **Security** - rotates the Supabase account (login) password. It
   re-verifies the current password by re-signing in, then calls
   Supabase `updateUser` to set the new one. There is no master
@@ -180,11 +179,14 @@ every update) so it's covered here rather than in its own file.
   then writes atomically via the `merge_profile_settings` RPC
   (`supabase/schema.sql`); `getSettings` reads the
   `profiles.settings` JSONB column.
-- `src/lib/venice.ts` — `VeniceClient.fetchUsage` + `UsageRow` /
-  `UsageCurrency` types. Backs the Usage pane; pages through
-  `/billing/usage` transparently up to `USAGE_MAX_PAGES`
-  (20 × 500 rows = 10k rows) and coerces each row defensively
-  before returning.
+- `src/lib/usage.ts` — `coerceUsageAnalytics` + the
+  `UsageModelBucket` / `UsageCurrency` types. Backs the Usage pane:
+  defensively reads the `byModel` slice of the
+  `/billing/usage-analytics` response into per-model buckets (scaling
+  `totalUnits` from millions-of-tokens to a raw count, dropping
+  malformed entries). The one round trip lives on
+  `SupabaseService.fetchUsage` (`supabase.ts`), which invokes the
+  `venice/usage-analytics` edge route and hands the JSON here.
 - `src/lib/usage-store.svelte.ts` — reactive cache for the Usage
   pane's default rolling-7-day window. Nothing runs at boot; the
   Settings pane drives the first fetch via `refreshUsage`. Wiped

@@ -49,11 +49,9 @@ import {
   VeniceError,
 } from './venice';
 import {
-  collectUsagePages,
+  coerceUsageAnalytics,
   type UsageRequestOptions,
-  type UsageRow,
-  type UsagePageRequest,
-  type UsagePageResult,
+  type UsageModelBucket,
 } from './usage';
 import { synthesizeRecoveryMessages } from './conversation-recovery';
 
@@ -573,27 +571,21 @@ export class SupabaseService {
   /**
    * Fetch Venice billing usage through the `venice` edge function. The browser
    * no longer holds a Venice key for this path - the function reads the shared
-   * key server-side and proxies one page per call. The paging loop lives in
-   * src/lib/usage.ts (not server-side) precisely so it can drive the Usage
-   * pane's per-page progress indicator. The session JWT rides along on
-   * functions.invoke and the gateway's verify_jwt gates the call; failures
-   * surface as VeniceError so the pane renders the same error shape it always
-   * has.
+   * key server-side and proxies one call to /billing/usage-analytics, which
+   * returns the per-model roll-up pre-aggregated in a single cached response
+   * (replacing the multi-page walk over the per-request ledger this used to do).
+   * Coercion of the `byModel` slice lives in src/lib/usage.ts (browser-side) so
+   * a malformed entry degrades to "skipped" rather than failing the whole list.
+   * The session JWT rides along on functions.invoke and the gateway's verify_jwt
+   * gates the call; failures surface as VeniceError so the pane renders the same
+   * error shape it always has.
    */
-  async fetchUsage(opts: UsageRequestOptions = {}): Promise<UsageRow[]> {
-    return collectUsagePages((req) => this.fetchUsagePage(req), opts);
-  }
-
-  private async fetchUsagePage(req: UsagePageRequest): Promise<UsagePageResult> {
-    const { data, error } = await this.client.functions.invoke('venice/usage', {
-      body: req,
+  async fetchUsage(opts: UsageRequestOptions = {}): Promise<UsageModelBucket[]> {
+    const { data, error } = await this.client.functions.invoke('venice/usage-analytics', {
+      body: { startDate: opts.startDate, endDate: opts.endDate },
     });
     if (error) throw await veniceFunctionError(error);
-    const body = (data ?? {}) as { data?: unknown; totalPages?: unknown };
-    return {
-      rows: Array.isArray(body.data) ? body.data : [],
-      totalPages: typeof body.totalPages === 'number' ? body.totalPages : 1,
-    };
+    return coerceUsageAnalytics(data);
   }
 
   /**
