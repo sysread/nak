@@ -117,7 +117,10 @@ landing tab move together.
   shape), so the pane reports those two currencies and nothing else.
   The totals strip pairs each currency's total spend pill with an
   avg-per-day pill that divides the total by the inclusive day count
-  of the picked range.
+  of the picked range. Each chart row carries two independent color
+  channels off `relativeHue` (`src/lib/ui/usage.ts`): the bar hue
+  from the row's token count, the spend-pill border hue from its
+  dollar amount - so volume and cost read separately.
 - **Security** - rotates the Supabase account (login) password. It
   re-verifies the current password by re-signing in, then calls
   Supabase `updateUser` to set the new one. There is no master
@@ -164,6 +167,11 @@ every update) so it's covered here rather than in its own file.
   `reorderPrompts` (the drag-reorder array move), and `promptsMatch` (the
   by-value equality that backs the resync-from-Supabase guard). Unit-tested
   in `tests/prompts.test.ts`.
+- `src/lib/ui/usage.ts` — pure display math for the Usage pane:
+  `relativeHue(value, population)`, the median-anchored log-scale
+  blue->green->red mapping. Driven twice per row - bar hue from token
+  count, spend-pill border hue from dollar amount. Unit-tested in
+  `tests/usage-hue.test.ts`.
 - `src/lib/ui/model-picker.ts` — pure UI primitives for the picker:
   `tierRowView` (row view-model), `buildModelOptions`, `capabilityChips`,
   `formatContextWindow`, `formatPricing`, `tierConfigFromCatalog`,

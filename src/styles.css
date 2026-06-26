@@ -1057,6 +1057,21 @@ label {
   color: var(--muted);
 }
 
+/* Spend-magnitude border for the per-row chart pills. `--spend-hue` is set
+   inline from relativeHue() in Settings.svelte - the same blue (cheap) ->
+   green (typical) -> red (costly) scale the bars use, but keyed on dollars
+   spent rather than tokens, so the pill border answers "how much did this
+   model cost relative to the others?" independent of the bar's token read.
+   Scoped to `.usage-chart` so the totals-strip pills (which are aggregates,
+   not per-model, and have nothing to rank against) keep the neutral border.
+   1.5px so the hue reads at pill size; box-sizing: border-box means the extra
+   half-pixel grows inward and doesn't nudge the column alignment. The fill
+   (incl. the .credit grey) is untouched - border carries magnitude, fill still
+   carries cash-vs-credit. */
+.usage-chart .usage-pill {
+  border: 1.5px solid hsl(var(--spend-hue, 140), 62%, 48%);
+}
+
 /* The avg-per-day pill sits inline with the totals pill it derives
    from. Same geometry as the spend pill so the strip stays visually
    aligned; the subtler fill + italics says "secondary figure, not

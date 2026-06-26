@@ -126,6 +126,7 @@
     type UsageCurrency,
     type UsageModelBucket,
   } from '$lib/usage';
+  import { relativeHue } from '$lib/ui/usage';
   import {
     usage,
     shouldAutoRefreshUsage,
@@ -859,62 +860,6 @@
       : `Paid with ${currency}`;
   }
 
-  /**
-   * Compute a hue (0–360) for a bucket's bar based on its token
-   * count relative to the rest of the chart. Maps "typical" to
-   * green (~140°), lightweight models to blue (~220°), and heavy
-   * hitters to red (~5°).
-   *
-   * Why median-anchored on log tokens, not a plain percentile
-   * tertile: usage distributions are heavy-tailed — a user with
-   * one kimi-heavy workload and a dozen utility calls on other
-   * models would see the whole spectrum collapsed to two adjacent
-   * shades under straight "top-third / middle-third / bottom-third"
-   * bucketing. Anchoring at the median isolates the outlier on the
-   * high side without flattening the rest into a single color,
-   * which matches the intuitive read: "most of these are the green
-   * pack, that one is obviously doing more work." log() is the
-   * other half of the trick — it squeezes an order-of-magnitude
-   * outlier into a comparable distance on the color axis so the
-   * gradient stays readable whether the biggest bucket is 2× or
-   * 200× the smallest.
-   *
-   * Small-N behavior: with 1 bucket, everything sits at the median
-   * (green). With 2, the larger is at +1 (red) and the smaller at
-   * -1 (blue) — minimally useful but not wrong. The coloring earns
-   * its keep at 3+ models, which is the common case.
-   */
-  function usageHue(tokens: number, buckets: UsageBucket[]): number {
-    // Neutral (green) — any row that somehow has zero tokens picks
-    // up the same color the rest of the "typical" band uses.
-    if (tokens <= 0) return 140;
-    const logs = buckets
-      .map((b) => b.tokens)
-      .filter((t) => t > 0)
-      .map((t) => Math.log(t))
-      .sort((a, b) => a - b);
-    if (logs.length === 0) return 140;
-    const median = logs[Math.floor(logs.length / 2)];
-    const minLog = logs[0];
-    const maxLog = logs[logs.length - 1];
-    const cur = Math.log(tokens);
-    // Position in [-1, +1] anchored at the median. +1 = the biggest
-    // bucket, -1 = the smallest, 0 = sitting on the median.
-    let pos: number;
-    if (cur >= median) {
-      pos = maxLog === median ? 0 : (cur - median) / (maxLog - median);
-    } else {
-      pos = minLog === median ? 0 : -(median - cur) / (median - minLog);
-    }
-    pos = Math.max(-1, Math.min(1, pos));
-    // Map: -1 → 220 (blue), 0 → 140 (green), +1 → 5 (red). The red
-    // side uses a steeper slope (140° → 5° over [0, 1]) so outliers
-    // reach a genuinely red hue; the blue side moves more gently
-    // (140° → 220° over [-1, 0]) to avoid pushing past cyan into
-    // purple.
-    if (pos >= 0) return 140 - pos * 135;
-    return 140 - pos * 80;
-  }
 
   // --- Security pane ---
   // Supabase login password rotation. The master-password ceremony
@@ -2212,6 +2157,17 @@
           {@const totalTokens = buckets.reduce((s, b) => s + b.tokens, 0)}
           {@const totalsByCurrency = aggregateTotalsByCurrency(buckets)}
           <!--
+            Two independent color channels over the same rows. tokenPop
+            drives the bar hue (how token-heavy is this model?); spendPop
+            drives the spend-pill border hue (how costly is this model?).
+            Computed once here and fed to relativeHue per row so a model
+            that is cheap-but-chatty (long green bar, blue-bordered pill)
+            reads differently from an expensive-but-terse one (short bar,
+            red-bordered pill).
+          -->
+          {@const tokenPop = buckets.map((b) => b.tokens)}
+          {@const spendPop = buckets.map((b) => b.amount)}
+          <!--
             Totals strip. Tokens sum unconditionally (a scalar
             regardless of currency); spend totals split into one
             pill per currency so a mixed USD + credits plan doesn't
@@ -2274,7 +2230,7 @@
                       class:zero={b.tokens === 0}
                       style="--usage-pct:{maxTokens > 0 && b.tokens > 0
                         ? Math.max(2, (b.tokens / maxTokens) * 100)
-                        : 0}%; --usage-hue:{usageHue(b.tokens, buckets)}"
+                        : 0}%; --usage-hue:{relativeHue(b.tokens, tokenPop)}"
                     ></span>
                   </span>
                   <span class="usage-tokens" role="cell">{formatTokens(b.tokens)}</span>
@@ -2285,12 +2241,17 @@
                     cash charges that actually hit the user's card.
                     The native `title` tooltip spells out which kind
                     of credit paid for the row, so the info isn't
-                    lost when the pill is grey.
+                    lost when the pill is grey. The border hue
+                    (--spend-hue) is an orthogonal channel: it tracks
+                    this row's spend relative to the others regardless
+                    of currency, the same blue->green->red scale the
+                    bars use for tokens.
                   -->
                   <span
                     class="usage-pill"
                     class:credit={b.currency !== 'USD'}
                     role="cell"
+                    style="--spend-hue:{relativeHue(b.amount, spendPop)}"
                     title={b.currency !== 'USD' ? currencyTitle(b.currency) : undefined}
                   >{formatAmount(b.amount, b.currency)}</span>
                 </div>
