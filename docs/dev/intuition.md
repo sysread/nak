@@ -133,12 +133,16 @@ thread by the first response.
   ignores it; a UI could use it to identify synthetic intuition
   turns when listing message blocks.
 - `src/components/IntuitionPill.svelte` - brain icon that opens
-  the modal. Absolutely positioned inside `.messages-wrap`,
-  stacked at the top of a vertical column with
-  `SamskaraToasts.svelte` (middle) and the `.scroll-to-bottom`
-  arrow (bottom) - all three pinned to the bottom-right of the
-  messages pane. Suppressed when the active thread has no cached
-  payload.
+  the modal. Absolutely positioned inside `.messages-wrap`, second
+  from the top of the bottom-right pill column: recall bulb above,
+  then this brain, then `BiasPill`, `SamskaraToasts.svelte` (mood),
+  the opt-in `IntentsPill` (bottom slot), and the
+  `.scroll-to-bottom` arrow. Vertical placement is driven by each
+  pill's CSS `bottom`, keyed off the `--diag-base` custom property
+  `Chat.svelte` sets on `.messages-wrap` (6.1rem when the intents
+  pill occupies the bottom slot, else 3.6rem so the always-on pills
+  drop a slot and stay flush with the arrow). Suppressed when the
+  active thread has no cached payload.
 - `src/screens/Intuition.svelte` - the diagnostics modal. Reads
   the active thread's payload, renders synthesis + perception +
   the five drives + a footer with the trigger reason and
@@ -266,7 +270,7 @@ demand.
   fires per-thread on trigger events and produces a `<think>`
   block; bias profile fires across conversations in the
   background and produces a system-prompt section. Both
-  surface as bottom-right pills (bias stacks above intuition)
+  surface as bottom-right pills (bias stacks below intuition)
   and open into their own diagnostics modal.
 - **Logging ([./logging.md](./logging.md))** - the pipeline
   uses `createLogger('intuition')`. The `FNORD_DEBUG_INTUITION`

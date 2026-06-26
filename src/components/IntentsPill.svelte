@@ -42,14 +42,17 @@
 </div>
 
 <style>
-  /* Tops the bottom-right pill column (above the recall bulb at 11.1rem).
-     Conditionally mounted, so when intents are off there is simply
-     nothing here and the column starts at recall as before. Same
-     2.1rem size, z-index 25, and pointer-events handling as its
-     siblings. */
+  /* Bottom-most slot of the bottom-right pill column, directly above the
+     scroll-to-bottom arrow (arrow at bottom: 1rem + 2.2rem footprint +
+     0.4rem gap = 3.6rem). Conditionally mounted, so when intents are off
+     there is simply nothing here; .messages-wrap then sets --diag-base to
+     3.6rem so the always-on pills (samskara mood up to recall) drop one
+     2.5rem step and stay flush with the arrow rather than leaving this
+     slot as a gap. Same 2.1rem size, z-index 25, and pointer-events
+     handling as its siblings. */
   .intents-pill-wrap {
     position: absolute;
-    bottom: 13.6rem;
+    bottom: 3.6rem;
     right: 1rem;
     z-index: 25;
     pointer-events: none;

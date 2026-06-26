@@ -67,19 +67,23 @@
 
 <style>
   /* Top of the bottom-right pill column. The column from top to bottom:
-       recall pill (this one)            bottom: 11.1rem
-       bias pill                         bottom: 8.6rem
-       intuition pill (brain)            bottom: 6.1rem
-       samskara mood pill                bottom: ~3.6rem
+       recall pill (this one)            bottom: calc(--diag-base + 7.5rem)
+       intuition pill (brain)            bottom: calc(--diag-base + 5rem)
+       bias pill                         bottom: calc(--diag-base + 2.5rem)
+       samskara mood pill                bottom: var(--diag-base)
+       intents pill (seedling, opt-in)   bottom: 3.6rem
        scroll-to-bottom arrow            bottom: ~1rem
-     The 0.4rem gap between pills matches the gap the existing pills
-     already use. z-index 25 matches the sibling pills: above chat
-     surface, below modals (30) and drawers (40). pointer-events:none
-     on the wrap keeps the messages pane underneath clickable; the
-     button itself opts back in. */
+     --diag-base (set on .messages-wrap) is 6.1rem when the intents pill
+     occupies the bottom slot and 3.6rem when it doesn't, so the always-
+     on pills drop one 2.5rem step and stay flush with the arrow. With
+     intents on, this pill sits at 13.6rem; with it off, 11.1rem. The
+     2.5rem step is 2.1rem pill height + 0.4rem gap. z-index 25 matches
+     the sibling pills: above chat surface, below modals (30) and drawers
+     (40). pointer-events:none on the wrap keeps the messages pane
+     underneath clickable; the button itself opts back in. */
   .recall-pill-wrap {
     position: absolute;
-    bottom: 11.1rem;
+    bottom: calc(var(--diag-base, 3.6rem) + 7.5rem);
     right: 1rem;
     z-index: 25;
     pointer-events: none;

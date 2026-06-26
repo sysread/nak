@@ -49,21 +49,26 @@
 </div>
 
 <style>
-  /* Stacks above the intuition pill. The column from top to bottom:
-       recall pill (light bulb)         bottom: 11.1rem
-       bias pill (this one)             bottom: 8.6rem
-       intuition pill (brain)           bottom: 6.1rem
-       samskara mood pill               bottom: ~3.6rem
+  /* Middle of the bottom-right pill column, between the intuition brain
+     above and the samskara mood pill below. The column from top to
+     bottom:
+       recall pill (light bulb)         bottom: calc(--diag-base + 7.5rem)
+       intuition pill (brain)           bottom: calc(--diag-base + 5rem)
+       bias pill (this one)             bottom: calc(--diag-base + 2.5rem)
+       samskara mood pill               bottom: var(--diag-base)
+       intents pill (seedling, opt-in)  bottom: 3.6rem
        scroll-to-bottom arrow           bottom: ~1rem
-     Each pill is 2.1rem tall; the 0.4rem gap keeps them legible
-     without crowding. Same z-index 25 as the others so they share
-     the same stacking context above chat surface but below modals
-     (30) and drawers (40). pointer-events:none on the wrap so the
-     messages pane stays clickable through the gaps; the button
-     itself opts back in. */
+     --diag-base (on .messages-wrap) is 6.1rem with the intents pill in
+     the bottom slot, else 3.6rem; this pill lands at 8.6rem or 6.1rem
+     respectively. Each pill is 2.1rem tall; the 0.4rem gap keeps them
+     legible without crowding (2.5rem step). Same z-index 25 as the
+     others so they share the same stacking context above chat surface
+     but below modals (30) and drawers (40). pointer-events:none on the
+     wrap so the messages pane stays clickable through the gaps; the
+     button itself opts back in. */
   .bias-pill-wrap {
     position: absolute;
-    bottom: 8.6rem;
+    bottom: calc(var(--diag-base, 3.6rem) + 2.5rem);
     right: 1rem;
     z-index: 25;
     pointer-events: none;

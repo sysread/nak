@@ -10,8 +10,9 @@ when something meaningful changes.
 ## What you'll see
 
 There's a brain glyph (🧠) at the bottom-right of the conversation
-pane, stacked above the mood emoji (the [samskara](./settings.md)
-pill) and the scroll-to-latest arrow when it's showing. It only
+pane, just below the recall light bulb and above the bias chart, the
+mood emoji (the [samskara](./settings.md) pill), and the
+scroll-to-latest arrow when it's showing. It only
 appears on threads where the intuition layer has actually run; on a
 fresh thread or a thread that's never accumulated enough signal, the
 icon is suppressed. Click it to open the **Intuition** diagnostics

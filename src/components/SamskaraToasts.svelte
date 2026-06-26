@@ -223,21 +223,22 @@
 </div>
 
 <style>
-  /* Middle slot of the bottom-right pill column. The scroll-to-bottom
-     arrow sits at bottom: 1rem with a 2.2rem footprint; this pill
-     stacks directly above it at bottom: 1rem + 2.2rem + 0.4rem gap =
-     3.6rem (2.1rem height), and the IntuitionPill stacks above this
-     one at 6.1rem. All three are right-anchored at 1rem; the 0.05rem
-     horizontal offset between the 2.1rem pills and the 2.2rem arrow
-     is below perceptual threshold. z-index 25 sits above the chat
-     surface but below modals (30), drawers (40), Cookbook (40),
-     Samskara (50), and the update banner (100) - this is a passive
-     glance cue and should never float over interactive surfaces.
-     pointer-events:none on the container so the indicator never
-     blocks clicks on content beneath it. */
+  /* Lowest always-on slot of the bottom-right pill column, just below
+     the bias pill. Sits at bottom: var(--diag-base) (set on .messages-
+     wrap): 3.6rem when the opt-in intents pill is absent, so this pill
+     stacks directly above the scroll-to-bottom arrow (arrow at bottom:
+     1rem + 2.2rem footprint + 0.4rem gap = 3.6rem, 2.1rem pill height);
+     6.1rem when the intents pill takes the bottom-most slot below it.
+     Right-anchored at 1rem; the 0.05rem horizontal offset between the
+     2.1rem pills and the 2.2rem arrow is below perceptual threshold.
+     z-index 25 sits above the chat surface but below modals (30),
+     drawers (40), Cookbook (40), Samskara (50), and the update banner
+     (100) - this is a passive glance cue and should never float over
+     interactive surfaces. pointer-events:none on the container so the
+     indicator never blocks clicks on content beneath it. */
   .samskara-mood {
     position: absolute;
-    bottom: 3.6rem;
+    bottom: var(--diag-base, 3.6rem);
     right: 1rem;
     z-index: 25;
     pointer-events: none;

@@ -63,9 +63,9 @@ lives in the source at `src/lib/bias/catalog.ts`.
 ## How to inspect it
 
 Look for the chart-graph icon in the pill column in the
-bottom-right corner of the messages pane - second from the top,
-above the brain and the mood emoji, below the recall light
-bulb. The icon appears once at least one conversation has been
+bottom-right corner of the messages pane - below the recall light
+bulb and the intuition brain, above the mood emoji. The icon
+appears once at least one conversation has been
 analyzed. Click it to open the bias profile diagnostics
 modal.
 

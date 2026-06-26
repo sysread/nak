@@ -137,8 +137,9 @@ interval lower bound (not the mean) as the surfacing gate.
   source `bias`.
 - `src/components/BiasPill.svelte` - chart-glyph pill that opens
   the diagnostics modal. Mounted inside `.messages-wrap` in
-  `Chat.svelte`, stacked at the top of the bottom-right column
-  above the intuition brain. Suppressed when `bias_summary` is
+  `Chat.svelte`, in the middle of the bottom-right column - below
+  the intuition brain and recall bulb, above the samskara mood
+  pill. Suppressed when `bias_summary` is
   empty (cold-start gate). Icon is static regardless of tier
   state - revealing "something is shaping responses right now"
   via the chrome itself violates the "absorption over disclaimer"
@@ -535,7 +536,7 @@ closes the block.
   mood / staleness triggers and produces a `<think>` block.
   Bias profile fires per-user across conversations and
   produces a system-prompt section. Both expose a pill in the
-  bottom-right column; bias stacks above intuition.
+  bottom-right column; bias stacks below intuition.
 - **Logging ([./logging.md](./logging.md))** - the sweep writes
   through per-claim edge loggers (`createEdgeLogger(userId,
   'bias')`), attributed to the claimed thread's owner and

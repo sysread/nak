@@ -62,19 +62,20 @@
 </div>
 
 <style>
-  /* Top of the bottom-right pill column. The scroll-to-bottom arrow
-     sits at bottom: 1rem with a 2.2rem footprint; the mood pill stacks
-     directly above it at bottom: ~3.6rem with a 2.1rem height; this
-     pill stacks above the mood pill at bottom: ~6.1rem (3.6rem +
-     2.1rem mood-pill height + 0.4rem gap). All three are right-anchored
-     at 1rem; the 0.05rem horizontal offset between the 2.1rem pills
-     and the 2.2rem arrow is below perceptual threshold. z-index 25
-     matches the mood pill: above chat surface, below modals (30) and
-     drawers (40). pointer-events:none on the wrap keeps the messages
-     pane underneath clickable; the button itself opts back in. */
+  /* Second from the top of the bottom-right pill column, between the
+     recall bulb above and the bias pill below. Sits at calc(--diag-base
+     + 5rem): 11.1rem when the intents pill takes the bottom slot
+     (--diag-base 6.1rem), 8.6rem when intents is off (--diag-base
+     3.6rem). The 5rem offset is two 2.5rem steps (2.1rem pill height +
+     0.4rem gap each). Right-anchored at 1rem; the 0.05rem horizontal
+     offset between the 2.1rem pills and the 2.2rem arrow is below
+     perceptual threshold. z-index 25 matches the sibling pills: above
+     chat surface, below modals (30) and drawers (40). pointer-events:
+     none on the wrap keeps the messages pane underneath clickable; the
+     button itself opts back in. */
   .intuition-pill-wrap {
     position: absolute;
-    bottom: 6.1rem;
+    bottom: calc(var(--diag-base, 3.6rem) + 5rem);
     right: 1rem;
     z-index: 25;
     pointer-events: none;

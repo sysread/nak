@@ -34,8 +34,9 @@ Nak engages - never *what* you can ask for.
 ## Seeing them
 
 With intentions on, a **seedling pill** (the leaf icon) appears at the
-top of the bottom-right column in the chat view; on a narrow screen
-it's a tile in the diagnostics menu. Tapping it opens the
+bottom of the bottom-right column in the chat view, just below the
+mood emoji and above the scroll-to-latest arrow; on a narrow screen
+it's the last tile in the diagnostics menu. Tapping it opens the
 **inspector** - a read-only view of what Nak is working toward,
 grouped into **Active** (shaping replies now), **Paused** (set aside
 while the pattern is quiet), and **Let go** (abandoned, kept for the

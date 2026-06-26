@@ -6987,7 +6987,15 @@
       </div>
 
       {#if drawerTab === 'chats' || drawerTab === 'artifacts'}
-      <div class="messages-wrap">
+      <!-- --diag-base is the `bottom` of the lowest always-on diagnostic
+           pill (samskara mood). The intents pill, when enabled, takes the
+           bottom-most 3.6rem slot directly above the scroll arrow and the
+           always-on pills shift up one 2.5rem step (base 6.1rem). When
+           intents is off (the default), there is no bottom pill, so the
+           always-on column drops back down to sit flush above the arrow
+           (base 3.6rem) and no gap opens. The always-on pills read this
+           var via calc() so the whole column reflows from one toggle. -->
+      <div class="messages-wrap" style:--diag-base={app.intentsEnabled ? '6.1rem' : '3.6rem'}>
         <!--
           ontouchmove: not a user-facing interaction - the handler is a
           scroll-state sampler that re-runs onMessagesScroll during a
@@ -7558,27 +7566,32 @@
             </svg>
           </button>
         {/if}
-        <!-- Diagnostic pills (intuition brain, samskara mood) stack
-             above the scroll-to-bottom arrow in a vertical column
-             pinned to the bottom-right of the messages pane. They sit
-             inside .messages-wrap (which is position:relative) so they
-             share a coordinate system with .scroll-to-bottom; that
-             keeps the column aligned regardless of composer height.
-             Mounting them here, rather than as siblings of the shell
-             at the bottom of this file, is what couples the alignment
-             to the scroll arrow. Both pills suppress themselves when
-             their backing data isn't present (no cached intuition
-             payload / no samskara reading), so the column collapses
+        <!-- Diagnostic pills stack above the scroll-to-bottom arrow in a
+             vertical column pinned to the bottom-right of the messages
+             pane, in this top-to-bottom order: recall, intuition, bias,
+             samskara mood, intents. They sit inside .messages-wrap (which
+             is position:relative) so they share a coordinate system with
+             .scroll-to-bottom; that keeps the column aligned regardless
+             of composer height. Mounting them here, rather than as
+             siblings of the shell at the bottom of this file, is what
+             couples the alignment to the scroll arrow. DOM order matches
+             the visual order so keyboard tab order reads top-to-bottom;
+             the actual vertical placement is driven by each pill's CSS
+             `bottom`, not this order. Each pill suppresses itself when
+             its backing data isn't present (no cached intuition / context-
+             recall payload, no samskara reading), so the column collapses
              gracefully on cold threads. -->
+        <RecallPill payload={currentContextRecallPayload} />
+        <IntuitionPill payload={currentIntuitionPayload} />
+        <BiasPill />
         {#if SamskaraToastsComp}
           <SamskaraToastsComp />
         {/if}
-        <IntuitionPill payload={currentIntuitionPayload} />
-        <BiasPill />
-        <RecallPill payload={currentContextRecallPayload} />
-        <!-- Intents inspector pill, only when the user opted in. Tops
-             the column (its CSS bottom sits above the recall bulb); the
-             off-by-default majority never see it. -->
+        <!-- Intents inspector pill, only when the user opted in. Takes
+             the bottom-most slot directly above the scroll arrow; the
+             off-by-default majority never see it and the always-on pills
+             drop one slot to stay flush with the arrow (see --diag-base
+             on .messages-wrap). -->
         {#if app.intentsEnabled}
           <IntentsPill />
         {/if}
@@ -7784,9 +7797,11 @@
                 </svg>
               </button>
 
-              <!-- Drop-up panel with the three diagnostic buttons.
-                   Hidden when the wharf is closed (CSS gates on
-                   .wharf-open); rendered as a vertical column
+              <!-- Drop-up panel with the diagnostic buttons, top-to-
+                   bottom: recall, intuition, bias, samskara mood, intents
+                   (intents only when opted in). Mirrors the desktop pill
+                   column's order. Hidden when the wharf is closed (CSS
+                   gates on .wharf-open); rendered as a vertical column
                    anchored above the trigger via the .composer-diag-
                    anchor positioning context. Buttons close the wharf
                    on click via the shared closeMenus helper. -->
@@ -7795,73 +7810,6 @@
                 class="composer-diag-wharf"
                 class:wharf-open={composerDiagWharfOpen}
               >
-                <button
-                  type="button"
-                  class="diag-tile"
-                  disabled={currentIntuitionPayload === null}
-                  title={currentIntuitionPayload !== null
-                    ? 'Intuition - perception, drives, synthesis'
-                    : 'Intuition - no data for this conversation yet'}
-                  aria-label={currentIntuitionPayload !== null
-                    ? 'Open intuition diagnostics'
-                    : 'Intuition diagnostics (no data yet)'}
-                  onclick={() => {
-                    closeMenus();
-                    if (currentIntuitionPayload !== null) {
-                      navigate({ modal: 'intuition' });
-                    }
-                  }}
-                >
-                  <span class="emoji" aria-hidden="true">&#x1F9E0;</span>
-                </button>
-                <button
-                  type="button"
-                  class="diag-tile"
-                  title={moodState.current
-                    ? `feelin' ${valenceToMoodLabel(moodState.current.valence, moodState.current.confidence)} - open this conversation's mood`
-                    : "Open this conversation's mood"}
-                  aria-label="Open conversation mood"
-                  onclick={() => {
-                    // The mood is per-conversation, so it opens a modal -
-                    // not the corpus-global Samskara tab. (Global corpus +
-                    // health live on the tab; per-round triggered
-                    // predictions live in the inline cohort dropdown.)
-                    closeMenus();
-                    navigate({ modal: 'samskara-mood' });
-                  }}
-                >
-                  <span class="emoji" aria-hidden="true">
-                    {moodState.current
-                      ? valenceToEmoji(moodState.current.valence, moodState.current.confidence)
-                      : '\u{1F4A4}'}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  class="diag-tile"
-                  title="Bias profile - patterns observed across past conversations"
-                  aria-label="Open bias profile diagnostics"
-                  onclick={() => {
-                    closeMenus();
-                    navigate({ modal: 'bias-profile' });
-                  }}
-                >
-                  <span class="emoji" aria-hidden="true">&#x1F4C8;</span>
-                </button>
-                {#if app.intentsEnabled}
-                  <button
-                    type="button"
-                    class="diag-tile"
-                    title="Working intentions - what Nak is working toward with you"
-                    aria-label="Open working intentions inspector"
-                    onclick={() => {
-                      closeMenus();
-                      navigate({ modal: 'intents' });
-                    }}
-                  >
-                    <span class="emoji" aria-hidden="true">&#x1F331;</span>
-                  </button>
-                {/if}
                 <button
                   type="button"
                   class="diag-tile"
@@ -7887,6 +7835,73 @@
                 >
                   <span class="emoji" aria-hidden="true">&#x1F4A1;</span>
                 </button>
+                <button
+                  type="button"
+                  class="diag-tile"
+                  disabled={currentIntuitionPayload === null}
+                  title={currentIntuitionPayload !== null
+                    ? 'Intuition - perception, drives, synthesis'
+                    : 'Intuition - no data for this conversation yet'}
+                  aria-label={currentIntuitionPayload !== null
+                    ? 'Open intuition diagnostics'
+                    : 'Intuition diagnostics (no data yet)'}
+                  onclick={() => {
+                    closeMenus();
+                    if (currentIntuitionPayload !== null) {
+                      navigate({ modal: 'intuition' });
+                    }
+                  }}
+                >
+                  <span class="emoji" aria-hidden="true">&#x1F9E0;</span>
+                </button>
+                <button
+                  type="button"
+                  class="diag-tile"
+                  title="Bias profile - patterns observed across past conversations"
+                  aria-label="Open bias profile diagnostics"
+                  onclick={() => {
+                    closeMenus();
+                    navigate({ modal: 'bias-profile' });
+                  }}
+                >
+                  <span class="emoji" aria-hidden="true">&#x1F4C8;</span>
+                </button>
+                <button
+                  type="button"
+                  class="diag-tile"
+                  title={moodState.current
+                    ? `feelin' ${valenceToMoodLabel(moodState.current.valence, moodState.current.confidence)} - open this conversation's mood`
+                    : "Open this conversation's mood"}
+                  aria-label="Open conversation mood"
+                  onclick={() => {
+                    // The mood is per-conversation, so it opens a modal -
+                    // not the corpus-global Samskara tab. (Global corpus +
+                    // health live on the tab; per-round triggered
+                    // predictions live in the inline cohort dropdown.)
+                    closeMenus();
+                    navigate({ modal: 'samskara-mood' });
+                  }}
+                >
+                  <span class="emoji" aria-hidden="true">
+                    {moodState.current
+                      ? valenceToEmoji(moodState.current.valence, moodState.current.confidence)
+                      : '\u{1F4A4}'}
+                  </span>
+                </button>
+                {#if app.intentsEnabled}
+                  <button
+                    type="button"
+                    class="diag-tile"
+                    title="Working intentions - what Nak is working toward with you"
+                    aria-label="Open working intentions inspector"
+                    onclick={() => {
+                      closeMenus();
+                      navigate({ modal: 'intents' });
+                    }}
+                  >
+                    <span class="emoji" aria-hidden="true">&#x1F331;</span>
+                  </button>
+                {/if}
               </div>
             </div>
 
