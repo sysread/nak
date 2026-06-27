@@ -43,15 +43,19 @@
    * and selects fire on `change`, checkboxes on `change`, free-form
    * text inputs on the input's `change` event (blur or Enter, only
    * when the value differs) so a half-typed value doesn't fire a
-   * roundtrip per keystroke. The Keys pane is a deliberate exception -
-   * it re-activates services with new endpoints, so a deliberate Save
-   * gesture is the right shape for "I really mean to change this."
-   * The Timezone field inside About you is also deliberate:
-   * IANA-zone validation needs a commit gesture so a half-typed zone
-   * (e.g. "America/") doesn't keep erroring on every keystroke.
-   * Those three are the only Save buttons in the modal; if you find
-   * yourself adding another one, the convention says you probably
-   * want auto-apply with rollback instead.
+   * roundtrip per keystroke. The Keys and Security panes are the
+   * deliberate exceptions - Keys re-activates services against new
+   * endpoints and Security rotates the Supabase login, so a typo
+   * auto-applied on either could lock the user out; both keep an
+   * explicit Save gesture for "I really mean to change this." Those
+   * two are the only Save buttons in the modal; if you find yourself
+   * adding another one, the convention says you probably want
+   * auto-apply with rollback instead. (The Timezone field in About
+   * you autosaves on `change` like the other text inputs. It is the
+   * one text field seeded with a value that is NOT persisted - the
+   * browser-detected zone - so it also renders an amber "no timezone
+   * set - using UTC" notice until a zone is actually committed, so the
+   * suggestion is never mistaken for a saved value.)
    */
   import { onDestroy } from 'svelte';
   import { saveConfig, toExportedConfig } from '$lib/config';
@@ -249,20 +253,17 @@
   // too to bucket day-eligible threads. Persisted on
   // `profiles.settings.displayTimezone`.
   let displayTimezone = $state<string>(app.displayTimezone || detectTimezone());
-  // Save-button + saved-vs-suggested state for the timezone field. The
-  // SAVED baseline is the persisted profile value: app.displayTimezone when
-  // it was actually written (displayTimezonePersisted), else "" - because
-  // until the first save app.displayTimezone is only the browser-detected
-  // default seeded on activate(). So the field is "dirty" (Save actionable,
-  // blue) whenever the input diverges from the saved baseline, which
-  // INCLUDES the never-saved case where the shown value is only a hint. The
-  // button also disables while a save is in flight.
-  let tzSaving = $state(false);
+  // Saved-vs-suggested status for the timezone field. The field autosaves
+  // on `change` like Name/Location, but differs in one way: it is seeded
+  // with a browser-detected guess (detectTimezone()) that is NOT persisted,
+  // so the box looks filled in even when nothing is stored and the server
+  // day-gates fall back to UTC. tzSavedValue is the actual persisted value
+  // ("" until the first write); app.displayTimezonePersisted distinguishes
+  // "stored" from "merely suggested" so the status line can flag the
+  // UTC-default state until the user commits a zone.
   const tzSavedValue = $derived(
     app.displayTimezonePersisted ? app.displayTimezone : ''
   );
-  const tzDirty = $derived(displayTimezone.trim() !== tzSavedValue.trim());
-  const tzCanSave = $derived(tzDirty && !tzSaving);
 
   // Effective image-generation model: the user's override, or the
   // built-in default when unset. Drives the picker's selected value and
@@ -1301,6 +1302,10 @@
     }
   }
 
+  // Fires on the input's `change` event (blur or Enter), same hands-off
+  // shape as Name/Location. Validating on `change` rather than `input` is
+  // deliberate: a half-typed zone like "America/" should surface one error
+  // when the user commits, not on every keystroke.
   async function onChangeDisplayTimezone(next: string): Promise<void> {
     modelError = null;
     modelInfo = null;
@@ -1313,7 +1318,6 @@
     }
     const prev = displayTimezone;
     displayTimezone = normalized;
-    tzSaving = true;
     try {
       await persistDisplayTimezone(normalized);
       // app.displayTimezonePersisted flips true on success, so the
@@ -1323,8 +1327,6 @@
     } catch (err) {
       displayTimezone = prev;
       modelError = err instanceof Error ? err.message : String(err);
-    } finally {
-      tzSaving = false;
     }
   }
 
@@ -1532,9 +1534,9 @@
         <p class="subtle" style="font-size:0.85rem">
           IANA timezone the model uses when reasoning about "what
           time is it for you" in the system prompt. Browser detected:
-          <code>{detectTimezone()}</code>. Save commits the value
-          (zones go through validation, so a half-typed name doesn't
-          fire an error on every keystroke).
+          <code>{detectTimezone()}</code>. Saves when you leave the
+          field or press Enter (zones go through validation, so a
+          half-typed name doesn't fire an error on every keystroke).
         </p>
         <div class="form-row">
           <label for="display-timezone">Timezone</label>
@@ -1546,6 +1548,8 @@
             list="display-timezone-options"
             spellcheck="false"
             autocomplete="off"
+            onchange={(e) =>
+              onChangeDisplayTimezone((e.currentTarget as HTMLInputElement).value)}
           />
           <datalist id="display-timezone-options">
             <option value="UTC"></option>
@@ -1566,28 +1570,20 @@
             <option value="Australia/Sydney"></option>
             <option value="Pacific/Auckland"></option>
           </datalist>
-          <button
-            type="button"
-            class="primary"
-            disabled={!tzCanSave}
-            onclick={() => onChangeDisplayTimezone(displayTimezone)}
-          >{tzSaving ? 'Saving…' : 'Save'}</button>
         </div>
-        <!-- Saved-vs-suggested status. Until the first save the field shows
-             the browser-detected default that is NOT in the profile - the
-             server day-gates fall back to UTC for it - so say so loudly and
-             keep Save actionable. Once persisted, show the saved value (and,
-             when the input diverges again, that the change is unsaved). -->
+        <!-- Unset-vs-saved status. The field is seeded with the browser's
+             detected zone, which is NOT persisted - the server day-gates
+             fall back to UTC for it - so when nothing is stored we flag that
+             in the warn color (amber, not the danger red: this is a heads-up
+             that a default is in effect, not an error). Once a zone is
+             committed the line drops to a muted confirmation. -->
         <p class="tz-status" aria-live="polite">
           {#if !app.displayTimezonePersisted}
             <span class="tz-status-hint">
-              ⚠ Suggested from your browser - <strong>not saved</strong>.
-              Until you Save, the wiki and memory sweeps treat your timezone
-              as UTC. Click Save to store it.
-            </span>
-          {:else if tzDirty}
-            <span class="tz-status-hint">
-              Unsaved change. Saved value: <code>{tzSavedValue}</code>.
+              <span class="tz-status-flag" aria-hidden="true">!</span>
+              <em>No timezone set - using <strong>UTC</strong> as the
+              default. Type or pick your zone above; it saves as soon as you
+              leave the field.</em>
             </span>
           {:else}
             <span class="tz-status-saved">Saved as <code>{tzSavedValue}</code>.</span>
