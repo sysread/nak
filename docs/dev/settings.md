@@ -434,14 +434,17 @@ every update) so it's covered here rather than in its own file.
   - **Keys** and **Security** panes need an explicit Save - the
     Keys pane re-activates the in-memory services against a new
     endpoint and the Security pane rotates the Supabase login, so a
-    typo auto-applied on either could lock the user out.
-  - **Journal -> Day boundary** has a Save button because the
-    IANA-zone validation in `normalizeTimezone()` needs a commit
-    gesture. Auto-applying on every keystroke would surface an
-    error mid-typing for partially-formed zones like
-    `America/`. That's the only "validation gate forces a button"
-    case in the modal; copy the rationale into a comment if a
-    new field needs the same treatment.
+    typo auto-applied on either could lock the user out. These are
+    the only two Save buttons in the modal.
+  - **AI -> About you -> Timezone** autosaves on `change` like the
+    other free-form text inputs, but validates the IANA zone in
+    `normalizeTimezone()` on commit (blur/Enter), not on `input` -
+    so a partially-formed zone like `America/` surfaces one error
+    when committed rather than mid-typing. It is also the one text
+    field seeded with a value it has not persisted (the
+    browser-detected zone), so it renders an amber "no timezone set
+    - using UTC" notice until a zone is committed; the suggestion in
+    the box is never mistaken for a stored value.
 
 ## Gotchas
 

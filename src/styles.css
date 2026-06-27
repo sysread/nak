@@ -753,16 +753,27 @@ label {
   color: var(--ok);
 }
 
-/* Saved-vs-suggested status under the AI -> About you Timezone field.
-   The hint variant (value shown but not persisted, or an unsaved edit)
-   uses the warn color so a merely-suggested value reads as clearly
-   not-yet-committed; the saved variant is muted. */
+/* Unset-vs-saved status under the AI -> About you Timezone field.
+   The hint variant (nothing persisted yet, only the browser-detected
+   suggestion in the box) uses the warn color - amber, deliberately not
+   the danger red - so the UTC-default state reads as a heads-up, not an
+   error. The leading flag is a styled "!" rather than an emoji so it
+   inherits that amber color instead of the platform emoji palette. The
+   saved variant is muted. */
 .tz-status {
   margin: 0.4rem 0 0 0;
   font-size: 0.85rem;
 }
 .tz-status-hint {
   color: var(--warn);
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+.tz-status-flag {
+  font-weight: 800;
+  font-size: 1.1em;
+  line-height: 1;
 }
 .tz-status-saved {
   color: var(--muted);
