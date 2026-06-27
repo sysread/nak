@@ -75,6 +75,20 @@ landing tab move together.
   staleness/error-guard shape as the Usage pane. See
   [Models & tiers in Chat](./chat.md) for the resolution cascade and the
   `TierModelConfig` snapshot rationale.
+  The catalog feeding the combobox is first run through
+  `filterCatalogByCaps(catalog, app.priceCaps)` (`src/lib/models/price-caps.ts`),
+  which drops models whose live Venice price exceeds the project-global
+  ceilings on the `app_config` row (`max_input_usd_per_m` /
+  `max_output_usd_per_m`, USD per 1M tokens, `0` = no limit). The caps are
+  hydrated into `app.priceCaps` by Chat's `refreshSettings` (a separate
+  `getPriceCaps()` read, since the caps live on `app_config`, not
+  `profiles.settings`), and a `priceCapHiddenNote` line reports how many
+  models the cap hid. This is the UX half of the cap; the venice edge
+  function enforces the same ceilings server-side (see
+  `supabase/functions/_shared/price-cap.ts`), so the filter is a
+  can't-pick-it convenience, not the boundary. The caps are written only by
+  `mise run setup` - there is no in-app editor.
+
   The **Image generation** subsection points the `generate_image` tool at
   a Venice image model via `ImageModelSelect` - a custom button + popover
   listbox (no fuzzy search, since image models are few) whose rows left-
@@ -86,9 +100,11 @@ landing tab move together.
   `profiles.settings.imageModel` at generation time and needs nothing but
   the id. Options come from the live Venice **image** catalog
   (`image-models-catalog.svelte.ts`, the `?type=image` twin of the text
-  catalog). Picking the built-in default (`VENICE_DEFAULT_IMAGE_MODEL`)
-  clears the override so "default" reads as absence; any other pick writes
-  the id via `persistImageModel`. See
+  catalog), filtered by the project-global per-image price cap
+  (`app_config.max_image_usd`) via `filterImageCatalogByCap`. Picking the
+  built-in default (`VENICE_DEFAULT_IMAGE_MODEL`) clears the override so
+  "default" reads as absence; any other pick writes the id via
+  `persistImageModel`. See
   [generate_image](./tools.md) for the server-side resolution + the
   one-dimension-table size assumption.
 - **Custom prompts** — the named system-prompt library
@@ -216,6 +232,12 @@ every update) so it's covered here rather than in its own file.
 - `src/lib/models/index.ts` — `TierModelConfig` / `TierModels`,
   `coerceTierModels`, and `effectiveTierSpec` (folds a user override over
   the built-in TierSpec).
+- `src/lib/models/price-caps.ts` — the browser half of the project-global
+  model price caps: `coercePriceCaps` (reads the `app_config` cap columns,
+  `0`/null/negative -> no cap), `isModelOverCap`, and `filterCatalogByCaps`
+  (drops over-cap models from the picker). Mirrors the edge enforcement in
+  `supabase/functions/_shared/price-cap.ts` across the Deno-island boundary;
+  unit-tested in `tests/price-caps.test.ts`.
 - `src/lib/supabase.ts` — `getSettings`, `updateSettings`,
   `updateSystemPrompts`. `updateSettings` validates the patch
   then writes atomically via the `merge_profile_settings` RPC

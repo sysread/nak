@@ -46,6 +46,7 @@
     app,
     applyServerSettings,
     resetForSignOut,
+    setPriceCaps,
   } from '$lib/state.svelte';
   import {
     notifications,
@@ -2018,6 +2019,11 @@
     try {
       const s = await app.supabase.getSettings();
       applyServerSettings(s);
+      // Project-global price caps live on app_config, not profiles.settings,
+      // so they come back from a separate read. getPriceCaps swallows its
+      // own errors (returns NO_PRICE_CAPS), so a caps-read hiccup can't
+      // break the settings refresh.
+      setPriceCaps(await app.supabase.getPriceCaps());
       // Only (re)seed the active set if the user hasn't already
       // started toggling prompts on the current thread. Avoids
       // clobbering their per-thread selection when settings arrive

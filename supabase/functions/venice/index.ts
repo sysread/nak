@@ -48,6 +48,11 @@ import {
   type BackfillDeps,
 } from '../_shared/backfill.ts';
 import { streamChannelName } from '../_shared/venice-stream.ts';
+import {
+  assertModelWithinCap,
+  coercePriceCaps,
+  type ModelPriceCaps,
+} from '../_shared/price-cap.ts';
 import { getStreamingResponse } from './getStreamingResponse.ts';
 import { retryWikiThread, runWikiSweepTick } from './agents/wiki.ts';
 import { runWikiManualUpdate } from './agents/wiki_manual.ts';
@@ -126,6 +131,21 @@ async function readVeniceKey(admin: SupabaseClient): Promise<string | null> {
   if (error || !data) return null;
   const key = (data as { venice_api_key?: string | null }).venice_api_key;
   return typeof key === 'string' && key.length > 0 ? key : null;
+}
+
+/**
+ * Read the project-global model price caps from app_config (service role;
+ * same access model as readVeniceKey). An unseeded row or absent columns
+ * coerce to all-null caps, which the price-cap check treats as "no
+ * ceiling" and short-circuits before any catalog fetch.
+ */
+async function readPriceCaps(admin: SupabaseClient): Promise<ModelPriceCaps> {
+  const { data } = await admin
+    .from('app_config')
+    .select('max_input_usd_per_m, max_output_usd_per_m')
+    .eq('id', true)
+    .maybeSingle();
+  return coercePriceCaps(data ?? {});
 }
 
 // Handler preambles. Every route needs the admin client, and the
@@ -1134,6 +1154,26 @@ async function handleStreamFresh(
   const apiKey = await readVeniceKey(ctx.admin);
   if (!apiKey) {
     return json({ error: 'no Venice key configured (app_config unseeded)' }, 503);
+  }
+
+  // Enforce the project-global model price cap (from app_config, seeded by
+  // `mise run setup`) before opening the stream, so an over-cap model hands
+  // the browser a clean 403 envelope rather than failing mid-stream. Inert
+  // when no cap is configured; fails open on a catalog hiccup. Only
+  // user-triggered chat is gated here - the developer-pinned agent fleet
+  // and the intuition /complete path are not user model choices and stay
+  // uncapped.
+  try {
+    await assertModelWithinCap({
+      model: (body.body as Record<string, unknown>).model,
+      apiKey,
+      caps: await readPriceCaps(ctx.admin),
+    });
+  } catch (err) {
+    if (err instanceof VeniceError) {
+      return json({ error: err.message, kind: err.kind }, err.status ?? 403);
+    }
+    throw err;
   }
 
   // Kick off the orchestrator. It owns its own AbortController (the

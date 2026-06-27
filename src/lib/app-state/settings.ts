@@ -18,6 +18,7 @@
 import { app } from './root.svelte';
 import type { SystemPrompt, UserSettings } from '../supabase';
 import type { ModelTier, ReasoningEffort, TierModels, Verbosity } from '../models';
+import type { ModelPriceCaps } from '../models/price-caps';
 import type { LogLevel } from '../logger.svelte';
 import { applyTheme, cacheTheme, type Accent, type ColorMode } from '../theme';
 
@@ -41,6 +42,18 @@ function setTierModels(tierModels: TierModels): void {
 // effective-selection fallback is a single `?? default`.
 function setImageModel(modelId: string | undefined): void {
   app.imageModel = modelId && modelId.length > 0 ? modelId : undefined;
+}
+
+/**
+ * Apply the project-global price caps in memory. Exported (unlike the
+ * other `set*` helpers) because there is no `persist*` counterpart: the
+ * browser never writes the caps - they live on app_config and are written
+ * only by `mise run setup` - so Chat's refreshSettings calls this directly
+ * with whatever `getPriceCaps()` returned, rather than routing through a
+ * persist wrapper.
+ */
+export function setPriceCaps(caps: ModelPriceCaps): void {
+  app.priceCaps = caps;
 }
 
 function setDefaultReasoningEffort(effort: ReasoningEffort): void {

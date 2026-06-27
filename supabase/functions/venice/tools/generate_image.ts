@@ -14,7 +14,8 @@
 // analyze_image on a later turn.
 
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
-import { readVeniceKey } from './_venice_key.ts';
+import { readPriceCaps, readVeniceKey } from './_venice_key.ts';
+import { assertImageModelWithinCap } from '../../_shared/price-cap.ts';
 import { veniceGenerateImage } from '../../_shared/venice.ts';
 import { GENERATED_IMAGE_RESULT_KEY } from './_generated_image.ts';
 
@@ -116,6 +117,18 @@ export const generateImage: ToolDef = {
     }
 
     const model = await resolveImageModel(ctx);
+
+    // Enforce the project-global per-image price cap (app_config.max_image_usd,
+    // seeded by `mise run setup`). The Settings picker already hides over-cap
+    // models, so this is the backstop for a stale selection or an over-cap
+    // built-in default; it throws a 403 VeniceError the tool surfaces as an
+    // error result. Inert when no image cap is set; fails open on a catalog
+    // hiccup. See assertImageModelWithinCap.
+    await assertImageModelWithinCap({
+      model,
+      apiKey,
+      caps: await readPriceCaps(ctx.adminClient),
+    });
 
     const result = await veniceGenerateImage({
       apiKey,

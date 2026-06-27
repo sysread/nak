@@ -106,6 +106,7 @@
     tierRowView,
     tierConfigFromCatalog,
     tierConfigFromSpec,
+    priceCapHiddenNote,
   } from '$lib/ui/model-picker';
   import { buildImageModelOptions } from '$lib/ui/image-model-picker';
   import {
@@ -118,6 +119,7 @@
     shouldAutoRefreshImageCatalog,
     refreshImageCatalog,
   } from '$lib/image-models-catalog.svelte';
+  import { filterCatalogByCaps, filterImageCatalogByCap } from '$lib/models/price-caps';
   import type { SystemPrompt } from '$lib/supabase';
   import * as prompts from '$lib/ui/prompts';
   import {
@@ -628,6 +630,25 @@
   let customData = $state<UsageModelBucket[] | null>(null);
   let customLoading = $state(false);
   let customError = $state<string | null>(null);
+
+  // Catalog with over-cap models removed, so the tier pickers only offer
+  // models the venice function would actually run (the server enforces the
+  // same caps; this is the UX half). A no-op when no cap is configured.
+  const visibleModels = $derived(filterCatalogByCaps(catalog.data ?? [], app.priceCaps));
+  // The explanatory note when the cap hides live catalog models (null when
+  // nothing is hidden).
+  const hiddenModelNote = $derived(
+    priceCapHiddenNote((catalog.data?.length ?? 0) - visibleModels.length)
+  );
+
+  // Same treatment for the image-generation picker, against the per-image
+  // cap (app.priceCaps.maxImageUsd).
+  const visibleImageModels = $derived(
+    filterImageCatalogByCap(imageCatalog.data ?? [], app.priceCaps)
+  );
+  const hiddenImageModelNote = $derived(
+    priceCapHiddenNote((imageCatalog.data?.length ?? 0) - visibleImageModels.length)
+  );
 
   const usageData = $derived(
     usageSource === 'store' ? usage.data : customData
@@ -1600,7 +1621,7 @@
         </p>
         <div class="tier-config">
           {#each TIER_ORDER as tier (tier)}
-            {@const row = tierRowView(tier, app.tierModels, catalog.data ?? [])}
+            {@const row = tierRowView(tier, app.tierModels, visibleModels)}
             <div class="tier-row" class:tier-row-default={defaultModel === tier}>
               <div class="tier-row-head">
                 <label class="tier-default-radio">
@@ -1680,6 +1701,9 @@
               >Retry</button>
             </p>
           {/if}
+          {#if hiddenModelNote}
+            <p class="subtle">{hiddenModelNote}</p>
+          {/if}
         </div>
 
         <h3 class="pane-section">Image generation</h3>
@@ -1692,7 +1716,7 @@
         </p>
         <div class="form-row" style="display:flex;gap:0.5rem;align-items:center">
           <ImageModelSelect
-            options={buildImageModelOptions(imageCatalog.data ?? [], effectiveImageModel)}
+            options={buildImageModelOptions(visibleImageModels, effectiveImageModel)}
             value={effectiveImageModel}
             disabled={imageCatalog.data === null}
             ariaLabel="Image generation model"
@@ -1711,6 +1735,9 @@
               onclick={() => app.supabase && refreshImageCatalog(app.supabase)}
             >Retry</button>
           </p>
+        {/if}
+        {#if hiddenImageModelNote}
+          <p class="subtle">{hiddenImageModelNote}</p>
         {/if}
 
         <h3 class="pane-section">Default reasoning effort</h3>

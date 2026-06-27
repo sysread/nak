@@ -7,6 +7,7 @@ import {
   formatContextWindow,
   formatPricing,
   fuzzyMatch,
+  priceCapHiddenNote,
   tierConfigFromCatalog,
   tierRowView,
 } from '../src/lib/ui/model-picker';
@@ -207,6 +208,17 @@ describe('tierConfigFromCatalog', () => {
       supportsResponseFormat: true,
       label: 'GLM 5.1',
     });
+  });
+});
+
+describe('priceCapHiddenNote', () => {
+  it('returns null when nothing is hidden', () => {
+    expect(priceCapHiddenNote(0)).toBeNull();
+    expect(priceCapHiddenNote(-1)).toBeNull();
+  });
+  it('pluralizes the count', () => {
+    expect(priceCapHiddenNote(1)).toBe("1 model is hidden by this instance's price cap.");
+    expect(priceCapHiddenNote(3)).toBe("3 models are hidden by this instance's price cap.");
   });
 });
 
