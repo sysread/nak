@@ -173,6 +173,18 @@ export function tierConfigFromSpec(
   };
 }
 
+/**
+ * The note shown under the tier pickers when the project price cap hides
+ * some live-catalog models, or null when nothing is hidden (the caller
+ * renders nothing). Count-to-noun pluralization kept out of the template
+ * per the frontend-organization split.
+ */
+export function priceCapHiddenNote(hiddenCount: number): string | null {
+  if (hiddenCount <= 0) return null;
+  const noun = hiddenCount === 1 ? 'model is' : 'models are';
+  return `${hiddenCount} ${noun} hidden by this instance's price cap.`;
+}
+
 /** Everything one tier's row in the Settings picker needs to render. */
 export interface TierRowView {
   /** Effective spec - built-in default folded with any user override. */

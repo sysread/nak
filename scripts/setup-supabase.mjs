@@ -62,23 +62,27 @@ const CONFIG_FIELDS = [
     hint:
       'Use a Venice ADMIN API key: the in-app Usage (billing) view calls Venice billing, which 401s on a standard key. A standard key still works for chat and embeddings. Keys: https://venice.ai/settings/api',
     secret: true,
+    // The only required field - its unset state is what triggers the
+    // first-time guided walk (the price caps below ship with defaults, so
+    // they are never "unset").
+    required: true,
   },
   {
     column: 'max_input_usd_per_m',
     label: 'Max input price (USD per 1M tokens)',
     description:
-      'project-wide ceiling on a chat model\'s input price; blank = no cap',
+      'project-wide cap on a chat model\'s input price (default 3.00; 0 = no limit)',
     hint:
-      'Optional. The edge function blocks any user-chosen chat model whose Venice input price exceeds this, in USD per 1,000,000 tokens (e.g. 2.5). Leave blank for no input-side cap.',
+      'Blocks any user-chosen chat model whose Venice input price exceeds this, in USD per 1,000,000 tokens (e.g. 3.00). Enter 0 for no input-side cap. Blank keeps the current value.',
     numeric: true,
   },
   {
     column: 'max_output_usd_per_m',
     label: 'Max output price (USD per 1M tokens)',
     description:
-      'project-wide ceiling on a chat model\'s output price; blank = no cap',
+      'project-wide cap on a chat model\'s output price (default 8.50; 0 = no limit)',
     hint:
-      'Optional. Same as the input cap but for output tokens, in USD per 1,000,000 tokens (e.g. 10). Leave blank for no output-side cap.',
+      'Same as the input cap but for output tokens, in USD per 1,000,000 tokens (e.g. 8.50). Enter 0 for no output-side cap. Blank keeps the current value.',
     numeric: true,
   },
 ];
@@ -147,8 +151,12 @@ async function manageConfig(ref) {
     return;
   }
 
-  if (!CONFIG_FIELDS.some((f) => current[f.column])) {
-    info('No application config set yet - walking through each value.');
+  // First-time walk is gated on the required field(s), not on "any field
+  // set": the price caps carry schema defaults, so they always read as set
+  // and would otherwise suppress the guided first run for the Venice key.
+  const firstTime = CONFIG_FIELDS.some((f) => f.required && !current[f.column]);
+  if (firstTime) {
+    info('Required application config is not set yet - walking through each value.');
     for (const field of CONFIG_FIELDS) {
       const value = await promptConfigField(field);
       if (value !== null) {

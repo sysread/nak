@@ -46,18 +46,19 @@ function asRecord(v: unknown): Record<string, unknown> | null {
   return typeof v === 'object' && v !== null ? (v as Record<string, unknown>) : null;
 }
 
-// A cap is only meaningful as a finite, non-negative number; anything else
-// (a typo, a negative) reads as "no cap" so a malformed value degrades to
-// inert rather than blocking everything. Accepts a numeric STRING as well
-// as a number: PostgREST serializes a `numeric` column as a JSON string to
-// preserve arbitrary precision, so a cap set in app_config arrives here as
-// e.g. "2.5". An empty / whitespace string is "unset", not 0.
+// Coerce a stored cap to "an active ceiling" (a positive number) or null
+// ("no cap on this side"). 0 is the schema's no-limit sentinel, so it maps
+// to null and flows through the rest of the module as an uncapped
+// dimension - the same shape a malformed or negative value degrades to.
+// Accepts a numeric STRING as well as a number: PostgREST serializes a
+// `numeric` column as a JSON string to preserve arbitrary precision, so a
+// cap set in app_config arrives here as e.g. "3.00" or "0".
 function capValue(v: unknown): number | null {
   let n: number;
   if (typeof v === 'number') n = v;
   else if (typeof v === 'string' && v.trim() !== '') n = Number(v);
   else return null;
-  return Number.isFinite(n) && n >= 0 ? n : null;
+  return Number.isFinite(n) && n > 0 ? n : null;
 }
 
 /**

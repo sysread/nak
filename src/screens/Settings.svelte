@@ -106,6 +106,7 @@
     tierRowView,
     tierConfigFromCatalog,
     tierConfigFromSpec,
+    priceCapHiddenNote,
   } from '$lib/ui/model-picker';
   import { buildImageModelOptions } from '$lib/ui/image-model-picker';
   import {
@@ -118,6 +119,7 @@
     shouldAutoRefreshImageCatalog,
     refreshImageCatalog,
   } from '$lib/image-models-catalog.svelte';
+  import { filterCatalogByCaps } from '$lib/models/price-caps';
   import type { SystemPrompt } from '$lib/supabase';
   import * as prompts from '$lib/ui/prompts';
   import {
@@ -628,6 +630,16 @@
   let customData = $state<UsageModelBucket[] | null>(null);
   let customLoading = $state(false);
   let customError = $state<string | null>(null);
+
+  // Catalog with over-cap models removed, so the tier pickers only offer
+  // models the venice function would actually run (the server enforces the
+  // same caps; this is the UX half). A no-op when no cap is configured.
+  const visibleModels = $derived(filterCatalogByCaps(catalog.data ?? [], app.priceCaps));
+  // The explanatory note when the cap hides live catalog models (null when
+  // nothing is hidden).
+  const hiddenModelNote = $derived(
+    priceCapHiddenNote((catalog.data?.length ?? 0) - visibleModels.length)
+  );
 
   const usageData = $derived(
     usageSource === 'store' ? usage.data : customData
@@ -1600,7 +1612,7 @@
         </p>
         <div class="tier-config">
           {#each TIER_ORDER as tier (tier)}
-            {@const row = tierRowView(tier, app.tierModels, catalog.data ?? [])}
+            {@const row = tierRowView(tier, app.tierModels, visibleModels)}
             <div class="tier-row" class:tier-row-default={defaultModel === tier}>
               <div class="tier-row-head">
                 <label class="tier-default-radio">
@@ -1679,6 +1691,9 @@
                 onclick={() => app.supabase && refreshCatalog(app.supabase)}
               >Retry</button>
             </p>
+          {/if}
+          {#if hiddenModelNote}
+            <p class="subtle">{hiddenModelNote}</p>
           {/if}
         </div>
 

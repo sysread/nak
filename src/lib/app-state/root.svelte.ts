@@ -30,6 +30,7 @@
 import type { AppConfig } from '../config';
 import type { SupabaseService, SystemPrompt } from '../supabase';
 import type { VeniceClient } from '../venice';
+import { NO_PRICE_CAPS, type ModelPriceCaps } from '../models/price-caps';
 import { detectTimezone } from '../timezone';
 import {
   DEFAULT_REASONING_EFFORT,
@@ -81,6 +82,16 @@ interface AppState {
    * resolution happens server-side at generation time).
    */
   imageModel?: string;
+  /**
+   * Project-global model price caps from the app_config row, hydrated by
+   * Chat's refreshSettings after sign-in (seeded to NO_PRICE_CAPS on
+   * activate()). Read by the Settings model picker to hide over-cap
+   * models; the venice edge function enforces the same caps server-side,
+   * so this is a UX filter, not the boundary. Not part of
+   * profiles.settings - it's project-wide config, the same row that holds
+   * the shared Venice key.
+   */
+  priceCaps: ModelPriceCaps;
   /**
    * User-level default reasoning-effort. Seeded to
    * DEFAULT_REASONING_EFFORT on activate(), then overwritten from
@@ -228,6 +239,7 @@ export const app = $state<AppState>({
   defaultModel: DEFAULT_TIER,
   tierModels: {},
   imageModel: undefined,
+  priceCaps: NO_PRICE_CAPS,
   defaultReasoningEffort: DEFAULT_REASONING_EFFORT,
   defaultVerbosity: DEFAULT_VERBOSITY,
   colorMode: cachedTheme?.mode ?? DEFAULT_MODE,

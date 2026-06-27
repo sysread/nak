@@ -79,7 +79,12 @@ Deno.test('coercePriceCaps reads an app_config row; non-number / negative -> nul
     maxInputUsdPerM: 2,
     maxOutputUsdPerM: 8,
   });
-  // A negative or non-numeric column degrades to "no cap on that side".
+  // 0 is the no-limit sentinel; a negative / non-numeric column also
+  // degrades to "no cap on that side".
+  assertEquals(coercePriceCaps({ max_input_usd_per_m: 0, max_output_usd_per_m: '0.00' }), {
+    maxInputUsdPerM: null,
+    maxOutputUsdPerM: null,
+  });
   assertEquals(coercePriceCaps({ max_input_usd_per_m: -1, max_output_usd_per_m: 'x' }), {
     maxInputUsdPerM: null,
     maxOutputUsdPerM: null,

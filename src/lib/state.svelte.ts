@@ -40,6 +40,7 @@ export {
   persistTheme,
   persistSystemPrompts,
   applyServerSettings,
+  setPriceCaps,
 } from './app-state/settings';
 export {
   activate,

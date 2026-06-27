@@ -27,6 +27,11 @@ import {
 } from './models';
 import { coerceCatalog, type CatalogModel } from './models/catalog';
 import { coerceImageCatalog, type ImageCatalogModel } from './models/image-catalog';
+import {
+  coercePriceCaps,
+  NO_PRICE_CAPS,
+  type ModelPriceCaps,
+} from './models/price-caps';
 import { isAccent, isColorMode } from './theme';
 import {
   isLogLevel,
@@ -567,6 +572,24 @@ export class SupabaseService {
       .maybeSingle();
     if (error) throw new SupabaseError(error.message);
     return coerceSettings((data as { settings?: unknown } | null)?.settings);
+  }
+
+  /**
+   * Read the project-global model price caps from app_config. Selects only
+   * the cap columns - never venice_api_key - so the shared key stays off
+   * the wire to the browser even though RLS would permit reading the whole
+   * row. Returns NO_PRICE_CAPS on any error or an unseeded row so a fetch
+   * failure degrades to "no cap" (the picker shows everything) rather than
+   * throwing - the server is the real enforcement point regardless.
+   */
+  async getPriceCaps(): Promise<ModelPriceCaps> {
+    const { data, error } = await this.client
+      .from('app_config')
+      .select('max_input_usd_per_m, max_output_usd_per_m')
+      .eq('id', true)
+      .maybeSingle();
+    if (error || !data) return NO_PRICE_CAPS;
+    return coercePriceCaps(data);
   }
 
   /**
