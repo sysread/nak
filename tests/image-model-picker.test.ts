@@ -6,7 +6,7 @@ import {
 import {
   buildImageModelOptions,
   formatImagePrice,
-  imageModelLabel,
+  imageModelOption,
 } from '../src/lib/ui/image-model-picker';
 
 // One raw /models?type=image entry in Venice's nested shape.
@@ -87,13 +87,11 @@ describe('coerceImageCatalog', () => {
 describe('formatImagePrice', () => {
   it('renders three decimals per image', () => {
     expect(formatImagePrice(0.01)).toBe('$0.010/image');
-  });
-  it('reads n/a for null pricing', () => {
-    expect(formatImagePrice(null)).toBe('price n/a');
+    expect(formatImagePrice(0.02)).toBe('$0.020/image');
   });
 });
 
-describe('imageModelLabel', () => {
+describe('imageModelOption', () => {
   const base: ImageCatalogModel = {
     id: 'venice-sd35',
     name: 'Venice SD3.5',
@@ -102,17 +100,24 @@ describe('imageModelLabel', () => {
     deprecated: false,
   };
 
-  it('combines name and price', () => {
-    expect(imageModelLabel(base)).toBe('Venice SD3.5 - $0.010/image');
+  it('splits name, price pill, and badges into separate fields', () => {
+    expect(imageModelOption(base)).toEqual({
+      id: 'venice-sd35',
+      name: 'Venice SD3.5',
+      priceLabel: '$0.010/image',
+      badges: [],
+    });
   });
 
-  it('appends beta and retiring badges', () => {
-    expect(imageModelLabel({ ...base, beta: true })).toBe(
-      'Venice SD3.5 - $0.010/image (beta)'
-    );
-    expect(imageModelLabel({ ...base, beta: true, deprecated: true })).toBe(
-      'Venice SD3.5 - $0.010/image (beta, retiring)'
-    );
+  it('collapses the pill (null priceLabel) when pricing is absent', () => {
+    expect(imageModelOption({ ...base, usdPerImage: null }).priceLabel).toBeNull();
+  });
+
+  it('emits beta and retiring badges', () => {
+    expect(imageModelOption({ ...base, beta: true }).badges).toEqual(['beta']);
+    expect(
+      imageModelOption({ ...base, beta: true, deprecated: true }).badges
+    ).toEqual(['beta', 'retiring']);
   });
 });
 
@@ -122,21 +127,26 @@ describe('buildImageModelOptions', () => {
     { id: 'flux-dev', name: 'FLUX Dev', usdPerImage: 0.02, beta: false, deprecated: false },
   ];
 
-  it('maps catalog rows to labelled options', () => {
+  it('maps catalog rows to structured options', () => {
     const opts = buildImageModelOptions(catalog, 'venice-sd35');
     expect(opts).toHaveLength(2);
-    expect(opts.find((o) => o.id === 'flux-dev')?.label).toBe(
-      'FLUX Dev - $0.020/image'
-    );
+    expect(opts.find((o) => o.id === 'flux-dev')).toEqual({
+      id: 'flux-dev',
+      name: 'FLUX Dev',
+      priceLabel: '$0.020/image',
+      badges: [],
+    });
   });
 
   it('prepends a synthetic current option when the id is off-catalog', () => {
     // e.g. a retired pick or the default that the image catalog dropped -
-    // the select must still show the real current value.
+    // the picker must still show the real current value.
     const opts = buildImageModelOptions(catalog, 'some-retired-model');
     expect(opts[0]).toEqual({
       id: 'some-retired-model',
-      label: 'some-retired-model (current)',
+      name: 'some-retired-model',
+      priceLabel: null,
+      badges: ['current'],
     });
     expect(opts).toHaveLength(3);
   });
@@ -148,6 +158,8 @@ describe('buildImageModelOptions', () => {
 
   it('synthesizes a current option against an empty catalog', () => {
     const opts = buildImageModelOptions([], 'venice-sd35');
-    expect(opts).toEqual([{ id: 'venice-sd35', label: 'venice-sd35 (current)' }]);
+    expect(opts).toEqual([
+      { id: 'venice-sd35', name: 'venice-sd35', priceLabel: null, badges: ['current'] },
+    ]);
   });
 });

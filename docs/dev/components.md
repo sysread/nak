@@ -117,6 +117,44 @@ interface Props {
 
 Consumer: `Settings.svelte` (one per tier in the Models subsection).
 
+## `<ImageModelSelect>`
+
+File: `src/components/ImageModelSelect.svelte`.
+
+Custom button + popover listbox for the **Image generation** picker in
+Settings -> AI, replacing a native `<select>` (which can't render the
+per-row price pill). Each row left-aligns the model name with any
+beta/retiring tags and right-aligns the per-image price in a pill; CSS
+**subgrid** keeps the pills sharing one right edge across rows. The
+trigger shows the selected model's name + price the same way.
+
+```ts
+interface Props {
+  options: ImageModelOption[];  // from buildImageModelOptions
+  value: string;               // selected model id
+  disabled?: boolean;
+  ariaLabel: string;
+  onSelect: (id: string) => void;
+}
+```
+
+- Stripped-down sibling of `<ModelCombobox>`: **no** fuzzy-search input
+  (image models are few), so the keyboard model lives on the focusable
+  `<ul role="listbox" tabindex="-1">` itself rather than a search
+  `<input>`. Arrow/Home/End move the highlight (mirrored to
+  `aria-activedescendant`), Enter/Space selects, Escape closes (and
+  `stopPropagation` so it doesn't bubble to Settings' modal-close
+  handler); rows are pointer targets that set the highlight on hover.
+- Decision logic - the structured option rows (`buildImageModelOptions`,
+  `imageModelOption`) and the price label (`formatImagePrice`) - lives in
+  `src/lib/ui/image-model-picker.ts`, unit-tested in
+  `tests/image-model-picker.test.ts`. The `.svelte` file owns only the
+  keyboard model, open/close glue, and markup.
+- The synthetic off-catalog "current" option renders name + a `current`
+  badge, pill collapsed (no catalog price to show).
+
+Consumer: `Settings.svelte` (Image generation subsection).
+
 ## `<ContextRing>`
 
 File: `src/components/ContextRing.svelte`.

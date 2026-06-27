@@ -128,6 +128,7 @@
   } from '$lib/theme';
   import SecretInput from '../components/SecretInput.svelte';
   import ModelCombobox from '../components/ModelCombobox.svelte';
+  import ImageModelSelect from '../components/ImageModelSelect.svelte';
   import { updateState, applyUpdate, checkForUpdates } from '$lib/update.svelte';
   import { VeniceError } from '$lib/venice';
   import {
@@ -1694,18 +1695,13 @@
           <strong>price</strong> comes from the live Venice catalog.
         </p>
         <div class="form-row" style="display:flex;gap:0.5rem;align-items:center">
-          <label for="image-model" class="sr-only">Image generation model</label>
-          <select
-            id="image-model"
+          <ImageModelSelect
+            options={buildImageModelOptions(imageCatalog.data ?? [], effectiveImageModel)}
             value={effectiveImageModel}
             disabled={imageCatalog.data === null}
-            onchange={(e) =>
-              onPickImageModel((e.currentTarget as HTMLSelectElement).value)}
-          >
-            {#each buildImageModelOptions(imageCatalog.data ?? [], effectiveImageModel) as opt (opt.id)}
-              <option value={opt.id}>{opt.label}</option>
-            {/each}
-          </select>
+            ariaLabel="Image generation model"
+            onSelect={onPickImageModel}
+          />
         </div>
         {#if imageCatalog.loading}
           <p class="subtle">Loading image models from Venice…</p>

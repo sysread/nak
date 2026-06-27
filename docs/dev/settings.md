@@ -75,17 +75,18 @@ landing tab move together.
   staleness/error-guard shape as the Usage pane. See
   [Models & tiers in Chat](./chat.md) for the resolution cascade and the
   `TierModelConfig` snapshot rationale.
-  The **Image generation** subsection is a single `<select>` pointing the
-  `generate_image` tool at a Venice image model. Unlike the tier picker
-  it's a plain dropdown (no fuzzy search, no reasoning axis - image
-  generation has one backend, a handful of models, and no smart/balanced/
-  fast split), and unlike `tierModels` it persists a bare model id, not a
-  capability snapshot: the only consumer is the server-side tool, which
-  reads `profiles.settings.imageModel` at generation time and needs
-  nothing but the id. Options come from the live Venice **image** catalog
+  The **Image generation** subsection points the `generate_image` tool at
+  a Venice image model via `ImageModelSelect` - a custom button + popover
+  listbox (no fuzzy search, since image models are few) whose rows left-
+  align the model name and right-align the per-image price in a pill, with
+  beta/retiring tags next to the name. It's custom rather than a native
+  `<select>` because an `<option>` can't hold a styled pill. Unlike
+  `tierModels` it persists a bare model id, not a capability snapshot: the
+  only consumer is the server-side tool, which reads
+  `profiles.settings.imageModel` at generation time and needs nothing but
+  the id. Options come from the live Venice **image** catalog
   (`image-models-catalog.svelte.ts`, the `?type=image` twin of the text
-  catalog), each row labelled with its per-image price plus beta/retiring
-  badges. Picking the built-in default (`VENICE_DEFAULT_IMAGE_MODEL`)
+  catalog). Picking the built-in default (`VENICE_DEFAULT_IMAGE_MODEL`)
   clears the override so "default" reads as absence; any other pick writes
   the id via `persistImageModel`. See
   [generate_image](./tools.md) for the server-side resolution + the
@@ -188,8 +189,13 @@ every update) so it's covered here rather than in its own file.
   `shouldAutoRefreshImageCatalog`, `isImageCatalogStale`,
   `IMAGE_CATALOG_STALE_MS`.
 - `src/lib/ui/image-model-picker.ts` — pure UI primitives for the Image
-  generation `<select>`: `buildImageModelOptions`, `imageModelLabel`,
-  `formatImagePrice`. Unit-tested in `tests/image-model-picker.test.ts`.
+  generation picker: `buildImageModelOptions` (structured
+  `ImageModelOption` rows - name, price-pill label, badges),
+  `imageModelOption`, `formatImagePrice`. Unit-tested in
+  `tests/image-model-picker.test.ts`.
+- `src/components/ImageModelSelect.svelte` — the custom button + popover
+  listbox the Image generation subsection renders (name-left / price-pill-
+  right rows). See `./components.md`.
 - `src/lib/ui/prompts.ts` — pure list transforms for the Custom prompts
   pane: `createPrompt`, `addPrompt`, `updatePrompt`, `deletePrompt`,
   `reorderPrompts` (the drag-reorder array move), and `promptsMatch` (the
