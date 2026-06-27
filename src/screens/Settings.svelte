@@ -119,7 +119,7 @@
     shouldAutoRefreshImageCatalog,
     refreshImageCatalog,
   } from '$lib/image-models-catalog.svelte';
-  import { filterCatalogByCaps } from '$lib/models/price-caps';
+  import { filterCatalogByCaps, filterImageCatalogByCap } from '$lib/models/price-caps';
   import type { SystemPrompt } from '$lib/supabase';
   import * as prompts from '$lib/ui/prompts';
   import {
@@ -639,6 +639,15 @@
   // nothing is hidden).
   const hiddenModelNote = $derived(
     priceCapHiddenNote((catalog.data?.length ?? 0) - visibleModels.length)
+  );
+
+  // Same treatment for the image-generation picker, against the per-image
+  // cap (app.priceCaps.maxImageUsd).
+  const visibleImageModels = $derived(
+    filterImageCatalogByCap(imageCatalog.data ?? [], app.priceCaps)
+  );
+  const hiddenImageModelNote = $derived(
+    priceCapHiddenNote((imageCatalog.data?.length ?? 0) - visibleImageModels.length)
   );
 
   const usageData = $derived(
@@ -1707,7 +1716,7 @@
         </p>
         <div class="form-row" style="display:flex;gap:0.5rem;align-items:center">
           <ImageModelSelect
-            options={buildImageModelOptions(imageCatalog.data ?? [], effectiveImageModel)}
+            options={buildImageModelOptions(visibleImageModels, effectiveImageModel)}
             value={effectiveImageModel}
             disabled={imageCatalog.data === null}
             ariaLabel="Image generation model"
@@ -1726,6 +1735,9 @@
               onclick={() => app.supabase && refreshImageCatalog(app.supabase)}
             >Retry</button>
           </p>
+        {/if}
+        {#if hiddenImageModelNote}
+          <p class="subtle">{hiddenImageModelNote}</p>
         {/if}
 
         <h3 class="pane-section">Default reasoning effort</h3>

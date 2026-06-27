@@ -183,16 +183,17 @@ create table if not exists public.app_config (
   constraint app_config_singleton check (id)
 );
 
--- Project-wide model price ceilings, in USD per 1,000,000 tokens. A chat
--- model whose live Venice input/output price exceeds the matching ceiling
--- is rejected by the venice edge function (and hidden from the Settings
--- model picker). 0 means "no limit on that side" - the sentinel is 0, not
--- null, so the column always carries a value. Defaults are a deliberate
--- secure-by-default cap (input $3.00 / output $8.50 per 1M tokens); the
--- owner raises, lowers, or zeroes them via `mise run setup` (service role,
--- same as venice_api_key above - there is no in-app editor and no write
--- policy). Columns on the singleton rather than a new table, per the
--- "columns over migrations" convention.
+-- Project-wide model price ceilings. The text caps (max_input_usd_per_m /
+-- max_output_usd_per_m) are USD per 1,000,000 tokens; the image cap
+-- (max_image_usd) is flat USD per generated image. A model whose live
+-- Venice price exceeds the matching ceiling is rejected by the venice edge
+-- function (and hidden from the Settings picker). 0 means "no limit" - the
+-- sentinel is 0, not null, so the column always carries a value. Defaults
+-- are a deliberate secure-by-default cap (input $3.00 / output $8.50 per 1M
+-- tokens; image $0.10 per image); the owner raises, lowers, or zeroes them
+-- via `mise run setup` (service role, same as venice_api_key above - there
+-- is no in-app editor and no write policy). Columns on the singleton rather
+-- than a new table, per the "columns over migrations" convention.
 --
 -- The four statements per column are the idempotent path to NOT NULL with
 -- a default on a table that may already hold the column as nullable: add
@@ -202,12 +203,17 @@ alter table public.app_config
   add column if not exists max_input_usd_per_m numeric;
 alter table public.app_config
   add column if not exists max_output_usd_per_m numeric;
+alter table public.app_config
+  add column if not exists max_image_usd numeric;
 update public.app_config set max_input_usd_per_m = 3.00 where max_input_usd_per_m is null;
 update public.app_config set max_output_usd_per_m = 8.50 where max_output_usd_per_m is null;
+update public.app_config set max_image_usd = 0.10 where max_image_usd is null;
 alter table public.app_config alter column max_input_usd_per_m set default 3.00;
 alter table public.app_config alter column max_output_usd_per_m set default 8.50;
+alter table public.app_config alter column max_image_usd set default 0.10;
 alter table public.app_config alter column max_input_usd_per_m set not null;
 alter table public.app_config alter column max_output_usd_per_m set not null;
+alter table public.app_config alter column max_image_usd set not null;
 
 alter table public.app_config enable row level security;
 

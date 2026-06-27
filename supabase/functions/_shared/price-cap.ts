@@ -34,6 +34,8 @@ import { VeniceError, veniceFetchModels } from './venice.ts';
 export interface ModelPriceCaps {
   readonly maxInputUsdPerM: number | null;
   readonly maxOutputUsdPerM: number | null;
+  /** Ceiling on a text-to-image model's flat USD-per-image price. */
+  readonly maxImageUsd: number | null;
 }
 
 /** A model's published per-1M-token USD price. null when Venice omits it. */
@@ -72,6 +74,7 @@ export function coercePriceCaps(row: unknown): ModelPriceCaps {
   return {
     maxInputUsdPerM: capValue(rec.max_input_usd_per_m),
     maxOutputUsdPerM: capValue(rec.max_output_usd_per_m),
+    maxImageUsd: capValue(rec.max_image_usd),
   };
 }
 
@@ -202,11 +205,101 @@ export async function assertModelWithinCap(opts: {
   }
 }
 
-// Test-only hook: reset the module-scope price cache between cases. Kept
+// --- Image models (per-image price) ---------------------------------------
+//
+// The image-generation picker (generate_image tool) is a separate cap: a
+// flat USD-per-image ceiling rather than per-1M-token. Pricing comes from
+// the ?type=image catalog slice, where the per-image price lives at
+// model_spec.pricing.generation.usd (mirrors src/lib/models/image-catalog.ts).
+
+/**
+ * Flatten Venice's GET /models?type=image response into an id -> per-image
+ * USD map. Null for a model Venice prices per-resolution-tier or omits
+ * pricing for (same shape as image-catalog.ts's usdPerImage).
+ */
+export function extractImageModelPrices(raw: unknown): Map<string, number | null> {
+  const envelope = asRecord(raw);
+  const list = Array.isArray(raw)
+    ? raw
+    : Array.isArray(envelope?.data)
+      ? (envelope!.data as unknown[])
+      : [];
+  const out = new Map<string, number | null>();
+  for (const item of list) {
+    const entry = asRecord(item);
+    if (!entry) continue;
+    const id = entry.id;
+    if (typeof id !== 'string' || id.length === 0) continue;
+    const pricing = asRecord(asRecord(entry.model_spec)?.pricing);
+    out.set(id, usdFrom(pricing?.generation));
+  }
+  return out;
+}
+
+let imagePriceCache: Map<string, number | null> | null = null;
+let imagePriceCacheAt = 0;
+
+async function loadImagePrices(
+  apiKey: string,
+  fetchImpl?: typeof fetch,
+): Promise<Map<string, number | null>> {
+  const now = Date.now();
+  if (imagePriceCache && now - imagePriceCacheAt < PRICE_CACHE_TTL_MS) return imagePriceCache;
+  const raw = await veniceFetchModels({ apiKey, type: 'image', fetchImpl });
+  imagePriceCache = extractImageModelPrices(raw);
+  imagePriceCacheAt = now;
+  return imagePriceCache;
+}
+
+/**
+ * Reject an image model whose per-image Venice price breaches the project
+ * cap. Same posture as assertModelWithinCap: 403 on breach, fail-open on a
+ * catalog hiccup or an unpriced model, inert when no image cap is set.
+ * Called by the generate_image tool after it resolves the user's image
+ * model.
+ */
+export async function assertImageModelWithinCap(opts: {
+  model: unknown;
+  apiKey: string;
+  caps: ModelPriceCaps;
+  fetchImpl?: typeof fetch;
+}): Promise<void> {
+  const cap = opts.caps.maxImageUsd;
+  if (cap === null) return;
+  if (typeof opts.model !== 'string' || opts.model.length === 0) return;
+
+  let prices: Map<string, number | null>;
+  try {
+    prices = await loadImagePrices(opts.apiKey, opts.fetchImpl);
+  } catch (err) {
+    console.warn(
+      `[venice/price-cap] image catalog fetch failed, skipping cap check: ${(err as Error).message}`,
+    );
+    return;
+  }
+
+  const usd = prices.get(opts.model);
+  // Unknown id or per-tier/unpriced model: cannot price it, so cannot
+  // exceed the cap - allow (the model itself is Venice's to validate).
+  if (usd == null) return;
+
+  if (usd > cap) {
+    throw new VeniceError(
+      `Image model "${opts.model}" is blocked by the project price cap: ` +
+        `$${usd}/image exceeds the $${cap}/image cap.`,
+      'http',
+      403,
+    );
+  }
+}
+
+// Test-only hook: reset the module-scope price caches between cases. Kept
 // out of the production surface per CLAUDE.md's test-hook convention.
 export const __test = {
   resetCache(): void {
     priceCache = null;
     priceCacheAt = 0;
+    imagePriceCache = null;
+    imagePriceCacheAt = 0;
   },
 };

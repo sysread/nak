@@ -157,6 +157,10 @@ tool uses.
 - Leaving it untouched uses Nak's built-in default. The list is fetched
   live from Venice the first time you open the AI pane, so it always
   reflects the models currently available.
+- The same instance-wide **price cap** that filters the text models
+  applies here too, as a separate maximum **per-image** price - image
+  models above it don't appear in the dropdown, with a note saying how
+  many were hidden. It's set during setup, not from the app.
 
 ## Emphasis markdown
 

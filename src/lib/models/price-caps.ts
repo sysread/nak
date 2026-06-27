@@ -16,17 +16,24 @@
  */
 
 import type { CatalogModel } from './catalog';
+import type { ImageCatalogModel } from './image-catalog';
 
-/** A per-1M-token USD ceiling. null on a dimension means "no cap there". */
+/**
+ * Project-global price ceilings. The text caps are USD per 1M tokens; the
+ * image cap is flat USD per generated image. null on a dimension means "no
+ * cap there".
+ */
 export interface ModelPriceCaps {
   readonly maxInputUsdPerM: number | null;
   readonly maxOutputUsdPerM: number | null;
+  readonly maxImageUsd: number | null;
 }
 
-/** The "no ceiling on either side" caps, used to seed state before load. */
+/** The "no ceiling anywhere" caps, used to seed state before load. */
 export const NO_PRICE_CAPS: ModelPriceCaps = {
   maxInputUsdPerM: null,
   maxOutputUsdPerM: null,
+  maxImageUsd: null,
 };
 
 // Coerce a stored cap to an active ceiling (positive number) or null ("no
@@ -52,6 +59,7 @@ export function coercePriceCaps(row: unknown): ModelPriceCaps {
   return {
     maxInputUsdPerM: capValue(rec.max_input_usd_per_m),
     maxOutputUsdPerM: capValue(rec.max_output_usd_per_m),
+    maxImageUsd: capValue(rec.max_image_usd),
   };
 }
 
@@ -92,4 +100,32 @@ export function filterCatalogByCaps(
 ): CatalogModel[] {
   if (!capsConfigured(caps)) return [...catalog];
   return catalog.filter((m) => !isModelOverCap(m, caps));
+}
+
+/**
+ * True when an image model's per-image price exceeds the image cap. Every
+ * catalog row carries a real price here - `coerceImageModel` already drops
+ * unpriced / resolution-tiered models upstream, which is why `usdPerImage`
+ * is non-nullable on `ImageCatalogModel` and there's no null guard. (The
+ * edge side reads the raw Venice catalog instead, so it still handles an
+ * absent price - see `assertImageModelWithinCap` in price-cap.ts.)
+ */
+export function isImageModelOverCap(
+  model: Pick<ImageCatalogModel, 'usdPerImage'>,
+  caps: ModelPriceCaps
+): boolean {
+  return caps.maxImageUsd !== null && model.usdPerImage > caps.maxImageUsd;
+}
+
+/**
+ * Drop over-cap image models from the image catalog so the image-
+ * generation picker never offers a model the server would reject. A no-op
+ * when no image cap is configured.
+ */
+export function filterImageCatalogByCap(
+  catalog: readonly ImageCatalogModel[],
+  caps: ModelPriceCaps
+): ImageCatalogModel[] {
+  if (caps.maxImageUsd === null) return [...catalog];
+  return catalog.filter((m) => !isImageModelOverCap(m, caps));
 }

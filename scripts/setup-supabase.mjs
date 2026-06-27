@@ -85,6 +85,15 @@ const CONFIG_FIELDS = [
       'Same as the input cap but for output tokens, in USD per 1,000,000 tokens (e.g. 8.50). Enter 0 for no output-side cap. Blank keeps the current value.',
     numeric: true,
   },
+  {
+    column: 'max_image_usd',
+    label: 'Max image price (USD per image)',
+    description:
+      'project-wide cap on the image-generation model\'s per-image price (default 0.10; 0 = no limit)',
+    hint:
+      'Blocks any image-generation model whose Venice price exceeds this, in flat USD per generated image (e.g. 0.10). Enter 0 for no image cap. Blank keeps the current value.',
+    numeric: true,
+  },
 ];
 
 async function readAppConfig(ref) {

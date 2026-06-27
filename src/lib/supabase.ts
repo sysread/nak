@@ -585,7 +585,7 @@ export class SupabaseService {
   async getPriceCaps(): Promise<ModelPriceCaps> {
     const { data, error } = await this.client
       .from('app_config')
-      .select('max_input_usd_per_m, max_output_usd_per_m')
+      .select('max_input_usd_per_m, max_output_usd_per_m, max_image_usd')
       .eq('id', true)
       .maybeSingle();
     if (error || !data) return NO_PRICE_CAPS;
