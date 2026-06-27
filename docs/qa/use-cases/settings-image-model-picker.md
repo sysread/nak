@@ -45,10 +45,13 @@ generation time and falls back to the built-in default
 
 ## Expected
 
-- (2) While loading, the dropdown is disabled and a "Loading image
-  models from Venice..." line shows. Once loaded, each option reads
-  `<name> - $<price>/image`, with `(beta)` / `(retiring)` badges where
-  applicable. The currently-effective model is selected.
+- (2) While loading, the picker is disabled and a "Loading image
+  models from Venice..." line shows. Once loaded, each row left-aligns
+  the model name (with `beta` / `retiring` tags where applicable) and
+  right-aligns the per-image price in a pill; the pills line up in a
+  column. Every listed model has a real price - models Venice prices
+  per resolution tier or doesn't price at all are filtered out, so no
+  "n/a" row ever appears. The currently-effective model is selected.
 - (3) A confirmation line appears ("Image generation now uses
   `<name>`."). No page reload needed.
 - (4) `image_model` equals the id you picked.

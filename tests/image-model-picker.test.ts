@@ -47,20 +47,23 @@ describe('coerceImageCatalog', () => {
     expect(coerceImageCatalog([{ id: 'x' }])).toEqual([]);
   });
 
-  it('reads usdPerImage from flat generation pricing, null when absent', () => {
+  it('reads usdPerImage from flat generation pricing', () => {
     const [flat] = coerceImageCatalog([rawEntry()]);
     expect(flat.usdPerImage).toBe(0.01);
-    const [noPrice] = coerceImageCatalog([rawEntry({ pricing: undefined })]);
-    expect(noPrice.usdPerImage).toBeNull();
   });
 
-  it('treats resolution-tiered pricing as no single rate (null)', () => {
-    // pricing.resolutions.* has no representative flat number, so the row
-    // shows "n/a" rather than picking an arbitrary tier.
-    const [tiered] = coerceImageCatalog([
-      rawEntry({ pricing: { resolutions: { '1K': { usd: 0.01 } } } }),
-    ]);
-    expect(tiered.usdPerImage).toBeNull();
+  it('drops a model with no pricing block (free / internal)', () => {
+    expect(coerceImageCatalog([rawEntry({ pricing: undefined })])).toEqual([]);
+  });
+
+  it('drops a resolution-tiered model (no single flat rate to show)', () => {
+    // pricing.resolutions.* is a real price but per output size, with no
+    // representative flat number - dropped rather than shown as "n/a".
+    expect(
+      coerceImageCatalog([
+        rawEntry({ pricing: { resolutions: { '1K': { usd: 0.01 } } } }),
+      ])
+    ).toEqual([]);
   });
 
   it('flags beta (either flag) and deprecation', () => {
@@ -77,7 +80,10 @@ describe('coerceImageCatalog', () => {
   it('falls back to the id when name is missing, and sorts by name', () => {
     const list = coerceImageCatalog([
       rawEntry({ name: undefined }),
-      { id: 'aaa-model', model_spec: { name: 'Aaa' } },
+      {
+        id: 'aaa-model',
+        model_spec: { name: 'Aaa', pricing: { generation: { usd: 0.02 } } },
+      },
     ]);
     // 'Aaa' sorts before 'venice-sd35' (the id used as the missing name).
     expect(list.map((m) => m.name)).toEqual(['Aaa', 'venice-sd35']);
@@ -107,10 +113,6 @@ describe('imageModelOption', () => {
       priceLabel: '$0.010/image',
       badges: [],
     });
-  });
-
-  it('collapses the pill (null priceLabel) when pricing is absent', () => {
-    expect(imageModelOption({ ...base, usdPerImage: null }).priceLabel).toBeNull();
   });
 
   it('emits beta and retiring badges', () => {

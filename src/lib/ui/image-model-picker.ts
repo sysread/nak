@@ -22,10 +22,11 @@ export interface ImageModelOption {
   /** Left-aligned model name (or the bare id for an off-catalog current pick). */
   readonly name: string;
   /**
-   * Right-aligned price-pill text, e.g. "$0.010/image". Null when Venice
-   * omits pricing, the model is resolution-tiered, or this is the
-   * synthetic current row - the component collapses the pill rather than
-   * drawing an empty capsule or a misleading "$0.00".
+   * Right-aligned price-pill text, e.g. "$0.010/image". Null only for the
+   * synthetic off-catalog "current" row, which has no catalog price to
+   * show - the component collapses the pill rather than drawing an empty
+   * capsule. Every real catalog row carries a price (unpriced models are
+   * dropped upstream by coerceImageModel).
    */
   readonly priceLabel: string | null;
   /** Small status tags shown next to the name, e.g. ['beta', 'retiring']. */
@@ -34,9 +35,7 @@ export interface ImageModelOption {
 
 /**
  * Format a model's per-image price for the pill. Three decimals reads
- * cleanly across the typical $0.005 - $0.05 range. Takes a non-null
- * number; the caller maps null pricing to a collapsed pill (priceLabel
- * null) rather than a "price n/a" string.
+ * cleanly across the typical $0.005 - $0.05 range.
  */
 export function formatImagePrice(usdPerImage: number): string {
   return `$${usdPerImage.toFixed(3)}/image`;
@@ -55,7 +54,7 @@ export function imageModelOption(model: ImageCatalogModel): ImageModelOption {
   return {
     id: model.id,
     name: model.name,
-    priceLabel: model.usdPerImage === null ? null : formatImagePrice(model.usdPerImage),
+    priceLabel: formatImagePrice(model.usdPerImage),
     badges: badgesFor(model),
   };
 }

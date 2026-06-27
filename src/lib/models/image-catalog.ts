@@ -21,21 +21,17 @@
 
 /**
  * One image model as the picker needs it. Flattened from Venice's nested
- * `model_spec`. Pricing is nullable because Venice omits the block on
- * free / internal models, and because models priced per-resolution-tier
- * (rather than a single flat per-image rate) have no single number to
- * show here - those read as "Pricing n/a" rather than a misleading tier.
+ * `model_spec`. Only priced models make it this far - `coerceImageModel`
+ * drops anything without a flat per-image USD rate (see its docblock for
+ * the two unpriced cases and why), so `usdPerImage` is always a real
+ * number here and the picker never shows a price-less row.
  */
 export interface ImageCatalogModel {
   readonly id: string;
   /** Human-facing name from `model_spec.name`, e.g. "Venice SD3.5". */
   readonly name: string;
-  /**
-   * Flat USD per generated image, from `pricing.generation.usd`. Null
-   * when Venice omits pricing or prices the model per resolution tier
-   * (`pricing.resolutions.*`), which has no single representative rate.
-   */
-  readonly usdPerImage: number | null;
+  /** Flat USD per generated image, from `pricing.generation.usd`. */
+  readonly usdPerImage: number;
   /** Gated to beta-flagged keys (`beta` or `betaModel`). */
   readonly beta: boolean;
   /** True when `model_spec.deprecation.date` is set - retiring soon. */
@@ -54,9 +50,24 @@ function usdFrom(block: unknown): number | null {
 
 /**
  * Coerce one raw `/models?type=image` entry into an ImageCatalogModel, or
- * null when the entry is unusable (missing id, or offline). Defensive on
- * every field: Venice marks the endpoint's shape loosely and free models
- * drop the pricing block entirely.
+ * null when the entry is unusable. Dropped: missing id, offline, and -
+ * deliberately - any model without a flat per-image USD price. Two kinds
+ * of model land in that last bucket:
+ *
+ *   1. No pricing block at all - Venice omits it on free / internal
+ *      models. (A blank price is NOT a crypto/DIEM thing: Venice prices
+ *      every real model in both USD and DIEM, so a missing block means
+ *      unpriced/internal, not payment-gated.)
+ *   2. Resolution-tiered pricing (`pricing.resolutions.<tier>`) - a real
+ *      price, but per output size rather than one flat rate, so there's
+ *      no single number to put in the pill.
+ *
+ * We drop both rather than show a "n/a" row the user can't reason about.
+ *
+ * TODO: case 2 hides a model that is actually usable and priced. No
+ * current Venice image model is resolution-tiered, so this is acceptable
+ * today; if one appears, surface it with a representative "from $X" price
+ * (cheapest tier) instead of dropping it.
  */
 function coerceImageModel(raw: unknown): ImageCatalogModel | null {
   const entry = asRecord(raw);
@@ -71,16 +82,18 @@ function coerceImageModel(raw: unknown): ImageCatalogModel | null {
   // absent so the picker never offers a model that will fail at send time.
   if (spec.offline === true) return null;
 
-  const name = typeof spec.name === 'string' && spec.name.length > 0 ? spec.name : id;
   const pricing = asRecord(spec.pricing);
+  const usdPerImage = usdFrom(pricing?.generation);
+  // No flat per-image price - drop it (see docblock). Keeps the picker to
+  // models with a real number to show.
+  if (usdPerImage === null) return null;
+
+  const name = typeof spec.name === 'string' && spec.name.length > 0 ? spec.name : id;
 
   return {
     id,
     name,
-    // Flat per-image rate only. Per-resolution-tier pricing
-    // (pricing.resolutions.*) has no single number to surface, so it
-    // reads as "n/a" rather than picking an arbitrary tier.
-    usdPerImage: usdFrom(pricing?.generation),
+    usdPerImage,
     beta: spec.beta === true || spec.betaModel === true,
     deprecated: asRecord(spec.deprecation)?.date != null,
   };
