@@ -11011,8 +11011,18 @@ alter table public.wiki_record_links replica identity using index wiki_record_li
 --     A SELECT on realtime.messages keyed on the topic name is what the
 --     Realtime server checks against these policies.
 --   - Browsers publish '{"type":"cancel"}' to 'thread:<uuid>:control'
---     when the user clicks Stop. An INSERT on realtime.messages is the
---     check there.
+--     when the user clicks Stop. Publishing a broadcast over the socket
+--     requires the client to FIRST join (subscribe to) the channel, and
+--     joining a private channel is itself a SELECT check - so the
+--     control channel needs BOTH a SELECT (subscribe/join) policy and an
+--     INSERT (publish) policy. The browser is the only publisher; the
+--     function subscribes under service_role and never publishes here, so
+--     the SELECT policy only ever authorizes the browser joining its own
+--     thread's control channel (it receives nothing, since nothing else
+--     publishes there). Without the SELECT policy the join is denied
+--     ("permission to read from this Channel topic"), cancelStream's
+--     awaited subscribe rejects, and the cancel publish on the next line
+--     never runs - the function streams to completion despite the Stop.
 --
 -- For these policies to take effect on the wire, the browser must
 -- subscribe with `private: true` in its channel options. Subscribing
@@ -11060,6 +11070,27 @@ drop policy if exists "control channel: owner publish" on realtime.messages;
 create policy "control channel: owner publish" on realtime.messages
   for insert to authenticated
   with check (
+    realtime.topic() like 'thread:%:control'
+    and exists (
+      select 1 from public.threads t
+        where t.id = public.realtime_topic_thread_id(realtime.topic())
+          and t.user_id = (select auth.uid())
+    )
+  );
+
+-- Subscribers to the control channel must own the thread. The browser
+-- never wants to RECEIVE here (the function is the only reader, under
+-- service_role), but Supabase requires a channel to be joined before a
+-- broadcast can be published over the socket, and the join is gated by a
+-- SELECT check. Without this policy the browser's cancelStream() join is
+-- denied ("permission to read from this Channel topic"), and the cancel
+-- publish on the next line never fires - the Stop button looks like it
+-- worked locally while the edge function keeps generating to completion.
+-- Mirror of the stream channel's owner-subscribe gate, scoped to control.
+drop policy if exists "control channel: owner subscribe" on realtime.messages;
+create policy "control channel: owner subscribe" on realtime.messages
+  for select to authenticated
+  using (
     realtime.topic() like 'thread:%:control'
     and exists (
       select 1 from public.threads t

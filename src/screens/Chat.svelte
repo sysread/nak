@@ -5773,6 +5773,14 @@
       return last;
     }
     if (last.role === 'assistant') {
+      // A user-initiated stop commits as status='aborted' (carrying the
+      // interrupted marker). That is a deliberate endpoint, not a cut-off
+      // turn - never offer to retry it. Checked before the tool_calls and
+      // reasoning-only branches, which would otherwise flag a stop that
+      // landed mid-tool-call or mid-reasoning. The status is persisted on
+      // the row, so a second device that opens the thread suppresses the
+      // banner the same way the device that issued the stop does.
+      if (last.status === 'aborted') return null;
       if (last.tool_calls && last.tool_calls.length > 0) return last;
       // Reasoning-only stall (see isReasoningOnlyStall): the model
       // emitted chain-of-thought but no visible content and no tool

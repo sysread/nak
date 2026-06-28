@@ -1644,6 +1644,18 @@ function setupStreamSubscription(
  *
  * Idempotent: extra cancel publishes are no-ops once the orchestrator
  * has unsubscribed.
+ *
+ * Joins the channel before publishing - a broadcast over the socket
+ * requires the channel to be subscribed first. On a private channel the
+ * join is a READ, so it needs the "control channel: owner subscribe"
+ * SELECT policy on realtime.messages (supabase/schema.sql), NOT just the
+ * INSERT publish policy. Both must exist together: if the SELECT policy
+ * is missing the subscribe below rejects ("permission to read from this
+ * Channel topic"), the await throws, and the send never runs - the Stop
+ * button stops the local consumer while the edge function keeps
+ * generating to completion. That failure is silent (caught and warned),
+ * so the symptom shows up as "I hit Stop but the full reply still
+ * landed", not as an error.
  */
 export async function cancelStream(
   supabase: SupabaseClient,
