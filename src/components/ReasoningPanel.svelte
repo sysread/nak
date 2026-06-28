@@ -12,10 +12,19 @@
   message action bar — keeping the affordance at the top of the bubble
   means the reasoning reads as something that happened BEFORE the
   answer (which is how the model produced it), not a footnote tucked
-  under the final text. During streaming the parent pins the panel
-  open via the bindable `open` prop and flips it closed once the
-  visible answer starts to arrive, so the user sees the model "think
-  out loud" and then watches the thinking tuck away.
+  under the final text. During streaming the parent opens the panel
+  via the bindable `open` prop on the first reasoning delta, then
+  auto-collapses it once the thought runs long or the answer starts
+  (see reasoningShouldCollapse + Chat.svelte), so the user watches the
+  model "think out loud" and then watches the thinking tuck away. A
+  manual click is sticky for the rest of the turn - the parent stops
+  driving `open` once the user has touched it.
+
+  While streaming, the header carries two pills beside the label - an
+  elapsed-ms counter and a running character count - so a collapsed
+  panel still shows the thinking is alive and how far along it is. The
+  parent passes them only on the live row; persisted rows render the
+  header bare (the timing isn't persisted).
 
   Rendering: dark-grey italic plain text, not markdown. The thinking
   stream is prose the model didn't intend for a user — rendering it
@@ -44,9 +53,32 @@
      * a snap.
      */
     duration?: number;
+    /**
+     * Streaming-only header pills. `elapsedPill` is the thinking-time
+     * counter (e.g. "1432 ms"), `charPill` the running length (e.g.
+     * "512 chars"). Null on persisted rows, which render the header
+     * bare - the timing isn't persisted. Both are pre-formatted by the
+     * parent (reasoningElapsedPill / reasoningCharPill).
+     */
+    elapsedPill?: string | null;
+    charPill?: string | null;
+    /**
+     * Fired when the user clicks the header. The streaming parent uses
+     * it to latch "the user took manual control" so its automatic
+     * open/collapse stops fighting the click for the rest of the turn.
+     * Persisted rows don't pass it - there's no automation to suppress.
+     */
+    onToggle?: () => void;
   }
 
-  let { reasoning, open = $bindable(false), duration = 220 }: Props = $props();
+  let {
+    reasoning,
+    open = $bindable(false),
+    duration = 220,
+    elapsedPill = null,
+    charPill = null,
+    onToggle,
+  }: Props = $props();
 </script>
 
 {#if reasoning.length > 0}
@@ -56,6 +88,7 @@
       class="reasoning-header"
       onclick={() => {
         open = !open;
+        onToggle?.();
       }}
       aria-expanded={open}
       aria-label={open ? 'Hide reasoning' : 'Show reasoning'}
@@ -83,6 +116,19 @@
         <circle cx="4" cy="21.5" r="0.7" />
       </svg>
       <span class="reasoning-label">Reasoning</span>
+      <!-- Streaming-only pills: thinking-time (ms) + character count.
+           Mirror the tool-call duration pill so "how long / how much"
+           reads the same across the card. Present only while the parent
+           feeds live values; a collapsed panel still shows the thought
+           is alive and advancing. aria-hidden - the visible counter is
+           decorative progress, not content a screen reader should
+           announce on every tick. -->
+      {#if elapsedPill}
+        <span class="reasoning-pill" aria-hidden="true">{elapsedPill}</span>
+      {/if}
+      {#if charPill}
+        <span class="reasoning-pill" aria-hidden="true">{charPill}</span>
+      {/if}
       <!-- Chevron rotates 90° when open — a familiar "disclosure
            triangle" affordance. Animating with CSS rather than Svelte
            transitions so the header never reflows mid-slide. -->
@@ -155,6 +201,23 @@
 
   .reasoning-icon {
     flex: 0 0 auto;
+  }
+
+  /* Streaming header pills - matched to .tool-pill (src/styles.css) so
+     the thinking counters read as the same family as the tool-call
+     duration pill. tabular-nums + a min-width keep the live ms counter
+     from jittering the row as it gains digits. */
+  .reasoning-pill {
+    flex: 0 0 auto;
+    color: var(--muted);
+    font-size: 0.78rem;
+    padding: 0.05rem 0.4rem;
+    border-radius: 999px;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    min-width: 4.5rem;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
   }
 
   /* Chevron rotates from "pointing right" (collapsed) to "pointing
