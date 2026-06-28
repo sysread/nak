@@ -122,12 +122,22 @@
            feeds live values; a collapsed panel still shows the thought
            is alive and advancing. aria-hidden - the visible counter is
            decorative progress, not content a screen reader should
-           announce on every tick. -->
-      {#if elapsedPill}
-        <span class="reasoning-pill" aria-hidden="true">{elapsedPill}</span>
-      {/if}
-      {#if charPill}
-        <span class="reasoning-pill" aria-hidden="true">{charPill}</span>
+           announce on every tick.
+
+           Grouped so the pair wraps as ONE unit to a second line on a
+           narrow viewport (the header is flex-wrap; see CSS). Without
+           the group the fixed-min-width pills wouldn't shrink and the
+           flex squeeze fell on the label, breaking "Reasoning" a
+           character at a time. -->
+      {#if elapsedPill || charPill}
+        <span class="reasoning-pills">
+          {#if elapsedPill}
+            <span class="reasoning-pill" aria-hidden="true">{elapsedPill}</span>
+          {/if}
+          {#if charPill}
+            <span class="reasoning-pill" aria-hidden="true">{charPill}</span>
+          {/if}
+        </span>
       {/if}
       <!-- Chevron rotates 90° when open — a familiar "disclosure
            triangle" affordance. Animating with CSS rather than Svelte
@@ -180,6 +190,10 @@
   .reasoning-header {
     display: inline-flex;
     align-items: center;
+    /* Wrap the streaming pills onto a second line when the row is too
+       narrow (mobile) instead of squeezing the label. Harmless on wide
+       viewports - everything fits on one line so no wrap occurs. */
+    flex-wrap: wrap;
     gap: 0.4rem;
     padding: 0.25rem 0.5rem;
     margin-left: -0.5rem; /* align the icon with the body's left edge */
@@ -191,6 +205,26 @@
     font-size: 0.85rem;
     font-weight: 500;
     cursor: pointer;
+  }
+
+  /* The label must never absorb the flex squeeze: it's a single word,
+     so shrinking it below its width breaks "Reasoning" one character
+     per line. Pin its size and forbid the break; the pills wrap
+     instead. */
+  .reasoning-label {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  /* Pill group - keeps the two pills together so they wrap as one unit
+     to the next line rather than splitting one-per-line. gap matches
+     the header's so a single-line layout reads identically to the
+     ungrouped form. */
+  .reasoning-pills {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex: 0 0 auto;
   }
 
   .reasoning-header:hover,
