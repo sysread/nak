@@ -69,13 +69,27 @@ accurate preview of the finished answer.
 Reasoning-capable models stream a chain-of-thought trace **before**
 the visible answer. Nak shows it as a block-quote-styled panel that
 slides open at the top of the message bubble the moment the first
-thinking token arrives. Once the model transitions to the visible
-answer, the panel animates closed so the reply takes center stage.
+thinking token arrives, so you can watch the model think out loud.
+
+A short thought stays open all the way through. Once the thinking
+runs long, the panel tucks itself closed mid-stream (at a sentence
+break) so a lengthy trace doesn't push the screen around — and it
+always closes when the model switches to the visible answer. While
+the thinking is still streaming, the collapsed "Reasoning" header
+carries two small pills: a running timer and a live character count,
+so you can see it's still working and how far along it is.
+
+You can take over at any time: click the "Reasoning" header to
+collapse or expand it yourself, even mid-stream. Your choice sticks
+for the rest of that response — Nak won't auto-open or auto-close it
+behind you once you've touched it.
 
 After the fact, every message that has saved reasoning shows a
 thought-balloon "Reasoning" header at the top of the bubble. Click
 it to expand the block-quote back open — handy for reading *why* the
-model answered a specific way without regenerating.
+model answered a specific way without regenerating. (The timer and
+character-count pills are live-only; they're not saved with the
+message.)
 
 ### Citations and sources
 

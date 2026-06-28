@@ -37,9 +37,23 @@
  *     Same lifecycle as streamingText - reset per round.
  *
  *   streamingReasoningOpen - drives the slide-open state of the live
- *     reasoning panel. Flipped on by the first reasoning delta, flipped
- *     off ~600ms after the first content delta so the user reads it as
- *     a deliberate hand-off rather than a snap close.
+ *     reasoning panel. Opens on the first reasoning delta so the user
+ *     watches the thinking stream in, then auto-collapses (with easing)
+ *     once the reasoning crosses a length/sentence boundary
+ *     (reasoningShouldCollapse) or the first answer delta arrives,
+ *     whichever comes first. A short thought that never crosses the
+ *     boundary stays open through to the hand-off. All of this is
+ *     suppressed once reasoningUserToggled is set.
+ *
+ *   reasoningUserToggled - sticky "the user clicked the header" guard.
+ *     Once set, the auto open/collapse above stops firing for the rest
+ *     of the round; the user's explicit choice wins until the card is
+ *     delivered. Reset per round.
+ *
+ *   reasoningStartedAt / reasoningEndedAt - timestamps bracketing the
+ *     reasoning phase of a round. Drive the live elapsed-ms pill in the
+ *     reasoning header; endedAt freezes it at the final thinking
+ *     duration. Not persisted (live-row only, like the tool pills).
  *
  *   streamingContentStarted - sticky guard. Set on the first content
  *     delta of a round so a late reasoning delta can't re-open the
@@ -146,6 +160,32 @@ export class ExchangeSlot {
   streamingReasoning = $state('');
   streamingReasoningOpen = $state(false);
   /**
+   * Sticky guard set the moment the user clicks the reasoning header.
+   * Once true, ALL automatic open/close of the reasoning panel is
+   * suppressed for the rest of the round - the user's explicit choice
+   * is law until the card is delivered. Reset per round (in the
+   * onAssistantPersisted handler) and in reset(), so the next round's
+   * reasoning starts under automation again. $state because the live
+   * panel's auto-collapse logic reads it reactively.
+   */
+  reasoningUserToggled = $state(false);
+  /**
+   * performance.now() at the first reasoning delta of the current
+   * round; null before any reasoning has streamed. Drives the elapsed-
+   * ms pill in the live reasoning header. Reset per round and in
+   * reset(). Not persisted - historical latency isn't worth a column,
+   * same call as the tool-timing pills.
+   */
+  reasoningStartedAt = $state<number | null>(null);
+  /**
+   * performance.now() at the first answer (content) delta of the round,
+   * which is when reasoning has effectively ended; null while reasoning
+   * is still the live channel. Freezes the elapsed-ms pill at the final
+   * thinking duration instead of letting it count on into the answer.
+   * Reset per round and in reset().
+   */
+  reasoningEndedAt = $state<number | null>(null);
+  /**
    * Plain field (not $state) because no template binds to it - it's
    * an internal guard read only by the chat-loop handlers. Lifting
    * it to $state would force an extra render every time the first
@@ -230,6 +270,9 @@ export class ExchangeSlot {
     this.streamingText = '';
     this.streamingReasoning = '';
     this.streamingReasoningOpen = false;
+    this.reasoningUserToggled = false;
+    this.reasoningStartedAt = null;
+    this.reasoningEndedAt = null;
     this.streamingContentStarted = false;
     this.streamingError = null;
     this.slopNotices = [];

@@ -217,6 +217,11 @@
     subconsciousLabel,
   } from '$lib/ui/subconscious-status';
   import { streamingCardHasContent } from '$lib/ui/streaming-bubble';
+  import {
+    reasoningShouldCollapse,
+    reasoningElapsedPill,
+    reasoningCharPill,
+  } from '$lib/ui/reasoning-panel';
   import AssistantBody from '../components/AssistantBody.svelte';
   import Markdown from '../components/Markdown.svelte';
   import ReasoningPanel from '../components/ReasoningPanel.svelte';
@@ -1160,8 +1165,14 @@
   let nowMs = $state<number>(typeof performance !== 'undefined' ? performance.now() : 0);
   $effect(() => {
     if (!activeSlot) return;
-    const pending = Object.values(activeSlot.toolTimings).some((t) => t.endedAt === undefined);
-    if (!pending) return;
+    const toolPending = Object.values(activeSlot.toolTimings).some((t) => t.endedAt === undefined);
+    // Also tick while reasoning is streaming so the elapsed-ms pill in
+    // the reasoning header counts up. Stops once reasoning ends
+    // (reasoningEndedAt set) - the pill freezes at its final value and
+    // the rAF loop can idle until the next live timing source.
+    const reasoningLive =
+      activeSlot.reasoningStartedAt !== null && activeSlot.reasoningEndedAt === null;
+    if (!toolPending && !reasoningLive) return;
     let raf = 0;
     const tick = (): void => {
       nowMs = performance.now();
@@ -3589,6 +3600,15 @@
               // so only the first text delta schedules it.
               if (!slot.streamingContentStarted) {
                 slot.streamingContentStarted = true;
+                // Reasoning has yielded to the answer: freeze the
+                // elapsed-ms pill at the final thinking duration. Only
+                // when this round actually thought (reasoningStartedAt
+                // set) and not already frozen. Independent of the panel's
+                // open state - the pill stays whether the panel is open
+                // or collapsed.
+                if (slot.reasoningStartedAt !== null && slot.reasoningEndedAt === null) {
+                  slot.reasoningEndedAt = performance.now();
+                }
                 // Checklist dismissal happens in flushPending, when the
                 // first text actually paints - see the note there for why
                 // it can't fire on this not-yet-flushed first byte.
@@ -3597,7 +3617,10 @@
                 // before the leading reasoning buffer has flushed, so
                 // slot.streamingReasoning may still be empty even though
                 // reasoning content arrived and the panel is open.
+                // Skipped once the user has taken manual control - their
+                // explicit choice wins until the card is delivered.
                 if (
+                  !slot.reasoningUserToggled &&
                   slot.streamingReasoningOpen &&
                   (slot.streamingReasoning.length > 0 || pendingReasoning !== null)
                 ) {
@@ -3617,17 +3640,38 @@
               // checklist and the first painted reasoning.
               pendingReasoning = t;
               armFlush();
-              // Panel opens on the first reasoning delta so the user
+              // First reasoning delta of the round: stamp the start (the
+              // elapsed-ms pill reads it) and open the panel so the user
               // watches the thinking stream in. Set eagerly here rather
               // than on the throttled flush so streamingReasoningOpen is
-              // already true when the first reasoning buffer paints; the
-              // panel stays visually absent until that paint because
+              // already true when the first reasoning buffer paints -
               // ReasoningPanel guards its markup on reasoning.length > 0,
-              // so there's no empty-panel frame. Only before content has
-              // started — once the answer is flowing, late reasoning
-              // shouldn't pop the panel back open.
-              if (!slot.streamingReasoningOpen && !slot.streamingContentStarted) {
-                slot.streamingReasoningOpen = true;
+              // so there's no empty-panel frame.
+              //
+              // Open ONLY on this first delta, never re-asserted on later
+              // ones. Re-opening on every delta (the prior shape) is what
+              // made a mid-stream collapse impossible: the next delta
+              // after a manual or auto collapse snapped the panel back
+              // open within ~50ms. The user's explicit collapse now
+              // sticks because nothing re-opens behind it.
+              if (slot.reasoningStartedAt === null) {
+                slot.reasoningStartedAt = performance.now();
+                if (!slot.reasoningUserToggled) slot.streamingReasoningOpen = true;
+              }
+              // Auto-collapse once the thought runs long (length / first
+              // sentence boundary past the floor - see
+              // reasoningShouldCollapse). Gated on the panel still being
+              // open and the user not having taken manual control; once it
+              // collapses, `open` is false so later deltas short-circuit
+              // before the regex. A short thought that never crosses the
+              // boundary stays open through to the answer hand-off.
+              if (
+                slot.streamingReasoningOpen &&
+                !slot.reasoningUserToggled &&
+                !slot.streamingContentStarted &&
+                reasoningShouldCollapse(t)
+              ) {
+                slot.streamingReasoningOpen = false;
               }
             },
             onAssistantPersisted: (msg) => {
@@ -3654,6 +3698,13 @@
               slot.streamingReasoning = '';
               slot.streamingReasoningOpen = false;
               slot.streamingContentStarted = false;
+              // Per-round reset of the reasoning interaction + timing
+              // state: the card is delivered, so the next round's
+              // reasoning starts under automation again and the user's
+              // manual choice no longer applies (per-round, per #3).
+              slot.reasoningUserToggled = false;
+              slot.reasoningStartedAt = null;
+              slot.reasoningEndedAt = null;
               if (reasoningCloseTimer !== 0) {
                 window.clearTimeout(reasoningCloseTimer);
                 reasoningCloseTimer = 0;
@@ -3823,6 +3874,13 @@
               slot.streamingReasoning = '';
               slot.streamingReasoningOpen = false;
               slot.streamingContentStarted = false;
+              // The re-roll is a fresh attempt at this round: clear the
+              // reasoning timing + manual-toggle so the replacement's
+              // first reasoning delta opens a clean panel and the pill
+              // counts from the new start, not the discarded attempt's.
+              slot.reasoningUserToggled = false;
+              slot.reasoningStartedAt = null;
+              slot.reasoningEndedAt = null;
             },
           },
         });
@@ -4127,6 +4185,14 @@
       // both fields see the timings cleaned up by the time sending
       // flips false.
       slot.finalizePendingToolTimings();
+      // Freeze a reasoning timer that never saw an answer delta (a turn
+      // aborted or errored mid-thought, or a reasoning-only round). Left
+      // live, reasoningEndedAt stays null and the elapsed-ms rAF ticker
+      // would spin forever after sending flips false. Same BEFORE-sending
+      // ordering as the tool finalize above.
+      if (slot.reasoningStartedAt !== null && slot.reasoningEndedAt === null) {
+        slot.reasoningEndedAt = performance.now();
+      }
       slot.sending = false;
       slot.abortCtl = null;
       // Wake lock: only release if no OTHER slot is still streaming.
@@ -7378,6 +7444,15 @@
                 reasoning={activeSlot.streamingReasoning}
                 bind:open={activeSlot.streamingReasoningOpen}
                 duration={320}
+                elapsedPill={reasoningElapsedPill(
+                  activeSlot.reasoningStartedAt,
+                  activeSlot.reasoningEndedAt,
+                  nowMs
+                )}
+                charPill={reasoningCharPill(activeSlot.streamingReasoning.length)}
+                onToggle={() => {
+                  activeSlot.reasoningUserToggled = true;
+                }}
               />
               {#if activeSlot.streamingText}
                 <!-- Live markdown render of the in-progress buffer. The

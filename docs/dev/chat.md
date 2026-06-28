@@ -580,6 +580,28 @@ A chat turn goes:
   (`displayedError` for a partial-text tail, the cut-off banner for a
   reasoning-only one) then replaces the card on click - see
   `retryIncompleteTurn` and `src/lib/ui/incomplete-turn.ts`.
+- **The streaming reasoning panel opens once, then yields - it is
+  never re-pinned open.** The first `reasoning_text` delta of a round
+  opens the panel (and stamps `slot.reasoningStartedAt`); from there
+  the ONLY automatic close paths are (a) it crosses a length/sentence
+  boundary mid-thought (`reasoningShouldCollapse` in
+  `src/lib/ui/reasoning-panel.ts` - floor 80 / ceiling 600 chars,
+  first sentence end past the floor in between), or (b) ~600ms after
+  the first answer delta. A short thought that never crosses the
+  boundary stays open to the hand-off. Crucially the panel is NOT
+  re-opened on every delta - the prior shape did that, which made a
+  mid-stream collapse impossible because the next delta snapped it
+  back open. A header click sets `slot.reasoningUserToggled`, which
+  latches OFF every automatic open/close for the rest of the round
+  (the user's choice is law); it resets per round in
+  `onAssistantPersisted`. While streaming the header carries two pills
+  - elapsed-ms (frozen at `reasoningEndedAt`, the first answer delta)
+  and a live char count - driven by the same rAF `nowMs` ticker as the
+  tool-duration pills; that ticker's `$effect` gate now also runs while
+  reasoning is live, and the outer `finally` freezes
+  `reasoningEndedAt` so an abort mid-thought can't spin it forever.
+  None of this timing is persisted - the pills are live-row only, same
+  call as the tool pills.
 - **Drafts must not enter realtime state.** The draft's in-memory
   id is a freshly-minted UUID; if a draft leaks into `addMessage`
   before being materialized, the realtime `INSERT` handler sees a
