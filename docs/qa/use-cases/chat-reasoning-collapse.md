@@ -36,6 +36,9 @@ and the open/collapse + pill wiring in `Chat.svelte`.
    just the word OK."), and watch the panel.
 6. After any completed turn above, click the saved "Reasoning" header
    on the persisted bubble.
+7. Note the pills on a completed turn's "Reasoning" header, send one
+   more message in the thread, then switch to another thread and back.
+   Finally, reload the page (or reopen the thread on another device).
 
 ## Expected
 
@@ -54,8 +57,14 @@ and the open/collapse + pill wiring in `Chat.svelte`.
   this - automation governs the next turn again.)
 - (5) A short thought stays open the whole time (never crosses the
   collapse boundary) and closes only at the answer hand-off.
-- (6) The persisted header expands the saved block-quote reasoning.
-  No pills on persisted rows - the timing is live-only, not saved.
+- (6) The persisted header expands the saved block-quote reasoning,
+  with the elapsed-ms + char-count pills still showing (they carry over
+  from the live bubble).
+- (7) The pills stay on the completed turn's header across a follow-up
+  send and a thread switch-and-back (the thread stays loaded). After a
+  full page reload - or reopening the thread on another device - the
+  header renders WITHOUT pills: the timing is in-memory only, never
+  saved, same elision as the tool-duration pills.
 
 ## Cleanup
 

@@ -50,6 +50,15 @@
   interface Props {
     content: string;
     reasoning?: string | null;
+    /**
+     * Pre-formatted reasoning header pills (elapsed-ms + char count),
+     * captured while this row streamed and forwarded to ReasoningPanel.
+     * Null on rows that didn't stream this session (a cold reopen has
+     * no in-memory timing), which render the header bare - same as the
+     * tool-duration pills. See `reasoningPillsById` in Chat.svelte.
+     */
+    reasoningElapsed?: string | null;
+    reasoningChars?: string | null;
     citations?: Message['citations'];
     /**
      * Context window (tokens) of the thread's CURRENT model, for the
@@ -111,6 +120,8 @@
   const {
     content,
     reasoning = null,
+    reasoningElapsed = null,
+    reasoningChars = null,
     citations = null,
     contextWindow = null,
     usage = null,
@@ -181,7 +192,11 @@
   }
 </script>
 
-<ReasoningPanel reasoning={reasoning ?? ''} />
+<ReasoningPanel
+  reasoning={reasoning ?? ''}
+  elapsedPill={reasoningElapsed}
+  charPill={reasoningChars}
+/>
 
 <!-- The wrapper is a pure click-delegation host; all actual markup
      is emitted by `<Markdown>`. Same a11y concession as Markdown.svelte

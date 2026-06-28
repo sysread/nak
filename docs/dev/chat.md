@@ -600,8 +600,13 @@ A chat turn goes:
   tool-duration pills; that ticker's `$effect` gate now also runs while
   reasoning is live, and the outer `finally` freezes
   `reasoningEndedAt` so an abort mid-thought can't spin it forever.
-  None of this timing is persisted - the pills are live-row only, same
-  call as the tool pills.
+  None of this timing is written to Supabase. At persist time
+  `onAssistantPersisted` freezes the final pills into the in-memory
+  `reasoningPillsById` map (keyed by message id, active thread only),
+  which `AssistantBody` reads so the pills survive the handoff from
+  streaming bubble to persisted card and stay on the row for as long as
+  the thread is loaded. A cold reopen has no in-memory entry and renders
+  the header bare - same elision as the tool-duration pills.
 - **Drafts must not enter realtime state.** The draft's in-memory
   id is a freshly-minted UUID; if a draft leaks into `addMessage`
   before being materialized, the realtime `INSERT` handler sees a

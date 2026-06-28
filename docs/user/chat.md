@@ -87,9 +87,10 @@ behind you once you've touched it.
 After the fact, every message that has saved reasoning shows a
 thought-balloon "Reasoning" header at the top of the bubble. Click
 it to expand the block-quote back open — handy for reading *why* the
-model answered a specific way without regenerating. (The timer and
-character-count pills are live-only; they're not saved with the
-message.)
+model answered a specific way without regenerating. The timer and
+character-count pills stay on the message for as long as the
+conversation is open, but they aren't saved with it — reopen the
+thread fresh (or on another device) and the header shows without them.
 
 ### Citations and sources
 
