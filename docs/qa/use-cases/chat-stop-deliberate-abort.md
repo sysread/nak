@@ -35,6 +35,14 @@ preserved as a card, not dropped"):
 - A second browser (or a private window with a distinct
   `localStorage` holder id) signed in as the same user, for the
   cross-device step.
+- Both control-channel realtime policies present on the project
+  (`"control channel: owner publish"` AND `"control channel: owner
+  subscribe"` on `realtime.messages`). The browser must JOIN the control
+  channel before it can publish the cancel, and the join is a SELECT
+  check - missing the subscribe policy makes Stop a silent no-op
+  server-side (the function streams to completion). Verify with:
+  `select policyname, cmd from pg_policies where schemaname='realtime'
+  and tablename='messages' and policyname like 'control channel%';`
 
 ## Steps
 
