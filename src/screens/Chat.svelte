@@ -634,6 +634,20 @@
   });
   let messages = $state<Message[]>([]);
 
+  // Final reasoning header pills (elapsed-ms + char count) captured per
+  // assistant message at persist time, keyed by message id. The pills the
+  // user watched while the answer streamed live on the streaming bubble;
+  // once the row persists, the bubble is replaced by the persisted card
+  // (AssistantBody), which has no live timing to read. This map carries
+  // the frozen values across that handoff so the pills stay put for as
+  // long as the thread is loaded. In-memory only - never written to
+  // Supabase - so a cold reopen (state not in memory) renders the bare
+  // header, same elision as the tool-duration pills. Populated only for
+  // the active thread (the one whose streaming bubble actually showed the
+  // pills), so a background completion the user never watched doesn't
+  // sprout pills on first view.
+  let reasoningPillsById = $state<Record<string, { elapsed: string | null; chars: string | null }>>({});
+
   // --- Per-user-message samskara diagnostics --------------------------
   // The cohort fires + substrate that the modal used to render in its
   // own sections now mount inline under each user message. Three
@@ -3688,6 +3702,22 @@
               slot.recordPersistedRow(msg);
               if (ctx.threadId === activeThreadId) {
                 appendMessage(msg);
+                // Freeze this row's reasoning pills so they survive the
+                // handoff from streaming bubble to persisted card (see
+                // reasoningPillsById). Captured before the per-round reset
+                // below nulls the timing. Duration comes from the slot's
+                // start/end stamps; the char count from the persisted
+                // reasoning text (msg.reasoning), which is the same string
+                // the card renders. Only rows that actually thought get an
+                // entry.
+                if (slot.reasoningStartedAt !== null) {
+                  const end = slot.reasoningEndedAt ?? performance.now();
+                  const elapsed = reasoningElapsedPill(slot.reasoningStartedAt, end, end);
+                  const chars = reasoningCharPill((msg.reasoning ?? '').length);
+                  if (elapsed !== null || chars !== null) {
+                    reasoningPillsById[msg.id] = { elapsed, chars };
+                  }
+                }
               }
               slot.streamingText = '';
               // Streaming companions reset per round so the NEXT
@@ -7093,6 +7123,8 @@
                 <AssistantBody
                   content={block.assistant.content}
                   reasoning={block.assistant.reasoning}
+                  reasoningElapsed={reasoningPillsById[block.assistant.id]?.elapsed ?? null}
+                  reasoningChars={reasoningPillsById[block.assistant.id]?.chars ?? null}
                   citations={block.assistant.citations}
                   contextWindow={currentTierSpec.contextWindow}
                   usage={block.assistant.usage}
@@ -7172,6 +7204,8 @@
                 <AssistantBody
                   content={block.message.content}
                   reasoning={block.message.reasoning}
+                  reasoningElapsed={reasoningPillsById[block.message.id]?.elapsed ?? null}
+                  reasoningChars={reasoningPillsById[block.message.id]?.chars ?? null}
                   citations={block.message.citations}
                   contextWindow={currentTierSpec.contextWindow}
                   usage={block.message.usage}
