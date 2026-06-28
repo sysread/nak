@@ -35,9 +35,21 @@ import type { Message } from '$lib/supabase';
  * the model needs to pick up), there's nothing here for a continuation
  * to build on. Retrying it must delete the row and re-roll, otherwise
  * the empty bubble lingers above the fresh answer.
+ *
+ * Excludes status='aborted' for the same reason isCutOffPartialText
+ * does: a user-initiated stop is a deliberate endpoint we leave alone,
+ * never a stall to retry. The aborted terminal appends the interrupted
+ * marker to content (so the common stop-after-some-text case already
+ * fails the !hasContent test), but a stop that landed during a
+ * reasoning-only stretch produces a marker-only row whose reasoning
+ * survives - the status gate, not the incidental marker, is what keeps
+ * that off the retry path. The gate also holds across devices: the
+ * status rides the persisted row, so a second device classifies the
+ * stop the same way the device that issued it would.
  */
 export function isReasoningOnlyStall(message: Message): boolean {
   if (message.role !== 'assistant') return false;
+  if (message.status === 'aborted') return false;
   if (message.tool_calls && message.tool_calls.length > 0) return false;
   const hasContent = message.content.trim().length > 0;
   const hasReasoning = (message.reasoning ?? '').trim().length > 0;

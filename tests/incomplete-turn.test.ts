@@ -57,6 +57,16 @@ describe('isReasoningOnlyStall', () => {
     expect(isReasoningOnlyStall(msg({ role: 'user', content: '', reasoning: 'x' }))).toBe(false);
     expect(isReasoningOnlyStall(msg({ role: 'tool', content: '', reasoning: 'x' }))).toBe(false);
   });
+
+  it('is false for a user-initiated stop during a reasoning-only stretch (status aborted)', () => {
+    // A stop that landed before any visible text produces a marker-only
+    // row whose reasoning survives. That is a deliberate endpoint, not a
+    // stall to re-roll - the status gate, not the incidental marker,
+    // keeps it off the retry path (and keeps a second device in agreement).
+    expect(
+      isReasoningOnlyStall(msg({ content: '', reasoning: 'thinking...', status: 'aborted' }))
+    ).toBe(false);
+  });
 });
 
 describe('isCutOffPartialText', () => {

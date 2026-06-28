@@ -85,15 +85,26 @@ A chat turn goes:
   publishes a control message on `thread:<id>:control` to tear
   down the function-side round chain, and fires the outer
   `AbortController` to stop the local event consumer. The
-  function persists whatever it had accumulated this round with
-  the `INTERRUPTED_MARKER` (`--- user interrupted response`)
-  appended; a mid-tool-execution stop persists the in-flight
-  tool's row with an error envelope (no marker on the assistant
-  row in that case - the tool row already records the
-  cancellation). The function emits an `END` event with
-  `terminalKind: 'aborted'` so the browser knows the stop
-  landed; `ChatLoopResult.interrupted` lets the UI suppress the
-  "something went wrong" banner.
+  function persists whatever it had accumulated this round as a
+  `status='aborted'` row with the `INTERRUPTED_MARKER`
+  (`--- user interrupted response`) appended; a stop that landed
+  before any text or reasoning streamed still persists a
+  marker-only `'aborted'` row (`withInterruptedMarker('')`), so a
+  deliberate stop is ALWAYS a first-class row rather than a bare
+  user-message tail another device can't tell apart from a crash.
+  A mid-tool-execution stop persists the in-flight tool's row with
+  an error envelope (no marker on the assistant row in that case -
+  the tool row already records the cancellation). The function
+  emits an `END` event with `terminalKind: 'aborted'` so the
+  browser knows the stop landed; `ChatLoopResult.interrupted` lets
+  the UI suppress the "something went wrong" banner. The
+  persisted `status='aborted'` is the cross-device signal: the
+  transcript-tail classifiers
+  (`incompleteTurnTail`, `isReasoningOnlyStall`,
+  `isCutOffPartialText`) all treat an aborted tail as a deliberate
+  endpoint and never offer it for retry, so a second device that
+  opens the thread reaches the same verdict the stopping device
+  did.
 - **Draft creation** — "New thread" button creates an in-memory-
   only `Thread` row (`isDraft: true`). It materializes to
   Supabase on first send; never written as an empty shell. This
@@ -547,9 +558,15 @@ A chat turn goes:
   (then errored, or "thought" without answering) would leave
   `assistantRowId` null and persist nothing. The terminal-write block
   in `getStreamingResponse.ts` therefore creates the row at finally
-  time when the terminal is `error`/`aborted` AND any content or
-  reasoning accumulated, so the partial lands as a `status='error'` row
-  carrying the reasoning. (2) Browser: the live streaming bubble is
+  time: for an `error` terminal only when content or reasoning
+  accumulated (an empty error row has nothing to show and renders
+  through `threads.last_error` instead), so the partial lands as a
+  `status='error'` row carrying the reasoning. An `aborted` terminal
+  ALWAYS creates the row even with nothing accumulated - a deliberate
+  stop must persist as a `status='aborted'` marker-only row so it is a
+  first-class, cross-device-visible record rather than a bare
+  user-message tail another device would read as a crashed turn and
+  offer to retry. (2) Browser: the live streaming bubble is
   gated on `activeSlot.sending` alone, so it unmounts the instant the
   turn ends - the persisted DB row is the ONLY thing that can show the
   partial afterward. The drain in `venice.ts` no longer `close()`s on

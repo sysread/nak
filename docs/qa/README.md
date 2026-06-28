@@ -107,6 +107,10 @@ One file per use-case under [`use-cases/`](./use-cases/), named
 - [chat-cutoff-retry](./use-cases/chat-cutoff-retry.md) - retrying a
   dead tail (partial-text cutoff or reasoning-only stall) red-outlines
   and replaces it rather than appending a continuation.
+- [chat-stop-deliberate-abort](./use-cases/chat-stop-deliberate-abort.md) -
+  the Stop button persists a `status='aborted'` row (marker-only even
+  when nothing streamed), is never offered for retry, and reads the same
+  on a second device.
 - [chat-recovery-banner](./use-cases/chat-recovery-banner.md) - one
   recovery banner at the transcript tail, never stacked: precedence
   error > interrupted-draft > cut-off, suppressed while a live claim

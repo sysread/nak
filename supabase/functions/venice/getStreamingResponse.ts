@@ -884,14 +884,24 @@ export async function getStreamingResponse(
     // persisted card to fall back on, so the user watches the partial
     // vanish with no way to inspect it. Create the row now so the
     // partial (reasoning, plus any text) survives as a status='error' /
-    // 'aborted' card. Scoped to the failed/stopped terminals with
-    // something to preserve - the 'completed' and 'suspended_for_ask_user'
-    // terminals own their own row lifecycle, and a turn that streamed
-    // nothing at all has nothing to persist.
+    // 'aborted' card. The 'completed' and 'suspended_for_ask_user'
+    // terminals own their own row lifecycle.
+    //
+    // 'aborted' always creates the row, even with nothing accumulated:
+    // a user-initiated stop is a deliberate signal that must persist as
+    // a first-class 'aborted' row (the marker-only content from
+    // withInterruptedMarker('')) so a second device reading the thread
+    // sees the same deliberate-endpoint record this device does. Without
+    // the row an early stop leaves a bare user-message tail that another
+    // device can't distinguish from a crashed turn, and would offer to
+    // retry. 'error' still requires something to preserve - an error row
+    // with no partial has nothing to show and renders through other
+    // affordances (threads.last_error), so an empty one is pure noise.
     if (
       assistantRowId === null &&
-      (terminalKind === 'error' || terminalKind === 'aborted') &&
-      (accum.content.length > 0 || accum.reasoning.length > 0)
+      (terminalKind === 'aborted' ||
+        (terminalKind === 'error' &&
+          (accum.content.length > 0 || accum.reasoning.length > 0)))
     ) {
       // Best-effort: ensureAssistantRow throws on an insert failure, and
       // this runs in the finally where a throw would escape the
