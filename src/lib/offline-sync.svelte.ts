@@ -185,17 +185,6 @@ export async function syncOfflineCache(
     // "remote changed". Evicting here would wipe the offline copies on
     // the first network hiccup.
     log.warn('sync skipped: could not reach server; cache left intact', err);
-    // Diagnostic: how much is actually mirrored right now. A failed sync
-    // is exactly when the offline read paths matter, so surfacing the
-    // cache size here (visible at info) tells a Logs-drawer dump whether
-    // there is anything to serve at all.
-    const [cachedA, cachedR] = await Promise.all([
-      getAllCached<WikiArticle>('articles'),
-      getAllCached<Recipe>('recipes'),
-    ]);
-    log.info(
-      `offline cache holds ${cachedA.length} article(s), ${cachedR.length} recipe(s)`,
-    );
     return { ok: false };
   }
   const recipeRows = dedupeById(favoriteRecipes, upcomingRecipes);
@@ -291,14 +280,8 @@ export async function getArticleCached(
     }
   }
   const cached = await getCached<WikiArticle>('articles', id);
-  // Visible (info) so an offline-read problem shows in a Logs-drawer dump
-  // without dropping the filter: whether the row was in the cache, and -
-  // when it was - whether it actually carries a body (an empty body would
-  // render as a blank article even on a cache "hit").
-  log.info(
-    cached
-      ? `article ${id}: served from offline cache (body ${cached.row.content?.length ?? 0} chars)`
-      : `article ${id}: NOT in offline cache`,
+  log.debug(
+    `article ${id}: ${cached ? 'served from offline cache' : 'not in offline cache'}`,
   );
   return { row: cached?.row ?? null, fromCache: cached != null };
 }
@@ -329,13 +312,8 @@ export async function getRecipeCached(
     }
   }
   const cached = await getCached<Recipe>('recipes', id);
-  // Visible (info) so an offline-read problem shows in a Logs-drawer dump
-  // without dropping the filter: cache hit/miss, and on a hit whether the
-  // row carries a body (empty cooklang would render as a blank recipe).
-  log.info(
-    cached
-      ? `recipe ${id}: served from offline cache (cooklang ${cached.row.cooklang?.length ?? 0} chars)`
-      : `recipe ${id}: NOT in offline cache`,
+  log.debug(
+    `recipe ${id}: ${cached ? 'served from offline cache' : 'not in offline cache'}`,
   );
   return { row: cached?.row ?? null, fromCache: cached != null };
 }

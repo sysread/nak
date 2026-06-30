@@ -163,22 +163,6 @@
       : null,
   );
 
-  // Diagnostic (offline debugging). An article resolved from the
-  // in-memory Favorites bucket never touches the read-through logger, so
-  // a blank-article-offline report would have no breadcrumb. Log how the
-  // open article resolved and whether it carries a body, visible at info.
-  const offlineDiag = createLogger('offline');
-  $effect(() => {
-    const id = route.wiki_article_id;
-    if (!id) return;
-    const a = selectedArticle;
-    if (a && a.id === id) {
-      offlineDiag.info(
-        `article ${id}: rendering (body ${a.content?.length ?? 0} chars)`,
-      );
-    }
-  });
-
   // Resolve the fallback whenever the route points at an article the
   // loaded set doesn't hold. getArticleCached is offline-aware: online
   // it fetches + refreshes the cache; offline it reads the cached copy.
