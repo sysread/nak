@@ -1368,6 +1368,16 @@ separately.
 
 ## Interactions
 
+- **Offline cache** (`docs/dev/offline-cache.md`) - the
+  `wiki_articles.favorite` flag, its header toggle, the sidebar
+  Favorites bucket, and `setWikiArticleFavorite` /
+  `listFavoriteWikiArticles` / `getWikiArticleById` exist for offline
+  caching: favoriting an article is what mirrors it into IndexedDB.
+  The article detail view resolves its open article through that
+  feature's read-through (`getArticleCached`) so a favorited article
+  opens with no network. Favorite toggles deliberately skip
+  `updated_at` so the cache treats a bookmark flip as "no content
+  change".
 - **File storage** (`docs/dev/file-storage.md`) - record files use the
   persistent `wiki-record-files` bucket and the signed-URL read model;
   the `wiki-record-file-gc` orphan sweep is a clone of `attachment-gc`.

@@ -152,6 +152,7 @@
   import LibraryList from '../components/LibraryList.svelte';
   import ArtifactsList from '../components/ArtifactsList.svelte';
   import DiagnosticPills from '../components/DiagnosticPills.svelte';
+  import OfflineBanner from '../components/OfflineBanner.svelte';
   import SamskaraMoodSync from '../components/SamskaraMoodSync.svelte';
   import TopicsFilter from '../components/TopicsFilter.svelte';
   import BucketHeader from '../components/BucketHeader.svelte';
@@ -169,6 +170,7 @@
     runWikiSearch,
   } from '$lib/wiki-store.svelte';
   import { onWikiChange, emitWikiChange, emitWikiRecordChange } from '$lib/wiki-events';
+  import { initOfflineStatus, syncOfflineCache } from '$lib/offline-sync.svelte';
   import {
     wikiLibrarianLease,
     memoryLibrarianLease,
@@ -1874,7 +1876,16 @@
   // harmless - consumers refetch idempotently.
   $effect(() => {
     if (!app.supabase || !session) return;
-    return app.supabase.subscribeToWikiArticleChanges(session.user.id, emitWikiChange);
+    const supabase = app.supabase;
+    return supabase.subscribeToWikiArticleChanges(session.user.id, () => {
+      emitWikiChange();
+      // A server-side article write (this device or another) may have
+      // changed a favorited article's body or its favorite flag - re-
+      // reconcile the offline cache so the saved copy tracks it. The
+      // ping carries no payload, so we re-fetch the marked set; the
+      // reconcile is a no-op when nothing the cache holds actually moved.
+      void syncOfflineCache(supabase);
+    });
   });
 
   // Realtime: relay server-side wiki-record writes into the record
@@ -1941,7 +1952,36 @@
   // this relay into the cookbook event bus.
   $effect(() => {
     if (!app.supabase || !session) return;
-    return app.supabase.subscribeToRecipeChanges(session.user.id, emitCookbookChange);
+    const supabase = app.supabase;
+    return supabase.subscribeToRecipeChanges(session.user.id, () => {
+      emitCookbookChange();
+      // Twin of the wiki relay: a server-side recipe write may have
+      // changed a favorited / upcoming recipe or its bookmark flags,
+      // so re-reconcile the offline cache off the fresh marked set.
+      void syncOfflineCache(supabase);
+    });
+  });
+
+  // Offline cache: track connectivity and keep the IndexedDB mirror of
+  // the marked set (favorited articles, favorited / upcoming recipes)
+  // current. Reconcile once when the session goes live, and again each
+  // time the device comes back online so a cache that drifted while
+  // offline catches up. The realtime relays above cover the
+  // online-steady-state case. initOfflineStatus owns the
+  // navigator.onLine flag the offline UI reads.
+  $effect(() => {
+    if (!app.supabase || !session) return;
+    const supabase = app.supabase;
+    const teardownStatus = initOfflineStatus();
+    void syncOfflineCache(supabase);
+    const onOnline = (): void => {
+      void syncOfflineCache(supabase);
+    };
+    window.addEventListener('online', onOnline);
+    return () => {
+      window.removeEventListener('online', onOnline);
+      teardownStatus();
+    };
   });
 
   // Realtime: mint toasts. The samskara formation pipeline runs in the
@@ -1983,15 +2023,30 @@
         exchangeStore.disposeAll();
       }
     });
-    void app.supabase.getSession().then((s) => {
-      session = s;
-      sessionLoaded = true;
-      if (s) {
-        void refreshThreads();
-        void refreshSettings();
-        void refreshTopicsVocabulary();
-      }
-    });
+    // supabase-js getSession() reads the persisted session from
+    // localStorage and resolves without a network round-trip (token
+    // refresh is fire-and-forget), so an offline cold boot with a valid
+    // stored JWT still resolves here and renders the shell - which is
+    // what makes the offline cache reachable. The .catch is the
+    // belt-and-suspenders: if getSession ever rejects (a hardened
+    // storage error), we must still flip sessionLoaded so the UI can't
+    // strand on the "Connecting..." gate forever. onAuthChange's
+    // INITIAL_SESSION (also storage-backed) is what sets `session` in
+    // that case.
+    void app.supabase
+      .getSession()
+      .then((s) => {
+        session = s;
+        sessionLoaded = true;
+        if (s) {
+          void refreshThreads();
+          void refreshSettings();
+          void refreshTopicsVocabulary();
+        }
+      })
+      .catch(() => {
+        sessionLoaded = true;
+      });
     // Web Share Target drain. The service worker (src/sw.ts) stashes
     // incoming shares in IndexedDB and redirects here with
     // `?share=pending` as a navigation signal. We drain unconditionally
@@ -6325,6 +6380,8 @@
     class:logs-open={logsDrawer.state.open}
     class:shell-behind-modal={route.modal !== null}
   >
+    <!-- Fixed-position connectivity banner; renders only when offline. -->
+    <OfflineBanner />
     <div
       class="drawer-backdrop"
       onclick={closeDrawer}

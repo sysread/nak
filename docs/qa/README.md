@@ -143,6 +143,10 @@ One file per use-case under [`use-cases/`](./use-cases/), named
 - [realtime-relays](./use-cases/realtime-relays.md) - server-side
   writes refreshing open panels (wiki articles, memories, recipes),
   including DELETE delivery via the replica-identity indexes.
+- [offline-cache](./use-cases/offline-cache.md) - favoriting to save a
+  wiki article / recipe offline, reading it with no network, the
+  read-only gating + photo placeholder, and cross-device eviction that
+  never fires on a network blip.
 - [background-maintenance](./use-cases/background-maintenance.md) -
   embed backfill, attachment expiry, recipe-image GC, and their
   per-user drawer summaries.

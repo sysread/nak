@@ -30,6 +30,16 @@ interface WikiStore {
    *     `searchWikiArticlesSemantic`. `hasMore` is forced false here.
    */
   results: WikiArticle[];
+  /**
+   * Every `favorite`-flagged article (complete, not paged), title ASC.
+   * Rendered as a "Favorites" bucket above the browse list - and a
+   * favorite is what marks an article for offline caching, so this is
+   * also the set `offline-sync` mirrors into IndexedDB. Refetched whole
+   * by `loadWikiFirstPage`; empty while a search is active (the bucket
+   * only makes sense over the browse regime). Mirrors
+   * `cookbook.favorites`.
+   */
+  favorites: WikiArticle[];
   loading: boolean;
   /** Set true after the first load resolves, success or error. */
   loaded: boolean;
@@ -50,6 +60,7 @@ interface WikiStore {
 
 export const wikiStore = $state<WikiStore>({
   results: [],
+  favorites: [],
   loading: false,
   loaded: false,
   error: null,
@@ -79,13 +90,22 @@ export async function loadWikiFirstPage(
   wikiStore.loading = true;
   wikiStore.error = null;
   try {
-    const page = await supabase.listWikiArticlesPage({
-      offset: 0,
-      pageSize: DEFAULT_LIST_PAGE_SIZE,
-    });
+    // Fetch the browse page and the complete Favorites bucket together.
+    // Favorites is its own whole-set fetch (not a slice of the page)
+    // because it renders above the list and a favorited article living
+    // past the loaded page window would otherwise vanish from it -
+    // same rationale as cookbook.favorites.
+    const [page, favorites] = await Promise.all([
+      supabase.listWikiArticlesPage({
+        offset: 0,
+        pageSize: DEFAULT_LIST_PAGE_SIZE,
+      }),
+      supabase.listFavoriteWikiArticles(),
+    ]);
     wikiStore.results = page.rows;
     wikiStore.offset = page.rows.length;
     wikiStore.hasMore = page.hasMore;
+    wikiStore.favorites = favorites;
   } catch (err) {
     wikiStore.error = err instanceof Error ? err.message : String(err);
   } finally {
@@ -175,11 +195,42 @@ export function patchWikiRow(id: string, patch: Partial<WikiArticle>): void {
   wikiStore.results = wikiStore.results.map((a) =>
     a.id === id ? { ...a, ...patch } : a,
   );
+  // A favorited article also lives in the Favorites bucket; keep its
+  // copy in step so a title / content edit shows there too.
+  wikiStore.favorites = wikiStore.favorites.map((a) =>
+    a.id === id ? { ...a, ...patch } : a,
+  );
 }
 
-/** Drop one row from the list. */
+/**
+ * Reflect a favorite toggle locally without a refetch: patch the row's
+ * flag in `results` and add/remove it from the Favorites bucket
+ * (re-sorted alphabetically so the bucket order matches the browse
+ * list). The full `article` is passed so an add has a row to insert
+ * even when the toggle fires from a detail view whose row was never in
+ * `results`.
+ */
+export function applyWikiFavorite(article: WikiArticle, favorite: boolean): void {
+  wikiStore.results = wikiStore.results.map((a) =>
+    a.id === article.id ? { ...a, favorite } : a,
+  );
+  if (favorite) {
+    if (!wikiStore.favorites.some((a) => a.id === article.id)) {
+      const next = [...wikiStore.favorites, { ...article, favorite: true }];
+      next.sort((a, b) =>
+        a.title.toLowerCase().localeCompare(b.title.toLowerCase()),
+      );
+      wikiStore.favorites = next;
+    }
+  } else {
+    wikiStore.favorites = wikiStore.favorites.filter((a) => a.id !== article.id);
+  }
+}
+
+/** Drop one row from the list (and the Favorites bucket if present). */
 export function removeWikiRow(id: string): void {
   wikiStore.results = wikiStore.results.filter((a) => a.id !== id);
+  wikiStore.favorites = wikiStore.favorites.filter((a) => a.id !== id);
 }
 
 /**
@@ -217,6 +268,7 @@ export async function resetAllWikiData(
 ): Promise<void> {
   await supabase.resetWikiData();
   wikiStore.results = [];
+  wikiStore.favorites = [];
   wikiStore.loaded = true;
   wikiStore.error = null;
   emitWikiChange();

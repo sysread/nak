@@ -66,6 +66,7 @@
     wikiStore,
     runWikiSearch,
     patchWikiRow,
+    applyWikiFavorite,
     removeWikiRow,
     addWikiRow,
   } from '$lib/wiki-store.svelte';
@@ -75,6 +76,8 @@
     MAX_WIKI_CHANGELOG_MESSAGE_CHARS,
   } from '$lib/wiki';
   import { onWikiChange, emitWikiChange, emitWikiRecordChange } from '$lib/wiki-events';
+  import { offlineStatus, getArticleCached } from '$lib/offline-sync.svelte';
+  import { missingRecordMessage } from '$lib/ui/offline-status';
   import { createLogger } from '$lib/logger.svelte';
   import { describeRecordOps, recordOpsHeadline } from '$lib/ui/wiki-manual';
   import { contentPreview } from '$lib/ui/wiki-records';
@@ -143,11 +146,52 @@
     triggerSkippedView = $bindable(false),
   }: Props = $props();
 
+  // The article view normally reads the open article straight out of
+  // the loaded list / Favorites bucket. `fetchedArticle` is the
+  // fallback for the rows the loaded set doesn't cover: a deep link to
+  // an article that was never paged in, and - the point of the offline
+  // work - an article opened with no network, served from the
+  // IndexedDB cache via getArticleCached.
+  let fetchedArticle = $state<WikiArticle | null>(null);
+  let fetchingArticle = $state(false);
+
   const selectedArticle = $derived<WikiArticle | null>(
     route.wiki_article_id
-      ? wikiStore.results.find((a) => a.id === route.wiki_article_id) ?? null
+      ? (wikiStore.results.find((a) => a.id === route.wiki_article_id) ??
+         wikiStore.favorites.find((a) => a.id === route.wiki_article_id) ??
+         (fetchedArticle?.id === route.wiki_article_id ? fetchedArticle : null))
       : null,
   );
+
+  // Resolve the fallback whenever the route points at an article the
+  // loaded set doesn't hold. getArticleCached is offline-aware: online
+  // it fetches + refreshes the cache; offline it reads the cached copy.
+  $effect(() => {
+    const id = route.wiki_article_id;
+    const supabase = app.supabase;
+    if (!id || !supabase) {
+      fetchedArticle = null;
+      return;
+    }
+    if (
+      wikiStore.results.some((a) => a.id === id) ||
+      wikiStore.favorites.some((a) => a.id === id)
+    ) {
+      return;
+    }
+    let cancelled = false;
+    fetchingArticle = true;
+    void getArticleCached(supabase, id)
+      .then((res) => {
+        if (!cancelled) fetchedArticle = res.row;
+      })
+      .finally(() => {
+        if (!cancelled) fetchingArticle = false;
+      });
+    return () => {
+      cancelled = true;
+    };
+  });
 
   // Initial fetch + listen for cross-surface changes (tool path writes,
   // agent worker writes). The store owns the search debounce; this
@@ -257,6 +301,30 @@
   // input box.
   let editMessage = $state('');
   let saveState = $state<SaveState>({ kind: 'idle' });
+
+  // Favorite toggle. Marking an article favorite is what saves it
+  // offline (offline-sync mirrors the favorite set into IndexedDB), so
+  // this is the one bookmark control the wiki has. The local store only
+  // updates AFTER the server write lands (applyWikiFavorite), so a
+  // failed toggle leaves the glyph showing the true server state; the
+  // error line surfaces why nothing changed.
+  let favoriteBusy = $state(false);
+  let favoriteError = $state<string | null>(null);
+
+  async function toggleFavorite(a: WikiArticle): Promise<void> {
+    if (!app.supabase || favoriteBusy) return;
+    const next = !a.favorite;
+    favoriteBusy = true;
+    favoriteError = null;
+    try {
+      await app.supabase.setWikiArticleFavorite(a.id, next);
+      applyWikiFavorite(a, next);
+    } catch (err) {
+      favoriteError = err instanceof Error ? err.message : String(err);
+    } finally {
+      favoriteBusy = false;
+    }
+  }
 
   function startEdit(a: WikiArticle): void {
     editingId = a.id;
@@ -1514,9 +1582,15 @@
         <WikiChangelogPanel onAddArticle={startCompose} />
       {/if}
     {:else if !selectedArticle}
+      <!-- Route points at an article the loaded set doesn't hold and the
+           read-through couldn't resolve: still fetching, offline + not
+           saved, or genuinely gone. The message picks among those. -->
       <p class="subtle wiki-empty">
-        That article isn't in the current results. Clear the search to
-        find it again.
+        {missingRecordMessage({
+          fetching: fetchingArticle,
+          online: offlineStatus.online,
+          noun: 'article',
+        })}
       </p>
     {:else}
       {@const a = selectedArticle}
@@ -1761,15 +1835,74 @@
           <header class="wiki-header">
             <h1 class="wiki-title">{a.title}</h1>
             <div class="wiki-actions">
-              <button type="button" onclick={() => startEdit(a)}>Edit</button>
-              <button type="button" onclick={() => startManualUpdate(a)}>
+              <button
+                type="button"
+                class="icon-btn wiki-favorite-btn"
+                class:active={a.favorite}
+                onclick={() => toggleFavorite(a)}
+                disabled={favoriteBusy || !offlineStatus.online}
+                title={!offlineStatus.online
+                  ? 'Reconnect to change favorites'
+                  : a.favorite
+                    ? 'Saved offline (remove from favorites)'
+                    : 'Save offline (mark as favorite)'}
+                aria-label={a.favorite
+                  ? 'Remove from favorites'
+                  : 'Mark as favorite'}
+                aria-pressed={a.favorite}
+              >
+                <!-- Star: filled when favorited (saved offline), outline
+                     otherwise. Same fill-vs-stroke active convention as
+                     the Cookbook bookmark glyphs. -->
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill={a.favorite ? 'currentColor' : 'none'}
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"
+                  />
+                </svg>
+              </button>
+              <!-- Edits, the agent update, and delete all write to
+                   Supabase, so they need connectivity - disabled offline
+                   with a tooltip rather than failing on submit. -->
+              <button
+                type="button"
+                onclick={() => startEdit(a)}
+                disabled={!offlineStatus.online}
+                title={offlineStatus.online ? undefined : 'Reconnect to edit'}
+              >
+                Edit
+              </button>
+              <button
+                type="button"
+                onclick={() => startManualUpdate(a)}
+                disabled={!offlineStatus.online}
+                title={offlineStatus.online ? undefined : 'Reconnect to run the agent'}
+              >
                 Ask agent to update
               </button>
-              <button type="button" onclick={() => requestDelete(a)} class="danger">
+              <button
+                type="button"
+                onclick={() => requestDelete(a)}
+                class="danger"
+                disabled={!offlineStatus.online}
+                title={offlineStatus.online ? undefined : 'Reconnect to delete'}
+              >
                 Delete
               </button>
             </div>
           </header>
+          {#if favoriteError}
+            <p class="wiki-favorite-error" role="alert">{favoriteError}</p>
+          {/if}
           {#if tocHeadings.length >= 2 || sectionTocLinks.length > 0}
             <!--
               Table of contents. Rendered before the article body so the
@@ -1966,6 +2099,28 @@
     display: flex;
     gap: 0.4rem;
     flex-wrap: wrap;
+    align-items: center;
+  }
+  /* Favorite (save-offline) toggle. Muted until active, then the brand
+     accent fills the star - the same "active = accent" read the
+     Cookbook bookmark buttons use. */
+  .wiki-favorite-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-subtle, var(--text));
+  }
+  .wiki-favorite-btn.active {
+    color: var(--accent, #f5a623);
+  }
+  .wiki-favorite-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  .wiki-favorite-error {
+    margin: 0 0 0.75rem 0;
+    color: var(--danger, #c0392b);
+    font-size: 0.85rem;
   }
   .wiki-content {
     line-height: 1.6;

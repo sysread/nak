@@ -8289,6 +8289,23 @@ drop policy if exists "wiki_articles are self-deletable" on public.wiki_articles
 create policy "wiki_articles are self-deletable" on public.wiki_articles
   for delete using (auth.uid() = user_id);
 
+-- Long-lived bookmark. Marking an article favorite is what flags it for
+-- offline caching (the browser mirrors the favorite set into IndexedDB
+-- so it reads with no network). Mirrors recipes.favorite: a personal
+-- bookmark, not article content, so toggling it must NOT bump
+-- updated_at - the offline cache's freshness comparator keys on
+-- updated_at, and a bookmark flip is not a content change. The
+-- clear_wiki_embedding_on_change trigger above only guards title /
+-- content, so a favorite toggle also leaves the embedding intact.
+alter table public.wiki_articles
+  add column if not exists favorite boolean not null default false;
+
+-- Partial index over the flagged subset only, so the "list favorites"
+-- query (and the offline-sync reconcile that drives it) stays cheap
+-- while most rows aren't favorited. Twin of recipes_user_favorite_idx.
+create index if not exists wiki_articles_user_favorite_idx
+  on public.wiki_articles (user_id) where favorite;
+
 -- Per-thread pointer + claim columns for the autonomous wiki agent.
 -- Independent of last_reflected_msg_id so both workers can run
 -- concurrently against the same thread without crowding each

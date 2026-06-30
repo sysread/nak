@@ -144,6 +144,32 @@ populated Records section shows a Contents box with just the section
 links. A bare article with no headings and none of those sections has
 no Contents box at all.
 
+## Favorites and offline access
+
+Each open article has a **star** button in its header. Click it to
+**favorite** the article - the star fills in. Favoriting does two
+things:
+
+- It pins the article to a **Favorites** section at the top of the
+  Wiki sidebar, so the articles you return to most are one click away.
+- It **saves the article for offline reading.** While you're online,
+  favorited articles are mirrored onto your device; after that you can
+  open them with no connection - on a phone with no signal, on a plane,
+  anywhere. The sidebar labels the section "Favorites - saved offline"
+  to make the link explicit.
+
+This is the feature to reach for when you have an article you must be
+able to read no matter what - an evacuation checklist, emergency
+contacts, medical notes. Favorite it once while you have a connection
+and it's there when you don't.
+
+Click the star again to remove the favorite; the article drops out of
+the Favorites section and is no longer kept offline. Changing
+favorites needs a connection (the star is disabled while you're
+offline), and so do editing and deleting - offline, the article view
+is read-only. See [Install as a PWA -> What works
+offline](./install-pwa.md) for the full picture, including recipes.
+
 ## Deleting
 
 Click **Delete** on the open article. A confirmation strip appears
