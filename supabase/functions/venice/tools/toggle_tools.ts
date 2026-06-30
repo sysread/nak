@@ -27,8 +27,8 @@ import { requireThreadId, registerTool, type ToolContext, type ToolDef } from '.
 // the gated-toolbox names are duplicated here. A name the model toggles
 // that is absent from this Set is silently dropped (the accept loop
 // below filters on it), so a stale mirror manifests as "the toolbox
-// can't be enabled" - exactly how the wiki_records omission surfaced
-// after that feature shipped (toggle returned `enabled: []`).
+// can't be enabled" - the model toggles a real toolbox name and the
+// toggle returns `enabled: []` because this Set never heard of it.
 //
 // DRIFT GUARD: tests/toggle-toolbox-mirror.test.ts (vitest) reads this
 // literal as text and asserts it equals the browser GATED_TOOLBOX_NAMES,
@@ -38,7 +38,6 @@ const GATED_TOOLBOX_NAMES = new Set<string>([
   'cooking',
   'memories',
   'wiki',
-  'wiki_records',
   'library',
   'images',
 ]);

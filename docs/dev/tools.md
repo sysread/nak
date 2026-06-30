@@ -43,14 +43,17 @@ The main chat model sees toolboxes as the unit of enablement:
 - **`always_on`** - rides every request regardless of the thread's
   `toolboxes_enabled` array. Carries every read-only surface plus a
   few reflexes (below).
-- **`cooking`**, **`memories`**, **`wiki`**, **`wiki_records`**,
-  **`library`**, **`images`** - gated toolboxes carrying only writes.
+- **`cooking`**, **`memories`**, **`wiki`**, **`library`**,
+  **`images`** - gated toolboxes carrying only writes.
   Included in the wire catalog only when their name appears in
-  `threads.toolboxes_enabled`. `wiki_records` carries the record writes
-  (`record_create` / `record_update` / `record_delete`) plus the file +
+  `threads.toolboxes_enabled`. `wiki` is the single gate for every
+  chat-driven wiki write: article CRUD (`wiki_create` / `wiki_update` /
+  `wiki_delete`), the `wiki_librarian` delegation, the record writes
+  (`record_create` / `record_update` / `record_delete`), and the file +
   link writes (`record_file_attach` / `record_file_remove` /
-  `record_link_create` / `record_link_delete`); the record reads
-  (`record_list` / `record_get` / `record_search`) stay always-on. See
+  `record_link_create` / `record_link_delete`). The matching reads
+  (`wiki_search` / `wiki_list` / `wiki_get`, `record_list` /
+  `record_get` / `record_search`) stay always-on. See
   `docs/dev/wiki.md` for the record files + cross-links design.
 
 The principle: reads are idempotent and cheap, so gating them was
@@ -131,13 +134,17 @@ Notable members (the full ordered list is `alwaysOnToolbox` in
   / `memory_delete` plus the volitional levers (`memory_reaffirm` /
   `memory_doubt` for graded confidence, `memory_relate` /
   `memory_unrelate` for the memory graph). See `./memory.md`.
-- **`wiki`** - carries only `wiki_librarian`, which delegates a
-  maintenance task to a multi-round sub-agent. Direct `wiki_create`
-  / `wiki_update` / `wiki_delete` are NOT exposed to the main chat
-  at all - those are reserved for the autonomous wiki agent and the
-  librarian itself, so any chat-driven wiki edit goes through the
-  librarian's full read-then-plan loop rather than a one-shot
-  scribble. See `./wiki.md`.
+- **`wiki`** - the single gate for every chat-driven wiki write.
+  Direct article CRUD (`wiki_create` / `wiki_update` /
+  `wiki_delete`), the `wiki_librarian` delegation (a multi-round
+  sub-agent for multi-article consolidations), and the full record
+  write surface (`record_create` / `record_update` /
+  `record_delete`, the file tools `record_file_attach` /
+  `record_file_remove`, and the cross-link tools
+  `record_link_create` / `record_link_delete`). The chat model picks
+  a one-shot `wiki_update` for a targeted edit or delegates to the
+  librarian for a consolidation that has to reason across the whole
+  wiki. See `./wiki.md`.
 - **`library`** - document writes: `doc_create` (promote a file the
   user attached into a permanent searchable document), `doc_update`,
   `doc_delete`. See `./library.md`.
@@ -290,7 +297,8 @@ Edge dispatch (`supabase/functions/venice/`):
   import this browser barrel and so keeps a HAND-MAINTAINED copy of
   these names. A toolbox added here but not there can't be enabled
   by the model - the toggle silently drops the unknown name and
-  returns `enabled: []` (the bug that shipped with `wiki_records`).
+  returns `enabled: []` (the shape of a past regression where a
+  shipped toolbox was missing from this mirror).
   `tests/toggle-toolbox-mirror.test.ts` cross-checks the two lists,
   so adding a gated toolbox means editing BOTH places (and the
   guard fails the gate if you forget).
@@ -426,9 +434,11 @@ Edge dispatch (`supabase/functions/venice/`):
   Each recall agent runs with a one-tool read-only toolbox so a
   bug in a recall prompt can't scribble over user data. See
   `./context-recall.md` and `./conversation-recall.md`.
-- **Wiki** - reads are always-on; the gated `wiki` toolbox carries
-  only the librarian delegation. Direct wiki writes exist solely
-  as agent-toolbox members. See `./wiki.md`.
+- **Wiki** - reads are always-on; the gated `wiki` toolbox is the
+  single gate for every chat-driven write - article CRUD, the
+  librarian delegation, and the record writes (records + files +
+  links). The same write tool impls also compose the autonomous
+  agents' own toolboxes via `asAgentTool`. See `./wiki.md`.
 - **Library** - the `doc_*` read/write split mirrors the other
   stores: reads always-on, writes behind the `library` box. See
   `./library.md`.

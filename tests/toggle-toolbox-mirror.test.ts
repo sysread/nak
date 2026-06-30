@@ -48,8 +48,12 @@ describe('gated toolbox name mirror', () => {
     expect([...edgeNames].sort()).toEqual([...GATED_TOOLBOX_NAMES].sort());
   });
 
-  it('includes wiki_records (the reported regression)', () => {
-    expect(GATED_TOOLBOX_NAMES).toContain('wiki_records');
-    expect(parseEdgeGatedNames(readFileSync(EDGE_FILE, 'utf8'))).toContain('wiki_records');
+  it('includes the wiki toolbox in both lists', () => {
+    // `wiki` gates every chat-driven wiki write (articles + records).
+    // A drift that drops it from the edge mirror is the same class of
+    // regression a missing toolbox name has always been: the model
+    // toggles `wiki` and the toggle returns `enabled: []`.
+    expect(GATED_TOOLBOX_NAMES).toContain('wiki');
+    expect(parseEdgeGatedNames(readFileSync(EDGE_FILE, 'utf8'))).toContain('wiki');
   });
 });
