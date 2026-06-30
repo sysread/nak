@@ -35,7 +35,7 @@
     loadRecipePhotos,
   } from '$lib/cookbook-store.svelte';
   import { onCookbookChange } from '$lib/cookbook-events';
-  import { getRecipeCached } from '$lib/offline-sync.svelte';
+  import { getRecipeCached, offlineStatus } from '$lib/offline-sync.svelte';
   import {
     cooklangToHtml,
     parseCooklang,
@@ -1242,7 +1242,12 @@
                   class="secondary icon-btn cookbook-action-upcoming"
                   class:active={r!.upcoming}
                   onclick={onToggleUpcoming}
-                  title={r!.upcoming ? 'Remove from upcoming' : 'Mark as upcoming'}
+                  disabled={!offlineStatus.online}
+                  title={!offlineStatus.online
+                    ? 'Reconnect to change bookmarks'
+                    : r!.upcoming
+                      ? 'Remove from upcoming'
+                      : 'Mark as upcoming'}
                   aria-label={r!.upcoming ? 'Remove from upcoming' : 'Mark as upcoming'}
                   aria-pressed={r!.upcoming}
                 >
@@ -1273,7 +1278,12 @@
                   class="secondary icon-btn cookbook-action-favorite"
                   class:active={r!.favorite}
                   onclick={onToggleFavorite}
-                  title={r!.favorite ? 'Remove from favorites' : 'Mark as favorite'}
+                  disabled={!offlineStatus.online}
+                  title={!offlineStatus.online
+                    ? 'Reconnect to change bookmarks'
+                    : r!.favorite
+                      ? 'Remove from favorites'
+                      : 'Mark as favorite'}
                   aria-label={r!.favorite ? 'Remove from favorites' : 'Mark as favorite'}
                   aria-pressed={r!.favorite}
                 >
@@ -1301,7 +1311,8 @@
                   type="button"
                   class="secondary icon-btn"
                   onclick={openEdit}
-                  title="Edit recipe"
+                  disabled={!offlineStatus.online}
+                  title={offlineStatus.online ? 'Edit recipe' : 'Reconnect to edit'}
                   aria-label="Edit recipe"
                 >
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -1314,7 +1325,8 @@
                   type="button"
                   class="secondary icon-btn cookbook-action-danger"
                   onclick={() => onDelete(r!.id)}
-                  title="Delete recipe"
+                  disabled={!offlineStatus.online}
+                  title={offlineStatus.online ? 'Delete recipe' : 'Reconnect to delete'}
                   aria-label="Delete recipe"
                 >
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -1368,6 +1380,13 @@
                   </figure>
                 {/each}
               </div>
+            {:else if !offlineStatus.online}
+              <!-- Photos are signed-URL blobs we don't cache (text and
+                   metadata only), so they can't load with no network.
+                   Say so rather than showing broken image icons. -->
+              <p class="subtle recipe-photos-offline">
+                Photos are only available online.
+              </p>
             {/if}
             <!-- Table of contents. A jump menu over the rendered body:
                  top-level Ingredients / Instructions plus a sub-entry per

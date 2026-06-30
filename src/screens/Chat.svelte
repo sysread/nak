@@ -152,6 +152,7 @@
   import LibraryList from '../components/LibraryList.svelte';
   import ArtifactsList from '../components/ArtifactsList.svelte';
   import DiagnosticPills from '../components/DiagnosticPills.svelte';
+  import OfflineBanner from '../components/OfflineBanner.svelte';
   import SamskaraMoodSync from '../components/SamskaraMoodSync.svelte';
   import TopicsFilter from '../components/TopicsFilter.svelte';
   import BucketHeader from '../components/BucketHeader.svelte';
@@ -2022,15 +2023,30 @@
         exchangeStore.disposeAll();
       }
     });
-    void app.supabase.getSession().then((s) => {
-      session = s;
-      sessionLoaded = true;
-      if (s) {
-        void refreshThreads();
-        void refreshSettings();
-        void refreshTopicsVocabulary();
-      }
-    });
+    // supabase-js getSession() reads the persisted session from
+    // localStorage and resolves without a network round-trip (token
+    // refresh is fire-and-forget), so an offline cold boot with a valid
+    // stored JWT still resolves here and renders the shell - which is
+    // what makes the offline cache reachable. The .catch is the
+    // belt-and-suspenders: if getSession ever rejects (a hardened
+    // storage error), we must still flip sessionLoaded so the UI can't
+    // strand on the "Connecting..." gate forever. onAuthChange's
+    // INITIAL_SESSION (also storage-backed) is what sets `session` in
+    // that case.
+    void app.supabase
+      .getSession()
+      .then((s) => {
+        session = s;
+        sessionLoaded = true;
+        if (s) {
+          void refreshThreads();
+          void refreshSettings();
+          void refreshTopicsVocabulary();
+        }
+      })
+      .catch(() => {
+        sessionLoaded = true;
+      });
     // Web Share Target drain. The service worker (src/sw.ts) stashes
     // incoming shares in IndexedDB and redirects here with
     // `?share=pending` as a navigation signal. We drain unconditionally
@@ -6364,6 +6380,8 @@
     class:logs-open={logsDrawer.state.open}
     class:shell-behind-modal={route.modal !== null}
   >
+    <!-- Fixed-position connectivity banner; renders only when offline. -->
+    <OfflineBanner />
     <div
       class="drawer-backdrop"
       onclick={closeDrawer}

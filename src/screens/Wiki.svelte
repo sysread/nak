@@ -1840,10 +1840,12 @@
                 class="icon-btn wiki-favorite-btn"
                 class:active={a.favorite}
                 onclick={() => toggleFavorite(a)}
-                disabled={favoriteBusy}
-                title={a.favorite
-                  ? 'Saved offline (remove from favorites)'
-                  : 'Save offline (mark as favorite)'}
+                disabled={favoriteBusy || !offlineStatus.online}
+                title={!offlineStatus.online
+                  ? 'Reconnect to change favorites'
+                  : a.favorite
+                    ? 'Saved offline (remove from favorites)'
+                    : 'Save offline (mark as favorite)'}
                 aria-label={a.favorite
                   ? 'Remove from favorites'
                   : 'Mark as favorite'}
@@ -1868,11 +1870,32 @@
                   />
                 </svg>
               </button>
-              <button type="button" onclick={() => startEdit(a)}>Edit</button>
-              <button type="button" onclick={() => startManualUpdate(a)}>
+              <!-- Edits, the agent update, and delete all write to
+                   Supabase, so they need connectivity - disabled offline
+                   with a tooltip rather than failing on submit. -->
+              <button
+                type="button"
+                onclick={() => startEdit(a)}
+                disabled={!offlineStatus.online}
+                title={offlineStatus.online ? undefined : 'Reconnect to edit'}
+              >
+                Edit
+              </button>
+              <button
+                type="button"
+                onclick={() => startManualUpdate(a)}
+                disabled={!offlineStatus.online}
+                title={offlineStatus.online ? undefined : 'Reconnect to run the agent'}
+              >
                 Ask agent to update
               </button>
-              <button type="button" onclick={() => requestDelete(a)} class="danger">
+              <button
+                type="button"
+                onclick={() => requestDelete(a)}
+                class="danger"
+                disabled={!offlineStatus.online}
+                title={offlineStatus.online ? undefined : 'Reconnect to delete'}
+              >
                 Delete
               </button>
             </div>
