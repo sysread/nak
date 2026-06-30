@@ -98,6 +98,40 @@ export function reformedIds(rows: readonly IntentRow[]): Set<string> {
   return out;
 }
 
+/** A statement split into its directive core and situational clause. */
+export interface StatementParts {
+  /** What Nak inclines toward - rendered bold (the headline). */
+  lead: string;
+  /** The situational "when ..." trigger - rendered italic; null when the
+   * statement has no such clause. */
+  context: string | null;
+}
+
+/**
+ * Split an intention statement into its directive core and its
+ * situational clause for emphasis in the card. The minter is prompted to
+ * phrase statements as a dispositional lean plus a "when ..." trigger
+ * ("help them notice WHEN they reach for certainty before testing it",
+ * "lean on their strength at reframing WHEN they sound stuck" - the two
+ * worked examples in the minter prompt, venice/agents/intent.ts), so the
+ * first standalone " when " is the natural seam: the lead says WHAT, the
+ * context says WHEN. The "when" stays with the context clause.
+ *
+ * This is emphasis-only and the convention is taught, not enforced, so it
+ * degrades gracefully: a statement with no " when " (or one that would
+ * split to an empty half) is returned whole as `lead` with a null
+ * `context`, and the card simply bolds the entire line.
+ */
+export function splitStatement(statement: string): StatementParts {
+  const s = statement.trim();
+  const sep = /\swhen\s/i.exec(s);
+  if (!sep) return { lead: s, context: null };
+  const lead = s.slice(0, sep.index).trim();
+  const context = s.slice(sep.index).trim(); // keeps the leading "when"
+  if (!lead || !context) return { lead: s, context: null };
+  return { lead, context };
+}
+
 /** Plain-language view of an intent's efficacy, honest about uncertainty. */
 export interface EfficacyView {
   state: 'freeform' | 'unscored' | 'landing' | 'mixed' | 'struggling';

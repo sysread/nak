@@ -9,6 +9,7 @@ import {
   groupByStatus,
   reformedIds,
   efficacyView,
+  splitStatement,
   targetLabel,
   activeHeadline,
   formatRelative,
@@ -75,6 +76,41 @@ describe('reformedIds', () => {
     expect(ids.has('a')).toBe(true);
     expect(ids.has('c')).toBe(false);
     expect(ids.has('b')).toBe(false); // the retired row itself is not "re-formed"
+  });
+});
+
+describe('splitStatement - bold directive, italic situational clause', () => {
+  it('splits on the first standalone "when", keeping it with the context', () => {
+    expect(splitStatement('help them notice when they reach for certainty before testing it')).toEqual({
+      lead: 'help them notice',
+      context: 'when they reach for certainty before testing it',
+    });
+    expect(splitStatement('lean on their strength at reframing when they sound stuck')).toEqual({
+      lead: 'lean on their strength at reframing',
+      context: 'when they sound stuck',
+    });
+  });
+
+  it('returns the whole statement as lead when there is no "when" clause', () => {
+    expect(splitStatement('help them build a healthier relationship with food')).toEqual({
+      lead: 'help them build a healthier relationship with food',
+      context: null,
+    });
+  });
+
+  it('does not match "when" embedded in a larger word', () => {
+    // "whenever" must not be treated as the seam.
+    expect(splitStatement('notice whenever-style absolutes creep in')).toEqual({
+      lead: 'notice whenever-style absolutes creep in',
+      context: null,
+    });
+  });
+
+  it('does not treat a leading "when" as the seam (no directive before it)', () => {
+    // The seam needs whitespace on both sides; a statement that opens
+    // with "when" has nothing to bold ahead of it, so it stays whole.
+    const s = 'when they spiral, slow down';
+    expect(splitStatement(s)).toEqual({ lead: s, context: null });
   });
 });
 
