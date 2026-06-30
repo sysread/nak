@@ -1837,7 +1837,7 @@
             <div class="wiki-actions">
               <button
                 type="button"
-                class="icon-btn wiki-favorite-btn"
+                class="secondary icon-btn wiki-favorite-btn"
                 class:active={a.favorite}
                 onclick={() => toggleFavorite(a)}
                 disabled={favoriteBusy || !offlineStatus.online}
@@ -2101,17 +2101,18 @@
     flex-wrap: wrap;
     align-items: center;
   }
-  /* Favorite (save-offline) toggle. Muted until active, then the brand
-     accent fills the star - the same "active = accent" read the
-     Cookbook bookmark buttons use. */
-  .wiki-favorite-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--text-subtle, var(--text));
-  }
+  /* Favorite (save-offline) toggle. A `secondary` icon button, so its
+     background is transparent and the star is drawn in the button's
+     text colour (outline when off). When active the accent fills the
+     star - the same "active = accent" read the Cookbook bookmark
+     buttons use. The two-class selector is deliberate: it has to
+     out-specify `button.secondary`'s own `color`, or the accent never
+     wins and the active star stays the plain text colour. (The earlier
+     single-class rule lost to `button.secondary`, AND the missing
+     `secondary` class left the button on the default accent
+     background - an accent star on an accent fill, i.e. invisible.) */
   .wiki-favorite-btn.active {
-    color: var(--accent, #f5a623);
+    color: var(--accent);
   }
   .wiki-favorite-btn:disabled {
     opacity: 0.5;
