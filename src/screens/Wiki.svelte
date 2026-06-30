@@ -76,6 +76,8 @@
     MAX_WIKI_CHANGELOG_MESSAGE_CHARS,
   } from '$lib/wiki';
   import { onWikiChange, emitWikiChange, emitWikiRecordChange } from '$lib/wiki-events';
+  import { offlineStatus, getArticleCached } from '$lib/offline-sync.svelte';
+  import { missingRecordMessage } from '$lib/ui/offline-status';
   import { createLogger } from '$lib/logger.svelte';
   import { describeRecordOps, recordOpsHeadline } from '$lib/ui/wiki-manual';
   import { contentPreview } from '$lib/ui/wiki-records';
@@ -144,11 +146,52 @@
     triggerSkippedView = $bindable(false),
   }: Props = $props();
 
+  // The article view normally reads the open article straight out of
+  // the loaded list / Favorites bucket. `fetchedArticle` is the
+  // fallback for the rows the loaded set doesn't cover: a deep link to
+  // an article that was never paged in, and - the point of the offline
+  // work - an article opened with no network, served from the
+  // IndexedDB cache via getArticleCached.
+  let fetchedArticle = $state<WikiArticle | null>(null);
+  let fetchingArticle = $state(false);
+
   const selectedArticle = $derived<WikiArticle | null>(
     route.wiki_article_id
-      ? wikiStore.results.find((a) => a.id === route.wiki_article_id) ?? null
+      ? (wikiStore.results.find((a) => a.id === route.wiki_article_id) ??
+         wikiStore.favorites.find((a) => a.id === route.wiki_article_id) ??
+         (fetchedArticle?.id === route.wiki_article_id ? fetchedArticle : null))
       : null,
   );
+
+  // Resolve the fallback whenever the route points at an article the
+  // loaded set doesn't hold. getArticleCached is offline-aware: online
+  // it fetches + refreshes the cache; offline it reads the cached copy.
+  $effect(() => {
+    const id = route.wiki_article_id;
+    const supabase = app.supabase;
+    if (!id || !supabase) {
+      fetchedArticle = null;
+      return;
+    }
+    if (
+      wikiStore.results.some((a) => a.id === id) ||
+      wikiStore.favorites.some((a) => a.id === id)
+    ) {
+      return;
+    }
+    let cancelled = false;
+    fetchingArticle = true;
+    void getArticleCached(supabase, id)
+      .then((res) => {
+        if (!cancelled) fetchedArticle = res.row;
+      })
+      .finally(() => {
+        if (!cancelled) fetchingArticle = false;
+      });
+    return () => {
+      cancelled = true;
+    };
+  });
 
   // Initial fetch + listen for cross-surface changes (tool path writes,
   // agent worker writes). The store owns the search debounce; this
@@ -1539,9 +1582,15 @@
         <WikiChangelogPanel onAddArticle={startCompose} />
       {/if}
     {:else if !selectedArticle}
+      <!-- Route points at an article the loaded set doesn't hold and the
+           read-through couldn't resolve: still fetching, offline + not
+           saved, or genuinely gone. The message picks among those. -->
       <p class="subtle wiki-empty">
-        That article isn't in the current results. Clear the search to
-        find it again.
+        {missingRecordMessage({
+          fetching: fetchingArticle,
+          online: offlineStatus.online,
+          noun: 'article',
+        })}
       </p>
     {:else}
       {@const a = selectedArticle}

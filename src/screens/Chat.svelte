@@ -169,6 +169,7 @@
     runWikiSearch,
   } from '$lib/wiki-store.svelte';
   import { onWikiChange, emitWikiChange, emitWikiRecordChange } from '$lib/wiki-events';
+  import { initOfflineStatus, syncOfflineCache } from '$lib/offline-sync.svelte';
   import {
     wikiLibrarianLease,
     memoryLibrarianLease,
@@ -1874,7 +1875,16 @@
   // harmless - consumers refetch idempotently.
   $effect(() => {
     if (!app.supabase || !session) return;
-    return app.supabase.subscribeToWikiArticleChanges(session.user.id, emitWikiChange);
+    const supabase = app.supabase;
+    return supabase.subscribeToWikiArticleChanges(session.user.id, () => {
+      emitWikiChange();
+      // A server-side article write (this device or another) may have
+      // changed a favorited article's body or its favorite flag - re-
+      // reconcile the offline cache so the saved copy tracks it. The
+      // ping carries no payload, so we re-fetch the marked set; the
+      // reconcile is a no-op when nothing the cache holds actually moved.
+      void syncOfflineCache(supabase);
+    });
   });
 
   // Realtime: relay server-side wiki-record writes into the record
@@ -1941,7 +1951,36 @@
   // this relay into the cookbook event bus.
   $effect(() => {
     if (!app.supabase || !session) return;
-    return app.supabase.subscribeToRecipeChanges(session.user.id, emitCookbookChange);
+    const supabase = app.supabase;
+    return supabase.subscribeToRecipeChanges(session.user.id, () => {
+      emitCookbookChange();
+      // Twin of the wiki relay: a server-side recipe write may have
+      // changed a favorited / upcoming recipe or its bookmark flags,
+      // so re-reconcile the offline cache off the fresh marked set.
+      void syncOfflineCache(supabase);
+    });
+  });
+
+  // Offline cache: track connectivity and keep the IndexedDB mirror of
+  // the marked set (favorited articles, favorited / upcoming recipes)
+  // current. Reconcile once when the session goes live, and again each
+  // time the device comes back online so a cache that drifted while
+  // offline catches up. The realtime relays above cover the
+  // online-steady-state case. initOfflineStatus owns the
+  // navigator.onLine flag the offline UI reads.
+  $effect(() => {
+    if (!app.supabase || !session) return;
+    const supabase = app.supabase;
+    const teardownStatus = initOfflineStatus();
+    void syncOfflineCache(supabase);
+    const onOnline = (): void => {
+      void syncOfflineCache(supabase);
+    };
+    window.addEventListener('online', onOnline);
+    return () => {
+      window.removeEventListener('online', onOnline);
+      teardownStatus();
+    };
   });
 
   // Realtime: mint toasts. The samskara formation pipeline runs in the

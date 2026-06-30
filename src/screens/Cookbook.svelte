@@ -35,6 +35,7 @@
     loadRecipePhotos,
   } from '$lib/cookbook-store.svelte';
   import { onCookbookChange } from '$lib/cookbook-events';
+  import { getRecipeCached } from '$lib/offline-sync.svelte';
   import {
     cooklangToHtml,
     parseCooklang,
@@ -110,11 +111,16 @@
       fetchedRecipe = null;
       return;
     }
+    // Read-through the offline cache: online it fetches + refreshes the
+    // cached copy; offline it serves the cached row so a favorited /
+    // upcoming recipe still opens with no network. getRecipeCached
+    // never throws (it swallows the network error and falls back), but
+    // keep the catch as a belt-and-suspenders against an IndexedDB
+    // failure.
     let cancelled = false;
-    void app.supabase
-      .getRecipe(id)
-      .then((r) => {
-        if (!cancelled) fetchedRecipe = r;
+    void getRecipeCached(app.supabase, id)
+      .then((res) => {
+        if (!cancelled) fetchedRecipe = res.row;
       })
       .catch(() => {
         if (!cancelled) fetchedRecipe = null;
