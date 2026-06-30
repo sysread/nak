@@ -16,6 +16,7 @@ import {
   RECIPE_SEARCH_LIMIT,
   SEARCH_DEBOUNCE_MS,
   computeListView,
+  findLoadedRecipe,
   isSearching,
   matchesTopicFilter,
   pickFavoriteRecipes,
@@ -243,6 +244,42 @@ describe('matchesTopicFilter', () => {
     expect(matchesTopicFilter(untagged, sel)).toBe(true);
     expect(matchesTopicFilter(italian, sel)).toBe(true);
     expect(matchesTopicFilter(mexican, sel)).toBe(false);
+  });
+});
+
+describe('findLoadedRecipe', () => {
+  const r = (id: string): Recipe =>
+    ({
+      id,
+      title: id,
+      source: null,
+      source_url: null,
+      cooklang: '',
+      rating: null,
+      upcoming: false,
+      favorite: false,
+      topics: [],
+      created_at: '',
+      updated_at: '',
+    }) as Recipe;
+
+  it('finds a recipe held only in the Upcoming or Favorites bucket', () => {
+    // Offline the browse window is empty; the saved recipe lives in a
+    // bucket and must still resolve so the detail pane opens it.
+    expect(findLoadedRecipe('u', [], [r('u')], [])?.id).toBe('u');
+    expect(findLoadedRecipe('f', [], [], [r('f')])?.id).toBe('f');
+  });
+
+  it('prefers the browse window, then upcoming, then favorites', () => {
+    const win = { ...r('x'), title: 'win' };
+    const up = { ...r('x'), title: 'up' };
+    const fav = { ...r('x'), title: 'fav' };
+    expect(findLoadedRecipe('x', [win], [up], [fav])?.title).toBe('win');
+    expect(findLoadedRecipe('x', [], [up], [fav])?.title).toBe('up');
+  });
+
+  it('returns null when the id is in none of the loaded sets', () => {
+    expect(findLoadedRecipe('missing', [r('a')], [r('b')], [r('c')])).toBeNull();
   });
 });
 

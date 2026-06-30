@@ -146,6 +146,32 @@ export function pickFavoriteRecipes(
 }
 
 /**
+ * Locate a recipe already held in memory, across every loaded set: the
+ * paginated browse window AND the complete Upcoming / Favorites buckets.
+ *
+ * The detail pane needs all three because the sets diverge offline: the
+ * browse window (`recipes`) is empty (it needs the server), but the
+ * buckets hold the cached favorited-or-upcoming set the cache-first load
+ * painted. Consulting only `recipes` would miss a saved recipe the user
+ * just picked from the offline list and send it down a network
+ * read-through that can't complete - so a recipe that is right there in
+ * memory would read as "not found".
+ */
+export function findLoadedRecipe(
+  id: string,
+  recipes: readonly Recipe[],
+  upcoming: readonly Recipe[],
+  favorites: readonly Recipe[]
+): Recipe | null {
+  return (
+    recipes.find((r) => r.id === id) ??
+    upcoming.find((r) => r.id === id) ??
+    favorites.find((r) => r.id === id) ??
+    null
+  );
+}
+
+/**
  * Tagged union returned by `computeListView`. The component
  * dispatches on `kind` to render the right surface and carries
  * the small bit of payload each variant needs.

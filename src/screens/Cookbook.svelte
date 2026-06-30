@@ -36,6 +36,7 @@
   } from '$lib/cookbook-store.svelte';
   import { onCookbookChange } from '$lib/cookbook-events';
   import { getRecipeCached, offlineStatus } from '$lib/offline-sync.svelte';
+  import { findLoadedRecipe } from '$lib/ui/recipe-list';
   import {
     cooklangToHtml,
     parseCooklang,
@@ -105,9 +106,14 @@
       fetchedRecipe = null;
       return;
     }
-    // Store row present (the common case) - no fallback fetch needed,
-    // and the store copy stays authoritative below.
-    if (cookbook.recipes.some((r) => r.id === id)) {
+    // Already in memory (browse window OR a cached Upcoming / Favorites
+    // bucket) - no fallback fetch needed, and that copy stays
+    // authoritative below. Offline this is the path that matters: the
+    // recipe the user picked from the saved list lives in a bucket, not
+    // in the (empty) browse window.
+    if (
+      findLoadedRecipe(id, cookbook.recipes, cookbook.upcoming, cookbook.favorites)
+    ) {
       fetchedRecipe = null;
       return;
     }
@@ -135,8 +141,12 @@
   const activeRecipe = $derived.by(() => {
     if (!activeId) return null;
     return (
-      cookbook.recipes.find((r) => r.id === activeId) ??
-      (fetchedRecipe && fetchedRecipe.id === activeId ? fetchedRecipe : null)
+      findLoadedRecipe(
+        activeId,
+        cookbook.recipes,
+        cookbook.upcoming,
+        cookbook.favorites
+      ) ?? (fetchedRecipe && fetchedRecipe.id === activeId ? fetchedRecipe : null)
     );
   });
 
