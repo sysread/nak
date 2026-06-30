@@ -34,9 +34,12 @@ plus a reload stands in for losing signal.
    `nak-offline-cache`, check `articles` holds the favorited article's
    id and `recipes` holds the favorited recipe's id.
 3. **Go offline + reload.** Set Network to Offline. Reload the PWA.
-4. **Open the saved article by navigation.** Click the Wiki tab; the
-   favorited article appears under **Favorites - saved offline**. Open
-   it. Then open the favorited recipe from the Recipes tab.
+4. **Browse the saved set offline (no link needed).** Click the Wiki
+   tab. With no connection, the sidebar lists your saved articles under
+   **Favorites - saved offline** and the search box + A-Z list are
+   hidden. Pick the article from the list (not from a URL) and it
+   opens. Do the same on the Recipes tab - the **Upcoming** /
+   **Favorites** buckets list, controls hidden, pick one to open.
 5. **Open by deep link offline.** Note the article's URL
    (`?drawer=wiki&wiki_article_id=...`) while online; offline, paste it
    into the installed app's address bar (or reload on it).
@@ -50,6 +53,10 @@ plus a reload stands in for losing signal.
    online a moment (or toggle offline->online to force a sync).
 9. **Offline does not evict.** Favorite a fresh article online (let it
    cache), go offline, reload a few times, navigate around.
+10. **Reconnect refreshes the sidebar.** With the Wiki (or Recipes) tab
+    open and showing the offline buckets-only view, set Network back to
+    Online. Without reloading, the sidebar should swap back to the full
+    A-Z list with the search box returned.
 
 ## Expected
 
@@ -57,10 +64,13 @@ plus a reload stands in for losing signal.
   favoriting - the marked set mirrored without a manual action.
 - (3) The app shell loads with no network. A bottom banner reads
   "You're offline. N articles and M recipes saved for offline use."
-- (4-5) The favorited article renders fully offline - title, body,
-  table of contents - via the cache, whether reached by sidebar click
-  or by deep-link URL. The favorited recipe renders its text,
-  ingredients, and steps.
+- (4) The sidebar is browsable offline: the saved buckets list every
+  favorited / upcoming record (not just one you have a link to), the
+  search box and full A-Z list are hidden, and picking a row opens the
+  record. The favorited article renders fully offline - title, body,
+  table of contents - via the cache. The favorited recipe renders its
+  text, ingredients, and steps.
+- (5) The same records also open by deep-link URL offline.
 - (6) Every write control is disabled with a "Reconnect to ..."
   tooltip; nothing errors on click because nothing fires.
 - (7) The photo strip is replaced by "Photos are only available
@@ -72,6 +82,9 @@ plus a reload stands in for losing signal.
   reloads - going offline NEVER drops a saved copy. Only an
   un-favorite seen while online evicts (the "remote changed" vs
   "can't reach remote" distinction).
+- (10) On reconnect the open sidebar reloads from the server on its own:
+  the buckets-only offline view gives way to the full paginated list
+  and the search box returns, no manual reload needed.
 - **[hosted]** Same against the hosted project: hosted realtime
   delivers the cross-device eviction ping (step 8) that local realtime
   may differ on, and a genuinely installed PWA on a phone with
@@ -89,3 +102,4 @@ if you want a clean slate.
 | Date | Env | Commit | Result | Notes |
 | ---- | --- | ------ | ------ | ----- |
 | 2026-06-30 | n/a | 166f67b | pending-manual | feature landed via cloud agent (no browser/SW available there); unit layer green (tests/offline-cache.test.ts); awaiting a manual PWA pass per the steps above |
+| 2026-06-30 | n/a | (this PR) | pending-manual | offline sidebar browse added (steps 4, 10): list stores fall back to the cached set when offline, sidebars hide server-only controls, reconnect reloads. Unit layer green (tests/offline-list-fallback.test.ts, offline-cache.test.ts, recipe-list.test.ts); still needs the manual PWA pass - cloud agent can't drive a browser/SW |

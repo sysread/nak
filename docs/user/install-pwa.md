@@ -33,6 +33,12 @@ trailhead tomorrow.
 **What works with no connection:**
 
 - Opening the app and navigating around.
+- **Browsing your saved sets in the sidebar.** Open the Wiki or
+  Recipes tab offline and the sidebar lists your saved items - the
+  **Favorites** section (and the recipe **Upcoming** section) - so you
+  can pick one to read without already having its link. The sidebar
+  shows only those saved sections offline; the full A-Z list and search
+  need a connection and are hidden until you reconnect.
 - Reading any favorited article and any favorited or upcoming recipe,
   including its text, ingredients, and steps.
 - The in-app **Help** manual (these pages).

@@ -214,6 +214,35 @@ export async function refreshCounts(): Promise<void> {
   offlineStatus.recipeCount = recipes.length;
 }
 
+/**
+ * Every wiki article currently mirrored offline, title ASC. This is the
+ * offline fallback for the wiki sidebar list: when the authoritative
+ * fetch in `loadWikiFirstPage` can't reach the server, the saved set is
+ * still browsable from here. Ordering matches `listFavoriteWikiArticles`
+ * (title ASC) so the offline bucket reads identically to the online one.
+ */
+export async function getCachedArticles(): Promise<WikiArticle[]> {
+  const rows = (await getAllCached<WikiArticle>('articles')).map((c) => c.row);
+  rows.sort((a, b) =>
+    a.title.toLowerCase().localeCompare(b.title.toLowerCase()),
+  );
+  return rows;
+}
+
+/**
+ * Every recipe currently mirrored offline (the favorited-or-upcoming
+ * union), most-recently-updated first. The offline fallback for the
+ * cookbook sidebar: the caller re-buckets by the rows' `favorite` /
+ * `upcoming` flags into the Favorites / Upcoming sections. Ordering
+ * matches `listUpcomingRecipes` / `listFavoriteRecipes` (updated_at
+ * desc).
+ */
+export async function getCachedRecipes(): Promise<Recipe[]> {
+  const rows = (await getAllCached<Recipe>('recipes')).map((c) => c.row);
+  rows.sort((a, b) => (b.updated_at ?? '').localeCompare(a.updated_at ?? ''));
+  return rows;
+}
+
 export interface CachedRead<T> {
   row: T | null;
   /** True when the row came from the offline cache, not the network. */

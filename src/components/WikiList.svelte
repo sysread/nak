@@ -51,6 +51,20 @@
     onSelect?.();
   }
 
+  // Reconnect refresh: when the device comes back online while the Wiki
+  // tab is open, re-run the query so the offline-cache regime
+  // (Favorites-only, search hidden) gives way to the full browse list +
+  // search. runWikiSearch routes to loadWikiFirstPage when the query is
+  // empty (which it is offline, since the search box is hidden), and
+  // loadWikiFirstPage clears wikiStore.fromCache on a successful fetch.
+  $effect(() => {
+    const onOnline = (): void => {
+      if (app.supabase) void runWikiSearch(app.supabase);
+    };
+    window.addEventListener('online', onOnline);
+    return () => window.removeEventListener('online', onOnline);
+  });
+
   // The Favorites bucket only makes sense over the browse regime - a
   // search shows a flat relevance list, not sectioned browse. Same
   // gate the cookbook sidebar uses for its Upcoming / Favorites
@@ -75,6 +89,10 @@
 {/snippet}
 
 <div class="recipe-drawer-list">
+  <!-- Search needs the server (semantic embed round-trip), so the
+       search box is hidden in the offline-cache regime - the listing
+       below is just the saved Favorites bucket. -->
+  {#if !wikiStore.fromCache}
   <div class="wiki-list-controls">
     <input
       type="search"
@@ -87,6 +105,7 @@
       spellcheck="false"
     />
   </div>
+  {/if}
   {#if wikiStore.loading}
     <!-- Replace the entries list with the K.I.T.T. scanner for the
          duration of any in-flight wiki search - including the empty-
@@ -99,7 +118,7 @@
     <p class="error" style="padding:0.75rem">
       Couldn't load wiki: {wikiStore.error}
     </p>
-  {:else if wikiStore.results.length === 0}
+  {:else if wikiStore.favorites.length === 0 && wikiStore.results.length === 0}
     <p class="subtle" style="padding:0.75rem">
       {emptyMessage(wikiStore.query)}
     </p>
@@ -108,16 +127,20 @@
       <!-- Favorites bucket: the complete favorite set (title ASC),
            fetched whole by loadWikiFirstPage. A favorite is what saves
            an article offline, so this section doubles as "available on
-           this device with no network". Favorited articles also keep
-           their natural alphabetical spot in the full list below - the
-           duplication is intentional, mirroring the cookbook sidebar. -->
+           this device with no network" - and offline it is the ONLY
+           section (the browse list below needs the server). Favorited
+           articles also keep their natural alphabetical spot in the
+           full list below when online - the duplication is intentional,
+           mirroring the cookbook sidebar. -->
       <div class="wiki-list-section-label" aria-hidden="true">
         Favorites &middot; saved offline
       </div>
       {#each wikiStore.favorites as a (a.id)}
         {@render articleRow(a.id, a.title)}
       {/each}
-      <div class="wiki-list-section-label" aria-hidden="true">All articles</div>
+      {#if wikiStore.results.length > 0}
+        <div class="wiki-list-section-label" aria-hidden="true">All articles</div>
+      {/if}
     {/if}
     <!-- Rendered in server order (title ASC for browse, relevance for
          search). No client re-sort: a localeCompare pass over a partial

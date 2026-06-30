@@ -41,6 +41,12 @@ favorite / upcoming flags (see [`./cookbook.md`](./cookbook.md)).
 - `src/lib/ui/offline-status.ts` - pure copy/label primitives
   (`missingRecordMessage`, `offlineBannerText`, `countNoun`).
   Unit-tested.
+- `src/lib/wiki-store.svelte.ts` / `src/lib/cookbook-store.svelte.ts` -
+  the sidebar list stores. Their `loadWikiFirstPage` / `loadRecipes`
+  fall back to the cached set (`getCachedArticles` / `getCachedRecipes`)
+  when offline so the Favorites / Upcoming buckets stay browsable, and
+  carry a `fromCache` flag the sidebars read to drop into a
+  browse-only-the-saved-set regime (see Contracts).
 - `src/components/OfflineBanner.svelte` - the fixed, bottom-centered
   connectivity chip; renders only when offline. Mounted once by
   `Chat.svelte` inside `.shell`.
@@ -76,6 +82,15 @@ the `info` sync line's `wrote` count is the proof.
   it is not in the loaded list. `getWikiArticleById` (new) is the
   authoritative single-row fetch behind the article read-through;
   recipes already had `getRecipe`.
+- **Sidebar list (offline)** - the read-through opens a record only
+  once its id is in the route; to let the user *browse* to one offline,
+  `loadWikiFirstPage` / `loadRecipes` fall back to the cached set when
+  the authoritative fetch fails AND `offlineStatus.online` is false.
+  The list stores expose `getCachedArticles` / `getCachedRecipes` from
+  `offline-sync` and re-bucket recipes by their `favorite` / `upcoming`
+  flags. `WikiList.svelte` / `RecipeList.svelte` also add a `window`
+  `online` listener that reloads the list on reconnect so the regime
+  flips back to the full paginated list + search.
 
 ## Data model
 
@@ -111,6 +126,18 @@ server at any time.
 - **`offlineStatus`** is the reactive `{ online, lastSyncAt,
   articleCount, recipeCount }` the UI reads. `online` tracks
   `navigator.onLine` via `initOfflineStatus`.
+- **Offline list fallback + `fromCache` regime.** When
+  `loadWikiFirstPage` / `loadRecipes` throw, the next step depends on
+  `offlineStatus.online`: offline, the buckets are repopulated from the
+  IndexedDB mirror (articles title ASC; recipes the favorited-or-
+  upcoming union re-bucketed by flag), the paginated browse list is
+  emptied (it needs the server), and `fromCache` is set true; online,
+  the failure is surfaced as an error and `fromCache` is cleared -
+  hiding the full list + search over a transient blip is the worse
+  trade. The sidebars read `fromCache` to hide the search / sort /
+  topic controls and show only the saved buckets. A successful load
+  (or a successful search) clears `fromCache`. Pinned by
+  `tests/offline-list-fallback.test.ts`.
 
 ## Interactions
 
@@ -164,10 +191,13 @@ server at any time.
 
 `tests/offline-cache.test.ts` covers the reconcile diff (add /
 refresh / evict, the bookmark-toggle no-op), the never-evict-on-
-failure invariant, and the read-through (online refresh, offline
-serve, network-error fallback, authoritative-null eviction) against
-`fake-indexeddb`. The end-to-end PWA flow (install, favorite, go
-offline, reload, open) is the
+failure invariant, the read-through (online refresh, offline
+serve, network-error fallback, authoritative-null eviction), and the
+cached-list readers against `fake-indexeddb`.
+`tests/offline-list-fallback.test.ts` covers the sidebar fallback: the
+offline path repopulates the buckets and sets `fromCache`, while an
+online fetch failure stays an error. The end-to-end PWA flow (install,
+favorite, go offline, reload, browse, open) is the
 [offline-cache](../qa/use-cases/offline-cache.md) QA walkthrough -
 it needs a real browser + service worker, which the cloud agent
 cannot drive.

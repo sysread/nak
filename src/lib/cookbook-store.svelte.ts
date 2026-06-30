@@ -31,6 +31,7 @@ import {
   type TopicVocabulary,
 } from './supabase';
 import type { SortMode } from './ui/recipe-list';
+import { getCachedRecipes, offlineStatus } from './offline-sync.svelte';
 
 interface CookbookState {
   /**
@@ -55,6 +56,16 @@ interface CookbookState {
   /** True while a `loadMoreRecipes` page is in flight (drives the sentinel spinner). */
   loadingMore: boolean;
   loading: boolean;
+  /**
+   * True when `upcoming` / `favorites` were served from the IndexedDB
+   * offline mirror because the authoritative fetch couldn't reach the
+   * server. The paginated "All recipes" list and search both need the
+   * server, so in this regime the sidebar hides its controls and shows
+   * only the Upcoming / Favorites buckets. Cleared on the next
+   * successful network load (mount, reconnect, or a cookbook-change
+   * refresh).
+   */
+  fromCache: boolean;
   /** Last error from a load attempt. Cleared on the next successful load. */
   error: string | null;
   /**
@@ -99,6 +110,7 @@ export const cookbook = $state<CookbookState>({
   hasMore: false,
   loadingMore: false,
   loading: false,
+  fromCache: false,
   error: null,
   photos: {},
   selectedTopics: [],
@@ -136,6 +148,7 @@ export async function loadRecipes(supabase: SupabaseService): Promise<void> {
     cookbook.hasMore = page.hasMore;
     cookbook.upcoming = upcoming;
     cookbook.favorites = favorites;
+    cookbook.fromCache = false;
     cookbook.error = null;
     // Piggy-back a vocabulary refresh so a newly-minted topic from
     // the background worker shows up in the dropdown the next time
@@ -144,7 +157,32 @@ export async function loadRecipes(supabase: SupabaseService): Promise<void> {
     // stays usable across a transient Supabase blip.
     void refreshRecipesTopicsVocabulary(supabase);
   } catch (err) {
-    cookbook.error = err instanceof Error ? err.message : String(err);
+    // Authoritative fetch failed. When genuinely offline, re-bucket the
+    // IndexedDB mirror into Upcoming / Favorites so the saved set stays
+    // browsable - the cache holds exactly the favorited-or-upcoming
+    // union, and each row carries its own flags to sort it back into the
+    // right section. No paginated "All recipes" list offline (it needs
+    // the server), so `recipes` is emptied. A failure while ONLINE is
+    // left as an error - hiding the full list + search over a transient
+    // blip is the worse trade. offlineStatus.online is the app-wide
+    // connectivity source the read-through and disabled-control gating
+    // already trust.
+    if (!offlineStatus.online) {
+      const cached = await getCachedRecipes();
+      cookbook.recipes = [];
+      cookbook.offset = 0;
+      cookbook.hasMore = false;
+      cookbook.upcoming = cached.filter((r) => r.upcoming);
+      cookbook.favorites = cached.filter((r) => r.favorite);
+      cookbook.fromCache = true;
+      cookbook.error = null;
+    } else {
+      // Online but the fetch failed (transient). Surface the error and
+      // leave the cache regime - we're authoritative again, an error
+      // beats silently showing a stale cached subset.
+      cookbook.fromCache = false;
+      cookbook.error = err instanceof Error ? err.message : String(err);
+    }
   } finally {
     cookbook.loading = false;
   }

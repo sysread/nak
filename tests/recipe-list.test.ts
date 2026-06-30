@@ -319,4 +319,19 @@ describe('computeListView', () => {
       computeListView(args({ visibleCount: 5, storeCount: 5 }))
     ).toEqual({ kind: 'list' });
   });
+
+  it('stays a list when the All-list is empty but buckets carry rows (offline regime)', () => {
+    // Offline the paginated "All recipes" list is empty (visibleCount
+    // 0), but the cached Upcoming / Favorites buckets are the saved set
+    // - the listing must render, not collapse to the empty state.
+    expect(
+      computeListView(args({ visibleCount: 0, storeCount: 0, bucketCount: 4 }))
+    ).toEqual({ kind: 'list' });
+  });
+
+  it('still reports empty when both the list and the buckets are empty', () => {
+    expect(
+      computeListView(args({ visibleCount: 0, storeCount: 0, bucketCount: 0 }))
+    ).toEqual({ kind: 'empty', reason: 'no-recipes-yet' });
+  });
 });

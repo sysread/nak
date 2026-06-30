@@ -14,6 +14,8 @@ import {
   syncOfflineCache,
   getArticleCached,
   getRecipeCached,
+  getCachedArticles,
+  getCachedRecipes,
   offlineStatus,
 } from '../src/lib/offline-sync.svelte';
 import { getAllCached, getCached } from '../src/lib/offline-cache';
@@ -206,5 +208,33 @@ describe('read-through resolvers', () => {
     const res = await getArticleCached(fakeSupabase({ byId: { a1: null } }), 'a1');
     expect(res.row).toBeNull();
     expect(await getCached<WikiArticle>('articles', 'a1')).toBeNull();
+  });
+});
+
+describe('offline list readers', () => {
+  it('getCachedArticles returns the mirrored set title ASC', async () => {
+    await syncOfflineCache(
+      fakeSupabase({
+        // article(id).title === `Article ${id}`, so id order == title order.
+        favArticles: [article('c', 't1'), article('a', 't1'), article('b', 't1')],
+      }),
+    );
+    expect((await getCachedArticles()).map((a) => a.id)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('getCachedRecipes returns the favorited-or-upcoming union, updated_at desc', async () => {
+    await syncOfflineCache(
+      fakeSupabase({
+        favRecipes: [recipe('old', '2026-01-01T00:00:00Z')],
+        upcomingRecipes: [recipe('new', '2026-09-01T00:00:00Z')],
+      }),
+    );
+    // Newest first, and the favorite + upcoming buckets are unioned.
+    expect((await getCachedRecipes()).map((r) => r.id)).toEqual(['new', 'old']);
+  });
+
+  it('both readers are empty when nothing has been mirrored', async () => {
+    expect(await getCachedArticles()).toEqual([]);
+    expect(await getCachedRecipes()).toEqual([]);
   });
 });

@@ -180,6 +180,14 @@ export function computeListView(args: {
   storeLoading: boolean;
   storeCount: number;
   visibleCount: number;
+  /**
+   * Combined Upcoming + Favorites bucket count. Keeps the listing out
+   * of the `empty` state when the buckets carry rows even though the
+   * main "All recipes" list is empty - the offline regime, where the
+   * paginated list is unavailable but the cached buckets are the whole
+   * point. Defaults to 0 so existing online callers are unaffected.
+   */
+  bucketCount?: number;
 }): ListView {
   if (args.searching && args.searchBusy) return { kind: 'scanner-search' };
   if (args.searching && args.searchError !== null) {
@@ -188,7 +196,7 @@ export function computeListView(args: {
   if (!args.searching && args.storeLoading && args.storeCount === 0) {
     return { kind: 'scanner-loading' };
   }
-  if (args.visibleCount === 0) {
+  if (args.visibleCount === 0 && (args.bucketCount ?? 0) === 0) {
     return {
       kind: 'empty',
       reason: args.searching ? 'no-matches' : 'no-recipes-yet',

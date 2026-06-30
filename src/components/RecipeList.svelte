@@ -184,11 +184,34 @@
       storeLoading: cookbook.loading,
       storeCount: cookbook.recipes.length,
       visibleCount: visibleRecipes.length,
+      // Offline the "All recipes" list is empty but the cached buckets
+      // carry the saved set - keep the listing out of the empty state
+      // so those buckets still render.
+      bucketCount: upcomingRecipes.length + favoriteRecipes.length,
     })
   );
+
+  // Reconnect refresh: when the device comes back online while the
+  // Recipes tab is open, reload from the server so the offline-cache
+  // regime (buckets-only, controls hidden) gives way to the full
+  // paginated list + search. loadRecipes clears cookbook.fromCache on a
+  // successful fetch. Mount-time loads are owned by the sort/topics
+  // effect above; this only covers the open-while-reconnecting case.
+  $effect(() => {
+    const onOnline = (): void => {
+      if (app.supabase) void loadRecipes(app.supabase);
+    };
+    window.addEventListener('online', onOnline);
+    return () => window.removeEventListener('online', onOnline);
+  });
 </script>
 
 <div class="recipe-drawer-list">
+  <!-- Search, sort, and topic filter all need the server (embed +
+       paged query + vocabulary RPC), so the whole control strip is
+       hidden in the offline-cache regime - the listing below is just
+       the saved Upcoming / Favorites buckets. -->
+  {#if !cookbook.fromCache}
   <div class="recipe-list-controls">
     <input
       type="search"
@@ -230,6 +253,7 @@
       onChange={setTopics}
     />
   </div>
+  {/if}
   {#if view.kind === 'scanner-search'}
     <!-- Replace the listing with the K.I.T.T. scanner while the
          Venice embed + Supabase round-trip are in flight. -->

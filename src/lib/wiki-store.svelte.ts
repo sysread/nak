@@ -16,6 +16,7 @@ import {
 } from './supabase';
 import { emitWikiChange } from './wiki-events';
 import { searchWikiArticlesSemantic } from './wiki';
+import { getCachedArticles, offlineStatus } from './offline-sync.svelte';
 
 interface WikiStore {
   /**
@@ -43,6 +44,15 @@ interface WikiStore {
   loading: boolean;
   /** Set true after the first load resolves, success or error. */
   loaded: boolean;
+  /**
+   * True when `results` / `favorites` were served from the IndexedDB
+   * offline mirror because the authoritative fetch couldn't reach the
+   * server. In this regime there is no browse list and no search (both
+   * need the server), so the sidebar shows only the saved Favorites
+   * bucket and hides the search box. Cleared on the next successful
+   * network load (mount, reconnect, or a wiki-change refresh).
+   */
+  fromCache: boolean;
   error: string | null;
   /** Bound to the sidebar search input. */
   query: string;
@@ -63,6 +73,7 @@ export const wikiStore = $state<WikiStore>({
   favorites: [],
   loading: false,
   loaded: false,
+  fromCache: false,
   error: null,
   query: '',
   offset: 0,
@@ -106,8 +117,33 @@ export async function loadWikiFirstPage(
     wikiStore.offset = page.rows.length;
     wikiStore.hasMore = page.hasMore;
     wikiStore.favorites = favorites;
+    wikiStore.fromCache = false;
+    wikiStore.error = null;
   } catch (err) {
-    wikiStore.error = err instanceof Error ? err.message : String(err);
+    // The authoritative fetch failed. When the device is genuinely
+    // offline, fall back to the IndexedDB mirror so the saved set stays
+    // browsable - the favorites the user marked are exactly what
+    // offline-sync wrote there. There is no browse list offline (it
+    // needs the server), so results is emptied and the sidebar renders
+    // only the Favorites bucket. A failure while ONLINE (transient
+    // Supabase blip) is left as an error instead - hiding the full
+    // list + search over a momentary hiccup would be the worse trade.
+    // offlineStatus.online is the app-wide connectivity source the
+    // read-through and the disabled-control gating already trust.
+    if (!offlineStatus.online) {
+      wikiStore.favorites = await getCachedArticles();
+      wikiStore.results = [];
+      wikiStore.offset = 0;
+      wikiStore.hasMore = false;
+      wikiStore.fromCache = true;
+      wikiStore.error = null;
+    } else {
+      // Online but the fetch failed (transient). Surface the error and
+      // leave the cache regime - we're authoritative again, an error
+      // beats silently showing a stale cached subset.
+      wikiStore.fromCache = false;
+      wikiStore.error = err instanceof Error ? err.message : String(err);
+    }
   } finally {
     wikiStore.loading = false;
     wikiStore.loaded = true;
@@ -174,6 +210,9 @@ export async function runWikiSearch(
     // Search results are capped, not paged - close the sentinel.
     wikiStore.offset = hits.length;
     wikiStore.hasMore = false;
+    // A search round-trip only resolves online, so we're authoritative
+    // again - drop any offline-cache regime left over from before.
+    wikiStore.fromCache = false;
   } catch (err) {
     if (ctl.signal.aborted) return;
     wikiStore.error = err instanceof Error ? err.message : String(err);
