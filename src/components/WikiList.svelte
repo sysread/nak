@@ -50,7 +50,29 @@
     navigate({ wiki_article_id: id });
     onSelect?.();
   }
+
+  // The Favorites bucket only makes sense over the browse regime - a
+  // search shows a flat relevance list, not sectioned browse. Same
+  // gate the cookbook sidebar uses for its Upcoming / Favorites
+  // buckets.
+  const showFavorites = $derived(
+    wikiStore.query.trim().length === 0 && wikiStore.favorites.length > 0,
+  );
 </script>
+
+{#snippet articleRow(id: string, title: string)}
+  <div class="row thread-row" data-wiki-id-link={id}>
+    <button
+      class="thread grow"
+      class:active={route.wiki_article_id === id}
+      aria-current={route.wiki_article_id === id ? 'true' : undefined}
+      onclick={() => pickArticle(id)}
+      title={title}
+    >
+      <span class="wiki-list-title">{title}</span>
+    </button>
+  </div>
+{/snippet}
 
 <div class="recipe-drawer-list">
   <div class="wiki-list-controls">
@@ -82,22 +104,27 @@
       {emptyMessage(wikiStore.query)}
     </p>
   {:else}
+    {#if showFavorites}
+      <!-- Favorites bucket: the complete favorite set (title ASC),
+           fetched whole by loadWikiFirstPage. A favorite is what saves
+           an article offline, so this section doubles as "available on
+           this device with no network". Favorited articles also keep
+           their natural alphabetical spot in the full list below - the
+           duplication is intentional, mirroring the cookbook sidebar. -->
+      <div class="wiki-list-section-label" aria-hidden="true">
+        Favorites &middot; saved offline
+      </div>
+      {#each wikiStore.favorites as a (a.id)}
+        {@render articleRow(a.id, a.title)}
+      {/each}
+      <div class="wiki-list-section-label" aria-hidden="true">All articles</div>
+    {/if}
     <!-- Rendered in server order (title ASC for browse, relevance for
          search). No client re-sort: a localeCompare pass over a partial
          page would disagree with the server's page boundaries and
          shuffle rows across the pagination seam mid-scroll. -->
     {#each wikiStore.results as a (a.id)}
-      <div class="row thread-row" data-wiki-id-link={a.id}>
-        <button
-          class="thread grow"
-          class:active={route.wiki_article_id === a.id}
-          aria-current={route.wiki_article_id === a.id ? 'true' : undefined}
-          onclick={() => pickArticle(a.id)}
-          title={a.title}
-        >
-          <span class="wiki-list-title">{a.title}</span>
-        </button>
-      </div>
+      {@render articleRow(a.id, a.title)}
     {/each}
     {#if wikiStore.hasMore}
       <!-- Infinite-scroll sentinel for the browse list. hasMore is
@@ -136,6 +163,18 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     max-width: 100%;
+  }
+  /* Section divider between the Favorites bucket and the full list.
+     Mirrors the cookbook sidebar's bucket labels - quiet, uppercase,
+     not a clickable row. */
+  .wiki-list-section-label {
+    padding: 0.5rem 0.7rem 0.2rem;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-subtle, var(--text));
+    opacity: 0.7;
   }
   /* Pagination sentinel - a small box at the list tail the
      IntersectionObserver can catch as it nears the viewport. */

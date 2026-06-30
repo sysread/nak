@@ -2335,7 +2335,7 @@ export class SupabaseService {
   async listWikiArticles(opts: { limit?: number } = {}): Promise<WikiArticle[]> {
     const { data, error } = await this.client
       .from('wiki_articles')
-      .select('id, title, content, created_at, updated_at')
+      .select('id, title, content, favorite, created_at, updated_at')
       .order('title', { ascending: true })
       .limit(opts.limit ?? 500);
     if (error) throw new SupabaseError(error.message);
@@ -2361,7 +2361,7 @@ export class SupabaseService {
   }): Promise<OffsetPage<WikiArticle>> {
     const { data, error } = await this.client
       .from('wiki_articles')
-      .select('id, title, content, created_at, updated_at')
+      .select('id, title, content, favorite, created_at, updated_at')
       .order('title', { ascending: true })
       .order('id', { ascending: true })
       .range(opts.offset, opts.offset + opts.pageSize);
@@ -2371,6 +2371,58 @@ export class SupabaseService {
     );
     const hasMore = all.length > opts.pageSize;
     return { rows: hasMore ? all.slice(0, opts.pageSize) : all, hasMore };
+  }
+
+  /**
+   * Fetch one article by id, or null if it isn't there. The wiki
+   * sidebar normally keeps the open article in `wikiStore.results`, so
+   * this exists for the cases the list doesn't cover: a deep link to an
+   * article that was never paged in, and the offline read-through
+   * (`getArticleCached`) that needs an authoritative single-row fetch.
+   * Clone of `getRecipe`.
+   */
+  async getWikiArticleById(id: string): Promise<WikiArticle | null> {
+    const { data, error } = await this.client
+      .from('wiki_articles')
+      .select('id, title, content, favorite, created_at, updated_at')
+      .eq('id', id)
+      .maybeSingle();
+    if (error) throw new SupabaseError(error.message);
+    return data ? coerceWikiArticle(data as Record<string, unknown>) : null;
+  }
+
+  /**
+   * Every article flagged `favorite`. Fetched whole (the flagged subset
+   * is small and the partial index keeps it cheap) so the sidebar's
+   * Favorites bucket and the offline-sync reconcile both see the
+   * complete set rather than a page window. Twin of
+   * `listFavoriteRecipes`.
+   */
+  async listFavoriteWikiArticles(): Promise<WikiArticle[]> {
+    const { data, error } = await this.client
+      .from('wiki_articles')
+      .select('id, title, content, favorite, created_at, updated_at')
+      .eq('favorite', true)
+      .order('title', { ascending: true });
+    if (error) throw new SupabaseError(error.message);
+    return (data ?? []).map((row) =>
+      coerceWikiArticle(row as Record<string, unknown>)
+    );
+  }
+
+  /**
+   * Toggle the `favorite` bookmark. Direct update, no version row and
+   * no `updated_at` bump - favorite is a personal bookmark, not article
+   * content. Mirrors `setRecipeFavorite`. The schema trigger
+   * `clear_wiki_embedding_on_change` only fires on title/content, so
+   * this leaves the embedding intact too.
+   */
+  async setWikiArticleFavorite(id: string, favorite: boolean): Promise<void> {
+    const { error } = await this.client
+      .from('wiki_articles')
+      .update({ favorite })
+      .eq('id', id);
+    if (error) throw new SupabaseError(error.message);
   }
 
   async createWikiArticle(args: {
@@ -2386,7 +2438,7 @@ export class SupabaseService {
         title: args.title,
         content: args.content,
       })
-      .select('id, title, content, created_at, updated_at')
+      .select('id, title, content, favorite, created_at, updated_at')
       .single();
     if (error) throw new SupabaseError(error.message);
     return coerceWikiArticle(data as Record<string, unknown>);
@@ -2406,7 +2458,7 @@ export class SupabaseService {
       .from('wiki_articles')
       .update({ ...patch, updated_at: new Date().toISOString() })
       .eq('id', id)
-      .select('id, title, content, created_at, updated_at')
+      .select('id, title, content, favorite, created_at, updated_at')
       .single();
     if (error) throw new SupabaseError(error.message);
     return coerceWikiArticle(data as Record<string, unknown>);
@@ -3400,7 +3452,7 @@ export class SupabaseService {
 
     const ilikePromise = this.client
       .from('wiki_articles')
-      .select('id, title, content, created_at, updated_at')
+      .select('id, title, content, favorite, created_at, updated_at')
       .or(`title.ilike.${pattern},content.ilike.${pattern}`)
       .order('title', { ascending: true })
       .limit(limit);

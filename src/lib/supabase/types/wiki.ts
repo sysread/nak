@@ -18,6 +18,15 @@ export interface WikiArticle {
   id: string;
   title: string;
   content: string;
+  /**
+   * Long-lived bookmark. Marking an article favorite is what saves it
+   * offline (the favorite set is mirrored into IndexedDB by
+   * `offline-sync`). Independent of article content - toggling it does
+   * not bump `updated_at`, so the offline cache's freshness comparator
+   * treats a bookmark flip as "no content change". Mirrors
+   * `Recipe.favorite`.
+   */
+  favorite: boolean;
   created_at: string;
   updated_at: string;
   /** Populated only by `searchWikiArticlesByEmbedding`. */
@@ -187,6 +196,10 @@ export function coerceWikiArticle(raw: Record<string, unknown>): WikiArticle {
     id: String(raw.id),
     title: typeof raw.title === 'string' ? raw.title : '',
     content: typeof raw.content === 'string' ? raw.content : '',
+    // Absent on rows from the embedding-search RPC (it doesn't project
+    // the column) - default false there; the article view re-resolves
+    // the authoritative row via getWikiArticleById, which carries it.
+    favorite: raw.favorite === true,
     created_at: String(raw.created_at ?? raw.updated_at ?? ''),
     updated_at: String(raw.updated_at ?? raw.created_at ?? ''),
     similarity:

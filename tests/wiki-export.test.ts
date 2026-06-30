@@ -33,6 +33,7 @@ function makeArticle(over: Partial<WikiArticle> = {}): WikiArticle {
     id: 'art-1',
     title: 'Sourdough project',
     content: 'A long-running bake log.',
+    favorite: false,
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-06-17T00:00:00Z',
     ...over,

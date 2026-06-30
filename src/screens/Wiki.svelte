@@ -66,6 +66,7 @@
     wikiStore,
     runWikiSearch,
     patchWikiRow,
+    applyWikiFavorite,
     removeWikiRow,
     addWikiRow,
   } from '$lib/wiki-store.svelte';
@@ -257,6 +258,30 @@
   // input box.
   let editMessage = $state('');
   let saveState = $state<SaveState>({ kind: 'idle' });
+
+  // Favorite toggle. Marking an article favorite is what saves it
+  // offline (offline-sync mirrors the favorite set into IndexedDB), so
+  // this is the one bookmark control the wiki has. The local store only
+  // updates AFTER the server write lands (applyWikiFavorite), so a
+  // failed toggle leaves the glyph showing the true server state; the
+  // error line surfaces why nothing changed.
+  let favoriteBusy = $state(false);
+  let favoriteError = $state<string | null>(null);
+
+  async function toggleFavorite(a: WikiArticle): Promise<void> {
+    if (!app.supabase || favoriteBusy) return;
+    const next = !a.favorite;
+    favoriteBusy = true;
+    favoriteError = null;
+    try {
+      await app.supabase.setWikiArticleFavorite(a.id, next);
+      applyWikiFavorite(a, next);
+    } catch (err) {
+      favoriteError = err instanceof Error ? err.message : String(err);
+    } finally {
+      favoriteBusy = false;
+    }
+  }
 
   function startEdit(a: WikiArticle): void {
     editingId = a.id;
@@ -1761,6 +1786,39 @@
           <header class="wiki-header">
             <h1 class="wiki-title">{a.title}</h1>
             <div class="wiki-actions">
+              <button
+                type="button"
+                class="icon-btn wiki-favorite-btn"
+                class:active={a.favorite}
+                onclick={() => toggleFavorite(a)}
+                disabled={favoriteBusy}
+                title={a.favorite
+                  ? 'Saved offline (remove from favorites)'
+                  : 'Save offline (mark as favorite)'}
+                aria-label={a.favorite
+                  ? 'Remove from favorites'
+                  : 'Mark as favorite'}
+                aria-pressed={a.favorite}
+              >
+                <!-- Star: filled when favorited (saved offline), outline
+                     otherwise. Same fill-vs-stroke active convention as
+                     the Cookbook bookmark glyphs. -->
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill={a.favorite ? 'currentColor' : 'none'}
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"
+                  />
+                </svg>
+              </button>
               <button type="button" onclick={() => startEdit(a)}>Edit</button>
               <button type="button" onclick={() => startManualUpdate(a)}>
                 Ask agent to update
@@ -1770,6 +1828,9 @@
               </button>
             </div>
           </header>
+          {#if favoriteError}
+            <p class="wiki-favorite-error" role="alert">{favoriteError}</p>
+          {/if}
           {#if tocHeadings.length >= 2 || sectionTocLinks.length > 0}
             <!--
               Table of contents. Rendered before the article body so the
@@ -1966,6 +2027,28 @@
     display: flex;
     gap: 0.4rem;
     flex-wrap: wrap;
+    align-items: center;
+  }
+  /* Favorite (save-offline) toggle. Muted until active, then the brand
+     accent fills the star - the same "active = accent" read the
+     Cookbook bookmark buttons use. */
+  .wiki-favorite-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-subtle, var(--text));
+  }
+  .wiki-favorite-btn.active {
+    color: var(--accent, #f5a623);
+  }
+  .wiki-favorite-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  .wiki-favorite-error {
+    margin: 0 0 0.75rem 0;
+    color: var(--danger, #c0392b);
+    font-size: 0.85rem;
   }
   .wiki-content {
     line-height: 1.6;
