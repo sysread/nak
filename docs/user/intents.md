@@ -48,6 +48,11 @@ manages the set itself, the same way it manages its
 [instincts](./samskara.md). The pill is hidden entirely until you turn
 the feature on.
 
+If Nak lets a goal go and later takes it back up, the active card is
+marked **"reconsidered"** rather than appearing a second time under
+"Let go" - so the same wording showing up again reads as a deliberate
+revival, not a duplicate.
+
 ## The guardrails
 
 - **Your explicit instructions always win.** If you've told Nak to do

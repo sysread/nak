@@ -125,16 +125,46 @@ describe('processMintProposals', () => {
     expect(plan.toCreate).toEqual([]);
   });
 
-  it('allows re-minting a statement that belongs to a retired (or now-retired) intent', () => {
-    // The pattern came back: a retired intent's statement is free to
-    // re-form. Same for one being retired in this very batch.
+  it('allows re-minting a statement that belongs to a PRIOR-sweep retired intent', () => {
+    // The pattern came back: a statement retired in an earlier sweep is
+    // free to re-form (the row is already 'retired' in `existing`, not
+    // touched by this plan).
     const plan = processMintProposals({
       rawCreates: [{ statement: 'help them test' }],
+      rawRetires: [],
+      existing: [ex('1', 'help them test', 'retired')],
+    });
+    expect(plan.toCreate.map((c) => c.statement)).toEqual(['help them test']);
+  });
+
+  it('collapses a verbatim same-sweep retire+recreate into no change', () => {
+    // The minter retired a live intent and re-proposed the identical
+    // statement in one plan - a fumbled reframe (it never re-worded).
+    // Applied literally it would leave a retired tombstone next to a
+    // fresh active twin with the same text (the duplicate the user sees
+    // in the inspector). Instead the goal persists untouched: the retire
+    // is cancelled and the duplicate create dropped.
+    const plan = processMintProposals({
+      rawCreates: [{ statement: 'Help Them  Test' }], // same after normalize
       rawRetires: ['1'],
       existing: [ex('1', 'help them test', 'active')],
     });
-    expect(plan.toRetire).toEqual(['1']);
-    expect(plan.toCreate.map((c) => c.statement)).toEqual(['help them test']);
+    expect(plan.toRetire).toEqual([]);
+    expect(plan.toCreate).toEqual([]);
+  });
+
+  it('collapsing a same-sweep retire of a PAUSED twin revives it instead', () => {
+    // A dormant intent retired + recreated identically in one sweep: the
+    // create wants it active, so cancel the retire and revive it rather
+    // than leaving it paused.
+    const plan = processMintProposals({
+      rawCreates: [{ statement: 'help them test' }],
+      rawRetires: ['1'],
+      existing: [ex('1', 'help them test', 'dormant')],
+    });
+    expect(plan.toRetire).toEqual([]);
+    expect(plan.toRevive).toEqual(['1']);
+    expect(plan.toCreate).toEqual([]);
   });
 
   it('dedups duplicate creates within one batch', () => {

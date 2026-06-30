@@ -40,19 +40,62 @@ export interface GroupedIntents {
 }
 
 /**
+ * Normalize a statement for cross-status duplicate detection. Mirrors
+ * the minter's `normalizeStatement` (intent-mint.ts) so the inspector
+ * collapses exactly the pairs the minter treats as the same goal: trim,
+ * collapse internal whitespace, lowercase.
+ */
+function normKey(s: string): string {
+  return s.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+/**
  * Partition rows into active / dormant / retired, each sorted by
  * `updated_at` descending (freshest first). The inspector renders the
  * three groups as sections in that order - what Nak is pursuing now,
  * what it paused, what it let go.
+ *
+ * A retired row whose statement matches a currently-live (active or
+ * dormant) one is a superseded earlier take of a goal Nak has since
+ * picked back up. Showing it under "Let go" would surface the identical
+ * sentence twice, which reads as a glitch - so it is dropped from the
+ * retired group here, and the live card is flagged re-formed instead
+ * (see `reformedIds`).
  */
 export function groupByStatus(rows: readonly IntentRow[]): GroupedIntents {
   const byRecency = (a: IntentRow, b: IntentRow) =>
     b.updated_at.localeCompare(a.updated_at);
-  return {
-    active: rows.filter((r) => r.status === 'active').sort(byRecency),
-    dormant: rows.filter((r) => r.status === 'dormant').sort(byRecency),
-    retired: rows.filter((r) => r.status === 'retired').sort(byRecency),
-  };
+  const active = rows.filter((r) => r.status === 'active').sort(byRecency);
+  const dormant = rows.filter((r) => r.status === 'dormant').sort(byRecency);
+  const live = new Set([...active, ...dormant].map((r) => normKey(r.statement)));
+  const retired = rows
+    .filter((r) => r.status === 'retired' && !live.has(normKey(r.statement)))
+    .sort(byRecency);
+  return { active, dormant, retired };
+}
+
+/** Annotation shown on a live card that Nak let go of earlier and has
+ * since re-formed - so an identical statement reappearing does not read
+ * as a duplicate bug. */
+export const REFORMED_NOTE =
+  'Reconsidered - Nak set an earlier take on this aside, then took it back up.';
+
+/**
+ * Ids of active/dormant intents whose statement also appears on a
+ * retired row - a goal that was let go and later re-formed. The
+ * inspector annotates these (with `REFORMED_NOTE`) so the re-formed card
+ * explains itself rather than looking like a duplicate of a tombstone
+ * the user can no longer see.
+ */
+export function reformedIds(rows: readonly IntentRow[]): Set<string> {
+  const retired = new Set(
+    rows.filter((r) => r.status === 'retired').map((r) => normKey(r.statement)),
+  );
+  const out = new Set<string>();
+  for (const r of rows) {
+    if (r.status !== 'retired' && retired.has(normKey(r.statement))) out.add(r.id);
+  }
+  return out;
 }
 
 /** Plain-language view of an intent's efficacy, honest about uncertainty. */

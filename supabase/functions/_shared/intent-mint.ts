@@ -170,6 +170,13 @@ export function coerceProposedIntent(raw: unknown): ProposedIntent | null {
  *      contradictory batch can never half-apply.
  *   2. Coerce + structurally validate each proposed create; drop the
  *      invalid ones.
+ *   2b. Collapse verbatim same-sweep churn: a create whose normalized
+ *      statement matches an intent being retired from a LIVE state in
+ *      this same plan is a fumbled reframe (the minter re-worded
+ *      nothing). Cancel that retire (revive if it was paused) so the
+ *      goal simply persists, and let the duplicate create drop in (3).
+ *      Re-forming a statement that was retired in a PRIOR sweep is
+ *      untouched - that row is not in this plan's retire set.
  *   3. Dedup creates against (a) every existing intent that is NOT
  *      retired in the resulting state and (b) earlier creates in the
  *      same batch, by normalized statement. A dormant intent still
@@ -226,6 +233,41 @@ export function processMintProposals(args: {
   const dormantSet = new Set(toDormant);
   const reviveSet = new Set(toRevive);
 
+  // (2) Coerce + structurally validate the proposed creates.
+  const coerced: ProposedIntent[] = [];
+  for (const raw of args.rawCreates) {
+    const intent = coerceProposedIntent(raw);
+    if (intent) coerced.push(intent);
+  }
+
+  // (2b) Collapse verbatim same-sweep churn. When one plan both retires
+  // an intent AND re-proposes the identical (normalized) statement, the
+  // minter meant to re-frame the goal but emitted the same words - a
+  // fumbled reframe that nets to no change. Applied literally it would
+  // tombstone the old row and insert a fresh active twin with identical
+  // text, which surfaces as the same sentence under both "Active" and
+  // "Let go" in the inspector (a duplicate that reads as a bug). So read
+  // it as "keep pursuing this goal": cancel the redundant retire (and
+  // revive the row if it was paused), and the duplicate create then
+  // drops out of the dedup below because the surviving statement lands
+  // in `seen`. This fires ONLY for an intent that was LIVE
+  // (active/dormant) at the start of the sweep. Re-forming a statement
+  // that was ALREADY retired in a prior sweep stays allowed - the
+  // pattern genuinely came back, the legitimate re-form case - because
+  // such a row is not in `retireSet`.
+  const retiredFromLive = new Map<string, ExistingIntent>();
+  for (const e of args.existing) {
+    if (retireSet.has(e.id) && e.status !== 'retired') {
+      retiredFromLive.set(normalizeStatement(e.statement), e);
+    }
+  }
+  for (const intent of coerced) {
+    const e = retiredFromLive.get(normalizeStatement(intent.statement));
+    if (!e) continue;
+    retireSet.delete(e.id);
+    if (e.status === 'dormant') reviveSet.add(e.id);
+  }
+
   // Final status of an existing intent after the plan applies.
   const finalStatus = (e: ExistingIntent): ExistingIntent['status'] => {
     if (retireSet.has(e.id)) return 'retired';
@@ -236,28 +278,35 @@ export function processMintProposals(args: {
 
   // (3) Dedup set: normalized statements of every intent that ends up
   // non-retired. Dormant counts (a paused intent blocks its twin);
-  // retired does not (its pattern is free to re-form).
+  // retired does not (its pattern is free to re-form). An intent whose
+  // same-sweep retire was just cancelled (2b) is non-retired again, so
+  // its statement lands here and drops the duplicate create.
   const seen = new Set<string>();
   for (const e of args.existing) {
     if (finalStatus(e) !== 'retired') seen.add(normalizeStatement(e.statement));
   }
 
-  // (2) + (3) coerce and dedup creates.
-  const coerced: ProposedIntent[] = [];
-  for (const raw of args.rawCreates) {
-    const intent = coerceProposedIntent(raw);
-    if (!intent) continue;
+  // (3b) Dedup creates against the surviving existing statements and
+  // against earlier creates in the same batch.
+  const toCreateAll: ProposedIntent[] = [];
+  for (const intent of coerced) {
     const key = normalizeStatement(intent.statement);
     if (seen.has(key)) continue; // dup of a surviving existing or earlier create
     seen.add(key);
-    coerced.push(intent);
+    toCreateAll.push(intent);
   }
 
   // (4) Cap on the resulting active set.
   const survivingActive = args.existing.filter((e) => finalStatus(e) === 'active').length;
   const room = Math.max(0, cap - survivingActive);
-  const toCreate = coerced.slice(0, room);
-  const droppedForCap = coerced.length - toCreate.length;
+  const toCreate = toCreateAll.slice(0, room);
+  const droppedForCap = toCreateAll.length - toCreate.length;
 
-  return { toCreate, toRetire, toDormant, toRevive, droppedForCap };
+  return {
+    toCreate,
+    toRetire: [...retireSet],
+    toDormant: [...dormantSet],
+    toRevive: [...reviveSet],
+    droppedForCap,
+  };
 }

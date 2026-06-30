@@ -53,8 +53,12 @@
    invariants (coherent target bindings, status-transition
    legality with retire > dormant > revive precedence,
    exact-after-normalize dedup where dormant blocks a twin but
-   retired does not, active-set cap trimming low-priority
-   creates).
+   a PRIOR-sweep retired statement is free to re-form, active-set
+   cap trimming low-priority creates). A verbatim same-sweep
+   retire+recreate (the minter re-wording nothing) is collapsed
+   to no change - the retire is cancelled and the duplicate
+   create dropped - so it can never leave a tombstone next to an
+   identical active twin. See **Gotchas - same-sweep churn**.
 5. The minter agent core (`venice/agents/intent.ts`) - the
    judgment-shaping system prompt, the payload builder, and the
    response parser - pinned by a Deno suite
@@ -117,6 +121,11 @@
     rationale. All logic is in the tested primitives
     (`src/lib/ui/intents-inspector.ts`); the data read is
     `listIntents()`. No write controls - the minter owns the set.
+    A retired intent whose statement matches a still-live (active
+    or dormant) one is suppressed from "Let go" and the live card
+    is flagged "reconsidered" (`reformedIds` + `REFORMED_NOTE`),
+    so a goal Nak let go and later re-formed reads as a revival,
+    not a duplicated sentence across two sections.
 11. Employment classification - the settled-thread judge
     (`venice/agents/intent_employment.ts`,
     `runIntentEmploymentSweepTick`) that reads each settled
@@ -814,6 +823,21 @@ NOT user-facing knobs - the toggle is the only control.
   launch.** The toggle defaults off until the backtest clears
   the matched-control bar. Flipping the default is a separate,
   evidence-gated decision.
+- **Same-sweep churn vs. legitimate re-form.** The dedup rule
+  "retired does not block a twin" is for re-forming a pattern
+  that was retired in a PRIOR sweep (it genuinely came back). It
+  is NOT a license to retire and recreate the identical statement
+  in ONE plan - that is a fumbled reframe (the minter meant to
+  re-word and didn't), and applied literally it tombstones the
+  old row beside an identical fresh active twin, which surfaced
+  as the same sentence under both "Active" and "Let go" in the
+  inspector. `processMintProposals` collapses that case (cancel
+  the retire, drop the duplicate create); the inspector also
+  defensively hides a retired twin of a live statement. Both
+  guards are load-bearing for the "don't show duplicates" UX -
+  the minter fix stops new churn at the source, the inspector fix
+  also covers a genuine cross-sweep re-form (which is allowed and
+  should read as "reconsidered", not a duplicate).
 
 ## QA
 
