@@ -77,6 +77,11 @@ changing a contract that other features depend on.
   bucket for originals, browser-side extraction + chunking,
   the chunk-level embedding search, the `doc_*` tools, and
   the Library drawer tab + panel.
+- [Offline cache](./offline-cache.md) — the per-device IndexedDB
+  mirror of favorited articles and favorited/upcoming recipes, the
+  reconcile + read-through that keeps it fresh without evicting on a
+  network blip, and the offline indicator. Read before touching the
+  wiki/recipe read paths or the connectivity UI.
 - [Conversation recall](./conversation-recall.md) — recall
   over thread summaries.
 - [Context recall](./context-recall.md) — topic-boundary

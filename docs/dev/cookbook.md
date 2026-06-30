@@ -386,6 +386,14 @@ keystrokes; the LLM tool path keeps using `listRecipes`.
 - **Memory** (`./memory.md`) — scope contrast. A memory is "something
   about the user"; a recipe is "an item the user owns". Share the
   RLS posture and the tool-registry pattern; don't share data.
+- **Offline cache** (`./offline-cache.md`) — a recipe's `favorite` or
+  `upcoming` flag is what saves it offline: the offline-sync reconcile
+  mirrors the union of both buckets into IndexedDB. The Cookbook
+  detail view routes its existing `getRecipe` deep-link fallback
+  through that feature's `getRecipeCached` read-through, and the
+  bookmark / edit / delete controls disable when offline. The
+  bookmark flags' deliberate no-bump of `updated_at` is what lets the
+  cache treat a toggle as "no content change".
 - **Topics** (`./topics.md` under "Recipe topics") - a server-side
   curation unit
   (`supabase/functions/venice/agents/recipe_topics.ts`) tags each

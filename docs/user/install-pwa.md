@@ -11,6 +11,51 @@ launches like a native app and works when you're offline.
 
 ## What works offline
 
+Once Nak is installed, the app itself opens with no connection - the
+interface is cached on your device. What it can *show* you offline
+depends on what you saved ahead of time.
+
+**Saving things for offline.** Mark a wiki article or a recipe as a
+**favorite** (and, for recipes, "upcoming" counts too). Anything in
+those sets is mirrored onto your device the next time you're online,
+so you can open it later with no signal. Favoriting is the gesture:
+the wildfire-evacuation article you star today is readable from the
+trailhead tomorrow.
+
+- The sidebar's **Favorites** section (and the recipe **Upcoming**
+  section) is the set saved for offline use.
+- Saving syncs in the background while you're connected. Favorite
+  something, stay online a moment, and it's stored.
+- When you're offline, a small banner appears at the bottom of the
+  screen telling you so, and how many articles and recipes are
+  available.
+
+**What works with no connection:**
+
+- Opening the app and navigating around.
+- Reading any favorited article and any favorited or upcoming recipe,
+  including its text, ingredients, and steps.
+- The in-app **Help** manual (these pages).
+
+**What needs a connection:**
+
+- Chatting with the assistant (it talks to Venice over the network).
+- Editing, creating, or deleting articles and recipes, and changing
+  favorites - these are disabled while offline, with a tooltip saying
+  so. Reconnect and they work again.
+- **Recipe photos** - they aren't stored offline, so a recipe you
+  open with no signal shows "Photos are only available online" in
+  place of the strip. The text and steps are all there.
+- Anything you never favorited - if it wasn't saved, it can't load
+  without a connection.
+
+**Across devices.** Favoriting on your laptop saves it on your laptop;
+open Nak on your phone while online and it saves there too. Un-favorite
+something and it's dropped from each device's offline copy the next
+time that device syncs. An offline device keeps whatever it last
+saved - going offline never wipes your saved copies; only an
+un-favorite (seen while online) removes them.
+
 ## Sharing into Nak from other apps
 
 Once Nak is installed on your home screen (or desktop), it registers

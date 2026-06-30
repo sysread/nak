@@ -1,0 +1,91 @@
+# Offline cache: favorited records readable with no network
+
+## Covers
+
+The per-device IndexedDB mirror of the marked set (favorited wiki
+articles; favorited / upcoming recipes), the reconcile + read-through,
+the never-evict-on-failure rule, the offline indicator, and the
+read-only gating ([dev: offline-cache](../../dev/offline-cache.md),
+[dev: wiki](../../dev/wiki.md), [dev: cookbook](../../dev/cookbook.md)).
+
+This case needs a **real browser with a service worker** - the PWA
+shell only loads offline when installed (`pnpm build && pnpm preview`,
+then install; the dev server emits no SW). DevTools Network "Offline"
+plus a reload stands in for losing signal.
+
+## Preconditions
+
+- Production-shaped build served and installed as a PWA:
+  `pnpm build && pnpm preview`, open the preview URL, install via the
+  address-bar prompt. Signed in.
+- At least one wiki article and one recipe exist (create them, or use
+  seeded data).
+- DevTools open (Application -> Service Workers shows the active SW;
+  Network has the Offline throttle).
+- To inspect the cache directly: DevTools -> Application -> IndexedDB
+  -> `nak-offline-cache` -> `articles` / `recipes`.
+
+## Steps
+
+1. **Mark the set.** Open an article, click the **star** in its
+   header (it fills). Open a recipe, click the **favorite** (thumbs)
+   bookmark. Stay online ~2s.
+2. **Confirm it cached.** In Application -> IndexedDB ->
+   `nak-offline-cache`, check `articles` holds the favorited article's
+   id and `recipes` holds the favorited recipe's id.
+3. **Go offline + reload.** Set Network to Offline. Reload the PWA.
+4. **Open the saved article by navigation.** Click the Wiki tab; the
+   favorited article appears under **Favorites - saved offline**. Open
+   it. Then open the favorited recipe from the Recipes tab.
+5. **Open by deep link offline.** Note the article's URL
+   (`?drawer=wiki&wiki_article_id=...`) while online; offline, paste it
+   into the installed app's address bar (or reload on it).
+6. **Try a write offline.** On the open article, hover **Edit** /
+   **Delete** / the star; on the recipe, the bookmark / edit / delete.
+7. **Recipe photo offline.** Open (offline) a favorited recipe that
+   has photos.
+8. **Un-favorite cross-device (eviction).** Go back online. On a
+   second device (or a second browser profile signed into the same
+   account), un-favorite the article. Back on the first device, stay
+   online a moment (or toggle offline->online to force a sync).
+9. **Offline does not evict.** Favorite a fresh article online (let it
+   cache), go offline, reload a few times, navigate around.
+
+## Expected
+
+- (1-2) Both ids appear in the IndexedDB stores within ~2s of
+  favoriting - the marked set mirrored without a manual action.
+- (3) The app shell loads with no network. A bottom banner reads
+  "You're offline. N articles and M recipes saved for offline use."
+- (4-5) The favorited article renders fully offline - title, body,
+  table of contents - via the cache, whether reached by sidebar click
+  or by deep-link URL. The favorited recipe renders its text,
+  ingredients, and steps.
+- (6) Every write control is disabled with a "Reconnect to ..."
+  tooltip; nothing errors on click because nothing fires.
+- (7) The photo strip is replaced by "Photos are only available
+  online" - no broken image icons.
+- (8) On the first device, the un-favorited article drops out of the
+  Favorites section and its id disappears from the `articles` store on
+  the next successful sync (the realtime ping or the online tick).
+- (9) The freshly-favorited article stays in the cache across offline
+  reloads - going offline NEVER drops a saved copy. Only an
+  un-favorite seen while online evicts (the "remote changed" vs
+  "can't reach remote" distinction).
+- **[hosted]** Same against the hosted project: hosted realtime
+  delivers the cross-device eviction ping (step 8) that local realtime
+  may differ on, and a genuinely installed PWA on a phone with
+  airplane mode is the real target of step 4.
+
+## Cleanup
+
+Un-favorite the QA articles / recipes (online) so the caches drain.
+Re-enable Network. The IndexedDB DB can be deleted from DevTools
+(Application -> IndexedDB -> `nak-offline-cache` -> Delete database)
+if you want a clean slate.
+
+## Results log
+
+| Date | Env | Commit | Result | Notes |
+| ---- | --- | ------ | ------ | ----- |
+| 2026-06-30 | n/a | 166f67b | pending-manual | feature landed via cloud agent (no browser/SW available there); unit layer green (tests/offline-cache.test.ts); awaiting a manual PWA pass per the steps above |
