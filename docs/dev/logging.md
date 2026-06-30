@@ -158,6 +158,14 @@ Pick a short, stable source tag. Existing tags:
   tool rounds run edge-side under `stream`). Drop to `Debug+` when a
   turn answers the wrong thing - it shows exactly what was on the wire
 - `chat` - main screen one-offs (e.g. attachment persist failures)
+- `offline` - the offline cache (`src/lib/offline-sync.svelte.ts`,
+  browser-side). Connectivity transitions (info), the per-sync
+  headline "saved N article(s), M recipe(s) (wrote X, evicted Y)"
+  (info) with a per-store breakdown in the details, a skipped sync
+  when the server is unreachable (warn - the never-evict-on-failure
+  path), and per-record read-through outcomes - fetched / served from
+  cache / not cached (debug). This is the surface for confirming on a
+  real device that favorited records actually downloaded
 
 Rest arguments after the message string are "details". The drawer
 renders string details inline as a second line under the message;
