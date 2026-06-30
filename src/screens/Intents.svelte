@@ -22,6 +22,8 @@
   import { app } from '$lib/state.svelte';
   import {
     groupByStatus,
+    reformedIds,
+    REFORMED_NOTE,
     efficacyView,
     targetLabel,
     activeHeadline,
@@ -39,6 +41,7 @@
   let loading = $state(true);
 
   const grouped = $derived<GroupedIntents>(groupByStatus(rows));
+  const reformed = $derived<Set<string>>(reformedIds(rows));
 
   onMount(async () => {
     const supabase = app.supabase;
@@ -116,6 +119,9 @@
                     </span>
                     <span class="when subtle">updated {formatRelative(intent.updated_at)}</span>
                   </div>
+                  {#if reformed.has(intent.id)}
+                    <p class="intent-reformed subtle">{REFORMED_NOTE}</p>
+                  {/if}
                   {#if view.hint}
                     <p class="intent-hint subtle">{view.hint}</p>
                   {/if}
@@ -293,6 +299,14 @@
   }
 
   .intent-hint {
+    margin: 0.4rem 0 0;
+    font-size: 0.78rem;
+    line-height: 1.4;
+  }
+
+  /* The re-formed note explains why a goal Nak previously let go is
+     active again, since the superseded retired twin is hidden. */
+  .intent-reformed {
     margin: 0.4rem 0 0;
     font-size: 0.78rem;
     line-height: 1.4;

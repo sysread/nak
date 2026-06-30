@@ -7,6 +7,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   groupByStatus,
+  reformedIds,
   efficacyView,
   targetLabel,
   activeHeadline,
@@ -33,16 +34,47 @@ function row(over: Partial<IntentRow> = {}): IntentRow {
 
 describe('groupByStatus', () => {
   it('partitions and sorts each group most-recent first', () => {
+    // Distinct statements so the retired row is not read as a twin of a
+    // live one (see the suppression test below).
     const rows = [
-      row({ id: 'a', status: 'active', updated_at: '2026-06-01T00:00:00Z' }),
-      row({ id: 'b', status: 'active', updated_at: '2026-06-03T00:00:00Z' }),
-      row({ id: 'c', status: 'dormant' }),
-      row({ id: 'd', status: 'retired' }),
+      row({ id: 'a', status: 'active', statement: 'stmt a', updated_at: '2026-06-01T00:00:00Z' }),
+      row({ id: 'b', status: 'active', statement: 'stmt b', updated_at: '2026-06-03T00:00:00Z' }),
+      row({ id: 'c', status: 'dormant', statement: 'stmt c' }),
+      row({ id: 'd', status: 'retired', statement: 'stmt d' }),
     ];
     const g = groupByStatus(rows);
     expect(g.active.map((r) => r.id)).toEqual(['b', 'a']); // freshest first
     expect(g.dormant.map((r) => r.id)).toEqual(['c']);
     expect(g.retired.map((r) => r.id)).toEqual(['d']);
+  });
+
+  it('hides a retired twin of a live statement so it does not show twice', () => {
+    // A goal let go earlier and since re-formed: the retired row carries
+    // the same statement as a live one, so it is dropped from "Let go"
+    // (the active card is flagged re-formed instead). A genuinely
+    // distinct retired intent still shows.
+    const rows = [
+      row({ id: 'a', status: 'active', statement: 'help them test it' }),
+      row({ id: 'b', status: 'retired', statement: 'Help Them  Test It' }), // same after normalize
+      row({ id: 'c', status: 'retired', statement: 'something else' }),
+    ];
+    const g = groupByStatus(rows);
+    expect(g.active.map((r) => r.id)).toEqual(['a']);
+    expect(g.retired.map((r) => r.id)).toEqual(['c']); // 'b' suppressed
+  });
+});
+
+describe('reformedIds', () => {
+  it('flags a live intent whose statement also appears retired', () => {
+    const rows = [
+      row({ id: 'a', status: 'active', statement: 'help them test it' }),
+      row({ id: 'b', status: 'retired', statement: 'help them test it' }),
+      row({ id: 'c', status: 'active', statement: 'a fresh goal' }),
+    ];
+    const ids = reformedIds(rows);
+    expect(ids.has('a')).toBe(true);
+    expect(ids.has('c')).toBe(false);
+    expect(ids.has('b')).toBe(false); // the retired row itself is not "re-formed"
   });
 });
 
