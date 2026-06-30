@@ -33,6 +33,8 @@
  * indistinguishably from local ones.
  */
 
+import { untrack } from 'svelte';
+
 export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error';
 
 /** Runtime predicate. Used when coercing persisted settings jsonb that
@@ -170,12 +172,25 @@ let nextId = 1;
 
 function pushEntry(partial: Omit<LogEntry, 'id'>): void {
   const entry: LogEntry = { ...partial, id: nextId++ };
-  state.entries.push(entry);
-  if (state.entries.length > MAX_ENTRIES) {
-    // Drop the oldest N rather than clearing the whole array - the
-    // drawer's scroll position stays meaningful across a long burst.
-    state.entries.splice(0, state.entries.length - MAX_ENTRIES);
-  }
+  // Logging must be inert with respect to the reactive graph. A log
+  // call can land synchronously inside an $effect body - the
+  // offline-cache session-live effect logs on mount, for one - and the
+  // push below both reads state.entries.length and writes the array. If
+  // that read is captured while an effect is the active reaction, the
+  // effect ends up depending on the log buffer it just wrote, re-runs,
+  // logs again, and trips effect_update_depth_exceeded - a main-thread
+  // hang that also starves the gotrue auth lock and realtime connect.
+  // untrack severs the dependency capture: the write still notifies the
+  // Logs drawer's own readers (visible / availableSources / scroll
+  // pin), but no ambient effect gets subscribed to the buffer.
+  untrack(() => {
+    state.entries.push(entry);
+    if (state.entries.length > MAX_ENTRIES) {
+      // Drop the oldest N rather than clearing the whole array - the
+      // drawer's scroll position stays meaningful across a long burst.
+      state.entries.splice(0, state.entries.length - MAX_ENTRIES);
+    }
+  });
 }
 
 function fromSerializableDetail(d: SerializableDetail): unknown {
