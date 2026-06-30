@@ -62,7 +62,7 @@ badge fed by the `wiki_record_files(count)` embed.
    on the link row).
 8. **Part B - chat tools (model-driven).** In a chat thread, upload the
    image (so it's a live thread attachment), then enable the
-   **wiki_records** toolbox and ask: `Attach the image I just sent to the
+   **wiki** toolbox and ask: `Attach the image I just sent to the
    "<record content>" record, and link that record to the earlier attempt
    as "based on".`
 9. Inspect the same two tables for the new file row (its bytes copied

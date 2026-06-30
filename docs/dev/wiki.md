@@ -291,9 +291,18 @@ Browser tools:
   `conversation_search` / `memory_search` impls that remain in
   `src/lib/tools/` belong to the memory-librarian fleet
   (deep-sleep / rem), not to any wiki feature.
+- `src/lib/tools/wiki_create.schema.ts`, `wiki_update.schema.ts`,
+  `wiki_delete.schema.ts` - the direct article-write schemas the chat
+  model sees, schema-only like the reads (the impls + registration
+  live in the venice function). Kept aligned with the agent-side wire
+  schemas in `agents/wiki.ts`; the chat schemas omit the
+  librarian-only `source_thread_ids` (the chat turn's current thread
+  auto-attaches as the source).
 - `src/lib/tools/wiki_librarian.schema.ts` + the `wikiToolbox`
-  entry in `src/lib/tools/index.ts` - the main-chat delegation
-  surface (see "Tool toolbox split" below).
+  entry in `src/lib/tools/index.ts` - the main-chat wiki write
+  surface: the article CRUD above, this librarian delegation, and the
+  record writes all gate behind the one `wiki` toolbox (see "Tool
+  toolbox split" below).
 
 Browser preview UI (no browser agent code):
 
@@ -1202,13 +1211,19 @@ browser persists, the autonomous flow's tool calls ARE the writes).
   synthesises a topic note). All four ride every chat request; reads
   are idempotent and cheap, and the wiki blurb in the system prompt
   tells the model which one to reach for in which case.
-- `wikiToolbox` (browser, main-chat registry) is the gated toolbox
-  the chat model toggles to call `wiki_librarian` - a server-side
-  sub-agent that lets the model delegate maintenance work (merge /
-  split / delete / rewrite) inside the conversation. The model never
-  gets `wiki_create` / `wiki_update` / `wiki_delete` directly; every
-  chat-driven edit goes through the librarian's
-  read-everything-then-plan loop.
+- `wikiToolbox` (browser, main-chat registry) is the single gated
+  toolbox the chat model toggles for every wiki write. It carries the
+  direct article CRUD (`wiki_create` / `wiki_update` / `wiki_delete`),
+  the `wiki_librarian` delegation (the server-side sub-agent for
+  multi-article consolidations - merge / split / rewrite across the
+  whole wiki), AND the record writes (see "Record toolbox split"
+  below). The chat model reaches for a one-shot `wiki_update` when a
+  targeted edit is enough and delegates to the librarian when the job
+  needs a read-everything-then-plan pass over many articles. The
+  direct article writes wrap the same registered tool impls the
+  autonomous agents use; the chat dispatch's current thread is
+  attached as the article's source automatically (the chat schemas
+  omit the librarian-only `source_thread_ids`).
 - The autonomous agent's toolbox (`buildWikiToolbox` in
   `supabase/functions/venice/agents/wiki.ts`) bundles wiki_search +
   create + update + delete plus READ-ONLY `memory_search`, each
@@ -1245,24 +1260,24 @@ browser persists, the autonomous flow's tool calls ARE the writes).
 
 ### Record toolbox split
 
-Records DIVERGE from the article write policy, and the divergence is
-deliberate. Article writes are agent-only (the chat reaches them only
-through the librarian's read-then-plan loop); record writes are direct
-gated chat tools. The rationale: a record is a discrete, low-stakes,
-append-oriented jot (one event, one row), whereas the article body is
-the single shared consolidated narrative the librarian protects. A
-stray record is cheap to delete; a clobbered article is not.
+Record writes live in the SAME `wiki` toolbox as the article writes -
+one toggle gates the whole chat-driven wiki write surface. They were
+once their own `wiki_records` box; folding them in matches the user's
+mental model (enabling "wiki" turns on wiki editing, articles and
+records alike) and removes a toolbox the user otherwise had to discover
+separately.
 
 - `alwaysOnToolbox` carries the record READS - `record_list` (one
   article's timeline), `record_get` (by id), `record_search`
   (semantic across every article's records). They ride every request
   like the wiki reads.
-- `wikiRecordsToolbox` (gated, `name: 'wiki_records'`) carries the
-  WRITES - `record_create` / `record_update` / `record_delete` plus the
+- `wikiToolbox` (gated, `name: 'wiki'`) carries the record WRITES -
+  `record_create` / `record_update` / `record_delete` plus the
   file + link writes `record_file_attach` / `record_file_remove` /
-  `record_link_create` / `record_link_delete`. Gated via the composer
-  popover / `toggle_toolbox` like the cooking and memory write boxes. The
-  membership tripwire lives in `tests/tools.test.ts`.
+  `record_link_create` / `record_link_delete` - alongside the article
+  writes. Gated via the composer popover / `toggle_toolbox` like the
+  cooking and memory write boxes. The membership tripwire lives in
+  `tests/tools.test.ts`.
 - The extraction agent's toolbox (`buildWikiRecordsToolbox` in
   `agents/wiki_records.ts`) is read-heavy with three writes,
   `record_create` + `record_link_create` + `record_file_attach`:
@@ -1391,13 +1406,14 @@ stray record is cheap to delete; a clobbered article is not.
   Broadcast topic (`_shared/agent-progress.ts`), which follows the
   same transport + flush-before-respond contract as the log relay.
 - **Chat / tools** (`docs/dev/chat.md`, `docs/dev/tools.md`) -
-  `wiki_search` and the other read tools are always-on in every chat
-  request; the gated `wikiToolbox` delegates article writes to the
-  `wiki_librarian` sub-agent. Record reads (`record_list`,
-  `record_get`, `record_search`) are always-on; record writes
-  (`record_create` / `record_update` / `record_delete`) are direct,
-  gated behind `wikiRecordsToolbox` - the deliberate divergence from
-  the article write policy (see Record toolbox split above).
+  `wiki_search` and the other read tools (plus the record reads
+  `record_list` / `record_get` / `record_search`) are always-on in
+  every chat request. The gated `wikiToolbox` is the single toggle for
+  every chat-driven write: direct article CRUD (`wiki_create` /
+  `wiki_update` / `wiki_delete`), the `wiki_librarian` delegation for
+  multi-article consolidations, and the record writes
+  (`record_create` / `record_update` / `record_delete` plus the file +
+  link tools).
 - **Edge function auth** (`docs/dev/edge-function-auth.md`) - the
   venice function is b-strict: `/wiki-sweep`,
   `/wiki-records-sweep`, and `/wiki-librarian-sweep` are gated on

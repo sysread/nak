@@ -515,10 +515,12 @@ while a manual or scheduled run is happening (or vice versa) returns
 an error rather than racing two passes. Nak reports back in prose
 what the librarian merged, deleted, or left alone.
 
-The assistant cannot edit wiki articles directly - it can only
-delegate through the librarian. That keeps every chat-driven wiki
-edit going through the same "read everything, plan, then act" loop a
-sparkles-button run uses, instead of a one-shot scribble.
+The librarian is the right tool when the job spans several articles -
+merging duplicates, splitting a conflated topic, a from-scratch
+reorganization. For a single targeted edit, the assistant can also
+write the article directly (see [How the assistant uses the
+wiki](#how-the-assistant-uses-the-wiki) below); both paths gate behind
+the same **Wiki** toolbox.
 
 ## Changelog
 
@@ -578,6 +580,29 @@ This is the deliberate split between the two knowledge surfaces:
 
 If you want the assistant to use a particular article, mention the
 topic (or the title) directly - that's the cue for `wiki_search`.
+
+### Letting the assistant edit the wiki
+
+Reading is always on; **writing** is gated behind the **Wiki**
+toolbox in the composer's toolbox popover. Turn it on (or let Nak flip
+it on when the conversation makes a wiki edit the obvious next step)
+and the assistant can, right there in the chat:
+
+- **create, edit, and delete articles** - "start an article about my
+  marathon training", "add a paragraph to the Maya article", "delete
+  the duplicate kettle stub";
+- **manage records** - log a dated [record](#records), correct one,
+  remove one, attach a file you posted in the conversation, or
+  cross-link two records;
+- **delegate to the librarian** for the bigger multi-article jobs
+  (see [The librarian](#the-librarian)).
+
+Every chat-driven article create/edit/delete still writes a
+[changelog](#changelog) entry with the reason Nak gives, so the audit
+trail is identical whether you typed the change yourself or asked the
+assistant to. When the Wiki toolbox is off, none of these write tools
+are on the wire - the assistant can read your wiki but cannot change
+it.
 
 ## Settings controls
 

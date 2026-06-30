@@ -94,6 +94,9 @@ import { researchDocsSchema } from './research_docs.schema';
 import { wikiSearchSchema } from './wiki_search.schema';
 import { wikiListSchema } from './wiki_list.schema';
 import { wikiGetSchema } from './wiki_get.schema';
+import { wikiCreateSchema } from './wiki_create.schema';
+import { wikiUpdateSchema } from './wiki_update.schema';
+import { wikiDeleteSchema } from './wiki_delete.schema';
 import { wikiLibrarianSchema } from './wiki_librarian.schema';
 import { recordListSchema } from './record_list.schema';
 import { recordGetSchema } from './record_get.schema';
@@ -163,6 +166,9 @@ const researchDocs = serverSideTool(researchDocsSchema);
 const wikiSearch = serverSideTool(wikiSearchSchema);
 const wikiList = serverSideTool(wikiListSchema);
 const wikiGet = serverSideTool(wikiGetSchema);
+const wikiCreate = serverSideTool(wikiCreateSchema);
+const wikiUpdate = serverSideTool(wikiUpdateSchema);
+const wikiDelete = serverSideTool(wikiDeleteSchema);
 const wikiLibrarian = serverSideTool(wikiLibrarianSchema);
 const recordList = serverSideTool(recordListSchema);
 const recordGet = serverSideTool(recordGetSchema);
@@ -235,8 +241,8 @@ const generateImage = serverSideTool(generateImageSchema);
  *     `record_list` walks one article's timeline, `record_get`
  *     fetches one by id, `record_search` runs semantic search
  *     across every article's records. Reads ride always-on like
- *     the wiki reads; the record writes gate behind
- *     `wikiRecordsToolbox`.
+ *     the wiki reads; the record writes gate behind the
+ *     `wiki` toolbox alongside the article writes.
  *   - `recipe_list` / `recipe_get` - browse and fetch the user's
  *     saved recipes.
  *   - `research_docs` - bounded sub-agent that answers
@@ -354,57 +360,55 @@ export const memoriesToolbox: Toolbox = {
 };
 
 /**
- * Wiki maintenance toolbox. Wiki reads (wiki_search, wiki_list,
- * wiki_get, wiki_recall) live in the always-on set; this toolbox
- * carries the librarian-delegation tool, which dispatches a
- * multi-round sub-agent that can create, update, and delete wiki
- * articles on the user's behalf. The user enables the toolbox from
- * the composer popover when they want to ask Nak to consolidate or
- * reshape their wiki; the model can flip it on via `toggle_toolbox`
- * once the conversation makes a librarian run the obvious next move.
+ * Wiki toolbox - one gate for every chat-driven wiki write, articles
+ * and records alike. Wiki reads (wiki_search, wiki_list, wiki_get,
+ * wiki_recall) and record reads (record_list, record_get,
+ * record_search) live in the always-on set; this toolbox carries only
+ * the writes. The user enables it from the composer popover when they
+ * want Nak to maintain their wiki; the model flips it on via
+ * `toggle_toolbox` once the conversation makes a wiki write the obvious
+ * next move.
  *
- * Only the librarian-invocation tool lives here - direct
- * wiki_create / wiki_update / wiki_delete are NOT exposed to the
- * main chat at all. Those remain reserved for the autonomous wiki
- * agent and the librarian itself, so any wiki edit driven by the
- * main chat has to go through the librarian's full read-then-plan
- * loop rather than a one-shot scribble.
+ * Members, in catalog order:
+ *   - `wiki_create` / `wiki_update` / `wiki_delete` - direct article
+ *     CRUD. A chat turn's current thread is attached as the article's
+ *     source automatically, so these omit the librarian-only
+ *     `source_thread_ids` param.
+ *   - `wiki_librarian` - delegate a multi-article maintenance task
+ *     (merge duplicates, split or rewrite across several articles) to a
+ *     read-then-plan sub-agent. Kept alongside the direct tools: a
+ *     one-shot edit goes through wiki_update, a consolidation that has
+ *     to reason over the whole wiki goes through the librarian.
+ *   - `record_create` / `record_update` / `record_delete` - direct CRUD
+ *     for the dated records linked to an article (the topic's journey,
+ *     distinct from the article body's current state).
+ *   - `record_file_attach` / `record_file_remove` - promote a
+ *     conversation file onto a record / detach it.
+ *   - `record_link_create` / `record_link_delete` - the directed,
+ *     labelled graph between records.
+ *
+ * Direct article writes used to be agent-only (chat had to route
+ * through the librarian's read-then-plan loop); they are now exposed
+ * here so the chat model can make a targeted edit without a full
+ * librarian pass. The librarian stays for the genuinely
+ * multi-article consolidations it was built for.
  */
 export const wikiToolbox: Toolbox = {
   name: 'wiki',
   description:
-    "Delegate wiki maintenance tasks to the user's librarian sub-agent " +
-    '(merge duplicates, delete stubs, split or rewrite articles). Read ' +
-    'paths (wiki_search, wiki_list, wiki_get, wiki_recall) are ' +
-    'always-on; this toolbox carries the librarian invocation.',
-  tools: [wikiLibrarian],
-};
-
-/**
- * Wiki records write toolbox. Record reads (record_list, record_get,
- * record_search) live in the always-on set; this toolbox carries the
- * writes (create, update, delete a dated record).
- *
- * Deliberate divergence from `wikiToolbox`, which exposes NO direct
- * writes - all chat-driven article edits go through the librarian's
- * read-then-plan loop so an autonomous turn can't scribble over the
- * consolidated narrative. Records get direct write tools instead because
- * they are discrete, low-stakes, append-oriented jots (one event, one
- * row), not the single shared article body the librarian protects. A
- * stray record is cheap to delete; a clobbered article is not. The
- * background extraction agent and the librarian also read records and
- * promote durable learnings into the article body without deleting the
- * records - see supabase/functions/venice/agents/.
- */
-export const wikiRecordsToolbox: Toolbox = {
-  name: 'wiki_records',
-  description:
-    'Create, edit, and delete dated records linked to a wiki article ' +
-    "(the topic's journey, distinct from the article body's current " +
-    'state); attach conversation files to a record and cross-link related ' +
-    'records. Read paths (record_list, record_get, record_search) are ' +
+    "Maintain the user's wiki: create, edit, and delete encyclopedic " +
+    'articles (wiki_create / wiki_update / wiki_delete); delegate a ' +
+    'multi-article consolidation to the librarian sub-agent ' +
+    '(wiki_librarian); create, edit, and delete the dated records that ' +
+    "track an article's journey, attach conversation files to a record, " +
+    'and cross-link related records. Read paths (wiki_search, wiki_list, ' +
+    'wiki_get, wiki_recall, record_list, record_get, record_search) are ' +
     'always-on; this toolbox carries the writes.',
   tools: [
+    wikiCreate,
+    wikiUpdate,
+    wikiDelete,
+    wikiLibrarian,
     recordCreate,
     recordUpdate,
     recordDelete,
@@ -470,7 +474,6 @@ export const TOOLBOXES: readonly Toolbox[] = [
   cookingToolbox,
   memoriesToolbox,
   wikiToolbox,
-  wikiRecordsToolbox,
   libraryToolbox,
   imagesToolbox,
 ];

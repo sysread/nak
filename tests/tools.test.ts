@@ -100,10 +100,17 @@ describe('tool registry', () => {
       'recipe_photos_remove',
       'recipe_photos_reorder',
       'recipe_photo_label_set',
+      'wiki_create',
+      'wiki_update',
+      'wiki_delete',
       'wiki_librarian',
       'record_create',
       'record_update',
       'record_delete',
+      'record_file_attach',
+      'record_file_remove',
+      'record_link_create',
+      'record_link_delete',
       'doc_create',
       'doc_update',
       'doc_delete',
@@ -187,7 +194,6 @@ describe('tool registry', () => {
       'cooking',
       'memories',
       'wiki',
-      'wiki_records',
       'library',
       'images',
     ]);
@@ -198,7 +204,6 @@ describe('tool registry', () => {
       'cooking',
       'memories',
       'wiki',
-      'wiki_records',
       'library',
       'images',
     ]);
@@ -214,7 +219,6 @@ describe('tool registry', () => {
       'cooking',
       'memories',
       'wiki',
-      'wiki_records',
       'library',
       'images',
     ]);
@@ -246,56 +250,81 @@ describe('tool registry', () => {
       'memory_relate',
       'memory_unrelate',
     ]);
-    // The wiki toolbox carries the librarian-delegation tool only;
-    // direct wiki_create / wiki_update / wiki_delete are agent-only
-    // (the autonomous wiki agent and the librarian itself) and are
-    // deliberately NOT exposed to the main chat at any toggle state.
+    // The wiki toolbox is the single gate for every chat-driven wiki
+    // write: direct article CRUD, the librarian delegation, and the
+    // full record write surface (records + files + links). Reads stay
+    // always-on.
     expect(wikiToolbox.tools.map((t: ToolDef) => t.name)).toEqual([
+      'wiki_create',
+      'wiki_update',
+      'wiki_delete',
       'wiki_librarian',
+      'record_create',
+      'record_update',
+      'record_delete',
+      'record_file_attach',
+      'record_file_remove',
+      'record_link_create',
+      'record_link_delete',
     ]);
   });
 
-  it('buildToolList(["wiki_records"]) exposes record writes; reads stay always-on', () => {
-    // Records DIVERGE from the wiki article policy: unlike the article
-    // write tools (agent-only, never chat-reachable - all chat edits go
-    // through the librarian), the record write tools ARE direct chat
-    // tools. Records are discrete low-stakes jots, not the single shared
-    // article body the librarian protects. The reads stay always-on like
-    // every other read surface.
-    const names = buildToolList(['wiki_records']).map((t) => t.function.name);
+  it('buildToolList(["wiki"]) exposes every wiki write; reads stay always-on', () => {
+    // The wiki toolbox gates the whole chat-driven wiki write surface in
+    // one toggle: direct article CRUD, the librarian delegation, and the
+    // record writes (records + files + links). The matching reads stay
+    // always-on like every other read surface.
+    const names = buildToolList(['wiki']).map((t) => t.function.name);
+    // Article CRUD - direct, no longer librarian-only.
+    expect(names).toContain('wiki_create');
+    expect(names).toContain('wiki_update');
+    expect(names).toContain('wiki_delete');
+    // The librarian rides alongside the direct tools for multi-article
+    // consolidations.
+    expect(names).toContain('wiki_librarian');
+    // Record writes + file/link writes share the same gate.
     expect(names).toContain('record_create');
     expect(names).toContain('record_update');
     expect(names).toContain('record_delete');
-    // File + link writes are gated with the record writes.
     expect(names).toContain('record_file_attach');
     expect(names).toContain('record_file_remove');
     expect(names).toContain('record_link_create');
     expect(names).toContain('record_link_delete');
-    // Record reads are always-on, not in the gated toolbox.
-    expect(names).toContain('record_list');
-    expect(names).toContain('record_get');
-    expect(names).toContain('record_search');
-    // The article write tools remain agent-only at every toggle state.
-    expect(names).not.toContain('wiki_create');
-    expect(names).not.toContain('wiki_update');
-    expect(names).not.toContain('wiki_delete');
-  });
-
-  it('buildToolList(["wiki"]) exposes the librarian; reads stay always-on', () => {
-    const names = buildToolList(['wiki']).map((t) => t.function.name);
-    expect(names).toContain('wiki_librarian');
-    // Wiki reads are always-on, not in the wiki toolbox.
+    // Reads are always-on, not in the gated toolbox.
     expect(names).toContain('wiki_search');
     expect(names).toContain('wiki_list');
     expect(names).toContain('wiki_get');
-    // Direct wiki writes never reach the main chat - they are agent-
-    // only. If one of these ever leaks into the main catalog the
-    // librarian-only mutation policy has been bypassed.
-    expect(names).not.toContain('wiki_create');
-    expect(names).not.toContain('wiki_update');
-    expect(names).not.toContain('wiki_delete');
+    expect(names).toContain('record_list');
+    expect(names).toContain('record_get');
+    expect(names).toContain('record_search');
+    // Unrelated write boxes stay closed.
     expect(names).not.toContain('recipe_save');
     expect(names).not.toContain('memory_create');
+  });
+
+  it('wiki writes stay hidden until the wiki toolbox is enabled', () => {
+    // The whole wiki write surface gates - a chat turn with no toolbox
+    // on can read the wiki but never mutate it.
+    const off = buildToolList([]).map((t) => t.function.name);
+    for (const write of [
+      'wiki_create',
+      'wiki_update',
+      'wiki_delete',
+      'record_create',
+      'record_update',
+      'record_delete',
+      'record_file_attach',
+      'record_file_remove',
+      'record_link_create',
+      'record_link_delete',
+    ]) {
+      expect(off).not.toContain(write);
+    }
+    // The dropped `wiki_records` name no longer enables anything: it is
+    // an unknown toolbox now, silently ignored.
+    const stale = buildToolList(['wiki_records']).map((t) => t.function.name);
+    expect(stale).not.toContain('record_create');
+    expect(stale).not.toContain('wiki_create');
   });
 
   it('buildToolList(["images"]) exposes generate_image only when enabled', () => {
