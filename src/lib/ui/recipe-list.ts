@@ -193,7 +193,15 @@ export function computeListView(args: {
   if (args.searching && args.searchError !== null) {
     return { kind: 'error', message: args.searchError };
   }
-  if (!args.searching && args.storeLoading && args.storeCount === 0) {
+  if (
+    !args.searching &&
+    args.storeLoading &&
+    args.storeCount === 0 &&
+    (args.bucketCount ?? 0) === 0
+  ) {
+    // Cold start with nothing to show yet. Once cache-first paint has
+    // populated the buckets (bucketCount > 0) we render those instead of
+    // a blocking spinner, so an offline open never hangs on the scanner.
     return { kind: 'scanner-loading' };
   }
   if (args.visibleCount === 0 && (args.bucketCount ?? 0) === 0) {

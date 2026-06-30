@@ -320,6 +320,22 @@ describe('computeListView', () => {
     ).toEqual({ kind: 'list' });
   });
 
+  it('skips the loading scanner when cache-first paint has filled the buckets', () => {
+    // Offline open: still "loading" with no paged recipes, but the
+    // cached buckets are painted - render them, not a blocking spinner.
+    expect(
+      computeListView(
+        args({ storeLoading: true, storeCount: 0, visibleCount: 0, bucketCount: 3 })
+      )
+    ).toEqual({ kind: 'list' });
+  });
+
+  it('still shows the loading scanner on a cold start with no cache', () => {
+    expect(
+      computeListView(args({ storeLoading: true, storeCount: 0, bucketCount: 0 }))
+    ).toEqual({ kind: 'scanner-loading' });
+  });
+
   it('stays a list when the All-list is empty but buckets carry rows (offline regime)', () => {
     // Offline the paginated "All recipes" list is empty (visibleCount
     // 0), but the cached Upcoming / Favorites buckets are the saved set

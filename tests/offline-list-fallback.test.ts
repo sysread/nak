@@ -74,6 +74,21 @@ const offlineSupabase = (): SupabaseService =>
     },
   }) as unknown as SupabaseService;
 
+/**
+ * Stub whose list methods never settle - airplane mode, where the fetch
+ * hangs on a connection timeout instead of rejecting promptly. A loader
+ * that awaits this would stall forever; the offline path must not.
+ */
+const hangingSupabase = (): SupabaseService =>
+  ({
+    listWikiArticlesPage: () => new Promise<never>(() => {}),
+    listFavoriteWikiArticles: () => new Promise<never>(() => {}),
+    listRecipesPage: () => new Promise<never>(() => {}),
+    listUpcomingRecipes: () => new Promise<never>(() => {}),
+    listFavoriteRecipes: () => new Promise<never>(() => {}),
+    listUserRecipeTopics: () => new Promise<never>(() => {}),
+  }) as unknown as SupabaseService;
+
 function setOnline(value: boolean): void {
   offlineStatus.online = value;
 }
@@ -116,6 +131,18 @@ describe('wiki list offline fallback', () => {
 
     expect(wikiStore.fromCache).toBe(false);
     expect(wikiStore.error).not.toBeNull();
+  });
+
+  it('offline: serves cache without awaiting a network that never settles', async () => {
+    // The regression: airplane mode, where the fetch hangs rather than
+    // rejecting. A loader that awaited it would never resolve this test.
+    await putCached('articles', { id: 'a', row: article('a'), cachedAt: Date.now() });
+    setOnline(false);
+
+    await loadWikiFirstPage(hangingSupabase());
+
+    expect(wikiStore.fromCache).toBe(true);
+    expect(wikiStore.favorites.map((a) => a.id)).toEqual(['a']);
   });
 });
 
@@ -161,5 +188,19 @@ describe('cookbook list offline fallback', () => {
 
     expect(cookbook.fromCache).toBe(false);
     expect(cookbook.error).not.toBeNull();
+  });
+
+  it('offline: serves cache without awaiting a network that never settles', async () => {
+    await putCached('recipes', {
+      id: 'fav',
+      row: recipe('fav', { favorite: true }),
+      cachedAt: Date.now(),
+    });
+    setOnline(false);
+
+    await loadRecipes(hangingSupabase());
+
+    expect(cookbook.fromCache).toBe(true);
+    expect(cookbook.favorites.map((r) => r.id)).toEqual(['fav']);
   });
 });

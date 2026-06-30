@@ -100,6 +100,32 @@ export async function loadWikiFirstPage(
   if (currentAbort) currentAbort.abort();
   wikiStore.loading = true;
   wikiStore.error = null;
+
+  // Cache-first: paint the saved Favorites bucket from the IndexedDB
+  // mirror right away. Opening the tab offline or on a dead link then
+  // shows the saved articles immediately instead of a spinner that
+  // blocks on a fetch that may never fail fast (airplane mode rejects
+  // only after a long connection timeout). The network result below
+  // replaces this.
+  const cachedFavorites = await getCachedArticles();
+  if (cachedFavorites.length > 0) wikiStore.favorites = cachedFavorites;
+
+  // Known offline: don't attempt the doomed fetch. Settle into the
+  // buckets-only regime now (search box hidden) so there's no hang.
+  // offlineStatus.online is the app-wide connectivity source the
+  // read-through and the disabled-control gating already trust.
+  if (!offlineStatus.online) {
+    wikiStore.favorites = cachedFavorites;
+    wikiStore.results = [];
+    wikiStore.offset = 0;
+    wikiStore.hasMore = false;
+    wikiStore.fromCache = true;
+    wikiStore.error = null;
+    wikiStore.loading = false;
+    wikiStore.loaded = true;
+    return;
+  }
+
   try {
     // Fetch the browse page and the complete Favorites bucket together.
     // Favorites is its own whole-set fetch (not a slice of the page)
@@ -120,27 +146,20 @@ export async function loadWikiFirstPage(
     wikiStore.fromCache = false;
     wikiStore.error = null;
   } catch (err) {
-    // The authoritative fetch failed. When the device is genuinely
-    // offline, fall back to the IndexedDB mirror so the saved set stays
-    // browsable - the favorites the user marked are exactly what
-    // offline-sync wrote there. There is no browse list offline (it
-    // needs the server), so results is emptied and the sidebar renders
-    // only the Favorites bucket. A failure while ONLINE (transient
-    // Supabase blip) is left as an error instead - hiding the full
-    // list + search over a momentary hiccup would be the worse trade.
-    // offlineStatus.online is the app-wide connectivity source the
-    // read-through and the disabled-control gating already trust.
+    // Online at the start but the fetch failed - either we dropped
+    // offline mid-request, or a transient Supabase blip. If we're
+    // offline now, keep the cache-painted Favorites and enter the
+    // buckets-only regime (no browse list offline - it needs the
+    // server); otherwise surface the error (still authoritative, an
+    // error beats silently showing a stale subset).
     if (!offlineStatus.online) {
-      wikiStore.favorites = await getCachedArticles();
+      wikiStore.favorites = cachedFavorites;
       wikiStore.results = [];
       wikiStore.offset = 0;
       wikiStore.hasMore = false;
       wikiStore.fromCache = true;
       wikiStore.error = null;
     } else {
-      // Online but the fetch failed (transient). Surface the error and
-      // leave the cache regime - we're authoritative again, an error
-      // beats silently showing a stale cached subset.
       wikiStore.fromCache = false;
       wikiStore.error = err instanceof Error ? err.message : String(err);
     }

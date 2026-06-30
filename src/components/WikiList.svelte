@@ -106,11 +106,14 @@
     />
   </div>
   {/if}
-  {#if wikiStore.loading}
+  {#if wikiStore.loading && wikiStore.favorites.length === 0 && wikiStore.results.length === 0}
     <!-- Replace the entries list with the K.I.T.T. scanner for the
          duration of any in-flight wiki search - including the empty-
          query refresh on mount. Embedding the query takes a Venice
-         round-trip; without this the drawer reads as frozen. -->
+         round-trip; without this the drawer reads as frozen. Suppressed
+         once cache-first paint has filled the Favorites bucket, so an
+         offline open shows the saved set instead of a spinner that
+         blocks on a fetch that may never fail fast. -->
     <div class="search-status">
       <Scanner label={scannerLabel(wikiStore.query)} size={0.9} />
     </div>
