@@ -25,6 +25,7 @@
     reformedIds,
     REFORMED_NOTE,
     efficacyView,
+    splitStatement,
     targetLabel,
     activeHeadline,
     formatRelative,
@@ -110,8 +111,11 @@
 
               {#each section.list as intent (intent.id)}
                 {@const view = efficacyView(intent)}
+                {@const parts = splitStatement(intent.statement)}
                 <article class="intent-card" class:retired={intent.status === 'retired'}>
-                  <p class="intent-statement">{intent.statement}</p>
+                  <p class="intent-statement">
+                    <strong class="intent-lead">{parts.lead}</strong>{#if parts.context} <em class="intent-context">{parts.context}</em>{/if}
+                  </p>
                   <div class="intent-meta">
                     <span class="target">{targetLabel(intent)}</span>
                     <span class="badge badge-{view.state}" title={view.hint ?? ''}>
@@ -256,6 +260,18 @@
     font-size: 0.92rem;
     line-height: 1.4;
     color: var(--text);
+  }
+
+  /* Split the statement so the eye lands on WHAT Nak inclines toward
+     (bold lead) before the situational WHEN clause (italic context).
+     Both keep the statement color - this is the card headline, distinct
+     from the dimmer italic rationale below. */
+  .intent-lead {
+    font-weight: 600;
+  }
+
+  .intent-context {
+    font-style: italic;
   }
 
   .intent-meta {
