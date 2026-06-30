@@ -114,7 +114,11 @@
                 {@const parts = splitStatement(intent.statement)}
                 <article class="intent-card" class:retired={intent.status === 'retired'}>
                   <p class="intent-statement">
-                    <strong class="intent-lead">{parts.lead}</strong>{#if parts.context} <em class="intent-context">{parts.context}</em>{/if}
+                    <!-- {' '} forces the gap between lead and clause: a
+                         literal space at the start of the {#if} block is
+                         stripped by Svelte whitespace trimming, which ran
+                         "...notice" into "when...". -->
+                    <strong class="intent-lead">{parts.lead}</strong>{#if parts.context}{' '}<em class="intent-context">{parts.context}</em>{/if}
                   </p>
                   <div class="intent-meta">
                     <span class="target">{targetLabel(intent)}</span>
