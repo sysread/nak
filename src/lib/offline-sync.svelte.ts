@@ -29,6 +29,14 @@ import {
   deleteCached,
 } from './offline-cache';
 import type { Recipe, SupabaseService, WikiArticle } from './supabase';
+import { createLogger } from './logger.svelte';
+
+// Drawer source tag for the offline cache. Everything the cache does
+// is invisible by design (it works in the background), so these
+// breadcrumbs are the only way to confirm on a real device that a
+// favorited record actually downloaded. Filter the Logs drawer to
+// `offline` to watch it.
+const log = createLogger('offline');
 
 /**
  * Reactive snapshot the UI reads for the offline indicator and the
@@ -61,10 +69,13 @@ export function initOfflineStatus(): () => void {
   offlineStatus.online = navigator.onLine;
   const goOnline = (): void => {
     offlineStatus.online = true;
+    log.info('back online');
   };
   const goOffline = (): void => {
     offlineStatus.online = false;
+    log.info('went offline');
   };
+  log.debug(`connectivity: ${offlineStatus.online ? 'online' : 'offline'} at start`);
   window.addEventListener('online', goOnline);
   window.addEventListener('offline', goOffline);
   return () => {
@@ -117,10 +128,16 @@ function dedupeById<T extends { id: string }>(...lists: T[][]): T[] {
   return out;
 }
 
+interface ReconcileStats {
+  total: number;
+  written: number;
+  evicted: number;
+}
+
 async function reconcileStore<T extends Versioned>(
   store: 'articles' | 'recipes',
   rows: T[],
-): Promise<number> {
+): Promise<ReconcileStats> {
   const cached = await getAllCached<T>(store);
   const plan = planReconcile(
     cached.map((c) => ({ id: c.id, updatedAt: c.row.updated_at })),
@@ -132,7 +149,11 @@ async function reconcileStore<T extends Versioned>(
   for (const id of plan.deleteIds) {
     await deleteCached(store, id);
   }
-  return rows.length;
+  return {
+    total: rows.length,
+    written: plan.put.length,
+    evicted: plan.deleteIds.length,
+  };
 }
 
 /**
@@ -147,6 +168,7 @@ async function reconcileStore<T extends Versioned>(
 export async function syncOfflineCache(
   supabase: SupabaseService,
 ): Promise<{ ok: boolean }> {
+  log.debug('sync: fetching marked set (favorites + upcoming)');
   let favoriteArticles: WikiArticle[];
   let favoriteRecipes: Recipe[];
   let upcomingRecipes: Recipe[];
@@ -156,19 +178,29 @@ export async function syncOfflineCache(
       supabase.listFavoriteRecipes(),
       supabase.listUpcomingRecipes(),
     ]);
-  } catch {
+  } catch (err) {
     // Authoritative fetch failed - offline, or a transient Supabase
     // error. Do NOT reconcile: leaving the cache exactly as it is is
     // the whole point of distinguishing "can't reach remote" from
     // "remote changed". Evicting here would wipe the offline copies on
     // the first network hiccup.
+    log.warn('sync skipped: could not reach server; cache left intact', err);
     return { ok: false };
   }
   const recipeRows = dedupeById(favoriteRecipes, upcomingRecipes);
-  await reconcileStore('articles', favoriteArticles);
-  await reconcileStore('recipes', recipeRows);
+  const articleStats = await reconcileStore('articles', favoriteArticles);
+  const recipeStats = await reconcileStore('recipes', recipeRows);
   await refreshCounts();
   offlineStatus.lastSyncAt = Date.now();
+  // Headline breadcrumb: how many records are now saved for offline use,
+  // and what this pass changed. On a fresh device the `written` count is
+  // the proof your favorites just downloaded. Details carry the per-store
+  // breakdown for the expand caret.
+  log.info(
+    `sync ok: ${articleStats.total} article(s), ${recipeStats.total} recipe(s) saved` +
+      ` (wrote ${articleStats.written + recipeStats.written}, evicted ${articleStats.evicted + recipeStats.evicted})`,
+    { articles: articleStats, recipes: recipeStats },
+  );
   return { ok: true };
 }
 
@@ -205,17 +237,23 @@ export async function getArticleCached(
       const row = await supabase.getWikiArticleById(id);
       if (row) {
         await putCached('articles', { id, row, cachedAt: Date.now() });
+        log.debug(`article ${id}: fetched from server, cache refreshed`);
         return { row, fromCache: false };
       }
       // Server authoritatively has no such row - drop any stale copy so
       // a deleted article doesn't linger offline, and report the miss.
       await deleteCached('articles', id);
+      log.debug(`article ${id}: gone on server, cleared from cache`);
       return { row: null, fromCache: false };
-    } catch {
+    } catch (err) {
       // Network error despite the online flag - fall through to cache.
+      log.warn(`article ${id}: fetch failed, falling back to cache`, err);
     }
   }
   const cached = await getCached<WikiArticle>('articles', id);
+  log.debug(
+    `article ${id}: ${cached ? 'served from offline cache' : 'not in offline cache'}`,
+  );
   return { row: cached?.row ?? null, fromCache: cached != null };
 }
 
@@ -233,15 +271,21 @@ export async function getRecipeCached(
       const row = await supabase.getRecipe(id);
       if (row) {
         await putCached('recipes', { id, row, cachedAt: Date.now() });
+        log.debug(`recipe ${id}: fetched from server, cache refreshed`);
         return { row, fromCache: false };
       }
       await deleteCached('recipes', id);
+      log.debug(`recipe ${id}: gone on server, cleared from cache`);
       return { row: null, fromCache: false };
-    } catch {
+    } catch (err) {
       // Fall through to cache.
+      log.warn(`recipe ${id}: fetch failed, falling back to cache`, err);
     }
   }
   const cached = await getCached<Recipe>('recipes', id);
+  log.debug(
+    `recipe ${id}: ${cached ? 'served from offline cache' : 'not in offline cache'}`,
+  );
   return { row: cached?.row ?? null, fromCache: cached != null };
 }
 

@@ -48,6 +48,14 @@ favorite / upcoming flags (see [`./cookbook.md`](./cookbook.md)).
   primitive, and the storage + read-through integration against
   `fake-indexeddb`.
 
+The cache works silently, so `offline-sync.svelte.ts` emits Logs-drawer
+breadcrumbs under the `offline` source (see
+[`./logging.md`](./logging.md)): connectivity transitions and the
+per-sync headline at `info`, a skipped sync at `warn`, and per-record
+read-through outcomes at `debug`. On a real device, filtering the drawer
+to `offline` is how you confirm a favorited record actually downloaded -
+the `info` sync line's `wrote` count is the proof.
+
 ## Entry points
 
 - **Session live** - `Chat.svelte` calls `initOfflineStatus()` +
