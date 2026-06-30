@@ -118,11 +118,17 @@ export default defineConfig({
         //                     loaded when the Help modal navigates
         //                     to that page OR when `research_docs`
         //                     fires.
-        //   assets/screens/ - Settings / Cookbook / Journal / Wiki /
-        //                     Samskara / Memories / Intuition /
-        //                     drawers. Each is the modal or panel a
-        //                     specific UI flip opens; cold installs
-        //                     don't need any of them on disk yet.
+        //   assets/screens/ - Settings / Journal / Samskara / Memories
+        //                     / Intuition / drawers. Each is the modal
+        //                     or panel a specific UI flip opens; cold
+        //                     installs don't need any of them on disk
+        //                     yet. Cookbook and Wiki are deliberately
+        //                     NOT here - they render the offline cache's
+        //                     saved recipes/articles, so they must be in
+        //                     the precache (see the chunkFileNames
+        //                     exception below), or an offline open right
+        //                     after a deploy fails to fetch the new,
+        //                     never-runtime-cached screen chunk.
         //
         // Anything not matched falls through to the default
         // `assets/[name]-[hash].js` and stays precached - that
@@ -148,6 +154,19 @@ export default defineConfig({
           }
           if (/\/docs\/(user|dev)\/.*\.md/.test(facade)) {
             return 'assets/docs/[name]-[hash].js';
+          }
+          // Cookbook and Wiki are the panels that display the offline
+          // cache (favorited recipes / articles), so they MUST work with
+          // no network. Keep them in the precached default bucket, not
+          // the runtime-cached screens bucket: a deploy changes every
+          // chunk hash, and the runtime cache only holds the PREVIOUS
+          // build's hash, so opening a saved recipe offline right after
+          // an update fails with "Failed to fetch dynamically imported
+          // module" until the new chunk is fetched online once. Precache
+          // installs the new chunk up front (while the SW is installing,
+          // online), so the offline open always resolves.
+          if (/\/src\/screens\/(Cookbook|Wiki)\.svelte$/.test(facade)) {
+            return 'assets/[name]-[hash].js';
           }
           if (/\/src\/screens\/.*\.svelte$/.test(facade)) {
             return 'assets/screens/[name]-[hash].js';

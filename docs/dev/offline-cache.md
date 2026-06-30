@@ -153,7 +153,12 @@ server at any time.
 - **Build & deploy** ([`./build-deploy.md`](./build-deploy.md)) - the
   service worker precaches the app shell that hosts all of this; the
   offline cache is the data layer the shell reads when the network is
-  gone.
+  gone. The **Cookbook and Wiki panel chunks are precached
+  specifically** (routed out of the runtime-cached `assets/screens/`
+  bucket by `chunkFileNames`) because they render the cached records -
+  otherwise an offline open right after a deploy fails to fetch the new
+  screen chunk. The data being cached is useless if the code that
+  displays it can't load offline.
 - **Auth & session** ([`./auth-session.md`](./auth-session.md)) - the
   offline cache is only reachable once the shell renders, which
   depends on `getSession()` resolving. supabase-js resolves it from

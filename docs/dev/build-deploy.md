@@ -132,9 +132,22 @@ docs imported via `import.meta.glob`.
   user/org pages. The repo root makes it a project page;
   `<user>.github.io` is the user-page exception.
 - **Service worker cache scope.** `globPatterns:
-  **/*.{js,css,html,svg,png,ico,woff2}` — every bundled
-  asset is precached. `/api/*` is denied-listed so the
-  SW never intercepts user-API traffic.
+  **/*.{js,css,html,svg,png,ico,woff2}` precaches the app
+  shell, MINUS the long-tail lazy chunks bucketed under
+  `assets/hljs/**`, `assets/docs/**`, `assets/screens/**`
+  (`injectManifest.globIgnores`), which `src/sw.ts`
+  runtime-caches on first online fetch instead. **Exception:
+  the Cookbook and Wiki panel chunks are routed OUT of
+  `assets/screens/` (back to the precached default bucket) by
+  `chunkFileNames`** - they render the offline cache's saved
+  records, so they must be available with no network. Leaving
+  them runtime-cached broke offline opens right after a deploy:
+  the new build's chunk hash isn't in the runtime cache yet, so
+  the dynamic import failed with "Failed to fetch dynamically
+  imported module" until the panel was opened online once.
+  Precache installs them up front while the SW installs online,
+  so the offline open always resolves. `/api/*` is denied-listed
+  so the SW never intercepts user-API traffic.
 - **Build fingerprint.** `vite.config.ts` reads
   `process.env.GITHUB_SHA` (CI) or falls back to
   `git rev-parse --short=7 HEAD` (local) plus `new Date()`
