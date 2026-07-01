@@ -51,6 +51,10 @@ You can reach these pages two ways:
 - [Intuition](./intuition.md) — the subconscious read Nak forms of
   each conversation: how the brain icon next to the mood emoji works,
   and what the inline cards mean.
+- [Second thoughts](./second-thoughts.md) — the self-doubt reflex that
+  re-reads each reply and shows a confidence verdict below it: what the
+  dispositions mean, and why a flag is a glance-worthy hint, not a
+  ruling.
 - [Bias profile](./bias-profile.md) — the chart icon in the
   bottom-right pill column. Nak watches your past conversations
   for cognitive biases and quietly nudges its responses to

@@ -34,6 +34,7 @@
   import ContextRing from './ContextRing.svelte';
   import ReasoningPanel from './ReasoningPanel.svelte';
   import CitationsPanel from './CitationsPanel.svelte';
+  import SecondThoughtsPanel from './SecondThoughtsPanel.svelte';
   import type { Snippet } from 'svelte';
   import type { Message } from '$lib/supabase';
   import { app } from '$lib/state.svelte';
@@ -44,6 +45,7 @@
     parseCitationRefHref,
     showCitationsControls,
   } from '$lib/ui/assistant-body';
+  import { coerceSecondThoughts } from '$lib/ui/second-thoughts';
   import { webCitationToDisplay } from '$lib/ui/citations';
   import { formatMessageStamp } from '$lib/ui/message-timestamp';
 
@@ -60,6 +62,14 @@
     reasoningElapsed?: string | null;
     reasoningChars?: string | null;
     citations?: Message['citations'];
+    /**
+     * Raw `messages.second_thoughts` jsonb for this assistant row. The
+     * reviewer agent's self-doubt verdict, arriving on the messages
+     * UPDATE echo a beat after the reply commits. Coerced here; the
+     * panel renders only when it parses to a real verdict. Absent on
+     * user/tool rows, older rows, and turns the reviewer skipped.
+     */
+    secondThoughts?: unknown;
     /**
      * Context window (tokens) of the thread's CURRENT model, for the
      * usage ring's denominator. Deliberately the current model's window,
@@ -123,6 +133,7 @@
     reasoningElapsed = null,
     reasoningChars = null,
     citations = null,
+    secondThoughts = null,
     contextWindow = null,
     usage = null,
     createdAt = null,
@@ -155,6 +166,10 @@
   );
 
   const stamp = $derived(formatMessageStamp(createdAt, app.displayTimezone));
+
+  // Coerce the raw jsonb once; null means "no verdict" -> render
+  // nothing. See src/lib/ui/second-thoughts.ts.
+  const secondThoughtsVerdict = $derived(coerceSecondThoughts(secondThoughts));
 
   /**
    * Click delegation for `^N^` citation links inside the markdown
@@ -210,6 +225,13 @@
 
 {#if children}
   {@render children()}
+{/if}
+
+<!-- Second-thoughts coda: the reviewer's afterthought about this
+     answer, below the body (and any tool cards) but above the meta
+     action bar. Renders only when the jsonb coerced to a real verdict. -->
+{#if secondThoughtsVerdict}
+  <SecondThoughtsPanel verdict={secondThoughtsVerdict} />
 {/if}
 
 {#if content}

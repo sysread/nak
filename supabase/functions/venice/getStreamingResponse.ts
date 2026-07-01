@@ -73,6 +73,7 @@ import {
 import { reflectOneThread } from './agents/reflection.ts';
 import { curateOnTurnTail } from './agents/curation.ts';
 import { samskaraOnTurnTail } from './agents/samskara.ts';
+import { secondThoughtsOnTurnTail } from './agents/second_thoughts.ts';
 import { createEdgeLogger } from '../_shared/edge-log.ts';
 import { runServerPriming, type PrimingInputs } from './priming.ts';
 
@@ -1103,6 +1104,29 @@ export async function getStreamingResponse(
     // drawer); the catch is a defensive backstop so a reflection bug
     // still can't disturb this turn's already-committed row.
     if (terminalKind === 'completed') {
+      // Second-thoughts reflex, FIRST in the tail: re-read the turn we
+      // just committed and write a self-doubt verdict onto the terminal
+      // assistant row. The browser hydrates it via the messages UPDATE
+      // echo (subscribeToMessages listens for UPDATE), so the
+      // per-message slide-down lands a beat after the reply settles.
+      // Ordered ahead of curation/samskara/reflection so the
+      // user-visible verdict isn't starved behind reflection, which can
+      // span minutes of tool rounds. Guarded on persistedId - a turn
+      // that committed no assistant row (should not happen on the
+      // 'completed' path, but cheap to check) has nothing to review.
+      if (persistedId) {
+        try {
+          await secondThoughtsOnTurnTail(
+            opts.adminClient,
+            opts.userId,
+            opts.threadId,
+            opts.userMessageId,
+            persistedId,
+          );
+        } catch (err) {
+          log.error(`${runId} second-thoughts tail failed:`, err);
+        }
+      }
       // Curation piggyback, BEFORE reflection on purpose: the chain is
       // sequential and reflection can span minutes of tool rounds,
       // while curation is a handful of quick completions whose first

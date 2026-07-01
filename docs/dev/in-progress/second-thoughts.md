@@ -1,15 +1,46 @@
 # Second thoughts (in progress)
 
-> **Status: design only. Nothing is built yet.** This doc
-> records the design decisions reached in the planning
-> conversation so the first implementation milestone has a
-> spec to build against and a shape to poke holes in. When
-> v1 lands, graduate the durable parts (the reflex/deliberation
-> model, the reviewer input contract, the data model) into a
-> permanent `docs/dev/second-thoughts.md` and retire this file
-> per the in-progress doc rules in `CLAUDE.md`. Until then,
-> treat every "will" below as a proposal, not a description of
-> running code.
+> **Status: v1 shipped (the reflex, detached, per-message,
+> display-only). Phases 2-3 are still design only.** The reviewer
+> agent, the per-message slide-down, and the data model are built,
+> gated, and tested; a raised doubt displays but nothing yet acts on
+> it. When phase 2 (the correction round) lands, graduate the durable
+> parts (the reflex/deliberation model, the reviewer input contract,
+> the data model) into a permanent `docs/dev/second-thoughts.md` and
+> retire this file per the in-progress doc rules in `CLAUDE.md`. Below,
+> the v1 pieces described as "will" now exist (see **Build status**);
+> everything under phases 2-3 is still a proposal.
+
+**Build status.** Landed (v1):
+
+1. **Data model** - `messages.second_thoughts jsonb`
+   (`supabase/schema.sql`), the versioned `{v, disposition, note,
+   model, computed_at}` verdict. Replicates on the `supabase_realtime`
+   publication (whole-table), so the UPDATE echoes to the browser.
+2. **The reviewer agent** -
+   `supabase/functions/venice/agents/second_thoughts.ts`
+   (`secondThoughtsOnTurnTail`). Loads the turn slice, serializes it
+   as a fenced document, calls the fast model (`xiaomi-mimo-v2-5`) via
+   `completeJsonObject` (response_format json_object), parses +
+   validates the verdict, writes it onto the terminal row. Non-throwing
+   throughout. Pure surface (parser + serializer) pinned by
+   `supabase/functions/tests/second-thoughts.test.ts`.
+3. **Tail wiring** - `getStreamingResponse.ts` calls it FIRST in the
+   `terminalKind === 'completed'` waitUntil tail (ahead of
+   curation/samskara/reflection), guarded on a committed row.
+4. **Browser** - `second_thoughts` on the `Message` type
+   (`src/lib/supabase/types/chat.ts`); the coercer + disposition maps
+   in `src/lib/ui/second-thoughts.ts` (vitest:
+   `tests/second-thoughts.test.ts`); the `SecondThoughtsPanel.svelte`
+   slide-down; wired through `AssistantBody.svelte` and both
+   `Chat.svelte` call sites. `appendMessage` extended so the reviewer's
+   later UPDATE echo merges the verdict onto the already-hydrated row
+   (instead of being dropped as a duplicate).
+
+Deferred (design only below): phase 2 (the correction round + the
+`<think>` re-injection + the transcript card) and phase 3 (the
+emergent samskara/bias feedback). The two phase-2 open decisions
+(correction bar, replay semantics) wait for real v1 verdicts.
 
 ## The idea
 
