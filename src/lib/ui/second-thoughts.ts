@@ -23,6 +23,17 @@ export type SecondThoughtsDisposition =
 export interface SecondThoughtsVerdict {
   disposition: SecondThoughtsDisposition;
   note: string;
+  /**
+   * True once the user clicked the refinement button and a refinement
+   * turn was launched off this doubt. Set by Chat.svelte `refineFrom`,
+   * not the reviewer. Its job is twofold: mark the panel as acted-on
+   * for the human, and - the load-bearing half - flip the doubt from
+   * invisible to model-VISIBLE, so `toVeniceMessage` projects the
+   * `<think>` connective into replay. Without it the model would later
+   * see two answers in a row with no logical link and could waffle
+   * over which is authoritative. Absent / false on an un-acted doubt.
+   */
+  acted: boolean;
 }
 
 export const SECOND_THOUGHTS_DISPOSITIONS: readonly SecondThoughtsDisposition[] =
@@ -48,7 +59,11 @@ export function coerceSecondThoughts(raw: unknown): SecondThoughtsVerdict | null
     return null;
   }
   const note = typeof obj.note === 'string' ? obj.note.trim() : '';
-  return { disposition: disposition as SecondThoughtsDisposition, note };
+  return {
+    disposition: disposition as SecondThoughtsDisposition,
+    note,
+    acted: obj.acted === true,
+  };
 }
 
 /**
@@ -176,11 +191,12 @@ export function buildRefinementThink(note: string): string {
     : 'Something about my answer feels off, though I cannot name it precisely.';
   return [
     '<think>',
-    "I'm having second thoughts about how I just answered. Let me",
-    'think through this misgiving and double-check that it is',
-    'legitimate before I change anything. If it does not hold up, I',
-    'should stand by what I said and say so plainly rather than',
-    'inventing a change for its own sake.',
+    "I'm having second thoughts about my previous answer. Let me think",
+    'through this misgiving and double-check that it is legitimate before',
+    'I change anything. If it does not hold up, I should restate my',
+    'position and stand by it plainly rather than inventing a change for',
+    'its own sake. Either way, the reply that follows is my current,',
+    'considered answer - where it differs from the one above, prefer it.',
     '',
     `Misgiving: ${misgiving}`,
     '</think>',

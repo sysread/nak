@@ -123,6 +123,13 @@
     </svg>
     <span class="st-label">Second thoughts</span>
     <span class="st-disposition">{label}</span>
+    <!-- Persistent marker once the user acted on this doubt (clicked
+         the button, which appended a refinement below). Survives reload
+         via the verdict's `acted` flag; helps scroll-back read which
+         doubts were followed up on. -->
+    {#if verdict.acted}
+      <span class="st-acted">refined</span>
+    {/if}
     <svg
       class="st-chevron"
       width="12"
@@ -208,6 +215,16 @@
     font-size: 0.78rem;
     font-weight: 600;
     color: var(--st-tone);
+  }
+
+  /* Muted "refined" tag once the doubt was acted on - a quiet record,
+     not a second call-to-action. */
+  .st-acted {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    font-size: 0.72rem;
+    font-style: italic;
+    color: var(--muted);
   }
 
   .st-icon {

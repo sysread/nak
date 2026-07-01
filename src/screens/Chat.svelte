@@ -209,7 +209,7 @@
     shouldRetainDisplaced,
   } from '$lib/ui/recall';
   import { formatMessageStamp } from '$lib/ui/message-timestamp';
-  import { buildRefinementThink, coerceSecondThoughts } from '$lib/ui/second-thoughts';
+  import { coerceSecondThoughts } from '$lib/ui/second-thoughts';
   import { isReasoningOnlyStall, isCutOffPartialText } from '$lib/ui/incomplete-turn';
   import { selectRecoveryBanner } from '$lib/ui/recovery-banner';
   import { headingFor, parseLastError } from '$lib/ui/last-error';
@@ -3332,15 +3332,15 @@
      */
     supersededIds?: string[];
     /**
-     * Second-thoughts refinement: the ephemeral `<think>` self-doubt
-     * block to splice at the tail of the wire history (after the
-     * original answer), seeding the model to take another shot. Present
-     * ONLY on a refinement turn (Chat.svelte `refineFrom`); when set,
-     * server-side priming is skipped (this is not a new user round -
-     * see `skipPriming`). Never persisted, exactly like the priming
-     * `<think>` chain.
+     * True on a second-thoughts refinement turn (Chat.svelte
+     * `refineFrom`). Two effects: server-side priming is skipped (this
+     * is the model reconsidering itself, not a new user round - see
+     * `skipPriming`), and the wire history carries the doubt because
+     * `refineFrom` marked the original row's verdict `acted` before the
+     * run, so `toVeniceMessage` projects the `<think>` connective onto
+     * it. No separate ephemeral splice is needed.
      */
-    refinementThink?: string;
+    isRefinement?: boolean;
   }
 
   /**
@@ -3524,13 +3524,6 @@
             imageUrls: attachmentImageUrls,
           })
         ),
-      // Refinement turn: splice the ephemeral `<think>` self-doubt at
-      // the tail (after the original answer, which is the last message)
-      // so the model reads it as its own prior thought and takes
-      // another shot. Never persisted. Absent on every other exchange.
-      ...(ctx.refinementThink
-        ? [{ role: 'assistant' as const, content: ctx.refinementThink }]
-        : []),
     ];
 
     // Anchor for the `<datetime>` tag's since_last_response attribute.
@@ -3697,13 +3690,14 @@
           lastAssistantTimestamp: findLastAssistantTimestamp(),
           // A refinement turn skips the whole priming stage: it is the
           // model reconsidering its own answer (not a new user round),
-          // it carries its own <think> doubt, and re-running priming
+          // it carries its own <think> doubt (projected onto the acted
+          // original row by toVeniceMessage), and re-running priming
           // would double-fire samskara for the round and bury that
           // doubt. Omitting the intuition/recall inputs disables those
           // pipelines; `skipPriming` also suppresses samskara + bias.
-          intuitionModelId: ctx.refinementThink ? undefined : agentModel('intuition').id,
-          intuitionMood: ctx.refinementThink ? null : intuitionMoodArg,
-          skipPriming: ctx.refinementThink ? true : undefined,
+          intuitionModelId: ctx.isRefinement ? undefined : agentModel('intuition').id,
+          intuitionMood: ctx.isRefinement ? null : intuitionMoodArg,
+          skipPriming: ctx.isRefinement ? true : undefined,
           currentTurnHasAttachments,
           // Topic-boundary recall rides the same trigger machinery as
           // intuition (cold-start, mid-turn title shift, mood shift,
@@ -3712,7 +3706,7 @@
           // bounded by max(intuition, context-recall) and the cache
           // turns later turns into no-ops on the same trigger fire.
           // Off on a refinement turn (see the priming note above).
-          contextRecallEnabled: ctx.refinementThink ? false : true,
+          contextRecallEnabled: ctx.isRefinement ? false : true,
           handlers: {
             onTextUpdate: (t) => {
               pendingText = t;
@@ -4730,6 +4724,25 @@
     if (userIdx === -1) return;
     const userMessage = messages[userIdx];
 
+    // Mark the doubt ACTED. This is what flips it from display-only to
+    // model-visible: `toVeniceMessage` projects the `<think>` connective
+    // onto any acted row, so the refinement turn's own history (which
+    // includes this row) carries the doubt, and so do all future replays
+    // - giving the model the logical link between this answer and the
+    // refinement that follows. Patch the local row FIRST so
+    // buildHistoryOnWire sees it on this very turn; the DB persist (for
+    // reload / cross-device) rides a security-definer RPC because the
+    // client's messages-UPDATE policy only covers role='tool' rows.
+    // Best-effort persist: a failure just means the flag won't survive a
+    // reload; this turn's wire is already driven by the local patch.
+    const actedVerdict = { ...(row.second_thoughts as object), acted: true };
+    messages = messages.map((m) =>
+      m.id === row.id ? { ...m, second_thoughts: actedVerdict } : m
+    );
+    void app.supabase.markSecondThoughtsActed(row.id).catch((e) => {
+      log.error('failed to persist second-thoughts acted flag', e);
+    });
+
     // Resolve send-time context the same way regenerateFrom does - the
     // user's current toggles (model, reasoning, verbosity, system
     // prompts) apply to the refinement.
@@ -4764,7 +4777,7 @@
       sendUserLocation: app.userLocation,
       originalText: userMessage.content,
       userMessageId: userMessage.id,
-      refinementThink: buildRefinementThink(verdict.note),
+      isRefinement: true,
     });
   }
 

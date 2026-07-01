@@ -93,12 +93,19 @@ render path through `AssistantBody.svelte`
   stay collapsed.
 - (8) Row order is `[user] -> [original answer + its panel] ->
   [refinement] -> [your follow-up + its answer]`; the refinement sorts
-  after the original, not before it. The `stream` log shows the
-  refinement ran with no priming lines (no samskara/intuition/recall
-  for that turn) - it was a refinement, not a fresh user round. The
-  refinement turn itself gets a `second-thoughts` verdict too (it is a
-  completed turn); if that verdict is a doubt, the refinement - now the
-  latest answer - carries its own button.
+  after the original, not before it. The refined original's panel now
+  carries a muted **"refined"** tag, and that tag SURVIVES a reload
+  (the `acted` flag persisted via `mark_second_thoughts_acted`). The
+  `stream` log shows the refinement ran with no priming lines (no
+  samskara/intuition/recall for that turn) - it was a refinement, not a
+  fresh user round. The refinement turn itself gets a `second-thoughts`
+  verdict too (it is a completed turn); if that verdict is a doubt, the
+  refinement - now the latest answer - carries its own button.
+  Confirm the connective reaches the model: in the `chat`-source
+  "venice request wire" log for your follow-up turn (step 8), the
+  refined original assistant message's content ends with a `<think>`
+  block voicing the doubt - present ONLY because you acted on it (an
+  un-acted doubt never appears in the wire).
 - (9) The older answer shows its verdict but NO button (only the latest
   answer is refinable, since a refinement appends at the tail). The
   latest answer's button is absent or disabled while any send is in

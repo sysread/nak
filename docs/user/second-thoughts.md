@@ -44,7 +44,10 @@ actually better.
 
 The button only appears on the **most recent** answer (a refinement
 always adds to the end of the conversation), and only while nothing
-else is sending.
+else is sending. Once you refine, the two answers stay linked: on later
+turns the assistant knows it reconsidered, and treats the refined
+answer as its current one rather than getting confused by having said
+two things.
 
 Because the reviewer is a fast, deliberately *low-context* model - it
 sees only the latest question and answer, not the whole conversation or

@@ -48,16 +48,22 @@ Phase 2 (user-triggered refinement), landed on top of v1:
    `Chat.svelte` passes it ONLY for the latest assistant row
    (`latestAssistantId`).
 3. **Refinement flow** - `Chat.svelte` `refineFrom` runs one extra
-   streaming turn via the existing `runExchange` path: it splices the
-   `<think>` at the wire tail (`buildHistoryOnWire`), anchors on the
-   original user message with NO `supersededIds` (so the new answer
-   APPENDS, commit_assistant_message keys on newer user rows only), and
-   skips priming.
+   streaming turn via the existing `runExchange` path: it marks the
+   original verdict `acted`, anchors on the original user message with
+   NO `supersededIds` (so the new answer APPENDS, commit_assistant_message
+   keys on newer user rows only), and skips priming.
 4. **Skip-priming plumbing** - `ChatLoopOptions.skipPriming` ->
    `streamCtx.priming.skipPriming` (`venice.ts`) -> the `/stream` body
    (`index.ts`) -> `PrimingInputs.skipPriming` -> an early-return at the
    top of `runServerPriming`. Keeps a refinement from double-firing
    samskara for the round and from burying its own `<think>` doubt.
+5. **Acted connective** - `acted` on the verdict + coercer; the
+   `mark_second_thoughts_acted` SECURITY DEFINER RPC (`schema.sql`) +
+   `SupabaseService.markSecondThoughtsActed`; `toVeniceMessage`
+   projects an acted doubt as a `<think>` (via `buildRefinementThink`,
+   now worded to permit rejection AND mark supersession); a muted
+   "refined" tag in the panel. This is what gives replay its logical
+   link between the two answers.
 
 Deferred (design only below): phase 3 (AUTOMATIC correction - the
 critical-path relocation) and phase 4 (the emergent samskara/bias
@@ -332,18 +338,41 @@ worth stating because they simplify the build:
   follow-up on the model's behalf" than to regenerate.
 
 **Mechanism.** The click is browser-initiated (no round-loop change).
-The browser assembles a request whose history runs through the
-original answer and then splices ONE synthetic assistant `<think>`
-self-doubt block (built from the persisted `note`, with the
-permit-rejection framing below), and runs a normal streaming turn.
-The new assistant row commits appended after the original, anchored
-to the SAME user message the original answered (there is no new user
-message - the turn is the model reconsidering itself; the append must
-not trip `commit_assistant_message`'s newer-user-message conflict
-check, which keys on user rows, not the existing assistant answer).
-The `<think>` is ephemeral (not persisted), exactly like the priming
-chain. `correct` verdicts let the refinement reach `web_search` to
-actually verify.
+`refineFrom` marks the original row's verdict `acted`, then runs a
+normal streaming turn via the existing `runExchange` path. The new
+assistant row commits appended after the original, anchored to the
+SAME user message the original answered. There is no new user message
+(the turn is the model reconsidering itself), so the append must not
+trip `commit_assistant_message`'s newer-user-message conflict check -
+which keys on user rows, not the existing assistant answer. `correct`
+verdicts let the refinement reach `web_search` to actually verify.
+
+**The doubt becomes model-visible ONLY when acted - and that is the
+`<think>` connective.** This is the load-bearing subtlety, and it
+resolves the replay-coherence gap: without it, on any later turn the
+model would see two consecutive answers (original, refinement) with no
+link explaining the second, and could waffle over which is
+authoritative on a dependent question. So `toVeniceMessage`
+(`src/lib/chat/prompt-assembly.ts`) projects an `acted` doubt as a
+`<think>` block appended to that answer's wire content - built by
+`buildRefinementThink`, which frames it to PERMIT rejection ("if the
+misgiving doesn't hold, restate and stand by it") AND to mark
+supersession ("the reply that follows is my current, considered
+answer - prefer it"). One projection serves both moments: it seeds the
+refinement turn itself (whose history includes the just-acted row) and
+persists into every future replay. An UN-acted doubt is never
+projected - it stays a display-only column, invisible to the model
+(the same posture as `reasoning`).
+
+**Why `acted` is a server-side RPC, not a client UPDATE.** The
+messages-UPDATE RLS policy is scoped to `role='tool'` rows (so a
+client can never rewrite assistant/user content), so the browser
+cannot flip the flag directly. `mark_second_thoughts_acted`
+(SECURITY DEFINER, `schema.sql`) is the narrow write path: it touches
+only the `acted` key, only on an assistant row, only when `auth.uid()`
+owns the thread. `refineFrom` patches the LOCAL row first (so THIS
+turn's wire carries the connective without waiting on the DB) and
+fires the RPC best-effort for persistence across reload / device.
 
 ### Button phrasing
 
@@ -524,10 +553,14 @@ the composition and the slide-down wiring.
   next to curation/samskara/reflection. Phase 2 (user-triggered
   refinement) reuses the browser send/regenerate flow to run one
   extra streaming turn that APPENDS a new assistant row anchored to
-  the original user message, with a synthetic `<think>` spliced into
-  the request history; it touches the send path and
-  `commit_assistant_message`'s anchor handling but NOT the round
-  loop. Only phase 3 (automatic) hooks the terminal-round break.
+  the original user message; it touches the send path,
+  `commit_assistant_message`'s anchor handling (append does not
+  conflict - the check keys on user rows), and `toVeniceMessage`
+  (which now projects an `acted` doubt as a `<think>` connective),
+  but NOT the round loop. The `acted` flag is persisted via the
+  `mark_second_thoughts_acted` SECURITY DEFINER RPC (the client
+  cannot UPDATE assistant rows under RLS). Only phase 3 (automatic)
+  hooks the terminal-round break.
 - **Intuition ([`intuition.md`](../intuition.md))** - the
   metacognitive twin on the other side of the completion.
   Intuition is pre-game, global, ephemeral (one overwritten
@@ -593,12 +626,14 @@ Settled by the user-triggered-append pivot:
   / `reframe` / `correct`); `conviction` gets none. The human gates
   each click, so a generous button set is safe - a false flag just
   goes unclicked.
-- **Replay semantics** - resolved to *keep both, drop the doubt*.
-  Append keeps the original and the refinement in the transcript, so
-  future turns replay both; the `<think>` doubt is ephemeral (never
-  persisted), like the priming chain. This falls out of append for
-  free rather than needing a decision. (The old "corrected-only"
-  lean was for the REPLACE model, which the pivot dropped.)
+- **Replay semantics** - resolved to *keep both answers; the doubt is
+  visible to the model ONLY when acted*. Append keeps the original and
+  the refinement in the transcript. An un-acted doubt stays a
+  display-only column (invisible to the model). An ACTED doubt is
+  projected as a `<think>` connective on the original answer's wire
+  content (see "The doubt becomes model-visible" above), so the model
+  understands why there are two answers and treats the refinement as
+  authoritative rather than waffling on dependent turns.
 
 Still open, and genuinely gated on data:
 
