@@ -525,6 +525,24 @@ create index if not exists messages_streaming_idx
   on public.messages (thread_id, created_at desc)
   where status = 'streaming';
 
+-- Second-thoughts self-review verdict for a completed assistant turn.
+-- Written by the second_thoughts reviewer agent
+-- (supabase/functions/venice/agents/second_thoughts.ts) from the
+-- streaming function's completed-turn waitUntil tail, onto the terminal
+-- assistant row. Shape:
+--   {v, disposition: 'conviction'|'hedge'|'reframe'|'correct',
+--    note: string, model: string, computed_at: number}
+-- The reviewer is a fast, low-context "doubt reflex" that reads only the
+-- turn slice (user message + this turn's assistant/tool rows) and reports
+-- a felt confidence. 'conviction' is the common "no second thoughts"
+-- verdict. Null on non-assistant rows, on rows written before the column
+-- existed, and on turns where the reviewer was disabled or errored (it is
+-- best-effort and never blocks the turn). The browser coerces this jsonb
+-- on read (src/lib/ui/second-thoughts.ts) - a drifting shape reads as
+-- "no verdict" rather than crashing the card.
+alter table public.messages
+  add column if not exists second_thoughts jsonb;
+
 -- Per-thread set of enabled gated toolboxes. Stored as text[] so the
 -- toolbox dimension sits in the thread row without a second table.
 -- The always_on toolbox is implicit and is NOT represented here - its

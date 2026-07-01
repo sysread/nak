@@ -336,6 +336,19 @@ export interface Message {
     | 'error'
     | 'suspended_for_ask_user'
     | null;
+  /**
+   * Second-thoughts self-review verdict, written by the reviewer agent
+   * (supabase/functions/venice/agents/second_thoughts.ts) from the
+   * streaming function's completed-turn tail onto the terminal
+   * assistant row. Arrives on the messages UPDATE realtime echo a beat
+   * after the reply commits. Loosely typed here (jsonb passthrough) so
+   * the UI module owns the parse - a drifting or absent shape coerces
+   * to "no verdict" in src/lib/ui/second-thoughts.ts rather than
+   * crashing the card. Null on non-assistant rows, on rows written
+   * before the column existed, and on turns where the reviewer was
+   * disabled or errored.
+   */
+  second_thoughts?: unknown;
 }
 
 /**

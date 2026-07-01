@@ -1593,15 +1593,33 @@
       messages = [...messages, msg];
       return;
     }
+    // Row already present. A realtime echo and a follow-up fetch can each
+    // carry a field the other lacked; merge those upgrades onto the
+    // existing row rather than dropping the echo (and rather than a
+    // wholesale swap, which would clobber a field the existing row holds
+    // and the echo doesn't - e.g. co-fetched attachments). Two cases:
+    //   - attachments: the realtime payload can't join the attachments
+    //     table, so a later listAttachmentsByMessageIds fetch upgrades a
+    //     row that first arrived attachment-less.
+    //   - second_thoughts: the reviewer agent writes this via a messages
+    //     UPDATE a beat after the row committed (see
+    //     supabase/functions/venice/agents/second_thoughts.ts), so its
+    //     echo carries a verdict the locally-hydrated row didn't have yet.
     const existing = messages[existingIdx];
     const incomingHasAttachments = !!msg.attachments && msg.attachments.length > 0;
     const existingHasAttachments =
       !!existing.attachments && existing.attachments.length > 0;
-    if (incomingHasAttachments && !existingHasAttachments) {
-      const updated = [...messages];
-      updated[existingIdx] = msg;
-      messages = updated;
-    }
+    const gainsAttachments = incomingHasAttachments && !existingHasAttachments;
+    const gainsSecondThoughts =
+      msg.second_thoughts != null && existing.second_thoughts == null;
+    if (!gainsAttachments && !gainsSecondThoughts) return;
+    const updated = [...messages];
+    updated[existingIdx] = {
+      ...existing,
+      ...(gainsAttachments ? { attachments: msg.attachments } : {}),
+      ...(gainsSecondThoughts ? { second_thoughts: msg.second_thoughts } : {}),
+    };
+    messages = updated;
   }
 
   /**
@@ -7183,6 +7201,7 @@
                   reasoningElapsed={reasoningPillsById[block.assistant.id]?.elapsed ?? null}
                   reasoningChars={reasoningPillsById[block.assistant.id]?.chars ?? null}
                   citations={block.assistant.citations}
+                  secondThoughts={block.assistant.second_thoughts}
                   contextWindow={currentTierSpec.contextWindow}
                   usage={block.assistant.usage}
                   createdAt={block.assistant.created_at}
@@ -7264,6 +7283,7 @@
                   reasoningElapsed={reasoningPillsById[block.message.id]?.elapsed ?? null}
                   reasoningChars={reasoningPillsById[block.message.id]?.chars ?? null}
                   citations={block.message.citations}
+                  secondThoughts={block.message.second_thoughts}
                   contextWindow={currentTierSpec.contextWindow}
                   usage={block.message.usage}
                   createdAt={block.message.created_at}
