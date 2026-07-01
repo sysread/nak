@@ -108,6 +108,14 @@ populates via the realtime UPDATE on the row. Rides the exact
 only), so it is detached and adds zero latency to the user-
 visible turn.
 
+**Fires on every completed turn**, not gated. Gating would mean
+first deciding "is this turn worth doubting?" - but that decision
+cannot be made cheaply without a completion that reads the turn,
+which is the reflex pass itself. A gate is a false economy: the
+gate *is* the reviewer. So every completed turn gets the pass;
+`conviction` (the common verdict) is the cheap-and-quiet outcome
+rather than a skipped one.
+
 The point of v1 is to **watch the reflex's judgment quality
 before it is ever allowed to change an answer.** Consequence to
 go in with eyes open: with no correction round yet, a twinge
@@ -418,15 +426,19 @@ the composition and the slide-down wiring.
   If a future change relaxes the reviewer to free-text output,
   the fourth-voice-continuation failure mode comes back.
 
-## Open decisions (still to settle)
+## Open decisions
 
-- **Fire policy.** Every completed turn, or gated (skip trivial
-  / near-empty responses)? v1 default: every completed turn;
-  revisit if the signal is noisy or the cost is real.
-- **Phase 2 correction bar.** Which dispositions escalate?
-  Proposal: `reframe` + `correct` escalate, `hedge` stays
-  display-only. Confirm when phase 2 is designed.
+**Both remaining decisions are phase 2 and are deliberately
+deferred until v1 is built and observed** - the shape of a good
+answer here depends on watching real reflex verdicts, so guessing
+now would be guessing. Settled: fire policy (every completed turn,
+see v1 above).
+
+- **Phase 2 correction bar.** Which dispositions escalate to a
+  correction round? Straw proposal: `reframe` + `correct`
+  escalate, `hedge` stays display-only. Decide against real v1
+  verdicts, not in the abstract.
 - **Phase 2 replay semantics.** On future turns, does the model
   replay the original + doubt + correction, the corrected answer
-  only, or original + correction without the doubt? Deferred to
-  phase 2; noted here so it is not forgotten.
+  only, or original + correction without the doubt? Decide once
+  the transcript actually has correction rows to reason about.
