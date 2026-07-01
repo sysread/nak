@@ -209,6 +209,7 @@
     shouldRetainDisplaced,
   } from '$lib/ui/recall';
   import { formatMessageStamp } from '$lib/ui/message-timestamp';
+  import { coerceSecondThoughts } from '$lib/ui/second-thoughts';
   import { isReasoningOnlyStall, isCutOffPartialText } from '$lib/ui/incomplete-turn';
   import { selectRecoveryBanner } from '$lib/ui/recovery-banner';
   import { headingFor, parseLastError } from '$lib/ui/last-error';
@@ -784,6 +785,20 @@
    */
   let pendingDeleteIds = $state<string[]>([]);
   const pendingDeleteSet = $derived(new Set(pendingDeleteIds));
+
+  // Id of the thread's latest live assistant row - the only one that
+  // gets a second-thoughts refinement button, since a refinement
+  // appends at the transcript tail and must reconsider the last answer,
+  // not a mid-thread one. Skips rows greyed for regenerate-from-here.
+  // Mirrors the find-last-assistant walk `findLastAssistantTimestamp`
+  // does for the datetime anchor.
+  const latestAssistantId = $derived.by((): string | null => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const m = messages[i];
+      if (m.role === 'assistant' && !pendingDeleteSet.has(m.id)) return m.id;
+    }
+    return null;
+  });
   /**
    * Hover-preview of the regenerate range. Populated while the user
    * hovers (or focuses) a message's Regenerate button; cleared on
@@ -3316,6 +3331,16 @@
      * only. Omitted on plain sends.
      */
     supersededIds?: string[];
+    /**
+     * True on a second-thoughts refinement turn (Chat.svelte
+     * `refineFrom`). Two effects: server-side priming is skipped (this
+     * is the model reconsidering itself, not a new user round - see
+     * `skipPriming`), and the wire history carries the doubt because
+     * `refineFrom` marked the original row's verdict `acted` before the
+     * run, so `toVeniceMessage` projects the `<think>` connective onto
+     * it. No separate ephemeral splice is needed.
+     */
+    isRefinement?: boolean;
   }
 
   /**
@@ -3663,8 +3688,16 @@
           userLocation: ctx.sendUserLocation,
           displayTimezone: app.displayTimezone || null,
           lastAssistantTimestamp: findLastAssistantTimestamp(),
-          intuitionModelId: agentModel('intuition').id,
-          intuitionMood: intuitionMoodArg,
+          // A refinement turn skips the whole priming stage: it is the
+          // model reconsidering its own answer (not a new user round),
+          // it carries its own <think> doubt (projected onto the acted
+          // original row by toVeniceMessage), and re-running priming
+          // would double-fire samskara for the round and bury that
+          // doubt. Omitting the intuition/recall inputs disables those
+          // pipelines; `skipPriming` also suppresses samskara + bias.
+          intuitionModelId: ctx.isRefinement ? undefined : agentModel('intuition').id,
+          intuitionMood: ctx.isRefinement ? null : intuitionMoodArg,
+          skipPriming: ctx.isRefinement ? true : undefined,
           currentTurnHasAttachments,
           // Topic-boundary recall rides the same trigger machinery as
           // intuition (cold-start, mid-turn title shift, mood shift,
@@ -3672,7 +3705,8 @@
           // chat-loop's parallel fan-out keeps the wall-clock cost
           // bounded by max(intuition, context-recall) and the cache
           // turns later turns into no-ops on the same trigger fire.
-          contextRecallEnabled: true,
+          // Off on a refinement turn (see the priming note above).
+          contextRecallEnabled: ctx.isRefinement ? false : true,
           handlers: {
             onTextUpdate: (t) => {
               pendingText = t;
@@ -4651,6 +4685,99 @@
       originalText: userMessage.content,
       userMessageId: userMessage.id,
       supersededIds: persistedRowIds(messages, rangeIds),
+    });
+  }
+
+  /**
+   * Second-thoughts refinement: run one extra turn seeded with the
+   * reviewer's doubt as a `<think>`, APPENDING a fresh answer below the
+   * original. Unlike regenerate, nothing is superseded/deleted - the
+   * original answer stays. Anchored to the original turn's user message
+   * so the appended assistant row commits without a cross-device
+   * conflict (commit_assistant_message keys on newer USER messages, not
+   * the existing assistant answer). Only wired for the thread's latest
+   * assistant row (see the render site), so the append always lands at
+   * the transcript tail. Priming is skipped for the turn (see
+   * `refinementThink` handling in runExchange).
+   */
+  async function refineFrom(assistantMessageId: string): Promise<void> {
+    if (activeSlot?.sending || !app.supabase || !app.venice) return;
+    const active = activeThreadId ? findThread(activeThreadId) ?? null : null;
+    if (!active || active.isDraft || active.archived) return;
+    const idx = messages.findIndex((m) => m.id === assistantMessageId);
+    if (idx === -1) return;
+    const row = messages[idx];
+    if (row.role !== 'assistant') return;
+    // The doubt to seed the refinement lives on the row's verdict. No
+    // verdict (or a conviction with no button) means nothing to act on.
+    const verdict = coerceSecondThoughts(row.second_thoughts);
+    if (!verdict) return;
+    // Walk back to the user message that opened this turn - the append
+    // anchor. Mirrors regenerateFrom's walk.
+    let userIdx = -1;
+    for (let i = idx; i >= 0; i -= 1) {
+      if (messages[i].role === 'user') {
+        userIdx = i;
+        break;
+      }
+    }
+    if (userIdx === -1) return;
+    const userMessage = messages[userIdx];
+
+    // Mark the doubt ACTED. This is what flips it from display-only to
+    // model-visible: `toVeniceMessage` projects the `<think>` connective
+    // onto any acted row, so the refinement turn's own history (which
+    // includes this row) carries the doubt, and so do all future replays
+    // - giving the model the logical link between this answer and the
+    // refinement that follows. Patch the local row FIRST so
+    // buildHistoryOnWire sees it on this very turn; the DB persist (for
+    // reload / cross-device) rides a security-definer RPC because the
+    // client's messages-UPDATE policy only covers role='tool' rows.
+    // Best-effort persist: a failure just means the flag won't survive a
+    // reload; this turn's wire is already driven by the local patch.
+    const actedVerdict = { ...(row.second_thoughts as object), acted: true };
+    messages = messages.map((m) =>
+      m.id === row.id ? { ...m, second_thoughts: actedVerdict } : m
+    );
+    void app.supabase.markSecondThoughtsActed(row.id).catch((e) => {
+      log.error('failed to persist second-thoughts acted flag', e);
+    });
+
+    // Resolve send-time context the same way regenerateFrom does - the
+    // user's current toggles (model, reasoning, verbosity, system
+    // prompts) apply to the refinement.
+    const tier = resolveTier(active.model ?? null, defaultTier);
+    const tierSpec = effectiveTierSpec(tier, app.tierModels);
+    const modelId = tierSpec.id;
+    const { reasoningEffort: sendReasoning, disableThinking: sendDisableThinking } =
+      thinkingWireForTier(tierSpec, active.reasoning_effort ?? null, defaultReasoning);
+    const sendVerbosity: Verbosity = resolveVerbosity(
+      active.verbosity ?? null,
+      defaultVerbosity
+    );
+    const systemMessages: { role: 'system'; content: string }[] = app.systemPrompts
+      .filter((p) => activePromptIds.has(p.id) && p.body.trim().length > 0)
+      .map((p) => ({ role: 'system' as const, content: p.body }));
+    const currentUserId = session?.user.id ?? active.user_id;
+
+    // Pin to the bottom so the appended refinement streams into view.
+    followBottom = true;
+
+    await runExchange({
+      threadId: active.id,
+      currentUserId,
+      modelId,
+      tierSpec,
+      systemMessages,
+      sendReasoning,
+      sendDisableThinking,
+      sendVerbosity,
+      sendEmphasis: app.emphasisMarkdown,
+      sendUserName: app.userName,
+      sendUserLocation: app.userLocation,
+      originalText: userMessage.content,
+      userMessageId: userMessage.id,
+      isRefinement: true,
     });
   }
 
@@ -7284,6 +7411,9 @@
                   reasoningChars={reasoningPillsById[block.message.id]?.chars ?? null}
                   citations={block.message.citations}
                   secondThoughts={block.message.second_thoughts}
+                  onRefine={block.message.id === latestAssistantId
+                    ? () => { void refineFrom(block.message.id); }
+                    : undefined}
                   contextWindow={currentTierSpec.contextWindow}
                   usage={block.message.usage}
                   createdAt={block.message.created_at}

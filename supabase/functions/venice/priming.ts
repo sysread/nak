@@ -356,6 +356,16 @@ export interface PrimingInputs {
   intuitionModelId?: string;
   intuitionMood?: { band: number; column: 'confident' | 'tentative' } | null;
   contextRecallEnabled?: boolean;
+  /**
+   * Skip the entire priming stage (bias appendix + the whole `<think>`
+   * chain). Set by the second-thoughts refinement turn: it is the model
+   * reconsidering its own answer, not a new user round, so re-running
+   * the user-round-keyed priming would double-fire the samskara
+   * situational cohort and bury the refinement's own `<think>` doubt.
+   * The refinement supplies its own priming. See the field docs on
+   * `ChatLoopOptions.skipPriming` (src/lib/chat/types.ts).
+   */
+  skipPriming?: boolean;
 }
 
 /**
@@ -416,6 +426,12 @@ export interface ServerPrimingOpts {
 export async function runServerPriming(opts: ServerPrimingOpts): Promise<void> {
   const { adminClient, userId, threadId, apiKey, history, publisher, signal } =
     opts;
+  // Refinement turns (second-thoughts "Let me ..." button) carry their
+  // own `<think>` doubt and are not a new user round, so they opt out of
+  // the standard stage entirely - running it would double-fire samskara
+  // for the round and bury the doubt. No priming events are published,
+  // which is correct: no priming ran, so the browser shows no spinner.
+  if (opts.priming?.skipPriming) return;
   const deps = opts.deps ?? DEFAULT_PRIMING_DEPS;
   const biasLog = createEdgeLogger(userId, 'bias');
   const intentLog = createEdgeLogger(userId, 'intent');

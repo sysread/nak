@@ -28,6 +28,7 @@
   import { cubicOut } from 'svelte/easing';
   import { safeSlide } from '$lib/ui/safe-slide';
   import {
+    dispositionAction,
     dispositionHeadline,
     dispositionIcon,
     dispositionLabel,
@@ -38,17 +39,40 @@
 
   interface Props {
     verdict: SecondThoughtsVerdict;
+    /**
+     * Fired when the user clicks the refinement button ("Let me temper
+     * that", etc.). Passed by the parent ONLY for the actionable row -
+     * the thread's latest assistant answer. When omitted, no button
+     * shows and the panel does not auto-expand (older rows and
+     * conviction verdicts just display). See Chat.svelte.
+     */
+    onRefine?: () => void;
+    /** Disables the refinement button while a send is in flight. */
+    disabled?: boolean;
   }
 
-  const { verdict }: Props = $props();
+  const { verdict, onRefine, disabled = false }: Props = $props();
 
   const tone = $derived(dispositionTone(verdict.disposition));
   const icon = $derived(dispositionIcon(verdict.disposition));
   const label = $derived(dispositionLabel(verdict.disposition));
   const headline = $derived(dispositionHeadline(verdict.disposition));
   const note = $derived(displayNote(verdict));
+  // Button label; null for conviction (and thus no button). The
+  // refinement affordance is live only when the parent supplied a
+  // handler (the actionable latest row) AND the verdict is a doubt.
+  const actionLabel = $derived(dispositionAction(verdict.disposition));
+  const refinable = $derived(onRefine != null && actionLabel != null);
 
-  let open = $state(false);
+  // Expansion: auto-open an actionable doubt (surfacing it is the whole
+  // point of inviting the click), collapsed otherwise - UNTIL the user
+  // clicks the header, after which their choice latches for the panel's
+  // life. Same "manual control wins" shape the reasoning panel uses.
+  // Reactive (not a one-time $state from props) so a row that stops
+  // being the latest - `refinable` flips false - collapses on its own.
+  let userToggled = $state(false);
+  let userOpen = $state(false);
+  const open = $derived(userToggled ? userOpen : refinable);
 </script>
 
 <div class="second-thoughts tone-{tone}" class:open>
@@ -56,7 +80,8 @@
     type="button"
     class="st-header"
     onclick={() => {
-      open = !open;
+      userOpen = !open;
+      userToggled = true;
     }}
     aria-expanded={open}
     aria-label={open ? 'Hide second thoughts' : headline}
@@ -98,6 +123,13 @@
     </svg>
     <span class="st-label">Second thoughts</span>
     <span class="st-disposition">{label}</span>
+    <!-- Persistent marker once the user acted on this doubt (clicked
+         the button, which appended a refinement below). Survives reload
+         via the verdict's `acted` flag; helps scroll-back read which
+         doubts were followed up on. -->
+    {#if verdict.acted}
+      <span class="st-acted">refined</span>
+    {/if}
     <svg
       class="st-chevron"
       width="12"
@@ -114,12 +146,26 @@
     </svg>
   </button>
   {#if open}
-    <blockquote
-      class="st-body"
+    <div
+      class="st-expanded"
       transition:safeSlide={{ duration: 200, easing: cubicOut }}
     >
-      {note}
-    </blockquote>
+      <blockquote class="st-body">{note}</blockquote>
+      {#if refinable}
+        <!-- The model owning the goof and asking permission: a click
+             runs a refinement turn that APPENDS a fresh answer below.
+             Label is the model's own "let me ..." voice, disposition-
+             specific (dispositionAction). -->
+        <button
+          type="button"
+          class="st-refine"
+          {disabled}
+          onclick={() => onRefine?.()}
+        >
+          {actionLabel}
+        </button>
+      {/if}
+    </div>
   {/if}
 </div>
 
@@ -171,6 +217,16 @@
     color: var(--st-tone);
   }
 
+  /* Muted "refined" tag once the doubt was acted on - a quiet record,
+     not a second call-to-action. */
+  .st-acted {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    font-size: 0.72rem;
+    font-style: italic;
+    color: var(--muted);
+  }
+
   .st-icon {
     flex: 0 0 auto;
     color: var(--st-tone);
@@ -185,10 +241,20 @@
     transform: rotate(90deg);
   }
 
+  /* Expanded region: the note, then (on the actionable latest row) the
+     refinement button under it. */
+  .st-expanded {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+    margin-top: 0.25rem;
+  }
+
   /* Note body: block-quote treatment with a tone-colored left border,
      italic prose - the assistant's private afterthought voice. */
   .st-body {
-    margin: 0.25rem 0 0;
+    margin: 0;
     padding: 0.35rem 0 0.35rem 0.75rem;
     border-left: 3px solid var(--st-tone);
     color: var(--muted);
@@ -199,17 +265,47 @@
     word-break: break-word;
   }
 
+  /* Refinement button. Tone-colored outline so it reads as the same
+     thought's call-to-action; fills on hover. Matches the tone the
+     glyph/disposition already carry. */
+  .st-refine {
+    align-self: flex-start;
+    padding: 0.3rem 0.7rem;
+    font: inherit;
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--st-tone);
+    background: transparent;
+    border: 1px solid var(--st-tone);
+    border-radius: var(--radius);
+    cursor: pointer;
+  }
+
+  .st-refine:hover:not(:disabled),
+  .st-refine:focus-visible:not(:disabled) {
+    color: var(--st-ink);
+    background: var(--st-tone);
+  }
+
+  .st-refine:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
   /* Tone -> color. calm folds into the muted body color (an
      unremarkable "reviewed, fine"); unease borrows the theme accent (a
      gentle "worth a look"); alert is danger-red for a suspected
      mistake - the one a reader most wants to notice. */
   .tone-calm {
     --st-tone: var(--muted);
+    --st-ink: var(--ink-on-accent);
   }
   .tone-unease {
     --st-tone: var(--accent);
+    --st-ink: var(--ink-on-accent);
   }
   .tone-alert {
     --st-tone: var(--danger);
+    --st-ink: var(--ink-on-danger);
   }
 </style>

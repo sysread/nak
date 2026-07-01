@@ -19,6 +19,10 @@ import {
   sanitizeToolCallsForWire,
 } from '../tools/wire';
 import { detectTimezone } from '../timezone';
+import {
+  buildRefinementThink,
+  coerceSecondThoughts,
+} from '../ui/second-thoughts';
 
 // --- appended verbatim from chat-loop.ts ---
 /** Placeholder string threads ship with from schema.sql + draft creation. */
@@ -497,8 +501,23 @@ export function toVeniceMessage(
     return { role: 'user', content };
   }
   const out: VeniceMessage = { role: m.role, content: m.content };
-  if (m.role === 'assistant' && m.tool_calls && m.tool_calls.length > 0) {
-    out.tool_calls = sanitizeToolCallsForWire(m.tool_calls);
+  if (m.role === 'assistant') {
+    if (m.tool_calls && m.tool_calls.length > 0) {
+      out.tool_calls = sanitizeToolCallsForWire(m.tool_calls);
+    }
+    // Second-thoughts connective. A doubt the user ACTED on (clicked
+    // the refinement button) becomes model-visible: append it as a
+    // `<think>` so replay carries the logical link between this answer
+    // and the refinement that follows - otherwise the model sees two
+    // consecutive answers with no "why" and can waffle over which is
+    // authoritative on a dependent turn. Un-acted doubts stay a
+    // display-only column, never projected. The same projection seeds
+    // the refinement turn itself (its history includes this now-acted
+    // row). See src/lib/ui/second-thoughts.ts.
+    const verdict = coerceSecondThoughts(m.second_thoughts);
+    if (verdict?.acted && typeof out.content === 'string') {
+      out.content = `${out.content}\n\n${buildRefinementThink(verdict.note)}`;
+    }
   }
   return out;
 }

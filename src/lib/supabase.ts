@@ -4465,6 +4465,22 @@ export class SupabaseService {
     return data as Message;
   }
 
+  /**
+   * Mark an assistant row's second-thoughts verdict as acted-on (the
+   * user clicked the refinement button). Routes through the
+   * `mark_second_thoughts_acted` SECURITY DEFINER RPC because the
+   * client's messages-UPDATE RLS policy only covers role='tool' rows;
+   * the RPC gates on thread ownership and touches only the `acted` key.
+   * Callers fire-and-forget - a failure just means the flag won't
+   * survive a reload (this turn's wire is driven by the local patch).
+   */
+  async markSecondThoughtsActed(messageId: string): Promise<void> {
+    const { error } = await this.client.rpc('mark_second_thoughts_acted', {
+      p_message_id: messageId,
+    });
+    if (error) throw new SupabaseError(error.message);
+  }
+
   // --- Realtime subscriptions & message fetch --------------------------
 
   /**

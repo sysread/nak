@@ -531,7 +531,9 @@ create index if not exists messages_streaming_idx
 -- streaming function's completed-turn waitUntil tail, onto the terminal
 -- assistant row. Shape:
 --   {v, disposition: 'conviction'|'hedge'|'reframe'|'correct',
---    note: string, model: string, computed_at: number}
+--    note: string, model: string, computed_at: number, acted?: boolean}
+-- `acted` is set later by the browser (mark_second_thoughts_acted RPC)
+-- when the user clicks the refinement button, not by the reviewer.
 -- The reviewer is a fast, low-context "doubt reflex" that reads only the
 -- turn slice (user message + this turn's assistant/tool rows) and reports
 -- a felt confidence. 'conviction' is the common "no second thoughts"
@@ -542,6 +544,45 @@ create index if not exists messages_streaming_idx
 -- "no verdict" rather than crashing the card.
 alter table public.messages
   add column if not exists second_thoughts jsonb;
+
+-- Mark a second-thoughts verdict as acted-on: the user clicked the
+-- refinement button ("Let me temper that", etc.), which promotes the
+-- doubt from a display-only column to a model-visible <think> connective
+-- on replay (toVeniceMessage in src/lib/chat/prompt-assembly.ts). The
+-- browser cannot UPDATE an assistant row directly - the messages-UPDATE
+-- RLS policy is scoped to role='tool' rows so a client can never rewrite
+-- assistant/user content - so this SECURITY DEFINER function is the
+-- narrow, safe write path: it touches ONLY the `acted` key, only on an
+-- assistant row, and only when auth.uid() owns the parent thread.
+-- Idempotent.
+create or replace function public.mark_second_thoughts_acted(
+  p_message_id uuid
+) returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.messages m
+     set second_thoughts = jsonb_set(
+       coalesce(m.second_thoughts, '{}'::jsonb),
+       '{acted}',
+       'true'::jsonb,
+       true
+     )
+   where m.id = p_message_id
+     and m.role = 'assistant'
+     and exists (
+       select 1 from public.threads t
+       where t.id = m.thread_id and t.user_id = auth.uid()
+     );
+end;
+$$;
+
+-- Browser-called (the authenticated user clicking the refinement
+-- button), unlike the service_role-only claim/commit RPCs.
+grant execute on function public.mark_second_thoughts_acted(uuid)
+  to authenticated;
 
 -- Per-thread set of enabled gated toolboxes. Stored as text[] so the
 -- toolbox dimension sits in the thread row without a second table.

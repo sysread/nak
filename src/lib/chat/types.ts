@@ -297,6 +297,19 @@ export interface ChatLoopOptions {
    */
   contextRecallEnabled?: boolean;
   /**
+   * Skip the ENTIRE server-side priming stage for this turn - the bias
+   * appendix AND the samskara / intuition / context-recall `<think>`
+   * chain. Set by the second-thoughts refinement turn
+   * (Chat.svelte `refineFrom`): a refinement is the model reconsidering
+   * its own prior answer, NOT a new user round, so re-running the
+   * user-round-keyed priming would double-fire the samskara situational
+   * cohort for one round (pipeline pollution) and bury the refinement's
+   * own `<think>` doubt behind the samskara chain. The refinement
+   * supplies its own priming (the doubt block), so it wants none of the
+   * standard stage. Omitted / false leaves priming running as normal.
+   */
+  skipPriming?: boolean;
+  /**
    * True when the user message that opened this turn carries one or
    * more attachments. Drives the metadata message's anti-fabrication
    * reinforcement (see `buildMetadataSystemMessage`), which pins the

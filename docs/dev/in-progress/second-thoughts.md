@@ -1,17 +1,18 @@
 # Second thoughts (in progress)
 
-> **Status: v1 shipped (the reflex, detached, per-message,
-> display-only). Phases 2-3 are still design only.** The reviewer
-> agent, the per-message slide-down, and the data model are built,
-> gated, and tested; a raised doubt displays but nothing yet acts on
-> it. When phase 2 (the correction round) lands, graduate the durable
-> parts (the reflex/deliberation model, the reviewer input contract,
-> the data model) into a permanent `docs/dev/second-thoughts.md` and
-> retire this file per the in-progress doc rules in `CLAUDE.md`. Below,
-> the v1 pieces described as "will" now exist (see **Build status**);
-> everything under phases 2-3 is still a proposal.
+> **Status: v1 + phase 2 shipped (the reflex + the user-triggered
+> refinement button). Phases 3-4 are still design only.** The reviewer,
+> the per-message slide-down, and now the auto-expand + disposition
+> button that runs an append refinement turn are built, gated, and
+> tested. What remains is the AUTOMATIC correction (phase 3) - and
+> whether to build it at all is gated on the phase-2 button's
+> click-through data. When that resolves, graduate the durable parts
+> (the reflex/deliberation model, the reviewer input contract, the data
+> model, the refinement flow) into a permanent
+> `docs/dev/second-thoughts.md` and retire this file per the
+> in-progress doc rules in `CLAUDE.md`.
 
-**Build status.** Landed (v1):
+**Build status.** Landed (v1 + phase 2):
 
 1. **Data model** - `messages.second_thoughts jsonb`
    (`supabase/schema.sql`), the versioned `{v, disposition, note,
@@ -37,10 +38,37 @@
    later UPDATE echo merges the verdict onto the already-hydrated row
    (instead of being dropped as a duplicate).
 
-Deferred (design only below): phase 2 (the correction round + the
-`<think>` re-injection + the transcript card) and phase 3 (the
-emergent samskara/bias feedback). The two phase-2 open decisions
-(correction bar, replay semantics) wait for real v1 verdicts.
+Phase 2 (user-triggered refinement), landed on top of v1:
+
+1. **Primitive** - `dispositionAction` (button label, null for
+   conviction) + `buildRefinementThink` (the permit-rejection `<think>`
+   builder) in `src/lib/ui/second-thoughts.ts` (vitest-covered).
+2. **UI** - `SecondThoughtsPanel` auto-expands an actionable doubt and
+   renders the disposition button; `AssistantBody` forwards `onRefine`;
+   `Chat.svelte` passes it ONLY for the latest assistant row
+   (`latestAssistantId`).
+3. **Refinement flow** - `Chat.svelte` `refineFrom` runs one extra
+   streaming turn via the existing `runExchange` path: it marks the
+   original verdict `acted`, anchors on the original user message with
+   NO `supersededIds` (so the new answer APPENDS, commit_assistant_message
+   keys on newer user rows only), and skips priming.
+4. **Skip-priming plumbing** - `ChatLoopOptions.skipPriming` ->
+   `streamCtx.priming.skipPriming` (`venice.ts`) -> the `/stream` body
+   (`index.ts`) -> `PrimingInputs.skipPriming` -> an early-return at the
+   top of `runServerPriming`. Keeps a refinement from double-firing
+   samskara for the round and from burying its own `<think>` doubt.
+5. **Acted connective** - `acted` on the verdict + coercer; the
+   `mark_second_thoughts_acted` SECURITY DEFINER RPC (`schema.sql`) +
+   `SupabaseService.markSecondThoughtsActed`; `toVeniceMessage`
+   projects an acted doubt as a `<think>` (via `buildRefinementThink`,
+   now worded to permit rejection AND mark supersession); a muted
+   "refined" tag in the panel. This is what gives replay its logical
+   link between the two answers.
+
+Deferred (design only below): phase 3 (AUTOMATIC correction - the
+critical-path relocation) and phase 4 (the emergent samskara/bias
+feedback). Whether to build phase 3 at all is gated on the phase-2
+click-through data.
 
 ## The idea
 
@@ -156,17 +184,37 @@ would adjudicate it does not exist until phase 2. That is honest
 (you are watching the reflex fire in isolation) but it means the
 v1 surface shows doubt without resolution.
 
-### phase 2 - the correction round (the deliberation)
+### phase 2 - the user-triggered refinement (append + button)
 
-Once the reflex is trusted, let a strong-enough verdict trigger
-a follow-on round. This is the phase that touches the round loop
-and the critical path (it runs *before* control returns to the
-user, so the user sees the model reconsider before they act on
-the answer). Details in "The correction round" below. This is
-also where the reviewer's `web_search` grounding and the `defer`
-disposition become meaningful.
+The key move: the user, not the system, decides whether a doubt is
+worth acting on. On a doubt verdict the panel auto-expands and offers
+a button ("Let me temper that", etc.); a click runs a **refinement
+turn** that APPENDS a fresh answer below the original. The button is
+the safety valve - a low-context reviewer's false flag costs nothing
+because a human just doesn't click it. This is a strictly safer
+escalation than automatic correction, and it is what phase 2 builds.
 
-### phase 3 - the emergent loop (deferred, maybe organic)
+Crucially, **this leaves the reviewer exactly where v1 put it**:
+detached in the completed-turn tail. The verdict lands on the row as
+today; the panel + button are pure UI over that verdict; and the
+refinement is a separate, user-initiated turn. So phase 2 touches
+**neither the round loop nor the critical path** - it is UI plus one
+new "reconsider" turn flow. Details in "The refinement turn" below.
+
+### phase 3 - automatic correction (deferred, gated on data)
+
+The autonomous version: a strong-enough verdict triggers the
+refinement WITHOUT a click, before control returns to the user. This
+is the phase that would move the reviewer onto the critical path and
+touch the round loop - and it is only worth building if the phase-2
+click-through data shows the reviewer is trustworthy enough to take
+the human out of the loop. How often the user actually clicks the
+phase-2 button is precisely that signal. Details deferred; the
+critical-path mechanics are sketched under "Automatic correction
+(phase 3)" below. `web_search` grounding and the `defer` disposition
+are meaningful in both this phase and the phase-2 refinement turn.
+
+### phase 4 - the emergent loop (deferred, maybe organic)
 
 A `correct` / `reframe` is an *embarrassment event* - the same
 class of signal samskara and the bias profile already consume. A
@@ -266,25 +314,82 @@ The `defer` disposition ("I cannot resolve this without asking
 the user") is intentionally left out until phase 2, since
 deferring is only meaningful once the feature can act.
 
-## The correction round (phase 2)
+## The refinement turn (phase 2)
 
-When a verdict crosses the bar (initial proposal: `reframe` or
-`correct`; `hedge` stays display-only), the turn does not end.
-Instead the orchestrator, at the terminal-round break in
-`getStreamingResponse.ts` (`!roundHadToolCalls`), converts what
-would have been the terminal round into a non-terminal one:
+On a doubt verdict (`hedge` / `reframe` / `correct` - not
+`conviction`) the panel **auto-expands** and shows a
+disposition-specific **button** whose click runs a **refinement
+turn**. The button's voice is the model owning the goof and asking
+permission: "I might have goofed; if you agree, let's refine." The
+label is disposition-specific (see "Button phrasing" below).
 
-1. persist the original response as a non-terminal assistant row
-   (the same `persistRoundAssistantRow` path tool-rounds use);
-2. persist the "second thoughts" card (the reviewer's `note` +
-   any citations) as its own transcript element;
-3. splice a synthetic `<think>` self-doubt message onto
-   `history`;
-4. continue the loop for one correction round, which streams
-   live and commits terminal.
+**Append, not replace.** The refinement adds a fresh assistant turn
+BELOW the original; it never destroys the original. Two consequences
+worth stating because they simplify the build:
 
-Transcript ends ordered and honest: `[user] -> [assistant:
-original] -> [second-thoughts card] -> [assistant: correction]`.
+- **No separate "second thoughts card" row.** The original row's v1
+  panel already carries the note - it *is* the card. The refinement
+  is just the next assistant row. Transcript reads `[user] ->
+  [assistant: original + its second-thoughts panel] -> [assistant:
+  refinement]`.
+- **No grey/restore machinery.** Replace (regenerate-from-here) needs
+  it because it destroys the original; append destroys nothing, so a
+  flopped refinement leaves the original untouched. Closer to "send a
+  follow-up on the model's behalf" than to regenerate.
+
+**Mechanism.** The click is browser-initiated (no round-loop change).
+`refineFrom` marks the original row's verdict `acted`, then runs a
+normal streaming turn via the existing `runExchange` path. The new
+assistant row commits appended after the original, anchored to the
+SAME user message the original answered. There is no new user message
+(the turn is the model reconsidering itself), so the append must not
+trip `commit_assistant_message`'s newer-user-message conflict check -
+which keys on user rows, not the existing assistant answer. `correct`
+verdicts let the refinement reach `web_search` to actually verify.
+
+**The doubt becomes model-visible ONLY when acted - and that is the
+`<think>` connective.** This is the load-bearing subtlety, and it
+resolves the replay-coherence gap: without it, on any later turn the
+model would see two consecutive answers (original, refinement) with no
+link explaining the second, and could waffle over which is
+authoritative on a dependent question. So `toVeniceMessage`
+(`src/lib/chat/prompt-assembly.ts`) projects an `acted` doubt as a
+`<think>` block appended to that answer's wire content - built by
+`buildRefinementThink`, which frames it to PERMIT rejection ("if the
+misgiving doesn't hold, restate and stand by it") AND to mark
+supersession ("the reply that follows is my current, considered
+answer - prefer it"). One projection serves both moments: it seeds the
+refinement turn itself (whose history includes the just-acted row) and
+persists into every future replay. An UN-acted doubt is never
+projected - it stays a display-only column, invisible to the model
+(the same posture as `reasoning`).
+
+**Why `acted` is a server-side RPC, not a client UPDATE.** The
+messages-UPDATE RLS policy is scoped to `role='tool'` rows (so a
+client can never rewrite assistant/user content), so the browser
+cannot flip the flag directly. `mark_second_thoughts_acted`
+(SECURITY DEFINER, `schema.sql`) is the narrow write path: it touches
+only the `acted` key, only on an assistant row, only when `auth.uid()`
+owns the thread. `refineFrom` patches the LOCAL row first (so THIS
+turn's wire carries the connective without waiting on the DB) and
+fires the RPC best-effort for persistence across reload / device.
+
+### Button phrasing
+
+Disposition-specific, first-person, "let me" - short, because the
+panel note already carries the specifics. A UI-behavior primitive
+(`dispositionAction` in `src/lib/ui/second-thoughts.ts`) returning
+the label, or null for `conviction` (which gets no button and stays
+collapsed). Starting set, tunable to taste:
+
+- `hedge` -> "Let me temper that"
+- `reframe` -> "Let me re-read your question"
+- `correct` -> "Let me double-check that"
+
+The null-for-conviction return is the single gate for BOTH "which
+dispositions get a button" and "which auto-expand" - the same
+doubt-vs-conviction split the (deleted, now-resurrected) `isDoubt`
+helper drew.
 
 ### The injected doubt MUST permit rejection
 
@@ -318,22 +423,59 @@ prompt has to say so out loud. A correction round that cannot
 say "no" is a regression-to-generic machine pointed at the
 feature's best output.
 
-### Recursion limit
+### Recursion (phase 2: user-gated, so no runaway)
 
-The correction round produces a new response. Left unbounded, a
-cheap reflex re-doubting a smart-tier correction could ping-pong
-(doubt -> correct -> doubt the correction -> correct again),
-which both burns rounds and erodes user trust in the signal.
+The refinement turn is itself a completed turn, so the v1 tail
+reviewer runs on it too and may flag it - showing a button on the
+refinement. Under the user-triggered model this is fine, not
+runaway: the human gates every step, so a doubt -> refine -> doubt
+chain only continues as far as the user keeps clicking. No
+automatic ping-pong to bound.
 
-Rule: **the reviewer fires at most once per user turn - the
-correction response is terminal and is NOT itself reviewed.** One
-twinge, one adjudication, done. This also sits inside the
-existing `MAX_ROUNDS = 24` budget as a hard backstop, but the
-one-pass rule is the semantic bound and should be enforced
-explicitly (a per-turn "second thoughts already ran" flag),
-not left to the round cap. If a future need for multi-pass doubt
-appears, raise the cap deliberately with its own justification;
-do not let it default open.
+The ping-pong concern is a **phase-3 (automatic)** problem: once
+clicks are removed, a cheap reflex re-doubting a smart-tier
+refinement could loop on its own. The rule there is **at most one
+automatic refinement per user turn - the refined response is
+terminal and not itself auto-reviewed** (enforced by an explicit
+per-turn flag, with `MAX_ROUNDS = 24` only as the backstop). Do not
+let a multi-pass cap default open.
+
+### Automatic correction mechanics (phase 3)
+
+Sketched here so the phase-3 build is not a blank page; NONE of
+this is phase 2 (which is browser-triggered and touches neither
+the round loop nor the critical path).
+
+**The reviewer moves off the tail and onto the critical path.**
+v1 (and phase 2) run the reviewer detached in the `waitUntil` tail
+*after* the turn committed. Automatic correction needs the verdict
+*before* it decides whether to end the turn, so the reviewer call
+relocates INTO `getStreamingResponse`'s flow, at the terminal-round
+break (`!roundHadToolCalls`), before the terminal commit. On a
+non-escalating verdict the loop breaks and commits as today; on an
+escalating verdict it converts the would-be-terminal round into a
+non-terminal one (splice `<think>`, continue). This is a big,
+delicate change to the round loop - the reason it waits for data.
+
+**It puts reviewer latency on the critical path, every turn.** The
+pause before END now includes the reviewer round-trip (plus, on the
+correction branch, a `web_search` call and a refinement round).
+Surface it as a **Reconsidering** row on the in-flight bubble's
+priming checklist. Two mitigations that did not matter in v1/phase
+2: run the reviewer with thinking disabled (it is a reflex, now in
+the latency path), and give it a timeout that falls back to "no
+escalation" so a slow reviewer degrades to shipping the original
+rather than hanging the turn (mirror `SAMSKARA_PRIMING_TIMEOUT_MS`
+in `priming.ts`).
+
+**web_search grounding + `defer`.** Applies to BOTH the phase-2
+refinement turn and phase-3 auto: a `correct` verdict lets the
+refinement reach the existing `web_search` path (`toolComplete`
+with `enable_web_search`, returning `{answer, citations}`) to
+actually verify, and its citations persist on the refinement row.
+This is the only place the `defer` disposition ("cannot resolve
+without asking the user") becomes meaningful, so `defer` enters the
+disposition set when phase 2 lands, not before.
 
 ## Data model (v1)
 
@@ -408,11 +550,17 @@ the composition and the slide-down wiring.
 ## Interactions
 
 - **Chat ([`chat.md`](../chat.md))** - v1 is a turn-tail unit
-  next to curation/samskara/reflection; phase 2 hooks the
-  terminal-round break in the round loop and adds transcript
-  rows, so it touches `toVeniceMessage` (how the second-thoughts
-  card and the `<think>` block project on replay) and the
-  regenerate/delete-from-here ranges. v1 touches none of that.
+  next to curation/samskara/reflection. Phase 2 (user-triggered
+  refinement) reuses the browser send/regenerate flow to run one
+  extra streaming turn that APPENDS a new assistant row anchored to
+  the original user message; it touches the send path,
+  `commit_assistant_message`'s anchor handling (append does not
+  conflict - the check keys on user rows), and `toVeniceMessage`
+  (which now projects an `acted` doubt as a `<think>` connective),
+  but NOT the round loop. The `acted` flag is persisted via the
+  `mark_second_thoughts_acted` SECURITY DEFINER RPC (the client
+  cannot UPDATE assistant rows under RLS). Only phase 3 (automatic)
+  hooks the terminal-round break.
 - **Intuition ([`intuition.md`](../intuition.md))** - the
   metacognitive twin on the other side of the completion.
   Intuition is pre-game, global, ephemeral (one overwritten
@@ -450,26 +598,53 @@ the composition and the slide-down wiring.
   injected doubt MUST permit rejection." The cheap reviewer is
   the blinder model; without an explicit license to reject, the
   smart model rubber-stamps the reviewer's low-context flags.
-- **v1 doubt is unresolved by design.** No correction round
-  exists yet, so a twinge just displays. Do not read a hanging
-  `correct` disposition in v1 as a broken feature.
+- **A doubt on an OLD assistant row has no button - that is
+  correct, not a missing feature.** The refinement appends at the
+  transcript tail, so it can only reconsider the LATEST answer;
+  `Chat.svelte` passes `onRefine` (and thus the auto-expand +
+  button) only for `latestAssistantId`. Older rows keep their
+  verdict for display but no action.
+- **A refinement writes a second samskara substrate row for the
+  same user message.** The chat-loop's end-of-turn substrate stub
+  pairs the anchor user message with the terminal assistant row;
+  a refinement anchors on the original user message, so its stub
+  is a second pairing for that message. Tolerated: substrate
+  `user_message_id` is a soft pointer the samskara design already
+  accepts going off-by-N (see the delete-from-here gotcha in
+  `chat.md`). Priming's samskara *fire* is NOT double-counted -
+  `skipPriming` suppresses it.
 - **Structured output is the takeover guard, not politeness.**
   If a future change relaxes the reviewer to free-text output,
   the fourth-voice-continuation failure mode comes back.
 
 ## Open decisions
 
-**Both remaining decisions are phase 2 and are deliberately
-deferred until v1 is built and observed** - the shape of a good
-answer here depends on watching real reflex verdicts, so guessing
-now would be guessing. Settled: fire policy (every completed turn,
-see v1 above).
+Settled by the user-triggered-append pivot:
 
-- **Phase 2 correction bar.** Which dispositions escalate to a
-  correction round? Straw proposal: `reframe` + `correct`
-  escalate, `hedge` stays display-only. Decide against real v1
-  verdicts, not in the abstract.
-- **Phase 2 replay semantics.** On future turns, does the model
-  replay the original + doubt + correction, the corrected answer
-  only, or original + correction without the doubt? Decide once
-  the transcript actually has correction rows to reason about.
+- **Fire policy** - every completed turn (see v1 above).
+- **Which dispositions get the button** - all three doubts (`hedge`
+  / `reframe` / `correct`); `conviction` gets none. The human gates
+  each click, so a generous button set is safe - a false flag just
+  goes unclicked.
+- **Replay semantics** - resolved to *keep both answers; the doubt is
+  visible to the model ONLY when acted*. Append keeps the original and
+  the refinement in the transcript. An un-acted doubt stays a
+  display-only column (invisible to the model). An ACTED doubt is
+  projected as a `<think>` connective on the original answer's wire
+  content (see "The doubt becomes model-visible" above), so the model
+  understands why there are two answers and treats the refinement as
+  authoritative rather than waffling on dependent turns.
+
+Still open, and genuinely gated on data:
+
+- **Whether to build phase 3 (automatic correction) at all**, and
+  its escalation bar if so. The phase-2 button's **click-through
+  rate** is the signal: if the user routinely clicks on `correct`
+  flags and the refinements land, automatic correction on that
+  disposition is earning its keep; if the user rarely clicks, or the
+  refinements often come back worse, automatic is not warranted and
+  the human-gated button is the right permanent home. Do not start
+  phase 3 before this data exists.
+- **Button phrasing** - the starting labels ("Let me temper that",
+  etc.) are a taste call the user owns; retune as the personality
+  settles.

@@ -23,6 +23,17 @@ export type SecondThoughtsDisposition =
 export interface SecondThoughtsVerdict {
   disposition: SecondThoughtsDisposition;
   note: string;
+  /**
+   * True once the user clicked the refinement button and a refinement
+   * turn was launched off this doubt. Set by Chat.svelte `refineFrom`,
+   * not the reviewer. Its job is twofold: mark the panel as acted-on
+   * for the human, and - the load-bearing half - flip the doubt from
+   * invisible to model-VISIBLE, so `toVeniceMessage` projects the
+   * `<think>` connective into replay. Without it the model would later
+   * see two answers in a row with no logical link and could waffle
+   * over which is authoritative. Absent / false on an un-acted doubt.
+   */
+  acted: boolean;
 }
 
 export const SECOND_THOUGHTS_DISPOSITIONS: readonly SecondThoughtsDisposition[] =
@@ -48,7 +59,11 @@ export function coerceSecondThoughts(raw: unknown): SecondThoughtsVerdict | null
     return null;
   }
   const note = typeof obj.note === 'string' ? obj.note.trim() : '';
-  return { disposition: disposition as SecondThoughtsDisposition, note };
+  return {
+    disposition: disposition as SecondThoughtsDisposition,
+    note,
+    acted: obj.acted === true,
+  };
 }
 
 /**
@@ -132,4 +147,58 @@ export function displayNote(verdict: SecondThoughtsVerdict): string {
   return verdict.disposition === 'conviction'
     ? 'On reflection, no misgivings about this one.'
     : 'Something felt off, but no detail was recorded.';
+}
+
+/**
+ * Label for the refinement button, in the model's own "let me ..."
+ * voice - short, because the note carries the specifics. Returns null
+ * for `conviction`, which gets no button (and whose panel does not
+ * auto-expand). The null return is the single gate for both "which
+ * dispositions get a button" and "which auto-expand" - the
+ * doubt-vs-conviction split.
+ */
+export function dispositionAction(
+  d: SecondThoughtsDisposition,
+): string | null {
+  switch (d) {
+    case 'conviction':
+      return null;
+    case 'hedge':
+      return 'Let me temper that';
+    case 'reframe':
+      return 'Let me re-read your question';
+    case 'correct':
+      return 'Let me double-check that';
+  }
+}
+
+/**
+ * Build the ephemeral `<think>` self-doubt block that seeds a
+ * refinement turn (Chat.svelte `refineFrom`). The model reads it as
+ * its own prior thought and takes another shot.
+ *
+ * The framing is ADVISORY, never imperative - the most load-bearing
+ * prompt constraint in the feature. The reviewer is a cheap,
+ * low-context model second-guessing a smart, full-context one; if the
+ * doubt read as "fix these errors" the strong model would dutifully
+ * "fix" things that were never broken. Phrased as a misgiving to
+ * weigh, with explicit permission to stand by the original, the
+ * full-context author stays free to overrule the low-context reflex.
+ */
+export function buildRefinementThink(note: string): string {
+  const misgiving = note.trim().length > 0
+    ? note.trim()
+    : 'Something about my answer feels off, though I cannot name it precisely.';
+  return [
+    '<think>',
+    "I'm having second thoughts about my previous answer. Let me think",
+    'through this misgiving and double-check that it is legitimate before',
+    'I change anything. If it does not hold up, I should restate my',
+    'position and stand by it plainly rather than inventing a change for',
+    'its own sake. Either way, the reply that follows is my current,',
+    'considered answer - where it differs from the one above, prefer it.',
+    '',
+    `Misgiving: ${misgiving}`,
+    '</think>',
+  ].join('\n');
 }

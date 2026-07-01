@@ -27,26 +27,36 @@ assistant feels about the answer:
   context you didn't state.
 - **Possible error** (red) - it suspects an actual factual mistake.
 
-Click the row to expand the assistant's own first-person note about
-what nagged at it. For **Stands by it** there's usually nothing to say;
-for the others, it's a sentence or two voicing the doubt.
+When the assistant has a genuine misgiving, the note expands on its own
+and offers a button in the assistant's own voice - **"Let me temper
+that"**, **"Let me re-read your question"**, or **"Let me
+double-check that"** depending on what's bothering it. For **Stands by
+it** there's no button and nothing to say.
 
-## The catch (for now)
+## Acting on a second thought
 
-Right now, second thoughts is **display-only**: it tells you what the
-assistant is second-guessing, but it doesn't yet go back and fix
-anything. A **Possible error** or **May have misread** verdict is a
-flag for *you* to weigh, not a correction the assistant has made. A
-later version will let a strong-enough doubt trigger the assistant to
-reconsider and correct itself in a follow-up - but that's not built
-yet, so for now the doubt just surfaces.
+The button is the assistant saying *"I might have goofed - if you
+agree, let's refine."* You decide. Click it and the assistant takes
+another pass at your question, this time chewing on its own doubt, and
+**adds a fresh answer below the original**. Nothing is deleted - you
+keep both, so you can compare and see whether the second attempt is
+actually better.
+
+The button only appears on the **most recent** answer (a refinement
+always adds to the end of the conversation), and only while nothing
+else is sending. Once you refine, the two answers stay linked: on later
+turns the assistant knows it reconsidered, and treats the refined
+answer as its current one rather than getting confused by having said
+two things.
 
 Because the reviewer is a fast, deliberately *low-context* model - it
 sees only the latest question and answer, not the whole conversation or
 everything Nak knows about you - it will sometimes raise a doubt about
 something that was actually justified by context it couldn't see. That
-is by design: it's a gut check, not a final ruling. Treat a flag as
-"worth a glance," not "the assistant was wrong."
+is exactly why *you* hold the button: a gut check isn't a final ruling.
+If a flag looks wrong, just don't click - it costs nothing. And even
+when you do click, the assistant is free to reconsider and decide its
+first answer was right after all.
 
 ## Where the data lives
 
