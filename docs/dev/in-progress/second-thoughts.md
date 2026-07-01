@@ -1,17 +1,18 @@
 # Second thoughts (in progress)
 
-> **Status: v1 shipped (the reflex, detached, per-message,
-> display-only). Phases 2-3 are still design only.** The reviewer
-> agent, the per-message slide-down, and the data model are built,
-> gated, and tested; a raised doubt displays but nothing yet acts on
-> it. When phase 2 (the correction round) lands, graduate the durable
-> parts (the reflex/deliberation model, the reviewer input contract,
-> the data model) into a permanent `docs/dev/second-thoughts.md` and
-> retire this file per the in-progress doc rules in `CLAUDE.md`. Below,
-> the v1 pieces described as "will" now exist (see **Build status**);
-> everything under phases 2-3 is still a proposal.
+> **Status: v1 + phase 2 shipped (the reflex + the user-triggered
+> refinement button). Phases 3-4 are still design only.** The reviewer,
+> the per-message slide-down, and now the auto-expand + disposition
+> button that runs an append refinement turn are built, gated, and
+> tested. What remains is the AUTOMATIC correction (phase 3) - and
+> whether to build it at all is gated on the phase-2 button's
+> click-through data. When that resolves, graduate the durable parts
+> (the reflex/deliberation model, the reviewer input contract, the data
+> model, the refinement flow) into a permanent
+> `docs/dev/second-thoughts.md` and retire this file per the
+> in-progress doc rules in `CLAUDE.md`.
 
-**Build status.** Landed (v1):
+**Build status.** Landed (v1 + phase 2):
 
 1. **Data model** - `messages.second_thoughts jsonb`
    (`supabase/schema.sql`), the versioned `{v, disposition, note,
@@ -37,10 +38,31 @@
    later UPDATE echo merges the verdict onto the already-hydrated row
    (instead of being dropped as a duplicate).
 
-Deferred (design only below): phase 2 (the correction round + the
-`<think>` re-injection + the transcript card) and phase 3 (the
-emergent samskara/bias feedback). The two phase-2 open decisions
-(correction bar, replay semantics) wait for real v1 verdicts.
+Phase 2 (user-triggered refinement), landed on top of v1:
+
+1. **Primitive** - `dispositionAction` (button label, null for
+   conviction) + `buildRefinementThink` (the permit-rejection `<think>`
+   builder) in `src/lib/ui/second-thoughts.ts` (vitest-covered).
+2. **UI** - `SecondThoughtsPanel` auto-expands an actionable doubt and
+   renders the disposition button; `AssistantBody` forwards `onRefine`;
+   `Chat.svelte` passes it ONLY for the latest assistant row
+   (`latestAssistantId`).
+3. **Refinement flow** - `Chat.svelte` `refineFrom` runs one extra
+   streaming turn via the existing `runExchange` path: it splices the
+   `<think>` at the wire tail (`buildHistoryOnWire`), anchors on the
+   original user message with NO `supersededIds` (so the new answer
+   APPENDS, commit_assistant_message keys on newer user rows only), and
+   skips priming.
+4. **Skip-priming plumbing** - `ChatLoopOptions.skipPriming` ->
+   `streamCtx.priming.skipPriming` (`venice.ts`) -> the `/stream` body
+   (`index.ts`) -> `PrimingInputs.skipPriming` -> an early-return at the
+   top of `runServerPriming`. Keeps a refinement from double-firing
+   samskara for the round and from burying its own `<think>` doubt.
+
+Deferred (design only below): phase 3 (AUTOMATIC correction - the
+critical-path relocation) and phase 4 (the emergent samskara/bias
+feedback). Whether to build phase 3 at all is gated on the phase-2
+click-through data.
 
 ## The idea
 
@@ -543,9 +565,21 @@ the composition and the slide-down wiring.
   injected doubt MUST permit rejection." The cheap reviewer is
   the blinder model; without an explicit license to reject, the
   smart model rubber-stamps the reviewer's low-context flags.
-- **v1 doubt is unresolved by design.** No correction round
-  exists yet, so a twinge just displays. Do not read a hanging
-  `correct` disposition in v1 as a broken feature.
+- **A doubt on an OLD assistant row has no button - that is
+  correct, not a missing feature.** The refinement appends at the
+  transcript tail, so it can only reconsider the LATEST answer;
+  `Chat.svelte` passes `onRefine` (and thus the auto-expand +
+  button) only for `latestAssistantId`. Older rows keep their
+  verdict for display but no action.
+- **A refinement writes a second samskara substrate row for the
+  same user message.** The chat-loop's end-of-turn substrate stub
+  pairs the anchor user message with the terminal assistant row;
+  a refinement anchors on the original user message, so its stub
+  is a second pairing for that message. Tolerated: substrate
+  `user_message_id` is a soft pointer the samskara design already
+  accepts going off-by-N (see the delete-from-here gotcha in
+  `chat.md`). Priming's samskara *fire* is NOT double-counted -
+  `skipPriming` suppresses it.
 - **Structured output is the takeover guard, not politeness.**
   If a future change relaxes the reviewer to free-text output,
   the fourth-voice-continuation failure mode comes back.

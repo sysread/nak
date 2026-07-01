@@ -133,3 +133,56 @@ export function displayNote(verdict: SecondThoughtsVerdict): string {
     ? 'On reflection, no misgivings about this one.'
     : 'Something felt off, but no detail was recorded.';
 }
+
+/**
+ * Label for the refinement button, in the model's own "let me ..."
+ * voice - short, because the note carries the specifics. Returns null
+ * for `conviction`, which gets no button (and whose panel does not
+ * auto-expand). The null return is the single gate for both "which
+ * dispositions get a button" and "which auto-expand" - the
+ * doubt-vs-conviction split.
+ */
+export function dispositionAction(
+  d: SecondThoughtsDisposition,
+): string | null {
+  switch (d) {
+    case 'conviction':
+      return null;
+    case 'hedge':
+      return 'Let me temper that';
+    case 'reframe':
+      return 'Let me re-read your question';
+    case 'correct':
+      return 'Let me double-check that';
+  }
+}
+
+/**
+ * Build the ephemeral `<think>` self-doubt block that seeds a
+ * refinement turn (Chat.svelte `refineFrom`). The model reads it as
+ * its own prior thought and takes another shot.
+ *
+ * The framing is ADVISORY, never imperative - the most load-bearing
+ * prompt constraint in the feature. The reviewer is a cheap,
+ * low-context model second-guessing a smart, full-context one; if the
+ * doubt read as "fix these errors" the strong model would dutifully
+ * "fix" things that were never broken. Phrased as a misgiving to
+ * weigh, with explicit permission to stand by the original, the
+ * full-context author stays free to overrule the low-context reflex.
+ */
+export function buildRefinementThink(note: string): string {
+  const misgiving = note.trim().length > 0
+    ? note.trim()
+    : 'Something about my answer feels off, though I cannot name it precisely.';
+  return [
+    '<think>',
+    "I'm having second thoughts about how I just answered. Let me",
+    'think through this misgiving and double-check that it is',
+    'legitimate before I change anything. If it does not hold up, I',
+    'should stand by what I said and say so plainly rather than',
+    'inventing a change for its own sake.',
+    '',
+    `Misgiving: ${misgiving}`,
+    '</think>',
+  ].join('\n');
+}

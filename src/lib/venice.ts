@@ -323,6 +323,11 @@ export interface ChatRequest {
       } | null;
       /** Gate for the context-recall pipeline. */
       contextRecallEnabled?: boolean;
+      /** Skip the whole priming stage (bias + <think> chain). Set by
+       *  the second-thoughts refinement turn - not a new user round, so
+       *  re-running priming would double-fire samskara and bury the
+       *  refinement's own <think> doubt. */
+      skipPriming?: boolean;
     };
   };
 }

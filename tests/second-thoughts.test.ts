@@ -7,7 +7,9 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
+  buildRefinementThink,
   coerceSecondThoughts,
+  dispositionAction,
   dispositionHeadline,
   dispositionIcon,
   dispositionLabel,
@@ -77,6 +79,46 @@ describe('disposition maps', () => {
     expect(dispositionTone('hedge')).toBe('unease');
     expect(dispositionTone('reframe')).toBe('unease');
     expect(dispositionTone('correct')).toBe('alert');
+  });
+});
+
+describe('dispositionAction', () => {
+  it('returns null for conviction (no button, no auto-expand)', () => {
+    expect(dispositionAction('conviction')).toBeNull();
+  });
+
+  it('returns a distinct label for each doubt disposition', () => {
+    const hedge = dispositionAction('hedge');
+    const reframe = dispositionAction('reframe');
+    const correct = dispositionAction('correct');
+    expect(hedge).toBeTruthy();
+    expect(reframe).toBeTruthy();
+    expect(correct).toBeTruthy();
+    // Distinct so the button feels personalized per disposition.
+    expect(new Set([hedge, reframe, correct]).size).toBe(3);
+  });
+});
+
+describe('buildRefinementThink', () => {
+  it('wraps the note in a think block with the misgiving', () => {
+    const out = buildRefinementThink('I may have the acreage wrong.');
+    expect(out.startsWith('<think>')).toBe(true);
+    expect(out.trimEnd().endsWith('</think>')).toBe(true);
+    expect(out).toContain('I may have the acreage wrong.');
+  });
+
+  it('permits rejection - never frames the doubt as a command', () => {
+    const out = buildRefinementThink('x').toLowerCase();
+    // The load-bearing safety valve: the strong model must be free to
+    // stand by its original answer.
+    expect(out).toContain('stand by');
+    expect(out).not.toContain('fix these');
+  });
+
+  it('supplies a fallback misgiving when the note is empty', () => {
+    const out = buildRefinementThink('   ');
+    expect(out).toContain('<think>');
+    expect(out.toLowerCase()).toContain('feels off');
   });
 });
 

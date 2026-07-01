@@ -946,6 +946,9 @@ interface StreamRequestBody {
     intuitionModelId?: string;
     intuitionMood?: { band: number; column: 'confident' | 'tentative' } | null;
     contextRecallEnabled?: boolean;
+    /** Skip the whole priming stage - set by the second-thoughts
+     *  refinement turn (see PrimingInputs.skipPriming in priming.ts). */
+    skipPriming?: boolean;
   };
 }
 

@@ -71,6 +71,13 @@
      */
     secondThoughts?: unknown;
     /**
+     * Fired when the user clicks the second-thoughts refinement button.
+     * Passed ONLY for the thread's latest assistant row (the actionable
+     * one); when omitted the panel shows no button and doesn't
+     * auto-expand. See Chat.svelte `refineFrom`.
+     */
+    onRefine?: () => void;
+    /**
      * Context window (tokens) of the thread's CURRENT model, for the
      * usage ring's denominator. Deliberately the current model's window,
      * not the window of whatever model historically answered this row:
@@ -134,6 +141,7 @@
     reasoningChars = null,
     citations = null,
     secondThoughts = null,
+    onRefine,
     contextWindow = null,
     usage = null,
     createdAt = null,
@@ -231,7 +239,7 @@
      answer, below the body (and any tool cards) but above the meta
      action bar. Renders only when the jsonb coerced to a real verdict. -->
 {#if secondThoughtsVerdict}
-  <SecondThoughtsPanel verdict={secondThoughtsVerdict} />
+  <SecondThoughtsPanel verdict={secondThoughtsVerdict} {onRefine} {disabled} />
 {/if}
 
 {#if content}

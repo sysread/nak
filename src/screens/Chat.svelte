@@ -209,6 +209,7 @@
     shouldRetainDisplaced,
   } from '$lib/ui/recall';
   import { formatMessageStamp } from '$lib/ui/message-timestamp';
+  import { buildRefinementThink, coerceSecondThoughts } from '$lib/ui/second-thoughts';
   import { isReasoningOnlyStall, isCutOffPartialText } from '$lib/ui/incomplete-turn';
   import { selectRecoveryBanner } from '$lib/ui/recovery-banner';
   import { headingFor, parseLastError } from '$lib/ui/last-error';
@@ -784,6 +785,20 @@
    */
   let pendingDeleteIds = $state<string[]>([]);
   const pendingDeleteSet = $derived(new Set(pendingDeleteIds));
+
+  // Id of the thread's latest live assistant row - the only one that
+  // gets a second-thoughts refinement button, since a refinement
+  // appends at the transcript tail and must reconsider the last answer,
+  // not a mid-thread one. Skips rows greyed for regenerate-from-here.
+  // Mirrors the find-last-assistant walk `findLastAssistantTimestamp`
+  // does for the datetime anchor.
+  const latestAssistantId = $derived.by((): string | null => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const m = messages[i];
+      if (m.role === 'assistant' && !pendingDeleteSet.has(m.id)) return m.id;
+    }
+    return null;
+  });
   /**
    * Hover-preview of the regenerate range. Populated while the user
    * hovers (or focuses) a message's Regenerate button; cleared on
@@ -3316,6 +3331,16 @@
      * only. Omitted on plain sends.
      */
     supersededIds?: string[];
+    /**
+     * Second-thoughts refinement: the ephemeral `<think>` self-doubt
+     * block to splice at the tail of the wire history (after the
+     * original answer), seeding the model to take another shot. Present
+     * ONLY on a refinement turn (Chat.svelte `refineFrom`); when set,
+     * server-side priming is skipped (this is not a new user round -
+     * see `skipPriming`). Never persisted, exactly like the priming
+     * `<think>` chain.
+     */
+    refinementThink?: string;
   }
 
   /**
@@ -3499,6 +3524,13 @@
             imageUrls: attachmentImageUrls,
           })
         ),
+      // Refinement turn: splice the ephemeral `<think>` self-doubt at
+      // the tail (after the original answer, which is the last message)
+      // so the model reads it as its own prior thought and takes
+      // another shot. Never persisted. Absent on every other exchange.
+      ...(ctx.refinementThink
+        ? [{ role: 'assistant' as const, content: ctx.refinementThink }]
+        : []),
     ];
 
     // Anchor for the `<datetime>` tag's since_last_response attribute.
@@ -3663,8 +3695,15 @@
           userLocation: ctx.sendUserLocation,
           displayTimezone: app.displayTimezone || null,
           lastAssistantTimestamp: findLastAssistantTimestamp(),
-          intuitionModelId: agentModel('intuition').id,
-          intuitionMood: intuitionMoodArg,
+          // A refinement turn skips the whole priming stage: it is the
+          // model reconsidering its own answer (not a new user round),
+          // it carries its own <think> doubt, and re-running priming
+          // would double-fire samskara for the round and bury that
+          // doubt. Omitting the intuition/recall inputs disables those
+          // pipelines; `skipPriming` also suppresses samskara + bias.
+          intuitionModelId: ctx.refinementThink ? undefined : agentModel('intuition').id,
+          intuitionMood: ctx.refinementThink ? null : intuitionMoodArg,
+          skipPriming: ctx.refinementThink ? true : undefined,
           currentTurnHasAttachments,
           // Topic-boundary recall rides the same trigger machinery as
           // intuition (cold-start, mid-turn title shift, mood shift,
@@ -3672,7 +3711,8 @@
           // chat-loop's parallel fan-out keeps the wall-clock cost
           // bounded by max(intuition, context-recall) and the cache
           // turns later turns into no-ops on the same trigger fire.
-          contextRecallEnabled: true,
+          // Off on a refinement turn (see the priming note above).
+          contextRecallEnabled: ctx.refinementThink ? false : true,
           handlers: {
             onTextUpdate: (t) => {
               pendingText = t;
@@ -4651,6 +4691,80 @@
       originalText: userMessage.content,
       userMessageId: userMessage.id,
       supersededIds: persistedRowIds(messages, rangeIds),
+    });
+  }
+
+  /**
+   * Second-thoughts refinement: run one extra turn seeded with the
+   * reviewer's doubt as a `<think>`, APPENDING a fresh answer below the
+   * original. Unlike regenerate, nothing is superseded/deleted - the
+   * original answer stays. Anchored to the original turn's user message
+   * so the appended assistant row commits without a cross-device
+   * conflict (commit_assistant_message keys on newer USER messages, not
+   * the existing assistant answer). Only wired for the thread's latest
+   * assistant row (see the render site), so the append always lands at
+   * the transcript tail. Priming is skipped for the turn (see
+   * `refinementThink` handling in runExchange).
+   */
+  async function refineFrom(assistantMessageId: string): Promise<void> {
+    if (activeSlot?.sending || !app.supabase || !app.venice) return;
+    const active = activeThreadId ? findThread(activeThreadId) ?? null : null;
+    if (!active || active.isDraft || active.archived) return;
+    const idx = messages.findIndex((m) => m.id === assistantMessageId);
+    if (idx === -1) return;
+    const row = messages[idx];
+    if (row.role !== 'assistant') return;
+    // The doubt to seed the refinement lives on the row's verdict. No
+    // verdict (or a conviction with no button) means nothing to act on.
+    const verdict = coerceSecondThoughts(row.second_thoughts);
+    if (!verdict) return;
+    // Walk back to the user message that opened this turn - the append
+    // anchor. Mirrors regenerateFrom's walk.
+    let userIdx = -1;
+    for (let i = idx; i >= 0; i -= 1) {
+      if (messages[i].role === 'user') {
+        userIdx = i;
+        break;
+      }
+    }
+    if (userIdx === -1) return;
+    const userMessage = messages[userIdx];
+
+    // Resolve send-time context the same way regenerateFrom does - the
+    // user's current toggles (model, reasoning, verbosity, system
+    // prompts) apply to the refinement.
+    const tier = resolveTier(active.model ?? null, defaultTier);
+    const tierSpec = effectiveTierSpec(tier, app.tierModels);
+    const modelId = tierSpec.id;
+    const { reasoningEffort: sendReasoning, disableThinking: sendDisableThinking } =
+      thinkingWireForTier(tierSpec, active.reasoning_effort ?? null, defaultReasoning);
+    const sendVerbosity: Verbosity = resolveVerbosity(
+      active.verbosity ?? null,
+      defaultVerbosity
+    );
+    const systemMessages: { role: 'system'; content: string }[] = app.systemPrompts
+      .filter((p) => activePromptIds.has(p.id) && p.body.trim().length > 0)
+      .map((p) => ({ role: 'system' as const, content: p.body }));
+    const currentUserId = session?.user.id ?? active.user_id;
+
+    // Pin to the bottom so the appended refinement streams into view.
+    followBottom = true;
+
+    await runExchange({
+      threadId: active.id,
+      currentUserId,
+      modelId,
+      tierSpec,
+      systemMessages,
+      sendReasoning,
+      sendDisableThinking,
+      sendVerbosity,
+      sendEmphasis: app.emphasisMarkdown,
+      sendUserName: app.userName,
+      sendUserLocation: app.userLocation,
+      originalText: userMessage.content,
+      userMessageId: userMessage.id,
+      refinementThink: buildRefinementThink(verdict.note),
     });
   }
 
@@ -7284,6 +7398,9 @@
                   reasoningChars={reasoningPillsById[block.message.id]?.chars ?? null}
                   citations={block.message.citations}
                   secondThoughts={block.message.second_thoughts}
+                  onRefine={block.message.id === latestAssistantId
+                    ? () => { void refineFrom(block.message.id); }
+                    : undefined}
                   contextWindow={currentTierSpec.contextWindow}
                   usage={block.message.usage}
                   createdAt={block.message.created_at}
