@@ -335,6 +335,67 @@ not left to the round cap. If a future need for multi-pass doubt
 appears, raise the cap deliberately with its own justification;
 do not let it default open.
 
+### Implementation shape (decision-independent parts)
+
+These fall out of the mechanism regardless of the two open
+decisions below, and are worth pinning now so the eventual build
+is mechanical.
+
+**The reviewer moves off the tail and onto the critical path.**
+v1 runs the reviewer detached in the `waitUntil` tail *after* the
+turn committed, because a display-only verdict has no reason to
+block. Phase 2 needs the verdict *before* it decides whether to
+end the turn, so the reviewer call relocates INTO
+`getStreamingResponse`'s flow, at the terminal-round break
+(`!roundHadToolCalls`, `getStreamingResponse.ts`), before the
+terminal commit. Concretely: the v1 `secondThoughtsOnTurnTail`
+call in the `terminalKind === 'completed'` tail is *removed*, and
+the same reviewer (reused, not duplicated) is invoked inline when
+the round loop is about to break terminal. On a non-escalating
+verdict the loop breaks and commits exactly as today; on an
+escalating verdict it converts the would-be-terminal round into a
+non-terminal one (persist original + card, splice `<think>`,
+continue). The verdict still lands on the row for the card, but it
+is now computed inline rather than in the tail.
+
+**This puts reviewer latency on the critical path, every turn.**
+That is the "before control returns to the user" behavior the
+feature wants, but it is a real cost: the pause after the reply
+finishes and before END now includes the reviewer round-trip
+(plus, on the correction branch, a `web_search` call and a full
+correction round). Surface it as a "second thoughts" throbber on
+the in-flight bubble (the intuition/recall/samskara checklist
+already models this pattern - add a **Reconsidering** row). Two
+mitigations that matter here and did not in v1: the reviewer
+should run with thinking disabled (it is a reflex, and it is now
+in the latency path - v1 skipped this because detached latency was
+free), and a reviewer timeout should fall back to "no escalation"
+so a slow reviewer degrades to shipping the original reply rather
+than hanging the turn (mirror the `SAMSKARA_PRIMING_TIMEOUT_MS`
+race in `priming.ts`).
+
+**The correction card is a persisted transcript element.** The
+"second thoughts" card between the original and the correction
+needs a durable representation. Preferred shape: a dedicated
+`role`-like discriminator carried in `messages` (a marker on the
+row, mirroring the `ask_user` sentinel pattern that already rides
+in `content` as a JSON envelope) rather than a new column, so the
+existing transcript-ordering and delete/regenerate machinery
+covers it for free. Its projection onto the wire via
+`toVeniceMessage` is exactly the replay-semantics decision below -
+do not implement the card's persistence until that is settled,
+because the two are the same question.
+
+**web_search grounding.** The correction branch is where a
+factual doubt gets checked. The reviewer (or the correction round)
+reaches the existing `web_search` path (`toolComplete` with
+`enable_web_search`, returning `{answer, citations}`) when the
+disposition is `correct`; the citations attach to the card and/or
+the correction row. This is the only place the `defer` disposition
+becomes meaningful (a doubt the model genuinely cannot resolve
+without asking), so `defer` enters the disposition set in phase 2,
+not before.
+
 ## Data model (v1)
 
 One jsonb column on `messages`, sibling to `usage` / `reasoning`
@@ -460,16 +521,37 @@ the composition and the slide-down wiring.
 ## Open decisions
 
 **Both remaining decisions are phase 2 and are deliberately
-deferred until v1 is built and observed** - the shape of a good
-answer here depends on watching real reflex verdicts, so guessing
-now would be guessing. Settled: fire policy (every completed turn,
-see v1 above).
+deferred until v1 is observed** - the shape of a good answer here
+depends on watching real reflex verdicts, so guessing now would be
+guessing. Settled: fire policy (every completed turn, see v1
+above). Each decision below names the v1 observation that tips it,
+so watching is directly wired to resolving them.
 
 - **Phase 2 correction bar.** Which dispositions escalate to a
   correction round? Straw proposal: `reframe` + `correct`
-  escalate, `hedge` stays display-only. Decide against real v1
-  verdicts, not in the abstract.
+  escalate, `hedge` stays display-only.
+  - *What to watch in v1:* the false-positive rate on `reframe` and
+    `correct`. If the reviewer flags contextually-good answers as
+    `reframe`/`correct` often (cries wolf), the bar tightens - maybe
+    only `correct`-with-a-specific-claim escalates, or escalation
+    additionally requires the correction round's own `<think>` to
+    NOT immediately reject (i.e. a two-key launch). If verdicts are
+    conservative and mostly right, the straw proposal stands. A high
+    `hedge` rate with sound notes argues for a lighter treatment than
+    a full round (inline caveat rather than a new turn).
 - **Phase 2 replay semantics.** On future turns, does the model
   replay the original + doubt + correction, the corrected answer
-  only, or original + correction without the doubt? Decide once
-  the transcript actually has correction rows to reason about.
+  only, or original + correction without the doubt? (This is the
+  same question as how the correction card projects through
+  `toVeniceMessage` - see Implementation shape.) Current lean:
+  *corrected-answer-only* (drop the wrong original + the doubt from
+  replay; keep them as visible cards for the human), because
+  replaying a known-wrong answer every later turn is exactly the
+  stale-prime the freshness fuses elsewhere exist to prevent.
+  - *What to watch in v1:* whether corrections, when they happen,
+    read as genuine improvements or as the reviewer having
+    second-guessed a right answer. If the former dominates,
+    corrected-only is safe. If corrections are frequently *worse*
+    than the original (the low-context reflex winning against the
+    full-context author), that is a signal the bar - not the replay
+    - is wrong, and replay-semantics is moot until the bar is fixed.
