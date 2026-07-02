@@ -30,16 +30,18 @@ Both signals are background; recall is the read-time consumer.
 
 ## Files
 
-- `src/lib/tools/conversation_recall.ts` — the top-level tool
-  definition.
-- `src/lib/agents/conversation_recall/agent.ts`, `prompt.ts` —
-  the agent that runs one recall pass.
+- `src/lib/tools/conversation_recall.schema.ts` — the main-chat
+  tool definition (schema only; the implementation lives
+  server-side).
 - `src/lib/tools/conversation_search.ts` — exact-ILIKE + vector
-  merge over the user's threads. The recall agent's only tool.
-  Returns hits labeled by `match_kind: 'exact' | 'semantic'`.
-- `src/lib/tools/conversation_recall_toolbox.ts` — the read-only
-  toolbox. Standalone file to break an import cycle (see
-  Gotchas).
+  merge over the user's threads. Returns hits labeled by
+  `match_kind: 'exact' | 'semantic'`.
+- `supabase/functions/venice/agents/conversation_recall.ts` —
+  the recall agent, running server-side inside the venice edge
+  function. Trims the thread to the last user turn, appends a
+  recall-instruction user turn, runs `runHeadlessAgent` with a
+  `conversation_search`-only toolbox, and returns a
+  `RecallNote`.
 - `supabase/schema.sql` (summaries + embeddings + search RPCs)
   — `threads.summary`, `threads.embedding`,
   `search_threads_by_embedding` RPC,
@@ -48,13 +50,9 @@ Both signals are background; recall is the read-time consumer.
 ## Entry points
 
 - **Main model invokes `conversation_recall`** — with or without
-  an optional `topic` hint. The tool calls
-  `ConversationRecallAgent.run({ threadId, topic })`, which
-  loads the current thread, trims the trailing
-  assistant-with-tool_calls row (same reason as memory recall —
-  see `./memory.md` Gotchas), appends the recall instruction as
-  a final user turn, and calls `runHeadlessToolLoop` with
-  `conversationRecallToolbox`.
+  an optional `topic` hint. The tool definition dispatches to
+  the server-side `conversation_recall` agent
+  (`supabase/functions/venice/agents/conversation_recall.ts`).
 - **Agent tool calls** — inside the headless loop, the agent
   calls `conversation_search` one or more times. Exact-title
   hits are ordered ahead of semantic (vector) hits; the current
@@ -80,8 +78,9 @@ Both signals are background; recall is the read-time consumer.
   wants an earlier turn from the same thread (e.g. after
   context compaction drops an older message).
 - **`RecallOutput`** — discriminated union:
-  `{kind:'none'} | {kind:'note', note:string}`. Parsed via
-  `parseRecallOutput` shared from `agents/recall/agent.ts`.
+  `{kind:'none'} | {kind:'note', note:string}`. Parsed
+  server-side in
+  `supabase/functions/venice/agents/conversation_recall.ts`.
 
 ## Contracts
 
@@ -91,16 +90,17 @@ Both signals are background; recall is the read-time consumer.
   (default 20, max 100). When the embedding fetch fails (no
   Venice key, offline), falls back to ILIKE-only results.
 - `ConversationRecallAgent.run(req): Promise<AgentRunResult<
-  ConversationRecallOutput>>` — `req.input` is
-  `{ threadId, topic? }`. The returned `note` is parsed from
-  the agent's final JSON; a parse failure collapses to
-  `{kind:'none'}` so a malformed model response doesn't fail
-  the main chat turn.
+  ConversationRecallOutput>>` — server-side, in
+  `supabase/functions/venice/agents/conversation_recall.ts`.
+  `req.input` is `{ threadId, topic? }`. The returned `note`
+  is parsed from the agent's final JSON; a parse failure
+  collapses to `{kind:'none'}` so a malformed model response
+  doesn't fail the main chat turn.
 - **JSON-mode discipline.** The agent passes
-  `responseFormat: { type: 'json_object' }` to
-  `runHeadlessToolLoop`. Providers only constrain the *text*
-  part of a response to the requested shape, so tool-call
-  rounds pass through unaffected.
+  `responseFormat: { type: 'json_object' }` to the headless
+  tool loop. Providers only constrain the *text* part of a
+  response to the requested shape, so tool-call rounds pass
+  through unaffected.
 
 ## Interactions with other features
 
@@ -123,9 +123,8 @@ Both signals are background; recall is the read-time consumer.
   `TOOLS` list but is excluded from every agent toolbox
   (reflection, memory recall, conversation recall itself);
   agents don't recurse into recall. The search tool
-  `conversation_search` is shared by chat and the recall agent:
-  it lives in the registry and is also exposed via
-  `conversationRecallToolbox`. See `./tools.md`.
+  `conversation_search` is shared by chat and the recall agent.
+  See `./tools.md`.
 - **Logging** - the conversation-recall agent emits
   progress breadcrumbs through
   `createLogger('conversation-recall-agent')`. Entries
@@ -134,24 +133,11 @@ Both signals are background; recall is the read-time consumer.
 
 ## Gotchas
 
-- **Circular import dodge.** `conversation_recall` lives in
-  `tools/index.ts` and triggers
-  `agents/conversation_recall/agent.ts`, which needs a
-  toolbox. If the agent imported the toolbox from
-  `tools/index.ts` the cycle would bite — agent loads before
-  `conversationRecall` is defined, toolbox is undefined at
-  class-init time. Fix: `conversation_recall_toolbox.ts` is
-  its own file, re-exported from `tools/index.ts` so consumers
-  reading `$lib/tools` still see it. The memory recall side
-  has the exact same structure — both dodge the cycle the
-  same way.
-- **Helpers imported directly from `recall/agent`.** The
-  conversation-recall agent reaches across to
-  `agents/recall/agent.ts` for `trimToLastUserTurn`,
-  `parseRecallOutput`, and `messageToVenice`. These are
-  small, stable, and hoisting them into a shared module would
-  be premature abstraction; the comment at the top of the
-  conversation-recall agent calls this out explicitly.
+- **Recall runs server-side.** The conversation-recall agent
+  (`supabase/functions/venice/agents/conversation_recall.ts`)
+  runs inside the venice edge function under the same
+  `EdgeRuntime.waitUntil` as the streaming loop. Survives a
+  browser disconnect mid-recall.
 - **Exact hits are ranked ahead of vector hits.** Not by
   score; by position. A model-written query that happens to
   include a thread's exact title should promote that thread

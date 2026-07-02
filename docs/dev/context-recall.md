@@ -258,9 +258,10 @@ for the cost and the unfalsifiable confabulation the rewrite removed.
 
 ### Calibration drive on the recall agents
 
-The three recall-agent prompts (`src/lib/agents/recall/prompt.ts`,
-`src/lib/agents/conversation_recall/prompt.ts`, and
-`src/lib/agents/wiki_recall/prompt.ts`) carry a two-channel contract
+The three recall-agent prompts
+(`supabase/functions/venice/agents/memory_recall.ts`,
+`supabase/functions/venice/agents/conversation_recall.ts`, and
+`supabase/functions/venice/agents/wiki_recall.ts`) carry a two-channel contract
 (FACTS/DETAILS plus CALIBRATION about what the user already knows).
 That contract governs the `*_recall` TOOLS, not the deterministic
 pipeline - the index has no calibration channel (titles + counts are
@@ -314,7 +315,7 @@ see `pickFresherContextRecallPayload`.
 
 ## The `context` umbrella tool
 
-`src/lib/tools/context.ts` is the main-chat surface for an on-demand
+`src/lib/tools/context.schema.ts` is the main-chat surface for an on-demand
 gather. The chat-loop's reflexive pipeline handles topic-boundary
 recall automatically; the umbrella tool is the explicit path for "I
 need broad context on the user right now, regardless of whether a
@@ -342,7 +343,7 @@ strong. Cheap conversational turns skip recall entirely.
 
 ## conversation_get
 
-`src/lib/tools/conversation_get.ts` is the conversation-layer
+`src/lib/tools/conversation_get.schema.ts` is the conversation-layer
 counterpart to `wiki_get`: a primary-key fetch of one prior thread by
 id, returning `{found, conversation: {id, title, summary, updated_at,
 archived, truncated, messages}}`. It is what makes the conversation

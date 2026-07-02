@@ -405,7 +405,7 @@ perspective (which functions exist, what each one owns, the
 | Auth session | `localStorage['sb-<project>-auth-token']` | Supabase JWT + refresh token; owned by supabase-js |
 | Persistent per-origin | `localStorage['nak:config:v2']` | Plaintext Supabase URL + publishable key (no Venice key) |
 | Persistent per-origin | `localStorage['nak:theme:v1']` | Cached theme (non-secret; used by the pre-paint boot script in `index.html`) |
-| Per-account, remote | Supabase tables | Threads, messages, memories, profile settings, worker leases, embeddings - the data plane |
+| Per-account, remote | Supabase tables | Threads, messages, memories, profile settings, embeddings - the data plane |
 | Per-account, remote | Supabase Storage buckets | User file bytes - chat attachments, Library documents, recipe photos. Tables hold only a `storage_path` pointer; see [File storage](./file-storage.md). |
 | Project-global, remote | `app_config` table | Venice API key (read server-side; browser never reads it) + optional model price caps (`max_input_usd_per_m` / `max_output_usd_per_m`, USD per 1M tokens, null = uncapped). Both written only by `mise run setup` (service role; no in-app editor, no write policy). The venice function reads the caps to reject a user-chosen chat model whose live Venice price exceeds them. |
 

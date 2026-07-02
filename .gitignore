@@ -81,6 +81,9 @@ yarn-error.log*
 !.claude/skills/**
 .mcp.json
 
+# opencode
+opencode.json
+
 # scratch docs
 .scratch/
 scratch/
