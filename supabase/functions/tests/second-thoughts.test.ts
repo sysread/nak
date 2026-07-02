@@ -113,3 +113,24 @@ Deno.test('serializeExchange renders tool calls and truncates a huge tool result
   // The 10k body must not survive whole in the transcript.
   assert(!out.includes(big));
 });
+
+Deno.test('serializeExchange surfaces a tool URL even when it sits past the truncation point', () => {
+  // The exact production failure: a web_search citation URL deep in a
+  // long result got cut off, so the reviewer wrongly flagged a
+  // legitimately-cited URL as fabricated. The URL must survive.
+  const url = 'https://github.com/anomalyco/opencode/issues/14888';
+  const longResult =
+    `{"answer":"...","citations":[${'{"snippet":"' + 'z'.repeat(9000) + '"},'}` +
+    `{"url":"${url}"}]}`;
+  const out = serializeExchange([
+    { id: '1', role: 'user', content: 'does it have an issue?', reasoning: null, tool_calls: null, tool_call_id: null, name: null },
+    // Assistant prose deliberately does NOT contain the URL, so the URL
+    // can only reach the transcript via the tool-result surfacing.
+    { id: '2', role: 'assistant', content: 'Yes, there is an open issue.', reasoning: null, tool_calls: null, tool_call_id: null, name: null },
+    { id: '3', role: 'tool', content: longResult, reasoning: null, tool_calls: null, tool_call_id: 'c1', name: 'web_search' },
+  ]);
+  assert(out.includes('...[truncated]'), 'the long body should truncate');
+  // Even though the URL is far past the 4k cutoff, it is surfaced.
+  assert(out.includes('source URLs this tool returned'));
+  assert(out.includes(url), 'the cited URL must survive truncation');
+});

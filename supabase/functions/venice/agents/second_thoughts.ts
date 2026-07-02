@@ -149,6 +149,34 @@ function renderToolCalls(raw: unknown[]): string {
   return lines.join('\n');
 }
 
+// Cap the surfaced-URL list so a pathological result can't itself
+// blow the transcript budget. 40 is well past any real web_search
+// citation count.
+const MAX_SURFACED_URLS = 40;
+
+/**
+ * Pull the distinct http(s) URLs out of arbitrary text, in order of
+ * appearance. Used to preserve a tool result's source URLs when its
+ * body is truncated, so the reviewer can always verify that a URL the
+ * assistant cited actually came back from a tool.
+ */
+function extractUrls(text: string): string[] {
+  const matches = text.match(/https?:\/\/[^\s"'\\<>)]+/g);
+  if (!matches) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of matches) {
+    // Trim trailing punctuation a URL rarely ends on but JSON/prose
+    // often abuts (comma, period, quote-ish).
+    const url = raw.replace(/[.,;]+$/, '');
+    if (seen.has(url)) continue;
+    seen.add(url);
+    out.push(url);
+    if (out.length >= MAX_SURFACED_URLS) break;
+  }
+  return out;
+}
+
 /**
  * Serialize the turn slice into a single fenced transcript. This is
  * fed as DATA inside one user message, not as role-tagged turns - the
@@ -174,10 +202,25 @@ export function serializeExchange(rows: readonly TurnRow[]): string {
       parts.push(seg.join('\n'));
     } else if (m.role === 'tool') {
       const label = m.name ? `tool result: ${m.name}` : 'tool result';
-      const body = m.content.length > MAX_TOOL_RESULT_CHARS
+      const truncated = m.content.length > MAX_TOOL_RESULT_CHARS;
+      const body = truncated
         ? `${m.content.slice(0, MAX_TOOL_RESULT_CHARS)}\n...[truncated]`
         : m.content;
-      parts.push(`[${label}]\n${body}`);
+      const seg = [`[${label}]`, body];
+      // Never let truncation hide the URLs a tool returned. A
+      // web_search result runs ~14k chars and its citation URLs sit
+      // deep in the list; cutting the body at 4k dropped them, and the
+      // reviewer then wrongly flagged a legitimately-cited URL as
+      // fabricated (the model DID cite it - the reviewer just couldn't
+      // see the source). Surface every URL from the FULL content so
+      // provenance survives regardless of length or position.
+      if (truncated) {
+        const urls = extractUrls(m.content);
+        if (urls.length > 0) {
+          seg.push(`(source URLs this tool returned: ${urls.join(', ')})`);
+        }
+      }
+      parts.push(seg.join('\n'));
     }
     // system rows never appear in a turn slice; ignore defensively.
   }
@@ -213,6 +256,13 @@ Because you are low-context by design, be humble about "reframe" and
 "correct": an inference that looks unsupported to you may be perfectly
 justified by context you cannot see. Raise real doubt, but do not
 manufacture it - when in doubt, choose "conviction".
+
+Provenance check before doubting a URL or citation: the assistant may
+cite sources it got from tools. Before flagging a URL as fabricated,
+look at the tool results - including any "source URLs this tool
+returned" lines. A URL that appears anywhere in a tool result WAS
+legitimately returned by a search or scrape; do NOT flag it. Only doubt
+a URL that appears in NONE of the tool results.
 
 Respond with ONLY a JSON object, no prose around it:
 {"disposition": "conviction" | "hedge" | "reframe" | "correct",

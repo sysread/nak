@@ -601,6 +601,32 @@ the composition and the slide-down wiring.
 
 ## Gotchas (anticipated - fill in as built)
 
+- **Truncating a tool result must never hide its source URLs.**
+  The slice caps each tool result at `MAX_TOOL_RESULT_CHARS` (4k),
+  but a `web_search` result runs ~14k chars with citation URLs deep
+  in the list. Cutting the body at 4k dropped a cited URL, and the
+  reviewer then wrongly flagged a legitimately-sourced URL as
+  fabricated (a `correct` doubt) - the model DID cite it; the
+  reviewer just couldn't see the source. `serializeExchange`
+  therefore appends every URL from the FULL content
+  (`extractUrls`) as a "source URLs this tool returned" line, and
+  the prompt tells the reviewer that a URL appearing in any tool
+  result is legitimately sourced. If you add another
+  provenance-bearing tool result shape, make sure its key evidence
+  survives truncation the same way.
+- **The verdict's live delivery has a re-fetch backstop.** The
+  reviewer writes the verdict a few seconds after the turn commits,
+  and it reaches the open tab only via the messages UPDATE realtime
+  echo - which Supabase realtime occasionally drops (a brief
+  disconnect, a backgrounded tab), leaving the verdict invisible
+  until a manual refresh. `Chat.svelte` `scheduleVerdictBackfill`
+  fires a single delayed `getMessage` (~8s) for each completed
+  terminal row (gated on `status==='complete'` in
+  `onAssistantPersisted`) and merges the verdict if the echo missed
+  it; it is a no-op when the echo already delivered it or the
+  reviewer wrote nothing. A pathologically slow reviewer (rate-limit
+  retries pushing past the delay) still falls back to the manual
+  refresh - acceptable, since the DB row is always correct.
 - **A pure reviewer twinging at a good contextual leap is
   correct behavior, not a bug.** The reflex is supposed to doubt
   the asthma paragraph; the deliberation is supposed to overrule
