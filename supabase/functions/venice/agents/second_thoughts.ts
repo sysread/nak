@@ -38,19 +38,21 @@ import { readVeniceKey } from '../tools/_venice_key.ts';
 import { completeJsonObject } from './_curation_helpers.ts';
 import type { VeniceWireMessage } from './_recall_helpers.ts';
 
-// The reviewer model. A fast, cheap tier by design - the reflex is a
-// gut twinge, not a second deliberation, so a small model is the
-// RIGHT tool, not a compromise (see the reflex/deliberation split in
-// the dev doc). Held directly here rather than in src/lib AGENT_MODELS
-// because this agent runs only server-side, like the curation / bias /
-// samskara agents. Repoint here to retune the reflex.
-//
-// v1 runs detached in the turn tail, so reviewer latency is invisible
-// to the user - which is why we do not bother disabling the model's
-// thinking pass here. Phase 2 moves the reviewer onto the critical
-// path (before control returns to the user) and will want to revisit
-// that.
-const SECOND_THOUGHTS_MODEL = 'xiaomi-mimo-v2-5';
+// The reviewer model. A fast, NON-REASONING instruct model - the same
+// class (and literally the same id) the web_search / summary / topics
+// agents use, chosen for the same reason: it faithfully honors the
+// `json_object` response format. This is the reflex, a gut twinge, so
+// the intuition layer's rationale applies verbatim - latency is what
+// matters and reasoning would be actively wrong here. A reasoning model
+// (an earlier pick, xiaomi-mimo-v2-5) leaks its chain-of-thought around
+// the JSON: on the linked project it produced a usable verdict on only
+// ~40% of turns and NEVER a doubt (a longer doubt note came back messy
+// and failed the parser, while the trivial empty-note conviction
+// survived). A non-reasoning model emits the object cleanly. Held
+// directly here rather than in src/lib AGENT_MODELS because this agent
+// runs only server-side, like the curation / bias / samskara agents.
+// Repoint here to retune the reflex.
+const SECOND_THOUGHTS_MODEL = 'mistral-small-3-2-24b-instruct';
 
 // The disposition spectrum. 'conviction' is the common "no second
 // thoughts" verdict; the reviewer is instructed to bias heavily
@@ -237,6 +239,38 @@ function stripJsonFence(raw: string): string {
 }
 
 /**
+ * Extract the first balanced `{...}` object from arbitrary text, or
+ * null if there isn't one. Belt-and-suspenders for a model that wraps
+ * the JSON in prose (or leaks chain-of-thought around it) despite the
+ * json_object format - a whole verdict must never be dropped over a
+ * stray leading token. Walks braces while respecting string literals
+ * and escapes so a `{` inside a note doesn't throw off the depth count.
+ */
+function extractJsonObject(text: string): string | null {
+  const start = text.indexOf('{');
+  if (start === -1) return null;
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  for (let i = start; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === '\\') esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === '{') depth += 1;
+    else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
+/**
  * Parse the model's raw output into a verdict, or null on any failure
  * (parse error, missing/invalid disposition). A null return means "no
  * verdict written" - the row keeps its null column and the card shows
@@ -246,11 +280,20 @@ export function parseVerdict(raw: string): {
   disposition: SecondThoughtsDisposition;
   note: string;
 } | null {
+  const stripped = stripJsonFence(raw);
   let parsed: unknown;
   try {
-    parsed = JSON.parse(stripJsonFence(raw));
+    parsed = JSON.parse(stripped);
   } catch {
-    return null;
+    // Fall back to pulling the first balanced object out of surrounding
+    // prose before giving up.
+    const extracted = extractJsonObject(stripped);
+    if (extracted === null) return null;
+    try {
+      parsed = JSON.parse(extracted);
+    } catch {
+      return null;
+    }
   }
   if (!parsed || typeof parsed !== 'object') return null;
   const obj = parsed as Record<string, unknown>;

@@ -43,6 +43,20 @@ Deno.test('parseVerdict trims and length-caps the note', () => {
   assert(v!.note.startsWith('x'));
 });
 
+Deno.test('parseVerdict extracts the object from surrounding prose (leaked reasoning)', () => {
+  // The failure mode that a reasoning model caused in production: it
+  // narrates before/after the JSON. The parser must still recover the
+  // verdict rather than silently dropping it.
+  const raw =
+    'Let me think about whether the answer holds up... it seems fine.\n' +
+    '{"disposition":"hedge","note":"I stated the {figure} more firmly than I should have"}\n' +
+    'That is my assessment.';
+  const v = parseVerdict(raw);
+  assertEquals(v?.disposition, 'hedge');
+  // The brace inside the note must not throw off the balanced scan.
+  assert(v!.note.includes('{figure}'));
+});
+
 Deno.test('parseVerdict rejects an unknown disposition', () => {
   assertEquals(parseVerdict('{"disposition":"panic","note":"x"}'), null);
 });
