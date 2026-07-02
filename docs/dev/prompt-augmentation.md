@@ -208,11 +208,6 @@ browser surface is unchanged:
   `lastAssistantTimestamp` anchors and never appear in the stored
   transcript - the model "remembers" them only within the turn that
   injected them.
-- **A model whose chat template rejects an assistant-role tail** breaks
-  the priming chain (it ends on an assistant `<think>` row). See the
-  `chatTemplateRequiresUserTail` flag in `src/lib/models` - it injects
-  an empty user row between the conversation and the metadata block for
-  those models.
 - **Freshness suppression is silent.** A payload past `STALE_FUSE_MS`
   is dropped, not injected - so "the model ignored its intuition" can
   mean "the intuition was stale and correctly suppressed," not a bug.

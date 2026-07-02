@@ -131,6 +131,9 @@ changing a contract that other features depend on.
 - [Help](./help.md) — in-app rendering of `docs/user/`.
 - [Logging](./logging.md) — the `createLogger` surface, the
   in-app log drawer, and the edge-to-main log relay.
+- [Edge function auth](./edge-function-auth.md) — the b-strict
+  service-role client model for the venice edge function, and
+  why streaming turns can't rely on the user's session JWT.
 
 ### Build & deploy
 
@@ -146,6 +149,10 @@ changing a contract that other features depend on.
   that we tried and reverted (or scoped out and haven't
   started). Lessons learned and the "correct way" captured so
   the next attempt doesn't redo the dead-end investigation.
+- [Plans](./plans/) — historical planning docs for shipped
+  features (samskara tiering, association minting, decay,
+  observability). Kept for the design rationale; the
+  implementation may have diverged since.
 
 ## Writing conventions
 

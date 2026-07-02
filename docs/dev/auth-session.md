@@ -105,54 +105,13 @@ fields on read.
   by the "Forget this device" affordance.
 - `activate(config): void` - the only transition into
   `unlocked`. Stores the config, news up `SupabaseService`
-  and `VeniceClient`, flips phase, fires background
-  workers.
+  and `VeniceClient`, flips phase, seeds the settings
+  defaults.
 - `resetForSignOut(): void` - clears in-memory profile +
   system-prompt state so the previous account's
   preferences don't leak into a subsequent
   sign-in-as-someone-else before `refreshSettings` re-seeds
   from the new account's Supabase settings.
-
-## Refresh-token rotation across workers
-
-Nak runs multiple Supabase clients per tab: the main-thread
-client plus one in each background worker (samskara, bias).
-Only the main-thread client refreshes. Each worker is
-built with `autoRefreshToken: false` and is pinned to the
-current session via `setSession(...)`; its manager
-subscribes to `app.supabase.onAuthChange` and forwards
-every rotated `{access_token, refresh_token}` pair to the
-worker as a `{type: 'session', ...}` message, which the
-worker re-pins via `setSession`.
-
-Why: with every client running its own `autoRefreshToken`,
-multiple refreshers race for the same refresh token.
-Supabase's "detect and revoke potentially compromised
-refresh tokens" feature flags any non-latest refresh
-token as replayed once the reuse interval (default 10s)
-elapses and revokes the **entire session family** - the
-user is then forced through the email/password prompt
-even though they haven't been idle long enough for the
-project's inactivity timeout to fire.
-Main-thread-as-sole-refresher eliminates the race.
-
-Bridge wiring:
-
-- Main -> worker: `SupabaseService.onAuthChange`
-  (`src/lib/supabase.ts`) -> `worker.postMessage({type:
-  'session', ...})`.
-- Worker: a module-scope `currentClient` handle set by
-  `runWorker` after the initial `setSession` succeeds and
-  cleared on teardown. The `session` message handler
-  calls `currentClient.auth.setSession(...)`. A stray
-  `session` message arriving before the initial
-  setSession completes (or after teardown) is a no-op -
-  the start message carried the same tokens, and the
-  post-teardown case has no client to write to.
-
-Every manager unsubscribes in `stop()` before terminating
-the worker so a late-arriving auth event can't post into
-a null worker reference.
 
 ## Interactions with other features
 
@@ -161,11 +120,6 @@ a null worker reference.
   plus a Supabase session.
 - **Settings** - the Security pane rotates the account
   password via `app.supabase.changeAuthPassword`.
-- **Background workers** - `activate()` fires every
-  manager's `start()` fire-and-forget. Sign-out does not
-  tear them down directly; the supabase-js sign-out
-  triggers `onAuthChange(null)` which lets the workers
-  notice the missing session and stop themselves.
 
 ## Gotchas
 

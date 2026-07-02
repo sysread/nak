@@ -292,7 +292,7 @@ A chat turn goes:
   `abandoned_on_*` answer envelope when the user reloads (mount-
   time scan in `selectThread`) or sends a new message instead of
   picking an option, keeping the wire shape valid in both cases.
-  See `src/lib/tools/ask_user.ts` for the sentinel/answer shapes
+  See `src/lib/tools/ask_user.schema.ts` for the sentinel/answer shapes
   and `src/lib/notifications.svelte.ts` for the foreground OS
   notification that fires when the suspension lands while the
   tab is backgrounded.
