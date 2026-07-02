@@ -6,6 +6,10 @@
  *
  * Extensions in play:
  *   - GFM (tables, autolinks, strikethrough) via marked's built-in flag.
+ *     GFM autolinks cover scheme'd URLs (`https://...`) and `www.`-
+ *     prefixed domains; a custom `bareUrl` extension below extends that
+ *     to schemeless, non-www domains (`example.com`) against a curated
+ *     TLD allowlist.
  *   - Fenced code blocks run through Prism for syntax highlighting when a
  *     language tag is present and supported.
  *   - `$inline$` / `$$block$$` math runs through KaTeX (HTML output).
@@ -259,6 +263,104 @@ marked.use({
           )
           .join(',');
         return `<sup class="citation-sup">${links}</sup>`;
+      },
+    },
+  ],
+});
+
+// "Good enough" bare-domain autolinking. marked's GFM extension already
+// autolinks scheme'd URLs (`https://example.com`) and `www.`-prefixed
+// domains (`www.example.com`) per the GFM autolink spec - but the spec
+// deliberately excludes bare domains with neither a scheme nor a `www.`
+// prefix (`example.com`, `koaa.com/relief/...`), since without one of
+// those signals there's no way to tell a domain-looking string from
+// prose ("Node.js", "e.g.", "Acme.Corp"). We accept that ambiguity for
+// a curated set of common TLDs so donation-link-style text (bare
+// `site.org/path` with no scheme) still renders as a clickable link.
+//
+// Registered as a separate marked.use() call (rather than folded into
+// the citation extensions array above) so the two independent concerns
+// stay easy to find/remove separately.
+const BARE_URL_TLDS = new Set([
+  'com', 'org', 'net', 'edu', 'gov', 'mil', 'int', 'io', 'co', 'ai', 'app',
+  'dev', 'info', 'biz', 'tv', 'me', 'us', 'uk', 'ca', 'de', 'fr', 'jp',
+  'cn', 'au', 'in', 'ru', 'br', 'eu', 'nl', 'es', 'it', 'se', 'no', 'dk',
+  'fi', 'ch', 'at', 'be', 'pl', 'ie', 'nz', 'mx', 'kr', 'cc', 'ly', 'gl',
+  'sh', 'to', 'fm', 'im', 'gg', 'je', 'xyz', 'online', 'site', 'tech',
+  'store', 'blog', 'cloud', 'digital', 'live', 'news', 'world', 'email',
+  'name', 'pro', 'mobi', 'asia', 'coop', 'museum', 'aero', 'jobs',
+  'travel', 'tel', 'cat', 'id', 'sg', 'hk', 'tw', 'za', 'ke', 'ng', 'ph',
+  'vn', 'th', 'my',
+]);
+
+// Matches `label.label.tld` optionally followed by a `/path?query#hash`
+// segment. The TLD-length cap (24) and character classes keep the regex
+// itself from runaway backtracking; the TLD allowlist is what actually
+// filters out prose like "Node.js" or "e.g." (whose final "TLD" isn't in
+// the set) once matched.
+const BARE_URL_RE =
+  /^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,24}(?:\/[^\s<>[\]{}"']*)?/;
+
+// GFM's own trailing-punctuation trimming rule (see the GFM spec's
+// "extended autolink" section): strip trailing `?!.,:*_~'"`, then strip
+// a trailing `)` only while it's unbalanced against `(` earlier in the
+// match - so "(see example.com/foo)" links "example.com/foo" without
+// swallowing the closing paren, but "example.com/wiki/Foo_(bar)" keeps
+// its balanced paren.
+const BARE_URL_TRAILING_RE = /[?!.,:*_~'"]+$/;
+function trimBareUrlTrailingPunctuation(url: string): string {
+  let trimmed = url.replace(BARE_URL_TRAILING_RE, '');
+  while (trimmed.endsWith(')')) {
+    const opens = (trimmed.match(/\(/g) ?? []).length;
+    const closes = (trimmed.match(/\)/g) ?? []).length;
+    if (closes <= opens) break;
+    trimmed = trimmed.slice(0, -1);
+  }
+  return trimmed;
+}
+
+interface BareUrlToken extends Tokens.Generic {
+  type: 'bareUrl';
+  raw: string;
+  url: string;
+}
+marked.use({
+  extensions: [
+    {
+      name: 'bareUrl',
+      level: 'inline',
+      start(src: string): number | undefined {
+        const m = /[a-zA-Z0-9][a-zA-Z0-9-]*\.[a-zA-Z]{2,24}/.exec(src);
+        return m ? m.index : undefined;
+      },
+      tokenizer(src: string, tokens: Tokens.Generic[]): Tokens.Generic | undefined {
+        const match = BARE_URL_RE.exec(src);
+        if (!match) return undefined;
+        // Guard against grabbing the domain half of an email address
+        // GFM's own autolink extension declined to match (malformed
+        // local part, etc.) - if the previous sibling token ends in
+        // `@`, `.`, or `/`, this match is a continuation of something
+        // else, not a standalone URL.
+        const prev = tokens[tokens.length - 1];
+        const prevRaw = prev && typeof prev.raw === 'string' ? prev.raw : '';
+        const prevChar = prevRaw.slice(-1);
+        if (prevChar === '@' || prevChar === '.' || prevChar === '/') return undefined;
+        const url = trimBareUrlTrailingPunctuation(match[0]);
+        const tld = /\.([a-zA-Z]{2,24})(?:\/|$)/.exec(url)?.[1]?.toLowerCase();
+        if (!tld || !BARE_URL_TLDS.has(tld)) return undefined;
+        const tok: BareUrlToken = { type: 'bareUrl', raw: url, url };
+        return tok;
+      },
+      renderer(token: Tokens.Generic): string {
+        const tok = token as BareUrlToken;
+        // Not escapeAttr() - that helper strips to bare
+        // alphanumerics for CSS-class-like tokens (lang names,
+        // citation numbers) and would mangle a URL's dots/slashes.
+        // The BARE_URL_RE charset already excludes quotes/angle
+        // brackets, so escapeHtml is sufficient here.
+        const label = escapeHtml(tok.url);
+        const href = escapeHtml(`https://${tok.url}`);
+        return `<a href="${href}" title="${label}">${label}</a>`;
       },
     },
   ],
