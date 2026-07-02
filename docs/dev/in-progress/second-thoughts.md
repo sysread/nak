@@ -601,6 +601,19 @@ the composition and the slide-down wiring.
 
 ## Gotchas (anticipated - fill in as built)
 
+- **Truncating a tool result must never hide its source URLs.**
+  The slice caps each tool result at `MAX_TOOL_RESULT_CHARS` (4k),
+  but a `web_search` result runs ~14k chars with citation URLs deep
+  in the list. Cutting the body at 4k dropped a cited URL, and the
+  reviewer then wrongly flagged a legitimately-sourced URL as
+  fabricated (a `correct` doubt) - the model DID cite it; the
+  reviewer just couldn't see the source. `serializeExchange`
+  therefore appends every URL from the FULL content
+  (`extractUrls`) as a "source URLs this tool returned" line, and
+  the prompt tells the reviewer that a URL appearing in any tool
+  result is legitimately sourced. If you add another
+  provenance-bearing tool result shape, make sure its key evidence
+  survives truncation the same way.
 - **A pure reviewer twinging at a good contextual leap is
   correct behavior, not a bug.** The reflex is supposed to doubt
   the asthma paragraph; the deliberation is supposed to overrule
