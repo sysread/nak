@@ -100,6 +100,55 @@ describe('renderMarkdown — happy paths', () => {
     expect(html).toMatch(/<a [^>]*href="https:\/\/example\.com"/);
   });
 
+  describe('bare-domain autolinking (no scheme, no www.)', () => {
+    it('links a schemeless domain, using the domain for href/text/title', () => {
+      const html = renderMarkdown('a "good enough" link to example.com.');
+      expect(html).toMatch(
+        /<a href="https:\/\/example\.com" title="example\.com"[^>]*>example\.com<\/a>/
+      );
+      // The trailing sentence period is not part of the link.
+      expect(html).toMatch(/example\.com<\/a>\./);
+    });
+
+    it('links a schemeless domain with a path', () => {
+      const html = renderMarkdown('donate at koaa.com/relief/southern-colorado');
+      expect(html).toMatch(
+        /<a href="https:\/\/koaa\.com\/relief\/southern-colorado"/
+      );
+    });
+
+    it('does not linkify prose that merely contains dots', () => {
+      const html = renderMarkdown(
+        'Node.js and e.g. and i.e. and Acme.Corp are not links. Version 3.14 either.'
+      );
+      expect(html).not.toMatch(/<a /);
+    });
+
+    it('trims trailing sentence punctuation but keeps balanced parens', () => {
+      const html = renderMarkdown(
+        '(see example.com/foo) and example.com/wiki/Foo_(bar), also example.com!'
+      );
+      expect(html).toMatch(/href="https:\/\/example\.com\/foo"/);
+      expect(html).toMatch(/href="https:\/\/example\.com\/wiki\/Foo_\(bar\)"/);
+      expect(html).toMatch(/href="https:\/\/example\.com"/);
+      // The trimmed punctuation stays outside the anchor as plain text.
+      expect(html).toMatch(/example\.com\/foo<\/a>\)/);
+      expect(html).toMatch(/example\.com<\/a>!/);
+    });
+
+    it('does not swallow the domain half of an email address', () => {
+      const html = renderMarkdown('contact me at foo@example.com please');
+      expect(html).toMatch(/<a href="mailto:foo@example\.com"/);
+      expect(html).not.toMatch(/href="https:\/\/example\.com"/);
+    });
+
+    it('opens bare-domain links in a new tab like other external links', () => {
+      const html = renderMarkdown('see example.com');
+      expect(html).toMatch(/rel="noopener noreferrer nofollow"/);
+      expect(html).toMatch(/target="_blank"/);
+    });
+  });
+
   describe('citation superscripts', () => {
     it('renders a single ^N^ as a sup with an in-page anchor', () => {
       // Venice marks sourced claims with `^N^` caret-wrapped runs; we
