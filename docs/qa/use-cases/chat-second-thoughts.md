@@ -15,12 +15,13 @@ render path through `AssistantBody.svelte`
 ## Preconditions
 
 - Local stack up (`mise run dev-start`), signed in as the dev user.
-- The reviewer model id is reachable on the configured Venice key. v1
-  pins `xiaomi-mimo-v2-5` in `second_thoughts.ts`; if that id is not
-  available in the test environment, temporarily repoint
-  `SECOND_THOUGHTS_MODEL` to any available fast chat model so the
-  reviewer can run (the feature is model-agnostic - it just needs a
-  model that honors `response_format: json_object`).
+- The reviewer model id is reachable on the configured Venice key. It
+  pins `mistral-small-3-2-24b-instruct` in `second_thoughts.ts` (a fast
+  non-reasoning model that reliably honors json_object); if that id is
+  not available in the test environment, temporarily repoint
+  `SECOND_THOUGHTS_MODEL` to any available fast NON-REASONING chat
+  model. Avoid a reasoning model - it leaks chain-of-thought around the
+  JSON and the parser drops the verdict (the bug this pin fixes).
 - To read a verdict directly:
 
   ```sql

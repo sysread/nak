@@ -26,7 +26,7 @@ describe('coerceSecondThoughts', () => {
       v: 1,
       disposition: 'correct',
       note: 'I think the acreage was a guess.',
-      model: 'xiaomi-mimo-v2-5',
+      model: 'mistral-small-3-2-24b-instruct',
       computed_at: 123,
     });
     expect(v).toEqual({

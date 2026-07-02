@@ -21,10 +21,12 @@
 2. **The reviewer agent** -
    `supabase/functions/venice/agents/second_thoughts.ts`
    (`secondThoughtsOnTurnTail`). Loads the turn slice, serializes it
-   as a fenced document, calls the fast model (`xiaomi-mimo-v2-5`) via
-   `completeJsonObject` (response_format json_object), parses +
-   validates the verdict, writes it onto the terminal row. Non-throwing
-   throughout. Pure surface (parser + serializer) pinned by
+   as a fenced document, calls a fast non-reasoning model
+   (`mistral-small-3-2-24b-instruct`) via `completeJsonObject`
+   (response_format json_object), parses + validates the verdict (with
+   a balanced-brace fallback that recovers the object from surrounding
+   prose), writes it onto the terminal row. Non-throwing throughout.
+   Pure surface (parser + serializer) pinned by
    `supabase/functions/tests/second-thoughts.test.ts`.
 3. **Tail wiring** - `getStreamingResponse.ts` calls it FIRST in the
    `terminalKind === 'completed'` waitUntil tail (ahead of
@@ -285,14 +287,24 @@ increasing hardness:
 
 ### Model
 
-Fast, cheap tier - the reflex is dumb and fast by design, which
-is what makes it a reflex and not a second deliberation. The
-planning conversation used `xiaomi-mimo-v2-5` as the candidate
-(1M context, ~$0.17/M in). Wire it through the same agent-model
-resolution the other fast agents use rather than hardcoding the
-id; confirm it honors `response_format` structured output on
-Venice at implementation time (see the venice-chat skill /
-structured-output notes).
+Fast, **non-reasoning** instruct tier - the reflex is dumb and fast by
+design, which is what makes it a reflex and not a second deliberation,
+so the intuition layer's rationale applies verbatim (latency is the
+only thing that matters; reasoning would be actively wrong). Pinned to
+`mistral-small-3-2-24b-instruct`, the same id the web_search / summary
+/ topics agents use, chosen because it reliably honors
+`response_format: json_object`.
+
+The original pick was `xiaomi-mimo-v2-5` (a reasoning model, 1M
+context, cheap). It failed in production: on the linked project it
+produced a usable verdict on only ~40% of turns and NEVER a doubt - a
+reasoning model leaks chain-of-thought around the JSON, so the trivial
+empty-note `conviction` survived the parser but any longer doubt note
+came back messy and was dropped. The lesson is baked into the model
+comment in `second_thoughts.ts`: match intuition's non-reasoning-fast
+choice, not a reasoning model. The parser also gained a balanced-brace
+fallback (`extractJsonObject`) so a stray wrapping token can never
+again silently drop a whole verdict.
 
 ### Output - the disposition spectrum
 
