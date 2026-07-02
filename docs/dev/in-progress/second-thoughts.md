@@ -614,6 +614,19 @@ the composition and the slide-down wiring.
   result is legitimately sourced. If you add another
   provenance-bearing tool result shape, make sure its key evidence
   survives truncation the same way.
+- **The verdict's live delivery has a re-fetch backstop.** The
+  reviewer writes the verdict a few seconds after the turn commits,
+  and it reaches the open tab only via the messages UPDATE realtime
+  echo - which Supabase realtime occasionally drops (a brief
+  disconnect, a backgrounded tab), leaving the verdict invisible
+  until a manual refresh. `Chat.svelte` `scheduleVerdictBackfill`
+  fires a single delayed `getMessage` (~8s) for each completed
+  terminal row (gated on `status==='complete'` in
+  `onAssistantPersisted`) and merges the verdict if the echo missed
+  it; it is a no-op when the echo already delivered it or the
+  reviewer wrote nothing. A pathologically slow reviewer (rate-limit
+  retries pushing past the delay) still falls back to the manual
+  refresh - acceptable, since the DB row is always correct.
 - **A pure reviewer twinging at a good contextual leap is
   correct behavior, not a bug.** The reflex is supposed to doubt
   the asthma paragraph; the deliberation is supposed to overrule

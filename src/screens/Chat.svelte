@@ -1637,6 +1637,39 @@
     messages = updated;
   }
 
+  // Backstop for the second-thoughts verdict's realtime delivery. The
+  // reviewer writes the verdict a few seconds AFTER a turn commits, and
+  // it reaches the live view only via the messages UPDATE echo - which
+  // Supabase realtime occasionally drops (a brief disconnect, a
+  // backgrounded tab), leaving the verdict absent until a manual
+  // refresh. A single delayed re-fetch of the just-completed row lands
+  // it anyway; a no-op when the echo already delivered it (appendMessage
+  // merges nothing) or when the reviewer wrote no verdict. Bounded set
+  // of pending timers so a thread teardown can cancel them.
+  const VERDICT_BACKFILL_DELAY_MS = 8000;
+  const verdictBackfillTimers = new Set<ReturnType<typeof setTimeout>>();
+
+  function scheduleVerdictBackfill(messageId: string, threadId: string): void {
+    const timer = setTimeout(() => {
+      verdictBackfillTimers.delete(timer);
+      if (!app.supabase || activeThreadId !== threadId) return;
+      // Already delivered by the realtime echo -> nothing to fetch.
+      const local = messages.find((m) => m.id === messageId);
+      if (local?.second_thoughts != null) return;
+      void app.supabase
+        .getMessage(messageId)
+        .then((fresh) => {
+          if (!fresh || activeThreadId !== threadId) return;
+          if (fresh.second_thoughts != null) appendMessage(fresh);
+        })
+        .catch(() => {
+          // Best-effort backstop; a failed fetch just leaves the manual
+          // refresh as the fallback it already was.
+        });
+    }, VERDICT_BACKFILL_DELAY_MS);
+    verdictBackfillTimers.add(timer);
+  }
+
   /**
    * Total time the slop-notice CRT-power-off animation runs before the
    * card unmounts. Must stay >= the `crt-power-off` keyframe duration in
@@ -2124,6 +2157,8 @@
       offCookbook();
       offWiki();
       offDocuments();
+      for (const t of verdictBackfillTimers) clearTimeout(t);
+      verdictBackfillTimers.clear();
     };
   });
 
@@ -3824,6 +3859,15 @@
                   if (elapsed !== null || chars !== null) {
                     reasoningPillsById[msg.id] = { elapsed, chars };
                   }
+                }
+                // Only a completed terminal answer gets a second-thoughts
+                // verdict (the reviewer runs on `terminalKind==='completed'`,
+                // never on tool-call rounds or aborted/error tails). Schedule
+                // the delayed re-fetch backstop for exactly that row so a
+                // dropped realtime echo doesn't leave the verdict invisible
+                // until a manual refresh.
+                if (msg.status === 'complete') {
+                  scheduleVerdictBackfill(msg.id, ctx.threadId);
                 }
               }
               slot.streamingText = '';
