@@ -107,12 +107,18 @@ producing the verdicts) is the **[hosted]** tail below.
 - **[hosted]** the live judge. Against a settled conversation (newest
   message on a prior calendar day, `>= 2` user rounds) that fired
   samskaras, the `nak-samskara-evaluation-sweep` tick claims it, judges
-  each fired prediction, and applies the verdicts. Watch the in-app
-  Logs drawer (source `samskara-eval`) for `judged thread <id>: N/M
+  the fired predictions in batches of 20 (one Venice completion per
+  batch), and applies the verdicts. Watch the in-app Logs drawer
+  (source `samskara-eval`) for `judged thread <id>: N/M
   predictions; held=.. contradicted=.. not-borne-out=.. not-engaged=..`,
   then verify the
-  `samskara_fires.verdict` writes and the moved `health`. This is the
-  Venice path; run it against the hosted project post-deploy.
+  `samskara_fires.verdict` writes and the moved `health`. On a thread
+  with > 20 distinct fired samskaras, N should approach M rather than
+  collapsing to 0 (the pre-batching truncation symptom). A run where
+  every batch fails logs `... judge batch(es) failed ... cursor not
+  advanced` and leaves `threads.last_evaluated_msg_id` unchanged, so
+  the thread retries next tick instead of being marked judged. This is
+  the Venice path; run it against the hosted project post-deploy.
 
 ## Cleanup
 

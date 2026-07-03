@@ -9,7 +9,7 @@
 import { assert, assertEquals } from 'jsr:@std/assert';
 import { __test } from '../venice/agents/samskara_evaluation.ts';
 
-const { parseVerdicts, buildVerdictRequest } = __test;
+const { parseVerdicts, buildVerdictRequest, chunkPredictions } = __test;
 
 Deno.test('parseVerdicts keeps well-formed enum verdicts', () => {
   const m = parseVerdicts(
@@ -54,9 +54,35 @@ Deno.test('buildVerdictRequest names the four verdicts, the tags, and the JSON c
   assert(req.includes('p1:') && req.includes('p2:'), 'missing prediction tags');
   assert(req.includes('in situations like X'), 'missing prediction text');
   assert(req.includes('JSON object'), 'missing JSON-object instruction');
-  // The skeptical default is load-bearing - pin that the prompt states it.
-  assert(req.includes('DEFAULT to "not-engaged"'), 'missing skeptical default');
   // The situation-first decision tree is the whole point of the split;
   // pin that the prompt asks the situation question before the outcome.
   assert(req.includes('did the SITUATION'), 'missing situation-first gate');
+});
+
+Deno.test('buildVerdictRequest scopes the skeptical default to the engagement step', () => {
+  // The two-step shape is load-bearing: an earlier single-step framing
+  // let "default to not-engaged" swallow not-borne-out entirely (zero
+  // soft-miss verdicts across 19k judged fires in prod), which pinned
+  // every health posterior at the population prior. Pin the three
+  // pieces that prevent a regression to that shape: the explicit
+  // steps, the default on the engagement question, and the rule that
+  // an engaged prediction may not fall back to not-engaged.
+  const req = buildVerdictRequest([{ tag: 'p1', text: 'x' }]);
+  assert(req.includes('STEP 1') && req.includes('STEP 2'), 'missing two-step structure');
+  assert(req.includes('DEFAULT to'), 'missing skeptical engagement default');
+  assert(
+    req.includes('do NOT fall back to "not-engaged"'),
+    'missing the no-fallback rule that keeps not-borne-out reachable',
+  );
+  assert(req.includes('Worked examples'), 'missing worked examples');
+});
+
+Deno.test('chunkPredictions splits into ordered batches with a short tail', () => {
+  const items = ['a', 'b', 'c', 'd', 'e'];
+  assertEquals(chunkPredictions(items, 2), [['a', 'b'], ['c', 'd'], ['e']]);
+  // Exact multiple: no empty trailing batch.
+  assertEquals(chunkPredictions(items.slice(0, 4), 2), [['a', 'b'], ['c', 'd']]);
+  // A list inside one batch stays a single completion.
+  assertEquals(chunkPredictions(items, 20), [items]);
+  assertEquals(chunkPredictions([], 20), []);
 });
