@@ -394,6 +394,29 @@ orphans.**
    delete the whole declaration. Don't comment it out. Trust git
    for resurrection.
 
+## Venice sub-completions on reasoning models
+
+`max_completion_tokens` pays for the reasoning pass too, and
+thinking burn scales with the INPUT in context (a long
+transcript), not with the size of the JSON you asked for. A
+budget sized to the output shape dies with
+`finish_reason='length'` and empty or truncated content on
+exactly the largest inputs. This has bitten twice: the
+second-thoughts reviewer (fixed by switching to a non-reasoning
+model) and the samskara evaluation judge (fixed with an 8192
+budget plus `reasoningEffort: 'low'` for a ~400-token verdict
+map). When adding an agent sub-call:
+
+- Prefer a non-reasoning model when the task is classification
+  or extraction over evidence already in context.
+- If a reasoning model earns its keep, pin
+  `reasoningEffort: 'low'` and budget thousands of tokens of
+  headroom above the expected output size.
+- Check `finish_reason` (or fail closed on a parse failure)
+  rather than treating truncated output as a valid empty
+  result - `completeJsonObjectWithMeta` in
+  `venice/agents/_curation_helpers.ts` exists for this.
+
 ## User-facing documentation
 
 Two parallel doc trees:

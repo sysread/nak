@@ -140,3 +140,5 @@ or just let the next evaluation re-derive them.
 | 2026-06-11 | local | 5981c58 | pass | (retired decay) pre-lift baseline against the per-user `samskara_decay()` invoker: returned 6, per-row health 0.48 / 0.40 / 0.47, updated_at bumped. |
 | 2026-06-11 | local | b56436b | pass | (retired decay) post-lift: cron row `13,43 * * * *` -> `samskara_decay_sweep()`; manual sweep returned 6, byte-identical per-row health; ACL postgres + service_role only. |
 | --- | --- | --- | --- | relevance-gated model (this rewrite) below |
+| 2026-07-03 | hosted | a1c3424 | fail | [hosted] judge tail, post backlog-reset: batched judge returned zero verdicts on long-transcript threads (finish_reason=length at 2048 max_completion_tokens - reasoning burn scales w/ transcript, not verdict-map size); threads correctly retried then parked at the 3-attempt gate, cursor never falsely advanced. |
+| 2026-07-03 | hosted | 09a25f3 | pass | [hosted] judge tail, post budget fix (8192 + reasoning_effort low): first tick judged a long thread, ~479 fires verdicted in one pass, reset backlog draining ~1 thread/10min. not-borne-out still 0 at observation time - verdict-mix watch continues. |

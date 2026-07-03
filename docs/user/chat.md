@@ -353,8 +353,9 @@ stroke buttons under each assistant message. Click it to expand a
 panel anchored to that turn. The panel shows:
 
 - A header pill marking the cohort as **confirmed**,
-  **disconfirmed**, or **pending**, depending on what the reaction
-  classifier did with it on the following turn.
+  **disconfirmed**, or **pending**, depending on how the next-day
+  review judged the instincts that fired on this turn (pending means
+  the conversation hasn't settled and been judged yet).
 - The **substrate row** for the same round, lifted to the top of the
   panel with an accent stripe because it's Nak's after-the-
   fact summary of what actually happened on this turn ("user asked

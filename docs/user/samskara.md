@@ -68,8 +68,10 @@ invisible:
   raw age (shown alongside) is not itself a problem - the dot tracks the
   backlog of unincorporated instincts, not the clock.
 - **Activity** - how many instincts formed and fired recently, and how
-  often Nak learned from them. A low "reaction resolution" is expected -
-  only the turn right after an instinct fires can confirm it.
+  often Nak learned from them. A low resolution rate is expected -
+  fired instincts are judged in a batch the day after a conversation
+  settles, so recent fires are always still pending, and one-question
+  conversations are skipped on purpose (too little signal to judge).
 - **Corpus** - headline counts: total instincts by tier, how many are
   near-dead or have never fired, the raw-observation and pair-association
   totals behind them, and whether a new **tier-2 compound** is currently
