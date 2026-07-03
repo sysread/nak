@@ -50,12 +50,17 @@ const EVALUATION_MODEL = 'deepseek-v4-flash';
 // claim always finishes claim-lost and re-evaluates every cycle.
 const EVALUATION_CLAIM_TTL_SECONDS = 600;
 
-// JSON-mode output is a tiny id->verdict object, but the model is
-// reasoning-capable and may emit a CoT pass; the project-wide 2048
-// floor for agent sub-calls keeps finish_reason off 'length' for a
-// BATCH-SIZED verdict map. The budget is per batch, not per thread -
-// see EVALUATION_BATCH_SIZE.
-const EVALUATION_MAX_TOKENS = 2048;
+// Per-batch completion budget. max_completion_tokens covers the
+// REASONING pass too on reasoning models, and the judge's reasoning
+// burn scales with transcript length, not verdict-map size - on
+// long-transcript threads deepseek spends thousands of tokens
+// thinking before the first JSON byte, so a budget calibrated to the
+// tiny id->verdict map (2048) hits finish_reason='length' with zero
+// content on exactly the threads the batching exists to save. 8192
+// plus the 'low' reasoning-effort pin on the judge call keeps the
+// thinking bounded AND leaves room for it. The budget is per batch,
+// not per thread - see EVALUATION_BATCH_SIZE.
+const EVALUATION_MAX_TOKENS = 8192;
 
 // Predictions per judge completion. Long threads fire 40-90+ distinct
 // samskaras, and a single completion over that many predictions blows
@@ -364,11 +369,18 @@ async function evaluateClaimedThread(
     // cursor not advanced) rather than salvaging earlier batches - an
     // infra failure would fail every remaining batch anyway, and the
     // attempt-count gate bounds the retries.
+    // reasoningEffort 'low': the verdict task is per-prediction
+    // classification against evidence already in context, not
+    // derivation - and unbounded reasoning over a long transcript is
+    // what exhausts the completion budget before any JSON is emitted
+    // (see EVALUATION_MAX_TOKENS). Same lever the manual wiki agent
+    // uses for its structured completion.
     const { content, finishReason } = await completeJsonObjectWithMeta({
       apiKey,
       model: EVALUATION_MODEL,
       messages,
       maxTokens: EVALUATION_MAX_TOKENS,
+      reasoningEffort: 'low',
     });
     if (finishReason === 'length') {
       // Truncated mid-object: the verdict map is garbage even if it
