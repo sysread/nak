@@ -62,6 +62,12 @@ import { veniceFunctionError } from './supabase/venice-proxy';
 // Threads + topic-vocabulary domain slices, same delegation pattern.
 import * as threadsApi from './supabase/threads';
 import * as topicsApi from './supabase/topics';
+// Wiki-article and wiki-record domain slices, same delegation pattern.
+// Articles and records are separate sub-domains (separate UI surfaces);
+// records + their files + their links are one lifecycle and share a
+// module.
+import * as wikiApi from './supabase/wiki';
+import * as wikiRecordsApi from './supabase/wiki-records';
 
 // Domain row types live in ./supabase/types/*; this module keeps the
 // SupabaseService class plus the row coercers that read those types.
@@ -121,26 +127,9 @@ import {
   coerceAttachmentRow,
   coerceManualRunOutcome,
   coerceWikiArticle,
-  coerceWikiRecord,
-  coerceWikiRecordFile,
-  coerceWikiRecordLink,
   coerceWikiChangelogEntry,
   coerceDocument,
 } from './supabase/types';
-// Pure helper for the record-changelog message wording; mirrored
-// edge-side in venice/tools/_record_helpers.ts. The `import type` cycle
-// back to this file from ./wiki is erased at runtime, so this value
-// import is one-way.
-import {
-  buildRecordChangelogMessage,
-  buildRecordFileChangelogMessage,
-  buildRecordLinkChangelogMessage,
-} from './wiki';
-// sha256Hex lives in attachments.ts (recipe-photo dedup); reused here for
-// wiki-record-file dedup so the manual UI attach and the agent-side
-// record_file_attach key duplicates the same way. attachments.ts only
-// `import type`s from this module, so this value import has no runtime cycle.
-import { sha256Hex } from './attachments';
 import type { IntentRow } from './ui/intents-inspector';
 
 /**
@@ -182,10 +171,12 @@ import type { IntentRow } from './ui/intents-inspector';
  * Venice-proxy (./supabase/venice-proxy.ts), Threads incl. the
  * response claims (./supabase/threads.ts), Topic-vocabulary
  * (./supabase/topics.ts), Memories incl. confidence / search /
- * relations (./supabase/memories.ts), and Cookbook - recipes, versions,
- * photos (./supabase/cookbook.ts) - groups are extracted; the
- * remaining groups still carry their implementations inline and should
- * follow the same pattern when touched substantially.
+ * relations (./supabase/memories.ts), Cookbook - recipes, versions,
+ * photos (./supabase/cookbook.ts), Wiki articles (./supabase/wiki.ts),
+ * and Wiki records incl. files + links (./supabase/wiki-records.ts) -
+ * groups are extracted; the remaining groups still carry their
+ * implementations inline and should follow the same pattern when
+ * touched substantially.
  */
 export class SupabaseService {
   readonly client: SupabaseClient;
@@ -668,198 +659,73 @@ export class SupabaseService {
   // User wiki -------------------------------------------------------------
 
   // --- Wiki articles ---------------------------------------------------
+  //
+  // Extracted domain slice: the implementations and their doc comments
+  // live in ./supabase/wiki.ts (article listing / paging / fetch /
+  // favorites / CRUD) as plain functions taking the client. The dated
+  // records that sat under this banner moved with their files and
+  // links to ./supabase/wiki-records.ts - see the record banners
+  // below. These methods delegate one-for-one under the same names so
+  // call sites and grep targets stay stable.
 
-  /**
-   * Alphabetical listing of every wiki article for the current user.
-   * Sort key is `lower(title)` so case differences ("Apple" vs
-   * "apple") fold together. Limit defaults to 500, matching memories
-   * - a single user is unlikely to author thousands of
-   * encyclopedic articles, and pagination would complicate the
-   * client-side store filtering pattern.
-   */
   async listWikiArticles(opts: { limit?: number } = {}): Promise<WikiArticle[]> {
-    const { data, error } = await this.client
-      .from('wiki_articles')
-      .select('id, title, content, favorite, created_at, updated_at')
-      .order('title', { ascending: true })
-      .limit(opts.limit ?? 500);
-    if (error) throw new SupabaseError(error.message);
-    return (data ?? []).map((row) => coerceWikiArticle(row as Record<string, unknown>));
+    return wikiApi.listWikiArticles(this.client, opts);
   }
 
-  /**
-   * One offset page of the wiki browse list, alphabetical by title.
-   * Powers the sidebar's infinite scroll for the empty-query case; an
-   * active search still goes through `searchWikiArticles` (capped, not
-   * paged). `id` is the final tiebreak so articles colliding on title
-   * keep a stable cross-page order.
-   *
-   * Ordering is the DB collation's `title ASC`, so the sidebar renders
-   * server order verbatim rather than re-sorting with a JS
-   * `localeCompare` - a client re-sort over a partial page would
-   * disagree with the server's page boundaries and shuffle rows across
-   * the seam mid-scroll.
-   */
   async listWikiArticlesPage(opts: {
     offset: number;
     pageSize: number;
   }): Promise<OffsetPage<WikiArticle>> {
-    const { data, error } = await this.client
-      .from('wiki_articles')
-      .select('id, title, content, favorite, created_at, updated_at')
-      .order('title', { ascending: true })
-      .order('id', { ascending: true })
-      .range(opts.offset, opts.offset + opts.pageSize);
-    if (error) throw new SupabaseError(error.message);
-    const all = (data ?? []).map((row) =>
-      coerceWikiArticle(row as Record<string, unknown>)
-    );
-    const hasMore = all.length > opts.pageSize;
-    return { rows: hasMore ? all.slice(0, opts.pageSize) : all, hasMore };
+    return wikiApi.listWikiArticlesPage(this.client, opts);
   }
 
-  /**
-   * Fetch one article by id, or null if it isn't there. The wiki
-   * sidebar normally keeps the open article in `wikiStore.results`, so
-   * this exists for the cases the list doesn't cover: a deep link to an
-   * article that was never paged in, and the offline read-through
-   * (`getArticleCached`) that needs an authoritative single-row fetch.
-   * Clone of `getRecipe`.
-   */
   async getWikiArticleById(id: string): Promise<WikiArticle | null> {
-    const { data, error } = await this.client
-      .from('wiki_articles')
-      .select('id, title, content, favorite, created_at, updated_at')
-      .eq('id', id)
-      .maybeSingle();
-    if (error) throw new SupabaseError(error.message);
-    return data ? coerceWikiArticle(data as Record<string, unknown>) : null;
+    return wikiApi.getWikiArticleById(this.client, id);
   }
 
-  /**
-   * Every article flagged `favorite`. Fetched whole (the flagged subset
-   * is small and the partial index keeps it cheap) so the sidebar's
-   * Favorites bucket and the offline-sync reconcile both see the
-   * complete set rather than a page window. Twin of
-   * `listFavoriteRecipes`.
-   */
   async listFavoriteWikiArticles(): Promise<WikiArticle[]> {
-    const { data, error } = await this.client
-      .from('wiki_articles')
-      .select('id, title, content, favorite, created_at, updated_at')
-      .eq('favorite', true)
-      .order('title', { ascending: true });
-    if (error) throw new SupabaseError(error.message);
-    return (data ?? []).map((row) =>
-      coerceWikiArticle(row as Record<string, unknown>)
-    );
+    return wikiApi.listFavoriteWikiArticles(this.client);
   }
 
-  /**
-   * Toggle the `favorite` bookmark. Direct update, no version row and
-   * no `updated_at` bump - favorite is a personal bookmark, not article
-   * content. Mirrors `setRecipeFavorite`. The schema trigger
-   * `clear_wiki_embedding_on_change` only fires on title/content, so
-   * this leaves the embedding intact too.
-   */
   async setWikiArticleFavorite(id: string, favorite: boolean): Promise<void> {
-    const { error } = await this.client
-      .from('wiki_articles')
-      .update({ favorite })
-      .eq('id', id);
-    if (error) throw new SupabaseError(error.message);
+    return wikiApi.setWikiArticleFavorite(this.client, id, favorite);
   }
 
   async createWikiArticle(args: {
     title: string;
     content: string;
   }): Promise<WikiArticle> {
-    const session = await this.getSession();
-    if (!session) throw new SupabaseError('Not authenticated.');
-    const { data, error } = await this.client
-      .from('wiki_articles')
-      .insert({
-        user_id: session.user.id,
-        title: args.title,
-        content: args.content,
-      })
-      .select('id, title, content, favorite, created_at, updated_at')
-      .single();
-    if (error) throw new SupabaseError(error.message);
-    return coerceWikiArticle(data as Record<string, unknown>);
+    return wikiApi.createWikiArticle(this.client, args);
   }
 
-  /**
-   * Patch an article's title or content. RLS owner-scopes the update.
-   * The schema trigger `clear_wiki_embedding_on_change` nulls the
-   * embedding + claim columns when title or content changes so the
-   * worker re-embeds on its next poll.
-   */
   async updateWikiArticle(
     id: string,
     patch: { title?: string; content?: string }
   ): Promise<WikiArticle> {
-    const { data, error } = await this.client
-      .from('wiki_articles')
-      .update({ ...patch, updated_at: new Date().toISOString() })
-      .eq('id', id)
-      .select('id, title, content, favorite, created_at, updated_at')
-      .single();
-    if (error) throw new SupabaseError(error.message);
-    return coerceWikiArticle(data as Record<string, unknown>);
+    return wikiApi.updateWikiArticle(this.client, id, patch);
   }
 
   async deleteWikiArticle(id: string): Promise<void> {
-    const { error } = await this.client.from('wiki_articles').delete().eq('id', id);
-    if (error) throw new SupabaseError(error.message);
+    return wikiApi.deleteWikiArticle(this.client, id);
   }
 
   // Wiki records ---------------------------------------------------------
   //
-  // Dated entries linked to a wiki article. The article body owns the
-  // consolidated "current state"; records preserve the dated journey.
-  // RLS owner-scopes every query; the `wiki_records` table cascades on
-  // article delete. updated_at is stamped by a DB trigger, not here.
+  // Extracted domain slice: record CRUD, filtering, and the
+  // cross-article search live in ./supabase/wiki-records.ts, along
+  // with the private changelog-append helpers every record / file /
+  // link mutation runs through. These methods delegate one-for-one
+  // under the same names.
 
-  /**
-   * List records for one article, reverse-chronological by event date.
-   * Optional date-range (inclusive) and tag filters. Tags use JSONB
-   * containment (`tags @> [...]`) so a row must carry every requested
-   * tag (AND semantics) - the GIN index on `tags` backs this.
-   */
   async listWikiRecords(
     articleId: string,
     filters: { fromDate?: string; toDate?: string; tags?: string[]; limit?: number } = {}
   ): Promise<WikiRecord[]> {
-    let query = this.client
-      .from('wiki_records')
-      .select(
-        // wiki_record_files(count) embeds a per-record attachment count so a
-        // collapsed row can show an attachment badge without N+1 file fetches.
-        'id, article_id, date, content, tags, source_conversation_id, created_at, updated_at, wiki_record_files(count)'
-      )
-      .eq('article_id', articleId)
-      .order('date', { ascending: false })
-      .order('created_at', { ascending: false });
-    if (filters.fromDate) query = query.gte('date', filters.fromDate);
-    if (filters.toDate) query = query.lte('date', filters.toDate);
-    if (filters.tags && filters.tags.length > 0) query = query.contains('tags', filters.tags);
-    if (filters.limit) query = query.limit(filters.limit);
-    const { data, error } = await query;
-    if (error) throw new SupabaseError(error.message);
-    return (data ?? []).map((row) => coerceWikiRecord(row as Record<string, unknown>));
+    return wikiRecordsApi.listWikiRecords(this.client, articleId, filters);
   }
 
   async getWikiRecord(id: string): Promise<WikiRecord | null> {
-    const { data, error } = await this.client
-      .from('wiki_records')
-      .select(
-        'id, article_id, date, content, tags, source_conversation_id, created_at, updated_at'
-      )
-      .eq('id', id)
-      .maybeSingle();
-    if (error) throw new SupabaseError(error.message);
-    return data ? coerceWikiRecord(data as Record<string, unknown>) : null;
+    return wikiRecordsApi.getWikiRecord(this.client, id);
   }
 
   async createWikiRecord(args: {
@@ -869,271 +735,48 @@ export class SupabaseService {
     tags?: string[];
     sourceConversationId?: string | null;
   }): Promise<WikiRecord> {
-    const session = await this.getSession();
-    if (!session) throw new SupabaseError('Not authenticated.');
-    const { data, error } = await this.client
-      .from('wiki_records')
-      .insert({
-        user_id: session.user.id,
-        article_id: args.articleId,
-        date: args.date,
-        content: args.content,
-        tags: args.tags ?? [],
-        source_conversation_id: args.sourceConversationId ?? null,
-      })
-      .select(
-        'id, article_id, date, content, tags, source_conversation_id, created_at, updated_at'
-      )
-      .single();
-    if (error) throw new SupabaseError(error.message);
-    const record = coerceWikiRecord(data as Record<string, unknown>);
-    await this.appendRecordChangelog(
-      record.article_id,
-      'record_create',
-      record.date,
-      record.content
-    );
-    return record;
+    return wikiRecordsApi.createWikiRecord(this.client, args);
   }
 
-  /**
-   * Patch a record's date, content, or tags. RLS owner-scopes the
-   * update. The `clear_wiki_record_embedding_on_change` trigger nulls
-   * the embedding + claim columns when date or content changes so the
-   * worker re-embeds; `touch_wiki_record_updated_at` stamps updated_at.
-   */
   async updateWikiRecord(
     id: string,
     patch: { date?: string; content?: string; tags?: string[] }
   ): Promise<WikiRecord> {
-    const { data, error } = await this.client
-      .from('wiki_records')
-      .update(patch)
-      .eq('id', id)
-      .select(
-        'id, article_id, date, content, tags, source_conversation_id, created_at, updated_at'
-      )
-      .single();
-    if (error) throw new SupabaseError(error.message);
-    const record = coerceWikiRecord(data as Record<string, unknown>);
-    await this.appendRecordChangelog(
-      record.article_id,
-      'record_update',
-      record.date,
-      record.content
-    );
-    return record;
+    return wikiRecordsApi.updateWikiRecord(this.client, id, patch);
   }
 
   async deleteWikiRecord(id: string): Promise<void> {
-    // Read the record first so the changelog row (logged against the
-    // surviving parent article) can carry its date + content preview;
-    // the record itself is gone after the delete.
-    const doomed = await this.getWikiRecord(id);
-    const { error } = await this.client.from('wiki_records').delete().eq('id', id);
-    if (error) throw new SupabaseError(error.message);
-    if (doomed) {
-      await this.appendRecordChangelog(
-        doomed.article_id,
-        'record_delete',
-        doomed.date,
-        doomed.content
-      );
-    }
+    return wikiRecordsApi.deleteWikiRecord(this.client, id);
   }
 
-  /**
-   * Append a wiki_changelog row for a record write, scoped to the parent
-   * article. Best-effort: a record write must not fail because its audit
-   * row didn't land (the record is the source of truth; the changelog is
-   * a convenience). title_at_change is the parent article's current
-   * title, fetched here so the changelog UI renders the row without a
-   * join even after the article is later deleted.
-   */
-  private async appendRecordChangelog(
-    articleId: string,
-    kind: 'record_create' | 'record_update' | 'record_delete',
-    date: string,
-    content?: string
-  ): Promise<void> {
-    await this.appendRecordChangelogMessage(
-      articleId,
-      kind,
-      buildRecordChangelogMessage(kind, date, content)
-    );
-  }
-
-  /**
-   * Lower-level changelog append that takes a pre-built message, so the
-   * file/link mutations (which reuse the record_update kind but need
-   * different wording than a content edit - "Attached image ...",
-   * "Linked to ...") can land a history row through the same path. Same
-   * best-effort contract: a failed audit insert never fails the caller's
-   * already-completed write.
-   */
-  private async appendRecordChangelogMessage(
-    articleId: string,
-    kind: 'record_create' | 'record_update' | 'record_delete',
-    message: string
-  ): Promise<void> {
-    try {
-      const { data } = await this.client
-        .from('wiki_articles')
-        .select('title')
-        .eq('id', articleId)
-        .maybeSingle();
-      const title =
-        data && typeof (data as { title?: unknown }).title === 'string'
-          ? (data as { title: string }).title
-          : '(record)';
-      await this.createWikiChangelogEntry({
-        article_id: articleId,
-        kind,
-        title_at_change: title,
-        message,
-      });
-    } catch {
-      // Best-effort - see the doc comment. Swallow so the record write
-      // the caller already completed still resolves successfully.
-    }
-  }
-
-  /**
-   * Semantic + substring search across ALL the user's records (every
-   * article). Mirrors `searchWikiArticles`: vector hits first, then
-   * ILIKE hits the vector path missed, deduped by id, capped at `limit`.
-   * Empty query short-circuits to a recent-first listing.
-   */
   async searchWikiRecords(opts: {
     query: string;
     queryEmbedding: number[] | null;
     limit?: number;
   }): Promise<WikiRecord[]> {
-    const query = opts.query.trim();
-    const limit = opts.limit ?? 20;
-    if (query.length === 0) {
-      const { data, error } = await this.client
-        .from('wiki_records')
-        .select(
-          'id, article_id, date, content, tags, source_conversation_id, created_at, updated_at'
-        )
-        .order('date', { ascending: false })
-        .limit(limit);
-      if (error) throw new SupabaseError(error.message);
-      return (data ?? []).map((row) => coerceWikiRecord(row as Record<string, unknown>));
-    }
-
-    const pattern = ilikeLogicTreePattern(query);
-    const ilikePromise = this.client
-      .from('wiki_records')
-      .select(
-        'id, article_id, date, content, tags, source_conversation_id, created_at, updated_at'
-      )
-      .ilike('content', pattern)
-      .order('date', { ascending: false })
-      .limit(limit);
-
-    const semanticPromise = opts.queryEmbedding
-      ? this.client.rpc('search_wiki_records_by_embedding', {
-          query_embedding: opts.queryEmbedding,
-          match_limit: limit,
-        })
-      : Promise.resolve({ data: [] as unknown[], error: null });
-
-    const [ilikeRes, semRes] = await Promise.all([ilikePromise, semanticPromise]);
-    if (ilikeRes.error) throw new SupabaseError(ilikeRes.error.message);
-    const ilikeRows = (ilikeRes.data ?? []).map((row) =>
-      coerceWikiRecord(row as Record<string, unknown>)
-    );
-    const semanticRows =
-      semRes.error !== null
-        ? []
-        : ((semRes.data ?? []) as unknown[]).map((row) =>
-            coerceWikiRecord(row as Record<string, unknown>)
-          );
-
-    const out: WikiRecord[] = [];
-    const seen = new Set<string>();
-    for (const r of semanticRows) {
-      if (seen.has(r.id)) continue;
-      seen.add(r.id);
-      out.push(r);
-      if (out.length >= limit) return out;
-    }
-    for (const r of ilikeRows) {
-      if (seen.has(r.id)) continue;
-      seen.add(r.id);
-      out.push(r);
-      if (out.length >= limit) return out;
-    }
-    return out;
+    return wikiRecordsApi.searchWikiRecords(this.client, opts);
   }
 
   // --- wiki record files -----------------------------------------------
+  //
+  // Extracted domain slice: implementations live in
+  // ./supabase/wiki-records.ts under the same banner.
 
   async listWikiRecordFiles(recordId: string): Promise<WikiRecordFile[]> {
-    const { data, error } = await this.client
-      .from('wiki_record_files')
-      .select(
-        'id, record_id, position, filename, mime_type, size_bytes, storage_path, extracted_text, created_at'
-      )
-      .eq('record_id', recordId)
-      .order('position', { ascending: true })
-      .order('created_at', { ascending: true });
-    if (error) throw new SupabaseError(error.message);
-    return (data ?? []).map((row) => coerceWikiRecordFile(row as Record<string, unknown>));
+    return wikiRecordsApi.listWikiRecordFiles(this.client, recordId);
   }
 
-  /**
-   * Short-lived signed URLs per file id, for image previews / download
-   * links. Skips rows with no `storage_path` (reclaimed). Batched into one
-   * Storage call; best-effort per the attachment twin above.
-   */
   async createWikiRecordFileSignedUrls(
     files: readonly Pick<WikiRecordFile, 'id' | 'storage_path'>[],
     expiresInSeconds = 3600
   ): Promise<Map<string, string>> {
-    const out = new Map<string, string>();
-    const live = files.filter(
-      (f): f is { id: string; storage_path: string } => typeof f.storage_path === 'string'
-    );
-    if (live.length === 0) return out;
-    const { data, error } = await this.client.storage
-      .from('wiki-record-files')
-      .createSignedUrls(
-        live.map((f) => f.storage_path),
-        expiresInSeconds
-      );
-    if (error) throw new SupabaseError(error.message);
-    const urlByPath = new Map<string, string>();
-    for (const entry of data ?? []) {
-      if (entry.signedUrl && typeof entry.path === 'string') {
-        urlByPath.set(entry.path, entry.signedUrl);
-      }
-    }
-    for (const f of live) {
-      const url = urlByPath.get(f.storage_path);
-      if (url) out.set(f.id, url);
-    }
-    return out;
+    return wikiRecordsApi.createWikiRecordFileSignedUrls(this.client, files, expiresInSeconds);
   }
 
   async downloadWikiRecordFileBlob(storagePath: string): Promise<Blob> {
-    const { data, error } = await this.client.storage
-      .from('wiki-record-files')
-      .download(storagePath);
-    if (error) throw new SupabaseError(error.message);
-    return data;
+    return wikiRecordsApi.downloadWikiRecordFileBlob(this.client, storagePath);
   }
 
-  /**
-   * Upload bytes to the persistent wiki-record-files bucket and insert the
-   * metadata row, then changelog the attach against the parent article.
-   * The id is minted client-side so the upload key and the row reference
-   * one path in a single pass (same as addAttachments). `articleId` +
-   * `recordDate` come from the caller's already-loaded record so the
-   * changelog row reads without an extra fetch.
-   */
   async uploadAndAttachWikiRecordFile(args: {
     recordId: string;
     articleId: string;
@@ -1145,233 +788,35 @@ export class SupabaseService {
     dataBase64: string;
     extractedText?: string | null;
   }): Promise<WikiRecordFile> {
-    const session = await this.getSession();
-    if (!session) throw new SupabaseError('Not authenticated.');
-    const userId = session.user.id;
-    const bytes = base64ToBytes(args.dataBase64);
-    // base64ToBytes allocates a fresh (never shared) ArrayBuffer, so the
-    // narrowing off ArrayBufferLike is safe; the cast just satisfies the DOM
-    // lib's ArrayBuffer-vs-SharedArrayBuffer split.
-    const contentHash = await sha256Hex(bytes.buffer as ArrayBuffer);
-
-    // Per-record content dedup, matching the agent-side record_file_attach.
-    // Re-attaching the identical file to a record is never wanted (it stacks
-    // a duplicate thumbnail), so probe by (record_id, content_hash) first and
-    // short-circuit to the existing row - no upload, no insert, no changelog.
-    const { data: dup, error: dupErr } = await this.client
-      .from('wiki_record_files')
-      .select(
-        'id, record_id, position, filename, mime_type, size_bytes, storage_path, extracted_text, created_at'
-      )
-      .eq('record_id', args.recordId)
-      .eq('content_hash', contentHash)
-      .limit(1)
-      .maybeSingle();
-    if (dupErr) throw new SupabaseError(dupErr.message);
-    if (dup) return coerceWikiRecordFile(dup as Record<string, unknown>);
-
-    const id = crypto.randomUUID();
-    const path = `${userId}/${id}/${args.filename}`;
-    const { error: upErr } = await this.client.storage
-      .from('wiki-record-files')
-      .upload(path, bytes, {
-        contentType: args.mimeType ?? undefined,
-        upsert: true,
-      });
-    if (upErr) throw new SupabaseError(upErr.message);
-    const { data, error } = await this.client
-      .from('wiki_record_files')
-      .insert({
-        id,
-        user_id: userId,
-        record_id: args.recordId,
-        position: args.position,
-        filename: args.filename,
-        mime_type: args.mimeType,
-        size_bytes: args.sizeBytes,
-        storage_path: path,
-        content_hash: contentHash,
-        extracted_text: args.extractedText ?? null,
-      })
-      .select(
-        'id, record_id, position, filename, mime_type, size_bytes, storage_path, extracted_text, created_at'
-      )
-      .single();
-    if (error) throw new SupabaseError(error.message);
-    const file = coerceWikiRecordFile(data as Record<string, unknown>);
-    await this.appendRecordChangelogMessage(
-      args.articleId,
-      'record_update',
-      buildRecordFileChangelogMessage(
-        'attach',
-        args.recordDate,
-        file.filename,
-        (file.mime_type ?? '').startsWith('image/')
-      )
-    );
-    return file;
+    return wikiRecordsApi.uploadAndAttachWikiRecordFile(this.client, args);
   }
 
-  /**
-   * Delete a record file: remove the bucket object (best-effort - the
-   * daily wiki-record-file-gc sweep reclaims a miss) then the row, and
-   * changelog the removal. Reads the file + its record up front so the
-   * changelog row can name the file even though both are gone afterward.
-   */
   async deleteWikiRecordFile(id: string): Promise<void> {
-    const { data: fileRow } = await this.client
-      .from('wiki_record_files')
-      .select('id, record_id, filename, mime_type, storage_path')
-      .eq('id', id)
-      .maybeSingle();
-    const file = fileRow ? coerceWikiRecordFile(fileRow as Record<string, unknown>) : null;
-    const record = file ? await this.getWikiRecord(file.record_id) : null;
-    if (file?.storage_path) {
-      // Best-effort: a failed object remove is reclaimed by the GC sweep.
-      await this.client.storage.from('wiki-record-files').remove([file.storage_path]);
-    }
-    const { error } = await this.client.from('wiki_record_files').delete().eq('id', id);
-    if (error) throw new SupabaseError(error.message);
-    if (file && record) {
-      await this.appendRecordChangelogMessage(
-        record.article_id,
-        'record_update',
-        buildRecordFileChangelogMessage(
-          'remove',
-          record.date,
-          file.filename,
-          (file.mime_type ?? '').startsWith('image/')
-        )
-      );
-    }
+    return wikiRecordsApi.deleteWikiRecordFile(this.client, id);
   }
 
   // --- wiki record links -----------------------------------------------
+  //
+  // Extracted domain slice: implementations live in
+  // ./supabase/wiki-records.ts under the same banner.
 
-  /**
-   * Every link touching `recordId`, projected from that record's point of
-   * view: outgoing edges (this record -> other) and incoming edges (other
-   * -> this record), each carrying the OTHER record's date + content for
-   * the row label. Two queries plus one batched fetch of the endpoints -
-   * avoids the two-FK-to-one-table PostgREST embedding ambiguity.
-   */
   async listWikiRecordLinks(recordId: string): Promise<WikiRecordLinkView[]> {
-    const [outRes, inRes] = await Promise.all([
-      this.client
-        .from('wiki_record_links')
-        .select('id, from_record_id, to_record_id, label, created_at')
-        .eq('from_record_id', recordId),
-      this.client
-        .from('wiki_record_links')
-        .select('id, from_record_id, to_record_id, label, created_at')
-        .eq('to_record_id', recordId),
-    ]);
-    if (outRes.error) throw new SupabaseError(outRes.error.message);
-    if (inRes.error) throw new SupabaseError(inRes.error.message);
-    const outgoing = (outRes.data ?? []).map((r) =>
-      coerceWikiRecordLink(r as Record<string, unknown>)
-    );
-    const incoming = (inRes.data ?? []).map((r) =>
-      coerceWikiRecordLink(r as Record<string, unknown>)
-    );
-    // The other endpoint of each edge.
-    const otherIds = new Set<string>();
-    for (const l of outgoing) otherIds.add(l.to_record_id);
-    for (const l of incoming) otherIds.add(l.from_record_id);
-    if (otherIds.size === 0) return [];
-    const { data: recRows, error: recErr } = await this.client
-      .from('wiki_records')
-      .select('id, article_id, date, content')
-      .in('id', Array.from(otherIds));
-    if (recErr) throw new SupabaseError(recErr.message);
-    const byId = new Map<
-      string,
-      { id: string; article_id: string; date: string; content: string }
-    >();
-    for (const r of recRows ?? []) {
-      const row = r as Record<string, unknown>;
-      byId.set(String(row.id), {
-        id: String(row.id),
-        article_id: String(row.article_id ?? ''),
-        date: typeof row.date === 'string' ? row.date : '',
-        content: typeof row.content === 'string' ? row.content : '',
-      });
-    }
-    const views: WikiRecordLinkView[] = [];
-    for (const l of outgoing) {
-      const other = byId.get(l.to_record_id);
-      if (other) views.push({ id: l.id, direction: 'outgoing', label: l.label, record: other });
-    }
-    for (const l of incoming) {
-      const other = byId.get(l.from_record_id);
-      if (other) views.push({ id: l.id, direction: 'incoming', label: l.label, record: other });
-    }
-    return views;
+    return wikiRecordsApi.listWikiRecordLinks(this.client, recordId);
   }
 
-  /**
-   * Create or relabel a directed edge between two records. The unique
-   * (from, to) constraint makes this an upsert on the pair - re-linking
-   * updates the label rather than duplicating the edge. Changelogs the
-   * link against the FROM record's article, naming the target record.
-   */
   async createWikiRecordLink(args: {
     fromRecordId: string;
     toRecordId: string;
     label?: string | null;
   }): Promise<WikiRecordLink> {
-    const session = await this.getSession();
-    if (!session) throw new SupabaseError('Not authenticated.');
-    const { data, error } = await this.client
-      .from('wiki_record_links')
-      .upsert(
-        {
-          user_id: session.user.id,
-          from_record_id: args.fromRecordId,
-          to_record_id: args.toRecordId,
-          label: args.label ?? null,
-        },
-        { onConflict: 'from_record_id,to_record_id' }
-      )
-      .select('id, from_record_id, to_record_id, label, created_at')
-      .single();
-    if (error) throw new SupabaseError(error.message);
-    const link = coerceWikiRecordLink(data as Record<string, unknown>);
-    const [fromRec, toRec] = await Promise.all([
-      this.getWikiRecord(args.fromRecordId),
-      this.getWikiRecord(args.toRecordId),
-    ]);
-    if (fromRec && toRec) {
-      await this.appendRecordChangelogMessage(
-        fromRec.article_id,
-        'record_update',
-        buildRecordLinkChangelogMessage('create', toRec.date, toRec.content, link.label)
-      );
-    }
-    return link;
+    return wikiRecordsApi.createWikiRecordLink(this.client, args);
   }
 
   async deleteWikiRecordLink(args: {
     fromRecordId: string;
     toRecordId: string;
   }): Promise<void> {
-    const [fromRec, toRec] = await Promise.all([
-      this.getWikiRecord(args.fromRecordId),
-      this.getWikiRecord(args.toRecordId),
-    ]);
-    const { error } = await this.client
-      .from('wiki_record_links')
-      .delete()
-      .eq('from_record_id', args.fromRecordId)
-      .eq('to_record_id', args.toRecordId);
-    if (error) throw new SupabaseError(error.message);
-    if (fromRec && toRec) {
-      await this.appendRecordChangelogMessage(
-        fromRec.article_id,
-        'record_update',
-        buildRecordLinkChangelogMessage('delete', toRec.date, toRec.content, null)
-      );
-    }
+    return wikiRecordsApi.deleteWikiRecordLink(this.client, args);
   }
 
   // Documents (Library) --------------------------------------------------
