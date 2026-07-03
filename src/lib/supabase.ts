@@ -128,7 +128,6 @@ import type {
 import {
   coerceAttachmentRow,
   coerceManualRunOutcome,
-  coerceWikiArticle,
   coerceDocument,
 } from './supabase/types';
 import type { IntentRow } from './ui/intents-inspector';
@@ -1044,10 +1043,10 @@ export class SupabaseService {
   // tables); the run/retry routes into the venice function, the
   // Skipped-panel read, and the pipeline reset live in
   // ./supabase/agent-runs.ts. These methods delegate one-for-one
-  // under the same names. searchWikiArticles stays inline below: it
-  // queries the wiki_articles table itself, so its home is the
-  // article slice (./supabase/wiki.ts) whenever that module is next
-  // touched, not either of these two.
+  // under the same names. searchWikiArticles delegates to the article
+  // slice (./supabase/wiki.ts) - it queries the wiki_articles table
+  // itself, so it lives with the article CRUD, not either of these
+  // two.
 
   async listWikiArticleSources(articleId: string): Promise<WikiArticleSource[]> {
     return wikiSourcesApi.listWikiArticleSources(this.client, articleId);
@@ -1086,66 +1085,12 @@ export class SupabaseService {
     return agentRunsApi.resetWikiData(this.client);
   }
 
-  /**
-   * Semantic + substring search over wiki articles. Vector hits first
-   * (RPC), then unembedded ILIKE hits, deduped by id. Empty `query`
-   * returns the alphabetical listing without embedding.
-   * `queryEmbedding` may be null - callers without Venice get
-   * ILIKE-only results.
-   */
   async searchWikiArticles(opts: {
     query: string;
     queryEmbedding: number[] | null;
     limit?: number;
   }): Promise<WikiArticle[]> {
-    const query = opts.query.trim();
-    const limit = opts.limit ?? 20;
-    if (query.length === 0) return this.listWikiArticles({ limit });
-
-    const pattern = ilikeLogicTreePattern(query);
-
-    const ilikePromise = this.client
-      .from('wiki_articles')
-      .select('id, title, content, favorite, created_at, updated_at')
-      .or(`title.ilike.${pattern},content.ilike.${pattern}`)
-      .order('title', { ascending: true })
-      .limit(limit);
-
-    const semanticPromise = opts.queryEmbedding
-      ? this.client.rpc('search_wiki_articles_by_embedding', {
-          query_embedding: opts.queryEmbedding,
-          match_limit: limit,
-        })
-      : Promise.resolve({ data: [] as unknown[], error: null });
-
-    const [ilikeRes, semRes] = await Promise.all([ilikePromise, semanticPromise]);
-    if (ilikeRes.error) throw new SupabaseError(ilikeRes.error.message);
-    const ilikeRows = (ilikeRes.data ?? []).map((row) =>
-      coerceWikiArticle(row as Record<string, unknown>)
-    );
-    const semanticRows =
-      semRes.error !== null
-        ? []
-        : ((semRes.data ?? []) as unknown[]).map((row) =>
-            coerceWikiArticle(row as Record<string, unknown>)
-          );
-
-    const out: WikiArticle[] = [];
-    const seen = new Set<string>();
-    // Semantic first - meaning matches outrank substring matches.
-    for (const a of semanticRows) {
-      if (seen.has(a.id)) continue;
-      seen.add(a.id);
-      out.push(a);
-      if (out.length >= limit) return out;
-    }
-    for (const a of ilikeRows) {
-      if (seen.has(a.id)) continue;
-      seen.add(a.id);
-      out.push(a);
-      if (out.length >= limit) return out;
-    }
-    return out;
+    return wikiApi.searchWikiArticles(this.client, opts);
   }
 
   // Wiki background pipeline ---------------------------------------------

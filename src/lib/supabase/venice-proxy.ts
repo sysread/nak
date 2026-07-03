@@ -14,8 +14,8 @@
  * here one-for-one under the same names; UI code calls
  * `app.supabase.<method>()` and should not import this module
  * directly. The one deliberate extra export is veniceFunctionError,
- * which the facade's wiki agent-run methods still use to translate
- * their own functions.invoke failures.
+ * which the agent-runs slice (./agent-runs.ts) uses to translate its
+ * own functions.invoke failures.
  *
  * The profiles.settings reads/writes that used to share a banner with
  * these methods live in ./settings.ts - settings CRUD and
@@ -52,9 +52,9 @@ const log = createLogger('supabase');
  * reads as rate_limit. Anything without a Response context (a relay or transport
  * failure) becomes a network error.
  *
- * Exported (not slice-private) because the facade's wiki agent-run
- * methods invoke other venice-function routes and normalize their
- * failures through the same translation.
+ * Exported (not slice-private) because the agent-runs slice invokes
+ * other venice-function routes and normalizes their failures through
+ * the same translation.
  */
 export async function veniceFunctionError(error: unknown): Promise<VeniceError> {
   const ctx = (error as { context?: unknown }).context;

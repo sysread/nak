@@ -1,12 +1,12 @@
 /**
  * Wiki-articles domain slice of the Supabase data layer: the
  * alphabetical listing and its offset-paged variant, the single-row
- * fetch, the favorites bucket and its toggle, and article CRUD.
+ * fetch, the favorites bucket and its toggle, article CRUD, and the
+ * semantic + substring article search.
  *
- * Article search (`searchWikiArticles`), the bibliography/See-Also
- * reads, the changelog, and the background agent-run routes are a
- * separate group still inline in the facade - they ride the wiki
- * *pipeline*, not the article table's CRUD surface. Dated records
+ * The bibliography/See-Also reads and the changelog live in the
+ * sibling ./wiki-sources.ts (article satellite tables); the
+ * background agent-run routes live in ./agent-runs.ts. Dated records
  * attached to an article live in the sibling ./wiki-records.ts.
  *
  * RLS on wiki_articles scopes every query to the signed-in user's
@@ -24,6 +24,7 @@
  */
 import type { SupabaseClient, Session } from '@supabase/supabase-js';
 import { SupabaseError } from './error';
+import { ilikeLogicTreePattern } from './query-utils';
 import type { WikiArticle, OffsetPage } from './types';
 import { coerceWikiArticle } from './types';
 
@@ -58,6 +59,71 @@ export async function listWikiArticles(
     .limit(opts.limit ?? 500);
   if (error) throw new SupabaseError(error.message);
   return (data ?? []).map((row) => coerceWikiArticle(row as Record<string, unknown>));
+}
+
+/**
+ * Semantic + substring search over wiki articles. Vector hits first
+ * (RPC), then unembedded ILIKE hits, deduped by id. Empty `query`
+ * returns the alphabetical listing without embedding.
+ * `queryEmbedding` may be null - callers without Venice get
+ * ILIKE-only results.
+ */
+export async function searchWikiArticles(
+  client: SupabaseClient,
+  opts: {
+    query: string;
+    queryEmbedding: number[] | null;
+    limit?: number;
+  }
+): Promise<WikiArticle[]> {
+  const query = opts.query.trim();
+  const limit = opts.limit ?? 20;
+  if (query.length === 0) return listWikiArticles(client, { limit });
+
+  const pattern = ilikeLogicTreePattern(query);
+
+  const ilikePromise = client
+    .from('wiki_articles')
+    .select('id, title, content, favorite, created_at, updated_at')
+    .or(`title.ilike.${pattern},content.ilike.${pattern}`)
+    .order('title', { ascending: true })
+    .limit(limit);
+
+  const semanticPromise = opts.queryEmbedding
+    ? client.rpc('search_wiki_articles_by_embedding', {
+        query_embedding: opts.queryEmbedding,
+        match_limit: limit,
+      })
+    : Promise.resolve({ data: [] as unknown[], error: null });
+
+  const [ilikeRes, semRes] = await Promise.all([ilikePromise, semanticPromise]);
+  if (ilikeRes.error) throw new SupabaseError(ilikeRes.error.message);
+  const ilikeRows = (ilikeRes.data ?? []).map((row) =>
+    coerceWikiArticle(row as Record<string, unknown>)
+  );
+  const semanticRows =
+    semRes.error !== null
+      ? []
+      : ((semRes.data ?? []) as unknown[]).map((row) =>
+          coerceWikiArticle(row as Record<string, unknown>)
+        );
+
+  const out: WikiArticle[] = [];
+  const seen = new Set<string>();
+  // Semantic first - meaning matches outrank substring matches.
+  for (const a of semanticRows) {
+    if (seen.has(a.id)) continue;
+    seen.add(a.id);
+    out.push(a);
+    if (out.length >= limit) return out;
+  }
+  for (const a of ilikeRows) {
+    if (seen.has(a.id)) continue;
+    seen.add(a.id);
+    out.push(a);
+    if (out.length >= limit) return out;
+  }
+  return out;
 }
 
 /**
