@@ -65,17 +65,19 @@ render path through `AssistantBody.svelte`
   from the reviewer (v1 is detached). A beat AFTER the text settles, a
   small **Second thoughts** row appears below the answer, typically
   **Stands by it** (calm/muted) for a clean factual answer. The verdict
-  appears without a manual reload - it arrives on the messages UPDATE
-  echo.
-- (2) Same timing. The verdict may be **Overconfident**, **May have
-  misread**, or **Possible error** (red) depending on the model's read;
-  any of the four dispositions is a valid pass as long as the row
-  renders and its color/label match (`correct` -> red, `hedge`/`reframe`
-  -> accent, `conviction` -> muted). The reviewer being low-context, an
-  occasional doubt on a fine answer is expected, not a bug.
-- (3) The row expands to a short first-person note (or a calm "no
-  misgivings" line for a `conviction` with an empty note). The chevron
-  rotates; the note is italic with a tone-colored left border.
+  reply commits and streams as normal. Then - and this is the key
+  change - a clean answer shows **NO panel at all**: conviction is
+  display-suppressed. Confirm via the SQL query that a `conviction`
+  verdict WAS written to the row (the reviewer ran; it just renders
+  nothing). A missing panel means "reviewed, no doubt", not "not
+  reviewed".
+- (2) A doubt turn DOES render a **Second thoughts** panel a beat after
+  the answer settles (via the messages UPDATE echo, no manual reload):
+  **Overconfident** / **May have misread** (accent) or **Possible
+  error** (red). Only the three doubt dispositions ever show a panel;
+  `conviction` never does.
+- (3) The doubt panel is already expanded and shows a short first-person
+  note (italic, tone-colored left border) plus the disposition button.
 - (4) After reload the verdict is STILL present (it is persisted on the
   row and `listMessages` selects it). This distinguishes it from the
   reasoning pills, which are in-memory only.
@@ -90,8 +92,8 @@ render path through `AssistantBody.svelte`
   new streaming turn that APPENDS a fresh answer BELOW the original -
   the original answer stays put, nothing greys or disappears. The new
   answer may revise OR explicitly stand by the original (the injected
-  doubt permits rejection). `conviction` verdicts show no button and
-  stay collapsed.
+  doubt permits rejection). `conviction` verdicts render no panel at
+  all, so there is nothing to click.
 - (8) Row order is `[user] -> [original answer + its panel] ->
   [refinement] -> [your follow-up + its answer]`; the refinement sorts
   after the original, not before it. The refined original's panel now

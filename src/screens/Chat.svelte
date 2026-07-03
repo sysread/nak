@@ -1641,7 +1641,11 @@
   // it anyway; a no-op when the echo already delivered it (appendMessage
   // merges nothing) or when the reviewer wrote no verdict. Bounded set
   // of pending timers so a thread teardown can cancel them.
-  const VERDICT_BACKFILL_DELAY_MS = 8000;
+  // Past the observed reviewer latency (avg ~5s, max ~12s in
+  // production) with margin, since this fires only when the realtime
+  // echo dropped - a rare path where a slightly longer wait costs
+  // nothing, and covering the slow tail matters more than being quick.
+  const VERDICT_BACKFILL_DELAY_MS = 20000;
   const verdictBackfillTimers = new Set<ReturnType<typeof setTimeout>>();
 
   function scheduleVerdictBackfill(messageId: string, threadId: string): void {
