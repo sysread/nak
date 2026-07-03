@@ -416,6 +416,10 @@ export function panelEmptyMessage(query: string): string {
  * `selectedInResults` is the routed id resolved against the store's
  * results; `hasRoutedSelection` is whether an id is routed at all -
  * the two differ exactly in the `selection-missing` case.
+ *
+ * Exported as the named return shape of `memoriesBodySurface` - no
+ * consumer imports it by name today; the screen compares against the
+ * string literals. Not dead code.
  */
 export type MemoriesBodySurface =
   | 'librarian-strip-only'

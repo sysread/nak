@@ -71,6 +71,9 @@ export function relativeHue(value: number, population: number[]): number {
  * USD and DIEM totals; {@link aggregateUsage} fans that into one bucket
  * per currency the model was billed in so a mixed USD+DIEM plan never
  * sums unlike units.
+ *
+ * Exported as the named return shape of `aggregateUsage` - consumers
+ * use the inferred type rather than importing the name. Not dead code.
  */
 export interface UsageBucket {
   /** Model display name (analytics `modelName`), shown in the row label. */
@@ -138,7 +141,10 @@ export function aggregateUsage(models: UsageModelBucket[]): UsageBucket[] {
   );
 }
 
-/** One row of the per-currency spend summary at the top of the pane. */
+/** One row of the per-currency spend summary at the top of the pane.
+ *  Exported as the named return shape of `aggregateTotalsByCurrency` -
+ *  consumers use the inferred type rather than importing the name. Not
+ *  dead code. */
 export interface CurrencyTotal {
   currency: UsageCurrency;
   amount: number;
