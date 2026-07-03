@@ -86,21 +86,33 @@ The full writeup lives in `./auth-session.md`.
 ## Data layer — SupabaseService
 
 `src/lib/supabase.ts` is the single class every UI and agent uses to
-hit the user's Supabase project. Scope covers:
+hit the user's Supabase project. Scope covers auth, threads,
+messages, memories, settings, cookbook, wiki, documents, samskara,
+and bias - the class preamble carries the full banner-grouped
+directory; grep a banner name to jump to its block.
 
-- Auth (`signIn`, `signUp`, `getSession`, `signOut`).
-- Threads (`listThreads`, `createThread`, `renameThread`,
-  `setThreadArchived`, realtime subscription).
-- Messages (`listMessages`, `insertAssistantMessage`,
-  `insertToolMessages`, etc.).
-- Memories (`searchMemories`, plus RPC wrappers used by the
-  `memory_*` tools).
-- Settings (`getSettings`, `updateSettings`, `updateSystemPrompts`) —
-  the `profiles.settings` JSONB blob.
+The file is large (~5.5k lines). Its size is not complexity - almost
+every method is a narrow wrapper over the generated Supabase client -
+but it is being reduced by domain-slice extraction:
 
-The file is large (~1300 lines). Everything is well-commented; its
-size is not complexity, just the number of narrow method wrappers
-over the generated Supabase client.
+- **Row types** live in `src/lib/supabase/types/<domain>.ts`,
+  re-exported through `$lib/supabase` so consumers keep a single
+  import surface.
+- **Query implementations** are moving into plain-function modules at
+  `src/lib/supabase/<domain>.ts`. Each function takes the shared
+  `SupabaseClient` as its first argument; the class keeps a one-line
+  delegating method under the unchanged name. Call sites never
+  change (`app.supabase.<method>()` throughout), and the slices are
+  unit-testable against a stubbed client without constructing
+  `SupabaseService`.
+- `SupabaseError` lives in `src/lib/supabase/error.ts`, shared by
+  the facade and the slices. It is internal to the data layer.
+
+Extracted so far: **samskara** (`src/lib/supabase/samskara.ts`).
+The remaining groups still carry their implementations inline;
+extract a group into its slice module when touching it
+substantially, following the samskara shape. UI code should not
+import slice modules directly - the facade is the API.
 
 Security posture: the browser connects with the **publishable key**. Every
 table has RLS enabled, and every policy is `auth.uid() = user_id`
