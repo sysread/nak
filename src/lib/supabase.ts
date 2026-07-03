@@ -44,9 +44,12 @@ import {
   ilikeLogicTreePattern,
   ilikeFilterPattern,
 } from './supabase/query-utils';
-// Samskara domain slice: the facade's samskara methods delegate to
-// these plain functions one-for-one under the same names (see the
-// class preamble for the slice pattern).
+// Memories domain slice: the facade's memory methods (both the CRUD +
+// changelog group and the confidence / search / relations group)
+// delegate to these plain functions one-for-one under the same names
+// (see the class preamble for the slice pattern).
+import * as memoriesApi from './supabase/memories';
+// Samskara domain slice, same delegation pattern.
 import * as samskaraApi from './supabase/samskara';
 // Settings + Venice-proxy domain slices, same delegation pattern.
 // veniceFunctionError is pulled in by name because the wiki agent-run
@@ -115,7 +118,6 @@ import type {
 } from './supabase/types';
 import {
   coerceAttachmentRow,
-  coerceMemoryChangelogEntry,
   coerceManualRunOutcome,
   coerceWikiArticle,
   coerceWikiRecord,
@@ -257,10 +259,11 @@ function splitPhotoInputs(photos: RecipePhotoInput[]): {
  * change; the slices are unit-testable against a stubbed client. The
  * Samskara (./supabase/samskara.ts), Settings (./supabase/settings.ts),
  * Venice-proxy (./supabase/venice-proxy.ts), Threads incl. the
- * response claims (./supabase/threads.ts), and Topic-vocabulary
- * (./supabase/topics.ts) groups are extracted; the remaining groups
- * still carry their implementations inline and should follow the same
- * pattern when touched substantially.
+ * response claims (./supabase/threads.ts), Topic-vocabulary
+ * (./supabase/topics.ts), and Memories incl. confidence / search /
+ * relations (./supabase/memories.ts) groups are extracted; the
+ * remaining groups still carry their implementations inline and should
+ * follow the same pattern when touched substantially.
  */
 export class SupabaseService {
   readonly client: SupabaseClient;
@@ -525,181 +528,61 @@ export class SupabaseService {
     return threadsApi.deleteMessages(this.client, messageIds);
   }
 
-  // memories -------------------------------------------------------------
-  //
-  // RLS on the memories table scopes every query to the signed-in user's
-  // own rows, so these methods don't need to filter by user_id on
-  // select/update/delete. Inserts do need to set user_id explicitly (RLS
-  // checks with_check against the row, and there's no default).
-
   // --- Memories --------------------------------------------------------
+  //
+  // Extracted domain slice: the implementations and their doc comments
+  // (including the RLS posture notes for the memories table) live in
+  // ./supabase/memories.ts (memory CRUD + changelog + paging, plus the
+  // confidence / embedding-search / relations group further down) as
+  // plain functions taking the client. These methods delegate
+  // one-for-one under the same names so call sites and grep targets
+  // stay stable.
 
-  /**
-   * Case-insensitive substring search over `label || data`. Empty query
-   * lists all memories (most-recent first). Results are capped at `limit`
-   * so a runaway LLM can't blow up context with a giant memory dump.
-   *
-   * `selectedTopics` narrows the result set to rows whose `topics`
-   * column overlaps the selection (or is empty, if the UI-only
-   * UNTAGGED_TOPIC_SENTINEL is included). Empty array means "no filter
-   * active" - the LLM-facing memory_search tool passes nothing here
-   * because the model has no topic-selection UI, so its calls keep the
-   * pre-filter behaviour exactly.
-   */
   async searchMemories(
     query: string,
     limit: number,
     selectedTopics: readonly string[] = []
   ): Promise<Memory[]> {
-    let q = this.client
-      .from('memories')
-      .select('id, label, data, confidence, topics, created_at, updated_at')
-      .order('updated_at', { ascending: false })
-      .limit(limit);
-    if (query && query.length > 0) {
-      const pattern = ilikeLogicTreePattern(query);
-      q = q.or(`label.ilike.${pattern},data.ilike.${pattern}`);
-    }
-    const topicsClause = topicsFilterClause(selectedTopics);
-    if (topicsClause) q = q.or(topicsClause);
-    const { data, error } = await q;
-    if (error) throw new SupabaseError(error.message);
-    return (data ?? []) as Memory[];
+    return memoriesApi.searchMemories(this.client, query, limit, selectedTopics);
   }
 
-  /**
-   * Partial update. Caller guarantees at least one of label/data is set;
-   * the tool-side code enforces that contract. We bump updated_at on
-   * every write so memory_search orders by freshness.
-   */
   async updateMemory(
     id: string,
     patch: { label?: string; data?: string }
   ): Promise<Memory> {
-    const { data: row, error } = await this.client
-      .from('memories')
-      .update({ ...patch, updated_at: new Date().toISOString() })
-      .eq('id', id)
-      .select('id, label, data, confidence, topics, created_at, updated_at')
-      .single();
-    if (error) throw new SupabaseError(error.message);
-    return row as Memory;
+    return memoriesApi.updateMemory(this.client, id, patch);
   }
 
   async deleteMemory(id: string): Promise<void> {
-    const { error } = await this.client.from('memories').delete().eq('id', id);
-    if (error) throw new SupabaseError(error.message);
+    return memoriesApi.deleteMemory(this.client, id);
   }
 
-  /**
-   * Fetch a single memory by id, or null when it doesn't exist (or is
-   * owned by another user - RLS filters those rows out, so a not-found
-   * and a not-owned are indistinguishable here, which is the intended
-   * privacy posture). Used by the changelog write paths that need a
-   * `label_at_change` snapshot before a destructive mutation: the
-   * delete tool (snapshot before the row is gone) and the consolidate
-   * tool (snapshot the loser's label for the merge message).
-   */
   async getMemoryById(id: string): Promise<Memory | null> {
-    const { data, error } = await this.client
-      .from('memories')
-      .select('id, label, data, confidence, topics, created_at, updated_at')
-      .eq('id', id)
-      .maybeSingle();
-    if (error) throw new SupabaseError(error.message);
-    return (data as Memory | null) ?? null;
+    return memoriesApi.getMemoryById(this.client, id);
   }
 
-  /**
-   * Append a memory-changelog row. Called by every content-affecting
-   * memory write path: the create/update/delete tools, the user's
-   * direct edits in Memories.svelte, and the librarian's consolidate.
-   * Throws on a failed insert so callers can decide whether to surface
-   * or swallow it - the tool/UI paths currently swallow (the mutation
-   * already landed; a missed changelog row is a smaller harm than a
-   * confusing post-success error).
-   *
-   * `memory_id` is null for hard deletes (the memory is already gone by
-   * the time this lands). For create/update/consolidate it points at
-   * the live memory; if that memory is later deleted the FK cascades to
-   * null but `label_at_change` keeps the row meaningful.
-   */
   async createMemoryChangelogEntry(args: {
     memory_id: string | null;
     kind: MemoryChangelogKind;
     label_at_change: string;
     message: string;
   }): Promise<void> {
-    const session = await this.getSession();
-    if (!session) throw new SupabaseError('Not authenticated.');
-    const label = args.label_at_change.trim();
-    const message = args.message.trim();
-    if (label.length === 0 || message.length === 0) return;
-    const { error } = await this.client.from('memory_changelog').insert({
-      user_id: session.user.id,
-      memory_id: args.memory_id,
-      kind: args.kind,
-      label_at_change: label,
-      message,
-    });
-    if (error) throw new SupabaseError(error.message);
+    return memoriesApi.createMemoryChangelogEntry(this.client, args);
   }
 
-  /**
-   * Paged listing of the memory changelog, newest first. `before` is the
-   * exclusive cursor in `created_at desc` order - pass the last entry's
-   * `created_at` from the prior page to fetch the next one. The
-   * (user_id, created_at desc) index makes this a range scan rather than
-   * a sort, so the panel can lazy-load deep history cheaply.
-   */
   async listMemoryChangelog(opts: {
     limit?: number;
     before?: string | null;
   } = {}): Promise<MemoryChangelogEntry[]> {
-    const limit = Math.max(1, Math.min(opts.limit ?? 50, 200));
-    let q = this.client
-      .from('memory_changelog')
-      .select('id, memory_id, kind, label_at_change, message, created_at')
-      .order('created_at', { ascending: false })
-      .limit(limit);
-    if (opts.before) q = q.lt('created_at', opts.before);
-    const { data, error } = await q;
-    if (error) throw new SupabaseError(error.message);
-    const out: MemoryChangelogEntry[] = [];
-    for (const row of (data ?? []) as Array<Record<string, unknown>>) {
-      const entry = coerceMemoryChangelogEntry(row);
-      if (entry) out.push(entry);
-    }
-    return out;
+    return memoriesApi.listMemoryChangelog(this.client, opts);
   }
 
-  /**
-   * One offset page of the memory browse list (most-recent first).
-   * Powers the sidebar's infinite scroll for the empty-query case;
-   * an active search still goes through `searchMemories` (capped, not
-   * paged) so relevance order stays intact. `id` is the final tiebreak
-   * so rows colliding on `updated_at` keep a stable cross-page order.
-   * `selectedTopics` is filtered server-side - a partial page must be
-   * narrowed before it's sliced.
-   */
   async listMemoriesPage(opts: {
     offset: number;
     pageSize: number;
     selectedTopics?: readonly string[];
   }): Promise<OffsetPage<Memory>> {
-    let q = this.client
-      .from('memories')
-      .select('id, label, data, confidence, topics, created_at, updated_at')
-      .order('updated_at', { ascending: false })
-      .order('id', { ascending: false });
-    const topicsClause = topicsFilterClause(opts.selectedTopics ?? []);
-    if (topicsClause) q = q.or(topicsClause);
-    q = q.range(opts.offset, opts.offset + opts.pageSize);
-    const { data, error } = await q;
-    if (error) throw new SupabaseError(error.message);
-    const rows = (data ?? []) as Memory[];
-    const hasMore = rows.length > opts.pageSize;
-    return { rows: hasMore ? rows.slice(0, opts.pageSize) : rows, hasMore };
+    return memoriesApi.listMemoriesPage(this.client, opts);
   }
 
   // recipes --------------------------------------------------------------
@@ -2775,167 +2658,62 @@ export class SupabaseService {
   }
 
   // --- Memory confidence, search & relations ---------------------------
+  //
+  // Extracted domain slice: the implementations and their doc comments
+  // live in ./supabase/memories.ts (under this group's banner, below
+  // the memory CRUD) as plain functions taking the client. These
+  // methods delegate one-for-one under the same names.
 
-  /**
-   * Chat-side reaffirm: +0.5 capped at 10.0. Gentler than the reflection
-   * agent's bump (+1.0) because it fires mid-turn on a single exchange
-   * rather than on settled evidence across a conversation. Returns the
-   * post-adjustment value so the tool result can echo it to the LLM.
-   */
   async reaffirmMemoryConfidence(id: string): Promise<number | null> {
-    const { data, error } = await this.client.rpc(
-      'reaffirm_memory_confidence',
-      { p_id: id }
-    );
-    if (error) throw new SupabaseError(error.message);
-    return typeof data === 'number' ? data : null;
+    return memoriesApi.reaffirmMemoryConfidence(this.client, id);
   }
 
-  /**
-   * Chat-side doubt: ×0.7 with no floor. Gentler than the reflection
-   * agent's decay (×0.5). Five doubts from 1.0 lands around 0.168
-   * ([shaky] tag territory) without crashing below the 0.05 search-hide
-   * floor in one hit.
-   */
   async doubtMemoryConfidence(id: string): Promise<number | null> {
-    const { data, error } = await this.client.rpc('doubt_memory_confidence', {
-      p_id: id,
-    });
-    if (error) throw new SupabaseError(error.message);
-    return typeof data === 'number' ? data : null;
+    return memoriesApi.doubtMemoryConfidence(this.client, id);
   }
 
-  /**
-   * Cosine-similarity search via the `search_memories_by_embedding` RPC.
-   * The RPC enforces `user_id = auth.uid()` in addition to RLS and hides
-   * the `embedding` column from the response — 2048 floats per row is a
-   * lot to ship back just to throw away. Confidence rides the row so
-   * consumers can format the qualitative tag without a second round-trip.
-   */
   async searchMemoriesByEmbedding(
     queryEmbedding: number[],
     limit: number
   ): Promise<Memory[]> {
-    const { data, error } = await this.client.rpc('search_memories_by_embedding', {
-      query_embedding: queryEmbedding,
-      match_limit: limit,
-    });
-    if (error) throw new SupabaseError(error.message);
-    return (data ?? []) as Memory[];
+    return memoriesApi.searchMemoriesByEmbedding(this.client, queryEmbedding, limit);
   }
 
-  /**
-   * Top-k memories most similar to a given memory, via the
-   * `search_memories_similar` RPC. The source row's own stored
-   * embedding is the query vector, so the ranking matches
-   * `searchMemoriesByEmbedding`; the source is excluded server-side so
-   * it never lists itself. Returns an empty array when the source
-   * hasn't been embedded yet (the worker hasn't caught up) - the caller
-   * shows an empty state. Each row carries its `similarity` match score
-   * (the value the RPC ranks on); the embedding column itself is never
-   * shipped.
-   */
   async searchSimilarMemories(
     memoryId: string,
     limit: number
   ): Promise<SimilarMemory[]> {
-    const { data, error } = await this.client.rpc('search_memories_similar', {
-      p_memory_id: memoryId,
-      match_limit: limit,
-    });
-    if (error) throw new SupabaseError(error.message);
-    return (data ?? []) as SimilarMemory[];
+    return memoriesApi.searchSimilarMemories(this.client, memoryId, limit);
   }
 
-  /**
-   * Insert a new edge in the memory-relations graph. The unique
-   * constraint on (user_id, from_memory_id, to_memory_id, kind) means a
-   * repeated call for the same edge raises; the tool-side handler maps
-   * that to a friendlier "already exists" payload. Self-loops are
-   * rejected at the tool boundary, not here.
-   */
   async createMemoryRelation(
     fromId: string,
     toId: string,
     kind: MemoryRelation['kind'],
     note: string | null
   ): Promise<{ id: string; kind: MemoryRelation['kind'] }> {
-    const session = await this.getSession();
-    if (!session) throw new SupabaseError('Not authenticated.');
-    const { data, error } = await this.client
-      .from('memory_relations')
-      .insert({
-        user_id: session.user.id,
-        from_memory_id: fromId,
-        to_memory_id: toId,
-        kind,
-        note,
-      })
-      .select('id, kind')
-      .single();
-    if (error) throw new SupabaseError(error.message);
-    return data as { id: string; kind: MemoryRelation['kind'] };
+    return memoriesApi.createMemoryRelation(this.client, fromId, toId, kind, note);
   }
 
-  /**
-   * Delete a single relation by id. RLS scopes the delete to the
-   * signed-in user's own rows; a wrong id (or another user's edge) is
-   * silently a no-op, matching the rest of the CRUD surface here.
-   */
   async deleteMemoryRelation(id: string): Promise<void> {
-    const { error } = await this.client
-      .from('memory_relations')
-      .delete()
-      .eq('id', id);
-    if (error) throw new SupabaseError(error.message);
+    return memoriesApi.deleteMemoryRelation(this.client, id);
   }
 
-  /**
-   * Outbound edges for a batch of memory ids, joined to the target
-   * memory's display fields. Used by opening-recall (bounded traversal),
-   * the memory_search tool (graph context alongside hits), and
-   * Memories.svelte (per-row edge panel). Returns an empty array if
-   * `ids` is empty so callers can skip a conditional.
-   */
   async listMemoryRelationsFor(ids: string[]): Promise<MemoryRelation[]> {
-    if (ids.length === 0) return [];
-    const { data, error } = await this.client.rpc('get_memory_relations', {
-      p_ids: ids,
-    });
-    if (error) throw new SupabaseError(error.message);
-    return (data ?? []) as MemoryRelation[];
+    return memoriesApi.listMemoryRelationsFor(this.client, ids);
   }
 
-  /**
-   * ILIKE fallback, scoped to rows the worker hasn't embedded yet. Used
-   * by `memory_search` to fill in results for just-created memories —
-   * without this, a memory the user wrote seconds ago would be invisible
-   * until the worker catches up.
-   */
   async searchUnembeddedMemoriesByText(
     query: string,
     limit: number,
     selectedTopics: readonly string[] = []
   ): Promise<Memory[]> {
-    if (!query || query.length === 0) return [];
-    const pattern = ilikeLogicTreePattern(query);
-    let q = this.client
-      .from('memories')
-      .select('id, label, data, confidence, topics, created_at, updated_at')
-      .is('embedding', null)
-      .or(`label.ilike.${pattern},data.ilike.${pattern}`)
-      .order('updated_at', { ascending: false })
-      .limit(limit);
-    // Server-side topic filter on the just-written rows. Vector hits
-    // are filtered client-side inside searchMemoriesSemantic (the RPC
-    // returns `topics` on each row), so the two halves of the merged
-    // result set agree on what "the filter is active" means without
-    // needing to refactor the embedding RPC to take topic args.
-    const topicsClause = topicsFilterClause(selectedTopics);
-    if (topicsClause) q = q.or(topicsClause);
-    const { data, error } = await q;
-    if (error) throw new SupabaseError(error.message);
-    return (data ?? []) as Memory[];
+    return memoriesApi.searchUnembeddedMemoriesByText(
+      this.client,
+      query,
+      limit,
+      selectedTopics
+    );
   }
 
   // --- Messages & attachments ------------------------------------------
