@@ -69,7 +69,10 @@ export const recipeSaveSchema = {
     'ingredient with a modifier, write the whole phrase as a single ' +
     'multi-word braced name: `@pre-minced garlic{1%tbsp}`, NEVER ' +
     '`@pre-minced @garlic{1%tbsp}` (which creates two separate ' +
-    'ingredient entries). For alternatives ("use X or Y"), only the ' +
+    'ingredient entries). Mark an OPTIONAL ingredient with `?` right ' +
+    'after the `@` (`@?cilantro{2%tbsp}`, bare `@?cilantro`) - it ' +
+    'renders with an "(optional)" tag in the ingredient list. For ' +
+    'alternatives ("use X or Y"), only the ' +
     'primary ingredient gets `@`; write the substitute as plain prose. ' +
     'change_message lands in the recipe history; it is optional here ' +
     'and defaults to "Initial version" since a save is always the ' +

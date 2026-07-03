@@ -2126,6 +2126,15 @@
     font-variant-numeric: tabular-nums;
   }
 
+  /* "(optional)" tag emitted by recipeToHtml for `@?ingredient`
+     references - muted and small so required items read first when
+     the eye scans the list. */
+  .cookbook-render :global(.cook-optional) {
+    color: var(--muted);
+    font-size: 0.85em;
+    font-style: italic;
+  }
+
   /* Instruction steps — replace the browser-default "1." marker with
      a circular accent-weak badge via CSS counters. The hanging indent
      keeps multi-line step text flowing under itself instead of

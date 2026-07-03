@@ -233,8 +233,8 @@ unaffected.
     insert-side orphans. See
     [`./file-storage.md`](./file-storage.md).
 - Parsed shape (`src/lib/cooklang.ts::Recipe`): `{ metadata, steps,
-  ingredients, cookware, timers }`. The DB stores raw source; the
-  parsed shape is re-derived at read time.
+  ingredients, cookware, timers, sections }`. The DB stores raw
+  source; the parsed shape is re-derived at read time.
 
 ## Contracts
 
@@ -521,6 +521,20 @@ keystrokes; the LLM tool path keeps using `listRecipes`.
   render uses declarations only; inline `@ingredient` references in
   instruction prose are cross-references, not new ingredients, so
   they don't double-count against the declared rows.
+- **`@?` marks an optional ingredient.** Not in the canonical spec
+  (cooklang/spec discussion #50 is still open), but it is the `?`
+  component modifier from the official cooklang-rs parser's
+  extensions, so it round-trips through other Cooklang tooling.
+  `Ingredient.optional` is a required boolean on the parsed shape;
+  the dedupe key includes it, so `@salt` and `@?salt` stay distinct
+  rows. All three renderers agree on presentation: the HTML list
+  appends a `.cook-optional` "(optional)" span, the plain-text and
+  markdown exports append " (optional)" to the bullet, and step
+  prose shows just the name. Ingredients only - cooklang-rs also
+  allows `#?cookware`, but nak's flat cookware aside has nothing to
+  hang optionality off. The `recipe_save` / `recipe_update` tool
+  descriptions teach the model the syntax; keep them in sync if the
+  rendering changes.
 - **Dash-only section reset.** A line whose non-whitespace content is
   only dashes (2+, e.g. `--`, `---`) clears the current `section`. Used
   to end a cookbook-style declaration block so the instructions below

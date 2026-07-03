@@ -19,25 +19,25 @@ import {
 describe('parseCooklang — ingredients', () => {
   it('parses an ingredient with qty and unit', () => {
     const r = parseCooklang('Add @flour{200%g} to the bowl.');
-    expect(r.ingredients).toEqual([{ name: 'flour', qty: '200', unit: 'g' }]);
+    expect(r.ingredients).toEqual([{ name: 'flour', qty: '200', unit: 'g', optional: false }]);
   });
 
   it('parses an ingredient with qty but no unit', () => {
     const r = parseCooklang('Crack @eggs{2} into a bowl.');
-    expect(r.ingredients).toEqual([{ name: 'eggs', qty: '2', unit: null }]);
+    expect(r.ingredients).toEqual([{ name: 'eggs', qty: '2', unit: null, optional: false }]);
   });
 
   it('parses bare ingredients without braces', () => {
     const r = parseCooklang('Season with @salt and @pepper.');
     expect(r.ingredients).toEqual([
-      { name: 'salt', qty: null, unit: null },
-      { name: 'pepper', qty: null, unit: null },
+      { name: 'salt', qty: null, unit: null, optional: false },
+      { name: 'pepper', qty: null, unit: null, optional: false },
     ]);
   });
 
   it('parses multi-word ingredient inside braces', () => {
     const r = parseCooklang('Drizzle with @olive oil{1%tbsp}.');
-    expect(r.ingredients).toEqual([{ name: 'olive oil', qty: '1', unit: 'tbsp' }]);
+    expect(r.ingredients).toEqual([{ name: 'olive oil', qty: '1', unit: 'tbsp', optional: false }]);
   });
 
   it('keeps a parenthetical note in the braced name and binds its quantity', () => {
@@ -45,14 +45,14 @@ describe('parseCooklang — ingredients', () => {
     // alternative failed, the bare alternative grabbed just "flour" with
     // no qty, and the orphaned `{200%g}` was misread as a phantom timer.
     const r = parseCooklang('Add @flour (all-purpose){200%g} to the bowl.');
-    expect(r.ingredients).toEqual([{ name: 'flour (all-purpose)', qty: '200', unit: 'g' }]);
+    expect(r.ingredients).toEqual([{ name: 'flour (all-purpose)', qty: '200', unit: 'g', optional: false }]);
     expect(r.timers).toEqual([]);
     expect(r.steps[0]?.text).toBe('Add flour (all-purpose) to the bowl.');
   });
 
   it('binds the quantity to a parenthetical name even with no unit', () => {
     const r = parseCooklang('Whisk @eggs (room temperature){2}.');
-    expect(r.ingredients).toEqual([{ name: 'eggs (room temperature)', qty: '2', unit: null }]);
+    expect(r.ingredients).toEqual([{ name: 'eggs (room temperature)', qty: '2', unit: null, optional: false }]);
     expect(r.timers).toEqual([]);
   });
 
@@ -62,8 +62,64 @@ describe('parseCooklang — ingredients', () => {
     );
     // First two merge (same name + qty + unit); third stays distinct.
     expect(r.ingredients).toHaveLength(2);
-    expect(r.ingredients[0]).toEqual({ name: 'flour', qty: '1', unit: 'cup' });
-    expect(r.ingredients[1]).toEqual({ name: 'flour', qty: '2', unit: 'tbsp' });
+    expect(r.ingredients[0]).toEqual({ name: 'flour', qty: '1', unit: 'cup', optional: false });
+    expect(r.ingredients[1]).toEqual({ name: 'flour', qty: '2', unit: 'tbsp', optional: false });
+  });
+});
+
+describe('parseCooklang — optional ingredients (@?)', () => {
+  it('parses a braced optional ingredient and keeps prose clean', () => {
+    const r = parseCooklang('Top with @?feta{50%g} before serving.');
+    expect(r.ingredients).toEqual([{ name: 'feta', qty: '50', unit: 'g', optional: true }]);
+    // The "(optional)" tag belongs to the ingredient list; step prose
+    // shows just the name.
+    expect(r.steps[0]!.text).toBe('Top with feta before serving.');
+  });
+
+  it('parses a bare optional ingredient', () => {
+    const r = parseCooklang('Garnish with @?cilantro if you like.');
+    expect(r.ingredients).toEqual([
+      { name: 'cilantro', qty: null, unit: null, optional: true },
+    ]);
+  });
+
+  it('keeps a required and an optional row of the same name distinct', () => {
+    const r = parseCooklang('Season with @salt. Finish with @?salt on top.');
+    expect(r.ingredients).toEqual([
+      { name: 'salt', qty: null, unit: null, optional: false },
+      { name: 'salt', qty: null, unit: null, optional: true },
+    ]);
+  });
+
+  it('works on declaration lines', () => {
+    const r = parseCooklang('@?sumac{1%tbsp}\n--\nSprinkle the sumac over the top.');
+    expect(r.steps[0]!.kind).toBe('declaration');
+    expect(r.ingredients).toEqual([{ name: 'sumac', qty: '1', unit: 'tbsp', optional: true }]);
+  });
+
+  it('leaves a `?` with no name as plain prose', () => {
+    const r = parseCooklang('Email chef@? for details.');
+    expect(r.ingredients).toEqual([]);
+    expect(r.steps[0]!.text).toBe('Email chef@? for details.');
+  });
+
+  it('renders an "(optional)" tag in the HTML ingredient list', () => {
+    const html = cooklangToHtml('Top with @?feta{50%g} and @olives{10}.');
+    expect(html).toContain(
+      '<span class="cook-name">feta</span> <span class="cook-optional">(optional)</span>'
+    );
+    // The required ingredient carries no tag.
+    expect(html).toContain('<span class="cook-name">olives</span></li>');
+  });
+
+  it('carries the "(optional)" suffix into the plain-text export', () => {
+    const r = parseCooklang('Top with @?feta{50%g}.');
+    expect(recipeToPlainText('Salad', r)).toContain('- 50 g feta (optional)');
+  });
+
+  it('carries the "(optional)" suffix into the markdown export', () => {
+    const r = parseCooklang('Garnish with @?cilantro.');
+    expect(recipeToMarkdown('Tacos', r)).toContain('- cilantro (optional)');
   });
 });
 
@@ -413,7 +469,7 @@ describe('parseCooklang — declaration lines', () => {
     expect(r.steps[0]!.kind).toBe('declaration');
     expect(r.steps[0]!.text).toBe('');
     // Ingredient still contributes to the flat list.
-    expect(r.ingredients).toEqual([{ name: 'flour', qty: '200', unit: 'g' }]);
+    expect(r.ingredients).toEqual([{ name: 'flour', qty: '200', unit: 'g', optional: false }]);
   });
 
   it('keeps a prose-first line that happens to reference ingredients as an instruction', () => {
@@ -429,7 +485,7 @@ describe('parseCooklang — declaration lines', () => {
     );
     expect(r.steps).toHaveLength(1);
     expect(r.steps[0]!.kind).toBe('declaration');
-    expect(r.ingredients).toEqual([{ name: 'chicken thighs', qty: '1', unit: 'lb' }]);
+    expect(r.ingredients).toEqual([{ name: 'chicken thighs', qty: '1', unit: 'lb', optional: false }]);
   });
 
   it('when declarations exist, instruction inline references do not double-count ingredients', () => {
@@ -439,7 +495,7 @@ Sear @chicken{1%lb} for ~{5%minutes}.`;
     const r = parseCooklang(src);
     // Only the declared chicken row makes it into the ingredient list;
     // the instruction's `@chicken` is a cross-reference, not a new row.
-    expect(r.ingredients).toEqual([{ name: 'chicken', qty: '1', unit: 'lb' }]);
+    expect(r.ingredients).toEqual([{ name: 'chicken', qty: '1', unit: 'lb', optional: false }]);
     // Timers and cookware still come from instructions as usual.
     expect(r.timers).toHaveLength(1);
   });
@@ -639,7 +695,7 @@ describe('parseCooklang — bare-brace durations', () => {
     // Regression: `@flour{200%g}` must not also be re-claimed as a
     // bare-brace timer. The overlap guard in `tokenizeLine` covers this.
     const r = parseCooklang('Add @flour{200%g}.');
-    expect(r.ingredients).toEqual([{ name: 'flour', qty: '200', unit: 'g' }]);
+    expect(r.ingredients).toEqual([{ name: 'flour', qty: '200', unit: 'g', optional: false }]);
     expect(r.timers).toEqual([]);
     expect(r.steps[0]!.text).toBe('Add flour.');
   });
@@ -687,6 +743,19 @@ describe('validateCooklangSource', () => {
     expect(errors.length).toBe(1);
     expect(errors[0]).toMatch(/modifier @ingredient/);
     expect(errors[0]).toMatch(/multi-word/);
+  });
+
+  it('still rejects the duplicate-pattern when a token carries `@?`', () => {
+    const errors = validateCooklangSource(
+      'Use @?pre-minced @garlic{1%tbsp} for speed.',
+    );
+    expect(errors.length).toBe(1);
+    expect(errors[0]).toMatch(/modifier @ingredient/);
+  });
+
+  it('does NOT flag an optional ingredient reference', () => {
+    const errors = validateCooklangSource('Top with @?feta{50%g} before serving.');
+    expect(errors).toEqual([]);
   });
 
   it('does NOT flag legitimate two-ingredient prose like `@salt and @pepper`', () => {

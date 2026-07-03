@@ -43,6 +43,24 @@ and prep time.
 Single-word references can omit the braces — `@salt` is the same as
 `@salt{}`.
 
+### Optional ingredients
+
+Mark an ingredient as optional with a `?` right after the `@`:
+
+```cooklang
+Top with @?feta{50%g} and a little @?fresh dill{} before serving.
+```
+
+Optional ingredients show up in the ingredient list with an
+*(optional)* tag, and the tag carries into the plain-text and
+Markdown copies. In the instruction text the ingredient reads
+plainly - the sentence around it is where you say "if using."
+
+The `@?` form isn't in the core Cooklang spec (which has no notion
+of optionality), but it's the optional-ingredient modifier used by
+the official Cooklang parser's extensions, so recipes you copy out
+of nak stay readable by other Cooklang tools.
+
 ### Sections and long steps
 
 Long recipes (soups with a garnish, breads with a starter and a dough,

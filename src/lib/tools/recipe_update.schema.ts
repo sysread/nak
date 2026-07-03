@@ -14,7 +14,8 @@ export const recipeUpdateSchema = {
     'renders in step text but backtick code spans do not; use ' +
     '`~{N%unit}` for durations; write modifier+ingredient as one ' +
     'multi-word braced name (`@pre-minced garlic{1%tbsp}`), not two ' +
-    '`@` tokens. change_message is REQUIRED and lands in the recipe ' +
+    '`@` tokens; mark optional ingredients with `@?` ' +
+    '(`@?cilantro{2%tbsp}`). change_message is REQUIRED and lands in the recipe ' +
     'history. Returns the updated row.',
   shortDescription: 'edit a saved recipe',
   parameters: {
