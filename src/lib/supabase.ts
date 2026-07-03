@@ -38,16 +38,17 @@ import type {
 import type { UsageRequestOptions, UsageModelBucket } from './usage';
 import { synthesizeRecoveryMessages } from './conversation-recovery';
 import { SupabaseError } from './supabase/error';
-import {
-  base64ToBytes,
-  ilikeLogicTreePattern,
-} from './supabase/query-utils';
+import { base64ToBytes } from './supabase/query-utils';
 // Agent-runs domain slice (the wiki/rem/deep-sleep run + retry
 // routes), same delegation pattern as the slices below.
 import * as agentRunsApi from './supabase/agent-runs';
 // Cookbook domain slice (recipes, versions, photos), same delegation
 // pattern.
 import * as cookbookApi from './supabase/cookbook';
+// Library / documents domain slice (document CRUD, Library paging and
+// search, bucket upload + signed download URLs), same delegation
+// pattern.
+import * as documentsApi from './supabase/documents';
 // Memories domain slice: the facade's memory methods (both the CRUD +
 // changelog group and the confidence / search / relations group)
 // delegate to these plain functions one-for-one under the same names
@@ -128,7 +129,6 @@ import type {
 import {
   coerceAttachmentRow,
   coerceManualRunOutcome,
-  coerceDocument,
 } from './supabase/types';
 import type { IntentRow } from './ui/intents-inspector';
 
@@ -175,8 +175,9 @@ import type { IntentRow } from './ui/intents-inspector';
  * photos (./supabase/cookbook.ts), Wiki articles (./supabase/wiki.ts),
  * Wiki records incl. files + links (./supabase/wiki-records.ts),
  * Wiki satellites - bibliography, See-Also, changelog
- * (./supabase/wiki-sources.ts), and Agent runs - the wiki/rem/
- * deep-sleep run + retry routes (./supabase/agent-runs.ts) -
+ * (./supabase/wiki-sources.ts), Agent runs - the wiki/rem/
+ * deep-sleep run + retry routes (./supabase/agent-runs.ts), and
+ * Library / documents (./supabase/documents.ts) -
  * groups are extracted; the remaining groups still carry their
  * implementations inline and should follow the same pattern when
  * touched substantially.
@@ -822,17 +823,14 @@ export class SupabaseService {
     return wikiRecordsApi.deleteWikiRecordLink(this.client, args);
   }
 
-  // Documents (Library) --------------------------------------------------
-  //
-  // Upload flow is two-phase on purpose: createDocument writes the metadata
-  // row first (status 'pending', storage_path null), then the caller uploads
-  // the binary to the bucket and calls setDocumentStoragePath, then extracts
-  // text in the browser and calls setDocumentExtraction.
-  // Splitting it this way means a row always exists for the UI to show a
-  // "processing" placeholder, and a crash mid-upload leaves a recoverable
-  // pending row rather than an orphaned bucket object.
-
   // --- Library / documents ---------------------------------------------
+  //
+  // Extracted domain slice: the implementations and their doc comments
+  // (including the two-phase upload flow rationale and the note on the
+  // server-side grep/read pair) live in ./supabase/documents.ts
+  // (document CRUD + Library paging/search + bucket helpers) as plain
+  // functions taking the client. These methods delegate one-for-one
+  // under the same names so call sites and grep targets stay stable.
 
   async createDocument(args: {
     title: string;
@@ -841,200 +839,60 @@ export class SupabaseService {
     mimeType: string;
     sizeBytes: number;
   }): Promise<Document> {
-    const session = await this.getSession();
-    if (!session) throw new SupabaseError('Not authenticated.');
-    const { data, error } = await this.client
-      .from('documents')
-      .insert({
-        user_id: session.user.id,
-        title: args.title,
-        description: args.description ?? '',
-        filename: args.filename,
-        mime_type: args.mimeType,
-        size_bytes: args.sizeBytes,
-      })
-      .select(
-        'id, title, description, filename, mime_type, size_bytes, storage_path, extracted_text, extraction_status, extraction_error, created_at, updated_at'
-      )
-      .single();
-    if (error) throw new SupabaseError(error.message);
-    return coerceDocument(data as Record<string, unknown>);
+    return documentsApi.createDocument(this.client, args);
   }
 
   async setDocumentStoragePath(id: string, storagePath: string): Promise<void> {
-    const { error } = await this.client
-      .from('documents')
-      .update({ storage_path: storagePath })
-      .eq('id', id);
-    if (error) throw new SupabaseError(error.message);
+    return documentsApi.setDocumentStoragePath(this.client, id, storagePath);
   }
 
-  /**
-   * Record the outcome of the browser-side text extraction. On success pass
-   * the extracted text and status 'done'; on failure pass status 'failed' and
-   * a trimmed error so the Library UI can explain why the doc isn't
-   * searchable. The original file stays downloadable either way.
-   */
   async setDocumentExtraction(
     id: string,
     result:
       | { status: 'done'; text: string }
       | { status: 'failed'; error: string }
   ): Promise<void> {
-    const patch: Record<string, unknown> =
-      result.status === 'done'
-        ? { extraction_status: 'done', extracted_text: result.text, extraction_error: null }
-        : { extraction_status: 'failed', extraction_error: result.error.slice(0, 500) };
-    const { error } = await this.client.from('documents').update(patch).eq('id', id);
-    if (error) throw new SupabaseError(error.message);
+    return documentsApi.setDocumentExtraction(this.client, id, result);
   }
 
-  /**
-   * One offset page of the Library list, newest first. Powers the drawer's
-   * infinite scroll. `id` is the final tiebreak so docs sharing a created_at
-   * keep a stable cross-page order.
-   */
   async listDocumentsPage(opts: {
     offset: number;
     pageSize: number;
   }): Promise<OffsetPage<Document>> {
-    const { data, error } = await this.client
-      .from('documents')
-      .select(
-        'id, title, description, filename, mime_type, size_bytes, storage_path, extracted_text, extraction_status, extraction_error, created_at, updated_at'
-      )
-      .order('created_at', { ascending: false })
-      .order('id', { ascending: true })
-      .range(opts.offset, opts.offset + opts.pageSize);
-    if (error) throw new SupabaseError(error.message);
-    const all = (data ?? []).map((row) => coerceDocument(row as Record<string, unknown>));
-    const hasMore = all.length > opts.pageSize;
-    return { rows: hasMore ? all.slice(0, opts.pageSize) : all, hasMore };
+    return documentsApi.listDocumentsPage(this.client, opts);
   }
 
   async getDocumentById(id: string): Promise<Document | null> {
-    const { data, error } = await this.client
-      .from('documents')
-      .select(
-        'id, title, description, filename, mime_type, size_bytes, storage_path, extracted_text, extraction_status, extraction_error, created_at, updated_at'
-      )
-      .eq('id', id)
-      .maybeSingle();
-    if (error) throw new SupabaseError(error.message);
-    if (!data) return null;
-    return coerceDocument(data as Record<string, unknown>);
+    return documentsApi.getDocumentById(this.client, id);
   }
 
-  /**
-   * Substring search over the user's documents for the Library drawer, newest
-   * first. Matches the query against title, description, filename, and the
-   * extracted body, so a document surfaces whether the user typed its name or a
-   * phrase from inside it. This is the drawer's browse-by-keyword surface; the
-   * chat model's precise in-document search is grep_documents (doc_grep).
-   */
   async searchDocuments(opts: { query: string; limit?: number }): Promise<Document[]> {
-    const query = opts.query.trim();
-    if (query.length === 0) return [];
-    const pattern = ilikeLogicTreePattern(query);
-    const { data, error } = await this.client
-      .from('documents')
-      .select(
-        'id, title, description, filename, mime_type, size_bytes, storage_path, extracted_text, extraction_status, extraction_error, created_at, updated_at'
-      )
-      .or(
-        `title.ilike.${pattern},description.ilike.${pattern},filename.ilike.${pattern},extracted_text.ilike.${pattern}`
-      )
-      .order('created_at', { ascending: false })
-      .limit(opts.limit ?? 100);
-    if (error) throw new SupabaseError(error.message);
-    return (data ?? []).map((row) => coerceDocument(row as Record<string, unknown>));
+    return documentsApi.searchDocuments(this.client, opts);
   }
 
-  /**
-   * Patch a document's user-editable metadata (title, description). The
-   * extracted body is bound to the original file and is not editable here -
-   * replacing content means re-uploading the file.
-   */
   async updateDocument(
     id: string,
     patch: { title?: string; description?: string }
   ): Promise<Document> {
-    const update: Record<string, unknown> = { updated_at: new Date().toISOString() };
-    if (patch.title !== undefined) update.title = patch.title;
-    if (patch.description !== undefined) update.description = patch.description;
-    const { data, error } = await this.client
-      .from('documents')
-      .update(update)
-      .eq('id', id)
-      .select(
-        'id, title, description, filename, mime_type, size_bytes, storage_path, extracted_text, extraction_status, extraction_error, created_at, updated_at'
-      )
-      .single();
-    if (error) throw new SupabaseError(error.message);
-    return coerceDocument(data as Record<string, unknown>);
+    return documentsApi.updateDocument(this.client, id, patch);
   }
 
-  /**
-   * Delete a document, its chunks (FK cascade), and its original file in the
-   * bucket. The bucket object is removed first; if that fails we still throw
-   * before deleting the row, so we never orphan a bucket object behind a
-   * deleted row. A leftover row whose object is already gone is the safer
-   * failure direction (the UI can retry the delete).
-   */
   async deleteDocument(id: string): Promise<void> {
-    const doc = await this.getDocumentById(id);
-    if (doc?.storage_path) {
-      const { error: rmErr } = await this.client.storage
-        .from('documents')
-        .remove([doc.storage_path]);
-      if (rmErr) throw new SupabaseError(rmErr.message);
-    }
-    const { error } = await this.client.from('documents').delete().eq('id', id);
-    if (error) throw new SupabaseError(error.message);
+    return documentsApi.deleteDocument(this.client, id);
   }
 
-  // Documents Storage helpers --------------------------------------------
-
-  /**
-   * Upload an original file to the private `documents` bucket. The object key
-   * convention `<user_id>/<document_id>/<filename>` is what the bucket RLS
-   * policy keys on (top-level folder must equal auth.uid()).
-   */
   async uploadDocumentFile(args: {
     documentId: string;
     filename: string;
     file: Blob;
     contentType: string;
   }): Promise<string> {
-    const session = await this.getSession();
-    if (!session) throw new SupabaseError('Not authenticated.');
-    const path = `${session.user.id}/${args.documentId}/${args.filename}`;
-    const { error } = await this.client.storage
-      .from('documents')
-      .upload(path, args.file, { contentType: args.contentType, upsert: true });
-    if (error) throw new SupabaseError(error.message);
-    return path;
+    return documentsApi.uploadDocumentFile(this.client, args);
   }
 
-  /**
-   * Time-limited signed URL for downloading an original file. The bucket is
-   * private, so this is the only way the browser surfaces the binary.
-   */
   async createDocumentDownloadUrl(storagePath: string, expiresInSeconds = 300): Promise<string> {
-    const { data, error } = await this.client.storage
-      .from('documents')
-      .createSignedUrl(storagePath, expiresInSeconds);
-    if (error) throw new SupabaseError(error.message);
-    return data.signedUrl;
+    return documentsApi.createDocumentDownloadUrl(this.client, storagePath, expiresInSeconds);
   }
-
-  // Documents grep / read helpers ----------------------------------------
-  //
-  // The deterministic grep-then-read pair the chat model uses on a document.
-  // Both run server-side over documents.extracted_text (see grep_documents /
-  // read_document_lines in schema.sql) so a multi-MB document's text never
-  // crosses the wire - only matching snippets or the requested line range come
-  // back.
 
   // --- Wiki sources, changelog & agent runs ----------------------------
   //
