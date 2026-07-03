@@ -33,7 +33,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { createEdgeLogger } from '../../_shared/edge-log.ts';
 import { readVeniceKey } from '../tools/_venice_key.ts';
 import { loadThreadSliceUpTo } from './_agent_tools.ts';
-import { completeJsonObject } from './_curation_helpers.ts';
+import { completeJsonObjectWithMeta } from './_curation_helpers.ts';
 import { messageToVenice, type VeniceWireMessage } from './_recall_helpers.ts';
 
 // Mirrors the reflection tier: the judge, like reflection, reads a
@@ -52,8 +52,22 @@ const EVALUATION_CLAIM_TTL_SECONDS = 600;
 
 // JSON-mode output is a tiny id->verdict object, but the model is
 // reasoning-capable and may emit a CoT pass; the project-wide 2048
-// floor for agent sub-calls keeps finish_reason off 'length'.
+// floor for agent sub-calls keeps finish_reason off 'length' for a
+// BATCH-SIZED verdict map. The budget is per batch, not per thread -
+// see EVALUATION_BATCH_SIZE.
 const EVALUATION_MAX_TOKENS = 2048;
+
+// Predictions per judge completion. Long threads fire 40-90+ distinct
+// samskaras, and a single completion over that many predictions blows
+// past the token budget (reasoning pass + verdict map), truncating the
+// JSON to zero parseable verdicts - which silently discards every fire
+// in exactly the evidence-richest threads (a 2026-07 prod audit
+// measured the judged rate collapsing from 83% to ~5% once a thread
+// crossed ~40 fired samskaras; 43% of all fires ever recorded were
+// lost this way). Batching bounds each completion's output to a size
+// the budget comfortably holds: 20 keeps the worst-case verdict map
+// near ~400 output tokens.
+const EVALUATION_BATCH_SIZE = 20;
 
 // Kill switch. While true the judge records verdicts but never writes
 // health (the slice-1 shadow phase). False routes each verdict through
@@ -90,6 +104,7 @@ export type EvaluationCycleResult = {
     | 'evaluated' // judged a thread and marked it done
     | 'no-fires' // claimed thread had no fired samskaras to judge; marked to advance
     | 'empty-slice' // pathological empty transcript; marked to advance
+    | 'no-verdicts' // every judge batch failed to parse; cursor NOT advanced, retried next tick
     | 'claim-lost' // claim expired/stolen mid-run; verdicts (if any) stay, cursor not advanced
     | 'error';
   threadId?: string;
@@ -102,6 +117,17 @@ export type EvaluationCycleResult = {
 // from the transcript. Erring toward not-engaged is the safe bias - it
 // keeps the judge from inflating health on weak signal (which, with no
 // fast feedback loop, would let the corpus bloat past its cap).
+//
+// The verdict request is deliberately TWO-step (engagement gate first,
+// outcome second) with worked examples. A single-step framing lets the
+// skeptical default swallow the soft-miss bucket entirely (observed in
+// prod: zero 'not-borne-out' across 19k judged fires), which drives
+// the population prior p0 to ~0.98 and pins every posterior at the
+// ceiling - health cannot discriminate at all. The two-step shape
+// scopes "default to not-engaged" to the engagement question only;
+// once the situation is deemed to have arisen, the prompt forbids
+// falling back to not-engaged, so an untested tendency lands on
+// not-borne-out instead of vanishing into no-evidence.
 const JUDGE_SYSTEM_PROMPT = [
   'You evaluate standing behavioural predictions about a user against a',
   'conversation they just had. Each prediction is a hypothesis of the',
@@ -121,23 +147,40 @@ function buildVerdictRequest(predictions: { tag: string; text: string }[]): stri
   const lines = predictions.map((p) => `${p.tag}: ${p.text}`);
   return [
     'Below are predictions that were live during the conversation above.',
-    'For EACH one, first ask: did the SITUATION the prediction is about',
-    'actually come up in this conversation?',
+    'Judge EACH one in two steps.',
     '',
-    '- If the situation did NOT really come up (the prediction was only',
-    '  loosely related to what was discussed), the verdict is',
-    '  "not-engaged": there was no fair test of it.',
-    '- If the situation DID come up, judge how the user behaved:',
-    '  - "held": the user did what the prediction says they tend to do.',
-    '  - "contradicted": the user did the OPPOSITE of the prediction.',
-    '  - "not-borne-out": the situation arose but the predicted tendency',
-    '    simply did not appear - neither clearly confirmed nor clearly',
-    '    contradicted, it just did not happen this time.',
+    'STEP 1 - engagement: did the SITUATION the prediction is about (its',
+    '"in situations like X" clause) actually arise in this conversation?',
+    'Sharing vocabulary or general topic is not enough - the situation',
+    'itself must have come up. If it did not, the verdict is',
+    '"not-engaged" and you are done with that prediction. DEFAULT to',
+    '"not-engaged" when you are unsure whether the situation genuinely',
+    'arose.',
+    '',
+    'STEP 2 - outcome, ONLY for predictions whose situation did arise:',
+    '- "held": the user visibly did what the prediction says they tend',
+    '  to do.',
+    '- "contradicted": the user visibly did the opposite.',
+    '- "not-borne-out": the situation arose but the predicted tendency',
+    '  did not appear either way. This is the correct verdict when the',
+    '  prediction had its chance and the transcript shows neither',
+    '  confirmation nor contradiction. Once you have decided the',
+    '  situation arose, do NOT fall back to "not-engaged" - pick one of',
+    '  these three.',
+    '',
+    'Worked examples for the prediction "when discussing recipes, the',
+    'user tends to ask for metric units":',
+    '- The conversation was about car repair with a one-line aside about',
+    '  lunch: the situation (a recipe discussion) never arose ->',
+    '  "not-engaged".',
+    '- The user discussed a recipe at length and never mentioned units',
+    '  at all: the situation arose, the tendency did not appear ->',
+    '  "not-borne-out".',
+    '- The user asked to convert cups to grams -> "held".',
+    '- The user asked for the recipe in imperial-only measurements ->',
+    '  "contradicted".',
     '',
     'Be skeptical and require explicit evidence from the transcript.',
-    'DEFAULT to "not-engaged" when you are unsure whether the situation',
-    'genuinely came up; reserve held / contradicted / not-borne-out for',
-    'when the prediction was actually put to the test.',
     '',
     'Predictions:',
     ...lines,
@@ -170,6 +213,18 @@ function parseVerdicts(raw: string): Map<string, VerdictKind> {
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return out;
   for (const [tag, v] of Object.entries(parsed as Record<string, unknown>)) {
     if (isVerdict(v)) out.set(tag, v);
+  }
+  return out;
+}
+
+/**
+ * Split the fired-prediction list into judge-completion batches. Pure;
+ * preserves order, so tag numbering stays contiguous within a batch.
+ */
+function chunkPredictions<T>(items: readonly T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    out.push(items.slice(i, i + size));
   }
   return out;
 }
@@ -291,21 +346,69 @@ async function evaluateClaimedThread(
 
   // Same "switch modes" idiom as reflection: the model sees the whole
   // conversation in its native shape, then a final user turn that
-  // reframes the task as judgement.
+  // reframes the task as judgement. The transcript is resent per batch
+  // - a deliberate token-for-correctness trade: only ~13% of threads
+  // need more than one batch, and a truncated single-shot judgement
+  // over the full list loses the whole thread (see EVALUATION_BATCH_SIZE).
   const convo: VeniceWireMessage[] = slice.map(messageToVenice);
-  const messages: VeniceWireMessage[] = [
-    { role: 'system', content: JUDGE_SYSTEM_PROMPT },
-    ...convo,
-    { role: 'user', content: buildVerdictRequest(predictions) },
-  ];
+  const verdicts = new Map<string, VerdictKind>();
+  let failedBatches = 0;
+  const batches = chunkPredictions(predictions, EVALUATION_BATCH_SIZE);
+  for (const batch of batches) {
+    const messages: VeniceWireMessage[] = [
+      { role: 'system', content: JUDGE_SYSTEM_PROMPT },
+      ...convo,
+      { role: 'user', content: buildVerdictRequest(batch) },
+    ];
+    // A transport throw here aborts the whole cycle (outcome 'error',
+    // cursor not advanced) rather than salvaging earlier batches - an
+    // infra failure would fail every remaining batch anyway, and the
+    // attempt-count gate bounds the retries.
+    const { content, finishReason } = await completeJsonObjectWithMeta({
+      apiKey,
+      model: EVALUATION_MODEL,
+      messages,
+      maxTokens: EVALUATION_MAX_TOKENS,
+    });
+    if (finishReason === 'length') {
+      // Truncated mid-object: the verdict map is garbage even if it
+      // happens to parse. Count the batch failed rather than judging
+      // from a cut-off completion.
+      failedBatches++;
+      log.warn(`judge batch truncated (finish_reason=length) on thread ${threadId}`);
+      continue;
+    }
+    const parsed = parseVerdicts(content);
+    if (parsed.size === 0) {
+      failedBatches++;
+      log.warn(`judge batch parsed to zero verdicts on thread ${threadId}`);
+      continue;
+    }
+    // Tags are unique across the whole prediction list, so batch maps
+    // merge without collisions.
+    for (const [tag, v] of parsed) verdicts.set(tag, v);
+  }
 
-  const rawVerdicts = await completeJsonObject({
-    apiKey,
-    model: EVALUATION_MODEL,
-    messages,
-    maxTokens: EVALUATION_MAX_TOKENS,
-  });
-  const verdicts = parseVerdicts(rawVerdicts);
+  if (verdicts.size === 0) {
+    // Every batch failed. markEvaluated on a zero-verdict run turns a
+    // bad completion into "this thread was judged" and silently
+    // discards the thread's entire evidence contribution - so leave
+    // the cursor alone and let the thread re-qualify next tick; the
+    // evaluation_attempt_count < 3 gate in the claim RPC bounds how
+    // often an unjudgeable thread is retried.
+    log.warn(
+      `all ${failedBatches} judge batch(es) failed on thread ${threadId}; cursor not advanced`,
+    );
+    return { outcome: 'no-verdicts', threadId };
+  }
+  if (failedBatches > 0) {
+    // Partial coverage: the surviving batches' verdicts are real
+    // evidence and land below; the failed batches' predictions stay
+    // pending and re-judge when the thread next settles with a new
+    // terminal message. Same best-effort posture as a judge-omitted
+    // prediction.
+    log.warn(`${failedBatches}/${batches.length} judge batches failed on thread ${threadId}`);
+  }
 
   // Group fired samskaras by the verdict the judge gave them. A
   // prediction the judge omitted or mis-typed gets no verdict (and no
@@ -406,6 +509,7 @@ async function markEvaluated(
   return data === true;
 }
 
-// Test-only surface: the verdict parser's defensive drops and the
-// prompt contract are behaviour worth pinning without a live Venice call.
-export const __test = { parseVerdicts, buildVerdictRequest };
+// Test-only surface: the verdict parser's defensive drops, the prompt
+// contract, and the batch split are behaviour worth pinning without a
+// live Venice call.
+export const __test = { parseVerdicts, buildVerdictRequest, chunkPredictions };

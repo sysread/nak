@@ -706,19 +706,30 @@ logs and yields to the next phase.
 - **Evaluation (next-day judge)** - `samskara_evaluation.ts`, the
   `nak-samskara-evaluation-sweep` cron. NOT on the turn tail: it waits
   until a conversation has settled (same next-day + `>= 2`-round gate as
-  reflection), then runs one structured completion to judge every
-  samskara that FIRED in the thread and routes the verdicts through
-  `samskara_apply_evaluation` - the sole writer of the verdict tallies
-  and the derived health posterior. The judge answers a situation-first
-  decision tree: did the prediction's situation actually arise? If not,
-  `not-engaged` (a loose topical fire, no fair test). If so, `held`
-  (acted as predicted), `contradicted` (did the opposite), or
-  `not-borne-out` (situation arose but the tendency did not appear - a
-  soft miss). Firing is recall; this four-way is precision - splitting
-  the old single `not-engaged` bucket is what lets health discriminate
-  (see Health: the verdict posterior). Firing is the relevance gate, so
-  an untested prediction is never judged. It replaced a live 1-10 minute
-  reaction classifier (`agentClassifyReaction` + `samskara_apply_reaction`)
+  reflection), then judges every samskara that FIRED in the thread and
+  routes the verdicts through `samskara_apply_evaluation` - the sole
+  writer of the verdict tallies and the derived health posterior. The
+  fired-prediction list is judged in batches of `EVALUATION_BATCH_SIZE`
+  (20), one structured completion per batch with the transcript resent
+  each time - long threads fire 40-90+ distinct samskaras, and a single
+  completion over the whole list truncates its verdict map at the token
+  budget (see the truncation gotcha below). A zero-verdict run (every
+  batch truncated or unparseable) does NOT advance the evaluation
+  cursor; the thread re-qualifies next tick, bounded by the claim RPC's
+  `evaluation_attempt_count < 3` gate. The judge answers a two-step
+  decision tree: STEP 1, did the prediction's situation actually arise?
+  If not, `not-engaged` (a loose topical fire, no fair test) - the
+  skeptical default applies to this question only. STEP 2, for engaged
+  predictions only: `held` (acted as predicted), `contradicted` (did
+  the opposite), or `not-borne-out` (situation arose but the tendency
+  did not appear - a soft miss); the prompt forbids falling back to
+  `not-engaged` once the situation is deemed to have arisen, and
+  carries worked examples of all four verdicts. Firing is recall; this
+  four-way is precision - splitting the old single `not-engaged` bucket
+  is what lets health discriminate (see Health: the verdict posterior).
+  Firing is the relevance gate, so an untested prediction is never
+  judged. It replaced a live 1-10 minute reaction classifier
+  (`agentClassifyReaction` + `samskara_apply_reaction`)
   that resolved only ~4% of fires; `was_confirmed` is now set by the
   judge (`held` -> true, `contradicted` -> false) for the legacy panels
   that still read it.
@@ -1205,6 +1216,41 @@ summarizer reads samskaras to feed the agent.
   and the health it moves, lands roughly a day after the turn rather
   than minutes after. This replaced a live 1-10 minute reaction
   classifier whose narrow window resolved only ~4% of fires.
+- **The `>= 2`-user-message gate is a junk-data filter, not a leak.**
+  Single-round threads are excluded from evaluation on purpose: they
+  are overwhelmingly "AI as a search engine" one-shots, and judging
+  behavioural predictions against a one-question transcript produces
+  noise, not evidence. Their fires stay `verdict is null` forever -
+  a permanent, bounded pending population (~19% of threads in the
+  2026-07 prod audit), not a backlog to drain.
+- **The judge is batched, and a zero-verdict run must not advance the
+  cursor.** Both halves are load-bearing, learned from the same prod
+  failure: the judge originally sent every fired prediction in one
+  2048-token completion and marked the thread evaluated regardless of
+  the result. Long threads (40-90+ distinct fired samskaras) truncated
+  the verdict map, `parseVerdicts` returned empty, and the cursor
+  advanced anyway - the judged rate collapsed from 83% to ~5% past ~40
+  predictions, and 43% of all fires ever recorded sat permanently
+  unjudged BEHIND the cursor, concentrated in exactly the
+  evidence-richest threads. `EVALUATION_BATCH_SIZE` (20) bounds each
+  completion's output; `finish_reason = 'length'` or an empty parse
+  fails the batch; and a run where every batch fails returns
+  `no-verdicts` without calling `markEvaluated`, so the thread retries
+  (bounded by `evaluation_attempt_count < 3`). If you touch this, keep
+  "no verdicts" and "judged" distinguishable - collapsing them is the
+  original bug.
+- **The judge's skeptical default is scoped to the engagement step
+  only.** With a single-step prompt, "default to not-engaged when
+  unsure" swallowed the soft-miss bucket entirely: zero `not-borne-out`
+  verdicts across 19k judged fires, which drove the population prior
+  `p0` to ~0.98 and pinned every posterior at the ceiling - health
+  could not discriminate, so fire ranking degenerated to pure cosine
+  and the reaper had nothing to reap. The two-step prompt (engagement
+  gate first, then held / contradicted / not-borne-out with an
+  explicit "do not fall back to not-engaged") exists to keep
+  `not-borne-out` reachable. Watch the verdict mix on the Overview
+  panel after any prompt edit: a zero not-borne-out rate over a
+  meaningful window means this regressed.
 - **Neutral has no boolean state.** `was_confirmed` is
   true/false/NULL, and a classified-neutral fire stays NULL -
   it is marked only by `fired_at` being backdated 15 minutes,

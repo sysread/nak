@@ -264,7 +264,12 @@ export function repairToolCallFanIn(messages: StoredMessage[]): StoredMessage[] 
  * non-object response body (callers fold the throw into their
  * 'error' outcome).
  */
-export async function completeJsonObject(opts: {
+export async function completeJsonObject(opts: CompleteJsonObjectOpts): Promise<string> {
+  const { content } = await completeJsonObjectWithMeta(opts);
+  return content;
+}
+
+type CompleteJsonObjectOpts = {
   apiKey: string;
   model: string;
   messages: readonly VeniceWireMessage[];
@@ -276,7 +281,20 @@ export async function completeJsonObject(opts: {
    * absent the wire body carries no reasoning_effort field at all.
    */
   reasoningEffort?: 'low' | 'medium' | 'high';
-}): Promise<string> {
+};
+
+/**
+ * completeJsonObject plus the completion's finish_reason. A JSON-object
+ * completion that stops on 'length' is truncated mid-object - the text
+ * usually fails JSON.parse, but a caller that must distinguish "the
+ * model produced garbage" from "the token budget cut the model off"
+ * needs the finish_reason (the samskara evaluation judge treats
+ * 'length' as a retryable non-verdict rather than a judged-empty
+ * thread). finishReason is null when the response carries none.
+ */
+export async function completeJsonObjectWithMeta(
+  opts: CompleteJsonObjectOpts,
+): Promise<{ content: string; finishReason: string | null }> {
   const body: Record<string, unknown> = {
     model: opts.model,
     messages: opts.messages,
@@ -301,6 +319,10 @@ export async function completeJsonObject(opts: {
   const choices = Array.isArray(obj.choices)
     ? (obj.choices as Array<Record<string, unknown>>)
     : [];
-  const message = (choices[0]?.message as Record<string, unknown> | undefined) ?? {};
-  return typeof message.content === 'string' ? message.content : '';
+  const choice = choices[0] ?? {};
+  const message = (choice.message as Record<string, unknown> | undefined) ?? {};
+  return {
+    content: typeof message.content === 'string' ? message.content : '',
+    finishReason: typeof choice.finish_reason === 'string' ? choice.finish_reason : null,
+  };
 }
