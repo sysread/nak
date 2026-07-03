@@ -1234,7 +1234,12 @@ summarizer reads samskaras to feed the agent.
   unjudged BEHIND the cursor, concentrated in exactly the
   evidence-richest threads. `EVALUATION_BATCH_SIZE` (20) bounds each
   completion's output; `finish_reason = 'length'` or an empty parse
-  fails the batch; and a run where every batch fails returns
+  fails the batch. Batching alone is not sufficient: on reasoning
+  models `max_completion_tokens` covers the thinking pass, whose burn
+  scales with TRANSCRIPT length, not verdict-map size - so the judge
+  also needs the large `EVALUATION_MAX_TOKENS` (8192) and the 'low'
+  reasoning-effort pin, or long-transcript batches still die at
+  `length` with zero content. A run where every batch fails returns
   `no-verdicts` without calling `markEvaluated`, so the thread retries
   (bounded by `evaluation_attempt_count < 3`). If you touch this, keep
   "no verdicts" and "judged" distinguishable - collapsing them is the
