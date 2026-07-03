@@ -191,7 +191,10 @@ component "to consolidate." Each is locally reasonable.
 The aggregate is a layer rebuilt one inch at a time.
 
 Periodically (and after any non-trivial UI work), walk
-`src/components/*.svelte` and ask, per file:
+`src/components/*.svelte` AND `src/screens/*.svelte` and ask, per
+file (the screens are where the convention drifts hardest - they
+are the biggest files, and "it's only used by this screen" is the
+exact rationalization the convention exists to refuse):
 
 1. **What's in the `<script>` block besides imports, prop
    destructuring, `$state` / `$derived` declarations, and

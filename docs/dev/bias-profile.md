@@ -151,9 +151,17 @@ interval lower bound (not the mean) as the surfacing gate.
 - `src/screens/BiasProfile.svelte` - the diagnostics modal. Reads
   `bias_summary` and `biasListProcessedThreads` on mount;
   per-thread observations are pulled on demand when a row is
-  expanded. Three sections: per-bias evidence table, processed
-  conversations list with drill-down to observations, footer
-  citing the math constants.
+  expanded. Four sections: current-conversation status, bias
+  landscape chart, per-bias evidence cards with drill-down, and
+  the processed-conversations list, plus a footer citing the math
+  constants. The screen is Svelte wire-up only per the frontend
+  split (see `docs/dev/frontend-organization.md`).
+- `src/lib/ui/bias-profile.ts` - the modal's pure display
+  primitives: row sorting, the RENDER_CAP'd rendered set, catalog
+  lookups tolerant of unknown keys, number/verdict formatters, the
+  per-row interpretation prose, the landscape chart's hue and
+  width geometry, and the current-conversation empty-state copy.
+  Unit-tested in `tests/bias-profile.test.ts`.
 - `supabase/schema.sql` (bias-profile section) - the tables
   (`bias_observations`, `bias_summary`, `bias_reactions`), the
   columns on `threads` (`bias_processed_at`,
