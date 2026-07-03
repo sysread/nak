@@ -9,6 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   citationFlashDelay,
+  citationsToggleTitle,
   hasCitationRefsInBody,
   isCitationsUnavailable,
   parseCitationRefHref,
@@ -69,6 +70,22 @@ describe('showCitationsControls', () => {
 
   it('is false when neither side has anything to show', () => {
     expect(showCitationsControls(false, false)).toBe(false);
+  });
+});
+
+describe('citationsToggleTitle', () => {
+  it('says sources were not saved in the orphan-refs case, regardless of open state', () => {
+    expect(citationsToggleTitle(false, true, 0)).toBe('Sources not saved on this message');
+    expect(citationsToggleTitle(true, true, 0)).toBe('Sources not saved on this message');
+  });
+
+  it('offers the hide action while the panel is open', () => {
+    expect(citationsToggleTitle(true, false, 3)).toBe('Hide sources');
+  });
+
+  it('advertises the pluralized source count while closed', () => {
+    expect(citationsToggleTitle(false, false, 1)).toBe('1 source');
+    expect(citationsToggleTitle(false, false, 3)).toBe('3 sources');
   });
 });
 

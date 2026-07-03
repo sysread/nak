@@ -27,6 +27,7 @@
     severityFor,
     compoundRegenStatus,
     worstSeverity,
+    healthHeadline,
     relativeTime,
     verdictBreakdown,
     tier2CandidateLabel,
@@ -130,7 +131,7 @@
   {:else if snap}
     <div class="health-headline">
       <span class="sev-dot sev-{overall}" aria-hidden="true"></span>
-      <span>{overall === 'ok' ? 'Pipeline healthy' : overall === 'warn' ? 'Needs a look' : 'Something is stuck'}</span>
+      <span>{healthHeadline(overall)}</span>
       <button type="button" class="secondary health-refresh" onclick={() => void load()}>Refresh</button>
     </div>
 

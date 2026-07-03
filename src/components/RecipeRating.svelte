@@ -18,6 +18,14 @@
   aria-label like "Rating: 4 of 5 stars" (or "Unrated").
 -->
 <script lang="ts">
+  import {
+    effectiveRating,
+    ratingAfterStarClick,
+    ratingAfterKey,
+    rateStarLabel,
+    ratingAriaLabel,
+  } from '$lib/ui/recipe-rating';
+
   interface Props {
     /** 1-5, or null for unrated. Values outside that range render as null. */
     value: number | null;
@@ -39,62 +47,33 @@
 
   const interactive = $derived(typeof onChange === 'function');
 
-  // Effective rating for rendering. While hovering, the preview wins;
-  // otherwise the persisted value (clamped to 1-5 or null).
-  const effective = $derived.by<number | null>(() => {
-    if (hoverIndex !== null) return hoverIndex;
-    if (value === null || value === undefined) return null;
-    if (!Number.isFinite(value)) return null;
-    if (value < 1) return null;
-    if (value > 5) return 5;
-    return Math.round(value);
-  });
+  const effective = $derived(effectiveRating(value, hoverIndex));
 
   function onStarClick(n: number): void {
     if (!onChange) return;
-    // Clicking the already-set rating clears it. Without this, the only
-    // way to remove a rating from a 1-star recipe would be to set it to
-    // a different value first, which doesn't match the user's mental
-    // model ("click to toggle off").
-    if (value === n) onChange(null);
-    else onChange(n);
+    onChange(ratingAfterStarClick(value, n));
   }
 
   function onMouseLeaveRow(): void {
     hoverIndex = null;
   }
 
-  // Keyboard: left/right adjust by one, 0 / Backspace / Delete clear.
-  // Wired on each star button so focus stays in the group; the global
-  // window keydown for Escape in Cookbook.svelte still bails the
-  // modal as before.
+  // Keyboard: wired on each star button so focus stays in the group;
+  // the global window keydown for Escape in Cookbook.svelte still
+  // bails the modal as before. Enter/Space route through the click
+  // path so the toggle-off rule applies to the focused star.
   function onKeydown(e: KeyboardEvent, n: number): void {
     if (!onChange) return;
-    if (e.key === 'ArrowRight') {
+    const result = ratingAfterKey(value, e.key);
+    if (result) {
       e.preventDefault();
-      onChange(Math.min(5, (value ?? 0) + 1) || 1);
-      return;
-    }
-    if (e.key === 'ArrowLeft') {
-      e.preventDefault();
-      const next = (value ?? 0) - 1;
-      onChange(next < 1 ? null : next);
-      return;
-    }
-    if (e.key === '0' || e.key === 'Backspace' || e.key === 'Delete') {
-      e.preventDefault();
-      onChange(null);
+      onChange(result.next);
       return;
     }
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
       onStarClick(n);
     }
-  }
-
-  function ariaLabelForValue(v: number | null): string {
-    if (v === null) return 'Unrated';
-    return `Rating: ${v} of 5 stars`;
   }
 </script>
 
@@ -115,9 +94,9 @@
         class="rating-star"
         class:is-filled={filled}
         class:is-pressed={value === n}
-        aria-label={`Rate ${n} ${n === 1 ? 'star' : 'stars'}`}
+        aria-label={rateStarLabel(n)}
         aria-pressed={value === n}
-        title={`Rate ${n} ${n === 1 ? 'star' : 'stars'}`}
+        title={rateStarLabel(n)}
         onclick={() => onStarClick(n)}
         onkeydown={(e) => onKeydown(e, n)}
         onmouseenter={() => (hoverIndex = n)}
@@ -152,7 +131,7 @@
     class="rating rating-static"
     style:--rating-size="{size}px"
     role="img"
-    aria-label={ariaLabelForValue(value)}
+    aria-label={ratingAriaLabel(value)}
   >
     {#each [1, 2, 3, 4, 5] as n (n)}
       {@const filled = effective !== null && n <= effective}

@@ -30,6 +30,7 @@
   import {
     assimilationStatus,
     clusterFires,
+    cohortCountLabel,
     fireVerdictLabel,
     fireVerdictStatusClass,
     formatRelative,
@@ -90,12 +91,7 @@
       {resolutionLabel(wasConfirmed)}
     </span>
     <span class="cohort-count">
-      {#if collapsed && !raw}
-        {clusters.length} theme{clusters.length === 1 ? '' : 's'}
-        from {sortedFires.length} prediction{sortedFires.length === 1 ? '' : 's'}
-      {:else}
-        {sortedFires.length} prediction{sortedFires.length === 1 ? '' : 's'}
-      {/if}
+      {cohortCountLabel(clusters.length, sortedFires.length, collapsed && !raw)}
     </span>
     {#if collapsed}
       <button

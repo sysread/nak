@@ -10,9 +10,15 @@
    * Moved verbatim out of the retired Samskara diagnostics modal into a
    * standalone component so the Samskara tab's Summary sub-view can host
    * it. Composition only - the MOOD_TABLE lookup and the cell math live
-   * in $lib/samskara/events.
+   * in $lib/samskara/events; the range-label and aria-label derivations
+   * live in $lib/ui/samskara-mood-legend.
    */
   import { MOOD_TABLE, CONFIDENCE_CUT, cellFor, type MoodColumn } from '$lib/samskara/events';
+  import {
+    valenceRangeLabel,
+    valenceRangeCompactLabel,
+    moodDotAriaLabel,
+  } from '$lib/ui/samskara-mood-legend';
   import { moodState } from '$lib/samskara/mood.svelte';
 
   const currentCell: { row: number; column: MoodColumn } | null = $derived.by(() => {
@@ -53,21 +59,9 @@
           <tr>
             <th scope="row" class="mood-row-label">
               <span class="mood-row-name">{row.confidentLabel}</span>
-              <span class="mood-row-range">
-                {#if i === 0}
-                  v &ge; {row.valenceMin}
-                {:else if row.valenceMin === -Infinity}
-                  v &lt; {MOOD_TABLE[i - 1].valenceMin}
-                {:else}
-                  {row.valenceMin} &le; v &lt; {MOOD_TABLE[i - 1].valenceMin}
-                {/if}
-              </span>
+              <span class="mood-row-range">{valenceRangeLabel(i)}</span>
               <span class="mood-row-range-compact" aria-hidden="true">
-                {#if row.valenceMin === -Infinity}
-                  &lt; {MOOD_TABLE[i - 1].valenceMin}
-                {:else}
-                  &ge; {row.valenceMin}
-                {/if}
+                {valenceRangeCompactLabel(i)}
               </span>
             </th>
             <td class="mood-cell">
@@ -76,7 +70,7 @@
               {#if currentCell && currentCell.row === i && currentCell.column === 'confident'}
                 <span
                   class="mood-dot"
-                  aria-label={`Pill currently here: ${row.confidentLabel}, confidence ${(moodState.current?.confidence ?? 0).toFixed(2)}, valence ${(moodState.current?.valence ?? 0).toFixed(2)}`}
+                  aria-label={moodDotAriaLabel(row.confidentLabel, moodState.current?.confidence ?? 0, moodState.current?.valence ?? 0)}
                 ></span>
               {/if}
             </td>
@@ -86,7 +80,7 @@
               {#if currentCell && currentCell.row === i && currentCell.column === 'tentative'}
                 <span
                   class="mood-dot"
-                  aria-label={`Pill currently here: ${row.tentativeLabel}, confidence ${(moodState.current?.confidence ?? 0).toFixed(2)}, valence ${(moodState.current?.valence ?? 0).toFixed(2)}`}
+                  aria-label={moodDotAriaLabel(row.tentativeLabel, moodState.current?.confidence ?? 0, moodState.current?.valence ?? 0)}
                 ></span>
               {/if}
             </td>

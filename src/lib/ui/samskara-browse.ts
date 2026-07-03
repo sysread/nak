@@ -230,6 +230,16 @@ export function worstSeverity(severities: readonly Severity[]): Severity {
 }
 
 /**
+ * Headline copy for the Health panel's overall severity dot. One
+ * phrase per severity tier; the dot itself carries the color.
+ */
+export function healthHeadline(overall: Severity): string {
+  if (overall === 'ok') return 'Pipeline healthy';
+  if (overall === 'warn') return 'Needs a look';
+  return 'Something is stuck';
+}
+
+/**
  * Provenance kinds in display order: the substrate that formed the
  * samskara first, then the relations that tied that substrate together,
  * then (for a tier-2) its tier-1 children. A samskara minted from the
