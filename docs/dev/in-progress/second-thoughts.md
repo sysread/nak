@@ -530,6 +530,18 @@ message. Second thoughts is per-message and persistent, so it is
 a slide-down, in the `AssistantBody` neighborhood alongside the
 reasoning and tool-call panels.
 
+**The panel renders ONLY for a doubt.** `AssistantBody` gates the
+mount on `isDoubt(disposition)` - `conviction` (the overwhelming
+majority verdict on a good model) shows nothing. The reviewer still
+runs on every turn and the verdict still persists; this is purely a
+display gate. Rationale from production data: at a ~95%+ conviction
+base rate, a calm row on every fine answer is chrome, and a doubt is a
+trustworthy signal (it tracks answer quality - it fires on sloppy
+models, stays quiet on good ones), so a visible panel should always
+*mean* something. Consequence to remember: an absent panel means
+"reviewed, no doubt" (or, rarely, the reviewer wrote nothing) - it does
+NOT mean "not reviewed."
+
 - Collapsed: a small glyph / border tint keyed to disposition
   (the ambient signal - readable at a glance without opening).
 - Expanded: the `note`.

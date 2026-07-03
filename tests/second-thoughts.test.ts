@@ -15,6 +15,7 @@ import {
   dispositionLabel,
   dispositionTone,
   displayNote,
+  isDoubt,
   SECOND_THOUGHTS_DISPOSITIONS,
 } from '../src/lib/ui/second-thoughts';
 import { toVeniceMessage } from '../src/lib/chat/prompt-assembly';
@@ -87,6 +88,15 @@ describe('disposition maps', () => {
     expect(dispositionTone('hedge')).toBe('unease');
     expect(dispositionTone('reframe')).toBe('unease');
     expect(dispositionTone('correct')).toBe('alert');
+  });
+});
+
+describe('isDoubt', () => {
+  it('is false only for conviction (the panel-visibility gate)', () => {
+    expect(isDoubt('conviction')).toBe(false);
+    expect(isDoubt('hedge')).toBe(true);
+    expect(isDoubt('reframe')).toBe(true);
+    expect(isDoubt('correct')).toBe(true);
   });
 });
 

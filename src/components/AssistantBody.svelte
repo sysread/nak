@@ -46,7 +46,7 @@
     parseCitationRefHref,
     showCitationsControls,
   } from '$lib/ui/assistant-body';
-  import { coerceSecondThoughts } from '$lib/ui/second-thoughts';
+  import { coerceSecondThoughts, isDoubt } from '$lib/ui/second-thoughts';
   import { webCitationToDisplay } from '$lib/ui/citations';
   import { formatMessageStamp } from '$lib/ui/message-timestamp';
 
@@ -177,8 +177,14 @@
   const stamp = $derived(formatMessageStamp(createdAt, app.displayTimezone));
 
   // Coerce the raw jsonb once; null means "no verdict" -> render
-  // nothing. See src/lib/ui/second-thoughts.ts.
+  // nothing. The panel shows ONLY for a doubt - conviction (the common
+  // "stands by it" verdict) stays silent so the transcript isn't
+  // chromed with a calm row on every fine answer, and a visible panel
+  // always means something. See src/lib/ui/second-thoughts.ts.
   const secondThoughtsVerdict = $derived(coerceSecondThoughts(secondThoughts));
+  const showSecondThoughts = $derived(
+    secondThoughtsVerdict !== null && isDoubt(secondThoughtsVerdict.disposition)
+  );
 
   /**
    * Click delegation for `^N^` citation links inside the markdown
@@ -239,7 +245,7 @@
 <!-- Second-thoughts coda: the reviewer's afterthought about this
      answer, below the body (and any tool cards) but above the meta
      action bar. Renders only when the jsonb coerced to a real verdict. -->
-{#if secondThoughtsVerdict}
+{#if showSecondThoughts && secondThoughtsVerdict}
   <SecondThoughtsPanel verdict={secondThoughtsVerdict} {onRefine} {disabled} />
 {/if}
 

@@ -13,13 +13,12 @@ that makes a careful person hedge, caveat, or reconsider.
 
 ## What you'll see
 
-Below a completed reply, a compact **Second thoughts** row appears a
-beat after the answer settles (the review runs in the background, so it
-lands just after the text does). It carries a one-word read of how the
-assistant feels about the answer:
+The assistant reviews **every** reply in the background - but it only
+*shows* you something when it has an actual misgiving. Most answers hold
+up, and those stay quiet: no news is good news. So a **Second thoughts**
+row appearing under a reply always means the assistant flagged
+something. It comes in three flavors:
 
-- **Stands by it** (calm) - no misgivings. This is the common case: the
-  reply held up on a second look.
 - **Overconfident** (soft highlight) - the answer is basically fine but
   sounded more certain than it should; a caveat was missing.
 - **May have misread** (soft highlight) - the assistant suspects it
@@ -27,11 +26,10 @@ assistant feels about the answer:
   context you didn't state.
 - **Possible error** (red) - it suspects an actual factual mistake.
 
-When the assistant has a genuine misgiving, the note expands on its own
-and offers a button in the assistant's own voice - **"Let me temper
-that"**, **"Let me re-read your question"**, or **"Let me
-double-check that"** depending on what's bothering it. For **Stands by
-it** there's no button and nothing to say.
+When one appears, the note expands on its own and offers a button in the
+assistant's own voice - **"Let me temper that"**, **"Let me re-read your
+question"**, or **"Let me double-check that"** depending on what's
+bothering it.
 
 ## Acting on a second thought
 

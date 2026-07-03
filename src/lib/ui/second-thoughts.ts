@@ -67,6 +67,20 @@ export function coerceSecondThoughts(raw: unknown): SecondThoughtsVerdict | null
 }
 
 /**
+ * Whether a verdict represents actual doubt (anything but conviction).
+ * The per-message panel renders ONLY for a doubt: conviction is the
+ * common "nothing to see here" outcome and showing a calm row on every
+ * fine answer is just chrome. A doubt is a meaningful, trustworthy
+ * signal (it tracks answer quality - it fires on sloppy models and
+ * stays quiet on good ones), so it earns the visible panel; conviction
+ * stays silent. The reviewer still runs on every turn and the verdict
+ * still persists - this is purely a display gate.
+ */
+export function isDoubt(d: SecondThoughtsDisposition): boolean {
+  return d !== 'conviction';
+}
+
+/**
  * Visual tone for the collapsed glyph + border tint. 'calm' for
  * conviction, 'unease' for the soft doubts (hedge / reframe), 'alert'
  * for a suspected factual error (correct) - the loudest because it is
