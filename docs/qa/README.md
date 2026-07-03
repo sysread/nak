@@ -205,6 +205,16 @@ One file per use-case under [`use-cases/`](./use-cases/), named
 - [settings-custom-prompts](./use-cases/settings-custom-prompts.md) - the
   Custom prompts pane: add/edit/delete autosave, drag-and-drop reorder,
   and the order flowing through to the chat composer's prompt toggles.
+- [settings-model-profiles](./use-cases/settings-model-profiles.md) - the
+  Model profiles pane: the seeded starter profile, add/edit/delete with
+  the exactly-one-default and last-profile invariants, unique-name
+  validation gating the autosave, catalog re-snapshot on a model pick,
+  and drag reorder.
+- [chat-model-profile-selection](./use-cases/chat-model-profile-selection.md) -
+  the composer's profile picker pinning `threads.model`, send-path
+  resolution of model/reasoning/verbosity through the profile, the
+  pickers badging profile defaults (including Off), and the
+  deleted-profile / legacy-tier fallback to the default profile.
 - [setup-config-transfer](./use-cases/setup-config-transfer.md) - first
   launch setup, local config persistence, and config-only export/import
   across browsers.
