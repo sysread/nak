@@ -102,7 +102,7 @@ interface AppState {
    * per-turn system-prompt appendix asking the model to use light
    * Markdown emphasis for semantic save-points (bold terms, italic
    * phrases). Opt-in; seeded from Supabase on unlock. See
-   * chat-loop.ts for the exact blurb.
+   * chat/loop.ts for the exact blurb.
    */
   emphasisMarkdown: boolean;
   /**

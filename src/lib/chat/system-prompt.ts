@@ -11,7 +11,7 @@
  * sub-agents) live next to their callers; the "chat" in the name is
  * literal - this is the prompt for the user-facing chat loop only.
  *
- * Two exports, both called from `src/lib/chat-loop.ts` once per turn
+ * Two exports, both called from `src/lib/chat/loop.ts` once per turn
  * and from the test suite: `buildSystemPrompt` builds the stable
  * baseline, and `buildToolboxStateBlock` builds the volatile
  * gated-toolbox on/off block that rides in the per-turn metadata
@@ -25,8 +25,8 @@
  * source. The blocks join with blank lines between them at the bottom
  * of `buildSystemPrompt`, alongside the catalog.
  */
-import { TOOLBOXES, alwaysOnToolbox, toggleToolbox } from './tools';
-import type { Toolbox } from './tools';
+import { TOOLBOXES, alwaysOnToolbox, toggleToolbox } from '../tools';
+import type { Toolbox } from '../tools';
 
 /**
  * Gated toolboxes - everything in `TOOLBOXES` other than the always-on
@@ -52,7 +52,7 @@ const GATED_TOOLBOXES: readonly Toolbox[] = TOOLBOXES.filter(
  * a dedicated metadata system message that the chat-loop assembles per
  * round and pins at the TAIL of the request, after the conversation
  * (for prompt-cache stability - see `buildMetadataSystemMessage` and the
- * request assembly in `chat-loop.ts`). The
+ * request assembly in `chat/loop.ts`). The
  * samskara/intuition/context-recall priming projections ride as
  * assistant `<think>` messages after the user turn, not as appendix
  * text. The bias-profile appendix that used to ride at the end here is
@@ -276,7 +276,7 @@ Examples:
  * The catalog carries NO per-turn (on)/(off) state - it lists what
  * exists, not what is currently enabled. The volatile enabled/disabled
  * state rides in the per-turn metadata system message instead (see
- * `buildToolboxStateBlock` and the request assembly in chat-loop.ts).
+ * `buildToolboxStateBlock` and the request assembly in chat/loop.ts).
  * Keeping the catalog state-free is what makes the baseline system
  * prompt byte-stable across a mid-conversation toggle_toolbox flip, so
  * a toggle re-encodes only the small trailing metadata block rather
@@ -378,7 +378,7 @@ export function buildToolboxStateBlock(enabled: readonly string[]): string {
  * Per-turn ambient context (datetime, toolbox state, attachments
  * inventory, formatting and title nudges, identity facts) is NOT
  * carried here. It rides as a separate metadata system message that
- * chat-loop.ts builds per round and pins at the TAIL of the request.
+ * chat/loop.ts builds per round and pins at the TAIL of the request.
  * Recall and intuition projections ride as assistant `<think>`
  * messages after the user turn. The baseline this function returns is
  * fully stable across rounds and across toolbox toggles - nothing in

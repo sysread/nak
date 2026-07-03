@@ -57,7 +57,7 @@ covers the attachment-specific pieces.
   routes the multipart upload through the venice edge function's
   `/text-parser` route; the function holds the shared key and relays
   the response.
-- `src/lib/chat-loop.ts` - `toVeniceMessage` accepts `visionSpec` +
+- `src/lib/chat/loop.ts` - `toVeniceMessage` accepts `visionSpec` +
   `imageUrls` (the pre-resolved signed URLs) and routes user rows through
   `buildUserVeniceContent` when they carry attachments.
 - `src/lib/extractedTextDrawer.svelte.ts` - rune-based singleton store

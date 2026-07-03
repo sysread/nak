@@ -239,7 +239,7 @@ and fires the RPC best-effort for persistence across reload / device.
   merge that lands the verdict's realtime echo.
 - `src/lib/chat/prompt-assembly.ts` - `toVeniceMessage`'s acted-doubt
   `<think>` projection.
-- `src/lib/chat/types.ts` / `src/lib/chat-loop.ts` / `src/lib/venice.ts`
+- `src/lib/chat/types.ts` / `src/lib/chat/loop.ts` / `src/lib/venice.ts`
   - the `skipPriming` plumbing.
 - `src/lib/supabase.ts` - `markSecondThoughtsActed`.
 

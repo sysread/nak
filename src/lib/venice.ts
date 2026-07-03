@@ -156,7 +156,7 @@ export interface Citation {
  * {@link ChatRequest.webCitations} so a caller can keep grounding
  * while suppressing the `[1]` / `[2]` markers in the answer body.
  *
- * Caller scoping: the main chat loop in `chat-loop.ts` deliberately
+ * Caller scoping: the main chat loop in `chat/loop.ts` deliberately
  * does NOT set `webSearch` or `webCitations` on its `streamChat`
  * calls. Venice treats `enable_web_search: 'on'` as unconditional
  * (every request runs a search), so leaving the flag unset is the
@@ -1021,7 +1021,7 @@ export class VeniceClient {
     } catch (err) {
       // SSE parse failures, network interruptions mid-stream, and
       // reader.read() rejections all land here. The error is re-
-      // thrown so the for-await consumer in chat-loop.ts sees it
+      // thrown so the for-await consumer in chat/loop.ts sees it
       // (and runExchange's outer catch surfaces it to the user),
       // but we log at the source layer too so the log drawer shows
       // the error with `venice` as the source tag. Mobile users
@@ -1083,7 +1083,7 @@ export class VeniceClient {
  * longer trust the live path and must reconcile against the row.
  *
  * Thrown by the drain (not yielded) so the for-await consumer in
- * chat-loop.ts surfaces it as an exception, and Chat.svelte's
+ * chat/loop.ts surfaces it as an exception, and Chat.svelte's
  * runExchange catch can route it into the poll-the-row reconnect
  * (`reconnectInflightTurn`) instead of the generic "response was cut
  * off" banner. NOT a VeniceError subclass on purpose: the existing

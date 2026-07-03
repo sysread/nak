@@ -197,7 +197,7 @@ describe('coerceSettings', () => {
 
   it('drops empty / non-string profile fields so absent === blank', () => {
     // Empty string is the "not set" sentinel. The coercer drops it
-    // so the appendix builder in chat-loop.ts never has to
+    // so the appendix builder in chat/loop.ts never has to
     // distinguish "user typed nothing" from "field never set."
     expect(coerceSettings({ userName: '' })).toEqual({});
     expect(coerceSettings({ userLocation: '' })).toEqual({});

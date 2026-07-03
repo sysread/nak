@@ -3561,7 +3561,7 @@ $$;
 -- Scored sibling of search_memories_by_embedding. Same ranking formula,
 -- but returns the boosted similarity score alongside each row so the
 -- caller can threshold in application code. Used by the opening-turn
--- memory-recall priming in chat-loop.ts, which needs a minimum-score
+-- memory-recall priming in chat/loop.ts, which needs a minimum-score
 -- gate to avoid injecting noise on turns that don't actually look like
 -- anything the user's memories cover. Kept as a separate function so
 -- the main memory_search path (and the Memories browser) stays on the

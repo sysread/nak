@@ -59,24 +59,24 @@
  * return.
  */
 
-import type { VeniceMessage } from './venice';
-import { buildToolList } from './tools';
-import { buildSystemPrompt } from './chat-prompt';
-import { recordSubstrateStub } from './samskara';
-import { createLogger } from './logger.svelte';
-import { consumeStreamEvents } from './chat/stream-events';
-import { countUserRounds } from './intuition';
+import type { VeniceMessage } from '../venice';
+import { buildToolList } from '../tools';
+import { buildSystemPrompt } from './system-prompt';
+import { recordSubstrateStub } from '../samskara';
+import { createLogger } from '../logger.svelte';
+import { consumeStreamEvents } from './stream-events';
+import { countUserRounds } from '../intuition';
 import {
   buildMetadataSystemMessage,
   splitSystemPreamble,
-} from './chat/prompt-assembly';
-import type { ChatLoopOptions, ChatLoopResult } from './chat/types';
+} from './prompt-assembly';
+import type { ChatLoopOptions, ChatLoopResult } from './types';
 
-// `toVeniceMessage` (the stored-row -> wire projection) now lives in
-// ./chat/prompt-assembly; re-exported here so its external consumers
+// `toVeniceMessage` (the stored-row -> wire projection) lives in
+// ./prompt-assembly; re-exported here so its external consumers
 // (Chat.svelte, tools/wire.ts, the wire test) keep importing it from
-// `$lib/chat-loop`.
-export { toVeniceMessage } from './chat/prompt-assembly';
+// `$lib/chat/loop`.
+export { toVeniceMessage } from './prompt-assembly';
 
 const log = createLogger('chat-loop');
 

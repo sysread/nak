@@ -353,7 +353,7 @@ Main-thread plumbing:
   `profiles.settings.displayTimezone` server-side.
 - `src/lib/routing.svelte.ts` - extends `DrawerTab` with `'wiki'`
   and `Route` with `wiki_article_id`.
-- `src/lib/chat-prompt.ts` - `WIKI_BLOCK` after `JOURNAL_BLOCK` in
+- `src/lib/chat/system-prompt.ts` - `WIKI_BLOCK` after `JOURNAL_BLOCK` in
   the section list.
 
 UI:

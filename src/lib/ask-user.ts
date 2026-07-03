@@ -7,7 +7,7 @@
  * `serverSideTool`); the edge function returns the pending sentinel.
  * What stays browser-side is everything that reads that sentinel off a
  * persisted tool-result row and drives the suspend/resume UI:
- * `chat-loop.ts` detects the suspended turn, `Chat.svelte` and
+ * `chat/loop.ts` detects the suspended turn, `Chat.svelte` and
  * `AskUserCard.svelte` render the card and write the answer back. Those
  * consumers share these content shapes, so they live here in a non-tool
  * module rather than alongside the dead browser impl.
@@ -80,7 +80,7 @@ export interface AskUserAnsweredContent {
  * options are dropped rather than failing the whole call - the
  * AskUserCard renders a question with however many valid options
  * survived, and free-form answering covers the rest. Used by
- * chat-loop.ts to pre-populate the card from the in-flight tool_call
+ * chat/loop.ts to pre-populate the card from the in-flight tool_call
  * event without waiting for the persisted row.
  */
 export function extractAskUserPrompt(args: Record<string, unknown>): {
@@ -102,7 +102,7 @@ export function extractAskUserPrompt(args: Record<string, unknown>): {
 }
 
 /**
- * Type guards + content parser. Used by chat-loop.ts (to detect the
+ * Type guards + content parser. Used by chat/loop.ts (to detect the
  * suspended state on a tool-result row) and by Chat.svelte (to project
  * the message into an AskUserCard block). Returns null for any other
  * content - regular tool results, error payloads, malformed JSON. The

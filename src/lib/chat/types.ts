@@ -1,6 +1,6 @@
 /**
  * Chat-turn contract types. The option/result/handler shapes that
- * `runChatLoop` (../chat-loop.ts) takes and returns, plus the
+ * `runChatLoop` (./loop.ts) takes and returns, plus the
  * stream consumer (./stream-events.ts) shares. Kept in their own
  * module so the behavior files stay focused on logic and so UI code
  * that only needs the `SubconsciousOp` vocabulary doesn't import a

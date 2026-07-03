@@ -245,7 +245,7 @@ the function-side wire shape:
   `/stream` route with a thread + anchor-message context,
   subscribes to the `thread:<id>:stream` Broadcast channel, and
   yields the function-published event union. Used only by the
-  main user-facing chat (`chat-loop.ts`).
+  main user-facing chat (`chat/loop.ts`).
 - `SupabaseService.complete(req)` - non-streaming one-shot,
   routed through the venice/complete route. Used only by the one
   intentional browser-side completion path left: the intuition

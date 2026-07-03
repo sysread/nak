@@ -152,7 +152,7 @@ Pick a short, stable source tag. Existing tags:
   feature groups under a single drawer filter, same pattern as
   `bias`
 - `chat-loop` - the browser-side turn orchestrator
-  (`src/lib/chat-loop.ts`). Notably carries `venice request wire` at
+  (`src/lib/chat/loop.ts`). Notably carries `venice request wire` at
   debug: the full `requestMessages` array sent for the turn's opening
   round, priming `<think>` chain included. Round-1 wire only (later
   tool rounds run edge-side under `stream`). Drop to `Debug+` when a

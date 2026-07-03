@@ -2,7 +2,7 @@
  * Tests for the shared tool-call wire-projection helpers in
  * `src/lib/tools/wire.ts`.
  *
- * The sanitiser used to live inline in chat-loop.ts; it was hoisted to
+ * The sanitiser used to live inline in chat/loop.ts; it was hoisted to
  * a leaf module so every wire-projection site (chat-loop's
  * toVeniceMessage and in-loop history push, the headless tool loop in
  * tools/run.ts, and every agent's messageToVenice helper) can call in
@@ -230,7 +230,7 @@ describe('parseToolArguments', () => {
   });
 
   it('throws on invalid JSON so the caller can route to a tool error', () => {
-    // chat-loop.ts and tools/run.ts both wrap the call in try/catch
+    // chat/loop.ts and tools/run.ts both wrap the call in try/catch
     // and return a tool-error result row; preserving the throw means
     // those call sites keep working without change.
     expect(() => parseToolArguments('{not valid json')).toThrow();

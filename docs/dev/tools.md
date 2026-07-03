@@ -19,7 +19,7 @@ The catalog and the dispatch live on opposite sides of the wire:
 
 - **The browser owns the catalog.** `buildToolList` composes the
   wire `tools` array from the thread's enabled toolboxes, and
-  `src/lib/chat-prompt.ts` renders the same registry into the
+  `src/lib/chat/system-prompt.ts` renders the same registry into the
   system-prompt catalog. Every browser `ToolDef` is a
   `serverSideTool(schema)` - catalog metadata plus an `execute()`
   that throws. Nothing dispatches tools in the browser.
@@ -205,7 +205,7 @@ Browser catalog (`src/lib/tools/`):
 
 Adjacent browser modules:
 
-- `src/lib/chat-prompt.ts` - `buildSystemPrompt` renders the
+- `src/lib/chat/system-prompt.ts` - `buildSystemPrompt` renders the
   registry into the system-prompt catalog; `buildToolboxStateBlock`
   renders the volatile `(on)`/`(off)` state.
 - `src/lib/ask-user.ts` - the ask_user suspend/resume envelope
@@ -252,7 +252,7 @@ Edge dispatch (`supabase/functions/venice/`):
 
 ## Entry points
 
-- **Chat loop** - `chat-loop.ts` calls
+- **Chat loop** - `chat/loop.ts` calls
   `buildToolList(thread.toolboxes_enabled)` to ship the wire
   `tools` array, then observes the streamed `tool_call_request` /
   `tool_call_response` events. The edge function is
@@ -266,7 +266,7 @@ Edge dispatch (`supabase/functions/venice/`):
   Triggers and per-agent stories live with the owning features
   (`./memory.md`, `./wiki.md`).
 - **System prompt assembly** - `buildSystemPrompt({ biasProfile })`
-  in `src/lib/chat-prompt.ts` composes the baseline system message.
+  in `src/lib/chat/system-prompt.ts` composes the baseline system message.
   The catalog section lists always-on tools first, then each gated
   toolbox and its tools. The catalog is state-free: it lists what
   toolboxes exist, not which are enabled, so the baseline stays
@@ -366,7 +366,7 @@ Edge dispatch (`supabase/functions/venice/`):
   (first-seen wins). Callers should never construct this array
   by hand.
 - `buildSystemPrompt(opts?)` / `buildToolboxStateBlock(enabled)` -
-  live in `src/lib/chat-prompt.ts`, importing the registry from
+  live in `src/lib/chat/system-prompt.ts`, importing the registry from
   here. The baseline is state-free; the state block renders the
   gated toolboxes as `(on)`/`(off)` lines and rides the per-turn
   metadata message. Unknown names in `enabled` are ignored;

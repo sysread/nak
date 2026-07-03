@@ -5,7 +5,7 @@
  * other tool in the catalog, its "result" is supplied by the user, not
  * computed by code - the chat-loop suspends after this call lands and
  * waits for a UI-provided answer before resuming. See `./ask_user.ts`
- * for the sentinel/answer wire shapes and `src/lib/chat-loop.ts` for
+ * for the sentinel/answer wire shapes and `src/lib/chat/loop.ts` for
  * how the loop drives the suspend/resume cycle.
  *
  * Constants exported so the impl, the UI card, and tests share one
