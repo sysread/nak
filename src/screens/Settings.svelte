@@ -94,7 +94,22 @@
   } from '$lib/models';
   import { priceCapHiddenNote } from '$lib/ui/model-picker';
   import * as profilesLib from '$lib/ui/model-profiles';
-  import { buildImageModelOptions } from '$lib/ui/image-model-picker';
+  import {
+    buildImageModelOptions,
+    imageModelLabel,
+    imageModelOverrideFor,
+  } from '$lib/ui/image-model-picker';
+  import {
+    aboutActionLabel,
+    authPasswordError,
+    exportConfigFilename,
+    formatBuildTime,
+    notifyOnCompleteNotice,
+    notifyPermissionNudgeVisible,
+    notifyPermissionRequestNotice,
+    toggleNotice,
+    userFieldNotice,
+  } from '$lib/ui/settings';
   import {
     catalog,
     shouldAutoRefreshCatalog,
@@ -123,11 +138,23 @@
   import ImageModelSelect from '../components/ImageModelSelect.svelte';
   import { updateState, applyUpdate, checkForUpdates } from '$lib/update.svelte';
   import { VeniceError } from '$lib/venice';
+  import { type UsageModelBucket } from '$lib/usage';
   import {
-    type UsageCurrency,
-    type UsageModelBucket,
-  } from '$lib/usage';
-  import { relativeHue } from '$lib/ui/usage';
+    aggregateTotalsByCurrency,
+    aggregateUsage,
+    daysInPickedRange,
+    formatAmount,
+    formatAmountPerDay,
+    formatTokens,
+    isCreditCurrency,
+    modelCountNoun,
+    perDayTitle,
+    relativeHue,
+    spendPillTitle,
+    todayYmd,
+    usageBarPercent,
+    ymdDaysAgo,
+  } from '$lib/ui/usage';
   import {
     usage,
     shouldAutoRefreshUsage,
@@ -727,8 +754,7 @@
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-      a.download = `nak-config-${stamp}.json`;
+      a.download = exportConfigFilename();
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -749,32 +775,9 @@
   // `<input type="date">` produces and consumes). The analytics endpoint
   // takes date-only bounds and reads `endDate` as inclusive, so the
   // picker values pass straight through with no ISO conversion.
-
-  /**
-   * One row of the Usage table - a per-model, per-currency bucket. The
-   * analytics `byModel` roll-up gives one entry per model carrying both
-   * USD and DIEM totals; {@link aggregateUsage} fans that into one bucket
-   * per currency the model was billed in so a mixed USD+DIEM plan never
-   * sums unlike units.
-   */
-  interface UsageBucket {
-    /** Model display name (analytics `modelName`), shown in the row label. */
-    sku: string;
-    currency: UsageCurrency;
-    /** Token count for the model (0 for non-LLM SKUs). */
-    tokens: number;
-    /** Spend in this bucket's currency. */
-    amount: number;
-  }
-
-  function todayYmd(): string {
-    return new Date().toISOString().slice(0, 10);
-  }
-  function ymdDaysAgo(days: number): string {
-    const d = new Date();
-    d.setDate(d.getDate() - days);
-    return d.toISOString().slice(0, 10);
-  }
+  //
+  // The pane's display decisions (bucket fan-out, totals, formatters,
+  // pill tooltips, bar scaling) live in $lib/ui/usage.
 
   // Default range: rolling 7-day window. A week is the shortest
   // useful slice — long enough to smooth over a single heavy day,
@@ -932,157 +935,6 @@
     }
   }
 
-  /**
-   * Fan the analytics per-model roll-up into the table's per-(model,
-   * currency) buckets. Each `byModel` entry carries both a USD and a
-   * DIEM total; we emit one bucket per currency the model actually billed
-   * in (a nonzero total) so a mixed USD+DIEM plan never sums unlike units
-   * into one figure. Spend is already positive in the analytics shape, so
-   * no sign inversion (the per-request ledger's signed debits are gone).
-   *
-   * Tokens are reported per model, NOT split by currency. A model is
-   * almost always billed in a single currency within a window - Venice
-   * debits DIEM first and only falls through to USD once DIEM is
-   * exhausted - so the split is near-always 1:1. For the rare
-   * epoch-crossing model billed in both, the whole token count is
-   * attributed to the larger-spend currency and the minor row's bar is
-   * left empty; the tokens are still counted exactly once in the chart
-   * total.
-   *
-   * Buckets whose spend lands below one cent are dropped. Dust rows
-   * clutter the chart without telling the user anything they'd act on,
-   * and keeping them produced the `$0.00` cells this filter was added to
-   * remove.
-   */
-  function aggregateUsage(models: UsageModelBucket[]): UsageBucket[] {
-    const out: UsageBucket[] = [];
-    for (const m of models) {
-      const pairs: { currency: UsageCurrency; amount: number }[] = [];
-      if (m.usd > 0) pairs.push({ currency: 'USD', amount: m.usd });
-      if (m.diem > 0) pairs.push({ currency: 'DIEM', amount: m.diem });
-      // Larger-spend currency first so it gets the token attribution.
-      pairs.sort((a, b) => b.amount - a.amount);
-      pairs.forEach((p, i) => {
-        out.push({
-          sku: m.modelName,
-          currency: p.currency,
-          tokens: i === 0 ? m.tokens : 0,
-          amount: p.amount,
-        });
-      });
-    }
-    return (
-      out
-        // One-cent dust filter. The USD display resolution is two
-        // decimals, so anything under $0.01 renders as zero anyway;
-        // applying the same numeric threshold to DIEM drops equivalently
-        // trivial credit rows without needing a per-currency table.
-        .filter((b) => b.amount >= 0.01)
-        .sort((a, b) => {
-          // Token-heavy rows first. Zero-token rows (image, video)
-          // cluster at the bottom in amount order so spend-only SKUs
-          // still sort sensibly among themselves.
-          if (b.tokens !== a.tokens) return b.tokens - a.tokens;
-          return b.amount - a.amount;
-        })
-    );
-  }
-
-  /** One row of the per-currency spend summary at the top of the pane. */
-  interface CurrencyTotal {
-    currency: UsageCurrency;
-    amount: number;
-  }
-
-  /**
-   * Roll the per-model buckets up into one total per currency. We
-   * group rather than collapse so a user on a mixed USD + credits
-   * plan sees two totals — summing across currencies would be
-   * meaningless (a dollar and a credit aren't the same unit). USD
-   * sorts first so the cash total — the one that actually hit the
-   * user's card — reads as the primary figure; credit currencies
-   * fall in stable alpha order after.
-   */
-  function aggregateTotalsByCurrency(buckets: UsageBucket[]): CurrencyTotal[] {
-    const sums = new Map<UsageCurrency, number>();
-    for (const b of buckets) {
-      sums.set(b.currency, (sums.get(b.currency) ?? 0) + b.amount);
-    }
-    return Array.from(sums.entries())
-      .map(([currency, amount]) => ({ currency, amount }))
-      .sort((a, b) => {
-        if (a.currency === 'USD') return -1;
-        if (b.currency === 'USD') return 1;
-        return a.currency.localeCompare(b.currency);
-      });
-  }
-
-  const tokenFormatter = new Intl.NumberFormat(undefined, {
-    notation: 'compact',
-    maximumFractionDigits: 1,
-  });
-  function formatTokens(n: number): string {
-    if (n === 0) return '—';
-    return tokenFormatter.format(n);
-  }
-
-  /**
-   * Always render spend with the `$` sigil. Non-USD charges (VCU,
-   * DIEM, BUNDLED_CREDITS) get a muted pill style and a hover
-   * tooltip spelling out the origin — that's where "this was paid
-   * with credits, not cash" gets communicated. Keeping the numeric
-   * body identical across currencies lets every pill align cleanly
-   * in the spend column without the currency code widening the
-   * cell for a subset of rows.
-   */
-  function formatAmount(amount: number, _currency: UsageCurrency): string {
-    void _currency;
-    return `$${amount.toFixed(2)}`;
-  }
-
-  /**
-   * Inclusive day count for the picked range. The date pickers read
-   * as yyyy-mm-dd in the user's local calendar; "from May 1 to May 7"
-   * intuitively covers 7 days, not 6 (the diff between midnights) and
-   * not 8 (the exclusive upper bound the fetch uses). The clamp at 1
-   * keeps a same-day selection from dividing by zero.
-   */
-  function daysInPickedRange(start: string, end: string): number {
-    const startMs = new Date(`${start}T00:00:00Z`).getTime();
-    const endMs = new Date(`${end}T00:00:00Z`).getTime();
-    if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return 1;
-    const diffDays = Math.round((endMs - startMs) / (24 * 60 * 60 * 1000));
-    return Math.max(1, diffDays + 1);
-  }
-
-  /**
-   * Sub-cent precision for the avg-per-day pill. The totals pill
-   * rounds to two decimals because dollars and cents is the usual
-   * display unit, but daily averages from a 7-day window of light
-   * traffic can easily land at fractions of a cent - rounding those
-   * to `$0.00` defeats the pill's purpose. Three decimals keeps the
-   * pill readable while still showing signal on a sub-cent average.
-   */
-  function formatAmountPerDay(amount: number, _currency: UsageCurrency): string {
-    void _currency;
-    if (amount === 0) return '$0/day';
-    if (amount < 0.005) return `$${amount.toFixed(3)}/day`;
-    return `$${amount.toFixed(2)}/day`;
-  }
-
-  /**
-   * Human-facing tooltip text for a non-USD pill. Only DIEM reaches
-   * here today (USD pills carry no tooltip), but a `default` keeps a
-   * future analytics currency from rendering blank - it falls back to
-   * the raw identifier rather than silently hiding the distinction.
-   */
-  function currencyTitle(currency: UsageCurrency): string {
-    return currency === 'DIEM'
-      ? 'Paid with DIEM credits'
-      : `Paid with ${currency}`;
-  }
-
-
   // --- Security pane ---
   // Supabase login password rotation. The master-password ceremony
   // was retired with the streaming-root cleanup (the local config
@@ -1099,19 +951,6 @@
   let busy = $state(false);
 
   // --- About pane ---
-  // Humanize the ISO string Vite stamped at build time. Falls back to
-  // the raw value on any parse hiccup — e.g. the literal 'dev' that
-  // shows up during `pnpm dev` (no build step ran, so nothing to
-  // parse) or on a browser that doesn't speak the en-* locale family.
-  function formatBuildTime(iso: string): string {
-    const parsed = new Date(iso);
-    if (isNaN(parsed.getTime())) return iso;
-    return parsed.toLocaleString(undefined, {
-      dateStyle: 'medium',
-      timeStyle: 'short',
-    });
-  }
-
   // `about-busy` covers both button states since they share the same
   // button: checking for an update vs. reloading once one is found.
   let aboutBusy = $state<'idle' | 'checking' | 'reloading'>('idle');
@@ -1170,17 +1009,15 @@
     }
   }
 
-  // Image-generation model. One bare id, no reasoning/profile axis. Picking
-  // the default id clears the override (stored as absence) so the blob
-  // stays compact and "default" reads as unset; any other id is persisted.
+  // Image-generation model. One bare id, no reasoning/profile axis.
+  // imageModelOverrideFor maps the default id to absence so "default"
+  // reads as unset in the settings blob; any other id is persisted.
   async function onPickImageModel(modelId: string): Promise<void> {
     modelError = null;
     modelInfo = null;
-    const next = modelId === VENICE_DEFAULT_IMAGE_MODEL ? undefined : modelId;
     try {
-      await persistImageModel(next);
-      const label =
-        (imageCatalog.data ?? []).find((m) => m.id === modelId)?.name ?? modelId;
+      await persistImageModel(imageModelOverrideFor(modelId));
+      const label = imageModelLabel(imageCatalog.data ?? [], modelId);
       modelInfo = `Image generation now uses ${label}.`;
     } catch (err) {
       modelError = err instanceof Error ? err.message : String(err);
@@ -1200,7 +1037,7 @@
     try {
       const trimmed = await persistUserName(next);
       userName = trimmed;
-      modelInfo = trimmed.length > 0 ? 'Name saved.' : 'Name cleared.';
+      modelInfo = userFieldNotice('Name', trimmed);
     } catch (err) {
       modelError = err instanceof Error ? err.message : String(err);
     }
@@ -1215,7 +1052,7 @@
     try {
       const trimmed = await persistUserLocation(next);
       userLocation = trimmed;
-      modelInfo = trimmed.length > 0 ? 'Location saved.' : 'Location cleared.';
+      modelInfo = userFieldNotice('Location', trimmed);
     } catch (err) {
       modelError = err instanceof Error ? err.message : String(err);
     }
@@ -1228,9 +1065,7 @@
     intentsEnabled = next;
     try {
       await persistIntentsEnabled(next);
-      intentsInfo = next
-        ? 'Intents enabled. Nak will begin forming growth intentions from the next daily pass; nothing changes mid-conversation.'
-        : 'Intents disabled. Existing intentions stop influencing replies and the pipeline goes idle; they are kept, not deleted.';
+      intentsInfo = toggleNotice('intents', next);
     } catch (err) {
       intentsEnabled = prev;
       intentsError = err instanceof Error ? err.message : String(err);
@@ -1244,9 +1079,7 @@
     emphasisMarkdown = next;
     try {
       await persistEmphasisMarkdown(next);
-      modelInfo = next
-        ? 'Emphasis markdown enabled.'
-        : 'Emphasis markdown disabled.';
+      modelInfo = toggleNotice('emphasisMarkdown', next);
     } catch (err) {
       emphasisMarkdown = prev;
       modelError = err instanceof Error ? err.message : String(err);
@@ -1288,11 +1121,7 @@
     notifyOnComplete = next;
     try {
       await persistNotifyOnComplete(next);
-      modelInfo = next
-        ? notificationsSupported()
-          ? 'Reply notifications enabled.'
-          : 'Reply notifications enabled. This browser does not support OS notifications, so Nak will flag unread threads in the sidebar instead.'
-        : 'Reply notifications disabled.';
+      modelInfo = notifyOnCompleteNotice(next, notificationsSupported());
     } catch (err) {
       notifyOnComplete = prev;
       modelError = err instanceof Error ? err.message : String(err);
@@ -1316,22 +1145,11 @@
     modelInfo = null;
     const result = await requestPermission();
     notifyPermission = result === 'unsupported' ? 'unsupported' : result;
-    if (result === 'granted') {
-      modelInfo = 'Reply notifications enabled for this browser.';
-    } else if (result === 'denied') {
-      // Chromium auto-rejects requestPermission() after a prior deny
-      // without showing UI, so the user has to unblock via browser
-      // settings. Spell that out rather than leaving them clicking a
-      // button that silently does nothing.
-      modelError =
-        'Browser notifications are blocked for this site. Allow them in your browser settings, then reload.';
-    } else {
-      // 'default' means the user dismissed the prompt without picking
-      // (closed the chip, hit Escape). Re-clicking the button will
-      // re-show the prompt since the gesture chain stays alive.
-      modelError =
-        'Notifications still off. Click the button again to retry, or allow them in your browser settings.';
-    }
+    // The outcome-to-copy mapping (and the Chromium prior-deny gotcha it
+    // narrates) lives in notifyPermissionRequestNotice.
+    const notice = notifyPermissionRequestNotice(result);
+    if (notice.kind === 'info') modelInfo = notice.text;
+    else modelError = notice.text;
   }
 
   async function onToggleWikiAutomatic(next: boolean): Promise<void> {
@@ -1341,9 +1159,7 @@
     wikiAutomaticEnabled = next;
     try {
       await persistWikiAutomaticEnabled(next);
-      wikiInfo = next
-        ? 'Automatic wiki enabled.'
-        : 'Automatic wiki disabled. Manual edits and the per-article "ask agent to update" button still work.';
+      wikiInfo = toggleNotice('wikiAutomatic', next);
     } catch (err) {
       wikiAutomaticEnabled = prev;
       wikiError = err instanceof Error ? err.message : String(err);
@@ -1357,9 +1173,7 @@
     wikiRecordExtractionEnabled = next;
     try {
       await persistWikiRecordExtractionEnabled(next);
-      wikiInfo = next
-        ? 'Automatic record extraction enabled.'
-        : 'Automatic record extraction disabled. Manually-added records still work; the background agent will stop creating new ones.';
+      wikiInfo = toggleNotice('wikiRecordExtraction', next);
     } catch (err) {
       wikiRecordExtractionEnabled = prev;
       wikiError = err instanceof Error ? err.message : String(err);
@@ -1373,9 +1187,7 @@
     wikiLibrarianEnabled = next;
     try {
       await persistWikiLibrarianEnabled(next);
-      wikiInfo = next
-        ? 'Wiki librarian enabled.'
-        : 'Wiki librarian disabled. Existing articles are unaffected.';
+      wikiInfo = toggleNotice('wikiLibrarian', next);
     } catch (err) {
       wikiLibrarianEnabled = prev;
       wikiError = err instanceof Error ? err.message : String(err);
@@ -1389,9 +1201,7 @@
     memoryLibrarianEnabled = next;
     try {
       await persistMemoryLibrarianEnabled(next);
-      memoryLibrarianInfo = next
-        ? 'Memory librarian enabled.'
-        : 'Memory librarian disabled. Existing memories are unaffected.';
+      memoryLibrarianInfo = toggleNotice('memoryLibrarian', next);
     } catch (err) {
       memoryLibrarianEnabled = prev;
       memoryLibrarianError = err instanceof Error ? err.message : String(err);
@@ -1462,18 +1272,15 @@
     e.preventDefault();
     authPwError = null;
     authPwInfo = null;
-    if (!authPwCurrent) {
-      authPwError = 'Enter your current account password.';
-      return;
-    }
-    // Supabase enforces a 6-character minimum by default. Hold the floor
-    // at 8 so the account password is not the weakest link in the chain.
-    if (authPwNew.length < 8) {
-      authPwError = 'New password must be at least 8 characters.';
-      return;
-    }
-    if (authPwNew !== authPwConfirm) {
-      authPwError = 'New password and confirmation do not match.';
+    // Field validation (and its error copy, including the 8-char
+    // floor over Supabase's 6) lives in authPasswordError.
+    const validationError = authPasswordError(
+      authPwCurrent,
+      authPwNew,
+      authPwConfirm
+    );
+    if (validationError !== null) {
+      authPwError = validationError;
       return;
     }
     if (!app.supabase) {
@@ -1789,7 +1596,7 @@
           />
           <span>Notify me when replies finish</span>
         </label>
-        {#if notifyOnComplete && notificationsSupported() && notifyPermission !== 'granted'}
+        {#if notifyPermissionNudgeVisible(notifyOnComplete, notificationsSupported(), notifyPermission)}
           <!-- Per-device reconciliation: the account-level setting is
                on but this browser hasn't granted the OS-level permission
                yet. Common case is a user who enabled the toggle on phone
@@ -2417,12 +2224,12 @@
               No usage in this range.
             {:else}
               <strong>{formatTokens(totalTokens)}</strong> tokens across
-              <strong>{buckets.length}</strong>{buckets.length === 1 ? ' model' : ' models'}.
+              <strong>{buckets.length}</strong>{modelCountNoun(buckets.length)}.
               {#each totalsByCurrency as t (t.currency)}
                 <span
                   class="usage-pill"
-                  class:credit={t.currency !== 'USD'}
-                  title={t.currency !== 'USD' ? currencyTitle(t.currency) : undefined}
+                  class:credit={isCreditCurrency(t.currency)}
+                  title={spendPillTitle(t.currency)}
                 >{formatAmount(t.amount, t.currency)}</span>
                 <!--
                   Avg-per-day pill paired with each currency's total.
@@ -2437,8 +2244,8 @@
                 -->
                 <span
                   class="usage-pill per-day"
-                  class:credit={t.currency !== 'USD'}
-                  title={`Average per day over ${rangeDays} day${rangeDays === 1 ? '' : 's'}${t.currency !== 'USD' ? ' - ' + currencyTitle(t.currency) : ''}`}
+                  class:credit={isCreditCurrency(t.currency)}
+                  title={perDayTitle(rangeDays, t.currency)}
                 >{formatAmountPerDay(t.amount / rangeDays, t.currency)}</span>
               {/each}
             {/if}
@@ -2456,17 +2263,16 @@
                   <span class="usage-sku" role="cell" title={b.sku}>{b.sku}</span>
                   <span class="usage-bar-cell" role="cell">
                     <!--
-                      Width is `max(2%, share-of-max)` so a non-zero
-                      but tiny row still registers as a visible bar
-                      rather than an invisible sliver. A truly zero-
-                      token row (image SKU) collapses to nothing.
+                      Width is `max(2%, share-of-max)` (usageBarPercent)
+                      so a non-zero but tiny row still registers as a
+                      visible bar rather than an invisible sliver. A
+                      truly zero-token row (image SKU) collapses to
+                      nothing.
                     -->
                     <span
                       class="usage-bar"
                       class:zero={b.tokens === 0}
-                      style="--usage-pct:{maxTokens > 0 && b.tokens > 0
-                        ? Math.max(2, (b.tokens / maxTokens) * 100)
-                        : 0}%; --usage-hue:{relativeHue(b.tokens, tokenPop)}"
+                      style="--usage-pct:{usageBarPercent(b.tokens, maxTokens)}%; --usage-hue:{relativeHue(b.tokens, tokenPop)}"
                     ></span>
                   </span>
                   <span class="usage-tokens" role="cell">{formatTokens(b.tokens)}</span>
@@ -2485,10 +2291,10 @@
                   -->
                   <span
                     class="usage-pill"
-                    class:credit={b.currency !== 'USD'}
+                    class:credit={isCreditCurrency(b.currency)}
                     role="cell"
                     style="--spend-hue:{relativeHue(b.amount, spendPop)}"
-                    title={b.currency !== 'USD' ? currencyTitle(b.currency) : undefined}
+                    title={spendPillTitle(b.currency)}
                   >{formatAmount(b.amount, b.currency)}</span>
                 </div>
               {/each}
@@ -2556,17 +2362,7 @@
           type="button"
           onclick={onAboutAction}
           disabled={aboutBusy !== 'idle'}
-        >
-          {#if aboutBusy === 'reloading'}
-            Reloading…
-          {:else if aboutBusy === 'checking'}
-            Checking…
-          {:else if updateState.available}
-            Reload to update
-          {:else}
-            Check for updates
-          {/if}
-        </button>
+        >{aboutActionLabel(aboutBusy, updateState.available)}</button>
         {#if aboutCheckedInfo}
           <p class="subtle" style="margin-top:0.5rem">{aboutCheckedInfo}</p>
         {/if}
