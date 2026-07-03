@@ -13,7 +13,12 @@
 // settles that row from the POST's own outcome, so the spinner can't outlive
 // the request regardless of whether `done` arrived.
 
-import type { AgentRunProgressEvent, WikiLibrarianRunResult } from '$lib/supabase';
+import type {
+  AgentRunProgressEvent,
+  ManualRunOutcome,
+  WikiLibrarianRunResult,
+} from '$lib/supabase';
+import { recoveredOutcomeIsFresh } from './manual-run-recovery';
 
 export type LibrarianStepStatus = 'pending' | 'ok' | 'error';
 
@@ -78,6 +83,69 @@ export function appendProgressStep(
     default:
       return steps;
   }
+}
+
+// Shown when the server-side in-flight guard rejected the run - a
+// scheduled or chat-dispatched run already holds the per-user lease, so
+// nothing started, nothing was committed, and no steps were produced.
+export const LIBRARIAN_BUSY_MESSAGE =
+  'A librarian run is already in flight (scheduled or chat-driven). Try again in a moment.';
+
+// Glyph for a step row's status column. Mirrors the chat tool-row
+// vocabulary: the pending glyph is the same Lekton-safe character the
+// strip's CSS rotates for its spinner (see .tool-status.status-pending
+// in styles.css) rather than a swapped sprite.
+export function librarianStepGlyph(status: LibrarianStepStatus): string {
+  if (status === 'pending') return '↻';
+  if (status === 'ok') return '✓';
+  return '✗';
+}
+
+// Meta line under the result card: run size in tool calls and articles,
+// plus the pointer to the Logs drawer for the full trace.
+export function librarianResultMeta(
+  toolCalls: number,
+  articleCount: number,
+): string {
+  return (
+    `${toolCalls} tool call${toolCalls === 1 ? '' : 's'} ` +
+    `over ${articleCount} article${articleCount === 1 ? '' : 's'}. ` +
+    'See the Logs drawer for the full trace.'
+  );
+}
+
+// A wiki-librarian run is in flight that this strip didn't start -
+// another tab, another device, or a scheduled background run, detected
+// via the shared in-flight lease. The strip disables its Run button and
+// shows the low-fidelity "in progress" notice so a second run can't be
+// kicked into the server-side guard's `busy`.
+export function librarianRunElsewhere(
+  leaseRunning: boolean,
+  ownRunBusy: boolean,
+): boolean {
+  return leaseRunning && !ownRunBusy;
+}
+
+/**
+ * Decide whether a persisted outcome should populate the strip after a
+ * reload, and narrow it to the result card's shape when it should.
+ * Returns null - leave the strip alone - when there is no outcome, a
+ * live run in this tab is in flight (the live path keeps full step
+ * fidelity), the outcome's runId is already on screen (so a profiles
+ * realtime tick can't re-apply the same result), the outcome is stale
+ * (the sticky `*_last_run_outcome` column never expires - without the
+ * recency bound every cold load would resurface the last run ever),
+ * or the envelope isn't a terminal wiki-librarian result.
+ */
+export function recoverLibrarianOutcome(
+  outcome: ManualRunOutcome | null,
+  ownRunBusy: boolean,
+  shownRunId: string | null,
+  nowMs: number,
+): WikiLibrarianRunResult | null {
+  if (!outcome || ownRunBusy || outcome.runId === shownRunId) return null;
+  if (!recoveredOutcomeIsFresh(outcome.finishedAt, nowMs)) return null;
+  return outcomeToLibrarianResult(outcome);
 }
 
 // Label for the "Run librarian" button across its three states: this
