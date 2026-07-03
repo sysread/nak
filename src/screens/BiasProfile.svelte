@@ -15,33 +15,55 @@
    *     Lists the soft+strong biases that are currently shaping
    *     responses on this turn (the same RENDER_CAP-capped set the
    *     chat-loop injects into the system prompt) plus any
-   *     observations the sweep has already recorded for this
-   *     thread (or an explanation of why none exist yet - the
-   *     thread is excluded from analysis while open).
+   *     observations and reactions the sweep has already recorded
+   *     for this thread (or an explanation of why none exist yet -
+   *     the thread is excluded from analysis while open).
+   *
+   *   - Bias landscape. One bar per catalog entry tracking the CI
+   *     lower bound against the surfacing gates, for an at-a-glance
+   *     comparison across the whole catalog.
    *
    *   - Per-bias evidence table. One row per catalog entry showing
    *     the tier badge, the credible-interval lower bound, the
    *     posterior mean, the effective sample size, and a preview of
-   *     the system-prompt contribution (if any).
+   *     the system-prompt contribution (if any). Each flagged row
+   *     expands to its per-observation drill-down.
    *
    *   - Recently processed conversations. Latest N (default 30)
    *     threads the sweep has analyzed, each expandable to its
    *     per-observation list.
    *
-   *   - Per-observation drill-down. Inside an expanded thread, one
-   *     card per observation with the bias name, confidence, and
-   *     the reasoning string.
-   *
-   * No write controls; the pipeline is autonomic.
+   * No write controls; the pipeline is autonomic. Display
+   * decisions (sorting, the rendered set, formatters, prose
+   * interpretation, chart geometry, empty-state copy) live in
+   * `$lib/ui/bias-profile`; this file is Svelte wire-up.
    */
   import { onMount } from 'svelte';
   import { app } from '$lib/state.svelte';
   import { navigate, route } from '$lib/routing.svelte';
-  import { BIAS_CATALOG } from '$lib/bias/catalog';
-  import { type BiasKey, isBiasKey } from '$lib/bias/catalog-keys';
   import {
+    type BiasSummaryDisplayRow,
+    barWidthPct,
+    biasDefinition,
+    biasGuidance,
+    biasHue,
+    biasLabel,
+    chartScale,
+    currentObservationsEmptyCopy,
+    currentReactionsEmptyCopy,
     displayThreadTitle,
+    formatConfidence,
+    formatEffectiveN,
+    formatFeedback,
+    formatProbability,
+    formatTimestamp,
+    hasEvidence,
+    interpretBias,
     observationsLabel,
+    reactionVerdict,
+    reactionVerdictClass,
+    renderedBiasRows,
+    sortSummaryRows,
     tierTitle,
     IN_PROMPT_TITLE,
     reactionVerdictTitle,
@@ -62,16 +84,6 @@
     onClose: () => void;
   }
   let { onClose }: Props = $props();
-
-  interface SummaryRow {
-    bias: string;
-    effectiveN: number;
-    posteriorMean: number;
-    ciLower: number;
-    feedbackScore: number;
-    tier: 'elided' | 'soft' | 'strong';
-    computedAt: string;
-  }
 
   interface ProcessedThreadRow {
     threadId: string;
@@ -113,7 +125,7 @@
     createdAt: string;
   }
 
-  let summary = $state<SummaryRow[]>([]);
+  let summary = $state<BiasSummaryDisplayRow[]>([]);
   let processed = $state<ProcessedThreadRow[]>([]);
   // Per-bias drill-down expansion state. `expandedBiasKey` is the
   // bias whose observations are currently shown inline under its
@@ -262,240 +274,26 @@
     }
   }
 
-  /**
-   * Sort summary rows for the table: strong tier first, then soft,
-   * then elided; within each tier, by ciLower descending so the
-   * strongest signal lands at the top.
-   */
-  const summaryRows = $derived.by<SummaryRow[]>(() => {
-    const tierWeight = (t: string): number =>
-      t === 'strong' ? 0 : t === 'soft' ? 1 : 2;
-    return [...summary].sort((a, b) => {
-      const t = tierWeight(a.tier) - tierWeight(b.tier);
-      if (t !== 0) return t;
-      return b.ciLower - a.ciLower;
-    });
-  });
-
-  /**
-   * Set of bias keys that would be rendered into the system prompt
-   * this turn (post render-cap). The "in prompt" pill in the table
-   * reads from this so the user can see which biases are actually
-   * shaping responses right now, not just which ones cleared the
-   * tier gate.
-   */
-  const renderedRows = $derived.by<SummaryRow[]>(() => {
-    return summary
-      .filter((r) => r.tier === 'soft' || r.tier === 'strong')
-      .sort((a, b) => b.ciLower - a.ciLower)
-      .slice(0, RENDER_CAP);
-  });
+  // All display decisions delegate to $lib/ui/bias-profile; the
+  // deriveds below are the reactive wire-up over those primitives.
+  const summaryRows = $derived(sortSummaryRows(summary));
+  const renderedRows = $derived(renderedBiasRows(summary));
   const rendered = $derived(new Set(renderedRows.map((r) => r.bias)));
-
-  function biasLabel(key: string): string {
-    if (!isBiasKey(key)) return key;
-    return BIAS_CATALOG[key as BiasKey].label;
-  }
-
-  function biasDefinition(key: string): string {
-    if (!isBiasKey(key)) return '';
-    return BIAS_CATALOG[key as BiasKey].definition;
-  }
-
-  /**
-   * The pre-written compensation guidance string for a bias - the
-   * same text that rides into the chat LLM's system prompt when
-   * the bias clears a tier. Surfaced in the "Current conversation"
-   * section so the user can see what the assistant is being told
-   * about them, not just the bias name.
-   */
-  function biasGuidance(key: string): string {
-    if (!isBiasKey(key)) return '';
-    return BIAS_CATALOG[key as BiasKey].guidance;
-  }
-
-  function formatTimestamp(iso: string | null): string {
-    if (!iso) return '';
-    try {
-      return new Date(iso).toLocaleString();
-    } catch {
-      return iso;
-    }
-  }
-
-  function formatProbability(n: number): string {
-    return (n * 100).toFixed(1) + '%';
-  }
-
-  function formatEffectiveN(n: number): string {
-    return n.toFixed(1);
-  }
-
-  /**
-   * Feedback score is signed in [-1, +1]. Render with an explicit
-   * sign so the polarity reads at a glance; +0.00 / -0.00 also
-   * collapse to the neutral 0.00.
-   */
-  function formatFeedback(n: number): string {
-    const abs = Math.abs(n);
-    if (abs < 0.005) return '0.00';
-    const sign = n > 0 ? '+' : '-';
-    return `${sign}${abs.toFixed(2)}`;
-  }
-
-  /**
-   * Render-time tag for a reaction's three-state was_confirmed.
-   */
-  function reactionVerdict(wasConfirmed: boolean | null): string {
-    if (wasConfirmed === true) return 'affirmed';
-    if (wasConfirmed === false) return 'pushed back';
-    return 'neutral';
-  }
-
-  /**
-   * Has the sweep ever flagged this bias for the user? Distinct
-   * from "is the row above the N_eff floor": effective_n counts
-   * processed conversations (with pConv=0 for no-hits), while this
-   * counts raw observation rows. Zero observations means the
-   * row's ci_lower is just the prior's 10th-percentile (~5%)
-   * dragged slightly down by the cumulative no-hit denominator -
-   * not actual signal. Drives the "no evidence" rendering.
-   */
-  function hasEvidence(biasKey: string): boolean {
-    return (observationCounts[biasKey] ?? 0) > 0;
-  }
-
-  /**
-   * Subjective, prose-y interpretation of a row's numbers. The
-   * stats grid carries the raw values; this paragraph translates
-   * them into "what does this actually mean for me?" for readers
-   * who do not want to translate a 90% credible interval lower
-   * bound on a Beta-Binomial posterior into intuition on the fly.
-   *
-   * Branches: no-observations (never flagged, ci_lower is just the
-   * prior's 10th-percentile), below-N-floor (numbers are mostly
-   * prior), elided-but-above-floor (weak signal, no surfacing),
-   * soft tier (occasional pattern), strong tier (consistent
-   * pattern). The soft/strong arms also note when a bias is
-   * at-tier but bumped out by RENDER_CAP. A trailing feedback
-   * sentence appears only when the EMA is meaningful (|score| >=
-   * 0.10) - below that the gate shift rounds to zero anyway.
-   */
-  function interpretBias(row: SummaryRow, isRendered: boolean): string {
-    const pct = (n: number): string => (n * 100).toFixed(1) + '%';
-    const noObservations = !hasEvidence(row.bias);
-    const belowFloor = row.effectiveN < N_EFF_FLOOR;
-
-    let core: string;
-    if (noObservations) {
-      // The ci_lower sits at the prior's 10th-percentile (~5%) plus
-      // a small downward drift from cumulative no-hit denominator
-      // mass; the percentage itself is uninformative, so the prose
-      // leans on "never flagged" rather than the number.
-      core =
-        `No evidence - the analysis has never flagged this bias in any ` +
-        `analyzed conversation. The stats above are just the ` +
-        `Beta(${ALPHA_PRIOR}, ${BETA_PRIOR}) prior with the ` +
-        `cumulative no-hit denominator from processed conversations ` +
-        `pulling the posterior slightly below the prior mean ` +
-        `of ~20%.`;
-    } else if (belowFloor) {
-      const shortfall = Math.max(0, N_EFF_FLOOR - row.effectiveN).toFixed(1);
-      core =
-        `Mostly prior - only ${formatEffectiveN(row.effectiveN)} ` +
-        `effective observations (recency-weighted) against the ` +
-        `floor of ${N_EFF_FLOOR}. The posterior mean of ` +
-        `${pct(row.posteriorMean)} is dominated by the default ` +
-        `Beta(${ALPHA_PRIOR}, ${BETA_PRIOR}) prior (mean ~20%); ` +
-        `about ${shortfall} more recency-weighted observations ` +
-        `needed before any signal can clear the floor.`;
-    } else if (row.tier === 'elided') {
-      core =
-        `Weak signal - 90% confident the underlying rate is at ` +
-        `least ${pct(row.ciLower)}, below the ${pct(CI_LB_SOFT)} ` +
-        `soft gate. Not surfacing in the system prompt.`;
-    } else if (row.tier === 'soft') {
-      const trailing = isRendered
-        ? ` Surfaces as a light "occasionally" nudge in the system prompt.`
-        : ` Outside the top ${RENDER_CAP} by CI lower this turn, ` +
-          `so the system prompt skips it.`;
-      core =
-        `Occasional pattern - 90% lower bound of ` +
-        `${pct(row.ciLower)} clears the soft gate ` +
-        `(${pct(CI_LB_SOFT)}) but not strong ` +
-        `(${pct(CI_LB_STRONG)}).` +
-        trailing;
-    } else {
-      const trailing = isRendered
-        ? ` Surfaces as a firm "consistently" nudge in the system prompt.`
-        : ` Outside the top ${RENDER_CAP} by CI lower this turn, ` +
-          `so the system prompt skips it.`;
-      core =
-        `Consistent pattern - 90% lower bound of ` +
-        `${pct(row.ciLower)} clears the strong gate ` +
-        `(${pct(CI_LB_STRONG)}).` +
-        trailing;
-    }
-
-    const fb = row.feedbackScore;
-    if (Math.abs(fb) >= 0.1) {
-      const delta = (Math.abs(fb) * FEEDBACK_THRESHOLD_DELTA).toFixed(2);
-      if (fb > 0) {
-        core +=
-          ` Feedback ${formatFeedback(fb)} shifts both gates down ` +
-          `by ${delta}, surfacing this sooner.`;
-      } else {
-        core +=
-          ` Feedback ${formatFeedback(fb)} shifts both gates up ` +
-          `by ${delta}, raising the bar to surface.`;
-      }
-    }
-
-    return core;
-  }
-
-  /**
-   * Hue for the landscape bar - encodes where this bias's CI
-   * lower sits relative to the surfacing gates. Borrowed in
-   * spirit from `usageHue` in Settings.svelte (color carries
-   * "how unusual is this row"; length still carries the magnitude),
-   * but anchored to the absolute gate thresholds rather than the
-   * dataset's median, because the gates are what determine
-   * surfacing and they don't drift with the data.
-   *
-   *   0                       -> 220 (blue, no signal)
-   *   CI_LB_SOFT (0.15)       -> 140 (green, edge of soft tier)
-   *   CI_LB_STRONG (0.30)     ->  30 (orange, edge of strong tier)
-   *   >= CI_LB_STRONG + 0.20  ->   5 (red, deep into strong)
-   *
-   * Linear interpolation between waypoints.
-   */
-  function biasHue(ciLower: number): number {
-    if (ciLower <= 0) return 220;
-    if (ciLower < CI_LB_SOFT) {
-      const t = ciLower / CI_LB_SOFT;
-      return 220 - t * 80;
-    }
-    if (ciLower < CI_LB_STRONG) {
-      const t = (ciLower - CI_LB_SOFT) / (CI_LB_STRONG - CI_LB_SOFT);
-      return 140 - t * 110;
-    }
-    const t = Math.min(1, (ciLower - CI_LB_STRONG) / 0.2);
-    return 30 - t * 25;
-  }
-
-  /**
-   * Denominator for the landscape bar's width. Always extends at
-   * least to the strong-tier gate so the gate positions sit at a
-   * consistent visual location even when no bias has cleared it
-   * yet - otherwise a profile full of elided biases would stretch
-   * the tiny CI-lower values to full width and lose the "look how
-   * far we are from surfacing" read.
-   */
-  const chartScale = $derived(
-    Math.max(
-      CI_LB_STRONG * 1.1,
-      ...summaryRows.map((r) => r.ciLower),
+  // Denominator for the landscape bars, computed once per row set
+  // (see chartScale's doc for the gate-anchoring rationale).
+  const scale = $derived(chartScale(summaryRows));
+  // Empty-state copy for the two current-conversation blocks; null
+  // means the loaded list renders instead. The not-yet-analyzed /
+  // analyzed-but-empty distinction (including the brand-new-draft
+  // gotcha) is encoded in the primitives.
+  const obsEmptyCopy = $derived(
+    currentObservationsEmptyCopy(currentThreadObs, currentThreadProcessedAt),
+  );
+  const reactionsEmptyCopy = $derived(
+    currentReactionsEmptyCopy(
+      currentThreadReactions,
+      currentThreadProcessedAt,
+      renderedRows.length,
     ),
   );
 </script>
@@ -571,37 +369,19 @@
             {/if}
 
             <h3 class="sub-title">Observations from this conversation</h3>
-            {#if currentThreadObs === null || currentThreadProcessedAt === null}
-              <!-- The sweep hasn't analyzed this thread yet. Covers
-                   two cases that look the same from the modal's
-                   perspective: (1) the thread is materialized but
-                   still dated today (the day-gate defers it), and
-                   (2) the thread is still a brand-new draft that
-                   hasn't been written to the DB yet, in which
-                   case the observations query trivially returns []
-                   and would otherwise read as "already analyzed,
-                   no findings" - wrong and misleading for a
-                   conversation that hasn't even had its first
-                   message sent. -->
-              <p class="empty">
-                Not yet analyzed. Conversations become eligible
-                once their last activity falls on a previous day;
-                the hourly sweep picks this one up then.
-              </p>
-            {:else if currentThreadObs.length === 0}
-              <p class="empty">
-                Already analyzed - no clear bias evidence was
-                found in this conversation. Reporting nothing
-                is the correct answer most of the time.
-              </p>
+            {#if obsEmptyCopy !== null}
+              <!-- Copy choice (not-yet-analyzed vs analyzed-and-
+                   empty, including the brand-new-draft gotcha)
+                   lives in currentObservationsEmptyCopy. -->
+              <p class="empty">{obsEmptyCopy}</p>
             {:else}
               <div class="obs-list flush">
-                {#each currentThreadObs as o (o.id)}
+                {#each currentThreadObs ?? [] as o (o.id)}
                   <div class="obs-card">
                     <header class="obs-header">
                       <span class="obs-bias">{biasLabel(o.bias)}</span>
                       <span class="obs-confidence subtle">
-                        confidence {(o.confidence * 100).toFixed(0)}%
+                        confidence {formatConfidence(o.confidence)}
                       </span>
                     </header>
                     <p class="obs-reasoning">{o.reasoning}</p>
@@ -611,36 +391,18 @@
             {/if}
 
             <h3 class="sub-title">Reactions to compensation on this conversation</h3>
-            {#if currentThreadReactions === null || currentThreadProcessedAt === null || currentThreadReactions.length === 0}
-              <p class="empty">
-                {#if currentThreadReactions === null || currentThreadProcessedAt === null}
-                  <!-- Same "not yet analyzed" gating as the
-                       observations block above: an empty reactions
-                       list on an un-processed thread is the sweep
-                       not having gotten to it (or the thread being
-                       a draft that doesn't exist in the DB yet),
-                       not "scanned and found nothing." -->
-                  Not yet analyzed. Reactions are recorded for the
-                  biases that were active in the system prompt while
-                  the conversation happened; the sweep classifies
-                  them once the conversation settles.
-                {:else if renderedRows.length === 0}
-                  No biases were active in the system prompt during
-                  this conversation, so there was nothing for you
-                  to react to.
-                {:else}
-                  Already analyzed - the agent did not see a clear
-                  affirmation or pushback signal for the active
-                  biases on this conversation.
-                {/if}
-              </p>
+            {#if reactionsEmptyCopy !== null}
+              <!-- Three-way copy choice (not-yet-analyzed vs
+                   nothing-was-active vs no-clear-signal) lives in
+                   currentReactionsEmptyCopy. -->
+              <p class="empty">{reactionsEmptyCopy}</p>
             {:else}
               <div class="obs-list flush">
-                {#each currentThreadReactions as r (r.id)}
+                {#each currentThreadReactions ?? [] as r (r.id)}
                   <div class="obs-card">
                     <header class="obs-header">
                       <span class="obs-bias">{biasLabel(r.bias)}</span>
-                      <span class="reaction-verdict {r.wasConfirmed === true ? 'affirmed' : r.wasConfirmed === false ? 'pushed' : 'neutral'}" title={reactionVerdictTitle(r.wasConfirmed)}>
+                      <span class="reaction-verdict {reactionVerdictClass(r.wasConfirmed)}" title={reactionVerdictTitle(r.wasConfirmed)}>
                         {reactionVerdict(r.wasConfirmed)}
                       </span>
                     </header>
@@ -689,32 +451,18 @@
                   title={biasDefinition(row.bias)}
                 >{biasLabel(row.bias)}</span>
                 <span class="bias-chart-bar-cell" role="cell">
-                  <!--
-                    Width is `max(2%, share-of-scale)` so a
-                    non-zero but tiny CI lower still registers as
-                    a visible nub rather than vanishing.
-                    chartScale extends at least to CI_LB_STRONG *
-                    1.1 so gate-relative position stays readable
-                    even when no bias has cleared the strong gate
-                    yet. No-evidence rows are pinned to a fixed
-                    1.5% gray nub - the ci_lower for these is just
-                    prior + cumulative no-hit drift, so rendering
-                    it at gate-relative position would imply signal
-                    that isn't there.
-                  -->
+                  <!-- Bar geometry (the visible-nub minimum, the
+                       gate-anchored scale, the fixed no-evidence
+                       nub) lives in barWidthPct + chartScale. -->
                   <span
                     class="bias-chart-bar"
                     class:elided={row.tier === 'elided'}
-                    class:no-evidence={!hasEvidence(row.bias)}
-                    style="--bias-pct:{!hasEvidence(row.bias)
-                      ? 1.5
-                      : row.ciLower > 0
-                        ? Math.max(2, (row.ciLower / chartScale) * 100)
-                        : 0}%; --bias-hue:{biasHue(row.ciLower)}"
+                    class:no-evidence={!hasEvidence(observationCounts, row.bias)}
+                    style="--bias-pct:{barWidthPct(row.ciLower, hasEvidence(observationCounts, row.bias), scale)}%; --bias-hue:{biasHue(row.ciLower)}"
                   ></span>
                 </span>
                 <span class="bias-chart-value" role="cell">
-                  {#if !hasEvidence(row.bias)}
+                  {#if !hasEvidence(observationCounts, row.bias)}
                     <em class="no-evidence-label">no evidence</em>
                   {:else}
                     {formatProbability(row.ciLower)}
@@ -752,7 +500,7 @@
                   <div>
                     <dt>CI lower (90%)</dt>
                     <dd>
-                      {#if !hasEvidence(row.bias)}
+                      {#if !hasEvidence(observationCounts, row.bias)}
                         <em class="no-evidence-label">no evidence</em>
                       {:else}
                         {formatProbability(row.ciLower)}
@@ -768,9 +516,9 @@
                      trailing feedback sentence when the EMA is
                      meaningful enough to shift the gates. -->
                 <p class="bias-interpretation">
-                  {interpretBias(row, rendered.has(row.bias))}
+                  {interpretBias(row, rendered.has(row.bias), hasEvidence(observationCounts, row.bias))}
                 </p>
-                {#if hasEvidence(row.bias)}
+                {#if hasEvidence(observationCounts, row.bias)}
                   <!-- Per-bias drill-down. Surfacing this only on
                        rows the analysis has actually flagged - rows
                        with no observations have nothing to show
@@ -857,7 +605,7 @@
                             <header class="obs-header">
                               <span class="obs-bias">{biasLabel(o.bias)}</span>
                               <span class="obs-confidence subtle">
-                                confidence {(o.confidence * 100).toFixed(0)}%
+                                confidence {formatConfidence(o.confidence)}
                               </span>
                             </header>
                             <p class="obs-reasoning">{o.reasoning}</p>
@@ -870,7 +618,7 @@
                           <div class="obs-card">
                             <header class="obs-header">
                               <span class="obs-bias">{biasLabel(r.bias)}</span>
-                              <span class="reaction-verdict {r.wasConfirmed === true ? 'affirmed' : r.wasConfirmed === false ? 'pushed' : 'neutral'}" title={reactionVerdictTitle(r.wasConfirmed)}>
+                              <span class="reaction-verdict {reactionVerdictClass(r.wasConfirmed)}" title={reactionVerdictTitle(r.wasConfirmed)}>
                                 {reactionVerdict(r.wasConfirmed)}
                               </span>
                             </header>
