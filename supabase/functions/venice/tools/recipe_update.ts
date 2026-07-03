@@ -25,8 +25,10 @@ function validateCooklangSource(src: string): string[] {
         'render as literal backticks. Remove the backticks.',
     );
   }
+  // `\??` after each `@` keeps the check effective when either token
+  // also carries the optional-ingredient modifier (`@?`).
   const NAME = "[\\p{L}\\p{N}\\-_']+";
-  const MODIFIER_PAIR_RE = new RegExp(`@${NAME}[ \\t]+@${NAME}\\{`, 'u');
+  const MODIFIER_PAIR_RE = new RegExp(`@\\??${NAME}[ \\t]+@\\??${NAME}\\{`, 'u');
   if (MODIFIER_PAIR_RE.test(src)) {
     errors.push(
       'detected `@modifier @ingredient{...}` pattern. Write modifier + ' +

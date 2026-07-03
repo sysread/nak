@@ -56,6 +56,7 @@ open panel.
    == Ingredients ==
    @cornmeal{1.5%cups}
    @buttermilk{1%cup}
+   @?honey{2%tbsp}
 
    --
 
@@ -103,7 +104,9 @@ open panel.
 - (2-3) The `Preview` pane re-renders live as Cooklang is typed
   (ingredients grouped under the `==` section headings, the `--`
   dash line ending the declaration block so the instructions don't
-  inherit the Ingredients heading). `Save` is blocked with an inline
+  inherit the Ingredients heading). The `@?honey` row carries a
+  muted *(optional)* tag after its name in the ingredient list.
+  `Save` is blocked with an inline
   error until `What changed?` is non-empty; with a message it
   persists and the panel flips to the detail pane. The saved row
   appears at the top of the drawer's "All recipes" list (updated
@@ -132,7 +135,8 @@ open panel.
   it. A click on the image itself does NOT dismiss.
 - (9) Plain text is title + ingredients + numbered instructions with
   NO cookware line (the skillet is omitted - AnyList-transfer
-  framing). Markdown includes the cookware list and any source link,
+  framing); the honey bullet reads `- 2 tbsp honey (optional)`.
+  Markdown includes the cookware list and any source link,
   and passes recipe content through verbatim (no escaping). Cooklang
   is the raw source you authored. Each copy flashes a `Copied.` /
   `Markdown copied.` / `Cooklang source copied.` confirmation.

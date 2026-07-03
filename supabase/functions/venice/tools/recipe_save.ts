@@ -27,8 +27,10 @@ function validateCooklangSource(src: string): string[] {
         'in a step is already prose.',
     );
   }
+  // `\??` after each `@` keeps the check effective when either token
+  // also carries the optional-ingredient modifier (`@?`).
   const NAME = "[\\p{L}\\p{N}\\-_']+";
-  const MODIFIER_PAIR_RE = new RegExp(`@${NAME}[ \\t]+@${NAME}\\{`, 'u');
+  const MODIFIER_PAIR_RE = new RegExp(`@\\??${NAME}[ \\t]+@\\??${NAME}\\{`, 'u');
   if (MODIFIER_PAIR_RE.test(src)) {
     errors.push(
       'detected `@modifier @ingredient{...}` pattern (e.g. `@pre-minced ' +

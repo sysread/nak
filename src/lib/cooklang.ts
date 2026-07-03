@@ -46,6 +46,18 @@
  *                              references ingredients inline (`Add the
  *                              @chicken{1%lb} to the pot.`) is still a
  *                              regular instruction step.
+ *   @?ingredient{...}        → optional-ingredient modifier. Not in the
+ *                              canonical spec (cooklang.org/docs/spec has
+ *                              no optionality), but it is the `?` component
+ *                              modifier from the official cooklang-rs
+ *                              parser's extensions and the syntax the spec
+ *                              maintainer favoured in cooklang/spec
+ *                              discussion #50 - so recipes stay readable
+ *                              by the wider Cooklang ecosystem. Ingredients
+ *                              only; cooklang-rs also allows `#?cookware`,
+ *                              but nak's cookware list is a flat "what
+ *                              tools do I need" aside where optionality
+ *                              has no rendering to hang off.
  *   ---- (dash-only line)    → section reset: a line whose non-whitespace
  *                              content is only dashes (2+) clears the
  *                              current section so subsequent steps attach
@@ -78,6 +90,13 @@ export interface Ingredient {
   qty: string | null;
   /** `null` when the user didn't write a unit (e.g. `@eggs{2}`). */
   unit: string | null;
+  /**
+   * `true` when written with the `@?` optional-ingredient modifier
+   * (`@?cilantro{2%tbsp}`). Renderers tag these "(optional)" in the
+   * ingredient lists; step prose shows just the name, since the
+   * sentence around it already carries the hedging ("if using").
+   */
+  optional: boolean;
 }
 
 export interface Cookware {
@@ -291,8 +310,12 @@ function isDeclarationLine(line: string): boolean {
 const NAME_CHARS = "[\\p{L}\\p{N}\\-_']";
 const NAME_SEGMENT = `(?:${NAME_CHARS}+|\\([^)]*\\))`;
 const NAME_RUN = `${NAME_SEGMENT}(?:[ \\t]${NAME_SEGMENT})*`;
+// Group 1 is the `?` optional-ingredient modifier (`@?name` - see the
+// preamble). `?` is not a name char, so a `?` that isn't immediately
+// followed by a name (e.g. a literal "@? " in prose) fails both
+// alternatives and stays plain text.
 const INGREDIENT_RE = new RegExp(
-  `@(?:(${NAME_RUN})\\{([^}]*)\\}|(${NAME_CHARS}+))`,
+  `@(\\??)(?:(${NAME_RUN})\\{([^}]*)\\}|(${NAME_CHARS}+))`,
   'gu'
 );
 const COOKWARE_RE = new RegExp(
@@ -347,11 +370,13 @@ function tokenizeLine(line: string): LineTokens {
   const edits: Array<[number, number, string]> = [];
 
   for (const m of line.matchAll(INGREDIENT_RE)) {
-    // Group 1 + 2 = braced form `@name{body}`; group 3 = bare `@name`.
-    const name = (m[1] ?? m[3]!).trim();
-    const body = m[2];
+    // Group 1 = optional-modifier marker; group 2 + 3 = braced form
+    // `@name{body}`; group 4 = bare `@name`.
+    const optional = m[1] === '?';
+    const name = (m[2] ?? m[4]!).trim();
+    const body = m[3];
     const { qty, unit } = body !== undefined ? parseQtyUnit(body) : { qty: null, unit: null };
-    ingredients.push({ name, qty, unit });
+    ingredients.push({ name, qty, unit, optional });
     edits.push([m.index!, m.index! + m[0].length, name]);
   }
   for (const m of line.matchAll(COOKWARE_RE)) {
@@ -557,13 +582,15 @@ export function parseCooklang(src: string): Recipe {
  * pair we saw. We don't try to sum quantities across the same ingredient
  * — "1 cup flour" and "2 tbsp flour" are different amounts that a human
  * reader wants to see both of. The dedupe only merges rows that are
- * genuinely identical (same name, same qty, same unit).
+ * genuinely identical (same name, same qty, same unit, same
+ * optionality — a required `@salt` and an optional `@?salt` are two
+ * different asks and both belong in the list).
  */
 function dedupeIngredients(items: Ingredient[]): Ingredient[] {
   const seen = new Set<string>();
   const out: Ingredient[] = [];
   for (const it of items) {
-    const key = `${it.name.toLowerCase()}|${it.qty ?? ''}|${it.unit ?? ''}`;
+    const key = `${it.name.toLowerCase()}|${it.qty ?? ''}|${it.unit ?? ''}|${it.optional ? '?' : ''}`;
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(it);
@@ -683,7 +710,7 @@ function groupStepsBySection(
 
 /**
  * Collect every ingredient that appears in the given steps, deduping
- * with the same `name|qty|unit` key the flat list uses. Extracted so
+ * with the same `name|qty|unit|optional` key the flat list uses. Extracted so
  * the section-aware renderer can apply the dedupe *within* a section
  * without cross-contaminating neighbouring sections — "1 cup flour" in
  * Soup and "1 cup flour" in Bread should both render once, in their
@@ -703,7 +730,7 @@ function dedupeFromSteps(steps: Step[]): Ingredient[] {
   const out: Ingredient[] = [];
   for (const step of source) {
     for (const ing of step.ingredients) {
-      const key = `${ing.name.toLowerCase()}|${ing.qty ?? ''}|${ing.unit ?? ''}`;
+      const key = `${ing.name.toLowerCase()}|${ing.qty ?? ''}|${ing.unit ?? ''}|${ing.optional ? '?' : ''}`;
       if (seen.has(key)) continue;
       seen.add(key);
       out.push(ing);
@@ -722,9 +749,22 @@ function ingredientsListItems(ings: Ingredient[]): string {
   for (const ing of ings) {
     const qty = formatQtyUnit(ing.qty, ing.unit);
     const qtyHtml = qty.length > 0 ? `<span class="cook-qty">${esc(qty)}</span> ` : '';
-    out.push(`<li>${qtyHtml}<span class="cook-name">${esc(ing.name)}</span></li>`);
+    const optHtml = ing.optional ? ' <span class="cook-optional">(optional)</span>' : '';
+    out.push(`<li>${qtyHtml}<span class="cook-name">${esc(ing.name)}</span>${optHtml}</li>`);
   }
   return out.join('');
+}
+
+/**
+ * One `- qty name` bullet for an ingredient, shared by the plain-text
+ * and markdown exports. The "(optional)" suffix mirrors the HTML
+ * renderer's cook-optional tag so all three projections agree on how
+ * an `@?ingredient` reads.
+ */
+function ingredientBulletLine(ing: Ingredient): string {
+  const qty = formatQtyUnit(ing.qty, ing.unit);
+  const name = ing.optional ? `${ing.name} (optional)` : ing.name;
+  return qty.length > 0 ? `- ${qty} ${name}` : `- ${name}`;
 }
 
 // Two blocks carry a navigable table-of-contents entry: Ingredients and
@@ -1017,8 +1057,7 @@ export function recipeToPlainText(title: string, recipe: Recipe): string {
   if (recipe.ingredients.length > 0) {
     lines.push('Ingredients');
     for (const ing of recipe.ingredients) {
-      const qty = formatQtyUnit(ing.qty, ing.unit);
-      lines.push(qty.length > 0 ? `- ${qty} ${ing.name}` : `- ${ing.name}`);
+      lines.push(ingredientBulletLine(ing));
     }
     lines.push('');
   }
@@ -1141,8 +1180,7 @@ export function recipeToMarkdown(
     lines.push('## Ingredients', '');
     if (recipe.sections.length === 0) {
       for (const ing of recipe.ingredients) {
-        const qty = formatQtyUnit(ing.qty, ing.unit);
-        lines.push(qty.length > 0 ? `- ${qty} ${ing.name}` : `- ${ing.name}`);
+        lines.push(ingredientBulletLine(ing));
       }
       lines.push('');
     } else {
@@ -1160,8 +1198,7 @@ export function recipeToMarkdown(
           lines.push(`### ${bucket.name}`, '');
         }
         for (const ing of ings) {
-          const qty = formatQtyUnit(ing.qty, ing.unit);
-          lines.push(qty.length > 0 ? `- ${qty} ${ing.name}` : `- ${ing.name}`);
+          lines.push(ingredientBulletLine(ing));
         }
         lines.push('');
       }
@@ -1278,9 +1315,11 @@ export function validateCooklangSource(src: string): string[] {
   // whitespace, with the SECOND one carrying a `{` body. Whitespace-
   // only between is what marks this as "modifier + thing"; any prose
   // between (`@salt and @pepper`) is a legitimate "two ingredients
-  // mentioned in the same sentence" pattern and shouldn't fire.
+  // mentioned in the same sentence" pattern and shouldn't fire. The
+  // `\??` after each `@` keeps the check effective when either token
+  // also carries the optional-ingredient modifier (`@?`).
   const NAME = "[\\p{L}\\p{N}\\-_']+";
-  const MODIFIER_PAIR_RE = new RegExp(`@${NAME}[ \\t]+@${NAME}\\{`, 'u');
+  const MODIFIER_PAIR_RE = new RegExp(`@\\??${NAME}[ \\t]+@\\??${NAME}\\{`, 'u');
   if (MODIFIER_PAIR_RE.test(src)) {
     errors.push(
       'detected `@modifier @ingredient{...}` pattern (e.g. `@pre-minced ' +
