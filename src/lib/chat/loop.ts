@@ -72,10 +72,10 @@ import {
 } from './prompt-assembly';
 import type { ChatLoopOptions, ChatLoopResult } from './types';
 
-// `toVeniceMessage` (the stored-row -> wire projection) now lives in
-// ./chat/prompt-assembly; re-exported here so its external consumers
+// `toVeniceMessage` (the stored-row -> wire projection) lives in
+// ./prompt-assembly; re-exported here so its external consumers
 // (Chat.svelte, tools/wire.ts, the wire test) keep importing it from
-// `$lib/chat-loop`.
+// `$lib/chat/loop`.
 export { toVeniceMessage } from './prompt-assembly';
 
 const log = createLogger('chat-loop');

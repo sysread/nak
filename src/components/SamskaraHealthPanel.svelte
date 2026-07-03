@@ -17,9 +17,10 @@
    * One Refresh reloads BOTH - the summary and every health read - so
    * the page is a single coherent snapshot, not two stale halves.
    *
-   * Composition only: every severity classification, relative-time
-   * format, and count-to-label transform is delegated to
-   * `$lib/ui/samskara-browse`.
+   * Composition only: the severity classification, regen status, and
+   * count-to-label transforms are delegated to
+   * `$lib/ui/samskara-health`; the relative-time format comes from
+   * `$lib/ui/samskara-browse`, shared with the detail pane.
    */
   import { onMount } from 'svelte';
   import { app } from '$lib/state.svelte';

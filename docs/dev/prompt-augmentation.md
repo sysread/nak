@@ -66,7 +66,7 @@ Two distinct injection surfaces:
 | Samskara fire | `<think>` (row 6) | `fireSamskaras` (`venice/priming/samskara.ts`) | computed per turn | raced against `SAMSKARA_PRIMING_TIMEOUT_MS` |
 | Intuition | `<think>` (row 7) | `runIntuitionPipeline` (`venice/priming/intuition.ts`) | `threads.intuition_payload` | `isPayloadFreshForInjection` (STALE_FUSE_MS) |
 | Tool catalog | system (row 1) | `buildSystemPrompt` / `buildToolList` (`src/lib/tools`) | n/a (derived from enabled toolboxes) | per-turn snapshot of `toolboxes_enabled` |
-| Metadata block | system (row 8) | `buildMetadataSystemMessage` (`src/lib/chat-loop`) | n/a | rebuilt every turn |
+| Metadata block | system (row 8) | `buildMetadataSystemMessage` (`src/lib/chat/prompt-assembly`) | n/a | rebuilt every turn |
 
 ## Ordering
 
