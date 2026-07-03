@@ -40,7 +40,6 @@ import { synthesizeRecoveryMessages } from './conversation-recovery';
 import { SupabaseError } from './supabase/error';
 import {
   base64ToBytes,
-  partitionSelectedTopics,
   topicsFilterClause,
   ilikeLogicTreePattern,
   ilikeFilterPattern,
@@ -56,6 +55,9 @@ import * as samskaraApi from './supabase/samskara';
 import * as settingsApi from './supabase/settings';
 import * as veniceProxyApi from './supabase/venice-proxy';
 import { veniceFunctionError } from './supabase/venice-proxy';
+// Threads + topic-vocabulary domain slices, same delegation pattern.
+import * as threadsApi from './supabase/threads';
+import * as topicsApi from './supabase/topics';
 
 // Domain row types live in ./supabase/types/*; this module keeps the
 // SupabaseService class plus the row coercers that read those types.
@@ -112,7 +114,6 @@ import type {
   SamskaraFireDiagnosticRow,
 } from './supabase/types';
 import {
-  coerceThread,
   coerceAttachmentRow,
   coerceMemoryChangelogEntry,
   coerceManualRunOutcome,
@@ -121,9 +122,7 @@ import {
   coerceWikiRecordFile,
   coerceWikiRecordLink,
   coerceWikiChangelogEntry,
-  parseTopicVocabulary,
   coerceDocument,
-  DEFAULT_THREAD_PAGE_SIZE,
 } from './supabase/types';
 // Pure helper for the record-changelog message wording; mirrored
 // edge-side in venice/tools/_record_helpers.ts. The `import type` cycle
@@ -257,9 +256,11 @@ function splitPhotoInputs(photos: RecipePhotoInput[]): {
  * one-line delegating methods under unchanged names. Callers never
  * change; the slices are unit-testable against a stubbed client. The
  * Samskara (./supabase/samskara.ts), Settings (./supabase/settings.ts),
- * and Venice-proxy (./supabase/venice-proxy.ts) groups are extracted;
- * the remaining groups still carry their implementations inline and
- * should follow the same pattern when touched substantially.
+ * Venice-proxy (./supabase/venice-proxy.ts), Threads incl. the
+ * response claims (./supabase/threads.ts), and Topic-vocabulary
+ * (./supabase/topics.ts) groups are extracted; the remaining groups
+ * still carry their implementations inline and should follow the same
+ * pattern when touched substantially.
  */
 export class SupabaseService {
   readonly client: SupabaseClient;
@@ -396,34 +397,19 @@ export class SupabaseService {
   }
 
   // --- Threads ---------------------------------------------------------
+  //
+  // Extracted domain slice: the implementations and their doc comments
+  // live in ./supabase/threads.ts (list / search / CRUD / per-thread
+  // setters, plus the thread-scoped response claims further down) as
+  // plain functions taking the client. These methods delegate
+  // one-for-one under the same names so call sites and grep targets
+  // stay stable.
 
-  /**
-   * One page of threads. `nextCursor === null` means the query has been
-   * fully drained; any truthy value is what the caller should pass as
-   * `cursor` to fetch the next page.
-   */
   async listRecentThreads(
     cutoff: string,
     selectedTopics: readonly string[] = []
   ): Promise<Thread[]> {
-    // Everything touched within the "active" window — hardcoded by the
-    // caller so the boundary doesn't drift second-to-second and flip
-    // threads at the edge between Recent and Older as seconds tick by.
-    // Two-column ordering mirrors listOlderThreads so a thread the
-    // user just updated doesn't hop position when it transitions.
-    let q = this.client
-      .from('threads')
-      .select('*')
-      .eq('archived', false)
-      .gte('updated_at', cutoff)
-      .order('updated_at', { ascending: false })
-      .order('id', { ascending: false })
-      .limit(500);
-    const topicsClause = topicsFilterClause(selectedTopics);
-    if (topicsClause) q = q.or(topicsClause);
-    const { data, error } = await q;
-    if (error) throw new SupabaseError(error.message);
-    return (data ?? []).map((row) => coerceThread(row as Record<string, unknown>));
+    return threadsApi.listRecentThreads(this.client, cutoff, selectedTopics);
   }
 
   async listOlderThreads(opts: {
@@ -432,13 +418,7 @@ export class SupabaseService {
     pageSize?: number;
     selectedTopics?: readonly string[];
   }): Promise<ThreadPage> {
-    return this.pageThreads({
-      archived: false,
-      cutoff: opts.cutoff,
-      cursor: opts.cursor,
-      pageSize: opts.pageSize ?? DEFAULT_THREAD_PAGE_SIZE,
-      selectedTopics: opts.selectedTopics ?? [],
-    });
+    return threadsApi.listOlderThreads(this.client, opts);
   }
 
   async listArchivedThreads(opts: {
@@ -446,514 +426,103 @@ export class SupabaseService {
     pageSize?: number;
     selectedTopics?: readonly string[];
   }): Promise<ThreadPage> {
-    return this.pageThreads({
-      archived: true,
-      cutoff: null,
-      cursor: opts.cursor,
-      pageSize: opts.pageSize ?? DEFAULT_THREAD_PAGE_SIZE,
-      selectedTopics: opts.selectedTopics ?? [],
-    });
+    return threadsApi.listArchivedThreads(this.client, opts);
   }
 
-  /**
-   * One-shot "window" fetch: every thread in `bucket` from the head of
-   * the list down to (and including) `target`. Used when the user
-   * clicks a search result that lives past the currently-loaded
-   * pagination cursor — we need to materialise enough of the list to
-   * put a DOM node at the target so `scrollIntoView` has something to
-   * aim at.
-   *
-   * Returning rows in the same ordering the bucket uses lets the
-   * caller merge without re-sorting. The archived bucket has no
-   * cutoff; the older bucket only window-fetches within the "before
-   * the cutoff" range (a Recent-bucket target should already be in
-   * memory — recent is eager-loaded).
-   */
   async listThreadsSince(opts: {
     target: ThreadCursor;
     archived: boolean;
     cutoff: string | null;
     selectedTopics?: readonly string[];
   }): Promise<Thread[]> {
-    let q = this.client
-      .from('threads')
-      .select('*')
-      .eq('archived', opts.archived)
-      .gte('updated_at', opts.target.updated_at)
-      .order('updated_at', { ascending: false })
-      .order('id', { ascending: false });
-    if (opts.cutoff) q = q.lt('updated_at', opts.cutoff);
-    const topicsClause = topicsFilterClause(opts.selectedTopics ?? []);
-    if (topicsClause) q = q.or(topicsClause);
-    const { data, error } = await q;
-    if (error) throw new SupabaseError(error.message);
-    return (data ?? []).map((row) => coerceThread(row as Record<string, unknown>));
+    return threadsApi.listThreadsSince(this.client, opts);
   }
 
-  private async pageThreads(opts: {
-    archived: boolean;
-    cutoff: string | null;
-    cursor: ThreadCursor | null;
-    pageSize: number;
-    selectedTopics: readonly string[];
-  }): Promise<ThreadPage> {
-    // Fetch pageSize+1 rows so we can derive hasMore without a second
-    // count query — if the server returned pageSize+1 rows we know at
-    // least one page remains, otherwise we're at the tail.
-    let q = this.client
-      .from('threads')
-      .select('*')
-      .eq('archived', opts.archived)
-      .order('updated_at', { ascending: false })
-      .order('id', { ascending: false })
-      .limit(opts.pageSize + 1);
-    if (opts.cutoff) q = q.lt('updated_at', opts.cutoff);
-    if (opts.cursor) {
-      // Composite cursor: (updated_at, id) strictly-less-than the
-      // cursor, with id tie-break. PostgREST doesn't have row-value
-      // comparison sugar, so spell it as
-      // `updated_at < c.updated_at OR (updated_at = c.updated_at AND id < c.id)`.
-      const c = opts.cursor;
-      q = q.or(
-        `updated_at.lt.${c.updated_at},and(updated_at.eq.${c.updated_at},id.lt.${c.id})`
-      );
-    }
-    const topicsClause = topicsFilterClause(opts.selectedTopics);
-    if (topicsClause) q = q.or(topicsClause);
-    const { data, error } = await q;
-    if (error) throw new SupabaseError(error.message);
-    const rows = (data ?? []).map((row) => coerceThread(row as Record<string, unknown>));
-    const hasMore = rows.length > opts.pageSize;
-    const page = hasMore ? rows.slice(0, opts.pageSize) : rows;
-    const last = page[page.length - 1];
-    const nextCursor: ThreadCursor | null =
-      hasMore && last ? { updated_at: last.updated_at, id: last.id } : null;
-    return { rows: page, nextCursor };
-  }
-
-  /**
-   * Merged exact + semantic search across all the user's threads.
-   *
-   * Exact hits are ILIKE matches against `title` (substring, case-
-   * insensitive) — same escape pattern as `searchMemories`. Semantic
-   * hits come from the `search_threads_by_embedding` RPC against
-   * `title + summary` embeddings populated by the background workers.
-   * Both queries run in parallel; the merge puts every exact hit
-   * before every semantic hit, deduping by id on the way through so a
-   * thread can't appear twice.
-   *
-   * `queryEmbedding` may be null — callers that couldn't produce an
-   * embedding (Venice error, offline) still get useful exact-match
-   * results instead of an empty list. Archived threads are included
-   * in both halves; the UI greys them.
-   */
   async searchThreads(opts: {
     query: string;
     queryEmbedding: number[] | null;
     limit?: number;
-    /**
-     * When non-empty, search results are narrowed to the same topic
-     * filter the drawer's date-sorted list uses. Exact (ILIKE) hits
-     * are filtered server-side via the same `topicsFilterClause`
-     * helper the list paths use; semantic hits come back from the
-     * embedding RPC without topic columns, so we re-fetch the matched
-     * rows and filter in memory rather than touching the RPC signature.
-     * Matches the "topic filter constrains search too" UX decision -
-     * see docs/dev/topics.md.
-     */
     selectedTopics?: readonly string[];
   }): Promise<ThreadSearchHit[]> {
-    const query = opts.query.trim();
-    if (query.length === 0) return [];
-    const limit = opts.limit ?? 50;
-    const selectedTopics = opts.selectedTopics ?? [];
-    const topicsClause = topicsFilterClause(selectedTopics);
-
-    const pattern = ilikeFilterPattern(query);
-    let exactQ = this.client
-      .from('threads')
-      .select('*')
-      .ilike('title', pattern)
-      .order('updated_at', { ascending: false })
-      .order('id', { ascending: false })
-      .limit(limit);
-    if (topicsClause) exactQ = exactQ.or(topicsClause);
-    const exactPromise = exactQ;
-
-    const semanticPromise = opts.queryEmbedding
-      ? this.client.rpc('search_threads_by_embedding', {
-          query_embedding: opts.queryEmbedding,
-          match_limit: limit,
-        })
-      : Promise.resolve({ data: [] as unknown[], error: null });
-
-    const [exactRes, semRes] = await Promise.all([exactPromise, semanticPromise]);
-    if (exactRes.error) throw new SupabaseError(exactRes.error.message);
-    // A semantic failure shouldn't kill the whole search — fall back to
-    // exact-only. Mirrors how memory_search falls back when Venice is
-    // unreachable.
-    const semanticRows =
-      semRes.error !== null
-        ? []
-        : ((semRes.data ?? []) as {
-            id: string;
-            title: string;
-            archived: boolean;
-            updated_at: string;
-            similarity: number;
-          }[]);
-
-    const exactThreads = (exactRes.data ?? []).map((row) =>
-      coerceThread(row as Record<string, unknown>)
-    );
-
-    // When a topic filter is active, narrow semantic hits to rows
-    // matching the same predicate. The embedding RPC doesn't read
-    // `topics`, so we do this client-side: fetch the matched rows'
-    // topics columns by id, then drop any that don't satisfy the
-    // filter. The fetch is one round trip with at most `limit` rows
-    // so the overhead is small (and only paid when a filter is
-    // active). When no filter is active we skip the round trip
-    // entirely and the existing path runs unchanged.
-    let allowedSemanticIds: Set<string> | null = null;
-    if (selectedTopics.length > 0 && semanticRows.length > 0) {
-      const ids = semanticRows.map((r) => r.id);
-      const { topics: realTopics, includeUntagged } =
-        partitionSelectedTopics(selectedTopics);
-      const { data: topicRows, error: topicErr } = await this.client
-        .from('threads')
-        .select('id, topics')
-        .in('id', ids);
-      if (topicErr) throw new SupabaseError(topicErr.message);
-      allowedSemanticIds = new Set<string>();
-      const realSet = new Set(realTopics);
-      for (const r of (topicRows ?? []) as { id: string; topics: unknown }[]) {
-        const rowTopics = Array.isArray(r.topics)
-          ? r.topics.filter((v): v is string => typeof v === 'string')
-          : [];
-        if (rowTopics.length === 0 && includeUntagged) {
-          allowedSemanticIds.add(r.id);
-          continue;
-        }
-        if (realSet.size > 0 && rowTopics.some((t) => realSet.has(t))) {
-          allowedSemanticIds.add(r.id);
-        }
-      }
-    }
-
-    const out: ThreadSearchHit[] = [];
-    const seen = new Set<string>();
-    for (const t of exactThreads) {
-      if (seen.has(t.id)) continue;
-      seen.add(t.id);
-      out.push({ thread: t, kind: 'exact' });
-      if (out.length >= limit) return out;
-    }
-    for (const row of semanticRows) {
-      if (seen.has(row.id)) continue;
-      if (allowedSemanticIds && !allowedSemanticIds.has(row.id)) continue;
-      seen.add(row.id);
-      // The RPC projection gives us enough for the row UI; fields the
-      // result list doesn't render are stubbed so downstream code that
-      // wants a full Thread still gets a valid shape.
-      out.push({
-        thread: {
-          id: row.id,
-          user_id: '',
-          title: row.title,
-          model: null,
-          reasoning_effort: null,
-          verbosity: null,
-          toolboxes_enabled: [],
-          archived: row.archived,
-          title_manually_set: false,
-          intuition_payload: null,
-          context_recall_payload: null,
-          topics: [],
-          response_holder_id: null,
-          response_claim_expires_at: null,
-          last_error: null,
-          created_at: row.updated_at,
-          updated_at: row.updated_at,
-        },
-        kind: 'semantic',
-        similarity: row.similarity,
-      });
-      if (out.length >= limit) return out;
-    }
-    return out;
+    return threadsApi.searchThreads(this.client, opts);
   }
 
   async createThread(
     title: string,
-    // Model-profile id (see ModelProfile in ./models), or null to track
-    // the user's default profile.
     model: string | null = null,
     reasoningEffort: ThinkingLevel | null = null,
     verbosity: Verbosity | null = null,
     titleManuallySet = false,
     toolboxesEnabled: string[] = []
   ): Promise<Thread> {
-    const session = await this.getSession();
-    if (!session) throw new SupabaseError('Not authenticated.');
-    const { data, error } = await this.client
-      .from('threads')
-      .insert({
-        title,
-        user_id: session.user.id,
-        model,
-        reasoning_effort: reasoningEffort,
-        verbosity,
-        title_manually_set: titleManuallySet,
-        // Carries the draft's toolbox selections through to the
-        // persisted row. The composer toolbox button is available
-        // before a draft materializes, so a user may have enabled
-        // toolboxes before the first send - without this passthrough
-        // those flips would silently reset to [] on materialization.
-        toolboxes_enabled: toolboxesEnabled,
-      })
-      .select()
-      .single();
-    if (error) throw new SupabaseError(error.message);
-    return coerceThread(data as Record<string, unknown>);
+    return threadsApi.createThread(
+      this.client,
+      title,
+      model,
+      reasoningEffort,
+      verbosity,
+      titleManuallySet,
+      toolboxesEnabled
+    );
   }
 
-  /**
-   * Rename a thread. The `manuallySet` flag is the signal that separates
-   * the two callers:
-   *
-   *   - `false` (default): the `update_title` tool path. Writes the title
-   *     but leaves `title_manually_set` alone — so a model-initiated
-   *     rename is still considered "up for revision" on a future topic
-   *     shift.
-   *   - `true`: the user's title input / commitRename. Writes the title
-   *     AND flips the sticky flag so the chat loop will stop feeding the
-   *     rename instruction to the model. Once the user has picked a
-   *     title, that choice wins permanently.
-   *
-   * Explicitly a single method rather than two (renameThread /
-   * renameThreadManually) so there's one RPC round-trip per rename
-   * regardless of path.
-   */
   async renameThread(
     threadId: string,
     title: string,
     opts: { manuallySet?: boolean } = {}
   ): Promise<void> {
-    const patch: Record<string, unknown> = {
-      title,
-      updated_at: new Date().toISOString(),
-    };
-    if (opts.manuallySet === true) {
-      patch.title_manually_set = true;
-    }
-    const { error } = await this.client
-      .from('threads')
-      .update(patch)
-      .eq('id', threadId);
-    if (error) throw new SupabaseError(error.message);
+    return threadsApi.renameThread(this.client, threadId, title, opts);
   }
 
-  /**
-   * Pin the model profile for this thread by id, or clear the override
-   * (null) so the thread tracks the user's default profile.
-   */
   async setThreadModel(threadId: string, model: string | null): Promise<void> {
-    const { error } = await this.client
-      .from('threads')
-      .update({ model, updated_at: new Date().toISOString() })
-      .eq('id', threadId);
-    if (error) throw new SupabaseError(error.message);
+    return threadsApi.setThreadModel(this.client, threadId, model);
   }
 
-  /**
-   * Pin the reasoning-effort level for this thread, or clear the override
-   * (null) so the thread tracks the user default. Doesn't touch
-   * updated_at - flipping reasoning shouldn't promote the thread to the
-   * top of the sidebar, same rationale as setThreadToolboxesEnabled.
-   */
   async setThreadReasoningEffort(
     threadId: string,
     reasoningEffort: ThinkingLevel | null
   ): Promise<void> {
-    const { error } = await this.client
-      .from('threads')
-      .update({ reasoning_effort: reasoningEffort })
-      .eq('id', threadId);
-    if (error) throw new SupabaseError(error.message);
+    return threadsApi.setThreadReasoningEffort(this.client, threadId, reasoningEffort);
   }
 
-  /**
-   * Pin the text.verbosity level for this thread, or clear the override
-   * (null) so the thread tracks the user default. Same discipline as
-   * setThreadReasoningEffort — no updated_at bump because flipping
-   * verbosity shouldn't promote the thread to the top of the sidebar.
-   */
   async setThreadVerbosity(
     threadId: string,
     verbosity: Verbosity | null
   ): Promise<void> {
-    const { error } = await this.client
-      .from('threads')
-      .update({ verbosity })
-      .eq('id', threadId);
-    if (error) throw new SupabaseError(error.message);
+    return threadsApi.setThreadVerbosity(this.client, threadId, verbosity);
   }
 
-  /**
-   * Persist the cached intuition payload for this thread. Pass `null`
-   * to clear (used by tests; the chat-loop only ever writes a fresh
-   * payload). Doesn't bump updated_at - intuition is internal state
-   * that shouldn't promote the thread to the top of the sidebar, same
-   * discipline as the toolbox / verbosity / reasoning-effort setters.
-   *
-   * Loose typing on `payload`: the column is jsonb and the intuition
-   * module owns the canonical shape (see
-   * src/lib/intuition/types.ts#IntuitionPayload). Routing the parse
-   * through there means a future shape change touches one file rather
-   * than every Supabase call site.
-   */
   async setThreadIntuitionPayload(
     threadId: string,
     payload: unknown
   ): Promise<void> {
-    const { error } = await this.client
-      .from('threads')
-      .update({ intuition_payload: payload })
-      .eq('id', threadId);
-    if (error) throw new SupabaseError(error.message);
+    return threadsApi.setThreadIntuitionPayload(this.client, threadId, payload);
   }
 
-  /**
-   * Persist the cached context-recall payload. Sibling of
-   * setThreadIntuitionPayload and shares its discipline: no
-   * updated_at bump (subconscious priming shouldn't promote the
-   * thread in the sidebar), loose typing because the canonical
-   * shape lives in src/lib/context-recall/types.ts.
-   */
   async setThreadContextRecallPayload(
     threadId: string,
     payload: unknown
   ): Promise<void> {
-    const { error } = await this.client
-      .from('threads')
-      .update({ context_recall_payload: payload })
-      .eq('id', threadId);
-    if (error) throw new SupabaseError(error.message);
+    return threadsApi.setThreadContextRecallPayload(this.client, threadId, payload);
   }
 
-  /**
-   * Replace the thread's set of enabled gated toolboxes. Called from
-   * the `toggle_toolbox` meta-tool (LLM path) and from the composer
-   * toolbox popover (user path). The array is the new set; any
-   * toolbox not listed is disabled. Doesn't touch updated_at - a
-   * toolbox flip shouldn't promote the thread to the top of the
-   * sidebar. Caller is responsible for pre-filtering to the known
-   * toolbox names (this method writes whatever it's given - the
-   * validation lives with the callers who know the valid name list).
-   */
   async setThreadToolboxesEnabled(
     threadId: string,
     enabled: readonly string[]
   ): Promise<void> {
-    const { error } = await this.client
-      .from('threads')
-      .update({ toolboxes_enabled: enabled })
-      .eq('id', threadId);
-    if (error) throw new SupabaseError(error.message);
+    return threadsApi.setThreadToolboxesEnabled(this.client, threadId, enabled);
   }
 
-  /**
-   * Flip the thread's archived flag. Unlike setThreadToolboxesEnabled /
-   * setThreadReasoningEffort, this one DOES bump updated_at - both
-   * directions want the thread promoted to the top of whichever section
-   * (Chats or Archive) it lands in, so the user immediately sees where
-   * it went.
-   */
   async setThreadArchived(threadId: string, archived: boolean): Promise<void> {
-    const { error } = await this.client
-      .from('threads')
-      .update({ archived, updated_at: new Date().toISOString() })
-      .eq('id', threadId);
-    if (error) throw new SupabaseError(error.message);
+    return threadsApi.setThreadArchived(this.client, threadId, archived);
   }
 
   async deleteThread(threadId: string): Promise<void> {
-    // Collect the thread's live attachment object keys BEFORE the delete:
-    // threads -> messages -> message_attachments all cascade, so once the
-    // thread is gone the rows are gone and their bucket keys are
-    // unrecoverable. Includes generated images (same table). Expired rows
-    // (storage_path null) have no object left, so we filter them out.
-    const { data: attachRows, error: listErr } = await this.client
-      .from('message_attachments')
-      .select('storage_path, messages!inner(thread_id)')
-      .eq('messages.thread_id', threadId)
-      .not('storage_path', 'is', null);
-    if (listErr) throw new SupabaseError(listErr.message);
-    const paths = (attachRows ?? [])
-      .map((r) => (r as { storage_path: string | null }).storage_path)
-      .filter((p): p is string => typeof p === 'string' && p.length > 0);
-
-    const { error } = await this.client.from('threads').delete().eq('id', threadId);
-    if (error) throw new SupabaseError(error.message);
-
-    // Best-effort object reclamation AFTER the rows are gone (the reverse of
-    // deleteDocument's object-then-row order): the thread has already left the
-    // user's view, so a Storage hiccup must not resurrect it. Any object left
-    // behind here is caught by the daily attachment-gc sweep (bucket objects
-    // with no message_attachments row), so we swallow the remove error rather
-    // than fail the delete. Doing it after the cascade also means a partial
-    // failure can't strand a live row pointing at a deleted object (which would
-    // render as a broken image).
-    if (paths.length > 0) {
-      await this.client.storage.from('attachments').remove(paths);
-    }
+    return threadsApi.deleteThread(this.client, threadId);
   }
 
   async deleteMessages(messageIds: string[]): Promise<void> {
-    // Delete a set of message rows by id - the "delete from here"
-    // gesture passes a user message and every row after it. The
-    // "messages are self-deletable via thread" RLS policy scopes the
-    // delete to threads the caller owns, so a forged id from another
-    // user's thread silently matches nothing.
-    //
-    // Everything that references messages.id either cascades or clears:
-    // message_attachments cascade (their bucket objects are reclaimed
-    // below), and the threads.last_*_msg_id watermarks + the bias
-    // evidence_message_id pointer are ON DELETE SET NULL - so the next
-    // reflection/summary/topics/wiki/evaluation cycle simply re-runs
-    // from a cleared watermark. samskara_substrate.user_message_id and
-    // samskara_fires.user_round are soft pointers with no FK; their
-    // rows survive and may go off-by-N, which the samskara design
-    // accepts (rare, not worth a trigger).
-    if (messageIds.length === 0) return;
-
-    // Collect attachment object keys BEFORE the delete: the cascade
-    // removes the rows, after which their bucket keys are
-    // unrecoverable. Expired rows (storage_path null) have no object
-    // left, so they are filtered out.
-    const { data: attachRows, error: listErr } = await this.client
-      .from('message_attachments')
-      .select('storage_path')
-      .in('message_id', messageIds)
-      .not('storage_path', 'is', null);
-    if (listErr) throw new SupabaseError(listErr.message);
-    const paths = (attachRows ?? [])
-      .map((r) => (r as { storage_path: string | null }).storage_path)
-      .filter((p): p is string => typeof p === 'string' && p.length > 0);
-
-    const { error } = await this.client.from('messages').delete().in('id', messageIds);
-    if (error) throw new SupabaseError(error.message);
-
-    // Best-effort object reclamation AFTER the rows are gone (same order
-    // as deleteThread): a Storage hiccup must not strand a live row
-    // pointing at a deleted object. Anything left behind is swept by the
-    // daily attachment-gc (bucket objects with no message_attachments
-    // row), so the remove error is swallowed rather than failing the
-    // delete.
-    if (paths.length > 0) {
-      await this.client.storage.from('attachments').remove(paths);
-    }
+    return threadsApi.deleteMessages(this.client, messageIds);
   }
 
   // memories -------------------------------------------------------------
@@ -3160,102 +2729,49 @@ export class SupabaseService {
   // keyed on the thread row itself.
 
   // --- Thread response claims ------------------------------------------
+  //
+  // Extracted domain slice: the implementations and their doc comments
+  // live in ./supabase/threads.ts under its "Thread response claims"
+  // banner - the claims are thread-scoped, so they ride the threads
+  // slice. These methods delegate one-for-one under the same names.
 
-  /**
-   * Try to take the response claim on `threadId`. Returns true iff we
-   * hold it after the call. Atomic: the underlying SQL update only
-   * lands if the thread is unclaimed, ours already (harmless refresh),
-   * or carrying an expired claim. A `false` return means another
-   * device beat us to the claim and still owns a live TTL window.
-   */
   async acquireThreadResponseClaim(
     threadId: string,
     holderId: string,
     ttlSeconds: number
   ): Promise<boolean> {
-    const { data, error } = await this.client.rpc('acquire_thread_response_claim', {
-      p_thread_id: threadId,
-      p_holder_id: holderId,
-      p_ttl_seconds: ttlSeconds,
-    });
-    if (error) throw new SupabaseError(error.message);
-    return data === true;
+    return threadsApi.acquireThreadResponseClaim(this.client, threadId, holderId, ttlSeconds);
   }
 
-  /**
-   * Extend our claim on `threadId`. Returns false when the claim has
-   * already lapsed or been taken over - the chat-loop must abort
-   * immediately in that case to avoid a double-response race with the
-   * new holder.
-   */
   async heartbeatThreadResponseClaim(
     threadId: string,
     holderId: string,
     ttlSeconds: number
   ): Promise<boolean> {
-    const { data, error } = await this.client.rpc('heartbeat_thread_response_claim', {
-      p_thread_id: threadId,
-      p_holder_id: holderId,
-      p_ttl_seconds: ttlSeconds,
-    });
-    if (error) throw new SupabaseError(error.message);
-    return data === true;
+    return threadsApi.heartbeatThreadResponseClaim(this.client, threadId, holderId, ttlSeconds);
   }
 
-  /**
-   * Release the claim on `threadId` explicitly on graceful end-of-turn
-   * (success, abort, error). Lets observer devices re-enable their
-   * composer instantly rather than waiting for the TTL to elapse.
-   * No-op when we don't actually hold the claim.
-   */
   async releaseThreadResponseClaim(threadId: string, holderId: string): Promise<void> {
-    const { error } = await this.client.rpc('release_thread_response_claim', {
-      p_thread_id: threadId,
-      p_holder_id: holderId,
-    });
-    if (error) throw new SupabaseError(error.message);
+    return threadsApi.releaseThreadResponseClaim(this.client, threadId, holderId);
   }
 
   // --- Topic vocabularies ----------------------------------------------
+  //
+  // Extracted domain slice: the implementations and their doc comments
+  // live in ./supabase/topics.ts (the list_user_*_topics RPC wrappers)
+  // as plain functions taking the client. These methods delegate
+  // one-for-one under the same names.
 
-  /**
-   * Topic vocabulary + per-topic counts for the current user. Backs the
-   * drawer's topic-filter dropdown; called on drawer mount and
-   * refreshed after a tagging event. Returns the alphabetised topics
-   * the server-side topics agent has assigned across all threads, each with its corpus
-   * count, plus the count of zero-topic threads (the "(untagged)"
-   * dropdown row the UI synthesises - never a member of `topics`).
-   */
   async listUserTopics(): Promise<TopicVocabulary> {
-    const { data, error } = await this.client.rpc('list_user_topics');
-    if (error) throw new SupabaseError(error.message);
-    return parseTopicVocabulary(data);
+    return topicsApi.listUserTopics(this.client);
   }
 
-  /**
-   * Memory-topic vocabulary + per-topic counts for the current user.
-   * Backs the Memories drawer's topic-filter dropdown; called on drawer
-   * mount and refreshed after a tagging event. Counts span the whole
-   * memory corpus, not the capped search-result set the panel holds.
-   * The "(untagged)" pseudo-topic is NOT in `topics` - the UI
-   * synthesises it from the `untagged` count.
-   */
   async listUserMemoryTopics(): Promise<TopicVocabulary> {
-    const { data, error } = await this.client.rpc('list_user_memory_topics');
-    if (error) throw new SupabaseError(error.message);
-    return parseTopicVocabulary(data);
+    return topicsApi.listUserMemoryTopics(this.client);
   }
 
-  /**
-   * Recipe-topic vocabulary + per-topic counts for the current user.
-   * Backs the Cookbook drawer's topic-filter dropdown. Distinct from
-   * `listUserTopics` (threads) and `listUserMemoryTopics`
-   * (memories) so a user's vocabularies don't cross-pollute.
-   */
   async listUserRecipeTopics(): Promise<TopicVocabulary> {
-    const { data, error } = await this.client.rpc('list_user_recipe_topics');
-    if (error) throw new SupabaseError(error.message);
-    return parseTopicVocabulary(data);
+    return topicsApi.listUserRecipeTopics(this.client);
   }
 
   // --- Memory confidence, search & relations ---------------------------
