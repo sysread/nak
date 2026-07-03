@@ -108,6 +108,12 @@ changing a contract that other features depend on.
   produces a `<think>`-tagged internal monologue, injected
   ahead of the next completion. Cached per-thread; refreshed
   on title changes, mood-band shifts, and a staleness fuse.
+- [Second thoughts](./second-thoughts.md) — the post-game
+  metacognitive twin of intuition. A fast non-reasoning reviewer
+  runs in the completed-turn tail, re-reads the answer over a
+  narrow turn slice, and writes a per-message doubt verdict;
+  a doubt surfaces a panel + a user-triggered refinement that
+  appends a reconsidered answer. Deferred: automatic correction.
 - [Bias profile](./bias-profile.md) — silent server-side pipeline
   (hourly cron sweep in the venice function) that analyzes past
   conversations for cognitive biases and
