@@ -131,57 +131,64 @@ import type {
 import type { IntentRow } from './ui/intents-inspector';
 
 /**
- * The browser's single handle on the user's Supabase project. One class,
- * ~160 methods, grouped by domain with `// --- <group> ---` banners in
- * declaration order. Grep a banner to jump to its block:
+ * The browser's single handle on the user's Supabase project. The
+ * class is a facade: every method is a one-line delegation to a
+ * per-domain slice module under ./supabase/, keeping its original
+ * name, so `app.supabase.<method>()` call sites, the delegate, and
+ * the implementation all sit under one greppable token. The banner
+ * directory (declaration order; grep a banner to jump to its block):
  *
- *   Auth & session            sign-in / out, session, password
- *   Settings & Venice proxies user settings + the /complete, /embed,
- *                             /usage, /models, /generate-image, text
- *                             extraction edge-function calls
- *   Threads                   list / search / CRUD / per-thread setters
- *   Memories                  memory CRUD + changelog + paging
+ *   Auth & session            sign-in / out, session, password.
+ *                             IMPLEMENTED INLINE - these own the
+ *                             client's auth surface.
+ *   Settings & Venice API proxies
+ *                             user settings blob     -> ./supabase/settings.ts
+ *                             /complete, /embed, /usage, /models,
+ *                             text extraction        -> ./supabase/venice-proxy.ts
+ *   Threads                   list / search / CRUD / per-thread
+ *                             setters                -> ./supabase/threads.ts
+ *   Memories                  CRUD + changelog + paging
+ *                                                    -> ./supabase/memories.ts
  *   Cookbook                  recipes, versions, photos
- *   Wiki articles             article CRUD + paging
- *   Library / documents       document CRUD, upload, grep, stat
+ *                             (listIntents straggler lives here too)
+ *                                                    -> ./supabase/cookbook.ts
+ *   Wiki articles             article CRUD + paging + search
+ *                                                    -> ./supabase/wiki.ts
+ *   wiki record files         record attachments     -> ./supabase/wiki-records.ts
+ *   wiki record links         record cross-links     -> ./supabase/wiki-records.ts
+ *   Library / documents       document CRUD + upload -> ./supabase/documents.ts
  *   Wiki sources, changelog & agent runs
- *                             bibliography, See-Also, changelog, the
+ *                             bibliography / See-Also / changelog
+ *                                                    -> ./supabase/wiki-sources.ts
  *                             wiki/rem/deep-sleep run + retry routes
+ *                                                    -> ./supabase/agent-runs.ts
  *   Thread response claims    cross-device "responding here" claim
- *   Topic vocabularies        list_user_*_topics
+ *                                                    -> ./supabase/threads.ts
+ *   Topic vocabularies        list_user_*_topics     -> ./supabase/topics.ts
  *   Memory confidence, search & relations
  *                             reaffirm/doubt, embedding search, graph
+ *                                                    -> ./supabase/memories.ts
  *   Messages & attachments    message read/write, attachment storage
+ *                                                    -> ./supabase/messages.ts
  *   Realtime subscriptions & message fetch
- *                             subscribe* + getMessage + inflight lease
+ *                             subscribe* + paired point reads
+ *                                                    -> ./supabase/realtime.ts
  *   Samskara                  fire / substrate / health / clustering
- *   Bias profile              bias summary + observations + reactions
+ *                                                    -> ./supabase/samskara.ts
+ *   Bias profile              summary + observation reads
+ *                                                    -> ./supabase/bias.ts
  *
- * Row types and their coercers live in ./supabase/types/*; this file
- * keeps the class plus its query/util helpers.
+ * One straggler: listIntents is implemented inline until an intents
+ * slice exists (see the note at its declaration).
  *
- * Domain-slice extraction: query implementations are moving out of
- * this class into plain-function modules under ./supabase/<domain>.ts
- * (first argument: the SupabaseClient), with this class keeping
- * one-line delegating methods under unchanged names. Callers never
- * change; the slices are unit-testable against a stubbed client. The
- * Samskara (./supabase/samskara.ts), Settings (./supabase/settings.ts),
- * Venice-proxy (./supabase/venice-proxy.ts), Threads incl. the
- * response claims (./supabase/threads.ts), Topic-vocabulary
- * (./supabase/topics.ts), Memories incl. confidence / search /
- * relations (./supabase/memories.ts), Cookbook - recipes, versions,
- * photos (./supabase/cookbook.ts), Wiki articles (./supabase/wiki.ts),
- * Wiki records incl. files + links (./supabase/wiki-records.ts),
- * Wiki satellites - bibliography, See-Also, changelog
- * (./supabase/wiki-sources.ts), Agent runs - the wiki/rem/
- * deep-sleep run + retry routes (./supabase/agent-runs.ts),
- * Library / documents (./supabase/documents.ts),
- * Messages & attachments (./supabase/messages.ts),
- * Realtime subscriptions incl. the paired point reads
- * (./supabase/realtime.ts), and
- * Bias profile (./supabase/bias.ts) -
- * groups are extracted; only Auth & session and the listIntents
- * straggler still carry their implementations inline.
+ * Slice functions take the shared SupabaseClient as their first
+ * argument - no class, no state - so each is unit-testable against a
+ * stubbed client without constructing SupabaseService. Row types and
+ * their coercers live in ./supabase/types/*; SupabaseError in
+ * ./supabase/error.ts; cross-domain query builders in
+ * ./supabase/query-utils.ts. UI code should not import slice modules
+ * directly - this facade is the API. New query wrappers go in the
+ * owning slice with a delegating method here.
  */
 export class SupabaseService {
   readonly client: SupabaseClient;

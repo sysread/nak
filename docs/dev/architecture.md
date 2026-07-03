@@ -86,33 +86,43 @@ The full writeup lives in `./auth-session.md`.
 ## Data layer — SupabaseService
 
 `src/lib/supabase.ts` is the single class every UI and agent uses to
-hit the user's Supabase project. Scope covers auth, threads,
-messages, memories, settings, cookbook, wiki, documents, samskara,
-and bias - the class preamble carries the full banner-grouped
-directory; grep a banner name to jump to its block.
+hit the user's Supabase project - a **facade** (~1.5k lines) whose
+methods delegate one-for-one to per-domain slice modules. Scope
+covers auth, settings, the Venice edge-function proxies, threads,
+messages, memories, cookbook, wiki, documents, agent runs, realtime
+subscriptions, samskara, and bias; the class preamble carries the
+banner-grouped directory - grep a banner name to jump to its block.
 
-The file is large (~5.5k lines). Its size is not complexity - almost
-every method is a narrow wrapper over the generated Supabase client -
-but it is being reduced by domain-slice extraction:
+The layout:
 
 - **Row types** live in `src/lib/supabase/types/<domain>.ts`,
   re-exported through `$lib/supabase` so consumers keep a single
   import surface.
-- **Query implementations** are moving into plain-function modules at
-  `src/lib/supabase/<domain>.ts`. Each function takes the shared
-  `SupabaseClient` as its first argument; the class keeps a one-line
-  delegating method under the unchanged name. Call sites never
-  change (`app.supabase.<method>()` throughout), and the slices are
+- **Query implementations** live in plain-function modules at
+  `src/lib/supabase/<domain>.ts` (samskara, settings, venice-proxy,
+  threads, topics, memories, cookbook, wiki, wiki-records,
+  wiki-sources, agent-runs, documents, messages, realtime, bias).
+  Each function takes the shared `SupabaseClient` as its first
+  argument and keeps the name of the facade method that delegates to
+  it, so grep hits the implementation, the delegate, and every call
+  site under one token. Call sites never change
+  (`app.supabase.<method>()` throughout), and the slices are
   unit-testable against a stubbed client without constructing
   `SupabaseService`.
-- `SupabaseError` lives in `src/lib/supabase/error.ts`, shared by
-  the facade and the slices. It is internal to the data layer.
+- **Shared helpers**: `SupabaseError` in `src/lib/supabase/error.ts`;
+  the cross-domain query builders (topics filter, the two ILIKE
+  pattern builders, base64 decode) in
+  `src/lib/supabase/query-utils.ts`. Both are internal to the data
+  layer.
+- Slices that need the signed-in user replicate a small private
+  `getSession(client)` mirror of the facade's unwrap rather than
+  reaching back into the class - grep any slice for the precedent.
 
-Extracted so far: **samskara** (`src/lib/supabase/samskara.ts`).
-The remaining groups still carry their implementations inline;
-extract a group into its slice module when touching it
-substantially, following the samskara shape. UI code should not
-import slice modules directly - the facade is the API.
+Only auth/session methods (which own the client's auth surface) and
+the `listIntents` straggler (waiting on an intents slice) remain
+inline in the facade. UI code should not import slice modules
+directly - the facade is the API. New query wrappers go in the
+owning slice module with a delegating method on the class.
 
 Security posture: the browser connects with the **publishable key**. Every
 table has RLS enabled, and every policy is `auth.uid() = user_id`
