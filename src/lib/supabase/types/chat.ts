@@ -4,10 +4,8 @@
  * `../../supabase.ts` so consumers keep importing from `$lib/supabase`.
  */
 import {
-  isModelTier,
   isThinkingLevel,
   isVerbosity,
-  type ModelTier,
   type ThinkingLevel,
   type Verbosity,
 } from '../../models';
@@ -23,23 +21,30 @@ export interface Thread {
   id: string;
   user_id: string;
   title: string;
-  /** Per-thread model tier override. Null/absent means use user default. */
-  model: ModelTier | null;
+  /**
+   * Per-thread model-profile pin: the id of a ModelProfile in
+   * `profiles.settings.modelProfiles`. Null/absent means track the
+   * user's default profile. Rows written before the profile system may
+   * still carry a legacy tier name ('smart' | 'balanced' | 'fast');
+   * resolution treats any id with no matching profile - legacy or
+   * deleted - as the default profile (see resolveModelProfile in
+   * ./models), so old rows degrade gracefully without a migration.
+   */
+  model: string | null;
   /**
    * Per-thread thinking-level override. Holds 'off' as well as
    * low/medium/high - 'off' resolves to disable_thinking on the wire,
    * the others to reasoning_effort (see ThinkingLevel / thinkingToWire
-   * in ./models). Null/absent means fall through to the tier/user
+   * in ./models). Null/absent means fall through to the profile's
    * default. Only consulted on reasoning-capable models; the composer
-   * picker is hidden (and the field cleared on re-point) when the
-   * resolved model can't reason. The column is still named
-   * reasoning_effort for storage-compat - no migration needed since it
-   * was already plain text with no CHECK.
+   * picker is hidden when the resolved model can't reason. The column
+   * is still named reasoning_effort for storage-compat - no migration
+   * needed since it was already plain text with no CHECK.
    */
   reasoning_effort: ThinkingLevel | null;
   /**
    * Per-thread text.verbosity override. Null/absent means use the
-   * user default. Surfaced unconditionally in the composer —
+   * profile's default. Surfaced unconditionally in the composer —
    * unlike reasoning_effort we don't gate on a model-capability
    * flag; providers that don't recognize the knob silently ignore
    * it rather than 400.
@@ -419,14 +424,16 @@ export const RECENT_THREAD_CUTOFF_MS = 3 * 24 * 60 * 60 * 1000;
 
 /**
  * Coerce the raw row from Supabase. The `model` column is `text` without a
- * CHECK constraint, so scrub unexpected values to null. `toolboxes_enabled`
- * defaults to an empty array if the column is missing (older row before
- * the migration, or a coerce on a freshly-minted draft) and non-string
- * elements inside the array are filtered out so a drifting row can never
- * poison the UI's `.includes()` checks.
+ * CHECK constraint holding a model-profile id; any non-empty string passes
+ * through (resolution maps unknown ids - deleted profiles, legacy tier
+ * names - to the default profile), non-strings scrub to null.
+ * `toolboxes_enabled` defaults to an empty array if the column is missing
+ * (older row before the migration, or a coerce on a freshly-minted draft)
+ * and non-string elements inside the array are filtered out so a drifting
+ * row can never poison the UI's `.includes()` checks.
  */
 export function coerceThread(row: Record<string, unknown>): Thread {
-  const model = isModelTier(row.model) ? row.model : null;
+  const model = typeof row.model === 'string' && row.model.length > 0 ? row.model : null;
   const reasoning_effort = isThinkingLevel(row.reasoning_effort)
     ? row.reasoning_effort
     : null;

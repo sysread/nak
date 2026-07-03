@@ -2,16 +2,18 @@
  * Model registry and helpers. Three concerns, one file:
  *
  *   1. MODELS - flat registry keyed by Venice id. Every model the app
- *      currently pins (whether from a tier or an agent role) lives here
- *      as a ModelSpec carrying the capability data every consumer reads
- *      (contextWindow, supportsReasoning, supportsVision,
- *      supportsResponseFormat).
+ *      currently pins from an agent role (plus the seed profile's
+ *      backing model) lives here as a ModelSpec carrying the capability
+ *      data every consumer reads (contextWindow, supportsReasoning,
+ *      supportsVision, supportsResponseFormat).
  *
- *   2. TIERS - user-facing tier wrappers (Smart / Balanced / Fast). Each
- *      TierSpec carries a ModelSpec entry's capability data plus the UI
- *      fields the tier picker reads (label, icon, description) and an
- *      optional defaultThinking level (including 'off') that lets tiers
- *      feel different in their default reasoning budget.
+ *   2. ModelProfile - the user-defined, named model configurations the
+ *      chat surface runs on (name + Venice id + default reasoning +
+ *      default verbosity + a capability snapshot). Users create, edit,
+ *      reorder, and delete them in Settings -> Model profiles; exactly
+ *      one is the default for new conversations. The type, its
+ *      coercion, the seed profile, and the send-path resolution helpers
+ *      all live here.
  *
  *   3. AGENT_MODELS - one-line-per-role mapping from background-agent
  *      roles (reflection, wiki, intuition, ...) to a registered
@@ -19,24 +21,17 @@
  *      rationale per slot lives in the docblock on AGENT_MODELS itself
  *      rather than scattered across the agent files.
  *
- * There is no retired-id registry. Threads store a tier, not a concrete
- * id (see below), so a model leaving Venice never orphans a thread - the
- * tier just resolves to its current backing model. The per-message
- * context ring measures each row against the thread's CURRENT model
- * window (passed in by the caller), not the window of whatever model
- * historically answered it, so no historical-id lookup is needed either.
- *
- * Why the indirection: Venice (and AI providers generally) rotate model
- * names aggressively. If we stored a literal id like 'kimi-k2-5' on
- * every thread row, changing the Smart tier to a newer model would
- * orphan every existing thread. Storing the tier name on the row means
- * we can retarget by editing this file alone - the same thinking
- * applies to AGENT_MODELS for the background agents.
+ * There is no retired-id registry. Threads store a profile id, not a
+ * concrete Venice id (see ModelProfile below), so renaming or re-
+ * pointing a profile never orphans a thread - the thread resolves
+ * through the profile to whatever model it currently carries. The
+ * per-message context ring measures each row against the thread's
+ * CURRENT model window (passed in by the caller), not the window of
+ * whatever model historically answered it, so no historical-id lookup
+ * is needed either.
  */
 
 // --- Reasoning / verbosity wire-config knobs -------------------------------
-
-export type ModelTier = 'smart' | 'balanced' | 'fast';
 
 /**
  * OpenAI-style reasoning_effort knob. Passed through verbatim in the
@@ -48,39 +43,22 @@ export type ModelTier = 'smart' | 'balanced' | 'fast';
  */
 export type ReasoningEffort = 'low' | 'medium' | 'high';
 
-export const REASONING_EFFORTS: readonly ReasoningEffort[] = ['low', 'medium', 'high'];
-
-/**
- * Default when the user hasn't picked anything explicitly. `low` keeps
- * latency in the chat-turn ballpark - `medium` / `high` can stretch a
- * simple reply into multi-second think time. Users who want more can
- * bump per-thread or change their default in Settings.
- */
-export const DEFAULT_REASONING_EFFORT: ReasoningEffort = 'low';
-
-export function isReasoningEffort(v: unknown): v is ReasoningEffort {
+function isReasoningEffort(v: unknown): v is ReasoningEffort {
   return v === 'low' || v === 'medium' || v === 'high';
 }
 
-/** Display labels for the three effort levels. Keep short; the dropdown is narrow. */
-export const REASONING_EFFORT_LABELS: Record<ReasoningEffort, string> = {
-  low: 'Low',
-  medium: 'Medium',
-  high: 'High',
-};
-
 /**
- * The composer reasoning picker's domain: the three reasoning_effort
- * levels plus an explicit 'off'. Kept separate from ReasoningEffort on
- * purpose - ReasoningEffort is wire-faithful to the `reasoning_effort`
- * body field (Venice 400s on anything outside low/medium/high), whereas
- * 'off' is not a reasoning_effort value at all: it maps to the distinct
+ * The reasoning picker's domain: the three reasoning_effort levels plus
+ * an explicit 'off'. Kept separate from ReasoningEffort on purpose -
+ * ReasoningEffort is wire-faithful to the `reasoning_effort` body field
+ * (Venice 400s on anything outside low/medium/high), whereas 'off' is
+ * not a reasoning_effort value at all: it maps to the distinct
  * `venice_parameters.disable_thinking` knob. The two wire knobs are
  * mutually exclusive (off wins), so the picker offers a single 4-way
  * choice and `thinkingToWire` splits it back into whichever knob the
- * level implies. The Settings account-default picker deliberately does
- * NOT use this domain - an account-wide "off" doesn't make sense, so it
- * stays on REASONING_EFFORTS (low/medium/high only).
+ * level implies. A model profile's default reasoning uses this domain
+ * too, so a profile can ship with thinking disabled (the old Fast-tier
+ * behavior, now user-composable).
  */
 export type ThinkingLevel = 'off' | ReasoningEffort;
 
@@ -93,7 +71,9 @@ export function isThinkingLevel(v: unknown): v is ThinkingLevel {
 /** Display labels for the picker. 'Off' reads as "no thinking pass." */
 export const THINKING_LEVEL_LABELS: Record<ThinkingLevel, string> = {
   off: 'Off',
-  ...REASONING_EFFORT_LABELS,
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
 };
 
 /**
@@ -114,14 +94,6 @@ export const THINKING_LEVEL_LABELS: Record<ThinkingLevel, string> = {
 export type Verbosity = 'low' | 'medium' | 'high';
 
 export const VERBOSITIES: readonly Verbosity[] = ['low', 'medium', 'high'];
-
-/**
- * Default when the user hasn't picked anything explicitly. 'medium' is
- * the neutral middle - neither forcing terse single-line answers nor
- * padding simple replies into essays. Users who prefer one extreme
- * can flip per-thread or change their default in Settings.
- */
-export const DEFAULT_VERBOSITY: Verbosity = 'medium';
 
 export function isVerbosity(v: unknown): v is Verbosity {
   return v === 'low' || v === 'medium' || v === 'high';
@@ -291,204 +263,218 @@ export const MODELS = {
 
 export type ModelId = keyof typeof MODELS;
 
-// --- User-facing tier system -----------------------------------------------
+// --- User-defined model profiles ---------------------------------------------
 
 /**
- * A tier is a Venice id wrapped with the UI fields the tier picker
- * needs (label, icon, description) plus an optional reasoning-effort
- * default that lets two tiers serving the same Venice id feel
- * different. Extends ModelSpec so consumers can read either UI fields
- * (`TIERS[tier].label`) or capability fields (`TIERS[tier].contextWindow`,
- * `TIERS[tier].supportsReasoning`) off the same struct.
- */
-export interface TierSpec extends ModelSpec {
-  readonly tier: ModelTier;
-  readonly label: string;
-  readonly icon: string;
-  readonly description: string;
-  /**
-   * Tier-level default thinking level - the picker position a thread
-   * starts at before the user touches it. Sits in the resolution
-   * cascade between the per-thread override (wins) and the user's
-   * account-level reasoning default (loses): see resolveThinking. The
-   * value can be 'off', which is how a tier ships with thinking
-   * disabled - 'off' resolves to `venice_parameters.disable_thinking`
-   * rather than a `reasoning_effort` value (reasoning_effort: 'low'
-   * shrinks the CoT but doesn't zero it; only disable_thinking does).
-   * Smart defaults to 'medium', Balanced and Fast to 'off'. Absent
-   * means "no tier opinion - fall through to the user default." Only
-   * consulted when the underlying model's supportsReasoning is true.
-   *
-   * Note this is a DEFAULT, not a lock: the composer reasoning picker
-   * stays visible on every reasoning-capable tier, so a user can move
-   * an 'off'-defaulted thread up to low/medium/high (or vice versa)
-   * for that one conversation.
-   */
-  readonly defaultThinking?: ThinkingLevel;
-}
-
-export const TIERS: Readonly<Record<ModelTier, TierSpec>> = {
-  smart: {
-    ...MODELS['qwen-3-7-plus'],
-    tier: 'smart',
-    label: 'Smart',
-    icon: '🧠',
-    description: 'Qwen 3.7 Plus with medium thinking. 1M context, native vision. Best for hard problems.',
-    defaultThinking: 'medium',
-  },
-  balanced: {
-    ...MODELS['deepseek-v4-flash'],
-    tier: 'balanced',
-    label: 'Balanced',
-    // U+262F YIN YANG + U+FE0F emoji presentation. Chosen over U+2696
-    // SCALES because the scales glyph is all thin strokes in every
-    // major emoji font, and it vanishes against the toggle background
-    // in both themes; yin-yang is a solid bi-tonal disc that reads at
-    // any size.
-    icon: '\u262F\uFE0F',
-    description: 'DeepSeek V4 Flash with light thinking. Good default for most turns.',
-    // Light thinking by default - 'low' keeps a short CoT pass that
-    // catches obvious slips without paying a long-think latency tax
-    // on every turn. Balanced and Fast both front deepseek-v4-flash;
-    // the only difference is this default ('low' vs 'off'). A user
-    // can bump per thread via the composer picker either way.
-    defaultThinking: 'low',
-  },
-  fast: {
-    ...MODELS['deepseek-v4-flash'],
-    tier: 'fast',
-    label: 'Fast',
-    icon: '\u26A1\uFE0F',
-    description: 'DeepSeek V4 Flash with thinking off. Quickest replies.',
-    // Defaulting to 'off' is what makes the Fast tier feel fast even
-    // though it fronts a reasoning-capable model - without it the model
-    // would burn its default thinking budget on CoT before writing any
-    // user-visible text. A user can still bump a single thread back to
-    // low/medium/high via the composer picker.
-    defaultThinking: 'off',
-  },
-};
-
-/** Iteration order for the tier picker. Smart -> Balanced -> Fast. */
-export const TIER_ORDER: readonly ModelTier[] = ['smart', 'balanced', 'fast'];
-
-export const DEFAULT_TIER: ModelTier = 'balanced';
-
-// --- User-configurable tier overrides --------------------------------------
-
-/**
- * A user's chosen backing for one tier, persisted in
- * `profiles.settings.tierModels`. The Settings AI pane lets the user
- * point a tier at any model the Venice catalog advertises and set that
- * tier's default reasoning effort; this is the snapshot that records the
- * choice.
+ * A user-defined model profile: a named pairing of a Venice model with
+ * the default reasoning level and verbosity conversations start at.
+ * Profiles replace the old fixed Smart/Balanced/Fast tiers - the user
+ * creates, renames, reorders, and deletes them freely in Settings ->
+ * Model profiles, and exactly one is flagged the default for new
+ * conversations. Persisted wholesale as
+ * `profiles.settings.modelProfiles`; array order is display order in
+ * both the Settings list and the composer's profile menu.
  *
- * Why a capability snapshot rather than just `{ modelId, thinking }`:
- * the live catalog (./catalog.ts) is fetched lazily - only when the
- * Settings pane opens. Chat resolution runs synchronously on every send
- * and cannot wait on (or assume the presence of) an async catalog fetch.
- * So the capability fields the send path needs - context window, whether
- * to forward `reasoning_effort`, whether images can be inlined - are
- * captured here at pick time from the catalog and read back without a
- * network round trip. The trade-off is staleness: if Venice later
- * changes a model's capabilities the snapshot lags until the user
- * re-picks. Capabilities for a fixed id rarely change, so this is
- * acceptable.
+ * Threads reference a profile by `id` (`threads.model` holds the
+ * profile id, or null for "track the default profile"). Ids are
+ * client-minted UUIDs - except the seed profile's well-known
+ * SEED_MODEL_PROFILE_ID - and stay stable across renames, so renaming
+ * or re-pointing a profile never orphans a thread. A thread whose
+ * profile was deleted resolves back to the default profile (see
+ * resolveModelProfile).
+ *
+ * Why a capability snapshot rides along (contextWindow / supports*):
+ * the live Venice catalog (./catalog.ts) is fetched lazily - only while
+ * the Settings pane is open. Chat resolution runs synchronously on
+ * every send and cannot wait on (or assume the presence of) an async
+ * catalog fetch, so the capability fields the send path needs - the
+ * context window for the ring, whether to forward `reasoning_effort`,
+ * whether images can be inlined - are captured at pick time from the
+ * catalog and read back without a network round trip. The trade-off is
+ * staleness: if Venice later changes the model's capabilities the
+ * snapshot lags until the user re-picks. Capabilities for a fixed id
+ * rarely change, so this is acceptable.
  *
  * Note the curated safety flags (leaksSpecialTokens) are deliberately
- * NOT snapshotted - those keep living in MODELS keyed by concrete id, so
- * `modelLeaksSpecialTokens(snapshot.modelId)` still arms the slop guard
- * for a user who points a tier at a known-leaky model. The catalog can't
- * supply that flag, so there's nothing to snapshot.
+ * NOT snapshotted - those keep living in MODELS keyed by concrete id,
+ * so `modelLeaksSpecialTokens(profile.modelId)` still arms the slop
+ * guard for a profile pointed at a known-leaky model. The catalog
+ * can't supply that flag, so there's nothing to snapshot.
  */
-export interface TierModelConfig {
+export interface ModelProfile {
+  /** Stable identity threads reference; survives renames. */
+  readonly id: string;
+  /** User-facing label; unique across the user's profiles. */
+  readonly name: string;
+  /** Concrete Venice model id this profile's requests go out with. */
   readonly modelId: string;
-  /** Tier-level default reasoning level; may be 'off'. */
+  /** Default reasoning level for threads on this profile; may be 'off'. */
   readonly thinking: ThinkingLevel;
+  /** Default text.verbosity for threads on this profile. */
+  readonly verbosity: Verbosity;
+  /** True on exactly one profile - the one new conversations start on. */
+  readonly isDefault: boolean;
   readonly contextWindow: number;
-  /** Whether to forward `reasoning_effort` on this tier's requests. */
+  /** Whether to forward `reasoning_effort` on this profile's requests. */
   readonly supportsReasoning: boolean;
   readonly supportsVision: boolean;
   readonly supportsResponseFormat: boolean;
-  /** Catalog display name captured at pick time, for the picker summary. */
-  readonly label: string;
+  /** Catalog display name captured at pick time, for the Settings strip. */
+  readonly modelLabel: string;
 }
 
-/** Per-tier override map. Absent tiers fall back to the built-in TierSpec. */
-export type TierModels = Partial<Record<ModelTier, TierModelConfig>>;
+/**
+ * Id of the starter profile seeded for accounts with no stored
+ * profiles (new users, or accounts predating the profile system). A
+ * fixed sentinel rather than a random UUID so the seed is stable
+ * across sessions and devices before it is ever persisted - a thread
+ * pinned to it on one device resolves to the same profile everywhere.
+ */
+export const SEED_MODEL_PROFILE_ID = 'default';
 
 /**
- * Validate one persisted tier-config blob. Total + defensive: returns
- * null on any shape mismatch so a corrupt settings entry degrades to the
- * built-in tier default rather than poisoning resolution. Used by
- * coerceSettings in supabase.ts on read.
+ * The starter profile list: one profile named "Default" on
+ * deepseek-v4-flash with medium reasoning and low verbosity.
+ * Capabilities come from the curated MODELS entry so the snapshot is
+ * born accurate. Returns a fresh array per call - callers hand it to
+ * reactive state and to list transforms that treat arrays as mutable.
  */
-export function coerceTierModelConfig(raw: unknown): TierModelConfig | null {
+export function seedModelProfiles(): ModelProfile[] {
+  const spec = MODELS['deepseek-v4-flash'];
+  return [
+    {
+      id: SEED_MODEL_PROFILE_ID,
+      name: 'Default',
+      modelId: spec.id,
+      thinking: 'medium',
+      verbosity: 'low',
+      isDefault: true,
+      contextWindow: spec.contextWindow,
+      supportsReasoning: spec.supportsReasoning,
+      supportsVision: spec.supportsVision,
+      supportsResponseFormat: spec.supportsResponseFormat,
+      modelLabel: 'DeepSeek V4 Flash',
+    },
+  ];
+}
+
+/**
+ * Re-establish the exactly-one-default invariant over a profile list:
+ * the first flagged profile keeps the flag (extras are cleared), and a
+ * list with no flag at all promotes its first entry. Entries are only
+ * copied when their flag actually changes so an already-normal list
+ * passes through with its object identities intact. Empty input
+ * returns empty - the caller decides whether that means "seed".
+ */
+export function normalizeDefaultProfile(
+  profiles: readonly ModelProfile[]
+): ModelProfile[] {
+  const defaultId = (profiles.find((p) => p.isDefault) ?? profiles[0])?.id;
+  return profiles.map((p) =>
+    p.isDefault === (p.id === defaultId) ? p : { ...p, isDefault: p.id === defaultId }
+  );
+}
+
+/**
+ * Validate one persisted profile blob. Total + defensive: returns null
+ * on any shape mismatch so a corrupt entry is dropped rather than
+ * poisoning resolution. Used by coerceModelProfiles on every read.
+ */
+export function coerceModelProfile(raw: unknown): ModelProfile | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const r = raw as Record<string, unknown>;
+  if (typeof r.id !== 'string' || r.id.length === 0) return null;
+  if (typeof r.name !== 'string' || r.name.trim().length === 0) return null;
   if (typeof r.modelId !== 'string' || r.modelId.length === 0) return null;
   if (!isThinkingLevel(r.thinking)) return null;
+  if (!isVerbosity(r.verbosity)) return null;
   if (typeof r.contextWindow !== 'number' || !Number.isFinite(r.contextWindow)) {
     return null;
   }
   if (typeof r.supportsReasoning !== 'boolean') return null;
   if (typeof r.supportsVision !== 'boolean') return null;
   if (typeof r.supportsResponseFormat !== 'boolean') return null;
-  const label =
-    typeof r.label === 'string' && r.label.length > 0 ? r.label : r.modelId;
+  const modelLabel =
+    typeof r.modelLabel === 'string' && r.modelLabel.length > 0
+      ? r.modelLabel
+      : r.modelId;
   return {
+    id: r.id,
+    name: r.name,
     modelId: r.modelId,
     thinking: r.thinking,
+    verbosity: r.verbosity,
+    isDefault: r.isDefault === true,
     contextWindow: r.contextWindow,
     supportsReasoning: r.supportsReasoning,
     supportsVision: r.supportsVision,
     supportsResponseFormat: r.supportsResponseFormat,
-    label,
+    modelLabel,
   };
 }
 
 /**
- * Coerce the whole `tierModels` map: keep only well-formed entries under
- * a real tier key. Returns undefined when nothing survives so the stored
- * blob and the in-memory state both treat "no overrides" as absence.
+ * Coerce a persisted `modelProfiles` array: drop malformed entries and
+ * duplicate ids (first occurrence wins), then normalize the default
+ * flag to exactly one. Returns undefined when nothing survives so the
+ * stored blob and the in-memory state both treat "no profiles" as
+ * absence - the caller substitutes seedModelProfiles().
  */
-export function coerceTierModels(raw: unknown): TierModels | undefined {
-  if (typeof raw !== 'object' || raw === null) return undefined;
-  const r = raw as Record<string, unknown>;
-  const out: TierModels = {};
-  for (const tier of TIER_ORDER) {
-    const config = coerceTierModelConfig(r[tier]);
-    if (config) out[tier] = config;
+export function coerceModelProfiles(raw: unknown): ModelProfile[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const seen = new Set<string>();
+  const out: ModelProfile[] = [];
+  for (const item of raw) {
+    const p = coerceModelProfile(item);
+    if (p === null || seen.has(p.id)) continue;
+    seen.add(p.id);
+    out.push(p);
   }
-  return Object.keys(out).length > 0 ? out : undefined;
+  return out.length > 0 ? normalizeDefaultProfile(out) : undefined;
 }
 
 /**
- * Resolve the effective TierSpec for a tier, folding any user override on
- * top of the built-in default. The tier's identity (label, icon) is
- * always the built-in one - Smart stays Smart - but the backing model,
- * its capabilities, and the default reasoning level come from the
- * snapshot when the user has configured this tier. Pure and synchronous:
- * the snapshot carries everything resolution needs, so no catalog lookup
- * happens here.
- *
- * The description is regenerated from the override so a stale built-in
- * blurb ("Qwen 3.7 Plus with medium thinking") never contradicts the
- * model the user actually picked.
+ * The profile new conversations start on. Total even over an empty
+ * list (falls back to a fresh seed profile) so a transient empty state
+ * can never crash the composer; in practice the app state is always
+ * seeded non-empty.
  */
-export function effectiveTierSpec(tier: ModelTier, tierModels?: TierModels): TierSpec {
-  const base = TIERS[tier];
-  const override = tierModels?.[tier];
-  if (!override) return base;
+export function defaultModelProfile(profiles: readonly ModelProfile[]): ModelProfile {
+  return profiles.find((p) => p.isDefault) ?? profiles[0] ?? seedModelProfiles()[0];
+}
+
+/**
+ * Resolve the effective profile for a thread. A thread pins a profile
+ * by id in `threads.model`; null means "track the default profile". An
+ * id with no matching profile also resolves to the default - that
+ * covers a profile the user deleted, and legacy rows that still carry
+ * a pre-profile tier name ('smart' | 'balanced' | 'fast') from before
+ * the profile system existed.
+ */
+export function resolveModelProfile(
+  profiles: readonly ModelProfile[],
+  threadProfileId: string | null
+): ModelProfile {
+  if (threadProfileId !== null) {
+    const hit = profiles.find((p) => p.id === threadProfileId);
+    if (hit) return hit;
+  }
+  return defaultModelProfile(profiles);
+}
+
+/**
+ * Project a profile's capability snapshot back into the ModelSpec shape
+ * for consumers that read specs rather than profiles (the attachments
+ * vision-routing helpers). The spec's `id` is the concrete Venice model
+ * id, not the profile id.
+ */
+export function profileModelSpec(profile: ModelProfile): ModelSpec {
   return {
-    ...base,
-    id: override.modelId,
-    contextWindow: override.contextWindow,
-    supportsReasoning: override.supportsReasoning,
-    supportsVision: override.supportsVision,
-    supportsResponseFormat: override.supportsResponseFormat,
-    defaultThinking: override.thinking,
-    description: `${override.label} - ${THINKING_LEVEL_LABELS[override.thinking].toLowerCase()} thinking.`,
+    id: profile.modelId,
+    contextWindow: profile.contextWindow,
+    supportsReasoning: profile.supportsReasoning,
+    supportsVision: profile.supportsVision,
+    supportsResponseFormat: profile.supportsResponseFormat,
   };
 }
 
@@ -496,7 +482,7 @@ export function effectiveTierSpec(tier: ModelTier, tierModels?: TierModels): Tie
 
 /**
  * Roles that have their own pinned Venice id, separate from the user-
- * facing tier system. Adding a role here is a three-step change: list
+ * facing profile system. Adding a role here is a three-step change: list
  * the role here, add the assignment in AGENT_MODELS below, switch the
  * call site to `agentModel('<role>').id`.
  */
@@ -747,49 +733,6 @@ export function padEmbeddingForStorage(embedding: readonly number[]): number[] {
 
 // --- Helpers ---------------------------------------------------------------
 
-export function isModelTier(v: unknown): v is ModelTier {
-  return v === 'smart' || v === 'balanced' || v === 'fast';
-}
-
-/**
- * Resolve the concrete tier to use for a given thread. A per-thread
- * override wins; otherwise fall back to the user's configured default.
- */
-export function resolveTier(
-  threadModel: ModelTier | null,
-  defaultTier: ModelTier
-): ModelTier {
-  return threadModel ?? defaultTier;
-}
-
-/**
- * Resolve the thinking level to use for a given thread. Cascade:
- *
- *   per-thread override -> tier default -> user account default
- *
- * The tier default is the mechanism that lets the three tiers feel
- * different - Smart's `defaultThinking: 'medium'` and Balanced/Fast's
- * `'off'` win over the user's account default when the user hasn't
- * explicitly set a per-thread level. The user's thread-level choice
- * still wins over everything, so anyone who wants thinking back on (or
- * off) for one conversation can pin it per thread and Nak won't
- * override.
- *
- * Returns a ThinkingLevel, which may be 'off'. The account default is
- * a ReasoningEffort (never 'off'), so 'off' only enters the result via
- * a tier default or an explicit per-thread pick. Use `thinkingToWire`
- * to turn the result into the actual wire knobs, and gate on
- * `TIERS[tier].supportsReasoning` first - some providers 400 on a
- * `reasoning_effort` field they don't recognise.
- */
-export function resolveThinking(
-  threadLevel: ThinkingLevel | null,
-  defaultEffort: ReasoningEffort,
-  tierDefault?: ThinkingLevel | null
-): ThinkingLevel {
-  return threadLevel ?? tierDefault ?? defaultEffort;
-}
-
 /**
  * Split a resolved thinking level into the two mutually-exclusive wire
  * knobs. 'off' maps to `venice_parameters.disable_thinking: true` (and
@@ -797,7 +740,8 @@ export function resolveThinking(
  * `reasoning_effort` (and no disable_thinking). Centralised so the
  * off<->wire mapping lives in one place rather than re-derived at each
  * send site. Kept internal - the composer goes through
- * `thinkingWireForTier`, which also applies the supportsReasoning gate.
+ * `thinkingWireForProfile`, which also applies the supportsReasoning
+ * gate.
  */
 function thinkingToWire(level: ThinkingLevel): {
   reasoningEffort?: ReasoningEffort;
@@ -810,34 +754,18 @@ function thinkingToWire(level: ThinkingLevel): {
 
 /**
  * Composer send-path convenience: resolve a thread's thinking level
- * against a tier and split it into wire knobs in one step. Non-
- * reasoning models get neither field (some providers 400 on a
+ * against its profile and split it into wire knobs in one step. The
+ * per-thread override wins; otherwise the profile's default applies.
+ * Non-reasoning models get neither field (some providers 400 on a
  * `reasoning_effort` they don't recognise, and disable_thinking is
- * meaningless without a thinking pass to disable). Collapses what was
- * five copies of the same resolve-then-gate dance at the call sites.
+ * meaningless without a thinking pass to disable).
  */
-export function thinkingWireForTier(
-  tier: TierSpec,
-  threadLevel: ThinkingLevel | null,
-  defaultEffort: ReasoningEffort
+export function thinkingWireForProfile(
+  profile: ModelProfile,
+  threadLevel: ThinkingLevel | null
 ): { reasoningEffort?: ReasoningEffort; disableThinking: boolean } {
-  if (!tier.supportsReasoning) return { disableThinking: false };
-  return thinkingToWire(resolveThinking(threadLevel, defaultEffort, tier.defaultThinking));
-}
-
-/**
- * Resolve the verbosity level to use for a given thread. Same
- * "override wins over default" shape as resolveTier /
- * resolveThinking. Unlike reasoning_effort, we don't gate on
- * a `supportsVerbosity` capability flag - `text.verbosity` is a
- * plain OpenAI-shape field that providers either honor or silently
- * ignore. The caller is responsible for deciding whether to send it.
- */
-export function resolveVerbosity(
-  threadVerbosity: Verbosity | null,
-  defaultVerbosity: Verbosity
-): Verbosity {
-  return threadVerbosity ?? defaultVerbosity;
+  if (!profile.supportsReasoning) return { disableThinking: false };
+  return thinkingToWire(threadLevel ?? profile.thinking);
 }
 
 /**

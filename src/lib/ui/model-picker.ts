@@ -1,23 +1,14 @@
 /**
- * UI-behavior primitives for the Settings AI-pane model picker. Pure
- * functions over the Venice catalog (src/lib/models/catalog.ts) and the
- * persisted per-tier snapshot (TierModelConfig in src/lib/models): option
+ * Catalog-generic UI primitives for the Settings model pickers: option
  * list assembly, capability-to-chip mapping, context/price formatting,
- * and the catalog-to-snapshot transform. Kept out of Settings.svelte per
- * the frontend-organization split - a port to another framework would
- * rewrite none of this.
+ * and the combobox's fuzzy filter. Pure functions over the Venice
+ * catalog (src/lib/models/catalog.ts); the Model-profiles pane's
+ * profile-specific transforms live in ./model-profiles and build on
+ * these. Kept out of Settings.svelte per the frontend-organization
+ * split - a port to another framework would rewrite none of this.
  */
 
 import type { CatalogModel } from '../models/catalog';
-import {
-  DEFAULT_REASONING_EFFORT,
-  effectiveTierSpec,
-  type ModelTier,
-  type ThinkingLevel,
-  type TierModelConfig,
-  type TierModels,
-  type TierSpec,
-} from '../models';
 
 /** One entry in the model dropdown. */
 export interface ModelOption {
@@ -130,51 +121,7 @@ export function formatPricing(model: {
 }
 
 /**
- * Snapshot a catalog model + chosen reasoning level into the persisted
- * TierModelConfig. This is the capture point referenced in
- * TierModelConfig's docblock: the catalog's capability fields are frozen
- * here so chat resolution reads them back without the async catalog.
- */
-export function tierConfigFromCatalog(
-  model: CatalogModel,
-  thinking: ThinkingLevel
-): TierModelConfig {
-  return {
-    modelId: model.id,
-    thinking,
-    contextWindow: model.contextWindow,
-    supportsReasoning: model.supportsReasoning,
-    supportsVision: model.supportsVision,
-    supportsResponseFormat: model.supportsResponseFormat,
-    label: model.name,
-  };
-}
-
-/**
- * Snapshot a TierSpec (the effective current spec for a tier) + chosen
- * reasoning level into a TierModelConfig. Used when the user changes only
- * the reasoning level on a tier whose model isn't a live catalog row, so
- * the existing capabilities carry forward unchanged. Label falls back to
- * the model id since a bare TierSpec has no friendly catalog name.
- */
-export function tierConfigFromSpec(
-  spec: TierSpec,
-  thinking: ThinkingLevel,
-  label?: string
-): TierModelConfig {
-  return {
-    modelId: spec.id,
-    thinking,
-    contextWindow: spec.contextWindow,
-    supportsReasoning: spec.supportsReasoning,
-    supportsVision: spec.supportsVision,
-    supportsResponseFormat: spec.supportsResponseFormat,
-    label: label ?? spec.id,
-  };
-}
-
-/**
- * The note shown under the tier pickers when the project price cap hides
+ * The note shown under the model pickers when the project price cap hides
  * some live-catalog models, or null when nothing is hidden (the caller
  * renders nothing). Count-to-noun pluralization kept out of the template
  * per the frontend-organization split.
@@ -183,53 +130,6 @@ export function priceCapHiddenNote(hiddenCount: number): string | null {
   if (hiddenCount <= 0) return null;
   const noun = hiddenCount === 1 ? 'model is' : 'models are';
   return `${hiddenCount} ${noun} hidden by this instance's price cap.`;
-}
-
-/** Everything one tier's row in the Settings picker needs to render. */
-export interface TierRowView {
-  /** Effective spec - built-in default folded with any user override. */
-  readonly spec: TierSpec;
-  /** The tier's default reasoning level (the picker's selected value). */
-  readonly thinking: ThinkingLevel;
-  /** Dropdown options, with the current pick guaranteed present. */
-  readonly options: ModelOption[];
-  /** Capability chips for the selected model. */
-  readonly chips: CapabilityChip[];
-  /** Pre-formatted context window, e.g. "1M". */
-  readonly contextLabel: string;
-  /** Pre-formatted price, e.g. "$0.30 in / $1.20 out per 1M". */
-  readonly priceLabel: string;
-  /** True when the tier carries a user override (enables the Reset affordance). */
-  readonly overridden: boolean;
-}
-
-/**
- * Assemble the view-model for one tier row from the effective spec, the
- * persisted overrides, and the live catalog. Capability chips, context,
- * and price prefer the live catalog row for the selected model (richer +
- * carries pricing); they fall back to the effective spec's snapshotted
- * capabilities when the model isn't a live catalog entry (retired, or a
- * curated id the catalog filter dropped), in which case price is "n/a"
- * because the snapshot doesn't carry pricing.
- */
-export function tierRowView(
-  tier: ModelTier,
-  tierModels: TierModels,
-  catalog: readonly CatalogModel[]
-): TierRowView {
-  const spec = effectiveTierSpec(tier, tierModels);
-  const override = tierModels[tier];
-  const selected = catalog.find((m) => m.id === spec.id) ?? null;
-  const label = override?.label ?? selected?.name ?? spec.id;
-  return {
-    spec,
-    thinking: spec.defaultThinking ?? DEFAULT_REASONING_EFFORT,
-    options: buildModelOptions(catalog, { id: spec.id, label }),
-    chips: capabilityChips(selected ?? spec),
-    contextLabel: formatContextWindow(spec.contextWindow),
-    priceLabel: selected ? formatPricing(selected) : 'Pricing n/a',
-    overridden: override != null,
-  };
 }
 
 /**

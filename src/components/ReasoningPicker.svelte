@@ -1,8 +1,8 @@
 <!--
-  Reasoning-effort picker — the composer-bar twin of the model tier
+  Reasoning-effort picker — the composer-bar twin of the model-profile
   picker. Controlled: parent owns the open/closed state so coordination
   with adjacent popovers (model, prompts) stays in one place; this
-  component is a pure view over `value`, `defaultEffort`, and `open`.
+  component is a pure view over `value`, `defaultLevel`, and `open`.
 
   Extracted from Chat.svelte so the picker can be mounted in isolation
   for component tests — Chat.svelte itself is too coupled to the live
@@ -13,23 +13,17 @@
   on the menu rows, so the existing composer styles keep working.
 -->
 <script lang="ts">
-  import {
-    THINKING_LEVELS,
-    THINKING_LEVEL_LABELS,
-    type ReasoningEffort,
-    type ThinkingLevel,
-  } from '$lib/models';
+  import { THINKING_LEVELS, THINKING_LEVEL_LABELS, type ThinkingLevel } from '$lib/models';
 
   interface Props {
     /** Currently-resolved level for the thread (override-or-default). May be 'off'. */
     value: ThinkingLevel;
     /**
-     * User's account default, shown with a `default` badge in the menu.
-     * Always one of low/medium/high - the account default never carries
-     * an 'off' (see THINKING_LEVELS docblock), so the badge only ever
-     * lands on a reasoning level, never on the Off row.
+     * The active model profile's default level, shown with a `default`
+     * badge in the menu. May be 'off' - a profile can ship with
+     * thinking disabled, in which case the badge lands on the Off row.
      */
-    defaultEffort: ReasoningEffort;
+    defaultLevel: ThinkingLevel;
     /** Controlled popover state. Parent coordinates "only one menu open". */
     open: boolean;
     /** Fired on button click; parent toggles `open` (and closes peers). */
@@ -37,7 +31,7 @@
     /** Fired when the user picks a level. Parent closes the menu. */
     onSelect: (level: ThinkingLevel) => void;
   }
-  let { value, defaultEffort, open, onToggle, onSelect }: Props = $props();
+  let { value, defaultLevel, open, onToggle, onSelect }: Props = $props();
 </script>
 
 <button
@@ -83,7 +77,7 @@
         <span class="menu-item-label">
           <strong>{THINKING_LEVEL_LABELS[level]}</strong>
         </span>
-        {#if level === defaultEffort}<span class="menu-item-badge">default</span>{/if}
+        {#if level === defaultLevel}<span class="menu-item-badge">default</span>{/if}
       </button>
     {/each}
   </div>

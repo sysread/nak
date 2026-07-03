@@ -1,12 +1,12 @@
 # Models & reasoning
 
-Nak routes chat requests to Venice. The **AI** pane in Settings picks
-the default model tier, the default reasoning effort, the default
-verbosity, whether replies come back with bionic-style emphasis,
-whether web-search is available to the model, and whether
-search-grounded answers come back with inline `[1]` / `[2]` source
-markers. The same pane is where you tell the model your name and
-location, both of which ride along on every reply.
+Nak routes chat requests to Venice. The **Model profiles** pane in
+Settings is where you define the named model configurations you chat
+with - each one a model plus its default reasoning effort and
+verbosity - and pick which one new conversations use. The **AI** pane
+holds the behavior preferences around them: bionic-style emphasis,
+reply notifications, and the *About you* fields (name, location,
+timezone) that ride along on every reply.
 
 ## About you
 
@@ -38,54 +38,65 @@ asking back.
   retroactively; the change applies to articles the agent writes
   from here on.
 
-## Model tiers
+## Model profiles
 
-Nak gives you three model **tiers** - **Smart**, **Balanced**, and
-**Fast** - rather than making you pick a raw model id every time. A tier
-is a named slot: pick a tier for a conversation (or as your account
-default) and Nak resolves it to whichever concrete Venice model that slot
-points at. Threads store the tier, not the model, so re-pointing a tier
-later doesn't strand your old conversations.
+A **model profile** is a named model configuration: a Venice model
+plus the default **reasoning effort** and **verbosity** conversations
+on it start with. You create as many as you like, name them whatever
+reads well in the composer menu ("Everyday", "Deep work", "Cheap and
+fast"), and switch between them per conversation. Threads remember the
+profile, not the raw model id, so renaming a profile or re-pointing it
+at a newer model never strands an old conversation.
 
-Out of the box the three tiers are tuned for a speed/capability spread,
-but each slot is **configurable** in Settings -> AI -> *Models*:
+Every account starts with one profile named **Default** (DeepSeek V4
+Flash, medium reasoning, low verbosity) so chat works before you've
+configured anything. Manage the list in Settings -> **Model
+profiles**:
 
-- **Pick the model.** Each tier has a searchable picker populated live
+- **Add** with the *+ Add profile* button; each card gets a fresh
+  name you can edit inline. Profile names must be unique - they are
+  the labels the composer menu shows.
+- **Pick the model.** Each card has a searchable picker populated live
   from Venice's model catalog. Click it and start typing to filter
   (fuzzy match, so "v4" finds "DeepSeek V4"); every row lays out the
   model name with its **capability icons** (reasoning, vision, tools)
   and right-aligned pills for **context window** and **input/output
   price**, so you can compare models at a glance before committing.
-  Point Smart at a frontier model, Fast at a small quick one, whatever
-  fits how you work. The selected model's same capability/context/price
-  strip also shows on the tier row itself.
-- **Set the reasoning effort.** Each tier carries its own default
-  thinking level (see below), set from a second dropdown on the same row.
-  This is what makes the tiers feel different even when they front
-  similar models - Fast defaults thinking off for snappy replies, Smart
-  leans into it.
-- **Mark the account default.** The radio on each row picks which tier
-  new threads start on. You can still override the tier per-conversation
-  from the chat top bar.
-- **Reset.** A tier you've customized shows a **Reset** link that drops
-  your override and returns it to its built-in model and reasoning level.
+  The selected model's capability/context/price strip also shows on
+  the card itself.
+- **Set the defaults.** Two dropdowns per card pick the profile's
+  default thinking level (including **Off**, for a snappy-replies
+  profile) and default verbosity. Both are defaults, not locks - any
+  conversation can override them from the composer.
+- **Mark the default profile.** The radio on each card picks which
+  profile new conversations start on. Selecting one deselects the
+  rest - there is always exactly one default. With a single profile
+  the radio is locked on: your only profile is necessarily the
+  default, until a second one exists.
+- **Delete** any profile except the last one - at least one profile
+  must always exist. Deleting the default promotes the first
+  remaining profile. Conversations pinned to a deleted profile fall
+  back to your default profile.
+- **Reorder** by the grip handle (drag, or press-and-hold on touch).
+  The order here is the order the composer menu lists them in.
 
-Changes save the moment you make them - no Save button. If the model you
-picked is later retired by Venice, the dropdown keeps showing it as your
-current choice and the tier keeps working until you pick a replacement.
+Changes save automatically a moment after you make them - no Save
+button. If the model a profile points at is later retired by Venice,
+the picker keeps showing it as your current choice and the profile
+keeps working until you pick a replacement.
 
 **Price cap.** The person who set up this instance can put a ceiling on
 how expensive a model the picker will offer - a maximum input and/or
 output price per million tokens. Models above the cap don't appear in the
-picker, and a short note under the tiers tells you how many were hidden.
+picker, and a short note under the cards tells you how many were hidden.
 The cap is enforced for the whole instance and isn't editable from the
 app; it's set during setup. A model with no published price - some free or
 internal ones - is never hidden, since it can't exceed a price.
 
 > Heads-up: Nak ships extra safety handling (the
 > [glitch recovery](#automatic-glitch-recovery) re-roll) only for the
-> models it has vetted. If you point a tier at a model Nak hasn't seen,
-> the reasoning and vision controls still work from the catalog's
+> models it has vetted. If you point a profile at a model Nak hasn't
+> seen, the reasoning and vision controls still work from the catalog's
 > capability flags, but that model-specific safety net doesn't extend to
 > it.
 
@@ -99,26 +110,24 @@ conversation**:
 
 - **Off** - no thinking pass at all. The model answers directly. This
   is the quickest option and the right one for routine turns.
-- **Low** - a short thinking pass. The account-level default.
+- **Low** - a short thinking pass.
 - **Medium** / **High** - progressively more deliberation before the
   reply, at the cost of more wait time.
 
 Notes on how it behaves:
 
-- The picker shows on every tier that uses a reasoning-capable model
-  (all three of Smart, Balanced, and Fast do by default). Each tier
-  starts at its configured default - out of the box **Smart** is
-  *Medium*, **Balanced** *Low*, and **Fast** *Off*, and you can change a
-  tier's default in Settings -> AI -> *Models* - and you can move any
-  individual conversation up or down from there.
+- The picker shows whenever the conversation's profile fronts a
+  reasoning-capable model. Each conversation starts at its profile's
+  default level (set in Settings -> *Model profiles*), and you can
+  move any individual conversation up or down from there.
 - Your pick is **per conversation** and sticky: it's saved on the
   thread, so it survives refreshes and follows you across devices.
-- The row marked **default** is your account-level default (set in
-  Settings -> AI -> *Default reasoning effort*). Re-selecting it
-  clears the per-thread override, so a later change to your default
-  flows through to the conversation automatically.
+- The row marked **default** is the profile's default level.
+  Re-selecting it clears the per-thread override, so a later change
+  to the profile's default flows through to the conversation
+  automatically.
 - Picking a level on a fresh conversation starts a draft so the choice
-  has somewhere to live, the same way the model picker does.
+  has somewhere to live, the same way the profile picker does.
 
 ## Verbosity
 
@@ -128,8 +137,9 @@ neutral; **high** invites expansive prose. It's orthogonal to
 reasoning effort — verbosity controls *output* length, reasoning
 controls how much hidden thinking happens before the reply.
 
-- Pick your **default verbosity** in Settings → AI → *Default
-  verbosity*. Every thread that hasn't overridden it uses this.
+- Each model profile carries its own **default verbosity** (set in
+  Settings -> *Model profiles*). Every thread that hasn't overridden
+  it uses its profile's default.
 - Override **per thread** from the composer's speech-balloon
   picker (next to the reasoning picker). The choice is sticky — it's
   saved on the thread row in Supabase, so it survives refreshes
@@ -144,8 +154,8 @@ calls an image-generation tool behind the scenes. The **Image
 generation** picker in Settings → AI chooses which Venice model that
 tool uses.
 
-- It's a single dropdown, not a per-tier setting - image generation
-  has one backend, not a Smart/Balanced/Fast split. Each option shows
+- It's a single dropdown, not a per-profile setting - image generation
+  has one backend, not a per-conversation split. Each option shows
   the model's **per-image price** so you can weigh cost against the
   look you want; a *beta* or *retiring* tag flags models that need
   early access or are being phased out.
@@ -250,8 +260,8 @@ toggle them on or off per conversation.
 
 Some models occasionally emit an internal control token (and a burst
 of unrelated text) at the very start of a reply instead of answering -
-a known quirk of the DeepSeek family that fronts the Balanced and Fast
-tiers. Nak detects this, throws the bad attempt away, and regenerates -
+a known quirk of the DeepSeek family that backs the starter profile.
+Nak detects this, throws the bad attempt away, and regenerates -
 automatically, without you doing anything.
 
 - When it happens you'll briefly see a small **"oops, all slop!"**

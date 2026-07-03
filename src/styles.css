@@ -530,69 +530,9 @@ label {
   margin: 0 0 1rem;
 }
 
-/* Per-tier model + reasoning configuration rows in the AI pane. Each
-   row is the Smart/Balanced/Fast slot: a default-tier radio, a model
-   select + reasoning select, and a metadata strip of capability chips,
-   context window, and price sourced from the live Venice catalog. */
-.tier-config {
-  display: flex;
-  flex-direction: column;
-  gap: 0.65rem;
-  margin-bottom: 1rem;
-}
-
-.tier-row {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  padding: 0.65rem 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-
-/* The tier marked as the account default gets an accent border so the
-   radio selection reads at a glance without scanning for the dot. */
-.tier-row-default {
-  border-color: var(--accent);
-}
-
-.tier-row-head {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.tier-default-radio {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  cursor: pointer;
-  margin-bottom: 0;
-}
-
-.tier-default-radio input[type='radio'] {
-  width: auto;
-  margin: 0;
-}
-
-.tier-icon {
-  font-size: 1.1rem;
-  line-height: 1;
-}
-
-.tier-badge {
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--accent);
-  border: 1px solid var(--accent);
-  border-radius: 999px;
-  padding: 0.05rem 0.45rem;
-}
-
-/* Reset / Retry text affordances. Borderless so they read as inline
-   actions next to the prose rather than competing with the real buttons
-   in the pane. */
+/* Retry text affordance used by the catalog error lines. Borderless so
+   it reads as an inline action next to the prose rather than competing
+   with the real buttons in the pane. */
 .tier-reset {
   margin-left: auto;
   background: none;
@@ -608,6 +548,9 @@ label {
   text-decoration: underline;
 }
 
+/* Model-profile card control row (model combobox + reasoning +
+   verbosity selects) and the metadata strip of capability chips,
+   context window, and price sourced from the live Venice catalog. */
 .tier-row-controls {
   display: flex;
   flex-wrap: wrap;
@@ -719,7 +662,10 @@ label {
   white-space: nowrap;
   margin-bottom: 0;
 }
-.prompt-default input[type='checkbox'] {
+/* Radio variant serves the Model-profiles pane's Default picker; the
+   checkbox variant is the prompts pane's enabled-by-default flag. */
+.prompt-default input[type='checkbox'],
+.prompt-default input[type='radio'] {
   width: auto;
   margin: 0;
 }
@@ -3223,10 +3169,6 @@ button.composer-wharf-trigger {
   font-size: 0.85rem;
   line-height: 1;
 }
-.model-picker-icon {
-  font-size: 0.95rem;
-  line-height: 1;
-}
 /* Label + chevron are dropped so the button renders as a single icon.
    The chevron selector excludes `.model-picker-model-icon` (the CPU
    glyph on the model button) so only the trailing chevron SVG is
@@ -3236,21 +3178,14 @@ button.composer-wharf-trigger {
   display: none;
 }
 /* Marks the leading affordance glyph kept visible on a collapsed picker
-   trigger - the CPU outline on the model button, the thought-cloud on the
-   reasoning picker, the speech bubble on the verbosity picker. All three
-   are stroke SVGs inheriting currentColor, so they render at full --text
-   contrast and uniform weight rather than as faint monochrome emoji. The
-   `svg:not(.model-picker-model-icon)` rule above hides the trailing
-   chevron without catching these. The ~ sibling rule below suppresses the
-   model button's tier emoji (a lone 🧠/⚡ reads as "currently on
-   brain/spark", not "opens the model menu"); it only fires on the model
-   button, the one trigger that still carries a `.model-picker-icon` span
-   after this leading glyph. */
+   trigger - the CPU outline on the model-profile button, the thought-
+   cloud on the reasoning picker, the speech bubble on the verbosity
+   picker. All three are stroke SVGs inheriting currentColor, so they
+   render at full --text contrast and uniform weight rather than as faint
+   monochrome emoji. The `svg:not(.model-picker-model-icon)` rule above
+   hides the trailing chevron without catching these. */
 .model-picker-model-icon {
   display: inline-block;
-}
-.model-picker-btn .model-picker-model-icon ~ .model-picker-icon {
-  display: none;
 }
 
 /* Popover menus. Positioned absolutely inside the composer-bar (which is

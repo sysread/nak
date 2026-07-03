@@ -2,7 +2,7 @@
   /*
    * The main screen. Three concerns stacked top-to-bottom:
    *
-   *   top-bar   — hamburger, title (inline renameable), model tier toggle
+   *   top-bar   — hamburger, title (inline renameable), model-profile picker
    *   messages  — scrollable list of bubbles, plus in-flight streaming text
    *   composer  — textarea + expand button + send button
    *
@@ -34,10 +34,11 @@
    *      again on that thread.
    *
    * Model selection:
-   *   - The top-right toggle sets a per-thread override (threads.model).
-   *   - Clicking the tier that matches the user's default clears the
-   *     override (writes null) so the thread keeps tracking default
-   *     changes — see setTier().
+   *   - The composer picker pins a model profile per thread
+   *     (threads.model holds the profile id).
+   *   - Picking the profile that matches the user's default clears the
+   *     pin (writes null) so the thread keeps tracking default
+   *     changes — see setProfile().
    */
   import { onMount, tick } from 'svelte';
   import { fade } from 'svelte/transition';
@@ -99,21 +100,15 @@
   } from '$lib/attachments';
   import { chipStatus } from '$lib/ui/composer-attachments';
   import {
-    DEFAULT_REASONING_EFFORT,
-    DEFAULT_TIER,
-    DEFAULT_VERBOSITY,
-    TIERS,
-    TIER_ORDER,
     VENICE_EMBEDDING_MODEL,
     agentModel,
-    effectiveTierSpec,
+    defaultModelProfile,
     padEmbeddingForStorage,
-    resolveThinking,
-    resolveTier,
-    resolveVerbosity,
-    thinkingWireForTier,
+    profileModelSpec,
+    resolveModelProfile,
+    thinkingWireForProfile,
+    type ModelProfile,
     type ModelSpec,
-    type ModelTier,
     type ReasoningEffort,
     type ThinkingLevel,
     type Verbosity,
@@ -2746,47 +2741,40 @@
     buildUserMessageByRound(messages)
   );
 
-  const defaultTier = $derived<ModelTier>(app.defaultModel ?? DEFAULT_TIER);
-  const currentTier = $derived<ModelTier>(
-    resolveTier(currentThread?.model ?? null, defaultTier)
+  // The user's default profile - what a thread with no per-thread pin
+  // (threads.model null) resolves to.
+  const defaultProfile = $derived<ModelProfile>(
+    defaultModelProfile(app.modelProfiles)
   );
-  // Effective spec for the current tier, folding the user's per-tier
-  // model + reasoning override (Settings -> AI) on top of the built-in
-  // TierSpec. Drives every capability read below (default thinking,
-  // reasoning support) so a repointed tier behaves as the user
-  // configured it.
-  const currentTierSpec = $derived(effectiveTierSpec(currentTier, app.tierModels));
-  const defaultReasoning = $derived<ReasoningEffort>(
-    app.defaultReasoningEffort ?? DEFAULT_REASONING_EFFORT
+  // Effective profile for the current thread: the pinned profile when
+  // threads.model names a live one, otherwise the default (which also
+  // covers deleted profiles and legacy pre-profile tier names). Drives
+  // every capability read below (default thinking, reasoning support,
+  // context window) so the thread behaves as its profile is configured.
+  const currentProfile = $derived<ModelProfile>(
+    resolveModelProfile(app.modelProfiles, currentThread?.model ?? null)
   );
-  // Resolved thinking level for the current thread (override -> tier
-  // default -> user default). Drives the picker's displayed value; may
-  // be 'off' when the tier defaults off or the user picked Off for this
-  // thread. Only surfaced when `currentTierSpec.supportsReasoning`.
+  // Resolved thinking level for the current thread (override -> profile
+  // default). Drives the picker's displayed value; may be 'off' when
+  // the profile defaults off or the user picked Off for this thread.
+  // Only surfaced when `currentProfile.supportsReasoning`.
   const currentReasoning = $derived<ThinkingLevel>(
-    resolveThinking(
-      currentThread?.reasoning_effort ?? null,
-      defaultReasoning,
-      currentTierSpec.defaultThinking
-    )
+    currentThread?.reasoning_effort ?? currentProfile.thinking
   );
-  // Show the per-thread reasoning picker on any reasoning-capable tier.
-  // 'Off' is now one of the picker's positions rather than a reason to
-  // hide it, so a tier that defaults thinking off still shows the picker
-  // (the user can bump it back up for one thread). Only a model that
-  // can't reason at all hides the control - a knob the provider would
-  // reject.
+  // Show the per-thread reasoning picker on any reasoning-capable
+  // profile. 'Off' is one of the picker's positions rather than a
+  // reason to hide it, so a profile that defaults thinking off still
+  // shows the picker (the user can bump it back up for one thread).
+  // Only a model that can't reason at all hides the control - a knob
+  // the provider would reject.
   const currentSupportsReasoning = $derived<boolean>(
-    currentTierSpec.supportsReasoning
-  );
-  const defaultVerbosity = $derived<Verbosity>(
-    app.defaultVerbosity ?? DEFAULT_VERBOSITY
+    currentProfile.supportsReasoning
   );
   // Resolved verbosity for the current thread. Same override-wins pattern
   // as reasoning; no capability gate — providers that don't recognize
   // `text.verbosity` silently ignore it, so it's always safe to surface.
   const currentVerbosity = $derived<Verbosity>(
-    resolveVerbosity(currentThread?.verbosity ?? null, defaultVerbosity)
+    currentThread?.verbosity ?? currentProfile.verbosity
   );
   // Resolved gated-toolbox set for the current thread. The composer
   // toolbox button renders unconditionally (mirroring the model /
@@ -2854,22 +2842,22 @@
     }
   }
 
-  async function setTier(tier: ModelTier): Promise<void> {
+  async function setProfile(profileId: string): Promise<void> {
     if (!app.supabase) return;
     // Fresh sessions (first run, last thread deleted, sidebar not yet
     // opened) leave `activeThreadId` null, which used to hide the picker
     // entirely — on mobile the sidebar is an overlay, so "pick a thread
-    // first" isn't a discoverable step. Auto-create a draft so the tier
-    // choice has somewhere to land; draft creation is free (local-only
-    // until the first send materializes it).
+    // first" isn't a discoverable step. Auto-create a draft so the
+    // profile choice has somewhere to land; draft creation is free
+    // (local-only until the first send materializes it).
     if (!currentThread) {
       await newThread();
       if (!currentThread) return;
     }
-    // If the chosen tier matches the user's default, clear the per-thread
-    // override so the thread keeps tracking future default changes; only
-    // pin an explicit tier when it actually differs from the default.
-    const next: ModelTier | null = tier === defaultTier ? null : tier;
+    // If the chosen profile is the user's default, clear the per-thread
+    // pin so the thread keeps tracking future default changes; only pin
+    // an explicit profile id when it actually differs from the default.
+    const next: string | null = profileId === defaultProfile.id ? null : profileId;
     if ((currentThread.model ?? null) === next) return;
     const threadId = currentThread.id;
     // Update local state immediately so the UI reflects the choice.
@@ -2885,24 +2873,26 @@
     }
   }
 
-  // Mirror of setTier for reasoning effort. Clearing the override when
-  // the user picks the current default is deliberate: that way a later
-  // change to their default propagates to this thread automatically, and
-  // we don't pin a stale value just because it happened to match once.
+  // Mirror of setProfile for reasoning effort. Clearing the override
+  // when the user picks the profile's current default is deliberate:
+  // that way a later change to the profile's default propagates to this
+  // thread automatically, and we don't pin a stale value just because
+  // it happened to match once.
   async function setReasoning(level: ThinkingLevel): Promise<void> {
     if (!app.supabase) return;
-    // Same fresh-session pattern as setTier — without a thread to land
-    // the override on, picking a level would silently no-op. Auto-
+    // Same fresh-session pattern as setProfile — without a thread to
+    // land the override on, picking a level would silently no-op. Auto-
     // create a draft so the choice has somewhere to go; the draft is
     // local-only until the first send materializes it.
     if (!currentThread) {
       await newThread();
       if (!currentThread) return;
     }
-    // Clear the override when the pick matches the account default so the
-    // thread keeps tracking a later default change. 'off' is never the
-    // account default, so picking Off always pins explicitly.
-    const next: ThinkingLevel | null = level === defaultReasoning ? null : level;
+    // Clear the override when the pick matches the profile's default so
+    // the thread keeps tracking a later default change (including the
+    // 'off' default of a thinking-off profile).
+    const next: ThinkingLevel | null =
+      level === currentProfile.thinking ? null : level;
     if ((currentThread.reasoning_effort ?? null) === next) return;
     const threadId = currentThread.id;
     patchThread(threadId, { reasoning_effort: next });
@@ -2915,15 +2905,16 @@
   }
 
   // Mirror of setReasoning for text.verbosity. Same clear-override-on-
-  // match discipline so a later change to the user's default propagates
-  // to this thread automatically.
+  // match discipline so a later change to the profile's default
+  // propagates to this thread automatically.
   async function setVerbosity(verbosity: Verbosity): Promise<void> {
     if (!app.supabase) return;
     if (!currentThread) {
       await newThread();
       if (!currentThread) return;
     }
-    const next: Verbosity | null = verbosity === defaultVerbosity ? null : verbosity;
+    const next: Verbosity | null =
+      verbosity === currentProfile.verbosity ? null : verbosity;
     if ((currentThread.verbosity ?? null) === next) return;
     const threadId = currentThread.id;
     patchThread(threadId, { verbosity: next });
@@ -3085,28 +3076,25 @@
     error = null;
 
     const active = activeThreadId ? findThread(activeThreadId) ?? null : null;
-    // Capture the tier BEFORE materializing, since materialize mutates
+    // Capture the profile BEFORE materializing, since materialize mutates
     // `threads` and could make `currentThread` briefly null.
-    const tier = resolveTier(active?.model ?? null, defaultTier);
-    const tierSpec = effectiveTierSpec(tier, app.tierModels);
-    const modelId = tierSpec.id;
-    // Resolve the thread's thinking level against the tier and split it
-    // into the two mutually-exclusive wire knobs (reasoning_effort vs
+    const profile = resolveModelProfile(app.modelProfiles, active?.model ?? null);
+    const modelSpec = profileModelSpec(profile);
+    const modelId = profile.modelId;
+    // Resolve the thread's thinking level against the profile and split
+    // it into the two mutually-exclusive wire knobs (reasoning_effort vs
     // disable_thinking). 'off' -> disable_thinking; non-reasoning models
-    // get neither. See thinkingWireForTier.
+    // get neither. See thinkingWireForProfile.
     const { reasoningEffort: sendReasoning, disableThinking: sendDisableThinking } =
-      thinkingWireForTier(tierSpec, active?.reasoning_effort ?? null, defaultReasoning);
+      thinkingWireForProfile(profile, active?.reasoning_effort ?? null);
     // Verbosity is safe to send unconditionally — providers that don't
     // recognize `text.verbosity` silently ignore it.
-    const sendVerbosity: Verbosity = resolveVerbosity(
-      active?.verbosity ?? null,
-      defaultVerbosity
-    );
+    const sendVerbosity: Verbosity = active?.verbosity ?? profile.verbosity;
     // Pre-send guard on attachments. Block the send if any attachment
     // is still processing, is in an error state, or can't be read by
-    // the selected tier. Surface the reason on `error` — the user sees
+    // the selected model. Surface the reason on `error` — the user sees
     // it above the composer and can either remove the file or switch
-    // tier.
+    // profile.
     const stillPending = pendingAttachments.find((a) => a.pending);
     if (stillPending) {
       error = {
@@ -3119,11 +3107,11 @@
       error = { text: `"${erroredChip.filename}": ${erroredChip.error}` };
       return;
     }
-    // Images are handled on all tiers via analyze_image(). Only block
+    // Images are handled on all models via analyze_image(). Only block
     // non-image attachments with no extractable text - those are a real
     // dead end with no tool fallback.
     const unreadable = readyAttachments.find(
-      (a) => !isImageMimeType(a.mime_type) && !isConsumableBy(a, tierSpec)
+      (a) => !isImageMimeType(a.mime_type) && !isConsumableBy(a, modelSpec)
     );
     if (unreadable) {
       error = {
@@ -3282,7 +3270,7 @@
         threadId,
         currentUserId,
         modelId,
-        tierSpec,
+        modelSpec,
         systemMessages,
         sendReasoning,
         sendDisableThinking,
@@ -3316,15 +3304,21 @@
     threadId: string;
     currentUserId: string;
     modelId: string;
-    tierSpec: ModelSpec;
+    /**
+     * Capability snapshot of the resolved profile's model at send time
+     * (see profileModelSpec). Drives the vision-routing decision below;
+     * captured so a profile swap mid-stream can't change how an
+     * in-flight turn treats its attachments.
+     */
+    modelSpec: ModelSpec;
     systemMessages: { role: 'system'; content: string }[];
     sendReasoning: ReasoningEffort | undefined;
     /**
-     * Snapshot of the tier's thinking-off kill switch at send time.
-     * Captured here for the same reason as sendReasoning: a tier swap
-     * mid-stream must not change the wire shape of an in-flight turn.
-     * When true, the chat-loop ships `disable_thinking: true` and
-     * sendReasoning is forced undefined.
+     * Snapshot of the profile's thinking-off kill switch at send time.
+     * Captured here for the same reason as sendReasoning: a profile
+     * swap mid-stream must not change the wire shape of an in-flight
+     * turn. When true, the chat-loop ships `disable_thinking: true`
+     * and sendReasoning is forced undefined.
      */
     sendDisableThinking: boolean;
     sendVerbosity: Verbosity;
@@ -3520,7 +3514,7 @@
     // Pre-resolve short-lived signed URLs for the live image attachments
     // so the wire builder hands Venice a URL it fetches server-side - the
     // bytes never touch the client, and history replay just re-signs
-    // rather than re-shipping base64. Vision tiers only; resolved once and
+    // rather than re-shipping base64. Vision models only; resolved once and
     // captured by the closure so the in-loop 429 retry reuses it.
     // Best-effort: a signing failure just means those images don't inline
     // this turn (the non-vision note path still tells the model they exist).
@@ -3535,7 +3529,7 @@
     );
 
     let attachmentImageUrls = new Map<string, string>();
-    if (ctx.tierSpec.supportsVision && app.supabase) {
+    if (ctx.modelSpec.supportsVision && app.supabase) {
       const liveImages = messages
         .filter((m) => !pendingDeleteSet.has(m.id))
         .flatMap((m) => m.attachments ?? [])
@@ -3555,7 +3549,7 @@
         .filter((m) => !pendingDeleteSet.has(m.id))
         .map((m) =>
           toVeniceMessage(m, {
-            visionSpec: ctx.tierSpec,
+            visionSpec: ctx.modelSpec,
             imageUrls: attachmentImageUrls,
           })
         ),
@@ -4547,12 +4541,11 @@
     void deleteDraft(draft.threadId).catch(() => {});
     const active = findThread(draft.threadId);
     if (!active || active.isDraft || active.archived) return;
-    const tier = resolveTier(active.model ?? null, defaultTier);
-    const tierSpec = effectiveTierSpec(tier, app.tierModels);
+    const profile = resolveModelProfile(app.modelProfiles, active.model ?? null);
     // Resolve thinking level -> wire knobs; mirror of the send() path.
     const { reasoningEffort: sendReasoning, disableThinking: sendDisableThinking } =
-      thinkingWireForTier(tierSpec, active.reasoning_effort ?? null, defaultReasoning);
-    const sendVerbosity: Verbosity = resolveVerbosity(active.verbosity ?? null, defaultVerbosity);
+      thinkingWireForProfile(profile, active.reasoning_effort ?? null);
+    const sendVerbosity: Verbosity = active.verbosity ?? profile.verbosity;
     const systemMessages: { role: 'system'; content: string }[] = app.systemPrompts
       .filter((p) => activePromptIds.has(p.id) && p.body.trim().length > 0)
       .map((p) => ({ role: 'system' as const, content: p.body }));
@@ -4563,8 +4556,8 @@
     await runExchange({
       threadId: draft.threadId,
       currentUserId,
-      modelId: tierSpec.id,
-      tierSpec,
+      modelId: profile.modelId,
+      modelSpec: profileModelSpec(profile),
       systemMessages,
       sendReasoning,
       sendDisableThinking,
@@ -4695,16 +4688,12 @@
     // That's intentional: a regenerate is a deliberate "try this
     // turn again" gesture, and the user often wants to re-run with
     // a different model or a tweaked system prompt.
-    const tier = resolveTier(active.model ?? null, defaultTier);
-    const tierSpec = effectiveTierSpec(tier, app.tierModels);
-    const modelId = tierSpec.id;
+    const profile = resolveModelProfile(app.modelProfiles, active.model ?? null);
+    const modelId = profile.modelId;
     // Resolve thinking level -> wire knobs; mirror of the send() path.
     const { reasoningEffort: sendReasoning, disableThinking: sendDisableThinking } =
-      thinkingWireForTier(tierSpec, active.reasoning_effort ?? null, defaultReasoning);
-    const sendVerbosity: Verbosity = resolveVerbosity(
-      active.verbosity ?? null,
-      defaultVerbosity
-    );
+      thinkingWireForProfile(profile, active.reasoning_effort ?? null);
+    const sendVerbosity: Verbosity = active.verbosity ?? profile.verbosity;
     const systemMessages: { role: 'system'; content: string }[] = app.systemPrompts
       .filter((p) => activePromptIds.has(p.id) && p.body.trim().length > 0)
       .map((p) => ({ role: 'system' as const, content: p.body }));
@@ -4718,7 +4707,7 @@
       threadId: active.id,
       currentUserId,
       modelId,
-      tierSpec,
+      modelSpec: profileModelSpec(profile),
       systemMessages,
       sendReasoning,
       sendDisableThinking,
@@ -4790,15 +4779,11 @@
     // Resolve send-time context the same way regenerateFrom does - the
     // user's current toggles (model, reasoning, verbosity, system
     // prompts) apply to the refinement.
-    const tier = resolveTier(active.model ?? null, defaultTier);
-    const tierSpec = effectiveTierSpec(tier, app.tierModels);
-    const modelId = tierSpec.id;
+    const profile = resolveModelProfile(app.modelProfiles, active.model ?? null);
+    const modelId = profile.modelId;
     const { reasoningEffort: sendReasoning, disableThinking: sendDisableThinking } =
-      thinkingWireForTier(tierSpec, active.reasoning_effort ?? null, defaultReasoning);
-    const sendVerbosity: Verbosity = resolveVerbosity(
-      active.verbosity ?? null,
-      defaultVerbosity
-    );
+      thinkingWireForProfile(profile, active.reasoning_effort ?? null);
+    const sendVerbosity: Verbosity = active.verbosity ?? profile.verbosity;
     const systemMessages: { role: 'system'; content: string }[] = app.systemPrompts
       .filter((p) => activePromptIds.has(p.id) && p.body.trim().length > 0)
       .map((p) => ({ role: 'system' as const, content: p.body }));
@@ -4811,7 +4796,7 @@
       threadId: active.id,
       currentUserId,
       modelId,
-      tierSpec,
+      modelSpec: profileModelSpec(profile),
       systemMessages,
       sendReasoning,
       sendDisableThinking,
@@ -4888,16 +4873,12 @@
       supersededIds = persistedRowIds(messages, [tail.id]);
     }
 
-    const tier = resolveTier(active.model ?? null, defaultTier);
-    const tierSpec = effectiveTierSpec(tier, app.tierModels);
-    const modelId = tierSpec.id;
+    const profile = resolveModelProfile(app.modelProfiles, active.model ?? null);
+    const modelId = profile.modelId;
     // Resolve thinking level -> wire knobs; mirror of the send() path.
     const { reasoningEffort: sendReasoning, disableThinking: sendDisableThinking } =
-      thinkingWireForTier(tierSpec, active.reasoning_effort ?? null, defaultReasoning);
-    const sendVerbosity: Verbosity = resolveVerbosity(
-      active.verbosity ?? null,
-      defaultVerbosity
-    );
+      thinkingWireForProfile(profile, active.reasoning_effort ?? null);
+    const sendVerbosity: Verbosity = active.verbosity ?? profile.verbosity;
     const systemMessages: { role: 'system'; content: string }[] = app.systemPrompts
       .filter((p) => activePromptIds.has(p.id) && p.body.trim().length > 0)
       .map((p) => ({ role: 'system' as const, content: p.body }));
@@ -4909,7 +4890,7 @@
       threadId: active.id,
       currentUserId,
       modelId,
-      tierSpec,
+      modelSpec: profileModelSpec(profile),
       systemMessages,
       sendReasoning,
       sendDisableThinking,
@@ -5054,7 +5035,7 @@
     // from. The localStorage config stays - signing back in re-uses
     // it without going through Setup.
     clearSessionThreadId();
-    // Reset config defaults (model tier, profile, system prompts,
+    // Reset config defaults (model profiles, user profile, system prompts,
     // wiki/memory toggles) so the previous account's preferences
     // don't bleed into a subsequent sign-in-as-someone-else before
     // refreshSettings re-seeds them from the new account's Supabase
@@ -5855,15 +5836,11 @@
       }
       const freshThread = findThread(threadId);
       if (!freshThread) return;
-      const tier = resolveTier(freshThread.model ?? null, defaultTier);
-      const tierSpec = effectiveTierSpec(tier, app.tierModels);
-      const modelId = tierSpec.id;
+      const profile = resolveModelProfile(app.modelProfiles, freshThread.model ?? null);
+      const modelId = profile.modelId;
       const { reasoningEffort: sendReasoning, disableThinking: sendDisableThinking } =
-        thinkingWireForTier(tierSpec, freshThread.reasoning_effort ?? null, defaultReasoning);
-      const sendVerbosity: Verbosity = resolveVerbosity(
-        freshThread.verbosity ?? null,
-        defaultVerbosity
-      );
+        thinkingWireForProfile(profile, freshThread.reasoning_effort ?? null);
+      const sendVerbosity: Verbosity = freshThread.verbosity ?? profile.verbosity;
       const systemMessages: { role: 'system'; content: string }[] = app.systemPrompts
         .filter((p) => activePromptIds.has(p.id) && p.body.trim().length > 0)
         .map((p) => ({ role: 'system' as const, content: p.body }));
@@ -5873,7 +5850,7 @@
         threadId,
         currentUserId,
         modelId,
-        tierSpec,
+        modelSpec: profileModelSpec(profile),
         systemMessages,
         sendReasoning,
         sendDisableThinking,
@@ -6270,7 +6247,7 @@
    * to Supabase, and reverts on failure so the UI can't lie about
    * server state.
    *
-   * Same fresh-session / draft pattern as setTier: with no active
+   * Same fresh-session / draft pattern as setProfile: with no active
    * thread, auto-create a draft so the choice has somewhere to land.
    * On a draft, the toggle rides along in memory and gets persisted
    * when the draft materializes (see `materializeIfDraft`, which
@@ -7373,7 +7350,7 @@
                   reasoningChars={reasoningPillsById[block.assistant.id]?.chars ?? null}
                   citations={block.assistant.citations}
                   secondThoughts={block.assistant.second_thoughts}
-                  contextWindow={currentTierSpec.contextWindow}
+                  contextWindow={currentProfile.contextWindow}
                   usage={block.assistant.usage}
                   createdAt={block.assistant.created_at}
                   disabled={pendingDeleteSet.has(block.assistant.id) || (activeSlot?.sending ?? false)}
@@ -7458,7 +7435,7 @@
                   onRefine={block.message.id === latestAssistantId
                     ? () => { void refineFrom(block.message.id); }
                     : undefined}
-                  contextWindow={currentTierSpec.contextWindow}
+                  contextWindow={currentProfile.contextWindow}
                   usage={block.message.usage}
                   createdAt={block.message.created_at}
                   disabled={pendingDeleteSet.has(block.message.id) || activeSlot?.sending}
@@ -8242,10 +8219,11 @@
                 {/if}
               </button>
 
-              <!-- Model picker: per-thread override, stored on threads.model.
-                   Renders unconditionally — even with no active thread the
-                   current tier is well-defined (falls back to the user
-                   default via `resolveTier`), and `setTier` auto-creates
+              <!-- Model-profile picker: per-thread pin, stored on
+                   threads.model as a profile id. Renders unconditionally —
+                   even with no active thread the current profile is
+                   well-defined (falls back to the user's default via
+                   `resolveModelProfile`), and `setProfile` auto-creates
                    a draft on first pick so the choice has somewhere to
                    live. Gating on `currentThread` hid the button on any
                    fresh session where session-restore didn't pick a thread,
@@ -8262,13 +8240,12 @@
                 }}
                 aria-haspopup="true"
                 aria-expanded={modelMenuOpen}
-                title={`Model: ${currentTierSpec.label} (${currentTierSpec.id})`}
+                title={`Model profile: ${currentProfile.name} (${currentProfile.modelId})`}
               >
                 <!-- Generic "model selection" glyph for the collapsed
-                     icon-only trigger. A CPU outline rather than the
-                     tier emoji so the button reads as "pick a model"
-                     instead of "currently on 🧠" — the CSS hides the
-                     tier emoji whenever this CPU icon precedes it. -->
+                     icon-only trigger. A CPU outline so the button reads
+                     as "pick a model" on mobile, where the profile-name
+                     label is hidden and only this icon shows. -->
                 <svg class="model-picker-model-icon" width="18" height="18"
                      viewBox="0 0 24 24" fill="none" stroke="currentColor"
                      stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
@@ -8284,8 +8261,7 @@
                   <line x1="2" y1="9" x2="4" y2="9" />
                   <line x1="2" y1="14" x2="4" y2="14" />
                 </svg>
-                <span class="model-picker-icon" aria-hidden="true">{TIERS[currentTier].icon}</span>
-                <span class="model-picker-label">{TIERS[currentTier].label}</span>
+                <span class="model-picker-label">{currentProfile.name}</span>
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <polyline points="6 9 12 15 18 9" />
@@ -8295,12 +8271,12 @@
               <!-- Reasoning picker: per-thread override, stored on
                    threads.reasoning_effort (which can hold 'off' as well
                    as low/medium/high). Shows on any reasoning-capable
-                   tier; 'Off' is a picker position rather than a reason to
-                   hide the control, so a tier that defaults thinking off
-                   still offers the knob. Hidden only when the model can't
-                   reason at all. Renders with no active thread too:
-                   `currentReasoning` falls back to the tier/user default
-                   via `resolveThinking`, and `setReasoning` auto-creates a
+                   profile; 'Off' is a picker position rather than a reason
+                   to hide the control, so a profile that defaults thinking
+                   off still offers the knob. Hidden only when the model
+                   can't reason at all. Renders with no active thread too:
+                   `currentReasoning` falls back to the profile's default,
+                   and `setReasoning` auto-creates a
                    draft on first pick so the choice has somewhere to land
                    — same pattern as the model picker.
                    Extracted so the picker is mountable in isolation under
@@ -8309,7 +8285,7 @@
               {#if currentSupportsReasoning}
                 <ReasoningPicker
                   value={currentReasoning}
-                  defaultEffort={defaultReasoning}
+                  defaultLevel={currentProfile.thinking}
                   open={reasoningMenuOpen}
                   onToggle={() => {
                     promptsMenuOpen = false;
@@ -8334,7 +8310,7 @@
                    always has somewhere to land. -->
               <VerbosityPicker
                 value={currentVerbosity}
-                defaultVerbosity={defaultVerbosity}
+                defaultVerbosity={currentProfile.verbosity}
                 open={verbosityMenuOpen}
                 onToggle={() => {
                   promptsMenuOpen = false;
@@ -8432,27 +8408,26 @@
 
             {#if modelMenuOpen}
               <div class="composer-menu composer-menu-left" role="menu">
-                <div class="menu-header">Model for this conversation</div>
-                {#each TIER_ORDER as tier (tier)}
+                <div class="menu-header">Model profile for this conversation</div>
+                {#each app.modelProfiles as p (p.id)}
                   <button
                     type="button"
                     class="menu-item menu-item-btn"
-                    class:selected={currentTier === tier}
+                    class:selected={currentProfile.id === p.id}
                     onclick={() => {
-                      void setTier(tier);
+                      void setProfile(p.id);
                       modelMenuOpen = false;
                     }}
                     role="menuitemradio"
-                    aria-checked={currentTier === tier}
+                    aria-checked={currentProfile.id === p.id}
                   >
-                    <span class="menu-item-icon" aria-hidden="true">{TIERS[tier].icon}</span>
                     <span class="menu-item-label">
-                      <strong>{TIERS[tier].label}</strong>
+                      <strong>{p.name}</strong>
                       <span class="subtle" style="display:block;font-size:0.75rem"
-                        >{effectiveTierSpec(tier, app.tierModels).id}</span
+                        >{p.modelId}</span
                       >
                     </span>
-                    {#if tier === defaultTier}<span class="menu-item-badge">default</span>{/if}
+                    {#if p.isDefault}<span class="menu-item-badge">default</span>{/if}
                   </button>
                 {/each}
               </div>

@@ -9,49 +9,71 @@ describe('coerceSettings', () => {
     expect(coerceSettings(42)).toEqual({});
   });
 
-  it('passes through a valid defaultModel tier', () => {
-    expect(coerceSettings({ defaultModel: 'smart' })).toEqual({ defaultModel: 'smart' });
-    expect(coerceSettings({ defaultModel: 'balanced' })).toEqual({ defaultModel: 'balanced' });
-    expect(coerceSettings({ defaultModel: 'fast' })).toEqual({ defaultModel: 'fast' });
-  });
-
-  it('drops an unknown defaultModel value', () => {
-    expect(coerceSettings({ defaultModel: 'wizard' })).toEqual({});
-    expect(coerceSettings({ defaultModel: '' })).toEqual({});
-    expect(coerceSettings({ defaultModel: 123 })).toEqual({});
-  });
-
-  it('drops unknown keys silently', () => {
-    expect(coerceSettings({ rando: 'value', defaultModel: 'fast' })).toEqual({
-      defaultModel: 'fast',
-    });
-    expect(coerceSettings({ rando: 'value' })).toEqual({});
-  });
-
-  it('coerces a well-formed tierModels map and drops bad entries', () => {
+  it('coerces a well-formed modelProfiles list and drops bad entries', () => {
     const good = {
+      id: 'p1',
+      name: 'Everyday',
       modelId: 'glm-5-1',
       thinking: 'high',
+      verbosity: 'low',
+      isDefault: true,
       contextWindow: 200_000,
       supportsReasoning: true,
       supportsVision: true,
       supportsResponseFormat: true,
-      label: 'GLM 5.1',
+      modelLabel: 'GLM 5.1',
     };
     expect(
       coerceSettings({
-        tierModels: {
-          smart: good,
-          balanced: { modelId: '', thinking: 'high' },
-          bogusTier: good,
-        },
+        modelProfiles: [good, { ...good, id: 'p2', thinking: 'bogus' }],
       })
-    ).toEqual({ tierModels: { smart: good } });
+    ).toEqual({ modelProfiles: [good] });
   });
 
-  it('omits tierModels entirely when no entry survives', () => {
-    expect(coerceSettings({ tierModels: { smart: { modelId: '' } } })).toEqual({});
-    expect(coerceSettings({ tierModels: 'nope' })).toEqual({});
+  it('normalizes modelProfiles to exactly one default on read', () => {
+    const base = {
+      id: 'p1',
+      name: 'A',
+      modelId: 'glm-5-1',
+      thinking: 'low',
+      verbosity: 'medium',
+      isDefault: false,
+      contextWindow: 200_000,
+      supportsReasoning: true,
+      supportsVision: true,
+      supportsResponseFormat: true,
+      modelLabel: 'GLM 5.1',
+    };
+    const result = coerceSettings({
+      modelProfiles: [base, { ...base, id: 'p2', name: 'B' }],
+    });
+    expect(result.modelProfiles?.map((p) => p.isDefault)).toEqual([true, false]);
+  });
+
+  it('omits modelProfiles entirely when no entry survives - the app seeds the starter profile', () => {
+    expect(coerceSettings({ modelProfiles: [] })).toEqual({});
+    expect(coerceSettings({ modelProfiles: [{ id: '' }] })).toEqual({});
+    expect(coerceSettings({ modelProfiles: 'nope' })).toEqual({});
+  });
+
+  it('drops the legacy pre-profile keys like any unknown key', () => {
+    // Blobs written before the profile system may still carry these;
+    // they are ignored on read and cleared on the next profiles write.
+    expect(
+      coerceSettings({
+        defaultModel: 'smart',
+        tierModels: { smart: { modelId: 'x' } },
+        defaultReasoningEffort: 'low',
+        defaultVerbosity: 'medium',
+      })
+    ).toEqual({});
+  });
+
+  it('drops unknown keys silently', () => {
+    expect(coerceSettings({ rando: 'value', imageModel: 'flux-dev' })).toEqual({
+      imageModel: 'flux-dev',
+    });
+    expect(coerceSettings({ rando: 'value' })).toEqual({});
   });
 
   it('passes through a non-empty imageModel string and drops bad values', () => {
@@ -78,10 +100,10 @@ describe('coerceSettings', () => {
     expect(coerceSettings({ colorMode: null, accent: 123 })).toEqual({});
   });
 
-  it('mixes model + theme fields correctly', () => {
+  it('mixes image-model + theme fields correctly', () => {
     expect(
-      coerceSettings({ defaultModel: 'smart', colorMode: 'dark', accent: 'red' })
-    ).toEqual({ defaultModel: 'smart', colorMode: 'dark', accent: 'red' });
+      coerceSettings({ imageModel: 'flux-dev', colorMode: 'dark', accent: 'red' })
+    ).toEqual({ imageModel: 'flux-dev', colorMode: 'dark', accent: 'red' });
   });
 
   it('passes through well-formed systemPrompts', () => {
@@ -126,43 +148,6 @@ describe('coerceSettings', () => {
     expect(
       coerceSettings({ systemPrompts: ['nope', 123, null] }).systemPrompts
     ).toBeUndefined();
-  });
-
-  it('passes through a valid defaultReasoningEffort', () => {
-    expect(coerceSettings({ defaultReasoningEffort: 'low' })).toEqual({
-      defaultReasoningEffort: 'low',
-    });
-    expect(coerceSettings({ defaultReasoningEffort: 'medium' })).toEqual({
-      defaultReasoningEffort: 'medium',
-    });
-    expect(coerceSettings({ defaultReasoningEffort: 'high' })).toEqual({
-      defaultReasoningEffort: 'high',
-    });
-  });
-
-  it('drops an unknown defaultReasoningEffort value', () => {
-    expect(coerceSettings({ defaultReasoningEffort: 'extreme' })).toEqual({});
-    expect(coerceSettings({ defaultReasoningEffort: '' })).toEqual({});
-    expect(coerceSettings({ defaultReasoningEffort: 0 })).toEqual({});
-    expect(coerceSettings({ defaultReasoningEffort: null })).toEqual({});
-  });
-
-  it('passes through a valid defaultVerbosity', () => {
-    expect(coerceSettings({ defaultVerbosity: 'low' })).toEqual({
-      defaultVerbosity: 'low',
-    });
-    expect(coerceSettings({ defaultVerbosity: 'medium' })).toEqual({
-      defaultVerbosity: 'medium',
-    });
-    expect(coerceSettings({ defaultVerbosity: 'high' })).toEqual({
-      defaultVerbosity: 'high',
-    });
-  });
-
-  it('drops an unknown defaultVerbosity value', () => {
-    expect(coerceSettings({ defaultVerbosity: 'extreme' })).toEqual({});
-    expect(coerceSettings({ defaultVerbosity: '' })).toEqual({});
-    expect(coerceSettings({ defaultVerbosity: null })).toEqual({});
   });
 
   it('passes through a valid defaultLogLevel', () => {

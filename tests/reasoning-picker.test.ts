@@ -20,7 +20,7 @@ describe('ReasoningPicker', () => {
   it('shows the currently-resolved effort on the trigger button', () => {
     const { getByRole } = render(ReasoningPicker, {
       value: 'medium',
-      defaultEffort: 'low',
+      defaultLevel: 'low',
       open: false,
       onToggle: () => {},
       onSelect: () => {},
@@ -37,7 +37,7 @@ describe('ReasoningPicker', () => {
   it('does not render the menu when closed', () => {
     const { queryByRole } = render(ReasoningPicker, {
       value: 'low',
-      defaultEffort: 'low',
+      defaultLevel: 'low',
       open: false,
       onToggle: () => {},
       onSelect: () => {},
@@ -48,7 +48,7 @@ describe('ReasoningPicker', () => {
   it('renders the four levels with the default badged and the current marked checked', () => {
     const { getByRole, getAllByRole, getAllByText } = render(ReasoningPicker, {
       value: 'high',
-      defaultEffort: 'low',
+      defaultLevel: 'low',
       open: true,
       onToggle: () => {},
       onSelect: () => {},
@@ -74,13 +74,13 @@ describe('ReasoningPicker', () => {
     expect(checked[0].textContent).toContain('High');
   });
 
-  it('marks Off checked and badges no row when the resolved level is off', () => {
-    // A tier that defaults thinking off (Balanced/Fast) resolves to
-    // 'off'; the picker shows Off selected, and since 'off' is never the
-    // account default the badge still lands on a reasoning level.
+  it('marks Off checked while the default badge stays on the profile default', () => {
+    // A per-thread Off override on a profile whose default is 'medium':
+    // the picker shows Off selected while the badge stays on the
+    // profile's default level.
     const { getAllByRole, getAllByText } = render(ReasoningPicker, {
       value: 'off',
-      defaultEffort: 'medium',
+      defaultLevel: 'medium',
       open: true,
       onToggle: () => {},
       onSelect: () => {},
@@ -96,7 +96,7 @@ describe('ReasoningPicker', () => {
     const onSelect = vi.fn();
     const { getByRole } = render(ReasoningPicker, {
       value: 'low',
-      defaultEffort: 'low',
+      defaultLevel: 'low',
       open: true,
       onToggle: () => {},
       onSelect,
@@ -110,7 +110,7 @@ describe('ReasoningPicker', () => {
     const onSelect = vi.fn();
     const { getByTitle } = render(ReasoningPicker, {
       value: 'low',
-      defaultEffort: 'low',
+      defaultLevel: 'low',
       open: false,
       onToggle,
       onSelect,
@@ -124,7 +124,7 @@ describe('ReasoningPicker', () => {
     const onSelect = vi.fn();
     const { getByRole } = render(ReasoningPicker, {
       value: 'low',
-      defaultEffort: 'low',
+      defaultLevel: 'low',
       open: true,
       onToggle: () => {},
       onSelect,
@@ -143,7 +143,7 @@ describe('ReasoningPicker', () => {
     const onSelect = vi.fn();
     const { getByRole } = render(ReasoningPicker, {
       value: 'medium',
-      defaultEffort: 'low',
+      defaultLevel: 'low',
       open: true,
       onToggle: () => {},
       onSelect,

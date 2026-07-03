@@ -238,23 +238,25 @@ create table if not exists public.threads (
   updated_at timestamptz not null default now()
 );
 
--- Optional per-thread model tier override. Null means "use user default".
--- The app stores the tier name ('smart' | 'balanced' | 'fast') and resolves
--- it to a concrete Venice model id at send-time, so the column stays schema-
--- compatible even as tiers are retuned. No CHECK constraint on purpose —
--- garbage values are scrubbed by the app on read.
+-- Optional per-thread model-profile pin. Null means "track the user's
+-- default profile". The app stores a model-profile id (see ModelProfile in
+-- src/lib/models; profiles live in profiles.settings.modelProfiles) and
+-- resolves it to a concrete Venice model id at send-time. Older rows may
+-- still carry a pre-profile tier name ('smart' | 'balanced' | 'fast');
+-- resolution maps any unknown id to the default profile, so no data
+-- migration was needed. No CHECK constraint on purpose — garbage values
+-- are scrubbed by the app on read.
 alter table public.threads
   add column if not exists model text;
 
 -- Optional per-thread thinking-level override ('off' | 'low' | 'medium' |
 -- 'high'). 'off' maps to venice_parameters.disable_thinking; the rest map to
 -- reasoning_effort (see ThinkingLevel in src/lib/models). Null means "use the
--- tier/user default" (profiles.settings.defaultReasoningEffort →
--- DEFAULT_REASONING_EFFORT). Column keeps the reasoning_effort name for
--- storage-compat. Plain text / no CHECK for the same reason as `model` above:
--- garbage is scrubbed by the app on read, and we want stored rows to survive a
--- future tier / provider change (such as adding 'off') without a schema
--- migration.
+-- model profile's default reasoning level". Column keeps the
+-- reasoning_effort name for storage-compat. Plain text / no CHECK for the
+-- same reason as `model` above: garbage is scrubbed by the app on read, and
+-- we want stored rows to survive a future provider change (such as adding
+-- 'off') without a schema migration.
 alter table public.threads
   add column if not exists reasoning_effort text;
 

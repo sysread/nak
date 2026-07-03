@@ -140,10 +140,10 @@ gets replaced depends on which message you click:
   stay readable while the new reply streams in, so you can copy
   anything you want to preserve before they're removed.)
 
-The regenerate runs against your current settings - model, reasoning
-effort, verbosity, active system prompts. So if you switch to a
-different tier and then click regenerate on an older message, the
-new response comes from the new model. Tool use (web search, etc.)
+The regenerate runs against your current settings - model profile,
+reasoning effort, verbosity, active system prompts. So if you switch
+to a different profile and then click regenerate on an older message,
+the new response comes from the new model. Tool use (web search, etc.)
 re-evaluates from scratch too; the new turn might fetch different
 sources than the original.
 

@@ -1,9 +1,9 @@
 # Settings
 
 The settings modal plus everything it persists: the panes (About,
-Appearance, Memory, Wiki, AI, Custom prompts, Usage, Security, API
-keys), the `profiles.settings` JSONB blob they read from and write to,
-and the theme system that lives alongside.
+Appearance, Memory, Wiki, AI, Model profiles, Custom prompts, Usage,
+Security, API keys), the `profiles.settings` JSONB blob they read from
+and write to, and the theme system that lives alongside.
 
 ## Role in the app
 
@@ -40,9 +40,8 @@ landing tab move together.
   `wikiLibrarianEnabled`). **Reset** is a confirmed-irreversible
   wipe of every wiki article plus the per-thread wiki pipeline
   state.
-- **AI** — per-tier model + reasoning configuration, default reasoning
-  effort, default
-  verbosity, the "Emphasis markdown" opt-in (a bionic-style scan
+- **AI** — the assistant's behavior preferences: the "Emphasis
+  markdown" opt-in (a bionic-style scan
   aid - when on, chat-loop folds a short formatting blurb into
   the per-turn system-prompt appendix so the model bolds terms
   and italicises phrases), reply notifications (an opt-in
@@ -56,25 +55,52 @@ landing tab move together.
   intents pipeline: minting sweep, efficacy evaluation, and the
   `applyIntentPriming` system-prompt block; see
   [`in-progress/intents.md`](./in-progress/intents.md)). All preferences
-  persist to `profiles.settings`. The system-prompt library used to live
-  here too but moved to its own **Custom prompts** pane (below) - the
-  prompt cards are tall and pushed the Models layout below the fold.
+  persist to `profiles.settings`. Chat-model configuration lives on
+  its own **Model profiles** pane and the system-prompt library on
+  **Custom prompts** (both below) - each carries a tall card list
+  that would push everything else here below the fold.
 
-  The **Models** subsection is the per-tier configuration UI: each of
-  Smart/Balanced/Fast gets a fuzzy-search model combobox
-  (`ModelCombobox`, populated from the live Venice catalog via
-  `models-catalog.svelte.ts`, with per-row capability/context/price
-  columns), a reasoning-effort dropdown, a default-tier radio, and a
-  capability/context/price strip on the row itself.
-  Picking a model or reasoning level writes a `TierModelConfig` snapshot
-  into `profiles.settings.tierModels[tier]` (via `persistTierModels`);
-  the chat send path reads it back through `effectiveTierSpec(tier,
-  app.tierModels)`. The snapshot carries the chosen model's capabilities
-  so resolution stays synchronous - the catalog is only needed while the
-  pane is open, fetched lazily on first AI-pane visit with the same
-  staleness/error-guard shape as the Usage pane. See
-  [Models & tiers in Chat](./chat.md) for the resolution cascade and the
-  `TierModelConfig` snapshot rationale.
+  The **Image generation** subsection points the `generate_image` tool at
+  a Venice image model via `ImageModelSelect` - a custom button + popover
+  listbox (no fuzzy search, since image models are few) whose rows left-
+  align the model name and right-align the per-image price in a pill, with
+  beta/retiring tags next to the name. It's custom rather than a native
+  `<select>` because an `<option>` can't hold a styled pill. Unlike
+  `modelProfiles` it persists a bare model id, not a capability snapshot: the
+  only consumer is the server-side tool, which reads
+  `profiles.settings.imageModel` at generation time and needs nothing but
+  the id. Options come from the live Venice **image** catalog
+  (`image-models-catalog.svelte.ts`, the `?type=image` twin of the text
+  catalog), filtered by the project-global per-image price cap
+  (`app_config.max_image_usd`) via `filterImageCatalogByCap`. Picking the
+  built-in default (`VENICE_DEFAULT_IMAGE_MODEL`) clears the override so
+  "default" reads as absence; any other pick writes the id via
+  `persistImageModel`. See
+  [generate_image](./tools.md) for the server-side resolution + the
+  one-dimension-table size assumption.
+- **Model profiles** - the user-defined named model configurations
+  (`profiles.settings.modelProfiles`, a `ModelProfile[]`). Each card
+  is a grip handle + name input + Default radio + delete button, a
+  fuzzy-search model combobox (`ModelCombobox`, populated from the
+  live Venice catalog via `models-catalog.svelte.ts`), a default-
+  thinking dropdown (the `ThinkingLevel` domain, so a profile can
+  default thinking Off), a default-verbosity dropdown, and a
+  capability/context/price strip. The list autosaves (debounced
+  500ms) on add / edit / delete / reorder / default change, pushing
+  the whole array through `persistModelProfiles` - same wholesale-
+  replace + drag-reorder mechanics as the Custom prompts pane (the
+  pure list transforms live in `src/lib/ui/model-profiles.ts`).
+  Invariants the UI enforces (and `coerceModelProfiles` re-enforces
+  on every read/write): profile names are non-empty and unique (an
+  invalid draft parks on an inline error instead of persisting),
+  exactly one profile carries `isDefault` (the radio semantic - with
+  one profile it is locked on), and the last profile is undeletable.
+  Picking a model re-snapshots the profile's capability fields from
+  the catalog row so chat resolution stays synchronous - the catalog
+  is only needed while the pane is open, fetched lazily on first
+  visit with the same staleness/error-guard shape as the Usage pane.
+  See [Chat's data model](./chat.md) for the resolution cascade and
+  the snapshot rationale.
   The catalog feeding the combobox is first run through
   `filterCatalogByCaps(catalog, app.priceCaps)` (`src/lib/models/price-caps.ts`),
   which drops models whose live Venice price exceeds the project-global
@@ -88,25 +114,6 @@ landing tab move together.
   `supabase/functions/_shared/price-cap.ts`), so the filter is a
   can't-pick-it convenience, not the boundary. The caps are written only by
   `mise run setup` - there is no in-app editor.
-
-  The **Image generation** subsection points the `generate_image` tool at
-  a Venice image model via `ImageModelSelect` - a custom button + popover
-  listbox (no fuzzy search, since image models are few) whose rows left-
-  align the model name and right-align the per-image price in a pill, with
-  beta/retiring tags next to the name. It's custom rather than a native
-  `<select>` because an `<option>` can't hold a styled pill. Unlike
-  `tierModels` it persists a bare model id, not a capability snapshot: the
-  only consumer is the server-side tool, which reads
-  `profiles.settings.imageModel` at generation time and needs nothing but
-  the id. Options come from the live Venice **image** catalog
-  (`image-models-catalog.svelte.ts`, the `?type=image` twin of the text
-  catalog), filtered by the project-global per-image price cap
-  (`app_config.max_image_usd`) via `filterImageCatalogByCap`. Picking the
-  built-in default (`VENICE_DEFAULT_IMAGE_MODEL`) clears the override so
-  "default" reads as absence; any other pick writes the id via
-  `persistImageModel`. See
-  [generate_image](./tools.md) for the server-side resolution + the
-  one-dimension-table size assumption.
 - **Custom prompts** — the named system-prompt library
   (`profiles.settings.systemPrompts`, a `SystemPrompt[]`). Each card is a
   name + "Default" checkbox + delete + body textarea; the list autosaves
@@ -183,14 +190,13 @@ every update) so it's covered here rather than in its own file.
   version available" pill, driven by `updateState.available`.
   Mounted once in `App.svelte` so it appears across every phase.
 - `src/lib/state.svelte.ts` — setters that Settings calls
-  (`setDefaultModel`, `persistTierModels`, `setDefaultReasoningEffort`,
-  `setDefaultVerbosity`, `setEmphasisMarkdown`,
-  `setSystemPrompts`, `setTheme`, `setWebSearchEnabled`).
+  (`persistModelProfiles`, `setEmphasisMarkdown`,
+  `setSystemPrompts`, `setTheme`).
 - `src/lib/models/catalog.ts` — `CatalogModel` type + `coerceCatalog`,
   the defensive flatten of Venice's `GET /models` response. Pure,
   unit-tested offline.
 - `src/lib/models-catalog.svelte.ts` — reactive cache for the live
-  model catalog backing the AI pane's tier dropdowns. Same shape as
+  model catalog backing the Model-profiles pane's comboboxes. Same shape as
   `usage-store.svelte.ts` (lazy-on-open, 15-min staleness, lock-reset);
   exposes `catalog`, `refreshCatalog`, `resetCatalog`,
   `shouldAutoRefreshCatalog`, `isCatalogStale`, `CATALOG_STALE_MS`.
@@ -222,16 +228,26 @@ every update) so it's covered here rather than in its own file.
   blue->green->red mapping. Driven twice per row - bar hue from token
   count, spend-pill border hue from dollar amount. Unit-tested in
   `tests/usage-hue.test.ts`.
-- `src/lib/ui/model-picker.ts` — pure UI primitives for the picker:
-  `tierRowView` (row view-model), `buildModelOptions`, `capabilityChips`,
-  `formatContextWindow`, `formatPricing`, `tierConfigFromCatalog`,
-  `tierConfigFromSpec`, plus the combobox's `fuzzyMatch` /
+- `src/lib/ui/model-picker.ts` — catalog-generic picker primitives:
+  `buildModelOptions`, `capabilityChips`, `formatContextWindow`,
+  `formatPricing`, plus the combobox's `fuzzyMatch` /
   `filterModelOptions`.
+- `src/lib/ui/model-profiles.ts` — pure list transforms + view-model
+  for the Model-profiles pane: `createProfile` / `addProfile` /
+  `updateProfile` / `deleteProfile` (last-profile guard + default
+  promotion) / `setDefaultProfile` / `reorderProfiles`,
+  `profileWithCatalogModel` (the capability re-snapshot on a model
+  pick), `profileNamesError` (the non-empty + unique validation the
+  autosave gates on), `profilesMatch` (the resync equality guard), and
+  `profileRowView`. Unit-tested in `tests/model-profiles.test.ts`.
 - `src/components/ModelCombobox.svelte` — the fuzzy-search model picker
   (subgrid-aligned rows; combobox/listbox a11y). See `./components.md`.
-- `src/lib/models/index.ts` — `TierModelConfig` / `TierModels`,
-  `coerceTierModels`, and `effectiveTierSpec` (folds a user override over
-  the built-in TierSpec).
+- `src/lib/models/index.ts` — `ModelProfile`, `coerceModelProfiles`
+  (drops malformed entries, dedupes ids, normalizes the exactly-one-
+  default invariant), `seedModelProfiles` (the starter "Default"
+  profile), and the send-path resolution helpers
+  (`resolveModelProfile`, `defaultModelProfile`,
+  `thinkingWireForProfile`, `profileModelSpec`).
 - `src/lib/models/price-caps.ts` — the browser half of the project-global
   model price caps: `coercePriceCaps` (reads the `app_config` cap columns,
   `0`/null/negative -> no cap), `isModelOverCap`, and `filterCatalogByCaps`
@@ -308,23 +324,24 @@ every update) so it's covered here rather than in its own file.
 
 - **`profiles.settings`** — JSONB column. No per-field schema.
   Known keys today:
-  - `defaultModel`: `ModelTier`
-  - `tierModels`: `Partial<Record<ModelTier, TierModelConfig>>` — per-tier
-    model + reasoning overrides. Each `TierModelConfig` is a capability
-    snapshot (`modelId`, `thinking`, `contextWindow`, `supportsReasoning`,
-    `supportsVision`, `supportsResponseFormat`, `label`) so the chat send
-    path resolves a configured tier without the async catalog. Absent
-    tiers fall back to the built-in `TierSpec`. Validated by
-    `coerceTierModels` on read; a malformed entry degrades to the
-    built-in default rather than poisoning resolution.
+  - `modelProfiles`: `ModelProfile[]` — the user's named model
+    configurations, in display order. Each profile is `{id, name,
+    modelId, thinking, verbosity, isDefault}` plus a capability
+    snapshot (`contextWindow`, `supportsReasoning`, `supportsVision`,
+    `supportsResponseFormat`, `modelLabel`) so the chat send path
+    resolves a profile without the async catalog. Validated by
+    `coerceModelProfiles` on read (drops malformed entries and
+    duplicate ids, re-establishes the exactly-one-default flag);
+    absence means "never edited" and the app substitutes
+    `seedModelProfiles()` in memory without writing it back. Writing
+    this key also clears the legacy pre-profile keys (`defaultModel`,
+    `tierModels`, `defaultReasoningEffort`, `defaultVerbosity`) from
+    the blob.
   - `imageModel`: `string` — Venice text-to-image model id for the
     `generate_image` tool. A bare id, not a snapshot: the only consumer is
     the server-side tool, which reads it at generation time. Absent means
     fall back to `VENICE_DEFAULT_IMAGE_MODEL`. A non-empty string survives
     `coerceSettings`; empty/non-string drops to absence.
-  - `defaultReasoningEffort`: `ReasoningEffort`
-  - `defaultVerbosity`: `Verbosity` (`'low' | 'medium' | 'high'`);
-    absent falls back to `DEFAULT_VERBOSITY` (`medium`)
   - `colorMode`: `ColorMode`
   - `accent`: `Accent`
   - `systemPrompts`: `SystemPrompt[]` with `{id, name, body,
@@ -355,10 +372,10 @@ every update) so it's covered here rather than in its own file.
 - **`localStorage['nak:config:v2']`** — plaintext JSON holding the
   Supabase URL + publishable key (neither is a secret). The Keys
   pane overwrites it on save. See `./auth-session.md`.
-- **Reactive state** — `app.defaultModel`, `app.tierModels`,
-  `app.defaultReasoningEffort`, `app.defaultVerbosity`,
+- **Reactive state** — `app.modelProfiles`,
   `app.colorMode`, `app.accent`, `app.systemPrompts`. Seeded
-  to defaults on `activate()` (`tierModels` to `{}`); overwritten from
+  to defaults on `activate()` (`modelProfiles` to
+  `seedModelProfiles()`); overwritten from
   `profiles.settings` by Chat's `refreshSettings` right after
   the Supabase session lands.
 
@@ -422,10 +439,10 @@ every update) so it's covered here rather than in its own file.
   config via `saveConfig` (local only); the Security pane rotates
   the Supabase login via `changeAuthPassword` (Supabase only). See
   `./auth-session.md`.
-- **Chat** — chat reads every AI-pane setting
-  (`defaultModel`, `defaultReasoningEffort`, `defaultVerbosity`,
-  `systemPrompts`) from the state store. Settings writes those
-  values. See `./chat.md`.
+- **Chat** — chat reads the model profiles and every AI-pane
+  setting (`modelProfiles`, `systemPrompts`, the About-you fields)
+  from the state store. Settings writes those values. See
+  `./chat.md`.
 - **Architecture** — the reactive state store
   (`state.svelte.ts`) is the bridge: Settings writes setters,
   other features read the corresponding `app.*` field. See
@@ -481,7 +498,7 @@ every update) so it's covered here rather than in its own file.
   toggles flipped in quick succession, or a fire-and-forget theme
   write racing a toggle), surfacing as a setting that reverted
   intermittently with no repeatable pattern. The merge is a
-  top-level shallow merge (`||`), so nested values (`tierModels`,
+  top-level shallow merge (`||`), so nested values (`modelProfiles`,
   `systemPrompts`) replace wholesale - correct, since the app
   treats them as atomic snapshots. Don't reintroduce a
   client-side blob read before the write.
@@ -494,9 +511,10 @@ every update) so it's covered here rather than in its own file.
 - **Empty `profiles.settings`.** A brand-new account has
   `settings = '{}'`. `coerceSettings` returns every field
   undefined; the state store falls back to its seed values
-  (`DEFAULT_TIER`, `DEFAULT_REASONING_EFFORT`, cached theme,
-  empty prompt list). Any pane that assumes a particular field
-  exists has a bug.
+  (`seedModelProfiles()`, cached theme, empty prompt list). Any
+  pane that assumes a particular field exists has a bug. The seed
+  profile is never written back - it materializes in the blob only
+  when the user first edits profiles.
 - **Inline boot script in `index.html` is ES5.** Vite doesn't
   transform inline scripts. Keep the theme-cache read logic
   there simple; use `var`, avoid template literals and arrow
