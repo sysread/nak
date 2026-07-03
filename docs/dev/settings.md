@@ -142,7 +142,8 @@ landing tab move together.
   `/billing/usage-analytics` endpoint, which returns the per-model
   spend + token roll-up pre-aggregated in one cached response, and
   fans that into per-(model, currency) rows client-side
-  (`aggregateUsage`). One request replaces the multi-page walk over
+  (`aggregateUsage` in `src/lib/ui/usage.ts`). One request replaces
+  the multi-page walk over
   the per-request `/billing/usage` ledger this pane used to do.
   The default rolling-7-day window is cached in
   `usage-store.svelte.ts` and fetched lazily the first time the
@@ -213,7 +214,9 @@ every update) so it's covered here rather than in its own file.
 - `src/lib/ui/image-model-picker.ts` — pure UI primitives for the Image
   generation picker: `buildImageModelOptions` (structured
   `ImageModelOption` rows - name, price-pill label, badges),
-  `imageModelOption`, `formatImagePrice`. Unit-tested in
+  `imageModelOption`, `formatImagePrice`, `imageModelLabel` (display
+  name w/ bare-id fallback), and `imageModelOverrideFor` (the
+  default-id-to-absence persistence rule). Unit-tested in
   `tests/image-model-picker.test.ts`.
 - `src/components/ImageModelSelect.svelte` — the custom button + popover
   listbox the Image generation subsection renders (name-left / price-pill-
@@ -223,11 +226,26 @@ every update) so it's covered here rather than in its own file.
   `reorderPrompts` (the drag-reorder array move), and `promptsMatch` (the
   by-value equality that backs the resync-from-Supabase guard). Unit-tested
   in `tests/prompts.test.ts`.
-- `src/lib/ui/usage.ts` — pure display math for the Usage pane:
-  `relativeHue(value, population)`, the median-anchored log-scale
-  blue->green->red mapping. Driven twice per row - bar hue from token
-  count, spend-pill border hue from dollar amount. Unit-tested in
+- `src/lib/ui/usage.ts` — pure display primitives for the Usage pane:
+  `aggregateUsage` (the per-(model, currency) bucket fan-out) and
+  `aggregateTotalsByCurrency`, the token/spend formatters
+  (`formatTokens`, `formatAmount`, `formatAmountPerDay`), the pill
+  helpers (`isCreditCurrency`, `spendPillTitle`, `perDayTitle`,
+  `currencyTitle`), the chart scaling (`usageBarPercent`,
+  `relativeHue` - the median-anchored log-scale blue->green->red
+  mapping, driven twice per row: bar hue from token count, spend-pill
+  border hue from dollar amount), and the date-picker helpers
+  (`todayYmd`, `ymdDaysAgo`, `daysInPickedRange`). Unit-tested in
   `tests/usage-hue.test.ts`.
+- `src/lib/ui/settings.ts` — screen-scoped primitives for the modal
+  itself: the Security pane's `authPasswordError` validation + copy,
+  the auto-apply toggles' confirmation copy (`toggleNotice`,
+  `notifyOnCompleteNotice`), the notification-permission
+  reconciliation (`notifyPermissionNudgeVisible`,
+  `notifyPermissionRequestNotice`), the About-you field notices
+  (`userFieldNotice`), the config-export filename
+  (`exportConfigFilename`), and the About pane's `formatBuildTime` +
+  `aboutActionLabel`. Unit-tested in `tests/settings.test.ts`.
 - `src/lib/ui/model-picker.ts` — catalog-generic picker primitives:
   `buildModelOptions`, `capabilityChips`, `formatContextWindow`,
   `formatPricing`, plus the combobox's `fuzzyMatch` /

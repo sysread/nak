@@ -30,15 +30,17 @@ export interface MemoryLibrarianStep {
 export type MemoryLibrarianPass = 'deep-sleep' | 'rem';
 
 /**
- * Title + plain-language description for a pass, shown in the
- * confirmation strip before a manual run. Lives here rather than
- * inline in the markup because on mobile there's no hover-title to
- * fall back on - the confirm step IS how the user learns what the
- * button does, so the copy is load-bearing and worth a tested home.
+ * Title + plain-language description + submit-button label for a
+ * pass, shown in the confirmation strip before a manual run. Lives
+ * here rather than inline in the markup because on mobile there's no
+ * hover-title to fall back on - the confirm step IS how the user
+ * learns what the button does, so the copy is load-bearing and worth
+ * a tested home.
  */
 export interface MemoryLibrarianPassInfo {
   title: string;
   description: string;
+  runLabel: string;
 }
 
 export function librarianPassInfo(
@@ -52,6 +54,7 @@ export function librarianPassInfo(
         'duplicates, links related ones, and flags anything that looks ' +
         'contradicted or stale. It picks the memory that has gone the ' +
         'longest without review as the starting point.',
+      runLabel: 'Run deep-sleep',
     };
   }
   return {
@@ -61,7 +64,44 @@ export function librarianPassInfo(
       'chatting and fills in the connections between them - drawing ' +
       'links in the memory graph, and occasionally merging a duplicate ' +
       'that slipped past deep-sleep.',
+    runLabel: 'Run rem',
   };
+}
+
+/**
+ * Heading for the progress strip: pass name plus live/settled verb
+ * ("Deep-sleep running" / "Rem finished"). Null pass falls back to
+ * the rem reading - the strip only renders while a run is active, so
+ * the null arm is unreachable in practice, but the store types the
+ * field nullable ("strip is clear") and the fallback keeps this
+ * total rather than making the caller narrow.
+ */
+export function librarianStripHeading(
+  pass: MemoryLibrarianPass | null,
+  running: boolean
+): string {
+  const name = pass === 'deep-sleep' ? 'Deep-sleep' : 'Rem';
+  return `${name} ${running ? 'running' : 'finished'}`;
+}
+
+/** Accessible name for the progress strip region, parallel to
+ *  `librarianStripHeading` - screen readers get the pass identity
+ *  even though the visual heading carries it too. Same null-pass
+ *  fallback rationale as the heading. */
+export function librarianProgressAriaLabel(
+  pass: MemoryLibrarianPass | null
+): string {
+  return pass === 'deep-sleep'
+    ? 'Deep-sleep run progress'
+    : 'Rem run progress';
+}
+
+/** Status glyph for a step row. The ellipsis reads as in-flight
+ *  (the strip's CSS pulses it), check and cross as settled. */
+export function stepIcon(status: MemoryLibrarianStep['status']): string {
+  if (status === 'pending') return '…';
+  if (status === 'ok') return '✓';
+  return '✗';
 }
 
 /**

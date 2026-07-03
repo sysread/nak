@@ -6,8 +6,11 @@ import {
 import {
   buildImageModelOptions,
   formatImagePrice,
+  imageModelLabel,
   imageModelOption,
+  imageModelOverrideFor,
 } from '../src/lib/ui/image-model-picker';
+import { VENICE_DEFAULT_IMAGE_MODEL } from '../src/lib/models';
 
 // One raw /models?type=image entry in Venice's nested shape.
 function rawEntry(over: Record<string, unknown> = {}): unknown {
@@ -163,5 +166,30 @@ describe('buildImageModelOptions', () => {
     expect(opts).toEqual([
       { id: 'venice-sd35', name: 'venice-sd35', priceLabel: null, badges: ['current'] },
     ]);
+  });
+});
+
+describe('imageModelLabel', () => {
+  const catalog: ImageCatalogModel[] = [
+    { id: 'venice-sd35', name: 'Venice SD3.5', usdPerImage: 0.01, beta: false, deprecated: false },
+  ];
+
+  it('prefers the catalog display name', () => {
+    expect(imageModelLabel(catalog, 'venice-sd35')).toBe('Venice SD3.5');
+  });
+
+  it('falls back to the bare id off-catalog (retired model, catalog not loaded)', () => {
+    expect(imageModelLabel(catalog, 'some-retired-model')).toBe('some-retired-model');
+    expect(imageModelLabel([], 'venice-sd35')).toBe('venice-sd35');
+  });
+});
+
+describe('imageModelOverrideFor', () => {
+  it('maps the built-in default to absence so "default" reads as unset', () => {
+    expect(imageModelOverrideFor(VENICE_DEFAULT_IMAGE_MODEL)).toBeUndefined();
+  });
+
+  it('passes any other id through for persistence', () => {
+    expect(imageModelOverrideFor('flux-dev')).toBe('flux-dev');
   });
 });

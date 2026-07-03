@@ -15,6 +15,7 @@
  */
 
 import type { ImageCatalogModel } from '../models/image-catalog';
+import { VENICE_DEFAULT_IMAGE_MODEL } from '../models';
 
 /** One entry in the image-model dropdown, parts kept separate for layout. */
 export interface ImageModelOption {
@@ -82,4 +83,24 @@ export function buildImageModelOptions(
     });
   }
   return options;
+}
+
+/** Display name for a model id, falling back to the bare id when the
+ *  catalog has no row for it (retired model, catalog not loaded yet). */
+export function imageModelLabel(
+  catalog: readonly ImageCatalogModel[],
+  id: string
+): string {
+  return catalog.find((m) => m.id === id)?.name ?? id;
+}
+
+/**
+ * The value to persist for a picked image model. Picking the built-in
+ * default clears the override (stored as absence) so the settings blob
+ * stays compact and "default" reads as unset; any other id is stored
+ * as-is. Inverse of the `override ?? VENICE_DEFAULT_IMAGE_MODEL`
+ * fallback the picker's selected value uses.
+ */
+export function imageModelOverrideFor(pickedId: string): string | undefined {
+  return pickedId === VENICE_DEFAULT_IMAGE_MODEL ? undefined : pickedId;
 }
