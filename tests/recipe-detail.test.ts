@@ -8,10 +8,12 @@ import { describe, it, expect } from 'vitest';
 import type { Recipe } from '../src/lib/supabase';
 import {
   recipeSourceLine,
-  recipeTocTargetCount,
+  recipeTocVisible,
   wrapIndex,
   swipeNavStep,
+  isCommitAnimating,
   lightboxTrackStyle,
+  photoOpenAriaLabel,
   LIGHTBOX_SLIDE_MS,
 } from '../src/lib/ui/recipe-detail';
 import { recipeToc, parseCooklang } from '../src/lib/cooklang';
@@ -157,27 +159,53 @@ describe('lightboxTrackStyle', () => {
   });
 });
 
-describe('recipeTocTargetCount', () => {
-  it('counts a flat recipe as two targets (Ingredients + Instructions)', () => {
+describe('recipeTocVisible', () => {
+  it('shows the TOC for a flat recipe with both blocks (two targets)', () => {
     const toc = recipeToc(parseCooklang('Stir in @flour{200%g}.'));
-    expect(recipeTocTargetCount(toc)).toBe(2);
+    expect(recipeTocVisible(toc)).toBe(true);
   });
 
-  it('counts each top-level entry plus its section sub-entries', () => {
+  it('shows the TOC when section sub-entries add jump targets', () => {
     const src = `== Soup ==
 Simmer @lentils{200%g}.
 
 # Finishing
 Stir in @butter{2%tbsp}.`;
-    const toc = recipeToc(parseCooklang(src));
     // 2 blocks + 2 sub-sections each = 6 jump targets.
-    expect(recipeTocTargetCount(toc)).toBe(6);
+    const toc = recipeToc(parseCooklang(src));
+    expect(recipeTocVisible(toc)).toBe(true);
   });
 
-  it('drops below the detail pane`s show-threshold for a one-block recipe', () => {
+  it('hides the TOC for a one-block recipe - a lone link is clutter', () => {
     // Declarations only - just an Ingredients entry, no Instructions.
     const toc = recipeToc(parseCooklang('@flour{200%g}'));
-    expect(recipeTocTargetCount(toc)).toBe(1);
-    expect(recipeTocTargetCount([])).toBe(0);
+    expect(recipeTocVisible(toc)).toBe(false);
+    expect(recipeTocVisible([])).toBe(false);
+  });
+});
+
+describe('isCommitAnimating', () => {
+  it('treats both slide directions and the ease-back as in-flight', () => {
+    expect(isCommitAnimating('to-next')).toBe(true);
+    expect(isCommitAnimating('to-prev')).toBe(true);
+    expect(isCommitAnimating('cancel')).toBe(true);
+  });
+
+  it('leaves resting and finger-tracking phases interactive', () => {
+    expect(isCommitAnimating('idle')).toBe(false);
+    expect(isCommitAnimating('drag')).toBe(false);
+  });
+});
+
+describe('photoOpenAriaLabel', () => {
+  it('speaks a 1-based position over the strip total', () => {
+    expect(photoOpenAriaLabel(0, 3, null)).toBe('Open photo 1 of 3');
+    expect(photoOpenAriaLabel(2, 3, null)).toBe('Open photo 3 of 3');
+  });
+
+  it('appends the caption when the photo has one', () => {
+    expect(photoOpenAriaLabel(1, 5, 'Crumb shot')).toBe(
+      'Open photo 2 of 5: Crumb shot'
+    );
   });
 });

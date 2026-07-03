@@ -36,7 +36,6 @@
   } from '$lib/cookbook-store.svelte';
   import { onCookbookChange } from '$lib/cookbook-events';
   import { getRecipeCached, offlineStatus } from '$lib/offline-sync.svelte';
-  import { findLoadedRecipe } from '$lib/ui/recipe-list';
   import {
     cooklangToHtml,
     parseCooklang,
@@ -48,13 +47,38 @@
   import { MAX_RECIPE_COOKLANG_CHARS, MAX_RECIPE_TITLE_CHARS } from '$lib/recipe-limits';
   import {
     recipeSourceLine,
-    recipeTocTargetCount,
+    recipeTocVisible,
     wrapIndex,
     swipeNavStep,
+    isCommitAnimating,
     lightboxTrackStyle,
+    photoOpenAriaLabel,
     LIGHTBOX_SLIDE_MS,
     type LightboxSlidePhase,
   } from '$lib/ui/recipe-detail';
+  import {
+    MAX_PHOTO_UPLOAD_MB,
+    MAX_RECIPE_PHOTOS,
+    bookmarkAriaLabel,
+    bookmarkButtonTitle,
+    editRecipeDraft,
+    formatVersionDate,
+    historySummaryLabel,
+    modifyActionTitle,
+    moveDraftPhoto,
+    newRecipeDraft,
+    photoDecodeErrorLine,
+    photoLinkPayload,
+    photoPickVerdict,
+    ratingChangeMessage,
+    recipeSaveError,
+    resolveActiveRecipe,
+    seedDraftPhotos,
+    suggestedRevertMessage,
+    trimmedOrNull,
+    versionRowState,
+    type DraftPhoto,
+  } from '$lib/ui/cookbook-screen';
   import type { Recipe, RecipeVersion } from '$lib/supabase';
   import {
     arrayBufferToBase64,
@@ -63,16 +87,8 @@
     maybeDownscaleImage,
     sha256Hex,
     validateFile,
-    MAX_ATTACHMENT_BYTES,
   } from '$lib/attachments';
   import RecipeRating from '../components/RecipeRating.svelte';
-
-  // Cap on photos per recipe. Belt-and-suspenders with the editor's
-  // file picker - the input is `multiple` but we reject inserts that
-  // would push the draft over this. Tens of photos per recipe is more
-  // than anyone reasonably wants on a single dish; the cap exists to
-  // keep the version-snapshot link rows bounded.
-  const MAX_RECIPE_PHOTOS = 12;
 
   interface Props {
     // When Chat.svelte's top-bar "new recipe" button flips this to true,
@@ -110,9 +126,10 @@
     // bucket) - no fallback fetch needed, and that copy stays
     // authoritative below. Offline this is the path that matters: the
     // recipe the user picked from the saved list lives in a bucket, not
-    // in the (empty) browse window.
+    // in the (empty) browse window. `fetched: null` asks only "is the
+    // id already in the loaded sets".
     if (
-      findLoadedRecipe(id, cookbook.recipes, cookbook.upcoming, cookbook.favorites)
+      resolveActiveRecipe(id, cookbook.recipes, cookbook.upcoming, cookbook.favorites, null)
     ) {
       fetchedRecipe = null;
       return;
@@ -138,17 +155,15 @@
   // Store row wins when present - it's the freshest copy after an edit;
   // the by-id fallback only fills in when the row is outside the loaded
   // page window.
-  const activeRecipe = $derived.by(() => {
-    if (!activeId) return null;
-    return (
-      findLoadedRecipe(
-        activeId,
-        cookbook.recipes,
-        cookbook.upcoming,
-        cookbook.favorites
-      ) ?? (fetchedRecipe && fetchedRecipe.id === activeId ? fetchedRecipe : null)
-    );
-  });
+  const activeRecipe = $derived(
+    resolveActiveRecipe(
+      activeId,
+      cookbook.recipes,
+      cookbook.upcoming,
+      cookbook.favorites,
+      fetchedRecipe
+    )
+  );
 
   // --- edit pane draft state (shared across new + edit) ---
   let draftTitle = $state('');
@@ -167,26 +182,9 @@
   let saving = $state(false);
   let copyFeedback = $state<string | null>(null);
 
-  // Working photo set for the edit pane. Each entry carries the
-  // server-side `image_id` (already created via `upsertRecipeImage`
-  // before being added to the draft) plus the bytes for inline
-  // preview, plus an in-memory `label` that the user is editing.
-  // Label changes do NOT save until the user clicks Save - they
-  // ride along on the same versioned write as title/cooklang/etc.
-  // so the History panel shows one row per overall save, not a row
-  // per keystroke. The save path forwards `{id, label}` pairs to
-  // the update RPC as `photos`, so adds, removes, reorders, AND
-  // label edits land in the version snapshot together.
-  interface DraftPhoto {
-    imageId: string;
-    mimeType: string;
-    sizeBytes: number;
-    // Display-only source: a `data:` URI for a just-picked upload (bytes
-    // in memory) or the resolved `url` for a photo loaded from the DB.
-    // Save re-links by imageId, so the draft never carries bytes.
-    src: string;
-    label: string;
-  }
+  // Working photo set for the edit pane - see DraftPhoto in
+  // $lib/ui/cookbook-screen for the lifecycle (labels stay in memory
+  // until Save so the History panel shows one row per overall edit).
   let draftPhotos = $state<DraftPhoto[]>([]);
   // True while a photo upload (downscale + sha256 + upsert) is in
   // flight. Save is disabled while this is true so the user can't
@@ -252,20 +250,6 @@
     versions = null;
     versionsError = null;
     viewingVersionId = null;
-  }
-
-  // Compact human-readable timestamp for History rows. Locale-aware
-  // and falls back to the raw string if Date parsing fails.
-  function formatVersionDate(iso: string): string {
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return iso;
-    return d.toLocaleString(undefined, {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
   }
 
   // URL-driven sync. Single source of truth for landing the local
@@ -348,20 +332,15 @@
     // brand-new unsaved recipe is correctly unrouted until the save
     // navigates to its id.
     navigate({ recipe: null });
-    draftTitle = '';
-    draftSource = '';
-    draftSourceUrl = '';
-    // Seed the draft with a minimal Cooklang scaffold so the user has
-    // a head start and a reminder of the syntax. A blank textarea
-    // against "learn this DSL first" is hostile to the user journey
-    // where they're typing a recipe in from a cookbook.
-    draftCooklang = '>> servings: 4\n\n';
-    // New recipes start unrated. The user almost certainly hasn't
-    // cooked it yet - rating belongs on the "did this work?" pass.
-    draftRating = null;
-    // Sensible default for the initial version - the user can replace
-    // it but doesn't have to invent something on the very first save.
-    draftChangeMessage = 'Created recipe.';
+    // Seed choices (Cooklang scaffold, unrated, default change
+    // message) documented on newRecipeDraft.
+    const seed = newRecipeDraft();
+    draftTitle = seed.title;
+    draftSource = seed.source;
+    draftSourceUrl = seed.sourceUrl;
+    draftCooklang = seed.cooklang;
+    draftRating = seed.rating;
+    draftChangeMessage = seed.changeMessage;
     editError = null;
     draftPhotos = [];
     photoErrors = [];
@@ -371,16 +350,15 @@
   async function openEdit(): Promise<void> {
     const r = activeRecipe;
     if (!r) return;
-    draftTitle = r.title;
-    draftSource = r.source ?? '';
-    draftSourceUrl = r.source_url ?? '';
-    draftCooklang = r.cooklang;
-    draftRating = r.rating;
-    // Force the user to type a fresh description for this edit; we
-    // intentionally don't carry the previous message forward, since
-    // the message describes what's about to change, not the prior
-    // state.
-    draftChangeMessage = '';
+    // Seed choices (empty-string sentinels for nullable fields, blank
+    // change message) documented on editRecipeDraft.
+    const seed = editRecipeDraft(r);
+    draftTitle = seed.title;
+    draftSource = seed.source;
+    draftSourceUrl = seed.sourceUrl;
+    draftCooklang = seed.cooklang;
+    draftRating = seed.rating;
+    draftChangeMessage = seed.changeMessage;
     editError = null;
     photoErrors = [];
 
@@ -393,19 +371,7 @@
       await loadRecipePhotos(app.supabase, r.id);
     }
     const loaded = cookbook.photos[r.id] ?? [];
-    draftPhotos = loaded.map((p) => ({
-      imageId: p.id,
-      mimeType: p.mime_type,
-      sizeBytes: p.size_bytes,
-      // Display source only - the resolved URL (signed bucket URL or
-      // legacy data: URI) from listRecipePhotos. Save re-links by
-      // imageId, so the draft never needs the bytes.
-      src: p.url,
-      // Seed the input with the saved label (or empty when there
-      // isn't one). Empty string is the "no caption" sentinel in
-      // the form; the wire mapper trims it back to null on save.
-      label: p.label ?? '',
-    }));
+    draftPhotos = seedDraftPhotos(loaded);
     pane = 'edit';
   }
 
@@ -415,28 +381,14 @@
     const title = draftTitle.trim();
     const cooklang = draftCooklang;
     const changeMessage = draftChangeMessage.trim();
-    if (title.length === 0) {
-      editError = 'Title is required.';
-      return;
-    }
-    if (title.length > MAX_RECIPE_TITLE_CHARS) {
-      editError = `Title exceeds ${MAX_RECIPE_TITLE_CHARS}-char limit.`;
-      return;
-    }
-    if (cooklang.trim().length === 0) {
-      editError = 'Recipe source is required.';
-      return;
-    }
-    if (cooklang.length > MAX_RECIPE_COOKLANG_CHARS) {
-      editError = `Recipe source exceeds ${MAX_RECIPE_COOKLANG_CHARS}-char limit.`;
-      return;
-    }
-    if (changeMessage.length === 0) {
-      editError = 'Describe what changed before saving.';
-      return;
-    }
-    if (photosUploading) {
-      editError = 'Wait for photo uploads to finish before saving.';
+    const validationError = recipeSaveError({
+      title,
+      cooklang,
+      changeMessage,
+      photosUploading,
+    });
+    if (validationError) {
+      editError = validationError;
       return;
     }
     // Capture the recipe id and pane we started in. The save's
@@ -452,9 +404,8 @@
     saving = true;
     editError = null;
     try {
-      const source = draftSource.trim().length > 0 ? draftSource.trim() : null;
-      const sourceUrl =
-        draftSourceUrl.trim().length > 0 ? draftSourceUrl.trim() : null;
+      const source = trimmedOrNull(draftSource);
+      const sourceUrl = trimmedOrNull(draftSourceUrl);
       // Always pass the current draft photo set (with labels) to the
       // save - the version snapshot needs to capture photos alongside
       // the rest of the editable state. The RPC's
@@ -464,10 +415,7 @@
       // in the client. Labels are kept in memory on `draftPhotos`
       // until this save fires so the user can type without each
       // keystroke landing a version row.
-      const photos = draftPhotos.map((p) => ({
-        id: p.imageId,
-        label: p.label,
-      }));
+      const photos = photoLinkPayload(draftPhotos);
       let savedId: string;
       if (startedAt) {
         await app.supabase.updateRecipe(
@@ -563,29 +511,27 @@
     photosUploading = true;
     try {
       for (const file of Array.from(files)) {
-        if (draftPhotos.length >= MAX_RECIPE_PHOTOS) {
-          photoErrors = [
-            ...photoErrors,
-            `Cannot add more than ${MAX_RECIPE_PHOTOS} photos to a recipe.`,
-          ];
+        // Pre-upload gates (photo cap, images only, size cap) live in
+        // the verdict primitive; `cap` aborts the batch, `reject`
+        // skips just this file.
+        const verdict = photoPickVerdict({
+          name: file.name,
+          mimeType: file.type,
+          sizeError: validateFile(file),
+          draftCount: draftPhotos.length,
+        });
+        if (verdict.kind === 'cap') {
+          photoErrors = [...photoErrors, verdict.error];
           break;
         }
-        if (!file.type.startsWith('image/')) {
-          photoErrors = [...photoErrors, `${file.name}: not an image.`];
-          continue;
-        }
-        const sizeError = validateFile(file);
-        if (sizeError) {
-          photoErrors = [...photoErrors, `${file.name}: ${sizeError}`];
+        if (verdict.kind === 'reject') {
+          photoErrors = [...photoErrors, verdict.error];
           continue;
         }
         try {
           const downscaled = await maybeDownscaleImage(file);
           if (!downscaled) {
-            photoErrors = [
-              ...photoErrors,
-              `${file.name}: could not decode image.`,
-            ];
+            photoErrors = [...photoErrors, photoDecodeErrorLine(file.name)];
             continue;
           }
           const buffer = await downscaled.arrayBuffer();
@@ -632,12 +578,7 @@
   }
 
   function onMoveDraftPhoto(index: number, dir: -1 | 1): void {
-    const target = index + dir;
-    if (target < 0 || target >= draftPhotos.length) return;
-    const next = [...draftPhotos];
-    const [moved] = next.splice(index, 1);
-    next.splice(target, 0, moved!);
-    draftPhotos = next;
+    draftPhotos = moveDraftPhoto(draftPhotos, index, dir);
   }
 
   // --- lightbox ---
@@ -698,20 +639,13 @@
     if (lightboxIndex === null) resetSlideState();
   });
 
-  // True while a commit animation is mid-flight; new gestures and key
-  // presses are ignored until the slide settles so they can't strand
-  // the track between slides.
-  function isAnimatingCommit(): boolean {
-    return slidePhase === 'to-next' || slidePhase === 'to-prev' || slidePhase === 'cancel';
-  }
-
   // Page by `delta` with a slide animation, looping the photo set. The
   // track animates one slide over; LIGHTBOX_SLIDE_MS later we swap the
   // index and snap back to center - invisibly, because the slid-to
   // photo already fills the slot we land on. Shared by the arrows, the
   // arrow keys, and a committed swipe.
   function animateStep(delta: number): void {
-    if (lightboxIndex === null || isAnimatingCommit()) return;
+    if (lightboxIndex === null || isCommitAnimating(slidePhase)) return;
     const photos = activePhotos;
     if (!Array.isArray(photos) || photos.length < 2) return;
     const target = wrapIndex(lightboxIndex, delta, photos.length);
@@ -740,7 +674,7 @@
     // Don't start a drag on top of a commit animation, and treat any
     // multi-touch as a pinch: snap to center so the image is square for
     // zooming.
-    if (isAnimatingCommit()) return;
+    if (isCommitAnimating(slidePhase)) return;
     if (e.touches.length !== 1) {
       dragging = false;
       resetSlideState();
@@ -796,10 +730,7 @@
     const r = activeRecipe;
     if (!r) return;
     if (r.rating === next) return; // no-op, also defensive vs. double-fire
-    const msg =
-      next === null
-        ? 'Cleared rating.'
-        : `Rated ${next} ${next === 1 ? 'star' : 'stars'}.`;
+    const msg = ratingChangeMessage(next);
     try {
       await app.supabase.updateRecipe(activeId, { rating: next }, msg);
       await Promise.all([refresh(), loadVersions(activeId)]);
@@ -983,8 +914,9 @@
   const detailHtml = $derived(parsedDetail ? recipeToHtml(parsedDetail) : '');
   const detailToc = $derived(parsedDetail ? recipeToc(parsedDetail) : []);
   // Hide the TOC below two jump targets - a lone "Instructions" link
-  // with nothing to skip past is noise, not navigation.
-  const showDetailToc = $derived(recipeTocTargetCount(detailToc) >= 2);
+  // with nothing to skip past is noise, not navigation. Threshold
+  // policy lives on recipeTocVisible.
+  const showDetailToc = $derived(recipeTocVisible(detailToc));
 
   // The rendered-recipe container, bound so a TOC click can resolve its
   // target id within this pane's output. Scoping the lookup here keeps it
@@ -1029,7 +961,7 @@
   // to <date>" string so the user can hit Enter and move on.
   async function onRevert(v: RecipeVersion): Promise<void> {
     if (!app.supabase || !activeId) return;
-    const suggested = `Reverted to version from ${formatVersionDate(v.created_at)}.`;
+    const suggested = suggestedRevertMessage(v.created_at);
     const msg = window.prompt(
       'Describe this revert (required):',
       suggested
@@ -1253,12 +1185,8 @@
                   class:active={r!.upcoming}
                   onclick={onToggleUpcoming}
                   disabled={!offlineStatus.online}
-                  title={!offlineStatus.online
-                    ? 'Reconnect to change bookmarks'
-                    : r!.upcoming
-                      ? 'Remove from upcoming'
-                      : 'Mark as upcoming'}
-                  aria-label={r!.upcoming ? 'Remove from upcoming' : 'Mark as upcoming'}
+                  title={bookmarkButtonTitle(offlineStatus.online, r!.upcoming, 'upcoming')}
+                  aria-label={bookmarkAriaLabel(r!.upcoming, 'upcoming')}
                   aria-pressed={r!.upcoming}
                 >
                   {#if r!.upcoming}
@@ -1289,12 +1217,8 @@
                   class:active={r!.favorite}
                   onclick={onToggleFavorite}
                   disabled={!offlineStatus.online}
-                  title={!offlineStatus.online
-                    ? 'Reconnect to change bookmarks'
-                    : r!.favorite
-                      ? 'Remove from favorites'
-                      : 'Mark as favorite'}
-                  aria-label={r!.favorite ? 'Remove from favorites' : 'Mark as favorite'}
+                  title={bookmarkButtonTitle(offlineStatus.online, r!.favorite, 'favorite')}
+                  aria-label={bookmarkAriaLabel(r!.favorite, 'favorite')}
                   aria-pressed={r!.favorite}
                 >
                   {#if r!.favorite}
@@ -1322,7 +1246,7 @@
                   class="secondary icon-btn"
                   onclick={openEdit}
                   disabled={!offlineStatus.online}
-                  title={offlineStatus.online ? 'Edit recipe' : 'Reconnect to edit'}
+                  title={modifyActionTitle(offlineStatus.online, 'edit')}
                   aria-label="Edit recipe"
                 >
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -1336,7 +1260,7 @@
                   class="secondary icon-btn cookbook-action-danger"
                   onclick={() => onDelete(r!.id)}
                   disabled={!offlineStatus.online}
-                  title={offlineStatus.online ? 'Delete recipe' : 'Reconnect to delete'}
+                  title={modifyActionTitle(offlineStatus.online, 'delete')}
                   aria-label="Delete recipe"
                 >
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -1371,9 +1295,7 @@
                       class="photo-thumb"
                       onclick={() => openLightbox(i)}
                       title={p.label ?? 'Open photo'}
-                      aria-label={p.label
-                        ? `Open photo ${i + 1} of ${activePhotos.length}: ${p.label}`
-                        : `Open photo ${i + 1} of ${activePhotos.length}`}
+                      aria-label={photoOpenAriaLabel(i, activePhotos.length, p.label)}
                     >
                       <img
                         src={p.url}
@@ -1462,7 +1384,7 @@
                  they're scanning back through edits. -->
             <details class="cookbook-history" open={viewingVersionId !== null}>
               <summary>
-                History {versions ? `(${versions.length})` : ''}
+                {historySummaryLabel(versions ? versions.length : null)}
               </summary>
               {#if versionsLoading}
                 <p class="subtle">Loading history…</p>
@@ -1471,19 +1393,19 @@
               {:else if versions && versions.length > 0}
                 <ul class="cookbook-history-list">
                   {#each versions as ver, i (ver.id)}
-                    {@const isCurrent = i === 0}
+                    {@const row = versionRowState(i, ver.id, viewingVersionId)}
                     <li>
                       <button
                         type="button"
                         class="cookbook-history-row"
-                        class:is-active={!isCurrent && viewingVersionId === ver.id}
-                        class:is-current={isCurrent && viewingVersionId === null}
+                        class:is-active={row.isViewing}
+                        class:is-current={row.isCurrentShown}
                         onclick={() =>
-                          isCurrent ? onBackToCurrent() : onViewVersion(ver.id)}
+                          row.isCurrent ? onBackToCurrent() : onViewVersion(ver.id)}
                       >
                         <span class="cookbook-history-date">
                           {formatVersionDate(ver.created_at)}
-                          {#if isCurrent}<span class="cookbook-history-badge">current</span>{/if}
+                          {#if row.isCurrent}<span class="cookbook-history-badge">current</span>{/if}
                         </span>
                         <span class="cookbook-history-message">
                           {ver.change_message}
@@ -1629,7 +1551,7 @@
               </ul>
             {/if}
             <p class="subtle cookbook-change-message-hint">
-              Images are downscaled to {Math.round(MAX_ATTACHMENT_BYTES / 1024 / 1024)}MB max
+              Images are downscaled to {MAX_PHOTO_UPLOAD_MB}MB max
               and stored alongside the recipe. Photo edits land in the
               History panel like any other change.
             </p>
