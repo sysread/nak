@@ -10,6 +10,9 @@ import {
   deepSleepResultLine,
   remResultLine,
   librarianPassInfo,
+  librarianProgressAriaLabel,
+  librarianStripHeading,
+  stepIcon,
   type MemoryLibrarianStep,
 } from '../src/lib/ui/memory-librarian';
 
@@ -32,6 +35,49 @@ describe('librarianPassInfo', () => {
     expect(librarianPassInfo('deep-sleep').title).not.toBe(
       librarianPassInfo('rem').title,
     );
+  });
+
+  it('carries the confirm strip submit label per pass', () => {
+    expect(librarianPassInfo('deep-sleep').runLabel).toBe('Run deep-sleep');
+    expect(librarianPassInfo('rem').runLabel).toBe('Run rem');
+  });
+});
+
+describe('librarianStripHeading', () => {
+  it('names the pass and whether it is still running', () => {
+    expect(librarianStripHeading('deep-sleep', true)).toBe(
+      'Deep-sleep running',
+    );
+    expect(librarianStripHeading('deep-sleep', false)).toBe(
+      'Deep-sleep finished',
+    );
+    expect(librarianStripHeading('rem', true)).toBe('Rem running');
+    expect(librarianStripHeading('rem', false)).toBe('Rem finished');
+  });
+
+  it('falls back to the rem reading on a null pass', () => {
+    // The store types the field nullable ("strip is clear"); the
+    // strip only renders while a run is active, so this arm is
+    // unreachable in practice but keeps the function total.
+    expect(librarianStripHeading(null, true)).toBe('Rem running');
+  });
+});
+
+describe('librarianProgressAriaLabel', () => {
+  it('names the pass for assistive tech', () => {
+    expect(librarianProgressAriaLabel('deep-sleep')).toBe(
+      'Deep-sleep run progress',
+    );
+    expect(librarianProgressAriaLabel('rem')).toBe('Rem run progress');
+    expect(librarianProgressAriaLabel(null)).toBe('Rem run progress');
+  });
+});
+
+describe('stepIcon', () => {
+  it('maps each step status to its glyph', () => {
+    expect(stepIcon('pending')).toBe('…');
+    expect(stepIcon('ok')).toBe('✓');
+    expect(stepIcon('error')).toBe('✗');
   });
 });
 

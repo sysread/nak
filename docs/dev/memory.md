@@ -206,8 +206,10 @@ in `docs/user/memory.md`. The dev side has five moving parts:
   Parallel to `src/lib/ui/wiki-changelog-panel.ts`.
 - `src/lib/ui/memory-librarian.ts` — step-list bookkeeping
   primitives the Memories panel uses to render the manual-run
-  progress strip. Unit-tested at
-  `tests/memory-librarian-ui.test.ts`.
+  progress strip, plus the strip's display copy (pass info
+  including the confirm strip's Run submit label, the progress
+  heading, its aria-label, and the step-status glyphs).
+  Unit-tested at `tests/memory-librarian-ui.test.ts`.
 - `src/screens/Memories.svelte` — human-facing browser, panel
   side. Mounted in the chat shell's main column when the
   `memories` drawer tab is active; sibling of `Cookbook.svelte`
@@ -230,7 +232,24 @@ in `docs/user/memory.md`. The dev side has five moving parts:
   `removeMemoryRow`, `addRelationEdge`, `removeRelationEdge`)
   so the sidebar re-renders without a refetch. Confirmed
   delete also clears `route.memory` so the panel doesn't dwell
-  on a row that no longer exists.
+  on a row that no longer exists. Composition-only: every
+  display decision delegates to `src/lib/ui/memories.ts` (see
+  that entry).
+- `src/lib/ui/memories.ts` — pure UI-behavior primitives for the
+  panel side of the browser: body-surface selection
+  (`memoriesBodySurface` - the precedence cascade including the
+  librarian-strip suppression rule and its selected-card
+  exception), the per-card action-status vocabulary
+  (`MemoryActionStatus`, busy/done/settled predicates, button
+  captions, the done/error notice), edit / delete / relation
+  form validation (`memoryEditError`, `changelogMessageError`,
+  `relationNoteError`), the duplicate-edge error sniff, and the
+  card's formatters (`relativeTime`, `confidenceTooltip`,
+  `confidenceChipLabel`, `panelEmptyMessage`). Also owns the
+  panel's domain sentinels (`MAX_LABEL_CHARS`,
+  `MAX_RELATION_NOTE_CHARS`, `RELATION_KINDS`,
+  `SIMILAR_MEMORIES_LIMIT`, `ACTION_DONE_LINGER_MS`).
+  Unit-tested at `tests/memories.test.ts`.
 - `src/components/MemoryList.svelte` — human-facing browser,
   sidebar side. Search input bound to `memoriesStore.query`
   with a 200ms debounce around `runMemoriesSearch`. Each row

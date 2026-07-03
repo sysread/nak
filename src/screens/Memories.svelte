@@ -5,8 +5,9 @@
    * Cookbook.svelte and Journal.svelte; the sidebar `MemoryList` is
    * the browse surface (search + label rows), and this panel renders
    * exactly one card at a time - the memory whose id is in
-   * `route.memory`. With no selection the panel shows an empty-state
-   * hint pointing at the sidebar.
+   * `route.memory`. With no selection the panel renders the memory
+   * changelog as its default surface (see memoriesBodySurface in
+   * `$lib/ui/memories` for the full precedence).
    *
    * Both surfaces read from `memoriesStore` (see
    * `$lib/memories-store.svelte.ts`), so a sidebar keystroke filters
@@ -27,7 +28,6 @@
   import {
     classifyMemoryConfidence,
     MAX_MEMORY_CHANGELOG_MESSAGE_CHARS,
-    type MemoryConfidenceTag,
   } from '$lib/memories';
   import {
     memoriesStore,
@@ -39,6 +39,38 @@
     removeRelationEdge,
   } from '$lib/memories-store.svelte';
   import { searchMemoriesSemantic, MAX_MEMORY_DATA_CHARS } from '$lib/memories';
+  // Panel-side UI-behavior primitives - every display decision this
+  // screen makes (body-surface selection, action-status vocabulary,
+  // form validation, formatters) lives in the companion module; this
+  // file is Svelte wire-up.
+  import {
+    ACTION_DONE_LINGER_MS,
+    MAX_LABEL_CHARS,
+    MAX_RELATION_NOTE_CHARS,
+    RELATION_KINDS,
+    SIMILAR_MEMORIES_LIMIT,
+    type MemoryActionKind,
+    type MemoryActionStatus,
+    type MemorySaveState,
+    type RelationKind,
+    actionLabel,
+    changelogMessageError,
+    confidenceChipLabel,
+    confidenceTooltip,
+    isActionBusyForRow,
+    isActionDoneFor,
+    isActionSettledFor,
+    isAnyActionBusyFor,
+    isDuplicateRelationError,
+    memoriesBodySurface,
+    memoryActionNotice,
+    memoryEditError,
+    panelEmptyMessage,
+    relationNoteError,
+    relativeTime,
+    saveStateNotice,
+  } from '$lib/ui/memories';
+  import { SEARCH_DEBOUNCE_MS } from '$lib/ui/memories-list';
   import type { Memory, MemoryRelation, SimilarMemory } from '$lib/supabase';
   import Markdown from '../components/Markdown.svelte';
   import MemoryChangelogPanel from '../components/MemoryChangelogPanel.svelte';
@@ -49,6 +81,9 @@
   } from '$lib/agents/inflight-lease.svelte';
   import {
     librarianPassInfo,
+    librarianProgressAriaLabel,
+    librarianStripHeading,
+    stepIcon,
     type MemoryLibrarianPass,
   } from '$lib/ui/memory-librarian';
   import { onMemoryChange } from '$lib/memory-events';
@@ -67,22 +102,6 @@
     triggerRem?: boolean;
     triggerChangelog?: boolean;
   } = $props();
-
-  // Label length is capped at 80 by the memory_create/update tool
-  // schemas; mirror it here so the UI rejects early instead of
-  // bouncing off a Supabase error. Data length is capped at
-  // MAX_MEMORY_DATA_CHARS (imported).
-  const MAX_LABEL_CHARS = 80;
-
-  // Debounce keystrokes inside the relation-picker so rapid typing
-  // doesn't fire one embedding request per character. Same window the
-  // store uses for its main search.
-  const SEARCH_DEBOUNCE_MS = 200;
-
-  // How many neighbours the "Similar memories" disclosure pulls. Small
-  // on purpose - the section is a quick lateral jump to closely-related
-  // memories, not a second search surface.
-  const SIMILAR_MEMORIES_LIMIT = 10;
 
   // The single memory currently displayed. Selection lives on
   // `route.memory` so it survives a refresh / back / forward and can
@@ -137,17 +156,11 @@
   // memory changelog for this edit - the user's manual equivalent of the
   // `message` param the memory_update tool requires of the assistant.
   let editMessage = $state('');
-  // Three-state save indicator, mirroring the pattern in Settings'
-  // system-prompts pane (see Settings.svelte line 109). The goal is
-  // that the user never has to guess whether their edit is live -
-  // every state transition is visible.
-  type SaveState =
-    | { kind: 'idle' }
-    | { kind: 'dirty' } // draft differs from server row
-    | { kind: 'saving' }
-    | { kind: 'saved' }
-    | { kind: 'error'; message: string };
-  let saveState = $state<SaveState>({ kind: 'idle' });
+  // Save indicator for the edit form; the state vocabulary and the
+  // rendered notice live in $lib/ui/memories (MemorySaveState /
+  // saveStateNotice).
+  let saveState = $state<MemorySaveState>({ kind: 'idle' });
+  const saveNotice = $derived(saveStateNotice(saveState));
 
   // Delete confirmation - one row at a time, same reasoning as edits.
   let deletingId = $state<string | null>(null);
@@ -165,74 +178,11 @@
   let relationError = $state<{ memoryId: string; message: string } | null>(null);
 
   // Inline busy/feedback state for the per-card action buttons
-  // (Reaffirm / Doubt / confirmed Delete). The previous shape ran the
-  // call without any visible indicator, so a click that didn't cross a
-  // confidence threshold looked like the button had silently no-op'd
-  // ("did it work? do I click again?"). We always show the user that
-  // their click did something: while a call is in flight, the targeted
-  // button reads "Reaffirming..." / "Doubting..." / "Deleting..." and
-  // the sibling action buttons disable so the user can't fire a
-  // second mutation against the same row mid-flight; on completion we
-  // flash a brief success label that auto-clears, and surface errors
-  // inline in the same slot. Edit and + Relate aren't here because
-  // their visual feedback is the form/picker mounting - no network
-  // round-trip to cover.
-  type ActionKind = 'reaffirm' | 'doubt' | 'delete';
-  type ActionStatus =
-    | { kind: 'idle' }
-    | { kind: 'busy'; action: ActionKind; memoryId: string }
-    | { kind: 'done'; action: ActionKind; memoryId: string }
-    | { kind: 'error'; action: ActionKind; memoryId: string; message: string };
-  let actionStatus = $state<ActionStatus>({ kind: 'idle' });
-  // Window the "done" pulse stays up before auto-clearing back to idle.
-  // Long enough to register as success, short enough that the user can
-  // click again immediately without waiting for it to fade.
-  const ACTION_DONE_LINGER_MS = 1200;
+  // (Reaffirm / Doubt / confirmed Delete). The status vocabulary,
+  // the button captions, and the done/error notice all live in
+  // $lib/ui/memories (MemoryActionStatus and friends).
+  let actionStatus = $state<MemoryActionStatus>({ kind: 'idle' });
   let actionDoneTimer: ReturnType<typeof setTimeout> | null = null;
-
-  function actionLabel(action: ActionKind, busy: boolean): string {
-    if (!busy) {
-      if (action === 'reaffirm') return 'Reaffirm';
-      if (action === 'doubt') return 'Doubt';
-      return 'Delete';
-    }
-    if (action === 'reaffirm') return 'Reaffirming...';
-    if (action === 'doubt') return 'Doubting...';
-    return 'Deleting...';
-  }
-
-  function actionDoneLabel(action: ActionKind): string {
-    if (action === 'reaffirm') return 'Reaffirmed';
-    if (action === 'doubt') return 'Doubted';
-    return 'Deleted';
-  }
-
-  function actionErrorPrefix(action: ActionKind): string {
-    if (action === 'reaffirm') return "Couldn't reaffirm";
-    if (action === 'doubt') return "Couldn't doubt";
-    return "Couldn't delete";
-  }
-
-  // True iff some action is currently mid-flight against the given
-  // memory. Used by every action button on the card to grey itself
-  // out (`disabled`) so the user can't stack mutations on the same
-  // row. Cross-row disabling isn't needed - actions are per-row and
-  // the panel only shows one card at a time today, but the predicate
-  // is keyed by id so a future multi-card view stays correct.
-  function isAnyActionBusyFor(id: string): boolean {
-    return actionStatus.kind === 'busy' && actionStatus.memoryId === id;
-  }
-
-  function isActionBusyForRow(
-    id: string,
-    action: ActionKind,
-  ): boolean {
-    return (
-      actionStatus.kind === 'busy' &&
-      actionStatus.action === action &&
-      actionStatus.memoryId === id
-    );
-  }
 
   function clearActionDoneTimer(): void {
     if (actionDoneTimer !== null) {
@@ -241,7 +191,10 @@
     }
   }
 
-  function scheduleActionDoneClear(memoryId: string, action: ActionKind): void {
+  function scheduleActionDoneClear(
+    memoryId: string,
+    action: MemoryActionKind,
+  ): void {
     clearActionDoneTimer();
     actionDoneTimer = setTimeout(() => {
       actionDoneTimer = null;
@@ -249,27 +202,16 @@
       // success - a follow-up click that started a new action will
       // have replaced `actionStatus` with a `busy` entry, and clobbering
       // that would visually swallow the in-flight call.
-      if (
-        actionStatus.kind === 'done' &&
-        actionStatus.memoryId === memoryId &&
-        actionStatus.action === action
-      ) {
+      if (isActionDoneFor(actionStatus, memoryId, action)) {
         actionStatus = { kind: 'idle' };
       }
     }, ACTION_DONE_LINGER_MS);
   }
 
-  // Outbound relations live on the shared store keyed by source memory id.
-  const RELATION_KINDS = [
-    'supports',
-    'contradicts',
-    'generalises',
-    'specialises',
-  ] as const;
-  type RelationKind = (typeof RELATION_KINDS)[number];
-
   // Inline relation picker state. Only one picker open at a time - same
   // one-modal-at-a-time discipline as edits and delete confirmations.
+  // Outbound relations live on the shared store keyed by source memory
+  // id; the kind list the picker offers is RELATION_KINDS (imported).
   let relatingFromId = $state<string | null>(null);
   let pickerQuery = $state('');
   let pickerCandidates = $state<Memory[]>([]);
@@ -277,7 +219,6 @@
   let pickerNote = $state('');
   let pickerBusy = $state(false);
   let pickerError = $state<string | null>(null);
-  const MAX_RELATION_NOTE_CHARS = 500;
   // Debounced picker search. Has its own timer so typing in the picker
   // input doesn't clobber the sidebar search debounce window.
   let pickerDebounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -310,27 +251,10 @@
     void runMemoriesSearch(app.supabase);
   });
 
-  /**
-   * Render the qualitative confidence tag for a memory. Returns one of
-   * 'corroborated' / 'hedged' / 'shaky' or null - the template uses the
-   * null branch to drop the badge entirely rather than show a blank.
-   * The numeric value still shows in the tooltip so curious users can
-   * see the raw number without cluttering the default view.
-   */
-  function confidenceTagFor(m: Memory): MemoryConfidenceTag {
-    return classifyMemoryConfidence(m.confidence);
-  }
-
-  function confidenceTooltip(m: Memory): string {
-    const tag = classifyMemoryConfidence(m.confidence);
-    const base = `confidence ${m.confidence.toFixed(2)}`;
-    return tag === null ? base : `${base} (${tag})`;
-  }
-
   async function reaffirmMemory(m: Memory): Promise<void> {
     if (!app.supabase) return;
     // Same-row stacking is already blocked by the per-row
-    // `disabled={isAnyActionBusyFor(m.id)}` on every action button -
+    // `disabled={isAnyActionBusyFor(actionStatus, m.id)}` on every action button -
     // a disabled button doesn't fire its onclick. The previous
     // global busy guard blocked CROSS-row clicks too: with a stale
     // in-flight action on a memory the user has since navigated
@@ -474,8 +398,9 @@
     if (!app.supabase || !relatingFromId) return;
     const fromId = relatingFromId;
     const note = pickerNote.trim();
-    if (note.length > MAX_RELATION_NOTE_CHARS) {
-      pickerError = `Note must be ${MAX_RELATION_NOTE_CHARS} chars or fewer.`;
+    const noteError = relationNoteError(note);
+    if (noteError) {
+      pickerError = noteError;
       return;
     }
     pickerBusy = true;
@@ -520,7 +445,7 @@
       // Unique-constraint failure = the edge already exists. Treat as
       // success from the UI's perspective; the user gets the same
       // outcome they asked for.
-      if (msg.includes('duplicate key value') || msg.includes('unique constraint')) {
+      if (isDuplicateRelationError(msg)) {
         // Same cross-row guard as the success path.
         if (relatingFromId === fromId) cancelRelate();
       } else if (relatingFromId === fromId) {
@@ -626,38 +551,12 @@
     const id = editingId;
     const label = editLabel.trim();
     const data = editData;
-    if (!label) {
-      saveState = { kind: 'error', message: 'Label is required.' };
-      return;
-    }
-    if (label.length > MAX_LABEL_CHARS) {
-      saveState = { kind: 'error', message: `Label must be ${MAX_LABEL_CHARS} chars or fewer.` };
-      return;
-    }
-    if (!data) {
-      saveState = { kind: 'error', message: 'Data is required.' };
-      return;
-    }
-    if (data.length > MAX_MEMORY_DATA_CHARS) {
-      saveState = {
-        kind: 'error',
-        message: `Data must be ${MAX_MEMORY_DATA_CHARS} chars or fewer.`,
-      };
-      return;
-    }
     const message = editMessage.trim();
-    if (!message) {
-      saveState = {
-        kind: 'error',
-        message: 'Add a one-line change message before saving.',
-      };
-      return;
-    }
-    if (message.length > MAX_MEMORY_CHANGELOG_MESSAGE_CHARS) {
-      saveState = {
-        kind: 'error',
-        message: `Change message must be ${MAX_MEMORY_CHANGELOG_MESSAGE_CHARS} chars or fewer.`,
-      };
+    // Field checks (required-ness, the label/data/message caps) live
+    // in memoryEditError so the copy and ordering are testable.
+    const validationError = memoryEditError(label, data, message);
+    if (validationError) {
+      saveState = { kind: 'error', message: validationError };
       return;
     }
     saveState = { kind: 'saving' };
@@ -730,10 +629,7 @@
     deleteMessage = '';
     // Clear any lingering action status from a previous attempt against
     // this row so the confirm strip opens clean.
-    if (
-      (actionStatus.kind === 'error' || actionStatus.kind === 'done') &&
-      actionStatus.memoryId === m.id
-    ) {
+    if (isActionSettledFor(actionStatus, m.id)) {
       clearActionDoneTimer();
       actionStatus = { kind: 'idle' };
     }
@@ -756,21 +652,13 @@
     // through actionStatus so it renders in the same slot next to the
     // confirm buttons that RPC errors use.
     const message = deleteMessage.trim();
-    if (!message) {
+    const messageError = changelogMessageError(message, 'deleting');
+    if (messageError) {
       actionStatus = {
         kind: 'error',
         action: 'delete',
         memoryId: id,
-        message: 'Add a one-line change message before deleting.',
-      };
-      return;
-    }
-    if (message.length > MAX_MEMORY_CHANGELOG_MESSAGE_CHARS) {
-      actionStatus = {
-        kind: 'error',
-        action: 'delete',
-        memoryId: id,
-        message: `Change message must be ${MAX_MEMORY_CHANGELOG_MESSAGE_CHARS} chars or fewer.`,
+        message: messageError,
       };
       return;
     }
@@ -825,11 +713,7 @@
       // action set on a different memory after our RPC started
       // (e.g. a reaffirm on memory B fired while A's delete was
       // settling).
-      if (
-        actionStatus.kind === 'busy' &&
-        actionStatus.memoryId === id &&
-        actionStatus.action === 'delete'
-      ) {
+      if (isActionBusyForRow(actionStatus, id, 'delete')) {
         actionStatus = { kind: 'idle' };
       }
       // Drop the routed selection too. Without this the panel would
@@ -846,29 +730,6 @@
         message: msg,
       };
     }
-  }
-
-  // Human-friendly "N minutes ago" for the updated_at timestamp. Cheap
-  // inline implementation - the thread list uses a similar helper, but
-  // pulling it in would drag along thread-specific formatting. Small
-  // enough to inline here without becoming a shared util.
-  function relativeTime(iso: string): string {
-    const then = new Date(iso).getTime();
-    if (Number.isNaN(then)) return '';
-    const diffSec = Math.round((Date.now() - then) / 1000);
-    if (diffSec < 60) return 'just now';
-    const diffMin = Math.round(diffSec / 60);
-    if (diffMin < 60) return `${diffMin} min ago`;
-    const diffHr = Math.round(diffMin / 60);
-    if (diffHr < 24) return `${diffHr} hr ago`;
-    const diffDay = Math.round(diffHr / 24);
-    if (diffDay < 7) return `${diffDay} day${diffDay === 1 ? '' : 's'} ago`;
-    const diffWk = Math.round(diffDay / 7);
-    if (diffWk < 5) return `${diffWk} wk ago`;
-    const diffMo = Math.round(diffDay / 30);
-    if (diffMo < 12) return `${diffMo} mo ago`;
-    const diffYr = Math.round(diffDay / 365);
-    return `${diffYr} yr${diffYr === 1 ? '' : 's'} ago`;
   }
 
   // --- Memory librarian manual-run flow --------------------------------
@@ -897,6 +758,20 @@
   // content, not a hint); see the leading branch of the body cascade.
   const librarianStripVisible = $derived(
     librarianConfirm !== null || librarianRun.active,
+  );
+
+  // Which surface the body renders. The precedence cascade (strip
+  // suppression with the selected-card exception, loading, empty,
+  // changelog default, missing-selection hint, the card) lives in
+  // memoriesBodySurface; this derived is just the reactive wire-up.
+  const bodySurface = $derived(
+    memoriesBodySurface({
+      librarianStripVisible,
+      selectedInResults: selectedMemory !== null,
+      hasRoutedSelection: !!route.memory,
+      loading: memoriesStore.loading,
+      resultCount: memoriesStore.results.length,
+    }),
   );
 
   // A pass is in flight (this tab's own run OR any other - scheduled,
@@ -1015,7 +890,7 @@
             onclick={confirmLibrarianRun}
             disabled={memoryLibrarianBusy}
           >
-            {librarianConfirm === 'deep-sleep' ? 'Run deep-sleep' : 'Run rem'}
+            {librarianConfirmInfo.runLabel}
           </button>
           <button
             type="button"
@@ -1039,14 +914,11 @@
       <aside
         class="librarian-strip"
         aria-live="polite"
-        aria-label={librarianRun.pass === 'deep-sleep'
-          ? 'Deep-sleep run progress'
-          : 'Rem run progress'}
+        aria-label={librarianProgressAriaLabel(librarianRun.pass)}
       >
         <header class="librarian-strip-head">
           <strong>
-            {librarianRun.pass === 'deep-sleep' ? 'Deep-sleep' : 'Rem'}
-            {librarianRun.running ? 'running' : 'finished'}
+            {librarianStripHeading(librarianRun.pass, librarianRun.running)}
           </strong>
           <button
             type="button"
@@ -1063,7 +935,7 @@
             {#each librarianRun.steps as step (step.label + step.status)}
               <li class="librarian-step librarian-step-{step.status}">
                 <span class="librarian-step-icon" aria-hidden="true">
-                  {#if step.status === 'pending'}…{:else if step.status === 'ok'}✓{:else}✗{/if}
+                  {stepIcon(step.status)}
                 </span>
                 <span class="librarian-step-label">{step.label}</span>
               </li>
@@ -1086,28 +958,26 @@
       <p class="error">{memoriesStore.error}</p>
     {/if}
 
-    {#if librarianStripVisible && !selectedMemory}
+    <!-- Surface precedence (including the strip-suppression rule and
+         its selected-card exception) is decided by memoriesBodySurface;
+         each branch here just renders its surface. -->
+    {#if bodySurface === 'librarian-strip-only'}
       <!-- A librarian confirm/progress strip is up and there's no
            selected memory card to show. Render nothing in the content
            area: the changelog and every empty-state hint below would
            just compete with the button-triggered form for attention.
            The strip above is the whole content until it's dismissed.
-           (A selected memory card falls through to the {:else} below -
+           (A selected memory card resolves to the 'card' surface -
            it's real content, not a hint, so the strip coexists w/ it.) -->
-    {:else if memoriesStore.loading && memoriesStore.results.length === 0}
+    {:else if bodySurface === 'loading'}
       <p class="subtle">Loading memories…</p>
-    {:else if memoriesStore.results.length === 0}
-      {#if memoriesStore.query.trim().length > 0}
-        <p class="subtle memories-empty">
-          No memories match "{memoriesStore.query.trim()}".
-        </p>
-      {:else}
-        <p class="subtle memories-empty">
-          Nothing here yet. Memories accumulate as you chat - see the
-          Help modal's Memory page for details.
-        </p>
-      {/if}
-    {:else if !route.memory}
+    {:else if bodySurface === 'empty'}
+      <!-- Copy choice (no-matches vs the cold-account explainer)
+           lives in panelEmptyMessage. -->
+      <p class="subtle memories-empty">
+        {panelEmptyMessage(memoriesStore.query)}
+      </p>
+    {:else if bodySurface === 'changelog'}
       <!-- Drawer tab is open but the user hasn't picked a row yet. The
            changelog is the default surface here (parallel to the Wiki
            tab) - a "what did I learn / forget / revise" log, with each
@@ -1115,7 +985,7 @@
            while a librarian strip is up is handled by the leading
            branch of this cascade, not here. -->
       <MemoryChangelogPanel />
-    {:else if !selectedMemory}
+    {:else if bodySurface === 'selection-missing'}
       <!-- route.memory points at a memory that isn't in the current
            search results. Most likely the user followed a sidebar
            link and then narrowed the search; clearing the search
@@ -1124,8 +994,13 @@
         That memory isn't in the current results. Clear the search to
         find it again.
       </p>
-    {:else}
+    {:else if selectedMemory}
+      <!-- The 'card' surface. The truthiness re-check is TypeScript
+           narrowing only - 'card' already implies the selection
+           resolved against the results. -->
       {@const m = selectedMemory}
+      {@const confidenceTag = classifyMemoryConfidence(m.confidence)}
+      {@const actionNotice = memoryActionNotice(actionStatus, m.id)}
       <ul class="memory-list">
         <li class="memory-card" data-memory-id={m.id}>
             {#if editingId === m.id}
@@ -1172,14 +1047,10 @@
                 </div>
                 <div class="memory-edit-footer">
                   <div class="memory-save-state" aria-live="polite">
-                    {#if saveState.kind === 'dirty'}
-                      <span class="subtle">Unsaved changes</span>
-                    {:else if saveState.kind === 'saving'}
-                      <span class="subtle">Saving…</span>
-                    {:else if saveState.kind === 'saved'}
-                      <span class="subtle save-ok">Saved ✓</span>
-                    {:else if saveState.kind === 'error'}
-                      <span class="error">Couldn't save - {saveState.message}</span>
+                    <!-- Copy + styling per save state live in
+                         saveStateNotice; idle renders nothing. -->
+                    {#if saveNotice}
+                      <span class={saveNotice.className}>{saveNotice.text}</span>
                     {/if}
                   </div>
                   <div class="memory-edit-actions">
@@ -1201,16 +1072,20 @@
               <div class="memory-view">
                 <div class="memory-header-row">
                   <span class="memory-card-label">{m.label}</span>
-                  {#if confidenceTagFor(m)}
+                  <!-- Qualitative tag when confidence is outside the
+                       neutral band; otherwise a quiet numeric chip so
+                       the raw value stays visible. The tooltip carries
+                       the exact number either way. -->
+                  {#if confidenceTag}
                     <span
-                      class="memory-confidence-tag tag-{confidenceTagFor(m)}"
-                      title={confidenceTooltip(m)}
-                    >{confidenceTagFor(m)}</span>
+                      class="memory-confidence-tag tag-{confidenceTag}"
+                      title={confidenceTooltip(m.confidence)}
+                    >{confidenceTag}</span>
                   {:else}
                     <span
                       class="subtle memory-confidence-chip"
-                      title={confidenceTooltip(m)}
-                    >~{m.confidence.toFixed(1)}</span>
+                      title={confidenceTooltip(m.confidence)}
+                    >{confidenceChipLabel(m.confidence)}</span>
                   {/if}
                   <span class="subtle memory-card-meta" title={m.updated_at}>
                     {relativeTime(m.updated_at)}
@@ -1263,31 +1138,31 @@
                     type="button"
                     class="secondary"
                     onclick={() => startEdit(m)}
-                    disabled={isAnyActionBusyFor(m.id)}
+                    disabled={isAnyActionBusyFor(actionStatus, m.id)}
                   >Edit</button>
                   <button
                     type="button"
                     class="secondary"
-                    class:is-busy={isActionBusyForRow(m.id, 'reaffirm')}
+                    class:is-busy={isActionBusyForRow(actionStatus, m.id, 'reaffirm')}
                     onclick={() => reaffirmMemory(m)}
-                    disabled={isAnyActionBusyFor(m.id)}
-                    aria-busy={isActionBusyForRow(m.id, 'reaffirm') ? 'true' : undefined}
+                    disabled={isAnyActionBusyFor(actionStatus, m.id)}
+                    aria-busy={isActionBusyForRow(actionStatus, m.id, 'reaffirm') ? 'true' : undefined}
                     title="Nudge confidence upward (+0.5)"
-                  >{actionLabel('reaffirm', isActionBusyForRow(m.id, 'reaffirm'))}</button>
+                  >{actionLabel('reaffirm', isActionBusyForRow(actionStatus, m.id, 'reaffirm'))}</button>
                   <button
                     type="button"
                     class="secondary"
-                    class:is-busy={isActionBusyForRow(m.id, 'doubt')}
+                    class:is-busy={isActionBusyForRow(actionStatus, m.id, 'doubt')}
                     onclick={() => doubtMemory(m)}
-                    disabled={isAnyActionBusyFor(m.id)}
-                    aria-busy={isActionBusyForRow(m.id, 'doubt') ? 'true' : undefined}
+                    disabled={isAnyActionBusyFor(actionStatus, m.id)}
+                    aria-busy={isActionBusyForRow(actionStatus, m.id, 'doubt') ? 'true' : undefined}
                     title="Nudge confidence downward (x0.7)"
-                  >{actionLabel('doubt', isActionBusyForRow(m.id, 'doubt'))}</button>
+                  >{actionLabel('doubt', isActionBusyForRow(actionStatus, m.id, 'doubt'))}</button>
                   <button
                     type="button"
                     class="secondary"
                     onclick={() => startRelate(m)}
-                    disabled={isAnyActionBusyFor(m.id) || relatingFromId === m.id}
+                    disabled={isAnyActionBusyFor(actionStatus, m.id) || relatingFromId === m.id}
                   >+ Relate</button>
                   {#if deletingId === m.id}
                     <span class="subtle memory-delete-prompt">Really delete?</span>
@@ -1299,28 +1174,28 @@
                       maxlength={MAX_MEMORY_CHANGELOG_MESSAGE_CHARS}
                       placeholder="Why delete this?"
                       bind:value={deleteMessage}
-                      disabled={isActionBusyForRow(m.id, 'delete')}
+                      disabled={isActionBusyForRow(actionStatus, m.id, 'delete')}
                     />
                     <button
                       type="button"
                       class="secondary"
                       onclick={cancelDelete}
-                      disabled={isActionBusyForRow(m.id, 'delete')}
+                      disabled={isActionBusyForRow(actionStatus, m.id, 'delete')}
                     >Cancel</button>
                     <button
                       type="button"
                       class="danger"
-                      class:is-busy={isActionBusyForRow(m.id, 'delete')}
+                      class:is-busy={isActionBusyForRow(actionStatus, m.id, 'delete')}
                       onclick={confirmDelete}
-                      disabled={isAnyActionBusyFor(m.id)}
-                      aria-busy={isActionBusyForRow(m.id, 'delete') ? 'true' : undefined}
-                    >{actionLabel('delete', isActionBusyForRow(m.id, 'delete'))}</button>
+                      disabled={isAnyActionBusyFor(actionStatus, m.id)}
+                      aria-busy={isActionBusyForRow(actionStatus, m.id, 'delete') ? 'true' : undefined}
+                    >{actionLabel('delete', isActionBusyForRow(actionStatus, m.id, 'delete'))}</button>
                   {:else}
                     <button
                       type="button"
                       class="secondary"
                       onclick={() => requestDelete(m)}
-                      disabled={isAnyActionBusyFor(m.id)}
+                      disabled={isAnyActionBusyFor(actionStatus, m.id)}
                     >Delete</button>
                   {/if}
                   <!-- Done/error pulse. Anchored to the actions row so
@@ -1329,16 +1204,11 @@
                        memory-save-state cue. aria-live so screen
                        readers pick up the state transition without
                        any extra focus management. -->
-                  {#if actionStatus.kind === 'done' && actionStatus.memoryId === m.id}
+                  {#if actionNotice}
                     <span
-                      class="memory-action-state action-ok"
+                      class="memory-action-state {actionNotice.className}"
                       aria-live="polite"
-                    >{actionDoneLabel(actionStatus.action)} ✓</span>
-                  {:else if actionStatus.kind === 'error' && actionStatus.memoryId === m.id}
-                    <span
-                      class="memory-action-state error"
-                      aria-live="polite"
-                    >{actionErrorPrefix(actionStatus.action)} - {actionStatus.message}</span>
+                    >{actionNotice.text}</span>
                   {/if}
                 </div>
                 {#if relatingFromId === m.id}
