@@ -42,8 +42,11 @@ import {
   base64ToBytes,
   ilikeLogicTreePattern,
 } from './supabase/query-utils';
+// Agent-runs domain slice (the wiki/rem/deep-sleep run + retry
+// routes), same delegation pattern as the slices below.
+import * as agentRunsApi from './supabase/agent-runs';
 // Cookbook domain slice (recipes, versions, photos), same delegation
-// pattern as the slices below.
+// pattern.
 import * as cookbookApi from './supabase/cookbook';
 // Memories domain slice: the facade's memory methods (both the CRUD +
 // changelog group and the confidence / search / relations group)
@@ -53,12 +56,8 @@ import * as memoriesApi from './supabase/memories';
 // Samskara domain slice, same delegation pattern.
 import * as samskaraApi from './supabase/samskara';
 // Settings + Venice-proxy domain slices, same delegation pattern.
-// veniceFunctionError is pulled in by name because the wiki agent-run
-// methods below still normalize their own functions.invoke failures
-// through it.
 import * as settingsApi from './supabase/settings';
 import * as veniceProxyApi from './supabase/venice-proxy';
-import { veniceFunctionError } from './supabase/venice-proxy';
 // Threads + topic-vocabulary domain slices, same delegation pattern.
 import * as threadsApi from './supabase/threads';
 import * as topicsApi from './supabase/topics';
@@ -68,6 +67,9 @@ import * as topicsApi from './supabase/topics';
 // module.
 import * as wikiApi from './supabase/wiki';
 import * as wikiRecordsApi from './supabase/wiki-records';
+// Wiki-satellite domain slice (bibliography, See-Also, changelog),
+// same delegation pattern.
+import * as wikiSourcesApi from './supabase/wiki-sources';
 
 // Domain row types live in ./supabase/types/*; this module keeps the
 // SupabaseService class plus the row coercers that read those types.
@@ -127,7 +129,6 @@ import {
   coerceAttachmentRow,
   coerceManualRunOutcome,
   coerceWikiArticle,
-  coerceWikiChangelogEntry,
   coerceDocument,
 } from './supabase/types';
 import type { IntentRow } from './ui/intents-inspector';
@@ -173,7 +174,10 @@ import type { IntentRow } from './ui/intents-inspector';
  * (./supabase/topics.ts), Memories incl. confidence / search /
  * relations (./supabase/memories.ts), Cookbook - recipes, versions,
  * photos (./supabase/cookbook.ts), Wiki articles (./supabase/wiki.ts),
- * and Wiki records incl. files + links (./supabase/wiki-records.ts) -
+ * Wiki records incl. files + links (./supabase/wiki-records.ts),
+ * Wiki satellites - bibliography, See-Also, changelog
+ * (./supabase/wiki-sources.ts), and Agent runs - the wiki/rem/
+ * deep-sleep run + retry routes (./supabase/agent-runs.ts) -
  * groups are extracted; the remaining groups still carry their
  * implementations inline and should follow the same pattern when
  * touched substantially.
@@ -1034,192 +1038,52 @@ export class SupabaseService {
   // back.
 
   // --- Wiki sources, changelog & agent runs ----------------------------
+  //
+  // Extracted domain slices: the bibliography / See-Also / changelog
+  // reads live in ./supabase/wiki-sources.ts (wiki-article satellite
+  // tables); the run/retry routes into the venice function, the
+  // Skipped-panel read, and the pipeline reset live in
+  // ./supabase/agent-runs.ts. These methods delegate one-for-one
+  // under the same names. searchWikiArticles stays inline below: it
+  // queries the wiki_articles table itself, so its home is the
+  // article slice (./supabase/wiki.ts) whenever that module is next
+  // touched, not either of these two.
 
-  /**
-   * Return the bibliography for one article: every thread that has
-   * been attributed, joined with the thread's title, ordered by
-   * `last_processed_at` ascending so the reader sees the article's
-   * narrative of growth (oldest contributing conversation first).
-   *
-   * Threads hard-deleted out from under their attribution rows show
-   * up with a null title until the cascade catches up; the UI handles
-   * that with a placeholder.
-   */
   async listWikiArticleSources(articleId: string): Promise<WikiArticleSource[]> {
-    const { data, error } = await this.client
-      .from('wiki_article_sources')
-      .select('thread_id, first_processed_at, last_processed_at, threads(title)')
-      .eq('article_id', articleId)
-      .order('last_processed_at', { ascending: true });
-    if (error) throw new SupabaseError(error.message);
-    const out: WikiArticleSource[] = [];
-    for (const row of (data ?? []) as Array<Record<string, unknown>>) {
-      const threadId = row.thread_id;
-      if (typeof threadId !== 'string') continue;
-      const thread = row.threads as { title?: unknown } | null;
-      const title =
-        thread && typeof thread.title === 'string' ? thread.title : null;
-      out.push({
-        thread_id: threadId,
-        thread_title: title,
-        first_processed_at: String(row.first_processed_at ?? ''),
-        last_processed_at: String(row.last_processed_at ?? ''),
-      });
-    }
-    return out;
+    return wikiSourcesApi.listWikiArticleSources(this.client, articleId);
   }
 
-  /**
-   * Batched source-thread lookup for a candidate set of article ids.
-   * Returns a Map keyed by article id whose value is the set of thread
-   * ids that fed that article. Articles with no rows in
-   * `wiki_article_sources` are absent from the map (orphan articles -
-   * never written from a recorded conversation).
-   *
-   * Powers the sole-source exclusion in `searchWikiArticlesSemantic`
-   * (src/lib/wiki.ts, the `excludeSoleSourceThreadId` option; the
-   * venice function's wiki_search carries the same filter on its tool
-   * context): the recall path needs to know
-   * "is the current thread the ONLY source of this article?", which is
-   * cheaper to answer against an in-memory map of all sources for the
-   * returned candidates than as a per-article round-trip. Empty input
-   * returns an empty Map without a round-trip.
-   */
   async listSourceThreadIdsForArticles(
     articleIds: readonly string[]
   ): Promise<Map<string, Set<string>>> {
-    const out = new Map<string, Set<string>>();
-    if (articleIds.length === 0) return out;
-    const { data, error } = await this.client
-      .from('wiki_article_sources')
-      .select('article_id, thread_id')
-      .in('article_id', [...articleIds]);
-    if (error) throw new SupabaseError(error.message);
-    for (const row of (data ?? []) as Array<Record<string, unknown>>) {
-      const articleId = row.article_id;
-      const threadId = row.thread_id;
-      if (typeof articleId !== 'string' || typeof threadId !== 'string') continue;
-      const set = out.get(articleId);
-      if (set) set.add(threadId);
-      else out.set(articleId, new Set([threadId]));
-    }
-    return out;
+    return wikiSourcesApi.listSourceThreadIdsForArticles(this.client, articleIds);
   }
 
-  /**
-   * See Also for an article. Single RPC call; the floor calculation
-   * (minimum cosine similarity between the article and its source
-   * conversations) lives server-side so the client never has to fetch
-   * raw embeddings.
-   *
-   * Returns an empty array when the article has no embedding yet (the
-   * embeddings worker hasn't caught up after a content change),
-   * when no other articles clear the floor, or when there are simply
-   * no other articles. All three are honest "nothing to suggest".
-   */
   async findRelatedWikiArticles(
     articleId: string,
     limit = 5
   ): Promise<WikiArticleRelated[]> {
-    const { data, error } = await this.client.rpc('find_related_wiki_articles', {
-      p_article_id: articleId,
-      p_limit: limit,
-    });
-    if (error) throw new SupabaseError(error.message);
-    const out: WikiArticleRelated[] = [];
-    for (const row of (data ?? []) as Array<Record<string, unknown>>) {
-      const id = row.id;
-      const title = row.title;
-      const similarity = row.similarity;
-      if (typeof id !== 'string' || typeof title !== 'string') continue;
-      out.push({
-        id,
-        title,
-        similarity: typeof similarity === 'number' ? similarity : 0,
-      });
-    }
-    return out;
+    return wikiSourcesApi.findRelatedWikiArticles(this.client, articleId, limit);
   }
 
-  /**
-   * Append a wiki-changelog row. Called by every wiki write path: the
-   * three tools (`wiki_create`/`wiki_update`/`wiki_delete`), the
-   * librarian's same three tools, and the user's direct edits in
-   * Wiki.svelte. Throws on a failed insert so callers can decide
-   * whether to surface the error or swallow it - the tool path
-   * currently swallows (the mutation already landed; a missed
-   * changelog row is a smaller harm than a confusing post-success
-   * error).
-   *
-   * `article_id` is null for deletes (the article is already gone by
-   * the time this lands). For create/update it points at the live
-   * article; if the article is later deleted the FK cascades to null
-   * but `title_at_change` keeps the row meaningful.
-   */
   async createWikiChangelogEntry(args: {
     article_id: string | null;
     kind: WikiChangelogKind;
     title_at_change: string;
     message: string;
   }): Promise<void> {
-    const session = await this.getSession();
-    if (!session) throw new SupabaseError('Not authenticated.');
-    const title = args.title_at_change.trim();
-    const message = args.message.trim();
-    if (title.length === 0 || message.length === 0) return;
-    const { error } = await this.client.from('wiki_changelog').insert({
-      user_id: session.user.id,
-      article_id: args.article_id,
-      kind: args.kind,
-      title_at_change: title,
-      message,
-    });
-    if (error) throw new SupabaseError(error.message);
+    return wikiSourcesApi.createWikiChangelogEntry(this.client, args);
   }
 
-  /**
-   * Paged listing of the wiki changelog, newest first. `before` is the
-   * exclusive cursor in `created_at desc` order - pass the last entry's
-   * `created_at` from the prior page to fetch the next one. The
-   * (user_id, created_at desc) index makes this a one-row-per-page
-   * range scan rather than a sort, so the modal can lazy-load deep
-   * history cheaply.
-   */
   async listWikiChangelog(opts: {
     limit?: number;
     before?: string | null;
   } = {}): Promise<WikiChangelogEntry[]> {
-    const limit = Math.max(1, Math.min(opts.limit ?? 50, 200));
-    let q = this.client
-      .from('wiki_changelog')
-      .select('id, article_id, kind, title_at_change, message, created_at')
-      .order('created_at', { ascending: false })
-      .limit(limit);
-    if (opts.before) q = q.lt('created_at', opts.before);
-    const { data, error } = await q;
-    if (error) throw new SupabaseError(error.message);
-    const out: WikiChangelogEntry[] = [];
-    for (const row of (data ?? []) as Array<Record<string, unknown>>) {
-      const entry = coerceWikiChangelogEntry(row);
-      if (entry) out.push(entry);
-    }
-    return out;
+    return wikiSourcesApi.listWikiChangelog(this.client, opts);
   }
 
-  /**
-   * Nuke the wiki subsystem for the current user. Deletes every
-   * `wiki_articles` row and nulls `last_wiki_processed_msg_id` + the
-   * wiki claim columns on the user's threads so the per-conversation
-   * agent re-evaluates from scratch. Wraps both statements in a single
-   * server-side transaction (see `reset_wiki_data` in schema.sql) so
-   * the articles and the per-thread pipeline state stay in lockstep.
-   *
-   * Callers (Settings -> Wiki -> Reset) MUST gate this behind an
-   * explicit user confirmation - it's irreversible.
-   */
   async resetWikiData(): Promise<void> {
-    const { error } = await this.client.rpc('reset_wiki_data');
-    if (error) throw new SupabaseError(error.message);
+    return agentRunsApi.resetWikiData(this.client);
   }
 
   /**
@@ -1285,206 +1149,46 @@ export class SupabaseService {
   }
 
   // Wiki background pipeline ---------------------------------------------
+  //
+  // Extracted domain slice: implementations live in
+  // ./supabase/agent-runs.ts.
 
-  /**
-   * List the user's wiki-skipped threads, most recent first. The
-   * Wiki tab's Skipped panel renders this; a row drops off the list
-   * automatically when the next successful wiki run on that thread
-   * clears the skip marker (mark_thread_wiki_processed_if_claimed
-   * nulls both columns in one update).
-   */
   async listWikiSkippedThreads(): Promise<
     {
       threadId: string;
       title: string | null;
       lastSkipAt: string;
       lastSkipReason: string | null;
-      /**
-       * A per-thread wiki claim is currently held - a manual retry (or
-       * the sweep's recovery branch) is processing this thread. The
-       * Skipped panel renders it as "Retrying..." and recovers the
-       * in-flight state across a reload, since the claim is durable
-       * server state rather than the panel's in-memory spinner.
-       */
       retrying: boolean;
     }[]
   > {
-    const { data, error } = await this.client.rpc('list_wiki_skipped_threads');
-    if (error) throw new SupabaseError(error.message);
-    const rows = (data ?? []) as {
-      thread_id: string;
-      title: string | null;
-      last_skip_at: string;
-      last_skip_reason: string | null;
-      retrying: boolean | null;
-    }[];
-    return rows.map((r) => ({
-      threadId: r.thread_id,
-      title: r.title,
-      lastSkipAt: r.last_skip_at,
-      lastSkipReason: r.last_skip_reason,
-      retrying: r.retrying === true,
-    }));
+    return agentRunsApi.listWikiSkippedThreads(this.client);
   }
 
-  /**
-   * Ask the venice function to re-run the wiki agent against one
-   * skipped thread (the Skipped panel's Retry button). The whole retry
-   * cycle - per-thread claim, terminal-message resolution, the agent's
-   * tool loop with the content-filter fallback, the pointer advance that
-   * clears the skip marker, claim release - runs server-side under
-   * EdgeRuntime.waitUntil, so it survives a reload mid-retry; this is a
-   * thin authenticated POST. `busy` means the thread was already claimed
-   * (the sweep, or a concurrent retry). Agent-level failures come back as
-   * `kind: 'error'` in the union (an application outcome, not a transport
-   * error); only transport/auth failures throw.
-   */
   async retryWikiThread(threadId: string): Promise<WikiRetryResult> {
-    const { data, error } = await this.client.functions.invoke('venice/wiki-retry', {
-      body: { threadId },
-    });
-    if (error) throw await veniceFunctionError(error);
-    const result = data as Partial<WikiRetryResult> | null;
-    // Boundary validation: the function returns the union below; an
-    // unrecognised shape collapses to an error result rather than
-    // letting a malformed payload masquerade as success.
-    if (result && result.kind === 'ok' && typeof result.terminalMsgId === 'string') {
-      return {
-        kind: 'ok',
-        terminalMsgId: result.terminalMsgId,
-        toolCalls: typeof result.toolCalls === 'number' ? result.toolCalls : 0,
-        reasoning: typeof result.reasoning === 'string' ? result.reasoning : '(none)',
-      };
-    }
-    if (result && result.kind === 'no-op' && typeof result.reason === 'string') {
-      return { kind: 'no-op', reason: result.reason };
-    }
-    if (result && result.kind === 'error' && typeof result.error === 'string') {
-      return { kind: 'error', error: result.error };
-    }
-    return { kind: 'error', error: 'wiki-retry returned an unrecognised response' };
+    return agentRunsApi.retryWikiThread(this.client, threadId);
   }
 
-  /**
-   * Ask the venice function to run the manual per-article wiki agent
-   * (the "Ask agent to update" panel). The prompt build, the single
-   * JSON completion, and the article + record reads all happen
-   * server-side; this is a thin authenticated POST. Returns the
-   * preview / noop the panel renders. The function's union also has a
-   * kind:'error' for parse / read / transport failures - this method
-   * turns that (and any transport/auth failure) into a thrown Error so
-   * the panel's existing catch shows a retry banner; callers only ever
-   * see preview or noop on a resolved promise.
-   */
   async runWikiManualUpdate(args: {
     articleId: string;
     instructions: string;
   }): Promise<WikiManualUpdateResult> {
-    const { data, error } = await this.client.functions.invoke('venice/wiki-manual-update', {
-      body: { articleId: args.articleId, instructions: args.instructions },
-    });
-    if (error) throw await veniceFunctionError(error);
-    // Boundary validation: the function returns the preview / noop /
-    // error union below. An error outcome becomes a throw (the panel
-    // wants a banner, not an inline kind); an unrecognised shape throws
-    // too rather than masquerading as a no-op.
-    const result = data as
-      | Partial<WikiManualUpdateResult>
-      | { kind?: string; error?: unknown }
-      | null;
-    if (
-      result &&
-      result.kind === 'preview' &&
-      typeof (result as { title?: unknown }).title === 'string' &&
-      typeof (result as { content?: unknown }).content === 'string'
-    ) {
-      const preview = result as Extract<WikiManualUpdateResult, { kind: 'preview' }>;
-      return {
-        kind: 'preview',
-        title: preview.title,
-        content: preview.content,
-        reason: typeof preview.reason === 'string' ? preview.reason : '',
-        recordOps: Array.isArray(preview.recordOps) ? preview.recordOps : [],
-      };
-    }
-    if (result && result.kind === 'noop') {
-      const reason =
-        typeof (result as { reason?: unknown }).reason === 'string'
-          ? (result as { reason: string }).reason
-          : 'No change applied.';
-      return { kind: 'noop', reason };
-    }
-    if (
-      result &&
-      result.kind === 'error' &&
-      typeof (result as { error?: unknown }).error === 'string'
-    ) {
-      throw new Error((result as { error: string }).error);
-    }
-    throw new Error('wiki-manual-update returned an unrecognised response');
+    return agentRunsApi.runWikiManualUpdate(this.client, args);
   }
 
-  /**
-   * Ask the venice function to run the wiki librarian now (the Wiki
-   * panel's sparkles button). The whole run - article snapshot,
-   * prompt build, the tool loop, the in-flight guard shared with the
-   * scheduled sweep and the chat-dispatched path - happens
-   * server-side; this is a thin authenticated POST. `runId` is the
-   * client-minted demux key for the live step events: subscribe via
-   * subscribeToAgentRunProgress BEFORE calling this, or the first
-   * events race the subscription.
-   */
   async runWikiLibrarian(args: {
     instructions: string | null;
     runId: string;
   }): Promise<void> {
-    // Detached route: the body is {accepted:true} and the run continues
-    // in the background past the gateway window. The outcome arrives
-    // later as a `result` event on the agent-runs channel (await it via
-    // awaitDetachedRun), so this POST only KICKS the run - a non-error
-    // response means accepted. A transport/auth failure throws.
-    const { error } = await this.client.functions.invoke('venice/wiki-librarian-run', {
-      body: { instructions: args.instructions, runId: args.runId },
-    });
-    if (error) throw await veniceFunctionError(error);
+    return agentRunsApi.runWikiLibrarian(this.client, args);
   }
 
-  /**
-   * Ask the venice function to run the rem (associative integration)
-   * memory-librarian pass now (the Memories panel's manual button).
-   * The whole run - eligibility pick, prompt build, the tool loop,
-   * the in-flight guard shared with the scheduled sweeps and the
-   * deep-sleep paths - happens server-side; this is a thin
-   * authenticated POST. `runId` is the client-minted demux key for
-   * the live step events: subscribe via subscribeToAgentRunProgress
-   * BEFORE calling this, or the first events race the subscription.
-   */
   async runRem(args: { runId: string }): Promise<void> {
-    // Detached route: the body is {accepted:true} and the run continues
-    // in the background past the gateway window. The RemRunResult arrives
-    // later as a `result` event on the agent-runs channel (await it via
-    // awaitDetachedRun), so this POST only KICKS the run - a non-error
-    // response means accepted. A transport/auth failure throws.
-    const { error } = await this.client.functions.invoke('venice/rem-run', {
-      body: { runId: args.runId },
-    });
-    if (error) throw await veniceFunctionError(error);
+    return agentRunsApi.runRem(this.client, args);
   }
 
-  /**
-   * Ask the venice function to run the deep-sleep memory-librarian
-   * pass now. Same contract as runRem (and the wiki librarian's
-   * runWikiLibrarian): subscribe to the progress channel before the
-   * POST; the in-flight collision comes back as kind 'busy'.
-   */
   async runDeepSleep(args: { runId: string }): Promise<void> {
-    // Detached route, same contract as runRem: returns {accepted:true};
-    // the DeepSleepRunResult arrives as a `result` event on the
-    // agent-runs channel (await via awaitDetachedRun). KICK only.
-    const { error } = await this.client.functions.invoke('venice/deep-sleep-run', {
-      body: { runId: args.runId },
-    });
-    if (error) throw await veniceFunctionError(error);
+    return agentRunsApi.runDeepSleep(this.client, args);
   }
 
   // Thread response claim --------------------------------------------------

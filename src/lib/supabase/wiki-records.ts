@@ -28,7 +28,6 @@ import type { SupabaseClient, Session } from '@supabase/supabase-js';
 import { SupabaseError } from './error';
 import { base64ToBytes, ilikeLogicTreePattern } from './query-utils';
 import type {
-  WikiChangelogKind,
   WikiRecord,
   WikiRecordFile,
   WikiRecordLink,
@@ -39,6 +38,11 @@ import {
   coerceWikiRecordFile,
   coerceWikiRecordLink,
 } from './types';
+// The changelog append lives in the wiki-satellite slice; every record
+// / file / link mutation here lands its best-effort wiki_changelog row
+// through it. One-way sibling import - wiki-sources does not import
+// from this module.
+import { createWikiChangelogEntry } from './wiki-sources';
 // Pure helpers for the record-changelog message wording; mirrored
 // edge-side in venice/tools/_record_helpers.ts. The `import type` cycle
 // from ../wiki back to the facade (../supabase.ts) is erased at
@@ -65,39 +69,6 @@ async function getSession(client: SupabaseClient): Promise<Session | null> {
   const { data, error } = await client.auth.getSession();
   if (error) throw new SupabaseError(error.message);
   return data.session;
-}
-
-/**
- * Private mirror of the facade's createWikiChangelogEntry - the wiki
- * sources / changelog / agent-run group is still inline in
- * ../supabase.ts, and a slice can't reach back into SupabaseService.
- * Verbatim copy so the record paths keep the exact validation + insert
- * behavior. TODO: two copies of the changelog insert now exist (here
- * and the facade); when the changelog group gets its own slice they
- * want to converge on one.
- */
-async function createWikiChangelogEntry(
-  client: SupabaseClient,
-  args: {
-    article_id: string | null;
-    kind: WikiChangelogKind;
-    title_at_change: string;
-    message: string;
-  }
-): Promise<void> {
-  const session = await getSession(client);
-  if (!session) throw new SupabaseError('Not authenticated.');
-  const title = args.title_at_change.trim();
-  const message = args.message.trim();
-  if (title.length === 0 || message.length === 0) return;
-  const { error } = await client.from('wiki_changelog').insert({
-    user_id: session.user.id,
-    article_id: args.article_id,
-    kind: args.kind,
-    title_at_change: title,
-    message,
-  });
-  if (error) throw new SupabaseError(error.message);
 }
 
 // Wiki records ---------------------------------------------------------
