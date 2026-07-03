@@ -77,8 +77,8 @@ transitions), archive loading sentinel in the drawer.
 
 File: `src/components/ModelCombobox.svelte`.
 
-Search-and-select combobox for the per-tier model picker in
-Settings -> AI -> Models, replacing the native `<select>` (which
+Search-and-select combobox for the per-profile model picker in
+Settings -> Model profiles, replacing the native `<select>` (which
 can't render the per-row capability badges, context-window pill, and
 input/output price pill, nor type-to-filter). Each row aligns the
 model name left, capability badges centered, and the context + price
@@ -87,10 +87,10 @@ row. A fuzzy search box filters the list as the user types.
 
 ```ts
 interface Props {
-  options: ModelOption[];   // from tierRowView.options
+  options: ModelOption[];   // from profileRowView.options
   value: string;            // selected model id
   disabled?: boolean;
-  ariaLabel: string;        // e.g. "Model for Smart"
+  ariaLabel: string;        // e.g. "Model for Everyday"
   onSelect: (id: string) => void;
 }
 ```
@@ -115,7 +115,7 @@ interface Props {
   catalog) renders name-only - no badges or pills, since the snapshot
   doesn't carry catalog capability/pricing data.
 
-Consumer: `Settings.svelte` (one per tier in the Models subsection).
+Consumer: `Settings.svelte` (one per card in the Model profiles pane).
 
 ## `<ImageModelSelect>`
 
@@ -178,8 +178,9 @@ interface Props {
 - Renders nothing when either token prop is missing. `totalTokens`
   comes from the `messages.usage` JSONB column (sourced from Venice's
   `usage` epilogue frame; absent on turns where usage wasn't
-  reported). `contextWindow` is the thread's CURRENT effective-tier
-  window, passed in by `AssistantBody` from `effectiveTierSpec` - not
+  reported). `contextWindow` is the thread's CURRENT profile's
+  window, passed in by `AssistantBody` from the resolved
+  `ModelProfile` - not
   a lookup on the row's historical `messages.model`. So an old row is
   measured against the model the user is on now (the window they have
   to manage); a turn larger than today's window fills the ring and the
@@ -213,7 +214,7 @@ Consumers: message action bar in `Chat.svelte`.
 
 File: `src/components/ReasoningPicker.svelte`.
 
-Composer-bar twin of the model tier picker. Renders a trigger
+Composer-bar twin of the model-profile picker. Renders a trigger
 button + a popover menu of `THINKING_LEVELS` (off / low / medium /
 high) from `src/lib/models/index.ts`. `off` maps to
 `venice_parameters.disable_thinking` rather than a `reasoning_effort`
@@ -222,14 +223,15 @@ parent owns open/closed state so it can coordinate with sibling
 popovers (model picker, prompt picker) and enforce "only one menu
 open at a time."
 
-`value` is a `ThinkingLevel` (may be `off`); `defaultEffort` is the
-account-level `ReasoningEffort` shown with the `default` badge, which
-therefore never lands on the Off row.
+`value` is a `ThinkingLevel` (may be `off`); `defaultLevel` is the
+active model profile's default level shown with the `default` badge -
+also a `ThinkingLevel`, so the badge can land on the Off row when the
+profile ships with thinking disabled.
 
 ```ts
 interface Props {
   value: ThinkingLevel;
-  defaultEffort: ReasoningEffort;
+  defaultLevel: ThinkingLevel;
   open: boolean;
   onToggle: () => void;
   onSelect: (level: ThinkingLevel) => void;

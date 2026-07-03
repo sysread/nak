@@ -8,16 +8,7 @@
  * one place the wire shape is validated. Re-exported through
  * `../../supabase.ts` so consumers keep importing from `$lib/supabase`.
  */
-import {
-  coerceTierModels,
-  isModelTier,
-  isReasoningEffort,
-  isVerbosity,
-  type ModelTier,
-  type ReasoningEffort,
-  type TierModels,
-  type Verbosity,
-} from '../../models';
+import { coerceModelProfiles, type ModelProfile } from '../../models';
 import { isAccent, isColorMode, type Accent, type ColorMode } from '../../theme';
 import { isLogLevel, type LogLevel } from '../../logger.svelte';
 
@@ -51,16 +42,16 @@ export interface SystemPrompt {
  * Supabase config (URL + publishable key) stays per-device by design.
  */
 export interface UserSettings {
-  defaultModel?: ModelTier;
   /**
-   * Per-tier model + reasoning overrides. Each entry repoints a tier
-   * (Smart/Balanced/Fast) at a user-chosen Venice model and pins that
-   * tier's default reasoning level, carrying a capability snapshot so the
-   * chat send path resolves synchronously without the catalog. Absent
-   * tiers fall back to the built-in TierSpec. See TierModelConfig in
-   * ./models for the snapshot rationale.
+   * The user's named model profiles, in display order. Each profile is
+   * a named Venice model + default reasoning + default verbosity with a
+   * capability snapshot, and exactly one carries `isDefault` (enforced
+   * by the coercer). Absent means the user has never edited profiles -
+   * the app substitutes `seedModelProfiles()` in memory without writing
+   * it back, so a brand-new account still has a working "Default"
+   * profile. See ModelProfile in ../../models.
    */
-  tierModels?: TierModels;
+  modelProfiles?: ModelProfile[];
   /**
    * Venice text-to-image model the generate_image tool uses, e.g.
    * 'venice-sd35'. Absent means fall back to VENICE_DEFAULT_IMAGE_MODEL.
@@ -71,20 +62,6 @@ export interface UserSettings {
    * path the way chat does). See VENICE_DEFAULT_IMAGE_MODEL in ../models.
    */
   imageModel?: string;
-  /**
-   * User-level reasoning-effort default, used on reasoning-capable
-   * models when the thread hasn't overridden it. Absent means fall
-   * back to {@link DEFAULT_REASONING_EFFORT} in code (`low`) so an
-   * empty settings jsonb still produces sane behavior.
-   */
-  defaultReasoningEffort?: ReasoningEffort;
-  /**
-   * User-level text.verbosity default, used when the thread hasn't
-   * overridden it. Absent means fall back to {@link DEFAULT_VERBOSITY}
-   * in code (`medium`) so an empty settings jsonb still produces sane
-   * behavior.
-   */
-  defaultVerbosity?: Verbosity;
   colorMode?: ColorMode;
   accent?: Accent;
   /** Library of named system prompts the user can toggle per-thread. */
@@ -222,16 +199,15 @@ export function coerceSettings(raw: unknown): UserSettings {
   if (typeof raw !== 'object' || raw === null) return {};
   const r = raw as Record<string, unknown>;
   const out: UserSettings = {};
-  if (isModelTier(r.defaultModel)) out.defaultModel = r.defaultModel;
-  const tierModels = coerceTierModels(r.tierModels);
-  if (tierModels) out.tierModels = tierModels;
+  // Legacy pre-profile keys (defaultModel, tierModels,
+  // defaultReasoningEffort, defaultVerbosity) may still sit in older
+  // blobs; they are dropped here like any other unknown key and cleaned
+  // out of the stored blob on the next modelProfiles write.
+  const modelProfiles = coerceModelProfiles(r.modelProfiles);
+  if (modelProfiles) out.modelProfiles = modelProfiles;
   if (typeof r.imageModel === 'string' && r.imageModel.length > 0) {
     out.imageModel = r.imageModel;
   }
-  if (isReasoningEffort(r.defaultReasoningEffort)) {
-    out.defaultReasoningEffort = r.defaultReasoningEffort;
-  }
-  if (isVerbosity(r.defaultVerbosity)) out.defaultVerbosity = r.defaultVerbosity;
   if (isColorMode(r.colorMode)) out.colorMode = r.colorMode;
   if (isAccent(r.accent)) out.accent = r.accent;
   if (Array.isArray(r.systemPrompts)) {

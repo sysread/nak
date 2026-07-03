@@ -21,11 +21,8 @@ export type { AppPhase } from './app-state/root.svelte';
 export { app } from './app-state/root.svelte';
 export {
   setTheme,
-  persistDefaultModel,
-  persistTierModels,
+  persistModelProfiles,
   persistImageModel,
-  persistDefaultReasoningEffort,
-  persistDefaultVerbosity,
   persistDefaultLogLevel,
   persistEmphasisMarkdown,
   persistNotifyOnComplete,

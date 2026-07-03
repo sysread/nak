@@ -1,46 +1,43 @@
 import { describe, it, expect } from 'vitest';
 import {
   AGENT_MODELS,
-  DEFAULT_REASONING_EFFORT,
-  DEFAULT_TIER,
-  DEFAULT_VERBOSITY,
   EMBEDDING_STORAGE_DIMS,
   MODELS,
-  REASONING_EFFORTS,
-  REASONING_EFFORT_LABELS,
+  SEED_MODEL_PROFILE_ID,
   THINKING_LEVELS,
   THINKING_LEVEL_LABELS,
-  TIERS,
-  TIER_ORDER,
   VENICE_EMBEDDING_DIMS,
   VENICE_EMBEDDING_MODEL,
   VERBOSITIES,
   VERBOSITY_LABELS,
   agentModel,
-  coerceTierModelConfig,
-  coerceTierModels,
-  effectiveTierSpec,
-  isModelTier,
-  isReasoningEffort,
+  coerceModelProfile,
+  coerceModelProfiles,
+  defaultModelProfile,
   isThinkingLevel,
   isVerbosity,
+  normalizeDefaultProfile,
   padEmbeddingForStorage,
-  resolveThinking,
-  resolveTier,
-  resolveVerbosity,
-  thinkingWireForTier,
+  profileModelSpec,
+  resolveModelProfile,
+  seedModelProfiles,
+  thinkingWireForProfile,
   type AgentRole,
-  type TierModelConfig,
+  type ModelProfile,
 } from '../src/lib/models';
 
-const SAMPLE_CONFIG: TierModelConfig = {
+const SAMPLE_PROFILE: ModelProfile = {
+  id: 'profile-1',
+  name: 'Deep work',
   modelId: 'some-new-model',
   thinking: 'high',
+  verbosity: 'medium',
+  isDefault: false,
   contextWindow: 512_000,
   supportsReasoning: true,
   supportsVision: false,
   supportsResponseFormat: true,
-  label: 'Some New Model',
+  modelLabel: 'Some New Model',
 };
 
 describe('MODELS (active registry)', () => {
@@ -63,11 +60,10 @@ describe('MODELS (active registry)', () => {
   it('marks the vision-capable ids as supportsVision=true', () => {
     // Vision-capable entries today: analyze_image's server-side vision
     // sub-call primary (e2ee-qwen3-vl-30b-a3b-p) and its uncensored
-    // fallback (venice-uncensored-1-2), plus the Smart tier's foreground
-    // model (qwen-3-7-plus, which inlines image_url parts directly rather
-    // than routing through analyze_image). Balanced and Fast both front
-    // deepseek-v4-flash, which is text-only - vision goes through
-    // analyze_image.
+    // fallback (venice-uncensored-1-2), plus qwen-3-7-plus (which
+    // inlines image_url parts directly rather than routing through
+    // analyze_image). The seed profile's deepseek-v4-flash is text-only
+    // - vision goes through analyze_image.
     const visionIds = new Set([
       'venice-uncensored-1-2',
       'e2ee-qwen3-vl-30b-a3b-p',
@@ -79,44 +75,160 @@ describe('MODELS (active registry)', () => {
   });
 });
 
-describe('TIERS (user-facing wrappers)', () => {
-  it('has the three tiers with the expected Venice model ids', () => {
-    // Smart fronts qwen-3-7-plus (1M context, native vision);
-    // Balanced and Fast both front deepseek-v4-flash and differ only
-    // in default thinking budget ('low' vs 'off').
-    expect(TIERS.smart.id).toBe('qwen-3-7-plus');
-    expect(TIERS.balanced.id).toBe('deepseek-v4-flash');
-    expect(TIERS.fast.id).toBe('deepseek-v4-flash');
+describe('seedModelProfiles', () => {
+  it('is a single "Default" profile on deepseek-v4-flash, medium reasoning, low verbosity', () => {
+    const seed = seedModelProfiles();
+    expect(seed).toHaveLength(1);
+    const p = seed[0];
+    expect(p.id).toBe(SEED_MODEL_PROFILE_ID);
+    expect(p.name).toBe('Default');
+    expect(p.modelId).toBe('deepseek-v4-flash');
+    expect(p.thinking).toBe('medium');
+    expect(p.verbosity).toBe('low');
+    expect(p.isDefault).toBe(true);
   });
-  it('each tier wraps its corresponding MODELS entry', () => {
-    for (const t of TIER_ORDER) {
-      const spec = TIERS[t];
-      const model = MODELS[spec.id as keyof typeof MODELS];
-      expect(spec.contextWindow).toBe(model.contextWindow);
-      expect(spec.supportsReasoning).toBe(model.supportsReasoning);
-      expect(spec.supportsVision).toBe(model.supportsVision);
-      expect(spec.supportsResponseFormat).toBe(model.supportsResponseFormat);
-    }
+  it('carries the curated capability snapshot of its backing model', () => {
+    const p = seedModelProfiles()[0];
+    const spec = MODELS['deepseek-v4-flash'];
+    expect(p.contextWindow).toBe(spec.contextWindow);
+    expect(p.supportsReasoning).toBe(spec.supportsReasoning);
+    expect(p.supportsVision).toBe(spec.supportsVision);
+    expect(p.supportsResponseFormat).toBe(spec.supportsResponseFormat);
   });
-  it('differentiates the tiers by default thinking level', () => {
-    // Smart defaults to 'medium' thinking, Balanced to 'low' (light
-    // CoT pass to catch obvious slips without long-think latency),
-    // Fast to 'off'. These are defaults, not locks - the composer
-    // picker stays available on all three so a user can override
-    // per thread (see thinkingWireForTier tests below).
-    expect(TIERS.smart.defaultThinking).toBe('medium');
-    expect(TIERS.balanced.defaultThinking).toBe('low');
-    expect(TIERS.fast.defaultThinking).toBe('off');
+  it('returns a fresh array per call so callers can mutate safely', () => {
+    const a = seedModelProfiles();
+    const b = seedModelProfiles();
+    expect(a).not.toBe(b);
+    expect(a[0]).not.toBe(b[0]);
+    expect(a).toEqual(b);
   });
-  it('has matching tier/label and sensible context windows', () => {
-    for (const t of TIER_ORDER) {
-      expect(TIERS[t].tier).toBe(t);
-      expect(TIERS[t].label.length).toBeGreaterThan(0);
-      expect(TIERS[t].contextWindow).toBeGreaterThan(0);
-    }
-    // Fast fronts deepseek-v4-flash, which carries a 1M-token window
-    // inherited via the spread.
-    expect(TIERS.fast.contextWindow).toBe(1_000_000);
+});
+
+describe('coerceModelProfile', () => {
+  it('accepts a well-formed profile', () => {
+    expect(coerceModelProfile(SAMPLE_PROFILE)).toEqual(SAMPLE_PROFILE);
+  });
+  it('falls back modelLabel to the model id when absent', () => {
+    const noLabel: Record<string, unknown> = { ...SAMPLE_PROFILE };
+    delete noLabel.modelLabel;
+    expect(coerceModelProfile(noLabel)?.modelLabel).toBe(SAMPLE_PROFILE.modelId);
+  });
+  it('treats a missing isDefault as false', () => {
+    const noFlag: Record<string, unknown> = { ...SAMPLE_PROFILE };
+    delete noFlag.isDefault;
+    expect(coerceModelProfile(noFlag)?.isDefault).toBe(false);
+  });
+  it('rejects a missing id, blank name, or missing modelId', () => {
+    expect(coerceModelProfile({ ...SAMPLE_PROFILE, id: '' })).toBeNull();
+    expect(coerceModelProfile({ ...SAMPLE_PROFILE, name: '   ' })).toBeNull();
+    expect(coerceModelProfile({ ...SAMPLE_PROFILE, modelId: '' })).toBeNull();
+  });
+  it('rejects invalid thinking / verbosity values', () => {
+    expect(coerceModelProfile({ ...SAMPLE_PROFILE, thinking: 'extreme' })).toBeNull();
+    expect(coerceModelProfile({ ...SAMPLE_PROFILE, verbosity: 'chatty' })).toBeNull();
+  });
+  it('rejects a non-numeric context window and non-boolean capability flags', () => {
+    expect(coerceModelProfile({ ...SAMPLE_PROFILE, contextWindow: 'big' })).toBeNull();
+    expect(coerceModelProfile({ ...SAMPLE_PROFILE, supportsVision: 'yes' })).toBeNull();
+  });
+  it('rejects non-objects', () => {
+    expect(coerceModelProfile(null)).toBeNull();
+    expect(coerceModelProfile('nope')).toBeNull();
+  });
+});
+
+describe('coerceModelProfiles', () => {
+  it('keeps well-formed entries and drops malformed ones', () => {
+    const result = coerceModelProfiles([
+      { ...SAMPLE_PROFILE, isDefault: true },
+      { ...SAMPLE_PROFILE, id: 'profile-2', name: 'Broken', thinking: 'bogus' },
+      { ...SAMPLE_PROFILE, id: 'profile-3', name: 'Fast replies' },
+    ]);
+    expect(result?.map((p) => p.id)).toEqual(['profile-1', 'profile-3']);
+  });
+  it('drops duplicate ids, first occurrence wins', () => {
+    const result = coerceModelProfiles([
+      { ...SAMPLE_PROFILE, name: 'First' },
+      { ...SAMPLE_PROFILE, name: 'Second' },
+    ]);
+    expect(result).toHaveLength(1);
+    expect(result?.[0].name).toBe('First');
+  });
+  it('normalizes to exactly one default - none flagged promotes the first', () => {
+    const result = coerceModelProfiles([
+      SAMPLE_PROFILE,
+      { ...SAMPLE_PROFILE, id: 'profile-2', name: 'Other' },
+    ]);
+    expect(result?.map((p) => p.isDefault)).toEqual([true, false]);
+  });
+  it('normalizes to exactly one default - extras are cleared, first flagged wins', () => {
+    const result = coerceModelProfiles([
+      SAMPLE_PROFILE,
+      { ...SAMPLE_PROFILE, id: 'profile-2', name: 'B', isDefault: true },
+      { ...SAMPLE_PROFILE, id: 'profile-3', name: 'C', isDefault: true },
+    ]);
+    expect(result?.map((p) => p.isDefault)).toEqual([false, true, false]);
+  });
+  it('returns undefined when nothing survives', () => {
+    expect(coerceModelProfiles([])).toBeUndefined();
+    expect(coerceModelProfiles([{ id: '' }])).toBeUndefined();
+    expect(coerceModelProfiles(null)).toBeUndefined();
+    expect(coerceModelProfiles({})).toBeUndefined();
+  });
+});
+
+describe('normalizeDefaultProfile', () => {
+  it('passes an already-normal list through with identities intact', () => {
+    const list = [
+      { ...SAMPLE_PROFILE, isDefault: true },
+      { ...SAMPLE_PROFILE, id: 'profile-2', name: 'Other' },
+    ];
+    const result = normalizeDefaultProfile(list);
+    expect(result[0]).toBe(list[0]);
+    expect(result[1]).toBe(list[1]);
+  });
+  it('returns empty for empty input', () => {
+    expect(normalizeDefaultProfile([])).toEqual([]);
+  });
+});
+
+describe('defaultModelProfile / resolveModelProfile', () => {
+  const profiles: ModelProfile[] = [
+    SAMPLE_PROFILE,
+    { ...SAMPLE_PROFILE, id: 'profile-2', name: 'Everyday', isDefault: true },
+  ];
+  it('defaultModelProfile returns the flagged profile', () => {
+    expect(defaultModelProfile(profiles).id).toBe('profile-2');
+  });
+  it('defaultModelProfile falls back to the first when nothing is flagged', () => {
+    expect(defaultModelProfile([SAMPLE_PROFILE]).id).toBe('profile-1');
+  });
+  it('defaultModelProfile stays total on an empty list via the seed', () => {
+    expect(defaultModelProfile([]).id).toBe(SEED_MODEL_PROFILE_ID);
+  });
+  it('resolveModelProfile honors a live per-thread pin', () => {
+    expect(resolveModelProfile(profiles, 'profile-1').id).toBe('profile-1');
+  });
+  it('resolveModelProfile falls back to the default for null', () => {
+    expect(resolveModelProfile(profiles, null).id).toBe('profile-2');
+  });
+  it('resolveModelProfile falls back to the default for deleted / legacy ids', () => {
+    // A profile the user deleted...
+    expect(resolveModelProfile(profiles, 'gone-profile').id).toBe('profile-2');
+    // ...and a legacy pre-profile tier name still stored on old rows.
+    expect(resolveModelProfile(profiles, 'balanced').id).toBe('profile-2');
+  });
+});
+
+describe('profileModelSpec', () => {
+  it('projects the capability snapshot with the Venice id as the spec id', () => {
+    expect(profileModelSpec(SAMPLE_PROFILE)).toEqual({
+      id: 'some-new-model',
+      contextWindow: 512_000,
+      supportsReasoning: true,
+      supportsVision: false,
+      supportsResponseFormat: true,
+    });
   });
 });
 
@@ -165,83 +277,7 @@ describe('AGENT_MODELS (background agents)', () => {
   });
 });
 
-describe('DEFAULT_TIER', () => {
-  it('default is balanced', () => {
-    expect(DEFAULT_TIER).toBe('balanced');
-  });
-});
-
-describe('isModelTier', () => {
-  it('accepts the three tier names', () => {
-    expect(isModelTier('smart')).toBe(true);
-    expect(isModelTier('balanced')).toBe(true);
-    expect(isModelTier('fast')).toBe(true);
-  });
-  it('rejects anything else', () => {
-    expect(isModelTier('')).toBe(false);
-    expect(isModelTier('SMART')).toBe(false);
-    expect(isModelTier(null)).toBe(false);
-    expect(isModelTier(undefined)).toBe(false);
-    expect(isModelTier(42)).toBe(false);
-    expect(isModelTier({ tier: 'smart' })).toBe(false);
-  });
-});
-
-describe('resolveTier', () => {
-  it('returns the thread override when set', () => {
-    expect(resolveTier('smart', 'fast')).toBe('smart');
-  });
-  it('falls back to the default when no override', () => {
-    expect(resolveTier(null, 'fast')).toBe('fast');
-  });
-});
-
-describe('reasoning effort', () => {
-  it('exposes the three OpenAI-style levels', () => {
-    expect(REASONING_EFFORTS).toEqual(['low', 'medium', 'high']);
-  });
-  it('defaults to low (keeps turn latency in the chat-turn ballpark)', () => {
-    expect(DEFAULT_REASONING_EFFORT).toBe('low');
-  });
-  it('has a human-readable label for every level', () => {
-    for (const e of REASONING_EFFORTS) {
-      expect(REASONING_EFFORT_LABELS[e]).toMatch(/^[A-Z]/);
-    }
-  });
-  it('isReasoningEffort accepts the three levels and rejects the rest', () => {
-    expect(isReasoningEffort('low')).toBe(true);
-    expect(isReasoningEffort('medium')).toBe(true);
-    expect(isReasoningEffort('high')).toBe(true);
-    expect(isReasoningEffort('extreme')).toBe(false);
-    expect(isReasoningEffort('LOW')).toBe(false);
-    expect(isReasoningEffort(null)).toBe(false);
-    expect(isReasoningEffort(undefined)).toBe(false);
-    expect(isReasoningEffort(1)).toBe(false);
-  });
-  it('resolveThinking prefers thread override over every default', () => {
-    expect(resolveThinking('high', 'low')).toBe('high');
-    expect(resolveThinking('high', 'low', 'medium')).toBe('high');
-    // A per-thread 'off' override wins even when the tier default would
-    // have turned thinking on.
-    expect(resolveThinking('off', 'low', 'medium')).toBe('off');
-  });
-
-  it('resolveThinking prefers tier default over user default', () => {
-    // Tier-level default (Smart: 'medium', Balanced/Fast: 'off') has to
-    // win over the account default so the tiers feel different when the
-    // user hasn't set a per-thread level.
-    expect(resolveThinking(null, 'medium', 'high')).toBe('high');
-    expect(resolveThinking(null, 'low', 'off')).toBe('off');
-  });
-
-  it('resolveThinking falls through to user default when no tier default is set', () => {
-    expect(resolveThinking(null, 'medium')).toBe('medium');
-    expect(resolveThinking(null, 'medium', undefined)).toBe('medium');
-    expect(resolveThinking(null, 'medium', null)).toBe('medium');
-  });
-});
-
-describe('thinking level (composer picker domain)', () => {
+describe('thinking level (reasoning picker domain)', () => {
   it('exposes off + the three effort levels in picker order', () => {
     expect(THINKING_LEVELS).toEqual(['off', 'low', 'medium', 'high']);
   });
@@ -260,29 +296,30 @@ describe('thinking level (composer picker domain)', () => {
     expect(isThinkingLevel(null)).toBe(false);
     expect(isThinkingLevel(undefined)).toBe(false);
   });
-  it('thinkingWireForTier maps off -> disable_thinking and levels -> reasoning_effort', () => {
-    // Smart defaults to 'medium', Balanced to 'low' - both
-    // thinking-on, so they forward reasoning_effort.
-    expect(thinkingWireForTier(TIERS.smart, null, 'medium')).toEqual({
-      reasoningEffort: 'medium',
-      disableThinking: false,
-    });
-    expect(thinkingWireForTier(TIERS.balanced, null, 'medium')).toEqual({
-      reasoningEffort: 'low',
-      disableThinking: false,
-    });
-    // Fast defaults to 'off' -> the off-switch, no reasoning_effort.
-    expect(thinkingWireForTier(TIERS.fast, null, 'medium')).toEqual({
-      disableThinking: true,
-    });
-    // A per-thread 'off' beats a thinking-on tier default.
-    expect(thinkingWireForTier(TIERS.balanced, 'off', 'medium')).toEqual({
-      disableThinking: true,
-    });
-    // And a per-thread level beats the tier's off default (user turned
-    // thinking back on for this one conversation on Fast).
-    expect(thinkingWireForTier(TIERS.fast, 'high', 'medium')).toEqual({
+  it('thinkingWireForProfile maps off -> disable_thinking and levels -> reasoning_effort', () => {
+    // No thread override: the profile default applies.
+    expect(thinkingWireForProfile(SAMPLE_PROFILE, null)).toEqual({
       reasoningEffort: 'high',
+      disableThinking: false,
+    });
+    // A thinking-off profile default resolves to the off switch, no
+    // reasoning_effort.
+    expect(
+      thinkingWireForProfile({ ...SAMPLE_PROFILE, thinking: 'off' }, null)
+    ).toEqual({ disableThinking: true });
+    // A per-thread 'off' beats a thinking-on profile default.
+    expect(thinkingWireForProfile(SAMPLE_PROFILE, 'off')).toEqual({
+      disableThinking: true,
+    });
+    // And a per-thread level beats the profile's off default (user
+    // turned thinking back on for this one conversation).
+    expect(
+      thinkingWireForProfile({ ...SAMPLE_PROFILE, thinking: 'off' }, 'medium')
+    ).toEqual({ reasoningEffort: 'medium', disableThinking: false });
+  });
+  it('thinkingWireForProfile sends neither knob on a non-reasoning model', () => {
+    const nonReasoning = { ...SAMPLE_PROFILE, supportsReasoning: false };
+    expect(thinkingWireForProfile(nonReasoning, 'high')).toEqual({
       disableThinking: false,
     });
   });
@@ -291,9 +328,6 @@ describe('thinking level (composer picker domain)', () => {
 describe('verbosity', () => {
   it('exposes the three OpenAI-style levels', () => {
     expect(VERBOSITIES).toEqual(['low', 'medium', 'high']);
-  });
-  it('defaults to medium (neutral; neither terse nor verbose by fiat)', () => {
-    expect(DEFAULT_VERBOSITY).toBe('medium');
   });
   it('has a human-readable label for every level', () => {
     for (const v of VERBOSITIES) {
@@ -309,10 +343,6 @@ describe('verbosity', () => {
     expect(isVerbosity(null)).toBe(false);
     expect(isVerbosity(undefined)).toBe(false);
     expect(isVerbosity(1)).toBe(false);
-  });
-  it('resolveVerbosity prefers thread override over default', () => {
-    expect(resolveVerbosity('high', 'low')).toBe('high');
-    expect(resolveVerbosity(null, 'medium')).toBe('medium');
   });
 });
 
@@ -380,82 +410,5 @@ describe('padEmbeddingForStorage', () => {
     const original = dot(a, b);
     const padded = dot(padEmbeddingForStorage(a), padEmbeddingForStorage(b));
     expect(padded).toBeCloseTo(original, 10);
-  });
-});
-
-
-describe('coerceTierModelConfig', () => {
-  it('accepts a well-formed snapshot', () => {
-    expect(coerceTierModelConfig(SAMPLE_CONFIG)).toEqual(SAMPLE_CONFIG);
-  });
-  it('falls back label to the model id when absent', () => {
-    const noLabel: Record<string, unknown> = { ...SAMPLE_CONFIG };
-    delete noLabel.label;
-    expect(coerceTierModelConfig(noLabel)?.label).toBe(SAMPLE_CONFIG.modelId);
-  });
-  it('rejects a missing modelId', () => {
-    expect(coerceTierModelConfig({ ...SAMPLE_CONFIG, modelId: '' })).toBeNull();
-  });
-  it('rejects an invalid thinking level', () => {
-    expect(coerceTierModelConfig({ ...SAMPLE_CONFIG, thinking: 'extreme' })).toBeNull();
-  });
-  it('rejects a non-numeric context window', () => {
-    expect(
-      coerceTierModelConfig({ ...SAMPLE_CONFIG, contextWindow: 'big' })
-    ).toBeNull();
-  });
-  it('rejects non-boolean capability flags', () => {
-    expect(
-      coerceTierModelConfig({ ...SAMPLE_CONFIG, supportsVision: 'yes' })
-    ).toBeNull();
-  });
-  it('rejects non-objects', () => {
-    expect(coerceTierModelConfig(null)).toBeNull();
-    expect(coerceTierModelConfig('nope')).toBeNull();
-  });
-});
-
-describe('coerceTierModels', () => {
-  it('keeps only well-formed entries under a real tier key', () => {
-    const result = coerceTierModels({
-      smart: SAMPLE_CONFIG,
-      balanced: { ...SAMPLE_CONFIG, thinking: 'bogus' },
-      nonsense: SAMPLE_CONFIG,
-    });
-    expect(result).toEqual({ smart: SAMPLE_CONFIG });
-  });
-  it('returns undefined when nothing survives', () => {
-    expect(coerceTierModels({})).toBeUndefined();
-    expect(coerceTierModels({ smart: { modelId: '' } })).toBeUndefined();
-    expect(coerceTierModels(null)).toBeUndefined();
-  });
-});
-
-describe('effectiveTierSpec', () => {
-  it('returns the built-in spec when no override exists', () => {
-    for (const tier of TIER_ORDER) {
-      expect(effectiveTierSpec(tier, {})).toEqual(TIERS[tier]);
-      expect(effectiveTierSpec(tier, undefined)).toEqual(TIERS[tier]);
-    }
-  });
-  it('folds an override over the built-in spec, keeping tier identity', () => {
-    const spec = effectiveTierSpec('smart', { smart: SAMPLE_CONFIG });
-    // Identity (label/icon/tier) stays built-in.
-    expect(spec.tier).toBe('smart');
-    expect(spec.label).toBe(TIERS.smart.label);
-    expect(spec.icon).toBe(TIERS.smart.icon);
-    // Backing model + capabilities + default thinking come from the override.
-    expect(spec.id).toBe(SAMPLE_CONFIG.modelId);
-    expect(spec.contextWindow).toBe(SAMPLE_CONFIG.contextWindow);
-    expect(spec.supportsReasoning).toBe(SAMPLE_CONFIG.supportsReasoning);
-    expect(spec.supportsVision).toBe(SAMPLE_CONFIG.supportsVision);
-    expect(spec.defaultThinking).toBe(SAMPLE_CONFIG.thinking);
-    // Description is regenerated so it can't contradict the picked model.
-    expect(spec.description).toContain(SAMPLE_CONFIG.label);
-  });
-  it('feeds the thinking cascade so an override default flows through', () => {
-    const spec = effectiveTierSpec('fast', { fast: { ...SAMPLE_CONFIG, thinking: 'medium' } });
-    // No thread override, account default 'low' loses to the tier default.
-    expect(resolveThinking(null, 'low', spec.defaultThinking)).toBe('medium');
   });
 });

@@ -17,11 +17,7 @@
 import { createClient, type SupabaseClient, type Session } from '@supabase/supabase-js';
 import type { AppConfig } from './config';
 import {
-  coerceTierModels,
-  isModelTier,
-  isReasoningEffort,
-  isVerbosity,
-  type ModelTier,
+  coerceModelProfiles,
   type ThinkingLevel,
   type Verbosity,
 } from './models';
@@ -791,16 +787,22 @@ export class SupabaseService {
     // or neither when its patch value fails validation.
     const toSet: Record<string, unknown> = {};
     const toRemove: string[] = [];
-    if ('defaultModel' in patch) {
-      if (patch.defaultModel === undefined) toRemove.push('defaultModel');
-      else if (isModelTier(patch.defaultModel)) toSet.defaultModel = patch.defaultModel;
-    }
-    if ('tierModels' in patch) {
+    if ('modelProfiles' in patch) {
       // Re-run the coercer so a sloppy caller can't persist a malformed
-      // snapshot; an all-empty result clears the key entirely.
-      const cleaned = coerceTierModels(patch.tierModels);
-      if (cleaned) toSet.tierModels = cleaned;
-      else toRemove.push('tierModels');
+      // profile or a broken default invariant; an all-empty result
+      // clears the key entirely (read-side substitutes the seed).
+      const cleaned = coerceModelProfiles(patch.modelProfiles);
+      if (cleaned) toSet.modelProfiles = cleaned;
+      else toRemove.push('modelProfiles');
+      // Clear the pre-profile keys in the same merge so a blob written
+      // before profiles existed doesn't keep ghosting the retired tier
+      // system alongside the profiles that replaced it.
+      toRemove.push(
+        'defaultModel',
+        'tierModels',
+        'defaultReasoningEffort',
+        'defaultVerbosity'
+      );
     }
     if ('imageModel' in patch) {
       // A non-empty string sets the override; undefined / empty clears it
@@ -809,20 +811,6 @@ export class SupabaseService {
         toSet.imageModel = patch.imageModel;
       } else {
         toRemove.push('imageModel');
-      }
-    }
-    if ('defaultReasoningEffort' in patch) {
-      if (patch.defaultReasoningEffort === undefined) {
-        toRemove.push('defaultReasoningEffort');
-      } else if (isReasoningEffort(patch.defaultReasoningEffort)) {
-        toSet.defaultReasoningEffort = patch.defaultReasoningEffort;
-      }
-    }
-    if ('defaultVerbosity' in patch) {
-      if (patch.defaultVerbosity === undefined) {
-        toRemove.push('defaultVerbosity');
-      } else if (isVerbosity(patch.defaultVerbosity)) {
-        toSet.defaultVerbosity = patch.defaultVerbosity;
       }
     }
     if ('colorMode' in patch) {
@@ -1244,7 +1232,9 @@ export class SupabaseService {
 
   async createThread(
     title: string,
-    model: ModelTier | null = null,
+    // Model-profile id (see ModelProfile in ./models), or null to track
+    // the user's default profile.
+    model: string | null = null,
     reasoningEffort: ThinkingLevel | null = null,
     verbosity: Verbosity | null = null,
     titleManuallySet = false,
@@ -1310,7 +1300,11 @@ export class SupabaseService {
     if (error) throw new SupabaseError(error.message);
   }
 
-  async setThreadModel(threadId: string, model: ModelTier | null): Promise<void> {
+  /**
+   * Pin the model profile for this thread by id, or clear the override
+   * (null) so the thread tracks the user's default profile.
+   */
+  async setThreadModel(threadId: string, model: string | null): Promise<void> {
     const { error } = await this.client
       .from('threads')
       .update({ model, updated_at: new Date().toISOString() })

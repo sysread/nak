@@ -32,15 +32,7 @@ import type { SupabaseService, SystemPrompt } from '../supabase';
 import type { VeniceClient } from '../venice';
 import { NO_PRICE_CAPS, type ModelPriceCaps } from '../models/price-caps';
 import { detectTimezone } from '../timezone';
-import {
-  DEFAULT_REASONING_EFFORT,
-  DEFAULT_TIER,
-  DEFAULT_VERBOSITY,
-  type ModelTier,
-  type ReasoningEffort,
-  type TierModels,
-  type Verbosity,
-} from '../models';
+import { seedModelProfiles, type ModelProfile } from '../models';
 import {
   DEFAULT_MODE,
   DEFAULT_ACCENT,
@@ -58,21 +50,16 @@ interface AppState {
   supabase: SupabaseService | null;
   venice: VeniceClient | null;
   /**
-   * User-level default model tier. Seeded to DEFAULT_TIER on activate(),
-   * then updated from Supabase `profiles.settings` once the user signs
-   * in. Written back via setDefaultModel() from Settings.
+   * The user's named model profiles from
+   * `profiles.settings.modelProfiles`, in display order, exactly one
+   * flagged default. Seeded to `seedModelProfiles()` on activate() so
+   * the composer and send path always have a working profile before
+   * (or without) a stored value; overwritten from Supabase on unlock.
+   * Read at chat send time via `resolveModelProfile(app.modelProfiles,
+   * thread.model)`. Each profile carries a capability snapshot, so
+   * chat resolution never has to wait on the lazily-fetched catalog.
    */
-  defaultModel: ModelTier;
-  /**
-   * Per-tier model + reasoning overrides from
-   * `profiles.settings.tierModels`. Empty object on activate() (no
-   * overrides = built-in tier defaults); overwritten from Supabase on
-   * unlock. Read at chat send time via `effectiveTierSpec(tier,
-   * app.tierModels)` so a configured tier resolves to the user's model
-   * and reasoning level. Each entry is a capability snapshot, so chat
-   * resolution never has to wait on the lazily-fetched catalog.
-   */
-  tierModels: TierModels;
+  modelProfiles: ModelProfile[];
   /**
    * Venice text-to-image model id for generate_image, from
    * `profiles.settings.imageModel`. Undefined on activate() and whenever
@@ -92,21 +79,6 @@ interface AppState {
    * the shared Venice key.
    */
   priceCaps: ModelPriceCaps;
-  /**
-   * User-level default reasoning-effort. Seeded to
-   * DEFAULT_REASONING_EFFORT on activate(), then overwritten from
-   * Supabase `profiles.settings.defaultReasoningEffort` on unlock.
-   * Only consulted on reasoning-capable models.
-   */
-  defaultReasoningEffort: ReasoningEffort;
-  /**
-   * User-level default text.verbosity. Seeded to DEFAULT_VERBOSITY on
-   * activate(), then overwritten from Supabase
-   * `profiles.settings.defaultVerbosity` on unlock. Sent on every chat
-   * request (per-thread override wins if set) — providers that don't
-   * honor the field silently ignore it.
-   */
-  defaultVerbosity: Verbosity;
   /** UI theme — seeded from localStorage cache, then from Supabase. */
   colorMode: ColorMode;
   accent: Accent;
@@ -236,12 +208,9 @@ export const app = $state<AppState>({
   config: null,
   supabase: null,
   venice: null,
-  defaultModel: DEFAULT_TIER,
-  tierModels: {},
+  modelProfiles: seedModelProfiles(),
   imageModel: undefined,
   priceCaps: NO_PRICE_CAPS,
-  defaultReasoningEffort: DEFAULT_REASONING_EFFORT,
-  defaultVerbosity: DEFAULT_VERBOSITY,
   colorMode: cachedTheme?.mode ?? DEFAULT_MODE,
   accent: cachedTheme?.accent ?? DEFAULT_ACCENT,
   defaultLogLevel: DEFAULT_LOG_LEVEL,

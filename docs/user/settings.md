@@ -70,12 +70,24 @@ Covered in detail on [Wiki](./wiki.md).
 
 ### AI
 
-Covered in detail on [Models & reasoning](./models.md). Also holds
-the **Image generation** model picker (which Venice model draws your
-pictures when you ask the assistant for one), the **Emphasis markdown**
-scan-aid toggle, and **reply notifications** (an optional desktop/mobile
-ping when a reply lands while you're looking elsewhere). The named
-system prompts moved to their own **Custom prompts** pane.
+Covered in detail on [Models & reasoning](./models.md). Holds the
+**About you** fields (name, location, timezone), the **Image
+generation** model picker (which Venice model draws your pictures when
+you ask the assistant for one), the **Emphasis markdown** scan-aid
+toggle, and **reply notifications** (an optional desktop/mobile ping
+when a reply lands while you're looking elsewhere). Chat models live
+on the **Model profiles** pane; the named system prompts have their
+own **Custom prompts** pane.
+
+### Model profiles
+
+Your named model configurations - each pairs a Venice model with the
+default reasoning effort and verbosity conversations on it start
+with. Add, edit, delete, and drag-reorder profile cards; the radio on
+a card marks the profile new conversations use (exactly one is always
+the default, and the last remaining profile can't be deleted).
+Everything autosaves. See
+[Model profiles](./models.md#model-profiles) for the full picture.
 
 ### Custom prompts
 

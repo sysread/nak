@@ -7,7 +7,7 @@ priming chain and the system-prompt preamble, then issues one
 `venice.streamChat` call that routes through the venice edge
 function's `/stream` route. The function owns the streaming round
 chain, tool dispatch, persistence, and error handling end-to-end.
-Model tiers and per-thread overrides also live here.
+Model-profile resolution and per-thread overrides also live here.
 
 ## Role in the app
 
@@ -16,9 +16,9 @@ A chat turn goes:
 1. User types in the composer and clicks send. `Chat.svelte`
    `addMessage`s the user row (browser-owned: see
    [Production-path ownership](./architecture.md#production-path-ownership-browser-vs-edge-function)).
-2. `Chat.svelte` resolves the effective model (per-thread override
-   -> tier default -> account default), builds the history in
-   OpenAI shape, and calls `runChatLoop`.
+2. `Chat.svelte` resolves the effective model profile (per-thread
+   pin -> default profile), builds the history in OpenAI shape, and
+   calls `runChatLoop`.
 3. `chat-loop.ts` runs the per-turn priming layers (samskara
    fire-and-compound, intuition, context recall), stitches their
    synthetic `<think>` blocks into the history, assembles the
@@ -55,10 +55,11 @@ A chat turn goes:
   `venice.streamChat` call per turn; the function-side round
   chain takes over from there. Split from the screen so the
   loop is unit-testable without a Svelte runtime.
-- `src/lib/models/index.ts` - `ModelTier`, `MODELS`, `TIERS`,
-  `AGENT_MODELS`, and the cascade helpers (`resolveTier`,
-  `resolveThinking`, `thinkingWireForTier`, `resolveVerbosity`)
-  that every agent also imports.
+- `src/lib/models/index.ts` - `ModelProfile` (+ its coercion and
+  the seed profile), `MODELS`, `AGENT_MODELS`, and the resolution
+  helpers (`resolveModelProfile`, `defaultModelProfile`,
+  `thinkingWireForProfile`, `profileModelSpec`) that every agent
+  also imports.
 - `src/lib/venice.ts` - the Venice wire-shape facade.
   `VeniceClient.streamChat` posts to the venice edge function's
   `/stream` route, subscribes to the per-thread Broadcast
@@ -131,39 +132,37 @@ A chat turn goes:
   Roles: `system | user | assistant | tool`. Columns the chat
   loop writes or reads: `content`, `tool_calls` (jsonb),
   `tool_call_id`, `name`, `model` (concrete Venice id captured at
-  send-time, not the abstract tier), `usage` (jsonb — Venice's
+  send-time, not the profile id), `usage` (jsonb — Venice's
   trailing `usage` SSE frame).
-- **Model tiers** — `MODELS: Record<ModelTier, ModelSpec>`.
-  `tier` is what persists (`threads.model` or
-  `profiles.settings.defaultModel`); `id` is the concrete Venice
-  model, resolved at send-time. This indirection lets us retune
-  a tier without orphaning stored rows. The built-in `TierSpec`s in
-  `models/index.ts` are the defaults; a user can repoint a tier's model
-  and reasoning level in Settings -> AI, which persists a
-  `TierModelConfig` snapshot under `profiles.settings.tierModels[tier]`.
-  The send path resolves through `effectiveTierSpec(tier,
-  app.tierModels)`, which folds the override (model id, capabilities,
-  default thinking) over the built-in spec; tiers with no override
-  resolve to the built-in unchanged. The override carries a capability
-  snapshot so resolution never has to wait on the lazily-fetched model
-  catalog (see [Settings](./settings.md)).
-- **Reasoning effort** — same pattern, but the per-thread value is
-  a `ThinkingLevel` (`off` | low | medium | high), not a bare
-  `ReasoningEffort`. Cascade `threads.reasoning_effort` (override) ->
-  `TIERS[tier].defaultThinking` -> `profiles.settings.
-  defaultReasoningEffort`, resolved at send-time by `resolveThinking`
-  and split into wire knobs by `thinkingWireForTier`: `off` ->
+- **Model profiles** — the user-defined named configurations in
+  `profiles.settings.modelProfiles` (`ModelProfile[]` in
+  `models/index.ts`): name + Venice model id + default thinking +
+  default verbosity + a capability snapshot, exactly one flagged
+  default. What persists on a thread is the profile ID
+  (`threads.model`, null = track the default profile); the concrete
+  Venice id is resolved at send-time via
+  `resolveModelProfile(app.modelProfiles, thread.model)`, so renaming
+  or re-pointing a profile never orphans stored rows. Unknown ids
+  (deleted profiles, legacy pre-profile tier names like
+  `'balanced'`) resolve to the default profile. Each profile carries
+  a capability snapshot so resolution never has to wait on the
+  lazily-fetched model catalog; accounts with no stored profiles get
+  `seedModelProfiles()` in memory (one "Default" profile on
+  deepseek-v4-flash, medium thinking, low verbosity). See
+  [Settings](./settings.md).
+- **Reasoning effort** — the per-thread value is a `ThinkingLevel`
+  (`off` | low | medium | high), not a bare `ReasoningEffort`.
+  Cascade `threads.reasoning_effort` (override) -> the profile's
+  `thinking` default, resolved and split into wire knobs by
+  `thinkingWireForProfile`: `off` ->
   `venice_parameters.disable_thinking`, the rest -> `reasoning_effort`.
-  Only forwarded when `ModelSpec.supportsReasoning` is true (some
-  providers 400 on the unknown field). The account default stays
-  low/medium/high - `off` only enters via a tier default or a
-  per-thread pick.
-- **Verbosity** — `profiles.settings.defaultVerbosity` or
-  per-thread `threads.verbosity`, resolved at send-time via
-  `resolveVerbosity`. Forwarded unconditionally as
-  `text.verbosity` (OpenAI-shape: nested under the top-level
-  `text` object, not a flat field). No capability gate —
-  providers that don't honor it silently ignore the knob.
+  Only forwarded when the profile's `supportsReasoning` is true (some
+  providers 400 on the unknown field).
+- **Verbosity** — per-thread `threads.verbosity`, falling back to
+  the profile's `verbosity` default at send-time. Forwarded
+  unconditionally as `text.verbosity` (OpenAI-shape: nested under
+  the top-level `text` object, not a flat field). No capability
+  gate — providers that don't honor it silently ignore the knob.
 - **Usage** — `messages.usage` stores
   `{ prompt_tokens, completion_tokens, total_tokens }` from
   Venice. Sourced by passing `stream_options:
@@ -350,13 +349,11 @@ A chat turn goes:
   topics column changes. The topics background worker
   populates `threads.topics`; the chat loop has no direct
   call path to it. See `./topics.md`.
-- **Settings** — `Chat.svelte` reads `app.defaultModel`,
-  `app.tierModels`, `app.defaultReasoningEffort`,
-  `app.defaultVerbosity`,
+- **Settings** — `Chat.svelte` reads `app.modelProfiles` and
   `app.systemPrompts` from the state store. Settings writes
-  those values; `app.tierModels` feeds `effectiveTierSpec` at
-  send-time so a repointed tier uses the user's model + reasoning.
-  System prompts configured as `enabledByDefault`
+  those values; `app.modelProfiles` feeds `resolveModelProfile` at
+  send-time so an edited profile immediately drives the threads on
+  it. System prompts configured as `enabledByDefault`
   seed the per-thread active set; per-thread toggles aren't
   persisted. See `./settings.md`.
 - **Auth-session** — the screen renders only after `activate()`
@@ -382,21 +379,22 @@ A chat turn goes:
   the next turn automatically. (The function never edits the
   system preamble; it forwards what the browser sent.)
 - **Concrete vs. abstract model ids.** `messages.model` stores
-  the *concrete* Venice id captured at send-time, not the abstract
-  tier - a historical record of which model answered the row.
+  the *concrete* Venice id captured at send-time, not the profile
+  id - a historical record of which model answered the row.
   Nothing reads it back today (the context ring measures against
   the thread's current model, not this column); it's kept as
-  provenance. `threads.model` stores the abstract tier (`'smart'`),
-  so retunes flow through and a model leaving Venice never orphans
-  a thread.
+  provenance. `threads.model` stores the abstract profile id, so
+  a profile edit flows through to its threads and a deleted
+  profile never orphans a thread (unknown ids resolve to the
+  default profile).
 - **The trailing `usage` SSE frame is optional.** Not every
   provider sends it, and a cancelled stream may drop it. `usage`
   is nullable in `messages` and the context ring renders nothing
   when usage is missing. The ring's denominator is the thread's
-  CURRENT effective-tier window (passed into `AssistantBody`), not
-  a lookup on `messages.model` - so an old row is measured against
-  the model the user is on now, which is the window they actually
-  have to manage. There is no retired-model registry.
+  CURRENT profile's context window (passed into `AssistantBody`),
+  not a lookup on `messages.model` - so an old row is measured
+  against the model the user is on now, which is the window they
+  actually have to manage. There is no retired-model registry.
 - **Realtime echo of your own write.** `subscribeToMessages`
   delivers an insert event for every row including your own.
   The dedup-by-id at the append site handles both orderings

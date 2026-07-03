@@ -23,11 +23,7 @@ import { resetUsage } from '../usage-store.svelte';
 import { resetCatalog } from '../models-catalog.svelte';
 import { resetImageCatalog } from '../image-models-catalog.svelte';
 import { detectTimezone } from '../timezone';
-import {
-  DEFAULT_REASONING_EFFORT,
-  DEFAULT_TIER,
-  DEFAULT_VERBOSITY,
-} from '../models';
+import { seedModelProfiles } from '../models';
 import { DEFAULT_LOG_LEVEL } from '../logger.svelte';
 import { app } from './root.svelte';
 import { applyServerSettings } from './settings';
@@ -49,10 +45,7 @@ let workersHalted = false;
  * by the individual callers as their semantics differ.
  */
 function seedProfileDefaults(): void {
-  app.defaultModel = DEFAULT_TIER;
-  app.tierModels = {};
-  app.defaultReasoningEffort = DEFAULT_REASONING_EFFORT;
-  app.defaultVerbosity = DEFAULT_VERBOSITY;
+  app.modelProfiles = seedModelProfiles();
   app.defaultLogLevel = DEFAULT_LOG_LEVEL;
   app.emphasisMarkdown = false;
   app.notifyOnComplete = false;

@@ -17,7 +17,7 @@
  */
 import { app } from './root.svelte';
 import type { SystemPrompt, UserSettings } from '../supabase';
-import type { ModelTier, ReasoningEffort, TierModels, Verbosity } from '../models';
+import { seedModelProfiles, type ModelProfile } from '../models';
 import type { ModelPriceCaps } from '../models/price-caps';
 import type { LogLevel } from '../logger.svelte';
 import { applyTheme, cacheTheme, type Accent, type ColorMode } from '../theme';
@@ -29,12 +29,8 @@ import { applyTheme, cacheTheme, type Accent, type ColorMode } from '../theme';
 // entry point per field, and a few carry a doc comment explaining the
 // "in-memory, does not persist" contract. NOT exported: outside callers
 // route through the `persist*` wrappers, never writing `app.*` directly.
-function setDefaultModel(tier: ModelTier): void {
-  app.defaultModel = tier;
-}
-
-function setTierModels(tierModels: TierModels): void {
-  app.tierModels = tierModels;
+function setModelProfiles(profiles: ModelProfile[]): void {
+  app.modelProfiles = profiles;
 }
 
 // Empty string / undefined is "not set" - the server falls back to
@@ -54,14 +50,6 @@ function setImageModel(modelId: string | undefined): void {
  */
 export function setPriceCaps(caps: ModelPriceCaps): void {
   app.priceCaps = caps;
-}
-
-function setDefaultReasoningEffort(effort: ReasoningEffort): void {
-  app.defaultReasoningEffort = effort;
-}
-
-function setDefaultVerbosity(verbosity: Verbosity): void {
-  app.defaultVerbosity = verbosity;
 }
 
 function setSystemPrompts(prompts: SystemPrompt[]): void {
@@ -213,36 +201,26 @@ export function setTheme(mode: ColorMode, accent: Accent): void {
 
 const NOT_CONNECTED = 'Not connected to Supabase yet.';
 
-export async function persistDefaultModel(tier: ModelTier): Promise<void> {
-  if (!app.supabase) throw new Error(NOT_CONNECTED);
-  const prev = app.defaultModel;
-  setDefaultModel(tier);
-  try {
-    await app.supabase.updateSettings({ defaultModel: tier });
-  } catch (err) {
-    setDefaultModel(prev);
-    throw err;
-  }
-}
-
 /**
- * Persist the whole per-tier override map. Callers build the next map
- * (current map with one tier added, changed, or removed) and hand it in
- * whole - mirroring updateSystemPrompts' replace-wholesale contract,
- * since a tier config is a single atomic snapshot rather than a set of
- * independently-mergeable fields. Optimistic with rollback.
+ * Persist the whole model-profile list. Callers build the next list
+ * (current list with a profile added, edited, removed, reordered, or
+ * re-defaulted) and hand it in whole - mirroring updateSystemPrompts'
+ * replace-wholesale contract, since the list's order and its exactly-
+ * one-default invariant only make sense as a unit. Optimistic with
+ * rollback; adopts the coerced server shape on success so a list the
+ * coercer normalized (dropped entry, re-flagged default) is reflected
+ * locally. An emptied list comes back as absence from the server - the
+ * seed substitutes so the app never runs with zero profiles.
  */
-export async function persistTierModels(tierModels: TierModels): Promise<void> {
+export async function persistModelProfiles(profiles: ModelProfile[]): Promise<void> {
   if (!app.supabase) throw new Error(NOT_CONNECTED);
-  const prev = app.tierModels;
-  setTierModels(tierModels);
+  const prev = app.modelProfiles;
+  setModelProfiles(profiles);
   try {
-    const merged = await app.supabase.updateSettings({ tierModels });
-    // Adopt the coerced server shape so a snapshot the coercer scrubbed
-    // (e.g. an all-empty map collapsing to absence) is reflected locally.
-    setTierModels(merged.tierModels ?? {});
+    const merged = await app.supabase.updateSettings({ modelProfiles: profiles });
+    setModelProfiles(merged.modelProfiles ?? seedModelProfiles());
   } catch (err) {
-    setTierModels(prev);
+    setModelProfiles(prev);
     throw err;
   }
 }
@@ -260,32 +238,6 @@ export async function persistImageModel(modelId: string | undefined): Promise<vo
     await app.supabase.updateSettings({ imageModel: modelId });
   } catch (err) {
     setImageModel(prev);
-    throw err;
-  }
-}
-
-export async function persistDefaultReasoningEffort(
-  effort: ReasoningEffort
-): Promise<void> {
-  if (!app.supabase) throw new Error(NOT_CONNECTED);
-  const prev = app.defaultReasoningEffort;
-  setDefaultReasoningEffort(effort);
-  try {
-    await app.supabase.updateSettings({ defaultReasoningEffort: effort });
-  } catch (err) {
-    setDefaultReasoningEffort(prev);
-    throw err;
-  }
-}
-
-export async function persistDefaultVerbosity(verbosity: Verbosity): Promise<void> {
-  if (!app.supabase) throw new Error(NOT_CONNECTED);
-  const prev = app.defaultVerbosity;
-  setDefaultVerbosity(verbosity);
-  try {
-    await app.supabase.updateSettings({ defaultVerbosity: verbosity });
-  } catch (err) {
-    setDefaultVerbosity(prev);
     throw err;
   }
 }
@@ -499,14 +451,14 @@ export async function persistSystemPrompts(prompts: SystemPrompt[]): Promise<voi
  * drift on which fields they handle.
  */
 export function applyServerSettings(s: UserSettings): void {
-  if (s.defaultModel) setDefaultModel(s.defaultModel);
-  // Always assign so a tier the user cleared on another tab (absent from
-  // the blob) drops the stale local override rather than ghosting it.
-  setTierModels(s.tierModels ?? {});
+  // Always assign; a blob with no stored profiles (new account, or one
+  // predating the profile system) substitutes the seed so the composer
+  // and send path always have a working default profile. The seed is
+  // NOT written back - it materializes in the blob only when the user
+  // first edits profiles in Settings.
+  setModelProfiles(s.modelProfiles ?? seedModelProfiles());
   // Always assign so clearing the override on another tab drops it here too.
   setImageModel(s.imageModel);
-  if (s.defaultReasoningEffort) setDefaultReasoningEffort(s.defaultReasoningEffort);
-  if (s.defaultVerbosity) setDefaultVerbosity(s.defaultVerbosity);
   if (s.defaultLogLevel) setDefaultLogLevel(s.defaultLogLevel);
   // Boolean toggles default to false in the seed; `?? false` makes
   // an absent key explicitly false rather than passing `undefined`

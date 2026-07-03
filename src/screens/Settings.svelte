@@ -62,11 +62,8 @@
   import {
     app,
     activate,
-    persistDefaultModel,
-    persistTierModels,
+    persistModelProfiles,
     persistImageModel,
-    persistDefaultReasoningEffort,
-    persistDefaultVerbosity,
     persistDefaultLogLevel,
     persistEmphasisMarkdown,
     persistNotifyOnComplete,
@@ -86,28 +83,17 @@
   import { isSupported as notificationsSupported, requestPermission } from '$lib/notifications.svelte';
   import { LOG_LEVELS, LOG_LEVEL_LABELS, type LogLevel } from '$lib/logger.svelte';
   import {
-    REASONING_EFFORTS,
-    REASONING_EFFORT_LABELS,
     THINKING_LEVELS,
     THINKING_LEVEL_LABELS,
-    TIERS,
-    TIER_ORDER,
     VERBOSITIES,
     VERBOSITY_LABELS,
-    effectiveTierSpec,
     VENICE_DEFAULT_IMAGE_MODEL,
-    type ModelTier,
-    type ReasoningEffort,
+    type ModelProfile,
     type ThinkingLevel,
-    type TierModelConfig,
     type Verbosity,
   } from '$lib/models';
-  import {
-    tierRowView,
-    tierConfigFromCatalog,
-    tierConfigFromSpec,
-    priceCapHiddenNote,
-  } from '$lib/ui/model-picker';
+  import { priceCapHiddenNote } from '$lib/ui/model-picker';
+  import * as profilesLib from '$lib/ui/model-profiles';
   import { buildImageModelOptions } from '$lib/ui/image-model-picker';
   import {
     catalog,
@@ -156,6 +142,7 @@
   type Group =
     | 'keys'
     | 'ai'
+    | 'modelprofiles'
     | 'customprompts'
     | 'memory'
     | 'wiki'
@@ -165,19 +152,20 @@
     | 'about';
   // Tabs are ordered by nearness of subject to the user: the app itself
   // (About), then the user's own presentation and personal data
-  // (Appearance, Memory, Wiki), then the assistant (AI, then the
-  // custom-prompt library that rides on top of it), then the
+  // (Appearance, Memory, Wiki), then the assistant (AI, then the model
+  // profiles and custom-prompt library that ride on top of it), then the
   // account/infrastructure tail furthest from day-to-day use (Usage,
-  // Security, API keys). Custom prompts sit right after AI because they
-  // are the same subject (how the assistant behaves) but were split into
-  // their own tab to keep the AI pane's model/reasoning layout legible -
-  // the prompt cards are tall and pushed everything else below the fold.
+  // Security, API keys). Model profiles and Custom prompts sit right
+  // after AI because they are the same subject (how the assistant
+  // behaves) but each carries a tall card list that would push the AI
+  // pane's other controls below the fold.
   const GROUPS: { id: Group; label: string }[] = [
     { id: 'about', label: 'About' },
     { id: 'appearance', label: 'Appearance' },
     { id: 'memory', label: 'Memory' },
     { id: 'wiki', label: 'Wiki' },
     { id: 'ai', label: 'AI' },
+    { id: 'modelprofiles', label: 'Model profiles' },
     { id: 'customprompts', label: 'Custom prompts' },
     { id: 'usage', label: 'Usage' },
     { id: 'security', label: 'Security' },
@@ -193,19 +181,7 @@
   let keysError = $state<string | null>(null);
   let keysInfo = $state<string | null>(null);
 
-  // --- Model pane ---
-  // Lives in Supabase `profiles.settings.defaultModel` (synced across
-  // browsers), so no master password is needed to change it.
-  let defaultModel = $state<ModelTier>(app.defaultModel);
-  // Paired with defaultModel in the same pane / form because the two
-  // always feel like one decision ("what am I asking the model to do,
-  // and how hard should it think about it?"). Persisted on
-  // `profiles.settings.defaultReasoningEffort`.
-  let defaultReasoningEffort = $state<ReasoningEffort>(app.defaultReasoningEffort);
-  // Paired with defaultModel / defaultReasoningEffort — a third knob in
-  // the same "how do I want this model to answer me?" decision cluster.
-  // Persisted on `profiles.settings.defaultVerbosity`.
-  let defaultVerbosity = $state<Verbosity>(app.defaultVerbosity);
+  // --- AI pane ---
   // Opt-in formatting nudge. When on, chat-loop appends a short
   // instruction block to the per-turn system prompt asking the model
   // to use light Markdown emphasis as scan-points. Persisted on
@@ -465,18 +441,216 @@
     }
   }
 
+  // --- Model profiles pane ---
+  // Local working copy of the profile list, same draft + debounced-
+  // wholesale-save shape as the Custom prompts pane: every mutation is a
+  // pure list transform (src/lib/ui/model-profiles.ts) over this array,
+  // and the whole list persists 500ms after the last edit. The one
+  // difference is a validation gate - profile names must be non-empty
+  // and unique (they are the composer menu's row labels), so an invalid
+  // draft parks on an inline error and the save re-arms when the user
+  // fixes the name.
+  let profilesDraft = $state<ModelProfile[]>(
+    app.modelProfiles.map((p) => ({ ...p }))
+  );
+  let profilesError = $state<string | null>(null);
+  let profilesSaveState = $state<'idle' | 'saving' | 'saved'>('idle');
+  let profilesSaving = $state(false);
+  let profilesDebounce: ReturnType<typeof setTimeout> | null = null;
+  // The validation the autosave gates on; also rendered inline.
+  const profilesNameError = $derived(profilesLib.profileNamesError(profilesDraft));
+
+  // Resync from a fresh Supabase pull unless the user is mid-edit -
+  // same guard as the prompts draft above.
+  $effect(() => {
+    if (profilesDebounce !== null || profilesSaving) return;
+    const live = app.modelProfiles;
+    if (!profilesLib.profilesMatch(live, profilesDraft)) {
+      profilesDraft = live.map((p) => ({ ...p }));
+    }
+  });
+
+  function addProfile(): void {
+    profilesDraft = profilesLib.addProfile(profilesDraft);
+    scheduleProfilesSave();
+  }
+
+  function updateProfile(id: string, patch: Partial<ModelProfile>): void {
+    profilesDraft = profilesLib.updateProfile(profilesDraft, id, patch);
+    scheduleProfilesSave();
+  }
+
+  function deleteProfile(id: string): void {
+    profilesDraft = profilesLib.deleteProfile(profilesDraft, id);
+    scheduleProfilesSave();
+  }
+
+  function setDefaultProfile(id: string): void {
+    profilesDraft = profilesLib.setDefaultProfile(profilesDraft, id);
+    scheduleProfilesSave();
+  }
+
+  // Re-point a profile at a model picked from the combobox. A live
+  // catalog row refreshes the capability snapshot wholesale; re-picking
+  // the synthetic off-catalog "current" option is a no-op (there's
+  // nothing fresher to copy from).
+  function onPickProfileModel(id: string, modelId: string): void {
+    const model = (catalog.data ?? []).find((m) => m.id === modelId);
+    if (!model) return;
+    const current = profilesDraft.find((p) => p.id === id);
+    if (!current) return;
+    profilesDraft = profilesLib.updateProfile(
+      profilesDraft,
+      id,
+      profilesLib.profileWithCatalogModel(current, model)
+    );
+    scheduleProfilesSave();
+  }
+
+  // Drag / long-press reorder for profile cards. Shares the pure array
+  // move shape with the prompts pane but keeps its own gesture state -
+  // the two panes never render together, yet separate ids keep a stale
+  // timer from one pane ever mutating the other's draft.
+  let profileDragId = $state<string | null>(null);
+  let profileDragOverId = $state<string | null>(null);
+  let profileTouchDragId = $state<string | null>(null);
+  let profileLongPressTimer: ReturnType<typeof setTimeout> | null = null;
+  let profileTouchStartY = 0;
+
+  function onProfileDragStart(id: string, e: DragEvent): void {
+    profileDragId = id;
+    // Required for Firefox to start a drag at all; the payload itself is
+    // unused since we track the dragged id in component state.
+    e.dataTransfer?.setData('text/plain', id);
+    if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+  }
+
+  function onProfileDragOver(id: string, e: DragEvent): void {
+    if (profileDragId === null) return;
+    // preventDefault is what marks this element as a valid drop target;
+    // without it the browser fires no drop event.
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+    profileDragOverId = id;
+  }
+
+  function onProfileDrop(targetId: string, e: DragEvent): void {
+    e.preventDefault();
+    const from = profilesDraft.findIndex((p) => p.id === profileDragId);
+    const to = profilesDraft.findIndex((p) => p.id === targetId);
+    profileDragId = null;
+    profileDragOverId = null;
+    if (from === -1 || to === -1 || from === to) return;
+    profilesDraft = profilesLib.reorderProfiles(profilesDraft, from, to);
+    scheduleProfilesSave();
+  }
+
+  function onProfileDragEnd(): void {
+    profileDragId = null;
+    profileDragOverId = null;
+  }
+
+  function clearProfileLongPress(): void {
+    if (profileLongPressTimer !== null) {
+      clearTimeout(profileLongPressTimer);
+      profileLongPressTimer = null;
+    }
+  }
+
+  function onProfileTouchStart(id: string, e: TouchEvent): void {
+    const t = e.touches[0];
+    if (!t) return;
+    profileTouchStartY = t.clientY;
+    clearProfileLongPress();
+    profileLongPressTimer = setTimeout(() => {
+      profileLongPressTimer = null;
+      profileTouchDragId = id;
+      profileDragOverId = id;
+      // Haptic confirmation that the card is now liftable. Optional
+      // chaining: most desktop browsers and iOS Safari don't implement
+      // Vibration, and a missing API must not break the activation.
+      navigator.vibrate?.(15);
+    }, LONG_PRESS_MS);
+  }
+
+  function onProfileTouchMove(e: TouchEvent): void {
+    const t = e.touches[0];
+    if (!t) return;
+    if (profileTouchDragId === null) {
+      // Pre-activation: a finger that wanders is scrolling, not holding.
+      if (Math.abs(t.clientY - profileTouchStartY) > TOUCH_SLOP) {
+        clearProfileLongPress();
+      }
+      return;
+    }
+    // Active drag: stop the pane scrolling under the finger and track
+    // which card the finger is currently over.
+    e.preventDefault();
+    const el = document.elementFromPoint(t.clientX, t.clientY);
+    const card = el?.closest<HTMLElement>('.prompt-card[data-profile-id]');
+    if (card?.dataset.profileId) profileDragOverId = card.dataset.profileId;
+  }
+
+  function onProfileTouchEnd(): void {
+    clearProfileLongPress();
+    if (profileTouchDragId === null) return;
+    const from = profilesDraft.findIndex((p) => p.id === profileTouchDragId);
+    const to = profilesDraft.findIndex((p) => p.id === profileDragOverId);
+    profileTouchDragId = null;
+    profileDragOverId = null;
+    if (from === -1 || to === -1 || from === to) return;
+    profilesDraft = profilesLib.reorderProfiles(profilesDraft, from, to);
+    scheduleProfilesSave();
+  }
+
+  function scheduleProfilesSave(): void {
+    profilesSaveState = 'saving';
+    if (profilesDebounce) clearTimeout(profilesDebounce);
+    profilesDebounce = setTimeout(() => {
+      profilesDebounce = null;
+      void saveProfiles();
+    }, 500);
+  }
+
+  async function saveProfiles(): Promise<void> {
+    // Park on the name error rather than persist a list the coercer
+    // would mangle (it drops a blank-named profile outright, silently
+    // losing the card). The next edit re-arms the debounce, so fixing
+    // the name is what saves.
+    if (profilesNameError !== null) {
+      profilesError = profilesNameError;
+      profilesSaveState = 'idle';
+      return;
+    }
+    profilesError = null;
+    profilesSaving = true;
+    try {
+      await persistModelProfiles(profilesDraft);
+      profilesSaveState = 'saved';
+    } catch (err) {
+      profilesError = err instanceof Error ? err.message : String(err);
+      profilesSaveState = 'idle';
+    } finally {
+      profilesSaving = false;
+    }
+  }
+
   // Closing the modal mid-debounce would otherwise drop the user's
-  // most recent prompt edit on the floor (the timer outlives the
-  // component but its closure writes to state nobody reads anymore,
-  // and persistSystemPrompts never gets called). Cancel the pending
-  // timer and fire one final fire-and-forget save so the typed-but-
-  // unsent state lands on the server. Safe to no-op when there's no
-  // pending edit.
+  // most recent prompt or profile edit on the floor (the timer outlives
+  // the component but its closure writes to state nobody reads anymore,
+  // and the persist never gets called). Cancel the pending timers and
+  // fire one final fire-and-forget save so the typed-but-unsent state
+  // lands on the server. Safe to no-op when there's no pending edit.
   onDestroy(() => {
     if (promptsDebounce !== null) {
       clearTimeout(promptsDebounce);
       promptsDebounce = null;
       void savePrompts();
+    }
+    if (profilesDebounce !== null) {
+      clearTimeout(profilesDebounce);
+      profilesDebounce = null;
+      void saveProfiles();
     }
   });
 
@@ -631,9 +805,10 @@
   let customLoading = $state(false);
   let customError = $state<string | null>(null);
 
-  // Catalog with over-cap models removed, so the tier pickers only offer
-  // models the venice function would actually run (the server enforces the
-  // same caps; this is the UX half). A no-op when no cap is configured.
+  // Catalog with over-cap models removed, so the profile comboboxes only
+  // offer models the venice function would actually run (the server
+  // enforces the same caps; this is the UX half). A no-op when no cap is
+  // configured.
   const visibleModels = $derived(filterCatalogByCaps(catalog.data ?? [], app.priceCaps));
   // The explanatory note when the cap hides live catalog models (null when
   // nothing is hidden).
@@ -680,13 +855,14 @@
     }
   });
 
-  // First-landing-on-the-AI-pane catalog fetch, same lazy-on-open shape
-  // as the Usage auto-refresh above. The catalog populates the per-tier
-  // model dropdowns; shouldAutoRefreshCatalog() carries the same
-  // stale + not-in-flight + last-attempt-didn't-error guard so a failing
-  // fetch surfaces its error instead of retry-storming.
+  // First-landing-on-the-Model-profiles-pane catalog fetch, same
+  // lazy-on-open shape as the Usage auto-refresh above. The catalog
+  // populates each profile card's model combobox;
+  // shouldAutoRefreshCatalog() carries the same stale + not-in-flight +
+  // last-attempt-didn't-error guard so a failing fetch surfaces its
+  // error instead of retry-storming.
   $effect(() => {
-    if (group === 'ai' && shouldAutoRefreshCatalog() && app.supabase) {
+    if (group === 'modelprofiles' && shouldAutoRefreshCatalog() && app.supabase) {
       void refreshCatalog(app.supabase);
     }
   });
@@ -994,80 +1170,7 @@
     }
   }
 
-  // Picking a radio applies the choice immediately - no Save button.
-  // Optimistic in-memory flip so the radio reflects the new tier
-  // right away; on persistence failure we roll the local form state
-  // back. The persistX helper handles app-state apply + rollback.
-  async function onPickModel(next: ModelTier): Promise<void> {
-    modelError = null;
-    modelInfo = null;
-    const prev = defaultModel;
-    defaultModel = next;
-    try {
-      await persistDefaultModel(next);
-      modelInfo = `Default model set to ${TIERS[next].label}.`;
-    } catch (err) {
-      defaultModel = prev;
-      modelError = err instanceof Error ? err.message : String(err);
-    }
-  }
-
-  // Per-tier model + reasoning config. The selects below read their
-  // values from `app.tierModels` (reactive) via `tierRowView`, so these
-  // handlers persist the next whole map and let persistTierModels do the
-  // optimistic apply + rollback - no local form mirror to keep in sync.
-  // A tier config is one atomic snapshot, so we always write the full map
-  // (current map with the one tier replaced or removed).
-  async function persistTierConfig(
-    tier: ModelTier,
-    config: TierModelConfig | null
-  ): Promise<void> {
-    modelError = null;
-    modelInfo = null;
-    const next = { ...app.tierModels };
-    if (config) next[tier] = config;
-    else delete next[tier];
-    try {
-      await persistTierModels(next);
-      modelInfo = config
-        ? `${TIERS[tier].label} now uses ${config.label}.`
-        : `${TIERS[tier].label} reset to its built-in model.`;
-    } catch (err) {
-      modelError = err instanceof Error ? err.message : String(err);
-    }
-  }
-
-  function onPickTierModel(tier: ModelTier, modelId: string): void {
-    // Keep the tier's current default reasoning level when only the model
-    // changes - the two selects are independent decisions.
-    const thinking = effectiveTierSpec(tier, app.tierModels).defaultThinking
-      ?? defaultReasoningEffort;
-    const model = (catalog.data ?? []).find((m) => m.id === modelId);
-    const config = model
-      ? tierConfigFromCatalog(model, thinking)
-      : // The synthetic "current" option (off-catalog id) re-selected:
-        // preserve the existing snapshot's capabilities via the spec.
-        tierConfigFromSpec(
-          effectiveTierSpec(tier, app.tierModels),
-          thinking,
-          app.tierModels[tier]?.label
-        );
-    void persistTierConfig(tier, config);
-  }
-
-  function onPickTierThinking(tier: ModelTier, thinking: ThinkingLevel): void {
-    // Rebuild the snapshot for the tier's currently-selected model with
-    // the new reasoning level. Prefer the live catalog row so capabilities
-    // refresh; fall back to the effective spec for an off-catalog model.
-    const spec = effectiveTierSpec(tier, app.tierModels);
-    const model = (catalog.data ?? []).find((m) => m.id === spec.id);
-    const config = model
-      ? tierConfigFromCatalog(model, thinking)
-      : tierConfigFromSpec(spec, thinking, app.tierModels[tier]?.label);
-    void persistTierConfig(tier, config);
-  }
-
-  // Image-generation model. One bare id, no reasoning/tier axis. Picking
+  // Image-generation model. One bare id, no reasoning/profile axis. Picking
   // the default id clears the override (stored as absence) so the blob
   // stays compact and "default" reads as unset; any other id is persisted.
   async function onPickImageModel(modelId: string): Promise<void> {
@@ -1080,34 +1183,6 @@
         (imageCatalog.data ?? []).find((m) => m.id === modelId)?.name ?? modelId;
       modelInfo = `Image generation now uses ${label}.`;
     } catch (err) {
-      modelError = err instanceof Error ? err.message : String(err);
-    }
-  }
-
-  async function onPickReasoning(next: ReasoningEffort): Promise<void> {
-    modelError = null;
-    modelInfo = null;
-    const prev = defaultReasoningEffort;
-    defaultReasoningEffort = next;
-    try {
-      await persistDefaultReasoningEffort(next);
-      modelInfo = `Default reasoning effort set to ${REASONING_EFFORT_LABELS[next].toLowerCase()}.`;
-    } catch (err) {
-      defaultReasoningEffort = prev;
-      modelError = err instanceof Error ? err.message : String(err);
-    }
-  }
-
-  async function onPickVerbosity(next: Verbosity): Promise<void> {
-    modelError = null;
-    modelInfo = null;
-    const prev = defaultVerbosity;
-    defaultVerbosity = next;
-    try {
-      await persistDefaultVerbosity(next);
-      modelInfo = `Default verbosity set to ${VERBOSITY_LABELS[next].toLowerCase()}.`;
-    } catch (err) {
-      defaultVerbosity = prev;
       modelError = err instanceof Error ? err.message : String(err);
     }
   }
@@ -1503,16 +1578,15 @@
       {:else if group === 'ai'}
         <!-- AI-adjacent settings share one pane so the sidebar doesn't
              fan out into a dedicated tab per toggle. All subsections
-             autosave — picking a model or reasoning tier flips through
-             on change, prompts debounce-save on edit, and the
-             web-search checkbox writes on toggle — so the whole pane
-             matches the Appearance pane's "touch it and it sticks"
-             behavior. -->
+             autosave — pickers flip through on change and the toggles
+             write on click — so the whole pane matches the Appearance
+             pane's "touch it and it sticks" behavior. -->
         <h2>AI</h2>
         <p class="subtle">
-          Default model, reasoning, and behavior preferences. Your named
-          system prompts moved to their own <strong>Custom prompts</strong>
-          tab.
+          Profile and behavior preferences for the assistant. Chat models
+          and their defaults live on the
+          <strong>Model profiles</strong> tab; your named system prompts
+          have their own <strong>Custom prompts</strong> tab.
         </p>
 
         <h3 class="pane-section">About you</h3>
@@ -1611,101 +1685,6 @@
           {/if}
         </p>
 
-        <h3 class="pane-section">Models</h3>
-        <p class="subtle">
-          Each tier is a slot you can point at any Venice chat model and
-          give its own default reasoning effort. The <strong>radio</strong>
-          marks which tier new threads use by default; you can override the
-          tier per-thread from the chat top bar. Capability icons, context
-          window, and price come from the live Venice catalog.
-        </p>
-        <div class="tier-config">
-          {#each TIER_ORDER as tier (tier)}
-            {@const row = tierRowView(tier, app.tierModels, visibleModels)}
-            <div class="tier-row" class:tier-row-default={defaultModel === tier}>
-              <div class="tier-row-head">
-                <label class="tier-default-radio">
-                  <input
-                    type="radio"
-                    name="default-model"
-                    value={tier}
-                    checked={defaultModel === tier}
-                    onchange={() => onPickModel(tier)}
-                  />
-                  <span class="tier-icon" aria-hidden="true">{TIERS[tier].icon}</span>
-                  <strong>{TIERS[tier].label}</strong>
-                </label>
-                {#if defaultModel === tier}
-                  <span class="tier-badge">Account default</span>
-                {/if}
-                {#if row.overridden}
-                  <button
-                    type="button"
-                    class="tier-reset"
-                    onclick={() => persistTierConfig(tier, null)}
-                  >Reset</button>
-                {/if}
-              </div>
-
-              <div class="tier-row-controls">
-                <ModelCombobox
-                  options={row.options}
-                  value={row.spec.id}
-                  disabled={catalog.data === null}
-                  ariaLabel={`Model for ${TIERS[tier].label}`}
-                  onSelect={(id) => onPickTierModel(tier, id)}
-                />
-                <label class="sr-only" for={`tier-thinking-${tier}`}
-                  >Reasoning for {TIERS[tier].label}</label
-                >
-                <select
-                  id={`tier-thinking-${tier}`}
-                  value={row.thinking}
-                  disabled={!row.spec.supportsReasoning}
-                  title={row.spec.supportsReasoning
-                    ? 'Default reasoning effort for this tier'
-                    : "This model doesn't support reasoning"}
-                  onchange={(e) =>
-                    onPickTierThinking(
-                      tier,
-                      (e.currentTarget as HTMLSelectElement).value as ThinkingLevel
-                    )}
-                >
-                  {#each THINKING_LEVELS as lvl (lvl)}
-                    <option value={lvl}>{THINKING_LEVEL_LABELS[lvl]} thinking</option>
-                  {/each}
-                </select>
-              </div>
-
-              <div class="tier-row-meta">
-                {#each row.chips as chip (chip.label)}
-                  <span class="cap-chip"
-                    ><span aria-hidden="true">{chip.icon}</span> {chip.label}</span
-                  >
-                {/each}
-                <span class="cap-chip">{row.contextLabel} context</span>
-                <span class="cap-chip">{row.priceLabel}</span>
-              </div>
-            </div>
-          {/each}
-          {#if catalog.loading}
-            <p class="subtle">Loading models from Venice…</p>
-          {/if}
-          {#if catalog.error}
-            <p class="error">
-              Couldn't load the model catalog: {catalog.error}
-              <button
-                type="button"
-                class="tier-reset"
-                onclick={() => app.supabase && refreshCatalog(app.supabase)}
-              >Retry</button>
-            </p>
-          {/if}
-          {#if hiddenModelNote}
-            <p class="subtle">{hiddenModelNote}</p>
-          {/if}
-        </div>
-
         <h3 class="pane-section">Image generation</h3>
         <p class="subtle">
           The model the assistant uses when you ask it to
@@ -1739,51 +1718,6 @@
         {#if hiddenImageModelNote}
           <p class="subtle">{hiddenImageModelNote}</p>
         {/if}
-
-        <h3 class="pane-section">Default reasoning effort</h3>
-        <p class="subtle">
-          Controls how hard the model thinks before replying on
-          reasoning-capable models. <strong>Low</strong> keeps turns
-          snappy; <strong>high</strong> trades latency for depth.
-          Ignored on non-reasoning models. Overridable per-thread from
-          the composer.
-        </p>
-        <div class="form-row" style="display:flex;gap:0.5rem;align-items:center">
-          <label for="default-reasoning" class="sr-only">Default reasoning effort</label>
-          <select
-            id="default-reasoning"
-            value={defaultReasoningEffort}
-            onchange={(e) =>
-              onPickReasoning((e.currentTarget as HTMLSelectElement).value as ReasoningEffort)}
-          >
-            {#each REASONING_EFFORTS as effort (effort)}
-              <option value={effort}>{REASONING_EFFORT_LABELS[effort]}</option>
-            {/each}
-          </select>
-        </div>
-        <h3 class="pane-section">Default verbosity</h3>
-        <p class="subtle">
-          Suggests how long the model's answers should be before any
-          reasoning knob kicks in. <strong>Low</strong> biases toward
-          short, direct replies; <strong>high</strong> invites
-          expansive prose. Passed on every request as
-          <code>text.verbosity</code> — providers that don't honor the
-          field silently ignore it. Overridable per-thread from the
-          composer.
-        </p>
-        <div class="form-row" style="display:flex;gap:0.5rem;align-items:center">
-          <label for="default-verbosity" class="sr-only">Default verbosity</label>
-          <select
-            id="default-verbosity"
-            value={defaultVerbosity}
-            onchange={(e) =>
-              onPickVerbosity((e.currentTarget as HTMLSelectElement).value as Verbosity)}
-          >
-            {#each VERBOSITIES as v (v)}
-              <option value={v}>{VERBOSITY_LABELS[v]}</option>
-            {/each}
-          </select>
-        </div>
 
         <h3 class="pane-section">Emphasis markdown</h3>
         <p class="subtle">
@@ -1873,6 +1807,213 @@
         {/if}
         {#if modelError}<p class="error">{modelError}</p>{/if}
         {#if modelInfo}<p class="subtle">{modelInfo}</p>{/if}
+
+      {:else if group === 'modelprofiles'}
+        <!-- Model profiles split from the AI pane: the cards are tall
+             and the list is unbounded. The list autosaves (debounced)
+             on add / edit / delete / reorder / default change, matching
+             the Custom prompts pane it borrows its card + drag
+             mechanics from. -->
+        <h2>Model profiles</h2>
+        <p class="subtle">
+          Named model configurations you can switch between from the
+          chat composer. Each profile pairs a Venice model with the
+          default <strong>reasoning</strong> effort and
+          <strong>verbosity</strong> new conversations start at - both
+          still adjustable per conversation from the composer. The
+          <strong>Default</strong> radio marks the profile new
+          conversations use. Drag the grip handle to reorder.
+        </p>
+        <div class="prompt-list">
+          {#each profilesDraft as p (p.id)}
+            {@const row = profilesLib.profileRowView(p, visibleModels)}
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div
+              class="prompt-card"
+              class:drag-over={profileDragOverId === p.id &&
+                profileDragId !== p.id &&
+                profileTouchDragId !== p.id}
+              class:dragging={profileDragId === p.id}
+              class:touch-dragging={profileTouchDragId === p.id}
+              data-profile-id={p.id}
+              ondragover={(e) => onProfileDragOver(p.id, e)}
+              ondrop={(e) => onProfileDrop(p.id, e)}
+            >
+              <div class="prompt-row">
+                <span
+                  class="prompt-grip"
+                  role="button"
+                  tabindex="-1"
+                  draggable="true"
+                  title="Drag to reorder (press and hold on touch)"
+                  aria-label="Drag to reorder profile"
+                  ondragstart={(e) => onProfileDragStart(p.id, e)}
+                  ondragend={onProfileDragEnd}
+                  ontouchstart={(e) => onProfileTouchStart(p.id, e)}
+                  ontouchmove={onProfileTouchMove}
+                  ontouchend={onProfileTouchEnd}
+                  ontouchcancel={onProfileTouchEnd}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <circle cx="9" cy="6" r="1.6" />
+                    <circle cx="15" cy="6" r="1.6" />
+                    <circle cx="9" cy="12" r="1.6" />
+                    <circle cx="15" cy="12" r="1.6" />
+                    <circle cx="9" cy="18" r="1.6" />
+                    <circle cx="15" cy="18" r="1.6" />
+                  </svg>
+                </span>
+                <input
+                  type="text"
+                  name="profile-name-{p.id}"
+                  class="prompt-name"
+                  value={p.name}
+                  placeholder="Name"
+                  oninput={(e) =>
+                    updateProfile(p.id, {
+                      name: (e.currentTarget as HTMLInputElement).value,
+                    })}
+                />
+                <!-- Radio semantics carry the exactly-one-default rule:
+                     picking one deselects the rest (setDefaultProfile
+                     clears every other flag). With a single profile the
+                     radio is checked and disabled - the invariant says
+                     it cannot be unset until a second profile exists. -->
+                <label
+                  class="prompt-default"
+                  title={profilesDraft.length === 1
+                    ? 'Your only profile is always the default'
+                    : 'Use this profile for new conversations'}
+                >
+                  <input
+                    type="radio"
+                    name="default-profile"
+                    checked={p.isDefault}
+                    disabled={profilesDraft.length === 1}
+                    onchange={() => setDefaultProfile(p.id)}
+                  />
+                  <span>Default</span>
+                </label>
+                <button
+                  type="button"
+                  class="secondary icon-btn"
+                  title={profilesDraft.length === 1
+                    ? 'The last profile cannot be deleted'
+                    : 'Delete profile'}
+                  aria-label="Delete profile"
+                  disabled={profilesDraft.length === 1}
+                  onclick={() => deleteProfile(p.id)}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                       stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <polyline points="3 6 5 6 21 6" />
+                    <path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6" />
+                    <path d="M10 11v6M14 11v6" />
+                  </svg>
+                </button>
+              </div>
+
+              <div class="tier-row-controls">
+                <ModelCombobox
+                  options={row.options}
+                  value={p.modelId}
+                  disabled={catalog.data === null}
+                  ariaLabel={`Model for ${p.name}`}
+                  onSelect={(id) => onPickProfileModel(p.id, id)}
+                />
+                <label class="sr-only" for={`profile-thinking-${p.id}`}
+                  >Reasoning for {p.name}</label
+                >
+                <select
+                  id={`profile-thinking-${p.id}`}
+                  value={p.thinking}
+                  disabled={!p.supportsReasoning}
+                  title={p.supportsReasoning
+                    ? 'Default reasoning effort for this profile'
+                    : "This model doesn't support reasoning"}
+                  onchange={(e) =>
+                    updateProfile(p.id, {
+                      thinking: (e.currentTarget as HTMLSelectElement)
+                        .value as ThinkingLevel,
+                    })}
+                >
+                  {#each THINKING_LEVELS as lvl (lvl)}
+                    <option value={lvl}>{THINKING_LEVEL_LABELS[lvl]} thinking</option>
+                  {/each}
+                </select>
+                <label class="sr-only" for={`profile-verbosity-${p.id}`}
+                  >Verbosity for {p.name}</label
+                >
+                <select
+                  id={`profile-verbosity-${p.id}`}
+                  value={p.verbosity}
+                  title="Default verbosity for this profile"
+                  onchange={(e) =>
+                    updateProfile(p.id, {
+                      verbosity: (e.currentTarget as HTMLSelectElement)
+                        .value as Verbosity,
+                    })}
+                >
+                  {#each VERBOSITIES as v (v)}
+                    <option value={v}>{VERBOSITY_LABELS[v]} verbosity</option>
+                  {/each}
+                </select>
+              </div>
+
+              <div class="tier-row-meta">
+                {#each row.chips as chip (chip.label)}
+                  <span class="cap-chip"
+                    ><span aria-hidden="true">{chip.icon}</span> {chip.label}</span
+                  >
+                {/each}
+                <span class="cap-chip">{row.contextLabel} context</span>
+                <span class="cap-chip">{row.priceLabel}</span>
+              </div>
+            </div>
+          {/each}
+        </div>
+        {#if catalog.loading}
+          <p class="subtle">Loading models from Venice…</p>
+        {/if}
+        {#if catalog.error}
+          <p class="error">
+            Couldn't load the model catalog: {catalog.error}
+            <button
+              type="button"
+              class="tier-reset"
+              onclick={() => app.supabase && refreshCatalog(app.supabase)}
+            >Retry</button>
+          </p>
+        {/if}
+        {#if hiddenModelNote}
+          <p class="subtle">{hiddenModelNote}</p>
+        {/if}
+        <div class="prompts-footer">
+          <button type="button" onclick={addProfile}>+ Add profile</button>
+          <!-- Floating save-state indicator, same contract as the
+               Custom prompts footer: reserves its slot so it never
+               shifts the layout; only the icon inside toggles. -->
+          <div class="save-status" aria-live="polite">
+            {#if profilesSaveState === 'saving'}
+              <svg class="save-icon" width="16" height="16" viewBox="0 0 24 24"
+                   fill="none" stroke="currentColor" stroke-width="2"
+                   stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="10" />
+                <polyline points="12 6 12 12 16 14" />
+              </svg>
+              <span class="sr-only">Saving…</span>
+            {:else if profilesSaveState === 'saved'}
+              <svg class="save-icon saved" width="16" height="16" viewBox="0 0 24 24"
+                   fill="none" stroke="currentColor" stroke-width="2.5"
+                   stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+              <span class="sr-only">Saved</span>
+            {/if}
+          </div>
+        </div>
+        {#if profilesNameError}<p class="error">{profilesNameError}</p>
+        {:else if profilesError}<p class="error">{profilesError}</p>{/if}
 
       {:else if group === 'customprompts'}
         <!-- Custom prompts split out of the AI pane: the cards are tall

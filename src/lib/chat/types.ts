@@ -171,14 +171,15 @@ export interface ChatLoopOptions {
    */
   reasoningEffort?: ReasoningEffort;
   /**
-   * Tier-level kill switch for reasoning. When true, every streamChat
-   * call this turn ships `venice_parameters.disable_thinking: true`.
-   * Caller (Chat.svelte) is expected to also omit `reasoningEffort`
-   * when this is true - the two knobs are mutually exclusive on the
-   * wire (reasoning_effort: 'low' shrinks the CoT but doesn't disable
-   * it; disable_thinking is the full off switch). Used by the Fast
-   * tier so it stays fast even though it fronts a reasoning-capable
-   * model.
+   * Kill switch for reasoning. When true, every streamChat call this
+   * turn ships `venice_parameters.disable_thinking: true`. Caller
+   * (Chat.svelte) is expected to also omit `reasoningEffort` when this
+   * is true - the two knobs are mutually exclusive on the wire
+   * (reasoning_effort: 'low' shrinks the CoT but doesn't disable it;
+   * disable_thinking is the full off switch). Set when the thread's
+   * resolved thinking level is 'off' - e.g. a model profile whose
+   * default reasoning is Off - so the turn stays fast even though the
+   * profile fronts a reasoning-capable model.
    */
   disableThinking?: boolean;
   /**
@@ -260,7 +261,7 @@ export interface ChatLoopOptions {
   supersededIds?: readonly string[];
   /**
    * Concrete Venice model id used by the intuition pipeline (perception
-   * + 5 drives + synthesis). Caller resolves the fast tier. Omitted /
+   * + 5 drives + synthesis). Caller resolves it via agentModel. Omitted /
    * undefined disables the intuition feature entirely on this turn -
    * older callers (older test fixtures) keep working without knowing
    * the field exists. The cache is left untouched when this is absent,

@@ -8,10 +8,7 @@ import {
   formatPricing,
   fuzzyMatch,
   priceCapHiddenNote,
-  tierConfigFromCatalog,
-  tierRowView,
 } from '../src/lib/ui/model-picker';
-import { TIERS } from '../src/lib/models';
 
 // One raw /models entry in Venice's nested shape, for the coercer tests.
 function rawEntry(over: Record<string, unknown> = {}): unknown {
@@ -197,20 +194,6 @@ describe('buildModelOptions', () => {
   });
 });
 
-describe('tierConfigFromCatalog', () => {
-  it('snapshots capabilities + the chosen thinking level', () => {
-    expect(tierConfigFromCatalog(SAMPLE, 'low')).toEqual({
-      modelId: 'glm-5-1',
-      thinking: 'low',
-      contextWindow: 200_000,
-      supportsReasoning: true,
-      supportsVision: true,
-      supportsResponseFormat: true,
-      label: 'GLM 5.1',
-    });
-  });
-});
-
 describe('priceCapHiddenNote', () => {
   it('returns null when nothing is hidden', () => {
     expect(priceCapHiddenNote(0)).toBeNull();
@@ -219,26 +202,5 @@ describe('priceCapHiddenNote', () => {
   it('pluralizes the count', () => {
     expect(priceCapHiddenNote(1)).toBe("1 model is hidden by this instance's price cap.");
     expect(priceCapHiddenNote(3)).toBe("3 models are hidden by this instance's price cap.");
-  });
-});
-
-describe('tierRowView', () => {
-  it('reflects the built-in spec and no override by default', () => {
-    const row = tierRowView('smart', {}, []);
-    expect(row.spec.id).toBe(TIERS.smart.id);
-    expect(row.overridden).toBe(false);
-    // The built-in id isn't in an empty catalog, so the select still
-    // shows it via a synthetic option.
-    expect(row.options[0].id).toBe(TIERS.smart.id);
-  });
-  it('reads price + chips from the live catalog row for the selected model', () => {
-    const row = tierRowView('smart', { smart: tierConfigFromCatalog(SAMPLE, 'high') }, [
-      SAMPLE,
-    ]);
-    expect(row.spec.id).toBe('glm-5-1');
-    expect(row.overridden).toBe(true);
-    expect(row.thinking).toBe('high');
-    expect(row.priceLabel).toBe('$0.30 in / $1.20 out per 1M');
-    expect(row.chips.map((c) => c.label)).toContain('Vision');
   });
 });
