@@ -14,6 +14,7 @@ import type {
 import {
   assimilationStatus,
   clusterFires,
+  cohortCountLabel,
   fireVerdictLabel,
   fireVerdictStatusClass,
   formatRelative,
@@ -173,6 +174,21 @@ describe('isCollapsedView', () => {
 
   it('is false for an empty cohort', () => {
     expect(isCollapsedView([], [])).toBe(false);
+  });
+});
+
+describe('cohortCountLabel', () => {
+  it('leads with the theme count in the grouped view', () => {
+    expect(cohortCountLabel(2, 5, true)).toBe('2 themes from 5 predictions');
+  });
+
+  it('uses singular nouns at count one', () => {
+    expect(cohortCountLabel(1, 1, true)).toBe('1 theme from 1 prediction');
+  });
+
+  it('shows only the fire count when not grouped', () => {
+    expect(cohortCountLabel(2, 5, false)).toBe('5 predictions');
+    expect(cohortCountLabel(0, 1, false)).toBe('1 prediction');
   });
 });
 

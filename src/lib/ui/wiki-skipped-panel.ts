@@ -35,6 +35,21 @@ export function formatSkipTimestamp(iso: string): string {
 }
 
 /**
+ * Rows still visible after local dismissals. Dismissing is
+ * local-only (the server already cleared the skip marker on a
+ * successful retry; hiding the row is a rendering decision), so
+ * the panel's list and its empty-state check must both read
+ * through this filter - reading `rows` directly would resurrect
+ * dismissed rows in one of the two places.
+ */
+export function visibleSkippedRows<T extends { threadId: string }>(
+  rows: readonly T[],
+  dismissed: Readonly<Record<string, boolean>>
+): T[] {
+  return rows.filter((r) => !dismissed[r.threadId]);
+}
+
+/**
  * Fallback for the thread title in the row link. Threads can
  * land in the skipped list before the auto-title worker has
  * produced anything (the wiki worker runs a day after the

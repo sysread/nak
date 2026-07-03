@@ -25,12 +25,14 @@ import {
   describeLink,
   linkCandidates,
   validateLinkLabel,
+  validateRecordForm,
 } from '../src/lib/ui/wiki-records';
 import {
   buildRecordChangelogMessage,
   buildRecordFileChangelogMessage,
   buildRecordLinkChangelogMessage,
   MAX_RECORD_LINK_LABEL_CHARS,
+  MAX_WIKI_RECORD_CONTENT_CHARS,
 } from '../src/lib/wiki';
 import type { WikiRecordFile, WikiRecordLinkView } from '../src/lib/supabase';
 
@@ -265,6 +267,37 @@ describe('linkCandidates', () => {
     const existing = [makeLinkView({ id: 'l', record: { ...makeLinkView().record, id: 'b' } })];
     const out = linkCandidates([a, b, c], 'a', existing);
     expect(out.map((r) => r.id)).toEqual(['c']);
+  });
+});
+
+describe('validateRecordForm', () => {
+  it('accepts trimmed content with a date-input-shaped date', () => {
+    expect(validateRecordForm('Fed the starter.', '2026-06-17')).toBeNull();
+  });
+
+  it('rejects empty content (the caller passes content already trimmed)', () => {
+    expect(validateRecordForm('', '2026-06-17')).toBe('Content is required.');
+  });
+
+  it('rejects over-length content with the cap in the message', () => {
+    const long = 'x'.repeat(MAX_WIKI_RECORD_CONTENT_CHARS + 1);
+    expect(validateRecordForm(long, '2026-06-17')).toBe(
+      `Content must be ${MAX_WIKI_RECORD_CONTENT_CHARS} chars or fewer.`,
+    );
+    expect(
+      validateRecordForm('x'.repeat(MAX_WIKI_RECORD_CONTENT_CHARS), '2026-06-17'),
+    ).toBeNull();
+  });
+
+  it('rejects a date that is not YYYY-MM-DD shaped', () => {
+    // A native date input yields either that shape or an empty
+    // string; the empty string is the "no date picked" case.
+    expect(validateRecordForm('ok', '')).toBe('Pick a valid date.');
+    expect(validateRecordForm('ok', '06/17/2026')).toBe('Pick a valid date.');
+  });
+
+  it('checks content before date so the first missing field is reported', () => {
+    expect(validateRecordForm('', '')).toBe('Content is required.');
   });
 });
 

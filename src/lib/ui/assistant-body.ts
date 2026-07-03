@@ -65,6 +65,23 @@ export function showCitationsControls(
 }
 
 /**
+ * Tooltip for the citations toggle button. Unavailable (orphan
+ * refs, no stored list) wins over everything - the button surfaces
+ * a status note, not a source list, and the tooltip must say so
+ * before the click. Otherwise the closed state advertises the
+ * source count and the open state offers the hide action.
+ */
+export function citationsToggleTitle(
+  open: boolean,
+  unavailable: boolean,
+  count: number
+): string {
+  if (unavailable) return 'Sources not saved on this message';
+  if (open) return 'Hide sources';
+  return `${count} source${count === 1 ? '' : 's'}`;
+}
+
+/**
  * Delay before flashing the matching citation row when the user
  * clicks a `^N^` superscript. Zero when the panel was already
  * open (no slide to wait for); 240ms otherwise to cover the

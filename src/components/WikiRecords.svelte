@@ -48,6 +48,7 @@
     describeLink,
     linkCandidates,
     validateLinkLabel,
+    validateRecordForm,
   } from '$lib/ui/wiki-records';
   import Markdown from './Markdown.svelte';
   import { WIKI_RECORDS_ANCHOR } from '$lib/ui/wiki-toc-sections';
@@ -350,16 +351,9 @@
   async function saveForm(): Promise<void> {
     if (!app.supabase) return;
     const content = formContent.trim();
-    if (!content) {
-      formError = 'Content is required.';
-      return;
-    }
-    if (content.length > MAX_WIKI_RECORD_CONTENT_CHARS) {
-      formError = `Content must be ${MAX_WIKI_RECORD_CONTENT_CHARS} chars or fewer.`;
-      return;
-    }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(formDate)) {
-      formError = 'Pick a valid date.';
+    const invalid = validateRecordForm(content, formDate);
+    if (invalid) {
+      formError = invalid;
       return;
     }
     formBusy = true;

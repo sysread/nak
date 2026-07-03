@@ -11,6 +11,7 @@
 import {
   MAX_WIKI_RECORD_TAGS,
   MAX_WIKI_RECORD_TAG_CHARS,
+  MAX_WIKI_RECORD_CONTENT_CHARS,
   MAX_RECORD_LINK_LABEL_CHARS,
 } from '../wiki';
 import { formatBytes } from '../attachments';
@@ -274,6 +275,23 @@ export function linkCandidates(
   const excluded = new Set<string>([currentRecordId]);
   for (const l of existingLinks) excluded.add(l.record.id);
   return records.filter((r) => !excluded.has(r.id));
+}
+
+/**
+ * Validate the compose/edit form's content + date. The caller passes
+ * content already trimmed. The date check is shape-only
+ * ("YYYY-MM-DD") because the value comes from a native date input,
+ * which yields either that shape or an empty string - calendar
+ * validity is the browser's job. Returns an error string or null,
+ * matching validateLinkLabel.
+ */
+export function validateRecordForm(content: string, date: string): string | null {
+  if (!content) return 'Content is required.';
+  if (content.length > MAX_WIKI_RECORD_CONTENT_CHARS) {
+    return `Content must be ${MAX_WIKI_RECORD_CONTENT_CHARS} chars or fewer.`;
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return 'Pick a valid date.';
+  return null;
 }
 
 /**

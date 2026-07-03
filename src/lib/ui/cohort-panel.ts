@@ -97,6 +97,22 @@ export function isCollapsedView(
 }
 
 /**
+ * Header count summary. Grouped view (clustering collapsed at least
+ * one bucket AND the user hasn't toggled "Show all") leads with the
+ * theme count so the header explains why fewer rows render than
+ * fires exist; otherwise the plain fire count.
+ */
+export function cohortCountLabel(
+  clusterCount: number,
+  fireCount: number,
+  grouped: boolean
+): string {
+  const fires = `${fireCount} prediction${fireCount === 1 ? '' : 's'}`;
+  if (!grouped) return fires;
+  return `${clusterCount} theme${clusterCount === 1 ? '' : 's'} from ${fires}`;
+}
+
+/**
  * Three-state resolution label. The old four-way variant (in-flight
  * / window-open / aged-out) earned its keep in the diagnostics modal
  * where cohorts were a flat list with no message context; inline

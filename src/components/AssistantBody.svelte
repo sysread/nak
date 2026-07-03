@@ -40,6 +40,7 @@
   import { app } from '$lib/state.svelte';
   import {
     citationFlashDelay,
+    citationsToggleTitle,
     hasCitationRefsInBody,
     isCitationsUnavailable,
     parseCitationRefHref,
@@ -268,11 +269,7 @@
         onclick={() => {
           citationsOpen = !citationsOpen;
         }}
-        title={citationsUnavailable
-          ? 'Sources not saved on this message'
-          : citationsOpen
-            ? 'Hide sources'
-            : `${citationList.length} source${citationList.length === 1 ? '' : 's'}`}
+        title={citationsToggleTitle(citationsOpen, citationsUnavailable, citationList.length)}
         aria-label={citationsOpen ? 'Hide sources' : 'Show sources'}
         aria-pressed={citationsOpen}
       >

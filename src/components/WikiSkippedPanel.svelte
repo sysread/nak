@@ -41,6 +41,7 @@
     displayTitle,
     formatSkipTimestamp,
     retryResultHeadline,
+    visibleSkippedRows,
   } from '$lib/ui/wiki-skipped-panel';
 
   interface SkippedRow {
@@ -79,6 +80,8 @@
     Record<string, { toolCalls: number; reasoning: string }>
   >({});
   let dismissed = $state<Record<string, true>>({});
+
+  const visibleRows = $derived(visibleSkippedRows(rows, dismissed));
 
   async function load(): Promise<void> {
     if (!app.supabase) return;
@@ -194,7 +197,7 @@
     <p class="subtle">Loading...</p>
   {:else if error}
     <p class="error">{error}</p>
-  {:else if rows.filter((r) => !dismissed[r.threadId]).length === 0}
+  {:else if visibleRows.length === 0}
     <p class="subtle">
       No skipped threads. The autonomous wiki agent processes
       conversations a day after they settle; if it errors out
@@ -210,7 +213,7 @@
       this list.
     </p>
     <ul class="wiki-skipped-list">
-      {#each rows.filter((r) => !dismissed[r.threadId]) as row (row.threadId)}
+      {#each visibleRows as row (row.threadId)}
         <li class="wiki-skipped-row">
           <div class="wiki-skipped-row-head">
             <button

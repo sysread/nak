@@ -10,6 +10,7 @@ import {
   compoundRegenStatus,
   matchSummary,
   worstSeverity,
+  healthHeadline,
   relativeTime,
   formatValence,
   emptyMessage,
@@ -128,6 +129,14 @@ describe('worstSeverity', () => {
     expect(worstSeverity(['ok', 'warn'])).toBe('warn');
     expect(worstSeverity(['ok', 'ok'])).toBe('ok');
     expect(worstSeverity([])).toBe('ok');
+  });
+});
+
+describe('healthHeadline', () => {
+  it('maps each severity tier to its headline phrase', () => {
+    expect(healthHeadline('ok')).toBe('Pipeline healthy');
+    expect(healthHeadline('warn')).toBe('Needs a look');
+    expect(healthHeadline('alarm')).toBe('Something is stuck');
   });
 });
 

@@ -10,7 +10,27 @@ import {
   displayTitle,
   formatSkipTimestamp,
   retryResultHeadline,
+  visibleSkippedRows,
 } from '../src/lib/ui/wiki-skipped-panel';
+
+describe('visibleSkippedRows', () => {
+  const rows = [{ threadId: 'a' }, { threadId: 'b' }, { threadId: 'c' }];
+
+  it('passes every row through when nothing is dismissed', () => {
+    expect(visibleSkippedRows(rows, {})).toEqual(rows);
+  });
+
+  it('filters out locally dismissed rows', () => {
+    expect(visibleSkippedRows(rows, { b: true })).toEqual([
+      { threadId: 'a' },
+      { threadId: 'c' },
+    ]);
+  });
+
+  it('returns empty when every row is dismissed (the empty-state branch)', () => {
+    expect(visibleSkippedRows(rows, { a: true, b: true, c: true })).toEqual([]);
+  });
+});
 
 describe('formatSkipTimestamp', () => {
   it('renders a locale-aware compact stamp', () => {
