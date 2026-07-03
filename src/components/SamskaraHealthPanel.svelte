@@ -28,13 +28,13 @@
     compoundRegenStatus,
     worstSeverity,
     healthHeadline,
-    relativeTime,
     verdictBreakdown,
     tier2CandidateLabel,
     samskaraCountPhrase,
     HEALTH_THRESHOLDS,
     type Severity,
-  } from '$lib/ui/samskara-browse';
+  } from '$lib/ui/samskara-health';
+  import { relativeTime } from '$lib/ui/samskara-browse';
   import type { SamskaraHealthSnapshot, SamskaraRates } from '$lib/supabase';
 
   let loading = $state(true);
