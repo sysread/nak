@@ -40,13 +40,13 @@ for that round only; the rest of the loop is unchanged.
 Everything else - assimilating substrate into structured fields,
 embedding it, labelling pairs, minting tier-1 samskaras from
 clusters, minting tier-2 compounds from recurring co-fire
-constellations of tier-1 samskaras, classifying reactions,
-decaying stale or disconfirmed samskaras, regenerating the
-compound summary - runs server-side. The formation pipeline
-lives in the venice edge function
+constellations of tier-1 samskaras, judging fired predictions
+against settled conversations, reaping dead samskaras,
+regenerating the compound summary - runs server-side. The
+formation pipeline lives in the venice edge function
 (`supabase/functions/venice/agents/samskara.ts`), driven by the
-completed-turn tail and an hourly cron sweep; decay rides its
-own pg_cron job. Every LLM phase uses the hardcoded
+completed-turn tail and an hourly cron sweep; the evaluation
+judge and the reaper ride their own pg_cron jobs. Every LLM phase uses the hardcoded
 `SAMSKARA_MODEL` (mistral-small). No tab needs to stay open.
 Async-friendly: nak chat is SMS-shaped (the user can wander off
 for an hour and come back), so formation has time to catch up
@@ -171,9 +171,9 @@ toast is just a glance cue that the bias model is forming.
   is not null` (via `samskara_claim_next_substrate_embed`), embeds via
   Venice, and saves under a guard. Mirrors the memories source entry.
 - `supabase/functions/venice/agents/samskara.ts` - the formation
-  pipeline. The six agent prompts (`ASSIMILATOR_PROMPT`,
+  pipeline. The five agent prompts (`ASSIMILATOR_PROMPT`,
   `RELATOR_PROMPT`, `MINTER_PROMPT`, `TIER2_MINTER_PROMPT`,
-  `REACTION_PROMPT`, `COMPOUND_SUMMARY_PROMPT` - terse on
+  `COMPOUND_SUMMARY_PROMPT` - terse on
   purpose: the fast tier pays tokens for inputs, not
   instructions), one non-streaming `toolComplete` call per
   phase, the math helpers (`cosine`, `buildTopicalCluster`,
@@ -185,9 +185,9 @@ toast is just a glance cue that the bias model is forming.
   `supabase/functions/tests/samskara.test.ts` via the `__test`
   namespace export.
 - `supabase/schema.sql` (samskara section) - six tables with
-  RLS and the RPC surface covering fire, cohort log, reaction
+  RLS and the RPC surface covering fire, cohort log, evaluation
   apply, substrate record, assimilate claim/save, substrate-embed
-  claim/save, the cron-driven decay sweep, co-firing-based
+  claim/save, the cron-driven reaper, co-firing-based
   dedup collapse,
   `samskara_tier2_candidate(...)` (the co-fire-group detector the
   mint-tier2 phase reads - the inverse of dedup; see the Tier-2
@@ -231,9 +231,9 @@ toast is just a glance cue that the bias model is forming.
   it anchors to. The resulting bodies become the samskara `<think>`
   blocks the orchestrator splices ahead of the round (one cohort id
   per user turn, not per round). Underlying Promises keep running on
-  timeout; the worst case is one cohort logged but never
-  reaction-classified, which the classifier's resolution window drops
-  naturally.
+  timeout; the worst case is a cohort logged whose think-block never
+  reached the model - the next-day judge still rules on those fires,
+  which typically read as loose topical matches and land not-engaged.
 - **Inline `CohortPanel` in `Chat.svelte`** - on thread load,
   `Chat.svelte` calls `samskaraListFiresForThread`,
   `samskaraListSubstrateForThread`, and
@@ -427,8 +427,9 @@ samskaras (the mint-tier2 phase, see Contracts). Cap is `tier in
   by `samskara_apply_evaluation`; clamped to [0, 1]. **NO threshold
   filter at fire time** - see Gotchas.
 - `fire_count int`; `confirm_count real`, `disconfirm_count
-  real` (fractional by design - reactions add `1/sqrt(cohort_N)`,
-  which an int column would truncate to 0; see Gotchas);
+  real` (fractional by design - the per-evaluation discount and
+  the `w_soft` soft-miss weight are sub-unit; an int column would
+  truncate them to 0; see Gotchas);
   `last_fired_at`, `created_at`, `updated_at`.
 - Indexes on `(user_id, tier)` and `(user_id, health desc,
   confidence desc)`.
@@ -467,7 +468,7 @@ reinforcement and cohort detection.
 
 - `id`, `user_id`, `samskara_id` (FK on cascade), `thread_id`,
   `cohort_id uuid not null`, `user_round integer`, `fired_at`,
-  `score real not null`, `was_confirmed boolean`.
+  `score real not null`, `was_confirmed boolean`, `verdict text`.
 - `cohort_id` is shared across the set of samskaras fired
   together on the same turn, generated client-side when the
   chat loop assembles the fire. Lets the reaction classifier
@@ -484,10 +485,11 @@ reinforcement and cohort detection.
   threads with cold-start gaps.
 - `score` is the ranking score at fire time, kept for
   analytics.
-- `was_confirmed` starts NULL, set to true/false by the
-  reaction classifier on the next user turn. Older unresolved
-  fires age out via decay rather than being force-classified by
-  stale signal.
+- `verdict` is the authoritative judgment, written by the
+  next-day evaluation judge (held / contradicted / not-borne-out
+  / not-engaged; NULL = not yet judged). `was_confirmed` is kept
+  in sync for legacy readers: held -> true, contradicted and
+  not-borne-out -> false, not-engaged stays NULL.
 - Partial index on `(user_id, thread_id, fired_at desc) where
   was_confirmed is null` - served the retired reaction-classify
   unresolved poll; now vestigial (an unused-index advisor will
@@ -571,11 +573,10 @@ drivers run the phases, split by timing sensitivity:
 Mint-tier2, dedup, and compound-regen are cron-only: the tier-2
 detection self-join is the heaviest query in the feature, dedup
 is population maintenance, and the compound summary tolerates a
-day of staleness in the priming block. Reaction-classify is
-tail-only: classification needs the next user message, which
-implies a turn, which implies the tail already ran at the right
-moment - an hourly tick misses the 1-10 minute resolution window
-by construction.
+day of staleness in the priming block. Evaluation is neither a
+tail nor a sweep phase - it rides its own day-gated cron
+(`nak-samskara-evaluation-sweep`; see the Evaluation contract
+below).
 
 There are no per-phase throttles. One trigger runs one rotation,
 so the trigger cadence (turn or tick) IS the rate limit -
@@ -1121,9 +1122,9 @@ summarizer reads samskaras to feed the agent.
   on SCORE, not health - it only removes effectively-retired rows
   whose health decayed to ~0 (score ~0), which contribute nothing
   to priming yet would otherwise bloat cohorts to ~20 members,
-  inflate fire_count, dilute each reaction's `1/sqrt(N)` weight,
-  and poison co-fire dedup / tier-2 detection with spurious
-  Hebbian binding. Live-but-weak matches (the long tail) all sit
+  inflate fire_count, pad the next-day judge's per-thread
+  prediction list, and poison co-fire dedup / tier-2 detection
+  with spurious Hebbian binding. Live-but-weak matches (the long tail) all sit
   above it.
 - **pgvector reads back as a string, not an array.** PostgREST
   has no type mapping for `vector`/`halfvec`, so a selected
@@ -1172,10 +1173,11 @@ summarizer reads samskaras to feed the agent.
   `Promise.race` against `SAMSKARA_PRIMING_TIMEOUT_MS`
   (1500ms). The underlying Promises keep running on timeout so
   `samskara_record_fires` can still land - but the appendix for
-  that round goes empty. A cohort logged but never primed will
-  never be reaction-classified (the assistant wasn't actually
-  shaped by it); such cohorts age out via the resolution
-  window. Not an error; intentional.
+  that round goes empty. A cohort logged but never primed is
+  still judged next-day - the judge tests the prediction against
+  the user's behaviour in the transcript, not whether the
+  assistant's prompt carried the block - and those loose fires
+  typically land not-engaged. Not an error; intentional.
 - **Samskara helpers never fail a chat turn.** All three
   chat-loop entry points (`getCompoundSummary`,
   `fireSamskaras`, `recordSubstrateStub`) wrap their Supabase
@@ -1191,11 +1193,6 @@ summarizer reads samskaras to feed the agent.
   with no cross-project surface, so the gymnastics serve no
   purpose. Dedup is the minter agent's job via its
   `confirm: false` escape hatch.
-- **Cohort fires get sqrt-N reinforcement, not full +1 each.**
-  A 5-strong cohort all confirming contributes ~2.24 total
-  confirm-count, not 5. Prevents large cohorts from dominating
-  single-fire signal; revisit the formula if cohort dynamics
-  misbehave.
 - **Compound-regen has log10 dampening in two places** - on
   the event-count threshold of the regen trigger, and on the
   samskara-inclusion cap feeding the summary. Both use
@@ -1257,12 +1254,13 @@ summarizer reads samskaras to feed the agent.
   panel after any prompt edit: a zero not-borne-out rate over a
   meaningful window means this regressed.
 - **Neutral has no boolean state.** `was_confirmed` is
-  true/false/NULL, and a classified-neutral fire stays NULL -
-  it is marked only by `fired_at` being backdated 15 minutes,
-  which pushes it out of the resolution window. A query that
-  treats `was_confirmed is null` as "not yet classified" is
-  counting neutrals too; there is no way to distinguish a
-  neutral from an aged-out unresolved fire after the fact.
+  true/false/NULL, and a judged not-engaged fire stays NULL -
+  indistinguishable on that column from a fire the judge has not
+  ruled on yet. `verdict` is the authoritative read: `verdict is
+  null` means pending, `verdict = 'not-engaged'` means tested
+  with no evidence either way. A query that treats
+  `was_confirmed is null` as "not yet judged" is counting the
+  not-engaged majority too; filter on `verdict` instead.
 - **`samskara_record_fires` thread-ownership guard is silent-
   skip.** The RPC verifies the supplied `thread_id` belongs to
   `auth.uid()` before inserting fire rows (RLS hides reads but
@@ -1432,8 +1430,8 @@ summarizer reads samskaras to feed the agent.
   Don't add a "(no summary yet)" placeholder - that's a tell
   the user would reason about.
 - **Eventual consistency is the contract.** The user can send
-  a message before the assimilator has caught up, before
-  reaction classification has run, before the next regen has
+  a message before the assimilator has caught up, before the
+  next-day judge has ruled, before the next regen has
   fired. None of this is an error: the chat loop reads
   whatever's currently in the database and proceeds. If
   formation is hours behind, the model just operates on
@@ -1592,13 +1590,16 @@ the ranking.
 
 **Health-metric calibration (a fixed false alarm).** One signal looks
 like a failure but isn't, and an early version of the panel turned the
-headline permanently red on it: **fires aged out unresolved** grows
-unbounded by design. Reaction-classify only resolves the cohort whose
-follow-up landed in the 1-10min window, so ~95% of fires never get an
-explicit reaction (the resolution rate is *meant* to be low). This is
-not surfaced as a severity bar at all; the windowed resolution rate is
-shown with a note that low is normal. A genuinely stuck pipeline shows
-up as a deep, persistent backlog instead - which IS a severity bar.
+headline permanently red on it: **unresolved fires**. A fire stays
+`verdict is null` until its thread settles and the next-day judge
+rules, and some stay pending forever by design (single-round threads
+never qualify - the junk-data gate above). Of the fires that ARE
+judged, the large majority land not-engaged (~88% at the 2026-07 prod
+audit) - loose topical firing is recall doing its job, not a defect.
+Neither number is surfaced as a severity bar; the windowed resolution
+rate is shown with a note that low is normal. A genuinely stuck
+pipeline shows up as a deep, persistent backlog, or as threads parked
+at the evaluation attempt gate - which ARE actionable signals.
 The headline severity therefore considers only backlog,
 inconsistencies, and the compound-regen backlog (the event arm of the
 regen predicate, not summary age - see the observability section above).
