@@ -9,7 +9,7 @@ the completed-turn tail (`getStreamingResponse.ts`), the
 `messages.second_thoughts` column + its realtime UPDATE echo, the
 `appendMessage` merge in `Chat.svelte`, and the `SecondThoughtsPanel`
 render path through `AssistantBody.svelte`
-([dev: second-thoughts](../../dev/in-progress/second-thoughts.md),
+([dev: second-thoughts](../../dev/second-thoughts.md),
 [dev: chat](../../dev/chat.md)).
 
 ## Preconditions
