@@ -11,7 +11,7 @@
  *   - This file composes them into named toolboxes (cooking, memories,
  *     always_on), resolves names to defs, and projects them into
  *     the OpenAI / Venice request shape.
- *   - The main-chat system prompt is assembled in `../chat-prompt.ts`,
+ *   - The main-chat system prompt is assembled in `../chat/system-prompt.ts`,
  *     which imports the registry from here to render the dynamic tool
  *     catalog. Prose blocks and the catalog renderer live there, not
  *     here.
@@ -128,7 +128,7 @@ import { serverSideTool } from './server_side';
 // The eager always-on surfaces whose dispatch is server-side. Each is
 // a serverSideTool: catalog metadata for the wire payload, a throwing
 // execute() that fires only if a regression re-routes dispatch
-// browser-side. `toggleToolbox` is read by chat-prompt.ts for its
+// browser-side. `toggleToolbox` is read by chat/system-prompt.ts for its
 // `.name` (to filter it out of the rendered catalog) and re-exported
 // below; the rest are referenced only by `alwaysOnToolbox`.
 const toggleToolbox = serverSideTool(toggleToolboxSchema);
@@ -602,7 +602,7 @@ export function getToolFormatters(name: string): ToolFormatters | undefined {
 }
 
 export { toOpenAIToolDef };
-// `toggleToolbox` is read by chat-prompt.ts for its `.name`; re-exported
+// `toggleToolbox` is read by chat/system-prompt.ts for its `.name`; re-exported
 // for that one consumer.
 export { toggleToolbox };
 export type { ToolDef, OpenAIToolDef, ToolContext, ToolResult, Toolbox } from './types';

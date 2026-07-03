@@ -103,7 +103,7 @@ export function sanitizeToolCallIdForWire(id: string): string {
  * tool-error result row), so the next round's model sees the failure
  * via the tool result regardless of what the echoed arguments say.
  *
- * Used by chat-loop.ts (toVeniceMessage + the in-loop history push)
+ * Used by chat/loop.ts (toVeniceMessage + the in-loop history push)
  * and the no-tool completion agents' messageToVenice helpers that
  * project a stored Message onto a VeniceMessage (summary, topics).
  * The venice function's agent runner carries its own mirror of this
@@ -157,7 +157,7 @@ export function sanitizeToolCallsForWire(
  * tool whose schema nests free-form fields under a wrapper still
  * benefits.
  *
- * Throws on invalid JSON. The caller (chat-loop.ts) catches the
+ * Throws on invalid JSON. The caller (chat/loop.ts) catches the
  * throw and surfaces it as a tool error so the next round sees the
  * parse failure instead of a silent default.
  */

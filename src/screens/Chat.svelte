@@ -69,7 +69,7 @@
     type SamskaraSubstrateDiagnosticRow,
     type TopicVocabulary,
   } from '$lib/supabase';
-  import { runChatLoop, toVeniceMessage } from '$lib/chat-loop';
+  import { runChatLoop, toVeniceMessage } from '$lib/chat/loop';
   import { GuardExhaustedError } from '$lib/stream-guards';
   import { slopNoticeCopy } from '$lib/ui/slop-notice';
   import { ExchangeStore, mergeMessagesById } from '$lib/exchange/exchange-store.svelte';
@@ -4066,7 +4066,7 @@
 
       try {
         // Rate-limit retries are handled inside the chat-loop now
-        // (see streamChatWithRateLimitRetry in chat-loop.ts), which
+        // (see streamChatWithRateLimitRetry in chat/loop.ts), which
         // sleeps for the duration parsed from Venice's Retry-After /
         // x-ratelimit-reset-* headers and re-issues the request up
         // to RATE_LIMIT_MAX_ATTEMPTS times. By the time a rate_limit

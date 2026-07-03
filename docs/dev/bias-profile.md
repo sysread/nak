@@ -175,7 +175,7 @@ interval lower bound (not the mean) as the surfacing gate.
   (passing `p_user_id`) so the sweep re-analyzes with the fresh
   message. All three writes swallow their errors - bias never blocks
   a turn.
-- **`buildSystemPrompt()`** - in `src/lib/chat-prompt.ts`, builds the
+- **`buildSystemPrompt()`** - in `src/lib/chat/system-prompt.ts`, builds the
   baseline only. The browser ships a bias-free system prompt; the
   server appends the bias block with the same blank-line separator
   `buildSystemPrompt` uses between sections, so the wire bytes are

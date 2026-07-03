@@ -83,7 +83,7 @@ export async function veniceFunctionError(error: unknown): Promise<VeniceError> 
  * Maximum attempts (initial + retries) before `SupabaseService.complete`
  * surfaces a 429 to the caller. Picked so a brief quota dip recovers
  * transparently while a stuck quota still surfaces within ~10s of total
- * wait. The streaming path in chat-loop.ts uses its own attempt count;
+ * wait. The streaming path in chat/loop.ts uses its own attempt count;
  * the non-streaming chat seam sits behind tool sub-calls and background
  * agents with no UI feedback, so a propagated 429 lands as a silent
  * `{error: "..."}` in a tool-result row or a swallowed agent failure -
@@ -104,7 +104,7 @@ const COMPLETE_RATE_LIMIT_FALLBACK_WAIT_MS = [1_000, 1_710, 2_924, 5_000];
 
 /**
  * Hard cap on a single 429 wait inside `complete`. Mirrors
- * RATE_LIMIT_WAIT_CAP_MS in chat-loop.ts: a Retry-After longer than a
+ * RATE_LIMIT_WAIT_CAP_MS in chat/loop.ts: a Retry-After longer than a
  * minute almost certainly means a daily/monthly cap that won't clear
  * during the current call, so surface it as a hard error rather than
  * blocking a tool sub-call (or, worse, a background agent the user
@@ -272,7 +272,7 @@ export async function extractText(
  * supports it) and the inter-attempt sleep.
  *
  * Streaming chat completion still talks to Venice directly from
- * src/lib/chat-loop.ts; the streaming attractor is the next driver-B
+ * src/lib/chat/loop.ts; the streaming attractor is the next driver-B
  * milestone.
  */
 export async function complete(

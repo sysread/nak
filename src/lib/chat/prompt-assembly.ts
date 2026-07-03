@@ -2,7 +2,7 @@
  * Pure prompt-assembly builders for a chat turn. Each is a plain
  * function - options in, string or VeniceMessage out - with no loop
  * state and no side effects, so they test in isolation and `runChatLoop`
- * (../chat-loop.ts) reads as a conductor that calls them. The per-turn
+ * (./loop.ts) reads as a conductor that calls them. The per-turn
  * metadata block, the wall-clock paragraph, the thread-attachments
  * inventory, the system-preamble split, and the stored-Message ->
  * wire-shape projection all live here.
@@ -13,7 +13,7 @@
 import type { Message, ThreadAttachmentSummary } from '../supabase';
 import type { VeniceMessage } from '../venice';
 import { buildUserVeniceContent } from '../attachments';
-import { buildToolboxStateBlock } from '../chat-prompt';
+import { buildToolboxStateBlock } from './system-prompt';
 import {
   sanitizeToolCallIdForWire,
   sanitizeToolCallsForWire,
@@ -24,7 +24,7 @@ import {
   coerceSecondThoughts,
 } from '../ui/second-thoughts';
 
-// --- appended verbatim from chat-loop.ts ---
+// --- appended verbatim from chat/loop.ts ---
 /** Placeholder string threads ship with from schema.sql + draft creation. */
 const DEFAULT_THREAD_TITLE = 'New conversation';
 

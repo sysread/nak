@@ -21,7 +21,7 @@
  * actual failure mode.
  *
  * A guard inspects an in-flight attempt and returns a verdict; the
- * async wrapper that drives the verdicts lives in chat-loop.ts
+ * async wrapper that drives the verdicts lives in chat/loop.ts
  * (`streamChatWithGuards`) because it needs the streaming generator and
  * the abort plumbing. Everything in THIS file is pure and unit-testable
  * without a Venice client or a Svelte runtime - that split is
@@ -33,7 +33,7 @@
  * lean on `combineVerdicts` to compose. The wrapper, the buffering, and
  * the retry cap are all guard-agnostic.
  *
- * Interacts with: chat-loop.ts (the async wrapper + the round consumer),
+ * Interacts with: chat/loop.ts (the async wrapper + the round consumer),
  * models/index.ts (which models arm the special-token guard, via
  * `modelLeaksSpecialTokens`), venice.ts (`StreamEvent`).
  */

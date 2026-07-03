@@ -30,7 +30,7 @@ import {
 import {
   buildSystemPrompt,
   buildToolboxStateBlock,
-} from '../src/lib/chat-prompt';
+} from '../src/lib/chat/system-prompt';
 
 describe('buildSystemPrompt', () => {
   it('primes the model to write an activity sentence per call', () => {
@@ -256,7 +256,7 @@ describe('buildSystemPrompt', () => {
     // The wire-shape refactor retired all three: the user message now
     // rides bare (role:user is the boundary), datetime moved into a
     // prose paragraph in the per-turn metadata system message
-    // (chat-loop.ts), and the placeholder/topic-drift title nudges
+    // (chat/loop.ts), and the placeholder/topic-drift title nudges
     // moved into that same metadata system message. Keeping any of
     // the old framing in the baseline would teach the model to look
     // for tags it will never see.

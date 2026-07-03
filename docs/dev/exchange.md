@@ -317,7 +317,7 @@ deterministic.
 
 ## Interactions
 
-- **Chat loop (`src/lib/chat-loop.ts`)** — owns the actual
+- **Chat loop (`src/lib/chat/loop.ts`)** — owns the actual
   streaming + tool execution. The exchange module is the screen's
   state container; the chat loop is the producer. Every
   `handlers.X` callback in the `runChatLoop` call writes through

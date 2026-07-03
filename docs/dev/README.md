@@ -131,7 +131,7 @@ changing a contract that other features depend on.
   turn: the injection order of the bias appendix + the
   context-recall / samskara / intuition `<think>` chain + the
   per-turn metadata block, plus freshness, failure degradation,
-  and observability rules. The spec `chat-loop.ts` implements.
+  and observability rules. The spec `chat/loop.ts` implements.
 - [Settings](./settings.md) — the settings modal +
   `profiles.settings` JSONB + theme.
 - [Help](./help.md) — in-app rendering of `docs/user/`.

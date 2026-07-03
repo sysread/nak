@@ -7,7 +7,7 @@ augmentation layer**. This doc is that layer's contract: who may inject
 what, in what order, when it counts as fresh, how it degrades on
 failure, and where it is observable. The code that enforces the
 contract lives in two places: the browser assembles the baseline system
-prompt + conversation + metadata in `src/lib/chat-loop.ts`
+prompt + conversation + metadata in `src/lib/chat/loop.ts`
 (`runChatLoop` -> `requestMessages`), and the server's priming stage
 (`supabase/functions/venice/priming.ts` `runServerPriming`, the opening
 stage of `getStreamingResponse`) appends the bias appendix and splices
@@ -40,7 +40,7 @@ Two distinct injection surfaces:
 - **The baseline system prompt (row 1)** carries the slowly-changing,
   always-on context: the tool catalog and the bias-profile appendix.
   The tool catalog is assembled by `buildSystemPrompt()` in
-  `src/lib/chat-prompt.ts` (browser); the bias-profile appendix is
+  `src/lib/chat/system-prompt.ts` (browser); the bias-profile appendix is
   rendered and appended server-side by `applyBiasPriming`
   (`supabase/functions/venice/priming.ts`) before the first round,
   joined with the same blank-line separator so the wire bytes match.
@@ -160,7 +160,7 @@ browser surface is unchanged:
   round-tripped to the drawer via the edge-log Broadcast relay.
   **The assembled prompt is NOT surfaced in any drawer wire dump.** The
   browser logs its own *pre-priming* view of the request under source
-  `chat` ("venice request wire", in `chat-loop.ts`) before it POSTs;
+  `chat` ("venice request wire", in `chat/loop.ts`) before it POSTs;
   the server then appends the bias + intent appendices and splices the
   `<think>` chain server-side, so those additions never appear in that
   dump. The server-side `stream` source carries only operational lines
@@ -184,7 +184,7 @@ browser surface is unchanged:
 - [`tools.md`](./tools.md) - the tool catalog + toolbox-state halves of
   the system prompt.
 - The baseline prompt + catalog are browser-side
-  (`src/lib/chat-prompt.ts`); the bias appendix + `<think>`-chain
+  (`src/lib/chat/system-prompt.ts`); the bias appendix + `<think>`-chain
   assembly + ordering are server-side
   (`supabase/functions/venice/priming.ts`), with the trigger evaluator
   mirrored in `_shared/priming-triggers.ts`.

@@ -2,7 +2,7 @@
 
 The main user-facing surface plus the browser-side orchestration
 that drives a single turn. `Chat.svelte` renders the drawer,
-composer, and message list; `chat-loop.ts` builds the per-turn
+composer, and message list; `chat/loop.ts` builds the per-turn
 priming chain and the system-prompt preamble, then issues one
 `venice.streamChat` call that routes through the venice edge
 function's `/stream` route. The function owns the streaming round
@@ -19,7 +19,7 @@ A chat turn goes:
 2. `Chat.svelte` resolves the effective model profile (per-thread
    pin -> default profile), builds the history in OpenAI shape, and
    calls `runChatLoop`.
-3. `chat-loop.ts` runs the per-turn priming layers (samskara
+3. `chat/loop.ts` runs the per-turn priming layers (samskara
    fire-and-compound, intuition, context recall), stitches their
    synthetic `<think>` blocks into the history, assembles the
    three-layer system-prompt preamble (baseline, user-configured,
@@ -31,7 +31,7 @@ A chat turn goes:
    round via the `commit_assistant_message` RPC, and broadcasts
    typed events on `thread:<id>:stream` so the browser's UI stays
    live.
-5. `chat-loop.ts` consumes those events and routes them to the
+5. `chat/loop.ts` consumes those events and routes them to the
    UI handler surface (streaming bubble, reasoning panel, tool
    timings, rate-limit indicator, slop-notice cards). At the END
    event it captures the persisted assistant row id + terminal
@@ -50,7 +50,7 @@ A chat turn goes:
 - `src/screens/Chat.svelte` - the screen itself. Drawer,
   composer, message list, thread lifecycle, plus the call sites
   for every other feature that hooks into chat.
-- `src/lib/chat-loop.ts` - `runChatLoop`, `toVeniceMessage`, and
+- `src/lib/chat/loop.ts` - `runChatLoop`, `toVeniceMessage`, and
   the per-turn priming + event-routing orchestration. Issues one
   `venice.streamChat` call per turn; the function-side round
   chain takes over from there. Split from the screen so the
@@ -372,7 +372,7 @@ A chat turn goes:
 - **System prompts are re-assembled every round, browser-side.**
   The baseline tool-framing system message is NOT persisted - it's
   built from the tool registry at request-time by
-  `buildSystemPrompt` in `chat-loop.ts`. User-configured prompts
+  `buildSystemPrompt` in `chat/loop.ts`. User-configured prompts
   from Settings ride AFTER the baseline so a custom "you are a
   pirate" prompt still wins on voice while the tool framing stays
   in force. If you add a new tool, the model learns about it on
@@ -539,7 +539,7 @@ A chat turn goes:
   the initial SUBSCRIBED, and a later `CHANNEL_ERROR` / `TIMED_OUT` /
   `CLOSED` that this tab did not initiate flips `disconnected` and closes
   the drain, which then throws `StreamDisconnectedError`. That propagates
-  through `chat-loop.ts` to `runExchange`'s catch, which releases the
+  through `chat/loop.ts` to `runExchange`'s catch, which releases the
   slot and calls `reconnectInflightTurn` - the exact poll-the-row path
   above, seeded with the partial the dropped stream had buffered. So a
   mid-turn drop degrades gracefully to the reconnect poll instead of
@@ -569,7 +569,7 @@ A chat turn goes:
   turn ends - the persisted DB row is the ONLY thing that can show the
   partial afterward. The drain in `venice.ts` no longer `close()`s on
   the `error` broadcast event (END is the sole terminal), and
-  `consumeStreamEvents` (`chat-loop.ts`) stashes the terminal error
+  `consumeStreamEvents` (`chat/loop.ts`) stashes the terminal error
   instead of throwing immediately, throwing only AFTER the post-loop
   `onAssistantPersisted` hydration has handed the persisted partial to
   its card. Without the deferral the throw races ahead of hydration and

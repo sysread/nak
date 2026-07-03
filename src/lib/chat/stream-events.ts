@@ -6,7 +6,7 @@
  * server's terminalKind back onto the interrupted / conflict /
  * awaitingUserAnswer flags the caller's UI keys off.
  *
- * Split out from ../chat-loop.ts: `runChatLoop` feeds this its
+ * Split out from ../chat/loop.ts: `runChatLoop` feeds this its
  * `venice.streamChat` iterator and projects the returned
  * `ConsumedStreamResult` into its own `ChatLoopResult`. The consumer
  * closes over no loop state - everything it needs arrives in `opts` -

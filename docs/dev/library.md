@@ -94,7 +94,7 @@ Tools:
 
 Prompt:
 
-- `src/lib/chat-prompt.ts` - `LIBRARY_BLOCK`, after `WIKI_BLOCK`.
+- `src/lib/chat/system-prompt.ts` - `LIBRARY_BLOCK`, after `WIKI_BLOCK`.
 
 UI:
 

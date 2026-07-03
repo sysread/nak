@@ -12,7 +12,7 @@ cut-off reply's partial is preserved as a card, not dropped"):
    write even when only reasoning streamed (`ensureAssistantRow`
    normally fires on first `response_text`). Browser side, `venice.ts`
    keeps the drain open past the `error` broadcast so the terminal END
-   carries the row id, and `consumeStreamEvents` (`chat-loop.ts`)
+   carries the row id, and `consumeStreamEvents` (`chat/loop.ts`)
    hydrates that row before throwing.
 2. **Retry replaces.** `retryIncompleteTurn` + the classification
    predicates in `src/lib/ui/incomplete-turn.ts` (`isReasoningOnlyStall`,
