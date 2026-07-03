@@ -82,43 +82,51 @@ async function preflight() {
 // ---------------------------------------------------------------------------
 async function ensureStack() {
   step(2, 'Local Supabase stack');
-  const status = await runCapture('supabase', ['status', '-o', 'json']);
-  if (status.code === 0) {
+  let status = await getStatus();
+  if (status) {
+    assertLoopback('DB_URL', status.dbUrl);
+    assertLoopback('API_URL', status.apiUrl);
     info('reusing the stack already running (it will be stopped on exit)');
-    return { ...(await readStatus()), startedByUs: false };
+    return { ...status, startedByUs: false };
   }
   info('starting stack (first run pulls several GB of images - this is slow once)');
   await runInherit('supabase', ['start']);
+  status = await getStatus();
+  if (!status) {
+    // supabase start can return 0 but leave containers in an exited state,
+    // particularly the DB - "already running" means the container exists,
+    // not that it's healthy. A full stop+restart recovers every container
+    // to a clean boot. The stop might fail if the prior start's teardown
+    // already cleaned some containers; ignore the error and start anyway.
+    warn('stack did not start cleanly, trying a full restart');
+    await runCapture('supabase', ['stop']);
+    await runInherit('supabase', ['start']);
+    status = await getStatus();
+  }
+  if (!status) bail('Could not read `supabase status`.', 'Is the stack up?');
+  assertLoopback('DB_URL', status.dbUrl);
+  assertLoopback('API_URL', status.apiUrl);
   ok('stack started');
-  return { ...(await readStatus()), startedByUs: true };
+  return { ...status, startedByUs: true };
 }
 
-// Parse `supabase status -o json` into the endpoints we need. The CLI emits
-// uppercase keys (API_URL, DB_URL, ANON_KEY, SERVICE_ROLE_KEY); read them
-// defensively so a CLI version that renames one fails loudly here rather
-// than silently writing an undefined into the config file.
-async function readStatus() {
+// Parse `supabase status -o json` into the endpoints we need. Returns the
+// status object on success, null on any failure: a non-zero exit, malformed
+// JSON, a missing API_URL / DB_URL, or a missing client / secret key. This is
+// the canonical status reader; ensureStack uses it to decide whether to reuse
+// or start fresh, and on a fresh start uses it as the health check (with a
+// full stop+restart recovery if the first start leaves containers in an
+// exited state).
+async function getStatus() {
   const res = await runCapture('supabase', ['status', '-o', 'json']);
-  if (res.code !== 0) {
-    bail('Could not read `supabase status`.', res.stderr.trim() || 'Is the stack up?');
-  }
+  if (res.code !== 0) return null;
   let s;
   try {
     s = JSON.parse(res.stdout);
   } catch {
-    bail('`supabase status -o json` did not return JSON.', 'Check your supabase CLI version.');
+    return null;
   }
-  if (!s.API_URL || !s.DB_URL) {
-    bail('supabase status is missing API_URL / DB_URL.', 'CLI output shape changed; update this script.');
-  }
-  // Refuse to operate on anything but a loopback target. This script applies
-  // the schema and seeds a user with the secret key - operations that would be
-  // catastrophic against the real project. A dev machine commonly has prod
-  // credentials in its environment (direnv injecting an access token, etc.),
-  // so guard on the endpoint itself rather than trusting that
-  // `supabase status` could only ever return localhost.
-  assertLoopback('DB_URL', s.DB_URL);
-  assertLoopback('API_URL', s.API_URL);
+  if (!s.API_URL || !s.DB_URL) return null;
   // The app's client key is deliberately the LEGACY anon JWT (ANON_KEY), not
   // the modern publishable key (PUBLISHABLE_KEY, the sb_publishable_ value).
   // This is the one place local intentionally diverges from the prod key shape,
@@ -149,12 +157,7 @@ async function readStatus() {
   // sb_secret_ key works there (verified the local GoTrue accepts it), so
   // prefer it and fall back to the legacy service_role JWT for an older CLI.
   const secretKey = s.SECRET_KEY || s.SERVICE_ROLE_KEY;
-  if (!appClientKey || !secretKey) {
-    bail(
-      'supabase status has no anon/publishable (or secret/service_role) key.',
-      'CLI output shape changed; update this script.'
-    );
-  }
+  if (!appClientKey || !secretKey) return null;
   return { apiUrl: s.API_URL, dbUrl: s.DB_URL, appClientKey, secretKey };
 }
 
@@ -345,7 +348,7 @@ function writeConfig(apiUrl, appClientKey) {
   // The field is named `supabasePublishableKey` to match the app's config
   // contract (src/lib/config.ts), but the app treats it as an opaque Supabase
   // client key and never inspects the format. Locally that value is the anon
-  // JWT, not an sb_publishable_ key - see readStatus for why (local realtime
+  // JWT, not an sb_publishable_ key - see getStatus() for why (local realtime
   // can't authenticate the publishable key; supabase/cli#4219).
   //
   // The Venice API key intentionally does NOT appear here - the
