@@ -564,6 +564,30 @@ where opening a PR doesn't need a separate explicit ask.
 branch is currently checked out and stop. Do not rebase, merge,
 push, or switch branches. The user drives integration themselves.
 
+### Rebasing over concurrent work
+
+A clean rebase plus a green gate only proves the two diffs don't
+collide textually. When `main` picked up a sweep or refactor while
+your branch was in flight, also check whether that work's INTENT
+covers the surfaces your branch ADDS. A sweep that enumerates
+existing code - a global CSS selector list, a tool registry, a
+toolbox mirror, a conventions pass - cannot have known about code
+that didn't exist when it ran, so your additions silently miss the
+treatment and nothing fails: disjoint files, clean rebase, green
+gate, wrong result.
+
+After rebasing, read the concurrent commits' messages (not just
+their file lists), find any membership they establish or extend,
+and ask: "would my new code have been on that list if it had
+existed when the sweep ran?" If yes, add it in the rebase commit
+or a follow-up before merging.
+
+The canonical case: the terminal-style side-bar sweep enumerated
+the diagnostics-card classes by name while the seedling inspector
+was adding `.intent-card` on a parallel branch - same card
+species, absent from the list, invisible borders in terminal mode,
+and every check green.
+
 ### General git rules
 
 - **No AI attribution.** No `Co-Authored-By`, no "Generated with
