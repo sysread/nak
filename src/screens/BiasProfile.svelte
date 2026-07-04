@@ -1164,7 +1164,7 @@
   }
 
   .bias-footer code {
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-mono);
     font-size: 0.75rem;
   }
 
