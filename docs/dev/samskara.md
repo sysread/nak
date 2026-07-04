@@ -1549,7 +1549,7 @@ that same simplification.)
     resolution rates, the corpus counters, and the tier-2-candidate
     readout are shown but NOT severity-bearing (see the calibration note
     below). Backed by `samskara_health_snapshot`, `samskara_rates`, and
-    the severity thresholds in `src/lib/ui/samskara-browse.ts` (named
+    the severity thresholds in `src/lib/ui/samskara-health.ts` (named
     constants, tune against observed behaviour).
   - **Tier-2 candidate readout** - "Tier-2 candidate: available (N
     members) / none" in the Corpus card, via `samskaraTier2CandidateSize`
