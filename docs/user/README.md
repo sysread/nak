@@ -40,6 +40,9 @@ You can reach these pages two ways:
 - [Memory](./memory.md) — the long-term store Nak builds up about you
   across conversations: what gets remembered, how to correct or
   forget something, what's scoped to your account.
+- [Follow-ups](./followups.md) — the questions Nak saves for itself
+  ("how did the lasagna turn out?") so it asks about unknown outcomes
+  instead of assuming them, and can check in after a date passes.
 - [Wiki](./wiki.md) — a flat encyclopedia about you: titled articles
   about projects, people, places, and topics, maintained by both you
   and a background agent. The assistant reaches them through the

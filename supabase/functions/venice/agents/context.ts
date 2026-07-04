@@ -23,6 +23,7 @@ import { requireThreadId, registerTool, type ToolContext, type ToolDef } from '.
 import { memorySearch } from '../tools/memory_search.ts';
 import { conversationSearch } from '../tools/conversation_search.ts';
 import { wikiSearch } from '../tools/wiki_search.ts';
+import { followupList } from '../tools/followup_list.ts';
 import { logPreview } from './_recall_helpers.ts';
 
 // Per-layer caps. Memories ride inline so the cap also bounds the
@@ -50,10 +51,23 @@ interface ContextIndexRef {
   title: string;
 }
 
+// Open follow-ups ride the umbrella verbatim - they are few and short
+// by construction, and their whole value is the model seeing "outcome
+// unknown" next to the memories that describe the plan. No semantic
+// filter here: the umbrella is a survey, and the open set is already
+// small (docs/dev/followups.md).
+interface ContextIndexFollowup {
+  id: string;
+  question: string;
+  context: string;
+  relevant_after: string | null;
+}
+
 interface ContextIndex {
   memories: ContextIndexMemory[];
   conversations: ContextIndexRef[];
   wiki: ContextIndexRef[];
+  followups: ContextIndexFollowup[];
 }
 
 /**
@@ -116,7 +130,12 @@ function isValidConfidenceTag(
 export const contextTool: ToolDef = {
   name: 'context',
   async execute(args: Record<string, unknown>, ctx: ToolContext) {
-    const empty: ContextIndex = { memories: [], conversations: [], wiki: [] };
+    const empty: ContextIndex = {
+      memories: [],
+      conversations: [],
+      wiki: [],
+      followups: [],
+    };
     if (ctx.signal.aborted) return empty;
 
     // Drawer logging. The umbrella runs mid-turn on the live chat
@@ -150,7 +169,7 @@ export const contextTool: ToolDef = {
       // Run all three searches in parallel via allSettled. A search that
       // throws contributes an empty list rather than failing the gather
       // - one layer's outage must not surface as a chat-turn failure.
-      const [memoryR, convR, wikiR] = await Promise.allSettled([
+      const [memoryR, convR, wikiR, followupR] = await Promise.allSettled([
         memorySearch.execute(
           { query, limit: CONTEXT_MEMORY_LIMIT },
           ctx,
@@ -160,6 +179,7 @@ export const contextTool: ToolDef = {
           ctx,
         ),
         wikiSearch.execute({ query, limit: CONTEXT_WIKI_LIMIT }, ctx),
+        followupList.execute({}, ctx),
       ]);
 
       if (memoryR.status === 'rejected') {
@@ -170,6 +190,9 @@ export const contextTool: ToolDef = {
       }
       if (wikiR.status === 'rejected') {
         log.error('wiki layer failed:', wikiR.reason);
+      }
+      if (followupR.status === 'rejected') {
+        log.error('followup layer failed:', followupR.reason);
       }
 
       const memories: ContextIndexMemory[] = [];
@@ -217,11 +240,35 @@ export const contextTool: ToolDef = {
         }
       }
 
+      // followup_list returns { open, recently_closed }; the umbrella
+      // surfaces the OPEN set only - closed loops reach recall as
+      // ordinary memories, never as loops.
+      const followups: ContextIndexFollowup[] = [];
+      if (followupR.status === 'fulfilled') {
+        const openRows = (followupR.value as { open?: unknown[] } | null)?.open;
+        if (Array.isArray(openRows)) {
+          for (const raw of openRows as Array<Record<string, unknown>>) {
+            if (!raw || typeof raw !== 'object') continue;
+            const id = raw.id;
+            const question = raw.question;
+            if (typeof id !== 'string' || typeof question !== 'string') continue;
+            followups.push({
+              id,
+              question,
+              context: typeof raw.context === 'string' ? raw.context : '',
+              relevant_after:
+                typeof raw.relevant_after === 'string' ? raw.relevant_after : null,
+            });
+          }
+        }
+      }
+
       log.info(
         `context gather finished (${memories.length} memories, ` +
-          `${conversations.length} conversations, ${wiki.length} wiki articles)`,
+          `${conversations.length} conversations, ${wiki.length} wiki articles, ` +
+          `${followups.length} open follow-ups)`,
       );
-      return { memories, conversations, wiki };
+      return { memories, conversations, wiki, followups };
     } catch (err) {
       // Logging only - the failure still propagates to the tool
       // dispatcher unchanged; this line is the drawer-visible reason.

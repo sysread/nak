@@ -38,6 +38,7 @@ const GATED_TOOLBOX_NAMES = new Set<string>([
   'cooking',
   'memories',
   'wiki',
+  'followups',
   'library',
   'images',
 ]);

@@ -1,14 +1,13 @@
 # Follow-up semantic surfacing: the recipe hallucination killed
 
-> **Planning draft with a runnable baseline.** The follow-ups
-> feature is not built, but **steps 1-3 run against CURRENT code**
-> and reproduce the cross-conversation outcome hallucination the
-> feature exists to fix - execute them BEFORE the implementation
-> lands and log the run; that baseline is the regression evidence
-> the post-change run is compared against (see
-> [dev: followups (in progress)](../../dev/in-progress/followups.md)
-> and the QA ordering rules in `CLAUDE.md`). Steps 4+ are the
-> post-feature spec.
+> Written as the behavioral spec BEFORE the implementation; the
+> feature now exists on the feature branch. **The baseline arm
+> (steps 1-3) must run against PRE-feature code (`main`, before the
+> followups branch merges)** - it reproduces the cross-conversation
+> outcome hallucination the feature exists to fix, and that run is
+> the regression evidence the post-feature run is compared against
+> (see [dev: followups](../../dev/followups.md) and the QA ordering
+> rules in `CLAUDE.md`). Neither arm has been executed yet.
 
 ## Covers
 

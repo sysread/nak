@@ -1,16 +1,16 @@
 # Follow-up date-due surfacing: the off-topic ask, cooldown, expiry
 
-> **Planning draft.** The follow-ups feature is not built; this
-> case is part of its behavioral spec (see
-> [dev: followups (in progress)](../../dev/in-progress/followups.md)).
-> Constants named below (cooldown window, surfacing cap, expiry
-> age) are launch placeholders - verify against the shipped
-> values before executing.
+> Written as the behavioral spec BEFORE the implementation; the
+> feature now exists. The shipped constants live in
+> `supabase/functions/_shared/followups.ts`: due cap 2, cooldown
+> 20h, ask budget 3 surfacings, expiry 30 days past
+> `relevant_after`. Not yet executed - run it and start the
+> results log.
 
 ## Covers
 
 The date axis and the anti-nag containment
-([dev: followups](../../dev/in-progress/followups.md)):
+([dev: followups](../../dev/followups.md)):
 
 - **Due pull** - a loop whose `relevant_after` has passed is
   gathered deterministically at the next priming boundary

@@ -38,7 +38,7 @@ Deno.test('reflection prompt does not promise a confidence bump on update', () =
   assertStringIncludes(p, 'memory_reaffirm to nudge its confidence');
 });
 
-Deno.test('reflection toolbox is the soft-decay memory set, in declared order', () => {
+Deno.test('reflection toolbox is the soft-decay memory set plus follow-up verbs, in declared order', () => {
   const toolbox = __test.buildReflectionToolbox();
   assertEquals(toolbox.name, 'reflection');
   assertEquals(
@@ -52,14 +52,32 @@ Deno.test('reflection toolbox is the soft-decay memory set, in declared order', 
       'memory_doubt',
       'memory_relate',
       'memory_unrelate',
+      'followup_list',
+      'followup_create',
+      'followup_update',
+      'followup_close',
     ],
   );
 });
 
-Deno.test('reflection toolbox excludes hard-delete and the UI tool', () => {
+Deno.test('reflection toolbox excludes hard-delete, dismiss, and the UI tool', () => {
   const names = __test.buildReflectionToolbox().tools.map((t) => t.name);
   assertEquals(names.includes('memory_delete'), false);
   assertEquals(names.includes('ask_user'), false);
+  // Dismissal is the user's veto, expressed live in chat - a background
+  // agent must never infer "stop asking" from a transcript.
+  assertEquals(names.includes('followup_dismiss'), false);
+});
+
+Deno.test('reflection prompt reconciles follow-ups with the answered-check guard', () => {
+  // The stale re-creation guard: reflection may read an old planning
+  // thread whose outcome already landed in a different conversation,
+  // and must not mint a fresh follow-up for a resolved plan.
+  const p = __test.REFLECTION_PROMPT;
+  assertStringIncludes(p, 'followup_list');
+  assertStringIncludes(p, 'followup_close');
+  assertStringIncludes(p, 'already answered/dismissed');
+  assertStringIncludes(p, 'A moved plan is not a new follow-up');
 });
 
 Deno.test('every reflection tool carries a wire schema whose name matches', () => {

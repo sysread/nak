@@ -100,18 +100,18 @@ One file per use-case under [`use-cases/`](./use-cases/), named
   settled-thread judge: the toggle/day-gated claim, the per-intention
   opening/acted/reaction writes to `intent_employments`, the
   efficacy-firewall check, and the minter consuming the telemetry.
-- [followup-capture](./use-cases/followup-capture.md) - *(planning
-  draft; feature not built)* both follow-up writers (volitional
-  `followup_create`, reflection backfill), the reschedule verb, the
-  reflection close backstop, and the dedup between the writers.
+- [followup-capture](./use-cases/followup-capture.md) - both
+  follow-up writers (volitional `followup_create`, reflection
+  backfill), the reschedule verb, the reflection close backstop, and
+  the dedup between the writers.
 - [followup-semantic-recall](./use-cases/followup-semantic-recall.md) -
-  *(planning draft; its baseline arm is runnable NOW and reproduces
-  the cross-conversation outcome hallucination)* the open loop riding
-  the context-recall gather with unresolved framing, and the
-  close-on-answer lifecycle.
-- [followup-date-due](./use-cases/followup-date-due.md) - *(planning
-  draft; feature not built)* the date-due off-topic ask at thread
-  open, the surfacing cooldown, and expiry.
+  the open loop riding the context-recall gather with unresolved
+  framing, and the close-on-answer lifecycle. Its baseline arm runs
+  against PRE-feature code and reproduces the outcome hallucination -
+  execute it before the feature branch merges.
+- [followup-date-due](./use-cases/followup-date-due.md) - the
+  date-due off-topic ask at thread open, the surfacing cooldown, and
+  expiry.
 - [priming-disconnect-survival](./use-cases/priming-disconnect-survival.md)
   - proves turn-entry priming runs server-side under `waitUntil`: a turn
   whose tab closes mid-priming comes back fully primed, and the spinner

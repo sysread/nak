@@ -43,8 +43,8 @@ The main chat model sees toolboxes as the unit of enablement:
 - **`always_on`** - rides every request regardless of the thread's
   `toolboxes_enabled` array. Carries every read-only surface plus a
   few reflexes (below).
-- **`cooking`**, **`memories`**, **`wiki`**, **`library`**,
-  **`images`** - gated toolboxes carrying only writes.
+- **`cooking`**, **`memories`**, **`wiki`**, **`followups`**,
+  **`library`**, **`images`** - gated toolboxes carrying only writes.
   Included in the wire catalog only when their name appears in
   `threads.toolboxes_enabled`. `wiki` is the single gate for every
   chat-driven wiki write: article CRUD (`wiki_create` / `wiki_update` /
@@ -145,6 +145,10 @@ Notable members (the full ordered list is `alwaysOnToolbox` in
   a one-shot `wiki_update` for a targeted edit or delegates to the
   librarian for a consolidation that has to reason across the whole
   wiki. See `./wiki.md`.
+- **`followups`** - follow-up writes: `followup_create` /
+  `followup_update` / `followup_close` / `followup_dismiss`, the
+  lifecycle of the pending questions the model saves for itself.
+  The read (`followup_list`) stays always-on. See `./followups.md`.
 - **`library`** - document writes: `doc_create` (promote a file the
   user attached into a permanent searchable document), `doc_update`,
   `doc_delete`. See `./library.md`.

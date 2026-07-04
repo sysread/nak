@@ -1,16 +1,13 @@
 # Follow-up writers: volitional save, reschedule, reflection backfill + close
 
-> **Planning draft.** The follow-ups feature is not built; this
-> case is part of its behavioral spec (see
-> [dev: followups (in progress)](../../dev/in-progress/followups.md)).
-> Tool names, table name, and SQL are the proposed design and may
-> shift at implementation. Execute and start the results log once
-> the feature lands.
+> Written as the behavioral spec BEFORE the implementation; the
+> feature now exists and the names below are the real ones. Not yet
+> executed - run it and start the results log.
 
 ## Covers
 
 The two writers of the `followups` table and the dedup between
-them ([dev: followups](../../dev/in-progress/followups.md)):
+them ([dev: followups](../../dev/followups.md)):
 
 - **Volitional capture** - the chat model saves a follow-up
   mid-turn via `followup_create` when the user shares a plan
@@ -41,9 +38,8 @@ them ([dev: followups](../../dev/in-progress/followups.md)):
 
 - Local stack up (`mise run dev-start`), signed in as the dev
   user (`dev@nak.local` / `devpass123`).
-- The follow-ups write toolbox enabled on the test thread (via
-  the composer toolbox popover; exact box name per
-  implementation).
+- The `followups` write toolbox enabled on the test thread (via
+  the composer toolbox popover).
 - Logs drawer open at Debug, source filter on the tool dispatch
   and `reflection` sources.
 - Dev user id for the SQL checks:

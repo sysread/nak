@@ -13342,3 +13342,189 @@ exception when others then
   raise notice 'intent employment sweep cron setup skipped: %', sqlerrm;
 end
 $cron$;
+
+-- followups -----------------------------------------------------------------
+--
+-- Pending questions the assistant saves for itself: "Ask how the lasagna
+-- turned out." A follow-up is scaffolding, not knowledge - when the user
+-- reports the outcome the row is closed (status + resolution stamp) and
+-- the durable fact reaches `memories` through the normal channels
+-- (reflection reading the settled transcript). See docs/dev/followups.md.
+--
+-- Two surfacing axes read this table, both inside the context-recall
+-- gather (supabase/functions/venice/priming/context-recall.ts):
+--   - semantic: open rows ride the embedding backfill and are searched
+--     via search_followups_by_embedding alongside memories;
+--   - date-due: open rows whose relevant_after has passed are pulled
+--     deterministically, cooldown-gated via the surfacing ledger
+--     (last_surfaced_at / surface_count, stamped by the gather).
+-- relevant_after NULL means "never proactively asked" - the row
+-- surfaces only when the topic comes up semantically.
+
+create table if not exists public.followups (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  -- First-person prompt to self ("Ask how the lasagna turned out").
+  question text not null,
+  -- One or two lines of seeding context, enough to raise the question
+  -- naturally without a thread fetch.
+  context text not null default '',
+  -- The conversation that seeded the loop. SET NULL, not cascade - the
+  -- question is about the user's life, so it outlives the thread.
+  source_thread_id uuid references public.threads(id) on delete set null,
+  -- open = surfaces; answered/dismissed/expired = kept for audit and
+  -- create-side dedup (an answered twin blocks stale re-creation),
+  -- never surfaced again.
+  status text not null default 'open'
+    check (status in ('open', 'answered', 'dismissed', 'expired')),
+  -- Start of proactive relevance. NULL = semantic-only surfacing.
+  relevant_after timestamptz,
+  -- What we learned, stamped on close. Audit only - the durable outcome
+  -- lives in memories, written from the transcript.
+  resolution text,
+  -- Anti-nag ledger, written by the gather's date-due pull only
+  -- (semantic surfacing is not an ask-prompt, so it doesn't count).
+  last_surfaced_at timestamptz,
+  surface_count int not null default 0,
+  embedding vector(2048),
+  embedding_model text,
+  embedding_claim_holder text,
+  embedding_claim_expires timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- The gather's two hot reads: due pull (user, status, relevant_after)
+-- and the list tool's newest-first browse.
+create index if not exists followups_user_open_due_idx
+  on public.followups (user_id, relevant_after)
+  where status = 'open';
+
+create index if not exists followups_user_created_idx
+  on public.followups (user_id, created_at desc);
+
+alter table public.followups enable row level security;
+
+drop policy if exists "followups_select_own" on public.followups;
+create policy "followups_select_own" on public.followups
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "followups_insert_own" on public.followups;
+create policy "followups_insert_own" on public.followups
+  for insert with check (auth.uid() = user_id);
+
+drop policy if exists "followups_update_own" on public.followups;
+create policy "followups_update_own" on public.followups
+  for update using (auth.uid() = user_id);
+
+drop policy if exists "followups_delete_own" on public.followups;
+create policy "followups_delete_own" on public.followups
+  for delete using (auth.uid() = user_id);
+
+-- Invalidate the embedding whenever the text that produced it changes.
+-- Same shape and rationale as clear_memory_embedding_on_change: pending
+-- = `embedding is null`; the claim columns are nulled too so an
+-- in-flight backfill save can't land a now-stale vector.
+create or replace function public.clear_followup_embedding_on_change()
+  returns trigger language plpgsql as $$
+begin
+  if new.question is distinct from old.question
+     or new.context is distinct from old.context then
+    new.embedding := null;
+    new.embedding_model := null;
+    new.embedding_claim_holder := null;
+    new.embedding_claim_expires := null;
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists clear_followup_embedding_on_change on public.followups;
+create trigger clear_followup_embedding_on_change
+  before update on public.followups
+  for each row execute function public.clear_followup_embedding_on_change();
+
+-- Embedding backfill claim/save pair. Same contract as
+-- claim_next_pending_memory / save_memory_embedding_if_claimed; the
+-- backfill loop walks this via its EMBED_SOURCES registry entry
+-- (supabase/functions/_shared/embed-input.ts).
+create or replace function public.claim_next_pending_followup(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns table (id uuid, question text, context text, user_id uuid)
+language sql security definer
+set search_path = public as $$
+  with candidate as (
+    select f.id
+      from public.followups f
+     where f.embedding is null
+       and (f.embedding_claim_expires is null
+            or f.embedding_claim_expires < now())
+     order by f.updated_at desc
+     limit 1
+     for update skip locked
+  )
+  update public.followups f
+     set embedding_claim_holder = p_holder_id,
+         embedding_claim_expires = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c
+   where f.id = c.id
+  returning f.id, f.question, f.context, f.user_id;
+$$;
+
+create or replace function public.save_followup_embedding_if_claimed(
+  p_id uuid,
+  p_holder_id text,
+  p_embedding vector(2048),
+  p_embedding_model text
+) returns boolean
+language plpgsql security definer
+set search_path = public as $$
+declare
+  updated int;
+begin
+  update public.followups
+     set embedding = p_embedding,
+         embedding_model = p_embedding_model,
+         embedding_claim_holder = null,
+         embedding_claim_expires = null
+   where id = p_id
+     and embedding_claim_holder = p_holder_id
+     and embedding_claim_expires > now();
+  get diagnostics updated = row_count;
+  return updated > 0;
+end $$;
+
+-- Same lockdown rationale as the memory pair: definer functions with no
+-- per-user filter must not be callable by authenticated users.
+revoke all on function public.claim_next_pending_followup(text, int) from public, anon, authenticated;
+revoke all on function public.save_followup_embedding_if_claimed(uuid, text, vector, text) from public, anon, authenticated;
+grant execute on function public.claim_next_pending_followup(text, int) to service_role;
+grant execute on function public.save_followup_embedding_if_claimed(uuid, text, vector, text) to service_role;
+
+-- Semantic search over OPEN follow-ups only - this RPC exists for the
+-- context-recall gather's semantic arm, and closed loops must never
+-- surface as loops (the resolved outcome reaches recall as an ordinary
+-- memory instead). No confidence boost: loops have no corroboration
+-- axis, so plain cosine order is the whole ranking. p_user_id is the
+-- b-strict service-role escape hatch (see search_memories_by_embedding
+-- above for the full rationale).
+create or replace function public.search_followups_by_embedding(
+  query_embedding vector(2048),
+  match_limit int,
+  p_user_id uuid default null
+) returns table (
+  id uuid,
+  question text,
+  context text,
+  relevant_after timestamptz,
+  created_at timestamptz
+)
+language sql stable security invoker as $$
+  select id, question, context, relevant_after, created_at
+    from public.followups
+   where user_id = coalesce(p_user_id, auth.uid())
+     and status = 'open'
+     and embedding is not null
+   order by embedding <=> query_embedding
+   limit match_limit
+$$;

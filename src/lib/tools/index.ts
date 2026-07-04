@@ -108,6 +108,11 @@ import { recordFileAttachSchema } from './record_file_attach.schema';
 import { recordFileRemoveSchema } from './record_file_remove.schema';
 import { recordLinkCreateSchema } from './record_link_create.schema';
 import { recordLinkDeleteSchema } from './record_link_delete.schema';
+import { followupCreateSchema } from './followup_create.schema';
+import { followupUpdateSchema } from './followup_update.schema';
+import { followupCloseSchema } from './followup_close.schema';
+import { followupDismissSchema } from './followup_dismiss.schema';
+import { followupListSchema } from './followup_list.schema';
 import { docListSchema } from './doc_list.schema';
 import { docGetSchema } from './doc_get.schema';
 import { docGrepSchema } from './doc_grep.schema';
@@ -180,6 +185,11 @@ const recordFileAttach = serverSideTool(recordFileAttachSchema);
 const recordFileRemove = serverSideTool(recordFileRemoveSchema);
 const recordLinkCreate = serverSideTool(recordLinkCreateSchema);
 const recordLinkDelete = serverSideTool(recordLinkDeleteSchema);
+const followupCreate = serverSideTool(followupCreateSchema);
+const followupUpdate = serverSideTool(followupUpdateSchema);
+const followupClose = serverSideTool(followupCloseSchema);
+const followupDismiss = serverSideTool(followupDismissSchema);
+const followupList = serverSideTool(followupListSchema);
 const docList = serverSideTool(docListSchema);
 const docGet = serverSideTool(docGetSchema);
 const docGrep = serverSideTool(docGrepSchema);
@@ -287,6 +297,7 @@ export const alwaysOnToolbox: Toolbox = {
     recordList,
     recordGet,
     recordSearch,
+    followupList,
     recipeList,
     recipeGet,
     docList,
@@ -420,6 +431,30 @@ export const wikiToolbox: Toolbox = {
 };
 
 /**
+ * Follow-up write tools. A follow-up is a pending question the model
+ * saves for itself ("Ask how the lasagna turned out") so a later
+ * conversation knows the outcome is unknown rather than hallucinating
+ * one; surfacing rides the context-recall gather (semantic + date-due).
+ * The read path (`followup_list`) is always-on like every other read;
+ * this toolbox carries the four lifecycle writes (save / reschedule /
+ * close / dismiss). Gated like the other write boxes: the model flips
+ * it on via `toggle_toolbox` when the user shares a plan worth
+ * following up on, or when their answer resolves an open question.
+ * Note the reflection agent writes follow-ups server-side regardless
+ * of this gate - the box gates only the chat model's volitional path.
+ */
+export const followupsToolbox: Toolbox = {
+  name: 'followups',
+  description:
+    'Save, reschedule, close, and dismiss follow-ups: questions to ask ' +
+    'the user in a later conversation ("how did the lasagna turn out?"). ' +
+    'Save one when the user shares a plan or dated event worth asking ' +
+    'about later; close it when they report the outcome. The read path ' +
+    '(followup_list) is always-on; this toolbox carries the writes.',
+  tools: [followupCreate, followupUpdate, followupClose, followupDismiss],
+};
+
+/**
  * Image-generation toolbox. Gated rather than always-on: generating an
  * image spends Venice credits and writes a persistent attachment row,
  * so it gets the same deliberate user-or-model gate the cookbook /
@@ -474,6 +509,7 @@ export const TOOLBOXES: readonly Toolbox[] = [
   cookingToolbox,
   memoriesToolbox,
   wikiToolbox,
+  followupsToolbox,
   libraryToolbox,
   imagesToolbox,
 ];

@@ -93,6 +93,16 @@ table; nothing substitutes for any of the others.
 | Conversation | `threads` (titles + summaries) | What was worked through in prior threads | `title (id)` reference -> `conversation_get` |
 | Wiki | `wiki_articles` | Encyclopedic prose ABOUT topics in the user's life (projects, people, places) | `title (id)` reference -> `wiki_get` |
 
+A fourth arm rides the same gather: **follow-ups** (`followups` -
+the assistant's own pending questions, surfaced semantically AND
+date-due, rendered uncited under an explicit outcome-unknown
+register). It is documented in [`followups.md`](./followups.md)
+rather than here - the arm reuses this pipeline's triggers, cache,
+and failure contract, and adds two behaviors of its own (the
+proactive due pull with its anti-nag ledger, and the "due
+follow-ups force a non-empty note" exception to the empty-gather
+short-circuit).
+
 ## Role in the app
 
 Same shape of contract as intuition. The pipeline does NOT respond
@@ -385,6 +395,11 @@ readable content. Registered in the always-on toolbox.
   articles excluded, same hygiene as `wiki_search` in recall mode) and
   the model drills in with `wiki_get`. The `wiki_recall` TOOL still
   wraps `WikiRecallAgent`.
+- **Follow-ups ([./followups.md](./followups.md))** - the fourth
+  gather arm (`gatherFollowups`) and the follow-up rules in the
+  smoothing prompt. The `context` umbrella tool returns the open set
+  as a fourth array. Follow-up surfacing is gated by this feature's
+  toggle - disabling context recall disables the proactive asks too.
 - **Tools ([./tools.md](./tools.md))** - the umbrella `context`, the
   three per-layer `*_recall` tools, the `*_search` tools, and the
   `memory_get` / `conversation_get` / `wiki_get` drill-down trio are all
