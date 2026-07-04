@@ -47,3 +47,14 @@ export function chipStatus(
   if (a.compression) return { kind: 'compressed', label: compressionLabel(a.compression) };
   return { kind: 'ready' };
 }
+
+/**
+ * Total bytes across the currently-pending attachments. The add-file
+ * path uses this to reject files that would push the message past
+ * MAX_MESSAGE_AGGREGATE_BYTES (see $lib/attachments).
+ */
+export function totalAttachmentBytes(
+  attachments: readonly Pick<LocalAttachment, 'size_bytes'>[]
+): number {
+  return attachments.reduce((n, a) => n + a.size_bytes, 0);
+}

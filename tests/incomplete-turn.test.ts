@@ -7,7 +7,12 @@
  */
 import { describe, it, expect } from 'vitest';
 import type { Message } from '../src/lib/supabase';
-import { isReasoningOnlyStall, isCutOffPartialText } from '../src/lib/ui/incomplete-turn';
+import {
+  classifyIncompleteTurnTail,
+  isReasoningOnlyStall,
+  isCutOffPartialText,
+} from '../src/lib/ui/incomplete-turn';
+import { ASK_USER_PENDING_FLAG, ASK_USER_ANSWERED_FLAG } from '../src/lib/ask-user';
 
 function msg(over: Partial<Message>): Message {
   return {
@@ -118,5 +123,77 @@ describe('isCutOffPartialText', () => {
   it('is false for non-assistant roles', () => {
     expect(isCutOffPartialText(msg({ role: 'user', content: 'x', status: 'error' }))).toBe(false);
     expect(isCutOffPartialText(msg({ role: 'tool', content: 'x', status: 'error' }))).toBe(false);
+  });
+});
+
+describe('classifyIncompleteTurnTail', () => {
+  it('returns null for an empty transcript', () => {
+    expect(classifyIncompleteTurnTail([])).toBeNull();
+  });
+
+  it('flags a bare user-message tail (first round never wrote anything)', () => {
+    const user = msg({ id: 'u1', role: 'user', content: 'hi' });
+    expect(classifyIncompleteTurnTail([user])).toBe(user);
+  });
+
+  it('flags a tool-row tail (tool round completed, next round never landed)', () => {
+    const tail = msg({ id: 'r1', role: 'tool', content: '{"ok":1}' });
+    expect(classifyIncompleteTurnTail([msg({ role: 'user' }), tail])).toBe(tail);
+  });
+
+  it('suppresses the pending ask_user sentinel tail (deliberate suspension, not a cut-off)', () => {
+    const pending = msg({
+      role: 'tool',
+      content: JSON.stringify({
+        [ASK_USER_PENDING_FLAG]: true,
+        question: 'which?',
+        options: [{ label: 'A', description: 'a' }],
+      }),
+    });
+    expect(classifyIncompleteTurnTail([msg({ role: 'user' }), pending])).toBeNull();
+  });
+
+  it('keeps an answered/abandoned ask_user tail retry-able (it still lacks a follow-up turn)', () => {
+    const answered = msg({
+      role: 'tool',
+      content: JSON.stringify({
+        [ASK_USER_ANSWERED_FLAG]: true,
+        answer: 'A',
+        via: 'option',
+      }),
+    });
+    expect(classifyIncompleteTurnTail([msg({ role: 'user' }), answered])).toBe(answered);
+  });
+
+  it('flags an assistant tail whose tool_calls never got result rows', () => {
+    const tail = msg({
+      content: '',
+      tool_calls: [
+        { id: 'c1', type: 'function', function: { name: 'web_search', arguments: '{}' } },
+      ],
+    });
+    expect(classifyIncompleteTurnTail([msg({ role: 'user' }), tail])).toBe(tail);
+  });
+
+  it('flags a reasoning-only stall tail and clears a completed reply', () => {
+    const stall = msg({ content: '', reasoning: 'thinking...' });
+    expect(classifyIncompleteTurnTail([msg({ role: 'user' }), stall])).toBe(stall);
+    const done = msg({ content: 'the answer' });
+    expect(classifyIncompleteTurnTail([msg({ role: 'user' }), done])).toBeNull();
+  });
+
+  it('never flags an aborted tail - a deliberate stop is an endpoint on every device', () => {
+    const stoppedMidTool = msg({
+      status: 'aborted',
+      content: '',
+      tool_calls: [
+        { id: 'c1', type: 'function', function: { name: 'web_search', arguments: '{}' } },
+      ],
+    });
+    expect(classifyIncompleteTurnTail([msg({ role: 'user' }), stoppedMidTool])).toBeNull();
+    const stoppedMidReasoning = msg({ status: 'aborted', content: '', reasoning: 'part...' });
+    expect(
+      classifyIncompleteTurnTail([msg({ role: 'user' }), stoppedMidReasoning])
+    ).toBeNull();
   });
 });

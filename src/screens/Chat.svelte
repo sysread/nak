@@ -76,7 +76,6 @@
   import type { ExchangeSlot } from '$lib/exchange/exchange-slot.svelte';
   import { ThreadClaimCoordinator } from '$lib/exchange/thread-claim-coordinator';
   import { resolveHolderId } from '$lib/exchange/holder-id';
-  import { isRecoveryMessage } from '$lib/conversation-recovery';
   import {
     saveDraft,
     updateDraftText,
@@ -98,7 +97,7 @@
     validateFile,
     type LocalAttachment,
   } from '$lib/attachments';
-  import { chipStatus } from '$lib/ui/composer-attachments';
+  import { chipStatus, totalAttachmentBytes } from '$lib/ui/composer-attachments';
   import {
     VENICE_EMBEDDING_MODEL,
     agentModel,
@@ -205,9 +204,35 @@
   } from '$lib/ui/recall';
   import { formatMessageStamp } from '$lib/ui/message-timestamp';
   import { coerceSecondThoughts } from '$lib/ui/second-thoughts';
-  import { isReasoningOnlyStall, isCutOffPartialText } from '$lib/ui/incomplete-turn';
+  import {
+    classifyIncompleteTurnTail,
+    isReasoningOnlyStall,
+    isCutOffPartialText,
+  } from '$lib/ui/incomplete-turn';
   import { selectRecoveryBanner } from '$lib/ui/recovery-banner';
-  import { headingFor, parseLastError } from '$lib/ui/last-error';
+  import {
+    describeError,
+    formatRateLimitMessage,
+    headingFor,
+    parseLastError,
+  } from '$lib/ui/last-error';
+  import { buildMessageBlocks, findOpeningUserMessageIdForTail } from '$lib/ui/message-blocks';
+  import {
+    bucketFor,
+    insertByUpdatedAtDesc,
+    mergeByUpdatedAtDesc,
+    mergeServerThreadList,
+    sortsAheadOfCursor,
+  } from '$lib/ui/thread-buckets';
+  import {
+    buildUserRoundByMessageId,
+    groupFiresByUserRound,
+  } from '$lib/ui/cohort-panel';
+  import {
+    isMacPlatform,
+    rateLimitRemainingSeconds,
+    sendHintLabel,
+  } from '$lib/ui/chat-screen';
   import { computeRegenerateRangeIds, persistedRowIds } from '$lib/ui/regenerate';
   import { computeDeleteFromRangeIds } from '$lib/ui/message-delete';
   import {
@@ -228,14 +253,10 @@
   import Scanner from '../components/Scanner.svelte';
   import ToolCalls from '../components/ToolCalls.svelte';
   import GeneratedImageCard from '../components/GeneratedImageCard.svelte';
-  import { generatedImagesForGroup } from '$lib/ui/generated-image';
   import {
-    parseAskUserContent,
     buildAskUserAnswerContent,
-    ASK_USER_PENDING_FLAG,
+    findPendingAskUserRow,
     type AskUserVia,
-    type AskUserAnsweredContent,
-    type AskUserPendingContent,
   } from '$lib/ask-user';
   import MessageAttachments from '../components/MessageAttachments.svelte';
   import TopBarActions from '../components/TopBarActions.svelte';
@@ -687,40 +708,16 @@
     expandedCohortPanels = next;
   }
 
-  // Walk messages in transcript order and assign 1..N to user
-  // messages. Matches the runtime countUserRounds() the chat loop
-  // calls at fire time: both count current user messages, both stop
-  // at the same boundary, so the index produced here is the same
-  // value persisted on samskara_fires.user_round at fire time. Tool
-  // and assistant rows do not advance the counter.
-  const userRoundByMessageId: Map<string, number> = $derived.by(() => {
-    const map = new Map<string, number>();
-    let n = 0;
-    for (const m of messages) {
-      if (m.role === 'user') {
-        n += 1;
-        map.set(m.id, n);
-      }
-    }
-    return map;
-  });
+  // Anchor the inline cohort panels: message id -> 1-based user round
+  // (same counting rule the chat loop persists on samskara_fires at
+  // fire time), and user round -> that round's fires. Both walks live
+  // in $lib/ui/cohort-panel; these sites are the rune wire-up.
+  const userRoundByMessageId: Map<string, number> = $derived(
+    buildUserRoundByMessageId(messages)
+  );
 
-  // Group fires by their persisted user_round. Legacy rows whose
-  // backfill didn't produce a value (the column was NULL and the
-  // approximate ranking couldn't reach them - shouldn't happen but
-  // guard anyway) are dropped from the inline view rather than
-  // anchored at an arbitrary message.
-  const firesByUserRound: Map<number, SamskaraFireDiagnosticRow[]> = $derived.by(
-    () => {
-      const map = new Map<number, SamskaraFireDiagnosticRow[]>();
-      for (const f of cohortFires) {
-        if (f.userRound === null) continue;
-        const bucket = map.get(f.userRound);
-        if (bucket) bucket.push(f);
-        else map.set(f.userRound, [f]);
-      }
-      return map;
-    }
+  const firesByUserRound: Map<number, SamskaraFireDiagnosticRow[]> = $derived(
+    groupFiresByUserRound(cohortFires)
   );
 
   const substrateByUserMsgId: Map<string, SamskaraSubstrateDiagnosticRow> =
@@ -899,13 +896,13 @@
   });
   // Live countdown to the retry. Reads rateLimitNowTick so it
   // subscribes to the 1Hz interval above; the tick value itself
-  // doesn't enter the math. Returns 0 when no wait is active so the
-  // template can guard the "resuming in Ns" suffix on a positive
-  // value rather than null-checking a separate variable.
+  // doesn't enter the math (the primitive reads the wall clock).
   const rateLimitRemainingSec = $derived.by(() => {
-    if (!activeSlot || activeSlot.rateLimitWaitUntil === null) return 0;
     void rateLimitNowTick;
-    return Math.max(0, Math.ceil((activeSlot.rateLimitWaitUntil - Date.now()) / 1000));
+    return rateLimitRemainingSeconds(
+      activeSlot?.rateLimitWaitUntil ?? null,
+      Date.now()
+    );
   });
 
   // Subconscious-priming checklist rows for the active slot, in stable
@@ -991,35 +988,6 @@
   }
 
   /**
-   * Replace a server-fetched thread list while preserving each row's
-   * fresher in-memory `intuition_payload`. Used by `refreshThreads`
-   * when the server snapshot may not have caught up with a recent
-   * patchThread / pipeline write yet - same hazard rebucketThread
-   * defends against, applied across every row of a list refresh.
-   * Threads not present in memory pass through unchanged.
-   */
-  function mergeServerThreadList(rows: readonly Thread[]): Thread[] {
-    return rows.map((row) => {
-      const existing = findThread(row.id);
-      if (!existing) return row;
-      return {
-        ...row,
-        intuition_payload: pickFresherIntuitionPayload(
-          existing.intuition_payload,
-          row.intuition_payload
-        ),
-        // Same race / same merge as intuition_payload above. The
-        // two subconscious-priming caches ride parallel paths and
-        // each one can land in memory ahead of a server snapshot.
-        context_recall_payload: pickFresherContextRecallPayload(
-          existing.context_recall_payload,
-          row.context_recall_payload
-        ),
-      };
-    });
-  }
-
-  /**
    * Apply a partial update to whichever bucket currently holds `id`.
    * No-op if the thread isn't loaded (e.g. a realtime update for a
    * thread buried deep in Older that the user hasn't paginated to
@@ -1040,15 +1008,6 @@
     recentThreads = recentThreads.filter((t) => t.id !== id);
     olderThreads = olderThreads.filter((t) => t.id !== id);
     archivedPage = archivedPage.filter((t) => t.id !== id);
-  }
-
-  /** Classify a thread into its current bucket. Drafts are a special
-   *  case — their user-facing placement is always "top of Recent" but
-   *  internally they live in the drafts array. */
-  function bucketFor(t: Thread): 'draft' | 'recent' | 'older' | 'archived' {
-    if (t.isDraft) return 'draft';
-    if (t.archived) return 'archived';
-    return t.updated_at >= recentCutoff ? 'recent' : 'older';
   }
 
   /**
@@ -1092,7 +1051,7 @@
     recentThreads = recentThreads.filter((x) => x.id !== t.id);
     olderThreads = olderThreads.filter((x) => x.id !== t.id);
     archivedPage = archivedPage.filter((x) => x.id !== t.id);
-    switch (bucketFor(t)) {
+    switch (bucketFor(t, recentCutoff)) {
       case 'recent':
         recentThreads = insertByUpdatedAtDesc(recentThreads, t);
         break;
@@ -1114,56 +1073,6 @@
         // Drafts don't come from the server — nothing to do.
         break;
     }
-  }
-
-  function sortsAheadOfCursor(t: Thread, c: ThreadCursor): boolean {
-    // (updated_at desc, id desc) ordering: a row "ahead of" the cursor
-    // is strictly greater than the cursor under that ordering.
-    if (t.updated_at > c.updated_at) return true;
-    if (t.updated_at < c.updated_at) return false;
-    return t.id > c.id;
-  }
-
-  function insertByUpdatedAtDesc(arr: Thread[], t: Thread): Thread[] {
-    // Keep the existing ordering (already sorted desc). Binary insert
-    // would be faster in principle, but the bucket sizes are small
-    // enough that a linear scan is simpler and just as quick.
-    const idx = arr.findIndex((x) => t.updated_at > x.updated_at);
-    if (idx === -1) return [...arr, t];
-    return [...arr.slice(0, idx), t, ...arr.slice(idx)];
-  }
-
-  function mergeByUpdatedAtDesc(a: Thread[], b: Thread[]): Thread[] {
-    // Merge two already-sorted-desc lists into one, deduping by id.
-    // Used by the scroll-to-search-result path (`openSearchResult`)
-    // which window-fetches a range of threads and needs to splice
-    // them into the paginated list without upsetting ordering.
-    const out: Thread[] = [];
-    const seen = new Set<string>();
-    let i = 0;
-    let j = 0;
-    while (i < a.length && j < b.length) {
-      if (seen.has(a[i].id)) {
-        i++;
-        continue;
-      }
-      if (seen.has(b[j].id)) {
-        j++;
-        continue;
-      }
-      if (a[i].updated_at >= b[j].updated_at) {
-        out.push(a[i]);
-        seen.add(a[i].id);
-        i++;
-      } else {
-        out.push(b[j]);
-        seen.add(b[j].id);
-        j++;
-      }
-    }
-    for (; i < a.length; i++) if (!seen.has(a[i].id)) { out.push(a[i]); seen.add(a[i].id); }
-    for (; j < b.length; j++) if (!seen.has(b[j].id)) { out.push(b[j]); seen.add(b[j].id); }
-    return out;
   }
 
   // Per-row action menu and long-press state for the drawer. Long-press
@@ -1307,13 +1216,6 @@
     return `la-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   }
 
-  // Total bytes across all currently-pending attachments. Used by the
-  // add-file path to reject files that would push the message past
-  // the aggregate cap. Cheap enough to recompute each call.
-  function pendingBytes(): number {
-    return pendingAttachments.reduce((n, a) => n + a.size_bytes, 0);
-  }
-
   /**
    * Add one file to the composer. Handles the full add-time flow:
    * validate, image-downscale for images, base64-encode, kick off the
@@ -1334,7 +1236,7 @@
       error = { text: `${file.name}: ${perFileReason}` };
       return;
     }
-    if (pendingBytes() + file.size > MAX_MESSAGE_AGGREGATE_BYTES) {
+    if (totalAttachmentBytes(pendingAttachments) + file.size > MAX_MESSAGE_AGGREGATE_BYTES) {
       error = {
         text: `Total attachment size exceeds ${formatBytes(MAX_MESSAGE_AGGREGATE_BYTES)}.`,
       };
@@ -1764,9 +1666,9 @@
 
   // Insertion ordering across the three buckets is "updated_at desc,
   // id desc tiebreak" — same as the server-side ORDER BY in the
-  // pagination RPCs. The single-row insertion helper lives on
-  // `insertByUpdatedAtDesc` below; no caller needs the full re-sort
-  // variant, so it's not exposed.
+  // pagination RPCs. The single-row insertion helper is
+  // `insertByUpdatedAtDesc` in $lib/ui/thread-buckets; no caller
+  // needs the full re-sort variant, so it's not exposed.
 
   // Realtime: follow the active thread's messages. Re-runs whenever
   // `activeThreadId` changes, so switching threads tears down the
@@ -2233,12 +2135,12 @@
       // ahead of the server would otherwise wipe the brain icon and
       // the inline card; the merge keeps both visible until the
       // server actually has a payload at least as fresh.
-      recentThreads = mergeServerThreadList(recent);
-      olderThreads = mergeServerThreadList(older.rows);
+      recentThreads = mergeServerThreadList(recent, loadedThreads);
+      olderThreads = mergeServerThreadList(older.rows, loadedThreads);
       olderCursor = older.nextCursor;
       olderHasMore = older.nextCursor !== null;
       olderLoading = false;
-      archivedPage = mergeServerThreadList(archived.rows);
+      archivedPage = mergeServerThreadList(archived.rows, loadedThreads);
       archivedCursor = archived.nextCursor;
       archivedHasMore = archived.nextCursor !== null;
       archivedLoading = false;
@@ -4908,69 +4810,6 @@
     });
   }
 
-  /**
-   * Unwrap a Venice rate-limit error into a message fit for the banner.
-   * The raw err.message is `Venice rate limit hit (HTTP 429). <detail>`
-   * where <detail> is usually the OpenAI-compat envelope
-   * `{"error":"The model is currently overloaded..."}`. Peel both
-   * layers so the user sees only the provider's reason; fall back to
-   * the raw message when parsing fails — any text beats a blank banner.
-   */
-  /**
-   * Render an unknown thrown value as a non-empty human string. The
-   * naive `err.message` fallback broke on the "reasoning streams then
-   * vanishes silently" bug: an Error with an empty `.message` (or a
-   * non-Error thrown value) left the error banner with empty text,
-   * which the user read as "no error at all". Cascade down to `name`,
-   * then a JSON dump, then the literal `String(err)`, so something
-   * always lands. Never returns an empty string.
-   */
-  function describeError(err: unknown): string {
-    if (err instanceof Error) {
-      const msg = err.message?.trim();
-      if (msg) return msg;
-      if (err.name) return err.name;
-      return 'Error';
-    }
-    if (typeof err === 'string') return err || 'Unknown error';
-    if (err && typeof err === 'object') {
-      try {
-        const s = JSON.stringify(err);
-        if (s && s !== '{}') return s;
-      } catch {
-        // fall through
-      }
-    }
-    const s = String(err ?? '');
-    return s || 'Unknown error';
-  }
-
-  function formatRateLimitMessage(err: VeniceError): string {
-    const prefix = `Venice rate limit hit (HTTP ${err.status ?? 429}). `;
-    const detail = err.message.startsWith(prefix)
-      ? err.message.slice(prefix.length).trim()
-      : err.message.trim();
-    if (detail.startsWith('{')) {
-      try {
-        const parsed: unknown = JSON.parse(detail);
-        if (parsed && typeof parsed === 'object') {
-          const e = (parsed as { error?: unknown }).error;
-          if (typeof e === 'string') return e;
-          if (
-            e &&
-            typeof e === 'object' &&
-            typeof (e as { message?: unknown }).message === 'string'
-          ) {
-            return (e as { message: string }).message;
-          }
-        }
-      } catch {
-        // Not JSON — fall through to the raw detail.
-      }
-    }
-    return detail || 'Rate limited. Please try again later.';
-  }
-
   // ⌘+Enter (macOS), Ctrl+Enter (everyone else), and the legacy Shift+Enter
   // all submit. Plain Enter still inserts a newline so long-form drafts
   // aren't interrupted. `metaKey` maps to the Command key on macOS; on
@@ -5023,15 +4862,16 @@
 
   // Platform-aware hint in the composer placeholder. Uses the modern
   // navigator.userAgentData.platform when available and falls back to
-  // the legacy navigator.platform string.
+  // the legacy navigator.platform string; the classification and the
+  // label copy live in $lib/ui/chat-screen.
   const isMac = $derived.by(() => {
     if (typeof navigator === 'undefined') return false;
     const p =
       (navigator as Navigator & { userAgentData?: { platform?: string } })
         .userAgentData?.platform ?? navigator.platform ?? '';
-    return /mac/i.test(p);
+    return isMacPlatform(p);
   });
-  const sendHint = $derived(isMac ? '\u2318-enter sends' : 'ctrl-enter sends');
+  const sendHint = $derived(sendHintLabel(isMac));
 
   async function signOut(): Promise<void> {
     // Drop the tab-local last-active-thread id so a post-sign-in
@@ -5548,207 +5388,6 @@
   let toolboxFlash = $state(false);
 
   /**
-   * Render plan derived from the raw message list. Tool-result rows are
-   * folded into their parent assistant message's tool-group so the UI
-   * sees one card per turn. Plain user / assistant-text rows pass through.
-   *
-   * Built as a $derived so messages mutations re-group automatically
-   * (e.g. when the chat-loop pushes a new tool-result in mid-turn).
-   */
-  type MessageBlock =
-    | { kind: 'plain'; message: Message }
-    | { kind: 'tool-group'; assistant: Message; resultsByCallId: Record<string, Message> }
-    // A generate_image tool call's output, rendered as its own card
-    // directly below the tool-group block for the turn it fired on.
-    // `key` is the tool_call_id (stable across renders); `assistantId`
-    // anchors it to the originating row; `filename` + `aspectRatio` let
-    // GeneratedImageCard resolve the image by filename and size its
-    // loading placeholder. A separate block (not the AssistantBody
-    // attachment slot) because the image hydrates by filename, not via
-    // the realtime attachment path - see src/lib/ui/generated-image.ts.
-    | {
-        kind: 'generated-image';
-        key: string;
-        assistantId: string;
-        filename: string;
-        aspectRatio: string;
-      }
-    // Rendered as a single faded "Renamed to X" line where an
-    // `update_title` call fired. Carries a stable `key` so the #each
-    // keyed loop can distinguish multiple renames within one turn
-    // (unlikely, but the model could do it). `assistantId` anchors
-    // the block to its originating assistant row for debugging /
-    // future deep-link needs.
-    | { kind: 'rename'; key: string; assistantId: string; title: string }
-    // Rendered as an AskUserCard for an `ask_user` tool call. Three
-    // states (pending / answered / abandoned) derive from the tool-
-    // result row's content (see parseAskUserContent). `key` is the
-    // tool_call_id, stable across renders so the #each loop doesn't
-    // tear down the card on every messages mutation. `pendingContent`
-    // is set when state==='pending'; `answeredContent` when it isn't.
-    // We carry both shapes through the block rather than re-parsing
-    // in the template because the pending question text is only on
-    // the persisted sentinel - the answered shape doesn't echo it.
-    | {
-        kind: 'ask-user';
-        key: string;
-        assistantId: string;
-        state: 'pending' | 'answered' | 'abandoned';
-        question: string;
-        options: { label: string; description: string }[];
-        answeredContent: AskUserAnsweredContent | null;
-      };
-
-  // Tool names rendered as something other than a standard tool-call
-  // card:
-  //   - `toggle_tools` is pure housekeeping (the LLM flips tools on/off
-  //     between turns). Rendering it as a tool row adds noise and the
-  //     user already sees the state via the composer toolbox flash, so
-  //     it's suppressed from the render plan entirely.
-  //   - `update_title` is surfaced as a `rename` block instead of a
-  //     standard tool card - see the block builder below. It's listed
-  //     here so the standard tool-group path skips it.
-  // The underlying `tool_calls` and tool-result rows still live in the
-  // message store and go out on the wire on replay; this is purely a
-  // display filter.
-  // `ask_user` is suppressed from the standard tool-group card because
-  // it has its own dedicated AskUserCard rendering below. The
-  // tool_calls and tool-result rows still live in the message store
-  // (and ship on the wire on the resumed round) - this is purely a
-  // display filter so the question doesn't render as both a faceless
-  // tool row and a question card.
-  // `update_title` and `ask_user` are filtered from the standard
-  // tool-group card because each has its own dedicated rendering
-  // surface ("Renamed to X" line, AskUserCard respectively). The
-  // underlying tool_calls and tool-result rows still live in the
-  // message store and go out on the wire on replay; this is purely
-  // a display filter.
-  // `toggle_toolbox` is NOT hidden anymore: it used to be, because
-  // the persisted tool-result row's realtime INSERT could land after
-  // END and the missing result then rendered as a red X via
-  // statusFor's post-END logic. Under streaming-root the toggle
-  // almost always happens in a non-terminal round (model toggles,
-  // then calls the gated write tool, then writes a terminal response),
-  // so the tool-result row has multiple rounds of realtime
-  // propagation budget before END fires - the timing-race window
-  // closed in practice. Rendering as a tool card again gives the
-  // user a persistent chat-thread artifact of the toggle, which the
-  // 600ms composer-toolbox flash alone doesn't.
-  const HIDDEN_TOOL_NAMES = new Set(['update_title', 'ask_user']);
-
-  /**
-   * Pull the sanitised title out of an update_title call + its
-   * optional result row. Prefers the tool-result (post-sanitisation,
-   * post-persist) because that's exactly what was written to the DB;
-   * falls back to the call's raw arguments when the result hasn't
-   * landed yet (mid-turn, before persistence finishes). Returns null
-   * if neither source yields a non-empty title - in which case the
-   * rename block is skipped entirely rather than rendering an empty
-   * indicator.
-   */
-  function titleFromRenameCall(
-    call: { function: { arguments: string } },
-    result: Message | undefined
-  ): string | null {
-    if (result) {
-      try {
-        const parsed = JSON.parse(result.content) as unknown;
-        if (
-          parsed &&
-          typeof parsed === 'object' &&
-          'title' in parsed &&
-          typeof (parsed as { title: unknown }).title === 'string'
-        ) {
-          const t = (parsed as { title: string }).title.trim();
-          if (t) return t;
-        }
-      } catch {
-        // fall through to args
-      }
-    }
-    try {
-      const parsed = JSON.parse(call.function.arguments || '{}') as unknown;
-      if (
-        parsed &&
-        typeof parsed === 'object' &&
-        'title' in parsed &&
-        typeof (parsed as { title: unknown }).title === 'string'
-      ) {
-        const t = (parsed as { title: string }).title.trim();
-        if (t) return t;
-      }
-    } catch {
-      // malformed JSON on the wire is the model's fault; skip the block
-    }
-    return null;
-  }
-
-  /**
-   * Parse the `arguments` JSON string off an ask_user tool call into
-   * the question + options shape the card needs. Defensive against
-   * malformed JSON and partial wire payloads - returns null when the
-   * args are unusable, in which case the block-builder skips emitting
-   * an ask-user block for this call. The activity parameter that
-   * dispatch.ts injects is ignored here; the card only needs the
-   * question + options.
-   */
-  function parseAskUserCallArgs(
-    raw: string
-  ): { question: string; options: { label: string; description: string }[] } | null {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw || '{}');
-    } catch {
-      return null;
-    }
-    if (!parsed || typeof parsed !== 'object') return null;
-    const obj = parsed as Record<string, unknown>;
-    const question = typeof obj.question === 'string' ? obj.question.trim() : '';
-    const rawOptions = Array.isArray(obj.options) ? obj.options : [];
-    const options: { label: string; description: string }[] = [];
-    for (const o of rawOptions) {
-      if (!o || typeof o !== 'object') continue;
-      const oo = o as Record<string, unknown>;
-      if (typeof oo.label !== 'string' || typeof oo.description !== 'string') continue;
-      const label = oo.label.trim();
-      const description = oo.description.trim();
-      if (!label || !description) continue;
-      options.push({ label, description });
-    }
-    if (!question || options.length === 0) return null;
-    return { question, options };
-  }
-
-  /**
-   * Locate the unique pending ask_user tool row in the current
-   * thread's messages, if any. Per the chat-loop's contract, at most
-   * one such row exists at any time: a pending sentinel is written
-   * when ask_user lands, and the next event either replaces its
-   * content with an answer (user submitted) or with an abandonment
-   * payload (refresh / new-send / sibling cancel). A new ask_user
-   * cannot land until the previous one resolves because the loop is
-   * suspended in between.
-   */
-  function findPendingAskUserRow(): {
-    row: Message;
-    toolCallId: string;
-    question: string;
-  } | null {
-    for (const m of messages) {
-      if (m.role !== 'tool' || !m.tool_call_id) continue;
-      const parsed = parseAskUserContent(m.content);
-      if (parsed && ASK_USER_PENDING_FLAG in parsed) {
-        return {
-          row: m,
-          toolCallId: m.tool_call_id,
-          question: (parsed as AskUserPendingContent).question,
-        };
-      }
-    }
-    return null;
-  }
-
-  /**
    * Write an abandonment payload over the pending sentinel and patch
    * the in-memory message. Best-effort: a write failure logs but
    * doesn't surface, because the alternative is blocking the user's
@@ -5769,7 +5408,7 @@
     via: AskUserVia
   ): Promise<void> {
     if (!app.supabase) return;
-    const pending = findPendingAskUserRow();
+    const pending = findPendingAskUserRow(messages);
     if (!pending) return;
     const newContent = buildAskUserAnswerContent(null, via);
     try {
@@ -5833,7 +5472,7 @@
       // is the user message that opened the suspended turn, which
       // we recover by walking backward through messages from the
       // updated tool row.
-      const userMessageId = findOpeningUserMessageIdForTail();
+      const userMessageId = findOpeningUserMessageIdForTail(messages);
       if (!userMessageId) {
         log.warn('answerAskUser: could not locate opening user message');
         return;
@@ -5874,192 +5513,21 @@
   }
 
   /**
-   * Walk backward through messages from the tail to find the most
-   * recent role='user' message - the one that opened the currently-
-   * suspended (or just-resumed) turn. Returns null if no user
-   * message is present (cold thread), which means the resume cannot
-   * proceed and the caller surfaces a warning.
+   * Render plan derived from the raw message list - the fold lives in
+   * $lib/ui/message-blocks (tool-result folding, recovery-row hiding,
+   * hidden-tool filtering, the rename / generated-image / ask-user
+   * sibling blocks). Built as a $derived so messages mutations
+   * re-group automatically (e.g. when the chat-loop pushes a new
+   * tool-result row mid-turn).
    */
-  function findOpeningUserMessageIdForTail(): string | null {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const m = messages[i];
-      if (m.role === 'user') return m.id;
-    }
-    return null;
-  }
-
-  const messageBlocks = $derived.by<MessageBlock[]>(() => {
-    // First pass: index tool rows by their tool_call_id.
-    const resultsByCallId: Record<string, Message> = {};
-    for (const m of messages) {
-      if (m.role === 'tool' && m.tool_call_id) {
-        resultsByCallId[m.tool_call_id] = m;
-      }
-    }
-    // Second pass: emit blocks, folding assistant-with-tool_calls rows
-    // into a tool-group that carries the matching result rows.
-    const blocks: MessageBlock[] = [];
-    for (const m of messages) {
-      if (m.role === 'tool') continue; // folded under their assistant parent
-      // Filter synthetic and persisted recovery rows from the UI.
-      // synthesizeRecoveryMessages adds them so the wire shape stays
-      // valid for the next provider call (tool -> user without an
-      // intervening assistant is a provider 400), but they read as
-      // noise to the user - the failure is already conveyed by the
-      // failed tool card and the incomplete-turn banner above. Hiding
-      // them here keeps the wire fix while sparing the user the meta-
-      // note. Catches both shapes via the RECOVERY_MARKER substring
-      // test: synthetic rows (created in memory by the recovery walk)
-      // and persisted rows (saved to the DB on the next user send).
-      if (isRecoveryMessage(m)) continue;
-      if (m.role === 'user') {
-        blocks.push({ kind: 'plain', message: m });
-        continue;
-      }
-      if (
-        m.role === 'assistant' &&
-        m.tool_calls &&
-        m.tool_calls.length > 0
-      ) {
-        const visibleCalls = m.tool_calls.filter(
-          (c) => !HIDDEN_TOOL_NAMES.has(c.function.name)
-        );
-        // Pull the rename calls off separately so they render as their
-        // own dedicated block below. A turn can contain both rename +
-        // other tools; the two render paths coexist, with the rename
-        // indicator appearing AFTER the assistant/tool-group block for
-        // the turn it fired on (reads as "here's the response. and by
-        // the way, renamed").
-        const renameCalls = m.tool_calls.filter(
-          (c) => c.function.name === 'update_title'
-        );
-
-        // If every call on this turn is hidden, we either drop the
-        // whole row (no body, nothing to show) or demote it to a
-        // plain block so any assistant text still reaches the user.
-        // Demoting preserves the rare case where a model emits a
-        // short "ok, tools off" reply alongside the toggle call.
-        if (visibleCalls.length === 0) {
-          if (m.content && m.content.trim().length > 0) {
-            blocks.push({ kind: 'plain', message: m });
-          }
-        } else {
-          const scoped: Record<string, Message> = {};
-          for (const call of visibleCalls) {
-            const r = resultsByCallId[call.id];
-            if (r) scoped[call.id] = r;
-          }
-          // Copy the message so we can narrow tool_calls to just the
-          // visible ones without mutating the store-owned row.
-          const narrowed: Message = { ...m, tool_calls: visibleCalls };
-          blocks.push({ kind: 'tool-group', assistant: narrowed, resultsByCallId: scoped });
-
-          // Emit one generated-image card per successful generate_image
-          // call, immediately after the tool-group block so the picture
-          // sits right under the tool card that made it. The card
-          // resolves the image by filename rather than reading the
-          // assistant row's attachments, because the server-side
-          // per-round attach never echoes back over realtime (see
-          // generated-image.ts). Skipped for failed/in-flight calls -
-          // the descriptor is only parseable once the result lands.
-          for (const img of generatedImagesForGroup(visibleCalls, scoped)) {
-            blocks.push({
-              kind: 'generated-image',
-              key: img.key,
-              assistantId: m.id,
-              filename: img.filename,
-              aspectRatio: img.aspectRatio,
-            });
-          }
-        }
-
-        // Emit one rename block per successful update_title call on
-        // this turn. Placed AFTER the main block (see comment above on
-        // reading order).
-        for (const call of renameCalls) {
-          const title = titleFromRenameCall(call, resultsByCallId[call.id]);
-          if (title !== null) {
-            blocks.push({
-              kind: 'rename',
-              key: call.id,
-              assistantId: m.id,
-              title,
-            });
-          }
-        }
-
-        // Emit one ask-user block per `ask_user` call on this turn.
-        // The question and options come from the call's arguments (the
-        // model's original ask) so they survive into the answered
-        // history view, which carries only the answer payload. The
-        // tool-result row's content determines the state and the
-        // answer envelope (if any).
-        const askUserCalls = m.tool_calls.filter(
-          (c) => c.function.name === 'ask_user'
-        );
-        for (const call of askUserCalls) {
-          const args = parseAskUserCallArgs(call.function.arguments);
-          if (!args) continue;
-          const resultRow = resultsByCallId[call.id];
-          const parsedResult = resultRow
-            ? parseAskUserContent(resultRow.content)
-            : null;
-          let state: 'pending' | 'answered' | 'abandoned';
-          let answeredContent: AskUserAnsweredContent | null = null;
-          if (!parsedResult) {
-            // Result row not yet persisted; the chat-loop is in the
-            // sub-second window between assistant-row write and
-            // tool-row write. Skip the block until the row lands -
-            // emitting a card with no backing row would make submit
-            // operations target a non-existent tool_call_id.
-            continue;
-          }
-          if (ASK_USER_PENDING_FLAG in parsedResult) {
-            state = 'pending';
-          } else {
-            answeredContent = parsedResult;
-            const via = parsedResult.via;
-            if (via === 'option' || via === 'free_form') {
-              state = 'answered';
-            } else {
-              state = 'abandoned';
-            }
-          }
-          blocks.push({
-            kind: 'ask-user',
-            key: call.id,
-            assistantId: m.id,
-            state,
-            question: args.question,
-            options: args.options,
-            answeredContent,
-          });
-        }
-      } else {
-        blocks.push({ kind: 'plain', message: m });
-      }
-    }
-    return blocks;
-  });
+  const messageBlocks = $derived(buildMessageBlocks(messages));
 
   /**
-   * True when the persisted transcript ends in a shape that means the
-   * model never got to produce a final reply for the last user turn.
-   * Three tails qualify:
-   *
-   *   - `tool`: a tool round completed, and the next assistant round
-   *     failed before any text was persisted. This is the overload-
-   *     mid-turn case: the rate-limit banner that would normally park
-   *     a retry closure only lives in memory, so a page refresh wipes
-   *     the in-session retry button and leaves the transcript with
-   *     nothing after the tool result rows.
-   *   - `assistant` with `tool_calls`: the model emitted tool_calls
-   *     but the tool executions or the result-persist step failed
-   *     before any tool rows landed. Rare, but leaves the same
-   *     orphan-turn shape.
-   *   - `user`: the user message persisted but the first assistant
-   *     round never wrote anything (immediate failure, or refresh
-   *     during the very first round before any persistence).
+   * The persisted transcript tail when it means the model never got
+   * to produce a final reply for the last user turn (see
+   * classifyIncompleteTurnTail in $lib/ui/incomplete-turn for the
+   * qualifying tail shapes), gated on session state the transcript
+   * can't see:
    *
    * Suppressed while `activeSlot?.sending` is true (a turn in progress has the
    * same DB tail mid-exchange and we don't want the banner fighting
@@ -6078,43 +5546,7 @@
     if (activeSlot?.sending) return null;
     if (activeSlot?.streamingError) return null;
     if (respondingElsewhere) return null;
-    if (messages.length === 0) return null;
-    const last = messages[messages.length - 1];
-    if (last.role === 'tool') {
-      // A pending ask_user sentinel is the chat loop intentionally
-      // suspended waiting for the user to answer - not a cut-off
-      // response. The AskUserCard already owns this interaction, so
-      // offering a "response was cut off, retry?" prompt below it is
-      // wrong (retrying would relaunch the turn out from under the
-      // open question). The answered/abandoned sentinel is a different
-      // story: that tail genuinely lacks a follow-up assistant turn and
-      // stays retry-able, so only the pending shape is suppressed here.
-      const parsed = parseAskUserContent(last.content);
-      if (parsed && ASK_USER_PENDING_FLAG in parsed) return null;
-      return last;
-    }
-    if (last.role === 'assistant') {
-      // A user-initiated stop commits as status='aborted' (carrying the
-      // interrupted marker). That is a deliberate endpoint, not a cut-off
-      // turn - never offer to retry it. Checked before the tool_calls and
-      // reasoning-only branches, which would otherwise flag a stop that
-      // landed mid-tool-call or mid-reasoning. The status is persisted on
-      // the row, so a second device that opens the thread suppresses the
-      // banner the same way the device that issued the stop does.
-      if (last.status === 'aborted') return null;
-      if (last.tool_calls && last.tool_calls.length > 0) return last;
-      // Reasoning-only stall (see isReasoningOnlyStall): the model
-      // emitted chain-of-thought but no visible content and no tool
-      // calls, so the card renders as a bare reasoning panel with no
-      // answer. That tail genuinely lacks a follow-up, so make it
-      // retry-able. A normal completed turn has content (or tool calls)
-      // and is excluded; reasoning paired with either is the model
-      // working as intended, not a stall.
-      if (isReasoningOnlyStall(last)) return last;
-      return null;
-    }
-    if (last.role === 'user') return last;
-    return null;
+    return classifyIncompleteTurnTail(messages);
   });
 
   /**
@@ -6390,7 +5822,7 @@
    */
   async function openSearchResult(t: Thread): Promise<void> {
     if (!app.supabase) return;
-    const bucket = bucketFor(t);
+    const bucket = bucketFor(t, recentCutoff);
     try {
       if (bucket === 'older' && !olderThreads.some((x) => x.id === t.id)) {
         const rows = await app.supabase.listThreadsSince({

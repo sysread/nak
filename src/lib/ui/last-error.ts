@@ -1,4 +1,7 @@
-// Parse + project the threads.last_error jsonb column.
+// Error copy for the chat screen's error surfaces: parse + project
+// the threads.last_error jsonb column, plus the projections that turn
+// a live thrown value into banner text (describeError,
+// formatRateLimitMessage).
 //
 // The function-side writer (supabase/functions/_shared/error-translate.ts)
 // packs `{kind, message, retryable, occurred_at}` into the column. The
@@ -15,7 +18,11 @@
 //
 // Interacts with: src/lib/supabase.ts (Thread.last_error column),
 // src/screens/Chat.svelte (the error card rendering),
-// supabase/functions/_shared/error-translate.ts (the writer).
+// supabase/functions/_shared/error-translate.ts (the writer),
+// src/lib/venice.ts (the VeniceError shape formatRateLimitMessage
+// unwraps).
+
+import type { VeniceError } from '../venice';
 
 export type LastErrorKind =
   | 'auth'
@@ -119,4 +126,67 @@ export function headingFor(kind: LastErrorKind): string {
     case 'guard_exhausted':
       return 'Malformed response';
   }
+}
+
+/**
+ * Render an unknown thrown value as a non-empty human string. The
+ * naive `err.message` fallback broke on the "reasoning streams then
+ * vanishes silently" bug: an Error with an empty `.message` (or a
+ * non-Error thrown value) left the error banner with empty text,
+ * which the user read as "no error at all". Cascade down to `name`,
+ * then a JSON dump, then the literal `String(err)`, so something
+ * always lands. Never returns an empty string.
+ */
+export function describeError(err: unknown): string {
+  if (err instanceof Error) {
+    const msg = err.message?.trim();
+    if (msg) return msg;
+    if (err.name) return err.name;
+    return 'Error';
+  }
+  if (typeof err === 'string') return err || 'Unknown error';
+  if (err && typeof err === 'object') {
+    try {
+      const s = JSON.stringify(err);
+      if (s && s !== '{}') return s;
+    } catch {
+      // fall through
+    }
+  }
+  const s = String(err ?? '');
+  return s || 'Unknown error';
+}
+
+/**
+ * Unwrap a Venice rate-limit error into a message fit for the banner.
+ * The raw err.message is `Venice rate limit hit (HTTP 429). <detail>`
+ * where <detail> is usually the OpenAI-compat envelope
+ * `{"error":"The model is currently overloaded..."}`. Peel both
+ * layers so the user sees only the provider's reason; fall back to
+ * the raw message when parsing fails - any text beats a blank banner.
+ */
+export function formatRateLimitMessage(err: VeniceError): string {
+  const prefix = `Venice rate limit hit (HTTP ${err.status ?? 429}). `;
+  const detail = err.message.startsWith(prefix)
+    ? err.message.slice(prefix.length).trim()
+    : err.message.trim();
+  if (detail.startsWith('{')) {
+    try {
+      const parsed: unknown = JSON.parse(detail);
+      if (parsed && typeof parsed === 'object') {
+        const e = (parsed as { error?: unknown }).error;
+        if (typeof e === 'string') return e;
+        if (
+          e &&
+          typeof e === 'object' &&
+          typeof (e as { message?: unknown }).message === 'string'
+        ) {
+          return (e as { message: string }).message;
+        }
+      }
+    } catch {
+      // Not JSON - fall through to the raw detail.
+    }
+  }
+  return detail || 'Rate limited. Please try again later.';
 }

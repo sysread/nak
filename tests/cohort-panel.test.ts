@@ -8,17 +8,20 @@
  */
 import { describe, it, expect } from 'vitest';
 import type {
+  Message,
   SamskaraFireDiagnosticRow,
   SamskaraSubstrateDiagnosticRow,
 } from '../src/lib/supabase';
 import {
   assimilationStatus,
+  buildUserRoundByMessageId,
   clusterFires,
   cohortCountLabel,
   fireVerdictLabel,
   fireVerdictStatusClass,
   formatRelative,
   formatValence,
+  groupFiresByUserRound,
   isCollapsedView,
   resolutionLabel,
   resolutionStatusClass,
@@ -346,5 +349,55 @@ describe('formatValence', () => {
   it('clamps to two decimals', () => {
     expect(formatValence(0.123456)).toBe('+0.12');
     expect(formatValence(-0.987)).toBe('-0.99');
+  });
+});
+
+describe('buildUserRoundByMessageId', () => {
+  function row(id: string, role: Message['role']): Message {
+    return {
+      id,
+      thread_id: 't1',
+      role,
+      content: '',
+      created_at: '2024-01-01T00:00:00Z',
+    } as Message;
+  }
+
+  it('assigns 1..N to user messages in transcript order, skipping other roles', () => {
+    const map = buildUserRoundByMessageId([
+      row('u1', 'user'),
+      row('a1', 'assistant'),
+      row('r1', 'tool'),
+      row('u2', 'user'),
+      row('a2', 'assistant'),
+      row('u3', 'user'),
+    ]);
+    expect([...map.entries()]).toEqual([
+      ['u1', 1],
+      ['u2', 2],
+      ['u3', 3],
+    ]);
+  });
+
+  it('returns an empty map for a transcript with no user rows', () => {
+    expect(buildUserRoundByMessageId([row('a1', 'assistant')]).size).toBe(0);
+    expect(buildUserRoundByMessageId([]).size).toBe(0);
+  });
+});
+
+describe('groupFiresByUserRound', () => {
+  it('buckets fires by their persisted round, preserving input order within a bucket', () => {
+    const f1 = makeFire('f1', 0.9, { userRound: 1 });
+    const f2 = makeFire('f2', 0.5, { userRound: 2 });
+    const f3 = makeFire('f3', 0.7, { userRound: 1 });
+    const map = groupFiresByUserRound([f1, f2, f3]);
+    expect(map.get(1)).toEqual([f1, f3]);
+    expect(map.get(2)).toEqual([f2]);
+  });
+
+  it('drops legacy rows with a null userRound instead of anchoring them arbitrarily', () => {
+    const legacy = makeFire('f1', 0.9, { userRound: null });
+    const map = groupFiresByUserRound([legacy]);
+    expect(map.size).toBe(0);
   });
 });

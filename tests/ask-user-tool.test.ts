@@ -22,11 +22,14 @@ import {
 } from '../src/lib/tools';
 import {
   parseAskUserContent,
+  parseAskUserCallArgs,
+  findPendingAskUserRow,
   buildAskUserAnswerContent,
   ASK_USER_PENDING_FLAG,
   ASK_USER_ANSWERED_FLAG,
 } from '../src/lib/ask-user';
 import { askUserSchema } from '../src/lib/tools/ask_user.schema';
+import type { Message } from '../src/lib/supabase';
 
 describe('ask_user — registry scoping', () => {
   it('is present in the main chat TOOLS list', () => {
@@ -97,5 +100,87 @@ describe('ask_user — content parser', () => {
       options: [],
     });
     expect(parseAskUserContent(content)).toBeNull();
+  });
+});
+
+describe('ask_user — call-args parser (transcript render gate)', () => {
+  it('parses and trims a well-formed call', () => {
+    const raw = JSON.stringify({
+      question: '  Which one?  ',
+      options: [
+        { label: ' A ', description: ' first ' },
+        { label: 'B', description: 'second' },
+      ],
+    });
+    expect(parseAskUserCallArgs(raw)).toEqual({
+      question: 'Which one?',
+      options: [
+        { label: 'A', description: 'first' },
+        { label: 'B', description: 'second' },
+      ],
+    });
+  });
+
+  it('drops junk option entries but keeps the valid ones', () => {
+    const raw = JSON.stringify({
+      question: 'Q',
+      options: [
+        null,
+        { label: 'A' },
+        { label: '  ', description: 'blank label' },
+        { label: 'B', description: 'ok' },
+      ],
+    });
+    expect(parseAskUserCallArgs(raw)?.options).toEqual([{ label: 'B', description: 'ok' }]);
+  });
+
+  it('returns null when the args are unusable (unlike the lenient in-flight extractor)', () => {
+    expect(parseAskUserCallArgs('not json')).toBeNull();
+    expect(parseAskUserCallArgs('')).toBeNull();
+    expect(parseAskUserCallArgs(JSON.stringify({ options: [] }))).toBeNull();
+    expect(
+      parseAskUserCallArgs(JSON.stringify({ question: 'Q', options: [] }))
+    ).toBeNull();
+  });
+});
+
+describe('ask_user — pending-row lookup', () => {
+  function toolRow(over: Partial<Message>): Message {
+    return {
+      id: 'r1',
+      thread_id: 't1',
+      role: 'tool',
+      content: '',
+      created_at: '2024-01-01T00:00:00Z',
+      tool_call_id: 'c1',
+      ...over,
+    } as Message;
+  }
+  const pendingContent = JSON.stringify({
+    [ASK_USER_PENDING_FLAG]: true,
+    question: 'which?',
+    options: [{ label: 'A', description: 'a' }],
+  });
+
+  it('finds the pending sentinel row and projects its call id + question', () => {
+    const pending = toolRow({ id: 'r2', tool_call_id: 'c2', content: pendingContent });
+    const rows: Message[] = [
+      toolRow({ id: 'r1', content: '{"unrelated":true}' }),
+      pending,
+    ];
+    expect(findPendingAskUserRow(rows)).toEqual({
+      row: pending,
+      toolCallId: 'c2',
+      question: 'which?',
+    });
+  });
+
+  it('ignores answered sentinels and non-tool rows', () => {
+    const rows: Message[] = [
+      toolRow({ id: 'r1', content: buildAskUserAnswerContent('A', 'option', 0) }),
+      toolRow({ id: 'u1', role: 'user', content: pendingContent, tool_call_id: null }),
+    ];
+    expect(findPendingAskUserRow(rows)).toBeNull();
+    expect(findPendingAskUserRow([])).toBeNull();
   });
 });

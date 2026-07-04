@@ -50,6 +50,16 @@ A chat turn goes:
 - `src/screens/Chat.svelte` - the screen itself. Drawer,
   composer, message list, thread lifecycle, plus the call sites
   for every other feature that hooks into chat.
+- `src/lib/ui/message-blocks.ts`, `src/lib/ui/thread-buckets.ts`,
+  `src/lib/ui/chat-screen.ts` - the screen's pure UI-primitive
+  companions: the transcript render plan (tool-result folding,
+  recovery-row hiding, the rename / generated-image / ask-user
+  sibling blocks), the drawer's four-bucket list surgery, and the
+  small scoped decisions (platform send-hint copy, rate-limit
+  countdown). They sit alongside the per-feature companions the
+  screen already used (`incomplete-turn`, `last-error`,
+  `recovery-banner`, `streaming-bubble`, ...); the split contract
+  is [frontend-organization.md](./frontend-organization.md).
 - `src/lib/chat/loop.ts` - `runChatLoop`, `toVeniceMessage`, and
   the per-turn priming + event-routing orchestration. Issues one
   `venice.streamChat` call per turn; the function-side round

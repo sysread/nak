@@ -1,10 +1,11 @@
 /**
- * Predicates for classifying an incomplete-turn tail in the chat
- * transcript. The matching $derived (`incompleteTurnTail` in
- * src/screens/Chat.svelte) decides whether to show the "response
- * appears to have been cut off" retry banner; `retryIncompleteTurn`
- * uses these predicates to decide whether the retry must REPLACE the
- * tail or CONTINUE from it.
+ * Classification of an incomplete-turn tail in the chat transcript.
+ * `classifyIncompleteTurnTail` is the transcript-shape verdict; the
+ * matching $derived (`incompleteTurnTail` in src/screens/Chat.svelte)
+ * adds the session-state gates on top and decides whether to show the
+ * "response appears to have been cut off" retry banner.
+ * `retryIncompleteTurn` uses the finer predicates to decide whether
+ * the retry must REPLACE the tail or CONTINUE from it.
  *
  * REPLACE vs CONTINUE: a tail is a continuation point when its
  * persisted rows are exactly what the model needs to pick up - an
@@ -21,6 +22,7 @@
  */
 
 import type { Message } from '$lib/supabase';
+import { parseAskUserContent, ASK_USER_PENDING_FLAG } from '$lib/ask-user';
 
 /**
  * True when `message` is a reasoning-only stall: an assistant row that
@@ -84,4 +86,73 @@ export function isCutOffPartialText(message: Message): boolean {
   if (message.tool_calls && message.tool_calls.length > 0) return false;
   if (message.status !== 'error') return false;
   return message.content.trim().length > 0;
+}
+
+/**
+ * Classify the persisted transcript tail, returning the tail message
+ * when its shape means the model never got to produce a final reply
+ * for the last user turn, or null for a settled transcript. Three
+ * tails qualify:
+ *
+ *   - `tool`: a tool round completed, and the next assistant round
+ *     failed before any text was persisted. This is the overload-
+ *     mid-turn case: the rate-limit banner that would normally park
+ *     a retry closure only lives in memory, so a page refresh wipes
+ *     the in-session retry button and leaves the transcript with
+ *     nothing after the tool result rows.
+ *   - `assistant` with `tool_calls`: the model emitted tool_calls
+ *     but the tool executions or the result-persist step failed
+ *     before any tool rows landed. Rare, but leaves the same
+ *     orphan-turn shape.
+ *   - `user`: the user message persisted but the first assistant
+ *     round never wrote anything (immediate failure, or refresh
+ *     during the very first round before any persistence).
+ *
+ * This is the persisted-shape half of the verdict only. The caller
+ * (the `incompleteTurnTail` derived in src/screens/Chat.svelte) also
+ * gates on session state - a turn in progress, an already-displayed
+ * streaming error, a foreign device holding the response claim - all
+ * of which suppress the banner for reasons that live outside the
+ * transcript.
+ */
+export function classifyIncompleteTurnTail(
+  messages: readonly Message[]
+): Message | null {
+  if (messages.length === 0) return null;
+  const last = messages[messages.length - 1];
+  if (last.role === 'tool') {
+    // A pending ask_user sentinel is the chat loop intentionally
+    // suspended waiting for the user to answer - not a cut-off
+    // response. The AskUserCard already owns this interaction, so
+    // offering a "response was cut off, retry?" prompt below it is
+    // wrong (retrying would relaunch the turn out from under the
+    // open question). The answered/abandoned sentinel is a different
+    // story: that tail genuinely lacks a follow-up assistant turn and
+    // stays retry-able, so only the pending shape is suppressed here.
+    const parsed = parseAskUserContent(last.content);
+    if (parsed && ASK_USER_PENDING_FLAG in parsed) return null;
+    return last;
+  }
+  if (last.role === 'assistant') {
+    // A user-initiated stop commits as status='aborted' (carrying the
+    // interrupted marker). That is a deliberate endpoint, not a cut-off
+    // turn - never offer to retry it. Checked before the tool_calls and
+    // reasoning-only branches, which would otherwise flag a stop that
+    // landed mid-tool-call or mid-reasoning. The status is persisted on
+    // the row, so a second device that opens the thread suppresses the
+    // banner the same way the device that issued the stop does.
+    if (last.status === 'aborted') return null;
+    if (last.tool_calls && last.tool_calls.length > 0) return last;
+    // Reasoning-only stall (see isReasoningOnlyStall): the model
+    // emitted chain-of-thought but no visible content and no tool
+    // calls, so the card renders as a bare reasoning panel with no
+    // answer. That tail genuinely lacks a follow-up, so make it
+    // retry-able. A normal completed turn has content (or tool calls)
+    // and is excluded; reasoning paired with either is the model
+    // working as intended, not a stall.
+    if (isReasoningOnlyStall(last)) return last;
+    return null;
+  }
+  if (last.role === 'user') return last;
+  return null;
 }

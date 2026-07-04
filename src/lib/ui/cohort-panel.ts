@@ -3,7 +3,10 @@
  * inline under each user message in the chat transcript. Pure
  * functions only - no runes, no Svelte imports, no DOM access. The
  * companion `src/components/CohortPanel.svelte` composes these with
- * its own runes (`raw`, `expandedClusters`) and renders the result.
+ * its own runes (`raw`, `expandedClusters`) and renders the result;
+ * `src/screens/Chat.svelte` uses the transcript-anchoring walks at
+ * the bottom of this module to decide which user messages get the
+ * inline panel toggle.
  *
  * The decisions encoded here are the ones a port to another
  * framework would carry across unchanged: how fires are sorted, how
@@ -17,6 +20,7 @@
  * consume `SamskaraFireDiagnosticRow`.
  */
 import type {
+  Message,
   SamskaraFireDiagnosticRow,
   SamskaraSubstrateDiagnosticRow,
 } from '../supabase';
@@ -251,4 +255,50 @@ export function formatValence(v: number | null): string {
   if (v === null) return '-';
   const sign = v > 0 ? '+' : '';
   return `${sign}${v.toFixed(2)}`;
+}
+
+/**
+ * Walk messages in transcript order and assign 1..N to user
+ * messages. Matches the runtime countUserRounds() the chat loop
+ * calls at fire time: both count current user messages, both stop
+ * at the same boundary, so the index produced here is the same
+ * value persisted on samskara_fires.user_round at fire time. Tool
+ * and assistant rows do not advance the counter.
+ *
+ * The inverse walk (round number -> user Message) lives in
+ * src/lib/ui/recall.ts as buildUserMessageByRound; this direction
+ * anchors the inline cohort toggle to each user message's row.
+ */
+export function buildUserRoundByMessageId(
+  messages: readonly Message[]
+): Map<string, number> {
+  const map = new Map<string, number>();
+  let n = 0;
+  for (const m of messages) {
+    if (m.role === 'user') {
+      n += 1;
+      map.set(m.id, n);
+    }
+  }
+  return map;
+}
+
+/**
+ * Group fires by their persisted user_round. Legacy rows whose
+ * backfill didn't produce a value (the column was NULL and the
+ * approximate ranking couldn't reach them - shouldn't happen but
+ * guard anyway) are dropped from the inline view rather than
+ * anchored at an arbitrary message.
+ */
+export function groupFiresByUserRound(
+  fires: readonly SamskaraFireDiagnosticRow[]
+): Map<number, SamskaraFireDiagnosticRow[]> {
+  const map = new Map<number, SamskaraFireDiagnosticRow[]>();
+  for (const f of fires) {
+    if (f.userRound === null) continue;
+    const bucket = map.get(f.userRound);
+    if (bucket) bucket.push(f);
+    else map.set(f.userRound, [f]);
+  }
+  return map;
 }

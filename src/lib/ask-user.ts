@@ -36,6 +36,8 @@
  *     get rewritten to this state at write-time
  */
 
+import type { Message } from './supabase';
+
 /**
  * Magic-flag key on the pending tool-result content. Detection sites
  * check for this exact key being literal `true` - more robust than
@@ -98,6 +100,46 @@ export function extractAskUserPrompt(args: Record<string, unknown>): {
         typeof (o as { description?: unknown }).description === 'string',
     )
     .map((o) => ({ label: o.label, description: o.description }));
+  return { question, options };
+}
+
+/**
+ * Parse the `arguments` JSON string off an ask_user tool call into
+ * the question + options shape the card needs. Defensive against
+ * malformed JSON and partial wire payloads - returns null when the
+ * args are unusable, in which case the message-block builder skips
+ * emitting an ask-user block for this call. Stricter than
+ * `extractAskUserPrompt` above on purpose: that helper pre-populates
+ * a live card from an in-flight event and tolerates a missing
+ * question, while this one gates a persisted-transcript render where
+ * an empty card would be dead weight. The activity parameter that
+ * dispatch.ts injects is ignored here; the card only needs the
+ * question + options.
+ */
+export function parseAskUserCallArgs(
+  raw: string
+): { question: string; options: AskUserOption[] } | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw || '{}');
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object') return null;
+  const obj = parsed as Record<string, unknown>;
+  const question = typeof obj.question === 'string' ? obj.question.trim() : '';
+  const rawOptions = Array.isArray(obj.options) ? obj.options : [];
+  const options: AskUserOption[] = [];
+  for (const o of rawOptions) {
+    if (!o || typeof o !== 'object') continue;
+    const oo = o as Record<string, unknown>;
+    if (typeof oo.label !== 'string' || typeof oo.description !== 'string') continue;
+    const label = oo.label.trim();
+    const description = oo.description.trim();
+    if (!label || !description) continue;
+    options.push({ label, description });
+  }
+  if (!question || options.length === 0) return null;
   return { question, options };
 }
 
@@ -172,4 +214,32 @@ export function buildAskUserAnswerContent(
   };
   if (option_index !== undefined) payload.option_index = option_index;
   return JSON.stringify(payload);
+}
+
+/**
+ * Locate the unique pending ask_user tool row in a thread's messages,
+ * if any. Per the chat-loop's contract, at most one such row exists
+ * at any time: a pending sentinel is written when ask_user lands, and
+ * the next event either replaces its content with an answer (user
+ * submitted) or with an abandonment payload (refresh / new-send /
+ * sibling cancel). A new ask_user cannot land until the previous one
+ * resolves because the loop is suspended in between.
+ */
+export function findPendingAskUserRow(messages: readonly Message[]): {
+  row: Message;
+  toolCallId: string;
+  question: string;
+} | null {
+  for (const m of messages) {
+    if (m.role !== 'tool' || !m.tool_call_id) continue;
+    const parsed = parseAskUserContent(m.content);
+    if (parsed && ASK_USER_PENDING_FLAG in parsed) {
+      return {
+        row: m,
+        toolCallId: m.tool_call_id,
+        question: (parsed as AskUserPendingContent).question,
+      };
+    }
+  }
+  return null;
 }
