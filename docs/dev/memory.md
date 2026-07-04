@@ -130,6 +130,11 @@ in `docs/user/memory.md`. The dev side has five moving parts:
   body that stamps when it was written reads back later as a
   current-chat event (the row's `created_at` already records when it
   was learned). `__test.REFLECTION_PROMPT` pins that guidance.
+  Reflection also carries the follow-up verbs (list / create /
+  update / close - deliberately not dismiss) as the settled-thread
+  backstop for the follow-ups feature; see
+  [`followups.md`](./followups.md) for the reconcile contract and
+  the single-background-writer rule.
 - `supabase/functions/venice/agents/deep_sleep.ts` — the memory
   librarian's slow-wave consolidation pass. Per run it picks the
   longest-unvisited memory as the seed, embeds it, fetches the

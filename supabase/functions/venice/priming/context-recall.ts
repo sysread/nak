@@ -47,6 +47,7 @@ import {
   VENICE_EMBEDDING_MODEL,
 } from '../../_shared/backfill.ts';
 import { veniceEmbed } from '../../_shared/venice.ts';
+import { selectDueFollowups } from '../../_shared/followups.ts';
 // Confidence-tag classifier is single-sourced in the memory_search tool
 // port; reuse it so the bands cannot drift between the tool and recall.
 import { classifyMemoryConfidence } from '../tools/memory_search.ts';
@@ -58,6 +59,10 @@ import { classifyMemoryConfidence } from '../tools/memory_search.ts';
 const CONTEXT_MEMORY_LIMIT = 6;
 const CONTEXT_CONVERSATION_LIMIT = 5;
 const CONTEXT_WIKI_LIMIT = 3;
+// Follow-ups ride inline like memories (short by construction). This
+// caps the SEMANTIC matches; the date-due pull has its own cap
+// (DUE_SURFACE_CAP in _shared/followups.ts).
+const CONTEXT_FOLLOWUP_LIMIT = 3;
 
 // Character ceiling on the derived search query. The query is embedded by
 // every layer's search; an unbounded assistant turn would blow past the
@@ -81,10 +86,29 @@ export interface ContextIndexRef {
   title: string;
 }
 
+// An open follow-up - a question the assistant saved for itself whose
+// outcome it does not know. The epistemic state is computed here (not
+// left to the smoothing model): 'upcoming' = the dated event hasn't
+// happened yet; 'pending' = outcome unknown (date passed, or undated).
+// `proactive` marks rows the date-due pull selected - they carry the
+// "you've been meaning to ask" framing even without topical relevance.
+export interface ContextIndexFollowup {
+  id: string;
+  question: string;
+  context: string;
+  state: 'upcoming' | 'pending';
+  proactive: boolean;
+  // Carried so the post-smoothing ledger stamp can increment without a
+  // re-read; never rendered. 0 on semantic rows (only proactive rows
+  // are ever stamped).
+  surface_count: number;
+}
+
 export interface ContextIndex {
   memories: ContextIndexMemory[];
   conversations: ContextIndexRef[];
   wiki: ContextIndexRef[];
+  followups: ContextIndexFollowup[];
 }
 
 interface MemoryRow {
@@ -162,7 +186,11 @@ export async function runContextRecallPipeline(
   const hasHits =
     index.memories.length > 0 ||
     index.conversations.length > 0 ||
-    index.wiki.length > 0;
+    index.wiki.length > 0 ||
+    // A due follow-up must make the note non-empty even when every
+    // other layer is silent - the off-topic ask is the whole point of
+    // the date axis.
+    index.followups.length > 0;
   if (hasHits) {
     try {
       const smoothed = await smoothContextRecall({
@@ -185,6 +213,17 @@ export async function runContextRecallPipeline(
 
   if (signal?.aborted) return null;
 
+  // Stamp the follow-up ask ledger only now - after smoothing produced
+  // a non-empty note that this turn will actually inject. Stamping at
+  // gather time (the original shape) counted a surfacing even when the
+  // smoothing call failed or returned empty, so a flaky smoothing path
+  // could burn a loop's whole ask budget (MAX_UNANSWERED_SURFACINGS)
+  // and expire it without the user ever being asked once. Best-effort:
+  // a failed stamp costs one extra ask, never the turn.
+  if (note.length > 0) {
+    await stampFollowupLedger(opts, index.followups);
+  }
+
   const payload: ContextRecallPayload = {
     v: 2,
     note,
@@ -204,6 +243,7 @@ export async function runContextRecallPipeline(
     memoryCount: index.memories.length,
     conversationCount: index.conversations.length,
     wikiCount: index.wiki.length,
+    followupCount: index.followups.length,
     citationCount: citations.length,
     noteLength: note.length,
     elapsedMs: Date.now() - startedAt,
@@ -270,11 +310,26 @@ async function gatherContextIndex(
   opts: RunContextRecallOptions,
 ): Promise<ContextIndex> {
   const { signal } = opts;
-  const empty: ContextIndex = { memories: [], conversations: [], wiki: [] };
+  const empty: ContextIndex = {
+    memories: [],
+    conversations: [],
+    wiki: [],
+    followups: [],
+  };
   if (signal?.aborted) return empty;
 
   const query = deriveRecallQuery(opts.history);
-  if (query.length === 0) return empty;
+  // No user turn yet -> nothing to search semantically. The follow-up
+  // layer's date-due pull still runs: a due ask belongs at thread open,
+  // which is exactly when the history may hold no user text.
+  if (query.length === 0) {
+    try {
+      return { ...empty, followups: await gatherFollowups(opts, null) };
+    } catch (err) {
+      opts.log.warn('context-recall followup layer failed', err);
+      return empty;
+    }
+  }
 
   // Embed once and share the vector across all three layers. A failure
   // (no key, Venice unreachable) degrades to a null embedding - the
@@ -296,11 +351,13 @@ async function gatherContextIndex(
     queryEmbedding = null;
   }
 
-  const [memoriesR, conversationsR, wikiR] = await Promise.allSettled([
-    gatherMemories(opts, query, queryEmbedding),
-    gatherConversations(opts, query, queryEmbedding),
-    gatherWiki(opts, queryEmbedding),
-  ]);
+  const [memoriesR, conversationsR, wikiR, followupsR] =
+    await Promise.allSettled([
+      gatherMemories(opts, query, queryEmbedding),
+      gatherConversations(opts, query, queryEmbedding),
+      gatherWiki(opts, queryEmbedding),
+      gatherFollowups(opts, queryEmbedding),
+    ]);
 
   if (memoriesR.status === 'rejected')
     opts.log.warn('context-recall memory layer failed', memoriesR.reason);
@@ -311,12 +368,15 @@ async function gatherContextIndex(
     );
   if (wikiR.status === 'rejected')
     opts.log.warn('context-recall wiki layer failed', wikiR.reason);
+  if (followupsR.status === 'rejected')
+    opts.log.warn('context-recall followup layer failed', followupsR.reason);
 
   return {
     memories: memoriesR.status === 'fulfilled' ? memoriesR.value : [],
     conversations:
       conversationsR.status === 'fulfilled' ? conversationsR.value : [],
     wiki: wikiR.status === 'fulfilled' ? wikiR.value : [],
+    followups: followupsR.status === 'fulfilled' ? followupsR.value : [],
   };
 }
 
@@ -469,6 +529,162 @@ async function gatherWiki(
   }
   return kept;
 }
+
+interface FollowupRow {
+  id: string;
+  question: string;
+  context: string;
+  relevant_after: string | null;
+  last_surfaced_at: string | null;
+  surface_count: number;
+}
+
+interface FollowupSemanticHit {
+  id: string;
+  question: string;
+  context: string;
+  relevant_after: string | null;
+}
+
+// Follow-up layer: the two surfacing axes of the assistant's pending
+// questions (docs/dev/followups.md), unioned.
+//   - Semantic: open loops matching the derived query, via
+//     search_followups_by_embedding. NOT cooldown-gated - when the user
+//     brings the topic up, the unresolved status is always relevant.
+//   - Date-due: open loops whose relevant_after has passed, selected by
+//     the pure cooldown/expiry/cap logic in _shared/followups.ts. These
+//     are the proactive asks, so the gather stamps the surfacing ledger
+//     (last_surfaced_at / surface_count) and lazily flips
+//     policy-expired rows to 'expired'. Ledger writes are best-effort:
+//     a failed stamp costs one extra ask somewhere, never the turn.
+async function gatherFollowups(
+  opts: RunContextRecallOptions,
+  queryEmbedding: number[] | null,
+): Promise<ContextIndexFollowup[]> {
+  const { admin, userId, nowMs, log } = opts;
+  const nowIso = new Date(nowMs).toISOString();
+
+  // Date-due pull. RLS OFF: explicit user_id filter.
+  const { data: dueData, error: dueErr } = await admin
+    .from('followups')
+    .select('id, question, context, relevant_after, last_surfaced_at, surface_count')
+    .eq('user_id', userId)
+    .eq('status', 'open')
+    .not('relevant_after', 'is', null)
+    .lte('relevant_after', nowIso);
+  if (dueErr) throw new Error(`followups due pull failed: ${dueErr.message}`);
+  const { due, expiredIds } = selectDueFollowups(
+    (dueData ?? []) as FollowupRow[],
+    nowMs,
+  );
+
+  // Semantic matches. Skipped without an embedding, same posture as the
+  // wiki layer - the due pull above already covered the proactive axis.
+  let semantic: FollowupSemanticHit[] = [];
+  if (queryEmbedding) {
+    const { data, error } = await admin.rpc('search_followups_by_embedding', {
+      query_embedding: queryEmbedding,
+      match_limit: CONTEXT_FOLLOWUP_LIMIT,
+      p_user_id: userId,
+    });
+    if (error) {
+      // Semantic failure degrades to due-only rather than killing the
+      // layer - the proactive ask is the half that has no other path.
+      log.warn('followups semantic search failed', error);
+    } else {
+      semantic = (data ?? []) as FollowupSemanticHit[];
+    }
+  }
+
+  // Union, due rows first (they carry the proactive framing). The
+  // epistemic state is computed here so the smoothing model never has
+  // to date-math: upcoming = dated event still ahead; pending =
+  // outcome unknown (date passed, or undated).
+  const out: ContextIndexFollowup[] = [];
+  const seen = new Set<string>();
+  for (const row of due) {
+    seen.add(row.id);
+    out.push({
+      id: row.id,
+      question: row.question,
+      context: row.context,
+      state: 'pending',
+      proactive: true,
+      surface_count: row.surface_count,
+    });
+  }
+  for (const hit of semantic) {
+    if (seen.has(hit.id)) continue;
+    seen.add(hit.id);
+    const at = hit.relevant_after ? Date.parse(hit.relevant_after) : NaN;
+    out.push({
+      id: hit.id,
+      question: hit.question,
+      context: hit.context,
+      state: Number.isFinite(at) && at > nowMs ? 'upcoming' : 'pending',
+      proactive: false,
+      surface_count: 0,
+    });
+  }
+
+  // Expiry flips at gather time - it is a policy judgment about the
+  // row, not about this turn's delivery. The ASK LEDGER deliberately
+  // does NOT stamp here: the pipeline stamps it after the smoothing
+  // pass ships a non-empty note (see runContextRecallPipeline), so a
+  // failed or empty smoothing never burns ask budget.
+  if (expiredIds.length > 0) {
+    const { error } = await admin
+      .from('followups')
+      .update({ status: 'expired', updated_at: nowIso })
+      .in('id', expiredIds)
+      .eq('user_id', userId)
+      .eq('status', 'open');
+    if (error) log.warn('followup expiry flip failed', error);
+  }
+
+  return out;
+}
+
+/**
+ * Increment the ask ledger for the follow-ups the date-due pull
+ * surfaced this round. Called by the pipeline only after a non-empty
+ * note exists - a surfacing counts when it ships, not when it is
+ * gathered. Semantic rows (proactive=false) are never stamped: topical
+ * surfacing is not an ask-prompt, so it must not consume ask budget.
+ * Best-effort: errors are logged and swallowed (a lost stamp costs one
+ * extra ask before cooldown/expiry catches up; two devices racing the
+ * read-modify-write can likewise lose an increment - accepted, not
+ * worth a coordination primitive).
+ */
+async function stampFollowupLedger(
+  opts: Pick<RunContextRecallOptions, 'admin' | 'userId' | 'nowMs' | 'log'>,
+  followups: readonly ContextIndexFollowup[],
+): Promise<void> {
+  const proactive = followups.filter((f) => f.proactive);
+  if (proactive.length === 0) return;
+  const nowIso = new Date(opts.nowMs).toISOString();
+  await Promise.all(
+    proactive.map((row) =>
+      opts.admin
+        .from('followups')
+        .update({
+          last_surfaced_at: nowIso,
+          surface_count: row.surface_count + 1,
+        })
+        .eq('id', row.id)
+        .eq('user_id', opts.userId)
+        .then(({ error }) => {
+          if (error) opts.log.warn('followup ledger stamp failed', error);
+        }),
+    ),
+  );
+}
+
+// Test-only surface. The gather/stamp split is a timing contract - the
+// due pull must not consume ask budget unless a note actually ships -
+// so both halves get offline coverage with a scripted admin client in
+// supabase/functions/tests/followup-gather.test.ts.
+export const __test = { gatherFollowups, stampFollowupLedger };
 
 // Map article id -> set of source thread ids. Articles with no rows in
 // wiki_article_sources are absent from the map (orphans). RLS OFF on the

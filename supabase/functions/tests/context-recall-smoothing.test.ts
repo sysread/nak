@@ -11,6 +11,7 @@ const {
   extractCitedIndices,
   numberRecallSources,
   renderRecallSourceBlock,
+  renderFollowupBlock,
 } = __test;
 
 function sampleIndex(): ContextIndex {
@@ -33,6 +34,7 @@ function sampleIndex(): ContextIndex {
     ],
     conversations: [{ id: 'c1', title: 'Prior bake' }],
     wiki: [{ id: 'w1', title: 'Tangzhong' }],
+    followups: [],
   };
 }
 
@@ -89,4 +91,44 @@ Deno.test('extractCitedIndices pulls and dedupes ^N^ superscripts', () => {
 
 Deno.test('extractCitedIndices is empty when the note carries no markers', () => {
   assert(extractCitedIndices('plain prose, no citations').size === 0);
+});
+
+Deno.test('renderFollowupBlock labels the three epistemic states, uncited', () => {
+  // Follow-ups never join the numbered source list - no citations, no
+  // drill-down - and the state labels are computed by the gather, so
+  // the render is a pure projection of (state, proactive).
+  const block = renderFollowupBlock([
+    {
+      id: 'f1',
+      question: 'Ask how the lasagna turned out',
+      context: 'Planned a ricotta lasagna for Saturday',
+      state: 'pending',
+      proactive: true,
+      surface_count: 1,
+    },
+    {
+      id: 'f2',
+      question: 'Ask how the VP meeting went',
+      context: '',
+      state: 'pending',
+      proactive: false,
+      surface_count: 0,
+    },
+    {
+      id: 'f3',
+      question: 'Ask about the half-marathon',
+      context: 'Race is next month',
+      state: 'upcoming',
+      proactive: false,
+      surface_count: 0,
+    },
+  ]);
+  assertEquals(
+    block,
+    [
+      '- [due - you have been meaning to ask] Ask how the lasagna turned out (Planned a ricotta lasagna for Saturday)',
+      '- [outcome unknown] Ask how the VP meeting went',
+      '- [upcoming - has not happened yet] Ask about the half-marathon (Race is next month)',
+    ].join('\n'),
+  );
 });

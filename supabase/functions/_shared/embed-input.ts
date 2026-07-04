@@ -42,6 +42,11 @@ const MAX_WIKI_RECORD_CONTENT_CHARS = 8000;
 const MAX_SUBSTRATE_SITUATION_CHARS = 6000;
 const MAX_SUBSTRATE_OUTCOME_CHARS = 2000;
 
+// Follow-ups are short by construction (question 200 / context 500 at the
+// tool boundary - see _shared/followups.ts); the cap here is a defensive
+// backstop only.
+const MAX_FOLLOWUP_EMBED_CHARS = 2000;
+
 
 /**
  * Compose the string Venice embeds for a memory row. The label carries a lot
@@ -131,6 +136,19 @@ export function buildSubstrateEmbedInput(situation: string, outcome: string | nu
 }
 
 /**
+ * Compose the text Venice embeds for a follow-up. Question leads (it names
+ * the topic: "Ask how the lasagna turned out"), context trails behind a soft
+ * boundary. The semantic axis matches the user re-raising the TOPIC, so both
+ * halves carry signal.
+ */
+export function buildFollowupEmbedInput(question: string, context: string): string {
+  const combined = context.trim().length > 0 ? `${question}\n\n${context}` : question;
+  return combined.length > MAX_FOLLOWUP_EMBED_CHARS
+    ? combined.slice(0, MAX_FOLLOWUP_EMBED_CHARS)
+    : combined;
+}
+
+/**
  * One embeddable table, expressed declaratively so the backfill loop can walk
  * every source without per-table branching. `claimRpc` returns the next
  * pending row (globally, across all members - the RPCs are service-definer; see
@@ -193,5 +211,11 @@ export const EMBED_SOURCES: EmbedSource[] = [
     claimRpc: 'samskara_claim_next_substrate_embed', // returns (id, situation, outcome, user_id)
     saveRpc: 'samskara_save_substrate_embedding_if_claimed',
     buildInput: (row) => buildSubstrateEmbedInput(str(row.situation), strOrNull(row.outcome)),
+  },
+  {
+    name: 'followups',
+    claimRpc: 'claim_next_pending_followup', // returns (id, question, context, user_id)
+    saveRpc: 'save_followup_embedding_if_claimed',
+    buildInput: (row) => buildFollowupEmbedInput(str(row.question), str(row.context)),
   },
 ];

@@ -60,6 +60,7 @@ describe('tool registry', () => {
         'doc_grep',
         'doc_list',
         'doc_read',
+        'followup_list',
         'memory_get',
         'memory_recall',
         'memory_search',
@@ -114,6 +115,10 @@ describe('tool registry', () => {
       'doc_create',
       'doc_update',
       'doc_delete',
+      'followup_create',
+      'followup_update',
+      'followup_close',
+      'followup_dismiss',
     ]) {
       expect(disabled).not.toContain(gated);
     }
@@ -194,6 +199,7 @@ describe('tool registry', () => {
       'cooking',
       'memories',
       'wiki',
+      'followups',
       'library',
       'images',
     ]);
@@ -204,6 +210,7 @@ describe('tool registry', () => {
       'cooking',
       'memories',
       'wiki',
+      'followups',
       'library',
       'images',
     ]);
@@ -219,6 +226,7 @@ describe('tool registry', () => {
       'cooking',
       'memories',
       'wiki',
+      'followups',
       'library',
       'images',
     ]);

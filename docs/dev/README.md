@@ -89,6 +89,11 @@ changing a contract that other features depend on.
   fans out to the memory-recall and conversation-recall
   agents in parallel, stitches their notes into one
   `<think>`-tagged priming block.
+- [Follow-ups](./followups.md) — pending questions the model
+  saves for itself ("ask how the lasagna turned out") so later
+  conversations treat unknown outcomes as unknown; surfaces
+  semantically and date-due through the context-recall gather,
+  captured and resolved by the chat model + reflection.
 - [Summaries](./summaries.md) - server-side thread-summary
   curation unit.
 - [Topics](./topics.md) - server-side tagging units (threads,

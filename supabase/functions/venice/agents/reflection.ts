@@ -49,6 +49,10 @@ import { memoryReaffirm } from '../tools/memory_reaffirm.ts';
 import { memoryDoubt } from '../tools/memory_doubt.ts';
 import { memoryRelate } from '../tools/memory_relate.ts';
 import { memoryUnrelate } from '../tools/memory_unrelate.ts';
+import { followupList } from '../tools/followup_list.ts';
+import { followupCreate } from '../tools/followup_create.ts';
+import { followupUpdate } from '../tools/followup_update.ts';
+import { followupClose } from '../tools/followup_close.ts';
 import {
   runHeadlessAgent,
   type AgentTool,
@@ -206,6 +210,123 @@ const MEMORY_REAFFIRM_WIRE_SCHEMA: AgentTool['wire'] = {
 
 
 
+// ---------------------------------------------------------------------------
+// Wire schemas for the follow-up verbs. Reflection is the ONLY
+// background agent with follow-up tools (docs/dev/followups.md,
+// "single background writer") - it is the settled-thread backstop for
+// both capture and resolution, so it carries list (dedup evidence),
+// create, update (reschedule), and close. No dismiss: dismissal is the
+// user's veto, expressed live in chat, never inferred from a
+// transcript. Caps mirror _shared/followups.ts.
+// ---------------------------------------------------------------------------
+
+const MAX_FOLLOWUP_QUESTION_CHARS = 200;
+const MAX_FOLLOWUP_CONTEXT_CHARS = 500;
+const MAX_FOLLOWUP_RESOLUTION_CHARS = 500;
+
+const FOLLOWUP_LIST_WIRE_SCHEMA: AgentTool['wire'] = {
+  type: 'function',
+  function: {
+    name: 'followup_list',
+    description:
+      'List saved follow-ups: open questions to ask the user later ' +
+      '(with ids and relevant_after dates) plus recently closed ones ' +
+      'with their resolutions. ALWAYS call this before followup_create ' +
+      '- a question already open, answered, or dismissed must not be ' +
+      'created again.',
+    parameters: { type: 'object', properties: {}, additionalProperties: false },
+  },
+};
+
+const FOLLOWUP_CREATE_WIRE_SCHEMA: AgentTool['wire'] = {
+  type: 'function',
+  function: {
+    name: 'followup_create',
+    description:
+      'Save a follow-up: a question whose outcome is unknown and worth ' +
+      'asking the user in a future conversation ("Ask how the lasagna ' +
+      'turned out"). Set relevant_after to just after the event when a ' +
+      'date is known; omit it when there is no date.',
+    parameters: {
+      type: 'object',
+      properties: {
+        question: {
+          type: 'string',
+          minLength: 1,
+          maxLength: MAX_FOLLOWUP_QUESTION_CHARS,
+          description: 'Required. First-person prompt to the future self.',
+        },
+        context: {
+          type: 'string',
+          maxLength: MAX_FOLLOWUP_CONTEXT_CHARS,
+          description: 'One or two lines of seeding context.',
+        },
+        relevant_after: {
+          type: 'string',
+          description:
+            'Optional ISO date/timestamp just AFTER the event; omit when ' +
+            'no date is known.',
+        },
+      },
+      required: ['question'],
+      additionalProperties: false,
+    },
+  },
+};
+
+const FOLLOWUP_UPDATE_WIRE_SCHEMA: AgentTool['wire'] = {
+  type: 'function',
+  function: {
+    name: 'followup_update',
+    description:
+      'Revise or reschedule an open follow-up when the conversation ' +
+      'shows the plan MOVED rather than resolved. Pass relevant_after ' +
+      'as null to clear the date. Only open follow-ups can be updated.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Required. From followup_list.' },
+        question: {
+          type: 'string',
+          minLength: 1,
+          maxLength: MAX_FOLLOWUP_QUESTION_CHARS,
+        },
+        context: { type: 'string', maxLength: MAX_FOLLOWUP_CONTEXT_CHARS },
+        relevant_after: {
+          type: ['string', 'null'],
+          description: 'New ISO date/timestamp, or null to clear.',
+        },
+      },
+      required: ['id'],
+      additionalProperties: false,
+    },
+  },
+};
+
+const FOLLOWUP_CLOSE_WIRE_SCHEMA: AgentTool['wire'] = {
+  type: 'function',
+  function: {
+    name: 'followup_close',
+    description:
+      'Mark an open follow-up answered when the conversation contains ' +
+      'its outcome. resolution is a one-line record of the answer.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Required. From followup_list.' },
+        resolution: {
+          type: 'string',
+          minLength: 1,
+          maxLength: MAX_FOLLOWUP_RESOLUTION_CHARS,
+          description: 'Required. One line on what the answer was.',
+        },
+      },
+      required: ['id', 'resolution'],
+      additionalProperties: false,
+    },
+  },
+};
+
 // Reflection's user-turn instruction. Runs server-side only - the
 // browser no longer carries a reflection prompt module. The em-dashes
 // below are grandfathered from the browser-era original; they're
@@ -279,6 +400,31 @@ ones. Don't record the obvious ("the user asked a question"),
 ephemeral details that only matter for one conversation, or
 anything that reads like a summary of what was already said.
 
+Separately from memories, maintain the FOLLOW-UPS - the open
+questions saved for future conversations, whose outcomes are not
+yet known. Call followup_list once, then reconcile it against this
+conversation:
+
+- If the conversation contains the OUTCOME of an open follow-up
+  (the user reported how it went, asked or unprompted), call
+  followup_close with a one-line resolution. If the outcome is
+  worth remembering long-term, also record it through the memory
+  workflow above - the resolution line is an audit stamp, not a
+  memory.
+- If a plan behind an open follow-up MOVED (postponed, rescheduled,
+  reshaped), call followup_update - new relevant_after, reworded
+  question if needed. A moved plan is not a new follow-up.
+- If the user shared a NEW plan or upcoming event with a real "how
+  did it go" horizon they clearly care about, and no matching
+  follow-up is open OR already answered/dismissed in the list, call
+  followup_create. When a date is known, set relevant_after just
+  after it; with no date, omit it. The already-answered check
+  matters: you may be reading an old conversation whose plan was
+  resolved elsewhere since - a resolved plan must not get a fresh
+  follow-up.
+- Be conservative here too. One or two genuine open loops beat a
+  backlog of nags; skip plans mentioned in passing.
+
 When you have nothing more to write, reply with a single word. The
 word is discarded — only the tool calls matter.`;
 
@@ -294,6 +440,10 @@ function buildReflectionToolbox(): Toolbox {
       asAgentTool(memoryDoubt, MEMORY_DOUBT_WIRE_SCHEMA),
       asAgentTool(memoryRelate, MEMORY_RELATE_WIRE_SCHEMA),
       asAgentTool(memoryUnrelate, MEMORY_UNRELATE_WIRE_SCHEMA),
+      asAgentTool(followupList, FOLLOWUP_LIST_WIRE_SCHEMA),
+      asAgentTool(followupCreate, FOLLOWUP_CREATE_WIRE_SCHEMA),
+      asAgentTool(followupUpdate, FOLLOWUP_UPDATE_WIRE_SCHEMA),
+      asAgentTool(followupClose, FOLLOWUP_CLOSE_WIRE_SCHEMA),
     ],
   };
 }

@@ -17,11 +17,14 @@ export const contextSchema = {
     'wiki (encyclopedic articles about projects, people, places, and ' +
     'topics in their life). ' +
     'Returns {memories: [{id, label, data, confidence_tag}], ' +
-    'conversations: [{id, title}], wiki: [{id, title}]}. Memory facts ' +
+    'conversations: [{id, title}], wiki: [{id, title}], followups: ' +
+    '[{id, question, context, relevant_after}]}. Memory facts ' +
     'are inlined verbatim - use them directly. Conversations and wiki ' +
     'articles come back as a title + id index: call conversation_get ' +
     'or wiki_get with an id to read the transcript or article body when ' +
-    'one looks relevant. Empty arrays mean nothing matched that layer. ' +
+    'one looks relevant. followups are your OPEN questions about this ' +
+    'user - their outcomes are unknown to you, so never assert how one ' +
+    'went. Empty arrays mean nothing matched that layer. ' +
     'PREFERRED FIRST STEP when you need broad context on the user, ' +
     'their past, their projects, or what you have worked through ' +
     'together - a single round-trip instead of three separate searches. ' +

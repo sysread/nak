@@ -26,7 +26,10 @@
 import { type EdgeLogger } from '../../_shared/edge-log.ts';
 import { toolComplete } from '../tools/_venice_complete.ts';
 import { type ContextRecallCitation } from './context-recall-payload.ts';
-import { type ContextIndex } from './context-recall.ts';
+import {
+  type ContextIndex,
+  type ContextIndexFollowup,
+} from './context-recall.ts';
 
 // Mirror of agentModel('reflection').id - the same fast, cheap, large-
 // context tier reflection already runs on. Reasoning is disabled on the
@@ -51,6 +54,8 @@ const SMOOTHING_SYSTEM_PROMPT = [
   '     long-term memory about THIS user: stored facts, prior',
   '     conversations, and wiki articles. Memory facts carry the real',
   '     date they were recorded.',
+  '  3. Possibly OPEN FOLLOW-UPS - questions the assistant saved for',
+  '     itself whose answers it does NOT yet have.',
   '',
   "Write a short first-person recollection, in the assistant's voice,",
   'that the assistant will read as its own memory surfacing just before',
@@ -89,7 +94,22 @@ const SMOOTHING_SYSTEM_PROMPT = [
   '  not an essay. No preamble and no sign-off: output only the',
   '  recollection itself.',
   '- If, on reflection, none of the retrieved memory is genuinely',
-  '  relevant to the current exchange, output nothing at all.',
+  '  relevant to the current exchange, output nothing at all - UNLESS',
+  '  a follow-up marked "due" is present (see below), which is always',
+  '  worth surfacing on its own.',
+  '',
+  'Follow-up rules (apply only when OPEN FOLLOW-UPS are present):',
+  '- THE OUTCOME IS UNKNOWN. Each follow-up is a question whose answer',
+  '  you do not have. Never state, imply, or guess how it went - the',
+  '  recollection says plainly that you do not yet know ("I remember',
+  '  they were planning X; I don\'t know how it turned out").',
+  '- "upcoming" means the event has not happened yet. Frame it as a',
+  '  plan still ahead, never as something done.',
+  '- "due" means you have been meaning to ask. Fold in a gentle',
+  '  intention to raise it when there is a natural moment - an',
+  '  inclination, not an order; a heavy or urgent current topic',
+  '  outranks it.',
+  '- Follow-ups have no citation numbers; weave them in uncited.',
   '',
   'Stay domain-agnostic. The subject could be anything; the contract is',
   'the same.',
@@ -182,6 +202,30 @@ function renderRecallSourceBlock(
     .join('\n');
 }
 
+/**
+ * Render the follow-ups block. Separate from the numbered source list
+ * on purpose: follow-ups carry no citations (there is no drill-down
+ * tool behind them - question and context ride verbatim), and their
+ * state labels ("due" / "upcoming" / "outcome unknown") are computed
+ * by the gather, never inferred by the model.
+ */
+function renderFollowupBlock(
+  followups: readonly ContextIndexFollowup[],
+): string {
+  return followups
+    .map((f) => {
+      const flag =
+        f.state === 'upcoming'
+          ? 'upcoming - has not happened yet'
+          : f.proactive
+            ? 'due - you have been meaning to ask'
+            : 'outcome unknown';
+      const context = f.context.trim().length > 0 ? ` (${f.context})` : '';
+      return `- [${flag}] ${f.question}${context}`;
+    })
+    .join('\n');
+}
+
 /** Pull the 1-based indices referenced by `^N^` superscripts in a note. */
 function extractCitedIndices(note: string): Set<number> {
   const out = new Set<number>();
@@ -228,20 +272,41 @@ export async function smoothContextRecall(
   opts: SmoothContextRecallOptions,
 ): Promise<SmoothedRecall> {
   const sources = numberRecallSources(opts.index);
-  if (sources.length === 0) return { note: '', citations: [] };
+  const followups = opts.index.followups;
+  if (sources.length === 0 && followups.length === 0) {
+    return { note: '', citations: [] };
+  }
 
   const startedAt = Date.now();
-  const userMessage = [
+  const parts = [
     'THE CURRENT EXCHANGE (what is being discussed right now):',
     opts.recentExchange.trim().length > 0
       ? opts.recentExchange.trim()
       : '(no user message yet)',
+  ];
+  if (sources.length > 0) {
+    parts.push(
+      '',
+      'RETRIEVED MEMORY (numbered sources to draw on):',
+      renderRecallSourceBlock(sources),
+    );
+  }
+  if (followups.length > 0) {
+    parts.push(
+      '',
+      'OPEN FOLLOW-UPS (questions you saved to ask this user later; you',
+      'do NOT know the outcomes):',
+      renderFollowupBlock(followups),
+    );
+  }
+  parts.push(
     '',
-    'RETRIEVED MEMORY (numbered sources to draw on):',
-    renderRecallSourceBlock(sources),
-    '',
-    'Write the recollection now, or output nothing if none of it is relevant.',
-  ].join('\n');
+    followups.some((f) => f.proactive)
+      ? 'Write the recollection now. A "due" follow-up is always worth ' +
+          'surfacing, even if nothing else is relevant.'
+      : 'Write the recollection now, or output nothing if none of it is relevant.',
+  );
+  const userMessage = parts.join('\n');
 
   const result = await toolComplete({
     apiKey: opts.apiKey,
@@ -285,5 +350,6 @@ export const __test = {
   numberRecallSources,
   citationsFromSources,
   renderRecallSourceBlock,
+  renderFollowupBlock,
   extractCitedIndices,
 };
