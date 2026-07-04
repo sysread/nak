@@ -84,6 +84,20 @@ closed with a short `resolution` stamp.
    moment wrong (heavy topic in progress) and skip; the loop
    stays open for the next boundary.
 
+   **The epistemic register is explicit, not implied.** An open
+   loop renders in exactly one of three states, and the
+   smoothing instructions name the unknown in so many words -
+   "the outcome is unknown to you; do not assume it happened or
+   didn't":
+   - **Upcoming** - `relevant_after` in the future: "planned,
+     hasn't happened yet".
+   - **Outcome unknown** - date passed, or undated and
+     semantically surfaced: "you don't know how this went; ask
+     if natural, never assert".
+   - **Resolved** - closed loops never render as loops at all;
+     the outcome reaches later conversations as an ordinary
+     memory through the normal channels.
+
 4. **Anti-nag is load-bearing, not polish.** A follow-up bot
    that re-asks every thread is worse than none. Stamped at
    gather time: `last_surfaced_at` + `surface_count`. The
@@ -104,12 +118,16 @@ closed with a short `resolution` stamp.
    dedup by searching existing open loops first; the same plan
    discussed twice yields one row.
 
-6. **Close beats delete.** When the user reports the outcome
-   (asked or unprompted), the model closes the loop
-   (`status='answered'`, `resolution` stamped) and writes the
-   durable outcome to memories. `dismissed` covers "stop asking
-   about that"; `expired` is the system's own decay. Rows are
-   kept for inspection, never hard-deleted by agents.
+6. **Close beats delete, and reschedule is its own verb.** When
+   the user reports the outcome (asked or unprompted), the model
+   closes the loop (`status='answered'`, `resolution` stamped).
+   When the plan MOVED rather than resolved ("we ate out, I'm
+   making it tomorrow"), that is neither a close nor a dismiss -
+   `followup_update` revises `relevant_after` / `question` /
+   `context` in place and the loop stays open. `dismissed`
+   covers "stop asking about that"; `expired` is the system's
+   own decay. Rows are kept for inspection, never hard-deleted
+   by agents.
 
 ## Data model (proposed)
 
@@ -139,14 +157,57 @@ per the `schema.sql` conventions:
 
 - `followup_create({question, context, relevant_after?})` -
   write, gated.
+- `followup_update({id, question?, context?, relevant_after?})`
+  - write, gated. The reschedule/revise verb: a plan that moved
+  keeps its row and its ledger; the loop stays open.
 - `followup_close({id, resolution})` - write, gated.
 - `followup_dismiss({id})` - write, gated.
 - `followup_list()` - read, always-on (open loops are small in
   number; no search tool needed at v1).
 
 The reflection agent's toolbox gains `followup_create` +
-`followup_close` (it can both open loops and close ones the
-transcript resolved).
+`followup_update` + `followup_close` (it can open loops, adjust
+ones the transcript moved, and close ones the transcript
+resolved).
+
+## How outcomes reach the descriptive layers
+
+**The conversation is the conduit, deliberately.** A follow-up's
+job is to elicit the outcome INTO a transcript - and settled
+transcripts are already the input to the whole background fleet:
+reflection writes memories, the extraction sweep writes records,
+the wiki agents write articles, samskara formation reads the
+same evidence. Once the user says "made it, too salty", that is
+ordinary conversational evidence; none of those agents need to
+know follow-ups exist. The followup layer writes NOTHING
+directly into memories / wiki / records / samskara - the same
+one-way layering discipline intents follow (see
+[`intents.md`](./intents.md), "The C efficacy model" firewall
+rationale; here the direction is inverted but the principle is
+the same: scaffolding must not impersonate evidence).
+
+`resolution` is the loop's own audit stamp for inspection and
+dedup, NOT the persistence channel. Reflection is the guaranteed
+path for the durable outcome memory (it reads the settled thread
+containing both the ask and the answer); a volitional
+`memory_create` at close time is allowed when the model judges
+the outcome important, not required by the close.
+
+Two hazards this split creates, both to guard at implementation:
+
+- **Stale re-creation.** Reflection processes the ORIGINAL
+  planning thread days later - possibly after the outcome landed
+  in a different thread - and mints a fresh loop for an
+  already-resolved plan. Create-side dedup must therefore
+  consult closed loops and existing memories, not just open
+  loops: "is this question already answered somewhere" before
+  "is this question already open".
+- **Double-write.** A volitional outcome memory at close plus
+  reflection later writing the same fact from the transcript
+  yields near-duplicate memories. Handled by the existing
+  discipline (reflection searches before creating; the memory
+  librarians consolidate near-twins) - named here so nobody adds
+  a third writer thinking the path is empty.
 
 ## Open questions
 
@@ -175,9 +236,15 @@ transcript resolved).
   `context` umbrella tool's fourth result array. A non-empty
   loops arm must make the cached note non-empty (the empty-note
   short-circuit would otherwise drop a due ask).
-- **Memory** ([`memory.md`](../memory.md)) - outcomes graduate
-  to memories on close; the reflection agent is the subconscious
-  writer for both stores.
+- **Memory** ([`memory.md`](../memory.md)) - the reflection
+  agent is the subconscious writer for both stores and the
+  guaranteed path for outcome memories (see "How outcomes reach
+  the descriptive layers"); volitional outcome writes at close
+  are optional judgment.
+- **Wiki / records / samskara** ([`wiki.md`](../wiki.md),
+  [`samskara.md`](../samskara.md)) - NO direct coupling in
+  either direction. Outcomes reach these layers only through
+  settled transcripts, which their sweeps already post-process.
 - **Tools** ([`tools.md`](../tools.md)) - new gated writes +
   one always-on read; the browser schema / edge registration
   mirror discipline applies.

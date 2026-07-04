@@ -19,12 +19,17 @@ them ([dev: followups](../../dev/in-progress/followups.md)):
 - **Date extraction** - a plan with a stated date yields
   `relevant_after` just past that date; a plan with no date
   yields null (semantic-only surfacing, no proactive ask).
+- **Reschedule** - a plan that moved is a `followup_update`
+  (new `relevant_after`, same row, still open), not a close and
+  not a second create.
 - **Subconscious capture** - the reflection agent
   ([dev: memory](../../dev/memory.md)) records unresolved plans
   from settled threads, so capture works even when the mid-turn
   save didn't happen.
 - **Dedup** - the same plan discussed twice produces ONE open
-  row; both writers search existing open loops before creating.
+  row; both writers check whether the question is already open
+  OR already answered before creating (the answered check is the
+  stale re-creation guard - see the dev note).
 
 ## Preconditions
 
@@ -60,11 +65,14 @@ them ([dev: followups](../../dev/in-progress/followups.md)):
 3. In the SAME thread, restate the plan ("so to recap, lasagna
    on Saturday") and send.
 4. Re-run the step-2 query.
-5. In a SECOND fresh thread (follow-ups toolbox left OFF),
+5. Move the plan: "Change of plans - we're eating out Saturday,
+   I'll make the lasagna Sunday instead." Send, then re-run the
+   step-2 query.
+6. In a SECOND fresh thread (follow-ups toolbox left OFF),
    describe a different plan with no date: "I'm thinking about
    asking my manager for a scope change, not sure when." End the
    conversation.
-6. Force the reflection pass on that thread (same lever as
+7. Force the reflection pass on that thread (same lever as
    [reflection-drain](./reflection-drain.md): reset
    `threads.last_reflected_msg_id` and trigger a turn tail or
    the hourly sweep route), then re-run the step-2 query.
@@ -79,7 +87,10 @@ them ([dev: followups](../../dev/in-progress/followups.md)):
   visible in the tool-call panel with an activity line.
 - Step 4: STILL exactly one open lasagna row - the restate did
   not mint a twin.
-- Step 6: a new open row for the manager conversation, created
+- Step 5: still the SAME row (same id), now with `relevant_after`
+  on or just after Sunday, still `open` - a visible
+  `followup_update` call, no close, no second create.
+- Step 7: a new open row for the manager conversation, created
   by reflection (no tool call in the chat transcript; the
   reflection log lines show the create). `relevant_after` is
   NULL - no stated date, so no proactive-ask basis.

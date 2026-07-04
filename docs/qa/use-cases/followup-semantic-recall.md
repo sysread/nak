@@ -89,6 +89,11 @@ The semantic surfacing axis and the close-on-answer lifecycle:
     order by created_at desc limit 3;
    ```
 
+   If no outcome memory exists yet (the volitional write is
+   optional judgment, not a close requirement), force the
+   reflection pass on the answering thread (the
+   [reflection-drain](./reflection-drain.md) lever) and re-run
+   the memory query - reflection is the guaranteed path.
 8. Open one more fresh thread and ask another lasagna question.
 
 ## Expected
@@ -105,8 +110,11 @@ The semantic surfacing axis and the close-on-answer lifecycle:
   line shows a nonzero follow-ups hit count.
 - Step 6-7: the follow-up row is `status='answered'` with a
   `resolution` mentioning the outcome ("made it; too salty"),
-  via a visible `followup_close` call; a new memory row records
-  the durable outcome.
+  via a visible `followup_close` call. An outcome memory exists
+  - immediately if the model wrote one volitionally, otherwise
+  after the forced reflection pass. No duplicate outcome
+  memories after reflection runs (the search-before-create +
+  librarian-consolidation discipline holds).
 - Step 8: the injected note no longer raises the question as
   open - the recalled story is the outcome memory ("made it, too
   salty"), not "outcome unknown".
