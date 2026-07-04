@@ -4426,8 +4426,19 @@ button.top-bar-overflow-btn {
 :root[data-style='terminal'] .wiki-changelog-row,
 :root[data-style='terminal'] .memory-changelog-row,
 :root[data-style='terminal'] .health-summary-block,
-:root[data-style='terminal'] .health-card {
+:root[data-style='terminal'] .health-card,
+:root[data-style='terminal'] .intent-card {
   border-left: 2px solid var(--muted);
+}
+
+/* The seedling inspector's two-feature divider (working intentions
+   above follow-ups, .feature + .feature in Intents.svelte) is a
+   hairline with no stepped fill on either side, so the transparent
+   --border would erase the one line keeping the normative-goals /
+   pending-questions split legible. Recolor it to the same muted the
+   side bars use. */
+:root[data-style='terminal'] .feature + .feature {
+  border-top-color: var(--muted);
 }
 
 /* Inputs default to the --bg-2 fill, which matches the sidebar's fill -
