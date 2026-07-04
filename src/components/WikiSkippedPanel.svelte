@@ -322,7 +322,7 @@
   }
   .wiki-skipped-row {
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: var(--radius);
     padding: 0.6rem 0.75rem;
     background: var(--surface);
   }
@@ -372,7 +372,7 @@
     font-size: 0.85rem;
     padding: 0.25rem 0.6rem;
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     background: var(--surface);
     color: var(--text);
     cursor: pointer;
@@ -392,7 +392,7 @@
   .wiki-skipped-result {
     margin-top: 0.5rem;
     padding: 0.5rem 0.6rem;
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     background: color-mix(in srgb, #15803d 10%, transparent);
     border: 1px solid color-mix(in srgb, #15803d 30%, transparent);
     display: flex;
@@ -420,7 +420,7 @@
     font-size: 0.85rem;
     padding: 0.25rem 0.6rem;
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     background: var(--surface);
     color: var(--text);
     cursor: pointer;

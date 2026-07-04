@@ -297,7 +297,7 @@
     font-size: 0.65rem;
     font-weight: 600;
     padding: 0.05rem 0.3rem;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: var(--bg-2);
     color: var(--muted);
   }

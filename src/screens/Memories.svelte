@@ -1373,7 +1373,7 @@
      content rather than pinning to the top. */
   .librarian-strip {
     border: 1px solid var(--border-subtle);
-    border-radius: 0.5rem;
+    border-radius: var(--radius-md);
     background: var(--surface-subtle);
     padding: 0.75rem 1rem;
     margin-bottom: 1rem;
@@ -1683,7 +1683,7 @@
   .memory-confidence-chip {
     font-size: 0.7rem;
     padding: 0.1rem 0.4rem;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     border: 1px solid var(--border);
     line-height: 1;
     white-space: nowrap;
@@ -1953,7 +1953,7 @@
   .memory-similar-score {
     flex: none;
     padding: 0.05rem 0.4rem;
-    border-radius: 0.4rem;
+    border-radius: var(--radius-md);
     background: var(--bg-2);
     color: var(--muted);
     font-size: 0.8rem;

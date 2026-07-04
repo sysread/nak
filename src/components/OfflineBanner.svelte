@@ -58,7 +58,7 @@
     color: var(--text);
     background: color-mix(in srgb, var(--surface) 94%, transparent);
     border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
     backdrop-filter: blur(6px);
     -webkit-backdrop-filter: blur(6px);

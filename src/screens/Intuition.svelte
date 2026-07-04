@@ -214,7 +214,7 @@
     position: relative;
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 12px;
+    border-radius: var(--radius-lg);
     box-shadow: var(--shadow-modal);
     width: 100%;
     max-width: 48rem;
@@ -240,7 +240,7 @@
     background: var(--surface);
     color: var(--text);
     border: 1px solid var(--border);
-    border-radius: 50%;
+    border-radius: var(--radius-round);
     cursor: pointer;
   }
 
@@ -310,7 +310,7 @@
     background: color-mix(in srgb, var(--accent) 18%, transparent);
     color: var(--text);
     border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
-    border-radius: 9999px;
+    border-radius: var(--radius-pill);
     padding: 0.05rem 0.5rem;
     font-size: 0.78rem;
     text-transform: lowercase;
@@ -326,7 +326,7 @@
 
   .drive-row {
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: var(--radius);
     padding: 0.65rem 0.75rem;
     background: var(--bg-2);
   }
@@ -378,7 +378,7 @@
     display: inline-block;
     margin-left: 0.4rem;
     padding: 0 0.35rem;
-    border-radius: 0.4rem;
+    border-radius: var(--radius-md);
     font-size: 0.7rem;
     font-style: normal;
     text-transform: uppercase;

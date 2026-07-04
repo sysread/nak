@@ -403,7 +403,7 @@
     line-height: 1;
     color: var(--bg);
     background: var(--accent);
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     display: inline-flex;
     align-items: center;
     justify-content: center;

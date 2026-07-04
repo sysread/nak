@@ -206,7 +206,7 @@
   }
   .memory-changelog-row {
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: var(--radius);
     padding: 0.6rem 0.75rem;
     background: var(--surface);
   }
@@ -227,7 +227,7 @@
     text-transform: uppercase;
     letter-spacing: 0.04em;
     padding: 0.1rem 0.4rem;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     border: 1px solid transparent;
   }
   .memory-changelog-kind.kind-create {

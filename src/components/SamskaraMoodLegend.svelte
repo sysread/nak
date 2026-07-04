@@ -130,7 +130,7 @@
   .mood-legend-summary:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 2px;
-    border-radius: 2px;
+    border-radius: var(--radius-xs);
   }
   .mood-legend-blurb {
     margin: 0.6rem 0 0.4rem;
@@ -233,7 +233,7 @@
     right: 0.3rem;
     width: 0.6rem;
     height: 0.6rem;
-    border-radius: 50%;
+    border-radius: var(--radius-round);
     background: #ef4444;
     box-shadow:
       0 0 0 2px color-mix(in srgb, #ef4444 35%, transparent),
@@ -263,7 +263,7 @@
     display: inline-block;
     width: 0.55rem;
     height: 0.55rem;
-    border-radius: 50%;
+    border-radius: var(--radius-round);
     background: #ef4444;
     box-shadow:
       0 0 0 2px color-mix(in srgb, #ef4444 30%, transparent),

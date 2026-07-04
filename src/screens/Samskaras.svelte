@@ -279,7 +279,7 @@
     font-size: 0.7rem;
     font-weight: 600;
     padding: 0.1rem 0.4rem;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: var(--bg-2);
     color: var(--muted);
   }

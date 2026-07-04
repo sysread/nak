@@ -2074,7 +2074,7 @@
   .wiki-confirm-strip,
   .wiki-librarian-confirm {
     border: 1px solid var(--border);
-    border-radius: 0.5rem;
+    border-radius: var(--radius-md);
     padding: 1rem;
     margin-top: 1rem;
     background: var(--bg-2);
@@ -2107,7 +2107,7 @@
     font: inherit;
     padding: 0.4rem 0.5rem;
     border: 1px solid var(--border);
-    border-radius: 0.3rem;
+    border-radius: var(--radius-sm);
     background: var(--bg);
     color: var(--text);
   }
@@ -2343,7 +2343,7 @@
     margin: 0 0 1.5rem 0;
     padding: 0.75rem 1rem;
     border: 1px solid var(--border);
-    border-radius: 0.5rem;
+    border-radius: var(--radius-md);
     background: var(--bg-2);
   }
   .wiki-toc h2 {

@@ -64,7 +64,7 @@
     position: relative;
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 12px;
+    border-radius: var(--radius-lg);
     box-shadow: var(--shadow-modal);
     width: 100%;
     max-width: 40rem;
@@ -89,7 +89,7 @@
     background: var(--surface);
     color: var(--text);
     border: 1px solid var(--border);
-    border-radius: 50%;
+    border-radius: var(--radius-round);
     cursor: pointer;
   }
   .samskara-mood-close:hover {

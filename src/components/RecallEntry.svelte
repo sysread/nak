@@ -208,7 +208,7 @@
     padding: 0.5rem 0.75rem;
     border-left: 2px solid color-mix(in srgb, var(--accent) 35%, var(--border));
     background: color-mix(in srgb, var(--bg-2) 70%, transparent);
-    border-radius: 0 6px 6px 0;
+    border-radius: 0 var(--radius-md) var(--radius-md) 0;
     /* pre-wrap so the user's paragraphing survives verbatim. */
     white-space: pre-wrap;
     line-height: 1.45;
@@ -237,7 +237,7 @@
     padding: 0.65rem 0.85rem;
     border-left: 2px solid color-mix(in srgb, var(--accent) 55%, var(--border));
     background: color-mix(in srgb, var(--accent) 7%, transparent);
-    border-radius: 0 6px 6px 0;
+    border-radius: 0 var(--radius-md) var(--radius-md) 0;
     font-style: italic;
     line-height: 1.7;
     color: var(--text);
@@ -265,7 +265,7 @@
     color: var(--accent);
     background: transparent;
     border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
-    border-radius: 0.4rem;
+    border-radius: var(--radius-md);
     cursor: pointer;
   }
 
@@ -293,7 +293,7 @@
     display: inline-block;
     margin-left: 0.4rem;
     padding: 0 0.35rem;
-    border-radius: 0.4rem;
+    border-radius: var(--radius-md);
     font-size: 0.7rem;
     text-transform: uppercase;
     letter-spacing: 0.03em;

@@ -35,7 +35,28 @@
 */
 
 :root {
+  /* Shape tokens. Every border-radius in the app routes through one of
+     these so an alternate style (e.g. a square-cornered terminal theme)
+     can reshape the whole UI from this block. --radius is the default
+     card/control rounding; the others are the size steps observed in
+     the wild when the scale was consolidated. --radius-pill covers
+     fully-rounded chips/badges; --radius-round covers true circles
+     (avatars, dots, spinners). */
+  --radius-xs: 2px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
   --radius: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 14px;
+  --radius-pill: 999px;
+  --radius-round: 50%;
+  /* Elevation + focus tokens. Only values that repeat verbatim across
+     call sites are tokenized; one-off decorative shadows stay inline
+     next to the effect they belong to. --shadow-modal (per-theme, see
+     the [data-theme] blocks below) handles centered modals. */
+  --shadow-pop: 0 12px 24px rgba(0, 0, 0, 0.35); /* floating popover menus */
+  --shadow-menu: 0 4px 14px rgb(0 0 0 / 0.16); /* combobox dropdown lists */
+  --focus-ring: 0 0 0 2px var(--accent-weak); /* :focus-visible halo on inputs */
   font-family: 'Lekton', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
   font-size: 13.5px;
 }
@@ -369,7 +390,7 @@ label {
   background: var(--surface);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
   font-size: 0.85rem;
   max-width: calc(100vw - 1.5rem);
@@ -383,7 +404,7 @@ label {
   background: var(--accent);
   color: var(--ink-on-accent);
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   padding: 0.25rem 0.75rem;
   font-size: 0.8rem;
   font-weight: 600;
@@ -398,7 +419,7 @@ label {
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   padding: 1.5rem;
   width: 100%;
   max-width: 28rem;
@@ -411,7 +432,7 @@ label {
   position: relative;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-modal);
   width: 100%;
   max-width: 52rem;
@@ -459,7 +480,7 @@ label {
   background: var(--surface);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 50%;
+  border-radius: var(--radius-round);
   cursor: pointer;
 }
 
@@ -578,7 +599,7 @@ label {
   font-size: 0.75rem;
   color: var(--muted);
   background: var(--bg-2);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   padding: 0.1rem 0.5rem;
 }
 
@@ -841,7 +862,7 @@ label {
   display: block;
   width: 1.5rem;
   height: 1.5rem;
-  border-radius: 50%;
+  border-radius: var(--radius-round);
   background: linear-gradient(135deg, var(--sw-dark) 0 50%, var(--sw-light) 50% 100%);
   border: 1px solid var(--border);
 }
@@ -963,7 +984,7 @@ label {
     hsl(var(--usage-hue, 140), 62%, 52%) 70%,
     hsl(var(--usage-hue, 140), 58%, 40%) 100%
   );
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   /* Transition width so hitting Refresh doesn't snap the bars — they
      ease into the new values. Cheap tell that the fetch completed. */
   transition: width 220ms ease-out;
@@ -994,7 +1015,7 @@ label {
   background: var(--accent-weak);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   padding: 0.15rem 0.6rem;
   font-size: 0.8rem;
   font-variant-numeric: tabular-nums;
@@ -1518,7 +1539,7 @@ h1 {
   width: 0.45rem;
   height: 0.45rem;
   margin-right: 0.4rem;
-  border-radius: 50%;
+  border-radius: var(--radius-round);
   background: var(--accent);
   vertical-align: middle;
   flex-shrink: 0;
@@ -1533,10 +1554,10 @@ h1 {
   right: 0.2rem;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   padding: 0.25rem;
   min-width: 9rem;
-  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-pop);
   z-index: 30;
   display: flex;
   flex-direction: column;
@@ -1550,7 +1571,7 @@ h1 {
   text-align: left;
   width: 100%;
   padding: 0.4rem 0.55rem;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   font-size: 0.88rem;
   cursor: pointer;
 }
@@ -1616,7 +1637,7 @@ h1 {
   font-variant-numeric: tabular-nums;
   font-size: 0.75rem;
   padding: 0.05rem 0.4rem;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--bg-2);
   color: var(--muted);
 }
@@ -1687,7 +1708,7 @@ h1 {
 .sidebar-search-input:focus-visible {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-weak);
+  box-shadow: var(--focus-ring);
 }
 /* Hide the UA-provided `X` clear button on Chromium/WebKit — we honor
    Escape instead, and the built-in glyph clashes with the surrounding
@@ -1755,7 +1776,7 @@ h1 {
   letter-spacing: 0.05em;
   color: var(--muted);
   padding: 0.05rem 0.35rem;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--bg-2);
 }
 
@@ -1842,7 +1863,7 @@ h1 {
   width: 2.2rem;
   height: 2.2rem;
   padding: 0;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1861,7 +1882,7 @@ h1 {
 .msg {
   max-width: min(42rem, 100%);
   padding: 0.7rem 0.9rem;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   line-height: 1.45;
   /* Break genuinely unbreakable tokens (long URLs, hashes, code) rather
      than let them blow out the container width. Whitespace is handled by
@@ -1998,7 +2019,7 @@ h1 {
   font-family: 'Lekton', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
   background: var(--bg-2);
   padding: 0.05em 0.35em;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-size: 0.95em;
 }
 
@@ -2222,7 +2243,7 @@ h1 {
    in dark mode, tool-group children, the bare wiki <article>).
    border-radius is set on the class itself so the outline corners
    round consistently across hosts - on .msg the bubble already
-   carries border-radius: 12px so the outline picks that up; on
+   carries border-radius: var(--radius-lg) so the outline picks that up; on
    bare hosts like .wiki-article the radius here is what the outline
    follows. outline-offset is positive so the frame sits OUTSIDE the
    element with a small visual gap, reading as a deliberate
@@ -2240,7 +2261,7 @@ h1 {
   opacity: 0.55;
   outline: 2px solid var(--danger);
   outline-offset: 4px;
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 
 /* Fade-out animation applied to a regen-target once the replacement
@@ -2327,7 +2348,7 @@ h1 {
   flex: 0 0 auto;
   width: 1.25rem;
   height: 1.25rem;
-  border-radius: 50%;
+  border-radius: var(--radius-round);
   background: var(--danger);
   color: var(--on-accent);
   display: inline-flex;
@@ -2696,7 +2717,7 @@ h1 {
 .composer-shell {
   background: var(--bg-2);
   border: 1px solid var(--muted);
-  border-radius: 14px;
+  border-radius: var(--radius-xl);
   padding: 0.5rem 0.6rem 0.55rem;
   display: flex;
   flex-direction: column;
@@ -3006,7 +3027,7 @@ button.composer-wharf-trigger {
   min-width: 1rem;
   height: 1rem;
   padding: 0 0.25rem;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--accent);
   color: var(--ink-on-accent);
   font-size: 0.65rem;
@@ -3033,7 +3054,7 @@ button.composer-wharf-trigger {
   padding: 0.2rem 0.35rem 0.2rem 0.55rem;
   background: var(--bg-1);
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-size: 0.78rem;
   max-width: 18rem;
 }
@@ -3092,7 +3113,7 @@ button.composer-wharf-trigger {
   height: 0.7rem;
   border: 2px solid var(--border);
   border-top-color: var(--muted);
-  border-radius: 50%;
+  border-radius: var(--radius-round);
   animation: tool-spin 0.8s linear infinite;
 }
 @media (prefers-reduced-motion: reduce) {
@@ -3135,7 +3156,7 @@ button.composer-wharf-trigger {
   font-size: 0.9rem;
   color: var(--accent);
   font-weight: 500;
-  border-radius: 14px;
+  border-radius: var(--radius-xl);
   /* Very subtle tint so the textarea content underneath stays
      readable — we're augmenting the border highlight, not obscuring
      the input. */
@@ -3196,11 +3217,11 @@ button.composer-wharf-trigger {
   bottom: calc(100% + 0.5rem);
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   padding: 0.35rem;
   min-width: 16rem;
   max-width: 22rem;
-  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-pop);
   z-index: 30;
   display: flex;
   flex-direction: column;
@@ -3221,7 +3242,7 @@ button.composer-wharf-trigger {
   align-items: center;
   gap: 0.5rem;
   padding: 0.4rem 0.45rem;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   font-size: 0.88rem;
 }
@@ -3262,7 +3283,7 @@ button.composer-wharf-trigger {
   letter-spacing: 0.04em;
   padding: 0.1rem 0.35rem;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 .menu-empty {
   padding: 0.45rem;
@@ -3279,7 +3300,7 @@ button.composer-wharf-trigger {
   padding: 0;
   line-height: 1;
   flex-shrink: 0;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
 }
 
 /* Stop-mode styling: while the chat is streaming, the send button
@@ -3413,10 +3434,10 @@ button.top-bar-overflow-btn {
   left: 0;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   padding: 0.35rem;
   min-width: 12rem;
-  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-pop);
   z-index: 30;
   flex-direction: column;
   gap: 0.1rem;
@@ -3800,7 +3821,7 @@ button.top-bar-overflow-btn {
   background: transparent;
   color: var(--text);
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   font-size: inherit;
   font-family: inherit;
@@ -3895,7 +3916,7 @@ button.top-bar-overflow-btn {
   color: var(--muted);
   font-size: 0.78rem;
   padding: 0.05rem 0.4rem;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--bg-2);
   border: 1px solid var(--border);
   flex-shrink: 0;
@@ -4103,7 +4124,7 @@ button.top-bar-overflow-btn {
   flex: 0 0 auto;
   border: 2px solid var(--border);
   border-top-color: var(--muted);
-  border-radius: 50%;
+  border-radius: var(--radius-round);
   animation: subconscious-spin 0.7s linear infinite;
 }
 @keyframes subconscious-spin {
@@ -4142,7 +4163,7 @@ button.top-bar-overflow-btn {
   position: relative;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-modal);
   width: 100%;
   max-width: 52rem;
@@ -4215,7 +4236,7 @@ button.top-bar-overflow-btn {
   background: var(--surface);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 50%;
+  border-radius: var(--radius-round);
   cursor: pointer;
 }
 

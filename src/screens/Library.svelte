@@ -363,7 +363,7 @@
     overflow: auto;
     padding: 0.75rem;
     border: 1px solid var(--border, #444);
-    border-radius: 0.4rem;
+    border-radius: var(--radius-md);
     font-size: 0.85rem;
   }
   .library-upload {
