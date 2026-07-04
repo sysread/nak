@@ -249,7 +249,7 @@
   .model-combobox-trigger:focus-visible {
     outline: none;
     border-color: var(--accent);
-    box-shadow: 0 0 0 2px var(--accent-weak);
+    box-shadow: var(--focus-ring);
   }
   .model-combobox-trigger:disabled {
     opacity: 0.55;
@@ -288,7 +288,7 @@
     background: var(--bg);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    box-shadow: 0 4px 14px rgb(0 0 0 / 0.16);
+    box-shadow: var(--shadow-menu);
     overflow: hidden;
   }
 
@@ -381,7 +381,7 @@
     font-size: 0.72rem;
     color: var(--muted);
     background: var(--bg-2);
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     padding: 0.1rem 0.45rem;
     white-space: nowrap;
   }

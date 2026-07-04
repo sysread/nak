@@ -246,7 +246,7 @@
     color: var(--muted);
     font-size: 0.78rem;
     padding: 0.05rem 0.4rem;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: var(--bg-2);
     border: 1px solid var(--border);
     min-width: 4.5rem;

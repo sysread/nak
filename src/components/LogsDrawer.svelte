@@ -684,7 +684,7 @@
     padding: 0;
     color: var(--muted);
     cursor: pointer;
-    border-radius: 2px;
+    border-radius: var(--radius-xs);
   }
 
   .log-caret:hover {
@@ -696,7 +696,7 @@
     font-size: 0.88em;
     font-weight: 600;
     padding: 0 0.35rem;
-    border-radius: 2px;
+    border-radius: var(--radius-xs);
     letter-spacing: 0.04em;
     min-width: 2.9rem;
     text-align: center;
@@ -769,7 +769,7 @@
     padding: 0.4rem 0.55rem;
     background: var(--bg-2);
     border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-    border-radius: var(--radius, 4px);
+    border-radius: var(--radius);
     white-space: pre-wrap;
     word-break: break-word;
     font-size: 0.97em;
@@ -788,7 +788,7 @@
     background: var(--accent-weak);
     color: var(--text);
     padding: 0 1px;
-    border-radius: 2px;
+    border-radius: var(--radius-xs);
   }
 
   .visually-hidden {

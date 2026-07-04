@@ -268,7 +268,7 @@
   .topics-filter-trigger:focus-visible {
     outline: none;
     border-color: var(--accent);
-    box-shadow: 0 0 0 2px var(--accent-weak);
+    box-shadow: var(--focus-ring);
   }
   .topics-filter-trigger.active {
     border-color: var(--accent);
@@ -282,7 +282,7 @@
   .topics-filter-dot {
     width: 0.4rem;
     height: 0.4rem;
-    border-radius: 50%;
+    border-radius: var(--radius-round);
     background: var(--accent);
     flex-shrink: 0;
   }
@@ -411,7 +411,7 @@
     padding: 0.15rem 0.2rem 0.15rem 0.5rem;
     background: var(--accent-weak);
     color: var(--text);
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     font-size: 0.8rem;
     max-width: 100%;
   }
@@ -438,7 +438,7 @@
     padding: 0 0.3rem;
     font-size: 1rem;
     line-height: 1;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
   }
   .topics-filter-pill-x:hover {
     background: rgb(0 0 0 / 0.08);

@@ -168,7 +168,7 @@
     padding: 0.1rem;
     cursor: pointer;
     color: var(--muted);
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     line-height: 0;
   }
   .rating-star:hover,

@@ -257,7 +257,7 @@
   .artifacts-segmented {
     display: inline-flex;
     border: 1px solid var(--border);
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     overflow: hidden;
   }
   .artifacts-seg-btn {
@@ -294,7 +294,7 @@
   .artifact-thumb {
     width: 2rem;
     height: 2rem;
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     object-fit: cover;
     flex-shrink: 0;
     background: var(--bg-1);
@@ -344,7 +344,7 @@
     width: 2rem;
     background: transparent;
     border: 0;
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     color: var(--muted);
     cursor: pointer;
   }

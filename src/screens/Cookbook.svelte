@@ -1885,7 +1885,7 @@
     margin: 0.25rem 0 1rem;
     padding: 0.5rem 0.75rem;
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: var(--radius);
     background: var(--bg-2);
   }
   .cookbook-toc-list {
@@ -1912,7 +1912,7 @@
     background: transparent;
     border: 0;
     padding: 0.15rem 0.3rem;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     color: var(--accent);
     font-size: 0.9rem;
     font-weight: 600;
@@ -1961,7 +1961,7 @@
     padding: 0.35rem 0.65rem;
     background: var(--bg-2);
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: var(--radius);
     min-width: 3.5rem;
   }
   .cookbook-render :global(dl.cook-metadata dt) {
@@ -2028,7 +2028,7 @@
     top: 0.7em;
     width: 0.35rem;
     height: 0.35rem;
-    border-radius: 50%;
+    border-radius: var(--radius-round);
     background: var(--accent);
     opacity: 0.75;
   }
@@ -2043,7 +2043,7 @@
     margin-right: 0.25rem;
     background: var(--accent-weak);
     color: var(--text);
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     font-weight: 600;
     font-variant-numeric: tabular-nums;
   }
@@ -2091,7 +2091,7 @@
     color: var(--text);
     font-size: 0.8rem;
     font-weight: 700;
-    border-radius: 50%;
+    border-radius: var(--radius-round);
   }
   /* Highlighted step — a soft accent-weak wash that tells the reader
      "this is the step I'm on" while cooking. Full-bleed padding so the
@@ -2102,7 +2102,7 @@
      needed. */
   .cookbook-render :global(ol.cook-steps li.is-active) {
     background: var(--accent-weak);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     margin: 0 -0.4rem;
     padding-right: 0.4rem;
     padding-left: 2.5rem;
@@ -2127,7 +2127,7 @@
     font-size: 0.85rem;
     padding: 0.5rem;
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     background: var(--bg);
     color: var(--text);
     resize: vertical;
@@ -2139,12 +2139,12 @@
   .cookbook-syntax-hint code {
     background: var(--border);
     padding: 0 0.25rem;
-    border-radius: 3px;
+    border-radius: var(--radius-sm);
     font-size: 0.75rem;
   }
   .cookbook-edit-preview {
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     padding: 0.5rem 0.75rem;
     min-height: 260px;
     max-height: 320px;
@@ -2200,7 +2200,7 @@
     padding: 0.5rem 0.6rem;
     background: transparent;
     border: 1px solid transparent;
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     color: var(--text);
     text-align: left;
     cursor: pointer;
@@ -2237,7 +2237,7 @@
     text-transform: uppercase;
     letter-spacing: 0.06em;
     padding: 0.05rem 0.4rem;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: var(--accent-weak);
     color: var(--text);
   }
@@ -2274,7 +2274,7 @@
     height: 96px;
     padding: 0;
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: var(--radius);
     background: var(--bg-2);
     cursor: pointer;
     overflow: hidden;
@@ -2332,7 +2332,7 @@
     height: 110px;
     object-fit: cover;
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: var(--radius);
     background: var(--bg-2);
     display: block;
   }
@@ -2369,7 +2369,7 @@
     padding: 0.2rem 0.35rem;
     font-size: 0.75rem;
     border: 1px solid var(--border);
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     background: var(--bg);
     color: var(--text);
   }
@@ -2381,7 +2381,7 @@
     width: 110px;
     height: 110px;
     border: 1px dashed var(--border);
-    border-radius: 8px;
+    border-radius: var(--radius);
     background: var(--bg-2);
     display: flex;
     flex-direction: column;
@@ -2463,7 +2463,7 @@
     max-width: 95vw;
     max-height: 85vh;
     object-fit: contain;
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
     cursor: default;
     /* Re-enable pointer events the viewport turned off, so a click on
@@ -2481,7 +2481,7 @@
     right: 1rem;
     width: 2.25rem;
     height: 2.25rem;
-    border-radius: 50%;
+    border-radius: var(--radius-round);
     border: 1px solid rgba(255, 255, 255, 0.4);
     background: rgba(0, 0, 0, 0.4);
     color: white;
@@ -2528,12 +2528,12 @@
   .recipe-lightbox-nav.prev {
     left: 0;
     border-left: none;
-    border-radius: 0 6px 6px 0;
+    border-radius: 0 var(--radius-md) var(--radius-md) 0;
   }
   .recipe-lightbox-nav.next {
     right: 0;
     border-right: none;
-    border-radius: 6px 0 0 6px;
+    border-radius: var(--radius-md) 0 0 var(--radius-md);
   }
   .recipe-lightbox-nav:hover,
   .recipe-lightbox-nav:focus-visible {
@@ -2549,7 +2549,7 @@
     font-size: 0.85rem;
     background: rgba(0, 0, 0, 0.4);
     padding: 0.2rem 0.6rem;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
   }
   /* Lightbox caption. Sits above the counter so the two pieces of
      chrome don't overlap on narrow viewports. max-width caps the
@@ -2565,7 +2565,7 @@
     font-size: 0.95rem;
     background: rgba(0, 0, 0, 0.5);
     padding: 0.35rem 0.75rem;
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     max-width: min(80ch, 90vw);
     max-height: 6rem;
     overflow: auto;

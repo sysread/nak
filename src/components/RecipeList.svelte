@@ -424,7 +424,7 @@
   .recipe-sort {
     padding: 0.3rem 0.4rem;
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     background: var(--bg);
     color: var(--text);
     font: inherit;

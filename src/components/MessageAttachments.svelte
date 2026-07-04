@@ -282,7 +282,7 @@
     gap: 0.25rem;
     padding: 0.15rem 0.45rem;
     border: 1px solid var(--border);
-    border-radius: calc(var(--radius) / 2);
+    border-radius: var(--radius-sm);
     background: transparent;
     color: var(--text);
     font-size: 0.78rem;

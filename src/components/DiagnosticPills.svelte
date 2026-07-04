@@ -185,7 +185,7 @@
     background: color-mix(in srgb, var(--surface) 92%, transparent);
     color: var(--text);
     border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-    border-radius: 50%;
+    border-radius: var(--radius-round);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.22);
     /* z-index 25: above the chat surface, below modals (30), drawers
        (40), and the update banner (100). A passive glance cue should

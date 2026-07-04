@@ -162,7 +162,7 @@
     position: relative;
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 12px;
+    border-radius: var(--radius-lg);
     box-shadow: var(--shadow-modal);
     width: 100%;
     max-width: 46rem;
@@ -186,7 +186,7 @@
     background: var(--surface);
     color: var(--text);
     border: 1px solid var(--border);
-    border-radius: 50%;
+    border-radius: var(--radius-round);
     cursor: pointer;
   }
 
@@ -247,7 +247,7 @@
 
   .intent-card {
     border: 1px solid var(--border);
-    border-radius: 10px;
+    border-radius: var(--radius-lg);
     padding: 0.7rem 0.85rem;
     margin-bottom: 0.6rem;
     background: var(--bg-1);
@@ -294,7 +294,7 @@
     display: inline-flex;
     align-items: center;
     padding: 0.05rem 0.5rem;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     font-size: 0.72rem;
     border: 1px solid var(--border);
     background: var(--surface);

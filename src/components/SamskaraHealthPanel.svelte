@@ -375,7 +375,7 @@
   .sev-dot {
     width: 0.6rem;
     height: 0.6rem;
-    border-radius: 50%;
+    border-radius: var(--radius-round);
     flex-shrink: 0;
     background: var(--muted);
   }

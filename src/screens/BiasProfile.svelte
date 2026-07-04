@@ -675,7 +675,7 @@
     position: relative;
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 12px;
+    border-radius: var(--radius-lg);
     box-shadow: var(--shadow-modal);
     width: 100%;
     max-width: 52rem;
@@ -706,7 +706,7 @@
     background: var(--surface);
     color: var(--text);
     border: 1px solid var(--border);
-    border-radius: 50%;
+    border-radius: var(--radius-round);
     cursor: pointer;
   }
 
@@ -794,7 +794,7 @@
 
   .bias-row {
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: var(--radius);
     padding: 0.65rem 0.75rem;
     background: var(--bg-2);
   }
@@ -828,7 +828,7 @@
   .bias-stats div {
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     padding: 0.3rem 0.5rem;
   }
 
@@ -917,7 +917,7 @@
       hsl(var(--bias-hue, 220), 62%, 52%) 70%,
       hsl(var(--bias-hue, 220), 58%, 40%) 100%
     );
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
   }
 
   .bias-chart-bar.elided {
@@ -961,7 +961,7 @@
 
   .tier-badge {
     border: 1px solid var(--border);
-    border-radius: 9999px;
+    border-radius: var(--radius-pill);
     padding: 0.05rem 0.5rem;
     font-size: 0.72rem;
     text-transform: lowercase;
@@ -982,7 +982,7 @@
     font-size: 0.7rem;
     color: var(--accent);
     border: 1px dashed var(--accent);
-    border-radius: 9999px;
+    border-radius: var(--radius-pill);
     padding: 0.05rem 0.4rem;
   }
 
@@ -996,7 +996,7 @@
 
   .thread-row {
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: var(--radius);
     background: var(--bg-2);
     overflow: hidden;
   }
@@ -1042,7 +1042,7 @@
   .obs-card {
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     padding: 0.5rem 0.65rem;
   }
 
@@ -1106,7 +1106,7 @@
   .bias-evidence-item {
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     padding: 0.5rem 0.65rem;
   }
 
@@ -1185,7 +1185,7 @@
      part of the same vocabulary. */
   .reaction-verdict {
     border: 1px solid var(--border);
-    border-radius: 9999px;
+    border-radius: var(--radius-pill);
     padding: 0.05rem 0.5rem;
     font-size: 0.72rem;
     text-transform: lowercase;

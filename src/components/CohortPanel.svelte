@@ -257,7 +257,7 @@
     font-size: 0.7rem;
     font-weight: 600;
     padding: 0 0.4rem;
-    border-radius: 2px;
+    border-radius: var(--radius-xs);
     letter-spacing: 0.03em;
     text-transform: uppercase;
   }
@@ -298,7 +298,7 @@
     color: var(--muted);
     font-size: 0.72rem;
     padding: 2px 8px;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     cursor: pointer;
   }
   .raw-toggle:hover {
@@ -352,7 +352,7 @@
     font-size: 0.66rem;
     font-weight: 600;
     padding: 0 0.35rem;
-    border-radius: 2px;
+    border-radius: var(--radius-xs);
     letter-spacing: 0.02em;
     text-transform: uppercase;
   }
@@ -374,7 +374,7 @@
     color: var(--muted);
     font-size: 0.72rem;
     padding: 2px 8px;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     cursor: pointer;
     display: inline-flex;
     align-items: center;
@@ -398,7 +398,7 @@
     gap: 0.25rem;
     padding: 0.45rem 0.6rem 0.5rem;
     border-left: 3px solid var(--accent);
-    border-radius: 0 4px 4px 0;
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
     background: color-mix(in srgb, var(--accent) 8%, transparent);
   }
   .substrate-head {

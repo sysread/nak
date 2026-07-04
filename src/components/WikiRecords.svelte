@@ -830,7 +830,7 @@
     margin-bottom: 1rem;
     padding: 0.75rem;
     border: 1px solid var(--border, rgba(128, 128, 128, 0.3));
-    border-radius: 6px;
+    border-radius: var(--radius-md);
   }
   .wiki-records-compose h3 {
     margin-top: 0;
@@ -845,7 +845,7 @@
   }
   .wiki-record {
     border: 1px solid var(--border, rgba(128, 128, 128, 0.25));
-    border-radius: 6px;
+    border-radius: var(--radius-md);
   }
   .wiki-record-row {
     display: flex;
@@ -895,7 +895,7 @@
   .wiki-record-chip {
     font-size: 0.7em;
     padding: 0.1rem 0.45rem;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: var(--chip-bg, rgba(128, 128, 128, 0.18));
     white-space: nowrap;
   }
@@ -927,14 +927,14 @@
     width: 96px;
     height: 96px;
     object-fit: cover;
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     border: 1px solid var(--border, rgba(128, 128, 128, 0.3));
     display: block;
   }
   .wiki-record-thumb-placeholder {
     width: 96px;
     height: 96px;
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     border: 1px solid var(--border, rgba(128, 128, 128, 0.3));
     background: var(--chip-bg, rgba(128, 128, 128, 0.18));
   }
@@ -957,7 +957,7 @@
     border: none;
     background: var(--chip-bg, rgba(128, 128, 128, 0.25));
     color: inherit;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     width: 1.25rem;
     height: 1.25rem;
     line-height: 1;
@@ -975,7 +975,7 @@
   }
   .wiki-record-dropzone {
     border: 1px dashed var(--border, rgba(128, 128, 128, 0.4));
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     padding: 0.5rem 0.75rem;
     text-align: center;
     font-size: 0.85em;
