@@ -356,7 +356,7 @@
   .wiki-skipped-reason {
     margin: 0;
     color: var(--text);
-    font-family: var(--mono, ui-monospace, SFMono-Regular, monospace);
+    font-family: var(--font-mono);
     font-size: 0.85rem;
     white-space: pre-wrap;
     word-break: break-word;

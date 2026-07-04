@@ -631,13 +631,12 @@
     flex: 1 1 auto;
     overflow: auto;
     padding: 0.4rem 0;
-    /* Inherit the root's Lekton-first monospace stack rather than
-       declaring our own - using a separate font-family override here
-       (with a --font-mono variable that's never actually defined)
-       was routing the stream to Menlo, which read as a foreign
-       typeface against the Lekton-rendered message cards in the same
-       view. Whatever the root picks for body copy is the right choice
-       for the drawer too. */
+    /* Inherit the root's font stack (see --font-mono in styles.css)
+       rather than declaring our own - a separate override here once
+       routed the stream to Menlo, which read as a foreign typeface
+       against the Lekton-rendered message cards in the same view.
+       Whatever the root picks for body copy is the right choice for
+       the drawer too. */
     /* Single knob for the whole stream. Children that used to be
        rem-based are now em-based against this so a tweak here scales
        the badge, timestamp, source tag, message, and structured
@@ -652,7 +651,6 @@
     padding: 0.9rem;
     color: var(--muted);
     font-style: italic;
-    font-family: var(--font-sans, inherit);
   }
 
   .log-entry {

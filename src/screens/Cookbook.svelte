@@ -2123,7 +2123,6 @@
   .cookbook-edit-textarea {
     width: 100%;
     min-height: 260px;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
     font-size: 0.85rem;
     padding: 0.5rem;
     border: 1px solid var(--border);

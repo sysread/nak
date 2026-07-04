@@ -150,7 +150,7 @@
        PDF column still fits the drawer. */
     white-space: pre-wrap;
     word-break: break-word;
-    font-family: var(--font-mono, ui-monospace, Menlo, Consolas, monospace);
+    font-family: var(--font-mono);
     font-size: 0.85rem;
     line-height: 1.45;
     color: var(--text);

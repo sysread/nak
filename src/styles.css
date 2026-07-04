@@ -57,7 +57,13 @@
   --shadow-pop: 0 12px 24px rgba(0, 0, 0, 0.35); /* floating popover menus */
   --shadow-menu: 0 4px 14px rgb(0 0 0 / 0.16); /* combobox dropdown lists */
   --focus-ring: 0 0 0 2px var(--accent-weak); /* :focus-visible halo on inputs */
-  font-family: 'Lekton', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  /* The app's single typeface. Everything renders in this stack - body,
+     code, form controls - so any font-family override elsewhere must
+     either reference this token or justify itself (the color-emoji
+     stacks in DiagnosticPills/SamskaraMoodLegend are the only
+     legitimate exceptions; emoji glyphs need a color font). */
+  --font-mono: 'Lekton', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 13.5px;
 }
 
@@ -203,6 +209,11 @@ button {
   border-radius: var(--radius);
   cursor: pointer;
   font-size: 0.95rem;
+  /* Form controls don't inherit fonts in CSS; without this, every
+     button renders in the UA default (Arial on most platforms) while
+     the rest of the app is Lekton. The input/textarea/select rule
+     below carries the same reset. */
+  font-family: inherit;
 }
 
 button.secondary {
@@ -2016,7 +2027,7 @@ h1 {
 }
 
 .md code {
-  font-family: 'Lekton', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   background: var(--bg-2);
   padding: 0.05em 0.35em;
   border-radius: var(--radius-sm);
@@ -2504,7 +2515,7 @@ h1 {
 .msg-time {
   margin-right: auto;
   align-self: center;
-  font-family: var(--font-mono, inherit);
+  font-family: var(--font-mono);
   font-size: 0.78rem;
   color: var(--muted);
   white-space: nowrap;
@@ -3900,7 +3911,7 @@ button.top-bar-overflow-btn {
 .tool-name-sub {
   color: var(--muted);
   font-size: 0.72rem;
-  font-family: var(--font-mono, inherit);
+  font-family: var(--font-mono);
   opacity: 0.85;
   /* Sits in the summary row alongside the status, pill, and chevron;
      takes the remaining horizontal space so the right-side pill and
