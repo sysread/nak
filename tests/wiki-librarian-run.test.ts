@@ -10,11 +10,21 @@
  * spinner running forever.
  */
 import { describe, it, expect } from 'vitest';
-import type { AgentRunProgressEvent } from '../src/lib/supabase';
+import type {
+  AgentRunProgressEvent,
+  ManualRunOutcome,
+  WikiLibrarianRunResult,
+} from '../src/lib/supabase';
+import { MAX_RECOVERED_OUTCOME_AGE_MS } from '../src/lib/ui/manual-run-recovery';
 import {
   appendProgressStep,
   finalizeLibrarianSteps,
   librarianRunButtonLabel,
+  librarianRunElsewhere,
+  librarianStepGlyph,
+  librarianResultMeta,
+  recoverLibrarianOutcome,
+  LIBRARIAN_BUSY_MESSAGE,
   LIBRARIAN_PARTIAL_SAVE_NOTE,
   type LibrarianStep,
 } from '../src/lib/ui/wiki-librarian-run';
@@ -147,5 +157,92 @@ describe('librarianRunButtonLabel', () => {
   });
   it('is idle otherwise', () => {
     expect(librarianRunButtonLabel(false, false)).toBe('Run librarian');
+  });
+});
+
+describe('librarianStepGlyph', () => {
+  it('maps each status to its row glyph', () => {
+    expect(librarianStepGlyph('pending')).toBe('↻');
+    expect(librarianStepGlyph('ok')).toBe('✓');
+    expect(librarianStepGlyph('error')).toBe('✗');
+  });
+});
+
+describe('librarianResultMeta', () => {
+  it('pluralizes both counts independently', () => {
+    expect(librarianResultMeta(1, 1)).toBe(
+      '1 tool call over 1 article. See the Logs drawer for the full trace.',
+    );
+    expect(librarianResultMeta(5, 3)).toBe(
+      '5 tool calls over 3 articles. See the Logs drawer for the full trace.',
+    );
+  });
+});
+
+describe('librarianRunElsewhere', () => {
+  it('is true only when the lease is held by a run this strip did not start', () => {
+    expect(librarianRunElsewhere(true, false)).toBe(true);
+    // Our own run holds the lease too - that is not "elsewhere".
+    expect(librarianRunElsewhere(true, true)).toBe(false);
+    expect(librarianRunElsewhere(false, false)).toBe(false);
+  });
+});
+
+describe('LIBRARIAN_BUSY_MESSAGE', () => {
+  it('names the colliding trigger paths and invites a retry', () => {
+    expect(LIBRARIAN_BUSY_MESSAGE).toMatch(/already in flight/);
+    expect(LIBRARIAN_BUSY_MESSAGE).toMatch(/Try again/);
+  });
+});
+
+describe('recoverLibrarianOutcome', () => {
+  const okResult: WikiLibrarianRunResult = {
+    kind: 'ok',
+    finalText: 'Merged the Maya duplicates.',
+    toolCalls: 4,
+    articleCount: 7,
+  };
+  const now = Date.parse('2026-07-03T12:00:00Z');
+  function makeOutcome(over: Partial<ManualRunOutcome> = {}): ManualRunOutcome {
+    return {
+      runId: 'run-1',
+      source: 'wiki-librarian',
+      finishedAt: new Date(now - 1000).toISOString(),
+      result: okResult,
+      ...over,
+    };
+  }
+
+  it('recovers a fresh terminal outcome', () => {
+    expect(recoverLibrarianOutcome(makeOutcome(), false, null, now)).toEqual(okResult);
+  });
+
+  it('leaves the strip alone with no outcome or a live run in this tab', () => {
+    expect(recoverLibrarianOutcome(null, false, null, now)).toBeNull();
+    // The live path keeps full step fidelity; recovery must not clobber it.
+    expect(recoverLibrarianOutcome(makeOutcome(), true, null, now)).toBeNull();
+  });
+
+  it('does not re-apply the runId already on screen', () => {
+    // The profiles realtime UPDATE re-delivers the same envelope on
+    // every tick; the shown-run guard keeps it from looping.
+    expect(recoverLibrarianOutcome(makeOutcome(), false, 'run-1', now)).toBeNull();
+    expect(recoverLibrarianOutcome(makeOutcome(), false, 'run-0', now)).toEqual(okResult);
+  });
+
+  it('drops a stale outcome - the sticky column never expires', () => {
+    const stale = makeOutcome({
+      finishedAt: new Date(now - MAX_RECOVERED_OUTCOME_AGE_MS - 1000).toISOString(),
+    });
+    expect(recoverLibrarianOutcome(stale, false, null, now)).toBeNull();
+  });
+
+  it('rejects foreign sources and non-terminal results', () => {
+    expect(
+      recoverLibrarianOutcome(makeOutcome({ source: 'rem' }), false, null, now),
+    ).toBeNull();
+    expect(
+      recoverLibrarianOutcome(makeOutcome({ result: { kind: 'busy' } }), false, null, now),
+    ).toBeNull();
   });
 });

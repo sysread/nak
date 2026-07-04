@@ -14,12 +14,21 @@ import type { RecipeTocEntry } from '../cooklang';
 /**
  * Total number of jump targets in a recipe's table of contents: each
  * top-level entry (Ingredients / Instructions) plus each of its section
- * sub-entries. The detail pane uses this to decide whether the TOC is
- * worth showing - below two targets it's a single link with nothing to
- * jump past, which is clutter rather than navigation.
+ * sub-entries. Internal to the `recipeTocVisible` policy below.
  */
-export function recipeTocTargetCount(toc: RecipeTocEntry[]): number {
+function recipeTocTargetCount(toc: RecipeTocEntry[]): number {
   return toc.reduce((total, entry) => total + 1 + entry.sections.length, 0);
+}
+
+/**
+ * Whether the detail pane's table of contents is worth showing -
+ * below two jump targets it's a single link with nothing to jump
+ * past, which is clutter rather than navigation. Kept out of the
+ * cooklang renderer because it's a presentation threshold, not part
+ * of the document structure.
+ */
+export function recipeTocVisible(toc: RecipeTocEntry[]): boolean {
+  return recipeTocTargetCount(toc) >= 2;
 }
 
 /**
@@ -106,6 +115,22 @@ export function swipeNavStep(
 }
 
 /**
+ * Accessible label for a thumbnail in the detail pane's photo strip.
+ * Position and total give a screen-reader user the same "3 of 5"
+ * orientation the lightbox counter gives sighted users; the caption
+ * rides along when the photo has one. `index` is 0-based (the render
+ * loop's counter); the label speaks 1-based.
+ */
+export function photoOpenAriaLabel(
+  index: number,
+  total: number,
+  label: string | null,
+): string {
+  const base = `Open photo ${index + 1} of ${total}`;
+  return label ? `${base}: ${label}` : base;
+}
+
+/**
  * Phases of the lightbox photo carousel, which renders a 3-slide track
  * - [prev | current | next] - and slides it horizontally:
  *
@@ -121,6 +146,17 @@ export function swipeNavStep(
  *                track back to center.
  */
 export type LightboxSlidePhase = 'idle' | 'drag' | 'to-next' | 'to-prev' | 'cancel';
+
+/**
+ * True while a commit animation is mid-flight; the lightbox ignores
+ * new gestures and key presses until the slide settles so they can't
+ * strand the track between slides. `cancel` counts as a commit here -
+ * an ease-back-to-center is still an animation a fresh gesture would
+ * tear mid-frame.
+ */
+export function isCommitAnimating(phase: LightboxSlidePhase): boolean {
+  return phase === 'to-next' || phase === 'to-prev' || phase === 'cancel';
+}
 
 /**
  * Duration of the lightbox slide animation. Shared by the CSS

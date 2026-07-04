@@ -11,6 +11,9 @@ import {
   describeRecordOp,
   describeRecordOps,
   recordOpsHeadline,
+  previewChanges,
+  manualInstructionsError,
+  isAbortMessage,
 } from '../src/lib/ui/wiki-manual';
 
 function makeRecord(over: Partial<WikiRecord> = {}): WikiRecord {
@@ -83,5 +86,59 @@ describe('recordOpsHeadline', () => {
     expect(recordOpsHeadline(0)).toBe('');
     expect(recordOpsHeadline(1)).toBe('1 record change');
     expect(recordOpsHeadline(3)).toBe('3 record changes');
+  });
+});
+
+describe('previewChanges', () => {
+  const article = { title: 'Maya', content: 'Body' };
+
+  it('reports a records-only edit as no body change', () => {
+    // The load-bearing case: bodyChanged=false suppresses the article
+    // write, the fade, and the "Changelog entry:" line - each record
+    // write logs its own row.
+    expect(previewChanges({ title: 'Maya', content: 'Body' }, article)).toEqual({
+      titleChanged: false,
+      contentChanged: false,
+      bodyChanged: false,
+    });
+  });
+
+  it('a title-only change still counts as a body change', () => {
+    expect(previewChanges({ title: 'Maya (sister)', content: 'Body' }, article)).toEqual({
+      titleChanged: true,
+      contentChanged: false,
+      bodyChanged: true,
+    });
+  });
+
+  it('a content-only change still counts as a body change', () => {
+    expect(previewChanges({ title: 'Maya', content: 'New body' }, article)).toEqual({
+      titleChanged: false,
+      contentChanged: true,
+      bodyChanged: true,
+    });
+  });
+});
+
+describe('manualInstructionsError', () => {
+  it('rejects empty (pre-trimmed) instructions', () => {
+    expect(manualInstructionsError('')).toBe(
+      'Add some instructions for the agent first.',
+    );
+  });
+
+  it('accepts anything non-empty - the agent copes with terse asks', () => {
+    expect(manualInstructionsError('fix the date')).toBeNull();
+  });
+});
+
+describe('isAbortMessage', () => {
+  it('matches AbortController rejection messages case-insensitively', () => {
+    expect(isAbortMessage('The operation was aborted.')).toBe(true);
+    expect(isAbortMessage('AbortError: signal is aborted without reason')).toBe(true);
+  });
+
+  it('lets real errors through to the banner', () => {
+    expect(isAbortMessage('network timeout')).toBe(false);
   });
 });

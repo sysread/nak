@@ -493,6 +493,20 @@ UI:
   document.getElementById when the in-article lookup misses. The
   record count that gates the Records link is reported up from the
   WikiRecords component via its onCount prop on each unfiltered load.
+- `src/lib/ui/wiki-screen.ts` - the screen-scoped UI primitives for
+  Wiki.svelte (named `-screen` because `src/lib/wiki.ts` is the domain
+  module): selected-article resolution against the loaded lists /
+  Favorites bucket / read-through fallback, the edit-compose-delete
+  form validation + error copy (including the duplicate-title
+  rephrase), the edit form's save-state footer, the favorite and
+  offline-disabled button copy, the untitled-source label, and the
+  `?key=val` article-link -> route-patch mapping. Feature-specific
+  decisions route to the narrower companions instead: heading-outline
+  nesting and the ToC visibility gates live in `wiki-toc-sections.ts`,
+  the preview-diff / instructions validation / abort sniff in
+  `wiki-manual.ts`, and the step glyphs, result meta line, busy copy,
+  lease predicate, and reload-recovery guard in
+  `wiki-librarian-run.ts`. Unit-tested at `tests/wiki-screen.test.ts`.
 - `src/components/WikiChangelogPanel.svelte` - the inline changelog.
   Cursor-paged list (`listWikiChangelog`); kind chips
   (Added/Edited/Deleted), per-entry article link when the article

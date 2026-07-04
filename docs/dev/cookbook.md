@@ -75,13 +75,25 @@ unaffected.
   result; the TOC renders as a `<nav class="cookbook-toc">` above the
   rendered body, and a click resolves the target heading by id within
   the bound render container (`detailRenderEl`) and `scrollIntoView`s it.
-  The TOC is gated on `recipeTocTargetCount(...) >= 2` so a one-block
+  The TOC is gated on `recipeTocVisible(...)` so a one-block
   recipe doesn't show a lone link.
 - `src/lib/ui/recipe-detail.ts` — pure UI-behavior primitives for the
-  detail pane (`recipeSourceLine`, the lightbox carousel helpers, and
-  `recipeTocTargetCount` - the "is the TOC worth showing" policy, kept
-  out of the renderer because it's a presentation threshold, not part
-  of the document structure). Unit-tested at `tests/recipe-detail.test.ts`.
+  detail pane (`recipeSourceLine`, the lightbox carousel helpers, the
+  photo-strip aria labels, and `recipeTocVisible` - the "is the TOC
+  worth showing" threshold, kept out of the renderer because it's a
+  presentation threshold, not part of the document structure).
+  Unit-tested at `tests/recipe-detail.test.ts`.
+- `src/lib/ui/cookbook-screen.ts` — the screen-scoped UI primitives
+  for Cookbook.svelte (named `-screen` because the cookbook domain
+  already owns the nearby names - `cookbook-store.svelte.ts`,
+  `cooklang.ts`, `recipe-limits.ts`): routed-recipe resolution against
+  the loaded store sets and the by-id fallback fetch, the edit-form
+  draft seeds and validation ladder + error copy, the photo-draft
+  lifecycle (pick gates against the photo cap / images-only / size
+  rules, reorder, the `{id, label}` save payload), the auto-generated
+  rating and revert change messages, the History panel's summary label
+  and row states, and the action-bar / bookmark button copy.
+  Unit-tested at `tests/cookbook-screen.test.ts`.
 - `src/screens/Chat.svelte` — drawer tab switcher (`drawerTab`),
   Recipes list rendering, footer book icon, Cookbook modal mount,
   `COOKBOOK_CHANGE_EVENT` listener in `onMount`, and the

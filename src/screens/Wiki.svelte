@@ -79,8 +79,28 @@
   import { offlineStatus, getArticleCached } from '$lib/offline-sync.svelte';
   import { missingRecordMessage } from '$lib/ui/offline-status';
   import { createLogger } from '$lib/logger.svelte';
-  import { describeRecordOps, recordOpsHeadline } from '$lib/ui/wiki-manual';
+  import {
+    describeRecordOps,
+    recordOpsHeadline,
+    previewChanges,
+    manualInstructionsError,
+    isAbortMessage,
+    RECORD_OP_PREVIEW_CHARS,
+  } from '$lib/ui/wiki-manual';
   import { contentPreview } from '$lib/ui/wiki-records';
+  import {
+    resolveSelectedArticle,
+    articleFormError,
+    changelogMessageError,
+    createArticleErrorMessage,
+    editSaveNotice,
+    favoriteButtonTitle,
+    favoriteAriaLabel,
+    offlineActionTitle,
+    sourceThreadLabel,
+    wikiHrefRoutePatch,
+    type WikiEditSaveState,
+  } from '$lib/ui/wiki-screen';
   import type {
     WikiArticle,
     WikiArticleSource,
@@ -93,18 +113,26 @@
   import { extractHeadings, uniqueSlug, type HeadingEntry } from '$lib/markdown';
   import {
     buildSectionTocLinks,
+    nestHeadings,
+    headingOutlineVisible,
+    tocVisible,
+    cleanHeadingText,
     WIKI_SOURCES_ANCHOR,
     WIKI_SEE_ALSO_ANCHOR,
+    type TocNode,
   } from '$lib/ui/wiki-toc-sections';
   import {
     appendProgressStep,
     finalizeLibrarianSteps,
     librarianRunButtonLabel,
-    outcomeToLibrarianResult,
+    librarianRunElsewhere,
+    librarianStepGlyph,
+    librarianResultMeta,
+    recoverLibrarianOutcome,
+    LIBRARIAN_BUSY_MESSAGE,
     LIBRARIAN_PARTIAL_SAVE_NOTE,
     type LibrarianStep,
   } from '$lib/ui/wiki-librarian-run';
-  import { recoveredOutcomeIsFresh } from '$lib/ui/manual-run-recovery';
   import { awaitDetachedRun } from '$lib/agents/detached-run';
   import {
     wikiLibrarianLease,
@@ -156,11 +184,12 @@
   let fetchingArticle = $state(false);
 
   const selectedArticle = $derived<WikiArticle | null>(
-    route.wiki_article_id
-      ? (wikiStore.results.find((a) => a.id === route.wiki_article_id) ??
-         wikiStore.favorites.find((a) => a.id === route.wiki_article_id) ??
-         (fetchedArticle?.id === route.wiki_article_id ? fetchedArticle : null))
-      : null,
+    resolveSelectedArticle(
+      route.wiki_article_id,
+      wikiStore.results,
+      wikiStore.favorites,
+      fetchedArticle,
+    ),
   );
 
   // Resolve the fallback whenever the route points at an article the
@@ -173,10 +202,10 @@
       fetchedArticle = null;
       return;
     }
-    if (
-      wikiStore.results.some((a) => a.id === id) ||
-      wikiStore.favorites.some((a) => a.id === id)
-    ) {
+    // `fetched: null` asks the narrower question "already in the
+    // loaded sets" - a matching fetchedArticle must NOT suppress the
+    // refetch, since getArticleCached also refreshes the cache online.
+    if (resolveSelectedArticle(id, wikiStore.results, wikiStore.favorites, null)) {
       return;
     }
     let cancelled = false;
@@ -285,12 +314,6 @@
 
   // --- Edit mode ---------------------------------------------------------
 
-  type SaveState =
-    | { kind: 'idle' }
-    | { kind: 'dirty' }
-    | { kind: 'saving' }
-    | { kind: 'error'; message: string };
-
   let editingId = $state<string | null>(null);
   let editTitle = $state('');
   let editContent = $state('');
@@ -300,7 +323,10 @@
   // agent's `reason` field; this state is just the direct-edit form's
   // input box.
   let editMessage = $state('');
-  let saveState = $state<SaveState>({ kind: 'idle' });
+  let saveState = $state<WikiEditSaveState>({ kind: 'idle' });
+  // Status line under the edit form's fields (dirty hint / error);
+  // null renders nothing.
+  const saveNotice = $derived(editSaveNotice(saveState));
 
   // Favorite toggle. Marking an article favorite is what saves it
   // offline (offline-sync mirrors the favorite set into IndexedDB), so
@@ -351,40 +377,9 @@
     const title = editTitle.trim();
     const content = editContent;
     const message = editMessage.trim();
-    if (!title) {
-      saveState = { kind: 'error', message: 'Title is required.' };
-      return;
-    }
-    if (title.length > MAX_WIKI_TITLE_CHARS) {
-      saveState = {
-        kind: 'error',
-        message: `Title must be ${MAX_WIKI_TITLE_CHARS} chars or fewer.`,
-      };
-      return;
-    }
-    if (!content) {
-      saveState = { kind: 'error', message: 'Content is required.' };
-      return;
-    }
-    if (content.length > MAX_WIKI_CONTENT_CHARS) {
-      saveState = {
-        kind: 'error',
-        message: `Content must be ${MAX_WIKI_CONTENT_CHARS} chars or fewer.`,
-      };
-      return;
-    }
-    if (!message) {
-      saveState = {
-        kind: 'error',
-        message: 'Add a one-line change message before saving.',
-      };
-      return;
-    }
-    if (message.length > MAX_WIKI_CHANGELOG_MESSAGE_CHARS) {
-      saveState = {
-        kind: 'error',
-        message: `Change message must be ${MAX_WIKI_CHANGELOG_MESSAGE_CHARS} chars or fewer.`,
-      };
+    const validationError = articleFormError(title, content, message);
+    if (validationError) {
+      saveState = { kind: 'error', message: validationError };
       return;
     }
     saveState = { kind: 'saving' };
@@ -488,28 +483,9 @@
     const title = composeTitle.trim();
     const content = composeContent;
     const message = composeMessage.trim();
-    if (!title) {
-      composeError = 'Title is required.';
-      return;
-    }
-    if (title.length > MAX_WIKI_TITLE_CHARS) {
-      composeError = `Title must be ${MAX_WIKI_TITLE_CHARS} chars or fewer.`;
-      return;
-    }
-    if (!content) {
-      composeError = 'Content is required.';
-      return;
-    }
-    if (content.length > MAX_WIKI_CONTENT_CHARS) {
-      composeError = `Content must be ${MAX_WIKI_CONTENT_CHARS} chars or fewer.`;
-      return;
-    }
-    if (!message) {
-      composeError = 'Add a one-line change message before saving.';
-      return;
-    }
-    if (message.length > MAX_WIKI_CHANGELOG_MESSAGE_CHARS) {
-      composeError = `Change message must be ${MAX_WIKI_CHANGELOG_MESSAGE_CHARS} chars or fewer.`;
+    const validationError = articleFormError(title, content, message);
+    if (validationError) {
+      composeError = validationError;
       return;
     }
     composeBusy = true;
@@ -539,13 +515,9 @@
       navigate({ wiki_article_id: created.id });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      // The unique(user_id, title) constraint surfaces here for human
-      // creates too. Rephrase so the user sees actionable text rather
-      // than a Postgres error.
-      composeError =
-        /duplicate key|unique constraint/i.test(msg)
-          ? 'An article with that title already exists.'
-          : msg;
+      // Rephrases the unique(user_id, title) violation, which
+      // surfaces here for human creates too.
+      composeError = createArticleErrorMessage(msg);
     } finally {
       composeBusy = false;
     }
@@ -579,12 +551,9 @@
     if (!deletingId || !app.supabase) return;
     const id = deletingId;
     const message = deleteMessage.trim();
-    if (!message) {
-      deleteError = 'Add a one-line change message before deleting.';
-      return;
-    }
-    if (message.length > MAX_WIKI_CHANGELOG_MESSAGE_CHARS) {
-      deleteError = `Change message must be ${MAX_WIKI_CHANGELOG_MESSAGE_CHARS} chars or fewer.`;
+    const validationError = changelogMessageError(message, 'deleting');
+    if (validationError) {
+      deleteError = validationError;
       return;
     }
     // Capture the title BEFORE the delete so the changelog row can
@@ -676,6 +645,17 @@
     manualPreview ? describeRecordOps(manualPreview.recordOps, manualRecords) : []
   );
 
+  // Which parts of the article the preview would actually change.
+  // Drives the preview's title/reason/body sections - see the
+  // previewChanges doc comment for why bodyChanged gates the
+  // changelog line. Null while no preview is up (the template only
+  // reads it inside the preview branch).
+  const manualChanges = $derived(
+    manualPreview && selectedArticle
+      ? previewChanges(manualPreview, selectedArticle)
+      : null
+  );
+
   // Focus the instructions textarea as soon as the form mounts so the
   // user can start typing without an extra click. The bound element
   // stays referentially stable across the form's lifetime; this effect
@@ -756,8 +736,9 @@
   async function submitManualUpdate(article: WikiArticle): Promise<void> {
     if (!app.supabase) return;
     const instructions = manualInstructions.trim();
-    if (instructions.length === 0) {
-      manualError = 'Add some instructions for the agent first.';
+    const validationError = manualInstructionsError(instructions);
+    if (validationError) {
+      manualError = validationError;
       return;
     }
     if (manualController) manualController.abort();
@@ -803,7 +784,7 @@
       const msg = err instanceof Error ? err.message : String(err);
       // Aborted runs are intentional (the user clicked Cancel or the
       // panel unmounted); they shouldn't render as red errors.
-      if (!/abort/i.test(msg)) manualError = msg;
+      if (!isAbortMessage(msg)) manualError = msg;
     } finally {
       if (manualController === ctl) manualController = null;
       manualBusy = false;
@@ -853,9 +834,12 @@
     // The body may be unchanged (a records-only edit). Only write +
     // changelog + fade the article when its title or content actually
     // changed - re-writing identical content would mint a spurious
-    // "update" changelog row.
-    const bodyChanged =
-      targetTitle !== article.title || targetContent !== article.content;
+    // "update" changelog row. Compared against the snapshotted values,
+    // not manualPreview, for the same race reason as the snapshot.
+    const { bodyChanged } = previewChanges(
+      { title: targetTitle, content: targetContent },
+      article
+    );
     // The user's choice: they accepted the preview. The edge logged the
     // preview-stage outcome; this is the acceptance half of the pair.
     manualLog.debug(
@@ -980,12 +964,9 @@
   let librarianTextarea = $state<HTMLTextAreaElement | null>(null);
 
   // A wiki-librarian run is in flight that THIS strip didn't start -
-  // another tab, another device, or a scheduled background run, detected
-  // via the shared in-flight lease. Disables the Run button and drives
-  // the "a run is in progress" notice so a second run can't be kicked
-  // into the server-side guard's `busy`.
+  // see librarianRunElsewhere for the lease semantics.
   const runInFlightElsewhere = $derived(
-    wikiLibrarianLease.running && !librarianBusy
+    librarianRunElsewhere(wikiLibrarianLease.running, librarianBusy)
   );
 
   // Live step list for the manual librarian run. The run executes
@@ -1013,19 +994,19 @@
   // Recover the last run's result card after a reload. wikiLibrarianOutcome
   // reads the persisted outcome on mount and watches the profiles realtime
   // UPDATE the venice function writes when a run finishes; this bridges that
-  // into the local result state. Guarded so a live run in this tab (busy) or
-  // an already-shown runId wins - the live path keeps full step fidelity,
-  // this only fills the gap a reload leaves. No step rows: they're gone after
-  // a reload, but the result card is the part worth recovering. The
-  // recency guard keeps the sticky `*_last_run_outcome` column from caching
-  // an ancient run's result into the strip on a cold load (a fresh realtime
-  // outcome has finishedAt ~= now, so it still recovers).
+  // into the local result state. All the guards (live run wins, shown runId
+  // wins, stale outcomes dropped) live in recoverLibrarianOutcome. No step
+  // rows: they're gone after a reload, but the result card is the part worth
+  // recovering.
   $effect(() => {
     const outcome = wikiLibrarianOutcome.outcome;
-    if (!outcome || librarianBusy || outcome.runId === librarianShownRunId) return;
-    if (!recoveredOutcomeIsFresh(outcome.finishedAt, Date.now())) return;
-    const result = outcomeToLibrarianResult(outcome);
-    if (!result) return;
+    const result = recoverLibrarianOutcome(
+      outcome,
+      librarianBusy,
+      librarianShownRunId,
+      Date.now(),
+    );
+    if (!outcome || !result) return;
     librarianResult = result;
     librarianSteps = [];
     librarianShownRunId = outcome.runId;
@@ -1169,8 +1150,7 @@
         // No run started - the in-flight guard rejected it. Nothing was
         // committed and no steps were produced, so there's nothing to
         // finalize or refresh.
-        librarianError =
-          'A librarian run is already in flight (scheduled or chat-driven). Try again in a moment.';
+        librarianError = LIBRARIAN_BUSY_MESSAGE;
       } else if (result.kind === 'error') {
         // Run errored server-side mid-loop; earlier wiki_update calls may
         // already be committed. Settle the spinner, refresh to surface them.
@@ -1256,24 +1236,14 @@
     }
 
     if (!href.startsWith('?')) return;
+    // preventDefault BEFORE the patch check: a `?key=val` link with no
+    // recognised routed key stays a dead link rather than triggering a
+    // full same-origin navigation. The href-to-patch mapping (the
+    // `cid` source-link convention and the wiki-tab clearing that
+    // rides with it) lives in wikiHrefRoutePatch.
     event.preventDefault();
-    const params = new URLSearchParams(href);
-    // Build the navigate patch from whichever routed keys appear.
-    // `cid` is by far the most common (the source-link convention),
-    // but the same handler covers other in-app `?key=val` link
-    // patterns the agents might add later. Unknown keys silently
-    // fall through - navigate ignores keys it doesn't recognise.
-    const patch: Record<string, string | null> = {};
-    const cid = params.get('cid');
-    if (cid !== null) {
-      patch.cid = cid;
-      // Clearing the wiki tab so the user lands on the chat surface
-      // for that thread, rather than staying inside the wiki panel
-      // with a thread id behind the scenes.
-      patch.drawer = null;
-      patch.wiki_article_id = null;
-    }
-    if (Object.keys(patch).length === 0) return;
+    const patch = wikiHrefRoutePatch(href);
+    if (!patch) return;
     navigate(patch);
   }
 
@@ -1294,37 +1264,16 @@
   // The ToC hides for short articles (<2 headings) - a one-item outline
   // is noise.
 
-  interface TocNode extends HeadingEntry {
-    children: TocNode[];
-  }
-
-  /**
-   * Stack-based flat-to-tree fold. Each new heading hangs off the
-   * nearest preceding heading with a strictly lower level; jumps in
-   * the document outline (H1 -> H3 directly, no H2 between) attach
-   * to whichever ancestor is closest rather than synthesising a
-   * placeholder, which keeps the UI honest about the source.
-   */
-  function nestHeadings(items: HeadingEntry[]): TocNode[] {
-    const root: TocNode = { level: 0, text: '', slug: '', children: [] };
-    const stack: TocNode[] = [root];
-    for (const h of items) {
-      while (stack.length > 1 && stack[stack.length - 1].level >= h.level) {
-        stack.pop();
-      }
-      const node: TocNode = { ...h, children: [] };
-      stack[stack.length - 1].children.push(node);
-      stack.push(node);
-    }
-    return root.children;
-  }
-
   const tocHeadings = $derived<HeadingEntry[]>(
     selectedArticle ? extractHeadings(selectedArticle.content) : [],
   );
-  // Nested for rendering; flat count drives the >=2 visibility gate.
-  // A single-entry outline is more visual chrome than navigation.
+  // Nested for rendering (nestHeadings' flat-to-tree fold); the flat
+  // count drives the outline visibility gate below.
   const tocItems = $derived<TocNode[]>(nestHeadings(tocHeadings));
+  // Whether the heading outline renders (and whether the section-link
+  // group needs its divider); the panel gate additionally counts the
+  // section links, which relax the outline's two-heading minimum.
+  const outlineVisible = $derived(headingOutlineVisible(tocHeadings.length));
 
   // Record count for the open article, reported up by WikiRecords after
   // each unfiltered load. Drives whether the ToC gets a "Records" link.
@@ -1355,6 +1304,8 @@
       recordCount,
     }),
   );
+  // The whole ToC panel's visibility gate (outline OR section links).
+  const tocShown = $derived(tocVisible(tocHeadings.length, sectionTocLinks.length));
 
   // `bind:this` target for the rendered article. Used by:
   //   - the post-render effect below, to attach heading ids;
@@ -1377,10 +1328,10 @@
       '.wiki-content h1, .wiki-content h2, .wiki-content h3, ' +
       '.wiki-content h4, .wiki-content h5, .wiki-content h6',
     )) {
-      // Match the cleaning step in extractHeadings so slug lookup
-      // works for headings that carried inline `*` / `_` / `` ` ``
-      // markers in the source.
-      const text = (h.textContent ?? '').replace(/[*_`~]/g, '').trim();
+      // cleanHeadingText matches the cleaning step in extractHeadings
+      // so slug lookup works for headings that carried inline `*` /
+      // `_` / `` ` `` markers in the source.
+      const text = cleanHeadingText(h.textContent ?? '');
       h.id = uniqueSlug(text, used);
     }
   });
@@ -1462,11 +1413,7 @@
                 <span
                   class="librarian-step-glyph"
                   aria-hidden="true"
-                >{step.status === 'pending'
-                  ? '↻'
-                  : step.status === 'ok'
-                    ? '✓'
-                    : '✗'}</span>
+                >{librarianStepGlyph(step.status)}</span>
                 <span class="librarian-step-label">{step.label}</span>
               </li>
             {/each}
@@ -1491,9 +1438,7 @@
               </p>
             {/if}
             <p class="subtle wiki-librarian-result-meta">
-              {librarianResult.toolCalls} tool call{librarianResult.toolCalls === 1 ? '' : 's'}
-              over {librarianResult.articleCount} article{librarianResult.articleCount === 1 ? '' : 's'}.
-              See the Logs drawer for the full trace.
+              {librarianResultMeta(librarianResult.toolCalls, librarianResult.articleCount)}
             </p>
           </div>
         {/if}
@@ -1639,10 +1584,10 @@
               spellcheck="true"
             />
           </div>
-          {#if saveState.kind === 'error'}
-            <p class="error">{saveState.message}</p>
-          {:else if saveState.kind === 'dirty'}
-            <p class="subtle">Unsaved changes.</p>
+          <!-- Dirty hint / error line under the fields, derived via
+               editSaveNotice; idle and saving render nothing. -->
+          {#if saveNotice}
+            <p class={saveNotice.className}>{saveNotice.text}</p>
           {/if}
           <div class="row">
             <button
@@ -1728,7 +1673,7 @@
             {:else if manualPreview}
               <div class="wiki-preview">
                 <h4>Preview</h4>
-                {#if manualPreview.title !== a.title}
+                {#if manualChanges?.titleChanged}
                   <p class="subtle">
                     Title would change to: <strong>{manualPreview.title}</strong>
                   </p>
@@ -1737,12 +1682,12 @@
                      edit, so only surface it when the body actually
                      changes. A records-only edit writes no body
                      changelog row (each record write logs its own). -->
-                {#if manualPreview.title !== a.title || manualPreview.content !== a.content}
+                {#if manualChanges?.bodyChanged}
                   <p class="subtle wiki-preview-reason">
                     Changelog entry: <em>{manualPreview.reason}</em>
                   </p>
                 {/if}
-                {#if manualPreview.content !== a.content}
+                {#if manualChanges?.contentChanged}
                   <div
                     class="wiki-content"
                     role="presentation"
@@ -1768,7 +1713,7 @@
                           {/if}
                           {#if op.content}
                             <span class="wiki-record-op-content">
-                              {contentPreview(op.content, 160)}
+                              {contentPreview(op.content, RECORD_OP_PREVIEW_CHARS)}
                             </span>
                           {/if}
                         </li>
@@ -1841,14 +1786,8 @@
                 class:active={a.favorite}
                 onclick={() => toggleFavorite(a)}
                 disabled={favoriteBusy || !offlineStatus.online}
-                title={!offlineStatus.online
-                  ? 'Reconnect to change favorites'
-                  : a.favorite
-                    ? 'Saved offline (remove from favorites)'
-                    : 'Save offline (mark as favorite)'}
-                aria-label={a.favorite
-                  ? 'Remove from favorites'
-                  : 'Mark as favorite'}
+                title={favoriteButtonTitle(offlineStatus.online, a.favorite)}
+                aria-label={favoriteAriaLabel(a.favorite)}
                 aria-pressed={a.favorite}
               >
                 <!-- Star: filled when favorited (saved offline), outline
@@ -1877,7 +1816,7 @@
                 type="button"
                 onclick={() => startEdit(a)}
                 disabled={!offlineStatus.online}
-                title={offlineStatus.online ? undefined : 'Reconnect to edit'}
+                title={offlineActionTitle(offlineStatus.online, 'edit')}
               >
                 Edit
               </button>
@@ -1885,7 +1824,7 @@
                 type="button"
                 onclick={() => startManualUpdate(a)}
                 disabled={!offlineStatus.online}
-                title={offlineStatus.online ? undefined : 'Reconnect to run the agent'}
+                title={offlineActionTitle(offlineStatus.online, 'ask-agent')}
               >
                 Ask agent to update
               </button>
@@ -1894,7 +1833,7 @@
                 onclick={() => requestDelete(a)}
                 class="danger"
                 disabled={!offlineStatus.online}
-                title={offlineStatus.online ? undefined : 'Reconnect to delete'}
+                title={offlineActionTitle(offlineStatus.online, 'delete')}
               >
                 Delete
               </button>
@@ -1903,7 +1842,7 @@
           {#if favoriteError}
             <p class="wiki-favorite-error" role="alert">{favoriteError}</p>
           {/if}
-          {#if tocHeadings.length >= 2 || sectionTocLinks.length > 0}
+          {#if tocShown}
             <!--
               Table of contents. Rendered before the article body so the
               reader sees the outline first; clicking an entry scrolls
@@ -1916,7 +1855,7 @@
             -->
             <nav class="wiki-toc" aria-label="Table of contents">
               <h2>Contents</h2>
-              {#if tocHeadings.length >= 2}
+              {#if outlineVisible}
                 {@render tocList(tocItems)}
               {/if}
               {#if sectionTocLinks.length > 0}
@@ -1929,7 +1868,7 @@
                 -->
                 <ul
                   class="wiki-toc-sections"
-                  class:has-divider={tocHeadings.length >= 2}
+                  class:has-divider={outlineVisible}
                 >
                   {#each sectionTocLinks as link (link.id)}
                     <li><a href={`#${link.id}`}>{link.label}</a></li>
@@ -1961,7 +1900,7 @@
                         class="wiki-link"
                         onclick={() => openSourceThread(src.thread_id)}
                       >
-                        {src.thread_title || '(untitled thread)'}
+                        {sourceThreadLabel(src.thread_title)}
                       </button>
                     {:else}
                       <span class="wiki-link-gone">(thread no longer available)</span>

@@ -103,3 +103,51 @@ export function recordOpsHeadline(count: number): string {
   if (count <= 0) return '';
   return `${count} record ${count === 1 ? 'change' : 'changes'}`;
 }
+
+// Display cap for a record op's markdown body in the preview list -
+// enough to recognise the record, short enough that a batch of ops
+// still scans as a list rather than a wall of text.
+export const RECORD_OP_PREVIEW_CHARS = 160;
+
+/**
+ * Which parts of the article the agent's proposed edit actually
+ * touches. `bodyChanged` (title OR content) is the load-bearing one:
+ * it gates the article write, the fade-out, and the body changelog
+ * row - a records-only edit writes no body changelog row (each
+ * record write logs its own), so surfacing the agent's `reason` as
+ * "Changelog entry:" on such a preview would promise a row that
+ * never lands. Re-writing identical content would also mint a
+ * spurious "update" changelog row, hence the write gate.
+ */
+export function previewChanges(
+  preview: { title: string; content: string },
+  article: { title: string; content: string },
+): { titleChanged: boolean; contentChanged: boolean; bodyChanged: boolean } {
+  const titleChanged = preview.title !== article.title;
+  const contentChanged = preview.content !== article.content;
+  return { titleChanged, contentChanged, bodyChanged: titleChanged || contentChanged };
+}
+
+/**
+ * Validation error for the instructions box, or null when the run can
+ * start. Expects pre-trimmed input (the caller trims because it also
+ * sends the trimmed text to the agent). Only emptiness is rejected -
+ * the agent copes with terse instructions, and the box is the whole
+ * form, so one nudge line is all the validation the flow needs.
+ */
+export function manualInstructionsError(instructions: string): string | null {
+  return instructions.length === 0
+    ? 'Add some instructions for the agent first.'
+    : null;
+}
+
+/**
+ * Does this thrown message describe an intentional abort? Aborted
+ * runs (the user clicked Cancel or the panel unmounted) shouldn't
+ * render as red errors - the user caused them on purpose. Message
+ * sniffing because AbortController rejections reach the catch as
+ * plain Errors whose only abort marker is the message text.
+ */
+export function isAbortMessage(message: string): boolean {
+  return /abort/i.test(message);
+}
