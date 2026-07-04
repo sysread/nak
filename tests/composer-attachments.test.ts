@@ -5,7 +5,11 @@
  * label logic that drives the chip.
  */
 import { describe, it, expect } from 'vitest';
-import { chipStatus, compressionLabel } from '../src/lib/ui/composer-attachments';
+import {
+  chipStatus,
+  compressionLabel,
+  totalAttachmentBytes,
+} from '../src/lib/ui/composer-attachments';
 
 type ChipInput = Parameters<typeof chipStatus>[0];
 
@@ -51,5 +55,17 @@ describe('chipStatus', () => {
 
   it('is ready when nothing is pending and nothing was compressed', () => {
     expect(chipStatus(chip()).kind).toBe('ready');
+  });
+});
+
+describe('totalAttachmentBytes', () => {
+  it('sums size_bytes across the pending set', () => {
+    expect(
+      totalAttachmentBytes([{ size_bytes: 100 }, { size_bytes: 250 }, { size_bytes: 1 }])
+    ).toBe(351);
+  });
+
+  it('is zero for an empty set', () => {
+    expect(totalAttachmentBytes([])).toBe(0);
   });
 });
