@@ -90,11 +90,14 @@ Mobile order is plain DOM order from the same registry loop.
 
 - **Order is `DIAGNOSTIC_PILLS` order.** Changing the array
   reorders both surfaces. A test pins it.
-- **Presence**: recall / intuition / bias are always present
-  (recall and intuition merely render *disabled* when their
-  payload is missing — the slot is held). Samskara is present
-  only on an active thread (`moodVisual !== null`). Intents is
-  present only when `app.intentsEnabled`.
+- **Presence**: recall / intuition / bias / intents are always
+  present (recall and intuition merely render *disabled* when
+  their payload is missing — the slot is held). Samskara is
+  present only on an active thread (`moodVisual !== null`). The
+  intents pill stopped being `app.intentsEnabled`-gated when its
+  modal grew the follow-ups section (every account has
+  follow-ups); the toggle now only switches the pill's copy and
+  which sections the modal renders.
 - **Each pill opens `navigate({ modal })`** with its registry
   `modal`.
 
@@ -112,8 +115,10 @@ Mobile order is plain DOM order from the same registry loop.
   reads `moodState.visual`, written only by `SamskaraMoodSync`
   from the `SAMSKARA_MINT_EVENT` relay and the
   `samskaraGetLatestFireMood` thread-open seed.
-- **Intents** ([in-progress/intents.md](./in-progress/intents.md))
-  — opt-in pill gated on `app.intentsEnabled`.
+- **Intents / follow-ups** ([in-progress/intents.md](./in-progress/intents.md),
+  [followups.md](./followups.md)) — always-present seedling pill;
+  the shared modal shows follow-ups for everyone and adds the
+  working-intentions section when `app.intentsEnabled`.
 - **Chat** ([chat.md](./chat.md)) — owns the two mount sites,
   the payload `$derived`s passed in, and the mobile
   `composerDiagWharfOpen` state + `closeMenus` coordination.

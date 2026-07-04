@@ -1,22 +1,22 @@
 <script lang="ts">
   /**
-   * Working-intentions inspector. The read-only "surfaced" surface of
-   * the intents feature ("surfaced, not steerable") - the user can see
-   * exactly what Nak is working toward with them, but cannot hand-edit
-   * an intention (the minter owns the portfolio, same contract samskara
-   * runs under).
+   * The seedling inspector - the read-only "surfaced" window onto the
+   * notes Nak keeps to itself about the future. Two sections, two
+   * features, one contract ("surfaced, not steerable"):
    *
-   * Reached from the seedling pill in the bottom-right column, mounted
-   * only when intents are enabled. Pulls every `intents` row on mount
-   * and groups them by lifecycle: active (shaping replies now), dormant
-   * (paused), retired (let go). All decision logic - grouping, the
-   * plain-language efficacy read, the target label - lives in
-   * $lib/ui/intents-inspector and is unit-tested; this file is glue.
+   *   - Working intentions (opt-in, off by default): the standing
+   *     goals the minter forms about how to help the user grow. Shown
+   *     only when `app.intentsEnabled` - the section must not
+   *     advertise a feature the user never switched on.
+   *   - Follow-ups (every account): the pending questions Nak saved to
+   *     ask later, whose outcomes it does not know.
    *
-   * No write controls. The honesty constraint: each card states what
-   * the intention is trying to shift, and never overstates efficacy (a
-   * free-form intent shows "open-ended", an unscored one "too new to
-   * tell").
+   * Reached from the always-present seedling pill in the bottom-right
+   * column. No write controls on either section - the minter owns the
+   * intent portfolio; follow-ups are answered, postponed, or dismissed
+   * in conversation. All decision logic lives in the tested primitives
+   * ($lib/ui/intents-inspector, $lib/ui/followups-inspector); this file
+   * is glue.
    */
   import { onMount } from 'svelte';
   import { app } from '$lib/state.svelte';
@@ -32,17 +32,28 @@
     type IntentRow,
     type GroupedIntents,
   } from '$lib/ui/intents-inspector';
+  import {
+    groupFollowups,
+    openStatusChip,
+    followupsHeadline,
+    inspectorTitle,
+    type FollowupInspectorRow,
+    type GroupedFollowups,
+  } from '$lib/ui/followups-inspector';
 
   interface Props {
     onClose: () => void;
   }
   let { onClose }: Props = $props();
 
-  let rows = $state<IntentRow[]>([]);
+  let intentRows = $state<IntentRow[]>([]);
+  let followupRows = $state<FollowupInspectorRow[]>([]);
   let loading = $state(true);
 
-  const grouped = $derived<GroupedIntents>(groupByStatus(rows));
-  const reformed = $derived<Set<string>>(reformedIds(rows));
+  const grouped = $derived<GroupedIntents>(groupByStatus(intentRows));
+  const reformed = $derived<Set<string>>(reformedIds(intentRows));
+  const followups = $derived<GroupedFollowups>(groupFollowups(followupRows));
+  const title = $derived(inspectorTitle(app.intentsEnabled));
 
   onMount(async () => {
     const supabase = app.supabase;
@@ -51,7 +62,14 @@
       return;
     }
     try {
-      rows = await supabase.listIntents();
+      // Intents stay unfetched when the feature is off - the section
+      // isn't rendered, and an opted-out account has no rows anyway.
+      const [intents, loops] = await Promise.all([
+        app.intentsEnabled ? supabase.listIntents() : Promise.resolve([]),
+        supabase.listFollowups(),
+      ]);
+      intentRows = intents;
+      followupRows = loops;
     } finally {
       loading = false;
     }
@@ -66,7 +84,7 @@
   class="center intents-backdrop"
   onclick={(e) => { if (e.target === e.currentTarget) onClose(); }}
 >
-  <div class="intents-shell" role="dialog" aria-modal="true" aria-label="Working intentions">
+  <div class="intents-shell" role="dialog" aria-modal="true" aria-label={title}>
     <button
       type="button"
       class="intents-close"
@@ -77,70 +95,158 @@
 
     <div class="intents-body">
       <header class="intents-header">
-        <h1 class="intents-title">Working intentions</h1>
+        <h1 class="intents-title">{title}</h1>
         <p class="subtle intents-blurb">
-          Standing goals Nak forms about how to help you grow, drawn
-          from the patterns it observes. It reviews them daily -
-          pursuing what helps, pausing what goes quiet, letting go of
-          what isn't landing. They are gentle leans, never an agenda,
-          and never override what you explicitly ask for. This view is
-          read-only; Nak manages the set itself.
+          Notes Nak keeps to itself about the future. This view is
+          read-only - Nak manages these on its own, and you shape them
+          just by talking.
         </p>
       </header>
 
       {#if loading}
         <p class="empty">Loading...</p>
-      {:else if rows.length === 0}
-        <p class="empty">
-          No intentions yet. Nak reviews your patterns once a day and
-          forms an intention only when it sees a real, repeated one with
-          a way to help. Nothing here until then.
-        </p>
       {:else}
-        <p class="headline">{activeHeadline(grouped.active.length)}</p>
+        {#if app.intentsEnabled}
+          <section class="feature">
+            <h2 class="feature-title">Working intentions</h2>
+            <p class="feature-blurb subtle">
+              Standing goals Nak forms about how to help you grow, drawn
+              from the patterns it observes. It reviews them daily -
+              pursuing what helps, pausing what goes quiet, letting go
+              of what isn't landing. They are gentle leans, never an
+              agenda, and never override what you explicitly ask for.
+            </p>
 
-        {#each [
-          { key: 'active', title: 'Active', blurb: 'Shaping replies now.', list: grouped.active },
-          { key: 'dormant', title: 'Paused', blurb: 'Set aside while the pattern is quiet; may return.', list: grouped.dormant },
-          { key: 'retired', title: 'Let go', blurb: "Abandoned - not working, or no longer relevant. Kept for the record.", list: grouped.retired },
-        ] as section (section.key)}
-          {#if section.list.length > 0}
-            <section class="block">
-              <h2 class="block-title">{section.title}</h2>
-              <p class="block-blurb subtle">{section.blurb}</p>
+            {#if intentRows.length === 0}
+              <p class="empty">
+                No intentions yet. Nak reviews your patterns once a day and
+                forms an intention only when it sees a real, repeated one with
+                a way to help. Nothing here until then.
+              </p>
+            {:else}
+              <p class="headline">{activeHeadline(grouped.active.length)}</p>
 
-              {#each section.list as intent (intent.id)}
-                {@const view = efficacyView(intent)}
-                {@const parts = splitStatement(intent.statement)}
-                <article class="intent-card" class:retired={intent.status === 'retired'}>
-                  <p class="intent-statement">
-                    <!-- {' '} forces the gap between lead and clause: a
-                         literal space at the start of the {#if} block is
-                         stripped by Svelte whitespace trimming, which ran
-                         "...notice" into "when...". -->
-                    <strong class="intent-lead">{parts.lead}</strong>{#if parts.context}{' '}<em class="intent-context">{parts.context}</em>{/if}
-                  </p>
-                  <div class="intent-meta">
-                    <span class="target">{targetLabel(intent)}</span>
-                    <span class="badge badge-{view.state}" title={view.hint ?? ''}>
-                      {view.label}
-                    </span>
-                    <span class="when subtle">updated {formatRelative(intent.updated_at)}</span>
-                  </div>
-                  {#if reformed.has(intent.id)}
-                    <p class="intent-reformed subtle">{REFORMED_NOTE}</p>
-                  {/if}
-                  {#if view.hint}
-                    <p class="intent-hint subtle">{view.hint}</p>
-                  {/if}
-                  {#if intent.rationale}
-                    <p class="intent-rationale subtle">{intent.rationale}</p>
-                  {/if}
-                </article>
+              {#each [
+                { key: 'active', title: 'Active', blurb: 'Shaping replies now.', list: grouped.active },
+                { key: 'dormant', title: 'Paused', blurb: 'Set aside while the pattern is quiet; may return.', list: grouped.dormant },
+                { key: 'retired', title: 'Let go', blurb: "Abandoned - not working, or no longer relevant. Kept for the record.", list: grouped.retired },
+              ] as section (section.key)}
+                {#if section.list.length > 0}
+                  <section class="block">
+                    <h3 class="block-title">{section.title}</h3>
+                    <p class="block-blurb subtle">{section.blurb}</p>
+
+                    {#each section.list as intent (intent.id)}
+                      {@const view = efficacyView(intent)}
+                      {@const parts = splitStatement(intent.statement)}
+                      <article class="intent-card" class:retired={intent.status === 'retired'}>
+                        <p class="intent-statement">
+                          <!-- {' '} forces the gap between lead and clause: a
+                               literal space at the start of the {#if} block is
+                               stripped by Svelte whitespace trimming, which ran
+                               "...notice" into "when...". -->
+                          <strong class="intent-lead">{parts.lead}</strong>{#if parts.context}{' '}<em class="intent-context">{parts.context}</em>{/if}
+                        </p>
+                        <div class="intent-meta">
+                          <span class="target">{targetLabel(intent)}</span>
+                          <span class="badge badge-{view.state}" title={view.hint ?? ''}>
+                            {view.label}
+                          </span>
+                          <span class="when subtle">updated {formatRelative(intent.updated_at)}</span>
+                        </div>
+                        {#if reformed.has(intent.id)}
+                          <p class="intent-reformed subtle">{REFORMED_NOTE}</p>
+                        {/if}
+                        {#if view.hint}
+                          <p class="intent-hint subtle">{view.hint}</p>
+                        {/if}
+                        {#if intent.rationale}
+                          <p class="intent-rationale subtle">{intent.rationale}</p>
+                        {/if}
+                      </article>
+                    {/each}
+                  </section>
+                {/if}
               {/each}
-            </section>
+            {/if}
+          </section>
+        {/if}
+
+        <section class="feature">
+          <h2 class="feature-title">Follow-ups</h2>
+          <p class="feature-blurb subtle">
+            Questions Nak saved to ask you later - so it knows what it
+            doesn't know yet. It raises one when the moment is right and
+            closes it when you share how things went.
+          </p>
+
+          {#if followupRows.length === 0}
+            <p class="empty">
+              No follow-ups yet. When you share a plan or an upcoming
+              event, Nak can note a question to ask you about it later.
+            </p>
+          {:else}
+            <p class="headline">{followupsHeadline(followups.open.length)}</p>
+
+            {#if followups.open.length > 0}
+              <section class="block">
+                <h3 class="block-title">Waiting to ask</h3>
+                <p class="block-blurb subtle">Outcomes Nak doesn't know yet.</p>
+                {#each followups.open as loop (loop.id)}
+                  <article class="intent-card">
+                    <p class="intent-statement">
+                      <strong class="intent-lead">{loop.question}</strong>{#if loop.context}{' '}<em class="intent-context">{loop.context}</em>{/if}
+                    </p>
+                    <div class="intent-meta">
+                      <span class="badge">{openStatusChip(loop)}</span>
+                      <span class="when subtle">updated {formatRelative(loop.updated_at)}</span>
+                    </div>
+                  </article>
+                {/each}
+              </section>
+            {/if}
+
+            {#if followups.answered.length > 0}
+              <section class="block">
+                <h3 class="block-title">Answered</h3>
+                <p class="block-blurb subtle">You told Nak how it went.</p>
+                {#each followups.answered as loop (loop.id)}
+                  <article class="intent-card retired">
+                    <p class="intent-statement">
+                      <strong class="intent-lead">{loop.question}</strong>
+                    </p>
+                    {#if loop.resolution}
+                      <p class="intent-rationale subtle">Outcome: {loop.resolution}</p>
+                    {/if}
+                    <div class="intent-meta">
+                      <span class="when subtle">answered {formatRelative(loop.updated_at)}</span>
+                    </div>
+                  </article>
+                {/each}
+              </section>
+            {/if}
+
+            {#if followups.letGo.length > 0}
+              <section class="block">
+                <h3 class="block-title">Let go</h3>
+                <p class="block-blurb subtle">
+                  Dropped without an answer - you waved it off, or it went
+                  stale. Kept for the record.
+                </p>
+                {#each followups.letGo as loop (loop.id)}
+                  <article class="intent-card retired">
+                    <p class="intent-statement">
+                      <strong class="intent-lead">{loop.question}</strong>
+                    </p>
+                    <div class="intent-meta">
+                      <span class="when subtle">{formatRelative(loop.updated_at)}</span>
+                    </div>
+                  </article>
+                {/each}
+              </section>
+            {/if}
           {/if}
-        {/each}
+        </section>
       {/if}
     </div>
   </div>
@@ -222,6 +328,30 @@
     min-width: 0;
   }
 
+  /* One .feature block per hosted feature (intentions, follow-ups),
+     separated by a rule so the normative-goals / pending-questions line
+     stays visually legible inside the shared modal. */
+  .feature {
+    margin: 0 0 1.75rem;
+  }
+
+  .feature + .feature {
+    border-top: 1px solid var(--border);
+    padding-top: 1.25rem;
+  }
+
+  .feature-title {
+    font-size: 1rem;
+    margin: 0 0 0.25rem;
+    color: var(--text);
+  }
+
+  .feature-blurb {
+    margin: 0 0 0.9rem;
+    font-size: 0.82rem;
+    line-height: 1.45;
+  }
+
   .headline {
     margin: 0 0 1rem;
     font-size: 0.95rem;
@@ -253,8 +383,8 @@
     background: var(--bg-1);
   }
 
-  /* Retired intents are history, dimmed so the eye lands on what is
-     active first. */
+  /* Retired intents and closed follow-ups are history, dimmed so the
+     eye lands on what is live first. */
   .intent-card.retired {
     opacity: 0.62;
   }
@@ -269,7 +399,8 @@
   /* Split the statement so the eye lands on WHAT Nak inclines toward
      (bold lead) before the situational WHEN clause (italic context).
      Both keep the statement color - this is the card headline, distinct
-     from the dimmer italic rationale below. */
+     from the dimmer italic rationale below. Follow-up cards reuse the
+     split: question bold, seeding context italic. */
   .intent-lead {
     font-weight: 600;
   }

@@ -99,6 +99,15 @@ gather (never inferred by the smoothing model):
   the reflection prompt.
 - `supabase/functions/_shared/embed-input.ts` - the `followups`
   entry in `EMBED_SOURCES` (`buildFollowupEmbedInput`).
+- `src/lib/ui/followups-inspector.ts` +
+  `src/screens/Intents.svelte` - the read-only inspector: the
+  follow-ups section of the shared seedling modal (grouping,
+  the open-card status chip, headlines, the intents-off title),
+  fed by `listFollowups()` in `src/lib/supabase.ts`. The
+  seedling pill (`src/lib/ui/diagnostic-pills.ts`) is always
+  present because of this section; the intents toggle only
+  switches its copy. See
+  [`diagnostic-pills.md`](./diagnostic-pills.md).
 
 ## Data model
 
@@ -246,6 +255,9 @@ written BEFORE the implementation:
   so the post-feature run has its comparison point.
 - [`followup-date-due`](../qa/use-cases/followup-date-due.md) - the
   off-topic due ask, the cooldown, expiry.
+- [`followup-inspector`](../qa/use-cases/followup-inspector.md) -
+  the always-present seedling pill and the follow-ups section of
+  the shared inspector modal.
 
 ## Interactions
 

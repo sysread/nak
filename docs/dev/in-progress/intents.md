@@ -113,14 +113,20 @@
     seedling pill (the `intents` entry in the shared
     diagnostic-pill column, `src/lib/ui/diagnostic-pills.ts`,
     rendered on both the desktop column and the mobile wharf by
-    `src/components/DiagnosticPills.svelte`, gated on
-    `app.intentsEnabled`) opens a modal
+    `src/components/DiagnosticPills.svelte`) opens a modal
     (`src/screens/Intents.svelte`, route `modal: 'intents'`)
     that lists the user's intents grouped active / paused / let
     go, each with its target, an honest efficacy read, and the
-    rationale. All logic is in the tested primitives
+    rationale. The modal is SHARED with the follow-ups feature
+    (see `docs/dev/followups.md`): the pill is always present
+    (follow-ups exist for every account), and the
+    working-intentions section renders only when
+    `app.intentsEnabled` - the toggle gates the section and the
+    pill copy, no longer the pill's presence. All intents logic
+    is in the tested primitives
     (`src/lib/ui/intents-inspector.ts`); the data read is
-    `listIntents()`. No write controls - the minter owns the set.
+    `listIntents()`, fetched only when the toggle is on. No
+    write controls - the minter owns the set.
     A retired intent whose statement matches a still-live (active
     or dormant) one is suppressed from "Let go" and the live card
     is flagged "reconsidered" (`reformedIds` + `REFORMED_NOTE`),

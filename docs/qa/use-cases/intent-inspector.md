@@ -1,17 +1,27 @@
 # Intent inspector: the pill, the modal, the read-only surfacing
 
+> **Behavior change (post first execution):** the seedling pill is
+> no longer gated on `app.intentsEnabled` - the modal now also hosts
+> the follow-ups section
+> ([followup-inspector](./followup-inspector.md)), which every
+> account has, so the pill is always present and the toggle switches
+> only its copy and whether the Working intentions SECTION renders.
+> The 2026-06-25 pass below is the pre-change baseline; steps 1-2
+> and expectations 1-3 describe the new behavior and need a fresh
+> execution.
+
 ## Covers
 
 The read-only "surfaced" surface of intents
 ([dev: intents](../../dev/in-progress/intents.md)): the seedling
 pill (the `intents` entry in the shared diagnostic-pill column,
-`src/lib/ui/diagnostic-pills.ts`, gated on `app.intentsEnabled`), the
-inspector modal (`Intents.svelte`, route `modal: 'intents'`)
-listing intents grouped active / paused / let-go via the
-`listIntents()` read, and the honest label primitives in
-`src/lib/ui/intents-inspector.ts`. Proves the user can SEE what
-Nak is working toward but cannot edit it, and that the pill is
-absent for the off-by-default majority.
+`src/lib/ui/diagnostic-pills.ts`, always present), the intents
+section of the shared inspector modal (`Intents.svelte`, route
+`modal: 'intents'`) listing intents grouped active / paused /
+let-go via the `listIntents()` read, and the honest label
+primitives in `src/lib/ui/intents-inspector.ts`. Proves the user
+can SEE what Nak is working toward but cannot edit it, and that
+the off-by-default majority sees no intentions section at all.
 
 ## Preconditions
 
@@ -30,14 +40,13 @@ absent for the off-by-default majority.
 
 ## Steps
 
-1. **Pill hidden when off.** Ensure the toggle is off
+1. **Section hidden when off.** Ensure the toggle is off
    (`update profiles set settings = settings - 'intentsEnabled' where user_id = '$UID';`),
-   reload the chat view, and look at the bottom-right pill column.
-2. **Pill appears when on.** Settings -> AI -> check "Working
-   intentions". Return to chat; look at the bottom of the pill column
-   (below the samskara mood pill, directly above the scroll-to-bottom
-   arrow). On a narrow viewport, open the diagnostics menu instead -
-   the intents tile is the last entry there.
+   reload the chat view, hover the seedling pill, and open it.
+2. **Section appears when on.** Settings -> AI -> check "Working
+   intentions". Return to chat; hover the seedling pill again (bottom
+   of the pill column, directly above the scroll-to-bottom arrow; on
+   a narrow viewport it is the last tile in the diagnostics menu).
 3. **Open the inspector.** Click the seedling pill.
 4. **Read the groups.** Confirm the three sections and the per-card
    content.
@@ -47,19 +56,20 @@ absent for the off-by-default majority.
 
 ## Expected
 
-- (1) With intents OFF, no seedling pill renders - the column starts
-  at the recall/bias pills as before. No `intents` query fires.
-- (2) With intents ON: on desktop the seedling pill (leaf glyph)
-  appears at the bottom of the bottom-right column (below the
-  samskara mood pill); the always-on pills shift up one slot to make
-  room so no gap opens above the scroll arrow. On mobile
-  (<=720px) the whole column is hidden, so the pill must NOT appear
+- (1) With intents OFF, the seedling pill STILL renders (it hosts
+  follow-ups), but its tooltip reads follow-ups-only ("View
+  follow-ups - questions Nak saved to ask you later") and the opened
+  modal is titled "Follow-ups" with NO Working intentions section
+  and no `intents` query fired.
+- (2) With intents ON: the pill tooltip covers both features, and on
+  mobile (<=720px) the column is hidden, so the pill must NOT appear
   there - it lives only as the matching tile in the composer
   diagnostics menu. (Regression guard: the intents pill once leaked
   onto mobile by being absent from the column's mobile-hide rule in
   `styles.css`.)
-- (3) The modal opens with the "Working intentions" header + the
-  read-only blurb. There are NO edit/delete controls anywhere.
+- (3) The modal opens titled "Working intentions & follow-ups" with
+  the read-only blurb and a "Working intentions" section above the
+  follow-ups section. There are NO edit/delete controls anywhere.
 - (4) Three sections render in order - **Active** (the two active
   rows), **Paused** (the dormant row), **Let go** (the retired row,
   visually dimmed). Each card shows: the statement; a target label

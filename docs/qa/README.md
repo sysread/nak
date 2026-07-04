@@ -93,9 +93,9 @@ One file per use-case under [`use-cases/`](./use-cases/), named
   intentions" system-prompt block after the bias appendix under the
   shared cap, and the `intent_active_at_turn` snapshot.
 - [intent-inspector](./use-cases/intent-inspector.md) - the read-only
-  surfacing: the toggle-gated seedling pill, the inspector modal's
-  active/paused/let-go grouping, the honest efficacy labels, and the
-  empty state.
+  surfacing: the always-present seedling pill (copy and section
+  toggle-gated), the shared modal's active/paused/let-go grouping,
+  the honest efficacy labels, and the empty state.
 - [intent-employment](./use-cases/intent-employment.md) - the
   settled-thread judge: the toggle/day-gated claim, the per-intention
   opening/acted/reaction writes to `intent_employments`, the
@@ -112,6 +112,9 @@ One file per use-case under [`use-cases/`](./use-cases/), named
 - [followup-date-due](./use-cases/followup-date-due.md) - the
   date-due off-topic ask at thread open, the surfacing cooldown, and
   expiry.
+- [followup-inspector](./use-cases/followup-inspector.md) - the
+  always-present seedling pill, the follow-ups section of the shared
+  inspector modal (groups + status chips), and the intents-off shape.
 - [priming-disconnect-survival](./use-cases/priming-disconnect-survival.md)
   - proves turn-entry priming runs server-side under `waitUntil`: a turn
   whose tab closes mid-priming comes back fully primed, and the spinner
