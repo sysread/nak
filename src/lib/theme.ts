@@ -1,12 +1,14 @@
 /**
- * Theme tokens for the app. Two concerns are tracked independently:
+ * Theme tokens for the app. Three concerns are tracked independently:
  *
  *   colorMode : light | dark | system   (how the background looks)
  *   accent    : blue | green | ... | red  (the tint on buttons, links, etc.)
+ *   uiStyle   : soft | terminal         (rounded cards vs. square ANSI look)
  *
- * The CSS uses two attributes on <html>:
+ * The CSS uses three attributes on <html>:
  *   [data-theme='light' | 'dark']
  *   [data-accent='<accent>']
+ *   [data-style='soft' | 'terminal']
  *
  * Colors are chosen so each accent has a dark-mode pastel variant AND a
  * light-mode sharp variant — switching modes preserves the "same" color
@@ -17,8 +19,10 @@
 export type ColorMode = 'light' | 'dark' | 'system';
 export type EffectiveMode = 'light' | 'dark';
 export type Accent = 'blue' | 'green' | 'purple' | 'orange' | 'red';
+export type UiStyle = 'soft' | 'terminal';
 
 export const MODES: readonly ColorMode[] = ['system', 'light', 'dark'];
+export const STYLES: readonly UiStyle[] = ['soft', 'terminal'];
 export const ACCENTS: readonly Accent[] = [
   'blue',
   'green',
@@ -29,12 +33,24 @@ export const ACCENTS: readonly Accent[] = [
 
 export const DEFAULT_MODE: ColorMode = 'system';
 export const DEFAULT_ACCENT: Accent = 'blue';
+export const DEFAULT_STYLE: UiStyle = 'soft';
 
 /** Human labels for UI. */
 export const MODE_LABELS: Record<ColorMode, string> = {
   system: 'System',
   light: 'Light',
   dark: 'Dark',
+};
+
+export const STYLE_LABELS: Record<UiStyle, string> = {
+  soft: 'Soft',
+  terminal: 'Terminal',
+};
+
+/** One-line descriptions under each style option in Settings. */
+export const STYLE_DESCRIPTIONS: Record<UiStyle, string> = {
+  soft: 'rounded corners and soft shadows',
+  terminal: 'square corners, flat ANSI-era panels',
 };
 
 export const ACCENT_LABELS: Record<Accent, string> = {
@@ -62,6 +78,10 @@ export function isAccent(v: unknown): v is Accent {
   return typeof v === 'string' && (ACCENTS as readonly string[]).includes(v);
 }
 
+export function isUiStyle(v: unknown): v is UiStyle {
+  return v === 'soft' || v === 'terminal';
+}
+
 /** Resolve `system` to the actual preferred mode via matchMedia. */
 export function effectiveMode(mode: ColorMode): EffectiveMode {
   if (mode === 'light' || mode === 'dark') return mode;
@@ -69,36 +89,40 @@ export function effectiveMode(mode: ColorMode): EffectiveMode {
   return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
-/** Write the two data attributes onto <html> so CSS can react. */
-export function applyTheme(mode: ColorMode, accent: Accent): void {
+/** Write the three data attributes onto <html> so CSS can react. */
+export function applyTheme(mode: ColorMode, accent: Accent, style: UiStyle): void {
   if (typeof document === 'undefined') return;
   const root = document.documentElement;
   root.setAttribute('data-theme', effectiveMode(mode));
   root.setAttribute('data-accent', accent);
+  root.setAttribute('data-style', style);
 }
 
 const CACHE_KEY = 'nak:theme:v1';
 
 /**
- * Cache the user's picked mode+accent locally. Used by the inline boot
- * script in index.html to avoid a flash-of-wrong-theme on next load before
- * Supabase settles. Non-sensitive — just two enum values.
+ * Cache the user's picked mode+accent+style locally. Used by the inline
+ * boot script in index.html to avoid a flash-of-wrong-theme on next load
+ * before Supabase settles. Non-sensitive — just three enum values.
  */
-export function cacheTheme(mode: ColorMode, accent: Accent): void {
+export function cacheTheme(mode: ColorMode, accent: Accent, style: UiStyle): void {
   try {
-    localStorage.setItem(CACHE_KEY, `${mode}|${accent}`);
+    localStorage.setItem(CACHE_KEY, `${mode}|${accent}|${style}`);
   } catch {
     // quota / private mode — treat as no-op
   }
 }
 
-export function readCachedTheme(): { mode: ColorMode; accent: Accent } | null {
+export function readCachedTheme(): { mode: ColorMode; accent: Accent; style: UiStyle } | null {
   try {
     const raw = localStorage.getItem(CACHE_KEY);
     if (!raw) return null;
-    const [mode, accent] = raw.split('|');
+    // Caches written before the style axis existed carry only two
+    // fields; treat the missing third as the default rather than
+    // discarding the whole cache.
+    const [mode, accent, style] = raw.split('|');
     if (!isColorMode(mode) || !isAccent(accent)) return null;
-    return { mode, accent };
+    return { mode, accent, style: isUiStyle(style) ? style : DEFAULT_STYLE };
   } catch {
     return null;
   }

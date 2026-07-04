@@ -30,7 +30,7 @@ import {
   NO_PRICE_CAPS,
   type ModelPriceCaps,
 } from '../models/price-caps';
-import { isAccent, isColorMode } from '../theme';
+import { isAccent, isColorMode, isUiStyle } from '../theme';
 import { isLogLevel } from '../logger.svelte';
 
 /**
@@ -139,6 +139,10 @@ export async function updateSettings(
   if ('accent' in patch) {
     if (patch.accent === undefined) toRemove.push('accent');
     else if (isAccent(patch.accent)) toSet.accent = patch.accent;
+  }
+  if ('uiStyle' in patch) {
+    if (patch.uiStyle === undefined) toRemove.push('uiStyle');
+    else if (isUiStyle(patch.uiStyle)) toSet.uiStyle = patch.uiStyle;
   }
   if ('systemPrompts' in patch) {
     if (patch.systemPrompts === undefined) toRemove.push('systemPrompts');

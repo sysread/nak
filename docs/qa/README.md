@@ -237,3 +237,8 @@ One file per use-case under [`use-cases/`](./use-cases/), named
 - [auth-session-lifecycle](./use-cases/auth-session-lifecycle.md) - the
   Supabase auth gate, sign in/up toggle, sign out reset, and session
   restore on reload.
+- [appearance-terminal-style](./use-cases/appearance-terminal-style.md) -
+  the terminal UI style: the Style picker's live apply, `data-style`
+  on `<html>`, square/flat/borderless rendering with side-border chat
+  bubbles in both color modes, boot-cache reload (including legacy
+  two-field blobs), and Supabase sync of `uiStyle`.

@@ -23,10 +23,12 @@
           var raw = localStorage.getItem('nak:theme:v1');
           var mode = 'system';
           var accent = 'blue';
+          var style = 'soft';
           if (raw) {
             var parts = raw.split('|');
             if (parts[0] === 'light' || parts[0] === 'dark' || parts[0] === 'system') mode = parts[0];
             if (parts[1]) accent = parts[1];
+            if (parts[2] === 'terminal') style = parts[2];
           }
           var effective = mode;
           if (mode === 'system') {
@@ -35,9 +37,11 @@
           var root = document.documentElement;
           root.setAttribute('data-theme', effective);
           root.setAttribute('data-accent', accent);
+          root.setAttribute('data-style', style);
         } catch (e) {
           document.documentElement.setAttribute('data-theme', 'dark');
           document.documentElement.setAttribute('data-accent', 'blue');
+          document.documentElement.setAttribute('data-style', 'soft');
         }
       })();
     </script>
