@@ -93,9 +93,9 @@ One file per use-case under [`use-cases/`](./use-cases/), named
   intentions" system-prompt block after the bias appendix under the
   shared cap, and the `intent_active_at_turn` snapshot.
 - [intent-inspector](./use-cases/intent-inspector.md) - the read-only
-  surfacing: the toggle-gated seedling pill, the inspector modal's
-  active/paused/let-go grouping, the honest efficacy labels, and the
-  empty state.
+  surfacing: the always-present seedling pill (copy and section
+  toggle-gated), the shared modal's active/paused/let-go grouping,
+  the honest efficacy labels, and the empty state.
 - [intent-employment](./use-cases/intent-employment.md) - the
   settled-thread judge: the toggle/day-gated claim, the per-intention
   opening/acted/reaction writes to `intent_employments`, the
