@@ -33,22 +33,24 @@ Nak engages - never *what* you can ask for.
 
 ## Seeing them
 
-With intentions on, a **seedling pill** (the leaf icon) appears at the
-bottom of the bottom-right column in the chat view, just below the
-mood emoji and above the scroll-to-latest arrow; on a narrow screen
-it's the last tile in the diagnostics menu. Tapping it opens the
-**inspector** - a read-only view of what Nak is working toward,
-grouped into **Active** (shaping replies now), **Paused** (set aside
-while the pattern is quiet), and **Let go** (abandoned, kept for the
-record). Each intention is shown with its main lean in **bold** and the
+The **seedling pill** (the leaf icon) sits at the bottom of the
+bottom-right column in the chat view, just below the mood emoji and
+above the scroll-to-latest arrow; on a narrow screen it's the last
+tile in the diagnostics menu. It opens a shared inspector that also
+lists Nak's [follow-ups](./followups.md); with intentions on, a
+**Working intentions** section appears there too - a read-only view
+of what Nak is working toward, grouped into **Active** (shaping
+replies now), **Paused** (set aside while the pattern is quiet), and
+**Let go** (abandoned, kept for the record). Each intention is shown with its main lean in **bold** and the
 situational cue ("when they sound stuck") in *italic*, so the what and
 the when read apart at a glance. Each one also shows what it's trying to shift, an honest read of
 whether it's landing ("too new to tell", "landing", "not landing", or
 "open-ended" for ones with no measurable target), and why Nak formed
 it. You can see everything; you can't hand-edit an intention - Nak
 manages the set itself, the same way it manages its
-[instincts](./samskara.md). The pill is hidden entirely until you turn
-the feature on.
+[instincts](./samskara.md). With the feature off, the pill and the
+inspector still exist (they carry follow-ups), but no intentions
+section appears and none are formed.
 
 If Nak lets a goal go and later takes it back up, the active card is
 marked **"reconsidered"** rather than appearing a second time under

@@ -129,6 +129,7 @@ import type {
   SamskaraFireDiagnosticRow,
 } from './supabase/types';
 import type { IntentRow } from './ui/intents-inspector';
+import type { FollowupInspectorRow } from './ui/followups-inspector';
 
 /**
  * The browser's single handle on the user's Supabase project. The
@@ -666,6 +667,26 @@ export class SupabaseService {
       .order('updated_at', { ascending: false });
     if (error) throw new SupabaseError(error.message);
     return (data ?? []) as IntentRow[];
+  }
+
+  /**
+   * Every followup row for the inspector (the follow-ups half of the
+   * seedling modal). Same read-only contract and same straggler status
+   * as listIntents above. Includes closed rows - the modal shows the
+   * history - capped so an old account's tail doesn't grow the payload
+   * unbounded; the cap comfortably exceeds what the grouped view
+   * renders legibly.
+   */
+  async listFollowups(): Promise<FollowupInspectorRow[]> {
+    const { data, error } = await this.client
+      .from('followups')
+      .select(
+        'id, question, context, status, relevant_after, resolution, created_at, updated_at',
+      )
+      .order('updated_at', { ascending: false })
+      .limit(100);
+    if (error) throw new SupabaseError(error.message);
+    return (data ?? []) as FollowupInspectorRow[];
   }
 
   // User wiki -------------------------------------------------------------

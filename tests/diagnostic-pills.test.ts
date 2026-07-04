@@ -53,12 +53,16 @@ describe('visibleDiagnosticPills presence', () => {
     ]);
   });
 
-  it('drops intents when the user has not opted in', () => {
+  it('keeps intents present when intents is off - the modal hosts follow-ups too', () => {
+    // The seedling pill stopped being intents-gated when follow-ups
+    // moved into the same modal: every account has follow-ups, so the
+    // pill holds its slot and only the copy changes (see below).
     expect(idsOf({ ...fullContext(), intentsEnabled: false })).toEqual([
       'recall',
       'intuition',
       'bias',
       'samskara',
+      'intents',
     ]);
   });
 
@@ -96,17 +100,17 @@ describe('visibleDiagnosticPills positioning', () => {
   });
 
   it('collapses an absent pill rather than leaving a gap', () => {
-    // Intents off: the always-on column drops one step and the lowest
-    // pill (samskara) sits flush at the base, no empty bottom slot.
+    // Samskara absent (new-chat screen): the column drops one step and
+    // the lowest pill (intents) sits flush at the base, no empty slot.
     const positioned = visibleDiagnosticPills({
       ...fullContext(),
-      intentsEnabled: false,
+      moodVisual: null,
     });
     expect(positioned.map((p) => [p.descriptor.id, p.bottom])).toEqual([
       ['recall', '11.1rem'],
       ['intuition', '8.6rem'],
       ['bias', '6.1rem'],
-      ['samskara', '3.6rem'],
+      ['intents', '3.6rem'],
     ]);
   });
 });
@@ -134,6 +138,16 @@ describe('descriptor label/enabled logic', () => {
 
   it('bias is always enabled', () => {
     expect(byId('bias').enabled({ ...fullContext(), recall: null })).toBe(true);
+  });
+
+  it('intents pill copy adapts to the intents toggle', () => {
+    const intents = byId('intents');
+    const on = fullContext();
+    const off = { ...fullContext(), intentsEnabled: false };
+    expect(intents.title(on)).toContain('working intentions and follow-ups');
+    expect(intents.title(off)).toContain('follow-ups');
+    expect(intents.title(off)).not.toContain('working intentions');
+    expect(intents.ariaLabel(off)).toBe('Open follow-ups inspector');
   });
 
   it('samskara derives glyph and label from the live mood', () => {

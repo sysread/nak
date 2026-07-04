@@ -48,10 +48,11 @@ export interface DiagnosticPillDescriptor {
   id: DiagnosticPillId;
   /** Diagnostics modal this pill opens via `navigate({ modal })`. */
   modal: Modal;
-  /** Whether the pill occupies a slot at all. recall/intuition/bias are
-   *  always present (recall/intuition merely render disabled when their
-   *  payload is missing); samskara is present only on an active thread;
-   *  intents only when the user opted in. */
+  /** Whether the pill occupies a slot at all. recall/intuition/bias/
+   *  intents are always present (recall/intuition merely render
+   *  disabled when their payload is missing; the intents pill hosts
+   *  follow-ups too, which every account has); samskara is present only
+   *  on an active thread. */
   present: (ctx: DiagnosticPillContext) => boolean;
   /** Whether the pill is interactive. A present-but-disabled pill still
    *  holds its slot but ignores clicks (no data to open yet). */
@@ -144,11 +145,21 @@ export const DIAGNOSTIC_PILLS: readonly DiagnosticPillDescriptor[] = [
   {
     id: 'intents',
     modal: 'intents',
-    present: (ctx) => ctx.intentsEnabled,
+    // Always present: the modal hosts follow-ups (pending questions Nak
+    // saved to ask later) for every account, alongside the opt-in
+    // working intentions. The copy adapts so a user who never enabled
+    // intents isn't promised a feature they don't have.
+    present: () => true,
     enabled: () => true,
     emoji: () => '\u{1F331}', // seedling
-    title: () => 'View working intentions - what Nak is working toward with you',
-    ariaLabel: () => 'Open working intentions inspector',
+    title: (ctx) =>
+      ctx.intentsEnabled
+        ? 'View working intentions and follow-ups - what Nak is working toward and waiting to hear about'
+        : 'View follow-ups - questions Nak saved to ask you later',
+    ariaLabel: (ctx) =>
+      ctx.intentsEnabled
+        ? 'Open working intentions and follow-ups inspector'
+        : 'Open follow-ups inspector',
   },
 ];
 

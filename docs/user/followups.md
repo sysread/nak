@@ -60,6 +60,19 @@ when you raise the topic.
 You can always ask "what were you going to ask me?" - Nak lists its
 open follow-ups, and recently closed ones with what it learned.
 
+## Seeing them
+
+The **seedling pill** (the leaf icon at the bottom of the
+bottom-right column in the chat view; the last tile in the
+diagnostics menu on a narrow screen) opens a read-only inspector of
+Nak's follow-ups: **Waiting to ask** (with when each will be raised -
+"ready to ask", "asking after Jul 6", or "when it comes up"),
+**Answered** (with the outcome you shared), and **Let go** (dropped
+without an answer). If you've turned on
+[working intentions](./intents.md), those appear in the same
+inspector, in their own section - both are notes Nak keeps to itself
+about the future.
+
 ## Notes
 
 - Follow-up surfacing rides the same machinery as

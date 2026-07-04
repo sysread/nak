@@ -112,6 +112,9 @@ One file per use-case under [`use-cases/`](./use-cases/), named
 - [followup-date-due](./use-cases/followup-date-due.md) - the
   date-due off-topic ask at thread open, the surfacing cooldown, and
   expiry.
+- [followup-inspector](./use-cases/followup-inspector.md) - the
+  always-present seedling pill, the follow-ups section of the shared
+  inspector modal (groups + status chips), and the intents-off shape.
 - [priming-disconnect-survival](./use-cases/priming-disconnect-survival.md)
   - proves turn-entry priming runs server-side under `waitUntil`: a turn
   whose tab closes mid-priming comes back fully primed, and the spinner
