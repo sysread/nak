@@ -34,6 +34,21 @@ The date axis and the anti-nag containment
 - Local stack up (`mise run dev-start`), signed in as the dev
   user (`dev@nak.local` / `devpass123`), context recall enabled.
 - Logs drawer open at Debug, source filter `context-recall`.
+- **Boundary rule for every step below**: the due pull runs only
+  when a context-recall refresh fires - `cold` (a FRESH thread's
+  first turn), a mood shift, or the stale fuse (8 rounds / 1h).
+  SQL edits to `relevant_after` are invisible to an existing
+  thread's cached payload until a boundary, so each "open a fresh
+  thread" step is load-bearing, not stylistic. If an expectation
+  fails, check the boundary fired before suspecting the pull: the
+  `context-recall pipeline complete` log line carries
+  `followupCount`, and the cached note is readable at
+
+  ```sql
+  select context_recall_payload->>'note'
+    from public.threads where id = '<THREAD_ID>';
+  ```
+
 - One due follow-up seeded (embedding not required for the due
   pull, but seed it early so the backfill lands anyway):
 

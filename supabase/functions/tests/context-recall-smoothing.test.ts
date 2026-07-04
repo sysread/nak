@@ -104,6 +104,7 @@ Deno.test('renderFollowupBlock labels the three epistemic states, uncited', () =
       context: 'Planned a ricotta lasagna for Saturday',
       state: 'pending',
       proactive: true,
+      surface_count: 1,
     },
     {
       id: 'f2',
@@ -111,6 +112,7 @@ Deno.test('renderFollowupBlock labels the three epistemic states, uncited', () =
       context: '',
       state: 'pending',
       proactive: false,
+      surface_count: 0,
     },
     {
       id: 'f3',
@@ -118,6 +120,7 @@ Deno.test('renderFollowupBlock labels the three epistemic states, uncited', () =
       context: 'Race is next month',
       state: 'upcoming',
       proactive: false,
+      surface_count: 0,
     },
   ]);
   assertEquals(

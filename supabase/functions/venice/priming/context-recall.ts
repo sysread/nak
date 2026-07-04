@@ -98,6 +98,10 @@ export interface ContextIndexFollowup {
   context: string;
   state: 'upcoming' | 'pending';
   proactive: boolean;
+  // Carried so the post-smoothing ledger stamp can increment without a
+  // re-read; never rendered. 0 on semantic rows (only proactive rows
+  // are ever stamped).
+  surface_count: number;
 }
 
 export interface ContextIndex {
@@ -208,6 +212,17 @@ export async function runContextRecallPipeline(
   }
 
   if (signal?.aborted) return null;
+
+  // Stamp the follow-up ask ledger only now - after smoothing produced
+  // a non-empty note that this turn will actually inject. Stamping at
+  // gather time (the original shape) counted a surfacing even when the
+  // smoothing call failed or returned empty, so a flaky smoothing path
+  // could burn a loop's whole ask budget (MAX_UNANSWERED_SURFACINGS)
+  // and expire it without the user ever being asked once. Best-effort:
+  // a failed stamp costs one extra ask, never the turn.
+  if (note.length > 0) {
+    await stampFollowupLedger(opts, index.followups);
+  }
 
   const payload: ContextRecallPayload = {
     v: 2,
@@ -595,6 +610,7 @@ async function gatherFollowups(
       context: row.context,
       state: 'pending',
       proactive: true,
+      surface_count: row.surface_count,
     });
   }
   for (const hit of semantic) {
@@ -607,47 +623,68 @@ async function gatherFollowups(
       context: hit.context,
       state: Number.isFinite(at) && at > nowMs ? 'upcoming' : 'pending',
       proactive: false,
+      surface_count: 0,
     });
   }
 
-  // Ledger + expiry writes, after selection. Two devices racing here
-  // can lose an increment (read-modify-write, no atomic RPC); the cost
-  // is one extra ask before the cooldown or expiry catches up, which
-  // is not worth a coordination primitive. PromiseLike because the
-  // supabase-js builder is a thenable, not a real Promise.
-  const writes: PromiseLike<unknown>[] = [];
-  for (const row of due) {
-    writes.push(
-      admin
+  // Expiry flips at gather time - it is a policy judgment about the
+  // row, not about this turn's delivery. The ASK LEDGER deliberately
+  // does NOT stamp here: the pipeline stamps it after the smoothing
+  // pass ships a non-empty note (see runContextRecallPipeline), so a
+  // failed or empty smoothing never burns ask budget.
+  if (expiredIds.length > 0) {
+    const { error } = await admin
+      .from('followups')
+      .update({ status: 'expired', updated_at: nowIso })
+      .in('id', expiredIds)
+      .eq('user_id', userId)
+      .eq('status', 'open');
+    if (error) log.warn('followup expiry flip failed', error);
+  }
+
+  return out;
+}
+
+/**
+ * Increment the ask ledger for the follow-ups the date-due pull
+ * surfaced this round. Called by the pipeline only after a non-empty
+ * note exists - a surfacing counts when it ships, not when it is
+ * gathered. Semantic rows (proactive=false) are never stamped: topical
+ * surfacing is not an ask-prompt, so it must not consume ask budget.
+ * Best-effort: errors are logged and swallowed (a lost stamp costs one
+ * extra ask before cooldown/expiry catches up; two devices racing the
+ * read-modify-write can likewise lose an increment - accepted, not
+ * worth a coordination primitive).
+ */
+async function stampFollowupLedger(
+  opts: Pick<RunContextRecallOptions, 'admin' | 'userId' | 'nowMs' | 'log'>,
+  followups: readonly ContextIndexFollowup[],
+): Promise<void> {
+  const proactive = followups.filter((f) => f.proactive);
+  if (proactive.length === 0) return;
+  const nowIso = new Date(opts.nowMs).toISOString();
+  await Promise.all(
+    proactive.map((row) =>
+      opts.admin
         .from('followups')
         .update({
           last_surfaced_at: nowIso,
           surface_count: row.surface_count + 1,
         })
         .eq('id', row.id)
-        .eq('user_id', userId)
+        .eq('user_id', opts.userId)
         .then(({ error }) => {
-          if (error) log.warn('followup ledger stamp failed', error);
+          if (error) opts.log.warn('followup ledger stamp failed', error);
         }),
-    );
-  }
-  if (expiredIds.length > 0) {
-    writes.push(
-      admin
-        .from('followups')
-        .update({ status: 'expired', updated_at: nowIso })
-        .in('id', expiredIds)
-        .eq('user_id', userId)
-        .eq('status', 'open')
-        .then(({ error }) => {
-          if (error) log.warn('followup expiry flip failed', error);
-        }),
-    );
-  }
-  await Promise.all(writes);
-
-  return out;
+    ),
+  );
 }
+
+// Test-only surface. The gather/stamp split is a timing contract - the
+// due pull must not consume ask budget unless a note actually ships -
+// so both halves get offline coverage with a scripted admin client in
+// supabase/functions/tests/followup-gather.test.ts.
+export const __test = { gatherFollowups, stampFollowupLedger };
 
 // Map article id -> set of source thread ids. Articles with no rows in
 // wiki_article_sources are absent from the map (orphans). RLS OFF on the

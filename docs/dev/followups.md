@@ -83,9 +83,11 @@ gather (never inferred by the smoothing model):
   `src/lib/tools/index.ts`; the hand-maintained name mirror in
   `supabase/functions/venice/tools/toggle_tools.ts`.
 - `supabase/functions/venice/priming/context-recall.ts` -
-  `gatherFollowups` (the fourth arm: due pull + semantic union,
-  ledger stamping, lazy expiry) and the `ContextIndexFollowup`
-  shape.
+  `gatherFollowups` (the fourth arm: due pull + semantic union +
+  lazy expiry) and `stampFollowupLedger` (the post-smoothing ask
+  stamp), plus the `ContextIndexFollowup` shape. The gather/stamp
+  timing contract is Deno-pinned in
+  `supabase/functions/tests/followup-gather.test.ts`.
 - `supabase/functions/venice/priming/context-recall-smoothing.ts` -
   the follow-up rules in the smoothing system prompt and
   `renderFollowupBlock` (uncited, state-labelled).
@@ -113,11 +115,14 @@ One table, `followups`:
   topic comes up semantically, and never expires (its "outcome
   unknown" stays true until the user resolves it).
 - `resolution text` - stamped by `followup_close`. Audit only.
-- `last_surfaced_at` / `surface_count` - the anti-nag ledger,
-  written ONLY by the gather's date-due pull. Semantic surfacing is
-  not an ask-prompt, so it neither stamps the ledger nor counts
-  toward expiry. `followup_update` resets the ledger when it changes
-  `relevant_after` - a rescheduled plan has a fresh ask horizon.
+- `last_surfaced_at` / `surface_count` - the anti-nag ledger.
+  Written ONLY by `stampFollowupLedger`, which the pipeline calls
+  AFTER the smoothing pass ships a non-empty note - a surfacing
+  counts when it is delivered, not when it is gathered (see
+  Gotchas). Semantic surfacing is not an ask-prompt, so it neither
+  stamps the ledger nor counts toward expiry. `followup_update`
+  resets the ledger when it changes `relevant_after` - a rescheduled
+  plan has a fresh ask horizon.
 - `embedding` + model + claim columns - rides the standard backfill
   (see [`embeddings.md`](./embeddings.md)).
 
@@ -196,6 +201,27 @@ Two hazards this split creates, both guarded:
   the numbered source list - there is no drill-down tool behind
   them; question and context ride verbatim. The `^N^` citation
   machinery and the Recall modal's citation rows are untouched.
+- **Due asks surface only at refresh boundaries.** The gather runs
+  when a context-recall trigger fires: `cold` (a thread with no
+  cached payload - i.e. a NEW thread), a mood shift, or the stale
+  fuse (8 user-rounds / 1h). Between boundaries the cached note is
+  re-injected as-is. Two consequences: (a) a loop that becomes due
+  mid-thread will not be asked about until the next boundary in
+  that thread - the reliable moment for the ask is the next
+  thread-open, which is the designed behavior; (b) when QA-forging
+  state via SQL (making a loop due by editing `relevant_after`),
+  the edit is invisible until a boundary - open a FRESH thread to
+  force a `cold` fire, don't keep messaging an existing one and
+  conclude the pull is broken.
+- **The ask ledger stamps on delivery, not on gather.**
+  `stampFollowupLedger` runs after the smoothing pass returns a
+  non-empty note. If it stamped at gather time, a smoothing failure
+  (pipeline returns null, prior cache kept) or an empty model
+  output would consume ask budget for an ask that never reached a
+  prompt - a flaky smoothing path could burn all
+  `MAX_UNANSWERED_SURFACINGS` slots and expire a loop the user was
+  never asked about. Expiry still flips at gather time: it is a
+  policy judgment about the row, not about this turn's delivery.
 - **The ledger increment can race.** Two devices priming
   concurrently do a read-modify-write on `surface_count` with no
   atomic RPC; a lost increment costs one extra ask before cooldown
