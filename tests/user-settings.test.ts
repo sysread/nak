@@ -88,16 +88,17 @@ describe('coerceSettings', () => {
   });
 
   it('passes through valid theme fields', () => {
-    expect(coerceSettings({ colorMode: 'light', accent: 'red' })).toEqual({
+    expect(coerceSettings({ colorMode: 'light', accent: 'red', uiStyle: 'terminal' })).toEqual({
       colorMode: 'light',
       accent: 'red',
+      uiStyle: 'terminal',
     });
     expect(coerceSettings({ colorMode: 'system' })).toEqual({ colorMode: 'system' });
   });
 
   it('drops bad theme values', () => {
-    expect(coerceSettings({ colorMode: 'neon', accent: 'chartreuse' })).toEqual({});
-    expect(coerceSettings({ colorMode: null, accent: 123 })).toEqual({});
+    expect(coerceSettings({ colorMode: 'neon', accent: 'chartreuse', uiStyle: 'crt' })).toEqual({});
+    expect(coerceSettings({ colorMode: null, accent: 123, uiStyle: 7 })).toEqual({});
   });
 
   it('mixes image-model + theme fields correctly', () => {

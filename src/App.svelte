@@ -33,7 +33,7 @@
     // Make sure the inline boot script's attributes reflect the current
     // reactive state (they should already match via cached theme, but this
     // keeps Svelte and the DOM in sync on first paint).
-    applyTheme(app.colorMode, app.accent);
+    applyTheme(app.colorMode, app.accent, app.uiStyle);
 
     // Register the service worker and start polling for new builds. Has
     // to run after mount (not at module top level) so tests that import
@@ -44,7 +44,7 @@
     // When mode === 'system', follow OS changes live.
     const media = window.matchMedia('(prefers-color-scheme: dark)');
     const onSystemChange = (): void => {
-      if (app.colorMode === 'system') setTheme('system', app.accent);
+      if (app.colorMode === 'system') setTheme('system', app.accent, app.uiStyle);
     };
     media.addEventListener('change', onSystemChange);
 

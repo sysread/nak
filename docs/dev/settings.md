@@ -21,7 +21,8 @@ landing tab move together.
   values come from `$lib/update.svelte` which Vite populates at
   build time via `define`. See `./build-deploy.md` for the
   version-detection pipeline.
-- **Appearance** — color mode + accent, plus the default log
+- **Appearance** — color mode + accent + UI style (soft vs.
+  terminal), plus the default log
   level for the Logs drawer. Theme controls live-apply on click
   (no Save button); they mirror to `profiles.settings` (and
   localStorage for the boot script).
@@ -296,8 +297,8 @@ every update) so it's covered here rather than in its own file.
 - `src/lib/config.ts` — `saveConfig` (keys pane). The Security
   pane's password rotation lives in `supabase.ts`
   (`changeAuthPassword`), not here.
-- `src/lib/theme.ts` — `ColorMode`, `Accent`, `applyTheme`,
-  `cacheTheme`, `readCachedTheme`, `effectiveMode`.
+- `src/lib/theme.ts` — `ColorMode`, `Accent`, `UiStyle`,
+  `applyTheme`, `cacheTheme`, `readCachedTheme`, `effectiveMode`.
 - `index.html` — the inline boot script that applies cached
   theme attributes before first paint.
 
@@ -312,8 +313,8 @@ every update) so it's covered here rather than in its own file.
   inside the shell don't trigger close.
 - **AI pane save** — per-pane form submission. Each pane
   calls its own Supabase writer via `app.supabase.updateSettings`.
-- **Appearance live-apply** — `onPickMode` /
-  `onPickAccent` call `setTheme(mode, accent)` from the state
+- **Appearance live-apply** — `onPickMode` / `onPickAccent` /
+  `onPickStyle` call `setTheme(mode, accent, style)` from the state
   store, which updates DOM attributes + cache + reactive
   state synchronously, then fires
   `app.supabase.updateSettings` fire-and-forget for server
@@ -384,7 +385,8 @@ every update) so it's covered here rather than in its own file.
 
   `coerceSettings` in `supabase.ts` validates on read, dropping
   unknown / mistyped fields.
-- **`localStorage['nak:theme:v1']`** — `<mode>|<accent>`.
+- **`localStorage['nak:theme:v1']`** — `<mode>|<accent>|<style>`
+  (pre-style caches carry two fields; the reader defaults the third).
   Non-secret cache used by the inline boot script in
   `index.html` to avoid flash-of-wrong-theme on first paint.
 - **`localStorage['nak:config:v2']`** — plaintext JSON holding the
@@ -424,9 +426,11 @@ every update) so it's covered here rather than in its own file.
   the current password by re-signing in, then rotates the Supabase
   login via `updateUser`. This is the only password rotation left;
   the local config has none.
-- `applyTheme(mode, accent)` — writes two data attributes
-  (`data-theme`, `data-accent`) to `<html>`. CSS reacts via
-  attribute selectors.
+- `applyTheme(mode, accent, style)` — writes three data attributes
+  (`data-theme`, `data-accent`, `data-style`) to `<html>`. CSS
+  reacts via attribute selectors. The terminal style's CSS lives in
+  two `styles.css` sections: token overrides ("Terminal style") and
+  a small set of scoped rules ("Terminal style: component deltas").
 - `effectiveMode(mode)` — collapses `'system'` to `'light'` or
   `'dark'` via `matchMedia('(prefers-color-scheme: dark)')`.
 
@@ -434,7 +438,7 @@ every update) so it's covered here rather than in its own file.
 
 1. **Pre-paint boot** — the inline script in `index.html` reads
    `nak:theme:v1`, parses it, and writes `data-theme` +
-   `data-accent` to `<html>` before any CSS loads. This
+   `data-accent` + `data-style` to `<html>` before any CSS loads. This
    prevents flash-of-wrong-theme on refresh.
 2. **Reactive seed** — `state.svelte.ts` reads the same cache
    via `readCachedTheme()` into `app.colorMode` / `app.accent`.

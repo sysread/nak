@@ -163,6 +163,66 @@
 :root[data-theme='light'][data-accent='orange'] { --accent: #c2410c; --accent-weak: #ffedd5; }
 :root[data-theme='light'][data-accent='red']    { --accent: #b91c1c; --accent-weak: #fee2e2; }
 
+/* ---------- Terminal style ----------
+   Third theme axis: [data-style='soft' | 'terminal'], orthogonal to
+   data-theme and data-accent (see src/lib/theme.ts). Terminal recreates
+   the ANSI-era look: 90-degree corners, no boxes around cards, flat
+   panels separated by contrasting fills instead of hairlines. Everything
+   here is token overrides; the handful of component-level deltas (side
+   bars on chat bubbles, input fills) live in the "Terminal style:
+   component deltas" section at the bottom of this file. */
+
+:root[data-style='terminal'] {
+  --radius-xs: 0;
+  --radius-sm: 0;
+  --radius-md: 0;
+  --radius: 0;
+  --radius-lg: 0;
+  --radius-xl: 0;
+  --radius-pill: 0;
+  /* --radius-round is deliberately NOT zeroed: it marks true circles -
+     spinners and status dots. A rotating square reads as a glitch, not
+     a spinner, and a round dot at that size reads as a text bullet,
+     which is authentic terminal furniture anyway. */
+  /* Flat panels: no depth shadows. Floating layers (modals, popovers,
+     menus) sit over content, so they keep a crisp 1px outline - the
+     CSS equivalent of a TUI dialog's box-drawing edge. The outline
+     color is set per theme below. */
+  --shadow-modal: 0 0 0 1px var(--edge);
+  --shadow-pop: 0 0 0 1px var(--edge);
+  --shadow-menu: 0 0 0 1px var(--edge);
+  --bevel-hi: transparent;
+  --bevel-lo: transparent;
+  /* No boxes: hairline borders vanish. Transparent rather than a width
+     of 0 so every bordered element keeps its reserved pixel and nothing
+     shifts when the user flips styles. Separation comes from the
+     stepped surface fills below. */
+  --border: transparent;
+}
+
+:root[data-theme='dark'][data-style='terminal'] {
+  /* True black console. The surface steps are wider apart than the
+     soft theme's because, with borders gone, the fill difference is
+     the only thing delineating sidebar / page / cards. Neutral greys -
+     the soft theme's blue cast reads as "modern app", not phosphor. */
+  --bg: #000000;
+  --bg-2: #121212;
+  --surface: #1c1c1c;
+  --text: #e0e0e0;
+  --muted: #909090; /* >= 4.5:1 (WCAG AA) on all three surfaces */
+  --edge: #3c3c3c; /* outline for floating layers, see --shadow-* above */
+}
+
+:root[data-theme='light'][data-style='terminal'] {
+  /* Paper-white console. Same widened-steps reasoning as dark. */
+  --bg: #ffffff;
+  --bg-2: #ebebeb;
+  --surface: #f4f4f4;
+  --text: #111111;
+  --muted: #4f4f4f; /* >= 4.5:1 (WCAG AA) on all three surfaces */
+  --edge: #b4b4b4;
+}
+
 /* Body-level glyph thickener. Lekton ships only 400 and 700 TTFs
    (see @font-face above; the pixel-bitmap predecessor was retired
    precisely to avoid synthesized faux-bold), so reaching for
@@ -4331,4 +4391,39 @@ button.top-bar-overflow-btn {
        max-height would clamp `height: 100dvh` back below the viewport. */
     max-height: none;
   }
+}
+
+/* ---------- Terminal style: component deltas ----------
+   The token overrides near the top of this file (see "Terminal style")
+   do most of the work; these are the few places where the terminal look
+   needs more than a token can express. Kept together so the whole style
+   is auditable in two places. All selectors are prefixed with
+   :root[data-style='terminal'] so they outrank the per-theme rules they
+   adjust (attribute + descendant beats the base selectors, and source
+   order settles ties against :root[data-theme] prefixed rules above). */
+
+/* Side-border cards (the OpenCode idiom): with the box borders gone,
+   chat bubbles carry a single flat left bar - accent for the user's
+   words, muted for the assistant's, danger for errors. The bar rides
+   the existing 1px transparent border slot plus 1px, so the content
+   shifts a single pixel rather than jumping. */
+:root[data-style='terminal'] .msg.user {
+  border: 1px solid transparent;
+  border-left: 2px solid var(--accent);
+}
+:root[data-style='terminal'] .msg.assistant {
+  border-left: 2px solid var(--muted);
+}
+:root[data-style='terminal'] .msg.assistant.msg-error {
+  border-left-color: var(--danger);
+}
+
+/* Inputs default to the --bg-2 fill, which matches the sidebar's fill -
+   with hairlines transparent, a search box sitting on the sidebar would
+   be invisible until focused. Step inputs up to --surface so the fill
+   difference outlines them the same way it outlines cards. */
+:root[data-style='terminal'] input,
+:root[data-style='terminal'] textarea,
+:root[data-style='terminal'] select {
+  background: var(--surface);
 }

@@ -20,7 +20,7 @@ import type { SystemPrompt, UserSettings } from '../supabase';
 import { seedModelProfiles, type ModelProfile } from '../models';
 import type { ModelPriceCaps } from '../models/price-caps';
 import type { LogLevel } from '../logger.svelte';
-import { applyTheme, cacheTheme, type Accent, type ColorMode } from '../theme';
+import { applyTheme, cacheTheme, type Accent, type ColorMode, type UiStyle } from '../theme';
 
 // `set*` helpers are in-memory only: `applyServerSettings` calls them on
 // the load path, and each `persist*` wrapper calls them for its
@@ -179,11 +179,12 @@ function setMemoryLibrarianEnabled(enabled: boolean): void {
  * user-driven changes go through `persistTheme` so the persist +
  * rollback dance lives in one place.
  */
-export function setTheme(mode: ColorMode, accent: Accent): void {
+export function setTheme(mode: ColorMode, accent: Accent, style: UiStyle): void {
   app.colorMode = mode;
   app.accent = accent;
-  applyTheme(mode, accent);
-  cacheTheme(mode, accent);
+  app.uiStyle = style;
+  applyTheme(mode, accent, style);
+  cacheTheme(mode, accent, style);
 }
 
 // --- Transactional persist helpers --------------------------------
@@ -403,15 +404,16 @@ export async function persistDisplayTimezone(tz: string): Promise<void> {
   }
 }
 
-export async function persistTheme(mode: ColorMode, accent: Accent): Promise<void> {
+export async function persistTheme(mode: ColorMode, accent: Accent, style: UiStyle): Promise<void> {
   if (!app.supabase) throw new Error(NOT_CONNECTED);
   const prevMode = app.colorMode;
   const prevAccent = app.accent;
-  setTheme(mode, accent);
+  const prevStyle = app.uiStyle;
+  setTheme(mode, accent, style);
   try {
-    await app.supabase.updateSettings({ colorMode: mode, accent });
+    await app.supabase.updateSettings({ colorMode: mode, accent, uiStyle: style });
   } catch (err) {
-    setTheme(prevMode, prevAccent);
+    setTheme(prevMode, prevAccent, prevStyle);
     throw err;
   }
 }
@@ -485,8 +487,8 @@ export function applyServerSettings(s: UserSettings): void {
   // carried over from a prior unlock or another tab.
   setUserName(s.userName ?? '');
   setUserLocation(s.userLocation ?? '');
-  if (s.colorMode || s.accent) {
-    setTheme(s.colorMode ?? app.colorMode, s.accent ?? app.accent);
+  if (s.colorMode || s.accent || s.uiStyle) {
+    setTheme(s.colorMode ?? app.colorMode, s.accent ?? app.accent, s.uiStyle ?? app.uiStyle);
   }
   setSystemPrompts(s.systemPrompts ?? []);
 }

@@ -9,7 +9,7 @@
  * `../../supabase.ts` so consumers keep importing from `$lib/supabase`.
  */
 import { coerceModelProfiles, type ModelProfile } from '../../models';
-import { isAccent, isColorMode, type Accent, type ColorMode } from '../../theme';
+import { isAccent, isColorMode, isUiStyle, type Accent, type ColorMode, type UiStyle } from '../../theme';
 import { isLogLevel, type LogLevel } from '../../logger.svelte';
 
 // --- appended verbatim from the original supabase.ts type block ---
@@ -64,6 +64,8 @@ export interface UserSettings {
   imageModel?: string;
   colorMode?: ColorMode;
   accent?: Accent;
+  /** UI shape style: rounded 'soft' (default when absent) or square 'terminal'. */
+  uiStyle?: UiStyle;
   /** Library of named system prompts the user can toggle per-thread. */
   systemPrompts?: SystemPrompt[];
   /**
@@ -210,6 +212,7 @@ export function coerceSettings(raw: unknown): UserSettings {
   }
   if (isColorMode(r.colorMode)) out.colorMode = r.colorMode;
   if (isAccent(r.accent)) out.accent = r.accent;
+  if (isUiStyle(r.uiStyle)) out.uiStyle = r.uiStyle;
   if (Array.isArray(r.systemPrompts)) {
     const prompts: SystemPrompt[] = [];
     for (const item of r.systemPrompts) {

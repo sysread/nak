@@ -126,12 +126,16 @@
   import {
     ACCENTS,
     MODES,
+    STYLES,
     ACCENT_LABELS,
     ACCENT_SWATCHES,
     MODE_LABELS,
+    STYLE_LABELS,
+    STYLE_DESCRIPTIONS,
     effectiveMode,
     type Accent,
     type ColorMode,
+    type UiStyle,
   } from '$lib/theme';
   import SecretInput from '../components/SecretInput.svelte';
   import ModelCombobox from '../components/ModelCombobox.svelte';
@@ -684,20 +688,22 @@
   // --- Appearance pane ---
   let colorMode = $state<ColorMode>(app.colorMode);
   let accent = $state<Accent>(app.accent);
+  let uiStyle = $state<UiStyle>(app.uiStyle);
   let defaultLogLevel = $state<LogLevel>(app.defaultLogLevel);
   let appearanceError = $state<string | null>(null);
   let appearanceInfo = $state<string | null>(null);
 
   // Apply selection live as the user clicks - no Save button needed.
-  // Theme has two axes (mode + accent), so each picker assembles the
-  // full pair and routes through the same persist helper.
+  // Theme has three axes (mode + accent + style), so each picker
+  // assembles the full triple and routes through the same persist
+  // helper.
   async function onPickMode(next: ColorMode): Promise<void> {
     const prevMode = colorMode;
     colorMode = next;
     appearanceError = null;
     appearanceInfo = null;
     try {
-      await persistTheme(next, accent);
+      await persistTheme(next, accent, uiStyle);
       appearanceInfo = 'Saved.';
     } catch (err) {
       colorMode = prevMode;
@@ -710,10 +716,23 @@
     appearanceError = null;
     appearanceInfo = null;
     try {
-      await persistTheme(colorMode, next);
+      await persistTheme(colorMode, next, uiStyle);
       appearanceInfo = 'Saved.';
     } catch (err) {
       accent = prevAccent;
+      appearanceError = err instanceof Error ? err.message : String(err);
+    }
+  }
+  async function onPickStyle(next: UiStyle): Promise<void> {
+    const prevStyle = uiStyle;
+    uiStyle = next;
+    appearanceError = null;
+    appearanceInfo = null;
+    try {
+      await persistTheme(colorMode, accent, next);
+      appearanceInfo = 'Saved.';
+    } catch (err) {
+      uiStyle = prevStyle;
       appearanceError = err instanceof Error ? err.message : String(err);
     }
   }
@@ -2087,6 +2106,23 @@
                   follows your OS (currently {effectiveMode('system')})
                 </span>
               {/if}
+            </button>
+          {/each}
+        </div>
+
+        <h3 class="pane-section">Style</h3>
+        <div class="form-row mode-picker">
+          {#each STYLES as st (st)}
+            <button
+              type="button"
+              class="mode-option"
+              class:selected={uiStyle === st}
+              onclick={() => onPickStyle(st)}
+            >
+              <strong>{STYLE_LABELS[st]}</strong>
+              <span class="subtle" style="display:block;font-size:0.78rem">
+                {STYLE_DESCRIPTIONS[st]}
+              </span>
             </button>
           {/each}
         </div>

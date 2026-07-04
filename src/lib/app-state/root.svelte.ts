@@ -36,9 +36,11 @@ import { seedModelProfiles, type ModelProfile } from '../models';
 import {
   DEFAULT_MODE,
   DEFAULT_ACCENT,
+  DEFAULT_STYLE,
   readCachedTheme,
   type Accent,
   type ColorMode,
+  type UiStyle,
 } from '../theme';
 import { DEFAULT_LOG_LEVEL, type LogLevel } from '../logger.svelte';
 
@@ -82,6 +84,7 @@ interface AppState {
   /** UI theme — seeded from localStorage cache, then from Supabase. */
   colorMode: ColorMode;
   accent: Accent;
+  uiStyle: UiStyle;
   /**
    * Default minimum level for the in-app Logs drawer. Seeded to
    * {@link DEFAULT_LOG_LEVEL} on activate(), then overwritten from
@@ -213,6 +216,7 @@ export const app = $state<AppState>({
   priceCaps: NO_PRICE_CAPS,
   colorMode: cachedTheme?.mode ?? DEFAULT_MODE,
   accent: cachedTheme?.accent ?? DEFAULT_ACCENT,
+  uiStyle: cachedTheme?.style ?? DEFAULT_STYLE,
   defaultLogLevel: DEFAULT_LOG_LEVEL,
   systemPrompts: [],
   emphasisMarkdown: false,

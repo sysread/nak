@@ -83,7 +83,7 @@ You can reach these pages two ways:
   what each pane controls.
 - [Models & reasoning](./models.md) — picking a model tier, reasoning
   effort, and the web-search toggle.
-- [Appearance](./appearance.md) — color modes and accent colors.
+- [Appearance](./appearance.md) — color modes, accent colors, and the soft/terminal UI style.
 
 ### Data & security
 
