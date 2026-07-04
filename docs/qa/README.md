@@ -102,7 +102,8 @@ One file per use-case under [`use-cases/`](./use-cases/), named
   efficacy-firewall check, and the minter consuming the telemetry.
 - [followup-capture](./use-cases/followup-capture.md) - *(planning
   draft; feature not built)* both follow-up writers (volitional
-  `followup_create`, reflection backfill) and the dedup between them.
+  `followup_create`, reflection backfill), the reschedule verb, the
+  reflection close backstop, and the dedup between the writers.
 - [followup-semantic-recall](./use-cases/followup-semantic-recall.md) -
   *(planning draft; its baseline arm is runnable NOW and reproduces
   the cross-conversation outcome hallucination)* the open loop riding

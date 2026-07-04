@@ -109,14 +109,49 @@ closed with a short `resolution` stamp.
    Semantic surfacing is NOT cooldown-gated - if the user brings
    the topic up, the unresolved status is always relevant.
 
-5. **Two writers, mirroring memory's two layers.** Volitional:
-   the chat model saves a follow-up mid-turn when the user shares
-   a plan or a dated event (this is the "model leaves itself a
+5. **Two writers, mirroring memory's two layers - and the same
+   two are the complete resolution surface.** Volitional: the
+   chat model saves a follow-up mid-turn when the user shares a
+   plan or a dated event (this is the "model leaves itself a
    reminder" ask that started this design). Subconscious: the
    reflection agent records unresolved plans it finds in settled
    threads, so capture doesn't depend on mid-turn volition. Both
-   dedup by searching existing open loops first; the same plan
-   discussed twice yields one row.
+   dedup before creating; the same plan discussed twice yields
+   one row.
+
+   Resolution detection needs no third party, because a
+   resolution can only ever ARRIVE through a conversation - the
+   user reports the outcome or nobody knows it. So the detection
+   points are exactly the transcript readers: the chat model
+   live (it asked and heard the answer - the primary close
+   path), and reflection on settled threads (the backstop for
+   resolutions that slipped through: the user volunteered the
+   outcome unprompted, the model failed to close, the write
+   toolbox was off). Reflection therefore carries all three
+   verbs (create / update / close).
+
+   **Deliberately NOT a dedicated follow-up agent.** A separate
+   resolver would duplicate reflection's entire coordination
+   apparatus (per-thread claim, day gate, catch-up sweep,
+   attempt cap) to make a second Venice pass over the same
+   settled transcripts; and minting vs resolving is one
+   portfolio judgment over the same context ("what does this
+   transcript say against the existing loops") - same reason the
+   intent minter owns all four portfolio verbs in one head.
+   Intents split their employment judge from their minter only
+   because of the efficacy firewall; follow-ups have no
+   posterior and nothing to self-grade, so no firewall forces a
+   split here.
+
+   **Single background writer.** Reflection is the ONLY
+   background agent with follow-up tools. The wiki/record
+   extraction sweep also reads settled transcripts and must NOT
+   get them - two background resolvers means double-close races
+   and prompt sprawl for zero coverage gain. Cost to watch:
+   reflection already runs long (the measured ~9-minute run that
+   motivated the attempt cap - see `memory.md`), and follow-up
+   duties add prompt + tool weight to an agent near the hosted
+   wall clock.
 
 6. **Close beats delete, and reschedule is its own verb.** When
    the user reports the outcome (asked or unprompted), the model

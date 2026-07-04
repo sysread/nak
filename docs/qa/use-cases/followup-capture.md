@@ -1,4 +1,4 @@
-# Follow-up capture: volitional save, reflection backfill, dedup
+# Follow-up writers: volitional save, reschedule, reflection backfill + close
 
 > **Planning draft.** The follow-ups feature is not built; this
 > case is part of its behavioral spec (see
@@ -26,6 +26,12 @@ them ([dev: followups](../../dev/in-progress/followups.md)):
   ([dev: memory](../../dev/memory.md)) records unresolved plans
   from settled threads, so capture works even when the mid-turn
   save didn't happen.
+- **Subconscious close** - reflection is the resolution backstop:
+  a settled transcript that resolved a loop the chat model never
+  closed (outcome volunteered unprompted, write toolbox off)
+  gets closed by reflection. Reflection is the ONLY background
+  agent with follow-up tools - see the dev note's single-
+  background-writer rule.
 - **Dedup** - the same plan discussed twice produces ONE open
   row; both writers check whether the question is already open
   OR already answered before creating (the answered check is the
@@ -76,6 +82,11 @@ them ([dev: followups](../../dev/in-progress/followups.md)):
    [reflection-drain](./reflection-drain.md): reset
    `threads.last_reflected_msg_id` and trigger a turn tail or
    the hourly sweep route), then re-run the step-2 query.
+8. In a THIRD fresh thread (follow-ups toolbox OFF), volunteer
+   the lasagna outcome unprompted: "By the way, I made the
+   lasagna Sunday - the family loved it." Let the thread end.
+9. Force the reflection pass on that thread, then re-run the
+   step-2 query.
 
 ## Expected
 
@@ -94,6 +105,11 @@ them ([dev: followups](../../dev/in-progress/followups.md)):
   by reflection (no tool call in the chat transcript; the
   reflection log lines show the create). `relevant_after` is
   NULL - no stated date, so no proactive-ask basis.
+- Step 9: the lasagna row is `status='answered'` with a
+  `resolution` mentioning the outcome, closed by REFLECTION (no
+  `followup_close` in any chat transcript; the reflection log
+  lines show the close). The manager row is untouched - closing
+  is per-loop judgment, not a sweep.
 - At no point does a row exist for chit-chat without a pending
   outcome - capture is judgment-gated, not every-plan-mechanical.
 
