@@ -4418,6 +4418,18 @@ button.top-bar-overflow-btn {
   border-left-color: var(--danger);
 }
 
+/* The default-page card stacks - wiki + memory changelog rows and the
+   samskara diagnostics blocks (classes live in their component .svelte
+   files; global CSS reaches them because Svelte scoping only constrains
+   a component's own selectors) - get the same side-border treatment as
+   assistant bubbles: informational content, muted bar. */
+:root[data-style='terminal'] .wiki-changelog-row,
+:root[data-style='terminal'] .memory-changelog-row,
+:root[data-style='terminal'] .health-summary-block,
+:root[data-style='terminal'] .health-card {
+  border-left: 2px solid var(--muted);
+}
+
 /* Inputs default to the --bg-2 fill, which matches the sidebar's fill -
    with hairlines transparent, a search box sitting on the sidebar would
    be invisible until focused. Step inputs up to --surface so the fill

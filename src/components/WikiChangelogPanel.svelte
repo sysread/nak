@@ -224,7 +224,7 @@
   .wiki-changelog-row {
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 0.6rem 0.75rem;
+    padding: 0.75rem 0.9rem;
     background: var(--surface);
   }
   .wiki-changelog-row-head {
