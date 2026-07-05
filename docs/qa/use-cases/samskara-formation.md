@@ -157,10 +157,13 @@ observable contract - claims, writes, toasts - is the same.
   (worst case ~5 min idle nap + 60s throttle), `situation` /
   `outcome` / `valence` all land, and the save happens under the
   claim guard (a second worker's save would be rejected).
-- (2, doubt variant) The saved `outcome` names the misgiving (the
-  assimilator receives the doubt as `assistant_second_thoughts`)
-  and `valence` reads lower than an equivalent clean round would.
-  A `conviction` verdict on the anchor changes nothing - only
+- (2, doubt variant) The drawer's `samskara` source logs
+  `assimilate: doubt verdict attached` (debug, with disposition +
+  acted) before the agent call, the saved `outcome` names the
+  misgiving (the assimilator receives the doubt as
+  `assistant_second_thoughts`), and `valence` reads lower than an
+  equivalent clean round would. A `conviction` verdict on the
+  anchor changes nothing - no breadcrumb, no payload field; only
   hedge/reframe/correct are forwarded.
 - (3) Pair-relate seeds the longest-unseeded embedded row,
   selects that seed's closest pair the relator has not already

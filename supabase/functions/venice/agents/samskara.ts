@@ -809,6 +809,17 @@ async function assimilateClaimed(
     return;
   }
 
+  // Drawer breadcrumb for the doubt feed: the payload field is
+  // otherwise invisible (the agent call is not logged verbatim), and
+  // the QA doubt-variant check needs a positive signal beyond "the
+  // outcome prose mentions it".
+  if (doubt !== null) {
+    log.debug('assimilate: doubt verdict attached', {
+      substrateId: claim.id,
+      disposition: doubt.disposition,
+      acted: doubt.acted,
+    });
+  }
   const result = await agentAssimilate(apiKey, userMsg, assistantMsg, doubt);
   if (!result) {
     log.debug('assimilate: agent returned null', { substrateId: claim.id });
