@@ -4431,6 +4431,22 @@ button.top-bar-overflow-btn {
   border-left: 2px solid var(--muted);
 }
 
+/* Changelog rows carry their action's kind- class (create / update /
+   delete, plus the wiki's record_* variants) so the bar can take the
+   action color. The hex values deliberately mirror the kind chips
+   inside the rows (see WikiChangelogPanel / MemoryChangelogPanel) so
+   bar and chip read as one signal, rather than routing through
+   --ok/--warn/--danger, which shift per theme while the chips don't. */
+:root[data-style='terminal'] :is(.wiki-changelog-row, .memory-changelog-row):is(.kind-create, .kind-record_create) {
+  border-left-color: #15803d;
+}
+:root[data-style='terminal'] :is(.wiki-changelog-row, .memory-changelog-row):is(.kind-update, .kind-record_update) {
+  border-left-color: #b45309;
+}
+:root[data-style='terminal'] :is(.wiki-changelog-row, .memory-changelog-row):is(.kind-delete, .kind-record_delete) {
+  border-left-color: #b91c1c;
+}
+
 /* The seedling inspector's two-feature divider (working intentions
    above follow-ups, .feature + .feature in Intents.svelte) is a
    hairline with no stepped fill on either side, so the transparent

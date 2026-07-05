@@ -131,7 +131,10 @@
   {:else}
     <ul class="memory-changelog-list">
       {#each entries as entry (entry.id)}
-        <li class="memory-changelog-row">
+        <!-- kind- class rides the row as well as the chip so the terminal
+             style's left bar (styles.css component deltas) can take the
+             action color without reaching into the row's children. -->
+        <li class="memory-changelog-row kind-{entry.kind}">
           <div class="memory-changelog-row-head">
             <span
               class="memory-changelog-kind kind-{entry.kind}"
