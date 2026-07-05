@@ -40,8 +40,12 @@ import { type BroadcastPublisher } from './broadcast.ts';
 import {
   fireSamskaras,
   getCompoundSummary,
+  queryFiredSamskaras,
 } from './priming/samskara.ts';
-import { formatPrimingThinks } from './priming/samskara-format.ts';
+import {
+  formatPrimingThinks,
+  formatRefinementFireThink,
+} from './priming/samskara-format.ts';
 import {
   type IntuitionPayload,
   buildIntuitionThinkMessage,
@@ -357,15 +361,28 @@ export interface PrimingInputs {
   intuitionMood?: { band: number; column: 'confident' | 'tentative' } | null;
   contextRecallEnabled?: boolean;
   /**
-   * Skip the entire priming stage (bias appendix + the whole `<think>`
-   * chain). Set by the second-thoughts refinement turn: it is the model
-   * reconsidering its own answer, not a new user round, so re-running
-   * the user-round-keyed priming would double-fire the samskara
-   * situational cohort and bury the refinement's own `<think>` doubt.
-   * The refinement supplies its own priming. See the field docs on
+   * Skip the STANDARD priming stage (bias appendix + the whole
+   * `<think>` chain). Set by the second-thoughts refinement turn: it is
+   * the model reconsidering its own answer, not a new user round, so
+   * re-running the user-round-keyed priming would double-fire the
+   * samskara situational cohort and bury the refinement's own `<think>`
+   * doubt. The refinement instead gets the targeted samskara probe
+   * below when `refinementDoubtNote` is present. See the field docs on
    * `ChatLoopOptions.skipPriming` (src/lib/chat/types.ts).
    */
   skipPriming?: boolean;
+  /**
+   * The second-thoughts doubt note driving this refinement turn (the
+   * reviewer's first-person twinge). When present alongside
+   * `skipPriming`, the stage runs ONE targeted samskara probe - a
+   * read-only cosine query keyed to the doubt + the original user text,
+   * spliced as a single `<think>` block - so the full-context
+   * deliberation can weigh the twinge against what the model has
+   * learned about this user across threads. Read-only on purpose: no
+   * cohort is recorded, so the original turn's fire stays the round's
+   * only samskara bookkeeping.
+   */
+  refinementDoubtNote?: string;
 }
 
 /**
@@ -380,6 +397,7 @@ export interface ServerPrimingDeps {
   applyIntentPriming: typeof applyIntentPriming;
   getCompoundSummary: typeof getCompoundSummary;
   fireSamskaras: typeof fireSamskaras;
+  queryFiredSamskaras: typeof queryFiredSamskaras;
   runIntuitionPipeline: typeof runIntuitionPipeline;
   runContextRecallPipeline: typeof runContextRecallPipeline;
 }
@@ -389,6 +407,7 @@ const DEFAULT_PRIMING_DEPS: ServerPrimingDeps = {
   applyIntentPriming,
   getCompoundSummary,
   fireSamskaras,
+  queryFiredSamskaras,
   runIntuitionPipeline,
   runContextRecallPipeline,
 };
@@ -429,9 +448,13 @@ export async function runServerPriming(opts: ServerPrimingOpts): Promise<void> {
   // Refinement turns (second-thoughts "Let me ..." button) carry their
   // own `<think>` doubt and are not a new user round, so they opt out of
   // the standard stage entirely - running it would double-fire samskara
-  // for the round and bury the doubt. No priming events are published,
-  // which is correct: no priming ran, so the browser shows no spinner.
-  if (opts.priming?.skipPriming) return;
+  // for the round and bury the doubt. They get the targeted
+  // doubt-keyed samskara probe instead (a no-op for old clients that
+  // send skipPriming without a note).
+  if (opts.priming?.skipPriming) {
+    await runRefinementPriming(opts);
+    return;
+  }
   const deps = opts.deps ?? DEFAULT_PRIMING_DEPS;
   const biasLog = createEdgeLogger(userId, 'bias');
   const intentLog = createEdgeLogger(userId, 'intent');
@@ -476,6 +499,90 @@ export async function runServerPriming(opts: ServerPrimingOpts): Promise<void> {
       intuitionLog.flush(),
       recallLog.flush(),
     ]);
+  }
+}
+
+/**
+ * The refinement turn's priming: one read-only samskara probe keyed to
+ * the doubt note plus the original user text, spliced as a single
+ * `<think>` block before the trailing metadata row. This is the
+ * "deliberation gets the context" half of the second-thoughts design:
+ * the low-context reviewer twinged, and the full-context refinement
+ * adjudicates that twinge - so it is the refinement, not the reflex,
+ * that gets to see what the model has learned about this user across
+ * threads. The probe records no cohort (queryFiredSamskaras, not
+ * fireSamskaras): the original turn's fire remains the round's only
+ * samskara bookkeeping, so fire_count, co-fire detection, and the
+ * evaluation judge see one fire per user round as before.
+ *
+ * Same never-throws / never-delays posture as the standard stage: the
+ * probe races the shared samskara timeout and any failure degrades to
+ * "no probe block this turn."
+ */
+async function runRefinementPriming(opts: ServerPrimingOpts): Promise<void> {
+  // Runtime typeof guard: the note crosses the /stream body boundary,
+  // and it feeds an embed call - coerce anything non-string to absent
+  // rather than serializing garbage into the query.
+  const rawNote = opts.priming?.refinementDoubtNote;
+  const note = typeof rawNote === 'string' ? rawNote.trim() : '';
+  if (note.length === 0) return;
+  const deps = opts.deps ?? DEFAULT_PRIMING_DEPS;
+  const samskaraLog = createEdgeLogger(opts.userId, 'samskara');
+  try {
+    const userText = extractUserText(opts.history);
+    // Key the probe to doubt + question: the doubt names what feels
+    // off, the user text names the topic, and predictions relevant to
+    // either can bear on whether the twinge holds. The note is capped
+    // defensively - reviewer notes run a sentence or two, so a huge
+    // value here is a hostile body, not a real verdict.
+    const queryText = [userText, note.slice(0, 2000)]
+      .filter((s) => s.length > 0)
+      .join('\n\n');
+    void opts.publisher.publish({ type: 'priming_start', op: 'samskara' });
+    const probe = deps
+      .queryFiredSamskaras({
+        admin: opts.adminClient,
+        userId: opts.userId,
+        apiKey: opts.apiKey,
+        queryText,
+        signal: opts.signal,
+        log: samskaraLog,
+      })
+      .finally(() => {
+        void opts.publisher.publish({ type: 'priming_end', op: 'samskara' });
+      });
+    // Same cap as the standard stage, same cleanup: the refinement is a
+    // user-triggered streaming turn, so a slow probe must not delay its
+    // first token. A timed-out probe keeps running detached; its result
+    // is simply not spliced.
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    const fired = await Promise.race([
+      probe,
+      new Promise<null>((resolve) => {
+        timeoutHandle = setTimeout(() => resolve(null), SAMSKARA_PRIMING_TIMEOUT_MS);
+      }),
+    ]);
+    if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+
+    const body = formatRefinementFireThink(fired);
+    if (body !== null) {
+      // Before the trailing metadata system row, same as the standard
+      // chain. The acted-doubt <think> rides inside the original
+      // assistant row earlier in history, so the model reads doubt
+      // first, then these patterns, then generates.
+      const insertAt = Math.max(0, opts.history.length - 1);
+      opts.history.splice(insertAt, 0, {
+        role: 'assistant',
+        content: `<think>\n${body}\n</think>`,
+      });
+      samskaraLog.info('refinement probe: spliced', {
+        fired: fired?.length ?? 0,
+      });
+    } else {
+      samskaraLog.debug('refinement probe: nothing fired');
+    }
+  } finally {
+    await samskaraLog.flush();
   }
 }
 

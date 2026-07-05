@@ -7,6 +7,7 @@
 import { assert, assertEquals } from 'jsr:@std/assert';
 import {
   formatPrimingThinks,
+  formatRefinementFireThink,
   type FireResult,
   type FiredSamskara,
   topKForCorpusSize,
@@ -87,4 +88,17 @@ Deno.test('topKForCorpusSize: max(1, ceil(kBase * log10(n + 10)))', () => {
   assertEquals(topKForCorpusSize(90, 5), Math.max(1, Math.ceil(5 * Math.log10(100))));
   // Floor at 1 so an empty corpus never asks for 0 rows.
   assert(topKForCorpusSize(0, 0) >= 1);
+});
+
+Deno.test('refinement think: null on empty, adjudication framing + bullets when fired', () => {
+  assertEquals(formatRefinementFireThink(null), null);
+  assertEquals(formatRefinementFireThink([]), null);
+  const out = formatRefinementFireThink([fired({ prediction: 'wants citations' })]);
+  assert(out !== null);
+  // The orientation frames the bullets as evidence for weighing the
+  // doubt, not as fresh conversational priming.
+  assert(out!.includes('whether it holds'));
+  assert(out!.includes('- wants citations'));
+  // Shares the standard block's hedge rendering.
+  assert(out!.includes('fairly confident'));
 });

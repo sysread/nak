@@ -131,8 +131,7 @@ function renderFireBullet(fire: FiredSamskara, abbreviated: boolean): string {
  * everything past the top three when over budget, then drop the
  * lowest-scoring tail entries one at a time until the body fits.
  */
-function buildFireBody(fire: FireResult | null): string | null {
-  const fired = fire?.fired ?? [];
+function buildFireBody(fired: FiredSamskara[]): string | null {
   if (fired.length === 0) return null;
 
   let bullets = fired.map((f) => renderFireBullet(f, false));
@@ -184,7 +183,7 @@ export function formatPrimingThinks(input: PrimingInput): PrimingThinks {
   const summary = input.compoundSummary?.trim() ?? '';
   const compound = summary.length > 0 ? summary : null;
 
-  const fireBody = buildFireBody(input.fire ?? null);
+  const fireBody = buildFireBody(input.fire?.fired ?? []);
   let fire: string | null = null;
   if (fireBody !== null) {
     fire = [
@@ -196,6 +195,29 @@ export function formatPrimingThinks(input: PrimingInput): PrimingThinks {
   }
 
   return { compound, fire };
+}
+
+/**
+ * Render the `<think>` body for the second-thoughts refinement probe:
+ * the same fire bullets as the standard block, under an orientation
+ * sentence that frames them as evidence for ADJUDICATING the doubt.
+ * The refinement is the full-context deliberation over a low-context
+ * reflex's twinge, so the bullets must read as "what I know about this
+ * user that bears on whether the misgiving holds" - not as fresh
+ * conversational priming. Returns null when nothing fired (the
+ * refinement proceeds on history and the doubt alone).
+ */
+export function formatRefinementFireThink(
+  fired: FiredSamskara[] | null,
+): string | null {
+  const body = buildFireBody(fired ?? []);
+  if (body === null) return null;
+  return [
+    'Before I weigh that misgiving, some patterns I have learned about',
+    'this user that may bear on whether it holds:',
+    '',
+    body,
+  ].join('\n');
 }
 
 /**

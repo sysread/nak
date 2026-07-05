@@ -40,6 +40,13 @@ another pass at your question, this time chewing on its own doubt, and
 keep both, so you can compare and see whether the second attempt is
 actually better.
 
+While reconsidering, the assistant also quietly recalls what it has
+learned about you across past conversations (see
+[Samskara](./samskara.md)) - specifically the patterns that bear on
+the doubt. That is how it can rule "actually, that was justified - I
+know this about you" instead of walking back an answer that was right
+for reasons the quick reviewer couldn't see.
+
 The button only appears on the **most recent** answer (a refinement
 always adds to the end of the conversation), and only while nothing
 else is sending. Once you refine, the two answers stay linked: on later

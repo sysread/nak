@@ -99,9 +99,14 @@ render path through `AssistantBody.svelte`
   after the original, not before it. The refined original's panel now
   carries a muted **"refined"** tag, and that tag SURVIVES a reload
   (the `acted` flag persisted via `mark_second_thoughts_acted`). The
-  `stream` log shows the refinement ran with no priming lines (no
-  samskara/intuition/recall for that turn) - it was a refinement, not a
-  fresh user round. The refinement turn itself gets a `second-thoughts`
+  refinement turn runs NO intuition/recall/bias priming (not a fresh
+  user round), but the `samskara` source DOES log the doubt-keyed
+  refinement probe ("refinement probe: spliced" when patterns fired,
+  or "refinement probe: nothing fired" on a cold corpus) - and no new
+  `samskara_fires` cohort appears for that turn (the probe is
+  read-only; verify with
+  `select count(*) from samskara_fires where thread_id = '<thread-id>'`
+  before/after the refinement). The refinement turn itself gets a `second-thoughts`
   verdict too (it is a completed turn); if that verdict is a doubt, the
   refinement - now the latest answer - carries its own button.
   Confirm the connective reaches the model: in the `chat`-source
@@ -124,3 +129,4 @@ render path through `AssistantBody.svelte`
 | Date | Env | Commit | Result | Notes |
 | ---- | --- | ------ | ------ | ----- |
 | 2026-07-01 | - | claude/second-thoughts-feature-nca3sf | not executed | authored alongside the v1 feature; cloud session has no browser - needs a manual run against a local stack for the baseline |
+| 2026-07-05 | - | claude/samskara-second-thoughts-lnuuge | not executed | step-8 expectations updated for the refinement's doubt-keyed samskara probe (read-only, logged under the samskara source); cloud session has no browser - baseline for the v1 refinement flow was never run either |

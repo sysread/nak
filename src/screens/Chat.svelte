@@ -3268,14 +3268,22 @@
     supersededIds?: string[];
     /**
      * True on a second-thoughts refinement turn (Chat.svelte
-     * `refineFrom`). Two effects: server-side priming is skipped (this
-     * is the model reconsidering itself, not a new user round - see
-     * `skipPriming`), and the wire history carries the doubt because
-     * `refineFrom` marked the original row's verdict `acted` before the
-     * run, so `toVeniceMessage` projects the `<think>` connective onto
-     * it. No separate ephemeral splice is needed.
+     * `refineFrom`). Two effects: server-side standard priming is
+     * skipped (this is the model reconsidering itself, not a new user
+     * round - see `skipPriming`), and the wire history carries the
+     * doubt because `refineFrom` marked the original row's verdict
+     * `acted` before the run, so `toVeniceMessage` projects the
+     * `<think>` connective onto it. No separate ephemeral splice is
+     * needed.
      */
     isRefinement?: boolean;
+    /**
+     * The doubt note seeding a refinement turn. Forwarded to the server
+     * so its priming stage can run the targeted read-only samskara
+     * probe (cross-thread patterns that bear on whether the misgiving
+     * holds). Set by `refineFrom` alongside `isRefinement`.
+     */
+    refinementDoubtNote?: string;
   }
 
   /**
@@ -3623,16 +3631,21 @@
           userLocation: ctx.sendUserLocation,
           displayTimezone: app.displayTimezone || null,
           lastAssistantTimestamp: findLastAssistantTimestamp(),
-          // A refinement turn skips the whole priming stage: it is the
-          // model reconsidering its own answer (not a new user round),
-          // it carries its own <think> doubt (projected onto the acted
-          // original row by toVeniceMessage), and re-running priming
-          // would double-fire samskara for the round and bury that
-          // doubt. Omitting the intuition/recall inputs disables those
-          // pipelines; `skipPriming` also suppresses samskara + bias.
+          // A refinement turn skips the standard priming stage: it is
+          // the model reconsidering its own answer (not a new user
+          // round), it carries its own <think> doubt (projected onto
+          // the acted original row by toVeniceMessage), and re-running
+          // priming would double-fire samskara for the round and bury
+          // that doubt. Omitting the intuition/recall inputs disables
+          // those pipelines; `skipPriming` suppresses the samskara
+          // chain + bias. What a refinement DOES get is the targeted
+          // doubt-keyed samskara probe (`refinementDoubtNote`), so the
+          // full-context deliberation can weigh the reviewer's twinge
+          // against learned cross-thread patterns.
           intuitionModelId: ctx.isRefinement ? undefined : agentModel('intuition').id,
           intuitionMood: ctx.isRefinement ? null : intuitionMoodArg,
           skipPriming: ctx.isRefinement ? true : undefined,
+          refinementDoubtNote: ctx.isRefinement ? ctx.refinementDoubtNote : undefined,
           currentTurnHasAttachments,
           // Topic-boundary recall rides the same trigger machinery as
           // intuition (cold-start, mid-turn title shift, mood shift,
@@ -4713,6 +4726,10 @@
       originalText: userMessage.content,
       userMessageId: userMessage.id,
       isRefinement: true,
+      // The raw note (not displayNote's fallback copy) - the server
+      // keys its samskara probe to the reviewer's actual words, and an
+      // empty note correctly yields no probe.
+      refinementDoubtNote: verdict.note,
     });
   }
 

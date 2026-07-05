@@ -164,18 +164,40 @@ via the existing `runExchange` path. It marks the original verdict
 `acted`, anchors on the SAME user message the original answered with NO
 `supersededIds` (so the new row APPENDS - `commit_assistant_message`'s
 conflict check keys on newer *user* rows, not the existing assistant
-answer), and skips priming. Offered only on the thread's LATEST
+answer), and skips standard priming (getting the targeted samskara
+probe instead - next section). Offered only on the thread's LATEST
 assistant row (`latestAssistantId`), since a refinement always lands at
 the transcript tail. Touches neither the round loop nor the critical
 path.
 
-**Skip-priming.** A refinement is the model reconsidering itself, not a
-new user round, so re-running the user-round-keyed priming would
-double-fire the samskara situational cohort and bury the refinement's
-own `<think>` doubt. `ChatLoopOptions.skipPriming` threads through
+**Skip-priming, plus the doubt-keyed samskara probe.** A refinement is
+the model reconsidering itself, not a new user round, so re-running the
+user-round-keyed priming would double-fire the samskara situational
+cohort and bury the refinement's own `<think>` doubt.
+`ChatLoopOptions.skipPriming` threads through
 `streamCtx.priming.skipPriming` (`venice.ts`) -> the `/stream` body
-(`index.ts`) -> `PrimingInputs.skipPriming` -> an early-return at the
-top of `runServerPriming`.
+(`index.ts`) -> `PrimingInputs.skipPriming` -> `runServerPriming`,
+which routes the turn to `runRefinementPriming` instead of the
+standard stage.
+
+What the refinement DOES get is the deliberation's share of context:
+the design asymmetry is "the doubt does not need the context; the
+answer to the doubt does," and cross-thread samskara knowledge is
+exactly the context a full-context adjudication is otherwise missing
+(the priming `<think>` chain is never persisted, so a refinement
+cannot inherit the original turn's fire from history).
+`refinementDoubtNote` - the reviewer's raw first-person note, threaded
+alongside `skipPriming` from `refineFrom` - keys ONE read-only samskara
+probe (`queryFiredSamskaras`: embed + top-k + score floor, NO cohort
+write) against the doubt plus the original user text, under the same
+1500ms race cap as the standard fire. Whatever fires is spliced as a
+single `<think>` block (`formatRefinementFireThink`) framed as
+evidence for weighing the misgiving, after the acted doubt in wire
+order. Read-only on purpose: the original turn's fire remains the
+round's only samskara bookkeeping, so fire_count, co-fire detection,
+and the evaluation judge still see one fire per user round. An empty
+note (or an old client that sends `skipPriming` alone) skips the
+probe entirely.
 
 ### The acted `<think>` connective
 
@@ -223,7 +245,12 @@ and fires the RPC best-effort for persistence across reload / device.
 - `supabase/functions/venice/getStreamingResponse.ts` - calls the
   reviewer first in the completed-turn tail.
 - `supabase/functions/venice/priming.ts` - `PrimingInputs.skipPriming`
-  and the early return that a refinement uses.
+  and `refinementDoubtNote`, plus `runRefinementPriming`, the
+  refinement's doubt-keyed samskara probe.
+- `supabase/functions/venice/priming/samskara.ts` /
+  `priming/samskara-format.ts` - `queryFiredSamskaras` (the read-only
+  fire half the probe calls) and `formatRefinementFireThink` (the
+  probe's `<think>` body).
 - `supabase/schema.sql` - the `messages.second_thoughts` column and the
   `mark_second_thoughts_acted` RPC.
 - `src/lib/ui/second-thoughts.ts` - the coercer + the pure
@@ -322,9 +349,12 @@ composition + wiring.
   post-response verdict, distinct from the pregame priming chain.
 - **Samskara ([`samskara.md`](./samskara.md)) / bias profile
   ([`bias-profile.md`](./bias-profile.md))** - a refinement `skipPriming`
-  suppresses samskara's situational fire for that turn (it is not a new
-  user round). No other data flow today; the emergent feedback (below)
-  is deferred.
+  suppresses samskara's situational COHORT fire for that turn (it is not
+  a new user round), but the refinement gets the read-only doubt-keyed
+  probe described above - samskara-to-deliberation is the one live data
+  flow. The reviewer itself still consumes nothing samskara-shaped (the
+  independence contract). The reverse flow (doubt verdicts feeding
+  samskara substrate - the emergent feedback below) is deferred.
 - **Diagnostic pills ([`diagnostic-pills.md`](./diagnostic-pills.md))**
   - second thoughts is deliberately NOT a pill (it is per-message).
   Named here so a future editor does not "fix" its absence.
@@ -366,7 +396,8 @@ composition + wiring.
   user message (its stub anchors on the original user message).
   Tolerated: substrate `user_message_id` is a soft pointer the samskara
   design already accepts going off-by-N. The samskara *fire* is not
-  double-counted (`skipPriming`).
+  double-counted: `skipPriming` suppresses the cohort fire, and the
+  refinement's doubt-keyed probe is read-only (no cohort recorded).
 - **Structured output is the takeover guard, not politeness.** Relaxing
   the reviewer to free-text output brings back the
   fourth-voice-continuation failure mode.
