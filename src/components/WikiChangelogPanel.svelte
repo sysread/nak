@@ -147,7 +147,10 @@
   {:else}
     <ul class="wiki-changelog-list">
       {#each entries as entry (entry.id)}
-        <li class="wiki-changelog-row">
+        <!-- kind- class rides the row as well as the chip so the terminal
+             style's left bar (styles.css component deltas) can take the
+             action color without reaching into the row's children. -->
+        <li class="wiki-changelog-row kind-{entry.kind}">
           <div class="wiki-changelog-row-head">
             <span
               class="wiki-changelog-kind kind-{entry.kind}"
