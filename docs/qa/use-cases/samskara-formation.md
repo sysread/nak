@@ -72,6 +72,19 @@ observable contract - claims, writes, toasts - is the same.
      from samskara_substrate where id = '<forged-id>';
    ```
 
+   (Doubt variant) To exercise the second-thoughts feed, pick or
+   forge a stub whose assistant message carries a doubt verdict -
+   easiest is to hand-write one onto the anchor before the claim:
+
+   ```sql
+   update messages
+      set second_thoughts = '{"v":1,"disposition":"correct",
+        "note":"I may have mixed up the two dates.",
+        "model":"manual-qa","computed_at":0}'::jsonb
+    where id = (select assistant_message_id from samskara_substrate
+                where id = '<forged-id>');
+   ```
+
 3. Watch one pair-relate probe. Three valid outcomes: `selected
    pair ...` at Info followed by `associated` (with its
    reinforcement count) or `agent declined`, or the trace line
@@ -144,6 +157,11 @@ observable contract - claims, writes, toasts - is the same.
   (worst case ~5 min idle nap + 60s throttle), `situation` /
   `outcome` / `valence` all land, and the save happens under the
   claim guard (a second worker's save would be rejected).
+- (2, doubt variant) The saved `outcome` names the misgiving (the
+  assimilator receives the doubt as `assistant_second_thoughts`)
+  and `valence` reads lower than an equivalent clean round would.
+  A `conviction` verdict on the anchor changes nothing - only
+  hedge/reframe/correct are forwarded.
 - (3) Pair-relate seeds the longest-unseeded embedded row,
   selects that seed's closest pair the relator has not already
   ruled on, and persists the verdict either way: an association
@@ -193,3 +211,4 @@ compound summary is real feature output and stays.
 | 2026-06-11 | local | a5eb802 | FAIL (1-2, 6; rest pass) | post-port run. Blocking regression: both messages-table reads filtered on a nonexistent `messages.user_id` column (ownership routes through threads.user_id) - every assimilate and reaction-classify threw `column messages.user_id does not exist`; the substrate queue only grew, the sweep drain aborted at assimilated=0, and cohorts could not resolve (cohort 4c275558 left 5 rows NULL with un-backdated fired_at - genuine failure, not the neutral shape). Claim/scheduling machinery and runPhase isolation worked (a failing phase never took down the rotation). PASSING: pair-relate (associations 6 -> 7; reinforcement-stuck-at-1 quirk persists), mint-tier1 (3x dedup-reinforce), mint-tier2 POST-FIX CONFIRMED (direct RPC returns a result set, no 21000; the corpus minted its first-ever local tier-2), dedup (first nonzero collapse, tier-1 14 -> 13), compound-regen (7h backdate -> fresh 1175-char summary, count 14), step 9 toast relay (pill content -> cheerful within ~5s of the SQL insert), drawer relay under the `samskara` source tag, tail phase ordering as designed |
 | 2026-06-11 | local | c618678 | pass (1-2, 6 re-run; rest pass per prior row) | fix verification: the messages reads scope by thread_id. Assimilate: a sweep tick drained all three stuck stubs claim -> agent -> save (`assimilated=3`, pending queue 0) after their stale failed-attempt claims were released manually. Reaction-classify, live two-turn run: cohort 202a1cc5 (5 fires) resolved by the second turn's tail ~30s after the reply - 2 rows confirmed true (fired_at intact), 3 NEUTRAL (was_confirmed NULL, fired_at backdated ~13 min - the designed shape); zero `failed` / `message read failed` lines across the window. The feedback loop is closed end to end on the ported pipeline |
 | 2026-06-12 | local | a040984 | pass (1-3 re-run; partial scope) | pair-relate adjudication change only (declines ledger + adjudicated-skip + samskara_associate RPC). Baseline for the old behavior is the 87105f2 row (static corpus re-selected the same pair every probe, reinforcement stuck at 1). Post-change: forged stub 275636cb assimilated + embedded, then three sweep ticks on a static corpus selected three DISTINCT pairs (tick 3 kept the same seed but skipped its adjudicated top candidate 38e3cdc7 and related next-closest 9eb79527) - the amnesia loop is gone. Associations 11 -> 14. Direct re-call of samskara_associate on an existing pair+label returned reinforcement 2 with last_reinforced_at bumped - the conflict clause increments. Declined branch not organically reachable this run (the relator accepted every probe; clone-derived pairs are genuinely related) - the decline write shares the upsert shape and the adjudicated-read union with the proven accept side; rankPairCandidates floor/ordering pinned by the Deno suite. Decline-branch live confirmation rides the next orthogonal verdict in normal operation |
+| 2026-07-05 | - | claude/samskara-second-thoughts-lnuuge | not executed | step 2 gained the doubt variant (second-thoughts doubt verdicts now ride the assimilator payload as assistant_second_thoughts and colour outcome/valence); cloud session has no browser or local stack - needs a manual run for the doubt-variant baseline |

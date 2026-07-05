@@ -63,6 +63,16 @@ If a flag looks wrong, just don't click - it costs nothing. And even
 when you do click, the assistant is free to reconsider and decide its
 first answer was right after all.
 
+## Doubts feed what Nak learns
+
+A flagged answer is also a small lesson. When Nak later digests the
+conversation into its long-term picture of you (see
+[Samskara](./samskara.md)), a round the assistant had misgivings about
+is recorded that way - so over time it can notice patterns like "quick
+confident answers on this topic tend to miss for this person." Nothing
+extra is shown for this; it just makes the background learning a
+little more honest about its own stumbles.
+
 ## Where the data lives
 
 Each verdict is stored on the message it reviewed (the

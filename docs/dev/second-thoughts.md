@@ -348,13 +348,18 @@ composition + wiring.
   `<think>` connective is a turn-time injection driven by a
   post-response verdict, distinct from the pregame priming chain.
 - **Samskara ([`samskara.md`](./samskara.md)) / bias profile
-  ([`bias-profile.md`](./bias-profile.md))** - a refinement `skipPriming`
-  suppresses samskara's situational COHORT fire for that turn (it is not
-  a new user round), but the refinement gets the read-only doubt-keyed
-  probe described above - samskara-to-deliberation is the one live data
-  flow. The reviewer itself still consumes nothing samskara-shaped (the
-  independence contract). The reverse flow (doubt verdicts feeding
-  samskara substrate - the emergent feedback below) is deferred.
+  ([`bias-profile.md`](./bias-profile.md))** - data flows in BOTH
+  directions with samskara, on opposite sides of the turn. Out: a
+  refinement `skipPriming` suppresses samskara's situational COHORT
+  fire for that turn (it is not a new user round), but the refinement
+  gets the read-only doubt-keyed probe described above. In: the
+  samskara assimilator reads the assistant row's doubt verdict when
+  enriching that round's substrate (`assistant_second_thoughts` in the
+  assimilator payload - the embarrassment-event feed; see samskara.md's
+  Assimilate contract), so repeated misgivings shape the user model.
+  The reviewer itself still consumes nothing samskara-shaped (the
+  independence contract). The bias-profile half of the emergent
+  feedback (below) remains deferred.
 - **Diagnostic pills ([`diagnostic-pills.md`](./diagnostic-pills.md))**
   - second thoughts is deliberately NOT a pill (it is per-message).
   Named here so a future editor does not "fix" its absence.
@@ -404,10 +409,10 @@ composition + wiring.
 
 ## Deferred / future work
 
-Two extensions were designed but deliberately not built. The full
-design narrative (and the reasoning that got here) lives in git
-history, in the `docs/dev/in-progress/second-thoughts.md` this doc
-graduated from.
+Extensions designed but deliberately not built. The full design
+narrative (and the reasoning that got here) lives in git history, in
+the `docs/dev/in-progress/second-thoughts.md` this doc graduated
+from.
 
 - **Automatic correction.** The autonomous version: a strong-enough
   verdict triggers the refinement WITHOUT a click, before control
@@ -418,9 +423,12 @@ graduated from.
   If refinements are rarely wanted, or often come back worse than the
   original, the human-gated button is the right permanent home and this
   is never built.
-- **The emergent loop.** A `correct` / `reframe` is an *embarrassment
-  event* - the same class of signal samskara and the bias profile
-  consume. Feeding it into them would let the model's learned doubt
-  disposition tune its own future baseline confidence. Deliberately not
-  a dedicated diagnostic pill: if the loop works, the emergence should
-  show up secondarily in mood and bias calibration on its own.
+- **The bias-profile half of the emergent loop.** The samskara half is
+  BUILT: doubt verdicts ride the assimilator payload and colour
+  substrate (see Interactions), so learned doubt patterns can reach the
+  compound summary and future mints on their own. Still deferred:
+  feeding embarrassment events into the bias profile so the model's
+  doubt disposition tunes its baseline confidence directly.
+  Deliberately not a dedicated diagnostic pill either way: if the loop
+  works, the emergence should show up secondarily in mood and bias
+  calibration on its own.

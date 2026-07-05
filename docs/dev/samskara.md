@@ -594,10 +594,19 @@ turn or tick retries with fresh budget); any other phase failure
 logs and yields to the next phase.
 
 - **Assimilate** - `agentAssimilate(apiKey, userMsg,
-  assistantMsg) -> {situation, outcome, valence} | null`. Reads
-  the raw exchange, returns structured substrate fields. Claim
-  RPC `samskara_claim_next_assimilate` (per-user, tail) or
-  `samskara_claim_next_assimilate_for_sweep` (cross-user,
+  assistantMsg, secondThoughts?) -> {situation, outcome, valence}
+  | null`. Reads the raw exchange, returns structured substrate
+  fields. When the assistant row carries a second-thoughts DOUBT
+  verdict (hedge/reframe/correct - never conviction;
+  `doubtForAssimilation` is the gate), it rides the payload as
+  `assistant_second_thoughts` so the misgiving colours `outcome`
+  and `valence` - the embarrassment-event feed from
+  [second thoughts](./second-thoughts.md). Timing is forgiving:
+  the reviewer writes seconds after the turn, assimilation runs a
+  later tail or the hourly sweep, so the verdict is normally
+  present; a missing verdict just degrades to the doubt-free
+  payload. Claim RPC `samskara_claim_next_assimilate` (per-user,
+  tail) or `samskara_claim_next_assimilate_for_sweep` (cross-user,
   sweep); save RPC `samskara_save_assimilation_if_claimed`. Cap
   hits are logged, never silently truncated - the next trigger
   continues the drain.
@@ -1086,15 +1095,21 @@ summarizer reads samskaras to feed the agent.
   threads end-to-end and writes memories; the summary curation
   unit produces thread-level prose. Three different
   granularities, three different stores.
-- **Second thoughts** - a refinement turn (the user acting on a
-  doubt verdict) skips the standard priming stage but gets ONE
-  read-only samskara probe keyed to the doubt note + the original
-  user text (`queryFiredSamskaras`, no cohort recorded), so the
+- **Second thoughts** - two seams, one in each direction. OUT:
+  a refinement turn (the user acting on a doubt verdict) skips
+  the standard priming stage but gets ONE read-only samskara
+  probe keyed to the doubt note + the original user text
+  (`queryFiredSamskaras`, no cohort recorded), so the
   full-context deliberation can weigh the low-context reviewer's
   twinge against learned cross-thread patterns. The original
   turn's fire stays the round's only samskara bookkeeping -
   fire_count, co-fire detection, and the evaluation judge are
-  unaffected by the probe. See `./second-thoughts.md`.
+  unaffected by the probe. IN: the assimilator forwards a doubt
+  verdict on the assistant anchor as `assistant_second_thoughts`
+  (the embarrassment-event feed; see the Assimilate contract),
+  so repeated misgivings can shape substrate and, downstream,
+  mint claims about when confident answers miss for this user.
+  See `./second-thoughts.md`.
 - **Tools** - none. Samskara is intentionally not exposed as a
   tool (no `samskara_search`, no `samskara_invalidate`). It's
   an autonomic system; if the user wants to forget something,
