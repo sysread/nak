@@ -167,7 +167,19 @@ Keep \`situation\` under 240 chars. Keep \`outcome\` under 240 chars.
 Be concrete: name what was asked, the topic, any constraints the
 user mentioned. Do not editorialise about the user or the assistant.
 Do not include a name or pronoun for the assistant - "the assistant"
-is fine.`;
+is fine.
+
+The input MAY carry \`assistant_second_thoughts\`: the assistant's own
+automatic post-response review, present only when it flagged a
+misgiving about this very response ("hedge" = sounded more certain
+than warranted, "reframe" = may have answered a different question
+than the user meant, "correct" = suspects a factual error;
+\`acted: true\` means the user asked the assistant to take another
+pass). Treat it as part of how the round landed: name the misgiving
+in \`outcome\`, and weigh it when judging \`valence\` - a flagged
+round usually landed worse than the reply text alone suggests, more
+so when the user acted on it. It is a one-round gut check, not a
+verified fact; do not restate it as a truth about the user.`;
 
 /**
  * Relator prompt. Reads two substrate situations and labels the
@@ -328,6 +340,44 @@ interface AssimilationResult {
   valence: number;
 }
 
+/**
+ * The second-thoughts doubt handed to the assimilator alongside the
+ * exchange - the emergent-loop seam between the two features: a
+ * doubt verdict is an embarrassment event, the signal class substrate
+ * exists to capture, so it colours the round's outcome/valence and
+ * can eventually mint claims about when the assistant's answers miss
+ * for this user.
+ */
+interface AssimilationDoubt {
+  disposition: 'hedge' | 'reframe' | 'correct';
+  note: string;
+  acted: boolean;
+}
+
+/**
+ * Project a `messages.second_thoughts` jsonb into the assimilator's
+ * doubt payload, or null when absent / malformed / a conviction.
+ * Conviction is the ~95% base-rate "nothing nagged" verdict - feeding
+ * it through would pay prompt tokens to say "no misgiving" on nearly
+ * every round, so only real doubts flow. Defensive by the same rule
+ * as the browser coercer (src/lib/ui/second-thoughts.ts): a drifting
+ * shape reads as "no doubt", never a throw.
+ */
+function doubtForAssimilation(raw: unknown): AssimilationDoubt | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const obj = raw as Record<string, unknown>;
+  if (obj.v !== 1) return null;
+  const d = obj.disposition;
+  if (d !== 'hedge' && d !== 'reframe' && d !== 'correct') return null;
+  return {
+    disposition: d,
+    // The reviewer already caps notes at 800 chars; re-cap here so a
+    // hand-edited row can't balloon the assimilator payload.
+    note: typeof obj.note === 'string' ? obj.note.slice(0, 800).trim() : '',
+    acted: obj.acted === true,
+  };
+}
+
 interface RelatorResult {
   kind: 'pattern' | 'contrast' | 'prerequisite' | 'consequence' | 'orthogonal';
   label: string;
@@ -412,12 +462,17 @@ async function agentAssimilate(
   apiKey: string,
   userMessage: string,
   assistantMessage: string,
+  secondThoughts: AssimilationDoubt | null = null,
 ): Promise<AssimilationResult | null> {
-  const raw = await callOnce(
-    apiKey,
-    ASSIMILATOR_PROMPT,
-    JSON.stringify({ user_message: userMessage, assistant_message: assistantMessage }),
-  );
+  const payload: Record<string, unknown> = {
+    user_message: userMessage,
+    assistant_message: assistantMessage,
+  };
+  // Only doubts ride along (see doubtForAssimilation); the field is
+  // omitted, not nulled, so the common no-doubt round pays zero tokens
+  // for it.
+  if (secondThoughts !== null) payload.assistant_second_thoughts = secondThoughts;
+  const raw = await callOnce(apiKey, ASSIMILATOR_PROMPT, JSON.stringify(payload));
   if (raw === null) return null;
   const parsed = tryParseJson<{ situation?: unknown; outcome?: unknown; valence?: unknown }>(
     raw,
@@ -715,19 +770,29 @@ async function assimilateClaimed(
   );
   let userMsg = '';
   let assistantMsg = '';
+  let doubt: AssimilationDoubt | null = null;
   // Ownership scoping rides thread_id: `messages` has no user_id
   // column (ownership routes through threads.user_id), and the claim
   // RPC already proved the substrate row - and therefore its thread -
   // belongs to this user.
   const { data: messages, error: msgErr } = await admin
     .from('messages')
-    .select('id, content')
+    .select('id, content, second_thoughts')
     .eq('thread_id', claim.threadId)
     .in('id', wantedIds);
   if (msgErr) throw new Error(`assimilate: message read failed: ${msgErr.message}`);
   for (const m of messages ?? []) {
     if (m.id === claim.userMessageId) userMsg = (m.content as string | null) ?? '';
-    if (m.id === claim.assistantMessageId) assistantMsg = (m.content as string | null) ?? '';
+    if (m.id === claim.assistantMessageId) {
+      assistantMsg = (m.content as string | null) ?? '';
+      // The reviewer's doubt verdict, when one landed on this answer.
+      // Timing is forgiving by construction: the reviewer writes
+      // seconds after the turn while assimilation waits for a later
+      // tail or the hourly sweep, so the verdict is normally present;
+      // `acted` may still lag a user who refines much later. Either
+      // absence just degrades to the doubt-free payload.
+      doubt = doubtForAssimilation(m.second_thoughts);
+    }
   }
 
   if (userMsg.length === 0) {
@@ -744,7 +809,18 @@ async function assimilateClaimed(
     return;
   }
 
-  const result = await agentAssimilate(apiKey, userMsg, assistantMsg);
+  // Drawer breadcrumb for the doubt feed: the payload field is
+  // otherwise invisible (the agent call is not logged verbatim), and
+  // the QA doubt-variant check needs a positive signal beyond "the
+  // outcome prose mentions it".
+  if (doubt !== null) {
+    log.debug('assimilate: doubt verdict attached', {
+      substrateId: claim.id,
+      disposition: doubt.disposition,
+      acted: doubt.acted,
+    });
+  }
+  const result = await agentAssimilate(apiKey, userMsg, assistantMsg, doubt);
   if (!result) {
     log.debug('assimilate: agent returned null', { substrateId: claim.id });
     return;
@@ -1648,6 +1724,7 @@ export const __test = {
   buildTopicalCluster,
   buildAssociationCluster,
   cosine,
+  doubtForAssimilation,
   parseVector,
   stripJsonFence,
 };

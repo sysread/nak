@@ -24,6 +24,7 @@ const {
   buildTopicalCluster,
   buildAssociationCluster,
   cosine,
+  doubtForAssimilation,
   parseVector,
   stripJsonFence,
 } = __test;
@@ -35,6 +36,50 @@ Deno.test('assimilator prompt names the three output fields', () => {
     assert(ASSIMILATOR_PROMPT.includes(field), `missing ${field}`);
   }
   assert(ASSIMILATOR_PROMPT.includes('no markdown fence'));
+});
+
+Deno.test('assimilator prompt explains the optional second-thoughts doubt', () => {
+  // The doubt payload field and its three dispositions must stay
+  // named in the prompt - agentAssimilate attaches
+  // `assistant_second_thoughts` and an unexplained field would read
+  // as noise to the fast tier.
+  assert(ASSIMILATOR_PROMPT.includes('assistant_second_thoughts'));
+  for (const d of ['hedge', 'reframe', 'correct']) {
+    assert(ASSIMILATOR_PROMPT.includes(`"${d}"`), `missing disposition ${d}`);
+  }
+  assert(ASSIMILATOR_PROMPT.includes('acted'));
+});
+
+Deno.test('doubtForAssimilation: doubts pass, conviction and junk read as null', () => {
+  const doubt = doubtForAssimilation({
+    v: 1,
+    disposition: 'reframe',
+    note: '  did they mean the other thing?  ',
+    acted: true,
+    model: 'm',
+    computed_at: 1,
+  });
+  assert(doubt !== null);
+  assertEquals(doubt!.disposition, 'reframe');
+  assertEquals(doubt!.note, 'did they mean the other thing?');
+  assertEquals(doubt!.acted, true);
+
+  // Conviction is the base-rate no-op verdict - never forwarded.
+  assertEquals(
+    doubtForAssimilation({ v: 1, disposition: 'conviction', note: '', model: 'm', computed_at: 1 }),
+    null,
+  );
+  // Absent / malformed / wrong-version shapes read as "no doubt".
+  assertEquals(doubtForAssimilation(null), null);
+  assertEquals(doubtForAssimilation('hedge'), null);
+  assertEquals(doubtForAssimilation({ v: 2, disposition: 'hedge' }), null);
+  assertEquals(doubtForAssimilation({ v: 1, disposition: 'unsure' }), null);
+  // Missing note / acted coerce to safe defaults rather than dropping
+  // the doubt.
+  const bare = doubtForAssimilation({ v: 1, disposition: 'correct' });
+  assert(bare !== null);
+  assertEquals(bare!.note, '');
+  assertEquals(bare!.acted, false);
 });
 
 Deno.test('relator prompt enumerates all five kinds', () => {
