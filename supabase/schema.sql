@@ -9135,6 +9135,61 @@ begin
     );
 end $$;
 
+-- Wiki agent audit log. One row per COMPLETED agent cycle - the
+-- per-conversation wiki agent (sweep tick or manual retry), the
+-- record-extraction agent, and the librarian (all three trigger
+-- paths). The changelog above records what changed; this table
+-- records that a cycle RAN, including the majority of cycles that
+-- decide to change nothing. Without it, "when was this thread
+-- processed" and "why did the agent write nothing about X" are only
+-- answerable from the ephemeral log relay (in-app drawer, 24h edge
+-- logs) - the reasoning column here is the durable copy of the
+-- operator summary those surfaces already show.
+--
+-- Written best-effort by the edge agents through the service-role
+-- client (appendWikiAgentLog in venice/agents/_wiki_agent_log.ts);
+-- append-only from the client's perspective (select only, no
+-- insert/update/delete policies for authenticated).
+create table if not exists public.wiki_agent_log (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  agent text not null constraint wiki_agent_log_agent_check check (
+    agent in ('wiki', 'wiki-records', 'wiki-librarian')
+  ),
+  -- What kicked the cycle off: the hourly cron sweep, the Skipped
+  -- panel's Retry button, the Wiki panel's manual librarian run, or
+  -- the chat-dispatched wiki_librarian tool. Named trigger_source
+  -- because `trigger` is a Postgres keyword.
+  trigger_source text not null constraint wiki_agent_log_trigger_check check (
+    trigger_source in ('scheduled', 'retry', 'manual', 'chat')
+  ),
+  -- The processed conversation, for the thread-scoped agents; null
+  -- for the librarian (wiki-wide, no thread). `set null` so deleting
+  -- a conversation keeps its processing history readable.
+  thread_id uuid references public.threads(id) on delete set null,
+  terminal_msg_id uuid references public.messages(id) on delete set null,
+  tool_calls int not null default 0,
+  -- The model's one-or-two-sentence operator summary ("No edits -
+  -- generic Q&A with no user-centric subject"). Same text the log
+  -- drawer's finished-cycle line inlines as reasoning="...".
+  reasoning text,
+  created_at timestamptz not null default now()
+);
+
+-- Same access pattern as the changelog: page the user's history
+-- newest-first (health audits, "what ran last night").
+create index if not exists wiki_agent_log_user_created_idx
+  on public.wiki_agent_log (user_id, created_at desc);
+
+alter table public.wiki_agent_log enable row level security;
+
+drop policy if exists "wiki_agent_log is self-selectable" on public.wiki_agent_log;
+create policy "wiki_agent_log is self-selectable" on public.wiki_agent_log
+  for select using (auth.uid() = user_id);
+
+-- No insert/update/delete policies: rows land only through the
+-- service-role edge agents, and history is append-only.
+
 -- See Also RPC. Returns wiki articles topically related to the
 -- target article, using a dynamically-calibrated similarity floor:
 -- the minimum cosine similarity between the target's embedding and
@@ -9861,6 +9916,10 @@ begin
   -- alongside an empty wiki, so we drop them here as part of the same
   -- reset rather than leaving orphans.
   delete from public.wiki_changelog where user_id = v_user;
+  -- The audit log is processing history for data that no longer
+  -- exists after a wipe; clear it with the rest so the fresh start
+  -- is actually fresh.
+  delete from public.wiki_agent_log where user_id = v_user;
   update public.threads
      set last_wiki_processed_msg_id = null,
          wiki_claim_holder = null,

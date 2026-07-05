@@ -118,6 +118,16 @@ Schema (`supabase/schema.sql`):
   guarded `do $$` block widens the constraint on databases created
   before the record kinds existed (drop-by-introspection, then add the
   named constraint - idempotent).
+- For the audit trail: a `wiki_agent_log` table (one row per COMPLETED
+  agent cycle across all three agents - article sweep/retry, record
+  extraction, librarian - including no-op cycles; columns `agent`,
+  `trigger_source`, set-null `thread_id`/`terminal_msg_id` FKs,
+  `tool_calls`, `reasoning`). Select-only RLS; rows land exclusively
+  through the service-role edge agents. `reset_wiki_data` clears it
+  alongside the changelog. The `reasoning` column is the durable copy
+  of the operator summary the log drawer shows live - without it,
+  "when was this thread processed" and "why did the agent write
+  nothing" stop being answerable once the 24h edge logs roll over.
 - Embeddings RPCs: `claim_next_pending_wiki_article`,
   `save_wiki_article_embedding_if_claimed`,
   `search_wiki_articles_by_embedding`.
@@ -159,6 +169,12 @@ Edge function (`supabase/functions/venice/`):
   the two render an identical block. The librarian
   (`wiki_librarian.ts`) keeps its OWN renderer - a CORRECTIVE
   variant, not a copy to fold in here.
+- `agents/_wiki_agent_log.ts` - `appendWikiAgentLog`, the best-effort
+  insert into `wiki_agent_log`. Non-throwing by contract (a cycle
+  that did its real work must not fail because the audit insert
+  did); called from the article agent's sweep + retry success paths,
+  the extraction agent's sweep success path, and all three librarian
+  entry points.
 - `agents/_agent_tools.ts` - shared agent-toolbox plumbing:
   `asAgentTool` (wraps a registered `ToolDef` with a pinned wire
   schema so agent writes stay byte-identical to the chat-side
@@ -1335,9 +1351,14 @@ separately.
   - **Clean up**: `record_update` to correct or merge a record,
     `record_delete` for a true duplicate or clearly-irrelevant entry -
     opportunistic on the records of articles the agent is already
-    touching (the librarian also runs the wiki-wide pass). The hard
-    rule on both: never `record_delete` a record because its learning
-    was promoted; records survive promotion.
+    touching. The librarian's pass is wider: its workflow step 7
+    explicitly targets the articles with the most recent record
+    activity (the article-list projection annotates per-article
+    record counts + latest record dates to make that actionable),
+    and its step 7d names the same-event duplicate shape and the
+    merge discipline - see the "Same-event record duplicates"
+    gotcha. The hard rule on both: never `record_delete` a record
+    because its learning was promoted; records survive promotion.
   - **Link**: `record_link_create` to wire up an explicit continuation
     chain (one record is a revision of / based on / supersedes another)
     the records state but were never linked; conservative, never
@@ -1661,6 +1682,48 @@ separately.
   (`wiki_claim_expires_at`) DO have the suffix, matching
   `journal_claim_expires_at`. Easy to flip when cloning; both are
   canonical.
+- **Same-event record duplicates are a real production failure
+  mode.** Three weeks of live data produced ~8 redundant records out
+  of 127, in two shapes: two conversations covering one event each
+  yielded a record (two "attended the weekly meeting" records for
+  one meeting), and an ongoing conversation re-describing
+  yesterday's event got re-captured by the next day's extraction
+  pass (two records for one bake, one of them contradicting the
+  other on an ingredient ratio). The defenses live in two prompts
+  and must survive rewording: the extraction prompt's step 3
+  ("One event, one record" - no second record for a same-date
+  same-happening event regardless of source conversation; attach
+  new photos to the EXISTING record instead) and the librarian's
+  step 7d (merge same-date same-event siblings; the record carrying
+  a file attachment is the keeper because `record_delete` cascades
+  attachments away; reconcile contradictions against the source
+  conversation, never average). Records on DIFFERENT dates that
+  continue one arc are the journey model working - link, don't
+  merge. Asserted in `wiki_records.test.ts` / `wiki_librarian.test.ts`.
+- **The terminal message is the latest PLAIN-TEXT assistant reply.**
+  The claim RPCs' terminal lateral skips assistant rows with tool
+  calls or empty content, so a conversation whose tail is tool-call
+  rounds anchors at the last plain reply - the tail is invisible to
+  the wiki agents until a later normal reply lands. By design
+  (tool-call rounds without closing text carry little), but it fools
+  eligibility replicas: an audit that picks "newest assistant
+  message" will see phantom backlog that the real predicate
+  correctly excludes.
+- **Cron run history detaches on every deploy.** The schema sync
+  re-registers the pg_cron jobs, minting new jobids;
+  `cron.job_run_details` rows stay keyed to the OLD jobid, so
+  per-job queries show an empty history right after a deploy. When
+  auditing sweep health, query `cron.job_run_details` by command
+  text (`where command ilike '%wiki%'`), not by jobid.
+- **`wiki_agent_log` is the durable health surface.** The
+  changelog only records cycles that CHANGED something; most cycles
+  are no-ops whose reasoning previously evaporated with the 24h
+  edge logs. The audit log rows (one per completed cycle, reasoning
+  included) are what a "is the feature healthy / why didn't it
+  write about X" analysis queries. Best-effort writes: a lost row
+  is acceptable, so don't build anything on its completeness -
+  pointer state on `threads` remains the source of truth for
+  what was processed.
 
 ## Verification
 

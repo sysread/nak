@@ -45,6 +45,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createEdgeLogger, type EdgeLogger } from '../../_shared/edge-log.ts';
 import { readVeniceKey } from '../tools/_venice_key.ts';
+import { appendWikiAgentLog } from './_wiki_agent_log.ts';
 import {
   asAgentTool,
   loadThreadSliceUpTo,
@@ -1328,6 +1329,14 @@ export async function runWikiSweepTick(
               `(${outcome.toolCalls} tool calls over ${outcome.messageCount} messages, ` +
               `reasoning="${outcome.reasoning}") ${titleTag}`,
           );
+          await appendWikiAgentLog(adminClient, userId, {
+            agent: 'wiki',
+            triggerSource: 'scheduled',
+            threadId,
+            terminalMsgId,
+            toolCalls: outcome.toolCalls,
+            reasoning: outcome.reasoning,
+          });
           summary.processed += 1;
         } else {
           log.debug(
@@ -1525,6 +1534,14 @@ export async function retryWikiThread(
       `manual retry finished thread ${threadId} ` +
         `(${toolCalls} tool calls over ${messageCount} messages, reasoning="${reasoning}")`,
     );
+    await appendWikiAgentLog(adminClient, userId, {
+      agent: 'wiki',
+      triggerSource: 'retry',
+      threadId,
+      terminalMsgId,
+      toolCalls,
+      reasoning,
+    });
     return { kind: 'ok', terminalMsgId, toolCalls, reasoning };
   } catch (err) {
     return { kind: 'error', error: err instanceof Error ? err.message : String(err) };

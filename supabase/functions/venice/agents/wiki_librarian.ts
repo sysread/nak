@@ -60,6 +60,7 @@ import { recordDelete } from '../tools/record_delete.ts';
 import { recordLinkCreate } from '../tools/record_link_create.ts';
 import { recordLinkDelete } from '../tools/record_link_delete.ts';
 import { asAgentTool } from './_agent_tools.ts';
+import { appendWikiAgentLog } from './_wiki_agent_log.ts';
 import {
   runHeadlessAgent,
   type AgentProgressEvent,
@@ -942,7 +943,12 @@ ${WIKI_LIBRARIAN_TOOLS_BLOCK}
    layers split responsibility: records hold the blow-by-blow; the
    article BODY holds the consolidated current state. For each
    article you are already touching (and any whose body still
-   carries an inline dated log), call record_list and:
+   carries an inline dated log), PLUS the two or three articles with
+   the most recent record activity (the article list above annotates
+   each article with its record count and latest record date) - the
+   actively-recorded articles are exactly where duplicate records
+   accumulate, and an article can need record cleanup without
+   needing any body work - call record_list and:
 
    (a) **Promote durable learnings into the body - without duplicating
        the records.** When the records have established a settled
@@ -984,12 +990,28 @@ ${WIKI_LIBRARIAN_TOOLS_BLOCK}
        the one case where a dated line LEAVES the body - but only
        because an equivalent record now holds it.)
 
-   (d) **Clean up the records themselves.** record_update to merge a
-       true duplicate's unique detail into the one you keep or to fix
-       an outdated record; record_delete ONLY for a genuine duplicate
-       or a clearly irrelevant entry. When in doubt, leave the record
-       alone - a stray record is low-cost, a wrongly-deleted event is
-       lost history.
+   (d) **Clean up the records themselves - same-event duplicates
+       first.** The recurring duplicate shape is two records on the
+       same article with the SAME date describing the SAME happening.
+       It arises two ways: two conversations covered one event and
+       each produced a record, or an ongoing conversation kept
+       discussing yesterday's event and the next extraction pass
+       logged it again. Merge them: pick the keeper (a record
+       carrying a file attachment wins - record_delete takes a
+       record's attachments with it; otherwise keep the earlier or
+       more complete one), record_update the keeper to fold in the
+       other's unique detail, then record_delete the redundant one
+       and fix its links (step e). When the two records CONTRADICT
+       each other on a fact (one says 50/50, the other 60/40), do not
+       average or guess - conversation_search + conversation_get the
+       source thread and keep what the user actually said. Records on
+       DIFFERENT dates that continue one arc (started it / how it
+       went) are the journey working as intended: link them (step e),
+       never merge them. Beyond duplicates: record_update to fix an
+       outdated record; record_delete ONLY for a merged-away
+       duplicate or a clearly irrelevant entry. When in doubt, leave
+       the record alone - a stray record is low-cost, a
+       wrongly-deleted event is lost history.
 
    (e) **Link the journey, and prune broken links.** Records can link to
        each other ("revision 3 based on revision 2"). When you find
@@ -1148,7 +1170,16 @@ interface WikiArticleRow {
   content: string;
 }
 
-function renderArticleList(rows: readonly WikiArticleRow[]): string {
+/** Per-article record signal rendered into the article list. */
+interface RecordActivity {
+  count: number;
+  latestDate: string | null;
+}
+
+function renderArticleList(
+  rows: readonly WikiArticleRow[],
+  recordActivity?: ReadonlyMap<string, RecordActivity>,
+): string {
   if (rows.length === 0) return '(the wiki is currently empty)';
   return rows
     .map((r) => {
@@ -1156,9 +1187,54 @@ function renderArticleList(rows: readonly WikiArticleRow[]): string {
         .replace(/\s+/g, ' ')
         .trim()
         .slice(0, LIBRARIAN_EXCERPT_CHARS);
-      return `- \`${r.title}\` - ${excerpt || '(empty body)'}`;
+      // The record annotation is what makes the workflow's "articles
+      // with the most recent record activity" instruction actionable -
+      // without it the model would have to record_list every article
+      // to find the active ones.
+      const activity = recordActivity?.get(r.id);
+      const annotation =
+        activity && activity.count > 0
+          ? ` (${activity.count} record${activity.count === 1 ? '' : 's'}` +
+            `${activity.latestDate ? `, latest ${activity.latestDate}` : ''})`
+          : '';
+      return `- \`${r.title}\`${annotation} - ${excerpt || '(empty body)'}`;
     })
     .join('\n');
+}
+
+/**
+ * Aggregate each article's record count + latest record date for the
+ * article-list annotation. Fetches (article_id, date) pairs newest-
+ * first under a bounded window and aggregates here - PostgREST group-
+ * by aggregates aren't a dependable surface, and the annotation is a
+ * prompt hint, not bookkeeping, so a count clipped by the window on a
+ * pathologically record-heavy wiki is acceptable.
+ */
+async function loadRecordActivity(
+  adminClient: SupabaseClient,
+  userId: string,
+): Promise<Map<string, RecordActivity>> {
+  const { data, error } = await adminClient
+    .from('wiki_records')
+    .select('article_id, date')
+    .eq('user_id', userId)
+    .order('date', { ascending: false })
+    .limit(2000);
+  if (error) throw new Error(`loadRecordActivity failed: ${error.message}`);
+  const out = new Map<string, RecordActivity>();
+  for (const row of (data ?? []) as Array<{ article_id?: unknown; date?: unknown }>) {
+    if (typeof row.article_id !== 'string') continue;
+    const date = typeof row.date === 'string' ? row.date : null;
+    const existing = out.get(row.article_id);
+    if (existing) {
+      existing.count += 1;
+      // Rows arrive date-descending, so the first date seen per
+      // article is already the latest.
+    } else {
+      out.set(row.article_id, { count: 1, latestDate: date });
+    }
+  }
+  return out;
 }
 
 async function loadArticles(
@@ -1263,7 +1339,8 @@ async function runLibrarianReview(args: LibrarianReviewArgs): Promise<LibrarianR
   const { adminClient, userId } = args;
   const articles = await loadArticles(adminClient, userId);
   args.onProgress?.({ kind: 'preparing', articleCount: articles.length });
-  const projection = renderArticleList(articles);
+  const recordActivity = await loadRecordActivity(adminClient, userId);
+  const projection = renderArticleList(articles, recordActivity);
   const profile = await loadLibrarianProfile(adminClient, userId);
   const promptText = buildWikiLibrarianPrompt({
     articleList: projection,
@@ -1392,6 +1469,12 @@ export async function runWikiLibrarianSweepTick(
       `librarian finished (${result.toolCalls} tool calls over ` +
         `${result.articleCount} articles, reasoning="${normaliseReasoning(result.finalText)}")`,
     );
+    await appendWikiAgentLog(adminClient, userId, {
+      agent: 'wiki-librarian',
+      triggerSource: 'scheduled',
+      toolCalls: result.toolCalls,
+      reasoning: normaliseReasoning(result.finalText),
+    });
     return {
       outcome: 'reviewed',
       toolCalls: result.toolCalls,
@@ -1452,6 +1535,12 @@ export async function runWikiLibrarianManual(
       `manual librarian finished (${result.toolCalls} tool calls over ` +
         `${result.articleCount} articles, reasoning="${normaliseReasoning(result.finalText)}")`,
     );
+    await appendWikiAgentLog(adminClient, userId, {
+      agent: 'wiki-librarian',
+      triggerSource: 'manual',
+      toolCalls: result.toolCalls,
+      reasoning: normaliseReasoning(result.finalText),
+    });
     onProgress?.({ kind: 'done', ok: true });
     return {
       kind: 'ok',
@@ -1510,6 +1599,12 @@ export const wikiLibrarian: ToolDef = {
         `chat-delegated librarian finished (${result.toolCalls} tool calls over ` +
           `${result.articleCount} articles, reasoning="${normaliseReasoning(result.finalText)}")`,
       );
+      await appendWikiAgentLog(ctx.adminClient, ctx.userId, {
+        agent: 'wiki-librarian',
+        triggerSource: 'chat',
+        toolCalls: result.toolCalls,
+        reasoning: normaliseReasoning(result.finalText),
+      });
       return {
         summary: result.finalText,
         articleCount: result.articleCount,

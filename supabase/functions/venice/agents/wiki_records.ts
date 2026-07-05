@@ -23,6 +23,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createEdgeLogger, type EdgeLogger } from '../../_shared/edge-log.ts';
 import { readVeniceKey } from '../tools/_venice_key.ts';
+import { appendWikiAgentLog } from './_wiki_agent_log.ts';
 import {
   asAgentTool,
   loadThreadSliceUpTo,
@@ -237,8 +238,10 @@ const RECORD_FILE_ATTACH_WIRE_SCHEMA: AgentTool['wire'] = {
     name: 'record_file_attach',
     description:
       'Attach a file the user posted in THIS conversation (by its exact ' +
-      'filename) to a record you just logged, copying it into permanent ' +
-      'record storage so it outlives the chat attachment. Use for a photo ' +
+      'filename) to a record - one you just logged, or the existing record ' +
+      'that already documents this event (from record_list) - copying it ' +
+      'into permanent record storage so it outlives the chat attachment. ' +
+      'Use for a photo ' +
       'or scan the user shared that documents the event - a crumb shot, a ' +
       'finished dish, a scanned card. ONLY use a filename actually present ' +
       "in this conversation; never invent one, and don't attach an image " +
@@ -248,7 +251,9 @@ const RECORD_FILE_ATTACH_WIRE_SCHEMA: AgentTool['wire'] = {
       properties: {
         record_id: {
           type: 'string',
-          description: 'UUID of the record to attach to (from the record_create you just ran).',
+          description:
+            'UUID of the record to attach to (from record_create, or from ' +
+            'record_list when the event was already recorded).',
         },
         filename: {
           type: 'string',
@@ -287,13 +292,13 @@ The wiki has two layers, and you only touch one of them. Each article's BODY is 
 
 2. For each genuine event, find the article it belongs to. Call wiki_search with the topic (the recipe, the hobby, the person, the project). If search is thin, call wiki_list to survey what exists. Records attach to an EXISTING article only - if no article fits, skip the event (the article agent will create the article later, and a future extraction pass can log the record then).
 
-3. Before logging, call record_list on that article and check whether the event is already recorded. Do NOT create a duplicate.
+3. Before logging, call record_list on that article and check whether the event is already recorded. **One event, one record.** An event that already has a record - same date, same happening - gets NO second record, no matter which conversation produced the first one: the same event routinely comes back around (a second conversation covers it, or this conversation keeps discussing it and you meet it again in tomorrow's pass), and it is ALREADY CAPTURED. When the conversation adds material to an already-recorded event (an outcome, a reaction, a photo), do not re-narrate it as a new record - attach the photo to the EXISTING record (step 6 takes any record id from record_list) and leave prose amendments to the maintenance agents. The same rule applies within a single pass: several aspects of one event (started it, how it went, who reacted) are ONE record, not one record per aspect. A new record is warranted only for a genuinely distinct happening - a new attempt, a new day's event, a different subject.
 
 4. Call record_create with the article_id, the event's date (ISO "YYYY-MM-DD" - read it from the conversation; use the message timestamps when the user doesn't state a date), a short Markdown description of what happened and what was learned, and a few filtering tags.
 
 5. **Cross-link a continuation (only when explicit).** If the conversation frames the new event as a direct follow-up to a SPECIFIC earlier record you can see in record_list ("attempt 3", "same dough as last week but wetter", "the rematch"), call record_link_create from the new record's id to that prior record's id, with a short label ("based on", "supersedes"). This is the exception, not the rule: most records stand alone. Never link on a vague thematic resemblance, never invent a relationship the user did not state, and never link to a record you did not actually find via record_list. When unsure, skip the link.
 
-6. **Attach a photo the user posted (when one documents the event).** The live files the user shared in this conversation are listed in a <thread_attachments> note above (if any). You CANNOT see images yourself. If a listed image plausibly documents this exact record - a crumb shot of the loaf they just baked, a photo of the finished dish, a scanned card - first call analyze_image(filename, query) to confirm what it actually shows, ESPECIALLY when more than one image is present (do not guess which is which). Once confirmed, call record_file_attach with the new record's id and that exact filename so the evidence lives with the record permanently. Use ONLY a filename from the <thread_attachments> note; never invent one, and never attach an image you have not verified belongs to the record. Most records have no photo - that is fine; only attach when the user actually shared one for this event.
+6. **Attach a photo the user posted (when one documents the event).** The live files the user shared in this conversation are listed in a <thread_attachments> note above (if any). You CANNOT see images yourself. If a listed image plausibly documents this exact record - a crumb shot of the loaf they just baked, a photo of the finished dish, a scanned card - first call analyze_image(filename, query) to confirm what it actually shows, ESPECIALLY when more than one image is present (do not guess which is which). Once confirmed, call record_file_attach with the record's id - the one you just created, or the EXISTING record from step 3 when the event was already captured - and that exact filename so the evidence lives with the record permanently. Use ONLY a filename from the <thread_attachments> note; never invent one, and never attach an image you have not verified belongs to the record. Most records have no photo - that is fine; only attach when the user actually shared one for this event.
 
 **Dates.** Anchor every record on the day the event happened, not the day you process it. If the user says "yesterday I baked", compute the date from the conversation's timestamps. Month-level precision is fine when the day is unknown - but prefer a concrete day when the conversation gives one.
 
@@ -522,6 +527,14 @@ export async function runWikiRecordsSweepTick(
               `(${outcome.toolCalls} tool calls over ${outcome.messageCount} messages, ` +
               `reasoning="${outcome.reasoning}") ${titleTag}`,
           );
+          await appendWikiAgentLog(adminClient, userId, {
+            agent: 'wiki-records',
+            triggerSource: 'scheduled',
+            threadId,
+            terminalMsgId,
+            toolCalls: outcome.toolCalls,
+            reasoning: outcome.reasoning,
+          });
           summary.processed += 1;
         } else {
           summary.claimLost += 1;
