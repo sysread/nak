@@ -533,6 +533,14 @@ with an explicit `p_user_id`.
   `cohort_id` is generated with `crypto.randomUUID`. Returns null
   on empty corpus, empty input, embedding failure, or RPC
   failure; errors are logged at debug so a chat turn is never blocked.
+- `queryFiredSamskaras({ admin, userId, apiKey, queryText, signal?,
+  log }): Promise<FiredSamskara[] | null>` - the read-only half of a
+  fire (embed + top-k + score floor, NO cohort write). `fireSamskaras`
+  is this plus the record step. Exists for callers that want advisory
+  context without touching fire bookkeeping - today that is the
+  second-thoughts refinement probe, which keys a query to the doubt
+  note + user text and must not double-count the round's fire (see
+  `./second-thoughts.md`). Same swallow contract.
 - `recordSubstrateStub(supabase, threadId, userMessageId,
   assistantMessageId | null): Promise<void>` - the surviving
   browser end-of-turn write; one INSERT via
@@ -1078,6 +1086,15 @@ summarizer reads samskaras to feed the agent.
   threads end-to-end and writes memories; the summary curation
   unit produces thread-level prose. Three different
   granularities, three different stores.
+- **Second thoughts** - a refinement turn (the user acting on a
+  doubt verdict) skips the standard priming stage but gets ONE
+  read-only samskara probe keyed to the doubt note + the original
+  user text (`queryFiredSamskaras`, no cohort recorded), so the
+  full-context deliberation can weigh the low-context reviewer's
+  twinge against learned cross-thread patterns. The original
+  turn's fire stays the round's only samskara bookkeeping -
+  fire_count, co-fire detection, and the evaluation judge are
+  unaffected by the probe. See `./second-thoughts.md`.
 - **Tools** - none. Samskara is intentionally not exposed as a
   tool (no `samskara_search`, no `samskara_invalidate`). It's
   an autonomic system; if the user wants to forget something,

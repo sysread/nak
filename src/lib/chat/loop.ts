@@ -102,6 +102,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     intuitionMood,
     contextRecallEnabled,
     skipPriming,
+    refinementDoubtNote,
     currentTurnHasAttachments,
   } = opts;
   // Copy so we can extend locally each round without mutating the caller.
@@ -264,7 +265,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
         threadId: thread.id,
         userMessageId,
         supersededIds,
-        priming: { intuitionModelId, intuitionMood, contextRecallEnabled, skipPriming },
+        priming: { intuitionModelId, intuitionMood, contextRecallEnabled, skipPriming, refinementDoubtNote },
       },
     }),
     signal,

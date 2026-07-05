@@ -946,9 +946,13 @@ interface StreamRequestBody {
     intuitionModelId?: string;
     intuitionMood?: { band: number; column: 'confident' | 'tentative' } | null;
     contextRecallEnabled?: boolean;
-    /** Skip the whole priming stage - set by the second-thoughts
+    /** Skip the standard priming stage - set by the second-thoughts
      *  refinement turn (see PrimingInputs.skipPriming in priming.ts). */
     skipPriming?: boolean;
+    /** The doubt note driving a refinement turn; enables the targeted
+     *  read-only samskara probe (see PrimingInputs.refinementDoubtNote
+     *  in priming.ts). */
+    refinementDoubtNote?: string;
   };
 }
 

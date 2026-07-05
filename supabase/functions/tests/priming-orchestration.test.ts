@@ -22,7 +22,10 @@ import {
   type ContextRecallPayload,
   CONTEXT_RECALL_THINK_MARKER,
 } from '../venice/priming/context-recall-payload.ts';
-import { type FireResult } from '../venice/priming/samskara-format.ts';
+import {
+  type FiredSamskara,
+  type FireResult,
+} from '../venice/priming/samskara-format.ts';
 import { STALE_FUSE_MS } from '../_shared/priming-triggers.ts';
 
 interface Msg {
@@ -101,13 +104,13 @@ function recallPayload(over: Partial<ContextRecallPayload> = {}): ContextRecallP
     ...over,
   };
 }
+function firedList(): FiredSamskara[] {
+  return [
+    { id: crypto.randomUUID(), prediction: 'PRED', innerVoice: null, valence: 0, confidence: 0.7, health: 0.9, score: 0.8 },
+  ];
+}
 function fireResult(): FireResult {
-  return {
-    cohortId: crypto.randomUUID(),
-    fired: [
-      { id: crypto.randomUUID(), prediction: 'PRED', innerVoice: null, valence: 0, confidence: 0.7, health: 0.9, score: 0.8 },
-    ],
-  };
+  return { cohortId: crypto.randomUUID(), fired: firedList() };
 }
 
 // A deps set whose pipelines all produce content, with overridable bits.
@@ -117,6 +120,7 @@ function makeDeps(over: Partial<ServerPrimingDeps> = {}): ServerPrimingDeps {
     applyIntentPriming: () => Promise.resolve(),
     getCompoundSummary: () => Promise.resolve('COMPOUND PROSE'),
     fireSamskaras: () => Promise.resolve(fireResult()),
+    queryFiredSamskaras: () => Promise.resolve(firedList()),
     runIntuitionPipeline: () => Promise.resolve(intuitionPayload()),
     runContextRecallPipeline: () => Promise.resolve(recallPayload()),
     ...over,
@@ -241,6 +245,102 @@ Deno.test('disabled pipelines never run, never flash a spinner; samskara still f
   // Nothing to inject, nothing persisted.
   assertEquals(history.length, 3);
   assertEquals(updates.length, 0);
+});
+
+Deno.test('skipPriming without a doubt note runs nothing at all', async () => {
+  // Old-client / conviction shape: the refinement opts out of the
+  // standard stage and supplies no note, so no pipeline may run, no
+  // spinner may flash, and history must be untouched.
+  const history = baseHistory();
+  const events: Record<string, unknown>[] = [];
+  let standardRan = 0;
+  await runServerPriming({
+    adminClient: makeAdmin(null, []),
+    userId: 'u',
+    threadId: 't',
+    apiKey: 'k',
+    history,
+    publisher: makePublisher(events),
+    priming: { skipPriming: true },
+    runId: 'test',
+    deps: makeDeps({
+      applyBiasPriming: () => { standardRan += 1; return Promise.resolve(); },
+      getCompoundSummary: () => { standardRan += 1; return Promise.resolve(null); },
+      fireSamskaras: () => { standardRan += 1; return Promise.resolve(null); },
+      queryFiredSamskaras: () => { standardRan += 1; return Promise.resolve(firedList()); },
+      runIntuitionPipeline: () => { standardRan += 1; return Promise.resolve(null); },
+      runContextRecallPipeline: () => { standardRan += 1; return Promise.resolve(null); },
+    }),
+  });
+  assertEquals(standardRan, 0, 'no pipeline may run');
+  assertEquals(events.length, 0, 'no priming events');
+  assertEquals(history.length, 3, 'history untouched');
+});
+
+Deno.test('refinement: doubt note drives one read-only probe spliced before the metadata row', async () => {
+  const history = baseHistory();
+  const events: Record<string, unknown>[] = [];
+  let standardRan = 0;
+  const queries: string[] = [];
+  await runServerPriming({
+    adminClient: makeAdmin(null, []),
+    userId: 'u',
+    threadId: 't',
+    apiKey: 'k',
+    history,
+    publisher: makePublisher(events),
+    priming: { skipPriming: true, refinementDoubtNote: 'Was the asthma mention warranted?' },
+    runId: 'test',
+    deps: makeDeps({
+      applyBiasPriming: () => { standardRan += 1; return Promise.resolve(); },
+      getCompoundSummary: () => { standardRan += 1; return Promise.resolve(null); },
+      fireSamskaras: () => { standardRan += 1; return Promise.resolve(null); },
+      runIntuitionPipeline: () => { standardRan += 1; return Promise.resolve(null); },
+      runContextRecallPipeline: () => { standardRan += 1; return Promise.resolve(null); },
+      queryFiredSamskaras: ({ queryText }) => {
+        queries.push(queryText);
+        return Promise.resolve(firedList());
+      },
+    }),
+  });
+
+  assertEquals(standardRan, 0, 'standard pipelines must not run on a refinement');
+  // The probe query keys to BOTH the original user text and the doubt.
+  assertEquals(queries.length, 1);
+  assert(queries[0].includes('hello there'), 'query carries the user text');
+  assert(queries[0].includes('asthma'), 'query carries the doubt note');
+  // One liveness pair for the probe, nothing else.
+  assertEquals(count(events, 'priming_start', 'samskara'), 1);
+  assertEquals(count(events, 'priming_end', 'samskara'), 1);
+  assertEquals(count(events, 'priming_start', 'intuition'), 0);
+  assertEquals(count(events, 'priming_start', 'recall'), 0);
+  // [BASELINE, user, probe think, METADATA]
+  assertEquals(history.length, 4);
+  assertEquals(history[3].content, 'METADATA', 'metadata must stay last on the wire');
+  assertEquals(history[2].role, 'assistant');
+  assert(history[2].content!.includes('<think>'));
+  assert(history[2].content!.includes('whether it holds'), 'refinement orientation sentence');
+  assert(history[2].content!.includes('PRED'), 'fired prediction rendered');
+});
+
+Deno.test('refinement: a probe with nothing fired splices nothing', async () => {
+  const history = baseHistory();
+  const events: Record<string, unknown>[] = [];
+  await runServerPriming({
+    adminClient: makeAdmin(null, []),
+    userId: 'u',
+    threadId: 't',
+    apiKey: 'k',
+    history,
+    publisher: makePublisher(events),
+    priming: { skipPriming: true, refinementDoubtNote: 'hmm' },
+    runId: 'test',
+    deps: makeDeps({ queryFiredSamskaras: () => Promise.resolve(null) }),
+  });
+  assertEquals(history.length, 3, 'no splice on an empty probe');
+  // The liveness pair still brackets the attempt.
+  assertEquals(count(events, 'priming_start', 'samskara'), 1);
+  assertEquals(count(events, 'priming_end', 'samskara'), 1);
 });
 
 Deno.test('a stale cached payload that did not refresh is suppressed from the splice', async () => {

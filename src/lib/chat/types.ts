@@ -298,18 +298,29 @@ export interface ChatLoopOptions {
    */
   contextRecallEnabled?: boolean;
   /**
-   * Skip the ENTIRE server-side priming stage for this turn - the bias
-   * appendix AND the samskara / intuition / context-recall `<think>`
-   * chain. Set by the second-thoughts refinement turn
+   * Skip the STANDARD server-side priming stage for this turn - the
+   * bias appendix AND the samskara / intuition / context-recall
+   * `<think>` chain. Set by the second-thoughts refinement turn
    * (Chat.svelte `refineFrom`): a refinement is the model reconsidering
    * its own prior answer, NOT a new user round, so re-running the
    * user-round-keyed priming would double-fire the samskara situational
    * cohort for one round (pipeline pollution) and bury the refinement's
    * own `<think>` doubt behind the samskara chain. The refinement
-   * supplies its own priming (the doubt block), so it wants none of the
-   * standard stage. Omitted / false leaves priming running as normal.
+   * carries the doubt block itself, plus the targeted samskara probe
+   * driven by `refinementDoubtNote` below. Omitted / false leaves
+   * priming running as normal.
    */
   skipPriming?: boolean;
+  /**
+   * The second-thoughts doubt note (the reviewer's first-person
+   * twinge) for a refinement turn. The server keys ONE read-only
+   * samskara probe to it - cross-thread patterns spliced as a single
+   * `<think>` block so the full-context deliberation can weigh the
+   * low-context reviewer's twinge against what the model knows about
+   * this user. No cohort is recorded. Only meaningful alongside
+   * `skipPriming`; omitted on normal turns.
+   */
+  refinementDoubtNote?: string;
   /**
    * True when the user message that opened this turn carries one or
    * more attachments. Drives the metadata message's anti-fabrication

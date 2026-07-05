@@ -31,6 +31,7 @@ import {
 } from '../../_shared/backfill.ts';
 import {
   FIRE_SCORE_FLOOR,
+  type FiredSamskara,
   type FireResult,
   K_BASE,
   STALE_CEILING_HOURS,
@@ -101,41 +102,35 @@ interface FireRow {
 }
 
 /**
- * Embed the user's text, run the cosine fire RPC, and persist the
- * cohort. Returns null when there are no samskaras yet or the user
- * text is empty - the orchestrator renders priming without a fire
- * section in either case.
+ * The read-only half of a fire: embed the query text, run the cosine
+ * top-k RPC, and drop the dead tail below the score floor. Writes
+ * nothing - no cohort, no samskara_fires rows - so callers that only
+ * want advisory context (the second-thoughts refinement probe) do not
+ * pollute fire_count, co-fire detection, or the evaluation judge's
+ * fired-prediction pool. `fireSamskaras` is this plus the cohort
+ * record.
  *
- * Cohort id: generated here as a uuid via crypto.randomUUID and
- * written into every fire row in the same RPC. The reaction classifier
- * in the formation pipeline uses cohort_id to score the set as a unit
- * (cohort-aware reinforcement weighting) and to mark the entire cohort
- * resolved in one update.
- *
- * Errors are swallowed and logged: a fire failure should NOT block the
- * user's chat turn. The orchestrator continues with no priming appendix
- * from this fire if anything goes wrong.
+ * Returns null when the query text is empty, the corpus is empty or
+ * dormant, or anything fails - same swallow contract as the rest of
+ * this module.
  */
-export async function fireSamskaras(opts: {
+export async function queryFiredSamskaras(opts: {
   admin: SupabaseClient;
   userId: string;
   apiKey: string;
-  threadId: string;
-  userRound: number;
-  userText: string;
+  queryText: string;
   signal?: AbortSignal;
   log: EdgeLogger;
-}): Promise<FireResult | null> {
-  const { admin, userId, apiKey, threadId, userRound, userText, signal, log } =
-    opts;
+}): Promise<FiredSamskara[] | null> {
+  const { admin, userId, apiKey, queryText, signal, log } = opts;
 
-  const trimmed = userText.trim();
+  const trimmed = queryText.trim();
   if (trimmed.length === 0) {
-    log.debug('fire: empty user text, skipping');
+    log.debug('fire: empty query text, skipping');
     return null;
   }
 
-  log.debug('fire: embedding user text', { chars: trimmed.length });
+  log.debug('fire: embedding query text', { chars: trimmed.length });
   let rawEmbedding: number[] | undefined;
   try {
     const resp = await veniceEmbed({
@@ -196,8 +191,7 @@ export async function fireSamskaras(opts: {
     return null;
   }
 
-  const cohortId = crypto.randomUUID();
-  const fired = live.map((r) => ({
+  return live.map((r) => ({
     id: r.id,
     prediction: r.prediction,
     innerVoice: r.inner_voice,
@@ -206,6 +200,48 @@ export async function fireSamskaras(opts: {
     health: r.health,
     score: r.score,
   }));
+}
+
+/**
+ * Embed the user's text, run the cosine fire RPC, and persist the
+ * cohort. Returns null when there are no samskaras yet or the user
+ * text is empty - the orchestrator renders priming without a fire
+ * section in either case.
+ *
+ * Cohort id: generated here as a uuid via crypto.randomUUID and
+ * written into every fire row in the same RPC. The reaction classifier
+ * in the formation pipeline uses cohort_id to score the set as a unit
+ * (cohort-aware reinforcement weighting) and to mark the entire cohort
+ * resolved in one update.
+ *
+ * Errors are swallowed and logged: a fire failure should NOT block the
+ * user's chat turn. The orchestrator continues with no priming appendix
+ * from this fire if anything goes wrong.
+ */
+export async function fireSamskaras(opts: {
+  admin: SupabaseClient;
+  userId: string;
+  apiKey: string;
+  threadId: string;
+  userRound: number;
+  userText: string;
+  signal?: AbortSignal;
+  log: EdgeLogger;
+}): Promise<FireResult | null> {
+  const { admin, userId, apiKey, threadId, userRound, userText, signal, log } =
+    opts;
+
+  const fired = await queryFiredSamskaras({
+    admin,
+    userId,
+    apiKey,
+    queryText: userText,
+    signal,
+    log,
+  });
+  if (fired === null) return null;
+
+  const cohortId = crypto.randomUUID();
   log.info('fire: cohort formed', {
     cohortId,
     threadId,
