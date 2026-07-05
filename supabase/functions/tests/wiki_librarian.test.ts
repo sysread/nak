@@ -139,3 +139,34 @@ Deno.test('renderArticleList handles the empty wiki and squashes whitespace', ()
   ]);
   assertEquals(list, '- `Nak` - line one line two');
 });
+
+Deno.test('renderArticleList annotates record activity; zero-record articles stay bare', () => {
+  const rows = [
+    { id: 'a', title: 'Bread', content: 'body a' },
+    { id: 'b', title: 'Dogs', content: 'body b' },
+    { id: 'c', title: 'Quiet', content: 'body c' },
+  ];
+  const activity = new Map([
+    ['a', { count: 3, latestDate: '2026-07-04' }],
+    ['b', { count: 1, latestDate: null }],
+  ]);
+  const list = __test.renderArticleList(rows, activity);
+  assertStringIncludes(list, '- `Bread` (3 records, latest 2026-07-04) - body a');
+  // Singular form, and no dangling ", latest" when the date is unknown.
+  assertStringIncludes(list, '- `Dogs` (1 record) - body b');
+  assertStringIncludes(list, '- `Quiet` - body c');
+});
+
+Deno.test('standard sweep body carries the same-event record-dedup discipline', () => {
+  const prompt = __test.buildWikiLibrarianPrompt({
+    articleList: '- `Nak` - an app',
+  });
+  // The record-cleanup pass must target record-active articles (the
+  // annotation makes this actionable), name the same-date same-event
+  // duplicate shape, prefer the attachment-carrying record as keeper,
+  // and protect cross-date continuation arcs from merging.
+  assertStringIncludes(prompt, 'most recent record activity');
+  assertStringIncludes(prompt, 'SAME date describing the SAME happening');
+  assertStringIncludes(prompt, 'file attachment wins');
+  assertStringIncludes(prompt, 'never merge them');
+});

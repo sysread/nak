@@ -75,3 +75,17 @@ Deno.test('extraction prompt draws the body-vs-records line and excludes non-eve
   // And to dedupe via record_list before creating.
   assertStringIncludes(p, 'record_list');
 });
+
+Deno.test('extraction prompt carries the one-event-one-record dedup discipline', () => {
+  const p = __test.WIKI_RECORDS_PROMPT;
+  // The observed production failure: the same event re-captured as a
+  // sibling record when a second conversation covered it, or when an
+  // ongoing conversation met it again in the next day's slice. The
+  // prompt must forbid the second record, allow attaching a photo to
+  // the EXISTING record instead, and collapse multi-aspect coverage
+  // within one pass to a single record.
+  assertStringIncludes(p, 'One event, one record');
+  assertStringIncludes(p, 'no matter which conversation produced the first one');
+  assertStringIncludes(p, 'attach the photo to the EXISTING record');
+  assertStringIncludes(p, 'ONE record, not one record per aspect');
+});
