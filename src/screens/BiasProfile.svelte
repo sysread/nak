@@ -357,7 +357,7 @@
             {:else}
               <ul class="bias-list">
                 {#each renderedRows as row (row.bias)}
-                  <li class="bias-row">
+                  <li class="bias-row tier-{row.tier}">
                     <header class="bias-row-header">
                       <span class="bias-name">{biasLabel(row.bias)}</span>
                       <span class="tier-badge {row.tier}" title={tierTitle(row.tier)}>{row.tier}</span>
@@ -487,7 +487,7 @@
           </p>
           <ul class="bias-list">
             {#each summaryRows as row (row.bias)}
-              <li class="bias-row">
+              <li class="bias-row tier-{row.tier}">
                 <header class="bias-row-header">
                   <span class="bias-name">{biasLabel(row.bias)}</span>
                   <span class="tier-badge {row.tier}" title={tierTitle(row.tier)}>{row.tier}</span>
