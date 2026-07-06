@@ -6917,10 +6917,10 @@ revoke all on function public.samskara_population_p0(uuid) from public, anon, au
 grant execute on function public.samskara_population_p0(uuid) to service_role;
 
 -- Verdict-apply for the evaluation sweep - the self-calibrating successor
--- to samskara_apply_reaction. For every samskara that fired in a judged
--- thread, age its prior evidence by the discount d, fold in this
--- evaluation's verdict, then recompute health as the empirical-Bayes
--- posterior shrunk toward p0. The four verdicts map to hit/miss evidence:
+-- to samskara_apply_reaction. For every samskara that received a GENUINE
+-- TEST in a judged thread, age its prior evidence by the discount d, fold
+-- in this evaluation's verdict, then recompute health as the empirical-
+-- Bayes posterior shrunk toward p0. The verdicts map to hit/miss evidence:
 --   held         -> a full hit       (confirm += 1)
 --   contradicted -> a full miss       (disconfirm += 1) - the user did the opposite
 --   not-borne-out -> a SOFT miss      (disconfirm += w_soft) - the prediction's
@@ -6930,38 +6930,48 @@ grant execute on function public.samskara_population_p0(uuid) to service_role;
 --                    discriminating power: without it, an on-topic prediction
 --                    that fires constantly and never lands stays pinned at the
 --                    prior because not-engaged is neutral.
---   not-engaged  -> no evidence       (discount only) - the situation never really
---                    arose (a loose topical fire); no fair test, so neither tally
---                    moves. This is also why p0 stays meaningful: only genuine
---                    tests (held / contradicted / not-borne-out) feed the prior.
+--   not-engaged  -> NOT PASSED to this function at all. The situation never
+--                    arose (a loose topical fire) - no fair test, no evidence,
+--                    and critically NO DISCOUNT either. An earlier version
+--                    accepted the not-engaged ids and applied the discount to
+--                    them ("forgetting" per evaluation); live data killed
+--                    that: ~80% of judged fires land not-engaged, so evidence
+--                    decayed ~4x faster than genuine tests could accrue it,
+--                    the biggest tally in a 184-samskara corpus was 5.5
+--                    confirms, and every posterior sat pinned at p0 (156/184
+--                    rows at 0.95). Decay now ages evidence per GENUINE TEST
+--                    only: the half-life L is denominated in tests, and a
+--                    samskara that merely fires near a conversation neither
+--                    earns nor loses anything.
 -- health and confidence are kept EQUAL - both ARE the posterior, the single
 -- "earning its keep" score the fire RPC's sqrt(health*confidence) collapses
 -- to (so no fire-score change is needed). The posterior is a weighted
 -- average of {0,1} outcomes and p0 in [0,1], so it is inherently bounded to
 -- [0,1] - it cannot run away the way the old accumulator could. Model knobs:
--- k (prior strength), the evidence half-life L (in evaluations) behind the
+-- k (prior strength), the evidence half-life L (in genuine tests) behind the
 -- discount d = 0.5^(1/L), and w_soft (the soft-miss weight). Caller (the
--- service-role sweep) must pass each fired samskara in exactly one of the
--- four arrays.
+-- service-role sweep) must pass each genuinely-tested samskara in exactly
+-- one of the three arrays.
 --
--- The first drop clears the pre-soft-miss 4-arg signature on existing
--- databases; the second makes re-applying the new 5-arg form idempotent
--- (adding a parameter is a new overload, so CREATE OR REPLACE alone would
--- leave the old arity resolvable - see CLAUDE.md on RPC signature changes).
+-- The drops clear the two prior signatures on existing databases: the
+-- pre-soft-miss 4-arg form (user, held, contradicted, not_engaged) and the
+-- 5-arg form that took not-engaged for the per-evaluation discount. The new
+-- 4-arg form has the same TYPES as the pre-soft-miss one but different
+-- semantics, so the drop-then-create is what keeps re-application
+-- unambiguous (see CLAUDE.md on RPC signature changes).
 drop function if exists public.samskara_apply_evaluation(uuid, uuid[], uuid[], uuid[]);
 drop function if exists public.samskara_apply_evaluation(uuid, uuid[], uuid[], uuid[], uuid[]);
 create or replace function public.samskara_apply_evaluation(
   p_user_id uuid,
   p_held uuid[],
   p_contradicted uuid[],
-  p_not_borne_out uuid[],
-  p_not_engaged uuid[]
+  p_not_borne_out uuid[]
 ) returns int
 language plpgsql security definer set search_path = public as $$
 declare
   k constant real := 5.0;                       -- prior strength (pseudo-count)
-  l_halflife constant real := 10.0;             -- evidence half-life, in evaluations
-  d constant real := 0.5 ^ (1.0 / l_halflife);  -- per-evaluation discount
+  l_halflife constant real := 10.0;             -- evidence half-life, in genuine tests
+  d constant real := 0.5 ^ (1.0 / l_halflife);  -- per-test discount
   -- Soft-miss weight: a "not-borne-out" (situation arose, tendency did not
   -- appear) is real but weaker evidence against the prediction than a flat
   -- contradiction, so it counts as a fraction of a miss. This is the one
@@ -6974,6 +6984,9 @@ declare
   -- whole corpus below the reap floor. Recalibrate from the observed live
   -- not-borne-out rate once it exists (raise to hit a target median health);
   -- under-decay is a one-line bump, over-decay needs ~L cycles to re-earn.
+  -- First live reading (2026-07-06, single-user corpus): not-borne-out ran
+  -- 6.7% of genuine tests (124 of 1848 judged since the fire-score floor
+  -- landed on 2026-06-11) - input for the judge-calibration pass.
   w_soft constant real := 0.25;
   v_p0 real;
   affected int;
@@ -6988,8 +7001,6 @@ begin
     select unnest(p_contradicted) as id, 0.0::real as h, 1.0::real   as m
     union all
     select unnest(p_not_borne_out) as id, 0.0::real as h, w_soft     as m
-    union all
-    select unnest(p_not_engaged)  as id, 0.0::real as h, 0.0::real   as m
   ),
   computed as (
     select s.id,
@@ -7011,9 +7022,9 @@ begin
   get diagnostics affected = row_count;
   return affected;
 end $$;
-revoke all on function public.samskara_apply_evaluation(uuid, uuid[], uuid[], uuid[], uuid[])
+revoke all on function public.samskara_apply_evaluation(uuid, uuid[], uuid[], uuid[])
   from public, anon, authenticated;
-grant execute on function public.samskara_apply_evaluation(uuid, uuid[], uuid[], uuid[], uuid[])
+grant execute on function public.samskara_apply_evaluation(uuid, uuid[], uuid[], uuid[])
   to service_role;
 
 -- Reaper: delete repeatedly-contradicted, long-quiet samskaras. Under
@@ -7023,17 +7034,35 @@ grant execute on function public.samskara_apply_evaluation(uuid, uuid[], uuid[],
 -- recurring prediction mid-re-evaluation is never reaped, and never-fired
 -- rows (last_fired_at null - newborns, or the bug-era evidence-less rows
 -- now sitting at p0) are spared by the not-null guard. Returns the count.
+--
+-- The floor is a RATIO of the user's own prior p0, not an absolute. The
+-- original absolute floor (0.15) was unreachable arithmetic: the posterior
+-- is bounded below by k*p0 / (m_max + k), and with k=5, the decay ceiling
+-- m_max = 1/(1-d) ~= 14.4, and the observed p0 ~= 0.95, even a samskara
+-- contradicted on every genuine test forever converges to ~0.25 - above
+-- the floor, so nothing could ever be reaped. At the 0.5 ratio a row is
+-- reaped once its net miss evidence outweighs roughly k genuine tests'
+-- worth of prior (m - c > k when c ~= 0) - reachable, but only through
+-- repeated real failure, never through mere staleness.
 drop function if exists public.samskara_reap_dead(real, int);
 create or replace function public.samskara_reap_dead(
-  p_health_floor real default 0.15,
+  p_floor_ratio real default 0.5,
   p_quiet_days int default 14
 ) returns int
 language plpgsql security definer set search_path = public as $$
 declare
   affected int;
 begin
+  -- One p0 per owner, evaluated once per user rather than per row (the
+  -- prior aggregates the user's whole corpus).
+  with p0 as (
+    select u.user_id, public.samskara_population_p0(u.user_id) as v
+      from (select distinct user_id from public.samskaras) u
+  )
   delete from public.samskaras s
-   where s.health < p_health_floor
+   using p0
+   where p0.user_id = s.user_id
+     and s.health < p_floor_ratio * p0.v
      and s.last_fired_at is not null
      and s.last_fired_at < now() - make_interval(days => p_quiet_days);
   get diagnostics affected = row_count;

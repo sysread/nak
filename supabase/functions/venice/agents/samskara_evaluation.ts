@@ -476,14 +476,17 @@ async function evaluateClaimedThread(
     // samskara_apply_evaluation discounts prior evidence, applies this
     // round's hit / full-miss / soft-miss, and recomputes health =
     // confidence = the posterior shrunk toward the population prior `p0`.
-    // The not-engaged ids ride along so their prior evidence is discounted
-    // (the forgetting) even though they add no hit or miss.
+    // The not-engaged ids are deliberately NOT passed: a loose topical
+    // fire is no test at all, and discounting on it turned out to erase
+    // evidence ~4x faster than genuine tests could accrue it (live data:
+    // ~80% of judged fires land not-engaged and every posterior sat
+    // pinned at p0). Their fire rows keep the verdict stamp above; their
+    // evidence tallies stay untouched.
     const { error: applyErr } = await adminClient.rpc('samskara_apply_evaluation', {
       p_user_id: userId,
       p_held: byVerdict.held,
       p_contradicted: byVerdict.contradicted,
       p_not_borne_out: byVerdict['not-borne-out'],
-      p_not_engaged: byVerdict['not-engaged'],
     });
     if (applyErr) throw new Error(`samskara_apply_evaluation failed: ${applyErr.message}`);
     log.info(

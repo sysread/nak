@@ -7,20 +7,22 @@ The self-calibrating health model that replaced wall-clock decay
 posterior" / "Decay: relevance-gated forgetting"). Health is a derived
 empirical-Bayes posterior, not an accumulator:
 
-- `samskara_apply_evaluation(user, held[], contradicted[], not_borne_out[], not_engaged[])`
+- `samskara_apply_evaluation(user, held[], contradicted[], not_borne_out[])`
   - the verdict-apply the next-day evaluation sweep calls: discount
   prior evidence by `d = 0.5^(1/L)`, fold in the verdict (held ->
   confirm, contradicted -> disconfirm, not-borne-out -> disconfirm
-  `+= w_soft` (0.25, the soft miss), not-engaged -> neither), then
-  recompute `health = confidence = (confirm + k*p0)/(confirm +
-  disconfirm + k)` (k = 5).
+  `+= w_soft` (0.25, the soft miss)), then recompute
+  `health = confidence = (confirm + k*p0)/(confirm + disconfirm + k)`
+  (k = 5). Not-engaged fires are NOT passed at all - no evidence
+  change, no discount; the discount is per GENUINE test.
 - `samskara_population_p0(user)` - the prior: the user's aggregate
   hit rate, weak `0.66` fallback under 20 evidence.
 - The one-shot health reconcile (runs on every schema apply) - the
   free repair: zero-evidence rows evaluate to `p0`.
-- `samskara_reap_dead(floor, quiet_days)` - deletes repeatedly-
-  contradicted, long-quiet rows; the `nak-samskara-reap` pure-SQL cron
-  (`13 * * * *`).
+- `samskara_reap_dead(floor_ratio, quiet_days)` - deletes repeatedly-
+  contradicted, long-quiet rows whose health sits below
+  `floor_ratio * p0` (per user; default ratio 0.5); the
+  `nak-samskara-reap` pure-SQL cron (`13 * * * *`).
 
 The live LLM judge (the sweep reading a settled conversation and
 producing the verdicts) is the **[hosted]** tail below.
@@ -55,21 +57,22 @@ producing the verdicts) is the **[hosted]** tail below.
    begin;
    update samskaras set confirm_count = 0, disconfirm_count = 0,
           health = 0.1, confidence = 0.1 where id = '<row-A>';
-   -- arg order: (user, held[], contradicted[], not_borne_out[], not_engaged[])
+   -- arg order: (user, held[], contradicted[], not_borne_out[])
+   -- not-engaged is NOT an argument: an unengaged fire changes nothing.
    -- held -> a hit
-   select public.samskara_apply_evaluation('<user>', array['<row-A>']::uuid[], '{}'::uuid[], '{}'::uuid[], '{}'::uuid[]);
+   select public.samskara_apply_evaluation('<user>', array['<row-A>']::uuid[], '{}'::uuid[], '{}'::uuid[]);
    select confirm_count, disconfirm_count, round(health::numeric,4) h, round(confidence::numeric,4) c
      from samskaras where id = '<row-A>';
    -- contradicted -> a full miss (discounts the prior confirm, folds in a disconfirm)
-   select public.samskara_apply_evaluation('<user>', '{}'::uuid[], array['<row-A>']::uuid[], '{}'::uuid[], '{}'::uuid[]);
+   select public.samskara_apply_evaluation('<user>', '{}'::uuid[], array['<row-A>']::uuid[], '{}'::uuid[]);
    select confirm_count, disconfirm_count, round(health::numeric,4) h, round(confidence::numeric,4) c
      from samskaras where id = '<row-A>';
    -- not-borne-out -> a SOFT miss (folds in w_soft = 0.25 disconfirm)
-   select public.samskara_apply_evaluation('<user>', '{}'::uuid[], '{}'::uuid[], array['<row-A>']::uuid[], '{}'::uuid[]);
+   select public.samskara_apply_evaluation('<user>', '{}'::uuid[], '{}'::uuid[], array['<row-A>']::uuid[]);
    select confirm_count, disconfirm_count, round(health::numeric,4) h, round(confidence::numeric,4) c
      from samskaras where id = '<row-A>';
-   -- not-engaged -> discount only (no hit, no miss)
-   select public.samskara_apply_evaluation('<user>', '{}'::uuid[], '{}'::uuid[], '{}'::uuid[], array['<row-A>']::uuid[]);
+   -- passing no ids at all is a no-op returning 0 - the not-engaged case
+   select public.samskara_apply_evaluation('<user>', '{}'::uuid[], '{}'::uuid[], '{}'::uuid[]);
    select confirm_count, disconfirm_count, round(health::numeric,4) h, round(confidence::numeric,4) c
      from samskaras where id = '<row-A>';
    rollback;
@@ -82,7 +85,7 @@ producing the verdicts) is the **[hosted]** tail below.
    begin;
    update samskaras set health = 0.05, last_fired_at = now() - interval '15 days' where id = '<row-A>';
    update samskaras set health = 0.05, last_fired_at = now() where id = '<row-B>';
-   select public.samskara_reap_dead();           -- default floor 0.15, quiet 14d
+   select public.samskara_reap_dead();           -- default floor 0.5 * p0, quiet 14d
    select id from samskaras where id in ('<row-A>', '<row-B>');
    rollback;
    ```
@@ -97,13 +100,16 @@ producing the verdicts) is the **[hosted]** tail below.
   discounts to `1*d` and a full disconfirm folds in, so health drops
   below the held value. After `not-borne-out`: a `0.25` disconfirm folds
   in on top of the discounted priors, so health drops but by less than a
-  full contradiction would (the soft miss is quarter-weight). After
-  `not-engaged`: both counts just discount by `d` and health regresses
-  slightly toward `p0`. (`apply_evaluation` returns the count of rows
-  touched: `1` each call.)
-- (3) `<row-A>` (below floor AND quiet 15d) is deleted; `<row-B>`
-  (below floor but fired today) survives - the reaper spares anything
-  fired within `quiet_days`.
+  full contradiction would (the soft miss is quarter-weight). The final
+  empty-arrays call returns `0` and the row's counts and health are
+  byte-identical to the previous read - an unengaged cycle neither adds
+  evidence nor discounts it. (`apply_evaluation` returns the count of
+  rows touched: `1` for each verdict call.)
+- (3) `<row-A>` (below `0.5 * p0` AND quiet 15d) is deleted; `<row-B>`
+  (below the floor but fired today) survives - the reaper spares
+  anything fired within `quiet_days`. (At the sparse-corpus fallback
+  `p0 = 0.66` the effective floor is `0.33`, so the forged `0.05`
+  qualifies.)
 - **[hosted]** the live judge. Against a settled conversation (newest
   message on a prior calendar day, `>= 2` user rounds) that fired
   samskaras, the `nak-samskara-evaluation-sweep` tick claims it, judges
@@ -142,3 +148,4 @@ or just let the next evaluation re-derive them.
 | --- | --- | --- | --- | relevance-gated model (this rewrite) below |
 | 2026-07-03 | hosted | a1c3424 | fail | [hosted] judge tail, post backlog-reset: batched judge returned zero verdicts on long-transcript threads (finish_reason=length at 2048 max_completion_tokens - reasoning burn scales w/ transcript, not verdict-map size); threads correctly retried then parked at the 3-attempt gate, cursor never falsely advanced. |
 | 2026-07-03 | hosted | 09a25f3 | pass | [hosted] judge tail, post budget fix (8192 + reasoning_effort low): first tick judged a long thread, ~479 fires verdicted in one pass, reset backlog draining ~1 thread/10min. not-borne-out still 0 at observation time - verdict-mix watch continues. |
+| --- | --- | --- | --- | evidence model recalibrated 2026-07-06 (not-engaged no longer discounts - decay is per genuine test; reaper floor became a per-user ratio `0.5 * p0`): steps above updated; executions below run the new semantics |
