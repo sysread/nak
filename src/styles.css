@@ -4509,14 +4509,18 @@ button.top-bar-overflow-btn {
    lightens cards in dark mode and gently deepens them in light mode,
    where a literal lighten would vanish against near-white fills.
 
-   Selector family mirrors the terminal muted-bar list above plus the
-   changelog/diagnostic rows' colored variants - keep the two lists in
-   sync when a new card species joins.
+   Selector family is the chat bubbles (.msg.user / .msg.assistant -
+   scoped to the conversational variants so the chrome-stripped
+   .msg.ask-user-host doesn't flash) plus the terminal muted-bar list
+   above and the changelog/diagnostic rows' colored variants - keep
+   the lists in sync when a new card species joins.
 
    :hover is gated on (hover: hover) so touch browsers don't stick a
    phantom highlight on the last-tapped card; :active gives taps a
    momentary flash instead. */
 @media (hover: hover) {
+  .msg.user:hover,
+  .msg.assistant:hover,
   .wiki-changelog-row:hover,
   .memory-changelog-row:hover,
   .health-summary-block:hover,
@@ -4533,6 +4537,8 @@ button.top-bar-overflow-btn {
     );
   }
 }
+.msg.user:active,
+.msg.assistant:active,
 .wiki-changelog-row:active,
 .memory-changelog-row:active,
 .health-summary-block:active,
