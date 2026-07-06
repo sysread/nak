@@ -4498,3 +4498,59 @@ button.top-bar-overflow-btn {
 :root[data-style='terminal'] select {
   background: var(--surface);
 }
+
+/* ---------- Card hover highlight ----------
+   Style-agnostic (applies in soft AND terminal): the informational
+   card stacks respond to pointer attention with a subtle fill shift.
+   The highlight is a translucent text-tint OVERLAY (background-image
+   gradient) rather than a background-color swap because the cards sit
+   on different bases (--surface vs --bg-2) - one overlay reads
+   correctly over any of them, and mixing toward --text means it
+   lightens cards in dark mode and gently deepens them in light mode,
+   where a literal lighten would vanish against near-white fills.
+
+   Selector family is the chat bubbles (.msg.user / .msg.assistant -
+   scoped to the conversational variants so the chrome-stripped
+   .msg.ask-user-host doesn't flash) plus the terminal muted-bar list
+   above and the changelog/diagnostic rows' colored variants - keep
+   the lists in sync when a new card species joins.
+
+   :hover is gated on (hover: hover) so touch browsers don't stick a
+   phantom highlight on the last-tapped card; :active gives taps a
+   momentary flash instead. */
+@media (hover: hover) {
+  .msg.user:hover,
+  .msg.assistant:hover,
+  .wiki-changelog-row:hover,
+  .memory-changelog-row:hover,
+  .health-summary-block:hover,
+  .health-card:hover,
+  .intent-card:hover,
+  .drive-row:hover,
+  .bias-row:hover,
+  .obs-card:hover,
+  .bias-evidence-item:hover,
+  .thread-row:hover {
+    background-image: linear-gradient(
+      color-mix(in srgb, var(--text) 5%, transparent),
+      color-mix(in srgb, var(--text) 5%, transparent)
+    );
+  }
+}
+.msg.user:active,
+.msg.assistant:active,
+.wiki-changelog-row:active,
+.memory-changelog-row:active,
+.health-summary-block:active,
+.health-card:active,
+.intent-card:active,
+.drive-row:active,
+.bias-row:active,
+.obs-card:active,
+.bias-evidence-item:active,
+.thread-row:active {
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--text) 8%, transparent),
+    color-mix(in srgb, var(--text) 8%, transparent)
+  );
+}
