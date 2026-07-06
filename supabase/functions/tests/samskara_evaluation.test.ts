@@ -77,6 +77,31 @@ Deno.test('buildVerdictRequest scopes the skeptical default to the engagement st
   assert(req.includes('Worked examples'), 'missing worked examples');
 });
 
+Deno.test('buildVerdictRequest holds "held" to pointable evidence, not consistency', () => {
+  // The rubber-stamp failure mode: broad meta-tendency predictions are
+  // consistent with any ordinary engaged conversation, and a judge that
+  // treats consistency as confirmation ruled 92.5% of genuine tests
+  // 'held' in prod - pinning the population prior at ~0.95 and leaving
+  // the posterior nothing to discriminate with. Pin the three pieces of
+  // the bar: the pointable-moment requirement, the counterfactual test,
+  // and the broad-prediction worked example that routes the
+  // consistent-but-undemonstrated case to not-borne-out.
+  const req = buildVerdictRequest([{ tag: 'p1', text: 'x' }]);
+  assert(req.includes('SPECIFIC moment'), 'missing the pointable-moment requirement');
+  assert(
+    req.includes('look any different if the prediction were false'),
+    'missing the counterfactual test',
+  );
+  assert(
+    req.includes('Mere consistency is NOT confirmation'),
+    'missing the consistency-is-not-confirmation rule',
+  );
+  assert(
+    req.includes('broad prediction'),
+    'missing the broad-prediction worked example',
+  );
+});
+
 Deno.test('chunkPredictions splits into ordered batches with a short tail', () => {
   const items = ['a', 'b', 'c', 'd', 'e'];
   assertEquals(chunkPredictions(items, 2), [['a', 'b'], ['c', 'd'], ['e']]);

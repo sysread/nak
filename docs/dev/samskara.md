@@ -741,11 +741,18 @@ logs and yields to the next phase.
   decision tree: STEP 1, did the prediction's situation actually arise?
   If not, `not-engaged` (a loose topical fire, no fair test) - the
   skeptical default applies to this question only. STEP 2, for engaged
-  predictions only: `held` (acted as predicted), `contradicted` (did
+  predictions only: `held` (a POINTABLE moment where the user did the
+  predicted thing - mere consistency is not confirmation, and the
+  prompt carries the operational test "would the transcript look any
+  different if the prediction were false?"), `contradicted` (did
   the opposite), or `not-borne-out` (situation arose but the tendency
-  did not appear - a soft miss); the prompt forbids falling back to
+  did not distinctly appear - a soft miss, including the consistent-
+  but-undemonstrated case); the prompt forbids falling back to
   `not-engaged` once the situation is deemed to have arisen, and
-  carries worked examples of all four verdicts. Firing is recall; this
+  carries worked examples of all four verdicts plus the broad-
+  prediction trap. The held bar exists because a consistency-is-
+  confirmation judge ruled 92.5% of genuine tests `held` in prod
+  (2026-07 audit), pinning `p0` at ~0.95. Firing is recall; this
   four-way is precision - splitting the old single `not-engaged` bucket
   is what lets health discriminate (see Health: the verdict posterior).
   Firing is the relevance gate, so an untested prediction is never
@@ -1306,9 +1313,15 @@ summarizer reads samskaras to feed the agent.
   and the reaper had nothing to reap. The two-step prompt (engagement
   gate first, then held / contradicted / not-borne-out with an
   explicit "do not fall back to not-engaged") exists to keep
-  `not-borne-out` reachable. Watch the verdict mix on the Overview
-  panel after any prompt edit: a zero not-borne-out rate over a
-  meaningful window means this regressed.
+  `not-borne-out` reachable. The same class of failure exists on the
+  OTHER side of the gate: a consistency-is-confirmation reading of
+  `held` rubber-stamps broad meta-tendency predictions (92.5% of
+  genuine tests ruled `held` at the 2026-07 audit, `p0` pinned at
+  ~0.95), which is why the prompt's held bar demands a pointable
+  moment and routes consistent-but-undemonstrated to `not-borne-out`.
+  Watch the verdict mix on the Overview panel after any prompt edit:
+  a zero not-borne-out rate over a meaningful window means one of
+  these regressed.
 - **Neutral has no boolean state.** `was_confirmed` is
   true/false/NULL, and a judged not-engaged fire stays NULL -
   indistinguishable on that column from a fire the judge has not
