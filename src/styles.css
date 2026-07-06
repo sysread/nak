@@ -4418,17 +4418,49 @@ button.top-bar-overflow-btn {
   border-left-color: var(--danger);
 }
 
-/* The default-page card stacks - wiki + memory changelog rows and the
-   samskara diagnostics blocks (classes live in their component .svelte
-   files; global CSS reaches them because Svelte scoping only constrains
-   a component's own selectors) - get the same side-border treatment as
-   assistant bubbles: informational content, muted bar. */
+/* The default-page and diagnostic-modal card stacks - wiki + memory
+   changelog rows, the samskara diagnostics blocks, the seedling
+   inspector's intent cards, the intuition drive rows, and the bias
+   profile's row/observation/evidence/thread cards (classes live in
+   their component .svelte files; global CSS reaches them because
+   Svelte scoping only constrains a component's own selectors) - get
+   the same side-border treatment as assistant bubbles: informational
+   content, muted bar. Cards that already carry their own semantic
+   left bar (second-thoughts tone bodies, recall prompt/prose quotes,
+   bias evidence reasons) are deliberately absent - they had the idiom
+   before the terminal style existed and their colors are richer than
+   anything a blanket rule could assign. */
 :root[data-style='terminal'] .wiki-changelog-row,
 :root[data-style='terminal'] .memory-changelog-row,
 :root[data-style='terminal'] .health-summary-block,
 :root[data-style='terminal'] .health-card,
-:root[data-style='terminal'] .intent-card {
+:root[data-style='terminal'] .intent-card,
+:root[data-style='terminal'] .drive-row,
+:root[data-style='terminal'] .bias-row,
+:root[data-style='terminal'] .obs-card,
+:root[data-style='terminal'] .bias-evidence-item,
+:root[data-style='terminal'] .thread-row {
   border-left: 2px solid var(--muted);
+}
+
+/* Bias rows carry their tier as a tier- class (mirroring the changelog
+   rows' kind- pattern) so the bar echoes the tier badge inside the row:
+   accent-strength encodes tier the same way the badge's accent tint
+   does. Elided rows keep the muted bar from the blanket rule above. */
+:root[data-style='terminal'] .bias-row.tier-strong {
+  border-left-color: var(--accent);
+}
+:root[data-style='terminal'] .bias-row.tier-soft {
+  border-left-color: color-mix(in srgb, var(--accent) 45%, var(--muted));
+}
+
+/* The cohort panel's sibling-cluster guide line is drawn with
+   var(--border), which the terminal style sets transparent - the
+   indented list would lose the one line tying siblings to their
+   cluster. Same failure mode as the seedling inspector's feature
+   divider above; redraw it with the terminal edge tone. */
+:root[data-style='terminal'] .sibling-list {
+  border-left-color: var(--edge);
 }
 
 /* Changelog rows carry their action's kind- class (create / update /
