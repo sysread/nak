@@ -555,6 +555,24 @@ Mechanic:
    Leave the remote feature branch alone - the user runs a periodic
    cleanup script. No need to mention the skipped remote delete in
    the summary; it's the expected shape of every merge.
+6. **Watch CI through to green before calling the merge done.** A
+   merge to `main` kicks the Tests workflow, and Deploy chains off it
+   via `workflow_run` - so the Deploy run appears a few minutes after
+   the merge, and a red Deploy is otherwise invisible until the user
+   stumbles on it. Start a background timer (`sleep` via a
+   background Bash task, not a foreground wait) and check both runs
+   when it fires, via the `mcp__github__actions_*` tools (no `gh` in
+   this environment); list runs by workflow file (`tests.yml`,
+   `deploy.yml`). On a failure, read the per-JOB conclusions before
+   diagnosing: Deploy has three jobs (sync-supabase, build, deploy),
+   and the schema/edge-function half can succeed while only the
+   Pages publish fails. Known transient: the `deploy` job's
+   `actions/deploy-pages` step failing with "Deployment failed, try
+   again later" seconds after creating the deployment - remediation
+   is `actions_run_trigger` with `rerun_failed_jobs` (the build
+   artifact is reused), then re-check. A real failure (sync-supabase
+   or build red, or a re-run failing the same way) gets diagnosed
+   and reported, not silently retried in a loop.
 
 If the user says "merge to main" *and* no PR exists, step 2 (open
 the PR) is implied by the merge instruction - this is the one case
