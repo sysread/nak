@@ -133,6 +133,17 @@ export type EvaluationCycleResult = {
 // once the situation is deemed to have arisen, the prompt forbids
 // falling back to not-engaged, so an untested tendency lands on
 // not-borne-out instead of vanishing into no-evidence.
+//
+// STEP 2's "held" bar requires a POINTABLE moment, not mere
+// consistency. The failure mode it exists for: many predictions are
+// broad meta-tendencies ("tends to give detailed context") that any
+// ordinary engaged conversation is consistent with, and a
+// consistency-is-confirmation judge rubber-stamps them - observed in
+// prod as 92.5% of genuine tests landing 'held', which put the
+// population prior at ~0.95 and left the posterior no room to
+// discriminate. The "would the transcript look different if the
+// prediction were false" question is the operational test; a
+// consistent-but-undemonstrated tendency lands on not-borne-out.
 const JUDGE_SYSTEM_PROMPT = [
   'You evaluate standing behavioural predictions about a user against a',
   'conversation they just had. Each prediction is a hypothesis of the',
@@ -163,15 +174,19 @@ function buildVerdictRequest(predictions: { tag: string; text: string }[]): stri
     'arose.',
     '',
     'STEP 2 - outcome, ONLY for predictions whose situation did arise:',
-    '- "held": the user visibly did what the prediction says they tend',
-    '  to do.',
+    '- "held": the transcript shows a SPECIFIC moment where the user did',
+    '  what the prediction says - something you could quote or point to.',
+    '  Mere consistency is NOT confirmation: ask "would this transcript',
+    '  look any different if the prediction were false?" If nothing',
+    '  would change, the prediction was not really tested.',
     '- "contradicted": the user visibly did the opposite.',
     '- "not-borne-out": the situation arose but the predicted tendency',
-    '  did not appear either way. This is the correct verdict when the',
-    '  prediction had its chance and the transcript shows neither',
-    '  confirmation nor contradiction. Once you have decided the',
-    '  situation arose, do NOT fall back to "not-engaged" - pick one of',
-    '  these three.',
+    '  did not distinctly appear either way. This is the correct verdict',
+    '  when the prediction had its chance and the transcript shows',
+    '  neither pointable confirmation nor contradiction - including the',
+    '  consistent-but-undemonstrated case above. Once you have decided',
+    '  the situation arose, do NOT fall back to "not-engaged" - pick one',
+    '  of these three.',
     '',
     'Worked examples for the prediction "when discussing recipes, the',
     'user tends to ask for metric units":',
@@ -185,7 +200,16 @@ function buildVerdictRequest(predictions: { tag: string; text: string }[]): stri
     '- The user asked for the recipe in imperial-only measurements ->',
     '  "contradicted".',
     '',
-    'Be skeptical and require explicit evidence from the transcript.',
+    'Worked example for a broad prediction "in technical discussions,',
+    'the user tends to give detailed context": the user asked two short',
+    'technical questions with ordinary detail. The situation arose, but',
+    'no specific moment demonstrated the tendency - the transcript would',
+    'read the same if the prediction were false -> "not-borne-out". An',
+    'unprompted deep-dive with specs and constraints would have made it',
+    '"held".',
+    '',
+    'Be skeptical: "held" is earned by pointable evidence from the',
+    'transcript, never by plausibility.',
     '',
     'Predictions:',
     ...lines,
@@ -476,14 +500,17 @@ async function evaluateClaimedThread(
     // samskara_apply_evaluation discounts prior evidence, applies this
     // round's hit / full-miss / soft-miss, and recomputes health =
     // confidence = the posterior shrunk toward the population prior `p0`.
-    // The not-engaged ids ride along so their prior evidence is discounted
-    // (the forgetting) even though they add no hit or miss.
+    // The not-engaged ids are deliberately NOT passed: a loose topical
+    // fire is no test at all, and discounting on it turned out to erase
+    // evidence ~4x faster than genuine tests could accrue it (live data:
+    // ~80% of judged fires land not-engaged and every posterior sat
+    // pinned at p0). Their fire rows keep the verdict stamp above; their
+    // evidence tallies stay untouched.
     const { error: applyErr } = await adminClient.rpc('samskara_apply_evaluation', {
       p_user_id: userId,
       p_held: byVerdict.held,
       p_contradicted: byVerdict.contradicted,
       p_not_borne_out: byVerdict['not-borne-out'],
-      p_not_engaged: byVerdict['not-engaged'],
     });
     if (applyErr) throw new Error(`samskara_apply_evaluation failed: ${applyErr.message}`);
     log.info(

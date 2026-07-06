@@ -427,7 +427,7 @@ samskaras (the mint-tier2 phase, see Contracts). Cap is `tier in
   by `samskara_apply_evaluation`; clamped to [0, 1]. **NO threshold
   filter at fire time** - see Gotchas.
 - `fire_count int`; `confirm_count real`, `disconfirm_count
-  real` (fractional by design - the per-evaluation discount and
+  real` (fractional by design - the per-genuine-test discount and
   the `w_soft` soft-miss weight are sub-unit; an int column would
   truncate them to 0; see Gotchas);
   `last_fired_at`, `created_at`, `updated_at`.
@@ -725,8 +725,11 @@ logs and yields to the next phase.
   `nak-samskara-evaluation-sweep` cron. NOT on the turn tail: it waits
   until a conversation has settled (same next-day + `>= 2`-round gate as
   reflection), then judges every samskara that FIRED in the thread and
-  routes the verdicts through `samskara_apply_evaluation` - the sole
-  writer of the verdict tallies and the derived health posterior. The
+  routes the GENUINE-TEST verdicts (held / contradicted / not-borne-out)
+  through `samskara_apply_evaluation` - the sole writer of the verdict
+  tallies and the derived health posterior. Not-engaged verdicts are
+  stamped on the fire rows only; they never reach the RPC (see Health:
+  the verdict posterior). The
   fired-prediction list is judged in batches of `EVALUATION_BATCH_SIZE`
   (20), one structured completion per batch with the transcript resent
   each time - long threads fire 40-90+ distinct samskaras, and a single
@@ -738,11 +741,18 @@ logs and yields to the next phase.
   decision tree: STEP 1, did the prediction's situation actually arise?
   If not, `not-engaged` (a loose topical fire, no fair test) - the
   skeptical default applies to this question only. STEP 2, for engaged
-  predictions only: `held` (acted as predicted), `contradicted` (did
+  predictions only: `held` (a POINTABLE moment where the user did the
+  predicted thing - mere consistency is not confirmation, and the
+  prompt carries the operational test "would the transcript look any
+  different if the prediction were false?"), `contradicted` (did
   the opposite), or `not-borne-out` (situation arose but the tendency
-  did not appear - a soft miss); the prompt forbids falling back to
+  did not distinctly appear - a soft miss, including the consistent-
+  but-undemonstrated case); the prompt forbids falling back to
   `not-engaged` once the situation is deemed to have arisen, and
-  carries worked examples of all four verdicts. Firing is recall; this
+  carries worked examples of all four verdicts plus the broad-
+  prediction trap. The held bar exists because a consistency-is-
+  confirmation judge ruled 92.5% of genuine tests `held` in prod
+  (2026-07 audit), pinning `p0` at ~0.95. Firing is recall; this
   four-way is precision - splitting the old single `not-engaged` bucket
   is what lets health discriminate (see Health: the verdict posterior).
   Firing is the relevance gate, so an untested prediction is never
@@ -815,21 +825,33 @@ prediction hold? `health` and `confidence` are the SAME number now (the
 merge): both are this posterior, so the fire score's
 `sqrt(health * confidence)` collapses to it.
 
-`samskara_apply_evaluation(user, held[], contradicted[], not_borne_out[], not_engaged[])`
-updates each fired samskara online, one discount step plus the verdict:
+`samskara_apply_evaluation(user, held[], contradicted[], not_borne_out[])`
+updates each GENUINELY-TESTED samskara online, one discount step plus
+the verdict:
 
 ```text
 discount prior evidence (the forgetting):
-  confirm_count    *= d        -- d = 0.5 ^ (1/L), L = half-life in evaluations
+  confirm_count    *= d        -- d = 0.5 ^ (1/L), L = half-life in genuine tests
   disconfirm_count *= d
-fold in this evaluation's verdict:
+fold in this test's verdict:
   held          -> confirm_count    += 1
   contradicted  -> disconfirm_count += 1
   not-borne-out -> disconfirm_count += w_soft   -- soft miss, w_soft = 0.25
-  not-engaged   -> neither (the discount above is its only effect)
 recompute the posterior (written to BOTH health and confidence):
   health = confidence = (confirm_count + k*p0) / (confirm_count + disconfirm_count + k)
 ```
+
+`not-engaged` fires are NOT passed to the RPC at all - the verdict is
+stamped on the fire rows for the diagnostics surfaces, but the
+samskara's evidence is untouched. An earlier version passed them for a
+discount-only "forgetting" step; live data killed that: ~80% of judged
+fires land not-engaged (a wide-K cosine fire is usually just a loose
+topical match), so evidence decayed roughly 4x faster than genuine
+tests could accrue it - the largest tally in a 184-row corpus was 5.5
+confirms and every posterior sat pinned at `p0` (156/184 rows at 0.95,
+min 0.77), which made the health axis carry no information. The
+half-life `L` is therefore denominated in genuine tests: firing near a
+conversation neither earns nor costs a samskara anything.
 
 `not-borne-out` is the verdict that gives health teeth. The situation
 arose and the predicted tendency did not appear - real but weaker
@@ -871,22 +893,31 @@ population-derived instead of flat.
 ### Decay: relevance-gated forgetting (no wall clock)
 
 There is no wall-clock decay pass. Forgetting IS the evidence discount
-above: each time a samskara is evaluated without earning a fresh hit, its
-prior evidence shrinks and its posterior regresses toward `p0`. A
-prediction whose topic never recurs is never evaluated, never decays, and
+above: each time a samskara is genuinely tested without earning a fresh
+hit, its prior evidence shrinks and its posterior regresses toward `p0`.
+A prediction whose topic never genuinely arises - whether it never fires
+at all, or fires only as loose not-engaged matches - never decays, and
 waits at its last posterior - untested is not wrong. That is the whole
-point of the redesign: decay tracks *being tested*, not elapsed time, so a
-narrow-but-valid claim is not eroded on the days its topic is absent.
+point of the redesign: decay tracks *being tested*, not elapsed time or
+fire volume, so a narrow-but-valid claim is not eroded on the days its
+topic is absent.
 
 "Dead" therefore means **repeatedly contradicted** - a posterior driven
 well below `p0` by real misses, not mere staleness. The reaper
 (`samskara_reap_dead`, the `nak-samskara-reap` pure-SQL cron at minute
-:13) deletes only rows below a low health floor AND not fired in `>= 14`
+:13) deletes only rows whose health is below a RATIO of the owner's own
+prior (`health < 0.5 * p0`, per user) AND that have not fired in `>= 14`
 days, so genuinely-wrong, long-quiet predictions are cleared while an
 untested-but-baseline one is spared (still eligible to fire and prove
-itself). The baseline-sitting majority is bounded by
-`samskara_collapse_by_cofiring` and the 150-row population cap, not by
-decay.
+itself). The floor is a ratio because an absolute floor was unreachable
+arithmetic: the posterior is bounded below by `k*p0 / (m_max + k)` (the
+decay ceiling `m_max = 1/(1-d) ~= 14.4`), which at the observed
+`p0 ~= 0.95` is ~0.25 - above the old 0.15 floor even for a samskara
+contradicted on every test forever, so the reaper could never fire. At
+the 0.5 ratio a row is reaped once net miss evidence outweighs roughly
+`k` genuine tests' worth of prior. The baseline-sitting majority is
+bounded by `samskara_collapse_by_cofiring` and the 150-row population
+cap, not by decay.
 
 History: this replaced a wall-clock `samskara_decay_sweep` (a per-pass
 health nudge on a 30-minute cron) plus a live 1-10 minute reaction
@@ -1172,7 +1203,7 @@ summarizer reads samskaras to feed the agent.
   bites JS-side vector math.
 - **Verdict counts are `real`; the prior is load-bearing.**
   `confirm_count`/`disconfirm_count` MUST be `real`: the
-  per-evaluation discount (`* 0.5^(1/L)`) and the earlier classifier's
+  per-genuine-test discount (`* 0.5^(1/L)`) and the earlier classifier's
   sub-unit increments are both fractional, and an integer column
   truncates them to 0, freezing health at the prior - the bug that
   once euthanized the whole corpus to 0. Any RPC RETURNS TABLE that
@@ -1282,9 +1313,15 @@ summarizer reads samskaras to feed the agent.
   and the reaper had nothing to reap. The two-step prompt (engagement
   gate first, then held / contradicted / not-borne-out with an
   explicit "do not fall back to not-engaged") exists to keep
-  `not-borne-out` reachable. Watch the verdict mix on the Overview
-  panel after any prompt edit: a zero not-borne-out rate over a
-  meaningful window means this regressed.
+  `not-borne-out` reachable. The same class of failure exists on the
+  OTHER side of the gate: a consistency-is-confirmation reading of
+  `held` rubber-stamps broad meta-tendency predictions (92.5% of
+  genuine tests ruled `held` at the 2026-07 audit, `p0` pinned at
+  ~0.95), which is why the prompt's held bar demands a pointable
+  moment and routes consistent-but-undemonstrated to `not-borne-out`.
+  Watch the verdict mix on the Overview panel after any prompt edit:
+  a zero not-borne-out rate over a meaningful window means one of
+  these regressed.
 - **Neutral has no boolean state.** `was_confirmed` is
   true/false/NULL, and a judged not-engaged fire stays NULL -
   indistinguishable on that column from a fire the judge has not
