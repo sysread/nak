@@ -13872,3 +13872,192 @@ exception when others then
   raise notice 'conversation digest sweep cron setup skipped: %', sqlerrm;
 end
 $cron$;
+||||||| parent of fece5c2 (Add MCP integration tables (mcp_integrations, mcp_oauth_tokens, mcp_integration_tools))
+
+-- mcp_integrations -------------------------------------------------------
+--
+-- One row per remote MCP server a user has connected. The browser
+-- Settings "Integrations" pane inserts a row on paste-URL; the edge
+-- function's mcp-discover route fills in the OAuth metadata and the
+-- mcp-register route fills in client_id via RFC 7591 DCR; the
+-- mcp-token-exchange route stores the first access + refresh token
+-- in mcp_oauth_tokens; subsequent mcp-token-refresh calls rotate the
+-- token row. The chat model toggles a per-server "mcp:<label>"
+-- toolbox; the edge function's performToolCall dispatches against
+-- the server URL with the stored bearer token.
+--
+-- Token storage lives in a separate table (mcp_oauth_tokens) so the
+-- integration row itself - which the browser reads for the settings
+-- list - never carries secrets. The access_token is still a bearer
+-- credential and must never be returned to the browser; all reads of
+-- mcp_oauth_tokens happen service-role from the edge function.
+
+create table if not exists public.mcp_integrations (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  -- User-supplied label for the integration, shown in the settings
+  -- list and used as the toolbox display name prefix.
+  label text not null,
+  -- The remote MCP server URL the user pasted. Unique per user so a
+  -- second paste of the same URL updates the existing row instead of
+  -- creating a duplicate.
+  server_url text not null,
+  -- Whether this server's auth advertised RFC 7591 Dynamic Client
+  -- Registration. If true, nak self-registered on the fly. If false,
+  -- the client_id was user-pasted (tier 2) or shipped as a curated
+  -- constant (tier 1 - not yet implemented).
+  supports_dcr boolean not null default false,
+  -- OAuth client registration. Minted by DCR (supports_dcr=true) or
+  -- pasted by the user (tier 2). client_secret is null for public
+  -- clients (PKCE-only, the common case for MCP servers).
+  client_id text,
+  client_secret text,
+  -- The redirect URI nak used for this integration's OAuth flow.
+  -- Stored so a re-authorization uses the same registered URI.
+  registered_redirect_uri text,
+  -- The auth status: 'pending' = user pasted URL but OAuth not yet
+  -- completed; 'authorized' = tokens stored and ready; 'revoked' =
+  -- token refresh failed permanently or the user removed access.
+  auth_status text not null default 'pending',
+  -- Cached RFC 8414 + RFC 9728 metadata from the discovery chain, so
+  -- the edge function doesn't refetch on every tool-dispatch refresh.
+  discovered_metadata jsonb,
+  -- The scopes the user actually granted. Array of scope strings.
+  granted_scopes text[] not null default '{}',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (user_id, server_url)
+);
+
+alter table public.mcp_integrations enable row level security;
+
+drop policy if exists "mcp_integrations are self-selectable" on public.mcp_integrations;
+create policy "mcp_integrations are self-selectable" on public.mcp_integrations
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "mcp_integrations are self-insertable" on public.mcp_integrations;
+create policy "mcp_integrations are self-insertable" on public.mcp_integrations
+  for insert with check (auth.uid() = user_id);
+
+drop policy if exists "mcp_integrations are self-updatable" on public.mcp_integrations;
+create policy "mcp_integrations are self-updatable" on public.mcp_integrations
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "mcp_integrations are self-deletable" on public.mcp_integrations;
+create policy "mcp_integrations are self-deletable" on public.mcp_integrations
+  for delete using (auth.uid() = user_id);
+
+create index if not exists mcp_integrations_user_idx
+  on public.mcp_integrations (user_id, updated_at desc);
+
+-- mcp_oauth_tokens -------------------------------------------------------
+--
+-- Per-integration OAuth token storage. One row per mcp_integrations
+-- row (1:1). Written and read exclusively by the edge function using
+-- the service-role client - the browser never touches this table. The
+-- access_token and refresh_token are bearer credentials; RLS still
+-- gates the table (auth.uid() = user_id) as defense in depth, but the
+-- security boundary is that no browser code path reads from it.
+--
+-- Refresh-token rotation: some MCP servers (Fastmail, and OAuth 2.1
+-- public clients per spec) return a NEW refresh_token on every
+-- refresh and invalidate the old one on reuse. The edge function's
+-- refresh handler must write-then-replace: update both token columns
+-- atomically, never let two devices race a refresh on the same row
+-- (one gets rotated-out and the whole grant dies). For v1 single-
+-- device use this is a straightforward UPDATE; cross-device
+-- coordination is deferred (see plan open question 2).
+
+create table if not exists public.mcp_oauth_tokens (
+  id uuid primary key default gen_random_uuid(),
+  integration_id uuid not null references public.mcp_integrations(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  access_token text not null,
+  -- When the access token expires (epoch ms), from the token response
+  -- expires_in. Null means the server didn't return an expiry (treat
+  -- as already-expired so the first use triggers a refresh).
+  access_token_expires_at bigint,
+  refresh_token text,
+  refresh_token_rotated_at timestamptz,
+  last_refreshed_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (integration_id)
+);
+
+alter table public.mcp_oauth_tokens enable row level security;
+
+drop policy if exists "mcp_oauth_tokens are self-selectable" on public.mcp_oauth_tokens;
+create policy "mcp_oauth_tokens are self-selectable" on public.mcp_oauth_tokens
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "mcp_oauth_tokens are self-insertable" on public.mcp_oauth_tokens;
+create policy "mcp_oauth_tokens are self-insertable" on public.mcp_oauth_tokens
+  for insert with check (auth.uid() = user_id);
+
+drop policy if exists "mcp_oauth_tokens are self-updatable" on public.mcp_oauth_tokens;
+create policy "mcp_oauth_tokens are self-updatable" on public.mcp_oauth_tokens
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "mcp_oauth_tokens are self-deletable" on public.mcp_oauth_tokens;
+create policy "mcp_oauth_tokens are self-deletable" on public.mcp_oauth_tokens
+  for delete using (auth.uid() = user_id);
+
+create index if not exists mcp_oauth_tokens_integration_idx
+  on public.mcp_oauth_tokens (integration_id);
+
+-- mcp_integration_tools --------------------------------------------------
+--
+-- Cached MCP tool catalog per integration. Populated after OAuth by
+-- calling tools/list on the MCP server; consulted at chat-dispatch
+-- time to build the wire `tools` array entry for the integration's
+-- gated "mcp:<label>" toolbox. Refreshed on integration-add and
+-- periodically thereafter (the edge function decides the cadence).
+--
+-- The wire_schema column holds the JSON Schema for the tool's input
+-- parameters (the inputSchema field from the MCP tools/list
+-- response). The description column holds the full tool description
+-- (for the wire `tools` array). The short_description column holds
+-- the <50-char brief for the system-prompt catalog line.
+
+create table if not exists public.mcp_integration_tools (
+  id uuid primary key default gen_random_uuid(),
+  integration_id uuid not null references public.mcp_integrations(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  -- The tool name as the MCP server defines it (e.g. "search_email").
+  -- The wire tool name is namespaced as "mcp_<integrationId>_<name>"
+  -- to avoid collisions; the edge function resolves the mapping.
+  server_tool_name text not null,
+  -- Full description from the MCP server (for the wire tools array).
+  description text not null default '',
+  -- <50-char brief for the system-prompt catalog line.
+  short_description text not null default '',
+  -- JSON Schema for the tool's input parameters (inputSchema from
+  -- the MCP tools/list response).
+  wire_schema jsonb not null default '{}'::jsonb,
+  last_refreshed_at timestamptz not null default now(),
+  -- One row per (integration, server_tool_name).
+  unique (integration_id, server_tool_name)
+);
+
+alter table public.mcp_integration_tools enable row level security;
+
+drop policy if exists "mcp_integration_tools are self-selectable" on public.mcp_integration_tools;
+create policy "mcp_integration_tools are self-selectable" on public.mcp_integration_tools
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "mcp_integration_tools are self-insertable" on public.mcp_integration_tools;
+create policy "mcp_integration_tools are self-insertable" on public.mcp_integration_tools
+  for insert with check (auth.uid() = user_id);
+
+drop policy if exists "mcp_integration_tools are self-updatable" on public.mcp_integration_tools;
+create policy "mcp_integration_tools are self-updatable" on public.mcp_integration_tools
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "mcp_integration_tools are self-deletable" on public.mcp_integration_tools;
+create policy "mcp_integration_tools are self-deletable" on public.mcp_integration_tools
+  for delete using (auth.uid() = user_id);
+
+create index if not exists mcp_integration_tools_integration_idx
+  on public.mcp_integration_tools (integration_id);
+
