@@ -27,11 +27,13 @@ import { serverSideTool } from '../tools/server_side';
  * redirects back to `origin/?code=...&state=...`, and the routing layer
  * (../routing.svelte.ts) detects the `code` + `state` query params on
  * boot, stashes them in sessionStorage, and cleans the URL so the app
- * boots clean. HTTPS is required by the MCP authorization spec, which
- * `window.location.origin` satisfies on the deployed Pages URL.
+ * boots clean. HTTPS is required by the MCP authorization spec. Uses
+ * the full path (origin + pathname) so redirects land on the PWA
+ * itself, not the origin root — GitHub Pages serves from a subdirectory
+ * and redirecting to just the origin would 404.
  */
 export function mcpRedirectUri(): string {
-  return window.location.origin + '/';
+  return window.location.origin + window.location.pathname;
 }
 
 /** Human-readable label for an integration's auth status. */
