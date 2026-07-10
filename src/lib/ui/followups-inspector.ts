@@ -73,11 +73,18 @@ export function openStatusChip(
 }
 
 /** "Jul 6" style short date for the asking-after chip. Locale-stable
- *  (en-US) so tests and screenshots don't drift by machine locale. */
+ *  (en-US) so output doesn't drift by machine locale, and rendered in
+ *  UTC because relevant_after is a calendar date, not an instant: the
+ *  followup tools accept bare dates ("2026-07-06") that Date.parse
+ *  stores as midnight UTC, so local-time rendering shows the previous
+ *  day to any user west of UTC - the chip read "asking after Jul 5"
+ *  for a follow-up recorded as July 6 (and made the pinning test
+ *  timezone-dependent: green on UTC CI, red on a local machine). */
 function formatShortDate(ms: number): string {
   return new Date(ms).toLocaleDateString('en-US', {
     month: 'short',
     day: 'numeric',
+    timeZone: 'UTC',
   });
 }
 
