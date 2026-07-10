@@ -1405,6 +1405,9 @@ async function handleMcpRegister(req: Request): Promise<Response> {
   } catch {
     return json({ error: 'invalid JSON body' }, 400);
   }
+  console.log(
+    `mcp-register: serverUrl=${body.serverUrl} redirectUri=${body.redirectUri} label=${body.label} integrationId=${body.integrationId ?? 'none'}`,
+  );
   if (typeof body.serverUrl !== 'string' || body.serverUrl.length === 0) {
     return json({ error: 'body must include `serverUrl`' }, 400);
   }
