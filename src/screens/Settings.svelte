@@ -1042,9 +1042,10 @@
   // --- Integrations pane handlers (MCP) ---
 
   /**
-   * Complete an OAuth callback that landed on `#mcp-callback`. Runs
-   * once on mount: the routing layer already stashed the code + state
-   * off the hash (see consumeMcpCallbackHash in routing.svelte.ts);
+   * Complete an OAuth callback that landed on the root URL with
+   * `?code=...&state=...` query params. Runs once on mount: the
+   * routing layer already stashed the code + state off the query
+   * params (see consumeMcpCallbackParams in routing.svelte.ts);
    * this reads the stashed register context (PKCE verifier + state +
    * integration id + redirect URI), calls the token-exchange route,
    * and refreshes the integration list so the new `authorized` row +
@@ -1128,7 +1129,7 @@
       // Stash the PKCE material BEFORE the redirect - the round-trip
       // is a full page navigation and nothing in memory survives it.
       // The routing layer stashes the code + state off the return
-      // hash; completeMcpCallback reads both halves back on mount.
+      // query params; completeMcpCallback reads both halves back on mount.
       stashMcpRegisterContext({
         integrationId: reg.integrationId,
         codeVerifier: reg.codeVerifier,
@@ -1179,7 +1180,7 @@
   }
 
   // On mount, complete any OAuth callback the routing layer stashed
-  // off the `#mcp-callback` hash. Runs once; the stashed code is
+  // off the query params. Runs once; the stashed code is
   // consumed (cleared) whether the exchange succeeds or fails so a
   // stale callback can't drive a second attempt.
   onMount(() => {
@@ -2550,9 +2551,9 @@
              DCR registration, stores tokens server-side, and exposes
              the server's tools to the chat model as a gated
              `mcp:<id>` toolbox. The OAuth round-trip is a full page
-             redirect; the routing layer catches the `#mcp-callback`
-             hash on return and completeMcpCallback (fired on mount)
-             finishes the token exchange. -->
+             redirect; the routing layer catches the OAuth `code` +
+             `state` query params on return and completeMcpCallback
+             (fired on mount) finishes the token exchange. -->
         <h2>Integrations</h2>
         <p class="subtle">
           Connect a remote MCP server (Fastmail, or any streamable-HTTP

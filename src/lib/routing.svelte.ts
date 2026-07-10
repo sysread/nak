@@ -312,37 +312,33 @@ function syncFromUrl(): void {
  * Detect an MCP OAuth callback on boot and stash the code + state for
  * the Settings Integrations pane to complete the token exchange.
  *
- * The deploy target (GitHub Pages, no SPA fallback) can't receive a
- * path-style OAuth redirect - `/mcp-callback` would 404 on the return
- * hop - so the OAuth flow returns to `/#mcp-callback?code=...&state=...`
- * (or `/#mcp-callback` with the params in `location.search`, depending
- * on the server). This parses the params out of whichever half carried
- * them, stashes them in sessionStorage under the keys the Settings pane
- * reads (see src/lib/ui/mcp.ts), and clears the hash so the app boots
- * clean and the routing parse doesn't see a stray fragment.
+ * The OAuth provider redirects back to `origin/?code=...&state=...`
+ * (no hash fragment - OAuth 2.1 forbids fragments in redirect URIs).
+ * This detects `code` + `state` in `location.search`, stashes them in
+ * sessionStorage under the keys the Settings pane reads (see
+ * src/lib/ui/mcp.ts), and cleans the URL so the app boots without
+ * stray OAuth params in the address bar.
  *
- * No-op when the hash isn't an MCP callback. Runs once at the top of
+ * No-op when there are no code + state params. Runs once at the top of
  * `initRouting()` (the boot-time URL handler) so the stash lands before
  * any pane mounts and reads it.
  */
-function consumeMcpCallbackHash(): void {
+function consumeMcpCallbackParams(): void {
   if (typeof window === 'undefined') return;
-  const hash = window.location.hash;
-  if (!hash.startsWith('#mcp-callback')) return;
-  // The fragment after `#mcp-callback` may carry the OAuth params as a
-  // query string (`?code=...&state=...`). Some servers put the params
-  // in location.search and leave the hash bare; check both so neither
-  // server convention loses the code.
-  const fragment = hash.slice('#mcp-callback'.length);
-  const paramStr = fragment.startsWith('?') ? fragment.slice(1) : window.location.search;
-  const params = new URLSearchParams(paramStr);
+  const params = new URLSearchParams(window.location.search);
   const code = params.get('code');
   const state = params.get('state');
+  if (!code) return;
   if (code) sessionStorage.setItem(MCP_CALLBACK_CODE_KEY, code);
   if (state) sessionStorage.setItem(MCP_CALLBACK_STATE_KEY, state);
-  // Clear the hash without leaving a stray `#` in the URL bar. Keeps
-  // location.search so any routed keys (cid / drawer / modal) survive.
-  history.replaceState(null, '', window.location.pathname + window.location.search);
+  // Strip the OAuth params so the address bar is clean on boot and the
+  // routing parse doesn't see stray code/state keys. Preserve any
+  // routed keys (cid / drawer / modal) the user had in the URL.
+  params.delete('code');
+  params.delete('state');
+  const remaining = params.toString();
+  const cleanSearch = remaining ? `?${remaining}` : '';
+  history.replaceState(null, '', window.location.pathname + cleanSearch);
 }
 
 /**
@@ -354,10 +350,10 @@ export function initRouting(): void {
   if (initialized) return;
   initialized = true;
   if (typeof window === 'undefined') return;
-  // Drain an MCP OAuth callback hash BEFORE the route parse so the
-  // stash lands in sessionStorage and the hash is cleared ahead of
-  // syncFromUrl (which would otherwise preserve the fragment).
-  consumeMcpCallbackHash();
+  // Drain an MCP OAuth callback BEFORE the route parse so the
+  // stash lands in sessionStorage and the OAuth params are cleared
+  // from the URL ahead of syncFromUrl.
+  consumeMcpCallbackParams();
   syncFromUrl();
   window.addEventListener('popstate', syncFromUrl);
 }

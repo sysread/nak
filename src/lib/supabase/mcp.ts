@@ -173,7 +173,7 @@ export async function invokeMcpDiscover(
  * to authzUrl - the OAuth round-trip is a full page navigation, so
  * nothing in memory survives it. See src/lib/ui/mcp.ts for the
  * sessionStorage keys + src/lib/routing.svelte.ts for the
- * `#mcp-callback` detection that picks the code + state back up.
+ * query-param callback detection that picks the code + state back up.
  */
 export async function invokeMcpRegister(
   client: SupabaseClient,

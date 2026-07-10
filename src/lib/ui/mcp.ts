@@ -21,17 +21,17 @@ import type { Toolbox, ToolDef } from '../tools';
 import { serverSideTool } from '../tools/server_side';
 
 /**
- * The OAuth redirect URI nak registers with each MCP server. The
- * deploy target is GitHub Pages with no SPA fallback, so a path-style
- * callback (/mcp-callback) would 404 on the return hop. The hash
- * fragment keeps the return on the root index.html; the routing layer
- * (../routing.svelte.ts) detects `#mcp-callback` on boot, stashes the
- * code + state in sessionStorage, and clears the hash so the app
+ * The OAuth redirect URI nak registers with each MCP server. Just the
+ * origin root - OAuth 2.1 forbids fragments (`#`) in redirect URIs and
+ * Fastmail explicitly rejects them at DCR time. The OAuth provider
+ * redirects back to `origin/?code=...&state=...`, and the routing layer
+ * (../routing.svelte.ts) detects the `code` + `state` query params on
+ * boot, stashes them in sessionStorage, and cleans the URL so the app
  * boots clean. HTTPS is required by the MCP authorization spec, which
  * `window.location.origin` satisfies on the deployed Pages URL.
  */
 export function mcpRedirectUri(): string {
-  return window.location.origin + '/#mcp-callback';
+  return window.location.origin + '/';
 }
 
 /** Human-readable label for an integration's auth status. */
@@ -130,7 +130,7 @@ export function buildMcpToolboxes(
 // so nothing in memory survives it. The register step stashes the
 // PKCE verifier + state + integration id + redirect URI here before
 // the redirect; the routing layer stashes the code + state it parses
-// out of the `#mcp-callback` hash on return; the Settings Integrations
+// out of the query params on return; the Settings Integrations
 // pane reads both halves on mount to complete the token exchange, then
 // clears them. Centralised here so the writer (Settings pane) and the
 // reader (routing + Settings pane) stay in sync without a shared
@@ -144,9 +144,9 @@ export const MCP_REGISTER_STATE_KEY = 'nak:mcp-pkce:state';
 export const MCP_REGISTER_ID_KEY = 'nak:mcp-pkce:integration-id';
 /** Redirect URI used at register; must match at token exchange. */
 export const MCP_REGISTER_REDIRECT_KEY = 'nak:mcp-pkce:redirect';
-/** Authorization code the routing layer parsed off the callback hash. */
+/** Authorization code the routing layer parsed off the callback query params. */
 export const MCP_CALLBACK_CODE_KEY = 'nak:mcp-callback:code';
-/** State the routing layer parsed off the callback hash. */
+/** State the routing layer parsed off the callback query params. */
 export const MCP_CALLBACK_STATE_KEY = 'nak:mcp-callback:state';
 
 /**
@@ -154,7 +154,7 @@ export const MCP_CALLBACK_STATE_KEY = 'nak:mcp-callback:state';
  * can complete the token exchange. Writer: the Settings Integrations
  * pane, immediately before `window.location.href = authzUrl`. Reader:
  * the same pane on mount, after the routing layer has stashed the
- * code + state from the `#mcp-callback` hash.
+ * code + state from the callback query params.
  */
 export function stashMcpRegisterContext(ctx: {
   integrationId: string;
@@ -206,7 +206,7 @@ export function clearMcpRegisterContext(): void {
 
 /**
  * Read + clear the OAuth callback code + state the routing layer
- * stashed off the `#mcp-callback` hash. Returns null when no callback
+ * stashed off the callback query params. Returns null when no callback
  * landed (the keys are absent or were already consumed). Clears the
  * keys unconditionally so a stale callback can't drive a second
  * exchange.
