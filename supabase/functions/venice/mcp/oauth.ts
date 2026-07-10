@@ -178,6 +178,10 @@ export interface DiscoveredMetadata {
   resource: string;
   /** Raw RFC 9728 metadata, including `authorization_servers: string[]`. */
   resourceMetadata: Record<string, unknown>;
+  /** The `scope` parameter from the 401's WWW-Authenticate header — the
+   * MCP server's exact scope gating string (tier 1 in the SDK's
+   * resolution). Null when the header didn't carry one. */
+  requiredScope: string | null;
   /** One entry per `authorization_servers` issuer, with plucked RFC 8414 fields + raw. */
   authServers: AuthServerMetadata[];
   /** True when any auth server advertised `registration_endpoint` (RFC 7591 DCR). */
@@ -257,6 +261,24 @@ function mcpToolsCallRequest(
 // ---------------------------------------------------------------------------
 // Discovery
 // ---------------------------------------------------------------------------
+
+/**
+ * Parse a `WWW-Authenticate: Bearer resource_metadata="..."
+ * scope="..."` header. Returns a parsed scope string (still
+ * space-separated) or null when the header carries no `scope=`
+ * parameter. This is tier 1 in the SDK's scope resolution — the
+ * MCP server says exactly which scopes it requires.
+ */
+export function parseScopeFromHeader(
+  headerValue: string | null,
+): string | null {
+  if (!headerValue) return null;
+  const quoted = headerValue.match(/scope="([^"]+)"/i);
+  if (quoted && quoted[1]) return quoted[1];
+  const bare = headerValue.match(/scope=([^\s,]+)/i);
+  if (bare && bare[1]) return bare[1];
+  return null;
+}
 
 /**
  * Parse a `WWW-Authenticate: Bearer resource_metadata="..."`
@@ -342,6 +364,7 @@ export async function discoverMetadata(
     return {
       resource,
       resourceMetadata: {},
+      requiredScope: null,
       authServers: [],
       supportsDcr: false,
       authNotRequired: true,
@@ -482,9 +505,14 @@ export async function discoverMetadata(
       s.registration_endpoint.length > 0,
   );
 
+  const requiredScope = parseScopeFromHeader(
+    probe.headers.get('WWW-Authenticate'),
+  );
+
   return {
     resource,
     resourceMetadata,
+    requiredScope,
     authServers,
     supportsDcr,
     authNotRequired: false,
@@ -516,6 +544,7 @@ export async function registerClient(
   redirectUri: string,
   clientName: string,
   fetchFn: FetchLike = defaultFetch,
+  scopes?: string[],
 ): Promise<RegisteredClient> {
   if (!authServerMetadata.registration_endpoint) {
     throw new VeniceError(
@@ -523,6 +552,7 @@ export async function registerClient(
       'auth',
     );
   }
+  const scopeString = scopes && scopes.length > 0 ? scopes.join(' ') : undefined;
   const resp = await fetchFn(authServerMetadata.registration_endpoint, {
     method: 'POST',
     headers: {
@@ -535,7 +565,7 @@ export async function registerClient(
       grant_types: ['authorization_code', 'refresh_token'],
       response_types: ['code'],
       token_endpoint_auth_method: 'none',
-      scope: 'offline_access',
+      scope: scopeString,
     }),
   });
   if (!resp.ok) {
@@ -605,15 +635,7 @@ export function buildAuthzUrl(
   u.searchParams.set('client_id', clientId);
   u.searchParams.set('redirect_uri', redirectUri);
   u.searchParams.set('response_type', 'code');
-  // Prepend `offline_access` if the caller didn't ask for it; MCP
-  // Authorization §6.2 makes the refresh grant depend on the
-  // `offline_access` scope and we never want a re-authorization
-  // cycle just because a settings UI omitted it.
-  const scopeSet = new Set([
-    'offline_access',
-    ...scopes.filter((s) => s.length > 0),
-  ]);
-  u.searchParams.set('scope', Array.from(scopeSet).join(' '));
+  u.searchParams.set('scope', scopes.join(' '));
   u.searchParams.set('code_challenge', codeChallenge);
   u.searchParams.set('code_challenge_method', 'S256');
   u.searchParams.set('state', state);
@@ -792,11 +814,14 @@ export async function listMcpTools(
     ...extra,
   });
 
-  // initialize - we treat an HTTP failure here as terminal (the
+  // initialize — we treat an HTTP failure here as terminal (the
   // token is rejected, the server is down, or the URL is wrong).
   // A 200 with an MCP error payload means the server is up but the
   // request itself failed; we surface that as a parse error so the
   // caller can tell "couldn't list tools" from "token rejected".
+  // Streamable HTTP servers return a `Mcp-Session-Id` header on
+  // the initialize response; subsequent requests (tools/list,
+  // tools/call) must echo it back.
   const initResp = await fetchFn(resource, {
     method: 'POST',
     headers: headers(),
@@ -810,10 +835,11 @@ export async function listMcpTools(
     );
   }
   await drainMcpResponse(initResp);
+  const sessionId = initResp.headers.get('Mcp-Session-Id');
 
   const listResp = await fetchFn(resource, {
     method: 'POST',
-    headers: headers(),
+    headers: headers(sessionId ? { 'Mcp-Session-Id': sessionId } : undefined),
     body: JSON.stringify(mcpToolsListRequest()),
   });
   if (!listResp.ok) {
@@ -863,14 +889,37 @@ export async function callMcpTool(
   isError: boolean;
 }> {
   const resource = normalizeResource(serverUrl);
+  const headers = (extra?: Record<string, string>): Record<string, string> => ({
+    'Content-Type': 'application/json',
+    Accept: 'application/json, text/event-stream',
+    Authorization: `Bearer ${accessToken}`,
+    ...extra,
+  });
+
+  // initialize to get the session ID the tools/call route needs.
+  // v1 does not cache the session ID across tool calls; each call
+  // pays one extra round trip. The session ID is per-transport, not
+  // per-auth-session, so caching it on the oauth token row would be
+  // the correct optimization when this round trip hurts.
+  const initResp = await fetchFn(resource, {
+    method: 'POST',
+    headers: headers(),
+    body: JSON.stringify(mcpInitializeRequest()),
+  });
+  if (!initResp.ok) {
+    throw new VeniceError(
+      `MCP \`initialize\` against ${resource} failed: ${initResp.status}`,
+      initResp.status === 401 ? 'auth' : 'http',
+      initResp.status,
+    );
+  }
+  await drainMcpResponse(initResp);
+  const sessionId = initResp.headers.get('Mcp-Session-Id');
+
   const id = Math.floor(Math.random() * 1_000_000) + 1;
   const resp = await fetchFn(resource, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Accept: 'application/json, text/event-stream',
-      Authorization: `Bearer ${accessToken}`,
-    },
+    headers: headers(sessionId ? { 'Mcp-Session-Id': sessionId } : undefined),
     body: JSON.stringify(mcpToolsCallRequest(id, serverToolName, args)),
   });
   if (!resp.ok) {

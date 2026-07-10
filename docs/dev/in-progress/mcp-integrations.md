@@ -4,8 +4,8 @@
 > `mcp-integrations`.** Full-stack wired — settings UI, OAuth
 > flow with DCR discovery + PKCE + token exchange, per-user
 > tool-catalog caching, dynamic toolbox popup, edge-side
-> dispatch. Fastmail end-to-end verification blocked on
-> server-side scope policy (see Gotchas).
+> dispatch. Fastmail end-to-end verified 2026-07-10 with 10
+> tools (all read-only).
 
 ## Role in the app
 
@@ -466,28 +466,18 @@ nak's own system prompt. Two distinct risks:
   unlinked from the README until graduation; graduation
   happens when the feature ships (the "Current status" header
   at the top of this doc is the live state).
-- **Fastmail's DCR grants only `offline_access`.** Verified
-  2026-07-10 via live OAuth flow against Fastmail's MCP auth
-  server. Dynamically-registered clients (RFC 7591 DCR) return
-  `invalid_scope` for any scope beyond `offline_access` —
-  the `urn:ietf:params:oauth:scope:mail` / contacts / calendars
-  family and the `https://www.fastmail.com/dev/mcp` protocol
-  scope are all rejected. The resulting access token produces
-  a 403 on `tools/list` because the MCP server gates access on
-  a scope the token doesn't carry. Fastmail's consent screen
-  DOES render the mail scope's permission checkboxes (read
-  mail, send mail, etc.) during the OAuth flow — the rejection
-  happens at the authorization-server level, not the consent
-  layer. The working hypothesis is that Fastmail gates
-  functional scopes behind manually-registered clients
-  (`partnerships@fastmail.com`), not DCR. This is a Fastmail
-  policy choice, not a protocol limitation — the MCP auth spec
-  does not constrain what scopes a DCR-minted client may
-  request. Other MCP servers with permissive DCR policies will
-  work end-to-end. The scope-discover-and-auto-include
-  machinery in `handleMcpRegister` filters `urn:` and
-  `https://` scopes for this reason; remove those filters
-  once a permissive server is known.
+- **Fastmail's DCR scope is `offline_access`-free.** Verified
+  2026-07-10 via live OAuth + tools/list + tools/call. The
+  scope the MCP server requires is `https://www.fastmail.com/dev/mcp`
+  — extracted from the 401's `WWW-Authenticate` header (`scope=`
+  param, tier 1 per the MCP SDK). Including `offline_access`
+  alongside it returns `invalid_scope` from Fastmail's auth
+  server; the SDK's scope string is JUST the MCP scope. The
+  consent screen still renders the mail-scope checkboxes
+  (they map to the MCP scope's permission level), and the
+  resulting token grants full R/W access. Nak's
+  `discoverMetadata` now parses `scope` from the 401 header
+  and `buildAuthzUrl` no longer hardcodes `offline_access`.
 
 ## Where to go next
 

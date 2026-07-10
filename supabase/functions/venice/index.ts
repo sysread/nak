@@ -1459,26 +1459,31 @@ async function handleMcpRegister(req: Request): Promise<Response> {
     }
   }
 
-  // Auto-include every scope the server advertised during discovery so
-  // the user doesn't need to manually enumerate them. Skip
-  // `offline_access` (buildAuthzUrl prepends it unconditionally) and
-  // HTTPS-URL scopes (the MCP protocol's own identity scope — requesting
-  // it alongside the resource param returns `invalid_scope` from some
-  // servers). Skip `urn:ietf:params:oauth:scope:*` scopes too for now —
-  // Fastmail rejects them for dynamically-registered clients; the
-  // resource parameter carries the MCP endpoint identity on its own.
+  // Scope resolution, mirroring the MCP SDK's three-tier priority:
+  //   1. `scope` from the 401's WWW-Authenticate header (exact MCP gate)
+  //   2. `scopes_supported` from the RFC 9728 protected-resource metadata
+  //   3. `scopes_supported` from the RFC 8414 auth-server metadata
+  // `offline_access` is skipped here — buildAuthzUrl prepends it.
   if (scopes.length === 0) {
-    for (const as of discovered.authServers) {
-      const supported = as.scopes_supported;
-      if (Array.isArray(supported)) {
-        for (const s of supported) {
-          if (typeof s !== 'string' || s.length === 0) continue;
-          if (s === 'offline_access') continue;
-          if (s.startsWith('https://')) continue;
-          if (s.startsWith('urn:')) continue;
-          scopes.push(s);
+    const primary = (() => {
+      if (discovered.requiredScope) return discovered.requiredScope.split(' ').filter((s) => s.length > 0);
+      const rmScopes = Array.isArray(discovered.resourceMetadata?.scopes_supported)
+        ? (discovered.resourceMetadata.scopes_supported as unknown[]).filter(
+            (s): s is string => typeof s === 'string' && s.length > 0,
+          )
+        : [];
+      if (rmScopes.length > 0) return rmScopes;
+      const asScopes: string[] = [];
+      for (const as of discovered.authServers) {
+        for (const s of as.scopes_supported ?? []) {
+          if (s.length > 0) asScopes.push(s);
         }
       }
+      return asScopes;
+    })();
+    for (const s of primary) {
+      if (s.length === 0) continue;
+      scopes.push(s);
     }
   }
 
@@ -1503,7 +1508,7 @@ async function handleMcpRegister(req: Request): Promise<Response> {
       return json({ error: 'discovery advertised DCR but no reachable auth server has a registration_endpoint' }, 502);
     }
     try {
-      const reg = await registerClient(asWithReg, body.redirectUri, body.label);
+      const reg = await registerClient(asWithReg, body.redirectUri, body.label, undefined, scopes);
       clientId = reg.client_id;
     } catch (err) {
       if (err instanceof VeniceError) {
