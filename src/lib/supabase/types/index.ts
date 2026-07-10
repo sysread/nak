@@ -14,3 +14,4 @@ export * from './cookbook';
 export * from './documents';
 export * from './settings';
 export * from './samskara';
+export * from './digests';

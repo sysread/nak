@@ -24,7 +24,9 @@
 //     `nak_trigger_bias_sweep()` hourly -> POST /bias-sweep, and
 //     `nak_trigger_samskara_sweep()` hourly -> POST /samskara-sweep
 //     (the catch-up siblings of the chat-turn tail for curation and
-//     samskara, and the bias pipeline's only driver).
+//     samskara, and the bias pipeline's only driver);
+//   - `nak_trigger_digest_sweep()` hourly -> POST /digest-sweep (writes
+//     the per-day conversation digests once each user's local day ends).
 // Two further cron jobs run pure SQL with no HTTP route (the stream
 // janitor and samskara decay); this shim cannot stand in for those -
 // exercise them with manual psql when a local run matters.
@@ -181,6 +183,11 @@ async function tickReflectionSweep(apiUrl, serviceRoleKey) {
   await postRoute(apiUrl, serviceRoleKey, 'reflection-sweep', stamp);
 }
 
+async function tickDigestSweep(apiUrl, serviceRoleKey) {
+  const stamp = new Date().toISOString().slice(11, 19);
+  await postRoute(apiUrl, serviceRoleKey, 'digest-sweep', stamp);
+}
+
 // One cron tick each for the three newest sweeps.// One cron tick each for the slow-group sweeps (see
 // SLOW_TICK_MULTIPLE below).
 async function tickCurationSweep(apiUrl, serviceRoleKey) {
@@ -222,6 +229,9 @@ async function tick(apiUrl, serviceRoleKey, count) {
   await tickRemSweep(apiUrl, serviceRoleKey);
   await tickDeepSleepSweep(apiUrl, serviceRoleKey);
   await tickReflectionSweep(apiUrl, serviceRoleKey);
+  // Cheap when idle: an empty-queue digest tick is one claim RPC, so
+  // it rides the fast group even though prod runs it hourly.
+  await tickDigestSweep(apiUrl, serviceRoleKey);
   if (count % SLOW_TICK_MULTIPLE === 0) {
     await tickCurationSweep(apiUrl, serviceRoleKey);
     await tickBiasSweep(apiUrl, serviceRoleKey);

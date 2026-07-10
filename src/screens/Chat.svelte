@@ -130,6 +130,7 @@
   // for none of them at boot.
   type AuthComponent = typeof import('./Auth.svelte').default;
   type CookbookComponent = typeof import('./Cookbook.svelte').default;
+  type DigestPanelComponent = typeof import('../components/DigestPanel.svelte').default;
   type MemoriesComponent = typeof import('./Memories.svelte').default;
   type WikiComponent = typeof import('./Wiki.svelte').default;
   type LibraryComponent = typeof import('./Library.svelte').default;
@@ -318,6 +319,7 @@
   let AskUserCardComp: AskUserCardComponent | null = $state(null);
   let AuthComp: AuthComponent | null = $state(null);
   let CookbookComp: CookbookComponent | null = $state(null);
+  let DigestPanelComp: DigestPanelComponent | null = $state(null);
   let MemoriesComp: MemoriesComponent | null = $state(null);
   let WikiComp: WikiComponent | null = $state(null);
   let LibraryComp: LibraryComponent | null = $state(null);
@@ -351,6 +353,13 @@
   $effect(() => {
     if (drawerTab === 'recipes' && !CookbookComp) {
       void import('./Cookbook.svelte').then((m) => (CookbookComp = m.default));
+    }
+  });
+  $effect(() => {
+    if (route.digest && !DigestPanelComp) {
+      void import('../components/DigestPanel.svelte').then(
+        (m) => (DigestPanelComp = m.default)
+      );
     }
   });
   $effect(() => {
@@ -2333,8 +2342,10 @@
     // Mirror the active thread into the URL. `navigate` no-ops when
     // route.cid is already `id` (e.g. this call originated from a
     // popstate-driven reconcile effect), so the back stack doesn't
-    // grow on browser-back navigations.
-    navigate({ cid: id });
+    // grow on browser-back navigations. Opening a thread also closes
+    // the Daily digest panel - the digest's deep-links and the sidebar
+    // both land the user in the transcript, never behind the panel.
+    navigate({ cid: id, digest: null });
     messages = [];
     // Drop the prior thread's inline diagnostics in lockstep with
     // its messages. loadMessagesForThread re-populates these once
@@ -6512,6 +6523,18 @@
             <path d="M19 14l.6 1.5L21 16l-1.4.5L19 18l-.6-1.5L17 16l1.4-.5L19 14z" />
           </svg>
         {/snippet}
+        {#snippet digestIcon()}
+          <!-- Feather "calendar" - reads as "day-by-day history",
+               distinct from the clock the changelog buttons use so the
+               two history surfaces don't look interchangeable. -->
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+            <line x1="16" y1="2" x2="16" y2="6" />
+            <line x1="8" y1="2" x2="8" y2="6" />
+            <line x1="3" y1="10" x2="21" y2="10" />
+          </svg>
+        {/snippet}
         {#snippet changelogIcon()}
           <!-- Feather "clock" - reads as "history / audit log". -->
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -6561,10 +6584,21 @@
               onclick: newThread,
               icon: newThreadIcon,
             },
+            {
+              id: 'digest',
+              label: 'Daily digest',
+              title: route.digest
+                ? 'Back to the conversation'
+                : 'Daily digest of past conversations',
+              onclick: () => navigate({ digest: route.digest ? null : '1' }),
+              icon: digestIcon,
+            },
           ]}
           <TopBarActions {actions} menuLabel="Chat actions" />
           <div class="title-wrap">
-            {#if currentThread}
+            {#if route.digest && drawerTab === 'chats'}
+              <span class="title-btn panel-section-label">Daily digest</span>
+            {:else if currentThread}
               {#if renaming}
                 <input
                   class="title-input"
@@ -6756,6 +6790,19 @@
       </div>
 
       {#if drawerTab === 'chats' || drawerTab === 'artifacts'}
+      {#if route.digest && drawerTab === 'chats'}
+        <!-- Daily digest panel replaces the transcript while open
+             (calendar button in the chats top-bar; routed via
+             ?digest=1 so browser back closes it). Gated to the chats
+             tab so flipping to Artifacts mid-digest still shows the
+             conversation the drawer is managing files for. Lazy chunk:
+             renders nothing for the import's first-open beat.
+             onOpenThread routes through selectThread, which clears
+             route.digest in the same navigate patch. -->
+        {#if DigestPanelComp}
+          <DigestPanelComp onOpenThread={(id: string) => { void selectThread(id); }} />
+        {/if}
+      {:else}
       <div class="messages-wrap">
         <!--
           ontouchmove: not a user-facing interaction - the handler is a
@@ -7889,6 +7936,7 @@
           </div>
         </div>
       </div>
+      {/if}
       {:else if drawerTab === 'recipes'}
         <!-- Recipe panel. Cookbook.svelte now renders inline - no modal
              wrapper, no list pane. Selecting a recipe is done from the

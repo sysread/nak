@@ -13621,3 +13621,254 @@ language sql stable security invoker as $$
    order by embedding <=> query_embedding
    limit match_limit
 $$;
+
+-- ---------------------------------------------------------------------------
+-- Conversation digests
+--
+-- One row per (user, local calendar day): an agent-written recap of
+-- everything the user discussed that day, rendered by the Daily digest
+-- panel on the Chats tab. Rows are written exclusively by the digest
+-- sweep agent (service role, bypasses RLS); the browser only reads.
+--
+-- digest_date is a plain DATE in the USER'S timezone (the sweep RPC
+-- resolves profiles.settings.displayTimezone via nak_safe_timezone),
+-- not a UTC bucket - "yesterday" means the user's yesterday.
+--
+-- threads is a JSONB array of {thread_id, title, summary} snapshots.
+-- Titles are snapshotted (not joined) so a digest stays readable after
+-- the underlying conversation is deleted - same rationale as
+-- wiki_changelog.title_at_change.
+-- ---------------------------------------------------------------------------
+
+create table if not exists public.conversation_digests (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  digest_date date not null,
+  summary text not null,
+  threads jsonb not null default '[]'::jsonb,
+  created_at timestamptz not null default now(),
+  -- One digest per local day; the save RPC inserts with
+  -- on-conflict-do-nothing so a raced double-claim can't duplicate.
+  constraint conversation_digests_user_date_key unique (user_id, digest_date)
+);
+
+-- Newest-first cursor pagination for the panel ("Load more" pages on
+-- digest_date) rides this as a range scan.
+create index if not exists conversation_digests_user_date_idx
+  on public.conversation_digests (user_id, digest_date desc);
+
+alter table public.conversation_digests enable row level security;
+
+-- Read-only for the owner. No insert/update/delete policies on
+-- purpose: every write comes from the sweep agent under the service
+-- role, which bypasses RLS. The browser cannot forge or edit history.
+drop policy if exists "conversation_digests_select_own" on public.conversation_digests;
+create policy "conversation_digests_select_own" on public.conversation_digests
+  for select using (auth.uid() = user_id);
+
+-- Per-user claim pair for the digest sweep. Lives on profiles (the
+-- digest is a per-user unit of work, unlike the wiki's per-thread
+-- claims on threads). Same TTL discipline as the other claim pairs:
+-- a crashed run leaves the claim to expire and the next hourly tick
+-- retries.
+alter table public.profiles
+  add column if not exists digest_claim_holder text,
+  add column if not exists digest_claim_expires_at timestamptz;
+
+-- Claim the next (user, day) pair needing a digest, across ALL users.
+-- SECURITY DEFINER global sweep, same posture as
+-- claim_next_thread_for_wiki: the caller is the venice function's
+-- /digest-sweep route driven by pg_cron with a service-role bearer,
+-- so there is no auth.uid() to scope by; EXECUTE is locked to
+-- service_role below.
+--
+-- Eligibility per user:
+--   - settings->>'conversationDigestEnabled' is distinct from 'false'
+--     (string compare, not a boolean cast, so one malformed value
+--     cannot wedge the global sweep - same guard as the wiki toggle);
+--   - no live claim (null or expired);
+--   - there exists a local calendar day, STRICTLY BEFORE today in the
+--     user's timezone and within the trailing 7-day backfill window,
+--     that has at least one non-empty user/assistant message and no
+--     digest row yet. The 7-day floor bounds first-deploy backfill:
+--     without it the sweep would grind through a user's entire
+--     history one Venice call at a time. It also self-limits a
+--     permanently-failing day - after a week of hourly TTL retries
+--     the day ages out of the window and stops being claimed.
+--
+-- Returns the UTC instants of the local day's boundaries
+-- (day_start/day_end) alongside the date so the edge agent can range-
+-- scan messages without re-deriving timezone math in JS.
+drop function if exists public.claim_next_digest_day(text, int);
+create or replace function public.claim_next_digest_day(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns table (
+  user_id uuid,
+  digest_date date,
+  tz text,
+  day_start timestamptz,
+  day_end timestamptz
+)
+language sql security definer
+set search_path = public as $$
+  with candidate as (
+    select
+      p.user_id as user_id,
+      pick.d as digest_date,
+      usertz.tz as tz
+      from public.profiles p
+      cross join lateral (
+        select public.nak_safe_timezone(p.settings->>'displayTimezone') as tz
+      ) usertz
+      cross join lateral (
+        -- Oldest undigested local day with substantive traffic in the
+        -- backfill window. Bucketing happens per message row; the
+        -- 7-day floor keeps the scan bounded to recent history.
+        select min((m.created_at at time zone usertz.tz)::date) as d
+          from public.messages m
+          inner join public.threads t on t.id = m.thread_id
+         where t.user_id = p.user_id
+           and m.role in ('user', 'assistant')
+           and m.content is not null
+           and length(m.content) > 0
+           and (m.created_at at time zone usertz.tz)::date
+               < (now() at time zone usertz.tz)::date
+           and (m.created_at at time zone usertz.tz)::date
+               >= (now() at time zone usertz.tz)::date - 7
+           and not exists (
+             select 1
+               from public.conversation_digests cd
+              where cd.user_id = p.user_id
+                and cd.digest_date = (m.created_at at time zone usertz.tz)::date
+           )
+      ) pick
+     where (p.settings->>'conversationDigestEnabled') is distinct from 'false'
+       and (p.digest_claim_expires_at is null
+            or p.digest_claim_expires_at < now())
+       and pick.d is not null
+     order by pick.d asc
+     limit 1
+     for update of p skip locked
+  )
+  update public.profiles p
+     set digest_claim_holder = p_holder_id,
+         digest_claim_expires_at = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c
+   where p.user_id = c.user_id
+  returning p.user_id,
+            c.digest_date,
+            c.tz,
+            (c.digest_date::timestamp at time zone c.tz) as day_start,
+            ((c.digest_date + 1)::timestamp at time zone c.tz) as day_end;
+$$;
+
+revoke all on function public.claim_next_digest_day(text, int)
+  from public, anon, authenticated;
+grant execute on function public.claim_next_digest_day(text, int)
+  to service_role;
+
+-- Persist a digest IF our claim is still ours, releasing the claim in
+-- the same statement. Returns false when another holder took over
+-- (the caller drops its result on the floor - the winner writes).
+-- on-conflict-do-nothing makes a raced duplicate insert a no-op
+-- rather than an error.
+create or replace function public.save_conversation_digest(
+  p_user_id uuid,
+  p_holder_id text,
+  p_digest_date date,
+  p_summary text,
+  p_threads jsonb
+) returns boolean
+language plpgsql security definer
+set search_path = public as $$
+begin
+  update public.profiles
+     set digest_claim_holder = null,
+         digest_claim_expires_at = null
+   where user_id = p_user_id
+     and digest_claim_holder = p_holder_id
+     and digest_claim_expires_at > now();
+  if not found then
+    return false;
+  end if;
+  insert into public.conversation_digests (user_id, digest_date, summary, threads)
+  values (p_user_id, p_digest_date, p_summary, p_threads)
+  on conflict (user_id, digest_date) do nothing;
+  return true;
+end $$;
+
+revoke all on function public.save_conversation_digest(uuid, text, date, text, jsonb)
+  from public, anon, authenticated;
+grant execute on function public.save_conversation_digest(uuid, text, date, text, jsonb)
+  to service_role;
+
+-- ---------------------------------------------------------------------------
+-- Scheduled conversation-digest sweep
+-- (pg_cron -> pg_net -> venice/digest-sweep)
+--
+-- Hourly, not daily: eligibility only flips when a user's LOCAL
+-- calendar day rolls over, and users sit in different timezones, so
+-- an hourly tick with the per-user day-gate in claim_next_digest_day
+-- is what delivers "after midnight in each user's timezone". Same
+-- Vault-secret custody and no-op-until-seeded behavior as the wiki
+-- sweep. Minute 53 - free slot on the shared minute ladder (see
+-- docs/dev/architecture.md, background-job model).
+-- ---------------------------------------------------------------------------
+
+create or replace function public.nak_trigger_digest_sweep()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $fn$
+declare
+  v_url text;
+  v_key text;
+begin
+  begin
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'project_url' $q$ into v_url;
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'service_role_key' $q$ into v_key;
+  exception when others then
+    return;  -- vault not installed or unreadable; nothing to dispatch
+  end;
+  if v_url is null or v_key is null then
+    return;  -- secrets not seeded yet
+  end if;
+  begin
+    execute format(
+      $q$ select net.http_post(
+            url := %L,
+            headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', %L),
+            body := '{}'::jsonb
+          ) $q$,
+      v_url || '/functions/v1/venice/digest-sweep',
+      'Bearer ' || v_key
+    );
+  exception when others then
+    raise notice 'nak_trigger_digest_sweep: dispatch failed: %', sqlerrm;
+  end;
+end;
+$fn$;
+
+revoke all on function public.nak_trigger_digest_sweep() from public, anon, authenticated;
+
+do $cron$
+begin
+  if exists (select 1 from pg_available_extensions where name = 'pg_cron')
+     and exists (select 1 from pg_available_extensions where name = 'pg_net') then
+    create extension if not exists pg_cron;
+    create extension if not exists pg_net;
+    if exists (select 1 from cron.job where jobname = 'nak-conversation-digest-sweep') then
+      perform cron.unschedule('nak-conversation-digest-sweep');
+    end if;
+    perform cron.schedule(
+      'nak-conversation-digest-sweep',
+      '53 * * * *',
+      $job$ select public.nak_trigger_digest_sweep(); $job$
+    );
+  end if;
+exception when others then
+  raise notice 'conversation digest sweep cron setup skipped: %', sqlerrm;
+end
+$cron$;

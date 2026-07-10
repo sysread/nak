@@ -41,6 +41,9 @@ import * as biasApi from './supabase/bias';
 // Cookbook domain slice (recipes, versions, photos), same delegation
 // pattern.
 import * as cookbookApi from './supabase/cookbook';
+// Conversation-digest domain slice (read-only paged listing of the
+// agent-written daily recaps), same delegation pattern.
+import * as digestsApi from './supabase/digests';
 // Library / documents domain slice (document CRUD, Library paging and
 // search, bucket upload + signed download URLs), same delegation
 // pattern.
@@ -105,6 +108,7 @@ import type {
   WikiArticleRelated,
   WikiChangelogKind,
   WikiChangelogEntry,
+  ConversationDigest,
   WikiRetryResult,
   WikiManualUpdateResult,
   Recipe,
@@ -966,6 +970,13 @@ export class SupabaseService {
     before?: string | null;
   } = {}): Promise<WikiChangelogEntry[]> {
     return wikiSourcesApi.listWikiChangelog(this.client, opts);
+  }
+
+  async listConversationDigests(opts: {
+    limit?: number;
+    before?: string | null;
+  } = {}): Promise<ConversationDigest[]> {
+    return digestsApi.listConversationDigests(this.client, opts);
   }
 
   async resetWikiData(): Promise<void> {

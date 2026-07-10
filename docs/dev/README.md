@@ -69,6 +69,11 @@ changing a contract that other features depend on.
   the user, the autonomous wiki agent, the per-article
   manual update flow, the `wiki_*` tools, and the Wiki
   drawer tab.
+- [Conversation digest](./conversation-digest.md) — the daily
+  per-user recap of a day's conversations: the timezone day-gated
+  claim RPC, the hourly digest sweep agent, the
+  `conversation_digests` table, and the Daily digest panel on the
+  Chats tab.
 - [Cookbook](./cookbook.md) — `recipes` store + Cooklang
   parser + the recipe_* tools + the Cookbook modal and
   drawer tab.
