@@ -53,10 +53,11 @@ const MAX_MESSAGES_FETCHED = 2000;
 // tree sees) - a budget sized to the output shape dies with
 // finish_reason='length' on exactly the busiest days (see CLAUDE.md,
 // Venice sub-completions on reasoning models). deepseek's reasoning
-// runs chatty regardless of the pinned low effort, so this carries
-// 4x the 8192 that fixed the samskara evaluation judge, whose input
-// was a single thread rather than a whole day.
-const DIGEST_MAX_TOKENS = 32768;
+// runs chatty regardless of the pinned low effort, and the model is
+// cheap enough that headroom costs nothing, so this is sized so only
+// a genuine runaway hits it - the fail-closed length check below is
+// the guard for that case, not the budget.
+const DIGEST_MAX_TOKENS = 65536;
 
 const DIGEST_PROMPT_HEADER = `You are writing a daily digest of a user's AI-assistant conversations.
 Below is everything the user discussed on %DATE%, grouped by conversation.
