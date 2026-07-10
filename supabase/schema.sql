@@ -13872,7 +13872,6 @@ exception when others then
   raise notice 'conversation digest sweep cron setup skipped: %', sqlerrm;
 end
 $cron$;
-||||||| parent of fece5c2 (Add MCP integration tables (mcp_integrations, mcp_oauth_tokens, mcp_integration_tools))
 
 -- mcp_integrations -------------------------------------------------------
 --
