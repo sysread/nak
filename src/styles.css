@@ -4403,19 +4403,33 @@ button.top-bar-overflow-btn {
    order settles ties against :root[data-theme] prefixed rules above). */
 
 /* Side-border cards (the OpenCode idiom): with the box borders gone,
-   chat bubbles carry a single flat left bar - accent for the user's
-   words, muted for the assistant's, danger for errors. The bar rides
-   the existing 1px transparent border slot plus 1px, so the content
-   shifts a single pixel rather than jumping. */
+   chat bubbles carry a single flat left bar, color-coded by message
+   type - accent for the user's words, green for the assistant's
+   (classic terminal output), amber for slop notices, danger for
+   errors. The bar rides the existing 1px transparent border slot
+   plus 1px, so the content shifts a single pixel rather than
+   jumping. The ask-user host is deliberately bare: it's the
+   chrome-stripped .msg variant and draws its own card. */
 :root[data-style='terminal'] .msg.user {
   border: 1px solid transparent;
   border-left: 2px solid var(--accent);
 }
 :root[data-style='terminal'] .msg.assistant {
-  border-left: 2px solid var(--muted);
+  border-left: 2px solid var(--ok);
+}
+:root[data-style='terminal'] .msg.assistant.msg-slop-notice {
+  border-left: 2px solid var(--warn);
 }
 :root[data-style='terminal'] .msg.assistant.msg-error {
   border-left-color: var(--danger);
+}
+
+/* Code blocks get a thin structural bar - --edge rather than --muted
+   because fenced code is content inside a card, not a card itself; a
+   full-strength bar on every snippet would compete with the message
+   bars that carry actual type signals. */
+:root[data-style='terminal'] .md pre {
+  border-left: 2px solid var(--edge);
 }
 
 /* The default-page and diagnostic-modal card stacks - wiki + memory
