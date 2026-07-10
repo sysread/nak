@@ -205,7 +205,7 @@
   } from '$lib/ui/recall';
   import { formatMessageStamp } from '$lib/ui/message-timestamp';
   import { coerceSecondThoughts } from '$lib/ui/second-thoughts';
-  import { buildMcpToolboxes } from '$lib/ui/mcp';
+  import { buildMcpToolboxes, mcpToolboxMetaItems } from '$lib/ui/mcp';
   import {
     classifyIncompleteTurnTail,
     isReasoningOnlyStall,
@@ -2701,6 +2701,12 @@
   // since there's no user-level "default toolboxes" concept.
   const currentToolboxesEnabled = $derived<string[]>(
     currentThread?.toolboxes_enabled ?? []
+  );
+
+  const allToolboxMeta = $derived(
+    GATED_TOOLBOX_META.concat(
+      mcpToolboxMetaItems(app.mcpIntegrations)
+    )
   );
 
   async function startRename(): Promise<void> {
@@ -7866,7 +7872,7 @@
             {#if toolboxMenuOpen}
               <div class="composer-menu composer-menu-left" role="menu">
                 <div class="menu-header">Toolboxes for this conversation</div>
-                {#each GATED_TOOLBOX_META as tb (tb.name)}
+                {#each allToolboxMeta as tb (tb.name)}
                   <label class="menu-item">
                     <input
                       type="checkbox"
@@ -7874,7 +7880,9 @@
                       onchange={() => void toggleToolboxManually(tb.name)}
                     />
                     <span class="menu-item-label">
-                      <strong>{tb.name}</strong>
+                      <strong>
+                        {tb.name.startsWith('mcp:') ? tb.name.slice(4) : tb.name}
+                      </strong>
                       <span class="subtle" style="display:block;font-size:0.75rem"
                         >{tb.description}</span
                       >

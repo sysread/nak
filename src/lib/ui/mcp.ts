@@ -52,12 +52,13 @@ export function mcpStatusLabel(status: McpIntegration['authStatus']): string {
  * in `threads.toolboxes_enabled` and that toggle_toolbox validates.
  * The `mcp:` prefix is the contract the server-side toggle handler
  * accepts as a runtime-discovered toolbox (see toggle_tools.ts); the
- * id is the `mcp_integrations.id` uuid.
+ * label is a per-user unique slug chosen at integration time, so
+ * the model reads `mcp:Fastmail` rather than a uuid.
  */
 export function mcpIntegrationToolboxName(
-  integration: Pick<McpIntegration, 'id'>
+  integration: Pick<McpIntegration, 'label'>
 ): string {
-  return `mcp:${integration.id}`;
+  return `mcp:${integration.label}`;
 }
 
 /**
@@ -113,7 +114,7 @@ export function buildMcpToolboxes(
       })
     );
     out.push({
-      name: mcpIntegrationToolboxName(integ),
+      name: mcpIntegrationToolboxName({ label: integ.label }),
       // The toolbox description the system-prompt catalog renders is
       // the user's label for the integration ("Fastmail"), so the
       // model reads a human-meaningful name rather than a uuid.
@@ -122,6 +123,23 @@ export function buildMcpToolboxes(
     });
   }
   return out;
+}
+
+/**
+ * Lightweight extraction of the {name, description} pairs from
+ * authorized MCP integrations for the toolbox popup. The popup only
+ * needs name + description to render a checkbox; `buildMcpToolboxes`
+ * carries the full ToolDef[] payload that the chat-loop needs.
+ */
+export function mcpToolboxMetaItems(
+  integrations: readonly McpIntegration[]
+): readonly { name: string; description: string }[] {
+  return integrations
+    .filter((i) => i.authStatus === 'authorized')
+    .map((i) => ({
+      name: mcpIntegrationToolboxName(i),
+      description: i.label,
+    }));
 }
 
 // --- OAuth round-trip sessionStorage keys ----------------------------

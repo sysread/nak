@@ -1421,6 +1421,28 @@ async function handleMcpRegister(req: Request): Promise<Response> {
   const admin = requireAdmin();
   if (admin instanceof Response) return admin;
 
+  // Label doubles as the toolbox name under the mcp:<label> prefix;
+  // colons would break the prefix-based name-parsing contract the
+  // toggle handler and dispatch share with the browser.
+  if (body.label.includes(':')) {
+    return json({ error: 'label must not contain colons' }, 400);
+  }
+
+  // Label must be unique per user so two integrations don't collide
+  // on the same mcp:<label> toolbox name. Skip the self-check on
+  // update (same label on the same integration is a no-op).
+  {
+    const { data: clash } = await admin
+      .from('mcp_integrations')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('label', body.label)
+      .maybeSingle();
+    if (clash && clash.id !== body.integrationId) {
+      return json({ error: 'label already in use' }, 409);
+    }
+  }
+
   // Discover if the browser did not pass the cached discover result
   // back (defensive: keeps the route usable standalone for tests).
   let discovered: DiscoveredMetadata;
@@ -1434,6 +1456,29 @@ async function handleMcpRegister(req: Request): Promise<Response> {
         return json({ error: err.message, kind: err.kind }, err.status ?? 502);
       }
       return json({ error: (err as Error).message }, 502);
+    }
+  }
+
+  // Auto-include every scope the server advertised during discovery so
+  // the user doesn't need to manually enumerate them. Skip
+  // `offline_access` (buildAuthzUrl prepends it unconditionally) and
+  // HTTPS-URL scopes (the MCP protocol's own identity scope — requesting
+  // it alongside the resource param returns `invalid_scope` from some
+  // servers). Skip `urn:ietf:params:oauth:scope:*` scopes too for now —
+  // Fastmail rejects them for dynamically-registered clients; the
+  // resource parameter carries the MCP endpoint identity on its own.
+  if (scopes.length === 0) {
+    for (const as of discovered.authServers) {
+      const supported = as.scopes_supported;
+      if (Array.isArray(supported)) {
+        for (const s of supported) {
+          if (typeof s !== 'string' || s.length === 0) continue;
+          if (s === 'offline_access') continue;
+          if (s.startsWith('https://')) continue;
+          if (s.startsWith('urn:')) continue;
+          scopes.push(s);
+        }
+      }
     }
   }
 

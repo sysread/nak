@@ -13950,6 +13950,19 @@ create policy "mcp_integrations are self-deletable" on public.mcp_integrations
 create index if not exists mcp_integrations_user_idx
   on public.mcp_integrations (user_id, updated_at desc);
 
+-- Unique labels per user so toolbox names (mcp:<label>) don't collide
+-- and so the user always knows which integration they're enabling.
+do $$ begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'mcp_integrations_user_label_key'
+      and conrelid = 'public.mcp_integrations'::regclass
+  ) then
+    alter table public.mcp_integrations
+      add constraint mcp_integrations_user_label_key unique (user_id, label);
+  end if;
+end $$;
+
 -- mcp_oauth_tokens -------------------------------------------------------
 --
 -- Per-integration OAuth token storage. One row per mcp_integrations
