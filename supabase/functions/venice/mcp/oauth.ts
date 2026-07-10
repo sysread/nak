@@ -553,28 +553,35 @@ export async function registerClient(
     );
   }
   const scopeString = scopes && scopes.length > 0 ? scopes.join(' ') : undefined;
+  const dcrBody = {
+    client_name: clientName,
+    redirect_uris: [redirectUri],
+    grant_types: ['authorization_code', 'refresh_token'],
+    response_types: ['code'],
+    token_endpoint_auth_method: 'none',
+    scope: scopeString,
+  };
+  console.log(
+    `mcp-register DCR: POST ${authServerMetadata.registration_endpoint} redirect_uri=${redirectUri} scope=${scopeString ?? 'none'}`,
+  );
   const resp = await fetchFn(authServerMetadata.registration_endpoint, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Accept: 'application/json',
     },
-    body: JSON.stringify({
-      client_name: clientName,
-      redirect_uris: [redirectUri],
-      grant_types: ['authorization_code', 'refresh_token'],
-      response_types: ['code'],
-      token_endpoint_auth_method: 'none',
-      scope: scopeString,
-    }),
+    body: JSON.stringify(dcrBody),
   });
   if (!resp.ok) {
     let bodyText = '';
     try {
-      bodyText = await resp.text();
+      bodyText = await resp.clone().text();
     } catch {
-      /* keep bodyText empty; the status line is the actionable detail */
+      bodyText = '(unreadable)';
     }
+    console.error(
+      `mcp-register DCR failed: HTTP ${resp.status} redirect_uri=${redirectUri} body=${bodyText}`,
+    );
     throw new VeniceError(
       `RFC 7591 registration failed: ${resp.status}` +
         (bodyText ? ` - ${bodyText.slice(0, 400)}` : ''),
