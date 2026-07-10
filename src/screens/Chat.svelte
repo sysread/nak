@@ -7641,11 +7641,9 @@
                 class="secondary icon-btn"
                 class:active={activePromptCount > 0}
                 onclick={() => {
-                  modelMenuOpen = false;
-                  reasoningMenuOpen = false;
-                  verbosityMenuOpen = false;
-                  composerWharfOpen = false;
-                  promptsMenuOpen = !promptsMenuOpen;
+                  const next = !promptsMenuOpen;
+                  closeMenus();
+                  promptsMenuOpen = next;
                 }}
                 title="System prompts"
                 aria-label="System prompts"
@@ -7698,12 +7696,9 @@
                 class:on={currentToolboxesEnabled.length > 0}
                 class:flash={toolboxFlash}
                 onclick={() => {
-                  modelMenuOpen = false;
-                  reasoningMenuOpen = false;
-                  verbosityMenuOpen = false;
-                  promptsMenuOpen = false;
-                  composerWharfOpen = false;
-                  toolboxMenuOpen = !toolboxMenuOpen;
+                  const next = !toolboxMenuOpen;
+                  closeMenus();
+                  toolboxMenuOpen = next;
                 }}
                 title={currentToolboxesEnabled.length > 0
                   ? `Toolboxes: ${currentToolboxesEnabled.join(', ')}`
@@ -7741,11 +7736,9 @@
                 type="button"
                 class="secondary model-picker-btn"
                 onclick={() => {
-                  promptsMenuOpen = false;
-                  reasoningMenuOpen = false;
-                  verbosityMenuOpen = false;
-                  composerWharfOpen = false;
-                  modelMenuOpen = !modelMenuOpen;
+                  const next = !modelMenuOpen;
+                  closeMenus();
+                  modelMenuOpen = next;
                 }}
                 aria-haspopup="true"
                 aria-expanded={modelMenuOpen}
@@ -7797,11 +7790,9 @@
                   defaultLevel={currentProfile.thinking}
                   open={reasoningMenuOpen}
                   onToggle={() => {
-                    promptsMenuOpen = false;
-                    modelMenuOpen = false;
-                    verbosityMenuOpen = false;
-                    composerWharfOpen = false;
-                    reasoningMenuOpen = !reasoningMenuOpen;
+                    const next = !reasoningMenuOpen;
+                    closeMenus();
+                    reasoningMenuOpen = next;
                   }}
                   onSelect={(effort) => {
                     void setReasoning(effort);
@@ -7822,11 +7813,9 @@
                 defaultVerbosity={currentProfile.verbosity}
                 open={verbosityMenuOpen}
                 onToggle={() => {
-                  promptsMenuOpen = false;
-                  modelMenuOpen = false;
-                  reasoningMenuOpen = false;
-                  composerWharfOpen = false;
-                  verbosityMenuOpen = !verbosityMenuOpen;
+                  const next = !verbosityMenuOpen;
+                  closeMenus();
+                  verbosityMenuOpen = next;
                 }}
                 onSelect={(v) => {
                   void setVerbosity(v);

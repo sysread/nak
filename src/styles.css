@@ -3381,7 +3381,9 @@ button.composer-wharf-trigger {
   border-radius: var(--radius-lg);
   padding: 0.35rem;
   min-width: 16rem;
-  max-width: 22rem;
+  max-width: min(28rem, calc(100vw - 1rem));
+  max-height: 60vh;
+  overflow-y: auto;
   box-shadow: var(--shadow-pop);
   z-index: 30;
   display: flex;
