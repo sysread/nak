@@ -96,7 +96,9 @@ transcript, which is accepted.
   duplicate is a no-op.
 - **Completion shape**: one `completeJsonObjectWithMeta` call,
   `deepseek-v4-flash` (model id held in `digest.ts` directly - edge
-  modules cannot import `src/lib`), `maxTokens: 8192`,
+  modules cannot import `src/lib`), `maxTokens: 32768` (deepseek's
+  thinking pass runs chatty and scales with the whole-day input, so
+  the budget carries 4x the headroom the samskara judge needed),
   `reasoningEffort: 'low'`, fail-closed on
   `finish_reason === 'length'` (see CLAUDE.md, "Venice
   sub-completions on reasoning models"). Thread ids in the reply are

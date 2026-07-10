@@ -48,12 +48,15 @@ const MAX_MESSAGES_FETCHED = 2000;
 
 // Output budget. The reply is a few hundred tokens of JSON, but on a
 // reasoning model max_completion_tokens pays for the thinking pass
-// too, and thinking burn scales with the INPUT (a whole day of chat)
-// - a budget sized to the output shape dies with
+// too, and thinking burn scales with the INPUT (a whole day of chat
+// across every thread - the largest input any sub-completion in the
+// tree sees) - a budget sized to the output shape dies with
 // finish_reason='length' on exactly the busiest days (see CLAUDE.md,
-// Venice sub-completions on reasoning models). 8192 plus pinned low
-// effort is the shape that fixed the samskara evaluation judge.
-const DIGEST_MAX_TOKENS = 8192;
+// Venice sub-completions on reasoning models). deepseek's reasoning
+// runs chatty regardless of the pinned low effort, so this carries
+// 4x the 8192 that fixed the samskara evaluation judge, whose input
+// was a single thread rather than a whole day.
+const DIGEST_MAX_TOKENS = 32768;
 
 const DIGEST_PROMPT_HEADER = `You are writing a daily digest of a user's AI-assistant conversations.
 Below is everything the user discussed on %DATE%, grouped by conversation.
