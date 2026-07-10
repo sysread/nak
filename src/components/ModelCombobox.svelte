@@ -31,6 +31,7 @@
     capabilityChips,
     formatContextWindow,
     formatPricing,
+    privacyChip,
     type ModelOption,
   } from '$lib/ui/model-picker';
 
@@ -203,6 +204,10 @@
             </span>
             <span class="mco-badges">
               {#if m}
+                {@const privacy = privacyChip(m)}
+                {#if privacy}
+                  <span class="mco-badge" title={privacy.label} aria-hidden="true">{privacy.icon}</span>
+                {/if}
                 {#each capabilityChips(m) as chip (chip.label)}
                   <span class="mco-badge" title={chip.label} aria-hidden="true">{chip.icon}</span>
                 {/each}

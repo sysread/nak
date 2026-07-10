@@ -23,6 +23,16 @@
  */
 
 /**
+ * Venice's serving-privacy classification for a model. 'private' means
+ * Venice hosts the weights itself; 'anonymized' means the request is
+ * proxied to an upstream provider (OpenAI, Anthropic, Google, ...) with
+ * identifying metadata stripped, so the prompt content leaves Venice's
+ * infrastructure. Null when the API omits or mangles the field - the UI
+ * shows nothing rather than guessing a classification.
+ */
+export type ModelPrivacy = 'private' | 'anonymized';
+
+/**
  * One text model as the picker needs it. Flattened from Venice's nested
  * `model_spec` so the UI and the snapshot builder read plain fields.
  * Pricing is nullable because Venice omits the block on free / internal
@@ -61,6 +71,10 @@ export interface CatalogModel {
   readonly outputUsdPerM: number | null;
   /** True when `model_spec.deprecation.date` is set - retiring soon. */
   readonly deprecated: boolean;
+  /** Serving privacy, or null when Venice doesn't report it. */
+  readonly privacy: ModelPrivacy | null;
+  /** Served end-to-end encrypted (`capabilities.supportsE2EE`). */
+  readonly supportsE2EE: boolean;
 }
 
 function asRecord(v: unknown): Record<string, unknown> | null {
@@ -71,6 +85,14 @@ function usdFrom(block: unknown): number | null {
   const rec = asRecord(block);
   const usd = rec?.usd;
   return typeof usd === 'number' && Number.isFinite(usd) ? usd : null;
+}
+
+// The live API carries privacy on model_spec, but the published docs
+// place it on the entry itself - coerceModel reads spec-first with an
+// entry-level fallback so a doc-shaped response still classifies.
+// Anything outside the two known values coerces to null (unclassified).
+function coercePrivacy(v: unknown): ModelPrivacy | null {
+  return v === 'private' || v === 'anonymized' ? v : null;
 }
 
 /**
@@ -121,6 +143,8 @@ function coerceModel(raw: unknown): CatalogModel | null {
     inputUsdPerM: usdFrom(pricing?.input),
     outputUsdPerM: usdFrom(pricing?.output),
     deprecated: asRecord(spec.deprecation)?.date != null,
+    privacy: coercePrivacy(spec.privacy ?? entry.privacy),
+    supportsE2EE: caps.supportsE2EE === true,
   };
 }
 

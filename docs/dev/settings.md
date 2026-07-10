@@ -102,6 +102,14 @@ landing tab move together.
   visit with the same staleness/error-guard shape as the Usage pane.
   See [Chat's data model](./chat.md) for the resolution cascade and
   the snapshot rationale.
+  The combobox rows and the card strip lead with a **privacy chip**
+  (`privacyChip` in `src/lib/ui/model-picker.ts`): E2EE (lock-and-key,
+  `capabilities.supportsE2EE`) beats Private (lock,
+  `model_spec.privacy: 'private'` - E2EE models are always private, so
+  one chip shows the strongest claim), then Anonymized (mask,
+  `'anonymized'` - proxied to an upstream provider). Privacy is
+  catalog-only - it is NOT snapshotted onto the profile, so an
+  off-catalog pick shows no privacy chip rather than a stale one.
   The catalog feeding the combobox is first run through
   `filterCatalogByCaps(catalog, app.priceCaps)` (`src/lib/models/price-caps.ts`),
   which drops models whose live Venice price exceeds the project-global

@@ -64,6 +64,15 @@ profiles**:
   price**, so you can compare models at a glance before committing.
   The selected model's capability/context/price strip also shows on
   the card itself.
+- **Check the privacy badge.** Each row (and the card strip) leads
+  with one of three privacy markers from Venice's catalog: a lock for
+  **Private** (Venice hosts the model itself, prompts stay on its
+  infrastructure), a mask for **Anonymized** (the request is proxied
+  to an outside provider such as OpenAI, Anthropic, or Google, with
+  identifying metadata stripped - the prompt text does leave Venice),
+  and a lock-and-key for **E2EE** (Venice-hosted *and* served
+  end-to-end encrypted). No badge means Venice didn't classify the
+  model.
 - **Set the defaults.** Two dropdowns per card pick the profile's
   default thinking level (including **Off**, for a snappy-replies
   profile) and default verbosity. Both are defaults, not locks - any

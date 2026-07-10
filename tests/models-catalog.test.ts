@@ -30,6 +30,8 @@ function sampleModel(overrides: Partial<CatalogModel> = {}): CatalogModel {
     inputUsdPerM: 0.3,
     outputUsdPerM: 1.2,
     deprecated: false,
+    privacy: null,
+    supportsE2EE: false,
     ...overrides,
   };
 }

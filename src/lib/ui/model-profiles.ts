@@ -19,6 +19,7 @@ import {
   capabilityChips,
   formatContextWindow,
   formatPricing,
+  privacyChip,
   type CapabilityChip,
   type ModelOption,
 } from './model-picker';
@@ -215,12 +216,17 @@ export function profileRowView(
   catalog: readonly CatalogModel[]
 ): ProfileRowView {
   const selected = catalog.find((m) => m.id === profile.modelId) ?? null;
+  // Privacy leads the chip row so the serving classification reads
+  // before the feature list. Catalog rows only - the profile snapshot
+  // doesn't carry privacy, so an off-catalog pick shows no privacy chip
+  // rather than a stale or guessed one.
+  const privacy = selected ? privacyChip(selected) : null;
   return {
     options: buildModelOptions(catalog, {
       id: profile.modelId,
       label: profile.modelLabel,
     }),
-    chips: capabilityChips(selected ?? profile),
+    chips: [...(privacy ? [privacy] : []), ...capabilityChips(selected ?? profile)],
     contextLabel: formatContextWindow(profile.contextWindow),
     priceLabel: selected ? formatPricing(selected) : 'Pricing n/a',
   };
