@@ -75,21 +75,25 @@ transcript, which is accepted.
   timezone comes from `profiles.settings.displayTimezone` via
   `nak_safe_timezone` (UTC fallback); a day is due when it is
   strictly before today in that timezone, has at least one non-empty
-  user/assistant message, has no digest row, and lies within the
-  trailing **7-day backfill window**. The window bounds first-deploy
-  backfill (no grinding through years of history) and self-limits
-  failures: a day that keeps failing ages out after a week of hourly
-  retries and is never attempted again.
+  user/assistant message, and has no digest row. There is **no
+  backfill floor**: the sweep drains the user's entire history
+  oldest-first, a few user-days per hourly tick, until every past
+  day is digested.
 - **Opt-out**: `profiles.settings.conversationDigestEnabled` gates
   the claim - only the literal string `'false'` disables (string
   compare, not a boolean cast, so one malformed value cannot wedge
   the global sweep; same guard as `wikiAutomaticEnabled`). There is
   no Settings UI toggle yet; the key is honored if set.
 - **Claim discipline**: per-user claim pair on `profiles` with a
-  600s TTL. No failure counters - a failed run (bad JSON, truncated
-  completion, transport error) leaves the claim to expire and the
-  next tick retries; see the backfill window above for why that
-  terminates.
+  600s TTL, plus a consecutive-failure pair (`digest_failing_date`,
+  `digest_failure_count`). A failed run (bad JSON, truncated
+  completion, transport error) reports through
+  `record_digest_failure`, which releases the claim for an hourly
+  retry; after 3 consecutive failures on the same day it writes a
+  placeholder row and advances the queue. The cap is load-bearing:
+  the claim always serves the OLDEST undigested day, so an
+  uncapped poison day would pin every day behind it forever.
+  Success (`save_conversation_digest`) resets the failure pair.
 - **Save**: `save_conversation_digest` releases the claim and inserts
   in one call, returns false if the claim was lost (the loser's
   result is dropped), and inserts `on conflict do nothing` so a raced
@@ -143,4 +147,10 @@ transcript, which is accepted.
   (the local stack ships neither pg_cron nor pg_net). If a new day
   never digests in dev, the shim isn't running.
 - The hourly cadence plus `DEFAULT_SWEEP_MAX_USERS = 3` means a
-  backlog larger than 3 user-days drains across ticks, not in one.
+  backlog larger than 3 user-days drains across ticks, not in one -
+  a deep history backfills at ~72 days/day.
+- The day-picking lateral scans every message the user owns on each
+  claim call (min over the whole history with a per-day not-exists).
+  Fine at single-user scale; if it ever shows up in pg load, the fix
+  is a floor keyed to the oldest undigested day, not a calendar
+  window.
