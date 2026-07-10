@@ -21,6 +21,7 @@ const {
   MINT_CLUSTER_COSINE_FLOOR,
   MINT_CLUSTER_MAX,
   MINT_CLUSTER_MIN,
+  TIER1_POPULATION_CAP,
   buildTopicalCluster,
   buildAssociationCluster,
   cosine,
@@ -127,6 +128,11 @@ Deno.test('caps and thresholds hold their designed relationships', () => {
   assert(MINT_DEDUP_COSINE > MINT_CLUSTER_COSINE_FLOOR);
   assert(MINT_CLUSTER_MIN >= 3);
   assert(MINT_CLUSTER_MAX >= MINT_CLUSTER_MIN);
+  // Pinned to the exact value because it MUST mirror p_target_count on
+  // samskara_collapse_by_cofiring (schema.sql). Drift re-opens the
+  // mint/cap-merge treadmill (cap here higher) or freezes minting
+  // permanently (cap here lower) - change both together.
+  assertEquals(TIER1_POPULATION_CAP, 150);
 });
 
 // --- helpers ----------------------------------------------------------------

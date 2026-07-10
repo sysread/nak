@@ -627,7 +627,12 @@ logs and yields to the next phase.
   {sample_labels, sample_situations, reinforcement}) ->
   {prediction, inner_voice, valence, confidence} | null` (null
   covers both parse failure and an explicit `confirm: false`
-  refusal). The
+  refusal). The probe is population-gated: while the user's
+  tier-1 count sits at or above `TIER1_POPULATION_CAP` (150,
+  mirroring the collapse RPC's `p_target_count` - see the
+  treadmill gotcha) it returns before any Venice spend, so new
+  claims enter only as the reaper or the Hebbian dedup pass
+  makes room. Below cap, the
   phase fetches the recent embedded substrate window, then
   builds a **topical cluster**: it seeds on the most recent row
   and keeps only the later rows whose situation embedding is
@@ -672,7 +677,11 @@ logs and yields to the next phase.
 - **Mint-tier1-assoc** (`mintTier1FromAssociationsProbe`, SWEEP
   ONLY) - mints from the association graph instead of the recency
   window, so cross-session recurrence that no recency window can
-  co-locate still reaches the minter. `samskara_association_cluster`
+  co-locate still reaches the minter. Carries the same
+  `TIER1_POPULATION_CAP` gate as Mint-tier1, checked BEFORE the
+  cluster read: a gated skip is a non-verdict, so the hub's edges
+  stay unstamped and the evidence waits intact for the sweep that
+  runs once headroom opens. Below cap, `samskara_association_cluster`
   picks the hub (the substrate row with the most summed
   reinforcement over its UNCONSUMED edges, >= 2 distinct partners)
   and returns ONE representative (highest-reinforcement) edge per
@@ -956,7 +965,11 @@ fall through to pure embedding-cosine greedy merge in ascending
 cosine-distance order, refusing to merge pairs with cosine below
 `p_cap_cosine_floor` (default 0.60). This guards against a
 diverse-but-overflowing pool where no pair meets the co-firing
-bar but the count is still growing without bound.
+bar but the count is still growing without bound. With the mint
+probes' `TIER1_POPULATION_CAP` gate in place this pass is a
+backstop for races (a mint slipping through while the count query
+fails open), not the routine make-room mechanism - see the
+treadmill gotcha.
 
 **Per-call cap.** `p_max_collapses` (default 20) bounds work per
 invocation. The hourly sweep's dedup probe calls the RPC once
@@ -1359,6 +1372,23 @@ summarizer reads samskaras to feed the agent.
   are cron-only
   (heavy or timing-insensitive), and moving a phase across that
   line should be a deliberate decision.
+- **Minting is population-gated; the overflow merge is a backstop,
+  not the make-room mechanism.** Both tier-1 mint probes skip while
+  the tier-1 count sits at `TIER1_POPULATION_CAP` (150), so at cap
+  the corpus changes only through the reaper (repeated real failure)
+  and the Hebbian dedup pass (true duplicates). Without the gate,
+  every mint at cap forced the collapse RPC's overflow pass to
+  greedy-merge two DISTINCT claims at its 0.60 cosine floor - the
+  same "related but distinct" band tier-2 detection owns - and a
+  2026-07 prod audit measured 49 mints/week churning through that
+  treadmill: Venice spend to mint a claim, then a merge that blurs
+  two others to make room for it. The gate fails OPEN on a count
+  error (a transient blip must not silence minting), which is why
+  the overflow pass stays: it catches the rare mint that slips
+  through at cap. `TIER1_POPULATION_CAP` and the RPC's
+  `p_target_count` must move together - the Deno suite pins the TS
+  side and both sites carry mirror comments. Raising the cap is now
+  the sanctioned way to grow the corpus; removing the gate is not.
 - **Tier-2 detection and dedup read the same co-fire self-join
   and must not overlap.** `samskara_tier2_candidate` and
   `samskara_collapse_by_cofiring` both self-join `samskara_fires`

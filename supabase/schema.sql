@@ -7444,6 +7444,11 @@ end $$;
 -- merge pairs with cosine < `p_cap_cosine_floor`. This guards
 -- against a diverse-but-overflowing pool where no pair meets the
 -- co-firing bar but the count is still growing without bound.
+-- `p_target_count` MUST stay in sync with TIER1_POPULATION_CAP in
+-- venice/agents/samskara.ts: the mint probes skip while the pool is
+-- at that cap, so this overflow pass is the backstop for races, not
+-- the routine make-room mechanism (it merges distinct claims, and
+-- running it once per mint was the treadmill the mint gate removed).
 --
 -- Per-call cap. `p_max_collapses` bounds work per invocation so a
 -- single RPC never chains through a pathological pool. The
