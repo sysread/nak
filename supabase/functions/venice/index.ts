@@ -1405,9 +1405,8 @@ async function handleMcpRegister(req: Request): Promise<Response> {
   } catch {
     return json({ error: 'invalid JSON body' }, 400);
   }
-  console.log(
-    `mcp-register: serverUrl=${body.serverUrl} redirectUri=${body.redirectUri} label=${body.label} integrationId=${body.integrationId ?? 'none'}`,
-  );
+  const mcpLog = createEdgeLogger(userId, 'mcp-register');
+  mcpLog.info(`register: serverUrl=${body.serverUrl} redirectUri=${body.redirectUri} label=${body.label} integrationId=${body.integrationId ?? 'none'}`);
   if (typeof body.serverUrl !== 'string' || body.serverUrl.length === 0) {
     return json({ error: 'body must include `serverUrl`' }, 400);
   }
@@ -1511,9 +1510,12 @@ async function handleMcpRegister(req: Request): Promise<Response> {
       return json({ error: 'discovery advertised DCR but no reachable auth server has a registration_endpoint' }, 502);
     }
     try {
+      mcpLog.info(`DCR: registering with ${asWithReg.registration_endpoint} redirect_uri=${body.redirectUri} scope=${scopes.join(' ')}`);
       const reg = await registerClient(asWithReg, body.redirectUri, body.label, undefined, scopes);
       clientId = reg.client_id;
+      mcpLog.info(`DCR: registered client_id=${clientId?.slice(0, 8)}...`);
     } catch (err) {
+      mcpLog.error(`DCR failed: ${(err as Error).message}`);
       if (err instanceof VeniceError) {
         return json({ error: err.message, kind: err.kind }, err.status ?? 502);
       }

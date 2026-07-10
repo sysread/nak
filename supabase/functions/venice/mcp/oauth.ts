@@ -553,24 +553,20 @@ export async function registerClient(
     );
   }
   const scopeString = scopes && scopes.length > 0 ? scopes.join(' ') : undefined;
-  const dcrBody = {
-    client_name: clientName,
-    redirect_uris: [redirectUri],
-    grant_types: ['authorization_code', 'refresh_token'],
-    response_types: ['code'],
-    token_endpoint_auth_method: 'none',
-    scope: scopeString,
-  };
-  console.log(
-    `mcp-register DCR: POST ${authServerMetadata.registration_endpoint} redirect_uri=${redirectUri} scope=${scopeString ?? 'none'}`,
-  );
   const resp = await fetchFn(authServerMetadata.registration_endpoint, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Accept: 'application/json',
     },
-    body: JSON.stringify(dcrBody),
+    body: JSON.stringify({
+      client_name: clientName,
+      redirect_uris: [redirectUri],
+      grant_types: ['authorization_code', 'refresh_token'],
+      response_types: ['code'],
+      token_endpoint_auth_method: 'none',
+      scope: scopeString,
+    }),
   });
   if (!resp.ok) {
     let bodyText = '';
@@ -579,13 +575,9 @@ export async function registerClient(
     } catch {
       bodyText = '(unreadable)';
     }
-    console.error(
-      `mcp-register DCR failed: HTTP ${resp.status} redirect_uri=${redirectUri} body=${bodyText}`,
-    );
     throw new VeniceError(
-      `RFC 7591 registration failed: ${resp.status}` +
-        (bodyText ? ` - ${bodyText.slice(0, 400)}` : ''),
-      'http',
+      `RFC 7591 registration failed: ${resp.status} - ${bodyText} (redirect_uri: ${redirectUri})`,
+      'auth',
       resp.status,
     );
   }
