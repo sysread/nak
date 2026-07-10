@@ -41,6 +41,8 @@ export function mcpStatusLabel(status: McpIntegration['authStatus']): string {
       return 'Connected';
     case 'revoked':
       return 'Disconnected';
+    case 'expired':
+      return 'Authorization expired';
     case 'pending':
     default:
       return 'Awaiting authorization';

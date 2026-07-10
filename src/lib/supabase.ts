@@ -1577,9 +1577,10 @@ export class SupabaseService {
   async invokeMcpRegister(
     serverUrl: string,
     redirectUri: string,
-    label: string
+    label: string,
+    integrationId?: string | null,
   ): Promise<McpRegisterResult> {
-    return mcpApi.invokeMcpRegister(this.client, serverUrl, redirectUri, label);
+    return mcpApi.invokeMcpRegister(this.client, serverUrl, redirectUri, label, integrationId);
   }
 
   async invokeMcpTokenExchange(

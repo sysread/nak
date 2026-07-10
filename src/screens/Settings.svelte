@@ -1149,6 +1149,42 @@
   }
 
   /**
+   * Re-launch OAuth for an integration stuck in `pending` or `expired`.
+   * Reuses the existing integration row (updates via integrationId) so
+   * the discovered metadata, client_id, and label are all preserved;
+   * generates fresh PKCE material and redirects to the authz URL.
+   */
+  async function onRetryMcp(integ: McpIntegration): Promise<void> {
+    mcpError = null;
+    mcpInfo = null;
+    if (!app.supabase) {
+      mcpError = 'Not connected to Supabase yet.';
+      return;
+    }
+    mcpBusy = true;
+    try {
+      const redirectUri = mcpRedirectUri();
+      const reg = await app.supabase.invokeMcpRegister(
+        integ.serverUrl,
+        redirectUri,
+        integ.label,
+        integ.id,
+      );
+      stashMcpRegisterContext({
+        integrationId: reg.integrationId,
+        codeVerifier: reg.codeVerifier,
+        state: reg.state,
+        redirectUri,
+      });
+      window.location.href = reg.authzUrl;
+    } catch (err) {
+      mcpError = err instanceof Error ? err.message : String(err);
+    } finally {
+      mcpBusy = false;
+    }
+  }
+
+  /**
    * Delete an integration. Optimistic local removal with rollback on
    * error - the row disappears from the list immediately, the DB
    * delete runs (cascading its tokens + tool catalog), and a failure
@@ -2599,24 +2635,45 @@
           <p class="subtle">No integrations yet. Connect one above.</p>
         {:else}
           <ul class="mcp-list">
-            {#each app.mcpIntegrations as integ (integ.id)}
-              <li class="mcp-row" class:deleting={mcpDeletingId === integ.id}>
-                <div class="mcp-row-main">
-                  <span class="mcp-label">{integ.label}</span>
-                  <code class="mcp-url">{integ.serverUrl}</code>
-                  <span class="mcp-status" data-status={integ.authStatus}>
-                    {mcpStatusLabel(integ.authStatus)}
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  class="mcp-delete"
-                  onclick={() => onDeleteMcp(integ)}
-                  disabled={mcpDeletingId === integ.id}
-                  aria-label={`Remove ${integ.label}`}
-                >{mcpDeletingId === integ.id ? 'Removing…' : 'Remove'}</button>
-              </li>
-            {/each}
+              {#each app.mcpIntegrations as integ (integ.id)}
+                <li class="mcp-row" class:deleting={mcpDeletingId === integ.id}>
+                  <div class="mcp-row-main">
+                    <span class="mcp-label">{integ.label}</span>
+                    <code class="mcp-url">{integ.serverUrl}</code>
+                    <span class="mcp-status" data-status={integ.authStatus}>
+                      {mcpStatusLabel(integ.authStatus)}
+                    </span>
+                  </div>
+                  <div class="mcp-row-actions">
+                    {#if integ.authStatus === 'pending'}
+                      <button
+                        type="button"
+                        class="mcp-retry"
+                        onclick={() => onRetryMcp(integ)}
+                      >Reauthorize</button>
+                    {/if}
+                    {#if integ.authStatus === 'expired'}
+                      <p class="mcp-expired-hint">
+                        Authorization window closed — the server expects the
+                        code exchange to complete within a few minutes. Remove
+                        and re-add, or reauthorize to restart the flow.
+                      </p>
+                      <button
+                        type="button"
+                        class="mcp-retry"
+                        onclick={() => onRetryMcp(integ)}
+                      >Reauthorize</button>
+                    {/if}
+                    <button
+                      type="button"
+                      class="mcp-delete"
+                      onclick={() => onDeleteMcp(integ)}
+                      disabled={mcpDeletingId === integ.id}
+                      aria-label={`Remove ${integ.label}`}
+                    >{mcpDeletingId === integ.id ? 'Removing…' : 'Remove'}</button>
+                  </div>
+                </li>
+              {/each}
           </ul>
         {/if}
       {:else if group === 'about'}

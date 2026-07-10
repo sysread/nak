@@ -179,10 +179,11 @@ export async function invokeMcpRegister(
   client: SupabaseClient,
   serverUrl: string,
   redirectUri: string,
-  label: string
+  label: string,
+  integrationId?: string | null,
 ): Promise<McpRegisterResult> {
   const { data, error } = await client.functions.invoke('venice/mcp-register', {
-    body: { serverUrl, redirectUri, label },
+    body: { serverUrl, redirectUri, label, integrationId },
   });
   if (error) throw new SupabaseError(await extractFunctionError(error));
   return (data ?? {}) as McpRegisterResult;

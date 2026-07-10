@@ -15,7 +15,16 @@
  * Settings Integrations list and the dynamic-toolbox builder need.
  */
 
-export type McpAuthStatus = 'pending' | 'authorized' | 'revoked';
+export type McpAuthStatus = 'pending' | 'authorized' | 'revoked' | 'expired';
+
+/**
+ * Backstop expiration: a `pending` integration older than this many
+ * milliseconds is coerced to `expired` on read. The browser treats
+ * `expired` the same as `pending` for toolkit building (neither
+ * contributes tools) but the Settings pane shows a different label
+ * so the user knows the OAuth window closed.
+ */
+const PENDING_EXPIRY_MS = 30 * 60 * 1000; // 30 minutes
 
 /**
  * One connected remote MCP server. Mirrors the columns the browser
@@ -39,7 +48,7 @@ export interface McpIntegration {
 }
 
 export function isMcpAuthStatus(v: unknown): v is McpAuthStatus {
-  return v === 'pending' || v === 'authorized' || v === 'revoked';
+  return v === 'pending' || v === 'authorized' || v === 'revoked' || v === 'expired';
 }
 
 /**
@@ -58,14 +67,21 @@ export function coerceMcpIntegration(raw: unknown): McpIntegration | null {
   const serverUrl = typeof r.server_url === 'string' ? r.server_url : null;
   if (id === null || label === null || serverUrl === null) return null;
   const supportsDcr = r.supports_dcr === true;
-  const authStatus: McpAuthStatus = isMcpAuthStatus(r.auth_status)
+  const rawStatus = isMcpAuthStatus(r.auth_status)
     ? r.auth_status
     : 'pending';
+  const updatedAt = typeof r.updated_at === 'string' ? r.updated_at : '';
+  const authStatus: McpAuthStatus = (rawStatus === 'pending' && updatedAt !== '')
+    ? (
+        Date.now() - new Date(updatedAt).getTime() > PENDING_EXPIRY_MS
+          ? 'expired'
+          : 'pending'
+      )
+    : rawStatus;
   const grantedScopes = Array.isArray(r.granted_scopes)
     ? r.granted_scopes.filter((s): s is string => typeof s === 'string')
     : [];
   const createdAt = typeof r.created_at === 'string' ? r.created_at : '';
-  const updatedAt = typeof r.updated_at === 'string' ? r.updated_at : '';
   return {
     id,
     label,
