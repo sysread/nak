@@ -8,6 +8,7 @@ import {
   formatPricing,
   fuzzyMatch,
   priceCapHiddenNote,
+  privacyChip,
 } from '../src/lib/ui/model-picker';
 
 // One raw /models entry in Venice's nested shape, for the coercer tests.
@@ -40,6 +41,8 @@ const SAMPLE: CatalogModel = {
   inputUsdPerM: 0.3,
   outputUsdPerM: 1.2,
   deprecated: false,
+  privacy: null,
+  supportsE2EE: false,
 };
 
 describe('coerceCatalog', () => {
@@ -81,6 +84,25 @@ describe('coerceCatalog', () => {
     expect(coerceCatalog([{ id: '', model_spec: {} }])).toEqual([]);
     expect(coerceCatalog([rawEntry({ availableContextTokens: 0 })])).toEqual([]);
   });
+  it('reads privacy from model_spec, falling back to the entry level', () => {
+    // Live API shape: privacy rides on model_spec.
+    expect(coerceCatalog([rawEntry({ privacy: 'anonymized' })])[0].privacy).toBe(
+      'anonymized'
+    );
+    // Docs shape: privacy on the entry itself.
+    const docShaped = rawEntry() as { model_spec: unknown };
+    expect(
+      coerceCatalog([{ ...docShaped, privacy: 'private' }])[0].privacy
+    ).toBe('private');
+    // Unknown or absent values coerce to null, not a guess.
+    expect(coerceCatalog([rawEntry({ privacy: 'public' })])[0].privacy).toBeNull();
+    expect(coerceCatalog([rawEntry()])[0].privacy).toBeNull();
+  });
+  it('reads supportsE2EE from capabilities', () => {
+    const e2ee = rawEntry({ capabilities: { supportsE2EE: true } });
+    expect(coerceCatalog([e2ee])[0].supportsE2EE).toBe(true);
+    expect(coerceCatalog([rawEntry()])[0].supportsE2EE).toBe(false);
+  });
   it('sorts by name', () => {
     const a = { id: 'z', model_spec: { name: 'Zeta', availableContextTokens: 1000 } };
     const b = { id: 'a', model_spec: { name: 'Alpha', availableContextTokens: 1000 } };
@@ -100,6 +122,25 @@ describe('capabilityChips', () => {
     expect(
       capabilityChips({ supportsVision: false, supportsReasoning: false })
     ).toEqual([]);
+  });
+});
+
+describe('privacyChip', () => {
+  it('shows E2EE over Private - the stronger claim replaces the weaker', () => {
+    expect(
+      privacyChip({ privacy: 'private', supportsE2EE: true })?.label
+    ).toBe('E2EE');
+  });
+  it('labels private and anonymized serving', () => {
+    expect(
+      privacyChip({ privacy: 'private', supportsE2EE: false })?.label
+    ).toBe('Private');
+    expect(
+      privacyChip({ privacy: 'anonymized', supportsE2EE: false })?.label
+    ).toBe('Anonymized');
+  });
+  it('returns null when Venice did not classify the model', () => {
+    expect(privacyChip({ privacy: null, supportsE2EE: false })).toBeNull();
   });
 });
 

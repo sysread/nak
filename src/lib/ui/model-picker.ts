@@ -85,6 +85,28 @@ export function capabilityChips(source: CapabilitySource): CapabilityChip[] {
 }
 
 /**
+ * The single privacy chip for a live catalog model, or null when Venice
+ * didn't classify it (the caller renders nothing). One chip, strongest
+ * claim wins: E2EE implies Venice-private serving, so it replaces the
+ * Private chip rather than stacking next to it; Anonymized means the
+ * request is proxied to an upstream provider with identifying metadata
+ * stripped. Only defined over catalog rows - the profile capability
+ * snapshot doesn't carry privacy, so off-catalog picks show no chip.
+ */
+export function privacyChip(model: {
+  privacy: 'private' | 'anonymized' | null;
+  supportsE2EE: boolean;
+}): CapabilityChip | null {
+  // U+1F510 CLOSED LOCK WITH KEY / U+1F512 LOCK - both emoji-default
+  // presentation, no variation selector needed. U+1F3AD PERFORMING ARTS
+  // (mask) for the proxied-but-anonymized class.
+  if (model.supportsE2EE) return { icon: '\u{1F510}', label: 'E2EE' };
+  if (model.privacy === 'private') return { icon: '\u{1F512}', label: 'Private' };
+  if (model.privacy === 'anonymized') return { icon: '\u{1F3AD}', label: 'Anonymized' };
+  return null;
+}
+
+/**
  * Format a context window for the chip strip: "1M", "1.5M", "256k". Whole
  * millions drop the decimal; sub-million rounds to the nearest thousand.
  */

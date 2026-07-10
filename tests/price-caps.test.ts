@@ -28,6 +28,8 @@ function model(id: string, input: number | null, output: number | null): Catalog
     inputUsdPerM: input,
     outputUsdPerM: output,
     deprecated: false,
+    privacy: null,
+    supportsE2EE: false,
   };
 }
 

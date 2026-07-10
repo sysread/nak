@@ -42,6 +42,8 @@ const CATALOG_MODEL: CatalogModel = {
   inputUsdPerM: 0.3,
   outputUsdPerM: 1.2,
   deprecated: false,
+  privacy: null,
+  supportsE2EE: false,
 };
 
 describe('createProfile / addProfile', () => {
@@ -196,6 +198,12 @@ describe('profileRowView', () => {
     expect(row.contextLabel).toBe('200k');
     // The current pick is a real catalog row, so no synthetic option.
     expect(row.options).toHaveLength(1);
+  });
+  it('leads the chip row with the privacy chip for a classified catalog model', () => {
+    const anonymized = { ...CATALOG_MODEL, privacy: 'anonymized' as const };
+    const p = profileWithCatalogModel(profile(), anonymized);
+    const row = profileRowView(p, [anonymized]);
+    expect(row.chips[0].label).toBe('Anonymized');
   });
   it('falls back to the snapshot for an off-catalog model', () => {
     const row = profileRowView(profile(), [CATALOG_MODEL]);
