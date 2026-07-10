@@ -55,6 +55,7 @@ import {
 } from '../_shared/price-cap.ts';
 import { getStreamingResponse } from './getStreamingResponse.ts';
 import { retryWikiThread, runWikiSweepTick } from './agents/wiki.ts';
+import { runDigestSweepTick } from './agents/digest.ts';
 import { runWikiManualUpdate } from './agents/wiki_manual.ts';
 import { runWikiRecordsSweepTick } from './agents/wiki_records.ts';
 import { runReflectionSweepTick } from './agents/reflection.ts';
@@ -816,6 +817,10 @@ const handleIntentEmploymentSweep = sweepHandler(runIntentEmploymentSweepTick);
 // + logs would-be health deltas, changes no health. See
 // agents/samskara_evaluation.ts.
 const handleSamskaraEvaluationSweep = sweepHandler(runSamskaraEvaluationSweepTick);
+// Hourly conversation-digest sweep: claims (user, local-day) pairs
+// past the owner's midnight and writes one daily recap row per day.
+// See agents/digest.ts.
+const handleDigestSweep = sweepHandler(runDigestSweepTick);
 // All three manual fleet runs (wiki librarian, rem, deep-sleep) are
 // detached: each pass can run minutes (conversation/memory reads over a
 // multi-round loop) past the gateway window, so the route returns
@@ -1289,6 +1294,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
   if (route === 'samskara-evaluation-sweep' && req.method === 'POST') {
     return handleSamskaraEvaluationSweep(req);
   }
+  if (route === 'digest-sweep' && req.method === 'POST') return handleDigestSweep(req);
   if (route === 'wiki-retry' && req.method === 'POST') return handleWikiRetry(req);
   if (route === 'wiki-manual-update' && req.method === 'POST') return handleWikiManualUpdate(req);
   if (route === 'wiki-librarian-sweep' && req.method === 'POST') return handleWikiLibrarianSweep(req);

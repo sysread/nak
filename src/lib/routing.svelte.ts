@@ -98,6 +98,14 @@ export interface Route {
    * drawer, detail in panel" shape as `memory` / `wiki_article_id`.
    */
   samskara_id: string | null;
+  /**
+   * Presence flag ('1') for the Daily digest panel on the Chats tab.
+   * Routed (rather than a local flag) so browser back closes the
+   * panel and a refresh restores it. Unlike the wiki changelog it is
+   * NOT the tab's default surface - absent means the ordinary
+   * conversation view.
+   */
+  digest: string | null;
 }
 
 const ROUTED_KEYS = [
@@ -110,6 +118,7 @@ const ROUTED_KEYS = [
   'wiki_article_id',
   'document_id',
   'samskara_id',
+  'digest',
 ] as const;
 const MODAL_VALUES: readonly Modal[] = [
   'settings',
@@ -140,6 +149,7 @@ export const route = $state<Route>({
   wiki_article_id: null,
   document_id: null,
   samskara_id: null,
+  digest: null,
 });
 
 function readEnum<T extends string>(
@@ -169,6 +179,7 @@ export function parseUrl(search: string = typeof location !== 'undefined' ? loca
     wiki_article_id: readString(params, 'wiki_article_id'),
     document_id: readString(params, 'document_id'),
     samskara_id: readString(params, 'samskara_id'),
+    digest: readString(params, 'digest'),
   };
 }
 
@@ -193,6 +204,7 @@ export function buildSearch(
   if (r.wiki_article_id) params.set('wiki_article_id', r.wiki_article_id);
   if (r.document_id) params.set('document_id', r.document_id);
   if (r.samskara_id) params.set('samskara_id', r.samskara_id);
+  if (r.digest) params.set('digest', r.digest);
   const s = params.toString();
   return s ? `?${s}` : '';
 }
@@ -246,6 +258,10 @@ function applyPatch(patch: Partial<Route>): boolean {
   }
   if (patch.samskara_id !== undefined && patch.samskara_id !== route.samskara_id) {
     route.samskara_id = patch.samskara_id;
+    changed = true;
+  }
+  if (patch.digest !== undefined && patch.digest !== route.digest) {
+    route.digest = patch.digest;
     changed = true;
   }
   return changed;
@@ -315,6 +331,7 @@ export const __test = {
     route.wiki_article_id = null;
     route.document_id = null;
     route.samskara_id = null;
+    route.digest = null;
   },
   syncFromUrl,
 };

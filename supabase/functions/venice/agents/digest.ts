@@ -1,0 +1,331 @@
+// Conversation-digest work unit. Once per (user, local calendar day),
+// after that day has ended in the user's timezone, read every
+// conversation the user had that day and write one row to
+// conversation_digests: a short overview of the day plus a per-thread
+// {thread_id, title, summary} table. The Daily digest panel on the
+// Chats tab is the only consumer.
+//
+// Single driver: runDigestSweepTick, called by the venice function's
+// /digest-sweep route, which pg_cron hits hourly (schema.sql,
+// nak_trigger_digest_sweep). The per-user "is a day due" decision -
+// timezone resolution, day-gate, 7-day backfill window, settings
+// toggle - lives entirely in the claim_next_digest_day RPC; this
+// module only summarizes what the claim hands it.
+//
+// Failure posture: there is no failure counter. A run that dies (bad
+// JSON, truncated completion, transport error) leaves the claim to
+// its TTL and the next hourly tick retries; a day that fails for a
+// whole week ages out of the claim RPC's 7-day window and stops being
+// attempted. Bounded retries without extra bookkeeping columns.
+
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { createEdgeLogger } from '../../_shared/edge-log.ts';
+import { readVeniceKey } from '../tools/_venice_key.ts';
+import { completeJsonObjectWithMeta } from './_curation_helpers.ts';
+
+// Server-side model id, held here directly (this module cannot import
+// from src/lib; same convention as the curation agents). deepseek's
+// big window matters: the input is a full day of conversation across
+// every thread, which can run long, while the output is a small JSON
+// object.
+const DIGEST_MODEL = 'deepseek-v4-flash';
+
+// Claim TTL. A digest run is one fetch plus one completion - minutes,
+// not hours - so ten minutes of headroom covers a slow completion
+// without letting a crashed run block the user for long.
+const DIGEST_CLAIM_TTL_SECONDS = 600;
+
+// Users processed per tick. Each is one Venice completion; the hourly
+// cadence resumes a longer backlog drain across ticks.
+const DEFAULT_SWEEP_MAX_USERS = 3;
+
+// Input-side caps. Per-message truncation keeps one giant paste from
+// eating the whole transcript budget; the total cap keeps the prompt
+// well inside the model window and the spend predictable.
+const MAX_CHARS_PER_MESSAGE = 1500;
+const MAX_TRANSCRIPT_CHARS = 150_000;
+const MAX_MESSAGES_FETCHED = 2000;
+
+// Output budget. The reply is a few hundred tokens of JSON, but on a
+// reasoning model max_completion_tokens pays for the thinking pass
+// too, and thinking burn scales with the INPUT (a whole day of chat)
+// - a budget sized to the output shape dies with
+// finish_reason='length' on exactly the busiest days (see CLAUDE.md,
+// Venice sub-completions on reasoning models). 8192 plus pinned low
+// effort is the shape that fixed the samskara evaluation judge.
+const DIGEST_MAX_TOKENS = 8192;
+
+const DIGEST_PROMPT_HEADER = `You are writing a daily digest of a user's AI-assistant conversations.
+Below is everything the user discussed on %DATE%, grouped by conversation.
+
+Reply with a single JSON object, nothing else:
+{
+  "summary": "1-3 sentence overview of the day's discussions",
+  "threads": [
+    {"thread_id": "<id copied verbatim from the header>",
+     "title": "<the conversation's title, copied from the header>",
+     "summary": "1-2 sentence summary of that conversation"}
+  ]
+}
+
+Rules:
+- One threads[] entry per conversation below, in the same order.
+- Describe subject matter (problems, decisions, artifacts), not the
+  shape of the exchange ("the user asked and the assistant answered").
+- Present tense, no preamble, no markdown.`;
+
+interface DayMessage {
+  threadId: string;
+  title: string;
+  role: string;
+  content: string;
+}
+
+export interface DigestThreadEntry {
+  thread_id: string;
+  title: string;
+  summary: string;
+}
+
+export interface DigestSweepOptions {
+  /** Users to process this invocation; defaults to DEFAULT_SWEEP_MAX_USERS. */
+  maxUsers?: number;
+}
+
+/** Per-tick counters returned to the /digest-sweep caller (and the dev shim). */
+export interface DigestSweepSummary {
+  claimed: number;
+  written: number;
+  emptyDay: number;
+  claimLost: number;
+  errors: number;
+}
+
+/**
+ * Fetch the day's user/assistant messages across every thread the
+ * user owns, oldest first. The UTC day boundaries come from the claim
+ * RPC (computed in SQL against the user's timezone) so no timezone
+ * math happens here.
+ */
+async function fetchDayMessages(
+  adminClient: SupabaseClient,
+  userId: string,
+  dayStart: string,
+  dayEnd: string,
+): Promise<DayMessage[]> {
+  const { data, error } = await adminClient
+    .from('messages')
+    .select('thread_id, role, content, created_at, threads!inner(user_id, title)')
+    .eq('threads.user_id', userId)
+    .in('role', ['user', 'assistant'])
+    .gte('created_at', dayStart)
+    .lt('created_at', dayEnd)
+    .order('created_at', { ascending: true })
+    .limit(MAX_MESSAGES_FETCHED);
+  if (error) throw new Error(`day-message fetch failed: ${error.message}`);
+  const out: DayMessage[] = [];
+  for (const row of (data ?? []) as Array<Record<string, unknown>>) {
+    const content = typeof row.content === 'string' ? row.content : '';
+    if (content.length === 0) continue;
+    const thread = row.threads as Record<string, unknown> | null;
+    out.push({
+      threadId: String(row.thread_id ?? ''),
+      title:
+        thread && typeof thread.title === 'string' && thread.title.length > 0
+          ? thread.title
+          : 'Untitled',
+      role: String(row.role ?? ''),
+      content,
+    });
+  }
+  return out;
+}
+
+/**
+ * Render the day's messages as a transcript grouped by thread, with
+ * per-message and total char caps. Thread headers carry the id the
+ * model must echo back, so the digest rows can deep-link to the
+ * conversation later.
+ */
+export function buildDayTranscript(messages: DayMessage[]): string {
+  const parts: string[] = [];
+  let total = 0;
+  let currentThread: string | null = null;
+  for (const m of messages) {
+    if (total >= MAX_TRANSCRIPT_CHARS) {
+      parts.push('[transcript truncated - day exceeded the input budget]');
+      break;
+    }
+    if (m.threadId !== currentThread) {
+      currentThread = m.threadId;
+      const header = `\n=== Conversation "${m.title}" (thread_id: ${m.threadId}) ===`;
+      parts.push(header);
+      total += header.length;
+    }
+    const body =
+      m.content.length > MAX_CHARS_PER_MESSAGE
+        ? m.content.slice(0, MAX_CHARS_PER_MESSAGE) + ' [...]'
+        : m.content;
+    const line = `${m.role}: ${body}`;
+    parts.push(line);
+    total += line.length;
+  }
+  return parts.join('\n');
+}
+
+/**
+ * Parse and clamp the model's JSON reply. Throws on any shape
+ * violation - the caller treats a throw as "leave the claim to its
+ * TTL and retry next tick" rather than persisting a garbage digest.
+ */
+export function parseDigestReply(
+  raw: string,
+  validThreadIds: ReadonlySet<string>,
+): { summary: string; threads: DigestThreadEntry[] } {
+  const parsed = JSON.parse(raw) as Record<string, unknown>;
+  if (typeof parsed !== 'object' || parsed === null) {
+    throw new Error('digest reply is not an object');
+  }
+  const summary = typeof parsed.summary === 'string' ? parsed.summary.trim() : '';
+  if (summary.length === 0) throw new Error('digest reply has no summary');
+  const rawThreads = Array.isArray(parsed.threads) ? parsed.threads : [];
+  const threads: DigestThreadEntry[] = [];
+  const seen = new Set<string>();
+  for (const t of rawThreads as Array<Record<string, unknown>>) {
+    if (typeof t !== 'object' || t === null) continue;
+    const threadId = typeof t.thread_id === 'string' ? t.thread_id : '';
+    const threadSummary = typeof t.summary === 'string' ? t.summary.trim() : '';
+    // Drop hallucinated ids rather than persisting a dead deep-link;
+    // dedupe because fast models occasionally repeat an entry.
+    if (!validThreadIds.has(threadId) || seen.has(threadId)) continue;
+    if (threadSummary.length === 0) continue;
+    seen.add(threadId);
+    threads.push({
+      thread_id: threadId,
+      title:
+        typeof t.title === 'string' && t.title.trim().length > 0
+          ? t.title.trim().slice(0, 200)
+          : 'Untitled',
+      summary: threadSummary.slice(0, 1000),
+    });
+  }
+  if (threads.length === 0) throw new Error('digest reply matched no real threads');
+  return { summary: summary.slice(0, 2000), threads };
+}
+
+/**
+ * One cron tick: claim up to maxUsers (user, day) pairs and digest
+ * each. NON-throwing by contract - per-user failures are counted and
+ * the loop moves on; an infrastructure failure (claim RPC down) stops
+ * the tick. Per-user progress is logged through an edge logger bound
+ * to the digest's OWNER so it lands in their Logs drawer.
+ */
+export async function runDigestSweepTick(
+  adminClient: SupabaseClient,
+  opts: DigestSweepOptions = {},
+): Promise<DigestSweepSummary> {
+  const maxUsers = opts.maxUsers ?? DEFAULT_SWEEP_MAX_USERS;
+  const summary: DigestSweepSummary = {
+    claimed: 0,
+    written: 0,
+    emptyDay: 0,
+    claimLost: 0,
+    errors: 0,
+  };
+
+  for (let i = 0; i < maxUsers; i += 1) {
+    const holderId = crypto.randomUUID();
+    const { data: claimRows, error: claimErr } = await adminClient.rpc(
+      'claim_next_digest_day',
+      { p_holder_id: holderId, p_ttl_seconds: DIGEST_CLAIM_TTL_SECONDS },
+    );
+    if (claimErr) {
+      console.error(`[digest-sweep] claim_next_digest_day failed: ${claimErr.message}`);
+      summary.errors += 1;
+      break;
+    }
+    const claim = Array.isArray(claimRows) ? claimRows[0] : claimRows;
+    if (!claim || typeof claim.user_id !== 'string') break; // queue empty
+
+    summary.claimed += 1;
+    const userId = claim.user_id as string;
+    const digestDate = String(claim.digest_date);
+    const dayStart = String(claim.day_start);
+    const dayEnd = String(claim.day_end);
+    const log = createEdgeLogger(userId, 'digest');
+
+    try {
+      log.info(`digesting ${digestDate}`);
+      const messages = await fetchDayMessages(adminClient, userId, dayStart, dayEnd);
+
+      if (messages.length === 0) {
+        // The claim gate saw substantive traffic, but the fetch found
+        // none (messages deleted since, or a boundary race). Persist a
+        // placeholder so the day stops being re-claimed every tick.
+        const saved = await adminClient.rpc('save_conversation_digest', {
+          p_user_id: userId,
+          p_holder_id: holderId,
+          p_digest_date: digestDate,
+          p_summary: 'No conversations on this day.',
+          p_threads: [],
+        });
+        if (saved.error) throw new Error(`save failed: ${saved.error.message}`);
+        if (saved.data === true) summary.emptyDay += 1;
+        else summary.claimLost += 1;
+        continue;
+      }
+
+      const apiKey = await readVeniceKey(adminClient);
+      if (!apiKey) throw new Error('no Venice key configured (app_config unseeded)');
+
+      const transcript = buildDayTranscript(messages);
+      const prompt =
+        DIGEST_PROMPT_HEADER.replace('%DATE%', digestDate) + '\n\n' + transcript;
+      const { content, finishReason } = await completeJsonObjectWithMeta({
+        apiKey,
+        model: DIGEST_MODEL,
+        messages: [{ role: 'user', content: prompt }],
+        maxTokens: DIGEST_MAX_TOKENS,
+        // Extraction over evidence already in context - low effort is
+        // the right tier, and it keeps the thinking pass from eating
+        // the output budget on a busy day.
+        reasoningEffort: 'low',
+      });
+      if (finishReason === 'length') {
+        // Truncated mid-object. Fail closed (claim TTL retries) rather
+        // than persisting whatever half-JSON survived.
+        throw new Error('digest completion truncated (finish_reason=length)');
+      }
+
+      const validIds = new Set(messages.map((m) => m.threadId));
+      const digest = parseDigestReply(content, validIds);
+
+      const saved = await adminClient.rpc('save_conversation_digest', {
+        p_user_id: userId,
+        p_holder_id: holderId,
+        p_digest_date: digestDate,
+        p_summary: digest.summary,
+        p_threads: digest.threads,
+      });
+      if (saved.error) throw new Error(`save failed: ${saved.error.message}`);
+      if (saved.data === true) {
+        log.info(
+          `wrote digest for ${digestDate} (${digest.threads.length} conversations)`,
+        );
+        summary.written += 1;
+      } else {
+        log.debug(`claim lost on ${digestDate} - another run took over`);
+        summary.claimLost += 1;
+      }
+    } catch (err) {
+      log.warn(
+        `digest for ${digestDate} failed: ${err instanceof Error ? err.message : String(err)} ` +
+          '(claim TTL will release; retried next tick until the day ages out of the window)',
+      );
+      summary.errors += 1;
+    } finally {
+      await log.flush();
+    }
+  }
+  return summary;
+}

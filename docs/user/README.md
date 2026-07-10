@@ -37,6 +37,10 @@ You can reach these pages two ways:
   compression, and managing files from the Artifacts tab.
 - [Threads](./threads.md) — the conversation drawer, pinning,
   archiving, renaming, deleting.
+- [Daily digest](./daily-digest.md) — the day-by-day journal of your
+  conversations: once a day an agent recaps what you discussed, one
+  card per day, reachable from the calendar button next to "New
+  conversation".
 - [Memory](./memory.md) — the long-term store Nak builds up about you
   across conversations: what gets remembered, how to correct or
   forget something, what's scoped to your account.
