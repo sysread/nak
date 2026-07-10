@@ -205,6 +205,7 @@
   } from '$lib/ui/recall';
   import { formatMessageStamp } from '$lib/ui/message-timestamp';
   import { coerceSecondThoughts } from '$lib/ui/second-thoughts';
+  import { buildMcpToolboxes, mcpToolboxMetaItems } from '$lib/ui/mcp';
   import {
     classifyIncompleteTurnTail,
     isReasoningOnlyStall,
@@ -2702,6 +2703,16 @@
     currentThread?.toolboxes_enabled ?? []
   );
 
+  const allToolboxMeta = $derived(
+    GATED_TOOLBOX_META.concat(
+      mcpToolboxMetaItems(app.mcpIntegrations)
+    )
+  );
+
+  const mcpProblemCount = $derived(
+    app.mcpIntegrations.filter((i) => i.authStatus === 'expired' || i.authStatus === 'revoked').length,
+  );
+
   async function startRename(): Promise<void> {
     if (!currentThread) return;
     renameBuffer = currentThread.title;
@@ -3658,6 +3669,14 @@
           skipPriming: ctx.isRefinement ? true : undefined,
           refinementDoubtNote: ctx.isRefinement ? ctx.refinementDoubtNote : undefined,
           currentTurnHasAttachments,
+          // Dynamic MCP-integration toolboxes, built at turn entry
+          // from app state. Each authorized integration becomes a
+          // gated `mcp:<id>` toolbox the model can toggle on; the
+          // chat-loop composes them with the static catalog under one
+          // dedup-by-name pass. Built here (not in loop.ts) so the
+          // loop stays free of a global `app` dependency and stays
+          // unit-testable with an explicit mcpToolboxes arg.
+          mcpToolboxes: buildMcpToolboxes(app.mcpIntegrations, app.mcpToolSchemas),
           // Topic-boundary recall rides the same trigger machinery as
           // intuition (cold-start, mid-turn title shift, mood shift,
           // stale fuse). Enabled by default in production - the
@@ -6430,12 +6449,23 @@
             onclick={() => navigate({ modal: 'settings' })}
             title="Settings"
             aria-label="Settings"
+            style="position:relative"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                  stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <circle cx="12" cy="12" r="3" />
               <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
             </svg>
+            {#if mcpProblemCount > 0}
+              <span
+                class="badge-dot"
+                style="position:absolute;top:-4px;right:-4px;min-width:16px;height:16px;
+                       padding:0 4px;border-radius:8px;background:var(--danger,#e53e3e);
+                       color:#fff;font-size:10px;font-weight:700;line-height:16px;
+                       text-align:center"
+                aria-label={`${mcpProblemCount} integration${mcpProblemCount > 1 ? 's' : ''} need attention`}
+              >{mcpProblemCount}</span>
+            {/if}
           </button>
           <button
             class="secondary icon-btn"
@@ -7632,11 +7662,9 @@
                 class="secondary icon-btn"
                 class:active={activePromptCount > 0}
                 onclick={() => {
-                  modelMenuOpen = false;
-                  reasoningMenuOpen = false;
-                  verbosityMenuOpen = false;
-                  composerWharfOpen = false;
-                  promptsMenuOpen = !promptsMenuOpen;
+                  const next = !promptsMenuOpen;
+                  closeMenus();
+                  promptsMenuOpen = next;
                 }}
                 title="System prompts"
                 aria-label="System prompts"
@@ -7689,12 +7717,9 @@
                 class:on={currentToolboxesEnabled.length > 0}
                 class:flash={toolboxFlash}
                 onclick={() => {
-                  modelMenuOpen = false;
-                  reasoningMenuOpen = false;
-                  verbosityMenuOpen = false;
-                  promptsMenuOpen = false;
-                  composerWharfOpen = false;
-                  toolboxMenuOpen = !toolboxMenuOpen;
+                  const next = !toolboxMenuOpen;
+                  closeMenus();
+                  toolboxMenuOpen = next;
                 }}
                 title={currentToolboxesEnabled.length > 0
                   ? `Toolboxes: ${currentToolboxesEnabled.join(', ')}`
@@ -7732,11 +7757,9 @@
                 type="button"
                 class="secondary model-picker-btn"
                 onclick={() => {
-                  promptsMenuOpen = false;
-                  reasoningMenuOpen = false;
-                  verbosityMenuOpen = false;
-                  composerWharfOpen = false;
-                  modelMenuOpen = !modelMenuOpen;
+                  const next = !modelMenuOpen;
+                  closeMenus();
+                  modelMenuOpen = next;
                 }}
                 aria-haspopup="true"
                 aria-expanded={modelMenuOpen}
@@ -7788,11 +7811,9 @@
                   defaultLevel={currentProfile.thinking}
                   open={reasoningMenuOpen}
                   onToggle={() => {
-                    promptsMenuOpen = false;
-                    modelMenuOpen = false;
-                    verbosityMenuOpen = false;
-                    composerWharfOpen = false;
-                    reasoningMenuOpen = !reasoningMenuOpen;
+                    const next = !reasoningMenuOpen;
+                    closeMenus();
+                    reasoningMenuOpen = next;
                   }}
                   onSelect={(effort) => {
                     void setReasoning(effort);
@@ -7813,11 +7834,9 @@
                 defaultVerbosity={currentProfile.verbosity}
                 open={verbosityMenuOpen}
                 onToggle={() => {
-                  promptsMenuOpen = false;
-                  modelMenuOpen = false;
-                  reasoningMenuOpen = false;
-                  composerWharfOpen = false;
-                  verbosityMenuOpen = !verbosityMenuOpen;
+                  const next = !verbosityMenuOpen;
+                  closeMenus();
+                  verbosityMenuOpen = next;
                 }}
                 onSelect={(v) => {
                   void setVerbosity(v);
@@ -7868,7 +7887,7 @@
             {#if toolboxMenuOpen}
               <div class="composer-menu composer-menu-left" role="menu">
                 <div class="menu-header">Toolboxes for this conversation</div>
-                {#each GATED_TOOLBOX_META as tb (tb.name)}
+                {#each allToolboxMeta as tb (tb.name)}
                   <label class="menu-item">
                     <input
                       type="checkbox"
@@ -7876,7 +7895,9 @@
                       onchange={() => void toggleToolboxManually(tb.name)}
                     />
                     <span class="menu-item-label">
-                      <strong>{tb.name}</strong>
+                      <strong>
+                        {tb.name.startsWith('mcp:') ? tb.name.slice(4) : tb.name}
+                      </strong>
                       <span class="subtle" style="display:block;font-size:0.75rem"
                         >{tb.description}</span
                       >

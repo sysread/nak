@@ -57,6 +57,11 @@ function seedProfileDefaults(): void {
   app.displayTimezonePersisted = false;
   app.userName = '';
   app.userLocation = '';
+  // MCP integrations + cached tool catalog are per-account; seed
+  // empty so a reader of `app.*` before the unlock-time fetch
+  // resolves sees no integrations rather than a prior account's.
+  app.mcpIntegrations = [];
+  app.mcpToolSchemas = [];
 }
 
 /**
@@ -88,6 +93,10 @@ export function activate(config: AppConfig): void {
   // the seeds above when it lands. Best-effort - a degraded Supabase
   // doesn't gate the bootstrap.
   void loadSettings();
+  // Fire-and-forget MCP integrations + tool-catalog fetch in parallel
+  // with settings. The chat-loop reads these at turn entry to build
+  // the dynamic `mcp:<id>` toolboxes; empty until this resolves.
+  void loadMcpIntegrations();
 }
 
 async function loadSettings(): Promise<void> {
@@ -98,6 +107,30 @@ async function loadSettings(): Promise<void> {
   } catch {
     // Best-effort: keep the seeds set in `activate()`. A Supabase
     // outage doesn't gate the entire bootstrap.
+  }
+}
+
+/**
+ * Load the user's connected MCP integrations + their cached tool
+ * catalog into app state. Best-effort like loadSettings - a degraded
+ * Supabase leaves the empty seeds in place rather than gating the
+ * bootstrap. The Settings Integrations pane calls this again after a
+ * connect / delete / re-authorize to refresh the list without a full
+ * sign-out cycle.
+ */
+export async function loadMcpIntegrations(): Promise<void> {
+  if (!app.supabase) return;
+  try {
+    const integrations = await app.supabase.listMcpIntegrations();
+    app.mcpIntegrations = integrations;
+  } catch {
+    // integrations stay [] from seed — best-effort
+  }
+  try {
+    const toolSchemas = await app.supabase.listMcpToolSchemas();
+    app.mcpToolSchemas = toolSchemas;
+  } catch {
+    // toolSchemas stay [] from seed — best-effort
   }
 }
 

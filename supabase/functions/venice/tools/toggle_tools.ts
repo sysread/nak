@@ -34,6 +34,17 @@ import { requireThreadId, registerTool, type ToolContext, type ToolDef } from '.
 // literal as text and asserts it equals the browser GATED_TOOLBOX_NAMES,
 // so adding a toolbox in only one place fails the gate. Keep the Set
 // literal a flat list of quoted strings so that parser keeps working.
+//
+// DYNAMIC MCP TOOLBOXES: this Set only covers the STATIC built-in
+// toolboxes. Connected MCP integrations become per-user toolboxes named
+// `mcp:<integrationId>` (see src/lib/ui/mcp.ts mcpIntegrationToolboxName),
+// which can't be enumerated here - the ids are runtime-discovered per
+// user. The accept loop below additionally passes any `mcp:`-prefixed
+// name through, so the model can toggle a connected integration on
+// without this Set knowing about it. The integration must exist and be
+// authorized for its tools to actually dispatch (performToolCall
+// resolves `mcp:` names against mcp_integrations); a bogus id just
+// yields an empty toolbox that ships no tools.
 const GATED_TOOLBOX_NAMES = new Set<string>([
   'cooking',
   'memories',
@@ -46,6 +57,11 @@ const GATED_TOOLBOX_NAMES = new Set<string>([
 // Mirror of alwaysOnToolbox.name in src/lib/tools/index.ts.
 const ALWAYS_ON_NAME = 'always_on';
 
+// Prefix for dynamic MCP-integration toolboxes (see the note above).
+// Kept as a constant so the accept loop and any future audit grep the
+// same token the browser uses in mcpIntegrationToolboxName.
+const MCP_TOOLBOX_PREFIX = 'mcp:';
+
 export const toggleToolbox: ToolDef = {
   name: 'toggle_toolbox',
   async execute(args: Record<string, unknown>, ctx: ToolContext) {
@@ -55,7 +71,13 @@ export const toggleToolbox: ToolDef = {
     for (const item of raw) {
       if (typeof item !== 'string') continue;
       if (item === ALWAYS_ON_NAME) continue;
-      if (!GATED_TOOLBOX_NAMES.has(item)) continue;
+      // Static built-in toolbox, OR a dynamic `mcp:<id>` integration
+      // toolbox. The static Set is the source of truth for built-ins;
+      // the prefix check is the runtime-discovered hatch for MCP
+      // integrations the static list can't enumerate.
+      if (!GATED_TOOLBOX_NAMES.has(item) && !item.startsWith(MCP_TOOLBOX_PREFIX)) {
+        continue;
+      }
       if (seen.has(item)) continue;
       seen.add(item);
       accepted.push(item);

@@ -57,7 +57,7 @@
    * set - using UTC" notice until a zone is actually committed, so the
    * suggestion is never mistaken for a saved value.)
    */
-  import { onDestroy } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import { saveConfig, toExportedConfig } from '$lib/config';
   import {
     app,
@@ -77,6 +77,7 @@
     persistTheme,
     persistUserName,
     persistUserLocation,
+    loadMcpIntegrations,
   } from '$lib/state.svelte';
   import { detectTimezone, normalizeTimezone } from '$lib/timezone';
   import { resetAllWikiData } from '$lib/wiki-store.svelte';
@@ -121,8 +122,15 @@
     refreshImageCatalog,
   } from '$lib/image-models-catalog.svelte';
   import { filterCatalogByCaps, filterImageCatalogByCap } from '$lib/models/price-caps';
-  import type { SystemPrompt } from '$lib/supabase';
+  import type { SystemPrompt, McpIntegration } from '$lib/supabase';
   import * as prompts from '$lib/ui/prompts';
+  import {
+    mcpRedirectUri,
+    mcpStatusLabel,
+    stashMcpRegisterContext,
+    consumeMcpRegisterContext,
+    consumeMcpCallback,
+  } from '$lib/ui/mcp';
   import {
     ACCENTS,
     MODES,
@@ -180,16 +188,15 @@
     | 'appearance'
     | 'usage'
     | 'security'
+    | 'integrations'
     | 'about';
   // Tabs are ordered by nearness of subject to the user: the app itself
   // (About), then the user's own presentation and personal data
   // (Appearance, Memory, Wiki), then the assistant (AI, then the model
-  // profiles and custom-prompt library that ride on top of it), then the
-  // account/infrastructure tail furthest from day-to-day use (Usage,
-  // Security, API keys). Model profiles and Custom prompts sit right
-  // after AI because they are the same subject (how the assistant
-  // behaves) but each carries a tall card list that would push the AI
-  // pane's other controls below the fold.
+  // profiles and custom-prompt library that ride on top of it), then
+  // Integrations (active configuration — connecting an MCP server
+  // changes which tools are available to the assistant), then the
+  // infrastructure tail: Usage and Security.
   const GROUPS: { id: Group; label: string }[] = [
     { id: 'about', label: 'About' },
     { id: 'appearance', label: 'Appearance' },
@@ -198,6 +205,7 @@
     { id: 'ai', label: 'AI' },
     { id: 'modelprofiles', label: 'Model profiles' },
     { id: 'customprompts', label: 'Custom prompts' },
+    { id: 'integrations', label: 'Integrations' },
     { id: 'usage', label: 'Usage' },
     { id: 'security', label: 'Security' },
     { id: 'keys', label: 'API keys' },
@@ -969,6 +977,27 @@
 
   let busy = $state(false);
 
+  // --- Integrations pane (MCP) ---
+  // Connect-flow form state. The user pastes a remote MCP server URL
+  // + a label; nak runs discovery, registers an OAuth client (via DCR
+  // when the server supports it), and redirects to the server's
+  // authorization endpoint. The PKCE verifier + state the register
+  // step returned are stashed in sessionStorage (stashMcpRegisterContext)
+  // so the OAuth round-trip - a full page navigation away - can
+  // complete the token exchange on return.
+  let mcpLabel = $state('');
+  let mcpServerUrl = $state('');
+  let mcpError = $state<string | null>(null);
+  let mcpInfo = $state<string | null>(null);
+  let mcpBusy = $state(false);
+  // Token-exchange in flight after an OAuth callback landed. Shown as
+  // a transient status above the integration list while the exchange
+  // + tool-catalog refresh resolves.
+  let mcpCallbackStatus = $state<string | null>(null);
+  // Integration row currently being deleted; disables that row's
+  // delete button + dims it while the DB round-trip runs.
+  let mcpDeletingId = $state<string | null>(null);
+
   // --- About pane ---
   // `about-busy` covers both button states since they share the same
   // button: checking for an update vs. reloading once one is found.
@@ -1007,6 +1036,224 @@
       aboutBusy = 'idle';
     }
   }
+
+  // --- Integrations pane handlers (MCP) ---
+
+  /**
+   * Complete an OAuth callback that landed on the root URL with
+   * `?code=...&state=...` query params. Runs once on mount: the
+   * routing layer already stashed the code + state off the query
+   * params (see consumeMcpCallbackParams in routing.svelte.ts);
+   * this reads the stashed register context (PKCE verifier + state +
+   * integration id + redirect URI), calls the token-exchange route,
+   * and refreshes the integration list so the new `authorized` row +
+   * its cached tool catalog appear. No-op when no callback is
+   * pending. Failures surface as a status line above the list rather
+   * than throwing - the user is already on the Settings screen and a
+   * thrown error would just bounce to the global error banner.
+   */
+  async function completeMcpCallback(): Promise<void> {
+    const callback = consumeMcpCallback();
+    if (!callback) return;
+    const reg = consumeMcpRegisterContext();
+    if (!reg) {
+      // A callback landed but no register context survived - either
+      // the user cleared sessionStorage or the register step never
+      // stashed (e.g. a stale bookmark). Surface it and bail; the
+      // integration row stays in `pending` so the user can retry.
+      mcpCallbackStatus =
+        'Authorization callback arrived without a matching pending connection. Try connecting again.';
+      return;
+    }
+    // OAuth 2.1 §7.4.2: the state parameter prevents CSRF. An attacker
+    // crafting a callback URL with a different code + stolen state
+    // would consume the register context but the exchange would fail
+    // on code/verifier mismatch — the state check catches the attack
+    // before we burn the one-shot register context.
+    if (callback.state !== reg.state) {
+      mcpCallbackStatus =
+        'Authorization state mismatch. The callback may have been tampered with. Try connecting again.';
+      return;
+    }
+    mcpCallbackStatus = 'Completing authorization…';
+    try {
+      await app.supabase!.invokeMcpTokenExchange(
+        reg.integrationId,
+        callback.code,
+        reg.codeVerifier,
+        callback.state,
+        reg.redirectUri
+      );
+      await loadMcpIntegrations();
+      mcpCallbackStatus = 'Connected. Tools are now available to the assistant.';
+    } catch (err) {
+      mcpCallbackStatus =
+        'Authorization failed: ' +
+        (err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  /**
+   * Connect a new MCP server. Runs discovery against the pasted URL,
+   * registers an OAuth client (via DCR when the server supports it),
+   * stashes the PKCE verifier + state for the callback hop, then
+   * redirects the browser to the server's authorization endpoint.
+   * The redirect is a full page navigation, so nothing after it runs
+   * - the return trip is handled by completeMcpCallback on the next
+   * mount.
+   */
+  async function onConnectMcp(e: SubmitEvent): Promise<void> {
+    e.preventDefault();
+    mcpError = null;
+    mcpInfo = null;
+    const label = mcpLabel.trim();
+    const serverUrl = mcpServerUrl.trim();
+    if (label.length === 0) {
+      mcpError = 'Give the integration a label.';
+      return;
+    }
+    if (serverUrl.length === 0) {
+      mcpError = 'Paste the MCP server URL.';
+      return;
+    }
+    if (!app.supabase) {
+      mcpError = 'Not connected to Supabase yet.';
+      return;
+    }
+    mcpBusy = true;
+    try {
+      // Discovery first so the pane can show the user what nak found
+      // (DCR support, tool preview) before committing a row. A
+      // discover failure is the most common error surface (bad URL,
+      // server down, no well-known metadata) so it gets its own
+      // message rather than a generic register failure.
+      const discovered = await app.supabase.invokeMcpDiscover(serverUrl);
+      mcpInfo = discovered.supportsDcr
+        ? 'Server supports auto-registration. Redirecting to authorization…'
+        : 'Server requires manual client registration. Redirecting…';
+      const redirectUri = mcpRedirectUri();
+      const reg = await app.supabase.invokeMcpRegister(
+        serverUrl,
+        redirectUri,
+        label,
+        undefined,
+      );
+      // Stash the PKCE material BEFORE the redirect - the round-trip
+      // is a full page navigation and nothing in memory survives it.
+      // The routing layer stashes the code + state off the return
+      // query params; completeMcpCallback reads both halves back on mount.
+      stashMcpRegisterContext({
+        integrationId: reg.integrationId,
+        codeVerifier: reg.codeVerifier,
+        state: reg.state,
+        redirectUri,
+      });
+      // Full-page redirect to the server's authorization endpoint.
+      // The browser leaves this tab; nothing after this line runs.
+      window.location.href = reg.authzUrl;
+    } catch (err) {
+      mcpError = err instanceof Error ? err.message : String(err);
+    } finally {
+      // `finally` runs before the redirect navigates away, so on the
+      // success path mcpBusy flips back to false for the brief moment
+      // before the navigation. On the error path it resets so the
+      // form is usable again. Either way the user sees the right state.
+      mcpBusy = false;
+    }
+  }
+
+  /**
+   * Re-launch OAuth for an integration stuck in `pending` or `expired`.
+   * Reuses the existing integration row (updates via integrationId) so
+   * the discovered metadata, client_id, and label are all preserved;
+   * generates fresh PKCE material and redirects to the authz URL.
+   */
+  async function onRetryMcp(integ: McpIntegration): Promise<void> {
+    mcpError = null;
+    mcpInfo = null;
+    if (!app.supabase) {
+      mcpError = 'Not connected to Supabase yet.';
+      return;
+    }
+    mcpBusy = true;
+    try {
+      const redirectUri = mcpRedirectUri();
+      const reg = await app.supabase.invokeMcpRegister(
+        integ.serverUrl,
+        redirectUri,
+        integ.label,
+        integ.id,
+      );
+      stashMcpRegisterContext({
+        integrationId: reg.integrationId,
+        codeVerifier: reg.codeVerifier,
+        state: reg.state,
+        redirectUri,
+      });
+      window.location.href = reg.authzUrl;
+    } catch (err) {
+      mcpError = err instanceof Error ? err.message : String(err);
+    } finally {
+      mcpBusy = false;
+    }
+  }
+
+  /**
+   * Revoke an authorized integration's tokens, flipping auth_status to
+   * 'revoked' while preserving the row (label, server_url, client_id)
+   * so the user can re-authorize without re-pasting the URL.
+   */
+  async function onDisconnectMcp(integ: McpIntegration): Promise<void> {
+    mcpError = null;
+    if (!app.supabase) {
+      mcpError = 'Not connected to Supabase yet.';
+      return;
+    }
+    try {
+      await app.supabase.invokeMcpDisconnect(integ.id);
+    } catch (err) {
+      mcpError = err instanceof Error ? err.message : String(err);
+      return;
+    }
+    await loadMcpIntegrations();
+  }
+
+  /**
+   * Delete an integration. Optimistic local removal with rollback on
+   * error - the row disappears from the list immediately, the DB
+   * delete runs (cascading its tokens + tool catalog), and a failure
+   * restores the row so the user isn't left looking at a list that
+   * doesn't match the server. The tool-catalog cache is refreshed
+   * after a successful delete so the chat-loop's next turn doesn't
+   * ship schemas for a deleted integration.
+   */
+  async function onDeleteMcp(integration: McpIntegration): Promise<void> {
+    if (!app.supabase) return;
+    mcpDeletingId = integration.id;
+    const prev = app.mcpIntegrations;
+    const prevTools = app.mcpToolSchemas;
+    app.mcpIntegrations = prev.filter((m) => m.id !== integration.id);
+    app.mcpToolSchemas = prevTools.filter((s) => s.integrationId !== integration.id);
+    try {
+      await app.supabase.deleteMcpIntegration(integration.id);
+    } catch (err) {
+      // Rollback: restore the row + its cached tools so the list
+      // matches the server again.
+      app.mcpIntegrations = prev;
+      app.mcpToolSchemas = prevTools;
+      mcpError = err instanceof Error ? err.message : String(err);
+    } finally {
+      mcpDeletingId = null;
+    }
+  }
+
+  // On mount, complete any OAuth callback the routing layer stashed
+  // off the query params. Runs once; the stashed code is
+  // consumed (cleared) whether the exchange succeeds or fails so a
+  // stale callback can't drive a second attempt.
+  onMount(() => {
+    void completeMcpCallback();
+  });
 
   function onSaveKeys(e: SubmitEvent): void {
     e.preventDefault();
@@ -2366,6 +2613,110 @@
           {#if authPwInfo}<p class="subtle">{authPwInfo}</p>{/if}
           <button type="submit" disabled={authPwBusy}>Change account password</button>
         </form>
+      {:else if group === 'integrations'}
+        <!-- Integrations pane: connect remote MCP servers. The user
+             pastes a server URL + label; nak runs OAuth discovery +
+             DCR registration, stores tokens server-side, and exposes
+             the server's tools to the chat model as a gated
+             `mcp:<id>` toolbox. The OAuth round-trip is a full page
+             redirect; the routing layer catches the OAuth `code` +
+             `state` query params on return and completeMcpCallback
+             (fired on mount) finishes the token exchange. -->
+        <h2>Integrations</h2>
+        <p class="subtle">
+          Connect a remote MCP server (Fastmail, or any streamable-HTTP
+          MCP server that advertises OAuth). Nak runs the OAuth flow,
+          stores the tokens server-side, and exposes the server's tools
+          to the assistant as a togglable toolbox per integration.
+        </p>
+
+        <h3 class="pane-section">Connect a server</h3>
+        <form onsubmit={onConnectMcp}>
+          <div class="form-row">
+            <label for="mcp-label">Label</label>
+            <input
+              id="mcp-label"
+              type="text"
+              bind:value={mcpLabel}
+              placeholder="Fastmail"
+              maxlength="80"
+              required
+            />
+          </div>
+          <div class="form-row">
+            <label for="mcp-url">Server URL</label>
+            <input
+              id="mcp-url"
+              type="url"
+              bind:value={mcpServerUrl}
+              placeholder="https://api.fastmail.com/mcp"
+              required
+            />
+          </div>
+          {#if mcpError}<p class="error">{mcpError}</p>{/if}
+          {#if mcpInfo}<p class="subtle">{mcpInfo}</p>{/if}
+          <button type="submit" disabled={mcpBusy || busy}>
+            {mcpBusy ? 'Connecting…' : 'Connect'}
+          </button>
+        </form>
+
+        {#if mcpCallbackStatus}
+          <p class="subtle" style="margin-top:0.75rem">{mcpCallbackStatus}</p>
+        {/if}
+
+        <h3 class="pane-section">Connected servers</h3>
+        {#if app.mcpIntegrations.length === 0}
+          <p class="subtle">No integrations yet. Connect one above.</p>
+        {:else}
+          <ul class="mcp-list">
+              {#each app.mcpIntegrations as integ (integ.id)}
+                <li class="mcp-row" class:deleting={mcpDeletingId === integ.id}>
+                  <div class="mcp-row-main">
+                    <span class="mcp-label">{integ.label}</span>
+                    <code class="mcp-url">{integ.serverUrl}</code>
+                    <span class="mcp-status" data-status={integ.authStatus}>
+                      {mcpStatusLabel(integ.authStatus)}
+                    </span>
+                  </div>
+                  <div class="mcp-row-actions">
+                    {#if integ.authStatus === 'pending'}
+                      <button
+                        type="button"
+                        class="mcp-retry"
+                        onclick={() => onRetryMcp(integ)}
+                      >Reauthorize</button>
+                    {/if}
+                    {#if integ.authStatus === 'expired'}
+                      <p class="mcp-expired-hint">
+                        Authorization window closed — the server expects the
+                        code exchange to complete within a few minutes. Remove
+                        and re-add, or reauthorize to restart the flow.
+                      </p>
+                      <button
+                        type="button"
+                        class="mcp-retry"
+                        onclick={() => onRetryMcp(integ)}
+                      >Reauthorize</button>
+                    {/if}
+                    {#if integ.authStatus === 'authorized'}
+                      <button
+                        type="button"
+                        class="mcp-disconnect"
+                        onclick={() => onDisconnectMcp(integ)}
+                      >Disconnect</button>
+                    {/if}
+                    <button
+                      type="button"
+                      class="mcp-delete"
+                      onclick={() => onDeleteMcp(integ)}
+                      disabled={mcpDeletingId === integ.id}
+                      aria-label={`Remove ${integ.label}`}
+                    >{mcpDeletingId === integ.id ? 'Removing…' : 'Remove'}</button>
+                  </div>
+                </li>
+              {/each}
+          </ul>
+        {/if}
       {:else if group === 'about'}
         <!-- About pane: surfaces the build fingerprint and lets the
              user pull the latest deploy on demand. Paired with the

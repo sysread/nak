@@ -885,6 +885,71 @@ label {
   word-break: break-all;
 }
 
+/* Settings -> Integrations: list of connected MCP servers. Each row
+   stacks the label + server URL + status badge on the left and a
+   Remove button on the right. The status badge picks up a color per
+   auth_status via the data-status attribute so the user can scan
+   connected vs. pending vs. disconnected at a glance. */
+.mcp-list {
+  list-style: none;
+  margin: 0.75rem 0 1rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.mcp-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.mcp-row.deleting {
+  opacity: 0.55;
+}
+
+.mcp-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.mcp-label {
+  font-weight: 600;
+}
+
+.mcp-url {
+  font-size: 0.8rem;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.mcp-status {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin-top: 0.15rem;
+}
+
+.mcp-status[data-status='authorized'] {
+  color: var(--accent);
+}
+
+.mcp-status[data-status='revoked'] {
+  color: var(--muted);
+}
+
+.mcp-delete {
+  flex-shrink: 0;
+}
+
 .update-ready {
   color: var(--accent);
   font-weight: 600;
@@ -3316,7 +3381,9 @@ button.composer-wharf-trigger {
   border-radius: var(--radius-lg);
   padding: 0.35rem;
   min-width: 16rem;
-  max-width: 22rem;
+  max-width: min(28rem, calc(100vw - 1rem));
+  max-height: 60vh;
+  overflow-y: auto;
   box-shadow: var(--shadow-pop);
   z-index: 30;
   display: flex;

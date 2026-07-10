@@ -76,6 +76,10 @@ import * as wikiRecordsApi from './supabase/wiki-records';
 // Wiki-satellite domain slice (bibliography, See-Also, changelog),
 // same delegation pattern.
 import * as wikiSourcesApi from './supabase/wiki-sources';
+// MCP-integration domain slice (integrations list, cached tool
+// catalog, and the OAuth-flow edge-function proxy calls), same
+// delegation pattern.
+import * as mcpApi from './supabase/mcp';
 
 // Domain row types live in ./supabase/types/*; this module keeps the
 // SupabaseService class plus the row coercers that read those types.
@@ -131,7 +135,14 @@ import type {
   SamskaraVerdictCounts,
   SamskaraSubstrateDiagnosticRow,
   SamskaraFireDiagnosticRow,
+  McpIntegration,
+  McpToolSchema,
 } from './supabase/types';
+import type {
+  McpDiscoveredMetadata,
+  McpRegisterResult,
+  McpTokenExchangeResult,
+} from './supabase/mcp';
 import type { IntentRow } from './ui/intents-inspector';
 import type { FollowupInspectorRow } from './ui/followups-inspector';
 
@@ -182,6 +193,11 @@ import type { FollowupInspectorRow } from './ui/followups-inspector';
  *                                                    -> ./supabase/samskara.ts
  *   Bias profile              summary + observation reads
  *                                                    -> ./supabase/bias.ts
+ *   MCP integrations          integrations list, cached tool catalog,
+ *                             and the OAuth-flow edge-function
+ *                             proxy calls (discover / register /
+ *                             token-exchange / refresh / disconnect)
+ *                                                    -> ./supabase/mcp.ts
  *
  * One straggler: listIntents is implemented inline until an intents
  * slice exists (see the note at its declaration).
@@ -1530,5 +1546,65 @@ export class SupabaseService {
     }[]
   > {
     return biasApi.biasListProcessedThreads(this.client, limit);
+  }
+
+  // --- MCP integrations -------------------------------------------------
+  //
+  // Extracted domain slice: the implementations and their doc comments
+  // live in ./supabase/mcp.ts (the integrations list + cached tool-
+  // catalog reads, plus the venice edge-function proxy calls that drive
+  // the OAuth flow) as plain functions taking the client. These methods
+  // delegate one-for-one under the same names so call sites and grep
+  // targets stay stable. The browser never reads mcp_oauth_tokens -
+  // token storage is edge-function-only.
+
+  async listMcpIntegrations(): Promise<McpIntegration[]> {
+    return mcpApi.listMcpIntegrations(this.client);
+  }
+
+  async listMcpToolSchemas(): Promise<McpToolSchema[]> {
+    return mcpApi.listMcpToolSchemas(this.client);
+  }
+
+  async deleteMcpIntegration(integrationId: string): Promise<void> {
+    return mcpApi.deleteMcpIntegration(this.client, integrationId);
+  }
+
+  async invokeMcpDiscover(serverUrl: string): Promise<McpDiscoveredMetadata> {
+    return mcpApi.invokeMcpDiscover(this.client, serverUrl);
+  }
+
+  async invokeMcpRegister(
+    serverUrl: string,
+    redirectUri: string,
+    label: string,
+    integrationId?: string | null,
+  ): Promise<McpRegisterResult> {
+    return mcpApi.invokeMcpRegister(this.client, serverUrl, redirectUri, label, integrationId);
+  }
+
+  async invokeMcpTokenExchange(
+    integrationId: string,
+    code: string,
+    codeVerifier: string,
+    state: string,
+    redirectUri: string
+  ): Promise<McpTokenExchangeResult> {
+    return mcpApi.invokeMcpTokenExchange(
+      this.client,
+      integrationId,
+      code,
+      codeVerifier,
+      state,
+      redirectUri
+    );
+  }
+
+  async invokeMcpRefresh(integrationId: string): Promise<McpTokenExchangeResult> {
+    return mcpApi.invokeMcpRefresh(this.client, integrationId);
+  }
+
+  async invokeMcpDisconnect(integrationId: string): Promise<void> {
+    return mcpApi.invokeMcpDisconnect(this.client, integrationId);
   }
 }

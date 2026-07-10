@@ -112,6 +112,13 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   // new wire catalog. Returned to the caller at the end for local
   // state rehydration.
   let toolboxesEnabled: readonly string[] = thread.toolboxes_enabled;
+  // Snapshot the user's connected MCP integrations as dynamic
+  // toolboxes for this turn. Built once at turn entry from the
+  // caller-supplied list (Chat.svelte computes it from app state via
+  // buildMcpToolboxes) so every round in the multi-round tool chain
+  // sees the same MCP catalog. A connect/disconnect mid-turn lands in
+  // app state but doesn't re-render here - the next turn picks it up.
+  const mcpToolboxes = opts.mcpToolboxes ?? [];
   let finalText = '';
   let roundsRun = 0;
   let stoppedByLimit = false;
@@ -209,6 +216,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     // mid-turn; the realtime echo updates the thread row asynchronously,
     // so this is the turn-entry value.
     enabledToolboxes: toolboxesEnabled,
+    mcpToolboxes,
     attachmentSummaries,
     currentTurnHasAttachments: currentTurnHasAttachments ?? false,
     emphasisMarkdown,
@@ -224,7 +232,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       // bias-free baseline and the orchestrator renders + appends the
       // block before the first round.
       role: 'system',
-      content: buildSystemPrompt(),
+      content: buildSystemPrompt(mcpToolboxes),
     },
     ...userSystem,
     ...conversation,
@@ -252,7 +260,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       model: modelId,
       messages: requestMessages,
       signal,
-      tools: buildToolList(toolboxesEnabled),
+      tools: buildToolList(toolboxesEnabled, mcpToolboxes),
       reasoningEffort,
       disableThinking,
       verbosity,

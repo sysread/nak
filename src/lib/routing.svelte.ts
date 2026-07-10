@@ -47,6 +47,11 @@
  * owns.
  */
 
+import {
+  MCP_CALLBACK_CODE_KEY,
+  MCP_CALLBACK_STATE_KEY,
+} from './ui/mcp';
+
 export type Modal =
   | 'settings'
   | 'help'
@@ -304,6 +309,39 @@ function syncFromUrl(): void {
 }
 
 /**
+ * Detect an MCP OAuth callback on boot and stash the code + state for
+ * the Settings Integrations pane to complete the token exchange.
+ *
+ * The OAuth provider redirects back to `origin/?code=...&state=...`
+ * (no hash fragment - OAuth 2.1 forbids fragments in redirect URIs).
+ * This detects `code` + `state` in `location.search`, stashes them in
+ * sessionStorage under the keys the Settings pane reads (see
+ * src/lib/ui/mcp.ts), and cleans the URL so the app boots without
+ * stray OAuth params in the address bar.
+ *
+ * No-op when there are no code + state params. Runs once at the top of
+ * `initRouting()` (the boot-time URL handler) so the stash lands before
+ * any pane mounts and reads it.
+ */
+function consumeMcpCallbackParams(): void {
+  if (typeof window === 'undefined') return;
+  const params = new URLSearchParams(window.location.search);
+  const code = params.get('code');
+  const state = params.get('state');
+  if (!code) return;
+  sessionStorage.setItem(MCP_CALLBACK_CODE_KEY, code);
+  if (state) sessionStorage.setItem(MCP_CALLBACK_STATE_KEY, state);
+  // Strip the OAuth params so the address bar is clean on boot and the
+  // routing parse doesn't see stray code/state keys. Preserve any
+  // routed keys (cid / drawer / modal) the user had in the URL.
+  params.delete('code');
+  params.delete('state');
+  const remaining = params.toString();
+  const cleanSearch = remaining ? `?${remaining}` : '';
+  history.replaceState(null, '', window.location.pathname + cleanSearch);
+}
+
+/**
  * Idempotent — call this when the app first enters the `unlocked`
  * phase. Subsequent calls are no-ops. Installs the popstate listener
  * exactly once per page lifecycle.
@@ -312,6 +350,10 @@ export function initRouting(): void {
   if (initialized) return;
   initialized = true;
   if (typeof window === 'undefined') return;
+  // Drain an MCP OAuth callback BEFORE the route parse so the
+  // stash lands in sessionStorage and the OAuth params are cleared
+  // from the URL ahead of syncFromUrl.
+  consumeMcpCallbackParams();
   syncFromUrl();
   window.addEventListener('popstate', syncFromUrl);
 }

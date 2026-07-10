@@ -88,6 +88,10 @@ You can reach these pages two ways:
 - [Models & reasoning](./models.md) — picking a model tier, reasoning
   effort, and the web-search toggle.
 - [Appearance](./appearance.md) — color modes, accent colors, and the soft/terminal UI style.
+- [MCP integrations](./mcp-integrations.md) - connect external
+  services (Fastmail, etc.) through the Model Context Protocol so
+  the assistant can read your mail, manage your calendar, and reach
+  other tools.
 
 ### Data & security
 

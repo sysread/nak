@@ -39,6 +39,11 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ToolCallRequest } from '../_shared/venice-stream.ts';
+// MCP-routed dispatch is a per-user concern resolved at call time
+// from the mcp_integrations cache; imported here rather than
+// self-registered into the static REGISTRY because there is no
+// single impl - the wire name carries the integration id.
+import { dispatchMcpTool, isMcpToolName } from './mcp/dispatch.ts';
 
 /**
  * Per-tool execution context the function side passes into every
@@ -185,8 +190,13 @@ export async function performToolCall(
   ctx: ToolContext,
 ): Promise<unknown> {
   const tool = REGISTRY.get(request.name);
-  if (!tool) {
-    throw new ToolNotImplementedError(request.name);
+  if (tool) return await tool.execute(request.args, ctx);
+  // MCP-routed tools are not in the static registry; dispatch via
+  // the MCP client. The wire name `mcp:<integrationId>:<tool>`
+  // carries the integration pointer; `dispatchMcpTool` resolves it
+  // against `ctx.adminClient` + `ctx.userId` (b-strict service-role).
+  if (isMcpToolName(request.name)) {
+    return await dispatchMcpTool(request, ctx);
   }
-  return await tool.execute(request.args, ctx);
+  throw new ToolNotImplementedError(request.name);
 }
