@@ -79,10 +79,12 @@ export function mcpToolWireName(
 /**
  * Build the dynamic `Toolbox` entries for the chat-loop from the
  * authorized integrations + their cached tool catalog. Each
- * `authorized` integration becomes one gated toolbox named
- * `mcp:<id>`; every cached tool becomes a schema-only ToolDef
- * (execute throws - dispatch is server-side) whose wire name is
- * `mcp:<integrationId>:<serverToolName>`.
+  * `authorized` integration becomes one gated toolbox named
+  * `mcp:<label>` (the label is a per-user unique slug); every cached
+  * tool becomes a schema-only ToolDef whose wire name is
+  * `mcp:<integrationId>:<serverToolName>`. The toolbox toggle gates
+  * on the label, dispatch resolves the immutable uuid — so renaming
+  * a label doesn't break existing `toolboxes_enabled` entries.
  *
  * `pending` / `revoked` integrations are dropped: only `authorized`
  * integrations expose tools to the model. The chat-loop passes the

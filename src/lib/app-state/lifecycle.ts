@@ -121,16 +121,16 @@ async function loadSettings(): Promise<void> {
 export async function loadMcpIntegrations(): Promise<void> {
   if (!app.supabase) return;
   try {
-    const [integrations, toolSchemas] = await Promise.all([
-      app.supabase.listMcpIntegrations(),
-      app.supabase.listMcpToolSchemas(),
-    ]);
+    const integrations = await app.supabase.listMcpIntegrations();
     app.mcpIntegrations = integrations;
+  } catch {
+    // integrations stay [] from seed — best-effort
+  }
+  try {
+    const toolSchemas = await app.supabase.listMcpToolSchemas();
     app.mcpToolSchemas = toolSchemas;
   } catch {
-    // Best-effort: keep the empty seeds set in `activate()`. A
-    // Supabase outage doesn't gate the bootstrap, and the Settings
-    // pane surfaces its own error on a connect/delete failure.
+    // toolSchemas stay [] from seed — best-effort
   }
 }
 

@@ -1,7 +1,7 @@
 # MCP integrations (in progress)
 
 > **Status: implementation in progress on branch
-> `mcp-integrations`.** Full-stack wired — settings UI, OAuth
+> `mcp-integrations`.** Full-stack wired - settings UI, OAuth
 > flow with DCR discovery + PKCE + token exchange, per-user
 > tool-catalog caching, dynamic toolbox popup, edge-side
 > dispatch. Fastmail end-to-end verified 2026-07-10 with 10
@@ -469,7 +469,7 @@ nak's own system prompt. Two distinct risks:
 - **Fastmail's DCR scope is `offline_access`-free.** Verified
   2026-07-10 via live OAuth + tools/list + tools/call. The
   scope the MCP server requires is `https://www.fastmail.com/dev/mcp`
-  — extracted from the 401's `WWW-Authenticate` header (`scope=`
+  - extracted from the 401's `WWW-Authenticate` header (`scope=`
   param, tier 1 per the MCP SDK). Including `offline_access`
   alongside it returns `invalid_scope` from Fastmail's auth
   server; the SDK's scope string is JUST the MCP scope. The

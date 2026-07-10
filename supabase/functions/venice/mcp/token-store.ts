@@ -170,16 +170,18 @@ export async function storeTokens(
  * fires on first use). Throws VenicyError-shaped errors on permanent
  * refresh failure (the dispatcher propagates a clear tool result).
  *
- * Single-device v1: no claim coordination. If two devices raced a
- * refresh, the second's UPDATE would land on a row already carrying
- * a NEW refresh_token, and a server with refresh-token rotation would
- * reject our now-staleToken. The schema's plan open question 2 names
- * this as the deferred work; v1 users hit one device.
+ * Single-device v1: no claim coordination. If two devices (or two
+ * same-turn parallel MCP tool calls) race a refresh, the second
+ * attempt gets `invalid_grant` from the server after the first one
+ * rotated the token. We retry once on that code: re-read the row,
+ * which now carries the fresh token the other caller just stored,
+ * and use it. One retry is sufficient for the same-turn case.
  */
 export async function getValidAccessToken(
   adminClient: SupabaseClient,
   userId: string,
   integrationId: string,
+  retryOnConflict = true,
 ): Promise<string> {
   // RLS OFF: filter by userId - service-role bypasses RLS, the
   // `.eq('user_id', userId)` clause is the only ownership boundary.
@@ -232,21 +234,31 @@ export async function getValidAccessToken(
     );
   }
 
-  const refreshed = await refreshOauthToken(
-    tokenEndpoint,
-    integration.client_id,
-    tokenRow.refresh_token,
-  );
+  try {
+    const refreshed = await refreshOauthToken(
+      tokenEndpoint,
+      integration.client_id,
+      tokenRow.refresh_token,
+    );
 
-  await storeTokens(
-    adminClient,
-    userId,
-    integrationId,
-    refreshed.access_token,
-    refreshed.refresh_token,
-    refreshed.expires_in,
-  );
-  return refreshed.access_token;
+    await storeTokens(
+      adminClient,
+      userId,
+      integrationId,
+      refreshed.access_token,
+      refreshed.refresh_token,
+      refreshed.expires_in,
+    );
+    return refreshed.access_token;
+  } catch (err) {
+    const msg = (err as Error).message ?? String(err);
+    if (retryOnConflict && msg.includes('invalid_grant')) {
+      // Another concurrent caller rotated the token before we did;
+      // re-read the row — it should now carry the fresh token.
+      return getValidAccessToken(adminClient, userId, integrationId, false);
+    }
+    throw err;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -396,6 +408,7 @@ export async function listEnabledToolSchemas(
     .eq('user_id', userId)
     .eq('mcp_integrations.auth_status', 'authorized');
   if (error) {
+    console.error(`listEnabledToolSchemas query failed: ${error.message}`);
     return [];
   }
   if (!Array.isArray(data)) return [];
@@ -432,7 +445,9 @@ function shortDescriptionOf(description: string): string {
   // the ceiling (rare on MCP tools), floor it at the first 50 chars.
   const slice = trimmed.slice(0, 50);
   const space = slice.lastIndexOf(' ');
-  if (space > 20) return slice.slice(0, space);
+    // 20 chars is the shortest readable fragment worth a mid-word cut —
+    // shorter fragments read as garbled anyway.
+    if (space > 20) return slice.slice(0, space);
   return slice;
 }
 

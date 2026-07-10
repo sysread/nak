@@ -69,7 +69,6 @@ export interface McpDiscoveredMetadata {
 export interface McpRegisterResult {
   integrationId: string;
   authzUrl: string;
-  codeChallenge: string;
   codeVerifier: string;
   state: string;
 }

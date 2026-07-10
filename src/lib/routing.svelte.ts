@@ -329,7 +329,7 @@ function consumeMcpCallbackParams(): void {
   const code = params.get('code');
   const state = params.get('state');
   if (!code) return;
-  if (code) sessionStorage.setItem(MCP_CALLBACK_CODE_KEY, code);
+  sessionStorage.setItem(MCP_CALLBACK_CODE_KEY, code);
   if (state) sessionStorage.setItem(MCP_CALLBACK_STATE_KEY, state);
   // Strip the OAuth params so the address bar is clean on boot and the
   // routing parse doesn't see stray code/state keys. Preserve any

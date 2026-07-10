@@ -14038,7 +14038,7 @@ create table if not exists public.mcp_integration_tools (
   integration_id uuid not null references public.mcp_integrations(id) on delete cascade,
   user_id uuid not null references auth.users(id) on delete cascade,
   -- The tool name as the MCP server defines it (e.g. "search_email").
-  -- The wire tool name is namespaced as "mcp_<integrationId>_<name>"
+  -- The wire tool name is namespaced as "mcp:<integrationId>:<serverToolName>"
   -- to avoid collisions; the edge function resolves the mapping.
   server_tool_name text not null,
   -- Full description from the MCP server (for the wire tools array).

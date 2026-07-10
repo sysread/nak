@@ -30,7 +30,7 @@
 //
 // Why no `resource` on refresh_token (RFC 8707 §2.2 says SHOULD, not
 // MUST): the spec leaves refresh-time audience to the authorization
-// server.servers (Fastmail's MCP server is fine without; we minimize
+  // servers (Fastmail's MCP server is fine without; we minimize
 // surface). If a future server requires it, the integration's
 // `discovered_metadata.resource` is cached and a follow-up can thread
 // it through `refreshToken` without a schema change.
@@ -921,6 +921,8 @@ export async function callMcpTool(
     method: 'POST',
     headers: headers(sessionId ? { 'Mcp-Session-Id': sessionId } : undefined),
     body: JSON.stringify(mcpToolsCallRequest(id, serverToolName, args)),
+    // One request per connection — any opaque id suffices for JSON-RPC
+    // correlation. The session ID from initialize carries the state.
   });
   if (!resp.ok) {
     throw new VeniceError(

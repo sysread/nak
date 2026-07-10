@@ -1065,6 +1065,16 @@
         'Authorization callback arrived without a matching pending connection. Try connecting again.';
       return;
     }
+    // OAuth 2.1 §7.4.2: the state parameter prevents CSRF. An attacker
+    // crafting a callback URL with a different code + stolen state
+    // would consume the register context but the exchange would fail
+    // on code/verifier mismatch — the state check catches the attack
+    // before we burn the one-shot register context.
+    if (callback.state !== reg.state) {
+      mcpCallbackStatus =
+        'Authorization state mismatch. The callback may have been tampered with. Try connecting again.';
+      return;
+    }
     mcpCallbackStatus = 'Completing authorization…';
     try {
       await app.supabase!.invokeMcpTokenExchange(
@@ -1117,12 +1127,16 @@
       // discover failure is the most common error surface (bad URL,
       // server down, no well-known metadata) so it gets its own
       // message rather than a generic register failure.
-      await app.supabase.invokeMcpDiscover(serverUrl);
+      const discovered = await app.supabase.invokeMcpDiscover(serverUrl);
+      mcpInfo = discovered.supportsDcr
+        ? 'Server supports auto-registration. Redirecting to authorization…'
+        : 'Server requires manual client registration. Redirecting…';
       const redirectUri = mcpRedirectUri();
       const reg = await app.supabase.invokeMcpRegister(
         serverUrl,
         redirectUri,
-        label
+        label,
+        undefined,
       );
       // Stash the PKCE material BEFORE the redirect - the round-trip
       // is a full page navigation and nothing in memory survives it.
@@ -1182,6 +1196,26 @@
     } finally {
       mcpBusy = false;
     }
+  }
+
+  /**
+   * Revoke an authorized integration's tokens, flipping auth_status to
+   * 'revoked' while preserving the row (label, server_url, client_id)
+   * so the user can re-authorize without re-pasting the URL.
+   */
+  async function onDisconnectMcp(integ: McpIntegration): Promise<void> {
+    mcpError = null;
+    if (!app.supabase) {
+      mcpError = 'Not connected to Supabase yet.';
+      return;
+    }
+    try {
+      await app.supabase.invokeMcpDisconnect(integ.id);
+    } catch (err) {
+      mcpError = err instanceof Error ? err.message : String(err);
+      return;
+    }
+    await loadMcpIntegrations();
   }
 
   /**
@@ -2663,6 +2697,13 @@
                         class="mcp-retry"
                         onclick={() => onRetryMcp(integ)}
                       >Reauthorize</button>
+                    {/if}
+                    {#if integ.authStatus === 'authorized'}
+                      <button
+                        type="button"
+                        class="mcp-disconnect"
+                        onclick={() => onDisconnectMcp(integ)}
+                      >Disconnect</button>
                     {/if}
                     <button
                       type="button"
