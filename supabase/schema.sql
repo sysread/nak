@@ -13673,7 +13673,14 @@ create policy "conversation_digests_select_own" on public.conversation_digests
 -- retries.
 alter table public.profiles
   add column if not exists digest_claim_holder text,
-  add column if not exists digest_claim_expires_at timestamptz;
+  add column if not exists digest_claim_expires_at timestamptz,
+  -- Consecutive-failure tracking for ONE day at a time: the claim
+  -- always serves the oldest undigested day, so at most one day per
+  -- user can be failing. When the failing day changes, the counter
+  -- resets; when it hits the cap, record_digest_failure writes a
+  -- placeholder digest to advance the queue.
+  add column if not exists digest_failing_date date,
+  add column if not exists digest_failure_count integer not null default 0;
 
 -- Claim the next (user, day) pair needing a digest, across ALL users.
 -- SECURITY DEFINER global sweep, same posture as
@@ -13688,13 +13695,14 @@ alter table public.profiles
 --     cannot wedge the global sweep - same guard as the wiki toggle);
 --   - no live claim (null or expired);
 --   - there exists a local calendar day, STRICTLY BEFORE today in the
---     user's timezone and within the trailing 7-day backfill window,
---     that has at least one non-empty user/assistant message and no
---     digest row yet. The 7-day floor bounds first-deploy backfill:
---     without it the sweep would grind through a user's entire
---     history one Venice call at a time. It also self-limits a
---     permanently-failing day - after a week of hourly TTL retries
---     the day ages out of the window and stops being claimed.
+--     user's timezone, that has at least one non-empty user/assistant
+--     message and no digest row yet. There is NO backfill floor: the
+--     sweep grinds through the user's entire history oldest-first,
+--     a few days per hourly tick, until every past day is digested.
+--     A permanently-failing day cannot pin the queue (the claim
+--     always picks the oldest undigested day) because
+--     record_digest_failure below skips it with a placeholder row
+--     after DIGEST_FAILURE_CAP consecutive failures.
 --
 -- Returns the UTC instants of the local day's boundaries
 -- (day_start/day_end) alongside the date so the edge agent can range-
@@ -13722,9 +13730,12 @@ set search_path = public as $$
         select public.nak_safe_timezone(p.settings->>'displayTimezone') as tz
       ) usertz
       cross join lateral (
-        -- Oldest undigested local day with substantive traffic in the
-        -- backfill window. Bucketing happens per message row; the
-        -- 7-day floor keeps the scan bounded to recent history.
+        -- Oldest undigested local day with substantive traffic,
+        -- across the user's whole history. Bucketing happens per
+        -- message row, so this lateral scans every message the user
+        -- owns on every claim call - acceptable at nak's single-user
+        -- scale, and once the backlog drains the min() short-circuits
+        -- to recent days only in effect (older days all have rows).
         select min((m.created_at at time zone usertz.tz)::date) as d
           from public.messages m
           inner join public.threads t on t.id = m.thread_id
@@ -13734,8 +13745,6 @@ set search_path = public as $$
            and length(m.content) > 0
            and (m.created_at at time zone usertz.tz)::date
                < (now() at time zone usertz.tz)::date
-           and (m.created_at at time zone usertz.tz)::date
-               >= (now() at time zone usertz.tz)::date - 7
            and not exists (
              select 1
                from public.conversation_digests cd
@@ -13785,7 +13794,12 @@ set search_path = public as $$
 begin
   update public.profiles
      set digest_claim_holder = null,
-         digest_claim_expires_at = null
+         digest_claim_expires_at = null,
+         -- A success wipes the consecutive-failure tracking so a
+         -- transient blip on an earlier attempt doesn't shorten the
+         -- retry budget of some future day.
+         digest_failing_date = null,
+         digest_failure_count = 0
    where user_id = p_user_id
      and digest_claim_holder = p_holder_id
      and digest_claim_expires_at > now();
@@ -13801,6 +13815,66 @@ end $$;
 revoke all on function public.save_conversation_digest(uuid, text, date, text, jsonb)
   from public, anon, authenticated;
 grant execute on function public.save_conversation_digest(uuid, text, date, text, jsonb)
+  to service_role;
+
+-- Record a failed digest attempt and decide retry-vs-skip. Because
+-- the claim always serves a user's OLDEST undigested day, a day that
+-- keeps failing would pin that user's whole queue - so after
+-- p_failure_cap consecutive failures on the same day this writes a
+-- placeholder digest row (empty threads, an honest "couldn't
+-- generate" summary) to advance the queue, mirroring the wiki
+-- sweep's skip-after-cap discipline. Returns:
+--   'released'   - claim cleared, counter bumped; retried next tick
+--   'skipped'    - cap reached, placeholder written, queue advanced
+--   'claim-lost' - another holder owns the row; nothing recorded
+create or replace function public.record_digest_failure(
+  p_user_id uuid,
+  p_holder_id text,
+  p_digest_date date,
+  p_failure_cap int
+) returns text
+language plpgsql security definer
+set search_path = public as $$
+declare
+  v_count int;
+begin
+  update public.profiles
+     set digest_claim_holder = null,
+         digest_claim_expires_at = null,
+         digest_failure_count = case
+           when digest_failing_date = p_digest_date
+             then digest_failure_count + 1
+           else 1
+         end,
+         digest_failing_date = p_digest_date
+   where user_id = p_user_id
+     and digest_claim_holder = p_holder_id
+     and digest_claim_expires_at > now()
+  returning digest_failure_count into v_count;
+  if not found then
+    return 'claim-lost';
+  end if;
+  if v_count < p_failure_cap then
+    return 'released';
+  end if;
+  insert into public.conversation_digests (user_id, digest_date, summary, threads)
+  values (
+    p_user_id,
+    p_digest_date,
+    'Digest generation failed repeatedly for this day, so it was skipped.',
+    '[]'::jsonb
+  )
+  on conflict (user_id, digest_date) do nothing;
+  update public.profiles
+     set digest_failing_date = null,
+         digest_failure_count = 0
+   where user_id = p_user_id;
+  return 'skipped';
+end $$;
+
+revoke all on function public.record_digest_failure(uuid, text, date, int)
+  from public, anon, authenticated;
+grant execute on function public.record_digest_failure(uuid, text, date, int)
   to service_role;
 
 -- ---------------------------------------------------------------------------

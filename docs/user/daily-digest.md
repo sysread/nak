@@ -39,5 +39,6 @@ through your history.
 - Digests are snapshots. If you later rename or delete a
   conversation, the digest keeps the title it had at the time; a
   deleted conversation's link opens an empty view.
-- When the feature first arrives, it looks back up to a week and
-  fills in recent days - it does not digest your entire history.
+- When the feature first arrives, it works backward through your
+  entire history, oldest days filling in gradually - a few days per
+  hour - until the whole archive is covered.

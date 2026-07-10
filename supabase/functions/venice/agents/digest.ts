@@ -8,15 +8,18 @@
 // Single driver: runDigestSweepTick, called by the venice function's
 // /digest-sweep route, which pg_cron hits hourly (schema.sql,
 // nak_trigger_digest_sweep). The per-user "is a day due" decision -
-// timezone resolution, day-gate, 7-day backfill window, settings
+// timezone resolution, day-gate, oldest-first backfill order, settings
 // toggle - lives entirely in the claim_next_digest_day RPC; this
 // module only summarizes what the claim hands it.
 //
-// Failure posture: there is no failure counter. A run that dies (bad
-// JSON, truncated completion, transport error) leaves the claim to
-// its TTL and the next hourly tick retries; a day that fails for a
-// whole week ages out of the claim RPC's 7-day window and stops being
-// attempted. Bounded retries without extra bookkeeping columns.
+// Failure posture: a run that dies (bad JSON, truncated completion,
+// transport error) reports through record_digest_failure, which
+// releases the claim for an hourly retry until DIGEST_FAILURE_CAP
+// consecutive failures on the same day, then writes a placeholder
+// row to advance the queue. The cap matters because the claim always
+// serves the oldest undigested day across the user's WHOLE history
+// (there is no backfill floor) - without it a poison day would pin
+// every day behind it forever.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createEdgeLogger } from '../../_shared/edge-log.ts';
@@ -38,6 +41,10 @@ const DIGEST_CLAIM_TTL_SECONDS = 600;
 // Users processed per tick. Each is one Venice completion; the hourly
 // cadence resumes a longer backlog drain across ticks.
 const DEFAULT_SWEEP_MAX_USERS = 3;
+
+// Consecutive failures on one day before record_digest_failure writes
+// a placeholder and moves on. Matches the wiki sweep's retry budget.
+const DIGEST_FAILURE_CAP = 3;
 
 // Input-side caps. Per-message truncation keeps one giant paste from
 // eating the whole transcript budget; the total cap keeps the prompt
@@ -102,6 +109,10 @@ export interface DigestSweepSummary {
   written: number;
   emptyDay: number;
   claimLost: number;
+  /** Failures released for an hourly retry (below the cap). */
+  released: number;
+  /** Days skipped with a placeholder after hitting the failure cap. */
+  skipped: number;
   errors: number;
 }
 
@@ -234,6 +245,8 @@ export async function runDigestSweepTick(
     written: 0,
     emptyDay: 0,
     claimLost: 0,
+    released: 0,
+    skipped: 0,
     errors: 0,
   };
 
@@ -322,11 +335,44 @@ export async function runDigestSweepTick(
         summary.claimLost += 1;
       }
     } catch (err) {
-      log.warn(
-        `digest for ${digestDate} failed: ${err instanceof Error ? err.message : String(err)} ` +
-          '(claim TTL will release; retried next tick until the day ages out of the window)',
-      );
-      summary.errors += 1;
+      const failureMsg = err instanceof Error ? err.message : String(err);
+      try {
+        const failed = await adminClient.rpc('record_digest_failure', {
+          p_user_id: userId,
+          p_holder_id: holderId,
+          p_digest_date: digestDate,
+          p_failure_cap: DIGEST_FAILURE_CAP,
+        });
+        if (failed.error) throw new Error(failed.error.message);
+        const outcome = typeof failed.data === 'string' ? failed.data : 'released';
+        if (outcome === 'skipped') {
+          log.warn(
+            `digest for ${digestDate} failed: ${failureMsg} ` +
+              '(reached failure cap; placeholder written to advance the queue)',
+          );
+          summary.skipped += 1;
+        } else if (outcome === 'claim-lost') {
+          log.debug(
+            `digest for ${digestDate} failed: ${failureMsg} ` +
+              '(claim already gone; another run will retry)',
+          );
+          summary.claimLost += 1;
+        } else {
+          log.warn(
+            `digest for ${digestDate} failed: ${failureMsg} (claim released; retried next tick)`,
+          );
+          summary.released += 1;
+        }
+      } catch (rpcErr) {
+        // Bookkeeping failed on top of the original error. The claim
+        // TTL still releases the row, so progress continues on the
+        // slower fallback path; surface both for correlation.
+        log.warn(
+          `digest for ${digestDate} failed: ${failureMsg} ` +
+            `(failure RPC also threw: ${rpcErr instanceof Error ? rpcErr.message : String(rpcErr)})`,
+        );
+        summary.errors += 1;
+      }
     } finally {
       await log.flush();
     }
