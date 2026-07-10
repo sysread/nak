@@ -1458,7 +1458,7 @@ async function handleMcpRegister(req: Request): Promise<Response> {
       return json({ error: 'discovery advertised DCR but no reachable auth server has a registration_endpoint' }, 502);
     }
     try {
-      const reg = await registerClient(asWithReg, body.redirectUri);
+      const reg = await registerClient(asWithReg, body.redirectUri, body.label);
       clientId = reg.client_id;
     } catch (err) {
       if (err instanceof VeniceError) {

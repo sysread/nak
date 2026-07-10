@@ -514,6 +514,7 @@ export async function discoverMetadata(
 export async function registerClient(
   authServerMetadata: AuthServerMetadata,
   redirectUri: string,
+  clientName: string,
   fetchFn: FetchLike = defaultFetch,
 ): Promise<RegisteredClient> {
   if (!authServerMetadata.registration_endpoint) {
@@ -529,6 +530,7 @@ export async function registerClient(
       Accept: 'application/json',
     },
     body: JSON.stringify({
+      client_name: clientName,
       redirect_uris: [redirectUri],
       grant_types: ['authorization_code', 'refresh_token'],
       response_types: ['code'],
