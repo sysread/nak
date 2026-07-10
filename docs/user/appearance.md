@@ -19,7 +19,8 @@ Appearance > Style**:
   degrees, boxes lose their borders, and panels are separated by
   contrasting background fills instead of outlines. Chat bubbles
   carry a single colored bar down their left edge - your accent
-  color for your messages, grey for the assistant, red for errors.
+  color for your messages, green for the assistant, amber for
+  notices, red for errors.
   Floating menus and dialogs keep a crisp one-pixel edge, the CSS
   cousin of a TUI dialog's box-drawing border.
 
