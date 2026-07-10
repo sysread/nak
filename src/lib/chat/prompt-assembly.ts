@@ -18,6 +18,7 @@ import {
   sanitizeToolCallIdForWire,
   sanitizeToolCallsForWire,
 } from '../tools/wire';
+import type { Toolbox } from '../tools';
 import { detectTimezone } from '../timezone';
 import {
   buildRefinementThink,
@@ -255,6 +256,16 @@ interface MetadataSystemMessageOptions {
    * prompt-prefix cache for the whole conversation.
    */
   enabledToolboxes: readonly string[];
+  /**
+   * The dynamic MCP-integration toolboxes the user has authorized,
+   * built at turn entry from app state (see buildMcpToolboxes in
+   * ../ui/mcp.ts). Rendered as additional (on)/(off) lines in the
+   * gated-toolbox state block so the model sees a `mcp:<id>` toggle
+   * identically to a built-in toolbox toggle. Absent / empty means
+   * the user has no connected integrations and the block is the
+   * static set alone.
+   */
+  mcpToolboxes?: readonly Toolbox[];
   attachmentSummaries: ThreadAttachmentSummary[];
   /**
    * True when the user message that opened this turn carries one or
@@ -332,7 +343,7 @@ export function buildMetadataSystemMessage(
   // the current enabled set. Kept out of the baseline so a
   // toggle_toolbox flip mid-conversation only re-encodes this trailing
   // block, not the whole cached prefix.
-  sections.push(buildToolboxStateBlock(opts.enabledToolboxes));
+  sections.push(buildToolboxStateBlock(opts.enabledToolboxes, opts.mcpToolboxes ?? []));
 
   const attachments = buildThreadAttachmentsBlock(opts.attachmentSummaries);
   if (attachments !== null) sections.push(attachments);

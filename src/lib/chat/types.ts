@@ -10,7 +10,7 @@
 import type { ReasoningEffort, Verbosity } from '../models';
 import type { SupabaseService, Message, Thread } from '../supabase';
 import type { VeniceClient, VeniceMessage } from '../venice';
-import type { OpenAIToolCall } from '../tools';
+import type { OpenAIToolCall, Toolbox } from '../tools';
 import type { IntuitionPayload } from '../intuition';
 import type { ContextRecallPayload } from '../context-recall';
 
@@ -330,6 +330,17 @@ export interface ChatLoopOptions {
    * callers / tests) so a text-only turn pays zero tokens for it.
    */
   currentTurnHasAttachments?: boolean;
+  /**
+   * The dynamic MCP-integration toolboxes the user has authorized,
+   * built by the caller (Chat.svelte) via buildMcpToolboxes from
+   * `app.mcpIntegrations` + `app.mcpToolSchemas`. Forwarded to
+   * buildSystemPrompt, buildToolList, and the per-turn metadata
+   * toolbox-state block so a `mcp:<id>` toolbox composes with the
+   * static catalog under one dedup-by-name pass. Absent / empty on
+   * accounts with no connected integrations - the static catalog
+   * alone ships, byte-identical to pre-MCP behaviour.
+   */
+  mcpToolboxes?: readonly Toolbox[];
 }
 
 /** Non-error completion shape returned to the caller. */

@@ -28,7 +28,7 @@
  * same lifetime.
  */
 import type { AppConfig } from '../config';
-import type { SupabaseService, SystemPrompt } from '../supabase';
+import type { SupabaseService, SystemPrompt, McpIntegration, McpToolSchema } from '../supabase';
 import type { VeniceClient } from '../venice';
 import { NO_PRICE_CAPS, type ModelPriceCaps } from '../models/price-caps';
 import { detectTimezone } from '../timezone';
@@ -201,6 +201,27 @@ interface AppState {
    * `profiles.settings.userLocation` on unlock.
    */
   userLocation: string;
+  /**
+   * The user's connected MCP integrations, loaded from
+   * `mcp_integrations` on unlock (see loadMcpIntegrations in
+   * ./lifecycle.ts). Empty until that fetch resolves. Each
+   * `authorized` integration becomes a gated `mcp:<id>` toolbox the
+   * chat model can enable; the Settings Integrations pane mutates
+   * this list (add / delete / re-authorize) and the chat-loop reads
+   * it at turn entry to build the dynamic MCP toolboxes (see
+   * buildMcpToolboxes in ../ui/mcp.ts).
+   */
+  mcpIntegrations: McpIntegration[];
+  /**
+   * Cached MCP tool catalog across every integration, loaded from
+   * `mcp_integration_tools` alongside `mcpIntegrations`. One row per
+   * (integration, server tool); the chat-loop groups these by
+   * integration to assemble the wire `tools` array + system-prompt
+   * catalog lines for each authorized integration's toolbox.
+   * Refreshed server-side after OAuth and periodically thereafter;
+   * the browser only reads.
+   */
+  mcpToolSchemas: McpToolSchema[];
   error: string | null;
 }
 
@@ -230,5 +251,7 @@ export const app = $state<AppState>({
   displayTimezonePersisted: false,
   userName: '',
   userLocation: '',
+  mcpIntegrations: [],
+  mcpToolSchemas: [],
   error: null,
 });

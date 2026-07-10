@@ -282,7 +282,7 @@ Examples:
  * a toggle re-encodes only the small trailing metadata block rather
  * than busting the prompt-prefix cache for the whole conversation.
  */
-function buildCatalog(): string {
+function buildCatalog(mcpToolboxes: readonly Toolbox[] = []): string {
   const alwaysOnLines: string[] = [];
   for (const tool of alwaysOnToolbox.tools) {
     if (tool.name === toggleToolbox.name) continue;
@@ -297,12 +297,37 @@ function buildCatalog(): string {
     }
   }
 
+  // Connected MCP integrations: the dynamic toolboxes the user has
+  // authorized. Rendered under their own sub-heading so the model can
+  // tell server-discovered tools apart from the built-in catalog. Same
+  // `- <name> : <shortDescription>` line shape as the static boxes;
+  // the toolbox line uses the user's label ("Fastmail") as the
+  // description so the model reads a human-meaningful name. Omitted
+  // entirely when the user has no authorized integrations so an
+  // account without MCP keeps a byte-stable baseline.
+  const mcpLines: string[] = [];
+  for (const tb of mcpToolboxes) {
+    mcpLines.push(`  ${tb.name} : ${tb.description}`);
+    for (const tool of tb.tools) {
+      mcpLines.push(`      - ${tool.name} : ${tool.shortDescription}`);
+    }
+  }
+  const mcpSection =
+    mcpLines.length > 0
+      ? [
+          '',
+          'Connected integrations (enable per integration with toggle_toolbox):',
+          ...mcpLines,
+        ]
+      : [];
+
   return [
     'Always available (no toggle needed):',
     ...alwaysOnLines,
     '',
     'Toolboxes you can enable via toggle_toolbox (each starts disabled; enable one BEFORE invoking a tool inside it - the metadata block below shows which are currently on):',
     ...gatedLines,
+    ...mcpSection,
   ].join('\n');
 }
 
@@ -324,11 +349,22 @@ function buildCatalog(): string {
  * over gated tools rather than enabling their toolboxes. Plain English
  * state words don't have that ambiguity.
  */
-export function buildToolboxStateBlock(enabled: readonly string[]): string {
+export function buildToolboxStateBlock(
+  enabled: readonly string[],
+  mcpToolboxes: readonly Toolbox[] = []
+): string {
   const enabledSet = new Set(enabled);
   const lines = GATED_TOOLBOXES.map(
     (tb) => `  ${enabledSet.has(tb.name) ? '(on)' : '(off)'} ${tb.name}`,
   );
+  // MCP toolboxes are dynamic; only the ones the user has (authorized
+  // integrations) are passed in, so render every entry rather than
+  // filtering. Same (on)/(off) shape as the static boxes so the model
+  // treats a `mcp:<id>` toggle identically to a built-in toolbox
+  // toggle.
+  for (const tb of mcpToolboxes) {
+    lines.push(`  ${enabledSet.has(tb.name) ? '(on)' : '(off)'} ${tb.name}`);
+  }
   return [
     'Gated toolbox state this turn (enable a toolbox with toggle_toolbox before calling its tools):',
     ...lines,
@@ -381,11 +417,17 @@ export function buildToolboxStateBlock(enabled: readonly string[]): string {
  * chat/loop.ts builds per round and pins at the TAIL of the request.
  * Recall and intuition projections ride as assistant `<think>`
  * messages after the user turn. The baseline this function returns is
- * fully stable across rounds and across toolbox toggles - nothing in
- * it varies per turn, which is what lets it anchor the prompt-prefix
- * cache.
+ * stable across rounds and across toolbox toggles - nothing in it
+ * varies per turn, which is what lets it anchor the prompt-prefix
+ * cache. The one per-user variable is `mcpToolboxes` (the connected
+ * MCP integrations): it only shifts when the user connects or
+ * disconnects an integration from Settings, a rare user-driven event
+ * analogous to a deploy picking up a new static toolbox, so the
+ * cache-bust it causes is acceptable.
  */
-export function buildSystemPrompt(): string {
+export function buildSystemPrompt(
+  mcpToolboxes: readonly Toolbox[] = []
+): string {
   const sections = [
     IDENTITY_BLOCK,
     VOICE_BLOCK,
@@ -396,7 +438,7 @@ export function buildSystemPrompt(): string {
     ASK_USER_BLOCK,
     TOOLBOX_FRAMING_BLOCK,
     ACTIVITY_BLOCK,
-    buildCatalog(),
+    buildCatalog(mcpToolboxes),
   ];
   // Baseline only. The bias-profile appendix that used to be pushed
   // here is appended server-side now (the edge function's priming

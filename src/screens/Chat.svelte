@@ -205,6 +205,7 @@
   } from '$lib/ui/recall';
   import { formatMessageStamp } from '$lib/ui/message-timestamp';
   import { coerceSecondThoughts } from '$lib/ui/second-thoughts';
+  import { buildMcpToolboxes } from '$lib/ui/mcp';
   import {
     classifyIncompleteTurnTail,
     isReasoningOnlyStall,
@@ -3658,6 +3659,14 @@
           skipPriming: ctx.isRefinement ? true : undefined,
           refinementDoubtNote: ctx.isRefinement ? ctx.refinementDoubtNote : undefined,
           currentTurnHasAttachments,
+          // Dynamic MCP-integration toolboxes, built at turn entry
+          // from app state. Each authorized integration becomes a
+          // gated `mcp:<id>` toolbox the model can toggle on; the
+          // chat-loop composes them with the static catalog under one
+          // dedup-by-name pass. Built here (not in loop.ts) so the
+          // loop stays free of a global `app` dependency and stays
+          // unit-testable with an explicit mcpToolboxes arg.
+          mcpToolboxes: buildMcpToolboxes(app.mcpIntegrations, app.mcpToolSchemas),
           // Topic-boundary recall rides the same trigger machinery as
           // intuition (cold-start, mid-turn title shift, mood shift,
           // stale fuse). Enabled by default in production - the

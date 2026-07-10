@@ -599,13 +599,33 @@ import { toOpenAIToolDef } from './wire';
  * included. Unknown names in the input are ignored (a toolbox that
  * was deleted or renamed should not break mid-flight). Duplicate
  * tool names across toolboxes are deduped on first-seen.
+ *
+ * `mcpToolboxes` carries the per-user, runtime-discovered MCP
+ * integration toolboxes (see buildMcpToolboxes in ../ui/mcp.ts). They
+ * gate the same way as the static boxes - only an integration whose
+ * `mcp:<id>` toolbox is in `enabledToolboxes` ships its schemas - but
+ * can't live in the static `TOOLBOXES` list because the ids are
+ * per-user. The static + dynamic composition shares one dedup-by-name
+ * pass so a name appearing in both (shouldn't, but defense in depth)
+ * is taken from the static side first.
  */
-export function buildToolList(enabledToolboxes: readonly string[]): OpenAIToolDef[] {
+export function buildToolList(
+  enabledToolboxes: readonly string[],
+  mcpToolboxes: readonly Toolbox[] = []
+): OpenAIToolDef[] {
   const enabled = new Set(enabledToolboxes);
   const seen = new Set<string>();
   const out: OpenAIToolDef[] = [];
   for (const tb of TOOLBOXES) {
     if (tb.name !== alwaysOnToolbox.name && !enabled.has(tb.name)) continue;
+    for (const tool of tb.tools) {
+      if (seen.has(tool.name)) continue;
+      seen.add(tool.name);
+      out.push(toOpenAIToolDef(tool));
+    }
+  }
+  for (const tb of mcpToolboxes) {
+    if (!enabled.has(tb.name)) continue;
     for (const tool of tb.tools) {
       if (seen.has(tool.name)) continue;
       seen.add(tool.name);

@@ -76,12 +76,70 @@ import { samskaraOnTurnTail } from './agents/samskara.ts';
 import { secondThoughtsOnTurnTail } from './agents/second_thoughts.ts';
 import { createEdgeLogger } from '../_shared/edge-log.ts';
 import { runServerPriming, type PrimingInputs } from './priming.ts';
+// MCP tool augmentation: per-user authorized integrations contribute
+// their `mcp:<id>:<tool>` entries to the wire `tools` array so the
+// model can emit them this turn. Augmentation runs once before the
+// first round and never throws (function-side b-strict, server-owned).
+import { listEnabledToolSchemas } from './mcp/token-store.ts';
 
 // Magic flag the ask_user tool returns to suspend the round chain
 // pending a user answer. Mirrors src/lib/tools/ask_user.ts'
 // ASK_USER_PENDING_FLAG. Duplicated here so the function does not
 // have to drag the browser's tool module in.
 const ASK_USER_PENDING_FLAG = '__ask_user_pending__';
+
+// `activity` parameter schema + wire-projection helper for MCP tools.
+// Deliberate duplicate of the browser's
+// `injectActivityParam` + `ACTIVITY_PARAM_SCHEMA` in
+// src/lib/tools/wire.ts: the Deno island cannot import browser code
+// (supabase/functions/README.md), and the model's behavior must be
+// identical whether the tool came from the static browser-built
+// catalog or from server-side MCP augmentation. The browser injects
+// `activity` into every built-in tool's parameters via
+// `toOpenAIToolDef`; this helper does the same for MCP tools so the
+// model narrates its MCP calls the same way it narrates built-in
+// ones. Keep both shapes in sync when the activity schema evolves.
+const ACTIVITY_PARAM_SCHEMA = {
+  type: 'string',
+  description:
+    'REQUIRED. One short present-tense sentence, addressed to the user, ' +
+    'narrating what you are doing with this specific call - e.g. ' +
+    '"Searching your memories for notes about the dishwasher", ' +
+    '"Saving that pancake recipe to your cookbook". Keep it under ' +
+    '100 characters. Surfaced prominently in the UI above the tool ' +
+    "name so the user can see what's happening without opening the " +
+    'call details.',
+} as const;
+
+function injectActivityParam(
+  parameters: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...parameters };
+  const existing = (out.properties as Record<string, unknown> | undefined) ?? {};
+  out.properties = { ...existing, activity: ACTIVITY_PARAM_SCHEMA };
+  const required = Array.isArray(out.required)
+    ? [...(out.required as unknown[])]
+    : [];
+  if (!required.includes('activity')) required.push('activity');
+  out.required = required;
+  if (out.type === undefined) out.type = 'object';
+  return out;
+}
+
+function toOpenAIToolDefWithActivity(t: {
+  wireName: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+}): { type: 'function'; function: { name: string; description: string; parameters: Record<string, unknown> } } {
+  return {
+    type: 'function',
+    function: {
+      name: t.wireName,
+      description: t.description,
+      parameters: injectActivityParam(t.inputSchema),
+    },
+  };
+}
 
 // Hard cap on rounds before we treat the turn as runaway. Single-
 // source guardrail now - the browser-side round loop is collapsed
@@ -369,6 +427,42 @@ export async function getStreamingResponse(
   // + tool-result rows.
   let body: VeniceWireBody = { ...opts.bodyTemplate };
   let history: VeniceMessage[] = [...(opts.bodyTemplate.messages ?? [])];
+
+  // Augment the wire `tools` array with this user's authorized MCP
+  // integration tools. The browser ships the static buildToolList
+  // output for built-in tools; MCP tools are per-user (resolved from
+  // `mcp_integrations` + `mcp_integration_tools` server-side, see
+  // docs/dev/in-progress/mcp-integrations), so the function folds
+  // them in before the first round. Reassigns `body.tools` to a new
+  // array so `opts.bodyTemplate.tools` (the caller's copy) stays
+  // untouched - the orchestrator never mutates the template.
+  //
+  // `activity` parameter is injected into every MCP tool's parameters
+  // so the model narrates its MCP-tool calls the same way it narrates
+  // built-in ones; the browser's toOpenAIToolDef injects it for the
+  // static set, and this is the dangling acceptance-driven duplicate
+  // the function has to carry because it cannot import browser code
+  // (Deno island, see supabase/functions/README.md).
+  //
+  // NEVER throws: an MCP augmentation failure (DB hiccup, malformed
+  // schema) must not break the chat turn. If augmentation fails the
+  // turn proceeds with `body.tools` exactly as the browser sent it.
+  try {
+    const mcpSchemas = await listEnabledToolSchemas(opts.adminClient, opts.userId);
+    if (mcpSchemas.length > 0) {
+      const staticTools = Array.isArray(opts.bodyTemplate.tools)
+        ? opts.bodyTemplate.tools
+        : [];
+      body.tools = [
+        ...staticTools,
+        ...mcpSchemas.map((t) => toOpenAIToolDefWithActivity(t)),
+      ];
+    }
+  } catch (err) {
+    log.debug(
+      `${runId} MCP tool augmentation failed (turn proceeds with static only): ${(err as Error).message ?? err}`,
+    );
+  }
 
   try {
     // Turn-entry priming, before the first round. Runs server-side so

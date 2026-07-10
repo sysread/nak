@@ -44,4 +44,5 @@ export {
   haltBackgroundWork,
   enterSetup,
   resetForSignOut,
+  loadMcpIntegrations,
 } from './app-state/lifecycle';

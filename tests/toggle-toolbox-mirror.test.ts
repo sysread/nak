@@ -56,4 +56,19 @@ describe('gated toolbox name mirror', () => {
     expect(GATED_TOOLBOX_NAMES).toContain('wiki');
     expect(parseEdgeGatedNames(readFileSync(EDGE_FILE, 'utf8'))).toContain('wiki');
   });
+
+  it('the edge accept loop passes dynamic mcp:<id> toolbox names through', () => {
+    // Connected MCP integrations become per-user toolboxes named
+    // `mcp:<integrationId>` (see src/lib/ui/mcp.ts), which can't sit
+    // in the static GATED_TOOLBOX_NAMES mirror - the ids are
+    // runtime-discovered per user. The edge handler has a prefix
+    // branch that accepts any `mcp:`-prefixed name so the model can
+    // toggle a connected integration on without the static list
+    // knowing about it. This test guards the branch against silent
+    // removal: a text check (the Deno module can't be imported into
+    // vitest) that the source references the prefix.
+    const src = readFileSync(EDGE_FILE, 'utf8');
+    expect(src).toMatch(/mcp:/);
+    expect(src).toMatch(/startsWith/);
+  });
 });
