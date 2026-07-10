@@ -61,13 +61,30 @@ export const ACCENT_LABELS: Record<Accent, string> = {
   red: 'Red',
 };
 
-/** Per-accent swatch used in the Settings picker (matches --accent). */
-export const ACCENT_SWATCHES: Record<Accent, { light: string; dark: string }> = {
-  blue: { light: '#1d4ed8', dark: '#8ab4ff' },
-  green: { light: '#15803d', dark: '#86efac' },
-  purple: { light: '#7e22ce', dark: '#c4b5fd' },
-  orange: { light: '#c2410c', dark: '#fdba74' },
-  red: { light: '#b91c1c', dark: '#fca5a5' },
+/**
+ * Per-accent swatch used in the Settings picker, keyed by UI style
+ * because each style has its own accent palette (soft pastels/sharps
+ * vs. bright/normal ANSI). Values mirror the --accent pairings in
+ * styles.css - keep in sync.
+ */
+export const ACCENT_SWATCHES: Record<
+  UiStyle,
+  Record<Accent, { light: string; dark: string }>
+> = {
+  soft: {
+    blue: { light: '#1d4ed8', dark: '#8ab4ff' },
+    green: { light: '#15803d', dark: '#86efac' },
+    purple: { light: '#7e22ce', dark: '#c4b5fd' },
+    orange: { light: '#c2410c', dark: '#fdba74' },
+    red: { light: '#b91c1c', dark: '#fca5a5' },
+  },
+  terminal: {
+    blue: { light: '#0000cc', dark: '#7a7aff' },
+    green: { light: '#007700', dark: '#55ff55' },
+    purple: { light: '#9900cc', dark: '#ff66ff' },
+    orange: { light: '#b34700', dark: '#ff8700' },
+    red: { light: '#cc0000', dark: '#ff5555' },
+  },
 };
 
 export function isColorMode(v: unknown): v is ColorMode {
