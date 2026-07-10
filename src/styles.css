@@ -4598,10 +4598,15 @@ button.top-bar-overflow-btn {
 /* Inputs default to the --bg-2 fill, which matches the sidebar's fill -
    with hairlines transparent, a search box sitting on the sidebar would
    be invisible until focused. Step inputs up to --surface so the fill
-   difference outlines them the same way it outlines cards. */
+   difference outlines them the same way it outlines cards.
+   .model-combobox-trigger rides along because it is a <button> dressed
+   as a select (ModelCombobox.svelte) sitting in the same row as two
+   native selects - without the step it disappears against the
+   profile card's --bg-2 fill. */
 :root[data-style='terminal'] input,
 :root[data-style='terminal'] textarea,
-:root[data-style='terminal'] select {
+:root[data-style='terminal'] select,
+:root[data-style='terminal'] .model-combobox-trigger {
   background: var(--surface);
 }
 
