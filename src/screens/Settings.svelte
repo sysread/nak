@@ -2139,7 +2139,7 @@
               aria-label={ACCENT_LABELS[a]}
               aria-pressed={accent === a}
             >
-              <span class="swatch" style="--sw-dark:{ACCENT_SWATCHES[a].dark};--sw-light:{ACCENT_SWATCHES[a].light}"></span>
+              <span class="swatch" style="--sw-dark:{ACCENT_SWATCHES[uiStyle][a].dark};--sw-light:{ACCENT_SWATCHES[uiStyle][a].light}"></span>
               <span class="swatch-label">{ACCENT_LABELS[a]}</span>
             </button>
           {/each}

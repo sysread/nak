@@ -163,6 +163,31 @@
 :root[data-theme='light'][data-accent='orange'] { --accent: #c2410c; --accent-weak: #ffedd5; }
 :root[data-theme='light'][data-accent='red']    { --accent: #b91c1c; --accent-weak: #fee2e2; }
 
+/* Terminal-style accent pairings. The terminal look gets its own
+   palette instead of the soft pastels/sharps: bright 16-color-ANSI
+   hues on dark (their native home is a black console) and the classic
+   "normal-intensity" ANSI equivalents on light, where bright ANSI is
+   unreadable against white. Every pairing clears WCAG AA (>= 4.5:1)
+   against ALL THREE terminal surfaces of its mode (--bg / --bg-2 /
+   --surface; the dark blue is nudged up from pure ANSI #5555ff, which
+   fails on the #1c1c1c card fill). --accent-weak is the muted same-hue
+   variant for selected-row fills and quote bubbles. These carry three
+   attribute selectors, so they outrank the soft pairings above
+   regardless of order. Swatches in theme.ts mirror these - keep in
+   sync. */
+
+:root[data-theme='dark'][data-style='terminal'][data-accent='blue']   { --accent: #7a7aff; --accent-weak: #1f1f52; }
+:root[data-theme='dark'][data-style='terminal'][data-accent='green']  { --accent: #55ff55; --accent-weak: #0e3d0e; }
+:root[data-theme='dark'][data-style='terminal'][data-accent='purple'] { --accent: #ff66ff; --accent-weak: #461446; }
+:root[data-theme='dark'][data-style='terminal'][data-accent='orange'] { --accent: #ff8700; --accent-weak: #4a2800; }
+:root[data-theme='dark'][data-style='terminal'][data-accent='red']    { --accent: #ff5555; --accent-weak: #4a1414; }
+
+:root[data-theme='light'][data-style='terminal'][data-accent='blue']   { --accent: #0000cc; --accent-weak: #dbdbff; }
+:root[data-theme='light'][data-style='terminal'][data-accent='green']  { --accent: #007700; --accent-weak: #d3f2d3; }
+:root[data-theme='light'][data-style='terminal'][data-accent='purple'] { --accent: #9900cc; --accent-weak: #f0daf7; }
+:root[data-theme='light'][data-style='terminal'][data-accent='orange'] { --accent: #b34700; --accent-weak: #ffe3cf; }
+:root[data-theme='light'][data-style='terminal'][data-accent='red']    { --accent: #cc0000; --accent-weak: #ffdada; }
+
 /* ---------- Terminal style ----------
    Third theme axis: [data-style='soft' | 'terminal'], orthogonal to
    data-theme and data-accent (see src/lib/theme.ts). Terminal recreates

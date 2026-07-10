@@ -19,12 +19,18 @@ Appearance > Style**:
   degrees, boxes lose their borders, and panels are separated by
   contrasting background fills instead of outlines. Chat bubbles
   carry a single colored bar down their left edge - your accent
-  color for your messages, grey for the assistant, red for errors.
+  color for your messages, green for the assistant, amber for
+  notices, red for errors.
   Floating menus and dialogs keep a crisp one-pixel edge, the CSS
   cousin of a TUI dialog's box-drawing border.
 
 Style combines freely with color mode and accent: Terminal comes in
-light and dark, and the accent palette applies to both styles.
+light and dark, and every accent works in both styles. Each style
+has its own rendition of the accents, though - Soft uses pastels in
+dark mode and deep sharps in light, while Terminal uses bright
+16-color-ANSI hues on the black console and their classic
+normal-intensity equivalents on the white one. The swatches in the
+accent picker show the palette for whichever style is active.
 
 ## Where these preferences live
 
