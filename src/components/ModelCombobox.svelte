@@ -233,7 +233,10 @@
   }
 
   /* Trigger reads like the native select it replaces - same bg/border so
-     it sits flush next to the reasoning <select> in the tier row. */
+     it sits flush next to the reasoning <select> in the tier row. In
+     terminal style (transparent hairlines) a global delta in styles.css
+     steps this fill up to --surface alongside native inputs/selects -
+     without it the trigger vanishes against the profile card. */
   .model-combobox-trigger {
     appearance: none;
     display: flex;
