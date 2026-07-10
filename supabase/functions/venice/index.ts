@@ -1566,7 +1566,15 @@ async function handleMcpRegister(req: Request): Promise<Response> {
       })
       .eq('id', integrationId)
       .eq('user_id', userId);
-    if (error) return json({ error: `integration update failed: ${error.message}` }, 500);
+    if (error) {
+      if (error.code === '23505') {
+        return json(
+          { error: 'An integration with this name or server URL already exists.' },
+          409,
+        );
+      }
+      return json({ error: `integration update failed: ${error.message}` }, 500);
+    }
   } else {
     const { data, error } = await admin
       .from('mcp_integrations')
@@ -1582,7 +1590,15 @@ async function handleMcpRegister(req: Request): Promise<Response> {
       })
       .select('id')
       .single();
-    if (error) return json({ error: `integration insert failed: ${error.message}` }, 500);
+    if (error) {
+      if (error.code === '23505') {
+        return json(
+          { error: 'An integration with this name or server URL already exists.' },
+          409,
+        );
+      }
+      return json({ error: `integration insert failed: ${error.message}` }, 500);
+    }
     integrationId = (data as { id: string }).id;
   }
 

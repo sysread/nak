@@ -193,12 +193,10 @@
   // Tabs are ordered by nearness of subject to the user: the app itself
   // (About), then the user's own presentation and personal data
   // (Appearance, Memory, Wiki), then the assistant (AI, then the model
-  // profiles and custom-prompt library that ride on top of it), then the
-  // account/infrastructure tail furthest from day-to-day use (Usage,
-  // Security, API keys). Model profiles and Custom prompts sit right
-  // after AI because they are the same subject (how the assistant
-  // behaves) but each carries a tall card list that would push the AI
-  // pane's other controls below the fold.
+  // profiles and custom-prompt library that ride on top of it), then
+  // Integrations (active configuration — connecting an MCP server
+  // changes which tools are available to the assistant), then the
+  // infrastructure tail: Usage and Security.
   const GROUPS: { id: Group; label: string }[] = [
     { id: 'about', label: 'About' },
     { id: 'appearance', label: 'Appearance' },
@@ -207,9 +205,9 @@
     { id: 'ai', label: 'AI' },
     { id: 'modelprofiles', label: 'Model profiles' },
     { id: 'customprompts', label: 'Custom prompts' },
+    { id: 'integrations', label: 'Integrations' },
     { id: 'usage', label: 'Usage' },
     { id: 'security', label: 'Security' },
-    { id: 'integrations', label: 'Integrations' },
     { id: 'keys', label: 'API keys' },
   ];
   // Default landing tab is always the first in GROUPS, so reordering the
