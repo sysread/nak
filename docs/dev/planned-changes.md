@@ -17,6 +17,8 @@ investigation cycles and the lessons learned are worth saving.
   milestone; analysis kept here as the historical record)
 - [Biometric unlock for the master password](#biometric-unlock-for-the-master-password)
   (obsolete - the master-password layer was removed; kept as WebAuthn PRF reference)
+- [Samskara calibration: cohort cutoff and the tier-2 confirm bar](#samskara-calibration-cohort-cutoff-and-the-tier-2-confirm-bar)
+  (deferred from the 2026-07 prod audit; both wait on post-fix data)
 
 ## Retire the browser supervisor
 
@@ -464,3 +466,49 @@ Lifecycle invariants:
 - Auth & session feature doc - [`./auth-session.md`](./auth-session.md).
   The biometric envelope, when reintroduced, slots in next to
   the existing `nak:config:v1` blob.
+
+## Samskara calibration: cohort cutoff and the tier-2 confirm bar
+
+**Status:** deferred, waiting on data. Two calibration items from the
+2026-07-03 prod audit of the samskara system ([samskara.md](./samskara.md)),
+deliberately sequenced AFTER the fixes that landed that week (the
+batched next-day judge, the two-step verdict prompt, the reasoning
+token budget, the evidence-model recalibration in #402, and the
+tier-1 mint gate). Both decisions depend on how the corpus behaves
+now that health actually discriminates.
+
+**Context worth preserving** (2026-07-10 measurements, single-user
+prod corpus of ~150 tier-1 / ~45 tier-2):
+
+- **Cohort cutoff.** Fires run ~19 per cohort, pinned at the fire
+  RPC's kMax (22) rather than thinned by relevance - the
+  `FIRE_SCORE_FLOOR` (0.01) cuts nothing because the score
+  distribution starts around 0.29 (p10). Consequences: the priming
+  formatter budget-trims most of the cohort (fires are logged but
+  never shown to the model), the judge's per-thread prediction list
+  is padded, fire_count inflates, and the co-fire graph saturates -
+  the base-rate-binding regime tier-2's lift gate exists to fight.
+  Candidate fixes, in rough preference order: a relative cut (drop
+  fires below some fraction of the cohort's top score), or cap
+  recorded fires near what `PRIMING_CHAR_BUDGET` actually renders
+  (~11, the log-scaled k). Do NOT recalibrate against a flat score
+  distribution: health began spreading only after 2026-07-06 (#402),
+  and the right threshold should be read off the post-spread
+  distribution. The samskara.md gotcha "No health threshold at fire
+  time" still applies - the long tail is wanted; the cap-bound
+  everything-fires regime is not.
+- **Tier-2 confirm bar.** `samskara_tier2_declines` has ZERO rows
+  ever - the tier-2 minter has never once declined a candidate - and
+  tier-2 grew ~10/week to 23% of the corpus. Either detection's lift
+  gate is doing all the filtering (possible) or the minter
+  rubber-stamps (likely, given the tier-1 minter's decline rate is
+  healthy). Re-measure AFTER the cohort cutoff lands: smaller, more
+  relevant cohorts thin the co-fire graph and may fix the candidate
+  stream on their own. If declines are still zero after that, tighten
+  the TIER2_MINTER_PROMPT with an explicit decline criterion (the
+  counterfactual-test pattern from the judge's held bar in #402 is
+  the precedent).
+
+The audit trail (queries, verdict-mix baselines, the health
+histogram progression) lives in the 2026-07-03/07-10 session; the
+durable numbers above are what the next session needs.

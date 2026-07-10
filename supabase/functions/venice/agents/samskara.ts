@@ -117,6 +117,21 @@ const MINT_CLUSTER_MAX = 5;
 const MINT_CLUSTER_MIN = 3;
 
 /**
+ * Tier-1 population carrying capacity. Both tier-1 mint probes skip
+ * (before any Venice spend) while the user's tier-1 count is at or
+ * above this, so new claims enter only as the reaper or the Hebbian
+ * dedup pass makes room. Without the gate, minting at cap forces the
+ * collapse RPC's overflow pass to greedy-merge two DISTINCT existing
+ * claims (cosine floor 0.60 - the "related but distinct" band tier-2
+ * detection owns) for every new mint: a 2026-07 prod audit measured
+ * 49 mints/week churning through exactly that treadmill. MUST mirror
+ * `p_target_count` on `samskara_collapse_by_cofiring` in
+ * supabase/schema.sql - if the two drift, either the gate never opens
+ * (cap here lower) or the treadmill quietly resumes (cap here higher).
+ */
+const TIER1_POPULATION_CAP = 150;
+
+/**
  * mint-tier1 reads just enough recent substrate to seed one topical
  * cluster (it is deliberately recency-seeded). pair-relate no longer
  * reads a recency window - it seeds corpus-wide via
@@ -986,6 +1001,30 @@ async function pairRelateProbe(
 }
 
 /**
+ * Population-headroom gate shared by the two tier-1 mint probes. True
+ * when the user's tier-1 count sits at or above TIER1_POPULATION_CAP.
+ * Fails open on a count error: a transient RPC blip should not silence
+ * minting, and the collapse RPC's overflow pass still bounds the
+ * population if one mint slips through at cap.
+ */
+async function tier1AtCap(
+  admin: SupabaseClient,
+  userId: string,
+  log: EdgeLogger,
+): Promise<boolean> {
+  const { count, error } = await admin
+    .from('samskaras')
+    .select('id', { count: 'exact', head: true })
+    .eq('user_id', userId)
+    .eq('tier', 1);
+  if (error) {
+    log.debug('mint gate: tier-1 count failed, proceeding', { error: error.message });
+    return false;
+  }
+  return (count ?? 0) >= TIER1_POPULATION_CAP;
+}
+
+/**
  * Mint-tier1 probe: build a topical cluster from the recent window,
  * ask the minter, embed, dedup-guard against the existing corpus,
  * insert with provenance. The INSERT doubles as the toast signal via
@@ -997,6 +1036,10 @@ async function mintTier1Probe(
   log: EdgeLogger,
   apiKey: string,
 ): Promise<void> {
+  if (await tier1AtCap(admin, userId, log)) {
+    log.trace('mint-tier1: tier-1 population at cap; skipping');
+    return;
+  }
   const recent = await recentEmbeddedSubstrate(admin, userId, MINT_WINDOW);
   if (recent.length < MINT_CLUSTER_MIN) return;
   const clusterRows = buildTopicalCluster(recent);
@@ -1175,6 +1218,13 @@ async function mintTier1FromAssociationsProbe(
   log: EdgeLogger,
   apiKey: string,
 ): Promise<void> {
+  // Gate BEFORE reading the cluster: a skip is a non-verdict, so the
+  // hub's edges stay unstamped and the evidence is intact for the
+  // sweep that runs once headroom opens.
+  if (await tier1AtCap(admin, userId, log)) {
+    log.trace('mint-tier1-assoc: tier-1 population at cap; skipping');
+    return;
+  }
   const { data, error } = await admin.rpc('samskara_association_cluster', {
     p_user_id: userId,
   });
@@ -1720,6 +1770,7 @@ export const __test = {
   MINT_CLUSTER_COSINE_FLOOR,
   MINT_CLUSTER_MAX,
   MINT_CLUSTER_MIN,
+  TIER1_POPULATION_CAP,
   PAIR_RELATE_COSINE_FLOOR,
   buildTopicalCluster,
   buildAssociationCluster,
