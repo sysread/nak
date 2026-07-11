@@ -128,9 +128,14 @@ async function fetchDayMessages(
   dayStart: string,
   dayEnd: string,
 ): Promise<DayMessage[]> {
+  // The threads embed MUST name its FK: six threads.last_*_msg_id
+  // pointer columns also relate threads to messages, so a bare
+  // `threads!inner` makes PostgREST refuse the query as an ambiguous
+  // relationship (PGRST201) on every call - the failure mode that
+  // skipped whole days of digests before the hint was added.
   const { data, error } = await adminClient
     .from('messages')
-    .select('thread_id, role, content, created_at, threads!inner(user_id, title)')
+    .select('thread_id, role, content, created_at, threads!messages_thread_id_fkey!inner(user_id, title)')
     .eq('threads.user_id', userId)
     .in('role', ['user', 'assistant'])
     .gte('created_at', dayStart)
@@ -250,6 +255,7 @@ export async function runDigestSweepTick(
     errors: 0,
   };
 
+  const failedThisTick = new Set<string>();
   for (let i = 0; i < maxUsers; i += 1) {
     const holderId = crypto.randomUUID();
     const { data: claimRows, error: claimErr } = await adminClient.rpc(
@@ -264,9 +270,18 @@ export async function runDigestSweepTick(
     const claim = Array.isArray(claimRows) ? claimRows[0] : claimRows;
     if (!claim || typeof claim.user_id !== 'string') break; // queue empty
 
-    summary.claimed += 1;
     const userId = claim.user_id as string;
     const digestDate = String(claim.digest_date);
+
+    // A failure releases its claim immediately, and the claim RPC
+    // always serves a user's oldest undigested day - so within one
+    // tick the loop would re-claim the day it just failed and burn
+    // the whole failure cap in minutes instead of the hourly retries
+    // the cap is meant to grant. Skip a pair that already failed this
+    // tick; its claim rides the TTL and the next tick retries.
+    if (failedThisTick.has(`${userId}:${digestDate}`)) continue;
+
+    summary.claimed += 1;
     const dayStart = String(claim.day_start);
     const dayEnd = String(claim.day_end);
     const log = createEdgeLogger(userId, 'digest');
@@ -336,6 +351,7 @@ export async function runDigestSweepTick(
       }
     } catch (err) {
       const failureMsg = err instanceof Error ? err.message : String(err);
+      failedThisTick.add(`${userId}:${digestDate}`);
       try {
         const failed = await adminClient.rpc('record_digest_failure', {
           p_user_id: userId,
