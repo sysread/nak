@@ -549,9 +549,13 @@ Consumers: drawer tab lists in `Chat.svelte`.
 
 File: `src/components/TopBarActions.svelte`.
 
-Horizontal row of action icon buttons in the chat top bar:
-settings, help, log drawer toggle, and extracted-text drawer
-toggle.
+Per-section action cluster in the top bar (new conversation +
+digest on Chats; changelog / librarian / sweeps on the other
+tabs). Renders a merged icon-button group on desktop and
+collapses into a single overflow ("...") menu at the 720px
+mobile breakpoint. An action marked `pinned: true` stays out
+of the mobile collapse as its own always-visible button
+(used for the chats tab's new-conversation action).
 
 Consumers: `Chat.svelte`.
 

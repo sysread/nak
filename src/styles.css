@@ -3590,6 +3590,12 @@ button.composer-wharf-trigger {
 button.top-bar-overflow-btn {
   display: none;
 }
+/* Mobile-only twin of a pinned action (TopBarActions renders it
+   alongside the desktop group, which already contains the action -
+   without this rule the button would appear twice on desktop). */
+button.top-bar-pinned {
+  display: none;
+}
 .top-bar-menu {
   display: none;
   position: absolute;
@@ -3617,6 +3623,9 @@ button.top-bar-overflow-btn {
     display: none;
   }
   button.top-bar-overflow-btn {
+    display: inline-flex;
+  }
+  button.top-bar-pinned {
     display: inline-flex;
   }
   /* Gated on `.top-bar-menu`'s `{#if menuOpen}` in markup; this just
