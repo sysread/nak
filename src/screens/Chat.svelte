@@ -6613,6 +6613,11 @@
               disabled: currentIsEmpty,
               onclick: newThread,
               icon: newThreadIcon,
+              // Primary action of the whole app: stays a standalone
+              // button on mobile instead of collapsing into the
+              // overflow menu with the digest (and any future
+              // chats-tab actions).
+              pinned: true,
             },
             {
               id: 'digest',

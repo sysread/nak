@@ -243,6 +243,38 @@
   .digest-td-summary {
     word-break: break-word;
   }
+  /* Mobile: a phone-width viewport squeezes the two-column table into
+     character-wrapped slivers, so stack each row instead - title on
+     one line, summary below - and drop the column headers, which mean
+     nothing once the columns are gone. Breakpoint matches the
+     top-bar's 720px mobile cutover. */
+  @media (max-width: 720px) {
+    .digest-table,
+    .digest-table tbody,
+    .digest-table tr,
+    .digest-table td {
+      display: block;
+    }
+    .digest-table thead {
+      display: none;
+    }
+    .digest-table td {
+      padding: 0;
+      border-bottom: none;
+    }
+    .digest-table tr {
+      padding: 0.5rem 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .digest-table tr:last-child {
+      border-bottom: none;
+    }
+    .digest-td-title {
+      min-width: 0;
+      margin-bottom: 0.15rem;
+    }
+  }
+
   .digest-thread-link {
     background: none;
     border: none;

@@ -11,6 +11,13 @@
                    mobile, where the row of separate icons crowds the
                    bar (the reason this component exists).
 
+  A `pinned` action opts out of the mobile collapse: it renders as a
+  standalone icon button on mobile (`.top-bar-pinned`, shown only at
+  the mobile breakpoint) and is excluded from the overflow menu, while
+  the desktop merged group still includes it. Exists for the chats
+  tab's new-conversation button - a primary action a user reaches for
+  constantly, which must not cost a menu round-trip on the phone.
+
   Both renderings of the multi-action case are emitted at once and the
   CSS media query at `max-width: 720px` (see `.top-bar-group` /
   `.top-bar-overflow-btn` / `.top-bar-menu` in styles.css) decides which
@@ -40,6 +47,12 @@
     title: string;
     class?: string;
     disabled?: boolean;
+    /**
+     * Keep this action out of the mobile overflow menu, rendered as
+     * its own always-visible icon button instead. Desktop layout is
+     * unaffected. Reserve for a section's primary action.
+     */
+    pinned?: boolean;
     onclick: () => void;
     icon: Snippet;
   }
@@ -55,6 +68,12 @@
   let { actions, menuLabel }: Props = $props();
 
   let menuOpen = $state(false);
+
+  // Mobile split: pinned actions stay visible, the rest collapse into
+  // the overflow menu. Desktop ignores the split (the merged group
+  // renders `actions` in full).
+  const pinnedActions = $derived(actions.filter((a) => a.pinned));
+  const menuActions = $derived(actions.filter((a) => !a.pinned));
 
   function runAction(action: TopBarAction): void {
     if (action.disabled) return;
@@ -112,6 +131,21 @@
         </button>
       {/each}
     </div>
+    <!-- Mobile-only twins of the pinned actions; the desktop group
+         above already includes them, and .top-bar-pinned is
+         display:none outside the mobile breakpoint. -->
+    {#each pinnedActions as a (a.id)}
+      <button
+        class="secondary icon-btn top-bar-pinned {a.class ?? ''}"
+        onclick={() => runAction(a)}
+        disabled={a.disabled}
+        title={a.title}
+        aria-label={a.title}
+      >
+        {@render a.icon()}
+      </button>
+    {/each}
+    {#if menuActions.length > 0}
     <button
       class="secondary icon-btn top-bar-overflow-btn"
       onclick={() => (menuOpen = !menuOpen)}
@@ -131,7 +165,7 @@
     </button>
     {#if menuOpen}
       <div class="top-bar-menu" role="menu">
-        {#each actions as a (a.id)}
+        {#each menuActions as a (a.id)}
           <button
             class="menu-item menu-item-btn"
             role="menuitem"
@@ -144,6 +178,7 @@
           </button>
         {/each}
       </div>
+    {/if}
     {/if}
   </div>
 {/if}
