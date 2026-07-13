@@ -552,7 +552,18 @@ A chat turn goes:
   for a turn still running under `waitUntil`. The `/stream` probe
   honors the stamp too (returning an in-flight envelope with
   `assistantRowId: null`), which also extends the duplicate-send
-  guard across the priming window.
+  guard across the priming window. Two operational notes. (1)
+  `selectThread` reads the stamp via a `getThreadStreamState` point
+  read, NOT via `findThread` - on a cold page load the route effect
+  opens the URL's thread before the sidebar buckets have fetched, so
+  the local thread copy doesn't exist yet and a bucket-based read
+  misses the stamp on exactly the reload this path exists for. (2)
+  The whole path emits Logs-drawer breadcrumbs at debug: the browser
+  logs thread-open signals, reconnect arming/settling, and every
+  recovery-banner transition (with a DOM census that warns if more
+  than one banner node ever renders) under the `chat` source; the
+  function logs the stamp write/clear and each probe's verdict under
+  the `stream` source.
 - **A live stream that drops mid-turn hands off to the same poll.**
   The case the `selectThread` reconnect could NOT cover: a tab whose JS
   context SURVIVED a background cycle (or hit a transient network blip)

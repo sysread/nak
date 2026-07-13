@@ -149,6 +149,45 @@ export async function listThreadsSince(
   return (data ?? []).map((row) => coerceThread(row as Record<string, unknown>));
 }
 
+/**
+ * Point read of a single thread's in-flight streaming state - the
+ * server-side stream_started_at stamp plus the response-claim pair.
+ * Exists for `selectThread`'s cold-start path: on a fresh page load
+ * the route effect opens the URL's thread BEFORE the sidebar's thread
+ * lists have fetched, so `findThread(id)` comes back empty and the
+ * in-flight stamp (the signal that arms the reconnect and suppresses
+ * the retry banners) was invisible exactly in the refresh-during-
+ * pregame case it exists for. Returns null when the row doesn't
+ * exist or RLS hides it.
+ */
+export async function getThreadStreamState(
+  client: SupabaseClient,
+  threadId: string
+): Promise<{
+  streamStartedAt: string | null;
+  responseHolderId: string | null;
+  responseClaimExpiresAt: string | null;
+} | null> {
+  const { data, error } = await client
+    .from('threads')
+    .select('stream_started_at, response_holder_id, response_claim_expires_at')
+    .eq('id', threadId)
+    .maybeSingle();
+  if (error) throw new SupabaseError(error.message);
+  if (!data) return null;
+  const row = data as Record<string, unknown>;
+  return {
+    streamStartedAt:
+      typeof row.stream_started_at === 'string' ? row.stream_started_at : null,
+    responseHolderId:
+      typeof row.response_holder_id === 'string' ? row.response_holder_id : null,
+    responseClaimExpiresAt:
+      typeof row.response_claim_expires_at === 'string'
+        ? row.response_claim_expires_at
+        : null,
+  };
+}
+
 async function pageThreads(
   client: SupabaseClient,
   opts: {

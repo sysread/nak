@@ -9,6 +9,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   selectRecoveryBanner,
+  recoveryBannerSource,
   CUT_OFF_BANNER_TEXT,
   INTERRUPTED_BANNER_TEXT,
   type RecoveryBannerSources,
@@ -83,5 +84,30 @@ describe('selectRecoveryBanner', () => {
     );
     expect(banner?.text).toBe(INTERRUPTED_BANNER_TEXT);
     expect(banner?.dismiss).toBeDefined();
+  });
+});
+
+describe('recoveryBannerSource', () => {
+  it('labels each selector outcome for the Logs-drawer breadcrumb', () => {
+    expect(recoveryBannerSource(null)).toBe('none');
+    expect(
+      recoveryBannerSource(
+        selectRecoveryBanner(
+          sources({ error: { text: 'boom', dismiss: () => {} } }),
+        ),
+      ),
+    ).toBe('error');
+    expect(
+      recoveryBannerSource(
+        selectRecoveryBanner(
+          sources({ interruptedDraft: { retry: () => {}, dismiss: () => {} } }),
+        ),
+      ),
+    ).toBe('interrupted-draft');
+    expect(
+      recoveryBannerSource(
+        selectRecoveryBanner(sources({ cutOff: { retry: () => {} } })),
+      ),
+    ).toBe('cut-off');
   });
 });
