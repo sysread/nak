@@ -237,7 +237,16 @@ aborts any in-flight exchange before the next sign-in.
 
 The `incompleteTurnTail` derivation and the orphaned-draft
 (`interruptedDraft`) source both return / render nothing while
-`respondingElsewhere` is true. A foreign device holding a live claim is
+`respondingElsewhere` is true - and also while the thread's
+server-side in-flight stamp (`threads.stream_started_at`, written by
+the /stream orchestrator at turn entry and cleared at terminal) is
+fresh per `streamLikelyInFlight` (`src/lib/ui/stream-inflight.ts`).
+The stamp covers the same-device-reload case the claim cannot: after
+a refresh the claim is held by OUR OWN holderId (so
+`respondingElsewhere` is false), yet the turn is still running under
+the edge function's waitUntil, and during its priming stage no
+streaming assistant row exists for the reconnect to key on. Without
+the stamp gate that window rendered retry banners for a live turn. A foreign device holding a live claim is
 actively producing the reply, so a transcript that ends on a user row
 only LOOKS incomplete from the observer side - the assistant row arrives
 over realtime. Offering retry there invites a competing turn the claim

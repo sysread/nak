@@ -371,6 +371,29 @@ export async function getStreamingResponse(
   let history: VeniceMessage[] = [...(opts.bodyTemplate.messages ?? [])];
 
   try {
+    // In-flight stamp, before anything else. The streaming assistant
+    // row (the reconnect probe's other signal) is only created at the
+    // first content delta, so the priming stage below - plus any long
+    // reasoning-only stretch before the model emits text - would
+    // otherwise be invisible to a reconnecting browser: a page refresh
+    // during that window found no streaming row, concluded no turn was
+    // running, and surfaced the "response was interrupted" retry
+    // banners for a turn that was still alive under waitUntil. The
+    // stamp is cleared in the finally after the terminal write;
+    // resolveStreamContext treats a fresh stamp as in-flight when no
+    // streaming row exists yet. Best-effort: a failed write degrades
+    // to the old blind window, it must not break the turn.
+    try {
+      // RLS OFF: filter by threadId (ownership was verified by the
+      // /stream handler before the orchestrator started).
+      await opts.adminClient
+        .from('threads')
+        .update({ stream_started_at: new Date().toISOString() })
+        .eq('id', opts.threadId);
+    } catch (err) {
+      log.error(`${runId} failed to stamp stream_started_at:`, err);
+    }
+
     // Turn-entry priming, before the first round. Runs server-side so
     // it survives browser disconnect under the same waitUntil as the
     // streaming loop. Assembles the bias system-prompt appendix and the
@@ -1018,6 +1041,20 @@ export async function getStreamingResponse(
           },
         );
       }
+    }
+
+    // Clear the in-flight stamp now that the row (if any) carries a
+    // terminal status. Ordered after the terminal write so the
+    // reconnect probe never observes "no signal at all" while the
+    // streaming row is still mid-transition. Best-effort: a failed
+    // clear is swept by the probe's staleness janitor.
+    try {
+      await opts.adminClient
+        .from('threads')
+        .update({ stream_started_at: null })
+        .eq('id', opts.threadId);
+    } catch (err) {
+      log.error(`${runId} failed to clear stream_started_at:`, err);
     }
 
     // Persistent error surface. threads.last_error is the column the

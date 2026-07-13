@@ -134,6 +134,19 @@ export interface Thread {
   response_holder_id: string | null;
   response_claim_expires_at: string | null;
   /**
+   * Server-side "a streaming turn is running against this thread"
+   * stamp, written by the venice /stream orchestrator at turn entry
+   * (before the priming stage) and cleared at terminal. Exists because
+   * the streaming assistant row is only created at the first content
+   * delta, so a page refresh during priming (or a long reasoning-only
+   * stretch) would otherwise find nothing to reconnect to. The chat
+   * screen uses it to arm the reconnect poll and to suppress the
+   * "response was interrupted / cut off" recovery banners while the
+   * turn is still alive server-side. See streamLikelyInFlight in
+   * src/lib/ui/stream-inflight.ts for the freshness rule.
+   */
+  stream_started_at: string | null;
+  /**
    * Most recent unrecoverable error against this thread. Written by
    * the streaming function on any terminalKind='error' path; cleared
    * by commit_assistant_message on the happy commit. Browser keys the
@@ -489,6 +502,11 @@ export function coerceThread(row: Record<string, unknown>): Thread {
           ? row.response_claim_expires_at
           : null
         : null,
+    // Drift-tolerant: a row predating the column (or a non-string
+    // value) reads as "no turn in flight", which just means the
+    // reconnect poll doesn't arm - the old behavior.
+    stream_started_at:
+      typeof row.stream_started_at === 'string' ? row.stream_started_at : null,
     // Pass jsonb through unchanged. The error-card renderer owns the
     // parse - a row predating the column reads as null, and a drifted
     // shape that doesn't match the expected `{kind, message, ...}`
