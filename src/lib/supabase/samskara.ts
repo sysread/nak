@@ -527,6 +527,7 @@ export async function samskaraHealthSnapshot(
     neverFired: r?.never_fired ?? 0,
     probationEligible: r?.probation_eligible ?? 0,
     evictable: r?.evictable ?? 0,
+    evictableStale: r?.evictable_stale ?? 0,
     associations: r?.associations ?? 0,
     associationsUnconsumed: r?.associations_unconsumed ?? 0,
     substrateTotal: r?.substrate_total ?? 0,
@@ -579,13 +580,16 @@ export async function samskaraVerdictCounts(
     p_samskara_id: samskaraId,
   });
   if (error) throw new SupabaseError(error.message);
-  const r = (Array.isArray(data) ? data[0] : data) as Record<string, number> | null;
+  // Mixed row shape: the counts are numbers, last_genuine_at is a
+  // timestamp string (or null when never genuinely tested).
+  const r = (Array.isArray(data) ? data[0] : data) as Record<string, unknown> | null;
   return {
-    held: r?.held ?? 0,
-    contradicted: r?.contradicted ?? 0,
-    notBorneOut: r?.not_borne_out ?? 0,
-    notEngaged: r?.not_engaged ?? 0,
-    pending: r?.pending ?? 0,
+    held: (r?.held as number) ?? 0,
+    contradicted: (r?.contradicted as number) ?? 0,
+    notBorneOut: (r?.not_borne_out as number) ?? 0,
+    notEngaged: (r?.not_engaged as number) ?? 0,
+    pending: (r?.pending as number) ?? 0,
+    lastGenuineAt: (r?.last_genuine_at as string | null) ?? null,
   };
 }
 

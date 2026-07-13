@@ -221,6 +221,10 @@ export const PROBATION_DAYS = 45;
 export const EVICT_MIN_JUDGED = 10;
 /** Newborn grace: rows younger than this are never evicted. */
 export const EVICT_MIN_AGE_DAYS = 14;
+/** Days since the last genuine verdict after which a weakly-established row becomes stale-evictable. */
+export const STALE_EVICT_DAYS = 90;
+/** Evidence-tally ceiling for "weakly established": at most one full test's worth. */
+export const STALE_EVICT_MAX_TALLY = 1.0;
 
 export interface EngagementSummary {
   /** Fires the next-day judge has ruled on (any verdict). */
@@ -255,9 +259,15 @@ export function engagementSummary(counts: {
 /**
  * One-line decay standing for the detail pane: is this row established
  * evidence, waiting on a pending judgment, or on its way out via
- * probation or eviction? Precedence mirrors the SQL guards: any genuine
- * test makes the row permanent-until-disproven; a pending fire defers
- * every release path; then probation-due, evictable, and the countdown.
+ * probation or eviction? Precedence mirrors the SQL guards: a genuine
+ * test protects the row while its evidence lasts (a weakly-established
+ * row goes stale-evictable 90 days after its last genuine verdict); a
+ * pending fire defers every release path; then probation-due,
+ * evictable, and the countdown.
+ *
+ * `evidenceTally` is the row's discounted confirm+disconfirm sum - the
+ * "weakly established" test reads the same number the SQL stale tier
+ * does, not the raw verdict counts.
  */
 export function releaseStatus(
   createdAt: string,
@@ -267,12 +277,21 @@ export function releaseStatus(
     notBorneOut: number;
     notEngaged: number;
     pending: number;
+    lastGenuineAt: string | null;
   },
+  evidenceTally: number,
   nowMs: number
 ): string {
   const { judged, genuine } = engagementSummary(counts);
   if (genuine > 0) {
-    return `established - ${genuine} genuine ${genuine === 1 ? 'test' : 'tests'}`;
+    const label = `established - ${genuine} genuine ${genuine === 1 ? 'test' : 'tests'}`;
+    if (counts.pending === 0 && evidenceTally <= STALE_EVICT_MAX_TALLY && counts.lastGenuineAt) {
+      const staleDays = Math.floor((nowMs - new Date(counts.lastGenuineAt).getTime()) / 86_400_000);
+      if (staleDays >= STALE_EVICT_DAYS) {
+        return `weakly ${label}, last engaged ${staleDays}d ago - evictable if a new mint needs the slot`;
+      }
+    }
+    return label;
   }
   if (counts.pending > 0) {
     return 'untested - awaiting judgment on recent fires';

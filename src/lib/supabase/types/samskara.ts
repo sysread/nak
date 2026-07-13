@@ -56,6 +56,10 @@ export interface SamskaraHealthSnapshot {
   /** Untested rows judged 10+ times with zero genuine engagements - the
    *  pool a capped tier-1 mint may evict from. */
   evictable: number;
+  /** Weakly-established rows (at most one test's worth of evidence)
+   *  whose last genuine verdict is 90+ days old - the eviction
+   *  fallback tier when no untested victim qualifies. */
+  evictableStale: number;
   associations: number;
   /** Association edges not yet fed to the association-mint pass. Drains across sweeps. */
   associationsUnconsumed: number;
@@ -91,6 +95,10 @@ export interface SamskaraVerdictCounts {
   notBorneOut: number;
   notEngaged: number;
   pending: number;
+  /** When the judge last ruled a genuine verdict (held / contradicted /
+   *  not-borne-out); null when never genuinely tested. The stale
+   *  eviction tier keys on this timestamp. */
+  lastGenuineAt: string | null;
 }
 
 /**

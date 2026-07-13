@@ -965,8 +965,18 @@ be the first genuine test, and the next-day judge hasn't ruled).
   times with zero genuine engagements, >= 14 days old, ranked
   most-judged-first. Decay by replacement: it runs exactly as fast as
   formation pressure demands. Merely-quiet rows (the median untested
-  row has ~2 judged fires) are NOT evictable; if nothing qualifies the
-  probe skips at cap exactly as it did before eviction existed.
+  row has ~2 judged fires) are NOT evictable. When no untested victim
+  qualifies, a second tier keeps pressure alive as the corpus matures:
+  **weakly-established rows gone stale** - at most one full test's
+  worth of evidence tally (a single held is 1.0, a lone soft miss
+  0.25) whose last genuine verdict is >= 90 days old, ranked
+  stalest-first. Without this tier one genuine test ever is a lifetime
+  pass, and a mature corpus fills with claims established once and
+  never re-engaged. Rows with a real track record (tally > 1.0) are
+  untouchable, the staleness clock only matters under cap pressure (an
+  idle account never bleeds), and the pending-fire guard applies to
+  both tiers. If neither tier qualifies the probe skips at cap exactly
+  as it did before eviction existed.
 
 A released claim is cheap to lose: if the pattern is real and recurs,
 minting re-creates it from fresh substrate. A design road not taken:
@@ -1727,19 +1737,23 @@ These are diagnostic summary reads, not user-facing controls.
 
 **Decay-standing legibility.** The release machinery (probation reap +
 cap-pressure eviction, see the decay section) surfaces on both
-diagnostics reads. The Overview Corpus card shows **"Probation due /
-evictable"** counts (two `samskara_health_snapshot` columns whose
-predicates deliberately mirror `samskara_reap_untested` /
-`samskara_evict_for_mint` - keep them in lockstep). Both are
-informational, not dotted: probation-due drains at the next hourly reap
-tick (a value that never drains means the reaper cron is stalled), and
-a nonzero evictable pool is the normal resting state while the tier-1
-cap is pinned. The Corpus detail pane adds an **engagement** stat
-(genuine/judged, `engagementSummary`) to the verdict tally and a
-one-line **release status** under it (`releaseStatus` - established /
+diagnostics reads. The Overview Corpus card shows a **"Probation due"**
+count and an **"Evictable (untested / stale)"** pair (three
+`samskara_health_snapshot` columns whose predicates deliberately mirror
+`samskara_reap_untested` / `samskara_evict_for_mint`'s two tiers - keep
+them in lockstep). All are informational, not dotted: probation-due
+drains at the next hourly reap tick (a value that never drains means
+the reaper cron is stalled), and a nonzero evictable pool is the normal
+resting state while the tier-1 cap is pinned. The Corpus detail pane
+adds an **engagement** stat (genuine/judged, `engagementSummary`) to
+the verdict tally and a one-line **release status** under it
+(`releaseStatus` - established / weakly-established-gone-stale /
 awaiting judgment / probation countdown / evictable), with the SQL
 thresholds mirrored as named constants in
-`src/lib/ui/samskara-browse.ts`.
+`src/lib/ui/samskara-browse.ts`. The stale read rides
+`samskara_verdict_counts`' `last_genuine_at` column plus the row's own
+discounted evidence tally - the same two numbers the SQL stale tier
+tests.
 
 Read-only by design - no delete/pin/edit. Curation would re-open the
 "operator games the bias model" question; if it's ever wanted it's a

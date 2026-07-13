@@ -7182,9 +7182,25 @@ grant execute on function public.samskara_reap_untested(int) to service_role;
 --   - no unresolved fire (same spare-the-pending-test guard as the
 --     probation reaper).
 -- Victims are ranked most-judged-first (the most adjacency-disproven
--- row goes first), oldest as the tiebreak. Returns the deleted id, or
--- null when nothing qualifies - the caller then skips the mint, same
--- as before eviction existed.
+-- row goes first), oldest as the tiebreak.
+--
+-- When no untested row qualifies, a SECOND tier keeps eviction
+-- pressure alive as the corpus matures: weakly-established rows gone
+-- stale. Without it, one genuine test ever is a lifetime pass - a row
+-- that held once and never genuinely engaged again is untouchable by
+-- probation (nonzero tally) and by tier one here, and a mature corpus
+-- fills with exactly those. A stale-tier victim must be:
+--   - genuinely tested at some point (tally > 0 - never-tested rows
+--     belong to tier one / probation, not here), but only weakly:
+--     total tally <= 1.0, i.e. at most one full test's worth of
+--     evidence (a single held is 1.0; a lone soft miss is 0.25). A
+--     row with a real track record is not evictable.
+--   - stale: last genuine verdict >= 90 days ago. The clock only
+--     matters under cap pressure - an idle account never bleeds.
+--   - not awaiting a judgment (same pending-fire guard).
+-- Ranked stalest-first, smallest tally as the tiebreak. Returns the
+-- deleted id, or null when neither tier qualifies - the caller then
+-- skips the mint, same as before eviction existed.
 create or replace function public.samskara_evict_for_mint(
   p_user_id uuid
 ) returns uuid
@@ -7213,6 +7229,32 @@ begin
      ) desc,
      s.created_at asc
    limit 1;
+  if victim is null then
+    -- Stale tier: weakly-established rows whose last genuine
+    -- engagement is 90+ days old.
+    select s.id into victim
+      from public.samskaras s
+     where s.user_id = p_user_id
+       and s.tier = 1
+       and s.confirm_count + s.disconfirm_count > 0
+       and s.confirm_count + s.disconfirm_count <= 1.0
+       and not exists (
+         select 1 from public.samskara_fires f
+          where f.samskara_id = s.id and f.verdict is null
+       )
+       and (
+         select max(f.fired_at) from public.samskara_fires f
+          where f.samskara_id = s.id
+            and f.verdict in ('held', 'contradicted', 'not-borne-out')
+       ) < now() - interval '90 days'
+     order by (
+         select max(f.fired_at) from public.samskara_fires f
+          where f.samskara_id = s.id
+            and f.verdict in ('held', 'contradicted', 'not-borne-out')
+       ) asc,
+       s.confirm_count + s.disconfirm_count asc
+     limit 1;
+  end if;
   if victim is null then
     return null;
   end if;
@@ -8270,19 +8312,31 @@ $$;
 -- this is the raw LIFETIME count by verdict so the soft-miss
 -- (not-borne-out) bucket is legible next to held / contradicted /
 -- not-engaged rather than being folded invisibly into disconfirm_count.
--- pending = fired but not yet judged (null verdict). security invoker so
--- the samskara_fires RLS select policy scopes the read; the explicit
--- user_id filter is belt-and-braces (mirrors samskara_provenance_detail).
+-- pending = fired but not yet judged (null verdict). last_genuine_at is
+-- when the judge last ruled a genuine verdict (held / contradicted /
+-- not-borne-out) - the timestamp the stale-eviction tier keys on, so
+-- the detail pane can show how long an established claim has gone
+-- without re-engaging. security invoker so the samskara_fires RLS
+-- select policy scopes the read; the explicit user_id filter is
+-- belt-and-braces (mirrors samskara_provenance_detail).
 drop function if exists public.samskara_verdict_counts(uuid);
 create or replace function public.samskara_verdict_counts(p_samskara_id uuid)
-returns table (held int, contradicted int, not_borne_out int, not_engaged int, pending int)
+returns table (
+  held int,
+  contradicted int,
+  not_borne_out int,
+  not_engaged int,
+  pending int,
+  last_genuine_at timestamptz
+)
 language sql stable security invoker set search_path = public as $$
   select
     count(*) filter (where verdict = 'held')::int,
     count(*) filter (where verdict = 'contradicted')::int,
     count(*) filter (where verdict = 'not-borne-out')::int,
     count(*) filter (where verdict = 'not-engaged')::int,
-    count(*) filter (where verdict is null)::int
+    count(*) filter (where verdict is null)::int,
+    max(fired_at) filter (where verdict in ('held', 'contradicted', 'not-borne-out'))
   from public.samskara_fires
   where samskara_id = p_samskara_id
     and user_id = auth.uid();
@@ -8303,15 +8357,17 @@ $$;
 --     count means workers are crashing mid-claim, not just idle.
 --   - near_dead / never_fired: corpus-quality signals (decay working,
 --     mints that never match anything).
---   - probation_eligible / evictable: rows the decay machinery will
---     release. probation_eligible mirrors samskara_reap_untested's
---     predicate (never genuinely tested, past the 45-day window, no
---     pending fire) - drains at the next hourly reap tick, so a
---     persistent nonzero means the reaper cron is stalled. evictable
---     mirrors samskara_evict_for_mint (judged 10+ times, zero genuine
---     engagements, 14+ days old) - the pool a capped mint may draw a
---     victim from; informational, since eviction only runs under cap
---     pressure.
+--   - probation_eligible / evictable / evictable_stale: rows the decay
+--     machinery will release. probation_eligible mirrors
+--     samskara_reap_untested's predicate (never genuinely tested, past
+--     the 45-day window, no pending fire) - drains at the next hourly
+--     reap tick, so a persistent nonzero means the reaper cron is
+--     stalled. evictable mirrors samskara_evict_for_mint's first tier
+--     (judged 10+ times, zero genuine engagements, 14+ days old);
+--     evictable_stale mirrors its second (weakly established, last
+--     genuine verdict 90+ days ago) - together the pool a capped mint
+--     may draw a victim from; informational, since eviction only runs
+--     under cap pressure.
 --   - associations / associations_unconsumed: the relation graph total
 --     and the slice still awaiting an association-mint pass. A standing
 --     unconsumed pile is normal between hourly sweeps; it should drain,
@@ -8327,6 +8383,7 @@ returns table (
   never_fired int,
   probation_eligible int,
   evictable int,
+  evictable_stale int,
   associations int,
   associations_unconsumed int,
   substrate_total int,
@@ -8372,6 +8429,19 @@ language sql stable security invoker as $$
         )
         and (select count(*) from public.samskara_fires f
               where f.samskara_id = s.id and f.verdict is not null) >= 10)::int,
+    (select count(*) from public.samskaras s
+      where s.user_id = auth.uid()
+        and s.tier = 1
+        and s.confirm_count + s.disconfirm_count > 0
+        and s.confirm_count + s.disconfirm_count <= 1.0
+        and not exists (
+          select 1 from public.samskara_fires f
+           where f.samskara_id = s.id and f.verdict is null
+        )
+        and (select max(f.fired_at) from public.samskara_fires f
+              where f.samskara_id = s.id
+                and f.verdict in ('held', 'contradicted', 'not-borne-out'))
+            < now() - interval '90 days')::int,
     (select count(*) from public.samskara_associations a
       where a.user_id = auth.uid())::int,
     (select count(*) from public.samskara_associations a
