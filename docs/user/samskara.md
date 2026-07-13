@@ -21,7 +21,10 @@ Two kinds:
 Everything here is **read-only**. You can see what Nak believes, but not
 edit or delete it. A wrong instinct isn't permanent - it loses "health"
 on its own as later conversations contradict it, and eventually stops
-mattering.
+mattering. Instincts that never connect at all fade too: one that goes
+45 days without a single genuine engagement is quietly released, and
+when the corpus is full, a new instinct can displace one that has fired
+many times without ever actually mattering.
 
 You can see samskara from three places, by how specific the information
 is:
@@ -73,10 +76,12 @@ invisible:
   settles, so recent fires are always still pending, and one-question
   conversations are skipped on purpose (too little signal to judge).
 - **Corpus** - headline counts: total instincts by tier, how many are
-  near-dead or have never fired, the raw-observation and pair-association
-  totals behind them, and whether a new **tier-2 compound** is currently
-  ready to form (a higher-order instinct distilled from several that keep
-  firing together).
+  near-dead or have never fired, how many are due for release (never
+  genuinely engaged and past their probation window) or eligible to be
+  displaced by a new instinct when the corpus is full, the
+  raw-observation and pair-association totals behind them, and whether a
+  new **tier-2 compound** is currently ready to form (a higher-order
+  instinct distilled from several that keep firing together).
 
 The dot at the top is green when healthy, amber when worth a look, and
 red when something genuinely needs attention - a deep backlog, a
@@ -95,7 +100,11 @@ Browse, search, filter, and sort every instinct Nak has formed:
   it shows how many remain after folding.
 
 Click any row to see its detail - confidence, health, how often it has
-fired, and where it came from. "Where it came from" lists the moments it
+fired, how often those fires genuinely engaged (the **engagement** stat),
+and a one-line **release status**: whether the instinct is established
+by real tests, still waiting on its first judgment, or counting down
+toward being released as never-relevant. Below that is where it came
+from. "Where it came from" lists the moments it
 was formed from, and - for an instinct built from recurring patterns
 across different conversations - the relations Nak noticed between them.
 For a tier-2 compound, it's the tier-1 instincts it was built from.

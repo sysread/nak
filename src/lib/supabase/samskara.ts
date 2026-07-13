@@ -525,6 +525,8 @@ export async function samskaraHealthSnapshot(
     tier2: r?.tier2 ?? 0,
     nearDead: r?.near_dead ?? 0,
     neverFired: r?.never_fired ?? 0,
+    probationEligible: r?.probation_eligible ?? 0,
+    evictable: r?.evictable ?? 0,
     associations: r?.associations ?? 0,
     associationsUnconsumed: r?.associations_unconsumed ?? 0,
     substrateTotal: r?.substrate_total ?? 0,

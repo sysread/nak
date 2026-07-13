@@ -49,6 +49,13 @@ export interface SamskaraHealthSnapshot {
   tier2: number;
   nearDead: number;
   neverFired: number;
+  /** Never genuinely tested and past the 45-day probation window - the
+   *  hourly reaper releases these; a persistent nonzero means it is
+   *  stalled. */
+  probationEligible: number;
+  /** Untested rows judged 10+ times with zero genuine engagements - the
+   *  pool a capped tier-1 mint may evict from. */
+  evictable: number;
   associations: number;
   /** Association edges not yet fed to the association-mint pass. Drains across sweeps. */
   associationsUnconsumed: number;

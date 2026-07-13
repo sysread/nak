@@ -7109,6 +7109,119 @@ end $$;
 revoke all on function public.samskara_reap_dead(real, int) from public, anon, authenticated;
 grant execute on function public.samskara_reap_dead(real, int) to service_role;
 
+-- Probation reaper: delete samskaras that have NEVER been genuinely
+-- tested (evidence tallies exactly zero - every genuine verdict, even a
+-- soft miss, leaves a nonzero tally) after a generous settling window.
+-- This is the complement to samskara_reap_dead: that one clears claims
+-- disproven by real misses; this one clears claims whose topic never
+-- genuinely arose at all - the one-off-lookup mints (a burst of
+-- questions about some technology, a single shopping errand) that
+-- otherwise sit at the p0 baseline forever, each holding a capped
+-- tier-1 slot.
+--
+-- Why an age window is honest evidence here: measured on the live
+-- corpus (2026-07), samskaras that ever get genuinely tested see their
+-- first genuine test fast - median under 1 day, p90 ~13 days, worst
+-- observed ~65 days - because the evaluation judge tests every fire
+-- against the next day's settled conversation. 45 days of that
+-- coverage without a single genuine engagement means the predicted
+-- situation is not part of the user's life, not that the judge hasn't
+-- looked. The window is wall-clock, which is calibrated to a
+-- daily-active user; an account idle for weeks under-tests its corpus
+-- and would need the window widened.
+--
+-- Guards:
+--   - evidence must be exactly zero: any judged genuine verdict writes
+--     confirm_count or disconfirm_count > 0, and discounting decays
+--     them toward-but-never-to zero, so = 0 identifies never-tested
+--     precisely.
+--   - an unresolved fire (verdict pending) spares the row: it may be
+--     the first genuine test, and the next-day judge hasn't ruled yet.
+--
+-- A reaped claim is cheap to lose: if the pattern is real and recurs,
+-- minting re-creates it from fresh substrate.
+create or replace function public.samskara_reap_untested(
+  p_min_age_days int default 45
+) returns int
+language plpgsql security definer set search_path = public as $$
+declare
+  affected int;
+begin
+  delete from public.samskaras s
+   where s.confirm_count = 0
+     and s.disconfirm_count = 0
+     and s.created_at < now() - make_interval(days => p_min_age_days)
+     and not exists (
+       select 1 from public.samskara_fires f
+        where f.samskara_id = s.id and f.verdict is null
+     );
+  get diagnostics affected = row_count;
+  return affected;
+end $$;
+revoke all on function public.samskara_reap_untested(int) from public, anon, authenticated;
+grant execute on function public.samskara_reap_untested(int) to service_role;
+
+-- Cap-pressure eviction: free one tier-1 slot for a pending mint by
+-- deleting the corpus's most-disproven untested row. Called by the
+-- mint-tier1 probe only when the population cap blocks a mint, so
+-- eviction happens exactly as fast as formation pressure demands -
+-- decay by replacement, not by clock.
+--
+-- The victim must be strongly evidenced as junk, not merely quiet:
+--   - never genuinely tested (evidence tallies zero, as in
+--     samskara_reap_untested), and
+--   - judged at least 10 times without one genuine engagement. The
+--     next-day judge stamps every settled fire; 10+ not-engaged
+--     rulings with zero engagements means the topic's neighborhood
+--     keeps coming up and the claim never actually connects. (Live
+--     corpus 2026-07: the median untested row has only 2 judged
+--     fires - those are merely quiet and are NOT evictable.)
+--   - at least 14 days old, so a newborn isn't evicted before the
+--     judge has had a real chance (p90 time-to-first-genuine-test is
+--     ~13 days).
+--   - no unresolved fire (same spare-the-pending-test guard as the
+--     probation reaper).
+-- Victims are ranked most-judged-first (the most adjacency-disproven
+-- row goes first), oldest as the tiebreak. Returns the deleted id, or
+-- null when nothing qualifies - the caller then skips the mint, same
+-- as before eviction existed.
+create or replace function public.samskara_evict_for_mint(
+  p_user_id uuid
+) returns uuid
+language plpgsql security definer set search_path = public as $$
+declare
+  victim uuid;
+begin
+  select s.id into victim
+    from public.samskaras s
+   where s.user_id = p_user_id
+     and s.tier = 1
+     and s.confirm_count = 0
+     and s.disconfirm_count = 0
+     and s.created_at < now() - interval '14 days'
+     and not exists (
+       select 1 from public.samskara_fires f
+        where f.samskara_id = s.id and f.verdict is null
+     )
+     and (
+       select count(*) from public.samskara_fires f
+        where f.samskara_id = s.id and f.verdict is not null
+     ) >= 10
+   order by (
+       select count(*) from public.samskara_fires f
+        where f.samskara_id = s.id and f.verdict is not null
+     ) desc,
+     s.created_at asc
+   limit 1;
+  if victim is null then
+    return null;
+  end if;
+  delete from public.samskaras where id = victim;
+  return victim;
+end $$;
+revoke all on function public.samskara_evict_for_mint(uuid) from public, anon, authenticated;
+grant execute on function public.samskara_evict_for_mint(uuid) to service_role;
+
 -- One-shot health reconcile. Recompute health = confidence = the derived
 -- posterior of each samskara's CURRENT tallies (k=5 mirrors
 -- samskara_apply_evaluation - keep the two in sync). On the first apply
@@ -8190,6 +8303,15 @@ $$;
 --     count means workers are crashing mid-claim, not just idle.
 --   - near_dead / never_fired: corpus-quality signals (decay working,
 --     mints that never match anything).
+--   - probation_eligible / evictable: rows the decay machinery will
+--     release. probation_eligible mirrors samskara_reap_untested's
+--     predicate (never genuinely tested, past the 45-day window, no
+--     pending fire) - drains at the next hourly reap tick, so a
+--     persistent nonzero means the reaper cron is stalled. evictable
+--     mirrors samskara_evict_for_mint (judged 10+ times, zero genuine
+--     engagements, 14+ days old) - the pool a capped mint may draw a
+--     victim from; informational, since eviction only runs under cap
+--     pressure.
 --   - associations / associations_unconsumed: the relation graph total
 --     and the slice still awaiting an association-mint pass. A standing
 --     unconsumed pile is normal between hourly sweeps; it should drain,
@@ -8203,6 +8325,8 @@ returns table (
   tier2 int,
   near_dead int,
   never_fired int,
+  probation_eligible int,
+  evictable int,
   associations int,
   associations_unconsumed int,
   substrate_total int,
@@ -8226,6 +8350,28 @@ language sql stable security invoker as $$
       where s.user_id = auth.uid() and s.health < 0.2)::int,
     (select count(*) from public.samskaras s
       where s.user_id = auth.uid() and s.fire_count = 0)::int,
+    -- Keep both predicates in lockstep with samskara_reap_untested and
+    -- samskara_evict_for_mint - a drifted copy here reports a pool the
+    -- workers don't actually drain.
+    (select count(*) from public.samskaras s
+      where s.user_id = auth.uid()
+        and s.confirm_count = 0 and s.disconfirm_count = 0
+        and s.created_at < now() - interval '45 days'
+        and not exists (
+          select 1 from public.samskara_fires f
+           where f.samskara_id = s.id and f.verdict is null
+        ))::int,
+    (select count(*) from public.samskaras s
+      where s.user_id = auth.uid()
+        and s.tier = 1
+        and s.confirm_count = 0 and s.disconfirm_count = 0
+        and s.created_at < now() - interval '14 days'
+        and not exists (
+          select 1 from public.samskara_fires f
+           where f.samskara_id = s.id and f.verdict is null
+        )
+        and (select count(*) from public.samskara_fires f
+              where f.samskara_id = s.id and f.verdict is not null) >= 10)::int,
     (select count(*) from public.samskara_associations a
       where a.user_id = auth.uid())::int,
     (select count(*) from public.samskara_associations a
@@ -12557,12 +12703,14 @@ $cron$;
 -- nak-samskara-decay job is unscheduled idempotently on every apply,
 -- and the samskara_decay_sweep function itself is dropped above.
 --
--- The freed minute-13 slot now drives the REAPER: a pure-SQL pass (no
--- pg_net, same shape the old decay used) that deletes
--- repeatedly-contradicted, long-quiet samskaras (samskara_reap_dead).
--- Untested-but-baseline rows sit at p0 and are spared; only real
--- accumulated misses are cleared. Was :13/:43; the reaper needs only
--- one pass a day's worth of cadence, so a single :13 tick.
+-- The freed minute-13 slot now drives the REAPERS: pure-SQL passes (no
+-- pg_net, same shape the old decay used). samskara_reap_dead deletes
+-- repeatedly-contradicted, long-quiet samskaras; samskara_reap_untested
+-- deletes never-genuinely-tested rows past the 45-day probation window
+-- (the one-off-lookup mints that would otherwise hold tier-1 slots at
+-- the p0 baseline forever). Tested-and-baseline rows are spared by
+-- both. Was :13/:43; one pass a day's worth of cadence suffices, so a
+-- single :13 tick runs both in one statement.
 do $cron$
 begin
   if exists (select 1 from pg_available_extensions where name = 'pg_cron') then
@@ -12576,7 +12724,7 @@ begin
     perform cron.schedule(
       'nak-samskara-reap',
       '13 * * * *',
-      $job$ select public.samskara_reap_dead(); $job$
+      $job$ select public.samskara_reap_dead(), public.samskara_reap_untested(); $job$
     );
   end if;
 exception when others then

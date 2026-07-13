@@ -13,6 +13,10 @@ import {
   emptyMessage,
   groupProvenance,
   verdictCountList,
+  engagementSummary,
+  releaseStatus,
+  PROBATION_DAYS,
+  EVICT_MIN_JUDGED,
   type CollapsedRow,
 } from '../src/lib/ui/samskara-browse';
 import type { SamskaraCorpusRow, SamskaraProvenanceRow } from '../src/lib/supabase';
@@ -148,6 +152,51 @@ describe('verdictCountList', () => {
       'pending',
     ]);
     expect(out.map((v) => v.count)).toEqual([5, 2, 3, 7, 11]);
+  });
+});
+
+describe('engagementSummary', () => {
+  it('counts genuine verdicts against all judged fires', () => {
+    const s = engagementSummary({ held: 3, contradicted: 1, notBorneOut: 1, notEngaged: 15 });
+    expect(s.genuine).toBe(5);
+    expect(s.judged).toBe(20);
+    expect(s.ratePct).toBe(25);
+  });
+
+  it('returns a null rate when nothing has been judged', () => {
+    const s = engagementSummary({ held: 0, contradicted: 0, notBorneOut: 0, notEngaged: 0 });
+    expect(s.ratePct).toBeNull();
+    expect(s.judged).toBe(0);
+  });
+});
+
+describe('releaseStatus', () => {
+  const now = Date.parse('2026-07-13T00:00:00Z');
+  const daysAgo = (d: number) => new Date(now - d * 86_400_000).toISOString();
+  const none = { held: 0, contradicted: 0, notBorneOut: 0, notEngaged: 0, pending: 0 };
+
+  it('reports established once any genuine verdict exists', () => {
+    expect(releaseStatus(daysAgo(100), { ...none, held: 1 }, now)).toMatch(/established/);
+  });
+
+  it('defers release while a fire awaits judgment', () => {
+    expect(releaseStatus(daysAgo(100), { ...none, pending: 2 }, now)).toMatch(/awaiting judgment/);
+  });
+
+  it('marks a never-tested row past the window as probation-due', () => {
+    expect(releaseStatus(daysAgo(PROBATION_DAYS + 1), none, now)).toMatch(/past probation/);
+  });
+
+  it('marks a heavily-judged never-engaged row as evictable, with the countdown', () => {
+    const s = releaseStatus(daysAgo(20), { ...none, notEngaged: EVICT_MIN_JUDGED }, now);
+    expect(s).toMatch(/evictable/);
+    expect(s).toMatch(/25d/);
+  });
+
+  it('shows a plain probation countdown for quiet young rows', () => {
+    const s = releaseStatus(daysAgo(5), { ...none, notEngaged: 2 }, now);
+    expect(s).not.toMatch(/evictable/);
+    expect(s).toMatch(/40d/);
   });
 });
 

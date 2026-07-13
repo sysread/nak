@@ -35,6 +35,8 @@
     relativeTime,
     groupProvenance,
     verdictCountList,
+    engagementSummary,
+    releaseStatus,
   } from '$lib/ui/samskara-browse';
   import type { SamskaraProvenanceRow, SamskaraVerdictCounts } from '$lib/supabase';
   import SamskaraHealthPanel from '../components/SamskaraHealthPanel.svelte';
@@ -135,6 +137,7 @@
   // best-effort shape as provenance - a failure leaves it null and the
   // section just doesn't render.
   let verdictCounts = $state<SamskaraVerdictCounts | null>(null);
+  const engagement = $derived(verdictCounts ? engagementSummary(verdictCounts) : null);
   $effect(() => {
     const id = route.samskara_id;
     if (!id || !app.supabase) {
@@ -211,7 +214,24 @@
             {#each verdictCountList(verdictCounts) as v (v.label)}
               <div><dt>{v.label}</dt><dd>{v.count}</dd></div>
             {/each}
+            {#if engagement && engagement.ratePct !== null}
+              <!-- Engagement rate: the share of judged fires that
+                   genuinely engaged. Low is normal (wide-K firing is
+                   mostly loose topical matches), but zero across many
+                   judged fires is what marks a claim for release. -->
+              <div>
+                <dt>engagement</dt>
+                <dd>{engagement.ratePct}% ({engagement.genuine}/{engagement.judged})</dd>
+              </div>
+            {/if}
           </dl>
+          <!-- Decay standing: whether this row is established evidence
+               or on a release path (45-day probation for never-tested
+               claims, cap-pressure eviction for fired-but-never-engaged
+               ones). Mirrors the SQL release machinery's guards. -->
+          <p class="samskara-release subtle">
+            {releaseStatus(selected.createdAt, verdictCounts, Date.now())}
+          </p>
         {/if}
 
         {#if provLoading}
@@ -323,6 +343,13 @@
     margin-top: 0;
     padding-top: 0.6rem;
     border-top: 1px dashed color-mix(in srgb, var(--border) 70%, transparent);
+  }
+  /* Decay-standing line: rides directly under the verdict tally as a
+     one-line caption, not a separate section. */
+  .samskara-release {
+    margin: 0 0 0.8rem;
+    font-size: 0.8rem;
+    line-height: 1.4;
   }
   .samskara-prov-head {
     font-size: 0.74rem;

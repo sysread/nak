@@ -1037,8 +1037,27 @@ async function mintTier1Probe(
   apiKey: string,
 ): Promise<void> {
   if (await tier1AtCap(admin, userId, log)) {
-    log.trace('mint-tier1: tier-1 population at cap; skipping');
-    return;
+    // Cap-pressure eviction: before giving up the slot, ask the DB to
+    // release the corpus's most-disproven untested row (judged 10+
+    // times, zero genuine engagements - see samskara_evict_for_mint in
+    // schema.sql). Null means nothing qualifies, and the probe skips
+    // exactly as it did before eviction existed. Errors also skip: a
+    // transient RPC blip must not stall the probe, and the next cap-hit
+    // retries the eviction.
+    const { data: evicted, error: evictErr } = await admin.rpc('samskara_evict_for_mint', {
+      p_user_id: userId,
+    });
+    if (evictErr || !evicted) {
+      if (evictErr) {
+        log.debug('mint-tier1: eviction RPC failed; skipping mint', { error: evictErr.message });
+      } else {
+        log.trace('mint-tier1: tier-1 at cap, nothing evictable; skipping');
+      }
+      return;
+    }
+    log.info('mint-tier1: evicted untested samskara to free a capped slot', {
+      evictedId: evicted as string,
+    });
   }
   const recent = await recentEmbeddedSubstrate(admin, userId, MINT_WINDOW);
   if (recent.length < MINT_CLUSTER_MIN) return;
