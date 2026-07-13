@@ -4595,6 +4595,24 @@ button.top-bar-pinned {
   border-left-color: color-mix(in srgb, var(--accent) 45%, var(--muted));
 }
 
+/* Grocery-list chrome (classes live in GroceryList.svelte; global CSS
+   reaches them because Svelte scoping only constrains a component's
+   own selectors). The suggestion dropdown, section manager, and
+   inline item editor are bordered boxes drawn with var(--border),
+   which the terminal style sets transparent - without this they read
+   as unbounded floating text. --muted matches the composer shell and
+   the native-input treatment above. The button-shaped controls
+   (Sections toggle, editor buttons) ride along for the same reason
+   the combobox triggers do in the input rule: they are buttons
+   dressed as form controls sitting among native ones. */
+:root[data-style='terminal'] .grocery-suggestions,
+:root[data-style='terminal'] .grocery-section-manager,
+:root[data-style='terminal'] .grocery-item-edit,
+:root[data-style='terminal'] .grocery-sections-toggle,
+:root[data-style='terminal'] .grocery-small-btn {
+  border-color: var(--muted);
+}
+
 /* The cohort panel's sibling-cluster guide line is drawn with
    var(--border), which the terminal style sets transparent - the
    indented list would lose the one line tying siblings to their
