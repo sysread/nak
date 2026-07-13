@@ -607,7 +607,18 @@ logs and yields to the next phase.
   present; a missing verdict just degrades to the doubt-free
   payload. Claim RPC `samskara_claim_next_assimilate` (per-user,
   tail) or `samskara_claim_next_assimilate_for_sweep` (cross-user,
-  sweep); save RPC `samskara_save_assimilation_if_claimed`. Cap
+  sweep); save RPC `samskara_save_assimilation_if_claimed`. Both
+  claim RPCs carry the same junk-data gate as the reflection /
+  wiki / evaluation claims: a stub whose thread has fewer than two
+  user messages is never claimed. One-shot lookups ("how does
+  postgres paging work") say nothing about the user, and letting
+  them into substrate polluted tier-1 mints and the compound
+  summary upstream. The gate defers rather than drops - the
+  round-1 stub of a thread that grows becomes claimable as soon as
+  the second user message lands, so real conversations lose
+  nothing; stubs of threads that stay one-shot wait unclaimed
+  forever (the health snapshot's `pending_assimilate` excludes
+  them so they don't read as a stuck worker). Cap
   hits are logged, never silently truncated - the next trigger
   continues the drain.
 - **Pair-relate** - `agentRelate(apiKey, a, b) -> {kind, label}
