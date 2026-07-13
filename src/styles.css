@@ -4604,29 +4604,23 @@ button.top-bar-pinned {
   border-top-color: var(--muted);
 }
 
-/* Inputs default to the --bg-2 fill, which matches the sidebar's fill -
-   with hairlines transparent, a search box sitting on the sidebar would
-   be invisible until focused. Step inputs up to --surface so the fill
-   difference outlines them the same way it outlines cards.
-   .model-combobox-trigger, .image-select-trigger, and
-   .topics-filter-trigger ride along because they are <button>s dressed
-   as selects (ModelCombobox / ImageModelSelect / TopicsFilter .svelte)
-   sitting among native controls - without the step they disappear
-   against their host card's fill.
-
-   The fill step alone is not enough: form controls sit on all three
-   surface levels (--bg pages, --bg-2 cards, --surface panels), so
-   whichever fill an input gets, some host surface matches it - in
-   light terminal, --surface (#f4f4f4) on a --bg (#ffffff) page is
-   near-invisible. Give every control a crisp 1px --muted outline:
-   the TUI box-drawing edge marks "type here" regardless of what the
-   control sits on. --muted rather than --edge because WCAG 2.1
+/* Form controls in terminal style: base-level --bg fill plus a
+   1px --muted outline, together making "type here" legible on any
+   host surface. Controls sit on all three surface levels (--bg
+   pages, --bg-2 cards, --surface panels), so no single fill can
+   contrast with every host - forms mostly live on the grey hosts
+   (cards, panels, the --bg-2 sidebar), so --bg pops there, and the
+   border alone carries the rare control on a bare --bg page.
+   --muted rather than --edge for the border because WCAG 2.1
    SC 1.4.11 wants 3:1 for component boundaries and light terminal's
-   --edge (#b4b4b4) only reaches ~1.9:1 against --surface - a border
-   that is technically present but reads as nothing. --muted is
-   spec'd >= 4.5:1 on all three surfaces in both terminal themes,
-   and it is the same border the composer shell already wears, so
-   controls match the one input that was always visible. Focus
+   --edge (#b4b4b4) only reaches ~2:1 against the light fills - a
+   border that is technically present but reads as nothing. --muted
+   is spec'd >= 4.5:1 on all three surfaces in both terminal themes,
+   and it is the same border the composer shell already wears.
+   .model-combobox-trigger, .image-select-trigger, and
+   .topics-filter-trigger ride along because they are <button>s
+   dressed as selects (ModelCombobox / ImageModelSelect /
+   TopicsFilter .svelte) sitting among native controls. Focus
    states are unaffected - they signal via box-shadow
    (--focus-ring), not border-color. */
 :root[data-style='terminal'] input,
@@ -4635,7 +4629,7 @@ button.top-bar-pinned {
 :root[data-style='terminal'] .model-combobox-trigger,
 :root[data-style='terminal'] .image-select-trigger,
 :root[data-style='terminal'] .topics-filter-trigger {
-  background: var(--surface);
+  background: var(--bg);
   border-color: var(--muted);
 }
 
