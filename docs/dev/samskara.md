@@ -935,9 +935,49 @@ decay ceiling `m_max = 1/(1-d) ~= 14.4`), which at the observed
 `p0 ~= 0.95` is ~0.25 - above the old 0.15 floor even for a samskara
 contradicted on every test forever, so the reaper could never fire. At
 the 0.5 ratio a row is reaped once net miss evidence outweighs roughly
-`k` genuine tests' worth of prior. The baseline-sitting majority is
-bounded by `samskara_collapse_by_cofiring` and the 150-row population
-cap, not by decay.
+`k` genuine tests' worth of prior.
+
+### Release of never-tested claims: probation + cap-pressure eviction
+
+Relevance-gated decay has a blind spot: a claim whose topic never
+*genuinely* arises - the one-off-lookup mints (a burst of questions
+about one technology, a single shopping errand) - never accrues
+evidence in either direction, sits at `p0` forever, and holds a capped
+tier-1 slot. Two release paths clear that residue. Both key on
+`confirm_count = 0 and disconfirm_count = 0`, which identifies
+never-genuinely-tested exactly (any genuine verdict, even a soft miss,
+writes a nonzero tally, and the discount decays tallies toward but
+never to zero), and both spare a row with an unresolved fire (it may
+be the first genuine test, and the next-day judge hasn't ruled).
+
+- **Probation** (`samskara_reap_untested`, same :13 cron statement as
+  `samskara_reap_dead`): never-tested rows older than 45 days are
+  deleted. The window is grounded in live-corpus measurement (2026-07,
+  daily-active user): claims that ever get genuinely tested see their
+  first test at median < 1 day, p90 ~13 days, worst observed ~65 days -
+  so 45 days of judge coverage without one genuine engagement means the
+  situation isn't part of the user's life. The window is wall-clock and
+  calibrated to daily use; a long-idle account under-tests its corpus
+  and would need it widened.
+- **Cap-pressure eviction** (`samskara_evict_for_mint`, called by the
+  mint-tier1 probe only when the population cap blocks a mint): frees
+  one slot by deleting the most-disproven untested row - judged >= 10
+  times with zero genuine engagements, >= 14 days old, ranked
+  most-judged-first. Decay by replacement: it runs exactly as fast as
+  formation pressure demands. Merely-quiet rows (the median untested
+  row has ~2 judged fires) are NOT evictable; if nothing qualifies the
+  probe skips at cap exactly as it did before eviction existed.
+
+A released claim is cheap to lose: if the pattern is real and recurs,
+minting re-creates it from fresh substrate. A design road not taken:
+scoring "is this topic recurrent?" by cosine-matching each samskara
+against the substrate archive was measured and rejected - at the 0.6
+substrate floor the mint-cluster centroid matched 30-70% of the entire
+archive, and at 0.7 known one-off junk still spanned 12 distinct weeks;
+the judge's per-fire rulings are the reliable archive-grounded signal,
+already computed out-of-sample. The baseline-sitting *tested* majority
+remains bounded by `samskara_collapse_by_cofiring` and the 150-row
+population cap, not by decay.
 
 History: this replaced a wall-clock `samskara_decay_sweep` (a per-pass
 health nudge on a 30-minute cron) plus a live 1-10 minute reaction
@@ -1684,6 +1724,22 @@ verdicts - the judge rules per samskara). The per-samskara
 the verdict tally beside it is the raw lifetime count, so not-borne-out
 reads as its own bucket instead of folding silently into disconfirm.
 These are diagnostic summary reads, not user-facing controls.
+
+**Decay-standing legibility.** The release machinery (probation reap +
+cap-pressure eviction, see the decay section) surfaces on both
+diagnostics reads. The Overview Corpus card shows **"Probation due /
+evictable"** counts (two `samskara_health_snapshot` columns whose
+predicates deliberately mirror `samskara_reap_untested` /
+`samskara_evict_for_mint` - keep them in lockstep). Both are
+informational, not dotted: probation-due drains at the next hourly reap
+tick (a value that never drains means the reaper cron is stalled), and
+a nonzero evictable pool is the normal resting state while the tier-1
+cap is pinned. The Corpus detail pane adds an **engagement** stat
+(genuine/judged, `engagementSummary`) to the verdict tally and a
+one-line **release status** under it (`releaseStatus` - established /
+awaiting judgment / probation countdown / evictable), with the SQL
+thresholds mirrored as named constants in
+`src/lib/ui/samskara-browse.ts`.
 
 Read-only by design - no delete/pin/edit. Curation would re-open the
 "operator games the bias model" question; if it's ever wanted it's a

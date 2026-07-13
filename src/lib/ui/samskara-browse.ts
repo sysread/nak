@@ -207,3 +207,83 @@ export function verdictCountList(counts: {
     { label: 'pending', count: counts.pending },
   ];
 }
+
+/*
+ * Decay-standing primitives for the detail pane. The thresholds mirror
+ * the SQL release machinery in schema.sql (samskara_reap_untested,
+ * samskara_evict_for_mint) - keep them in lockstep, or the pane
+ * predicts a fate the workers won't deliver.
+ */
+
+/** Days a never-genuinely-tested samskara survives before the hourly reaper releases it. */
+export const PROBATION_DAYS = 45;
+/** Judged fires (all not-engaged) that make an untested row evictable under cap pressure. */
+export const EVICT_MIN_JUDGED = 10;
+/** Newborn grace: rows younger than this are never evicted. */
+export const EVICT_MIN_AGE_DAYS = 14;
+
+export interface EngagementSummary {
+  /** Fires the next-day judge has ruled on (any verdict). */
+  judged: number;
+  /** Judged fires that genuinely engaged (held / contradicted / not-borne-out). */
+  genuine: number;
+  /** genuine/judged as a percent, or null when nothing has been judged yet. */
+  ratePct: number | null;
+}
+
+/**
+ * Collapse the verdict tally into the engagement read the decay
+ * machinery keys on: of the fires the judge ruled on, how many
+ * genuinely engaged (vs the loose not-engaged topical matches that
+ * touch no evidence)?
+ */
+export function engagementSummary(counts: {
+  held: number;
+  contradicted: number;
+  notBorneOut: number;
+  notEngaged: number;
+}): EngagementSummary {
+  const genuine = counts.held + counts.contradicted + counts.notBorneOut;
+  const judged = genuine + counts.notEngaged;
+  return {
+    judged,
+    genuine,
+    ratePct: judged > 0 ? Math.round((genuine / judged) * 100) : null,
+  };
+}
+
+/**
+ * One-line decay standing for the detail pane: is this row established
+ * evidence, waiting on a pending judgment, or on its way out via
+ * probation or eviction? Precedence mirrors the SQL guards: any genuine
+ * test makes the row permanent-until-disproven; a pending fire defers
+ * every release path; then probation-due, evictable, and the countdown.
+ */
+export function releaseStatus(
+  createdAt: string,
+  counts: {
+    held: number;
+    contradicted: number;
+    notBorneOut: number;
+    notEngaged: number;
+    pending: number;
+  },
+  nowMs: number
+): string {
+  const { judged, genuine } = engagementSummary(counts);
+  if (genuine > 0) {
+    return `established - ${genuine} genuine ${genuine === 1 ? 'test' : 'tests'}`;
+  }
+  if (counts.pending > 0) {
+    return 'untested - awaiting judgment on recent fires';
+  }
+  const ageDays = (nowMs - new Date(createdAt).getTime()) / 86_400_000;
+  const remaining = Math.ceil(PROBATION_DAYS - ageDays);
+  if (remaining <= 0) {
+    return 'untested past probation - released at the next hourly sweep';
+  }
+  if (judged >= EVICT_MIN_JUDGED && ageDays >= EVICT_MIN_AGE_DAYS) {
+    return `untested despite ${judged} judged fires - evictable if a new mint needs the slot; probation in ${remaining}d`;
+  }
+  return `untested - released by probation in ${remaining}d unless genuinely tested`;
+}
