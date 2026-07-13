@@ -6723,6 +6723,18 @@ language sql security invoker as $$
        and s.situation is null
        and (s.assimilate_claim_expires is null
             or s.assimilate_claim_expires < now())
+       and (
+         -- Junk-data gate, same substance bar as the reflection /
+         -- wiki / evaluation claims: substrate from a thread with a
+         -- single user message (a one-shot lookup) says nothing about
+         -- the user and would pollute minting upstream. The stub is
+         -- deferred, not dropped - it becomes claimable the moment a
+         -- second user message lands on its thread.
+         select count(*)
+           from public.messages m
+          where m.thread_id = s.thread_id
+            and m.role = 'user'
+       ) >= 2
      order by s.created_at asc
      limit 1
      for update skip locked
@@ -6758,6 +6770,15 @@ set search_path = public as $$
      where s.situation is null
        and (s.assimilate_claim_expires is null
             or s.assimilate_claim_expires < now())
+       and (
+         -- Same junk-data gate as the per-user claim above: stubs
+         -- from single-user-message threads wait until the thread
+         -- earns a second user message.
+         select count(*)
+           from public.messages m
+          where m.thread_id = s.thread_id
+            and m.role = 'user'
+       ) >= 2
      order by s.created_at asc
      limit 1
      for update skip locked
@@ -8211,8 +8232,15 @@ language sql stable security invoker as $$
       where a.user_id = auth.uid() and a.minted_at is null)::int,
     (select count(*) from public.samskara_substrate sub
       where sub.user_id = auth.uid())::int,
+    -- Only stubs the claim RPCs can actually pick up. Stubs on
+    -- single-user-message threads are deferred by the junk-data gate
+    -- in samskara_claim_next_assimilate* and wait indefinitely by
+    -- design; counting them here would read as a stuck worker.
     (select count(*) from public.samskara_substrate sub
-      where sub.user_id = auth.uid() and sub.situation is null)::int,
+      where sub.user_id = auth.uid() and sub.situation is null
+        and (select count(*) from public.messages m
+              where m.thread_id = sub.thread_id
+                and m.role = 'user') >= 2)::int,
     (select count(*) from public.samskara_substrate sub
       where sub.user_id = auth.uid()
         and sub.situation_embedding is null
