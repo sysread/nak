@@ -133,6 +133,10 @@ One file per use-case under [`use-cases/`](./use-cases/), named
   recovery banner at the transcript tail, never stacked: precedence
   error > interrupted-draft > cut-off, suppressed while a live claim
   means the detached run is still finishing.
+- [chat-pregame-refresh-reconnect](./use-cases/chat-pregame-refresh-reconnect.md) -
+  refreshing during the pre-response pregame (priming) reconnects to
+  the still-running server turn via the `stream_started_at` stamp
+  instead of surfacing interrupted/cut-off retry banners.
 - [exchange-per-thread-slots](./use-cases/exchange-per-thread-slots.md) -
   per-thread streaming slot isolation: navigate away mid-stream and
   back, concurrent multi-thread streams, no throbber/text bleed.

@@ -337,6 +337,7 @@ export async function searchThreads(
         topics: [],
         response_holder_id: null,
         response_claim_expires_at: null,
+        stream_started_at: null,
         last_error: null,
         created_at: row.updated_at,
         updated_at: row.updated_at,

@@ -3688,6 +3688,23 @@ alter table public.threads
   add column if not exists response_holder_id text,
   add column if not exists response_claim_expires_at timestamptz;
 
+-- Server-side "a streaming turn is running against this thread" stamp.
+-- Written by the venice /stream orchestrator at turn entry (before the
+-- priming stage runs) and cleared in its terminal finally. Exists
+-- because the streaming assistant row - the other in-flight signal -
+-- is only created at the first content delta, which leaves the whole
+-- priming window (and any long reasoning-only stretch) invisible to
+-- the reconnect probe: a page refresh during that window found nothing
+-- to re-attach to and fell through to the "response was interrupted"
+-- retry banners even though the turn was still running server-side.
+-- The reconnect probe (resolveStreamContext in
+-- supabase/functions/venice/index.ts) treats a fresh stamp as
+-- in-flight when no streaming row exists yet; the browser reads it
+-- through the regular threads realtime subscription, same as the
+-- response-claim columns above.
+alter table public.threads
+  add column if not exists stream_started_at timestamptz;
+
 -- Claim-lookup index. Partial on `response_holder_id is not null` so
 -- the index only carries live claims - the steady state has 0 rows
 -- claimed and a partial index stays tiny under that. Same shape as

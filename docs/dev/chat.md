@@ -518,10 +518,9 @@ A chat turn goes:
   on a delete failure the rows survived server-side, so the handler
   clears the greying and surfaces the error instead of pruning.
 - **Reconnect POLLS the DB row; it does NOT resume the live stream.**
-  When `selectThread` finds the transcript tail is a
-  `status='streaming'` assistant row and no local slot is producing it
-  (fresh tab, hard reload, a backgrounded mobile PWA that got
-  discarded), `reconnectInflightTurn` (`Chat.svelte`) re-attaches by
+  When `selectThread` finds an in-flight turn no local slot is
+  producing (fresh tab, hard reload, a backgrounded mobile PWA that
+  got discarded), `reconnectInflightTurn` (`Chat.svelte`) re-attaches by
   POLLING `/stream reconnectOnly` via `awaitStreamSettled`
   (`venice.ts`) until the probe reports `noStreamInFlight`, showing a
   "Reconnecting" throbber (the `ExchangeSlot.reconnecting` flag) over
@@ -536,6 +535,24 @@ A chat turn goes:
   that already fired. The DB row's terminal status is the canonical
   "done" signal; the server-side stale-row janitor guarantees the poll
   always terminates even for a function that died ungracefully.
+- **Two in-flight signals arm the reconnect, not one.** The
+  `status='streaming'` assistant row only exists from the first
+  content delta, so it cannot represent the priming stage
+  (samskara / intuition / context recall) or a long reasoning-only
+  stretch. The orchestrator therefore stamps
+  `threads.stream_started_at` at turn entry (before priming) and
+  clears it at terminal; `selectThread` arms the reconnect when
+  EITHER a streaming row exists OR the stamp is fresh
+  (`streamLikelyInFlight` in `src/lib/ui/stream-inflight.ts`, twin of
+  the staleness rule in `resolveStreamContext`). The same freshness
+  verdict suppresses the orphan-draft check and the
+  `incompleteTurnTail` cut-off banner - before the stamp existed, a
+  refresh during the pregame found no streaming row, concluded the
+  turn was dead, and offered "response was interrupted" retry banners
+  for a turn still running under `waitUntil`. The `/stream` probe
+  honors the stamp too (returning an in-flight envelope with
+  `assistantRowId: null`), which also extends the duplicate-send
+  guard across the priming window.
 - **A live stream that drops mid-turn hands off to the same poll.**
   The case the `selectThread` reconnect could NOT cover: a tab whose JS
   context SURVIVED a background cycle (or hit a transient network blip)

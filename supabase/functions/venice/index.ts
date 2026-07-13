@@ -1049,7 +1049,7 @@ async function resolveStreamContext(
   // someone else's thread.
   const { data: thread, error: threadErr } = await admin
     .from('threads')
-    .select('user_id')
+    .select('user_id, stream_started_at')
     .eq('id', threadId)
     .maybeSingle();
   if (threadErr) {
@@ -1139,6 +1139,44 @@ async function resolveStreamContext(
         assistantRowId: row.id,
         completedSoFar: row.content ?? '',
       };
+    }
+  }
+
+  // Pre-row in-flight signal. The orchestrator stamps
+  // threads.stream_started_at at turn entry - BEFORE the priming stage
+  // and before any assistant row exists (the streaming row is only
+  // created at the first content delta). Without this branch a probe
+  // that lands during priming, or during a long reasoning-only stretch,
+  // reports noStreamInFlight and a reconnecting browser gives up on a
+  // turn that is still running. Same staleness posture as the row
+  // janitor above: a stamp well past the wall-deadline ceiling means
+  // the function died before its finally could clear it, so treat it
+  // as quiet and best-effort clear the residue (otherwise fresh sends
+  // would keep short-circuiting into a channel no publisher feeds).
+  if (!inFlight) {
+    const startedAtRaw = (thread as { stream_started_at?: string | null })
+      .stream_started_at;
+    if (typeof startedAtRaw === 'string') {
+      const STALE_THRESHOLD_MS = 2 * 380_000; // mirrors the row janitor
+      const ageMs = Date.now() - new Date(startedAtRaw).getTime();
+      // A slightly-negative age (clock skew between isolates) still
+      // counts as fresh; only a stamp past the ceiling is residue.
+      if (Number.isFinite(ageMs) && ageMs <= STALE_THRESHOLD_MS) {
+        inFlight = {
+          channelName,
+          assistantRowId: null,
+          completedSoFar: '',
+        };
+      } else {
+        try {
+          await admin
+            .from('threads')
+            .update({ stream_started_at: null })
+            .eq('id', threadId);
+        } catch {
+          // Best-effort - the next probe retries the same sweep.
+        }
+      }
     }
   }
 

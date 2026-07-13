@@ -212,6 +212,7 @@
     isCutOffPartialText,
   } from '$lib/ui/incomplete-turn';
   import { selectRecoveryBanner } from '$lib/ui/recovery-banner';
+  import { streamLikelyInFlight } from '$lib/ui/stream-inflight';
   import {
     describeError,
     formatRateLimitMessage,
@@ -2470,26 +2471,44 @@
       // Slots persist across thread switches in Phase 2, so a peek
       // is enough to detect "we're the device producing this turn."
       interruptedDraft = null;
+      // Two in-flight signals: the streaming assistant row (created at
+      // the first content delta) and the server-side stream_started_at
+      // stamp, which the orchestrator writes at turn entry so the
+      // priming window BEFORE any row exists is also visible. Without
+      // the stamp, a refresh during the pre-response "pregame"
+      // (predicting / recalling) found nothing to reconnect to and
+      // fell through to the interrupted-draft / cut-off retry banners
+      // for a turn that was still running server-side.
+      const serverTurnInFlight =
+        streamingTail != null ||
+        streamLikelyInFlight(findThread(id)?.stream_started_at, Date.now());
       const lastMsg = fetched.at(-1);
-      if (lastMsg?.role === 'user' && !exchangeStore.peek(id)?.sending) {
+      if (
+        lastMsg?.role === 'user' &&
+        !serverTurnInFlight &&
+        !exchangeStore.peek(id)?.sending
+      ) {
         const draft = await loadDraft(id);
         if (draft && draft.userMessageId === lastMsg.id && activeThreadId === id) {
           interruptedDraft = draft;
         }
       }
-      // Join an in-flight assistant turn if the snapshot's tail
-      // carries a streaming row AND this device isn't the one
-      // producing it. Two paths: same-device reload (slot from prior
-      // tab lifetime is gone), or cross-device ape mode (peer is
-      // streaming). The streaming row was already pulled out of the
-      // rendered transcript above so the live bubble can own its
-      // visual slot without a duplicate static row underneath.
+      // Join an in-flight assistant turn if either signal says one is
+      // running AND this device isn't the one producing it. Three
+      // paths: same-device reload (slot from prior tab lifetime is
+      // gone), cross-device ape mode (peer is streaming), and a reload
+      // that landed during the pre-row priming window (stamp only, no
+      // streaming row yet - the reconnect poll picks the row up once
+      // the first content delta creates it). The streaming row, when
+      // present, was already pulled out of the rendered transcript
+      // above so the live bubble can own its visual slot without a
+      // duplicate static row underneath.
       //
       // Fire-and-forget: the reconnect drives its own slot lifecycle
       // (sending flag, throttled buffers, terminal handling). A
       // failure surfaces on the slot's streamingError banner.
-      if (streamingTail && !exchangeStore.peek(id)?.sending) {
-        void reconnectInflightTurn(id, streamingTail.content);
+      if (serverTurnInFlight && !exchangeStore.peek(id)?.sending) {
+        void reconnectInflightTurn(id, streamingTail?.content ?? '');
       }
       // Land on the latest exchange. The auto-scroll effect is gated on
       // an active completion (so a realtime echo can't hijack the view
@@ -2533,8 +2552,14 @@
   let claimNowTick = $state(0);
   $effect(() => {
     const t = currentThread;
-    if (!t?.response_holder_id) return;
-    if (t.response_holder_id === holderId) return;
+    // Armed for a foreign-held claim (the respondingElsewhere TTL
+    // check) and for a live server-side in-flight stamp (the
+    // incompleteTurnTail suppression below) - both are time-based
+    // verdicts that must eventually flip even if no realtime event
+    // ever arrives to re-run their deriveds.
+    const foreignClaim =
+      t?.response_holder_id != null && t.response_holder_id !== holderId;
+    if (!foreignClaim && !t?.stream_started_at) return;
     const id = window.setInterval(() => {
       claimNowTick = claimNowTick + 1;
     }, 5000);
@@ -2878,6 +2903,7 @@
       topics: [],
       response_holder_id: null,
       response_claim_expires_at: null,
+      stream_started_at: null,
       last_error: null,
       created_at: now,
       updated_at: now,
@@ -4423,6 +4449,17 @@
       if (threadId === activeThreadId) {
         const fresh = await supabase.listMessages(threadId);
         messages = mergeMessagesById(fresh, slot.persistedRows);
+        // The turn settled past the user row, so the IDB streaming
+        // draft from the pre-reload session is no longer an orphan -
+        // clearing it here keeps the "previous response was
+        // interrupted" banner from resurfacing under the committed
+        // reply. A tail still on the user row (the turn errored before
+        // persisting anything) keeps the draft: it remains the fuel
+        // for a retry.
+        if (fresh.at(-1)?.role !== 'user') {
+          if (interruptedDraft?.threadId === threadId) interruptedDraft = null;
+          void deleteDraft(threadId).catch(() => {});
+        }
       }
     } catch (err) {
       // awaitStreamSettled resolves (never rejects) on abort or the
@@ -5593,6 +5630,18 @@
     if (activeSlot?.sending) return null;
     if (activeSlot?.streamingError) return null;
     if (respondingElsewhere) return null;
+    // A live server-side in-flight stamp means the turn is still
+    // running under the edge function's waitUntil even though no local
+    // slot is producing it - the reload-during-priming case, plus the
+    // await window in selectThread before reconnectInflightTurn flips
+    // `sending` on. The tail only LOOKS incomplete; the reply arrives
+    // via the reconnect poll. Reads claimNowTick so the staleness
+    // verdict re-runs even when no realtime clear ever lands (the
+    // function died before its finally).
+    void claimNowTick;
+    if (streamLikelyInFlight(currentThread?.stream_started_at, Date.now())) {
+      return null;
+    }
     return classifyIncompleteTurnTail(messages);
   });
 
