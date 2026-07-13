@@ -84,7 +84,9 @@ docs imported via `import.meta.glob`.
 - **Push to `main`** — triggers Tests → Deploy. The deploy
   runs sync-supabase → build → publish; sync-supabase now also
   deploys the `venice` edge function (a `supabase functions
-  deploy` step), so functions ship on every deploy.
+  deploy` step), so functions ship on every deploy. The deployed
+  set is `venice`, `mcp-oauth-callback`, `recipe-image-gc`,
+  `attachment-gc`, and `wiki-record-file-gc`.
 
 ## Data model
 

@@ -1,6 +1,6 @@
 # Edge functions
 
-The Deno half of nak. Three functions today:
+The Deno half of nak. Five functions today:
 
 - **`venice/`** - the main chat-turn runtime. Owns the streaming
   round chain, tool dispatch, output guards, last_error writes,
@@ -9,6 +9,12 @@ The Deno half of nak. Three functions today:
   backfill (the `/embed-backfill` route). See
   `../docs/dev/in-progress/venice-edge-functions/` for the
   feature-level architecture notes.
+- **`mcp-oauth-callback/`** - public OAuth redirect shim for
+  hosted MCP integrations. Fastmail and other OAuth providers
+  redirect the browser here; the function validates the app
+  return URL and 302s back to the PWA with the callback query
+  params. Kept out of `venice/` because `venice` must keep
+  `verify_jwt` enabled.
 - **`attachment-gc/`** - I/O-free orchestration for the daily
   attachment-bucket orphan GC sweep, kicked by `pg_cron`.
   Reclaims objects whose `message_attachments` row is gone (a
@@ -17,6 +23,8 @@ The Deno half of nak. Three functions today:
   recipe-image GC sweep, kicked by `pg_cron`. Replaces the old
   AFTER DELETE orphan trigger; covered in
   `../docs/dev/in-progress/recipe-images-storage-migration.md`.
+- **`wiki-record-file-gc/`** - I/O-free orchestration for wiki
+  record file GC, kicked by `pg_cron`.
 
 ## When does work belong here vs in the browser?
 

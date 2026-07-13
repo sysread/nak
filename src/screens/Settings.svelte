@@ -1131,7 +1131,7 @@
       mcpInfo = discovered.supportsDcr
         ? 'Server supports auto-registration. Redirecting to authorization…'
         : 'Server requires manual client registration. Redirecting…';
-      const redirectUri = mcpRedirectUri();
+      const redirectUri = mcpRedirectUri(app.supabase.supabaseUrl);
       const reg = await app.supabase.invokeMcpRegister(
         serverUrl,
         redirectUri,
@@ -1177,7 +1177,7 @@
     }
     mcpBusy = true;
     try {
-      const redirectUri = mcpRedirectUri();
+      const redirectUri = mcpRedirectUri(app.supabase.supabaseUrl);
       const reg = await app.supabase.invokeMcpRegister(
         integ.serverUrl,
         redirectUri,

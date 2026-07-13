@@ -21,19 +21,32 @@ import type { Toolbox, ToolDef } from '../tools';
 import { serverSideTool } from '../tools/server_side';
 
 /**
- * The OAuth redirect URI nak registers with each MCP server. Just the
- * origin root - OAuth 2.1 forbids fragments (`#`) in redirect URIs and
- * Fastmail explicitly rejects them at DCR time. The OAuth provider
- * redirects back to `origin/?code=...&state=...`, and the routing layer
- * (../routing.svelte.ts) detects the `code` + `state` query params on
- * boot, stashes them in sessionStorage, and cleans the URL so the app
- * boots clean. HTTPS is required by the MCP authorization spec. Uses
- * the full path (origin + pathname) so redirects land on the PWA
- * itself, not the origin root — GitHub Pages serves from a subdirectory
- * and redirecting to just the origin would 404.
+ * The app URL nak returns to after an OAuth redirect. OAuth 2.1 forbids
+ * fragments (`#`) in redirect URIs, so callbacks use query params and
+ * routing.svelte.ts stashes `code` + `state` in sessionStorage on boot.
  */
-export function mcpRedirectUri(): string {
+export function mcpAppReturnUri(): string {
   return window.location.origin + window.location.pathname;
+}
+
+/**
+ * Redirect URI registered with the MCP server. Local dev can use the
+ * app URL directly because loopback redirects are allowed and the dev
+ * server can receive them. Hosted PWAs cannot receive arbitrary
+ * localhost callbacks, and Fastmail rejects GitHub Pages as a claimed
+ * HTTPS redirect, so production goes through a tiny public Supabase
+ * callback function that immediately 302s back to the app URL.
+ */
+export function mcpRedirectUri(supabaseUrl: string): string {
+  const appReturn = mcpAppReturnUri();
+  const host = window.location.hostname;
+  if (host === 'localhost' || host === '127.0.0.1' || host === '[::1]') {
+    return appReturn;
+  }
+  const base = supabaseUrl.replace(/\/+$/, '');
+  const callback = new URL(`${base}/functions/v1/mcp-oauth-callback`);
+  callback.searchParams.set('return_url', appReturn);
+  return callback.toString();
 }
 
 /** Human-readable label for an integration's auth status. */
@@ -84,9 +97,9 @@ export function mcpToolWireName(
   * `authorized` integration becomes one gated toolbox named
   * `mcp:<label>` (the label is a per-user unique slug); every cached
   * tool becomes a schema-only ToolDef whose wire name is
-  * `mcp:<integrationId>:<serverToolName>`. The toolbox toggle gates
-  * on the label, dispatch resolves the immutable uuid — so renaming
-  * a label doesn't break existing `toolboxes_enabled` entries.
+ * `mcp:<integrationId>:<serverToolName>`. The toolbox toggle gates
+ * on the label, dispatch resolves the immutable uuid - so renaming
+ * a label doesn't break existing `toolboxes_enabled` entries.
  *
  * `pending` / `revoked` integrations are dropped: only `authorized`
  * integrations expose tools to the model. The chat-loop passes the
