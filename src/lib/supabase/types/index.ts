@@ -11,6 +11,7 @@ export * from './chat';
 export * from './memories';
 export * from './wiki';
 export * from './cookbook';
+export * from './grocery';
 export * from './documents';
 export * from './settings';
 export * from './samskara';

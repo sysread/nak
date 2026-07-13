@@ -11,6 +11,11 @@
 // only ever delete an object whose row we definitively removed. Repeat
 // until a batch comes back short (drained), the row cap, or the time
 // budget; the next cron tick resumes. Idempotent throughout.
+//
+// The loop itself is table-agnostic - every table/bucket specific
+// lives in the injected deps - so grocery-image-gc/index.ts reuses
+// this driver too, with the grocery orphan RPCs and bucket injected.
+// If you change the drain semantics here, both sweeps change.
 
 export interface OrphanRow {
   id: string;

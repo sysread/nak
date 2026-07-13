@@ -1,6 +1,6 @@
 # Edge functions
 
-The Deno half of nak. Four functions today:
+The Deno half of nak. Five functions today:
 
 - **`venice/`** - the main chat-turn runtime. Owns the streaming
   round chain, tool dispatch, output guards, last_error writes,
@@ -19,6 +19,11 @@ The Deno half of nak. Four functions today:
   `../docs/dev/in-progress/recipe-images-storage-migration.md`.
 - **`wiki-record-file-gc/`** - I/O-free orchestration for wiki
   record file GC, kicked by `pg_cron`.
+- **`grocery-image-gc/`** - orphan GC for grocery-item product
+  photos, kicked by `pg_cron`. Glue only: it reuses the
+  recipe sweep's table-agnostic drain driver
+  (`_shared/recipe-image-gc.ts`) with grocery RPCs + bucket
+  injected as deps.
 
 ## When does work belong here vs in the browser?
 
@@ -102,8 +107,11 @@ supabase/functions/
 │   └── agents/                - one file per ported recall agent + headless tool loop
 ├── attachment-gc/
 │   └── index.ts               - cron-driven entry point
-└── recipe-image-gc/
-    └── index.ts               - cron-driven entry point
+├── recipe-image-gc/
+│   └── index.ts               - cron-driven entry point
+└── grocery-image-gc/
+    └── index.ts               - cron-driven entry point (reuses the
+                                 recipe-image-gc drain driver)
 ```
 
 ## Testing

@@ -1,9 +1,15 @@
 # Grocery List Implementation Plan
 
-Status: PROPOSED - not started. Read
-[`../cookbook.md`](../cookbook.md) first; this plan assumes its data
-model, tool/relay vocabulary, and the file-storage conventions in
-[`../file-storage.md`](../file-storage.md).
+Status: LANDED - kept for the design rationale. The living
+reference is [`../grocery-list.md`](../grocery-list.md); where the
+implementation diverged from this plan, that doc wins. Notable
+divergences: all four milestones shipped in one change rather than
+separately, and the grocery-image GC reuses the recipe sweep's
+table-agnostic drain driver instead of cloning it.
+
+Read [`../cookbook.md`](../cookbook.md) first; this plan assumes its
+data model, tool/relay vocabulary, and the file-storage conventions
+in [`../file-storage.md`](../file-storage.md).
 
 ## SYNOPSIS
 

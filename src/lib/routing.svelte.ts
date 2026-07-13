@@ -3,7 +3,7 @@
  * state that survives a refresh lives in the query string:
  *
  *   cid     = active thread id
- *   drawer  = 'chats' | 'recipes' | 'memories' | 'wiki'  (sidebar tab; absent = 'chats')
+ *   drawer  = 'chats' | 'groceries' | 'recipes' | 'memories' | 'wiki' | ...  (sidebar tab; absent = 'chats')
  *   modal   = 'settings' | 'help' | 'samskara' | 'intuition' | 'bias-profile' | 'recall'  (utility overlays)
  *   recipe  = recipe id; selecting one switches the main panel to the recipe detail
  *   doc     = docs/user/ path when modal=help
@@ -62,6 +62,7 @@ export type Modal =
   | 'recall';
 export type DrawerTab =
   | 'chats'
+  | 'groceries'
   | 'recipes'
   | 'memories'
   | 'wiki'
@@ -136,6 +137,7 @@ const MODAL_VALUES: readonly Modal[] = [
 ];
 const DRAWER_VALUES: readonly DrawerTab[] = [
   'chats',
+  'groceries',
   'recipes',
   'memories',
   'wiki',

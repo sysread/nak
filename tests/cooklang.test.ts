@@ -214,6 +214,29 @@ describe('recipeToHtml', () => {
     expect(html).toContain('&lt;script&gt;');
     expect(html).not.toContain('<script>');
   });
+
+  it('omits grocery checkboxes by default', () => {
+    const html = recipeToHtml(parseCooklang('Stir in @flour{200%g}.'));
+    expect(html).not.toContain('cook-buy');
+  });
+
+  it('prefixes ingredient rows with a data-ing checkbox when asked', () => {
+    const html = recipeToHtml(parseCooklang('Stir in @flour{200%g}.'), {
+      ingredientCheckboxes: true,
+    });
+    expect(html).toContain('<input type="checkbox" class="cook-buy" data-ing="flour"');
+    // Checkboxes are an ingredient-list affordance only - never in
+    // the instruction steps' inline references.
+    const stepsHtml = html.slice(html.indexOf('cook-steps'));
+    expect(stepsHtml).not.toContain('cook-buy');
+  });
+
+  it('escapes the ingredient name in data-ing', () => {
+    const html = recipeToHtml(parseCooklang('Add @"fancy" cheese{}.'), {
+      ingredientCheckboxes: true,
+    });
+    expect(html).not.toContain('data-ing=""fancy"');
+  });
 });
 
 describe('recipeToPlainText', () => {

@@ -1866,6 +1866,22 @@ h1 {
   width: 100%;
 }
 
+/* Groceries drawer tab. The list styles itself locally
+   (GroceryList.svelte); this rule is the desktop main-panel hint that
+   points at the sidebar - the grocery list has no per-item panel to
+   route there. */
+.grocery-panel-hint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 2rem;
+  text-align: center;
+}
+.grocery-panel-hint p {
+  max-width: 28rem;
+}
+
 .sidebar-search-input {
   width: 100%;
   padding: 0.4rem 0.6rem;

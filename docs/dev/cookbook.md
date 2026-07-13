@@ -8,10 +8,14 @@ follows the Settings modal pattern.
 ## Role in the app
 
 The cookbook is a staging area for recipes the user wants to capture,
-tidy, and transfer elsewhere (most commonly AnyList). Intentionally
-narrow: no shopping-list logic, no meal planning, no servings
-scaling. The model can read, write, and edit recipes via tools; the
-user can do the same via the Cookbook modal.
+tidy, and cook from. Intentionally narrow on recipe mechanics - no
+meal planning, no servings scaling - but it feeds the in-app
+grocery list: bookmarked (upcoming / favorite) recipes grow
+per-ingredient checkboxes in the detail pane that push items onto
+the Groceries drawer tab (see
+[`./grocery-list.md`](./grocery-list.md)). The model can read,
+write, and edit recipes via tools; the user can do the same via the
+Cookbook modal.
 
 Storage layout follows `memories` deliberately — recipes are
 user-owned notes that the LLM can also author, same row-level
@@ -398,6 +402,14 @@ keystrokes; the LLM tool path keeps using `listRecipes`.
 - **Memory** (`./memory.md`) — scope contrast. A memory is "something
   about the user"; a recipe is "an item the user owns". Share the
   RLS posture and the tool-registry pattern; don't share data.
+- **Grocery list** (`./grocery-list.md`) — the ingredient-checkbox
+  bridge: `recipeToHtml`'s `ingredientCheckboxes` option, the
+  detail pane's delegated handler + checked-state sync, and the
+  `clear_grocery_items_on_recipe_change` trigger, which deletes a
+  recipe's grocery items whenever `recipes.cooklang` changes. Any
+  new write path that touches `cooklang` inherits that side effect
+  by construction; a write path that changes ingredients WITHOUT
+  touching `cooklang` would silently skip it (none exists today).
 - **Offline cache** (`./offline-cache.md`) — a recipe's `favorite` or
   `upcoming` flag is what saves it offline: the offline-sync reconcile
   mirrors the union of both buckets into IndexedDB. The Cookbook

@@ -1,0 +1,219 @@
+/**
+ * Pure UI-behavior primitives for the grocery list: the drawer tab's
+ * section grouping, quantity labels, add-input suggestion decisions,
+ * the acquired-history disclosure copy, the drag-reorder next-state
+ * computation, and the recipe-bridge helpers the Cookbook detail
+ * pane's ingredient checkboxes share with the list (name
+ * normalization, checkbox-state mapping, checkbox-to-item payload).
+ *
+ * No Svelte imports on purpose - everything here is framework-
+ * agnostic and unit-tested at tests/grocery-list.test.ts. The
+ * composition + DOM glue lives in
+ * src/components/GroceryList.svelte and the checkbox delegation in
+ * src/screens/Cookbook.svelte.
+ */
+import type { Ingredient } from '../cooklang';
+import type { GroceryItemView, GrocerySection } from '../supabase';
+
+/**
+ * Debounce for the add-to-list suggestion search. Matches the sibling
+ * sidebars' SEARCH_DEBOUNCE_MS - long enough to skip intermediate
+ * keystrokes, short enough to feel immediate.
+ */
+export const GROCERY_SEARCH_DEBOUNCE_MS = 200;
+
+/** Suggestion dropdown cap - a phone-height list, not a result page. */
+export const GROCERY_SUGGESTION_LIMIT = 8;
+
+/**
+ * Acquired-history page size. The history grows one row per item per
+ * shopping trip forever, so it is always windowed; a page covers a
+ * typical trip or two.
+ */
+export const ACQUIRED_PAGE_SIZE = 30;
+
+/**
+ * Sentinel `<select>` value for the permanent "Other" pseudo-section
+ * (section_id = null). An empty string rather than null because HTML
+ * select option values are always strings.
+ */
+export const OTHER_SECTION_VALUE = '';
+
+/** Display name of the null-section pseudo-bucket. */
+export const OTHER_SECTION_LABEL = 'Other';
+
+/**
+ * Dedup/equality key for item names: case-insensitive, trimmed. Used
+ * everywhere two names are compared (suggestion dedup, the recipe
+ * checkbox state sync, the create-vs-reuse decision) so "Eggs " and
+ * "eggs" are one item.
+ */
+export function normalizeGroceryName(name: string): string {
+  return name.trim().toLowerCase();
+}
+
+/** One rendered section group: a header plus its items. */
+export interface GrocerySectionGroup {
+  /** Null for the "Other" pseudo-section. */
+  id: string | null;
+  name: string;
+  items: GroceryItemView[];
+}
+
+/**
+ * Group the needed items by section for rendering: user's section
+ * order, empty sections hidden, and the null-section "Other" bucket
+ * pinned last. Items keep their incoming (recency) order within a
+ * group. Items pointing at a section id that no longer exists (a
+ * mid-refresh delete) fall back to Other rather than vanishing.
+ */
+export function groupItemsBySection(
+  sections: readonly GrocerySection[],
+  items: readonly GroceryItemView[]
+): GrocerySectionGroup[] {
+  const byId = new Map<string, GroceryItemView[]>();
+  const other: GroceryItemView[] = [];
+  const known = new Set(sections.map((s) => s.id));
+  for (const item of items) {
+    if (item.section_id !== null && known.has(item.section_id)) {
+      const list = byId.get(item.section_id);
+      if (list) list.push(item);
+      else byId.set(item.section_id, [item]);
+    } else {
+      other.push(item);
+    }
+  }
+  const groups: GrocerySectionGroup[] = [];
+  for (const s of sections) {
+    const list = byId.get(s.id);
+    if (list && list.length > 0) {
+      groups.push({ id: s.id, name: s.name, items: list });
+    }
+  }
+  if (other.length > 0) {
+    groups.push({ id: null, name: OTHER_SECTION_LABEL, items: other });
+  }
+  return groups;
+}
+
+/**
+ * Compact quantity string for an item row: "2 lb", "1/2", "loaf", or
+ * null when the item carries neither a count nor a unit (render
+ * nothing rather than an empty chip).
+ */
+export function itemQuantityLabel(item: {
+  count: string | null;
+  unit: string | null;
+}): string | null {
+  const parts = [item.count, item.unit]
+    .map((p) => p?.trim() ?? '')
+    .filter((p) => p.length > 0);
+  return parts.length > 0 ? parts.join(' ') : null;
+}
+
+/**
+ * Disclosure-header copy for the collapsed acquired-history section.
+ * `hasMore` marks the count as a lower bound ("30+") because only a
+ * window of the history is loaded.
+ */
+export function acquiredHeaderLabel(count: number, hasMore: boolean): string {
+  const n = hasMore ? `${count}+` : `${count}`;
+  return `Acquired (${n})`;
+}
+
+/**
+ * Whether the add-input should offer a "create new item" action for
+ * the typed text: non-empty, and not a duplicate (by normalized name)
+ * of a suggestion (which would reuse its row) or of an item already
+ * on the needed list (which would double it up).
+ */
+export function canCreateGroceryItem(
+  query: string,
+  suggestions: readonly GroceryItemView[],
+  needed: readonly GroceryItemView[]
+): boolean {
+  const key = normalizeGroceryName(query);
+  if (key.length === 0) return false;
+  return ![...suggestions, ...needed].some(
+    (i) => normalizeGroceryName(i.name) === key
+  );
+}
+
+/**
+ * Next section-id order after dragging section `fromId` onto section
+ * `toId`: `fromId` is removed and re-inserted at `toId`'s position.
+ * Returns null for a no-op (same slot, unknown ids) so the caller can
+ * skip the reorder round trip.
+ */
+export function sectionOrderAfterDrag(
+  ids: readonly string[],
+  fromId: string,
+  toId: string
+): string[] | null {
+  if (fromId === toId) return null;
+  const from = ids.indexOf(fromId);
+  const to = ids.indexOf(toId);
+  if (from === -1 || to === -1) return null;
+  const next = [...ids];
+  next.splice(from, 1);
+  next.splice(to, 0, fromId);
+  return next;
+}
+
+// Recipe bridge ---------------------------------------------------------
+
+/**
+ * Map a recipe's parsed ingredients to their grocery-item rows (by
+ * normalized name) for the detail pane's checkbox sync. A checkbox is
+ * checked when its ingredient has a row - regardless of `needed`, so
+ * buying the item at the store doesn't visually re-open it on the
+ * recipe. Duplicate ingredient names collapse onto the same row, and
+ * unmatched rows (e.g. an item renamed after checking) are simply
+ * unmatched - they still belong to the recipe and still get wiped on
+ * a recipe edit.
+ */
+export function recipeCheckboxItemIds(
+  ingredients: readonly Ingredient[],
+  recipeItems: readonly { id: string; name: string }[]
+): Map<string, string> {
+  const byName = new Map<string, string>();
+  // First row wins on a name collision; rows are recipe-scoped so
+  // collisions only happen via manual edits.
+  for (const item of recipeItems) {
+    const key = normalizeGroceryName(item.name);
+    if (!byName.has(key)) byName.set(key, item.id);
+  }
+  const out = new Map<string, string>();
+  for (const ing of ingredients) {
+    const key = normalizeGroceryName(ing.name);
+    const id = byName.get(key);
+    if (id !== undefined) out.set(key, id);
+  }
+  return out;
+}
+
+/**
+ * Build the createGroceryItem payload for a checked recipe
+ * ingredient: name and cooklang quantity/unit verbatim (free-form
+ * text by design), a note naming the source recipe, and the recipe
+ * link that scopes the row to the invalidation trigger. Section is
+ * left null (Other) - the shopper files it later if they care.
+ */
+export function groceryItemFromIngredient(
+  ingredient: Ingredient,
+  recipe: { id: string; title: string }
+): {
+  name: string;
+  count: string | null;
+  unit: string | null;
+  note: string;
+  recipe_id: string;
+} {
+  return {
+    name: ingredient.name,
+    count: ingredient.qty,
+    unit: ingredient.unit,
+    note: `For ${recipe.title}`,
+    recipe_id: recipe.id,
+  };
+}
