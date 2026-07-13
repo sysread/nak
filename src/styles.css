@@ -4618,11 +4618,17 @@ button.top-bar-pinned {
    surface levels (--bg pages, --bg-2 cards, --surface panels), so
    whichever fill an input gets, some host surface matches it - in
    light terminal, --surface (#f4f4f4) on a --bg (#ffffff) page is
-   near-invisible. Give every control the same crisp 1px --edge
-   outline the floating layers use (see --shadow-* in the token
-   section): the TUI box-drawing edge marks "type here" regardless of
-   what the control sits on. Focus states are unaffected - they
-   signal via box-shadow (--focus-ring), not border-color. */
+   near-invisible. Give every control a crisp 1px --muted outline:
+   the TUI box-drawing edge marks "type here" regardless of what the
+   control sits on. --muted rather than --edge because WCAG 2.1
+   SC 1.4.11 wants 3:1 for component boundaries and light terminal's
+   --edge (#b4b4b4) only reaches ~1.9:1 against --surface - a border
+   that is technically present but reads as nothing. --muted is
+   spec'd >= 4.5:1 on all three surfaces in both terminal themes,
+   and it is the same border the composer shell already wears, so
+   controls match the one input that was always visible. Focus
+   states are unaffected - they signal via box-shadow
+   (--focus-ring), not border-color. */
 :root[data-style='terminal'] input,
 :root[data-style='terminal'] textarea,
 :root[data-style='terminal'] select,
@@ -4630,12 +4636,12 @@ button.top-bar-pinned {
 :root[data-style='terminal'] .image-select-trigger,
 :root[data-style='terminal'] .topics-filter-trigger {
   background: var(--surface);
-  border-color: var(--edge);
+  border-color: var(--muted);
 }
 
-/* The edge rule above outranks component focus rules like
+/* The border rule above outranks component focus rules like
    .sidebar-search-input:focus-visible (0,2,1 vs 0,2,0), which would
-   pin the border to --edge while focused. Re-assert the accent
+   pin the border to --muted while focused. Re-assert the accent
    border-color for focused controls at higher specificity so the
    focus idiom (accent border, box-shadow halo where a component adds
    one) survives in terminal. This also extends the accent-on-focus
@@ -4647,7 +4653,7 @@ button.top-bar-pinned {
 
 /* TopicsFilter's active-filter state marks the trigger with an accent
    border (.topics-filter-trigger.active). That scoped rule ties the
-   edge rule above on specificity and would lose or win on bundling
+   border rule above on specificity and would lose or win on bundling
    order alone; re-assert it here so the active signal is not
    order-dependent. */
 :root[data-style='terminal'] .topics-filter-trigger.active {
