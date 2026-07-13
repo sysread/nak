@@ -1142,6 +1142,8 @@ async function resolveStreamContext(
     }
   }
 
+  const probeLog = createEdgeLogger(userId, 'stream');
+
   // Pre-row in-flight signal. The orchestrator stamps
   // threads.stream_started_at at turn entry - BEFORE the priming stage
   // and before any assistant row exists (the streaming row is only
@@ -1179,6 +1181,21 @@ async function resolveStreamContext(
       }
     }
   }
+
+  // Probe-verdict breadcrumb for the Logs drawer (source: stream).
+  // Fires on every /stream call - fresh sends and the reconnect
+  // poll's ~2.5s probes alike - so a refresh-during-pregame session
+  // can be reconstructed after the fact: what the probe saw
+  // (streaming row / stamp / neither) and what it answered. Debug
+  // tier: drawer-only, never mirrors to the console.
+  probeLog.debug(
+    `in-flight probe thread=${threadId}` +
+      ` streamingRow=${streamingRow ? (streamingRow as { id: string }).id : 'none'}` +
+      ` stamp=${
+        (thread as { stream_started_at?: string | null }).stream_started_at ?? 'null'
+      }` +
+      ` verdict=${inFlight ? (inFlight.assistantRowId ? 'in-flight(row)' : 'in-flight(pregame)') : 'quiet'}`,
+  );
 
   return { userId, admin, channelName, inFlight };
 }

@@ -64,6 +64,21 @@ export interface RecoveryBannerSources {
 }
 
 /**
+ * Diagnostic label naming which source produced a selected banner.
+ * Purely for the Logs-drawer breadcrumbs in Chat.svelte - the banner
+ * itself never renders this. Derives the source from the descriptor
+ * (variant + copy) rather than threading a field through
+ * RecoveryBanner, so the render contract stays untouched.
+ */
+export function recoveryBannerSource(
+  banner: RecoveryBanner | null,
+): 'none' | 'error' | 'interrupted-draft' | 'cut-off' {
+  if (!banner) return 'none';
+  if (banner.variant === 'error') return 'error';
+  return banner.text === INTERRUPTED_BANNER_TEXT ? 'interrupted-draft' : 'cut-off';
+}
+
+/**
  * Pick the single recovery banner to render, or null when the tail is
  * healthy. Precedence: error > interrupted-draft > cut-off. The caller
  * is responsible for gating each source (e.g. suppressing the recovery

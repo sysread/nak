@@ -390,6 +390,7 @@ export async function getStreamingResponse(
         .from('threads')
         .update({ stream_started_at: new Date().toISOString() })
         .eq('id', opts.threadId);
+      log.debug(`${runId} stream_started_at stamped (pregame visible to probes)`);
     } catch (err) {
       log.error(`${runId} failed to stamp stream_started_at:`, err);
     }
@@ -1053,6 +1054,7 @@ export async function getStreamingResponse(
         .from('threads')
         .update({ stream_started_at: null })
         .eq('id', opts.threadId);
+      log.debug(`${runId} stream_started_at cleared`);
     } catch (err) {
       log.error(`${runId} failed to clear stream_started_at:`, err);
     }

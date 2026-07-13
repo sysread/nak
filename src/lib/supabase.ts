@@ -387,6 +387,14 @@ export class SupabaseService {
     return threadsApi.listThreadsSince(this.client, opts);
   }
 
+  async getThreadStreamState(threadId: string): Promise<{
+    streamStartedAt: string | null;
+    responseHolderId: string | null;
+    responseClaimExpiresAt: string | null;
+  } | null> {
+    return threadsApi.getThreadStreamState(this.client, threadId);
+  }
+
   async searchThreads(opts: {
     query: string;
     queryEmbedding: number[] | null;

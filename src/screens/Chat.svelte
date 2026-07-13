@@ -211,7 +211,7 @@
     isReasoningOnlyStall,
     isCutOffPartialText,
   } from '$lib/ui/incomplete-turn';
-  import { selectRecoveryBanner } from '$lib/ui/recovery-banner';
+  import { selectRecoveryBanner, recoveryBannerSource } from '$lib/ui/recovery-banner';
   import { streamLikelyInFlight } from '$lib/ui/stream-inflight';
   import {
     describeError,
@@ -2395,7 +2395,23 @@
     const t = findThread(id);
     if (t?.isDraft) return;
     try {
+      // Point-read the thread's in-flight streaming state in parallel
+      // with the message list. On a cold page load the route effect
+      // opens the URL's thread BEFORE the sidebar's thread buckets have
+      // fetched, so `findThread(id)` is empty and the local copy of
+      // stream_started_at doesn't exist yet - which made the
+      // refresh-during-pregame reconnect silently fail to arm on
+      // exactly the reload it was built for. The DB row is the
+      // authority; the bucket copy is only a fallback when the point
+      // read fails.
+      const streamStatePromise = app.supabase
+        .getThreadStreamState(id)
+        .catch((err: unknown) => {
+          log.warn('thread stream-state point read failed', err);
+          return null;
+        });
       const fetched = await app.supabase.listMessages(id);
+      const streamState = await streamStatePromise;
       // The user may have hopped threads while we were awaiting - guard
       // against a late response stomping newer state.
       if (activeThreadId !== id) return;
@@ -2479,10 +2495,33 @@
       // (predicting / recalling) found nothing to reconnect to and
       // fell through to the interrupted-draft / cut-off retry banners
       // for a turn that was still running server-side.
+      const streamStartedAt =
+        streamState?.streamStartedAt ?? findThread(id)?.stream_started_at ?? null;
       const serverTurnInFlight =
         streamingTail != null ||
-        streamLikelyInFlight(findThread(id)?.stream_started_at, Date.now());
+        streamLikelyInFlight(streamStartedAt, Date.now());
+      // Mirror the authoritative stamp into the loaded bucket copy (a
+      // no-op when the buckets haven't fetched yet) so the
+      // incompleteTurnTail suppression, which reads currentThread,
+      // agrees with the decision made here.
+      if (streamState) {
+        patchThread(id, { stream_started_at: streamState.streamStartedAt });
+      }
       const lastMsg = fetched.at(-1);
+      // Diagnostics for the refresh-during-pregame recovery path: one
+      // debug line per thread open recording every signal the banner /
+      // reconnect decisions below read, so the Logs drawer shows WHY a
+      // retry banner or a reconnect happened (source: chat).
+      log.debug(
+        `thread-open signals thread=${id} tail=${lastMsg?.role ?? 'empty'}` +
+          ` streamingRow=${streamingTail != null}` +
+          ` stampDb=${streamState?.streamStartedAt ?? 'null'}` +
+          ` stampLocal=${findThread(id)?.stream_started_at ?? 'null'}` +
+          ` inFlight=${serverTurnInFlight}` +
+          ` claimHolder=${streamState?.responseHolderId ?? 'null'}` +
+          ` claimExpires=${streamState?.responseClaimExpiresAt ?? 'null'}` +
+          ` slotSending=${exchangeStore.peek(id)?.sending === true}`,
+      );
       if (
         lastMsg?.role === 'user' &&
         !serverTurnInFlight &&
@@ -2491,6 +2530,9 @@
         const draft = await loadDraft(id);
         if (draft && draft.userMessageId === lastMsg.id && activeThreadId === id) {
           interruptedDraft = draft;
+          log.debug(
+            `interrupted-draft banner armed thread=${id} userMessageId=${draft.userMessageId}`,
+          );
         }
       }
       // Join an in-flight assistant turn if either signal says one is
@@ -2508,6 +2550,9 @@
       // (sending flag, throttled buffers, terminal handling). A
       // failure surfaces on the slot's streamingError banner.
       if (serverTurnInFlight && !exchangeStore.peek(id)?.sending) {
+        log.debug(
+          `reconnect armed thread=${id} seed=${streamingTail ? 'streaming-row' : 'pregame-stamp'}`,
+        );
         void reconnectInflightTurn(id, streamingTail?.content ?? '');
       }
       // Land on the latest exchange. The auto-scroll effect is gated on
@@ -4449,6 +4494,10 @@
       if (threadId === activeThreadId) {
         const fresh = await supabase.listMessages(threadId);
         messages = mergeMessagesById(fresh, slot.persistedRows);
+        log.debug(
+          `reconnect settled thread=${threadId} tail=${fresh.at(-1)?.role ?? 'empty'}` +
+            ` tailStatus=${fresh.at(-1)?.status ?? 'none'} rows=${fresh.length}`,
+        );
         // The turn settled past the user row, so the IDB streaming
         // draft from the pre-reload session is no longer an orphan -
         // clearing it here keeps the "previous response was
@@ -5747,6 +5796,45 @@
         : null,
     }),
   );
+
+  // Recovery-banner diagnostics. One debug line whenever the rendered
+  // banner changes (including to none), attributing it to its source
+  // and snapshotting the gates that let it through - so the Logs
+  // drawer can answer "why is this banner showing" after the fact.
+  // The post-tick DOM census exists for a reported-but-not-yet-
+  // reproduced sighting of TWO banners overlapping: the template has a
+  // single render site fed by one selector, so more than one banner
+  // node should be impossible - if it ever happens, the warn line
+  // (with the nodes' texts) is the evidence that pins down where the
+  // second element comes from.
+  let lastBannerLogKey = '';
+  $effect(() => {
+    const b = recoveryBanner;
+    const source = recoveryBannerSource(b);
+    const key = `${activeThreadId}|${source}|${b?.text ?? ''}`;
+    if (key === lastBannerLogKey) return;
+    lastBannerLogKey = key;
+    log.debug(
+      `recovery banner -> ${source} thread=${activeThreadId}` +
+        ` sending=${activeSlot?.sending === true}` +
+        ` reconnecting=${activeSlot?.reconnecting === true}` +
+        ` respondingElsewhere=${respondingElsewhere}` +
+        ` stamp=${currentThread?.stream_started_at ?? 'null'}` +
+        ` lastError=${currentThread?.last_error != null}` +
+        ` tail=${messages.at(-1)?.role ?? 'empty'}/${messages.at(-1)?.status ?? 'none'}`,
+    );
+    void tick().then(() => {
+      const nodes = document.querySelectorAll('.msg-incomplete, .msg-error');
+      if (nodes.length > 1) {
+        log.warn(
+          `recovery banner DOM census found ${nodes.length} banner nodes: ` +
+            Array.from(nodes)
+              .map((n) => JSON.stringify(n.textContent?.trim().slice(0, 80) ?? ''))
+              .join(' | '),
+        );
+      }
+    });
+  });
 
   /**
    * Best-effort clear of `threads.last_error` when the user dismisses
