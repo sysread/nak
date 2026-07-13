@@ -9,6 +9,8 @@ const ALLOWED_HTTPS_RETURNS = [
   { host: 'sysread.github.io', pathPrefix: '/nak/' },
 ] as const;
 
+const DEFAULT_RETURN_URL = 'https://sysread.github.io/nak/';
+
 function isLoopbackReturn(url: URL): boolean {
   return url.protocol === 'http:' && (
     url.hostname === 'localhost' ||
@@ -41,7 +43,9 @@ Deno.serve((req) => {
   }
 
   const incoming = new URL(req.url);
-  const returnUrl = isAllowedReturnUrl(incoming.searchParams.get('return_url'));
+  const returnUrl = isAllowedReturnUrl(
+    incoming.searchParams.get('return_url') ?? DEFAULT_RETURN_URL,
+  );
   if (!returnUrl) {
     return new Response('invalid return_url', { status: 400 });
   }

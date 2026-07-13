@@ -35,7 +35,9 @@ export function mcpAppReturnUri(): string {
  * server can receive them. Hosted PWAs cannot receive arbitrary
  * localhost callbacks, and Fastmail rejects GitHub Pages as a claimed
  * HTTPS redirect, so production goes through a tiny public Supabase
- * callback function that immediately 302s back to the app URL.
+ * callback function that immediately 302s back to the production app
+ * URL. The registered redirect URI carries no query params because
+ * Fastmail rejects DCR redirect URIs with query strings.
  */
 export function mcpRedirectUri(supabaseUrl: string): string {
   const appReturn = mcpAppReturnUri();
@@ -44,9 +46,7 @@ export function mcpRedirectUri(supabaseUrl: string): string {
     return appReturn;
   }
   const base = supabaseUrl.replace(/\/+$/, '');
-  const callback = new URL(`${base}/functions/v1/mcp-oauth-callback`);
-  callback.searchParams.set('return_url', appReturn);
-  return callback.toString();
+  return `${base}/functions/v1/mcp-oauth-callback`;
 }
 
 /** Human-readable label for an integration's auth status. */
