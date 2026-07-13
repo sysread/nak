@@ -173,28 +173,76 @@ describe('engagementSummary', () => {
 describe('releaseStatus', () => {
   const now = Date.parse('2026-07-13T00:00:00Z');
   const daysAgo = (d: number) => new Date(now - d * 86_400_000).toISOString();
-  const none = { held: 0, contradicted: 0, notBorneOut: 0, notEngaged: 0, pending: 0 };
+  const none = {
+    held: 0,
+    contradicted: 0,
+    notBorneOut: 0,
+    notEngaged: 0,
+    pending: 0,
+    lastGenuineAt: null,
+  };
 
   it('reports established once any genuine verdict exists', () => {
-    expect(releaseStatus(daysAgo(100), { ...none, held: 1 }, now)).toMatch(/established/);
+    const s = releaseStatus(
+      daysAgo(100),
+      { ...none, held: 1, lastGenuineAt: daysAgo(10) },
+      1.0,
+      now
+    );
+    expect(s).toMatch(/established/);
+    expect(s).not.toMatch(/evictable/);
   });
 
-  it('defers release while a fire awaits judgment', () => {
-    expect(releaseStatus(daysAgo(100), { ...none, pending: 2 }, now)).toMatch(/awaiting judgment/);
+  it('marks a weakly-established row stale-evictable 90 days after its last genuine test', () => {
+    const s = releaseStatus(
+      daysAgo(200),
+      { ...none, held: 1, lastGenuineAt: daysAgo(120) },
+      1.0,
+      now
+    );
+    expect(s).toMatch(/weakly established/);
+    expect(s).toMatch(/120d ago/);
+    expect(s).toMatch(/evictable/);
+  });
+
+  it('never marks a well-evidenced row stale, no matter how idle', () => {
+    const s = releaseStatus(
+      daysAgo(400),
+      { ...none, held: 8, notBorneOut: 2, lastGenuineAt: daysAgo(300) },
+      6.5,
+      now
+    );
+    expect(s).not.toMatch(/evictable/);
+  });
+
+  it('defers the stale read while a fire awaits judgment', () => {
+    const s = releaseStatus(
+      daysAgo(200),
+      { ...none, held: 1, pending: 1, lastGenuineAt: daysAgo(120) },
+      1.0,
+      now
+    );
+    expect(s).not.toMatch(/evictable/);
+  });
+
+  it('defers release while an untested row awaits judgment', () => {
+    expect(releaseStatus(daysAgo(100), { ...none, pending: 2 }, 0, now)).toMatch(
+      /awaiting judgment/
+    );
   });
 
   it('marks a never-tested row past the window as probation-due', () => {
-    expect(releaseStatus(daysAgo(PROBATION_DAYS + 1), none, now)).toMatch(/past probation/);
+    expect(releaseStatus(daysAgo(PROBATION_DAYS + 1), none, 0, now)).toMatch(/past probation/);
   });
 
   it('marks a heavily-judged never-engaged row as evictable, with the countdown', () => {
-    const s = releaseStatus(daysAgo(20), { ...none, notEngaged: EVICT_MIN_JUDGED }, now);
+    const s = releaseStatus(daysAgo(20), { ...none, notEngaged: EVICT_MIN_JUDGED }, 0, now);
     expect(s).toMatch(/evictable/);
     expect(s).toMatch(/25d/);
   });
 
   it('shows a plain probation countdown for quiet young rows', () => {
-    const s = releaseStatus(daysAgo(5), { ...none, notEngaged: 2 }, now);
+    const s = releaseStatus(daysAgo(5), { ...none, notEngaged: 2 }, 0, now);
     expect(s).not.toMatch(/evictable/);
     expect(s).toMatch(/40d/);
   });

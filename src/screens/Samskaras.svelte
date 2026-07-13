@@ -230,7 +230,12 @@
                claims, cap-pressure eviction for fired-but-never-engaged
                ones). Mirrors the SQL release machinery's guards. -->
           <p class="samskara-release subtle">
-            {releaseStatus(selected.createdAt, verdictCounts, Date.now())}
+            {releaseStatus(
+              selected.createdAt,
+              verdictCounts,
+              selected.confirmCount + selected.disconfirmCount,
+              Date.now()
+            )}
           </p>
         {/if}
 

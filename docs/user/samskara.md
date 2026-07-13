@@ -24,7 +24,8 @@ on its own as later conversations contradict it, and eventually stops
 mattering. Instincts that never connect at all fade too: one that goes
 45 days without a single genuine engagement is quietly released, and
 when the corpus is full, a new instinct can displace one that has fired
-many times without ever actually mattering.
+many times without ever actually mattering - or one that proved itself
+only once, long ago, and hasn't genuinely engaged in months.
 
 You can see samskara from three places, by how specific the information
 is:
@@ -102,8 +103,9 @@ Browse, search, filter, and sort every instinct Nak has formed:
 Click any row to see its detail - confidence, health, how often it has
 fired, how often those fires genuinely engaged (the **engagement** stat),
 and a one-line **release status**: whether the instinct is established
-by real tests, still waiting on its first judgment, or counting down
-toward being released as never-relevant. Below that is where it came
+by real tests, weakly established but long idle (and so displaceable
+when a new instinct needs the room), still waiting on its first
+judgment, or counting down toward being released as never-relevant. Below that is where it came
 from. "Where it came from" lists the moments it
 was formed from, and - for an instinct built from recurring patterns
 across different conversations - the relations Nak noticed between them.
