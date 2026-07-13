@@ -77,7 +77,6 @@ jobs:
         run: |
           node scripts/bundle-research-docs.mjs
           supabase functions deploy venice --project-ref ${{ vars.SUPABASE_PROJECT_REF }}
-          supabase functions deploy mcp-oauth-callback --project-ref ${{ vars.SUPABASE_PROJECT_REF }}
           supabase functions deploy recipe-image-gc --project-ref ${{ vars.SUPABASE_PROJECT_REF }}
           supabase functions deploy attachment-gc --project-ref ${{ vars.SUPABASE_PROJECT_REF }}
           supabase functions deploy wiki-record-file-gc --project-ref ${{ vars.SUPABASE_PROJECT_REF }}

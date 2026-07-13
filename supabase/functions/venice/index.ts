@@ -1377,6 +1377,7 @@ interface McpRegisterBody {
   serverUrl?: string;
   label?: string;
   redirectUri?: string;
+  clientId?: string;
   scopes?: string[];
   integrationId?: string;
   discovered?: DiscoveredMetadata;
@@ -1406,7 +1407,7 @@ async function handleMcpRegister(req: Request): Promise<Response> {
     return json({ error: 'invalid JSON body' }, 400);
   }
   const mcpLog = createEdgeLogger(userId, 'mcp-register');
-  mcpLog.info(`register: serverUrl=${body.serverUrl} redirectUri=${body.redirectUri} label=${body.label} integrationId=${body.integrationId ?? 'none'}`);
+  mcpLog.info(`register: serverUrl=${body.serverUrl} redirectUri=${body.redirectUri} label=${body.label} integrationId=${body.integrationId ?? 'none'} clientId=${body.clientId ? 'provided' : 'none'}`);
   if (typeof body.serverUrl !== 'string' || body.serverUrl.length === 0) {
     return json({ error: 'body must include `serverUrl`' }, 400);
   }
@@ -1465,7 +1466,9 @@ async function handleMcpRegister(req: Request): Promise<Response> {
   //   1. `scope` from the 401's WWW-Authenticate header (exact MCP gate)
   //   2. `scopes_supported` from the RFC 9728 protected-resource metadata
   //   3. `scopes_supported` from the RFC 8414 auth-server metadata
-  // `offline_access` is skipped here — buildAuthzUrl prepends it.
+  // The Authorization URL uses the resolved scope exactly; Fastmail
+  // rejects `offline_access` alongside the MCP scope even though its
+  // protected-resource metadata advertises both.
   if (scopes.length === 0) {
     const primary = (() => {
       if (discovered.requiredScope) return discovered.requiredScope.split(' ').filter((s) => s.length > 0);
@@ -1499,8 +1502,11 @@ async function handleMcpRegister(req: Request): Promise<Response> {
   // row so future re-authorizations reuse it (the OAuth implicit
   // contract is: a server that minted a client_id for us accepts it
   // for the life of the grant).
-  let clientId: string | null = null;
-  if (discovered.supportsDcr) {
+  const manualClientId = typeof body.clientId === 'string' && body.clientId.trim().length > 0
+    ? body.clientId.trim()
+    : null;
+  let clientId: string | null = manualClientId;
+  if (!clientId && discovered.supportsDcr) {
     const asWithReg = discovered.authServers.find(
       (s) => typeof s.registration_endpoint === 'string' &&
         s.registration_endpoint.length > 0 &&
@@ -1521,6 +1527,10 @@ async function handleMcpRegister(req: Request): Promise<Response> {
       }
       return json({ error: (err as Error).message }, 502);
     }
+  } else if (clientId) {
+    mcpLog.info('DCR: skipped, using provided client_id');
+  } else {
+    return json({ error: 'server requires manual client registration; provide a client_id' }, 400);
   }
 
   // Authz URL needs a reachable auth server's authorization_endpoint.

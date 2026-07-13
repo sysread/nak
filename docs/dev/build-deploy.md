@@ -85,12 +85,8 @@ docs imported via `import.meta.glob`.
   runs sync-supabase → build → publish; sync-supabase now also
   deploys the `venice` edge function (a `supabase functions
   deploy` step), so functions ship on every deploy. The deployed
-  set is `venice`, `mcp-oauth-callback`, `recipe-image-gc`,
-  `attachment-gc`, and `wiki-record-file-gc`. The MCP callback
-  is a public OAuth shim that redirects back to the production
-  Pages app; the registered OAuth redirect URI intentionally has
-  no query string because Fastmail rejects query-bearing DCR
-  redirect URIs.
+  set is `venice`, `recipe-image-gc`, `attachment-gc`, and
+  `wiki-record-file-gc`.
 
 ## Data model
 

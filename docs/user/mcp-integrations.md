@@ -30,20 +30,23 @@ OAuth can be connected the same way.
 2. Enter a **label** (any name you want; shows in the settings
    list and the toolbox popover) and the **server URL** the
    provider gave you (e.g. `https://api.fastmail.com/mcp`).
-3. Click **Connect**. Nak fetches the server's auth metadata,
-   self-registers as an OAuth client (when the server supports
-   RFC 7591 Dynamic Client Registration - Fastmail does), and
-   opens the provider's consent screen in a full-page redirect.
-4. Authorize on the provider's site. You're redirected back to
+3. If the provider gave you a manual OAuth **Client ID**, paste it
+   into **Client ID (optional)**. Leave it blank to let nak try
+   Dynamic Client Registration (DCR).
+4. Click **Connect**. Nak fetches the server's auth metadata,
+   self-registers as an OAuth client when DCR works, or uses your
+   pasted Client ID when provided, then opens the provider's consent
+   screen in a full-page redirect.
+5. Authorize on the provider's site. You're redirected back to
    Nak, which exchanges the auth code for tokens and caches the
    server's tool catalog.
-5. The integration appears in the list with an "authorized"
+6. The integration appears in the list with an "authorized"
    status.
 
-No client_id to paste, no developer console to wade through -
-the discovery + registration happen automatically when the
-server supports DCR. Providers that don't support DCR fall
-through to a manual client_id step (not yet implemented).
+No Client ID is needed when a provider accepts nak's DCR request.
+Some providers reject auto-registration for hosted redirect URIs;
+for those, register nak's displayed redirect URI with the provider
+and paste the resulting Client ID into the optional field.
 
 ## Using an integration's tools
 

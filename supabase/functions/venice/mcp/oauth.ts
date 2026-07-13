@@ -604,7 +604,7 @@ export async function registerClient(
  * MCP Authorization §6.2:
  *
  *   - client_id, redirect_uri, response_type=code
- *   - scope (server may add more; `offline_access` carries the refresh grant)
+ *   - scope (the MCP server's required scope string)
  *   - code_challenge (S256-derived from the verifier the browser keeps)
  *   - code_challenge_method=S256
  *   - state (CSRF/binding token; the browser round-trips it through the

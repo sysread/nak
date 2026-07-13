@@ -987,6 +987,7 @@
   // complete the token exchange on return.
   let mcpLabel = $state('');
   let mcpServerUrl = $state('');
+  let mcpClientId = $state('');
   let mcpError = $state<string | null>(null);
   let mcpInfo = $state<string | null>(null);
   let mcpBusy = $state(false);
@@ -1108,6 +1109,7 @@
     mcpInfo = null;
     const label = mcpLabel.trim();
     const serverUrl = mcpServerUrl.trim();
+    const clientId = mcpClientId.trim();
     if (label.length === 0) {
       mcpError = 'Give the integration a label.';
       return;
@@ -1129,14 +1131,17 @@
       // message rather than a generic register failure.
       const discovered = await app.supabase.invokeMcpDiscover(serverUrl);
       mcpInfo = discovered.supportsDcr
-        ? 'Server supports auto-registration. Redirecting to authorization…'
-        : 'Server requires manual client registration. Redirecting…';
-      const redirectUri = mcpRedirectUri(app.supabase.supabaseUrl);
+        ? (clientId.length > 0
+            ? 'Using provided client ID. Redirecting to authorization...'
+            : 'Server supports auto-registration. Redirecting to authorization...')
+        : 'Server requires manual client registration. Redirecting...';
+      const redirectUri = mcpRedirectUri();
       const reg = await app.supabase.invokeMcpRegister(
         serverUrl,
         redirectUri,
         label,
         undefined,
+        clientId.length > 0 ? clientId : undefined,
       );
       // Stash the PKCE material BEFORE the redirect - the round-trip
       // is a full page navigation and nothing in memory survives it.
@@ -1177,7 +1182,7 @@
     }
     mcpBusy = true;
     try {
-      const redirectUri = mcpRedirectUri(app.supabase.supabaseUrl);
+      const redirectUri = mcpRedirectUri();
       const reg = await app.supabase.invokeMcpRegister(
         integ.serverUrl,
         redirectUri,
@@ -2652,6 +2657,19 @@
               placeholder="https://api.fastmail.com/mcp"
               required
             />
+          </div>
+          <div class="form-row">
+            <label for="mcp-client-id">Client ID (optional)</label>
+            <input
+              id="mcp-client-id"
+              type="text"
+              bind:value={mcpClientId}
+              placeholder="Paste a manually registered OAuth client_id"
+            />
+            <p class="subtle" style="margin:0.35rem 0 0">
+              Leave blank for dynamic registration. Use this when a provider
+              rejects nak's auto-registered redirect URI.
+            </p>
           </div>
           {#if mcpError}<p class="error">{mcpError}</p>{/if}
           {#if mcpInfo}<p class="subtle">{mcpInfo}</p>{/if}

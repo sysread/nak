@@ -213,7 +213,6 @@ import type { FollowupInspectorRow } from './ui/followups-inspector';
  */
 export class SupabaseService {
   readonly client: SupabaseClient;
-  readonly supabaseUrl: string;
 
   /**
    * `opts.client` is the dependency-injection hatch used by the background
@@ -227,7 +226,6 @@ export class SupabaseService {
     config: Pick<AppConfig, 'supabaseUrl' | 'supabasePublishableKey'>,
     opts: { client?: SupabaseClient } = {}
   ) {
-    this.supabaseUrl = config.supabaseUrl;
     this.client =
       opts.client ??
       createClient(config.supabaseUrl, config.supabasePublishableKey, {
@@ -1581,8 +1579,9 @@ export class SupabaseService {
     redirectUri: string,
     label: string,
     integrationId?: string | null,
+    clientId?: string | null,
   ): Promise<McpRegisterResult> {
-    return mcpApi.invokeMcpRegister(this.client, serverUrl, redirectUri, label, integrationId);
+    return mcpApi.invokeMcpRegister(this.client, serverUrl, redirectUri, label, integrationId, clientId);
   }
 
   async invokeMcpTokenExchange(

@@ -4,8 +4,9 @@
 > `mcp-integrations`.** Full-stack wired - settings UI, OAuth
 > flow with DCR discovery + PKCE + token exchange, per-user
 > tool-catalog caching, dynamic toolbox popup, edge-side
-> dispatch. Fastmail end-to-end verified 2026-07-10 with 10
-> tools (all read-only).
+> dispatch. Fastmail end-to-end verified locally 2026-07-10 with
+> 10 tools (all read-only); hosted production needs a manual
+> client_id because Fastmail rejects nak's DCR redirect URI.
 
 ## Role in the app
 
@@ -59,10 +60,10 @@ chain is fully mandated:
    auto-mint its own `client_id` with no user interaction.
 
 So a paste-URL runway exists - for servers whose auth server
-implements DCR. For servers that do not, the spec names exactly
-two fallbacks: (a) the client hardcodes a per-vendor
-`client_id`, or (b) the client shows a UI letting the user
-paste a `client_id` they obtained themselves.
+implements DCR AND accepts nak's redirect URI. For servers that do
+not, the spec names exactly two fallbacks: (a) the client hardcodes
+a per-vendor `client_id`, or (b) the client shows a UI letting the
+user paste a `client_id` they obtained themselves.
 
 The catch discovered during design: **whether a server supports
 DCR is a property of the server, not the protocol.** Probed
@@ -76,7 +77,11 @@ That resource metadata points to auth server
 `/.well-known/oauth-authorization-server` advertises
 `"registration_endpoint": "https://api.fastmail.com/oauth/
 register"`. So **Fastmail's MCP auth server DOES support RFC
-7591 DCR** - nak self-registers on the fly, no manual email.
+7591 DCR**. It accepts localhost redirects (opencode/local dev),
+but rejects nak's hosted GitHub Pages and Supabase callback
+redirect URIs with `invalid_redirect_uri redirect_uri not valid
+scheme`. Hosted nak therefore uses the tier-2 manual client_id
+fallback for Fastmail.
 
 This corrects a prior misread: `fastmail.com/dev/` says
 "Clients are currently registered manually by contact with
@@ -86,10 +91,11 @@ MCP-scoped auth server (same endpoints, scope
 `https://www.fastmail.com/dev/mcp`) advertises DCR
 separately. Two policies at the same house, one per surface -
 the MCP one is the spec-friendly path. The manual-registration
-concern is a non-issue for the Fastmail MCP integration.
+concern still matters for hosted nak because Fastmail's redirect
+URI policy blocks this deployment shape.
 
-Servers that genuinely do not support DCR still force a
-two-tier model (below); Fastmail is not one of them.
+Servers that do not support DCR, or that reject nak's hosted
+redirect URI, still force a two-tier model (below).
 
 ## Tiering
 
