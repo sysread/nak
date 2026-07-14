@@ -352,10 +352,10 @@ export async function searchAcquiredGroceryItems(
 
 /**
  * Plain item rows linked to a recipe, any needed state. Drives the
- * recipe detail pane's ingredient checkbox sync - a checkbox reads as
- * checked when a row EXISTS for the recipe with a matching name,
- * regardless of `needed`, so buying the item at the store doesn't
- * visually re-open it on the recipe.
+ * recipe detail pane's ingredient checkbox sync - the checkbox
+ * mirrors the matched row's `needed` flag, and rows with
+ * `needed = false` are fetched too so a re-check can revive the
+ * existing row instead of inserting a duplicate.
  */
 export async function listGroceryItemsForRecipe(
   client: SupabaseClient,

@@ -87,8 +87,10 @@ Steps below name which surface they mean.
   `flour`.
 - (7) `eggs` drops out of the needed list into the greyed
   **Acquired (1)** section (collapsed until clicked; name shown
-  struck through). On the recipe, the `eggs` checkbox is STILL
-  checked - buying does not un-plan.
+  struck through). On the recipe, the `eggs` checkbox is now
+  UNCHECKED - the box mirrors "on the list right now". (Steps 8-9
+  revive the same row via the add-input; checking the recipe box
+  again would revive it identically.)
 - (8-9) The suggestion list shows `eggs`; picking it returns the
   same row to the needed list under **Dairy** (section survived the
   round trip).

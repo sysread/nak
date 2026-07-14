@@ -228,32 +228,44 @@ export function computeBrowseView(args: {
 
 // Recipe bridge ---------------------------------------------------------
 
+/** A recipe ingredient's matching grocery row, for the checkbox sync. */
+export interface RecipeCheckboxItem {
+  id: string;
+  /** The row's on-list flag - what the checkbox displays. */
+  needed: boolean;
+}
+
 /**
  * Map a recipe's parsed ingredients to their grocery-item rows (by
- * normalized name) for the detail pane's checkbox sync. A checkbox is
- * checked when its ingredient has a row - regardless of `needed`, so
- * buying the item at the store doesn't visually re-open it on the
- * recipe. Duplicate ingredient names collapse onto the same row, and
- * unmatched rows (e.g. an item renamed after checking) are simply
- * unmatched - they still belong to the recipe and still get wiped on
- * a recipe edit.
+ * normalized name) for the detail pane's checkbox sync. The checkbox
+ * displays the matched row's `needed` flag - "is this on my list
+ * right now" - so removing or buying the item on the list side
+ * unchecks it here, and re-checking revives the existing row rather
+ * than inserting a duplicate. Duplicate ingredient names collapse
+ * onto the same row, and unmatched rows (e.g. an item renamed after
+ * checking) are simply unmatched - they still belong to the recipe
+ * and still get wiped on a recipe edit.
  */
 export function recipeCheckboxItemIds(
   ingredients: readonly Ingredient[],
-  recipeItems: readonly { id: string; name: string }[]
-): Map<string, string> {
-  const byName = new Map<string, string>();
-  // First row wins on a name collision; rows are recipe-scoped so
-  // collisions only happen via manual edits.
+  recipeItems: readonly { id: string; name: string; needed: boolean }[]
+): Map<string, RecipeCheckboxItem> {
+  const byName = new Map<string, RecipeCheckboxItem>();
+  // A needed row wins on a name collision (the checkbox should read
+  // checked if ANY matching row is on the list); otherwise first row
+  // wins. Collisions are rare - rows are recipe-scoped.
   for (const item of recipeItems) {
     const key = normalizeGroceryName(item.name);
-    if (!byName.has(key)) byName.set(key, item.id);
+    const prior = byName.get(key);
+    if (!prior || (!prior.needed && item.needed)) {
+      byName.set(key, { id: item.id, needed: item.needed });
+    }
   }
-  const out = new Map<string, string>();
+  const out = new Map<string, RecipeCheckboxItem>();
   for (const ing of ingredients) {
     const key = normalizeGroceryName(ing.name);
-    const id = byName.get(key);
-    if (id !== undefined) out.set(key, id);
+    const entry = byName.get(key);
+    if (entry !== undefined) out.set(key, entry);
   }
   return out;
 }
