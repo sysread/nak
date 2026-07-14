@@ -222,6 +222,17 @@ describe('splitBrowseRows', () => {
   });
 });
 
+describe('sectionDropEdge', () => {
+  it('marks the hovered row edge matching where the drop lands', async () => {
+    const { sectionDropEdge } = await import('../src/lib/ui/grocery-list');
+    const ids = ['a', 'b', 'c'];
+    expect(sectionDropEdge(ids, 'a', 'c')).toBe('bottom'); // dragging down
+    expect(sectionDropEdge(ids, 'c', 'a')).toBe('top'); // dragging up
+    expect(sectionDropEdge(ids, 'a', 'a')).toBeNull();
+    expect(sectionDropEdge(ids, 'zz', 'a')).toBeNull();
+  });
+});
+
 describe('recipeCheckboxItemIds', () => {
   it('maps ingredients to rows by normalized name, carrying needed', () => {
     const map = recipeCheckboxItemIds(
@@ -250,6 +261,27 @@ describe('recipeCheckboxItemIds', () => {
       ]
     );
     expect(map.get('eggs')).toEqual({ id: 'live', needed: true });
+  });
+});
+
+describe('partitionIngredientsForAdd', () => {
+  it('splits into revive / create, skipping needed rows and dup names', async () => {
+    const { partitionIngredientsForAdd } = await import('../src/lib/ui/grocery-list');
+    const entries = new Map([
+      ['flour', { id: 'f1', needed: true }],
+      ['eggs', { id: 'e1', needed: false }],
+    ]);
+    const { reviveIds, create } = partitionIngredientsForAdd(
+      [
+        ingredient({ name: 'Flour' }),
+        ingredient({ name: 'eggs' }),
+        ingredient({ name: 'salt' }),
+        ingredient({ name: 'Salt' }),
+      ],
+      entries
+    );
+    expect(reviveIds).toEqual(['e1']);
+    expect(create.map((i) => i.name)).toEqual(['salt']);
   });
 });
 

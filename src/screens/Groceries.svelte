@@ -41,6 +41,7 @@
   import type { GroceryItemView } from '$lib/supabase';
   import {
     ACQUIRED_PAGE_SIZE,
+    sectionDropEdge,
     GROCERY_SEARCH_DEBOUNCE_MS,
     GROCERY_SUGGESTION_LIMIT,
     OTHER_SECTION_LABEL,
@@ -90,12 +91,34 @@
   // aisle, which helps when filing items into sections.
   let showEmptySections = $state(false);
 
+  // Item drag-to-file: dragging a needed row's handle onto a section
+  // card saves the item into that section (which also records the
+  // name's sticky section preference server-side). Native HTML5 DnD,
+  // same as the section manager - desktop-oriented; on touch the
+  // editor's section picker remains the path.
+  let dragItemId = $state<string | null>(null);
+  let dragOverSection = $state<string | null | undefined>(undefined);
+
+  function dropItemOnSection(sectionId: string | null): void {
+    const supabase = app.supabase;
+    const itemId = dragItemId;
+    dragItemId = null;
+    dragOverSection = undefined;
+    if (!supabase || !itemId) return;
+    const current = grocery.needed.find((i) => i.id === itemId);
+    if (!current || current.section_id === sectionId) return;
+    void mutate(() => supabase.updateGroceryItem(itemId, { section_id: sectionId }));
+  }
+
   // Section management mode.
   let manageSections = $state(false);
   let newSectionName = $state('');
   let renamingSectionId = $state<string | null>(null);
   let renameDraft = $state('');
   let dragSectionId = $state<string | null>(null);
+  // Insertion-line indicator for section reorder: which row the drag
+  // hovers and which edge the dragged section would land on.
+  let sectionDropHint = $state<{ id: string; edge: 'top' | 'bottom' } | null>(null);
 
   // Refetch on every mount, NOT gated on grocery.loaded. The store is
   // module-level and outlives this panel, and grocery writes made
@@ -434,18 +457,36 @@
         <div
           class="grocery-section-row"
           class:dragging={dragSectionId === s.id}
+          class:drop-before={sectionDropHint?.id === s.id && sectionDropHint.edge === 'top'}
+          class:drop-after={sectionDropHint?.id === s.id && sectionDropHint.edge === 'bottom'}
           draggable="true"
           role="listitem"
           ondragstart={(e) => {
             dragSectionId = s.id;
             if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
           }}
-          ondragover={(e) => e.preventDefault()}
+          ondragover={(e) => {
+            e.preventDefault();
+            if (!dragSectionId) return;
+            const edge = sectionDropEdge(
+              grocery.sections.map((x) => x.id),
+              dragSectionId,
+              s.id
+            );
+            sectionDropHint = edge ? { id: s.id, edge } : null;
+          }}
+          ondragleave={() => {
+            if (sectionDropHint?.id === s.id) sectionDropHint = null;
+          }}
           ondrop={(e) => {
             e.preventDefault();
+            sectionDropHint = null;
             dropSection(s.id);
           }}
-          ondragend={() => (dragSectionId = null)}
+          ondragend={() => {
+            dragSectionId = null;
+            sectionDropHint = null;
+          }}
         >
           <span class="grocery-drag-handle" aria-hidden="true">&#8942;&#8942;</span>
           {#if renamingSectionId === s.id}
@@ -499,6 +540,25 @@
 
   {#snippet itemRow(item: GroceryItemView, needed: boolean)}
     <div class="grocery-item-row" class:acquired={!needed}>
+      {#if needed}
+        <!-- Drag-to-file handle. Only the handle is draggable so the
+             row's tap targets (checkbox, edit) keep their gestures. -->
+        <span
+          class="grocery-drag-handle"
+          draggable="true"
+          role="button"
+          tabindex="-1"
+          aria-label={`Drag ${item.name} to a section`}
+          ondragstart={(e) => {
+            dragItemId = item.id;
+            if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+          }}
+          ondragend={() => {
+            dragItemId = null;
+            dragOverSection = undefined;
+          }}
+        >&#8942;&#8942;</span>
+      {/if}
       <label class="grocery-check-label">
         <!-- Inverted from the recipe view on purpose: needed items
              render CHECKED and the shopper unchecks as they buy. -->
@@ -604,7 +664,25 @@
          hidden unless the "Show empty sections" toggle above opts
          into the full store layout. -->
     {#each neededGroups as group (group.id ?? '__other')}
-      <section class="grocery-section-card">
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <!-- Drag-and-drop is a pointer shortcut; the keyboard path to
+           the same write is the item editor's section picker. -->
+      <section
+        class="grocery-section-card"
+        class:drop-target={dragItemId !== null && dragOverSection === group.id}
+        ondragover={(e) => {
+          if (dragItemId === null) return;
+          e.preventDefault();
+          dragOverSection = group.id;
+        }}
+        ondragleave={() => {
+          if (dragOverSection === group.id) dragOverSection = undefined;
+        }}
+        ondrop={(e) => {
+          e.preventDefault();
+          dropItemOnSection(group.id);
+        }}
+      >
         <h3 class="grocery-section-card-title">{group.name}</h3>
         {#if group.items.length === 0}
           <p class="subtle grocery-section-card-empty">No items</p>
@@ -772,6 +850,15 @@
   .grocery-section-row.dragging {
     opacity: 0.5;
   }
+  /* Insertion line marking where the dragged section will land -
+     box-shadow rather than border so the row doesn't jump a pixel
+     while the line flicks between rows. */
+  .grocery-section-row.drop-before {
+    box-shadow: 0 -2px 0 0 var(--accent);
+  }
+  .grocery-section-row.drop-after {
+    box-shadow: 0 2px 0 0 var(--accent);
+  }
   .grocery-drag-handle {
     cursor: grab;
     color: var(--text-muted, #888);
@@ -875,6 +962,16 @@
     align-items: center;
     gap: 0.5rem;
     padding: 0.3rem 0.75rem;
+  }
+  /* Drop highlight while an item drag hovers a card: accent outline
+     plus an accent-tinted title so the target reads at a glance even
+     on a tall card. */
+  .grocery-section-card.drop-target {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent) inset;
+  }
+  .grocery-section-card.drop-target .grocery-section-card-title {
+    color: var(--accent);
   }
   .grocery-item-row.acquired {
     opacity: 0.55;

@@ -744,14 +744,18 @@ function dedupeFromSteps(steps: Step[]): Ingredient[] {
  * so the caller controls whether this sits under a heading or inside
  * a sub-section block.
  *
- * With `checkboxes` on, each row is prefixed with an
- * `<input type="checkbox" class="cook-buy" data-ing="<name>">`. The
- * renderer stays grocery-unaware on purpose: it stamps the RAW
- * ingredient name and never any checked state - the host (the
- * Cookbook detail pane) owns matching names against grocery rows,
- * syncing `checked` after mount, and handling clicks via delegation.
- * The same ingredient name appearing in several rows gets the same
- * data-ing value; the host treats those as one toggle.
+ * With `checkboxes` on, each row becomes a `<label>` wrapping an
+ * `<input type="checkbox" class="cook-buy" data-ing="<name>">` plus
+ * the row text, so tapping ANYWHERE on the row - checkbox or
+ * ingredient label - toggles it (native label semantics; the input
+ * still fires `change`, which is what the host's delegation
+ * listens for). The renderer stays grocery-unaware on purpose: it
+ * stamps the RAW ingredient name and never any checked state - the
+ * host (the Cookbook detail pane) owns matching names against
+ * grocery rows, syncing `checked` after mount, and handling changes
+ * via delegation. The same ingredient name appearing in several
+ * rows gets the same data-ing value; the host treats those as one
+ * toggle.
  */
 function ingredientsListItems(ings: Ingredient[], checkboxes: boolean): string {
   const out: string[] = [];
@@ -759,12 +763,16 @@ function ingredientsListItems(ings: Ingredient[], checkboxes: boolean): string {
     const qty = formatQtyUnit(ing.qty, ing.unit);
     const qtyHtml = qty.length > 0 ? `<span class="cook-qty">${esc(qty)}</span> ` : '';
     const optHtml = ing.optional ? ' <span class="cook-optional">(optional)</span>' : '';
-    const checkboxHtml = checkboxes
-      ? `<input type="checkbox" class="cook-buy" data-ing="${esc(ing.name)}" aria-label="Add ${esc(ing.name)} to grocery list"> `
-      : '';
-    out.push(
-      `<li>${checkboxHtml}${qtyHtml}<span class="cook-name">${esc(ing.name)}</span>${optHtml}</li>`
-    );
+    if (checkboxes) {
+      const checkboxHtml = `<input type="checkbox" class="cook-buy" data-ing="${esc(ing.name)}" aria-label="Add ${esc(ing.name)} to grocery list"> `;
+      out.push(
+        `<li><label class="cook-buy-label">${checkboxHtml}${qtyHtml}<span class="cook-name">${esc(ing.name)}</span>${optHtml}</label></li>`
+      );
+    } else {
+      out.push(
+        `<li>${qtyHtml}<span class="cook-name">${esc(ing.name)}</span>${optHtml}</li>`
+      );
+    }
   }
   return out.join('');
 }

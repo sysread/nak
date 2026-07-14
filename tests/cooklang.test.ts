@@ -225,6 +225,9 @@ describe('recipeToHtml', () => {
       ingredientCheckboxes: true,
     });
     expect(html).toContain('<input type="checkbox" class="cook-buy" data-ing="flour"');
+    // The whole row is a <label> so tapping the ingredient text
+    // toggles the checkbox via native label semantics.
+    expect(html).toContain('<li><label class="cook-buy-label"><input type="checkbox" class="cook-buy"');
     // Checkboxes are an ingredient-list affordance only - never in
     // the instruction steps' inline references.
     const stepsHtml = html.slice(html.indexOf('cook-steps'));

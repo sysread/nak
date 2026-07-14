@@ -285,6 +285,25 @@ export function computeBrowseView(args: {
   return { kind: 'list' };
 }
 
+/**
+ * Which edge of the hovered row the section-reorder insertion line
+ * belongs on. Mirrors sectionOrderAfterDrag's landing spot: dragging
+ * DOWN the list inserts after the hovered row (line on its bottom
+ * edge), dragging UP inserts before it (line on top). Null for a
+ * self-hover or unknown ids - no line.
+ */
+export function sectionDropEdge(
+  ids: readonly string[],
+  fromId: string,
+  toId: string
+): 'top' | 'bottom' | null {
+  if (fromId === toId) return null;
+  const from = ids.indexOf(fromId);
+  const to = ids.indexOf(toId);
+  if (from === -1 || to === -1) return null;
+  return from < to ? 'bottom' : 'top';
+}
+
 // Recipe bridge ---------------------------------------------------------
 
 /** A recipe ingredient's matching grocery row, for the checkbox sync. */
@@ -327,6 +346,31 @@ export function recipeCheckboxItemIds(
     if (entry !== undefined) out.set(key, entry);
   }
   return out;
+}
+
+/**
+ * Plan the "add all ingredients" batch: which existing rows to
+ * revive (present but not needed) and which ingredients to insert
+ * fresh, deduped by normalized name so a recipe that mentions
+ * @butter twice adds it once. Already-needed rows are skipped -
+ * the batch is idempotent, so mashing the button is harmless.
+ */
+export function partitionIngredientsForAdd(
+  ingredients: readonly Ingredient[],
+  entries: ReadonlyMap<string, RecipeCheckboxItem>
+): { reviveIds: string[]; create: Ingredient[] } {
+  const reviveIds: string[] = [];
+  const create: Ingredient[] = [];
+  const seen = new Set<string>();
+  for (const ing of ingredients) {
+    const key = normalizeGroceryName(ing.name);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const entry = entries.get(key);
+    if (entry === undefined) create.push(ing);
+    else if (!entry.needed) reviveIds.push(entry.id);
+  }
+  return { reviveIds, create };
 }
 
 /**

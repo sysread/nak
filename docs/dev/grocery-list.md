@@ -24,8 +24,13 @@ content in panel" split:
   add-input with
   acquired-history suggestions, the collapsed acquired history, the
   inline item editor (name / count / unit / note / section / photo /
-  delete), and section management. Full-width, which is what a
-  phone at the store sees once the drawer closes.
+  delete), item drag-to-file (a needed row's handle drops onto a
+  section card, saving its section - with an accent highlight on the
+  hovered card; the section manager's reorder shows an insertion
+  line via `sectionDropEdge`), and section management. Full-width,
+  which is what a phone at the store sees once the drawer closes.
+  Native HTML5 DnD is pointer-only; the editor's section picker is
+  the touch/keyboard path.
 
 Shipped from the plan at
 [`plans/grocery-list-plan.md`](./plans/grocery-list-plan.md); this doc
@@ -49,7 +54,7 @@ owns current reality.
   (`nak:grocery:changed`): `emitGroceryChange` / `onGroceryChange`.
   Mirrors `cookbook-events.ts`.
 - `src/lib/ui/grocery-list.ts` - pure UI-behavior primitives:
-  section grouping (`groupItemsBySection`, Other pinned last),
+  section grouping (`groupItemsBySection`, Other pinned first),
   quantity labels, the add-input create-vs-reuse decision
   (`canCreateGroceryItem`), the acquired disclosure copy, the DnD
   next-order computation (`sectionOrderAfterDrag`), the sidebar
@@ -119,6 +124,16 @@ grocery_items":
   rows, signed-URL reads). At most one photo per item via
   `grocery_items.image_id`; no link table. See
   [`./file-storage.md`](./file-storage.md).
+- `grocery_section_prefs`: sticky name-to-section memory, keyed on
+  `(user_id, lower(btrim(name)))` and maintained entirely by
+  triggers on `grocery_items` - setting a section upserts the
+  preference, explicitly filing back to Other deletes it, and a
+  section-less INSERT is pre-filled from it (BEFORE INSERT). Rows
+  are deleted freely (recipe unchecks, the invalidation wipe), so
+  the memory deliberately lives outside the item rows; section
+  deletion cascades through the prefs FK so those names fall back
+  to Other. No client code participates - every add path inherits
+  the behavior for free.
 - Realtime: both tables are `supabase_realtime` publication members
   with `(id, user_id)` replica-identity indexes (DELETE delivery -
   same gotcha as recipes).
@@ -145,7 +160,15 @@ grocery_items":
   didn't "un-plan" the recipe - real use found that reading
   surprising, so the semantics were flipped.)
 - Checking inserts a row carrying the cooklang qty/unit verbatim, a
-  `"For <title>"` note, `recipe_id`, `needed = true`, section null.
+  `"For <title>"` note, `recipe_id`, `needed = true`, and a null
+  section - which the `fill_grocery_section_from_pref` trigger
+  replaces with the name's remembered section when one exists.
+- The detail pane also has an "Add all to grocery list" button:
+  revives existing not-needed rows, inserts the rest (deduped by
+  normalized name via `partitionIngredientsForAdd`), skips rows
+  already on the list - idempotent by construction. Each ingredient
+  row is a `<label>` wrapping its checkbox, so tapping the text
+  toggles it via native label semantics (no extra JS).
 - **Invalidation**: the `clear_grocery_items_on_recipe_change`
   trigger (AFTER UPDATE on `recipes`, only when `cooklang` is
   distinct) deletes every `grocery_items` row with that

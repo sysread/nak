@@ -84,6 +84,7 @@
   import {
     groceryItemFromIngredient,
     normalizeGroceryName,
+    partitionIngredientsForAdd,
     recipeCheckboxItemIds,
   } from '$lib/ui/grocery-list';
   import {
@@ -997,6 +998,44 @@
     }
   });
 
+  // "Add all to grocery list": batch the whole ingredient set onto
+  // the list - revive rows that exist but aren't needed, insert the
+  // rest - then one refetch + one event nudge. Idempotent (already-
+  // needed rows are skipped), so a double-tap is harmless.
+  let addAllBusy = $state(false);
+
+  function onAddAllIngredients(): void {
+    const recipe = activeRecipe;
+    const parsed = parsedDetail;
+    if (!recipe || !parsed || !app.supabase || addAllBusy) return;
+    const supabase = app.supabase;
+    addAllBusy = true;
+    void (async () => {
+      try {
+        const entries = recipeCheckboxItemIds(parsed.ingredients, recipeGroceryItems);
+        const { reviveIds, create } = partitionIngredientsForAdd(
+          parsed.ingredients,
+          entries
+        );
+        for (const id of reviveIds) {
+          await supabase.setGroceryItemNeeded(id, true);
+        }
+        for (const ingredient of create) {
+          await supabase.createGroceryItem(
+            groceryItemFromIngredient(ingredient, {
+              id: recipe.id,
+              title: recipe.title,
+            })
+          );
+        }
+      } finally {
+        await loadRecipeGroceryItems();
+        emitGroceryChange();
+        addAllBusy = false;
+      }
+    })();
+  }
+
   // Delegated change handler for the grocery checkboxes ({@html}
   // markup can't carry Svelte handlers). Checking inserts a grocery
   // item carrying the cooklang quantity verbatim plus a note naming
@@ -1491,6 +1530,19 @@
                  resets the highlights, and there's nothing to persist.
                  The same container is bound to `detailRenderEl` so a TOC
                  click can resolve its target id within this render. -->
+            {#if parsedDetail && parsedDetail.ingredients.length > 0}
+              <!-- Batch shortcut for the per-row checkboxes below.
+                   Rendered by the template (not the {@html} body)
+                   because it needs Svelte state for the busy gate. -->
+              <div class="cookbook-add-all-row">
+                <button
+                  type="button"
+                  class="cookbook-add-all"
+                  disabled={addAllBusy}
+                  onclick={onAddAllIngredients}
+                >{addAllBusy ? 'Adding...' : 'Add all to grocery list'}</button>
+              </div>
+            {/if}
             <!-- svelte-ignore a11y_click_events_have_key_events -->
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div
@@ -2195,6 +2247,37 @@
     vertical-align: -0.15rem;
     accent-color: var(--accent);
     cursor: pointer;
+  }
+
+  /* The whole row is the toggle target (native label semantics) -
+     the pointer cursor advertises that the text is tappable too,
+     which matters for thumbs that would otherwise aim at the tiny
+     box. */
+  .cookbook-render :global(.cook-buy-label) {
+    cursor: pointer;
+  }
+
+  /* Batch add-all shortcut above the rendered recipe, tucked toward
+     the reading column's right edge so it reads as an action on the
+     content below rather than part of the action bar above. */
+  .cookbook-add-all-row {
+    display: flex;
+    justify-content: flex-end;
+    margin: 0.25rem 0;
+  }
+  .cookbook-add-all {
+    padding: 0.3rem 0.6rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg);
+    color: var(--accent);
+    font: inherit;
+    font-size: 0.8rem;
+    cursor: pointer;
+  }
+  .cookbook-add-all:disabled {
+    opacity: 0.6;
+    cursor: default;
   }
 
   /* Instruction steps — replace the browser-default "1." marker with

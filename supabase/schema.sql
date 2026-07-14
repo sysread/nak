@@ -3339,6 +3339,106 @@ create trigger clear_grocery_items_on_recipe_change
   after update on public.recipes
   for each row execute function public.clear_grocery_items_on_recipe_change();
 
+-- Sticky section assignments -----------------------------------------------
+--
+-- Filing an item into a section should stick to the NAME, not the
+-- row: grocery rows are deleted freely (recipe-side unchecks, the
+-- recipe-edit invalidation wipe above, manual deletes), and without
+-- this the user re-files "eggs" into Dairy every time a recipe
+-- re-adds it. `grocery_section_prefs` remembers the last section the
+-- user chose per normalized item name, maintained entirely by
+-- triggers so every write path (item editor, recipe checkboxes, both
+-- add inputs) participates without client code:
+--
+--   - setting an item's section (insert or update, non-null) upserts
+--     the preference for that name;
+--   - explicitly moving an item back to Other (update to null)
+--     deletes the preference - the last explicit choice wins;
+--   - inserting an item WITHOUT a section fills it from the
+--     preference (BEFORE INSERT, so the row lands pre-filed).
+--
+-- Section deletion cascades through the prefs FK, so names filed in
+-- a deleted section fall back to Other on their next add - matching
+-- what happened to the live rows.
+
+create table if not exists public.grocery_section_prefs (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  -- lower(btrim(name)) - matches the client's normalizeGroceryName so
+  -- "Eggs " and "eggs" share one preference.
+  name_key text not null,
+  section_id uuid not null references public.grocery_sections(id) on delete cascade,
+  updated_at timestamptz not null default now(),
+  primary key (user_id, name_key)
+);
+
+alter table public.grocery_section_prefs enable row level security;
+
+-- Self-* policies: the triggers below run as the invoking user (RLS
+-- applies), so the user needs full CRUD on their own prefs.
+drop policy if exists "grocery_section_prefs are self-selectable" on public.grocery_section_prefs;
+create policy "grocery_section_prefs are self-selectable" on public.grocery_section_prefs
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "grocery_section_prefs are self-insertable" on public.grocery_section_prefs;
+create policy "grocery_section_prefs are self-insertable" on public.grocery_section_prefs
+  for insert with check (auth.uid() = user_id);
+
+drop policy if exists "grocery_section_prefs are self-updatable" on public.grocery_section_prefs;
+create policy "grocery_section_prefs are self-updatable" on public.grocery_section_prefs
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "grocery_section_prefs are self-deletable" on public.grocery_section_prefs;
+create policy "grocery_section_prefs are self-deletable" on public.grocery_section_prefs
+  for delete using (auth.uid() = user_id);
+
+-- Fill a section-less insert from the remembered preference. BEFORE
+-- INSERT so the row lands pre-filed and realtime/readers never see
+-- an unfiled flash.
+create or replace function public.fill_grocery_section_from_pref()
+returns trigger language plpgsql as $$
+begin
+  if new.section_id is null then
+    select p.section_id into new.section_id
+      from public.grocery_section_prefs p
+     where p.user_id = new.user_id
+       and p.name_key = lower(btrim(new.name));
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists fill_grocery_section_from_pref on public.grocery_items;
+create trigger fill_grocery_section_from_pref
+  before insert on public.grocery_items
+  for each row execute function public.fill_grocery_section_from_pref();
+
+-- Record the preference whenever a section is set, and drop it when
+-- the user explicitly files an item back to Other. Insert-with-null
+-- is NOT a preference signal (it is the "no choice yet" default the
+-- fill trigger just handled); update-to-null is, because the only
+-- paths that null a section_id are the user's editor and a section
+-- deletion (whose cascade already removed the matching prefs, making
+-- this trigger's delete a no-op for that case).
+create or replace function public.remember_grocery_section_pref()
+returns trigger language plpgsql as $$
+begin
+  if new.section_id is not null then
+    insert into public.grocery_section_prefs (user_id, name_key, section_id, updated_at)
+    values (new.user_id, lower(btrim(new.name)), new.section_id, now())
+    on conflict (user_id, name_key)
+      do update set section_id = excluded.section_id, updated_at = now();
+  elsif tg_op = 'UPDATE' and old.section_id is not null then
+    delete from public.grocery_section_prefs p
+     where p.user_id = new.user_id
+       and p.name_key = lower(btrim(new.name));
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists remember_grocery_section_pref on public.grocery_items;
+create trigger remember_grocery_section_pref
+  after insert or update of section_id, name on public.grocery_items
+  for each row execute function public.remember_grocery_section_pref();
+
 -- grocery_item_images ------------------------------------------------------
 --
 -- Product photos for grocery items (a brand label the shopper wants to
