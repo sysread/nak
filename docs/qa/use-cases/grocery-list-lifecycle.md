@@ -148,9 +148,12 @@ Steps below name which surface they mean.
 - (21) With empty sections shown, each real section card (not
   Other) carries a title-bar drag handle; dragging shows an accent
   line on the landing edge and the drop persists the new order
-  (verify in the Sections manager). Titles stay centered. Unticking
-  the toggle removes the handles - card reorder is only available
-  in full-layout mode.
+  (verify in the Sections manager). Titles are left-aligned with
+  the handle inline before the text. Unticking the toggle removes
+  the handles - card reorder is only available in full-layout mode.
+  In light mode + terminal style, the card titles and other muted
+  grocery text read clearly against the beige title bar (the muted
+  tone follows the theme, not a hardcoded grey).
 
 ## Cleanup
 
