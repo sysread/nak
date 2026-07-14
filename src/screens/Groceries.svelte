@@ -873,6 +873,9 @@
   }
   .grocery-item-name {
     font-size: 0.9rem;
+    /* Bold so the item name is the scannable anchor of each row -
+       qty, note, and recipe title stay regular/muted around it. */
+    font-weight: 600;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
