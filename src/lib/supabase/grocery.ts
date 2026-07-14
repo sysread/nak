@@ -277,6 +277,43 @@ export async function listAcquiredGroceryItemsPage(
 }
 
 /**
+ * One recency window of the full item corpus for the sidebar's
+ * all-items browse: optional ILIKE name search, optional status
+ * filter (`needed`), and optional section filter (`sectionId`;
+ * `'other'` matches the null-section pseudo-bucket). Windowed like
+ * the acquired page - the corpus grows every shopping trip, forever.
+ * `hasMore` derives from the +1 overfetch, same shape as
+ * listRecipesPage.
+ */
+export async function listGroceryItemsPage(
+  client: SupabaseClient,
+  opts: {
+    offset: number;
+    pageSize: number;
+    query?: string;
+    needed?: boolean;
+    sectionId?: string | 'other';
+  }
+): Promise<{ rows: GroceryItemView[]; hasMore: boolean }> {
+  let q = client.from('grocery_items').select(ITEM_SELECT);
+  const query = opts.query?.trim() ?? '';
+  if (query.length > 0) q = q.ilike('name', ilikeFilterPattern(query));
+  if (opts.needed !== undefined) q = q.eq('needed', opts.needed);
+  if (opts.sectionId === 'other') q = q.is('section_id', null);
+  else if (opts.sectionId !== undefined) q = q.eq('section_id', opts.sectionId);
+  q = q
+    .order('updated_at', { ascending: false })
+    .order('id', { ascending: false })
+    .range(opts.offset, opts.offset + opts.pageSize);
+  const { data, error } = await q;
+  if (error) throw new SupabaseError(error.message);
+  const rows = (data ?? []) as unknown as ItemRow[];
+  const hasMore = rows.length > opts.pageSize;
+  const windowRows = hasMore ? rows.slice(0, opts.pageSize) : rows;
+  return { rows: await toItemViews(client, windowRows), hasMore };
+}
+
+/**
  * Suggestion source for the add-to-list input: acquired items
  * (needed = false) whose name matches the query, newest first,
  * deduped by normalized name so "eggs" bought on ten trips is one

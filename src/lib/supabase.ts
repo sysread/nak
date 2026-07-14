@@ -724,6 +724,16 @@ export class SupabaseService {
     return groceryApi.listAcquiredGroceryItemsPage(this.client, opts);
   }
 
+  async listGroceryItemsPage(opts: {
+    offset: number;
+    pageSize: number;
+    query?: string;
+    needed?: boolean;
+    sectionId?: string | 'other';
+  }): Promise<{ rows: GroceryItemView[]; hasMore: boolean }> {
+    return groceryApi.listGroceryItemsPage(this.client, opts);
+  }
+
   async searchAcquiredGroceryItems(
     query: string,
     limit: number

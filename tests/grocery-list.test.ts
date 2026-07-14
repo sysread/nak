@@ -137,6 +137,45 @@ describe('sectionOrderAfterDrag', () => {
   });
 });
 
+describe('browse filter mapping', () => {
+  it('maps status filters to the needed argument', async () => {
+    const { browseNeededArg } = await import('../src/lib/ui/grocery-list');
+    expect(browseNeededArg('all')).toBeUndefined();
+    expect(browseNeededArg('needed')).toBe(true);
+    expect(browseNeededArg('acquired')).toBe(false);
+  });
+
+  it('maps section select values to the sectionId argument', async () => {
+    const { browseSectionArg, BROWSE_SECTION_ALL, BROWSE_SECTION_OTHER } =
+      await import('../src/lib/ui/grocery-list');
+    expect(browseSectionArg(BROWSE_SECTION_ALL)).toBeUndefined();
+    expect(browseSectionArg(BROWSE_SECTION_OTHER)).toBe('other');
+    expect(browseSectionArg('abc-123')).toBe('abc-123');
+  });
+});
+
+describe('computeBrowseView', () => {
+  it('prioritizes error, then loading, then empty, then list', async () => {
+    const { computeBrowseView } = await import('../src/lib/ui/grocery-list');
+    expect(computeBrowseView({ loading: true, error: 'x', count: 0, filtered: false }))
+      .toEqual({ kind: 'error', message: 'x' });
+    expect(computeBrowseView({ loading: true, error: null, count: 0, filtered: false }))
+      .toEqual({ kind: 'loading' });
+    expect(computeBrowseView({ loading: false, error: null, count: 0, filtered: true }))
+      .toEqual({ kind: 'empty', reason: 'no-matches' });
+    expect(computeBrowseView({ loading: false, error: null, count: 0, filtered: false }))
+      .toEqual({ kind: 'empty', reason: 'no-items-yet' });
+    expect(computeBrowseView({ loading: false, error: null, count: 3, filtered: false }))
+      .toEqual({ kind: 'list' });
+  });
+
+  it('keeps showing the list while a refetch is in flight', async () => {
+    const { computeBrowseView } = await import('../src/lib/ui/grocery-list');
+    expect(computeBrowseView({ loading: true, error: null, count: 5, filtered: true }))
+      .toEqual({ kind: 'list' });
+  });
+});
+
 describe('recipeCheckboxItemIds', () => {
   it('maps ingredients to rows by normalized name', () => {
     const map = recipeCheckboxItemIds(

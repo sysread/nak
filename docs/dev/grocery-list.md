@@ -1,12 +1,23 @@
 # Grocery list
 
-A section-organized shopping list rendered as the Groceries drawer
-tab (above Recipes), fed two ways: per-ingredient checkboxes on
-bookmarked (upcoming / favorite) recipes in the Cookbook detail pane,
-and manual adds from the list itself. Designed phone-first: the
-drawer IS the surface at the store, so add / edit / check-off all
-happen inline in the sidebar and there is no per-item main-panel
-detail (the desktop main panel shows a pointer hint only).
+A section-organized shopping list on the Groceries drawer tab (above
+Recipes), fed two ways: per-ingredient checkboxes on bookmarked
+(upcoming / favorite) recipes in the Cookbook detail pane, and
+manual adds. Two surfaces, matching the other tabs' "list in drawer,
+content in panel" split:
+
+- the **sidebar** (`GroceryList.svelte`) is the all-items browse - a
+  windowed, infinite-scrolled catalog of every item ever added, with
+  a debounced name search plus status (All / On list / Acquired) and
+  section filters. Its one verb is the checkbox: checked = on the
+  current list; toggling flips `needed`, which is how a past
+  purchase gets restocked. An unmatched search offers an Add action.
+- the **main panel** (`src/screens/Groceries.svelte`) is the working
+  surface: the current list grouped by store section, the add-input
+  with acquired-history suggestions, the collapsed acquired history,
+  the inline item editor (name / count / unit / note / section /
+  photo / delete), and section management. Full-width, which is what
+  a phone at the store sees once the drawer closes.
 
 Shipped from the plan at
 [`plans/grocery-list-plan.md`](./plans/grocery-list-plan.md); this doc
@@ -33,11 +44,19 @@ owns current reality.
   section grouping (`groupItemsBySection`, Other pinned last),
   quantity labels, the add-input create-vs-reuse decision
   (`canCreateGroceryItem`), the acquired disclosure copy, the DnD
-  next-order computation (`sectionOrderAfterDrag`), name
+  next-order computation (`sectionOrderAfterDrag`), the sidebar
+  browse helpers (status/section filter mapping + the
+  `computeBrowseView` render decision), name
   normalization, and the recipe-bridge helpers
   (`recipeCheckboxItemIds`, `groceryItemFromIngredient`). Tested at
   `tests/grocery-list.test.ts`.
-- `src/components/GroceryList.svelte` - the drawer tab component:
+- `src/components/GroceryList.svelte` - the sidebar all-items
+  browse: debounced search, status + section filters (mapped to the
+  service pager via `browseNeededArg` / `browseSectionArg`), a
+  windowed listing with an infinite-scroll sentinel
+  (`listGroceryItemsPage`), per-row needed toggles, and the
+  unmatched-search Add action.
+- `src/screens/Groceries.svelte` - the main-panel shopping list:
   add-input with debounced acquired-history suggestions, the needed
   panes grouped by section, the collapsed acquired history, the
   inline item editor (name / count / unit / note / section / photo /
@@ -129,8 +148,11 @@ Local UI writes call `loadGroceries` directly (via the component's
 trigger's bulk delete, a Cookbook checkbox click reaching an open
 Groceries tab, another device - arrive through the
 `subscribeToGroceryChanges` relay in Chat.svelte, which fires the
-`nak:grocery:changed` CustomEvent; `GroceryList.svelte` and the
-Cookbook detail pane's row fetch both subscribe. The Cookbook
+`nak:grocery:changed` CustomEvent; the panel (`Groceries.svelte`),
+the sidebar browse window, and the Cookbook detail pane's row fetch
+all subscribe. The sidebar's own toggle/add writes also emit the
+event directly - one nudge refreshes every grocery surface, and the
+realtime echo that follows is an idempotent no-op. The Cookbook
 checkbox handler also emits the event directly after its write so a
 same-client Groceries tab updates without waiting on the realtime
 echo (the echo is a harmless idempotent refetch).

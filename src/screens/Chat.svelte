@@ -282,6 +282,7 @@
   // ~19 kB gz of weight out of the main bundle.
   type RecipeListComponent = typeof import('../components/RecipeList.svelte').default;
   type GroceryListComponent = typeof import('../components/GroceryList.svelte').default;
+  type GroceriesComponent = typeof import('./Groceries.svelte').default;
   type MemoryListComponent = typeof import('../components/MemoryList.svelte').default;
   type CohortPanelComponent = typeof import('../components/CohortPanel.svelte').default;
   type AskUserCardComponent = typeof import('../components/AskUserCard.svelte').default;
@@ -320,6 +321,7 @@
   let LogsDrawerComp: LogsDrawerComponent | null = $state(null);
   let RecipeListComp: RecipeListComponent | null = $state(null);
   let GroceryListComp: GroceryListComponent | null = $state(null);
+  let GroceriesComp: GroceriesComponent | null = $state(null);
   let MemoryListComp: MemoryListComponent | null = $state(null);
   let CohortPanelComp: CohortPanelComponent | null = $state(null);
   let AskUserCardComp: AskUserCardComponent | null = $state(null);
@@ -429,6 +431,9 @@
       void import('../components/GroceryList.svelte').then(
         (m) => (GroceryListComp = m.default)
       );
+    }
+    if (drawerTab === 'groceries' && !GroceriesComp) {
+      void import('./Groceries.svelte').then((m) => (GroceriesComp = m.default));
     }
   });
   $effect(() => {
@@ -6539,10 +6544,12 @@
         {/if}
       </div>
       {:else if drawerTab === 'groceries'}
-        <!-- Groceries tab. The list IS the feature - add, check-off,
-             edit, and section management all happen inline here, so
-             there is no onSelect and no per-item panel navigation.
-             Lazy-loaded like the other tabs. -->
+        <!-- Groceries tab. The sidebar is the all-items browse
+             (search + status/section filters over the full purchase
+             history); the current shopping list renders in the main
+             panel (Groceries.svelte). No onSelect - the sidebar's
+             checkbox toggles items onto the list, and closing the
+             drawer per toggle would fight a multi-add flow. -->
         {#if GroceryListComp}
           <GroceryListComp />
         {/if}
@@ -8158,17 +8165,13 @@
       </div>
       {/if}
       {:else if drawerTab === 'groceries'}
-        <!-- Groceries panel. The grocery list lives entirely in the
-             sidebar (it is a phone-first surface where the drawer is
-             the whole screen); the desktop main panel just points at
-             it. No per-item detail exists to route here. -->
-        <div class="grocery-panel-hint">
-          <p class="subtle">
-            Your grocery list lives in the sidebar. Check ingredients
-            off an upcoming or favorite recipe to add them, or add
-            items directly from the list.
-          </p>
-        </div>
+        <!-- Groceries panel: the current shopping list (add-input,
+             section groups, acquired history, section management,
+             inline editor). The sidebar GroceryList is the all-items
+             browse that feeds it. Lazy-loaded like the other tabs. -->
+        {#if GroceriesComp}
+          <GroceriesComp />
+        {/if}
       {:else if drawerTab === 'recipes'}
         <!-- Recipe panel. Cookbook.svelte now renders inline - no modal
              wrapper, no list pane. Selecting a recipe is done from the

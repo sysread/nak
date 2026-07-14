@@ -160,6 +160,73 @@ export function sectionOrderAfterDrag(
   return next;
 }
 
+// All-items browse (the sidebar) -----------------------------------------
+
+/** Sidebar browse page size. Windowed - the corpus grows unboundedly. */
+export const GROCERY_BROWSE_PAGE_SIZE = 40;
+
+/** Status filter for the sidebar's all-items browse. */
+export type GroceryStatusFilter = 'all' | 'needed' | 'acquired';
+
+export const GROCERY_STATUS_FILTER_OPTIONS: ReadonlyArray<{
+  value: GroceryStatusFilter;
+  label: string;
+}> = [
+  { value: 'all', label: 'All' },
+  { value: 'needed', label: 'On list' },
+  { value: 'acquired', label: 'Acquired' },
+];
+
+/**
+ * Map the status filter to listGroceryItemsPage's `needed` argument
+ * (undefined = no filter).
+ */
+export function browseNeededArg(filter: GroceryStatusFilter): boolean | undefined {
+  if (filter === 'needed') return true;
+  if (filter === 'acquired') return false;
+  return undefined;
+}
+
+/** Section-filter select sentinels: all sections / the Other bucket. */
+export const BROWSE_SECTION_ALL = '';
+export const BROWSE_SECTION_OTHER = '__other';
+
+/**
+ * Map the section-filter select value to listGroceryItemsPage's
+ * `sectionId` argument (undefined = no filter, 'other' = null-section
+ * bucket, anything else = a section id).
+ */
+export function browseSectionArg(selected: string): string | 'other' | undefined {
+  if (selected === BROWSE_SECTION_ALL) return undefined;
+  if (selected === BROWSE_SECTION_OTHER) return 'other';
+  return selected;
+}
+
+/**
+ * The sidebar listing area's render decision, mirroring the recipe
+ * sidebar's computeListView shape: one tagged union so the template
+ * is a switch, not a predicate pile.
+ */
+export type GroceryBrowseView =
+  | { kind: 'loading' }
+  | { kind: 'error'; message: string }
+  | { kind: 'empty'; reason: 'no-items-yet' | 'no-matches' }
+  | { kind: 'list' };
+
+export function computeBrowseView(args: {
+  loading: boolean;
+  error: string | null;
+  count: number;
+  filtered: boolean;
+}): GroceryBrowseView {
+  if (args.error) return { kind: 'error', message: args.error };
+  if (args.loading && args.count === 0) return { kind: 'loading' };
+  if (args.count === 0) {
+    return { kind: 'empty', reason: args.filtered ? 'no-matches' : 'no-items-yet' };
+  }
+  return { kind: 'list' };
+}
+
 // Recipe bridge ---------------------------------------------------------
 
 /**
