@@ -57,8 +57,9 @@ Steps below name which surface they mean.
     a section `Pharmacy`, drag `Pharmacy` above `Produce`, then
     delete `Dairy`.
 13. In the SIDEBAR, search `paper`, then clear the search and set
-    the status filter to `Acquired`. Set it back to `All`, uncheck
-    `eggs` in the sidebar, then re-check it.
+    the status filter to `Acquired`. Set it back to `All`, tick
+    **Show recipe ingredients**, uncheck `eggs` in the sidebar, then
+    re-check it.
 14. Back on the recipe (Recipes tab), uncheck `flour`.
 15. Re-check `flour`, then edit the recipe (pencil), change `3` eggs
     to `4`, and save the edit.
@@ -86,7 +87,7 @@ Steps below name which surface they mean.
   `For <recipe title>`, under **Other**; the sidebar lists both rows
   with checked boxes.
 - (6) `eggs` moves into the **Dairy** card; the **Other** card keeps
-  `flour`.
+  `flour`. Within a card, items order alphabetically by name.
 - (7) `eggs` drops out of the needed list into the greyed
   **Acquired (1)** section (collapsed until clicked; name shown
   struck through). On the recipe, the `eggs` checkbox is now
@@ -102,12 +103,14 @@ Steps below name which surface they mean.
 - (12) Rename, add, drag order (Pharmacy first), and delete all
   stick after closing/reopening the manager. Deleting `Dairy` moves
   `eggs` to **Other** - the item survives.
-- (13) Sidebar: searching `paper` narrows to `paper towels`; the
-  `Acquired` filter shows only bought rows (struck-through-free,
-  muted). Unchecking `eggs` in the sidebar drops it from the main
-  panel's needed list into Acquired; re-checking restores it,
-  section intact - the sidebar checkbox and the panel are two views
-  of the same flag.
+- (13) Sidebar: searching `paper` narrows to `paper towels` under a
+  **Staples** header; `eggs` / `flour` are absent until **Show
+  recipe ingredients** is ticked, after which they appear under an
+  **Ingredients** header below Staples. The `Acquired` filter shows
+  only bought rows (muted). Unchecking `eggs` in the sidebar drops
+  it from the main panel's needed list into Acquired; re-checking
+  restores it, section intact - the sidebar checkbox and the panel
+  are two views of the same flag.
 - (14) Unchecking `flour` on the recipe removes it from both
   Groceries surfaces (open in another window to watch the realtime
   refresh) - a recipe-side uncheck DELETES the row rather than

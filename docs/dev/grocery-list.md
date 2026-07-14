@@ -8,7 +8,11 @@ content in panel" split:
 - the **sidebar** (`GroceryList.svelte`) is the all-items browse - a
   windowed, infinite-scrolled catalog of every item ever added, with
   a debounced name search plus status (All / On list / Acquired) and
-  section filters. Its one verb is the checkbox: checked = on the
+  section filters. Rows split by provenance: manually-entered
+  "Staples" first, recipe-sourced "Ingredients" below - and the
+  Ingredients group is hidden by default behind a "Show recipe
+  ingredients" toggle (a server-side `manualOnly` filter, so paging
+  stays honest). Its one verb is the checkbox: checked = on the
   current list; toggling flips `needed`, which is how a past
   purchase gets restocked. An unmatched search offers an Add action.
 - the **main panel** (`src/screens/Groceries.svelte`) is the working
@@ -55,8 +59,9 @@ owns current reality.
   browse: debounced search, status + section filters (mapped to the
   service pager via `browseNeededArg` / `browseSectionArg`), a
   windowed listing with an infinite-scroll sentinel
-  (`listGroceryItemsPage`), per-row needed toggles, and the
-  unmatched-search Add action.
+  (`listGroceryItemsPage`), the provenance split + recipe-items
+  toggle (`splitBrowseRows` / `manualOnly`), per-row needed toggles,
+  and the unmatched-search Add action.
 - `src/screens/Groceries.svelte` - the main-panel shopping list:
   add-input with debounced acquired-history suggestions, the needed
   panes grouped by section, the collapsed acquired history, the
