@@ -179,22 +179,33 @@ describe('computeBrowseView', () => {
 });
 
 describe('recipeCheckboxItemIds', () => {
-  it('maps ingredients to rows by normalized name', () => {
+  it('maps ingredients to rows by normalized name, carrying needed', () => {
     const map = recipeCheckboxItemIds(
       [ingredient({ name: 'Flour' }), ingredient({ name: 'salt' })],
-      [{ id: 'r1', name: 'flour' }]
+      [{ id: 'r1', name: 'flour', needed: true }]
     );
-    expect(map.get('flour')).toBe('r1');
+    expect(map.get('flour')).toEqual({ id: 'r1', needed: true });
     expect(map.has('salt')).toBe(false);
   });
 
   it('collapses duplicate ingredient names onto one row', () => {
     const map = recipeCheckboxItemIds(
       [ingredient({ name: 'butter' }), ingredient({ name: 'Butter' })],
-      [{ id: 'r2', name: 'butter' }]
+      [{ id: 'r2', name: 'butter', needed: false }]
     );
     expect(map.size).toBe(1);
-    expect(map.get('butter')).toBe('r2');
+    expect(map.get('butter')).toEqual({ id: 'r2', needed: false });
+  });
+
+  it('prefers a needed row when two rows share a name', () => {
+    const map = recipeCheckboxItemIds(
+      [ingredient({ name: 'eggs' })],
+      [
+        { id: 'old', name: 'eggs', needed: false },
+        { id: 'live', name: 'Eggs', needed: true },
+      ]
+    );
+    expect(map.get('eggs')).toEqual({ id: 'live', needed: true });
   });
 });
 

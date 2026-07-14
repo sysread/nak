@@ -126,10 +126,14 @@ grocery_items":
   `recipeCheckboxItemIds` maps parsed ingredients to grocery rows,
   the sync effect sets `checked` per input's `data-ing`, and the
   delegated handler resolves clicks back to an ingredient.
-- A checkbox reads checked when a row EXISTS for the recipe with a
-  matching name, regardless of `needed` - buying an item at the
-  store must not visually "un-plan" the recipe. Unchecking in the
-  recipe view deletes the row.
+- A checkbox mirrors its matched row's `needed` flag - "is this on
+  my list right now". Removing or buying the item on the list side
+  unchecks it on the recipe; re-checking revives the existing row
+  (setGroceryItemNeeded) instead of inserting a duplicate.
+  Unchecking in the recipe view deletes the row outright. (The
+  original design showed row EXISTENCE instead, so a store purchase
+  didn't "un-plan" the recipe - real use found that reading
+  surprising, so the semantics were flipped.)
 - Checking inserts a row carrying the cooklang qty/unit verbatim, a
   `"For <title>"` note, `recipe_id`, `needed = true`, section null.
 - **Invalidation**: the `clear_grocery_items_on_recipe_change`

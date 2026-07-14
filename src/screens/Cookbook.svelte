@@ -948,12 +948,12 @@
 
   // --- grocery-bridge state (the ingredient checkboxes) ---
 
-  // Grocery rows linked to the open recipe. A checkbox reads as
-  // checked when a row EXISTS for its ingredient name (regardless of
-  // the row's `needed` flag - buying the item at the store should not
-  // silently re-open it here). Refetched on recipe change and on the
-  // grocery change event, which also covers the invalidation
-  // trigger's wipe after a recipe edit.
+  // Grocery rows linked to the open recipe. A checkbox mirrors the
+  // matched row's `needed` flag - "is this on my list right now" -
+  // so removing or buying the item on the list side unchecks it
+  // here. Refetched on recipe change and on the grocery change
+  // event, which also covers the invalidation trigger's wipe after
+  // a recipe edit.
   let recipeGroceryItems = $state<GroceryItem[]>([]);
 
   async function loadRecipeGroceryItems(): Promise<void> {
@@ -988,10 +988,13 @@
     void detailHtml;
     const items = recipeGroceryItems;
     if (!el || !parsedDetail) return;
-    const checked = recipeCheckboxItemIds(parsedDetail.ingredients, items);
+    const entries = recipeCheckboxItemIds(parsedDetail.ingredients, items);
     for (const input of el.querySelectorAll<HTMLInputElement>('input.cook-buy')) {
       const name = input.dataset.ing ?? '';
-      input.checked = checked.has(normalizeGroceryName(name));
+      // Checked = the matched row is on the current list. A row that
+      // was bought or removed on the list side reads unchecked here;
+      // re-checking revives it (see onRenderChange).
+      input.checked = entries.get(normalizeGroceryName(name))?.needed === true;
     }
   });
 
@@ -1012,25 +1015,33 @@
     const key = normalizeGroceryName(target.dataset.ing ?? '');
     void (async () => {
       try {
+        const existing = recipeCheckboxItemIds(parsed.ingredients, recipeGroceryItems);
+        const entry = existing.get(key);
         if (target.checked) {
-          const ingredient = parsed.ingredients.find(
-            (i) => normalizeGroceryName(i.name) === key
-          );
-          // Double-insert guard: a row for this name may already exist
-          // (two checkboxes share a name, or a stale render).
-          const existing = recipeCheckboxItemIds(parsed.ingredients, recipeGroceryItems);
-          if (ingredient && !existing.has(key)) {
-            await supabase.createGroceryItem(
-              groceryItemFromIngredient(ingredient, {
-                id: recipe.id,
-                title: recipe.title,
-              })
+          if (entry) {
+            // A row already exists (bought on a past trip, or removed
+            // from the list without deleting) - revive it instead of
+            // inserting a duplicate.
+            if (!entry.needed) await supabase.setGroceryItemNeeded(entry.id, true);
+          } else {
+            const ingredient = parsed.ingredients.find(
+              (i) => normalizeGroceryName(i.name) === key
             );
+            if (ingredient) {
+              await supabase.createGroceryItem(
+                groceryItemFromIngredient(ingredient, {
+                  id: recipe.id,
+                  title: recipe.title,
+                })
+              );
+            }
           }
-        } else {
-          const existing = recipeCheckboxItemIds(parsed.ingredients, recipeGroceryItems);
-          const itemId = existing.get(key);
-          if (itemId) await supabase.deleteGroceryItem(itemId);
+        } else if (entry) {
+          // Un-planning deletes the row outright (rather than flipping
+          // needed false) so the wipe-on-recipe-edit story stays
+          // simple: rows linked to a recipe are exactly the checked
+          // set plus what was bought for it.
+          await supabase.deleteGroceryItem(entry.id);
         }
       } finally {
         await loadRecipeGroceryItems();

@@ -27,9 +27,10 @@ unchecking it removes it again.
 
 Two things to know:
 
-- The checkbox reflects "is this on my list (or bought for this
-  recipe)" - buying the item at the store does **not** uncheck it on
-  the recipe, so you can still see what you already shopped for.
+- The checkbox means "this is on my list right now." Removing the
+  item from the list (or checking it off during a shopping trip)
+  unchecks it on the recipe too; re-checking it puts the same item
+  back on the list.
 - **Editing a recipe's ingredients clears that recipe's items from
   the grocery list.** Ingredients live inside the recipe text, so
   after an edit the app can't tell which list items still match -
