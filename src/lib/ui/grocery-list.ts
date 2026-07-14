@@ -61,8 +61,11 @@ export interface GrocerySectionGroup {
 }
 
 /**
- * Group the needed items by section for rendering: user's section
- * order with the null-section "Other" bucket pinned last. EVERY
+ * Group the needed items by section for rendering: the null-section
+ * "Other" bucket pinned FIRST (it is the intake tray - fresh adds
+ * and recipe checkboxes land there until filed, and burying it at
+ * the tail hid exactly the items most recently touched), then the
+ * user's sections in their order. EVERY
  * section appears, including empty ones (and Other) - the panel
  * renders one card per section, and an aisle the user walks past
  * should show up even when nothing is filed under it. Items sort
@@ -91,12 +94,14 @@ export function groupItemsBySection(
   }
   const alphabetical = (list: GroceryItemView[]): GroceryItemView[] =>
     list.sort((a, b) => a.name.localeCompare(b.name));
-  const groups: GrocerySectionGroup[] = sections.map((s) => ({
-    id: s.id,
-    name: s.name,
-    items: alphabetical(byId.get(s.id) ?? []),
-  }));
-  groups.push({ id: null, name: OTHER_SECTION_LABEL, items: alphabetical(other) });
+  const groups: GrocerySectionGroup[] = [
+    { id: null, name: OTHER_SECTION_LABEL, items: alphabetical(other) },
+    ...sections.map((s) => ({
+      id: s.id,
+      name: s.name,
+      items: alphabetical(byId.get(s.id) ?? []),
+    })),
+  ];
   return groups;
 }
 

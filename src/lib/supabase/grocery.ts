@@ -306,9 +306,15 @@ export async function listGroceryItemsPage(
   if (opts.sectionId === 'other') q = q.is('section_id', null);
   else if (opts.sectionId !== undefined) q = q.eq('section_id', opts.sectionId);
   if (opts.manualOnly === true) q = q.is('recipe_id', null);
+  // Alphabetical by name (id tiebreak so the offset window can't drop
+  // or repeat a colliding row across page boundaries). Ordered by the
+  // column's collation server-side - a client re-sort of a paged
+  // window would disagree with the server's page seams, same
+  // rationale as the recipe sidebar's A-Z sort. Replaced the original
+  // recency order: the browse reads as a catalog index, not a feed.
   q = q
-    .order('updated_at', { ascending: false })
-    .order('id', { ascending: false })
+    .order('name', { ascending: true })
+    .order('id', { ascending: true })
     .range(opts.offset, opts.offset + opts.pageSize);
   const { data, error } = await q;
   if (error) throw new SupabaseError(error.message);

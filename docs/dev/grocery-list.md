@@ -6,9 +6,10 @@ detail pane in the Cookbook, and manual adds. Two surfaces, matching the other t
 content in panel" split:
 
 - the **sidebar** (`GroceryList.svelte`) is the all-items browse - a
-  windowed, infinite-scrolled catalog of every item ever added, with
-  a debounced name search plus status (All / On list / Acquired) and
-  section filters. Rows split by provenance: manually-entered
+  windowed, infinite-scrolled catalog of every item ever added,
+  alphabetical by name (ordered server-side so the page seams stay
+  honest), with a debounced name search plus status (All / On list /
+  Acquired) and section filters. Rows split by provenance: manually-entered
   "Staples" first, recipe-sourced "Ingredients" below - and the
   Ingredients group is hidden by default behind a "Show recipe
   ingredients" toggle (a server-side `manualOnly` filter, so paging
@@ -17,8 +18,9 @@ content in panel" split:
   purchase gets restocked. An unmatched search offers an Add action.
 - the **main panel** (`src/screens/Groceries.svelte`) is the working
   surface: the current list as one card per store section (section
-  name as the card title, items one per row; every section renders
-  even when empty, Other pinned last), the add-input with
+  name as the card title, items one per row, alphabetical; every
+  section renders even when empty, Other pinned first as the intake
+  tray for unfiled adds), the add-input with
   acquired-history suggestions, the collapsed acquired history, the
   inline item editor (name / count / unit / note / section / photo /
   delete), and section management. Full-width, which is what a

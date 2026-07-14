@@ -12,8 +12,9 @@
    *  - the add-to-list input, whose debounced suggestions search the
    *    acquired history (previously bought items) - picking one flips
    *    its row back to needed with section / note / photo intact;
-   *  - the needed list: one CARD per store section in the user's
-   *    order ("Other" pinned last), section name as the card title,
+   *  - the needed list: one CARD per store section ("Other" pinned
+   *    first as the intake tray, then the user's order), section
+   *    name as the card title,
    *    items one per row. Every section renders even when empty -
    *    the cards are the store's walk order, and an aisle shouldn't
    *    vanish just because nothing is filed under it today.
@@ -404,6 +405,13 @@
          delete. "Other" is not a row here - it's the permanent
          null-section bucket and has no affordances by design. -->
     <div class="grocery-section-manager">
+      <!-- Other leads, matching the card order in the list below. Not
+           a row (it is the null-section pseudo-bucket), so it carries
+           no drag/rename/delete affordances. -->
+      <div class="grocery-section-row grocery-section-other">
+        <span class="grocery-drag-handle grocery-drag-handle-disabled" aria-hidden="true">&#8942;&#8942;</span>
+        <span class="grocery-section-name-static">{OTHER_SECTION_LABEL}</span>
+      </div>
       {#each grocery.sections as s (s.id)}
         <div
           class="grocery-section-row"
@@ -451,10 +459,6 @@
           >&times;</button>
         </div>
       {/each}
-      <div class="grocery-section-row grocery-section-other">
-        <span class="grocery-drag-handle grocery-drag-handle-disabled" aria-hidden="true">&#8942;&#8942;</span>
-        <span class="grocery-section-name-static">{OTHER_SECTION_LABEL}</span>
-      </div>
       <div class="grocery-section-add">
         <input
           class="grocery-section-add-input"
@@ -576,10 +580,12 @@
         an upcoming or favorite recipe.
       </p>
     {/if}
-    <!-- One card per section, in the user's order, Other pinned last.
-         Every section renders even when empty - the cards ARE the
-         store layout, and an aisle shouldn't disappear from the walk
-         order just because nothing is filed under it today. -->
+    <!-- One card per section: Other pinned FIRST (the intake tray -
+         fresh adds and recipe checkboxes land there until filed),
+         then the user's sections in their order. Every section
+         renders even when empty - the cards ARE the store layout,
+         and an aisle shouldn't disappear from the walk order just
+         because nothing is filed under it today. -->
     {#each neededGroups as group (group.id ?? '__other')}
       <section class="grocery-section-card">
         <h3 class="grocery-section-card-title">{group.name}</h3>
