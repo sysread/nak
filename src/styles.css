@@ -57,6 +57,11 @@
   --shadow-pop: 0 12px 24px rgba(0, 0, 0, 0.35); /* floating popover menus */
   --shadow-menu: 0 4px 14px rgb(0 0 0 / 0.16); /* combobox dropdown lists */
   --focus-ring: 0 0 0 2px var(--accent-weak); /* :focus-visible halo on inputs */
+  /* Track circle behind the ContextRing progress arc. Defaults to the
+     hairline border tone; the terminal style must override it because
+     it sets --border transparent, which erases the track and leaves
+     the arc floating as a bare dot at low percentages. */
+  --ring-track: var(--border);
   /* The app's single typeface. Everything renders in this stack - body,
      code, form controls - so any font-family override elsewhere must
      either reference this token or justify itself (the color-emoji
@@ -223,6 +228,11 @@
      shifts when the user flips styles. Separation comes from the
      stepped surface fills below. */
   --border: transparent;
+  /* --ring-track defaults to --border, which the line above just made
+     transparent - the ContextRing's bucket circle would vanish into
+     its host button. --muted matches the form-control borders and is
+     spec'd >= 4.5:1 on all three surfaces in both terminal themes. */
+  --ring-track: var(--muted);
 }
 
 :root[data-theme='dark'][data-style='terminal'] {
