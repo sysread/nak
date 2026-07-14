@@ -69,6 +69,9 @@ You can reach these pages two ways:
   and how to inspect what it has on you.
 - [Cookbook](./cookbook.md) — a personal store for Cooklang recipes,
   with a dedicated modal and a tab in the conversation drawer.
+- [Grocery list](./grocery-list.md) — the Groceries drawer tab: a
+  phone-friendly shopping list organized by store section, fed by
+  ingredient checkboxes on your upcoming and favorite recipes.
 - [Samskara](./samskara.md) — the instincts Nak forms about you as you
   chat: the read-only Samskara tab (browse the whole corpus, tier-1 and
   tier-2 compounds, plus a pipeline-health readout), the per-conversation

@@ -156,6 +156,8 @@
     loadRecipes,
   } from '$lib/cookbook-store.svelte';
   import { onCookbookChange, emitCookbookChange } from '$lib/cookbook-events';
+  import { grocery, loadGroceries } from '$lib/grocery-store.svelte';
+  import { emitGroceryChange } from '$lib/grocery-events';
   import {
     memoriesStore,
     runMemoriesSearch,
@@ -279,6 +281,7 @@
   // post-first-paint load misses nothing). All five together carry
   // ~19 kB gz of weight out of the main bundle.
   type RecipeListComponent = typeof import('../components/RecipeList.svelte').default;
+  type GroceryListComponent = typeof import('../components/GroceryList.svelte').default;
   type MemoryListComponent = typeof import('../components/MemoryList.svelte').default;
   type CohortPanelComponent = typeof import('../components/CohortPanel.svelte').default;
   type AskUserCardComponent = typeof import('../components/AskUserCard.svelte').default;
@@ -316,6 +319,7 @@
   let ExtractedTextDrawerComp: ExtractedTextDrawerComponent | null = $state(null);
   let LogsDrawerComp: LogsDrawerComponent | null = $state(null);
   let RecipeListComp: RecipeListComponent | null = $state(null);
+  let GroceryListComp: GroceryListComponent | null = $state(null);
   let MemoryListComp: MemoryListComponent | null = $state(null);
   let CohortPanelComp: CohortPanelComponent | null = $state(null);
   let AskUserCardComp: AskUserCardComponent | null = $state(null);
@@ -421,6 +425,13 @@
     }
   });
   $effect(() => {
+    if (drawerTab === 'groceries' && !GroceryListComp) {
+      void import('../components/GroceryList.svelte').then(
+        (m) => (GroceryListComp = m.default)
+      );
+    }
+  });
+  $effect(() => {
     if (drawerTab === 'memories' && !MemoryListComp) {
       void import('../components/MemoryList.svelte').then(
         (m) => (MemoryListComp = m.default)
@@ -507,10 +518,20 @@
    * entries.
    */
   const drawerTab = $derived<
-    'chats' | 'recipes' | 'memories' | 'wiki' | 'library' | 'artifacts' | 'samskara'
+    'chats' | 'groceries' | 'recipes' | 'memories' | 'wiki' | 'library' | 'artifacts' | 'samskara'
   >(route.drawer ?? 'chats');
   // Recipe and memory search/listing state has moved to the
   // RecipeList / MemoryList sidebar components.
+
+  // Groceries drawer tab. Same lazy-load shape as recipes - the list
+  // component's onMount also loads, but kicking it on tab-pick lets a
+  // hidden-sidebar (mobile) landing start the fetch immediately.
+  function onPickGroceriesTab(): void {
+    navigate({ drawer: 'groceries' }, { replace: true });
+    if (app.supabase && !grocery.loaded && !grocery.loading) {
+      void loadGroceries(app.supabase);
+    }
+  }
 
   function onPickRecipesTab(): void {
     navigate({ drawer: 'recipes' }, { replace: true });
@@ -1938,6 +1959,16 @@
       // so re-reconcile the offline cache off the fresh marked set.
       void syncOfflineCache(supabase);
     });
+  });
+
+  // Realtime: the grocery leg. Grocery writes the UI didn't make
+  // itself - the recipe-edit invalidation trigger's bulk delete, a
+  // Cookbook checkbox click while the Groceries tab is open, another
+  // device at the store - reach the open list through this relay
+  // into the grocery event bus.
+  $effect(() => {
+    if (!app.supabase || !session) return;
+    return app.supabase.subscribeToGroceryChanges(session.user.id, emitGroceryChange);
   });
 
   // Offline cache: track connectivity and keep the IndexedDB mirror of
@@ -6222,6 +6253,16 @@
               type="button"
               role="tab"
               class="thread grow"
+              class:active={drawerTab === 'groceries'}
+              aria-selected={drawerTab === 'groceries'}
+              onclick={() => onPickGroceriesTab()}
+            >Groceries</button>
+          </div>
+          <div class="row thread-row">
+            <button
+              type="button"
+              role="tab"
+              class="thread grow"
               class:active={drawerTab === 'recipes'}
               aria-selected={drawerTab === 'recipes'}
               onclick={() => onPickRecipesTab()}
@@ -6497,6 +6538,14 @@
           {/if}
         {/if}
       </div>
+      {:else if drawerTab === 'groceries'}
+        <!-- Groceries tab. The list IS the feature - add, check-off,
+             edit, and section management all happen inline here, so
+             there is no onSelect and no per-item panel navigation.
+             Lazy-loaded like the other tabs. -->
+        {#if GroceryListComp}
+          <GroceryListComp />
+        {/if}
       {:else if drawerTab === 'recipes'}
         <!-- Recipes tab. RecipeList owns the search, sort, and item
              rows. Clicking a recipe navigates to it inline in the main
@@ -6788,6 +6837,14 @@
                 >{currentThread.title || 'Untitled'}</button>
               {/if}
             {/if}
+          </div>
+
+        {:else if drawerTab === 'groceries'}
+          <!-- Groceries top-bar: label only. Add / edit / section
+               management all live inline in the sidebar list, so
+               there is nothing to launch from here. -->
+          <div class="title-wrap">
+            <span class="title-btn panel-section-label">Groceries</span>
           </div>
 
         {:else if drawerTab === 'recipes'}
@@ -8100,6 +8157,18 @@
         </div>
       </div>
       {/if}
+      {:else if drawerTab === 'groceries'}
+        <!-- Groceries panel. The grocery list lives entirely in the
+             sidebar (it is a phone-first surface where the drawer is
+             the whole screen); the desktop main panel just points at
+             it. No per-item detail exists to route here. -->
+        <div class="grocery-panel-hint">
+          <p class="subtle">
+            Your grocery list lives in the sidebar. Check ingredients
+            off an upcoming or favorite recipe to add them, or add
+            items directly from the list.
+          </p>
+        </div>
       {:else if drawerTab === 'recipes'}
         <!-- Recipe panel. Cookbook.svelte now renders inline - no modal
              wrapper, no list pane. Selecting a recipe is done from the

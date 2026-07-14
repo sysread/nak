@@ -77,6 +77,11 @@ changing a contract that other features depend on.
 - [Cookbook](./cookbook.md) — `recipes` store + Cooklang
   parser + the recipe_* tools + the Cookbook modal and
   drawer tab.
+- [Grocery list](./grocery-list.md) — the `grocery_items` /
+  `grocery_sections` store, the Groceries drawer tab, the
+  ingredient-checkbox bridge from bookmarked recipes, the
+  recipe-edit invalidation trigger, and the item-photo bucket
+  plus its GC sweep.
 - [Library](./library.md) — persistent uploaded documents:
   the `documents` + `document_chunks` tables, the Storage
   bucket for originals, browser-side extraction + chunking,

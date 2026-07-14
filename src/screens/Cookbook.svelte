@@ -79,7 +79,13 @@
     versionRowState,
     type DraftPhoto,
   } from '$lib/ui/cookbook-screen';
-  import type { Recipe, RecipeVersion } from '$lib/supabase';
+  import type { GroceryItem, Recipe, RecipeVersion } from '$lib/supabase';
+  import { onGroceryChange, emitGroceryChange } from '$lib/grocery-events';
+  import {
+    groceryItemFromIngredient,
+    normalizeGroceryName,
+    recipeCheckboxItemIds,
+  } from '$lib/ui/grocery-list';
   import {
     arrayBufferToBase64,
     dataUrlFor,
@@ -911,7 +917,18 @@
     const r = activeRecipe;
     return r ? parseCooklang(r.cooklang) : null;
   });
-  const detailHtml = $derived(parsedDetail ? recipeToHtml(parsedDetail) : '');
+  // Grocery checkboxes render only on bookmarked recipes - the
+  // upcoming / favorite flags are the "I'm going to cook this" signal
+  // that makes shopping for it meaningful. Unbookmarked recipes keep
+  // the plain ingredient list.
+  const detailCheckboxes = $derived(
+    activeRecipe !== null && (activeRecipe.upcoming || activeRecipe.favorite)
+  );
+  const detailHtml = $derived(
+    parsedDetail
+      ? recipeToHtml(parsedDetail, { ingredientCheckboxes: detailCheckboxes })
+      : ''
+  );
   const detailToc = $derived(parsedDetail ? recipeToc(parsedDetail) : []);
   // Hide the TOC below two jump targets - a lone "Instructions" link
   // with nothing to skip past is noise, not navigation. Threshold
@@ -927,6 +944,101 @@
   function scrollToHeading(id: string): void {
     const el = detailRenderEl?.querySelector(`#${CSS.escape(id)}`);
     el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  // --- grocery-bridge state (the ingredient checkboxes) ---
+
+  // Grocery rows linked to the open recipe. A checkbox reads as
+  // checked when a row EXISTS for its ingredient name (regardless of
+  // the row's `needed` flag - buying the item at the store should not
+  // silently re-open it here). Refetched on recipe change and on the
+  // grocery change event, which also covers the invalidation
+  // trigger's wipe after a recipe edit.
+  let recipeGroceryItems = $state<GroceryItem[]>([]);
+
+  async function loadRecipeGroceryItems(): Promise<void> {
+    const id = activeId;
+    if (!id || !app.supabase) {
+      recipeGroceryItems = [];
+      return;
+    }
+    try {
+      recipeGroceryItems = await app.supabase.listGroceryItemsForRecipe(id);
+    } catch {
+      // Non-fatal for the recipe view - the checkboxes just render
+      // unchecked until the next successful refetch.
+      recipeGroceryItems = [];
+    }
+  }
+
+  $effect(() => {
+    // Reads activeId so a recipe switch refetches.
+    void activeId;
+    void loadRecipeGroceryItems();
+    return onGroceryChange(() => void loadRecipeGroceryItems());
+  });
+
+  // Sync the rendered checkboxes' checked state from the grocery rows.
+  // The render is an {@html} string, so state can't ride the markup -
+  // this effect walks the mounted inputs after every render/data
+  // change. Keyed by normalized ingredient name because ingredients
+  // have no stable id (they are parsed out of the cooklang source).
+  $effect(() => {
+    const el = detailRenderEl;
+    void detailHtml;
+    const items = recipeGroceryItems;
+    if (!el || !parsedDetail) return;
+    const checked = recipeCheckboxItemIds(parsedDetail.ingredients, items);
+    for (const input of el.querySelectorAll<HTMLInputElement>('input.cook-buy')) {
+      const name = input.dataset.ing ?? '';
+      input.checked = checked.has(normalizeGroceryName(name));
+    }
+  });
+
+  // Delegated change handler for the grocery checkboxes ({@html}
+  // markup can't carry Svelte handlers). Checking inserts a grocery
+  // item carrying the cooklang quantity verbatim plus a note naming
+  // this recipe; unchecking deletes the row. Either way the rows
+  // refetch and the checked-state effect reconciles the DOM - on a
+  // failed write that reconcile is also what rolls the checkbox back.
+  function onRenderChange(e: Event): void {
+    const target = e.target;
+    if (!(target instanceof HTMLInputElement)) return;
+    if (!target.classList.contains('cook-buy')) return;
+    const recipe = activeRecipe;
+    const parsed = parsedDetail;
+    if (!recipe || !parsed || !app.supabase) return;
+    const supabase = app.supabase;
+    const key = normalizeGroceryName(target.dataset.ing ?? '');
+    void (async () => {
+      try {
+        if (target.checked) {
+          const ingredient = parsed.ingredients.find(
+            (i) => normalizeGroceryName(i.name) === key
+          );
+          // Double-insert guard: a row for this name may already exist
+          // (two checkboxes share a name, or a stale render).
+          const existing = recipeCheckboxItemIds(parsed.ingredients, recipeGroceryItems);
+          if (ingredient && !existing.has(key)) {
+            await supabase.createGroceryItem(
+              groceryItemFromIngredient(ingredient, {
+                id: recipe.id,
+                title: recipe.title,
+              })
+            );
+          }
+        } else {
+          const existing = recipeCheckboxItemIds(parsed.ingredients, recipeGroceryItems);
+          const itemId = existing.get(key);
+          if (itemId) await supabase.deleteGroceryItem(itemId);
+        }
+      } finally {
+        await loadRecipeGroceryItems();
+        // Nudge an open Groceries tab in this same client immediately -
+        // the realtime echo also arrives, but round-trips noticeably.
+        emitGroceryChange();
+      }
+    })();
   }
 
   // The version row currently being viewed read-only, or null when the
@@ -1371,7 +1483,12 @@
                  click can resolve its target id within this render. -->
             <!-- svelte-ignore a11y_click_events_have_key_events -->
             <!-- svelte-ignore a11y_no_static_element_interactions -->
-            <div class="cookbook-render" bind:this={detailRenderEl} onclick={onRenderClick}>
+            <div
+              class="cookbook-render"
+              bind:this={detailRenderEl}
+              onclick={onRenderClick}
+              onchange={onRenderChange}
+            >
               {@html detailHtml}
             </div>
             {/if}
@@ -2055,6 +2172,19 @@
     color: var(--muted);
     font-size: 0.85em;
     font-style: italic;
+  }
+
+  /* Grocery checkbox on bookmarked recipes' ingredient rows. Sized as
+     a thumb target (matching the grocery list's own checkboxes) and
+     vertically centered against the qty pill so a tall row reads as
+     one line. */
+  .cookbook-render :global(.cook-buy) {
+    width: 1.05rem;
+    height: 1.05rem;
+    margin-right: 0.35rem;
+    vertical-align: -0.15rem;
+    accent-color: var(--accent);
+    cursor: pointer;
   }
 
   /* Instruction steps — replace the browser-default "1." marker with

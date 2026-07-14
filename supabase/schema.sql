@@ -43,6 +43,7 @@
 --   messages  individual turns within a thread (incl. OpenAI-shape tool rows)
 --   memories  freeform notes CRUD-able by the user and the memory_* tools
 --   recipes   Cooklang recipes CRUD-able by the user and the recipe_* tools
+--   grocery_items / grocery_sections   the grocery list (user-driven UI only)
 --
 -- All tables have Row Level Security enabled so an authenticated user
 -- can only access rows they own. The publishable key the browser uses
@@ -3172,6 +3173,396 @@ begin
      where l.recipe_version_id = v_new_version_id
      order by l.position;
 end $$;
+
+-- grocery_sections / grocery_items ----------------------------------------
+--
+-- The grocery list. Items are user-owned shopping-list rows organized
+-- by store section (aisle). Two intake paths: manual adds from the
+-- Groceries drawer tab, and per-ingredient checkboxes on bookmarked
+-- (upcoming / favorite) recipes in the Cookbook detail pane.
+--
+-- Sections are free-form, user-ordered rows. The permanent "Other"
+-- section is deliberately NOT a row: items with `section_id is null`
+-- render in a fixed "Other" pseudo-section pinned last in the list.
+-- That makes Other undeletable and unrenamable by construction, and
+-- lets section deletion be `on delete set null` - a deleted section's
+-- items fall back to Other instead of vanishing. Canned starter
+-- sections are seeded lazily by the client (needs an auth context the
+-- sync script doesn't have), guarded against double-seeding.
+--
+-- `needed` is the shopping flag: true = still to buy (renders in the
+-- main list), false = acquired (renders greyed-out in a collapsed
+-- history section, and feeds the add-input's "previously bought"
+-- suggestion search). Unchecking at the store flips it false; the row
+-- is kept, not deleted, so the purchase history accumulates.
+--
+-- `count` is free-form TEXT, not numeric: recipe quantities arrive
+-- verbatim from cooklang ("1/2", "2-3", "a pinch") and a numeric
+-- column would mangle them. `unit` is free-form for the same reason
+-- ("package", "loaf").
+--
+-- `recipe_id` links checkbox-added items back to their recipe (null =
+-- manually added). `on delete cascade`: deleting a recipe removes its
+-- list items. Recipe EDITS are handled by the trigger below.
+
+create table if not exists public.grocery_sections (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  name text not null,
+  -- Display order in the grocery list, lower first. The client's
+  -- drag-and-drop reorder rewrites the whole per-user sequence via
+  -- grocery_sections_reorder; values stay dense from 0.
+  position int not null,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists grocery_sections_user_position_idx
+  on public.grocery_sections (user_id, position);
+
+alter table public.grocery_sections enable row level security;
+
+drop policy if exists "grocery_sections are self-selectable" on public.grocery_sections;
+create policy "grocery_sections are self-selectable" on public.grocery_sections
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "grocery_sections are self-insertable" on public.grocery_sections;
+create policy "grocery_sections are self-insertable" on public.grocery_sections
+  for insert with check (auth.uid() = user_id);
+
+drop policy if exists "grocery_sections are self-updatable" on public.grocery_sections;
+create policy "grocery_sections are self-updatable" on public.grocery_sections
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "grocery_sections are self-deletable" on public.grocery_sections;
+create policy "grocery_sections are self-deletable" on public.grocery_sections
+  for delete using (auth.uid() = user_id);
+
+-- Atomic section reorder: set the user's section order to exactly
+-- p_section_ids (position = array index). The array must be a
+-- permutation of the caller's current section set - a missing or
+-- foreign id is a hard error, so a stale drag can't silently drop a
+-- section to the tail. security invoker: RLS scopes every row touch
+-- to the caller.
+create or replace function public.grocery_sections_reorder(p_section_ids uuid[])
+returns void
+language plpgsql security invoker as $$
+declare
+  v_uid uuid := auth.uid();
+  v_count int;
+begin
+  if v_uid is null then raise exception 'not authenticated'; end if;
+  select count(*) into v_count
+    from public.grocery_sections where user_id = v_uid;
+  if v_count <> coalesce(array_length(p_section_ids, 1), 0) then
+    raise exception 'reorder must enumerate every section exactly once';
+  end if;
+  update public.grocery_sections s
+     set position = u.ord - 1
+    from unnest(p_section_ids) with ordinality as u(id, ord)
+   where s.id = u.id and s.user_id = v_uid;
+  if not found and v_count > 0 then
+    raise exception 'reorder ids do not match any section';
+  end if;
+end $$;
+
+create table if not exists public.grocery_items (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  name text not null,
+  -- Free-form quantity text ("2", "1/2", "2-3"). Null = unspecified.
+  count text,
+  -- Free-form unit ("lb", "package", "loaf"). Null = unspecified.
+  unit text,
+  note text,
+  section_id uuid references public.grocery_sections(id) on delete set null,
+  -- True = still to buy; false = acquired / purchase history.
+  needed boolean not null default true,
+  -- Source recipe for checkbox-added items; null for manual adds.
+  recipe_id uuid references public.recipes(id) on delete cascade,
+  -- image_id (optional product photo) is added below, after the
+  -- grocery_item_images table it references exists - an inline FK here
+  -- would break a fresh start-to-finish apply on table order.
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- Serves both list panes: the needed list is fetched whole, the
+-- acquired history is fetched as a recency window.
+create index if not exists grocery_items_user_needed_idx
+  on public.grocery_items (user_id, needed, updated_at desc);
+
+-- Reverse lookup for the invalidation trigger's delete and the
+-- recipe-detail checkbox-state query.
+create index if not exists grocery_items_recipe_idx
+  on public.grocery_items (recipe_id) where recipe_id is not null;
+
+alter table public.grocery_items enable row level security;
+
+drop policy if exists "grocery_items are self-selectable" on public.grocery_items;
+create policy "grocery_items are self-selectable" on public.grocery_items
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "grocery_items are self-insertable" on public.grocery_items;
+create policy "grocery_items are self-insertable" on public.grocery_items
+  for insert with check (auth.uid() = user_id);
+
+drop policy if exists "grocery_items are self-updatable" on public.grocery_items;
+create policy "grocery_items are self-updatable" on public.grocery_items
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "grocery_items are self-deletable" on public.grocery_items;
+create policy "grocery_items are self-deletable" on public.grocery_items
+  for delete using (auth.uid() = user_id);
+
+-- Recipe-change invalidation. Ingredients are embedded in the recipe's
+-- cooklang markup, not discrete rows, so after an edit there is no way
+-- to know which list items still correspond to real ingredients -
+-- wholesale deletion of the recipe's items is the only honest answer.
+-- A trigger (rather than client-side cleanup) covers every write path
+-- uniformly: the Cookbook modal, the server-dispatched recipe_update
+-- LLM tool, and revert all funnel through an UPDATE on recipes.
+-- Fires only when `cooklang` actually changed - bookmark toggles,
+-- rating changes, and title/source edits leave the ingredient list
+-- intact, so they leave the grocery list intact too. Recipe DELETEs
+-- are covered by the FK cascade, not this trigger.
+create or replace function public.clear_grocery_items_on_recipe_change()
+returns trigger language plpgsql as $$
+begin
+  if new.cooklang is distinct from old.cooklang then
+    delete from public.grocery_items where recipe_id = new.id;
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists clear_grocery_items_on_recipe_change on public.recipes;
+create trigger clear_grocery_items_on_recipe_change
+  after update on public.recipes
+  for each row execute function public.clear_grocery_items_on_recipe_change();
+
+-- grocery_item_images ------------------------------------------------------
+--
+-- Product photos for grocery items (a brand label the shopper wants to
+-- match, etc.). Direct clone of `recipe_images`: content-addressed
+-- bytes in a private bucket, one metadata row per (user_id, sha256),
+-- rows immutable (byte changes mean a different sha, which means a
+-- different row). Unlike recipe photos there is no link table - an
+-- item has at most one photo via `grocery_items.image_id`, and the
+-- same image row may be shared by several items (the dedup upsert
+-- returns the existing id).
+
+create table if not exists public.grocery_item_images (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  -- Hex-encoded SHA-256 of the raw bytes, computed client-side via
+  -- Web Crypto before upload so the upsert can dedup.
+  sha256 text not null,
+  mime_type text not null,
+  size_bytes int not null,
+  -- Object key in the private `grocery-item-images` bucket,
+  -- content-addressed as `<user_id>/<sha256>`.
+  storage_path text not null,
+  created_at timestamptz not null default now(),
+  unique (user_id, sha256)
+);
+
+alter table public.grocery_item_images enable row level security;
+
+drop policy if exists "grocery_item_images are self-selectable" on public.grocery_item_images;
+create policy "grocery_item_images are self-selectable" on public.grocery_item_images
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "grocery_item_images are self-insertable" on public.grocery_item_images;
+create policy "grocery_item_images are self-insertable" on public.grocery_item_images
+  for insert with check (auth.uid() = user_id);
+
+-- No update policy - rows are immutable once written.
+drop policy if exists "grocery_item_images are self-deletable" on public.grocery_item_images;
+create policy "grocery_item_images are self-deletable" on public.grocery_item_images
+  for delete using (auth.uid() = user_id);
+
+-- Private bucket for grocery-item photo bytes, content-addressed as
+-- `<user_id>/<sha256>`. Same shape + self-prefix RLS as recipe-images.
+insert into storage.buckets (id, name, public)
+  values ('grocery-item-images', 'grocery-item-images', false)
+  on conflict (id) do nothing;
+
+drop policy if exists "grocery-item-images bucket is self-readable" on storage.objects;
+create policy "grocery-item-images bucket is self-readable" on storage.objects
+  for select to authenticated
+  using (
+    bucket_id = 'grocery-item-images'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+drop policy if exists "grocery-item-images bucket is self-writable" on storage.objects;
+create policy "grocery-item-images bucket is self-writable" on storage.objects
+  for insert to authenticated
+  with check (
+    bucket_id = 'grocery-item-images'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+drop policy if exists "grocery-item-images bucket is self-deletable" on storage.objects;
+create policy "grocery-item-images bucket is self-deletable" on storage.objects
+  for delete to authenticated
+  using (
+    bucket_id = 'grocery-item-images'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+-- Optional product photo on an item, at most one. Declared here (not
+-- inline in the grocery_items create) because this table is created
+-- after grocery_items in file order. `set null` (not cascade) so
+-- GC-ing an image row never deletes the list item it decorated.
+alter table public.grocery_items
+  add column if not exists image_id uuid
+    references public.grocery_item_images(id) on delete set null;
+
+-- Reverse lookup for the orphan sweep's anti-join and the FK's
+-- on-delete-set-null resolution.
+create index if not exists grocery_items_image_idx
+  on public.grocery_items (image_id) where image_id is not null;
+
+-- Image upsert RPC, twin of recipe_image_upsert: returns the existing
+-- row's id when (user_id, sha256) already maps to one, otherwise
+-- inserts and returns the new id. Lives in the database so any future
+-- second caller inherits the same dedup semantics.
+drop function if exists public.grocery_item_image_upsert(text, text, int, text);
+create or replace function public.grocery_item_image_upsert(
+  p_sha256 text,
+  p_mime_type text,
+  p_size_bytes int,
+  p_storage_path text
+) returns uuid
+language plpgsql security invoker as $$
+declare
+  v_uid uuid := auth.uid();
+  v_id uuid;
+begin
+  if v_uid is null then raise exception 'not authenticated'; end if;
+  if p_sha256 is null or length(p_sha256) <> 64 then
+    raise exception 'sha256 must be a 64-char hex digest';
+  end if;
+  if p_storage_path is null or length(p_storage_path) = 0 then
+    raise exception 'storage_path is required';
+  end if;
+  -- DO NOTHING + follow-up SELECT respects the table's no-update RLS
+  -- posture; the caller uploaded the bytes to the content-addressed
+  -- key first, so on conflict the existing row points at the same
+  -- object already.
+  insert into public.grocery_item_images
+    (user_id, sha256, mime_type, size_bytes, storage_path)
+    values (v_uid, p_sha256, p_mime_type, p_size_bytes, p_storage_path)
+    on conflict (user_id, sha256) do nothing
+    returning id into v_id;
+  if v_id is null then
+    select id into v_id
+      from public.grocery_item_images
+     where user_id = v_uid and sha256 = p_sha256;
+  end if;
+  return v_id;
+end $$;
+
+-- Orphan reclamation for grocery-item images: same sweep shape as
+-- recipe-image-gc (edge function + cron; SQL can't delete Storage
+-- objects). An image row is orphaned when no grocery_items.image_id
+-- references it - covers both delete-side orphans (item deleted or
+-- re-photographed) and insert-side orphans (upserted but the item
+-- save failed).
+drop function if exists public.list_orphan_grocery_item_images(int);
+create or replace function public.list_orphan_grocery_item_images(p_limit int)
+returns table (id uuid, storage_path text)
+language sql security definer
+set search_path = public as $$
+  select gi.id, gi.storage_path
+    from public.grocery_item_images gi
+   where not exists (
+     select 1 from public.grocery_items it where it.image_id = gi.id
+   )
+   order by gi.created_at asc
+   limit p_limit
+   for update of gi skip locked
+$$;
+
+-- Delete the given rows that are STILL orphaned, returning the bucket
+-- keys actually removed plus each row's user_id for the per-user GC
+-- summary. The re-check closes the race where a listed orphan gets
+-- re-referenced before the delete; content addressing makes a missed
+-- object self-healing (re-attach re-uploads the same key).
+drop function if exists public.delete_orphan_grocery_item_images(uuid[]);
+create or replace function public.delete_orphan_grocery_item_images(p_ids uuid[])
+returns table (id uuid, storage_path text, user_id uuid)
+language sql security definer
+set search_path = public as $$
+  delete from public.grocery_item_images gi
+   where gi.id = any(p_ids)
+     and not exists (
+       select 1 from public.grocery_items it where it.image_id = gi.id
+     )
+  returning gi.id, gi.storage_path, gi.user_id
+$$;
+
+revoke all on function public.list_orphan_grocery_item_images(int) from public, anon, authenticated;
+revoke all on function public.delete_orphan_grocery_item_images(uuid[]) from public, anon, authenticated;
+grant execute on function public.list_orphan_grocery_item_images(int) to service_role;
+grant execute on function public.delete_orphan_grocery_item_images(uuid[]) to service_role;
+
+-- Cron dispatcher for the grocery-image GC sweep. Same Vault-secret
+-- custody + local-stack guards as the other GC crons; no-ops until the
+-- secrets are seeded.
+create or replace function public.nak_trigger_grocery_image_gc()
+returns void
+language plpgsql security definer set search_path = public
+as $fn$
+declare
+  v_url text;
+  v_key text;
+begin
+  begin
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'project_url' $q$ into v_url;
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'service_role_key' $q$ into v_key;
+  exception when others then
+    return;
+  end;
+  if v_url is null or v_key is null then
+    return;
+  end if;
+  begin
+    execute format(
+      $q$ select net.http_post(
+            url := %L,
+            headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', %L),
+            body := '{}'::jsonb
+          ) $q$,
+      v_url || '/functions/v1/grocery-image-gc',
+      'Bearer ' || v_key
+    );
+  exception when others then
+    raise notice 'nak_trigger_grocery_image_gc: dispatch failed: %', sqlerrm;
+  end;
+end;
+$fn$;
+revoke all on function public.nak_trigger_grocery_image_gc() from public, anon, authenticated;
+
+do $cron$
+begin
+  if exists (select 1 from pg_available_extensions where name = 'pg_cron')
+     and exists (select 1 from pg_available_extensions where name = 'pg_net') then
+    create extension if not exists pg_cron;
+    create extension if not exists pg_net;
+    if exists (select 1 from cron.job where jobname = 'nak-grocery-image-gc') then
+      perform cron.unschedule('nak-grocery-image-gc');
+    end if;
+    perform cron.schedule(
+      'nak-grocery-image-gc',
+      '49 */6 * * *',
+      $job$ select public.nak_trigger_grocery_image_gc(); $job$
+    );
+  end if;
+exception when others then
+  raise notice 'grocery-image gc cron setup skipped: %', sqlerrm;
+end
+$cron$;
 
 -- Recipe embeddings ------------------------------------------------------
 --
@@ -11355,6 +11746,27 @@ begin
   ) then
     alter publication supabase_realtime add table public.wiki_record_links;
   end if;
+  -- grocery_items / grocery_sections feed the Groceries drawer tab's
+  -- refresh relay (subscribeToGroceryChanges -> emitGroceryChange):
+  -- a checkbox click in the Cookbook detail pane, the invalidation
+  -- trigger's bulk delete on a recipe edit, and a second device at the
+  -- store all reach an open Groceries tab through this stream.
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'grocery_items'
+  ) then
+    alter publication supabase_realtime add table public.grocery_items;
+  end if;
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'grocery_sections'
+  ) then
+    alter publication supabase_realtime add table public.grocery_sections;
+  end if;
   -- samskaras is deliberately NOT a member. Mint toasts ride a private
   -- samskara-mint Broadcast event (insertMint -> _shared/samskara-mint.ts
   -- + the owner-subscribe policy below), never a postgres_changes echo.
@@ -11427,6 +11839,12 @@ alter table public.wiki_record_files replica identity using index wiki_record_fi
 create unique index if not exists wiki_record_links_replident_idx
   on public.wiki_record_links (id, user_id);
 alter table public.wiki_record_links replica identity using index wiki_record_links_replident_idx;
+create unique index if not exists grocery_items_replident_idx
+  on public.grocery_items (id, user_id);
+alter table public.grocery_items replica identity using index grocery_items_replident_idx;
+create unique index if not exists grocery_sections_replident_idx
+  on public.grocery_sections (id, user_id);
+alter table public.grocery_sections replica identity using index grocery_sections_replident_idx;
 
 -- ---------------------------------------------------------------------------
 -- Realtime Broadcast authorization (streaming-root channels)

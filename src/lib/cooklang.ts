@@ -743,14 +743,28 @@ function dedupeFromSteps(steps: Step[]): Ingredient[] {
  * Render an ingredient list as `<li>` markup — no surrounding `<ul>`,
  * so the caller controls whether this sits under a heading or inside
  * a sub-section block.
+ *
+ * With `checkboxes` on, each row is prefixed with an
+ * `<input type="checkbox" class="cook-buy" data-ing="<name>">`. The
+ * renderer stays grocery-unaware on purpose: it stamps the RAW
+ * ingredient name and never any checked state - the host (the
+ * Cookbook detail pane) owns matching names against grocery rows,
+ * syncing `checked` after mount, and handling clicks via delegation.
+ * The same ingredient name appearing in several rows gets the same
+ * data-ing value; the host treats those as one toggle.
  */
-function ingredientsListItems(ings: Ingredient[]): string {
+function ingredientsListItems(ings: Ingredient[], checkboxes: boolean): string {
   const out: string[] = [];
   for (const ing of ings) {
     const qty = formatQtyUnit(ing.qty, ing.unit);
     const qtyHtml = qty.length > 0 ? `<span class="cook-qty">${esc(qty)}</span> ` : '';
     const optHtml = ing.optional ? ' <span class="cook-optional">(optional)</span>' : '';
-    out.push(`<li>${qtyHtml}<span class="cook-name">${esc(ing.name)}</span>${optHtml}</li>`);
+    const checkboxHtml = checkboxes
+      ? `<input type="checkbox" class="cook-buy" data-ing="${esc(ing.name)}" aria-label="Add ${esc(ing.name)} to grocery list"> `
+      : '';
+    out.push(
+      `<li>${checkboxHtml}${qtyHtml}<span class="cook-name">${esc(ing.name)}</span>${optHtml}</li>`
+    );
   }
   return out.join('');
 }
@@ -842,7 +856,17 @@ function instructionBucketRenders(steps: Step[]): boolean {
  * its list is empty, so a freshly-typed metadata-only recipe doesn't
  * render empty headers.
  */
-export function recipeToHtml(recipe: Recipe): string {
+export interface RecipeHtmlOptions {
+  /**
+   * Prefix every ingredient row with a grocery checkbox (see
+   * `ingredientsListItems`). Off by default; the Cookbook detail pane
+   * turns it on for bookmarked (upcoming / favorite) recipes only.
+   */
+  ingredientCheckboxes?: boolean;
+}
+
+export function recipeToHtml(recipe: Recipe, opts: RecipeHtmlOptions = {}): string {
+  const checkboxes = opts.ingredientCheckboxes === true;
   const out: string[] = [];
 
   const metaKeys = Object.keys(recipe.metadata);
@@ -874,7 +898,7 @@ export function recipeToHtml(recipe: Recipe): string {
     out.push(`<h3 id="${tocHeadingId('ingredients', null)}">Ingredients</h3>`);
     if (!hasSections) {
       out.push('<ul class="cook-ingredients">');
-      out.push(ingredientsListItems(recipe.ingredients));
+      out.push(ingredientsListItems(recipe.ingredients, checkboxes));
       out.push('</ul>');
     } else {
       for (const bucket of buckets) {
@@ -885,7 +909,7 @@ export function recipeToHtml(recipe: Recipe): string {
           out.push(`<h4 class="cook-section" id="${id}">${esc(bucket.name)}</h4>`);
         }
         out.push('<ul class="cook-ingredients">');
-        out.push(ingredientsListItems(ings));
+        out.push(ingredientsListItems(ings, checkboxes));
         out.push('</ul>');
       }
     }

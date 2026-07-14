@@ -218,6 +218,11 @@ One file per use-case under [`use-cases/`](./use-cases/), named
   recipe authoring in Cooklang, version log + revert, photos +
   lightbox, Upcoming / Favorites bookmarks, click-to-rate, the copy
   exports, and a model-driven recipe_save landing via the relay.
+- [grocery-list-lifecycle](./use-cases/grocery-list-lifecycle.md) -
+  the Groceries tab: ingredient checkboxes on bookmarked recipes,
+  the recipe-edit invalidation wipe, the needed / acquired shopping
+  flow, add-input history suggestions, section management, and item
+  photos.
 - [settings-account-and-updates](./use-cases/settings-account-and-updates.md) -
   Settings pane independence, update-check/reload flow, background-job
   toggles, usage refresh, and credential/export actions.

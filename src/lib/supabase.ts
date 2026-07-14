@@ -48,6 +48,9 @@ import * as digestsApi from './supabase/digests';
 // search, bucket upload + signed download URLs), same delegation
 // pattern.
 import * as documentsApi from './supabase/documents';
+// Grocery-list domain slice (sections, items, acquired-history search,
+// product photos), same delegation pattern.
+import * as groceryApi from './supabase/grocery';
 // Memories domain slice: the facade's memory methods (both the CRUD +
 // changelog group and the confidence / search / relations group)
 // delegate to these plain functions one-for-one under the same names
@@ -119,6 +122,10 @@ import type {
   RecipeVersion,
   RecipePhoto,
   RecipePhotoInput,
+  GrocerySection,
+  GroceryItem,
+  GroceryItemView,
+  GroceryItemPatch,
   Document,
   UserSettings,
   TopicVocabulary,
@@ -674,6 +681,97 @@ export class SupabaseService {
     versionId: string
   ): Promise<RecipePhotoInput[]> {
     return cookbookApi.listRecipeVersionPhotoInputs(this.client, versionId);
+  }
+
+  // Grocery list -----------------------------------------------------------
+  //
+  // Extracted domain slice: implementations and doc comments live in
+  // ./supabase/grocery.ts (sections, items, the acquired-history
+  // search, and the product-photo upload/upsert pair).
+
+  async listGrocerySections(): Promise<GrocerySection[]> {
+    return groceryApi.listGrocerySections(this.client);
+  }
+
+  async seedGrocerySectionsIfEmpty(): Promise<void> {
+    return groceryApi.seedGrocerySectionsIfEmpty(this.client);
+  }
+
+  async createGrocerySection(name: string): Promise<GrocerySection> {
+    return groceryApi.createGrocerySection(this.client, name);
+  }
+
+  async renameGrocerySection(id: string, name: string): Promise<void> {
+    return groceryApi.renameGrocerySection(this.client, id, name);
+  }
+
+  async deleteGrocerySection(id: string): Promise<void> {
+    return groceryApi.deleteGrocerySection(this.client, id);
+  }
+
+  async reorderGrocerySections(sectionIds: string[]): Promise<void> {
+    return groceryApi.reorderGrocerySections(this.client, sectionIds);
+  }
+
+  async listNeededGroceryItems(): Promise<GroceryItemView[]> {
+    return groceryApi.listNeededGroceryItems(this.client);
+  }
+
+  async listAcquiredGroceryItemsPage(opts: {
+    offset: number;
+    pageSize: number;
+  }): Promise<{ rows: GroceryItemView[]; hasMore: boolean }> {
+    return groceryApi.listAcquiredGroceryItemsPage(this.client, opts);
+  }
+
+  async searchAcquiredGroceryItems(
+    query: string,
+    limit: number
+  ): Promise<GroceryItemView[]> {
+    return groceryApi.searchAcquiredGroceryItems(this.client, query, limit);
+  }
+
+  async listGroceryItemsForRecipe(recipeId: string): Promise<GroceryItem[]> {
+    return groceryApi.listGroceryItemsForRecipe(this.client, recipeId);
+  }
+
+  async createGroceryItem(input: {
+    name: string;
+    count?: string | null;
+    unit?: string | null;
+    note?: string | null;
+    section_id?: string | null;
+    recipe_id?: string | null;
+    image_id?: string | null;
+  }): Promise<GroceryItem> {
+    return groceryApi.createGroceryItem(this.client, input);
+  }
+
+  async updateGroceryItem(id: string, patch: GroceryItemPatch): Promise<void> {
+    return groceryApi.updateGroceryItem(this.client, id, patch);
+  }
+
+  async setGroceryItemNeeded(id: string, needed: boolean): Promise<void> {
+    return groceryApi.setGroceryItemNeeded(this.client, id, needed);
+  }
+
+  async deleteGroceryItem(id: string): Promise<void> {
+    return groceryApi.deleteGroceryItem(this.client, id);
+  }
+
+  async upsertGroceryItemImage(
+    sha256: string,
+    mimeType: string,
+    sizeBytes: number,
+    dataBase64: string
+  ): Promise<string> {
+    return groceryApi.upsertGroceryItemImage(
+      this.client,
+      sha256,
+      mimeType,
+      sizeBytes,
+      dataBase64
+    );
   }
 
   // Not part of the cookbook slice: intents are their own domain, this
@@ -1352,6 +1450,10 @@ export class SupabaseService {
 
   subscribeToRecipeChanges(userId: string, onChange: () => void): () => void {
     return realtimeApi.subscribeToRecipeChanges(this.client, userId, onChange);
+  }
+
+  subscribeToGroceryChanges(userId: string, onChange: () => void): () => void {
+    return realtimeApi.subscribeToGroceryChanges(this.client, userId, onChange);
   }
 
   subscribeToSamskaraInserts(
