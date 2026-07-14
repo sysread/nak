@@ -23,10 +23,18 @@ direct adds.
 
 ## Adding from a recipe
 
-Open any recipe - every ingredient row carries a checkbox. Checking
-one puts that ingredient on the grocery list with its quantity
-carried over verbatim and a note naming the recipe; unchecking it
-removes it again.
+Open any recipe - every ingredient row carries a checkbox, and
+tapping anywhere on the row (the box or the ingredient text)
+toggles it. Checking one puts that ingredient on the grocery list
+with its quantity carried over verbatim and a note naming the
+recipe; unchecking it removes it again. An **Add all to grocery
+list** button above the recipe checks everything at once (items
+already on the list are left alone).
+
+Section assignments are sticky by name: once you file "eggs" into
+Dairy, every future add of "eggs" - from any recipe or the add
+input, even after the item was removed - lands in Dairy
+automatically. Filing an item back into Other clears the memory.
 
 Two things to know:
 
@@ -65,7 +73,13 @@ item to put it back on the list.
 
 Tap an item's name to edit it: name, count, unit, a free-form note,
 its section, and an optional photo (handy for "this exact brand"
-label shots). Delete lives in the same editor.
+label shots). Delete lives in the same editor. You can also drag an
+item by its handle onto another section's card to re-file it - the
+target card highlights as you hover, and the move is remembered as
+that item's sticky section. On a phone, press and hold the handle
+for a second (a small vibration confirms where supported), then
+slide to the target card and release; the same hold-and-slide works
+for reordering sections in the Sections manager.
 
 ## Sections
 

@@ -70,6 +70,15 @@ Steps below name which surface they mean.
     mise run dev-sql "select name, needed, recipe_id from grocery_items order by created_at"
     ```
 
+18. On the recipe, click **Add all to grocery list**, then tap the
+    `salt` ingredient's TEXT (not the box).
+19. In the main panel, file `eggs` into `Bakery` via the editor,
+    then uncheck `eggs` on the recipe (deleting the row), then
+    re-check it.
+20. In the main panel, drag the `salt` row's handle onto the
+    `Bakery` card. Then open **Sections** and drag `Pharmacy` over
+    another row, watching the row edges before dropping.
+
 ## Expected
 
 - (1) The main panel shows the "Nothing on the list" hint and NO
@@ -121,6 +130,18 @@ Steps below name which surface they mean.
   state) are gone from both surfaces; `paper towels` (manual, no
   recipe link) survives.
 - (17) Only rows with `recipe_id is null` remain.
+- (18) Add-all puts every ingredient on the list (checkboxes all
+  checked); tapping the `salt` TEXT unchecks it - the whole row is
+  the toggle target.
+- (19) The re-checked `eggs` lands directly under **Bakery** - the
+  section assignment stuck to the name across row deletion.
+- (20) While dragging `salt`, the hovered card shows an accent
+  outline + tinted title; dropping files `salt` into Bakery (and
+  sticks for future adds). In the section manager, an accent
+  insertion line rides the hovered row's top or bottom edge
+  matching where the dragged section will land. On a touch device,
+  both drags activate by holding the handle ~1s (haptic tick where
+  supported), then sliding and releasing - with the same visuals.
 
 ## Cleanup
 
