@@ -65,8 +65,11 @@ export interface GrocerySectionGroup {
  * order with the null-section "Other" bucket pinned last. EVERY
  * section appears, including empty ones (and Other) - the panel
  * renders one card per section, and an aisle the user walks past
- * should show up even when nothing is filed under it. Items keep
- * their incoming (recency) order within a group. Items pointing at a
+ * should show up even when nothing is filed under it. Items sort
+ * alphabetically by name within a group - the shopper scans an aisle
+ * card like an index, and recency order would shuffle it on every
+ * toggle. (Safe client-side: the needed list is complete in memory,
+ * unlike the paged surfaces.) Items pointing at a
  * section id that no longer exists (a mid-refresh delete) fall back
  * to Other rather than vanishing.
  */
@@ -86,12 +89,14 @@ export function groupItemsBySection(
       other.push(item);
     }
   }
+  const alphabetical = (list: GroceryItemView[]): GroceryItemView[] =>
+    list.sort((a, b) => a.name.localeCompare(b.name));
   const groups: GrocerySectionGroup[] = sections.map((s) => ({
     id: s.id,
     name: s.name,
-    items: byId.get(s.id) ?? [],
+    items: alphabetical(byId.get(s.id) ?? []),
   }));
-  groups.push({ id: null, name: OTHER_SECTION_LABEL, items: other });
+  groups.push({ id: null, name: OTHER_SECTION_LABEL, items: alphabetical(other) });
   return groups;
 }
 
@@ -199,6 +204,40 @@ export function browseSectionArg(selected: string): string | 'other' | undefined
   if (selected === BROWSE_SECTION_ALL) return undefined;
   if (selected === BROWSE_SECTION_OTHER) return 'other';
   return selected;
+}
+
+/** One provenance group in the sidebar browse. */
+export interface GroceryBrowseGroup {
+  key: 'staples' | 'ingredients';
+  label: string;
+  items: GroceryItemView[];
+}
+
+/**
+ * Split the loaded browse window by provenance: "Staples" are
+ * manually-entered items (no recipe link - the things the user buys
+ * as a matter of course), "Ingredients" came from recipe checkboxes.
+ * Empty groups are dropped; each group keeps the window's recency
+ * order. Client-side over the loaded window on purpose - the two
+ * groups share one paged query, so rows join their group as pages
+ * load rather than each group paging separately.
+ */
+export function splitBrowseRows(
+  rows: readonly GroceryItemView[]
+): GroceryBrowseGroup[] {
+  const staples: GroceryItemView[] = [];
+  const ingredients: GroceryItemView[] = [];
+  for (const row of rows) {
+    (row.recipe_id === null ? staples : ingredients).push(row);
+  }
+  const groups: GroceryBrowseGroup[] = [];
+  if (staples.length > 0) {
+    groups.push({ key: 'staples', label: 'Staples', items: staples });
+  }
+  if (ingredients.length > 0) {
+    groups.push({ key: 'ingredients', label: 'Ingredients', items: ingredients });
+  }
+  return groups;
 }
 
 /**

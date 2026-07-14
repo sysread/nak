@@ -730,6 +730,7 @@ export class SupabaseService {
     query?: string;
     needed?: boolean;
     sectionId?: string | 'other';
+    manualOnly?: boolean;
   }): Promise<{ rows: GroceryItemView[]; hasMore: boolean }> {
     return groceryApi.listGroceryItemsPage(this.client, opts);
   }

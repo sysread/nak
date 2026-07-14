@@ -279,11 +279,14 @@ export async function listAcquiredGroceryItemsPage(
 /**
  * One recency window of the full item corpus for the sidebar's
  * all-items browse: optional ILIKE name search, optional status
- * filter (`needed`), and optional section filter (`sectionId`;
- * `'other'` matches the null-section pseudo-bucket). Windowed like
- * the acquired page - the corpus grows every shopping trip, forever.
- * `hasMore` derives from the +1 overfetch, same shape as
- * listRecipesPage.
+ * filter (`needed`), optional section filter (`sectionId`;
+ * `'other'` matches the null-section pseudo-bucket), and
+ * `manualOnly` to restrict to manually-entered rows (recipe_id is
+ * null - the sidebar's "Staples", shown by default with the
+ * recipe-sourced rows behind a toggle). Server-side filters so the
+ * page window stays honest. Windowed like the acquired page - the
+ * corpus grows every shopping trip, forever. `hasMore` derives from
+ * the +1 overfetch, same shape as listRecipesPage.
  */
 export async function listGroceryItemsPage(
   client: SupabaseClient,
@@ -293,6 +296,7 @@ export async function listGroceryItemsPage(
     query?: string;
     needed?: boolean;
     sectionId?: string | 'other';
+    manualOnly?: boolean;
   }
 ): Promise<{ rows: GroceryItemView[]; hasMore: boolean }> {
   let q = client.from('grocery_items').select(ITEM_SELECT);
@@ -301,6 +305,7 @@ export async function listGroceryItemsPage(
   if (opts.needed !== undefined) q = q.eq('needed', opts.needed);
   if (opts.sectionId === 'other') q = q.is('section_id', null);
   else if (opts.sectionId !== undefined) q = q.eq('section_id', opts.sectionId);
+  if (opts.manualOnly === true) q = q.is('recipe_id', null);
   q = q
     .order('updated_at', { ascending: false })
     .order('id', { ascending: false })

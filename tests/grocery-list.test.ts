@@ -73,12 +73,17 @@ describe('groupItemsBySection', () => {
     expect(groups[2]!.items.map((i) => i.name)).toEqual(['ghost']);
   });
 
-  it('preserves item order within a group', () => {
+  it('sorts items alphabetically by name within a group', () => {
     const items = [
-      item({ id: '1', name: 'first', section_id: 'a' }),
-      item({ id: '2', name: 'second', section_id: 'a' }),
+      item({ id: '1', name: 'zucchini', section_id: 'a' }),
+      item({ id: '2', name: 'apples', section_id: 'a' }),
+      item({ id: '3', name: 'Melon', section_id: 'a' }),
     ];
-    expect(groupItemsBySection(sections, items)[0]!.items.map((i) => i.id)).toEqual(['1', '2']);
+    expect(groupItemsBySection(sections, items)[0]!.items.map((i) => i.name)).toEqual([
+      'apples',
+      'Melon',
+      'zucchini',
+    ]);
   });
 });
 
@@ -175,6 +180,28 @@ describe('computeBrowseView', () => {
     const { computeBrowseView } = await import('../src/lib/ui/grocery-list');
     expect(computeBrowseView({ loading: true, error: null, count: 5, filtered: true }))
       .toEqual({ kind: 'list' });
+  });
+});
+
+describe('splitBrowseRows', () => {
+  it('splits by recipe link, Staples first, preserving order', async () => {
+    const { splitBrowseRows } = await import('../src/lib/ui/grocery-list');
+    const groups = splitBrowseRows([
+      item({ id: '1', name: 'flour', recipe_id: 'r1' }),
+      item({ id: '2', name: 'paper towels', recipe_id: null }),
+      item({ id: '3', name: 'eggs', recipe_id: 'r1' }),
+      item({ id: '4', name: 'coffee', recipe_id: null }),
+    ]);
+    expect(groups.map((g) => g.label)).toEqual(['Staples', 'Ingredients']);
+    expect(groups[0]!.items.map((i) => i.id)).toEqual(['2', '4']);
+    expect(groups[1]!.items.map((i) => i.id)).toEqual(['1', '3']);
+  });
+
+  it('drops empty groups', async () => {
+    const { splitBrowseRows } = await import('../src/lib/ui/grocery-list');
+    const onlyStaples = splitBrowseRows([item({ name: 'coffee', recipe_id: null })]);
+    expect(onlyStaples.map((g) => g.key)).toEqual(['staples']);
+    expect(splitBrowseRows([])).toEqual([]);
   });
 });
 

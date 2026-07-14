@@ -36,14 +36,20 @@
     canCreateGroceryItem,
     computeBrowseView,
     itemQuantityLabel,
+    splitBrowseRows,
     type GroceryStatusFilter,
   } from '$lib/ui/grocery-list';
   import Scanner from './Scanner.svelte';
+  import BucketHeader from './BucketHeader.svelte';
   import { onMount } from 'svelte';
 
   let query = $state('');
   let statusFilter = $state<GroceryStatusFilter>('all');
   let sectionFilter = $state(BROWSE_SECTION_ALL);
+  // Recipe-sourced rows ("Ingredients") are hidden by default - the
+  // browse is primarily the staples catalog, and recipe items churn
+  // with cooking plans. The toggle widens the window to both groups.
+  let showRecipeItems = $state(false);
 
   let rows = $state<GroceryItemView[]>([]);
   let hasMore = $state(false);
@@ -68,6 +74,7 @@
         query,
         needed: browseNeededArg(statusFilter),
         sectionId: browseSectionArg(sectionFilter),
+        manualOnly: !showRecipeItems,
       });
       if (seq !== fetchSeq) return;
       rows = page.rows;
@@ -92,6 +99,7 @@
         query,
         needed: browseNeededArg(statusFilter),
         sectionId: browseSectionArg(sectionFilter),
+        manualOnly: !showRecipeItems,
       });
       if (seq !== fetchSeq) return; // filters changed mid-fetch
       rows = [...rows, ...page.rows];
@@ -113,6 +121,7 @@
     void query;
     void statusFilter;
     void sectionFilter;
+    void showRecipeItems;
     if (!app.supabase) return;
     const timer = setTimeout(() => {
       void loadFirstPage();
@@ -220,6 +229,13 @@
       <option value={BROWSE_SECTION_OTHER}>{OTHER_SECTION_LABEL}</option>
     </select>
   </div>
+  <!-- Recipe-sourced rows are hidden by default (the browse is
+       primarily the staples catalog); this widens the window to both
+       provenance groups. Server-side filter, so paging stays honest. -->
+  <label class="grocery-browse-toggle">
+    <input type="checkbox" bind:checked={showRecipeItems} />
+    Show recipe ingredients
+  </label>
 
   {#if canCreate}
     <!-- The searched name matches nothing anywhere in the corpus -
@@ -243,7 +259,13 @@
       {/if}
     </p>
   {:else}
-    {#each rows as item (item.id)}
+    <!-- Provenance split: manually-entered "Staples" first, then the
+         recipe-sourced "Ingredients" (visible only when the toggle
+         above widens the fetch). Grouping is client-side over the
+         loaded window - both groups share one paged query. -->
+    {#each splitBrowseRows(rows) as group (group.key)}
+      <BucketHeader label={group.label} flourish={group.key === 'ingredients'} />
+      {#each group.items as item (item.id)}
       <div class="grocery-browse-row" class:on-list={item.needed}>
         <label class="grocery-check-label">
           <!-- Checked = on the current shopping list. The sidebar's
@@ -281,6 +303,7 @@
           <img class="grocery-browse-thumb" src={item.image_url} alt={item.name} loading="lazy" />
         {/if}
       </div>
+      {/each}
     {/each}
     {#if hasMore}
       <!-- Infinite-scroll sentinel, same shape as the recipe sidebar:
@@ -335,6 +358,21 @@
     color: var(--text);
     font: inherit;
     font-size: 0.8rem;
+  }
+  /* Provenance toggle under the filter row, same gutters. */
+  .grocery-browse-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0 0.6rem 0.5rem;
+    font-size: 0.8rem;
+    color: var(--text-muted, #888);
+    cursor: pointer;
+    user-select: none;
+  }
+  .grocery-browse-toggle input {
+    accent-color: var(--accent);
+    cursor: pointer;
   }
   .grocery-browse-add {
     margin: 0 0.6rem 0.5rem;

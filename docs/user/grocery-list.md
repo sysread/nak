@@ -6,7 +6,10 @@ phone in the store aisle. It has two surfaces:
 
 - the **sidebar** lists every item you've ever added - your whole
   purchase history - with a search box and two filters (status:
-  All / On list / Acquired; and section). Each row has a checkbox:
+  All / On list / Acquired; and section). Items you added yourself
+  appear first under **Staples**; items that came from recipe
+  checkboxes live under **Ingredients**, hidden until you tick
+  **Show recipe ingredients**. Each row has a checkbox:
   checked means it's on the current shopping list, so restocking a
   past purchase is just "search it, check it". Searching a name
   you've never bought offers an **Add** action instead.
@@ -47,7 +50,7 @@ last time. If nothing matches, an "Add" action creates a fresh item.
 
 The list renders one card per store section, in your order, with
 **Other** always last - the section name is the card's title and
-items stack one per row inside it. Every section shows up even when
+items stack one per row inside it, alphabetically by name. Every section shows up even when
 it's empty, so the cards mirror your walk through the store. Every
 item on the list shows a **checked** box - as you
 put things in your cart, uncheck them. Unchecked items drop into the
