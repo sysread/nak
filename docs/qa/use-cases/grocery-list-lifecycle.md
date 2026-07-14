@@ -72,11 +72,12 @@ Steps below name which surface they mean.
 
 ## Expected
 
-- (1) The main panel renders one empty card per section: **Other**
+- (1) The main panel shows the "Nothing on the list" hint and NO
+  section cards (empty cards are hidden by default). Ticking **Show
+  empty sections** reveals one empty card per section - **Other**
   first, then the canned starters in order (Produce, Bread, Deli,
   Meats, Dairy, Frozen, Snacks, Pantry, Beverages, Household), each
-  showing "No items"; the "Nothing on the list" hint sits above
-  them.
+  showing "No items".
 - (2) Every ingredient row carries an unchecked checkbox even
   though the recipe is not bookmarked - the grocery bridge is not
   gated on upcoming/favorite.

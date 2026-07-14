@@ -88,6 +88,22 @@ describe('groupItemsBySection', () => {
   });
 });
 
+describe('filterSectionGroups', () => {
+  it('hides empty groups by default and shows them when toggled', async () => {
+    const { filterSectionGroups, groupItemsBySection } = await import(
+      '../src/lib/ui/grocery-list'
+    );
+    const sections = [section('a', 'Produce', 0), section('b', 'Dairy', 1)];
+    const groups = groupItemsBySection(sections, [item({ name: 'kale', section_id: 'a' })]);
+    expect(filterSectionGroups(groups, false).map((g) => g.name)).toEqual(['Produce']);
+    expect(filterSectionGroups(groups, true).map((g) => g.name)).toEqual([
+      'Other',
+      'Produce',
+      'Dairy',
+    ]);
+  });
+});
+
 describe('itemQuantityLabel', () => {
   it('joins count and unit', () => {
     expect(itemQuantityLabel({ count: '2', unit: 'lb' })).toBe('2 lb');

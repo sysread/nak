@@ -106,6 +106,21 @@ export function groupItemsBySection(
 }
 
 /**
+ * Narrow the section groups to what the panel renders: empty cards
+ * are hidden unless the user opts in via the "Show empty sections"
+ * toggle (the full store layout is mostly noise on a short list, but
+ * seeing every aisle helps when filing items into sections). The
+ * Other card survives either way when it has items - it is the
+ * intake tray.
+ */
+export function filterSectionGroups(
+  groups: readonly GrocerySectionGroup[],
+  showEmpty: boolean
+): GrocerySectionGroup[] {
+  return groups.filter((g) => showEmpty || g.items.length > 0);
+}
+
+/**
  * Compact quantity string for an item row: "2 lb", "1/2", "loaf", or
  * null when the item carries neither a count nor a unit (render
  * nothing rather than an empty chip).
