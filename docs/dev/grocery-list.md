@@ -13,11 +13,13 @@ content in panel" split:
   current list; toggling flips `needed`, which is how a past
   purchase gets restocked. An unmatched search offers an Add action.
 - the **main panel** (`src/screens/Groceries.svelte`) is the working
-  surface: the current list grouped by store section, the add-input
-  with acquired-history suggestions, the collapsed acquired history,
-  the inline item editor (name / count / unit / note / section /
-  photo / delete), and section management. Full-width, which is what
-  a phone at the store sees once the drawer closes.
+  surface: the current list as one card per store section (section
+  name as the card title, items one per row; every section renders
+  even when empty, Other pinned last), the add-input with
+  acquired-history suggestions, the collapsed acquired history, the
+  inline item editor (name / count / unit / note / section / photo /
+  delete), and section management. Full-width, which is what a
+  phone at the store sees once the drawer closes.
 
 Shipped from the plan at
 [`plans/grocery-list-plan.md`](./plans/grocery-list-plan.md); this doc

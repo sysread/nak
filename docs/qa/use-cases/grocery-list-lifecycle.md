@@ -71,10 +71,11 @@ Steps below name which surface they mean.
 
 ## Expected
 
-- (1) The tab renders an empty list plus the canned starter
-  sections in the Sections manager (verify via step 12 or
-  `grocery_sections` in the DB): Produce, Bread, Deli, Meats,
-  Dairy, Frozen, Snacks, Pantry, Beverages, Household.
+- (1) The main panel renders one empty card per canned starter
+  section, in order (Produce, Bread, Deli, Meats, Dairy, Frozen,
+  Snacks, Pantry, Beverages, Household) plus **Other** last, each
+  showing "No items"; the "Nothing on the list" hint sits above
+  them.
 - (2) No checkboxes on the ingredient rows (recipe not bookmarked).
 - (3) After marking upcoming, every ingredient row gains an
   unchecked checkbox.
@@ -82,7 +83,7 @@ Steps below name which surface they mean.
   `eggs` (with `3`) and `flour` (with `200 g`), each noting
   `For <recipe title>`, under **Other**; the sidebar lists both rows
   with checked boxes.
-- (6) `eggs` moves under a **Dairy** group header; **Other** keeps
+- (6) `eggs` moves into the **Dairy** card; the **Other** card keeps
   `flour`.
 - (7) `eggs` drops out of the needed list into the greyed
   **Acquired (1)** section (collapsed until clicked; name shown

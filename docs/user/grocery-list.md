@@ -45,8 +45,11 @@ last time. If nothing matches, an "Add" action creates a fresh item.
 
 ## Shopping
 
-Items are grouped by store section, in your order, with **Other**
-always last. Every item on the list shows a **checked** box - as you
+The list renders one card per store section, in your order, with
+**Other** always last - the section name is the card's title and
+items stack one per row inside it. Every section shows up even when
+it's empty, so the cards mirror your walk through the store. Every
+item on the list shows a **checked** box - as you
 put things in your cart, uncheck them. Unchecked items drop into the
 greyed-out **Acquired** section at the bottom, which stays collapsed
 until you open it (it keeps your whole purchase history, which is
