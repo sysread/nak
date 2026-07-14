@@ -14,10 +14,9 @@
    *    its row back to needed with section / note / photo intact;
    *  - the needed list: one CARD per store section ("Other" pinned
    *    first as the intake tray, then the user's order), section
-   *    name as the card title,
-   *    items one per row. Every section renders even when empty -
-   *    the cards are the store's walk order, and an aisle shouldn't
-   *    vanish just because nothing is filed under it today.
+   *    name as the card title, items one per row. Empty cards are
+   *    hidden by default; a "Show empty sections" toggle opts into
+   *    the full store layout (useful when filing items).
    *    Checkboxes render CHECKED (inverted from the recipe view):
    *    the shopper unchecks items as they land in the cart, which
    *    moves them down to...
@@ -48,6 +47,7 @@
     OTHER_SECTION_VALUE,
     acquiredHeaderLabel,
     canCreateGroceryItem,
+    filterSectionGroups,
     groupItemsBySection,
     itemQuantityLabel,
     sectionOrderAfterDrag,
@@ -84,6 +84,11 @@
   let draftImageUrl = $state<string | null>(null);
   let photoBusy = $state(false);
   let saveBusy = $state(false);
+
+  // Empty section cards are hidden by default - the full store
+  // layout is mostly noise on a short list. The toggle shows every
+  // aisle, which helps when filing items into sections.
+  let showEmptySections = $state(false);
 
   // Section management mode.
   let manageSections = $state(false);
@@ -331,7 +336,12 @@
     void mutate(() => supabase.reorderGrocerySections(next));
   }
 
-  const neededGroups = $derived(groupItemsBySection(grocery.sections, grocery.needed));
+  const neededGroups = $derived(
+    filterSectionGroups(
+      groupItemsBySection(grocery.sections, grocery.needed),
+      showEmptySections
+    )
+  );
   const canCreate = $derived(canCreateGroceryItem(addQuery, suggestions, grocery.needed));
   const suggesting = $derived(addQuery.trim().length > 0);
 </script>
@@ -361,6 +371,14 @@
       onclick={() => (manageSections = !manageSections)}
     >Sections</button>
   </div>
+
+  <!-- Same toggle idiom as the sidebar's show-recipe-ingredients
+       checkbox: explicit input sizing so global form-control styling
+       can't stretch it away from its label. -->
+  <label class="grocery-empty-toggle">
+    <input type="checkbox" bind:checked={showEmptySections} />
+    Show empty sections
+  </label>
 
   {#if actionError}
     <p class="error grocery-error">{actionError}</p>
@@ -582,10 +600,9 @@
     {/if}
     <!-- One card per section: Other pinned FIRST (the intake tray -
          fresh adds and recipe checkboxes land there until filed),
-         then the user's sections in their order. Every section
-         renders even when empty - the cards ARE the store layout,
-         and an aisle shouldn't disappear from the walk order just
-         because nothing is filed under it today. -->
+         then the user's sections in their order. Empty cards are
+         hidden unless the "Show empty sections" toggle above opts
+         into the full store layout. -->
     {#each neededGroups as group (group.id ?? '__other')}
       <section class="grocery-section-card">
         <h3 class="grocery-section-card-title">{group.name}</h3>
@@ -673,6 +690,28 @@
   }
   .grocery-error {
     padding: 0 0.75rem 0.5rem;
+  }
+  /* Empty-sections toggle under the controls row, same gutters. The
+     input gets explicit box sizing and zero margin so global
+     form-control styling can't stretch it away from its label. */
+  .grocery-empty-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0 0.75rem 0.5rem;
+    font-size: 0.8rem;
+    color: var(--text-muted, #888);
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+  }
+  .grocery-empty-toggle input {
+    width: 0.95rem;
+    height: 0.95rem;
+    margin: 0;
+    flex: 0 0 auto;
+    accent-color: var(--accent);
+    cursor: pointer;
   }
   .grocery-empty {
     padding: 0.75rem;

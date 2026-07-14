@@ -18,9 +18,10 @@ content in panel" split:
   purchase gets restocked. An unmatched search offers an Add action.
 - the **main panel** (`src/screens/Groceries.svelte`) is the working
   surface: the current list as one card per store section (section
-  name as the card title, items one per row, alphabetical; every
-  section renders even when empty, Other pinned first as the intake
-  tray for unfiled adds), the add-input with
+  name as the card title, items one per row, alphabetical; Other
+  pinned first as the intake tray for unfiled adds; empty cards
+  hidden behind a default-off "Show empty sections" toggle), the
+  add-input with
   acquired-history suggestions, the collapsed acquired history, the
   inline item editor (name / count / unit / note / section / photo /
   delete), and section management. Full-width, which is what a

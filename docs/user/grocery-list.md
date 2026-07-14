@@ -53,8 +53,9 @@ The list renders one card per store section - **Other** always
 first (it's the inbox: new adds and recipe ingredients land there
 until you file them), then your sections in your order. The section
 name is the card's title and items stack one per row inside it,
-alphabetically by name. Every section shows up even when
-it's empty, so the cards mirror your walk through the store. Every
+alphabetically by name. Sections with nothing on the list stay
+hidden until you tick **Show empty sections** at the top - handy
+when you're filing items and want the full store layout. Every
 item on the list shows a **checked** box - as you
 put things in your cart, uncheck them. Unchecked items drop into the
 greyed-out **Acquired** section at the bottom, which stays collapsed
