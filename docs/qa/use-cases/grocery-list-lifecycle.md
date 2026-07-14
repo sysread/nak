@@ -78,6 +78,9 @@ Steps below name which surface they mean.
 20. In the main panel, drag the `salt` row's handle onto the
     `Bakery` card. Then open **Sections** and drag `Pharmacy` over
     another row, watching the row edges before dropping.
+21. Back in the list, tick **Show empty sections** and drag the
+    `Bakery` CARD by the handle in its title bar to another spot;
+    untick the toggle and look at the title bars again.
 
 ## Expected
 
@@ -142,6 +145,12 @@ Steps below name which surface they mean.
   matching where the dragged section will land. On a touch device,
   both drags activate by holding the handle ~1s (haptic tick where
   supported), then sliding and releasing - with the same visuals.
+- (21) With empty sections shown, each real section card (not
+  Other) carries a title-bar drag handle; dragging shows an accent
+  line on the landing edge and the drop persists the new order
+  (verify in the Sections manager). Titles stay centered. Unticking
+  the toggle removes the handles - card reorder is only available
+  in full-layout mode.
 
 ## Cleanup
 
