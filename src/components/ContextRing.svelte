@@ -138,13 +138,17 @@
   >
     <!-- Track: a muted full circle that the progress arc overlays. Gives
          the ring a visible "bucket" at 0% and a consistent silhouette
-         across every percentage. -->
+         across every percentage. --ring-track rather than --border
+         because the terminal style sets --border transparent, which
+         would erase the track and leave the arc floating as a bare
+         dot; the token defaults to --border in the soft style and is
+         overridden per style in styles.css. -->
     <circle
       cx="12"
       cy="12"
       r={RADIUS}
       fill="none"
-      stroke="var(--border)"
+      stroke="var(--ring-track)"
       stroke-width="3"
     />
     <!-- Progress arc. Rotated -90° so the stroke starts at 12 o'clock
