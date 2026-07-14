@@ -917,16 +917,15 @@
     const r = activeRecipe;
     return r ? parseCooklang(r.cooklang) : null;
   });
-  // Grocery checkboxes render only on bookmarked recipes - the
-  // upcoming / favorite flags are the "I'm going to cook this" signal
-  // that makes shopping for it meaningful. Unbookmarked recipes keep
-  // the plain ingredient list.
-  const detailCheckboxes = $derived(
-    activeRecipe !== null && (activeRecipe.upcoming || activeRecipe.favorite)
-  );
+  // Grocery checkboxes render on EVERY recipe's live detail view.
+  // They were originally gated on the upcoming / favorite bookmarks,
+  // but a recipe's grocery items outlive its bookmark (un-bookmarking
+  // deliberately leaves the list alone), and gating left those items
+  // manageable only from the Groceries tab - an inconsistency worse
+  // than the extra checkboxes on recipes nobody is shopping for.
   const detailHtml = $derived(
     parsedDetail
-      ? recipeToHtml(parsedDetail, { ingredientCheckboxes: detailCheckboxes })
+      ? recipeToHtml(parsedDetail, { ingredientCheckboxes: true })
       : ''
   );
   const detailToc = $derived(parsedDetail ? recipeToc(parsedDetail) : []);

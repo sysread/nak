@@ -10,9 +10,8 @@ follows the Settings modal pattern.
 The cookbook is a staging area for recipes the user wants to capture,
 tidy, and cook from. Intentionally narrow on recipe mechanics - no
 meal planning, no servings scaling - but it feeds the in-app
-grocery list: bookmarked (upcoming / favorite) recipes grow
-per-ingredient checkboxes in the detail pane that push items onto
-the Groceries drawer tab (see
+grocery list: every recipe's detail pane carries per-ingredient
+checkboxes that push items onto the Groceries drawer tab (see
 [`./grocery-list.md`](./grocery-list.md)). The model can read,
 write, and edit recipes via tools; the user can do the same via the
 Cookbook modal.

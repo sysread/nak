@@ -250,9 +250,9 @@ The upcoming flag is yours - it does not appear in the recipe's edit
 history and the model does not toggle it on its own. It's a personal
 "do not forget this for this shopping trip" marker.
 
-Bookmarking also unlocks the grocery bridge: on any upcoming or
-favorite recipe, the detail pane's ingredient rows grow checkboxes
-that add items straight to the [grocery list](./grocery-list.md).
+Every recipe's ingredient rows carry checkboxes that add items
+straight to the [grocery list](./grocery-list.md) - upcoming is
+just the "planning to cook this" marker, not a gate on that.
 
 ## Favorites
 

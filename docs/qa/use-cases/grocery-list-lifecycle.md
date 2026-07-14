@@ -4,7 +4,7 @@
 
 The Groceries tab end to end
 ([dev: grocery list](../../dev/grocery-list.md)): the ingredient
-checkboxes on bookmarked recipes and the recipe-edit invalidation
+checkboxes on recipes and the recipe-edit invalidation
 trigger ([dev: cookbook](../../dev/cookbook.md)), the main panel's
 needed / acquired shopping flow with the collapsed history, the
 add-input's acquired-history suggestions, section management (add /
@@ -76,9 +76,11 @@ Steps below name which surface they mean.
   Snacks, Pantry, Beverages, Household) plus **Other** last, each
   showing "No items"; the "Nothing on the list" hint sits above
   them.
-- (2) No checkboxes on the ingredient rows (recipe not bookmarked).
-- (3) After marking upcoming, every ingredient row gains an
-  unchecked checkbox.
+- (2) Every ingredient row carries an unchecked checkbox even
+  though the recipe is not bookmarked - the grocery bridge is not
+  gated on upcoming/favorite.
+- (3) Marking upcoming changes nothing about the checkboxes (it
+  only files the recipe in the sidebar's Upcoming bucket).
 - (4) Both boxes stay checked. The Groceries main panel (5) shows
   `eggs` (with `3`) and `flour` (with `200 g`), each noting
   `For <recipe title>`, under **Other**; the sidebar lists both rows
