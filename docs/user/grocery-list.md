@@ -2,8 +2,20 @@
 
 The **Groceries** tab in the conversation drawer (right above
 Recipes) is a shopping list built to be driven one-handed from your
-phone in the store aisle. It fills two ways: ingredient checkboxes on
-bookmarked recipes, and direct adds from the list itself.
+phone in the store aisle. It has two surfaces:
+
+- the **sidebar** lists every item you've ever added - your whole
+  purchase history - with a search box and two filters (status:
+  All / On list / Acquired; and section). Each row has a checkbox:
+  checked means it's on the current shopping list, so restocking a
+  past purchase is just "search it, check it". Searching a name
+  you've never bought offers an **Add** action instead.
+- the **main panel** shows the current shopping list itself, grouped
+  by store section - that's where you add, edit, check things off,
+  and manage sections.
+
+The list fills two ways: ingredient checkboxes on bookmarked
+recipes, and direct adds.
 
 ## Adding from a recipe
 
@@ -26,8 +38,8 @@ Two things to know:
 
 ## Adding directly
 
-The **Add to list** input at the top searches everything you've
-bought before (by name) as you type. Pick a suggestion to put that
+The **Add to list** input at the top of the main panel searches
+everything you've bought before (by name) as you type. Pick a suggestion to put that
 item back on the list - it keeps its section, note, and photo from
 last time. If nothing matches, an "Add" action creates a fresh item.
 
@@ -47,7 +59,7 @@ label shots). Delete lives in the same editor.
 
 ## Sections
 
-Click **Sections** at the top of the list to manage your store
+Click **Sections** at the top of the main panel to manage your store
 sections: add new ones, rename or delete (a deleted section's items
 move to Other), and drag rows to match the order you walk the store.
 **Other** is permanent - it's where anything without a section lands.

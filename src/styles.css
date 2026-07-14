@@ -1866,21 +1866,10 @@ h1 {
   width: 100%;
 }
 
-/* Groceries drawer tab. The list styles itself locally
-   (GroceryList.svelte); this rule is the desktop main-panel hint that
-   points at the sidebar - the grocery list has no per-item panel to
-   route there. */
-.grocery-panel-hint {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
-  padding: 2rem;
-  text-align: center;
-}
-.grocery-panel-hint p {
-  max-width: 28rem;
-}
+/* Groceries drawer tab: the sidebar browse (GroceryList.svelte) and
+   the main panel (Groceries.svelte) both style themselves locally;
+   only the terminal-mode border deltas live in the global sheet (see
+   the terminal section below). */
 
 .sidebar-search-input {
   width: 100%;
@@ -4609,6 +4598,7 @@ button.top-bar-pinned {
 :root[data-style='terminal'] .grocery-section-manager,
 :root[data-style='terminal'] .grocery-item-edit,
 :root[data-style='terminal'] .grocery-sections-toggle,
+:root[data-style='terminal'] .grocery-browse-add,
 :root[data-style='terminal'] .grocery-small-btn {
   border-color: var(--muted);
 }
