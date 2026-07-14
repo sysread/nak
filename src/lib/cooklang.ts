@@ -860,7 +860,8 @@ export interface RecipeHtmlOptions {
   /**
    * Prefix every ingredient row with a grocery checkbox (see
    * `ingredientsListItems`). Off by default; the Cookbook detail pane
-   * turns it on for bookmarked (upcoming / favorite) recipes only.
+   * turns it on for the live recipe view (past-version views and the
+   * edit preview stay checkbox-free).
    */
   ingredientCheckboxes?: boolean;
 }

@@ -14,16 +14,15 @@ phone in the store aisle. It has two surfaces:
   by store section - that's where you add, edit, check things off,
   and manage sections.
 
-The list fills two ways: ingredient checkboxes on bookmarked
-recipes, and direct adds.
+The list fills two ways: ingredient checkboxes on recipes, and
+direct adds.
 
 ## Adding from a recipe
 
-Open any recipe you've marked **upcoming** (the cart icon) or
-**favorite** (the thumbs-up). Each ingredient row now carries a
-checkbox. Checking one puts that ingredient on the grocery list with
-its quantity carried over verbatim and a note naming the recipe;
-unchecking it removes it again.
+Open any recipe - every ingredient row carries a checkbox. Checking
+one puts that ingredient on the grocery list with its quantity
+carried over verbatim and a note naming the recipe; unchecking it
+removes it again.
 
 Two things to know:
 

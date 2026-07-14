@@ -1,9 +1,8 @@
 # Grocery list
 
 A section-organized shopping list on the Groceries drawer tab (above
-Recipes), fed two ways: per-ingredient checkboxes on bookmarked
-(upcoming / favorite) recipes in the Cookbook detail pane, and
-manual adds. Two surfaces, matching the other tabs' "list in drawer,
+Recipes), fed two ways: per-ingredient checkboxes on every recipe's
+detail pane in the Cookbook, and manual adds. Two surfaces, matching the other tabs' "list in drawer,
 content in panel" split:
 
 - the **sidebar** (`GroceryList.svelte`) is the all-items browse - a
@@ -65,8 +64,8 @@ owns current reality.
   delete), and the Sections manage mode (add / rename / delete /
   native-DnD reorder).
 - `src/screens/Cookbook.svelte` - the recipe side of the bridge:
-  `recipeToHtml(..., { ingredientCheckboxes })` for bookmarked
-  recipes, the delegated `onchange` handler on the render container,
+  `recipeToHtml(..., { ingredientCheckboxes })` on the live detail
+  view, the delegated `onchange` handler on the render container,
   the checked-state sync effect, and the per-recipe grocery-row
   fetch.
 - `src/lib/cooklang.ts` - `RecipeHtmlOptions.ingredientCheckboxes`:
@@ -118,8 +117,11 @@ grocery_items":
 
 ## The recipe bridge
 
-- Checkboxes render only when the recipe is `upcoming` or
-  `favorite` - the bookmark is the "I'm going to cook this" signal.
+- Checkboxes render on EVERY recipe's live detail view. They were
+  originally gated on the upcoming / favorite bookmarks, but a
+  recipe's items outlive its bookmark (un-bookmarking leaves the
+  list alone by design), and the gate left those surviving items
+  with no recipe-side management surface.
 - Ingredients have no stable identity (they are parsed out of the
   cooklang source at read time), so everything keys on the
   normalized (trimmed, lowercased) ingredient NAME:

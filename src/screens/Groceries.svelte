@@ -809,10 +809,10 @@
   }
   .grocery-section-card-title {
     margin: 0;
-    padding: 0.35rem 0.75rem;
-    font-size: 0.72rem;
+    padding: 0.4rem 0.75rem;
+    font-size: 0.88rem;
     font-weight: 600;
-    letter-spacing: 0.06em;
+    letter-spacing: 0.05em;
     text-transform: uppercase;
     color: var(--text-muted, #888);
     background: var(--bg-2);
