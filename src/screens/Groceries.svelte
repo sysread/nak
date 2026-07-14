@@ -430,8 +430,16 @@
     }
     e.preventDefault();
     const el = document.elementFromPoint(t.clientX, t.clientY);
+    // A section drag can hover either surface: the manager's rows or
+    // the list's cards (data-section-key '' is the Other card, which
+    // is not a reorder target).
     const row = el?.closest<HTMLElement>('.grocery-section-row[data-section-id]');
-    const overId = row?.dataset.sectionId;
+    let overId = row?.dataset.sectionId;
+    if (!overId) {
+      const card = el?.closest<HTMLElement>('.grocery-section-card[data-section-key]');
+      const key = card?.dataset.sectionKey;
+      if (key) overId = key;
+    }
     if (overId && overId !== dragSectionId) {
       const edge = sectionDropEdge(
         grocery.sections.map((x) => x.id),
@@ -791,20 +799,70 @@
         class="grocery-section-card"
         data-section-key={group.id ?? ''}
         class:drop-target={dragItemId !== null && dragOverSection === group.id}
+        class:lifted={dragSectionId !== null && dragSectionId === group.id}
+        class:drop-before={sectionDropHint?.id === group.id && sectionDropHint.edge === 'top'}
+        class:drop-after={sectionDropHint?.id === group.id && sectionDropHint.edge === 'bottom'}
         ondragover={(e) => {
-          if (dragItemId === null) return;
-          e.preventDefault();
-          dragOverSection = group.id;
+          if (dragItemId !== null) {
+            e.preventDefault();
+            dragOverSection = group.id;
+            return;
+          }
+          // Card-level section reorder: only real sections are
+          // targets (the Other card has no order slot).
+          if (dragSectionId !== null && group.id !== null) {
+            e.preventDefault();
+            const edge = sectionDropEdge(
+              grocery.sections.map((x) => x.id),
+              dragSectionId,
+              group.id
+            );
+            sectionDropHint = edge ? { id: group.id, edge } : null;
+          }
         }}
         ondragleave={() => {
           if (dragOverSection === group.id) dragOverSection = undefined;
+          if (sectionDropHint?.id === group.id) sectionDropHint = null;
         }}
         ondrop={(e) => {
           e.preventDefault();
-          dropItemOnSection(group.id);
+          if (dragItemId !== null) {
+            dropItemOnSection(group.id);
+          } else if (dragSectionId !== null && group.id !== null) {
+            sectionDropHint = null;
+            dropSection(group.id);
+          }
         }}
       >
-        <h3 class="grocery-section-card-title">{group.name}</h3>
+        <h3 class="grocery-section-card-title">
+          {#if showEmptySections && group.id !== null}
+            <!-- Whole-section reorder handle, shown only in the
+                 full-layout mode ("Show empty sections" on): with
+                 cards hidden, a drag past an invisible section would
+                 silently leapfrog it, so the two modes are coupled -
+                 the toggle IS the "arrange my store" mode. Same
+                 pointer + long-press pair as every other grip. -->
+            <span
+              class="grocery-drag-handle grocery-card-handle"
+              draggable="true"
+              role="button"
+              tabindex="-1"
+              aria-label={`Drag to reorder ${group.name}`}
+              ondragstart={(e) => {
+                dragSectionId = group.id;
+                if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+              }}
+              ondragend={() => {
+                dragSectionId = null;
+                sectionDropHint = null;
+              }}
+              ontouchstart={(e) => group.id !== null && onSectionTouchStart(group.id, e)}
+              ontouchmove={onSectionTouchMove}
+              ontouchend={onSectionTouchEnd}
+            >&#8942;&#8942;</span>
+          {/if}
+          {group.name}
+        </h3>
         {#if group.items.length === 0}
           <p class="subtle grocery-section-card-empty">No items</p>
         {:else}
@@ -1060,16 +1118,30 @@
     padding: 0 0 0.45rem;
     overflow: hidden;
   }
+  /* Centered title with the reorder handle absolutely positioned at
+     the left edge - centering (rather than a flex slot) keeps every
+     title aligned whether or not its card carries a handle, so
+     toggling "Show empty sections" doesn't shift the text. */
   .grocery-section-card-title {
+    position: relative;
     margin: 0;
-    padding: 0.4rem 0.75rem;
+    padding: 0.4rem 2rem;
     font-size: 0.88rem;
     font-weight: 600;
     letter-spacing: 0.05em;
     text-transform: uppercase;
+    text-align: center;
     color: var(--text-muted, #888);
     background: var(--bg-2);
     border-bottom: 1px solid var(--border);
+  }
+  .grocery-card-handle {
+    position: absolute;
+    left: 0.6rem;
+    top: 50%;
+    transform: translateY(-50%);
+    /* Generous hit box for a store-aisle thumb; the glyph stays small. */
+    padding: 0.3rem 0.45rem;
   }
   .grocery-section-card-empty {
     margin: 0;
@@ -1084,6 +1156,19 @@
     gap: 0.5rem;
     padding: 0.3rem 0.75rem;
   }
+  /* Card reorder feedback: the lifted card dims, and the insertion
+     line rides the hovered card's landing edge (same box-shadow
+     idiom as the manager rows, scaled to card width). */
+  .grocery-section-card.lifted {
+    opacity: 0.6;
+  }
+  .grocery-section-card.drop-before {
+    box-shadow: 0 -3px 0 0 var(--accent);
+  }
+  .grocery-section-card.drop-after {
+    box-shadow: 0 3px 0 0 var(--accent);
+  }
+
   /* Touch-drag "lift": the long-pressed row dims while the finger
      picks a destination card (mouse DnD shows the browser's drag
      ghost instead, so this only reads on touch). */

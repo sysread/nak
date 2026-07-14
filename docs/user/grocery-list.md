@@ -81,6 +81,13 @@ for a second (a small vibration confirms where supported), then
 slide to the target card and release; the same hold-and-slide works
 for reordering sections in the Sections manager.
 
+To rearrange whole sections right in the list - say, to match the
+order you walk the aisles - tick **Show empty sections** first: each
+section card's title bar then grows a drag handle on the left. Drag
+(or press-and-hold, then slide, on a phone) to where the accent line
+shows, and release. The handles only appear with all sections
+visible so a drag can't skip past a hidden one.
+
 ## Sections
 
 Click **Sections** at the top of the main panel to manage your store
