@@ -86,10 +86,16 @@
   let renameDraft = $state('');
   let dragSectionId = $state<string | null>(null);
 
+  // Refetch on every mount, NOT gated on grocery.loaded. The store is
+  // module-level and outlives this panel, and grocery writes made
+  // while the tab is closed (a Cookbook ingredient checkbox, the
+  // recipe-edit invalidation trigger) fire the change event with no
+  // grocery listener mounted to hear it - a loaded-gate would then
+  // render that stale store forever. The stale list still paints
+  // instantly; this refetch overwrites it. Concurrent-safe with the
+  // onGroceryChange refetch below (a later result overwrites).
   onMount(() => {
-    if (app.supabase && !grocery.loaded && !grocery.loading) {
-      void loadGroceries(app.supabase);
-    }
+    if (app.supabase) void loadGroceries(app.supabase);
   });
 
   // Server-originated writes (a Cookbook checkbox click, the
