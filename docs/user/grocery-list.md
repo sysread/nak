@@ -73,10 +73,13 @@ item to put it back on the list.
 
 Tap an item's name to edit it: name, count, unit, a free-form note,
 its section, and an optional photo (handy for "this exact brand"
-label shots). Delete lives in the same editor. On desktop you can
-also drag an item by its handle onto another section's card to
-re-file it - the target card highlights as you hover, and the move
-is remembered as that item's sticky section.
+label shots). Delete lives in the same editor. You can also drag an
+item by its handle onto another section's card to re-file it - the
+target card highlights as you hover, and the move is remembered as
+that item's sticky section. On a phone, press and hold the handle
+for a second (a small vibration confirms where supported), then
+slide to the target card and release; the same hold-and-slide works
+for reordering sections in the Sections manager.
 
 ## Sections
 

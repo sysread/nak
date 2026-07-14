@@ -139,7 +139,9 @@ Steps below name which surface they mean.
   outline + tinted title; dropping files `salt` into Bakery (and
   sticks for future adds). In the section manager, an accent
   insertion line rides the hovered row's top or bottom edge
-  matching where the dragged section will land.
+  matching where the dragged section will land. On a touch device,
+  both drags activate by holding the handle ~1s (haptic tick where
+  supported), then sliding and releasing - with the same visuals.
 
 ## Cleanup
 

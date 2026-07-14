@@ -29,8 +29,10 @@ content in panel" split:
   hovered card; the section manager's reorder shows an insertion
   line via `sectionDropEdge`), and section management. Full-width,
   which is what a phone at the store sees once the drawer closes.
-  Native HTML5 DnD is pointer-only; the editor's section picker is
-  the touch/keyboard path.
+  Both drags work on touch via the Settings custom-prompts
+  long-press pattern (hold the grip ~1s, haptic tick, slide,
+  release); native HTML5 DnD covers pointer. The editor's section
+  picker remains the keyboard path.
 
 Shipped from the plan at
 [`plans/grocery-list-plan.md`](./plans/grocery-list-plan.md); this doc

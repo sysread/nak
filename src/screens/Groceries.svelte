@@ -93,11 +93,71 @@
 
   // Item drag-to-file: dragging a needed row's handle onto a section
   // card saves the item into that section (which also records the
-  // name's sticky section preference server-side). Native HTML5 DnD,
-  // same as the section manager - desktop-oriented; on touch the
-  // editor's section picker remains the path.
+  // name's sticky section preference server-side). Native HTML5 DnD
+  // for pointers plus the long-press touch path below, same pair as
+  // the section manager and Settings' custom-prompts reorder.
   let dragItemId = $state<string | null>(null);
   let dragOverSection = $state<string | null | undefined>(undefined);
+
+  // --- Touch long-press drag (mobile) ---
+  // Native HTML5 DnD never fires on touch, so phones get the same
+  // parallel path the Settings custom-prompts reorder uses: press and
+  // hold the grip for LONG_PRESS_MS and the row "lifts" (haptic tick
+  // where supported), then sliding the finger marks the drop target
+  // and lifting drops there. A finger that travels more than
+  // TOUCH_SLOP before the timer fires is a scroll attempt and cancels
+  // the press. Touch events all dispatch to the touchstart target
+  // (the grip), so the element under the finger is resolved via
+  // elementFromPoint against data attributes on the targets.
+  const LONG_PRESS_MS = 1000;
+  const TOUCH_SLOP = 10; // px of travel that still counts as "held still"
+  let longPressTimer: ReturnType<typeof setTimeout> | null = null;
+  let touchStartY = 0;
+
+  function clearLongPress(): void {
+    if (longPressTimer !== null) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+  }
+
+  function onItemTouchStart(id: string, e: TouchEvent): void {
+    const t = e.touches[0];
+    if (!t) return;
+    touchStartY = t.clientY;
+    clearLongPress();
+    longPressTimer = setTimeout(() => {
+      longPressTimer = null;
+      dragItemId = id;
+      navigator.vibrate?.(15);
+    }, LONG_PRESS_MS);
+  }
+
+  function onItemTouchMove(e: TouchEvent): void {
+    const t = e.touches[0];
+    if (!t) return;
+    if (dragItemId === null) {
+      if (Math.abs(t.clientY - touchStartY) > TOUCH_SLOP) clearLongPress();
+      return;
+    }
+    e.preventDefault();
+    const el = document.elementFromPoint(t.clientX, t.clientY);
+    const card = el?.closest<HTMLElement>('.grocery-section-card[data-section-key]');
+    if (card) {
+      const key = card.dataset.sectionKey ?? '';
+      dragOverSection = key === '' ? null : key;
+    }
+  }
+
+  function onItemTouchEnd(): void {
+    clearLongPress();
+    if (dragItemId === null) return;
+    if (dragOverSection !== undefined) dropItemOnSection(dragOverSection);
+    else {
+      dragItemId = null;
+      dragOverSection = undefined;
+    }
+  }
 
   function dropItemOnSection(sectionId: string | null): void {
     const supabase = app.supabase;
@@ -345,6 +405,52 @@
     void mutate(() => supabase.deleteGrocerySection(id));
   }
 
+  // Touch twin of the item long-press above, for the section
+  // manager's reorder rows. Shares the timer/slop plumbing; the
+  // active-drag state rides the same dragSectionId/sectionDropHint
+  // the mouse path uses, so the insertion line renders identically.
+  function onSectionTouchStart(id: string, e: TouchEvent): void {
+    const t = e.touches[0];
+    if (!t) return;
+    touchStartY = t.clientY;
+    clearLongPress();
+    longPressTimer = setTimeout(() => {
+      longPressTimer = null;
+      dragSectionId = id;
+      navigator.vibrate?.(15);
+    }, LONG_PRESS_MS);
+  }
+
+  function onSectionTouchMove(e: TouchEvent): void {
+    const t = e.touches[0];
+    if (!t) return;
+    if (dragSectionId === null) {
+      if (Math.abs(t.clientY - touchStartY) > TOUCH_SLOP) clearLongPress();
+      return;
+    }
+    e.preventDefault();
+    const el = document.elementFromPoint(t.clientX, t.clientY);
+    const row = el?.closest<HTMLElement>('.grocery-section-row[data-section-id]');
+    const overId = row?.dataset.sectionId;
+    if (overId && overId !== dragSectionId) {
+      const edge = sectionDropEdge(
+        grocery.sections.map((x) => x.id),
+        dragSectionId,
+        overId
+      );
+      sectionDropHint = edge ? { id: overId, edge } : null;
+    }
+  }
+
+  function onSectionTouchEnd(): void {
+    clearLongPress();
+    if (dragSectionId === null) return;
+    const targetId = sectionDropHint?.id;
+    sectionDropHint = null;
+    if (targetId) dropSection(targetId);
+    else dragSectionId = null;
+  }
+
   function dropSection(targetId: string): void {
     const supabase = app.supabase;
     const fromId = dragSectionId;
@@ -456,6 +562,7 @@
       {#each grocery.sections as s (s.id)}
         <div
           class="grocery-section-row"
+          data-section-id={s.id}
           class:dragging={dragSectionId === s.id}
           class:drop-before={sectionDropHint?.id === s.id && sectionDropHint.edge === 'top'}
           class:drop-after={sectionDropHint?.id === s.id && sectionDropHint.edge === 'bottom'}
@@ -488,7 +595,13 @@
             sectionDropHint = null;
           }}
         >
-          <span class="grocery-drag-handle" aria-hidden="true">&#8942;&#8942;</span>
+          <span
+            class="grocery-drag-handle"
+            aria-hidden="true"
+            ontouchstart={(e) => onSectionTouchStart(s.id, e)}
+            ontouchmove={onSectionTouchMove}
+            ontouchend={onSectionTouchEnd}
+          >&#8942;&#8942;</span>
           {#if renamingSectionId === s.id}
             <!-- svelte-ignore a11y_autofocus -->
             <input
@@ -539,7 +652,11 @@
   {/if}
 
   {#snippet itemRow(item: GroceryItemView, needed: boolean)}
-    <div class="grocery-item-row" class:acquired={!needed}>
+    <div
+      class="grocery-item-row"
+      class:acquired={!needed}
+      class:lifted={dragItemId === item.id}
+    >
       {#if needed}
         <!-- Drag-to-file handle. Only the handle is draggable so the
              row's tap targets (checkbox, edit) keep their gestures. -->
@@ -557,6 +674,9 @@
             dragItemId = null;
             dragOverSection = undefined;
           }}
+          ontouchstart={(e) => onItemTouchStart(item.id, e)}
+          ontouchmove={onItemTouchMove}
+          ontouchend={onItemTouchEnd}
         >&#8942;&#8942;</span>
       {/if}
       <label class="grocery-check-label">
@@ -669,6 +789,7 @@
            the same write is the item editor's section picker. -->
       <section
         class="grocery-section-card"
+        data-section-key={group.id ?? ''}
         class:drop-target={dragItemId !== null && dragOverSection === group.id}
         ondragover={(e) => {
           if (dragItemId === null) return;
@@ -963,6 +1084,13 @@
     gap: 0.5rem;
     padding: 0.3rem 0.75rem;
   }
+  /* Touch-drag "lift": the long-pressed row dims while the finger
+     picks a destination card (mouse DnD shows the browser's drag
+     ghost instead, so this only reads on touch). */
+  .grocery-item-row.lifted {
+    opacity: 0.5;
+  }
+
   /* Drop highlight while an item drag hovers a card: accent outline
      plus an accent-tinted title so the target reads at a glance even
      on a tall card. */
