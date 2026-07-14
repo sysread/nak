@@ -72,9 +72,9 @@ Steps below name which surface they mean.
 
 ## Expected
 
-- (1) The main panel renders one empty card per canned starter
-  section, in order (Produce, Bread, Deli, Meats, Dairy, Frozen,
-  Snacks, Pantry, Beverages, Household) plus **Other** last, each
+- (1) The main panel renders one empty card per section: **Other**
+  first, then the canned starters in order (Produce, Bread, Deli,
+  Meats, Dairy, Frozen, Snacks, Pantry, Beverages, Household), each
   showing "No items"; the "Nothing on the list" hint sits above
   them.
 - (2) Every ingredient row carries an unchecked checkbox even

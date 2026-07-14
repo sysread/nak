@@ -359,7 +359,10 @@
     font: inherit;
     font-size: 0.8rem;
   }
-  /* Provenance toggle under the filter row, same gutters. */
+  /* Provenance toggle under the filter row, same gutters. The input
+     gets explicit box sizing and zero margin: global form-control
+     styling stretches inputs in this tree, which floated the
+     checkbox away from its label and let the text wrap under it. */
   .grocery-browse-toggle {
     display: flex;
     align-items: center;
@@ -369,8 +372,13 @@
     color: var(--text-muted, #888);
     cursor: pointer;
     user-select: none;
+    white-space: nowrap;
   }
   .grocery-browse-toggle input {
+    width: 0.95rem;
+    height: 0.95rem;
+    margin: 0;
+    flex: 0 0 auto;
     accent-color: var(--accent);
     cursor: pointer;
   }

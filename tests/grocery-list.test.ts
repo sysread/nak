@@ -48,29 +48,29 @@ describe('normalizeGroceryName', () => {
 describe('groupItemsBySection', () => {
   const sections = [section('a', 'Produce', 0), section('b', 'Dairy', 1)];
 
-  it('groups in section order and pins Other last', () => {
+  it('groups with Other pinned first, then section order', () => {
     const items = [
       item({ name: 'milk', section_id: 'b' }),
       item({ name: 'bread', section_id: null }),
       item({ name: 'apples', section_id: 'a' }),
     ];
     const groups = groupItemsBySection(sections, items);
-    expect(groups.map((g) => g.name)).toEqual(['Produce', 'Dairy', OTHER_SECTION_LABEL]);
-    expect(groups[2]!.id).toBeNull();
-    expect(groups[2]!.items.map((i) => i.name)).toEqual(['bread']);
+    expect(groups.map((g) => g.name)).toEqual([OTHER_SECTION_LABEL, 'Produce', 'Dairy']);
+    expect(groups[0]!.id).toBeNull();
+    expect(groups[0]!.items.map((i) => i.name)).toEqual(['bread']);
   });
 
   it('includes empty sections and an empty Other - every card renders', () => {
     const groups = groupItemsBySection(sections, [item({ name: 'kale', section_id: 'a' })]);
-    expect(groups.map((g) => g.name)).toEqual(['Produce', 'Dairy', OTHER_SECTION_LABEL]);
-    expect(groups[1]!.items).toEqual([]);
+    expect(groups.map((g) => g.name)).toEqual([OTHER_SECTION_LABEL, 'Produce', 'Dairy']);
+    expect(groups[0]!.items).toEqual([]);
     expect(groups[2]!.items).toEqual([]);
   });
 
   it('files items pointing at a deleted section under Other', () => {
     const groups = groupItemsBySection(sections, [item({ name: 'ghost', section_id: 'gone' })]);
-    expect(groups.map((g) => g.name)).toEqual(['Produce', 'Dairy', OTHER_SECTION_LABEL]);
-    expect(groups[2]!.items.map((i) => i.name)).toEqual(['ghost']);
+    expect(groups.map((g) => g.name)).toEqual([OTHER_SECTION_LABEL, 'Produce', 'Dairy']);
+    expect(groups[0]!.items.map((i) => i.name)).toEqual(['ghost']);
   });
 
   it('sorts items alphabetically by name within a group', () => {
@@ -79,7 +79,8 @@ describe('groupItemsBySection', () => {
       item({ id: '2', name: 'apples', section_id: 'a' }),
       item({ id: '3', name: 'Melon', section_id: 'a' }),
     ];
-    expect(groupItemsBySection(sections, items)[0]!.items.map((i) => i.name)).toEqual([
+    // Index 1: Other is pinned first, Produce ('a') follows.
+    expect(groupItemsBySection(sections, items)[1]!.items.map((i) => i.name)).toEqual([
       'apples',
       'Melon',
       'zucchini',
