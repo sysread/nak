@@ -62,10 +62,13 @@ export interface GrocerySectionGroup {
 
 /**
  * Group the needed items by section for rendering: user's section
- * order, empty sections hidden, and the null-section "Other" bucket
- * pinned last. Items keep their incoming (recency) order within a
- * group. Items pointing at a section id that no longer exists (a
- * mid-refresh delete) fall back to Other rather than vanishing.
+ * order with the null-section "Other" bucket pinned last. EVERY
+ * section appears, including empty ones (and Other) - the panel
+ * renders one card per section, and an aisle the user walks past
+ * should show up even when nothing is filed under it. Items keep
+ * their incoming (recency) order within a group. Items pointing at a
+ * section id that no longer exists (a mid-refresh delete) fall back
+ * to Other rather than vanishing.
  */
 export function groupItemsBySection(
   sections: readonly GrocerySection[],
@@ -83,16 +86,12 @@ export function groupItemsBySection(
       other.push(item);
     }
   }
-  const groups: GrocerySectionGroup[] = [];
-  for (const s of sections) {
-    const list = byId.get(s.id);
-    if (list && list.length > 0) {
-      groups.push({ id: s.id, name: s.name, items: list });
-    }
-  }
-  if (other.length > 0) {
-    groups.push({ id: null, name: OTHER_SECTION_LABEL, items: other });
-  }
+  const groups: GrocerySectionGroup[] = sections.map((s) => ({
+    id: s.id,
+    name: s.name,
+    items: byId.get(s.id) ?? [],
+  }));
+  groups.push({ id: null, name: OTHER_SECTION_LABEL, items: other });
   return groups;
 }
 

@@ -12,16 +12,21 @@
    *  - the add-to-list input, whose debounced suggestions search the
    *    acquired history (previously bought items) - picking one flips
    *    its row back to needed with section / note / photo intact;
-   *  - the needed list, grouped by the user's store sections with the
-   *    "Other" pseudo-section pinned last. Checkboxes render CHECKED
-   *    (inverted from the recipe view): the shopper unchecks items as
-   *    they land in the cart, which moves them down to...
+   *  - the needed list: one CARD per store section in the user's
+   *    order ("Other" pinned last), section name as the card title,
+   *    items one per row. Every section renders even when empty -
+   *    the cards are the store's walk order, and an aisle shouldn't
+   *    vanish just because nothing is filed under it today.
+   *    Checkboxes render CHECKED (inverted from the recipe view):
+   *    the shopper unchecks items as they land in the cart, which
+   *    moves them down to...
    *  - the acquired history: greyed-out, collapsed by default (it
    *    grows every trip, forever), windowed with a "show more" tail.
    *
    * Section management (add / rename / delete / drag-reorder) lives
-   * behind the "Sections" toggle because the shopping view hides
-   * empty sections - they'd be undraggable there.
+   * behind the "Sections" toggle - keeping those affordances off the
+   * shopping cards means a mid-aisle tap can't accidentally rename
+   * or reorder the store layout.
    *
    * Composition-only: every UI-behavior decision lives in
    * src/lib/ui/grocery-list.ts.
@@ -395,8 +400,7 @@
   {/if}
 
   {#if manageSections}
-    <!-- Section manager: every section (including empty ones the
-         shopping view hides), drag handles for reorder, inline rename,
+    <!-- Section manager: drag handles for reorder, inline rename,
          delete. "Other" is not a row here - it's the permanent
          null-section bucket and has no affordances by design. -->
     <div class="grocery-section-manager">
@@ -571,14 +575,23 @@
         Nothing on the list. Add items above, or check ingredients off
         an upcoming or favorite recipe.
       </p>
-    {:else}
-      {#each neededGroups as group (group.id ?? '__other')}
-        <div class="grocery-group-header">{group.name}</div>
-        {#each group.items as item (item.id)}
-          {@render itemRow(item, true)}
-        {/each}
-      {/each}
     {/if}
+    <!-- One card per section, in the user's order, Other pinned last.
+         Every section renders even when empty - the cards ARE the
+         store layout, and an aisle shouldn't disappear from the walk
+         order just because nothing is filed under it today. -->
+    {#each neededGroups as group (group.id ?? '__other')}
+      <section class="grocery-section-card">
+        <h3 class="grocery-section-card-title">{group.name}</h3>
+        {#if group.items.length === 0}
+          <p class="subtle grocery-section-card-empty">No items</p>
+        {:else}
+          {#each group.items as item (item.id)}
+            {@render itemRow(item, true)}
+          {/each}
+        {/if}
+      </section>
+    {/each}
 
     {#if grocery.acquired.length > 0}
       <button
@@ -778,15 +791,31 @@
     margin-top: 0.25rem;
   }
 
-  /* Group headers echo BucketHeader's look but stay local - they are
-     denser (one per aisle) and never carry a flourish. */
-  .grocery-group-header {
-    padding: 0.5rem 0.75rem 0.2rem;
+  /* One card per store section: the section name is the card title,
+     items stack one per row below it. Cards render for empty
+     sections too, so the fill keeps a titled-but-empty card reading
+     as a deliberate slot rather than a stray label. */
+  .grocery-section-card {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg-2);
+    margin: 0 0.6rem 0.6rem;
+    padding: 0.35rem 0 0.45rem;
+  }
+  .grocery-section-card-title {
+    margin: 0;
+    padding: 0.25rem 0.75rem 0.35rem;
     font-size: 0.72rem;
     font-weight: 600;
     letter-spacing: 0.06em;
     text-transform: uppercase;
     color: var(--text-muted, #888);
+    border-bottom: 1px solid var(--border);
+  }
+  .grocery-section-card-empty {
+    margin: 0;
+    padding: 0.4rem 0.75rem 0.1rem;
+    font-size: 0.78rem;
   }
 
   .grocery-item-row {

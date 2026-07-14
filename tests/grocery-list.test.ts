@@ -48,7 +48,7 @@ describe('normalizeGroceryName', () => {
 describe('groupItemsBySection', () => {
   const sections = [section('a', 'Produce', 0), section('b', 'Dairy', 1)];
 
-  it('groups in section order, hides empty sections, pins Other last', () => {
+  it('groups in section order and pins Other last', () => {
     const items = [
       item({ name: 'milk', section_id: 'b' }),
       item({ name: 'bread', section_id: null }),
@@ -60,15 +60,17 @@ describe('groupItemsBySection', () => {
     expect(groups[2]!.items.map((i) => i.name)).toEqual(['bread']);
   });
 
-  it('omits Other when no items are unfiled', () => {
+  it('includes empty sections and an empty Other - every card renders', () => {
     const groups = groupItemsBySection(sections, [item({ name: 'kale', section_id: 'a' })]);
-    expect(groups.map((g) => g.name)).toEqual(['Produce']);
+    expect(groups.map((g) => g.name)).toEqual(['Produce', 'Dairy', OTHER_SECTION_LABEL]);
+    expect(groups[1]!.items).toEqual([]);
+    expect(groups[2]!.items).toEqual([]);
   });
 
   it('files items pointing at a deleted section under Other', () => {
     const groups = groupItemsBySection(sections, [item({ name: 'ghost', section_id: 'gone' })]);
-    expect(groups).toHaveLength(1);
-    expect(groups[0]!.id).toBeNull();
+    expect(groups.map((g) => g.name)).toEqual(['Produce', 'Dairy', OTHER_SECTION_LABEL]);
+    expect(groups[2]!.items.map((i) => i.name)).toEqual(['ghost']);
   });
 
   it('preserves item order within a group', () => {
