@@ -795,27 +795,34 @@
      items stack one per row below it. Cards render for empty
      sections too, so the fill keeps a titled-but-empty card reading
      as a deliberate slot rather than a stray label. */
+  /* Body on --surface, title bar on --bg-2: the two-tone split is
+     what makes the title read as a header rather than a first row -
+     every theme keys the pair one level apart, so the contrast holds
+     in light, dark, and both terminal styles. */
   .grocery-section-card {
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
-    background: var(--bg-2);
+    background: var(--surface);
     margin: 0 0.6rem 0.6rem;
-    padding: 0.35rem 0 0.45rem;
+    padding: 0 0 0.45rem;
+    overflow: hidden;
   }
   .grocery-section-card-title {
     margin: 0;
-    padding: 0.25rem 0.75rem 0.35rem;
+    padding: 0.35rem 0.75rem;
     font-size: 0.72rem;
     font-weight: 600;
     letter-spacing: 0.06em;
     text-transform: uppercase;
     color: var(--text-muted, #888);
+    background: var(--bg-2);
     border-bottom: 1px solid var(--border);
   }
   .grocery-section-card-empty {
     margin: 0;
     padding: 0.4rem 0.75rem 0.1rem;
     font-size: 0.78rem;
+    font-style: italic;
   }
 
   .grocery-item-row {
