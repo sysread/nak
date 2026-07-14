@@ -156,7 +156,6 @@
     loadRecipes,
   } from '$lib/cookbook-store.svelte';
   import { onCookbookChange, emitCookbookChange } from '$lib/cookbook-events';
-  import { grocery, loadGroceries } from '$lib/grocery-store.svelte';
   import { emitGroceryChange } from '$lib/grocery-events';
   import {
     memoriesStore,
@@ -528,14 +527,13 @@
   // Recipe and memory search/listing state has moved to the
   // RecipeList / MemoryList sidebar components.
 
-  // Groceries drawer tab. Same lazy-load shape as recipes - the list
-  // component's onMount also loads, but kicking it on tab-pick lets a
-  // hidden-sidebar (mobile) landing start the fetch immediately.
+  // Groceries drawer tab. Unlike the sibling tabs there is no gated
+  // fetch here: the Groceries panel refetches unconditionally on
+  // every mount (see Groceries.svelte - a loaded-gate would freeze
+  // the module-level store against writes made while the tab was
+  // closed), and the panel mounts whenever this tab is active.
   function onPickGroceriesTab(): void {
     navigate({ drawer: 'groceries' }, { replace: true });
-    if (app.supabase && !grocery.loaded && !grocery.loading) {
-      void loadGroceries(app.supabase);
-    }
   }
 
   function onPickRecipesTab(): void {
