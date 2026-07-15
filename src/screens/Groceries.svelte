@@ -737,7 +737,18 @@
         aria-label={`Edit ${item.name}`}
         aria-expanded={editingId === item.id}
         onclick={() => (editingId === item.id ? cancelEdit() : startEdit(item))}
-      >&#9998;</button>
+      >
+        <!-- Stroked SVG rather than a text glyph: the U+270E pencil
+             entity rendered as an unreadable blob at row size, while
+             a controlled 2px stroke stays crisp at 13px. Same
+             feather-style idiom as the sidebar's cart / thumbs-up
+             marks. -->
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2" stroke-linecap="round"
+             stroke-linejoin="round" aria-hidden="true">
+          <path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+        </svg>
+      </button>
     </div>
     {#if editingId === item.id}
       <div class="grocery-item-edit">
@@ -1265,8 +1276,9 @@
      open so the pencil column doesn't compete with the item names. */
   .grocery-edit-btn {
     flex-shrink: 0;
-    font-size: 0.9rem;
-    padding: 0.2rem 0.35rem;
+    display: inline-flex;
+    align-items: center;
+    padding: 0.25rem 0.35rem;
   }
   .grocery-edit-btn.active {
     color: var(--accent);
