@@ -71,9 +71,11 @@ until you open it (it keeps your whole purchase history, which is
 also what powers the add-input suggestions). Re-check an acquired
 item to put it back on the list.
 
-Tap an item's name to edit it: name, count, unit, a free-form note,
-its section, and an optional photo (handy for "this exact brand"
-label shots). Delete lives in the same editor. You can also drag an
+Tapping anywhere on an item's row toggles its checkbox - the whole
+row is the tap target, not just the little box. To edit instead,
+tap the pencil at the row's right edge: name, count, unit, a
+free-form note, its section, and an optional photo (handy for "this
+exact brand" label shots). Delete lives in the same editor. You can also drag an
 item by its handle onto another section's card to re-file it - the
 target card highlights as you hover, and the move is remembered as
 that item's sticky section. On a phone, press and hold the handle

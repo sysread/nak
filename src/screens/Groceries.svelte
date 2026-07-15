@@ -698,11 +698,15 @@
           onchange={() => setNeeded(item, !needed)}
         />
       </label>
+      <!-- The whole row body is a second checkbox target - at the
+           store the tap is a thumb on a phone, and the tiny box
+           alone is a miss magnet. Editing moved to the pencil button
+           at the row's right edge. -->
       <button
         type="button"
         class="grocery-item-body"
-        title="Edit item"
-        onclick={() => (editingId === item.id ? cancelEdit() : startEdit(item))}
+        title={needed ? 'Mark as acquired' : 'Put back on the list'}
+        onclick={() => setNeeded(item, !needed)}
       >
         <span class="grocery-item-line">
           <span class="grocery-item-name">{item.name}</span>
@@ -725,6 +729,15 @@
       {#if item.image_url}
         <img class="grocery-item-thumb" src={item.image_url} alt={item.name} loading="lazy" />
       {/if}
+      <button
+        type="button"
+        class="grocery-icon-btn grocery-edit-btn"
+        class:active={editingId === item.id}
+        title="Edit item"
+        aria-label={`Edit ${item.name}`}
+        aria-expanded={editingId === item.id}
+        onclick={() => (editingId === item.id ? cancelEdit() : startEdit(item))}
+      >&#9998;</button>
     </div>
     {#if editingId === item.id}
       <div class="grocery-item-edit">
@@ -1248,6 +1261,17 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* Editor toggle at the row's right edge. Muted until hovered or
+     open so the pencil column doesn't compete with the item names. */
+  .grocery-edit-btn {
+    flex-shrink: 0;
+    font-size: 0.9rem;
+    padding: 0.2rem 0.35rem;
+  }
+  .grocery-edit-btn.active {
+    color: var(--accent);
+  }
+
   .grocery-item-thumb {
     flex-shrink: 0;
     width: 1.8rem;
