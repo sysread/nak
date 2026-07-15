@@ -369,7 +369,7 @@
     gap: 0.4rem;
     padding: 0 0.6rem 0.5rem;
     font-size: 0.8rem;
-    color: var(--text-muted, #888);
+    color: var(--muted);
     cursor: pointer;
     user-select: none;
     white-space: nowrap;
@@ -454,11 +454,11 @@
   .grocery-browse-qty {
     flex-shrink: 0;
     font-size: 0.75rem;
-    color: var(--text-muted, #888);
+    color: var(--muted);
   }
   .grocery-browse-meta {
     font-size: 0.72rem;
-    color: var(--text-muted, #888);
+    color: var(--muted);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

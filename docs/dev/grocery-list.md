@@ -29,9 +29,8 @@ content in panel" split:
   hovered card; the section manager's reorder shows an insertion
   line via `sectionDropEdge`), whole-card section reorder (title-bar
   handles, shown ONLY when "Show empty sections" is on - with cards
-  hidden, a drag would silently leapfrog invisible sections; card
-  titles are centered so the handle doesn't shift them), and section
-  management. Full-width,
+  hidden, a drag would silently leapfrog invisible sections), and
+  section management. Full-width,
   which is what a phone at the store sees once the drawer closes.
   Both drags work on touch via the Settings custom-prompts
   long-press pattern (hold the grip ~1s, haptic tick, slide,

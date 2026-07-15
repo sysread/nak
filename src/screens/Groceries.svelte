@@ -698,11 +698,15 @@
           onchange={() => setNeeded(item, !needed)}
         />
       </label>
+      <!-- The whole row body is a second checkbox target - at the
+           store the tap is a thumb on a phone, and the tiny box
+           alone is a miss magnet. Editing moved to the pencil button
+           at the row's right edge. -->
       <button
         type="button"
         class="grocery-item-body"
-        title="Edit item"
-        onclick={() => (editingId === item.id ? cancelEdit() : startEdit(item))}
+        title={needed ? 'Mark as acquired' : 'Put back on the list'}
+        onclick={() => setNeeded(item, !needed)}
       >
         <span class="grocery-item-line">
           <span class="grocery-item-name">{item.name}</span>
@@ -725,6 +729,15 @@
       {#if item.image_url}
         <img class="grocery-item-thumb" src={item.image_url} alt={item.name} loading="lazy" />
       {/if}
+      <button
+        type="button"
+        class="grocery-icon-btn grocery-edit-btn"
+        class:active={editingId === item.id}
+        title="Edit item"
+        aria-label={`Edit ${item.name}`}
+        aria-expanded={editingId === item.id}
+        onclick={() => (editingId === item.id ? cancelEdit() : startEdit(item))}
+      >&#9998;</button>
     </div>
     {#if editingId === item.id}
       <div class="grocery-item-edit">
@@ -957,7 +970,7 @@
     gap: 0.4rem;
     padding: 0 0.75rem 0.5rem;
     font-size: 0.8rem;
-    color: var(--text-muted, #888);
+    color: var(--muted);
     cursor: pointer;
     user-select: none;
     white-space: nowrap;
@@ -1040,7 +1053,7 @@
   }
   .grocery-drag-handle {
     cursor: grab;
-    color: var(--text-muted, #888);
+    color: var(--muted);
     font-size: 0.75rem;
     letter-spacing: -0.1em;
     user-select: none;
@@ -1066,7 +1079,7 @@
   .grocery-section-name-static {
     flex: 1;
     font-size: 0.85rem;
-    color: var(--text-muted, #888);
+    color: var(--muted);
     padding: 0.15rem 0.2rem;
   }
   .grocery-section-rename,
@@ -1085,7 +1098,7 @@
     flex-shrink: 0;
     border: none;
     background: none;
-    color: var(--text-muted, #888);
+    color: var(--muted);
     font-size: 1rem;
     line-height: 1;
     padding: 0.15rem 0.3rem;
@@ -1118,30 +1131,30 @@
     padding: 0 0 0.45rem;
     overflow: hidden;
   }
-  /* Centered title with the reorder handle absolutely positioned at
-     the left edge - centering (rather than a flex slot) keeps every
-     title aligned whether or not its card carries a handle, so
-     toggling "Show empty sections" doesn't shift the text. */
+  /* Left-aligned title with the reorder handle inline before it.
+     The handle only renders in full-layout mode, so the title's left
+     edge shifts slightly when it appears - preferred over centering,
+     which read as disconnected from the items below. --muted (not a
+     hardcoded grey) so the header clears WCAG contrast on every
+     theme's --bg-2, including light terminal's beige. */
   .grocery-section-card-title {
-    position: relative;
+    display: flex;
+    align-items: center;
     margin: 0;
-    padding: 0.4rem 2rem;
+    padding: 0.4rem 0.75rem;
     font-size: 0.88rem;
     font-weight: 600;
     letter-spacing: 0.05em;
     text-transform: uppercase;
-    text-align: center;
-    color: var(--text-muted, #888);
+    color: var(--muted);
     background: var(--bg-2);
     border-bottom: 1px solid var(--border);
   }
   .grocery-card-handle {
-    position: absolute;
-    left: 0.6rem;
-    top: 50%;
-    transform: translateY(-50%);
-    /* Generous hit box for a store-aisle thumb; the glyph stays small. */
-    padding: 0.3rem 0.45rem;
+    /* Generous hit box for a store-aisle thumb; the glyph stays
+       small, with clear air between it and the title text. */
+    padding: 0.3rem 0.75rem 0.3rem 0.1rem;
+    margin: -0.3rem 0;
   }
   .grocery-section-card-empty {
     margin: 0;
@@ -1239,15 +1252,26 @@
   .grocery-item-qty {
     flex-shrink: 0;
     font-size: 0.75rem;
-    color: var(--text-muted, #888);
+    color: var(--muted);
   }
   .grocery-item-meta {
     font-size: 0.72rem;
-    color: var(--text-muted, #888);
+    color: var(--muted);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* Editor toggle at the row's right edge. Muted until hovered or
+     open so the pencil column doesn't compete with the item names. */
+  .grocery-edit-btn {
+    flex-shrink: 0;
+    font-size: 0.9rem;
+    padding: 0.2rem 0.35rem;
+  }
+  .grocery-edit-btn.active {
+    color: var(--accent);
+  }
+
   .grocery-item-thumb {
     flex-shrink: 0;
     width: 1.8rem;
@@ -1337,7 +1361,7 @@
     border: none;
     border-top: 1px solid var(--border);
     background: none;
-    color: var(--text-muted, #888);
+    color: var(--muted);
     font: inherit;
     font-size: 0.8rem;
     text-align: left;

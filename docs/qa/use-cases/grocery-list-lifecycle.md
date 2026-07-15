@@ -42,8 +42,9 @@ Steps below name which surface they mean.
    then look at the ingredient list again.
 4. Check the checkboxes for `eggs` and `flour`.
 5. Switch to the Groceries tab and look at the MAIN PANEL.
-6. In the main panel, tap the `eggs` item's name, set its section to
-   **Dairy** in the editor, and Save.
+6. In the main panel, tap the pencil at the right edge of the
+   `eggs` row, set its section to **Dairy** in the editor, and
+   Save. Then tap the `flour` row's TEXT and tap it again.
 7. In the main panel, uncheck `eggs` (simulate buying it), then
    expand the **Acquired** disclosure at the bottom.
 8. In the main panel's **Add to list** input, type `egg` and wait a
@@ -101,6 +102,9 @@ Steps below name which surface they mean.
   with checked boxes.
 - (6) `eggs` moves into the **Dairy** card; the **Other** card keeps
   `flour`. Within a card, items order alphabetically by name.
+  Tapping the `flour` row's text toggles its checkbox (acquired,
+  then back) rather than opening the editor - only the pencil opens
+  the editor.
 - (7) `eggs` drops out of the needed list into the greyed
   **Acquired (1)** section (collapsed until clicked; name shown
   struck through). On the recipe, the `eggs` checkbox is now
@@ -148,9 +152,12 @@ Steps below name which surface they mean.
 - (21) With empty sections shown, each real section card (not
   Other) carries a title-bar drag handle; dragging shows an accent
   line on the landing edge and the drop persists the new order
-  (verify in the Sections manager). Titles stay centered. Unticking
-  the toggle removes the handles - card reorder is only available
-  in full-layout mode.
+  (verify in the Sections manager). Titles are left-aligned with
+  the handle inline before the text. Unticking the toggle removes
+  the handles - card reorder is only available in full-layout mode.
+  In light mode + terminal style, the card titles and other muted
+  grocery text read clearly against the beige title bar (the muted
+  tone follows the theme, not a hardcoded grey).
 
 ## Cleanup
 
