@@ -59,14 +59,19 @@ owns current reality.
   (`nak:grocery:changed`): `emitGroceryChange` / `onGroceryChange`.
   Mirrors `cookbook-events.ts`.
 - `src/lib/ui/grocery-list.ts` - pure UI-behavior primitives:
-  section grouping (`groupItemsBySection`, Other pinned first),
-  quantity labels, the add-input create-vs-reuse decision
+  section grouping (`groupItemsBySection`, Other pinned first;
+  `filterSectionGroups` for the empty-cards toggle), quantity
+  labels, the add-input create-vs-reuse decision
   (`canCreateGroceryItem`), the acquired disclosure copy, the DnD
-  next-order computation (`sectionOrderAfterDrag`), the sidebar
-  browse helpers (status/section filter mapping + the
-  `computeBrowseView` render decision), name
-  normalization, and the recipe-bridge helpers
-  (`recipeCheckboxItemIds`, `groceryItemFromIngredient`). Tested at
+  next-state helpers (`sectionOrderAfterDrag` + the `sectionDropEdge`
+  insertion-line decision), the shopping-trip helpers
+  (`isShoppingTripActive`, `splitAcquiredForTrip`,
+  `CART_IDLE_MESSAGE`, `shoppingToggleLabel`), the sidebar browse
+  helpers (status/section filter mapping, `splitBrowseRows`
+  provenance grouping, the `computeBrowseView` render decision),
+  name normalization, and the recipe-bridge helpers
+  (`recipeCheckboxItemIds`, `groceryItemFromIngredient`,
+  `partitionIngredientsForAdd`). Tested at
   `tests/grocery-list.test.ts`.
 - `src/components/GroceryList.svelte` - the sidebar all-items
   browse: debounced search, status + section filters (mapped to the
@@ -76,23 +81,27 @@ owns current reality.
   toggle (`splitBrowseRows` / `manualOnly`), per-row needed toggles,
   and the unmatched-search Add action.
 - `src/screens/Groceries.svelte` - the main-panel shopping list:
-  add-input with debounced acquired-history suggestions, the needed
-  panes grouped by section, the collapsed acquired history, the
-  inline item editor (name / count / unit / note / section / photo /
-  delete), and the Sections manage mode (add / rename / delete /
-  native-DnD reorder).
+  add-input with debounced acquired-history suggestions, the
+  section cards (row taps toggle `needed`; the pencil opens the
+  inline editor: name / count / unit / note / section / photo /
+  delete), the empty-sections toggle, both drags (item-to-card
+  filing and whole-card reorder, pointer + long-press touch), the
+  Start/Finish shopping trip toggle with the In-cart section, the
+  collapsed acquired history, and the Sections manage mode (add /
+  rename / delete / DnD reorder).
 - `src/screens/Cookbook.svelte` - the recipe side of the bridge:
   `recipeToHtml(..., { ingredientCheckboxes })` on the live detail
   view, the delegated `onchange` handler on the render container,
   the checked-state sync effect, and the per-recipe grocery-row
   fetch.
 - `src/lib/cooklang.ts` - `RecipeHtmlOptions.ingredientCheckboxes`:
-  prefixes ingredient `<li>`s with
-  `<input class="cook-buy" data-ing="<raw name>">`. The renderer
-  stays grocery-unaware - it stamps names, never checked state.
+  wraps each ingredient row in a `<label>` around an
+  `<input class="cook-buy" data-ing="<raw name>">` so tapping the
+  text toggles the box. The renderer stays grocery-unaware - it
+  stamps names, never checked state.
 - `src/screens/Chat.svelte` - the Groceries tab (nav row, lazy
-  component load, top-bar label, main-panel hint) and the realtime
-  relay (`subscribeToGroceryChanges` -> `emitGroceryChange`).
+  loads for both the sidebar and the panel, top-bar label) and the
+  realtime relay (`subscribeToGroceryChanges` -> `emitGroceryChange`).
 - `supabase/functions/grocery-image-gc/index.ts` - the photo orphan
   sweep; reuses the recipe sweep's table-agnostic drain driver
   (`_shared/recipe-image-gc.ts`) with grocery RPCs/bucket injected.
@@ -243,6 +252,11 @@ Deployed via its own line in `deploy.yml`.
   load, and the realtime relay.
 - **File storage** (`./file-storage.md`) - the fourth private
   bucket + its GC sweep.
+- **Settings** (`./settings.md`) - the shopping-trip flag
+  (`groceryShoppingStartedAt`) rides `profiles.settings` through
+  the standard coercer + merge-RPC path; adding trip fields means
+  touching `UserSettings`, `coerceSettings`, and the
+  `updateSettings` whitelist together.
 - **Routing** - `drawer=groceries` joins the DrawerTab union in
   `routing.svelte.ts`.
 - **LLM tools** - none, deliberately. The list is user-driven UI;

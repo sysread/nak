@@ -78,10 +78,12 @@ changing a contract that other features depend on.
   parser + the recipe_* tools + the Cookbook modal and
   drawer tab.
 - [Grocery list](./grocery-list.md) — the `grocery_items` /
-  `grocery_sections` store, the Groceries drawer tab, the
-  ingredient-checkbox bridge from bookmarked recipes, the
-  recipe-edit invalidation trigger, and the item-photo bucket
-  plus its GC sweep.
+  `grocery_sections` store, the Groceries drawer tab (all-items
+  browse sidebar + section-card shopping panel), the
+  ingredient-checkbox bridge from recipes, the recipe-edit
+  invalidation trigger, sticky section prefs, shopping trips with
+  the In-cart section, and the item-photo bucket plus its GC
+  sweep.
 - [Library](./library.md) — persistent uploaded documents:
   the `documents` + `document_chunks` tables, the Storage
   bucket for originals, browser-side extraction + chunking,
