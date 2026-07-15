@@ -477,6 +477,12 @@ every update) so it's covered here rather than in its own file.
   (`state.svelte.ts`) is the bridge: Settings writes setters,
   other features read the corresponding `app.*` field. See
   `./architecture.md`.
+- **Grocery list** (`./grocery-list.md`) - the shopping-trip flag
+  (`groceryShoppingStartedAt`) lives on the settings blob but is
+  written by the Groceries panel, not the Settings screen: a
+  timestamped "trip is underway" marker whose midnight expiry is
+  computed client-side. It rides the same coercer + merge-RPC
+  contract as every other field.
 - **Build & deploy** — the About pane surfaces the commit SHA +
   build time that `vite.config.ts` inlines via `define`, and
   drives the same `applyUpdate()` that UpdateBanner calls. See
