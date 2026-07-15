@@ -82,6 +82,15 @@ Steps below name which surface they mean.
 21. Back in the list, tick **Show empty sections** and drag the
     `Bakery` CARD by the handle in its title bar to another spot;
     untick the toggle and look at the title bars again.
+22. Look at the **In cart** section, then click **Start shopping**
+    and uncheck `salt` from the list. Re-check `salt` in the cart,
+    uncheck it again, then click **Finish shopping**. Set
+    `groceryShoppingStartedAt` to yesterday and reload to check the
+    midnight expiry:
+
+    ```sh
+    mise run dev-sql "update profiles set settings = settings || jsonb_build_object('groceryShoppingStartedAt', to_jsonb((now() - interval '1 day')::text))"
+    ```
 
 ## Expected
 
@@ -158,6 +167,14 @@ Steps below name which surface they mean.
   In light mode + terminal style, the card titles and other muted
   grocery text read clearly against the beige title bar (the muted
   tone follows the theme, not a hardcoded grey).
+
+- (22) Idle: the In-cart section shows the explainer message and no
+  items. After **Start shopping**, unchecking `salt` moves it into
+  In cart (not the Acquired history); re-checking returns it to the
+  list. After **Finish shopping** the cart empties back to the
+  explainer and `salt` shows under Acquired. With the trip
+  timestamp forced to yesterday, a reload shows the trip inactive -
+  it expired at midnight without any explicit finish.
 
 ## Cleanup
 

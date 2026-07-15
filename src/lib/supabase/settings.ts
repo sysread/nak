@@ -132,6 +132,19 @@ export async function updateSettings(
       toRemove.push('imageModel');
     }
   }
+  if ('groceryShoppingStartedAt' in patch) {
+    // Undefined clears the trip ("Finish shopping"); a parseable
+    // timestamp starts one. Invalid strings are ignored, like every
+    // other field.
+    if (patch.groceryShoppingStartedAt === undefined) {
+      toRemove.push('groceryShoppingStartedAt');
+    } else if (
+      typeof patch.groceryShoppingStartedAt === 'string' &&
+      !Number.isNaN(Date.parse(patch.groceryShoppingStartedAt))
+    ) {
+      toSet.groceryShoppingStartedAt = patch.groceryShoppingStartedAt;
+    }
+  }
   if ('colorMode' in patch) {
     if (patch.colorMode === undefined) toRemove.push('colorMode');
     else if (isColorMode(patch.colorMode)) toSet.colorMode = patch.colorMode;

@@ -46,8 +46,12 @@
     GROCERY_SUGGESTION_LIMIT,
     OTHER_SECTION_LABEL,
     OTHER_SECTION_VALUE,
+    CART_IDLE_MESSAGE,
     acquiredHeaderLabel,
     canCreateGroceryItem,
+    isShoppingTripActive,
+    shoppingToggleLabel,
+    splitAcquiredForTrip,
     filterSectionGroups,
     groupItemsBySection,
     itemQuantityLabel,
@@ -90,6 +94,61 @@
   // layout is mostly noise on a short list. The toggle shows every
   // aisle, which helps when filing items into sections.
   let showEmptySections = $state(false);
+
+  // --- Shopping trip state ---
+  // Persisted on profiles.settings.groceryShoppingStartedAt so a trip
+  // survives reloads and follows the account. While a trip is active,
+  // items unchecked from the list surface in the In-cart section
+  // (updated_at >= trip start); the trip expires implicitly at local
+  // midnight (isShoppingTripActive compares calendar days), so no
+  // cleanup write is needed. `clockTick` re-evaluates activity once a
+  // minute so a tab left open crosses midnight without interaction.
+  let shoppingStartedAt = $state<string | undefined>(undefined);
+  let shoppingBusy = $state(false);
+  let clockTick = $state(Date.now());
+
+  $effect(() => {
+    const timer = setInterval(() => (clockTick = Date.now()), 60_000);
+    return () => clearInterval(timer);
+  });
+
+  onMount(() => {
+    void (async () => {
+      if (!app.supabase) return;
+      try {
+        const settings = await app.supabase.getSettings();
+        shoppingStartedAt = settings.groceryShoppingStartedAt;
+      } catch {
+        // Non-fatal: the trip button still works (the next toggle
+        // writes fresh state); the cart just reads idle until then.
+      }
+    })();
+  });
+
+  const shoppingActive = $derived(
+    isShoppingTripActive(shoppingStartedAt, new Date(clockTick))
+  );
+
+  function toggleShopping(): void {
+    const supabase = app.supabase;
+    if (!supabase || shoppingBusy) return;
+    shoppingBusy = true;
+    const next = shoppingActive ? undefined : new Date().toISOString();
+    void (async () => {
+      try {
+        const settings = await supabase.updateSettings({
+          groceryShoppingStartedAt: next,
+        });
+        shoppingStartedAt = settings.groceryShoppingStartedAt;
+        clockTick = Date.now();
+        actionError = null;
+      } catch (err) {
+        actionError = errMsg(err);
+      } finally {
+        shoppingBusy = false;
+      }
+    })();
+  }
 
   // Item drag-to-file: dragging a needed row's handle onto a section
   // card saves the item into that section (which also records the
@@ -473,6 +532,9 @@
     void mutate(() => supabase.reorderGrocerySections(next));
   }
 
+  const acquiredSplit = $derived(
+    splitAcquiredForTrip(grocery.acquired, shoppingStartedAt, shoppingActive)
+  );
   const neededGroups = $derived(
     filterSectionGroups(
       groupItemsBySection(grocery.sections, grocery.needed),
@@ -507,6 +569,17 @@
       title="Manage sections"
       onclick={() => (manageSections = !manageSections)}
     >Sections</button>
+    <button
+      type="button"
+      class="grocery-sections-toggle grocery-shopping-toggle"
+      class:active={shoppingActive}
+      aria-pressed={shoppingActive}
+      disabled={shoppingBusy}
+      title={shoppingActive
+        ? 'End the shopping trip (also ends automatically at midnight)'
+        : 'Start a shopping trip - items you mark off go to the In-cart section'}
+      onclick={toggleShopping}
+    >{shoppingToggleLabel(shoppingActive)}</button>
   </div>
 
   <!-- Same toggle idiom as the sidebar's show-recipe-ingredients
@@ -897,7 +970,27 @@
       </section>
     {/each}
 
-    {#if grocery.acquired.length > 0}
+    <!-- In-cart section: the current trip's checked-off items. Only
+         populated while a shopping trip is active - the trip-start
+         timestamp is what distinguishes "just put it in the cart"
+         from the years of acquired history below. Idle, it renders
+         the explainer instead. -->
+    <section class="grocery-section-card grocery-cart-section">
+      <h3 class="grocery-section-card-title">In cart</h3>
+      {#if !shoppingActive}
+        <p class="subtle grocery-section-card-empty">{CART_IDLE_MESSAGE}</p>
+      {:else if acquiredSplit.cart.length === 0}
+        <p class="subtle grocery-section-card-empty">
+          Nothing in the cart yet - items you mark off appear here.
+        </p>
+      {:else}
+        {#each acquiredSplit.cart as item (item.id)}
+          {@render itemRow(item, false)}
+        {/each}
+      {/if}
+    </section>
+
+    {#if acquiredSplit.history.length > 0}
       <button
         type="button"
         class="grocery-acquired-toggle"
@@ -905,10 +998,10 @@
         onclick={() => (acquiredOpen = !acquiredOpen)}
       >
         <span class="grocery-acquired-chevron" class:open={acquiredOpen} aria-hidden="true">&#9656;</span>
-        {acquiredHeaderLabel(grocery.acquired.length, grocery.acquiredHasMore)}
+        {acquiredHeaderLabel(acquiredSplit.history.length, grocery.acquiredHasMore)}
       </button>
       {#if acquiredOpen}
-        {#each grocery.acquired as item (item.id)}
+        {#each acquiredSplit.history as item (item.id)}
           {@render itemRow(item, false)}
         {/each}
         {#if grocery.acquiredHasMore}
@@ -1272,13 +1365,26 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  /* Editor toggle at the row's right edge. Muted until hovered or
-     open so the pencil column doesn't compete with the item names. */
+  /* Editor toggle at the row's right edge. Bordered like the form
+     controls so it reads as a button, with the radius token carrying
+     the theme's shape (square in terminal style). Muted until
+     hovered or open so the pencil column doesn't compete with the
+     item names. */
   .grocery-edit-btn {
     flex-shrink: 0;
     display: inline-flex;
     align-items: center;
     padding: 0.25rem 0.35rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg);
+  }
+
+  /* The In-cart card sits between the section cards and the acquired
+     disclosure; extra top margin separates the trip surface from the
+     store layout above. */
+  .grocery-cart-section {
+    margin-top: 0.9rem;
   }
   .grocery-edit-btn.active {
     color: var(--accent);

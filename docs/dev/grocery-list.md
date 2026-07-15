@@ -185,6 +185,27 @@ grocery_items":
   leave the list alone. Recipe DELETE is the FK cascade, not the
   trigger.
 
+## Shopping trips
+
+The "Start shopping" / "Finish shopping" button on the panel toggles
+`profiles.settings.groceryShoppingStartedAt` (an ISO timestamp; see
+`UserSettings`). While a trip is active, items unchecked from the
+list surface in the **In cart** card between the section cards and
+the acquired disclosure - membership is derived, not stored:
+`needed = false` AND `updated_at >= trip start` (unchecking bumps
+`updated_at`), split client-side by `splitAcquiredForTrip`. The
+acquired-history disclosure excludes the cart rows while a trip is
+active. A trip is active only while the local calendar day still
+matches the start timestamp (`isShoppingTripActive`), so it expires
+at midnight in the user's timezone with no cron or cleanup write -
+the stale timestamp just reads as inactive; a minute-tick in the
+panel re-evaluates so an open tab crosses midnight too. Idle, the
+In-cart card shows `CART_IDLE_MESSAGE`.
+
+Gotcha: editing an old acquired item mid-trip bumps its
+`updated_at`, which reads as "in the cart" until the trip ends.
+Rare enough not to pay for a dedicated column; revisit if it bites.
+
 ## Refresh model
 
 Local UI writes call `loadGroceries` directly (via the component's

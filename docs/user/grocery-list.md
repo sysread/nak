@@ -90,6 +90,17 @@ section card's title bar then grows a drag handle on the left. Drag
 shows, and release. The handles only appear with all sections
 visible so a drag can't skip past a hidden one.
 
+## Shopping trips
+
+Hit **Start shopping** (top of the main panel) when you walk into
+the store. From then on, everything you mark off drops into the
+**In cart** section just below your list, so you can see the current
+trip's haul at a glance - re-check anything to put it back on the
+list. Hit **Finish shopping** when you're done (or just forget - a
+trip ends automatically at midnight), and the cart's contents settle
+into the acquired history. When no trip is running, the In-cart
+section explains itself and stays empty.
+
 ## Sections
 
 Click **Sections** at the top of the main panel to manage your store
