@@ -62,6 +62,17 @@ export interface UserSettings {
    * path the way chat does). See VENICE_DEFAULT_IMAGE_MODEL in ../models.
    */
   imageModel?: string;
+  /**
+   * ISO timestamp of when the user hit "Start shopping" on the
+   * grocery list, or absent when no trip is underway. A trip is
+   * ACTIVE only while the local calendar day still matches this
+   * timestamp (see isShoppingTripActive in ../../ui/grocery-list) -
+   * crossing midnight ends it implicitly, no cron or cleanup write
+   * needed; the stale value just reads as inactive and the next
+   * "Start shopping" overwrites it. Items unchecked while a trip is
+   * active (updated_at >= this) render in the "In cart" section.
+   */
+  groceryShoppingStartedAt?: string;
   colorMode?: ColorMode;
   accent?: Accent;
   /** UI shape style: rounded 'soft' (default when absent) or square 'terminal'. */
@@ -209,6 +220,12 @@ export function coerceSettings(raw: unknown): UserSettings {
   if (modelProfiles) out.modelProfiles = modelProfiles;
   if (typeof r.imageModel === 'string' && r.imageModel.length > 0) {
     out.imageModel = r.imageModel;
+  }
+  if (
+    typeof r.groceryShoppingStartedAt === 'string' &&
+    !Number.isNaN(Date.parse(r.groceryShoppingStartedAt))
+  ) {
+    out.groceryShoppingStartedAt = r.groceryShoppingStartedAt;
   }
   if (isColorMode(r.colorMode)) out.colorMode = r.colorMode;
   if (isAccent(r.accent)) out.accent = r.accent;

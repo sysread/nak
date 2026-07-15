@@ -184,6 +184,65 @@ export function sectionOrderAfterDrag(
   return next;
 }
 
+// Shopping trips ----------------------------------------------------------
+
+/**
+ * Copy shown in the In-cart section while no trip is underway.
+ */
+export const CART_IDLE_MESSAGE =
+  'Items appear in this list as you mark them off of your shopping ' +
+  'list. You must click "Start Shopping" to enable this feature.';
+
+/**
+ * Whether a shopping trip is active: a trip started at `startedAt`
+ * lives until local midnight - it is active only while `now` falls on
+ * the SAME local calendar day. Comparing calendar days (rather than a
+ * 24h window) is what makes the trip expire at midnight in the user's
+ * timezone with no cleanup write: the stale timestamp simply reads as
+ * inactive the next morning.
+ */
+export function isShoppingTripActive(
+  startedAt: string | undefined,
+  now: Date
+): boolean {
+  if (!startedAt) return false;
+  const started = new Date(startedAt);
+  if (Number.isNaN(started.getTime())) return false;
+  if (started > now) return false;
+  return (
+    started.getFullYear() === now.getFullYear() &&
+    started.getMonth() === now.getMonth() &&
+    started.getDate() === now.getDate()
+  );
+}
+
+/**
+ * Split the acquired window for an active trip: rows touched since
+ * the trip started (unchecking bumps updated_at) are "in the cart";
+ * everything older stays plain history. With no active trip the cart
+ * is empty and the history is untouched - the caller renders the
+ * idle message instead.
+ */
+export function splitAcquiredForTrip(
+  acquired: readonly GroceryItemView[],
+  startedAt: string | undefined,
+  active: boolean
+): { cart: GroceryItemView[]; history: GroceryItemView[] } {
+  if (!active || !startedAt) return { cart: [], history: [...acquired] };
+  const startMs = Date.parse(startedAt);
+  const cart: GroceryItemView[] = [];
+  const history: GroceryItemView[] = [];
+  for (const item of acquired) {
+    (Date.parse(item.updated_at) >= startMs ? cart : history).push(item);
+  }
+  return { cart, history };
+}
+
+/** Label for the trip toggle button. */
+export function shoppingToggleLabel(active: boolean): string {
+  return active ? 'Finish shopping' : 'Start shopping';
+}
+
 // All-items browse (the sidebar) -----------------------------------------
 
 /** Sidebar browse page size. Windowed - the corpus grows unboundedly. */

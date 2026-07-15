@@ -4601,6 +4601,7 @@ button.top-bar-pinned {
 :root[data-style='terminal'] .grocery-browse-add,
 :root[data-style='terminal'] .grocery-section-card,
 :root[data-style='terminal'] .grocery-section-card-title,
+:root[data-style='terminal'] .grocery-edit-btn,
 :root[data-style='terminal'] .grocery-small-btn {
   border-color: var(--muted);
 }

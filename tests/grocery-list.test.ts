@@ -161,6 +161,41 @@ describe('sectionOrderAfterDrag', () => {
   });
 });
 
+describe('isShoppingTripActive', () => {
+  it('is active only on the same local calendar day', async () => {
+    const { isShoppingTripActive } = await import('../src/lib/ui/grocery-list');
+    const start = new Date(2026, 6, 15, 18, 30); // 6:30pm local
+    const iso = start.toISOString();
+    expect(isShoppingTripActive(iso, new Date(2026, 6, 15, 23, 59))).toBe(true);
+    // Past local midnight: same trip timestamp now reads inactive.
+    expect(isShoppingTripActive(iso, new Date(2026, 6, 16, 0, 1))).toBe(false);
+    expect(isShoppingTripActive(undefined, new Date())).toBe(false);
+    expect(isShoppingTripActive('garbage', new Date())).toBe(false);
+    // A future timestamp (clock skew) is not an active trip.
+    expect(isShoppingTripActive(iso, new Date(2026, 6, 15, 12, 0))).toBe(false);
+  });
+});
+
+describe('splitAcquiredForTrip', () => {
+  it('routes rows touched since the trip start into the cart', async () => {
+    const { splitAcquiredForTrip } = await import('../src/lib/ui/grocery-list');
+    const startedAt = '2026-07-15T18:00:00Z';
+    const inCart = item({ name: 'eggs', needed: false, updated_at: '2026-07-15T18:05:00Z' });
+    const old = item({ name: 'milk', needed: false, updated_at: '2026-07-10T10:00:00Z' });
+    const { cart, history } = splitAcquiredForTrip([inCart, old], startedAt, true);
+    expect(cart.map((i) => i.name)).toEqual(['eggs']);
+    expect(history.map((i) => i.name)).toEqual(['milk']);
+  });
+
+  it('returns an empty cart when no trip is active', async () => {
+    const { splitAcquiredForTrip } = await import('../src/lib/ui/grocery-list');
+    const rows = [item({ name: 'eggs', needed: false, updated_at: '2026-07-15T18:05:00Z' })];
+    const { cart, history } = splitAcquiredForTrip(rows, '2026-07-15T18:00:00Z', false);
+    expect(cart).toEqual([]);
+    expect(history).toHaveLength(1);
+  });
+});
+
 describe('browse filter mapping', () => {
   it('maps status filters to the needed argument', async () => {
     const { browseNeededArg } = await import('../src/lib/ui/grocery-list');
