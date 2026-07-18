@@ -159,9 +159,10 @@ controls how much hidden thinking happens before the reply.
 - Not every model honors verbosity. Most that don't simply ignore
   it; a few reject it outright - nak detects those automatically
   the first time it happens, remembers, and stops sending the
-  setting to that model. The verbosity dropdown in Settings ->
-  *Model profiles* shows as disabled for a model nak has learned
-  this about.
+  setting to that model. For a model nak has learned this about,
+  the verbosity controls show as disabled everywhere they appear:
+  the dropdown in Settings -> *Model profiles* and the composer's
+  speech-balloon picker.
 
 ## Image generation
 

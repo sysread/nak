@@ -250,6 +250,7 @@
     reasoningElapsedPill,
     reasoningCharPill,
   } from '$lib/ui/reasoning-panel';
+  import { verbosityRejectedForModel } from '$lib/ui/model-profiles';
   import AssistantBody from '../components/AssistantBody.svelte';
   import Markdown from '../components/Markdown.svelte';
   import ReasoningPanel from '../components/ReasoningPanel.svelte';
@@ -2804,6 +2805,13 @@
   // (see getStreamingCompletion's strict-validation fallback).
   const currentVerbosity = $derived<Verbosity>(
     currentThread?.verbosity ?? currentProfile.verbosity
+  );
+  // Whether the current model is recorded as rejecting the verbosity
+  // knob outright (model_feature_rejections). Disables the composer's
+  // verbosity picker - same signal that disables the Settings profile
+  // card's verbosity dropdown, so the two surfaces can't disagree.
+  const currentVerbosityRejected = $derived<boolean>(
+    verbosityRejectedForModel(app.modelFeatureRejections, currentProfile.modelId)
   );
   // Resolved gated-toolbox set for the current thread. The composer
   // toolbox button renders unconditionally (mirroring the model /
@@ -8036,15 +8044,18 @@
               {/if}
 
               <!-- Verbosity picker: per-thread override, stored on
-                   threads.verbosity. Surfaced unconditionally — unlike
-                   the reasoning picker there's no model-capability
-                   gate; providers that don't recognize `text.verbosity`
-                   silently ignore it. Same auto-create-draft pattern
-                   as the model and reasoning pickers so the choice
-                   always has somewhere to land. -->
+                   threads.verbosity. Surfaced unconditionally but
+                   disabled when the model is recorded as rejecting the
+                   knob (currentVerbosityRejected) - providers that
+                   merely don't honor `text.verbosity` silently ignore
+                   it, so the common no-support case stays enabled.
+                   Same auto-create-draft pattern as the model and
+                   reasoning pickers so the choice always has somewhere
+                   to land. -->
               <VerbosityPicker
                 value={currentVerbosity}
                 defaultVerbosity={currentProfile.verbosity}
+                disabled={currentVerbosityRejected}
                 open={verbosityMenuOpen}
                 onToggle={() => {
                   const next = !verbosityMenuOpen;

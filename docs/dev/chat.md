@@ -196,8 +196,11 @@ A chat turn goes:
 
   The browser reads the same table (`app.modelFeatureRejections`,
   hydrated in `refreshSettings` alongside `priceCaps`) to disable
-  the matching controls in Settings -> Model profiles; see
-  [Settings](./settings.md).
+  the matching controls - the verbosity dropdown in Settings ->
+  Model profiles (see [Settings](./settings.md)) and the composer's
+  per-thread verbosity picker - via `verbosityRejectedForModel` in
+  `src/lib/ui/model-profiles.ts`, so the two surfaces read from one
+  signal.
 - **Usage** — `messages.usage` stores
   `{ prompt_tokens, completion_tokens, total_tokens }` from
   Venice. Sourced by passing `stream_options:

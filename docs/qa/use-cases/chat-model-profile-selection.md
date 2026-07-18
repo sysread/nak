@@ -115,10 +115,12 @@ themselves is
 
   Later turns on the same model show no strip line - the orchestrator
   strips the field preemptively from the recorded rejection. After a
-  settings refresh (reload the tab), the GLM profile's verbosity
-  dropdown in Settings -> Model profiles renders disabled with the
-  tooltip "This model doesn't support the verbosity setting"; the
-  deepseek profiles' dropdowns stay enabled.
+  settings refresh (reload the tab), the verbosity controls for the
+  GLM model render disabled with the tooltip "This model doesn't
+  support the verbosity setting": the GLM profile's dropdown in
+  Settings -> Model profiles, and the composer's speech-balloon
+  picker on a conversation using the GLM profile. Both stay enabled
+  for the deepseek profiles.
 
 ## Cleanup
 

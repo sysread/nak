@@ -89,4 +89,39 @@ describe('VerbosityPicker', () => {
     expect(onSelect).toHaveBeenCalledOnce();
     expect(onSelect).toHaveBeenCalledWith('high');
   });
+
+  it('disables the trigger and explains why for a rejecting model', () => {
+    // `disabled` comes from the model_feature_rejections record (the
+    // model's backend 400s on the text.verbosity knob); the tooltip
+    // swaps from the current-value readout to the explanation.
+    const { getByRole } = render(VerbosityPicker, {
+      value: 'medium',
+      defaultVerbosity: 'low',
+      open: false,
+      disabled: true,
+      onToggle: () => {},
+      onSelect: () => {},
+    });
+    const btn = getByRole('button');
+    expect(btn).toBeDisabled();
+    expect(btn).toHaveAttribute(
+      'title',
+      "This model doesn't support the verbosity setting"
+    );
+  });
+
+  it('closes the menu when disabled while open', () => {
+    // A profile/thread switch to a rejecting model can land while the
+    // menu is open; the dead trigger can no longer close it, so the
+    // menu must close itself.
+    const { queryByRole } = render(VerbosityPicker, {
+      value: 'medium',
+      defaultVerbosity: 'low',
+      open: true,
+      disabled: true,
+      onToggle: () => {},
+      onSelect: () => {},
+    });
+    expect(queryByRole('menu')).toBeNull();
+  });
 });
