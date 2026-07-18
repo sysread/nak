@@ -103,16 +103,31 @@ themselves is
   until the user re-picks - resolution, not migration, handles it.)
 - (9) The turn completes normally - no
   `Venice HTTP 400: Extra inputs are not permitted, field: 'text'`
-  error surfaces. The edge function's log shows one
+  error surfaces. On the FIRST-EVER turn against this model the edge
+  function's log shows one
   `[withRateLimitRetry] model backend rejected optional field 'text'`
-  line for the turn (the strip-and-retry), and follow-up tool rounds
-  in the same turn do not repeat it.
+  line (the strip-and-retry) and the discovery is recorded:
+
+  ```sql
+  select * from model_feature_rejections;
+  -- expect a (<glm model id>, 'text') row
+  ```
+
+  Later turns on the same model show no strip line - the orchestrator
+  strips the field preemptively from the recorded rejection. After a
+  settings refresh (reload the tab), the GLM profile's verbosity
+  dropdown in Settings -> Model profiles renders disabled with the
+  tooltip "This model doesn't support the verbosity setting"; the
+  deepseek profiles' dropdowns stay enabled.
 
 ## Cleanup
 
 - Delete the test conversations from the drawer.
 - Remove the test profiles per the sibling case's cleanup SQL if the
   dev account should return to the seeded state.
+- `delete from model_feature_rejections;` so the next run of step 9
+  exercises the discovery path again (the table is global and
+  persists across runs).
 
 ## Results log
 

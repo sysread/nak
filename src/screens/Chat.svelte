@@ -48,6 +48,7 @@
     applyServerSettings,
     resetForSignOut,
     setPriceCaps,
+    setModelFeatureRejections,
   } from '$lib/state.svelte';
   import {
     notifications,
@@ -2118,6 +2119,10 @@
       // own errors (returns NO_PRICE_CAPS), so a caps-read hiccup can't
       // break the settings refresh.
       setPriceCaps(await app.supabase.getPriceCaps());
+      // Same story for the model_feature_rejections snapshot (wire
+      // fields a model's backend rejects; disables matching controls in
+      // Settings -> Model profiles). Swallows its own errors too ({}).
+      setModelFeatureRejections(await app.supabase.getModelFeatureRejections());
       // Only (re)seed the active set if the user hasn't already
       // started toggling prompts on the current thread. Avoids
       // clobbering their per-thread selection when settings arrive
@@ -3122,9 +3127,10 @@
     // get neither. See thinkingWireForProfile.
     const { reasoningEffort: sendReasoning, disableThinking: sendDisableThinking } =
       thinkingWireForProfile(profile, active?.reasoning_effort ?? null);
-    // Verbosity is safe to send unconditionally - providers that
-    // reject `text.verbosity` outright are recovered server-side by
-    // the strict-validation fallback in getStreamingCompletion.
+    // Verbosity is safe to send unconditionally - a model whose
+    // backend rejects `text.verbosity` outright is recovered
+    // server-side (strip-and-retry on first encounter, then a
+    // preemptive strip from the model_feature_rejections record).
     const sendVerbosity: Verbosity = active?.verbosity ?? profile.verbosity;
     // Pre-send guard on attachments. Block the send if any attachment
     // is still processing, is in an error state, or can't be read by

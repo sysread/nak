@@ -12,6 +12,7 @@ import {
   reorderProfiles,
   setDefaultProfile,
   updateProfile,
+  verbosityRejectedForModel,
 } from '../src/lib/ui/model-profiles';
 
 function profile(over: Partial<ModelProfile> = {}): ModelProfile {
@@ -214,5 +215,27 @@ describe('profileRowView', () => {
     // The off-catalog current pick surfaces as a synthetic option.
     expect(row.options[0].id).toBe('deepseek-v4-flash');
     expect(row.options[0].label).toContain('current');
+  });
+});
+
+describe('verbosityRejectedForModel', () => {
+  // The rejections record stores wire FIELD names; verbosity ships as
+  // the `text` body object, so 'text' is the key this helper maps to
+  // the verbosity control.
+  it('flags a model recorded as rejecting the text field', () => {
+    expect(
+      verbosityRejectedForModel({ 'zai-org-glm-5-2': ['text'] }, 'zai-org-glm-5-2')
+    ).toBe(true);
+  });
+  it('ignores rejections of other fields and other models', () => {
+    expect(
+      verbosityRejectedForModel({ 'zai-org-glm-5-2': ['reasoning_effort'] }, 'zai-org-glm-5-2')
+    ).toBe(false);
+    expect(
+      verbosityRejectedForModel({ 'zai-org-glm-5-2': ['text'] }, 'deepseek-v4-flash')
+    ).toBe(false);
+  });
+  it('is false on an empty snapshot', () => {
+    expect(verbosityRejectedForModel({}, 'any')).toBe(false);
   });
 });

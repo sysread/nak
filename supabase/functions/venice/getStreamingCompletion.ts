@@ -89,7 +89,10 @@ const TRUNCATED_BACKOFF_MS = 500;
 // knobs belong in this set - losing one changes response style at
 // worst, never correctness. Fields that change semantics (`tools`,
 // `messages`, `response_format`) must never be silently dropped.
-const DROPPABLE_WIRE_FIELDS: ReadonlySet<string> = new Set(['text']);
+// Exported: the orchestrator uses the same set to gate the preemptive
+// strip of features recorded in model_feature_rejections, so a stray
+// DB row can never strip a semantic field.
+export const DROPPABLE_WIRE_FIELDS: ReadonlySet<string> = new Set(['text']);
 
 /**
  * Extract the field name from a strict-validation 400, or null when
@@ -338,7 +341,9 @@ async function* withRateLimitRetry(
       // backoff, the request never reached inference. The `in body`
       // check terminates the loop: a repeat 400 naming an
       // already-stripped field falls through to the rethrow instead
-      // of spinning.
+      // of spinning. The signal lets the orchestrator persist the
+      // discovery (model_feature_rejections), so future turns omit
+      // the field before it ever reaches Venice.
       const extraField = rejectedExtraField(err);
       if (
         extraField !== null &&
@@ -350,6 +355,7 @@ async function* withRateLimitRetry(
           `[withRateLimitRetry] model backend rejected optional field '${extraField}'; stripping and retrying`,
         );
         delete opts.body[extraField];
+        yield { type: 'wire_feature_rejected', field: extraField };
         continue;
       }
       const isRateLimit =

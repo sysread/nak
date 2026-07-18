@@ -38,6 +38,7 @@ export {
   persistSystemPrompts,
   applyServerSettings,
   setPriceCaps,
+  setModelFeatureRejections,
 } from './app-state/settings';
 export {
   activate,

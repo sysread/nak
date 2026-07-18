@@ -686,10 +686,12 @@ export function buildChatBody(req: ChatRequest, streaming: boolean): Record<stri
   // ignore it, but some model backends (GLM 5.x was the first
   // observed) reject the whole request with a strict-validation 400
   // ("Extra inputs are not permitted, field: 'text'"). The edge
-  // function's completion layer recovers by stripping the field and
-  // re-issuing (see DROPPABLE_WIRE_FIELDS in supabase/functions/
-  // venice/getStreamingCompletion.ts), so sending it optimistically
-  // stays safe.
+  // function recovers: it strips the field and re-issues on first
+  // encounter, records the rejection in model_feature_rejections,
+  // and strips preemptively on every later turn (see
+  // DROPPABLE_WIRE_FIELDS in supabase/functions/venice/
+  // getStreamingCompletion.ts and feature-rejections.ts), so sending
+  // it optimistically stays safe.
   if (req.verbosity) {
     body.text = { verbosity: req.verbosity };
   }

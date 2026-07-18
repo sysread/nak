@@ -168,7 +168,18 @@ export type StreamSignal =
    * fired and no UI affordance (slop-notice card) should surface -
    * this is a silent recovery for a transport-layer cut.
    */
-  | { type: 'stream_retry'; reason: 'truncated'; attempt: number };
+  | { type: 'stream_retry'; reason: 'truncated'; attempt: number }
+  /**
+   * The completion wrapper's strict-validation fallback fired: the
+   * model's backend 400'd on an optional wire field ("Extra inputs
+   * are not permitted"), the field was stripped from the body, and
+   * the request is being re-issued. The orchestrator persists the
+   * discovery to model_feature_rejections so future turns omit the
+   * field preemptively. No browser UI affordance - the retry is
+   * invisible to the user; the browser does not subscribe to this
+   * event name on the Broadcast channel.
+   */
+  | { type: 'wire_feature_rejected'; field: string };
 
 // ---------------------------------------------------------------------------
 // Orchestrator-added events.

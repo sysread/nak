@@ -81,6 +81,17 @@ interface AppState {
    * the shared Venice key.
    */
   priceCaps: ModelPriceCaps;
+  /**
+   * Project-global model_feature_rejections snapshot: wire fields a
+   * model's backend rejects with strict validation, keyed by model id
+   * (e.g. 'text' = the text.verbosity knob). Discovered and recorded
+   * server-side by the venice edge function; hydrated by Chat's
+   * refreshSettings alongside priceCaps (seeded empty on activate()).
+   * Read by Settings -> Model profiles to disable controls the
+   * selected model can't honor - a UX affordance only, the edge
+   * function strips rejected fields from outgoing requests regardless.
+   */
+  modelFeatureRejections: Readonly<Record<string, readonly string[]>>;
   /** UI theme — seeded from localStorage cache, then from Supabase. */
   colorMode: ColorMode;
   accent: Accent;
@@ -235,6 +246,7 @@ export const app = $state<AppState>({
   modelProfiles: seedModelProfiles(),
   imageModel: undefined,
   priceCaps: NO_PRICE_CAPS,
+  modelFeatureRejections: {},
   colorMode: cachedTheme?.mode ?? DEFAULT_MODE,
   accent: cachedTheme?.accent ?? DEFAULT_ACCENT,
   uiStyle: cachedTheme?.style ?? DEFAULT_STYLE,

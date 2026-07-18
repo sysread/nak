@@ -76,6 +76,15 @@ Deno.test('strips a rejected droppable field and retries successfully', async ()
   assertEquals(text, 'hi');
   assertEquals(events.at(-1)?.type, 'DONE');
   assert(!events.some((e) => e.type === 'error'), 'no error event surfaced');
+
+  // The discovery signal rides the event stream so the orchestrator
+  // can persist it to model_feature_rejections.
+  const signals = events.filter(
+    (e): e is Extract<StreamSignal, { type: 'wire_feature_rejected' }> =>
+      e.type === 'wire_feature_rejected'
+  );
+  assertEquals(signals.length, 1);
+  assertEquals(signals[0].field, 'text');
 });
 
 Deno.test('a repeat 400 naming an already-stripped field is terminal', async () => {

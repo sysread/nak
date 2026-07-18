@@ -229,6 +229,44 @@ drop policy if exists "app_config is readable by authenticated users" on public.
 create policy "app_config is readable by authenticated users" on public.app_config
   for select using (auth.uid() is not null);
 
+-- model_feature_rejections -----------------------------------------------
+
+-- Persistent memory of optional wire features a model's backend rejects
+-- with strict validation. Some Venice model backends (GLM 5.x was the
+-- first observed) 400 the whole request with "Extra inputs are not
+-- permitted, field: 'X'" for optional body fields other backends
+-- silently ignore, and the Venice models endpoint exposes no capability
+-- flag to gate on. The venice edge function discovers a rejection at
+-- runtime (strip-and-retry in getStreamingCompletion), records it here,
+-- and strips known-rejected features from future request bodies before
+-- they go to Venice - so the failing round-trip is paid once ever per
+-- model+feature, not once per turn. The browser reads the table to
+-- disable the matching controls in Settings -> Model profiles.
+--
+-- `feature` holds the wire FIELD name ('text' for the text.verbosity
+-- knob), not a product-feature label - the UI owns the field-to-control
+-- mapping. Rows are provider facts, not user data, so the table is
+-- global (no user_id). Staleness is accepted the same way profile
+-- capability snapshots accept it: if a backend later adds support, the
+-- row keeps the feature off until deleted by hand; discovered_at is
+-- there to make that cleanup legible.
+create table if not exists public.model_feature_rejections (
+  model_id text not null,
+  feature text not null,
+  discovered_at timestamptz not null default now(),
+  primary key (model_id, feature)
+);
+
+alter table public.model_feature_rejections enable row level security;
+
+-- Same RLS shape as app_config: any authenticated member may read (the
+-- Settings gating needs it); there is intentionally NO insert/update/
+-- delete policy - writes happen only through the service role in the
+-- venice edge function, which bypasses RLS.
+drop policy if exists "model_feature_rejections readable by authenticated users" on public.model_feature_rejections;
+create policy "model_feature_rejections readable by authenticated users" on public.model_feature_rejections
+  for select using (auth.uid() is not null);
+
 -- threads ----------------------------------------------------------------
 
 create table if not exists public.threads (

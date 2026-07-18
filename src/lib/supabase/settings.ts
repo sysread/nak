@@ -76,6 +76,33 @@ export async function getPriceCaps(client: SupabaseClient): Promise<ModelPriceCa
 }
 
 /**
+ * Read the project-global model_feature_rejections table: wire fields
+ * (e.g. 'text', the text.verbosity knob) that a model's backend
+ * rejects with strict validation, discovered and recorded at runtime
+ * by the venice edge function. Keyed by model id. Settings -> Model
+ * profiles uses this to disable controls the selected model can't
+ * honor. Returns {} on any error - like getPriceCaps, the read is
+ * advisory (the edge function strips rejected fields server-side
+ * regardless), so a fetch failure degrades to "no controls disabled"
+ * rather than throwing.
+ */
+export async function getModelFeatureRejections(
+  client: SupabaseClient
+): Promise<Readonly<Record<string, readonly string[]>>> {
+  const { data, error } = await client
+    .from('model_feature_rejections')
+    .select('model_id, feature');
+  if (error || !Array.isArray(data)) return {};
+  const out: Record<string, string[]> = {};
+  for (const row of data) {
+    const r = row as { model_id?: unknown; feature?: unknown };
+    if (typeof r.model_id !== 'string' || typeof r.feature !== 'string') continue;
+    (out[r.model_id] ??= []).push(r.feature);
+  }
+  return out;
+}
+
+/**
  * Merge a partial settings patch into the profiles.settings jsonb.
  *
  * Atomic via the `merge_profile_settings` RPC: this builds a validated
