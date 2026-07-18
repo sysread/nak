@@ -172,7 +172,35 @@ A chat turn goes:
   the profile's `verbosity` default at send-time. Forwarded
   unconditionally as `text.verbosity` (OpenAI-shape: nested under
   the top-level `text` object, not a flat field). No capability
-  gate — providers that don't honor it silently ignore the knob.
+  gate — most providers that don't honor the knob silently ignore
+  it, but some model backends (GLM 5.x was the first observed)
+  400 the whole request with "Extra inputs are not permitted,
+  field: 'text'". Two-layer recovery, both server-side:
+  - **Runtime fallback:** a strict-validation 400 naming a
+    droppable optional field strips that field from the body in
+    place and re-issues (see `DROPPABLE_WIRE_FIELDS` in
+    `getStreamingCompletion.ts`), and emits a
+    `wire_feature_rejected` signal. Only advisory knobs are in the
+    droppable set — semantic fields (`tools`, `messages`) always
+    surface as errors.
+  - **Persistent memory:** the orchestrator records each discovery
+    in the global `model_feature_rejections` table (model_id +
+    feature, where feature is the wire FIELD name, `'text'`) and
+    strips known-rejected features from the body at turn start
+    (`feature-rejections.ts`), so the failing round-trip is paid
+    once ever per model+feature, not per turn. Reads/writes are
+    best-effort and fail open — the runtime fallback still
+    recovers if the table is unreachable. Staleness is accepted
+    like the profile capability snapshots: a backend that later
+    adds support stays stripped until the row is deleted by hand.
+
+  The browser reads the same table (`app.modelFeatureRejections`,
+  hydrated in `refreshSettings` alongside `priceCaps`) to disable
+  the matching controls - the verbosity dropdown in Settings ->
+  Model profiles (see [Settings](./settings.md)) and the composer's
+  per-thread verbosity picker - via `verbosityRejectedForModel` in
+  `src/lib/ui/model-profiles.ts`, so the two surfaces read from one
+  signal.
 - **Usage** — `messages.usage` stores
   `{ prompt_tokens, completion_tokens, total_tokens }` from
   Venice. Sourced by passing `stream_options:

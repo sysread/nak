@@ -76,7 +76,10 @@ profiles**:
 - **Set the defaults.** Two dropdowns per card pick the profile's
   default thinking level (including **Off**, for a snappy-replies
   profile) and default verbosity. Both are defaults, not locks - any
-  conversation can override them from the composer.
+  conversation can override them from the composer. A dropdown
+  disables itself (with an explanatory tooltip) when the selected
+  model can't honor that setting - reasoning for non-reasoning
+  models, verbosity for models whose backend rejects the knob.
 - **Mark the default profile.** The radio on each card picks which
   profile new conversations start on. Selecting one deselects the
   rest - there is always exactly one default. With a single profile
@@ -153,8 +156,13 @@ controls how much hidden thinking happens before the reply.
   picker (next to the reasoning picker). The choice is sticky — it's
   saved on the thread row in Supabase, so it survives refreshes
   and carries across devices.
-- Providers that don't recognize `text.verbosity` silently ignore
-  it; the field is always safe to send.
+- Not every model honors verbosity. Most that don't simply ignore
+  it; a few reject it outright - nak detects those automatically
+  the first time it happens, remembers, and stops sending the
+  setting to that model. For a model nak has learned this about,
+  the verbosity controls show as disabled everywhere they appear:
+  the dropdown in Settings -> *Model profiles* and the composer's
+  speech-balloon picker.
 
 ## Image generation
 

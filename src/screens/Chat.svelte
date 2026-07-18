@@ -48,6 +48,7 @@
     applyServerSettings,
     resetForSignOut,
     setPriceCaps,
+    setModelFeatureRejections,
   } from '$lib/state.svelte';
   import {
     notifications,
@@ -249,6 +250,7 @@
     reasoningElapsedPill,
     reasoningCharPill,
   } from '$lib/ui/reasoning-panel';
+  import { verbosityRejectedForModel } from '$lib/ui/model-profiles';
   import AssistantBody from '../components/AssistantBody.svelte';
   import Markdown from '../components/Markdown.svelte';
   import ReasoningPanel from '../components/ReasoningPanel.svelte';
@@ -2118,6 +2120,10 @@
       // own errors (returns NO_PRICE_CAPS), so a caps-read hiccup can't
       // break the settings refresh.
       setPriceCaps(await app.supabase.getPriceCaps());
+      // Same story for the model_feature_rejections snapshot (wire
+      // fields a model's backend rejects; disables matching controls in
+      // Settings -> Model profiles). Swallows its own errors too ({}).
+      setModelFeatureRejections(await app.supabase.getModelFeatureRejections());
       // Only (re)seed the active set if the user hasn't already
       // started toggling prompts on the current thread. Avoids
       // clobbering their per-thread selection when settings arrive
@@ -2793,10 +2799,19 @@
     currentProfile.supportsReasoning
   );
   // Resolved verbosity for the current thread. Same override-wins pattern
-  // as reasoning; no capability gate — providers that don't recognize
-  // `text.verbosity` silently ignore it, so it's always safe to surface.
+  // as reasoning; no capability gate - most providers that don't honor
+  // `text.verbosity` silently ignore it, and the ones that 400 on the
+  // field are recovered server-side by stripping it and re-issuing
+  // (see getStreamingCompletion's strict-validation fallback).
   const currentVerbosity = $derived<Verbosity>(
     currentThread?.verbosity ?? currentProfile.verbosity
+  );
+  // Whether the current model is recorded as rejecting the verbosity
+  // knob outright (model_feature_rejections). Disables the composer's
+  // verbosity picker - same signal that disables the Settings profile
+  // card's verbosity dropdown, so the two surfaces can't disagree.
+  const currentVerbosityRejected = $derived<boolean>(
+    verbosityRejectedForModel(app.modelFeatureRejections, currentProfile.modelId)
   );
   // Resolved gated-toolbox set for the current thread. The composer
   // toolbox button renders unconditionally (mirroring the model /
@@ -3120,8 +3135,10 @@
     // get neither. See thinkingWireForProfile.
     const { reasoningEffort: sendReasoning, disableThinking: sendDisableThinking } =
       thinkingWireForProfile(profile, active?.reasoning_effort ?? null);
-    // Verbosity is safe to send unconditionally — providers that don't
-    // recognize `text.verbosity` silently ignore it.
+    // Verbosity is safe to send unconditionally - a model whose
+    // backend rejects `text.verbosity` outright is recovered
+    // server-side (strip-and-retry on first encounter, then a
+    // preemptive strip from the model_feature_rejections record).
     const sendVerbosity: Verbosity = active?.verbosity ?? profile.verbosity;
     // Pre-send guard on attachments. Block the send if any attachment
     // is still processing, is in an error state, or can't be read by
@@ -8027,15 +8044,18 @@
               {/if}
 
               <!-- Verbosity picker: per-thread override, stored on
-                   threads.verbosity. Surfaced unconditionally — unlike
-                   the reasoning picker there's no model-capability
-                   gate; providers that don't recognize `text.verbosity`
-                   silently ignore it. Same auto-create-draft pattern
-                   as the model and reasoning pickers so the choice
-                   always has somewhere to land. -->
+                   threads.verbosity. Surfaced unconditionally but
+                   disabled when the model is recorded as rejecting the
+                   knob (currentVerbosityRejected) - providers that
+                   merely don't honor `text.verbosity` silently ignore
+                   it, so the common no-support case stays enabled.
+                   Same auto-create-draft pattern as the model and
+                   reasoning pickers so the choice always has somewhere
+                   to land. -->
               <VerbosityPicker
                 value={currentVerbosity}
                 defaultVerbosity={currentProfile.verbosity}
+                disabled={currentVerbosityRejected}
                 open={verbosityMenuOpen}
                 onToggle={() => {
                   const next = !verbosityMenuOpen;

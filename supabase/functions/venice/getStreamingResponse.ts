@@ -59,6 +59,11 @@ import {
 import { createBroadcastPublisher } from './broadcast.ts';
 import { getStreamingCompletion } from './getStreamingCompletion.ts';
 import {
+  fetchRejectedFeatures,
+  recordRejectedFeature,
+  stripRejectedFeatures,
+} from './feature-rejections.ts';
+import {
   performToolCall,
   ToolNotImplementedError,
   type ToolContext,
@@ -371,6 +376,22 @@ export async function getStreamingResponse(
   let history: VeniceMessage[] = [...(opts.bodyTemplate.messages ?? [])];
 
   try {
+    // Preemptive strip of wire features this model's backend is known
+    // to reject (model_feature_rejections, populated by the
+    // wire_feature_rejected discovery path below). Done once per turn,
+    // before the first round, so an affected model never pays the
+    // failing 400 round-trip again after first discovery. Fail-open:
+    // an empty/unreachable table just means the completion layer's
+    // strip-and-retry recovers at runtime instead.
+    if (typeof body.model === 'string') {
+      const rejected = await fetchRejectedFeatures(opts.adminClient, body.model);
+      const stripped = stripRejectedFeatures(body, rejected);
+      if (stripped.length > 0) {
+        log.debug(
+          `${runId} stripped known-rejected wire features for ${body.model}: ${stripped.join(', ')}`,
+        );
+      }
+    }
     // In-flight stamp, before anything else. The streaming assistant
     // row (the reconnect probe's other signal) is only created at the
     // first content delta, so the priming stage below - plus any long
@@ -525,6 +546,23 @@ export async function getStreamingResponse(
               `${runId} round ${round} venice error kind=${ev.kind}: ${ev.message}`,
             );
             break roundLoop;
+          }
+          case 'wire_feature_rejected': {
+            // Runtime discovery from the completion wrapper's
+            // strict-validation fallback: this model's backend 400'd
+            // on an optional field and the wrapper already stripped
+            // it from the (shared) body and re-issued. Persist the
+            // discovery so the preemptive strip above covers every
+            // future turn. Awaited (not fire-and-forget) so the write
+            // cannot race isolate teardown, but recordRejectedFeature
+            // never throws - a lost write only costs a re-discovery.
+            if (typeof body.model === 'string') {
+              log.warn(
+                `${runId} round ${round} model ${body.model} rejected wire feature '${ev.field}'; recording`,
+              );
+              await recordRejectedFeature(opts.adminClient, body.model, ev.field);
+            }
+            break;
           }
           case 'stream_retry': {
             log.warn(

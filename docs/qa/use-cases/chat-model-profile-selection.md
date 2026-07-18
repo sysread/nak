@@ -8,9 +8,12 @@ pinning a profile id to `threads.model` (null = track the default),
 the send-path resolution of model id + reasoning + verbosity through
 the profile (`resolveModelProfile` / `thinkingWireForProfile`), the
 reasoning/verbosity pickers badging the profile's defaults (including
-an Off reasoning default), and the fallback that maps deleted-profile
-and legacy tier-name pins to the default profile. Authoring the
-profiles themselves is
+an Off reasoning default), the fallback that maps deleted-profile
+and legacy tier-name pins to the default profile, and the server-side
+strict-validation fallback that keeps a mid-conversation switch to a
+model whose backend rejects optional wire knobs (GLM 5.x rejects
+`text.verbosity`) from erroring the turn. Authoring the profiles
+themselves is
 [settings-model-profiles](./settings-model-profiles.md).
 
 ## Preconditions
@@ -60,6 +63,12 @@ profiles themselves is
 
    Reload the tab and open that conversation.
 
+9. Create a third profile pointed at a GLM 5.x model from the live
+   catalog (e.g. `zai-org-glm-5-2`; any model whose backend rejects
+   the `text.verbosity` knob works). In a conversation with a few
+   deepseek turns already in it, switch the profile picker to the
+   GLM profile and send another message.
+
 ## Expected
 
 - (1) The picker renders even with no active thread; the tooltip
@@ -92,12 +101,35 @@ profiles themselves is
   conversation opens with the picker showing `Everyday`, sends keep
   working, and no error surfaces. (`'balanced'` stays in the column
   until the user re-picks - resolution, not migration, handles it.)
+- (9) The turn completes normally - no
+  `Venice HTTP 400: Extra inputs are not permitted, field: 'text'`
+  error surfaces. On the FIRST-EVER turn against this model the edge
+  function's log shows one
+  `[withRateLimitRetry] model backend rejected optional field 'text'`
+  line (the strip-and-retry) and the discovery is recorded:
+
+  ```sql
+  select * from model_feature_rejections;
+  -- expect a (<glm model id>, 'text') row
+  ```
+
+  Later turns on the same model show no strip line - the orchestrator
+  strips the field preemptively from the recorded rejection. After a
+  settings refresh (reload the tab), the verbosity controls for the
+  GLM model render disabled with the tooltip "This model doesn't
+  support the verbosity setting": the GLM profile's dropdown in
+  Settings -> Model profiles, and the composer's speech-balloon
+  picker on a conversation using the GLM profile. Both stay enabled
+  for the deepseek profiles.
 
 ## Cleanup
 
 - Delete the test conversations from the drawer.
 - Remove the test profiles per the sibling case's cleanup SQL if the
   dev account should return to the seeded state.
+- `delete from model_feature_rejections;` so the next run of step 9
+  exercises the discovery path again (the table is global and
+  persists across runs).
 
 ## Results log
 

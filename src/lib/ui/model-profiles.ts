@@ -170,6 +170,24 @@ export function profilesMatch(
 }
 
 /**
+ * True when the model's backend is known to reject the verbosity knob
+ * outright. `rejections` is the model_feature_rejections snapshot
+ * (app.modelFeatureRejections), keyed by model id; the recorded
+ * feature name is the wire FIELD the backend rejected - 'text',
+ * because verbosity ships as the OpenAI-shape `text.verbosity` object
+ * - so this helper owns the field-to-control mapping. Settings uses
+ * it to disable the profile card's verbosity dropdown; the edge
+ * function strips the field from outgoing requests regardless, so
+ * this is a UX affordance, not the enforcement point.
+ */
+export function verbosityRejectedForModel(
+  rejections: Readonly<Record<string, readonly string[]>>,
+  modelId: string
+): boolean {
+  return rejections[modelId]?.includes('text') ?? false;
+}
+
+/**
  * The validation the autosave gates on: every profile needs a non-empty
  * name and names must be unique (case-insensitive, ignoring surrounding
  * whitespace, so "Fast" and "fast " can't coexist as visually-identical

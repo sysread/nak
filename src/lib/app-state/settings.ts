@@ -52,6 +52,20 @@ export function setPriceCaps(caps: ModelPriceCaps): void {
   app.priceCaps = caps;
 }
 
+/**
+ * Apply the model_feature_rejections snapshot in memory. Exported for
+ * the same reason as setPriceCaps: there is no persist* counterpart -
+ * the browser never writes the table (rows are recorded only by the
+ * venice edge function on runtime discovery), so Chat's refreshSettings
+ * calls this directly with whatever getModelFeatureRejections()
+ * returned.
+ */
+export function setModelFeatureRejections(
+  rejections: Readonly<Record<string, readonly string[]>>
+): void {
+  app.modelFeatureRejections = rejections;
+}
+
 function setSystemPrompts(prompts: SystemPrompt[]): void {
   app.systemPrompts = prompts;
 }

@@ -123,6 +123,15 @@ landing tab move together.
   `supabase/functions/_shared/price-cap.ts`), so the filter is a
   can't-pick-it convenience, not the boundary. The caps are written only by
   `mise run setup` - there is no in-app editor.
+  The **verbosity dropdown disables itself** when the selected model's
+  backend is known to reject the `text.verbosity` wire knob
+  (`verbosityRejectedForModel` over `app.modelFeatureRejections`, the
+  global `model_feature_rejections` table hydrated by `refreshSettings`
+  alongside the price caps). Like the price-cap filter this is the UX
+  half only - the venice edge function strips rejected fields from
+  outgoing requests regardless. Rows are recorded server-side on
+  runtime discovery; see [Chat](./chat.md) (Verbosity) for the
+  discovery + strip mechanics.
 - **Custom prompts** — the named system-prompt library
   (`profiles.settings.systemPrompts`, a `SystemPrompt[]`). Each card is a
   name + "Default" checkbox + delete + body textarea; the list autosaves

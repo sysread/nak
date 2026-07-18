@@ -324,6 +324,10 @@ export class SupabaseService {
     return settingsApi.getPriceCaps(this.client);
   }
 
+  async getModelFeatureRejections(): Promise<Readonly<Record<string, readonly string[]>>> {
+    return settingsApi.getModelFeatureRejections(this.client);
+  }
+
   async fetchUsage(opts: UsageRequestOptions = {}): Promise<UsageModelBucket[]> {
     return veniceProxyApi.fetchUsage(this.client, opts);
   }

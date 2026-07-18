@@ -78,13 +78,53 @@ const RATE_LIMIT_WAIT_CAP_MS = 60_000;
 const TRUNCATED_MAX_ATTEMPTS = 2;
 const TRUNCATED_BACKOFF_MS = 500;
 
+// Optional wire knobs that can be dropped from the request body when a
+// model's backend rejects them with strict validation. Some Venice
+// model backends (GLM 5.x was the first observed) run strict pydantic
+// validation on the forwarded body and 400 the whole request with
+// "Extra inputs are not permitted, field: 'X'" for fields other
+// backends silently ignore. `text` (the `text.verbosity` knob) is the
+// one field nak sends unconditionally on every main-chat request, so a
+// model that rejects it blocks every turn on that model. Only advisory
+// knobs belong in this set - losing one changes response style at
+// worst, never correctness. Fields that change semantics (`tools`,
+// `messages`, `response_format`) must never be silently dropped.
+// Exported: the orchestrator uses the same set to gate the preemptive
+// strip of features recorded in model_feature_rejections, so a stray
+// DB row can never strip a semantic field.
+export const DROPPABLE_WIRE_FIELDS: ReadonlySet<string> = new Set(['text']);
+
+/**
+ * Extract the field name from a strict-validation 400, or null when
+ * the error is anything else. Matches the pydantic-style message
+ * Venice relays: `Extra inputs are not permitted, field: 'text'`.
+ */
+function rejectedExtraField(err: unknown): string | null {
+  if (
+    !(err instanceof VeniceError) ||
+    err.kind !== 'http' ||
+    err.status !== 400
+  ) {
+    return null;
+  }
+  const m = err.message.match(
+    /Extra inputs are not permitted, field: '([^']+)'/,
+  );
+  return m ? m[1] : null;
+}
+
 export interface StreamingCompletionOpts {
   apiKey: string;
   /**
    * Venice wire-shape body. Caller has already run buildChatBody (or
    * its function-side equivalent) and turned streaming on. We never
-   * inspect or reshape the body except via guards' prepareRetry hook.
-   * `model` is read off it for guard arming.
+   * inspect or reshape the body except via guards' prepareRetry hook
+   * and the strict-validation fallback in withRateLimitRetry, which
+   * deletes a droppable optional knob IN PLACE when the model's
+   * backend 400s on it - the in-place delete is deliberate, so the
+   * orchestrator's per-turn body stays stripped across tool rounds
+   * instead of paying a fresh 400 round-trip every round. `model` is
+   * read off it for guard arming.
    */
   body: Record<string, unknown>;
   signal: AbortSignal;
@@ -293,6 +333,31 @@ async function* withRateLimitRetry(
       }
       return;
     } catch (err) {
+      // Strict-validation fallback. A 400 naming an extra field lands
+      // at fetch-open, before any event yields, so re-issuing is as
+      // safe as the pre-first-event rate-limit retry. Strip the field
+      // from the body IN PLACE (see StreamingCompletionOpts.body for
+      // why mutation is deliberate) and go again immediately - no
+      // backoff, the request never reached inference. The `in body`
+      // check terminates the loop: a repeat 400 naming an
+      // already-stripped field falls through to the rethrow instead
+      // of spinning. The signal lets the orchestrator persist the
+      // discovery (model_feature_rejections), so future turns omit
+      // the field before it ever reaches Venice.
+      const extraField = rejectedExtraField(err);
+      if (
+        extraField !== null &&
+        DROPPABLE_WIRE_FIELDS.has(extraField) &&
+        extraField in opts.body &&
+        !opts.signal.aborted
+      ) {
+        console.log(
+          `[withRateLimitRetry] model backend rejected optional field '${extraField}'; stripping and retrying`,
+        );
+        delete opts.body[extraField];
+        yield { type: 'wire_feature_rejected', field: extraField };
+        continue;
+      }
       const isRateLimit =
         err instanceof VeniceError && err.kind === 'rate_limit';
       const isTruncated =

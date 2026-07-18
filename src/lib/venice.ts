@@ -682,8 +682,16 @@ export function buildChatBody(req: ChatRequest, streaming: boolean): Record<stri
   }
   // Same discipline for text.verbosity - only forward when the
   // caller opted in, and nest under `text` to match the OpenAI
-  // spec shape. Providers that don't recognize the field silently
-  // ignore it; ones that 400 on unknown params never see it.
+  // spec shape. Most providers that don't honor the knob silently
+  // ignore it, but some model backends (GLM 5.x was the first
+  // observed) reject the whole request with a strict-validation 400
+  // ("Extra inputs are not permitted, field: 'text'"). The edge
+  // function recovers: it strips the field and re-issues on first
+  // encounter, records the rejection in model_feature_rejections,
+  // and strips preemptively on every later turn (see
+  // DROPPABLE_WIRE_FIELDS in supabase/functions/venice/
+  // getStreamingCompletion.ts and feature-rejections.ts), so sending
+  // it optimistically stays safe.
   if (req.verbosity) {
     body.text = { verbosity: req.verbosity };
   }

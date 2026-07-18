@@ -2025,7 +2025,16 @@
                 <select
                   id={`profile-verbosity-${p.id}`}
                   value={p.verbosity}
-                  title="Default verbosity for this profile"
+                  disabled={profilesLib.verbosityRejectedForModel(
+                    app.modelFeatureRejections,
+                    p.modelId
+                  )}
+                  title={profilesLib.verbosityRejectedForModel(
+                    app.modelFeatureRejections,
+                    p.modelId
+                  )
+                    ? "This model doesn't support the verbosity setting"
+                    : 'Default verbosity for this profile'}
                   onchange={(e) =>
                     updateProfile(p.id, {
                       verbosity: (e.currentTarget as HTMLSelectElement)

@@ -492,7 +492,15 @@ File: `src/components/VerbosityPicker.svelte`.
 
 Composer-bar twin of the reasoning picker. Renders a trigger
 button + a popover menu of verbosity levels from
-`src/lib/ui/verbosity.ts`.
+`src/lib/ui/verbosity.ts`. Takes an optional `disabled` prop:
+unlike ReasoningPicker (hidden outright for non-reasoning models)
+the control stays visible and disables, with an explanatory
+tooltip, when the model's backend is recorded as rejecting the
+`text.verbosity` wire knob - Chat derives the flag from
+`verbosityRejectedForModel(app.modelFeatureRejections, ...)`, the
+same signal that disables the Settings profile card's verbosity
+dropdown. When disabled while the menu is open, the menu closes
+itself (the dead trigger can no longer close it).
 
 Consumers: composer row in `Chat.svelte`.
 
