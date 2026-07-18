@@ -2793,8 +2793,10 @@
     currentProfile.supportsReasoning
   );
   // Resolved verbosity for the current thread. Same override-wins pattern
-  // as reasoning; no capability gate — providers that don't recognize
-  // `text.verbosity` silently ignore it, so it's always safe to surface.
+  // as reasoning; no capability gate - most providers that don't honor
+  // `text.verbosity` silently ignore it, and the ones that 400 on the
+  // field are recovered server-side by stripping it and re-issuing
+  // (see getStreamingCompletion's strict-validation fallback).
   const currentVerbosity = $derived<Verbosity>(
     currentThread?.verbosity ?? currentProfile.verbosity
   );
@@ -3120,8 +3122,9 @@
     // get neither. See thinkingWireForProfile.
     const { reasoningEffort: sendReasoning, disableThinking: sendDisableThinking } =
       thinkingWireForProfile(profile, active?.reasoning_effort ?? null);
-    // Verbosity is safe to send unconditionally — providers that don't
-    // recognize `text.verbosity` silently ignore it.
+    // Verbosity is safe to send unconditionally - providers that
+    // reject `text.verbosity` outright are recovered server-side by
+    // the strict-validation fallback in getStreamingCompletion.
     const sendVerbosity: Verbosity = active?.verbosity ?? profile.verbosity;
     // Pre-send guard on attachments. Block the send if any attachment
     // is still processing, is in an error state, or can't be read by

@@ -8,9 +8,12 @@ pinning a profile id to `threads.model` (null = track the default),
 the send-path resolution of model id + reasoning + verbosity through
 the profile (`resolveModelProfile` / `thinkingWireForProfile`), the
 reasoning/verbosity pickers badging the profile's defaults (including
-an Off reasoning default), and the fallback that maps deleted-profile
-and legacy tier-name pins to the default profile. Authoring the
-profiles themselves is
+an Off reasoning default), the fallback that maps deleted-profile
+and legacy tier-name pins to the default profile, and the server-side
+strict-validation fallback that keeps a mid-conversation switch to a
+model whose backend rejects optional wire knobs (GLM 5.x rejects
+`text.verbosity`) from erroring the turn. Authoring the profiles
+themselves is
 [settings-model-profiles](./settings-model-profiles.md).
 
 ## Preconditions
@@ -60,6 +63,12 @@ profiles themselves is
 
    Reload the tab and open that conversation.
 
+9. Create a third profile pointed at a GLM 5.x model from the live
+   catalog (e.g. `zai-org-glm-5-2`; any model whose backend rejects
+   the `text.verbosity` knob works). In a conversation with a few
+   deepseek turns already in it, switch the profile picker to the
+   GLM profile and send another message.
+
 ## Expected
 
 - (1) The picker renders even with no active thread; the tooltip
@@ -92,6 +101,12 @@ profiles themselves is
   conversation opens with the picker showing `Everyday`, sends keep
   working, and no error surfaces. (`'balanced'` stays in the column
   until the user re-picks - resolution, not migration, handles it.)
+- (9) The turn completes normally - no
+  `Venice HTTP 400: Extra inputs are not permitted, field: 'text'`
+  error surfaces. The edge function's log shows one
+  `[withRateLimitRetry] model backend rejected optional field 'text'`
+  line for the turn (the strip-and-retry), and follow-up tool rounds
+  in the same turn do not repeat it.
 
 ## Cleanup
 

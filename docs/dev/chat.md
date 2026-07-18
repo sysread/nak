@@ -172,7 +172,16 @@ A chat turn goes:
   the profile's `verbosity` default at send-time. Forwarded
   unconditionally as `text.verbosity` (OpenAI-shape: nested under
   the top-level `text` object, not a flat field). No capability
-  gate — providers that don't honor it silently ignore the knob.
+  gate — most providers that don't honor the knob silently ignore
+  it, but some model backends (GLM 5.x was the first observed)
+  400 the whole request with "Extra inputs are not permitted,
+  field: 'text'". The edge function's completion layer recovers:
+  a strict-validation 400 naming a droppable optional field
+  strips that field from the body in place and re-issues (see
+  `DROPPABLE_WIRE_FIELDS` in `getStreamingCompletion.ts`). The
+  in-place strip persists across the turn's tool rounds, so an
+  affected model pays one extra round-trip per turn, not per
+  round.
 - **Usage** — `messages.usage` stores
   `{ prompt_tokens, completion_tokens, total_tokens }` from
   Venice. Sourced by passing `stream_options:
