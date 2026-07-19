@@ -254,7 +254,7 @@ Deno.test('end-to-end: DB-shaped rows -> buildCorpus -> runBacktest', () => {
 // The fixtures are a guess made before any real employment/efficacy data
 // existed. This fails after the date below to force refreshing them - and
 // the BAR_* thresholds - against the real shape in prod.
-const FIXTURE_REFRESH_BY = Date.parse('2026-07-16T00:00:00Z');
+const FIXTURE_REFRESH_BY = Date.parse('2026-07-20T00:00:00Z');
 
 Deno.test('TRIPWIRE: refresh fixtures + bar thresholds from prod data after the date', () => {
   if (Date.now() >= FIXTURE_REFRESH_BY) {
