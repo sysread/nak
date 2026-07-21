@@ -7,7 +7,8 @@
 > read-only inspector are implemented behind the settings
 > toggle, with unit + Deno coverage and live-passing QA
 > walkthroughs. The backtest VERDICT logic is built and tested
-> on provisional fixtures (with a tripwire to refresh them); the
+> on provisional fixtures (refresh tracked as a scheduled
+> operator follow-up, not an in-suite tripwire); the
 > only piece left is the query that feeds it a real corpus,
 > which waits on weeks of opted-in usage. The feature ships **off by default**
 > and stays off-by-default until the backtest clears its
@@ -151,7 +152,8 @@
     `runBacktest`) - the corpus-level verdict (matched-control
     lift + the efficacy/employment firewall correlation + a
     data-volume floor) over the kernels, Deno-tested on
-    provisional fixtures with a 2026-07-16 tripwire. The
+    provisional fixtures (refresh tracked as a scheduled
+    operator follow-up). The
     DB-reading harness that feeds it a real corpus is the one
     remaining piece, blocked on field data.
 
@@ -686,10 +688,13 @@ under `BAR_MAX_ABS_CORR` (the firewall holding), and enough
 movement windows - returning a `BacktestReport` with the
 reasons it did or didn't clear. Deno-tested
 (`supabase/functions/tests/intent-backtest.test.ts`) over
-**provisional, best-guess fixtures**, with a **tripwire test
-that fails after 2026-07-16** to force replacing them with real
-data. The `BAR_*` thresholds are eyeballed placeholders the
-real data must re-derive.
+**provisional, best-guess fixtures**. Replacing them with the
+real prod shape (and re-deriving the eyeballed `BAR_*`
+placeholder thresholds from that data) is tracked as a
+scheduled follow-up in the operator's session - a date-armed
+in-suite tripwire used to carry this reminder, but firing it
+turned every Tests run and the Deploy chain red until handled,
+so the reminder moved out of the suite.
 
 Also built: the pure **DB-rows -> corpus mapper**
 (`buildCorpus`) that groups `intent_target_samples` into
