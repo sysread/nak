@@ -33,6 +33,31 @@ matters to you.
 
 ## Deleting a thread
 
+## Downloading a transcript
+
+You can save any conversation as a Markdown file. Two ways to get
+one:
+
+- **The current conversation**: click the download button (arrow into
+  a tray) in the top-right of the top bar, next to the logs toggle.
+  On a phone, the same action lives in the three-dot overflow menu
+  at the top of the screen, alongside **Daily digest**.
+- **Any conversation in the drawer**: open the three-dot menu on its
+  row and choose **Download transcript**. This works for archived
+  conversations too.
+
+The file is named after the conversation's title (lowercased,
+hyphenated) and contains the title, the creation date, and every
+user and assistant message with its timestamp. Attached files are
+noted by name; the file contents themselves are not included (see
+[Export and import](./export-import.md) for full-account export).
+Behind-the-scenes machinery - system prompts, tool calls and their
+results - is left out, so the transcript reads as the conversation
+you actually had.
+
+The button is greyed out while the conversation is empty, still a
+draft, or while the Daily digest panel is open.
+
 ## Filtering by topic
 
 The conversation drawer has a **Topics** button between the search

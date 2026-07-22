@@ -11,6 +11,7 @@
  * the service worker.
  */
 import { zipSync, strToU8 } from 'fflate';
+import { downloadText } from './download';
 import type { WikiArticle, WikiRecord } from './supabase';
 import { recordExportFilename } from './ui/wiki-records';
 
@@ -38,19 +39,6 @@ export function buildArticleMarkdown(article: WikiArticle): string {
   const body = article.content.trimEnd();
   if (/^#\s/.test(body)) return body + '\n';
   return `# ${article.title}\n\n${body}\n`;
-}
-
-/** Trigger a browser download of a text blob. Browser-only. */
-function downloadText(filename: string, text: string, mime = 'text/markdown'): void {
-  const blob = new Blob([text], { type: mime });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
 }
 
 /** Download one record as `yyyy-mm-dd-<slug>.md`. */
