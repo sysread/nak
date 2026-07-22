@@ -93,6 +93,33 @@ describe('buildTranscriptMarkdown', () => {
     expect(md).toContain('*Attachments: plan.pdf, map.png*');
   });
 
+  it('appends a Sources list and rewrites ^N^ markers on cited messages', () => {
+    const md = buildTranscriptMarkdown(thread, [
+      msg({
+        role: 'assistant',
+        content: 'Lisbon is sunny.^1^ Porto too.^2^',
+        citations: [
+          { index: 1, title: 'Lisbon weather', url: 'https://a.example/x', date: '2026-06-01' },
+          { index: 2, url: 'https://b.example/y' },
+        ],
+      }),
+    ]);
+    expect(md).toContain('Lisbon is sunny.[1] Porto too.[2]');
+    expect(md).not.toContain('^1^');
+    expect(md).toContain('Sources:');
+    expect(md).toContain('1. [Lisbon weather](https://a.example/x) - 2026-06-01');
+    // Untitled/undated citations fall back to the bare URL, no dangling dash.
+    expect(md).toContain('2. [https://b.example/y](https://b.example/y)\n');
+  });
+
+  it('leaves carets alone on messages without citations', () => {
+    const md = buildTranscriptMarkdown(thread, [
+      msg({ role: 'assistant', content: 'x^2^ means x squared' }),
+    ]);
+    expect(md).toContain('x^2^ means x squared');
+    expect(md).not.toContain('Sources:');
+  });
+
   it('falls back to Untitled conversation for a blank title', () => {
     const md = buildTranscriptMarkdown({ title: ' ', created_at: 'nonsense' }, []);
     expect(md).toContain('# Untitled conversation');

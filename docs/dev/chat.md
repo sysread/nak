@@ -63,7 +63,9 @@ A chat turn goes:
 - `src/lib/ui/transcript-export.ts` - pure builders for the
   download-transcript feature: the Markdown document
   (`buildTranscriptMarkdown` - user/assistant turns only, system
-  and tool rows dropped), the title-slug filename, and the
+  and tool rows dropped, web citations as a per-message Sources
+  list with `^N^` markers rewritten to `[N]`), the title-slug
+  filename, and the
   top-bar button's enabled gate (`canExportTranscript`). The
   browser download itself goes through `src/lib/download.ts`
   (shared with the wiki export). Chat.svelte triggers it from
