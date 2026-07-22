@@ -69,7 +69,10 @@ function formatTimestamp(iso: string): string {
  * whose content is empty (pure tool-call rows). Message bodies are
  * emitted verbatim; the app authors them in Markdown already. User
  * attachments are noted by filename so the transcript records that a
- * file was part of the turn even though the bytes stay behind.
+ * file was part of the turn even though the bytes stay behind. Web
+ * citations on an assistant row become a numbered Sources list under
+ * the message, with the body's `^N^` superscript markers rewritten to
+ * `[N]` so the references read as plain Markdown.
  */
 export function buildTranscriptMarkdown(
   thread: Pick<Thread, 'title' | 'created_at'>,
@@ -90,7 +93,21 @@ export function buildTranscriptMarkdown(
     if (names.length > 0) {
       lines.push(`*Attachments: ${names.join(', ')}*`, '');
     }
-    lines.push(body, '');
+    const citations = m.citations ?? [];
+    if (citations.length === 0) {
+      lines.push(body, '');
+      continue;
+    }
+    // The in-app renderer draws `^N^` as a superscript chip; in a raw
+    // Markdown file the carets are just noise, so rewrite the markers
+    // to `[N]` - the bracket style the Sources list below numbers by.
+    lines.push(body.replace(/\^(\d+)\^/g, '[$1]'), '', 'Sources:', '');
+    for (const c of citations) {
+      const label = c.title || c.url;
+      const date = c.date ? ` - ${c.date}` : '';
+      lines.push(`${c.index}. [${label}](${c.url})${date}`);
+    }
+    lines.push('');
   }
   return lines.join('\n');
 }

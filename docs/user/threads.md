@@ -48,8 +48,10 @@ one:
 
 The file is named after the conversation's title (lowercased,
 hyphenated) and contains the title, the creation date, and every
-user and assistant message with its timestamp. Attached files are
-noted by name; the file contents themselves are not included (see
+user and assistant message with its timestamp. Replies that cite
+web sources carry a numbered **Sources** list of links beneath the
+message, matching the bracketed reference markers in the text.
+Attached files are noted by name; the file contents themselves are not included (see
 [Export and import](./export-import.md) for full-account export).
 Behind-the-scenes machinery - system prompts, tool calls and their
 results - is left out, so the transcript reads as the conversation

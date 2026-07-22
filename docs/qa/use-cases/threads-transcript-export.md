@@ -46,7 +46,10 @@ menu, including the filename slug and the content filtering.
 - Step 3: the file opens with `# <title>`, a `Created:` line, then
   `## User - <timestamp>` and `## Assistant - <timestamp>` sections
   containing the visible message texts. No system prompt, no tool
-  call/result payloads.
+  call/result payloads. If a reply cited web sources, its section
+  ends with a numbered `Sources:` list of Markdown links and the
+  body's superscript markers read as `[1]`, `[2]`, ... instead of
+  `^1^`.
 - Step 4: the download button is disabled (draft, no messages).
 - Step 5: the download button is disabled while the digest panel is
   open; enabled again after closing it.
