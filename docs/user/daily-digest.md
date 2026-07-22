@@ -10,8 +10,12 @@ conversation.
 
 On the **Chats** tab, click the **calendar** button in the top bar -
 it sits next to the "New conversation" button. The digest page
-replaces the conversation view; click the calendar button again (or
-use your browser's Back button) to return to the chat.
+replaces the conversation view. To return to the chat, click the
+calendar button again, click any conversation in the sidebar (the
+highlighted one included), use your browser's Back button, or click
+the "New conversation" button - while the digest is open it always
+takes you back to the conversation view, even on a still-empty
+thread.
 
 Unlike the wiki's changelog, the digest is not the default view -
 opening the Chats tab always lands you in a conversation.

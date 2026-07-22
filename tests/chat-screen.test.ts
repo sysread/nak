@@ -6,6 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   isMacPlatform,
+  newThreadButtonState,
   rateLimitRemainingSeconds,
   sendHintLabel,
 } from '../src/lib/ui/chat-screen';
@@ -42,5 +43,35 @@ describe('sendHintLabel', () => {
   it('names the platform submit shortcut', () => {
     expect(sendHintLabel(true)).toBe('\u2318-enter sends');
     expect(sendHintLabel(false)).toBe('ctrl-enter sends');
+  });
+});
+
+describe('newThreadButtonState', () => {
+  it('disables on an empty thread in the transcript view', () => {
+    expect(newThreadButtonState(true, false)).toEqual({
+      disabled: true,
+      title: "You're already on an empty thread.",
+    });
+  });
+
+  it('enables on a non-empty thread in the transcript view', () => {
+    expect(newThreadButtonState(false, false)).toEqual({
+      disabled: false,
+      title: 'Start a new conversation',
+    });
+  });
+
+  it('stays enabled as "back to the conversation" when the digest covers an empty thread', () => {
+    expect(newThreadButtonState(true, true)).toEqual({
+      disabled: false,
+      title: 'Back to the conversation',
+    });
+  });
+
+  it('stays enabled as a normal new-thread action when the digest covers a non-empty thread', () => {
+    expect(newThreadButtonState(false, true)).toEqual({
+      disabled: false,
+      title: 'Start a new conversation',
+    });
   });
 });
