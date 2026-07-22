@@ -235,6 +235,7 @@
   } from '$lib/ui/cohort-panel';
   import {
     isMacPlatform,
+    newThreadButtonState,
     rateLimitRemainingSeconds,
     sendHintLabel,
   } from '$lib/ui/chat-screen';
@@ -2364,8 +2365,18 @@
   async function selectThread(id: string | null): Promise<void> {
     // No-op if the target matches our current state. Prevents a
     // feedback loop with the route-reconciling effect above, which
-    // calls selectThread when route.cid changes externally.
-    if (id === activeThreadId) return;
+    // calls selectThread when route.cid changes externally. (The
+    // effect only fires on a cid mismatch, so this equal-id path is
+    // reached only by direct user actions - sidebar row click,
+    // notification click - never by the reconcile loop.) Re-selecting
+    // the active thread still means "show me the transcript", so close
+    // the Daily digest panel if it is covering it; otherwise clicking
+    // the highlighted sidebar row while the digest is open does
+    // nothing and the user reads the view as stuck.
+    if (id === activeThreadId) {
+      navigate({ digest: null });
+      return;
+    }
     // Abandoned-draft cleanup: if the previously active thread was a draft
     // (never sent, never renamed), drop it from the sidebar rather than
     // leaving an empty placeholder behind once the user moves on.
@@ -2975,7 +2986,14 @@
 
   async function newThread(): Promise<void> {
     if (!app.supabase) return;
-    if (currentIsEmpty) return;
+    if (currentIsEmpty) {
+      // While the Daily digest panel covers the transcript, the New
+      // button stays enabled on an empty thread and acts as "back to
+      // the conversation" (see newThreadButtonState) - closing the
+      // panel instead of minting a second empty draft.
+      if (route.digest) navigate({ digest: null });
+      return;
+    }
     // Create a local-only draft. It materializes in Supabase only when the
     // user sends a message or renames the thread; an abandoned draft just
     // disappears on refresh.
@@ -6810,15 +6828,20 @@
                a drawer-only management surface - it shares the chats
                top-bar + transcript so the main view stays the conversation
                while the user reviews files in the drawer. -->
+          {@const newBtn = newThreadButtonState(
+            currentIsEmpty,
+            // The digest panel only renders on the chats tab, so on
+            // the artifacts tab the button keeps its transcript-view
+            // gating even if ?digest=1 is still in the URL.
+            route.digest !== null && drawerTab === 'chats'
+          )}
           {@const actions = [
             {
               id: 'new-thread',
               label: 'New conversation',
-              title: currentIsEmpty
-                ? "You're already on an empty thread."
-                : 'Start a new conversation',
+              title: newBtn.title,
               class: 'new-thread-mini',
-              disabled: currentIsEmpty,
+              disabled: newBtn.disabled,
               onclick: newThread,
               icon: newThreadIcon,
               // Primary action of the whole app: stays a standalone

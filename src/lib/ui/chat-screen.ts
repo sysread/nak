@@ -52,3 +52,34 @@ export function isMacPlatform(platform: string): boolean {
 export function sendHintLabel(isMac: boolean): string {
   return isMac ? '\u2318-enter sends' : 'ctrl-enter sends';
 }
+
+/**
+ * Disabled state + tooltip for the top-bar "New conversation" button.
+ *
+ * In the transcript view the button is disabled on an empty thread -
+ * clicking it would just mint a second empty draft. While the Daily
+ * digest panel covers the transcript, that gating inverts: the button
+ * stays enabled and acts as "back to the conversation", because with
+ * the transcript hidden a greyed-out primary action reads as "you
+ * cannot leave the digest" (the digest toggle icon is the only other
+ * way out and does not read as an exit).
+ */
+export function newThreadButtonState(
+  currentIsEmpty: boolean,
+  digestOpen: boolean
+): { disabled: boolean; title: string } {
+  if (digestOpen) {
+    return {
+      disabled: false,
+      title: currentIsEmpty
+        ? 'Back to the conversation'
+        : 'Start a new conversation',
+    };
+  }
+  return {
+    disabled: currentIsEmpty,
+    title: currentIsEmpty
+      ? "You're already on an empty thread."
+      : 'Start a new conversation',
+  };
+}

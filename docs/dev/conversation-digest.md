@@ -111,7 +111,15 @@ transcript, which is accepted.
 - **Routing**: `?digest=1` is a presence flag. Opening a thread
   (sidebar click or a digest deep-link, both via `selectThread`)
   clears it in the same `navigate` patch, so a (cid-change + digest
-  open) history entry can never exist.
+  open) history entry can never exist. `selectThread`'s equal-id
+  early return also clears the flag, so clicking the already-active
+  sidebar row exits the digest instead of doing nothing.
+- **Exits**: while the panel is open, the top-bar "New conversation"
+  button stays enabled even on an empty thread and acts as "back to
+  the conversation" (`newThreadButtonState` in
+  `src/lib/ui/chat-screen.ts`). The transcript-view gating (disabled
+  on an empty thread) would otherwise read as "you cannot leave the
+  digest".
 
 ## Interactions
 
