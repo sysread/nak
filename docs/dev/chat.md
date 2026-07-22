@@ -60,6 +60,17 @@ A chat turn goes:
   screen already used (`incomplete-turn`, `last-error`,
   `recovery-banner`, `streaming-bubble`, ...); the split contract
   is [frontend-organization.md](./frontend-organization.md).
+- `src/lib/ui/transcript-export.ts` - pure builders for the
+  download-transcript feature: the Markdown document
+  (`buildTranscriptMarkdown` - user/assistant turns only, system
+  and tool rows dropped), the title-slug filename, and the
+  top-bar button's enabled gate (`canExportTranscript`). The
+  browser download itself goes through `src/lib/download.ts`
+  (shared with the wiki export). Chat.svelte triggers it from
+  three places: the desktop button beside the logs toggle, the
+  chats overflow menu on mobile, and each thread row's kebab
+  menu (which fetches that thread's rows via `listMessages`
+  when it isn't the active one).
 - `src/lib/chat/loop.ts` - `runChatLoop`, `toVeniceMessage`, and
   the per-turn priming + event-routing orchestration. Issues one
   `venice.streamChat` call per turn; the function-side round

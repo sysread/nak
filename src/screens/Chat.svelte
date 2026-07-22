@@ -290,6 +290,8 @@
   type AskUserCardComponent = typeof import('../components/AskUserCard.svelte').default;
   import { extractedTextDrawer } from '$lib/extractedTextDrawer.svelte';
   import { logsDrawer, createLogger, appendFromEdge } from '$lib/logger.svelte';
+  import { downloadText } from '$lib/download';
+  import { buildTranscriptMarkdown, canExportTranscript, transcriptExportFilename } from '$lib/ui/transcript-export';
 
   const log = createLogger('chat');
   import { VeniceError, StreamDisconnectedError, cancelStream, awaitStreamSettled, type VeniceMessage } from '$lib/venice';
@@ -3095,6 +3097,27 @@
 
   function closeRowMenu(): void {
     openMenuThreadId = null;
+  }
+
+  // Download a conversation as a Markdown transcript. The active thread
+  // exports the in-memory `messages` array (which includes any turns
+  // realtime delivered since the last fetch); any other thread - the
+  // row-menu path - fetches its rows first. Draft threads are blocked
+  // at both call sites (no DB rows to export yet).
+  async function exportTranscript(id: string): Promise<void> {
+    closeRowMenu();
+    const thread = findThread(id);
+    if (!thread || thread.isDraft || !app.supabase) return;
+    try {
+      const rows =
+        id === activeThreadId ? messages : await app.supabase.listMessages(id);
+      downloadText(
+        transcriptExportFilename(thread),
+        buildTranscriptMarkdown(thread, rows),
+      );
+    } catch (err) {
+      error = { text: err instanceof Error ? err.message : String(err) };
+    }
   }
 
   function toggleRowMenu(id: string): void {
@@ -6424,6 +6447,8 @@
                 {#if t.archived}
                   <button class="thread-menu-item" role="menuitem"
                           onclick={() => restoreThread(t.id)}>Restore</button>
+                  <button class="thread-menu-item" role="menuitem"
+                          onclick={() => { void exportTranscript(t.id); }}>Download transcript</button>
                   <button class="thread-menu-item danger" role="menuitem"
                           onclick={() => deleteThread(t.id)}>Delete</button>
                 {:else}
@@ -6435,6 +6460,12 @@
                   </button>
                   <button class="thread-menu-item" role="menuitem"
                           onclick={() => renameFromRow(t.id)}>Rename</button>
+                  <button class="thread-menu-item" role="menuitem"
+                          onclick={() => { void exportTranscript(t.id); }}
+                          disabled={t.isDraft}
+                          title={t.isDraft ? "Draft threads have nothing to export yet." : undefined}>
+                    Download transcript
+                  </button>
                   <button class="thread-menu-item danger" role="menuitem"
                           onclick={() => deleteThread(t.id)}>Delete</button>
                 {/if}
@@ -6791,6 +6822,16 @@
             <line x1="3" y1="10" x2="21" y2="10" />
           </svg>
         {/snippet}
+        {#snippet transcriptDownloadIcon()}
+          <!-- Feather "download" - arrow into a tray, the conventional
+               save-to-disk glyph. -->
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="7 10 12 15 17 10" />
+            <line x1="12" y1="15" x2="12" y2="3" />
+          </svg>
+        {/snippet}
         {#snippet changelogIcon()}
           <!-- Feather "clock" - reads as "history / audit log". -->
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -6858,6 +6899,22 @@
                 : 'Daily digest of past conversations',
               onclick: () => navigate({ digest: route.digest ? null : '1' }),
               icon: digestIcon,
+            },
+            {
+              id: 'transcript-export',
+              label: 'Download transcript',
+              title: 'Download this conversation as Markdown',
+              // Mobile-menu-only: the desktop placement is the
+              // standalone button beside the logs toggle (top right),
+              // so the desktop merged group hides this copy via CSS.
+              class: 'transcript-export-menu-only',
+              disabled: !canExportTranscript(
+                currentThread,
+                route.digest !== null && drawerTab === 'chats',
+                messages.length
+              ),
+              onclick: () => { if (activeThreadId) void exportTranscript(activeThreadId); },
+              icon: transcriptDownloadIcon,
             },
           ]}
           <TopBarActions {actions} menuLabel="Chat actions" />
@@ -7037,6 +7094,26 @@
           <div class="title-wrap">
             <span class="title-btn panel-section-label">Library</span>
           </div>
+        {/if}
+        {#if drawerTab === 'chats' || drawerTab === 'artifacts'}
+          <!-- Desktop-only transcript download, sitting beside the logs
+               toggle as a trailing top-bar action. On mobile the same
+               action lives in the chats overflow menu instead (see the
+               transcript-export entry in the TopBarActions array), so
+               this button hides under the 720px breakpoint. -->
+          <button
+            class="secondary icon-btn transcript-export-toggle"
+            onclick={() => { if (activeThreadId) void exportTranscript(activeThreadId); }}
+            disabled={!canExportTranscript(
+              currentThread,
+              route.digest !== null && drawerTab === 'chats',
+              messages.length
+            )}
+            title="Download this conversation as Markdown"
+            aria-label="Download this conversation as Markdown"
+          >
+            {@render transcriptDownloadIcon()}
+          </button>
         {/if}
         <!-- Logs drawer toggle. Lives outside the per-tab branches so it
              appears as the trailing top-bar action on chats, recipes,

@@ -202,6 +202,10 @@ One file per use-case under [`use-cases/`](./use-cases/), named
 - [threads-management](./use-cases/threads-management.md) - thread title
   generation, manual rename pinning, topic-filter pills, and the
   per-thread multi-device reply lock.
+- [threads-transcript-export](./use-cases/threads-transcript-export.md) -
+  downloading a conversation as a Markdown transcript from the
+  top-bar button, the mobile overflow menu, and the thread-row
+  kebab menu, with the disabled states and content filtering.
 - [memory-browser-actions](./use-cases/memory-browser-actions.md) - the
   Memories tab's browse/search/filter flows, edit/reaffirm/doubt,
   relate/unrelate, delete, and recall visibility.
