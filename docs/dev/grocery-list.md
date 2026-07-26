@@ -61,7 +61,9 @@ owns current reality.
 - `src/lib/ui/grocery-list.ts` - pure UI-behavior primitives:
   section grouping (`groupItemsBySection`, Other pinned first;
   `filterSectionGroups` for the empty-cards toggle), quantity
-  labels, the add-input create-vs-reuse decision
+  labels, the row detail line (`itemDetailLine` - qty / note /
+  recipe title joined for the block under an item's name, shared by
+  both list surfaces), the add-input create-vs-reuse decision
   (`canCreateGroceryItem`), the acquired disclosure copy, the DnD
   next-state helpers (`sectionOrderAfterDrag` + the `sectionDropEdge`
   insertion-line decision), the shopping-trip helpers
@@ -282,6 +284,15 @@ Deployed via its own line in `deploy.yml`.
   sections; the count re-check narrows the window and a double
   seed is cosmetic (duplicate names, user-deletable). Not worth a
   server-side lock.
+- **Item rows wrap; they never ellipsize.** Both surfaces render the
+  name on a line of its own and `itemDetailLine` on a block under
+  it, each with `overflow-wrap: anywhere` and no
+  `text-overflow: ellipsis`. This is deliberate: a shopper scans an
+  aisle card by item name, and the drawer in particular is narrow
+  enough that clipping started on ordinary names. Reintroducing
+  single-line truncation to "tidy" a tall row undoes the fix.
+  `.grocery-item-name` is shared with the add-input's suggestion
+  dropdown, so a change there lands in two places.
 - **The grocery function reuses the recipe GC driver.** The drain
   loop in `_shared/recipe-image-gc.ts` is table-agnostic; changing
   its semantics changes BOTH sweeps.

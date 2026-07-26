@@ -35,7 +35,7 @@
     browseSectionArg,
     canCreateGroceryItem,
     computeBrowseView,
-    itemQuantityLabel,
+    itemDetailLine,
     splitBrowseRows,
     type GroceryStatusFilter,
   } from '$lib/ui/grocery-list';
@@ -287,16 +287,14 @@
           title={item.needed ? 'Remove from list' : 'Add to list'}
           onclick={() => toggleNeeded(item)}
         >
-          <span class="grocery-browse-line">
-            <span class="grocery-browse-name">{item.name}</span>
-            {#if itemQuantityLabel(item)}
-              <span class="grocery-browse-qty">{itemQuantityLabel(item)}</span>
-            {/if}
-          </span>
-          {#if item.note || item.recipe_title}
-            <span class="grocery-browse-meta">
-              {item.note ?? item.recipe_title}
-            </span>
+          <!-- Name alone on its line, wrapping. The drawer is the
+               narrowest surface the catalog renders on, so anything
+               sharing the name's line eats the part the reader came
+               for. Quantity / note / recipe title go below it, same
+               composition as the panel's rows. -->
+          <span class="grocery-browse-name">{item.name}</span>
+          {#if itemDetailLine(item)}
+            <span class="grocery-browse-meta">{itemDetailLine(item)}</span>
           {/if}
         </button>
         {#if item.image_url}
@@ -438,30 +436,21 @@
     padding: 0;
     cursor: pointer;
   }
-  .grocery-browse-line {
-    display: flex;
-    align-items: baseline;
-    gap: 0.4rem;
-    min-width: 0;
-  }
+  /* Wraps rather than ellipsizes - the item name is the whole point
+     of a browse row, and the drawer is narrow enough that clipping
+     starts on ordinary names. `overflow-wrap: anywhere` handles names
+     with no space to break at, which would otherwise widen the row
+     past the drawer. */
   .grocery-browse-name {
     font-size: 0.9rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    min-width: 0;
+    overflow-wrap: anywhere;
   }
-  .grocery-browse-qty {
-    flex-shrink: 0;
-    font-size: 0.75rem;
-    color: var(--muted);
-  }
+  /* Quantity, note, and recipe title on their own block under the
+     name, wrapping for the same reason. */
   .grocery-browse-meta {
     font-size: 0.72rem;
     color: var(--muted);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow-wrap: anywhere;
   }
   .grocery-browse-thumb {
     flex-shrink: 0;
