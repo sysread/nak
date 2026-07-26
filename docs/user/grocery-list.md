@@ -12,7 +12,9 @@ phone in the store aisle. It has two surfaces:
   checkboxes live under **Ingredients**, hidden until you tick
   **Show recipe ingredients**. Each row has a checkbox:
   checked means it's on the current shopping list, so restocking a
-  past purchase is just "search it, check it". Searching a name
+  past purchase is just "search it, check it". Rows read the same
+  way as the ones in the main panel - name on its own line, details
+  underneath. Searching a name
   you've never bought offers an **Add** action instead.
 - the **main panel** shows the current shopping list itself, grouped
   by store section - that's where you add, edit, check things off,
@@ -70,6 +72,13 @@ greyed-out **Acquired** section at the bottom, which stays collapsed
 until you open it (it keeps your whole purchase history, which is
 also what powers the add-input suggestions). Re-check an acquired
 item to put it back on the list.
+
+Each row reads top to bottom: the item **name** on its own line,
+then a smaller grey line under it with the count and unit, your
+note, and the recipe the item came from (separated by dots).
+Both lines wrap onto as many lines as they need, so a long name or
+a wordy note is never cut off mid-word - the name in particular is
+always shown in full.
 
 Tapping anywhere on an item's row toggles its checkbox - the whole
 row is the tap target, not just the little box. To edit instead,

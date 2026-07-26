@@ -54,6 +54,7 @@
     splitAcquiredForTrip,
     filterSectionGroups,
     groupItemsBySection,
+    itemDetailLine,
     itemQuantityLabel,
     sectionOrderAfterDrag,
   } from '$lib/ui/grocery-list';
@@ -781,22 +782,13 @@
         title={needed ? 'Mark as acquired' : 'Put back on the list'}
         onclick={() => setNeeded(item, !needed)}
       >
-        <span class="grocery-item-line">
-          <span class="grocery-item-name">{item.name}</span>
-          {#if itemQuantityLabel(item)}
-            <span class="grocery-item-qty">{itemQuantityLabel(item)}</span>
-          {/if}
-        </span>
-        {#if item.note || item.recipe_title}
-          <span class="grocery-item-meta">
-            {#if item.note}{item.note}{/if}
-            {#if item.note && item.recipe_title && item.note !== `For ${item.recipe_title}`}
-              &middot;
-            {/if}
-            {#if item.recipe_title && item.note !== `For ${item.recipe_title}`}
-              {item.recipe_title}
-            {/if}
-          </span>
+        <!-- The name owns its own line and wraps in full. Nothing
+             shares the line with it: the shopper scans an aisle card
+             by item name, and a name clipped by a quantity or a note
+             beside it is a name they have to tap to read. -->
+        <span class="grocery-item-name">{item.name}</span>
+        {#if itemDetailLine(item)}
+          <span class="grocery-item-meta">{itemDetailLine(item)}</span>
         {/if}
       </button>
       {#if item.image_url}
@@ -1337,33 +1329,34 @@
     padding: 0;
     cursor: pointer;
   }
-  .grocery-item-line {
-    display: flex;
-    align-items: baseline;
-    gap: 0.4rem;
-    min-width: 0;
-  }
+  /* Shared with the suggestion dropdown's rows. Wraps rather than
+     ellipsizes: the name is the one part of a row that must always be
+     readable in full, so a long one costs a second line instead of
+     its tail. `overflow-wrap: anywhere` covers names with no space to
+     break at (a pasted brand string), which would otherwise push the
+     row wider than the card. */
   .grocery-item-name {
     font-size: 0.9rem;
     /* Bold so the item name is the scannable anchor of each row -
-       qty, note, and recipe title stay regular/muted around it. */
+       the detail line under it stays regular/muted. */
     font-weight: 600;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    min-width: 0;
+    overflow-wrap: anywhere;
   }
+  /* Suggestion-dropdown only: in the list rows the quantity is folded
+     into the detail line under the name. */
   .grocery-item-qty {
     flex-shrink: 0;
     font-size: 0.75rem;
     color: var(--muted);
   }
+  /* Quantity, note, and recipe title, on their own block under the
+     name. Wraps for the same reason the name does - a long note
+     belongs to the item, and truncating it hides which of several
+     similar items this row is. */
   .grocery-item-meta {
     font-size: 0.72rem;
     color: var(--muted);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow-wrap: anywhere;
   }
   /* Editor toggle at the row's right edge. Bordered like the form
      controls so it reads as a button, with the radius token carrying

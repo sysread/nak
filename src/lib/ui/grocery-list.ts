@@ -136,6 +136,45 @@ export function itemQuantityLabel(item: {
 }
 
 /**
+ * Separator between the parts of an item's detail line. U+00B7 MIDDLE
+ * DOT rather than a comma or hyphen - at the muted 0.72rem size it
+ * reads as a divider instead of as punctuation belonging to the note
+ * text on either side of it.
+ */
+const DETAIL_SEPARATOR = ' \u00b7 ';
+
+/**
+ * The muted detail line rendered UNDER an item's name: quantity,
+ * free-form note, and source recipe title, in that order. Null when
+ * the item carries none of the three, so the caller renders nothing
+ * rather than an empty line.
+ *
+ * The recipe title is dropped when the note is exactly the
+ * `"For <title>"` string the Cookbook ingredient checkbox writes -
+ * that note already names the recipe, and printing both stutters
+ * ("For Chili . Chili").
+ *
+ * These three parts share one line because the item NAME owns the
+ * line above it: a long name has to wrap in full rather than get
+ * clipped by details competing for the same row.
+ */
+export function itemDetailLine(item: {
+  count: string | null;
+  unit: string | null;
+  note: string | null;
+  recipe_title: string | null;
+}): string | null {
+  const note = item.note?.trim() ?? '';
+  const recipe = item.recipe_title?.trim() ?? '';
+  const parts = [
+    itemQuantityLabel(item) ?? '',
+    note,
+    note === `For ${recipe}` ? '' : recipe,
+  ].filter((part) => part.length > 0);
+  return parts.length > 0 ? parts.join(DETAIL_SEPARATOR) : null;
+}
+
+/**
  * Disclosure-header copy for the collapsed acquired-history section.
  * `hasMore` marks the count as a lower bound ("30+") because only a
  * window of the history is loaded.

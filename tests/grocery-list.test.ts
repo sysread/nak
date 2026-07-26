@@ -5,6 +5,7 @@ import {
   canCreateGroceryItem,
   groceryItemFromIngredient,
   groupItemsBySection,
+  itemDetailLine,
   itemQuantityLabel,
   normalizeGroceryName,
   recipeCheckboxItemIds,
@@ -115,6 +116,46 @@ describe('itemQuantityLabel', () => {
   it('returns null when both are empty', () => {
     expect(itemQuantityLabel({ count: null, unit: null })).toBeNull();
     expect(itemQuantityLabel({ count: '  ', unit: '' })).toBeNull();
+  });
+});
+
+describe('itemDetailLine', () => {
+  const base = { count: null, unit: null, note: null, recipe_title: null };
+
+  it('joins quantity, note, and recipe title in that order', () => {
+    expect(
+      itemDetailLine({
+        count: '2',
+        unit: 'lb',
+        note: 'the thick-cut kind',
+        recipe_title: 'Chili',
+      })
+    ).toBe('2 lb \u00b7 the thick-cut kind \u00b7 Chili');
+  });
+
+  it('renders whichever parts are present', () => {
+    expect(itemDetailLine({ ...base, count: '3' })).toBe('3');
+    expect(itemDetailLine({ ...base, note: 'green ones' })).toBe('green ones');
+    expect(itemDetailLine({ ...base, recipe_title: 'Chili' })).toBe('Chili');
+  });
+
+  it('drops the recipe title when the note already names it', () => {
+    expect(
+      itemDetailLine({ ...base, note: 'For Chili', recipe_title: 'Chili' })
+    ).toBe('For Chili');
+  });
+
+  it('keeps the recipe title alongside an unrelated note', () => {
+    expect(
+      itemDetailLine({ ...base, note: 'For a party', recipe_title: 'Chili' })
+    ).toBe('For a party \u00b7 Chili');
+  });
+
+  it('returns null when the item carries no details', () => {
+    expect(itemDetailLine(base)).toBeNull();
+    expect(
+      itemDetailLine({ count: ' ', unit: '', note: '  ', recipe_title: '' })
+    ).toBeNull();
   });
 });
 

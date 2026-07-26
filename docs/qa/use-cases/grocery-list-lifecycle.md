@@ -92,6 +92,15 @@ Steps below name which surface they mean.
     mise run dev-sql "update profiles set settings = settings || jsonb_build_object('groceryShoppingStartedAt', to_jsonb((now() - interval '1 day')::text))"
     ```
 
+23. Edit `paper towels` (pencil) and give it a deliberately long
+    name - `extra absorbent select-a-size paper towels 12 mega
+    rolls` - a count of `2`, a unit of `packs`, and a long note
+    (`the bulk pack from the back aisle, not the shelf ones`).
+    Save, then read the row in the main panel AND in the sidebar
+    drawer, at desktop width and at a phone-narrow viewport. Repeat
+    with a name containing no spaces at all
+    (`extraabsorbentselectasizepapertowels12megarolls`).
+
 ## Expected
 
 - (1) The main panel shows the "Nothing on the list" hint and NO
@@ -175,6 +184,16 @@ Steps below name which surface they mean.
   explainer and `salt` shows under Acquired. With the trip
   timestamp forced to yesterday, a reload shows the trip inactive -
   it expired at midnight without any explicit finish.
+- (23) On BOTH surfaces the full name is visible: it wraps onto as
+  many lines as it needs, with no ellipsis and nothing else sharing
+  its line. Directly beneath it, one muted block reads
+  `2 packs . the bulk pack from the back aisle, not the shelf ones`
+  (middle dots between parts), also wrapping in full. Neither line
+  is clipped at phone-narrow width, and the space-free name breaks
+  mid-word rather than pushing the row wider than its card or the
+  drawer. A recipe-sourced row whose note is exactly
+  `For <recipe title>` shows that note ONCE, without the recipe
+  title repeated after it.
 
 ## Cleanup
 
