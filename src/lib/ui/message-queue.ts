@@ -13,6 +13,7 @@
  */
 
 import type { LocalAttachment } from '../attachments';
+import type { Thread } from '../supabase';
 
 /**
  * One banked composer draft. `attachments` carries the same
@@ -25,6 +26,37 @@ export interface QueuedMessage {
   id: string;
   text: string;
   attachments: LocalAttachment[];
+}
+
+/**
+ * Whether a settled turn should fire the messages queued behind it.
+ * Called from `maybeDrainQueuedMessages` (Chat.svelte) at the tail of
+ * every path that ends a turn.
+ *
+ * `hasStreamingError` is the load-bearing one, and it is a deliberate
+ * "no" rather than an oversight. A turn that ended on a rate-limit
+ * exhaustion, a cross-device preemption, or a commit conflict has put a
+ * banner in front of the user that a fresh turn would immediately bury,
+ * and the retry would most likely fail the same way. The queue is not
+ * dropped - it stays on the slot, still rendered as cards, and drains at
+ * the tail of whichever later turn succeeds. A user-initiated stop is
+ * NOT an error (runExchange's catch clears the slot's error on an abort
+ * with no claim loss), so stopping deliberately DOES drain - that is
+ * what makes the stop button's "and send mine now" meaning work.
+ *
+ * `thread` is null when the row vanished mid-turn (deleted on another
+ * device); a draft can't be a drain target because a queue can only be
+ * created against an in-flight turn, which implies a materialized row.
+ */
+export function shouldDrainQueue(
+  queuedCount: number,
+  hasStreamingError: boolean,
+  thread: Pick<Thread, 'archived'> & { isDraft?: boolean } | null
+): boolean {
+  if (queuedCount === 0) return false;
+  if (hasStreamingError) return false;
+  if (!thread || thread.isDraft === true || thread.archived) return false;
+  return true;
 }
 
 /**

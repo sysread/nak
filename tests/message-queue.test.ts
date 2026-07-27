@@ -9,6 +9,7 @@ import {
   queuedAttachmentSummary,
   queuedHeadline,
   sendButtonState,
+  shouldDrainQueue,
   type QueuedMessage,
 } from '../src/lib/ui/message-queue';
 
@@ -91,6 +92,42 @@ describe('sendButtonState', () => {
     // turn that ended on an error. The button must go back to meaning
     // "send what is in the composer" there, not offer to stop nothing.
     expect(sendButtonState({ ...IDLE, queuedCount: 2 }).mode).toBe('send');
+  });
+});
+
+describe('shouldDrainQueue', () => {
+  const live = { archived: false };
+
+  it('drains a non-empty queue on a clean settled turn', () => {
+    expect(shouldDrainQueue(1, false, live)).toBe(true);
+    expect(shouldDrainQueue(3, false, live)).toBe(true);
+  });
+
+  it('does nothing when nothing is queued', () => {
+    expect(shouldDrainQueue(0, false, live)).toBe(false);
+  });
+
+  it('holds the queue back when the turn left an error banner', () => {
+    // The rule with the most consequence: a rate-limit exhaustion or a
+    // cross-device preemption must not be buried under a fresh turn that
+    // would likely fail the same way. The queue is HELD, not dropped -
+    // the caller leaves it on the slot for a later successful turn.
+    expect(shouldDrainQueue(2, true, live)).toBe(false);
+  });
+
+  it('drains after a deliberate stop, which is not an error', () => {
+    // runExchange's catch clears the slot's streamingError on a
+    // user-initiated abort, so a stop reaches the tail looking clean.
+    // This is what gives the stop button its "and send mine now"
+    // meaning - if a stop registered as an error here, the queue would
+    // silently never fire.
+    expect(shouldDrainQueue(1, false, live)).toBe(true);
+  });
+
+  it('refuses a thread that vanished, is archived, or was never materialized', () => {
+    expect(shouldDrainQueue(1, false, null)).toBe(false);
+    expect(shouldDrainQueue(1, false, { archived: true })).toBe(false);
+    expect(shouldDrainQueue(1, false, { archived: false, isDraft: true })).toBe(false);
   });
 });
 

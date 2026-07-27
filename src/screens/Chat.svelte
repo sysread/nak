@@ -248,6 +248,7 @@
   import { streamingCardHasContent } from '$lib/ui/streaming-bubble';
   import {
     sendButtonState,
+    shouldDrainQueue,
     queuedHeadline,
     queuedAttachmentSummary,
   } from '$lib/ui/message-queue';
@@ -3504,18 +3505,20 @@
    * round exactly as a bare stop does (see stopStreaming), and the
    * queued rows land after them.
    *
-   * Deliberately does NOT drain when the turn left an error on the
-   * slot: a rate-limit exhaustion, a cross-device preemption, or a
-   * commit conflict all put a banner in front of the user that a fresh
-   * turn would bury, and the retry would most likely fail the same way.
-   * The queue survives instead, still visible as cards, and drains at
-   * the tail of whichever later turn succeeds.
+   * The decision of WHETHER to drain - notably the "an errored turn
+   * holds the queue back" rule - lives in `shouldDrainQueue`
+   * (`$lib/ui/message-queue`), which carries the reasoning and is
+   * covered by `tests/message-queue.test.ts`.
    */
   function maybeDrainQueuedMessages(threadId: string): void {
     const slot = exchangeStore.peek(threadId);
-    if (!slot || slot.queued.length === 0 || slot.streamingError !== null) return;
-    const thread = findThread(threadId);
-    if (!thread || thread.isDraft || thread.archived) return;
+    if (!slot) return;
+    const drain = shouldDrainQueue(
+      slot.queued.length,
+      slot.streamingError !== null,
+      findThread(threadId) ?? null
+    );
+    if (!drain) return;
     // Assert `sending` synchronously - before the async body's first
     // await - so the composer, the throbber, and the send button never
     // flicker back to their idle shapes in the gap between this turn's

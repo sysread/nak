@@ -29,6 +29,12 @@ tails"; [dev: exchange](../../dev/exchange.md), `ExchangeSlot.queued`):
 6. **An errored turn holds the queue.** A turn that ends on an error
    (rate-limit exhaustion, a foreign response claim) leaves the queue
    intact and visible rather than burying the banner under a fresh turn.
+7. **A background drain stays in its own thread.** The queue is
+   per-thread (`ExchangeSlot.queued`), and its drain can fire while the
+   user is looking at a different conversation. The rows it persists must
+   land in their own thread's transcript, never in whichever one happens
+   to be open - `persistUserTurn` gates its `appendMessage` on the active
+   thread for exactly this.
 
 ## Preconditions
 
@@ -66,6 +72,10 @@ tails"; [dev: exchange](../../dev/exchange.md), `ExchangeSlot.queued`):
    Back on the first browser, while that foreign claim is live, send a
    message so it fails with "Another device is responding", then queue a
    message against it.
+8. Background drain. On thread A, send a prompt and queue a distinctive
+   message against it ("QUEUED-ON-A"). Before the reply finishes, switch
+   to a different conversation (thread B) and watch B's transcript while
+   A's turn settles. Then switch back to A.
 
 ## Expected
 
@@ -95,6 +105,19 @@ tails"; [dev: exchange](../../dev/exchange.md), `ExchangeSlot.queued`):
   The queued card stays on screen after the foreign turn ends - the queue
   does **not** auto-fire into the error - and drains only when a later
   turn on this device succeeds.
+- (8) Thread B's transcript never shows "QUEUED-ON-A", and no queued card
+  appears under B while A drains. Returning to A shows the queued message
+  as a real user row with its reply beneath it. Confirm the row's home in
+  the DB:
+
+  ```sql
+  select thread_id, left(content, 20) as content_head
+    from messages
+   where content like 'QUEUED-ON-A%';
+  ```
+
+  It must name thread A. A row on B, or the text appearing in B's
+  transcript, is the ungated-`appendMessage` regression.
 
 ## Cleanup
 
