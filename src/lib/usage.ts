@@ -12,6 +12,14 @@
 // over the per-request /billing/usage ledger. Everything else in the analytics
 // payload (byDate, byModelDaily, byKey, ...) is ignored - the Usage pane only
 // needs the per-model token + spend totals.
+//
+// `byModel` is ACCOUNT-wide: it sums every API key on the Venice account plus
+// usage from Venice's own web app, not just the shared key nak calls with.
+// That is a Venice constraint - no billing endpoint takes an API-key filter,
+// and the per-request ledger carries no key id on its rows - so narrowing
+// these buckets to one key is not possible. `byKey` (deliberately ignored
+// above) carries per-key TOTALS with no model breakdown, which is why it
+// cannot stand in for a key-scoped version of this chart.
 
 /**
  * Currency codes the analytics endpoint reports spend in. Venice's `byModel`

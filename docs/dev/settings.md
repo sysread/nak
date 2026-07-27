@@ -156,7 +156,21 @@ landing tab move together.
   injected as system messages on each turn (see `chat.md`), so a reorder
   is a deliberate behavioral change, not just cosmetic.
 - **Usage** — a date-ranged snapshot of per-model token spend
-  against the Venice API key. Read-only: it calls Venice's beta
+  across the whole Venice account. Venice reports billing per
+  account, not per key, so this covers every API key on the account
+  plus Venice web-app usage - not just the shared key nak calls
+  with. Not fixable by filtering: no Venice billing endpoint takes
+  an API-key parameter, and the per-request ledger
+  (`/billing/usage-history`) carries no key id on its rows, so
+  per-key attribution cannot be reconstructed client-side either.
+  The only per-key data Venice exposes is the analytics response's
+  `byKey` / `byKeyDaily` arrays - totals per key and per key per
+  day, with no model breakdown - so a key-scoped *total* is
+  buildable but a key-scoped *per-model chart* is not. Identifying
+  our own row there needs the key id stored alongside the key;
+  Venice has no whoami endpoint (`/api_keys/rate_limits` returns
+  tier and balances but not the calling key's id, and `GET
+  /api_keys` is ADMIN-only). Read-only: it calls Venice's beta
   `/billing/usage-analytics` endpoint, which returns the per-model
   spend + token roll-up pre-aggregated in one cached response, and
   fans that into per-(model, currency) rows client-side

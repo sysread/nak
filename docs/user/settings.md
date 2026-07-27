@@ -103,8 +103,8 @@ order the toggles appear in the composer. See
 
 ### Usage
 
-A date-ranged snapshot of what the project's Venice API key has
-been spending. The key is held in your Supabase project's
+A date-ranged snapshot of what your **whole Venice account** has
+been spending. The project's key is held in your Supabase project's
 `app_config` table - all browser callers reach Venice through an
 edge function that holds the key server-side. Pick a **From** and
 **To** date, hit **Refresh**, and the pane pulls Venice's billing
@@ -112,6 +112,14 @@ analytics via that function - already grouped by model. Each row
 shows a horizontal bar scaled by total tokens, the token count as
 a compact label (e.g. `72k`, `1.2M`), and a pill with the billed
 amount.
+
+- **These are account totals, not Nak's alone.** Venice reports
+  billing per account, not per API key, and offers no way to filter
+  usage down to a single key. If your Venice account has other API
+  keys, or you have used Venice's own web app, their spend is
+  included in the numbers here. When the project's key is the only
+  thing charging the account, the account total *is* Nak's usage -
+  the two only diverge once something else starts spending.
 
 - The bars are measured in **tokens**, not money. A cheap-but-chatty
   model shows a long bar with a small pill; an expensive-but-concise

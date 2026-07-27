@@ -327,8 +327,12 @@ interface UsageAnalyticsRequestBody {
  * over the per-request /billing/usage ledger this route used to proxy.
  * Authenticated as the calling user: the gateway's verify_jwt has already
  * validated the session JWT (same model as /embed, no service-role check).
- * Usage is account-scoped, so any project member sees the one shared key's
- * usage - consistent with the shared-key trust model.
+ * Venice reports billing per ACCOUNT, not per API key: the response covers
+ * every key on the account plus Venice web-app usage, not just the shared key
+ * this function calls with. No Venice billing endpoint accepts a key filter,
+ * and the per-request ledger carries no key id on its rows, so the pane cannot
+ * narrow this to our key. Any project member therefore sees the whole
+ * account's usage - consistent with the shared-key trust model.
  *
  * Relays Venice's JSON verbatim; the browser (src/lib/usage.ts) picks out and
  * coerces the `byModel` slice, keeping this a thin passthrough with no

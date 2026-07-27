@@ -18,7 +18,10 @@
    *                 button) and mirrors to Supabase the same way as
    *                 the default model.
    *   usage       — date-ranged snapshot of billed spend per model,
-   *                 pulled from Venice's beta /billing/usage endpoint.
+   *                 pulled from Venice's beta
+   *                 /billing/usage-analytics endpoint. Account-wide,
+   *                 not scoped to the key nak calls with - Venice
+   *                 reports billing per account only.
    *                 The default rolling-7-day view is cached in
    *                 usage-store.svelte and fetched lazily on first
    *                 open of this pane (and re-fetched when older
@@ -2432,27 +2435,42 @@
         {#if appearanceInfo}<p class="subtle">{appearanceInfo}</p>{/if}
       {:else if group === 'usage'}
         <!--
-          Usage pane: a date-ranged snapshot of Venice spend for this
-          API key. Hits Venice's beta `/billing/usage-analytics`
-          endpoint, which returns the per-model spend + token roll-up
-          pre-aggregated in one cached response; the pane fans that into
-          per-(model, currency) rows and renders a bar chart scaled by
-          total tokens with a spend pill per row. The default rolling-7-
+          Usage pane: a date-ranged snapshot of Venice spend across the
+          whole account, NOT just the key nak calls with. Hits Venice's
+          beta `/billing/usage-analytics` endpoint, which returns the
+          per-model spend + token roll-up pre-aggregated in one cached
+          response; the pane fans that into per-(model, currency) rows
+          and renders a bar chart scaled by total tokens with a spend
+          pill per row. The default rolling-7-
           day view is cached in `$lib/usage-store.svelte` and fetched
           lazily on first open of this pane in the session; the `$effect`
           above also forces a refresh when the cache is older than
           USAGE_STALE_MS. User-picked custom ranges bypass the cache and
           fetch on-demand.
+
+          The account-wide scope is a Venice constraint, not an oversight
+          here - do not try to "fix" it by adding a key filter. No Venice
+          billing endpoint accepts an API-key parameter, and the
+          per-request ledger (/billing/usage-history) carries no key id on
+          its rows, so per-key attribution cannot be reconstructed either.
+          The only per-key data Venice exposes is the analytics response's
+          `byKey` / `byKeyDaily` arrays: totals per key and per key per
+          day, with no model breakdown. Scoping THIS chart to one key is
+          therefore not possible; a key-scoped total is, at the cost of
+          storing our key id (Venice has no whoami endpoint).
         -->
         <h2>Usage</h2>
         <p class="subtle">
-          Token spend against your Venice API key. Pulled from
-          Venice's billing analytics — the numbers below are what
-          Venice reports, not a Nak-side tally. The default 7-day view
-          fetches the first time you open this pane and caches the
-          result for 15 minutes; opening the pane again after that
-          re-fetches automatically. Custom date ranges fetch when
-          you hit Refresh. Bars are scaled by total tokens; the pill
+          Token spend across your entire Venice account, grouped by
+          model. Venice reports billing per account rather than per
+          API key, so these totals cover every API key on the account
+          plus anything spent in Venice's own web app - not just the
+          key Nak calls with. The numbers are what Venice reports, not
+          a Nak-side tally. The default 7-day view fetches the first
+          time you open this pane and caches the result for 15 minutes;
+          opening the pane again after that re-fetches automatically.
+          Custom date ranges fetch when you hit Refresh. Bars are
+          scaled by total tokens; the pill
           on the right is the amount billed in whatever currency each
           model was charged in.
         </p>
