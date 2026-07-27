@@ -181,23 +181,58 @@ the removed messages are gone from the database, not just hidden.
 To remove an entire conversation, use **Delete** in the thread list
 rather than deleting from the first message.
 
+## Queueing a message while a reply is streaming
+
+The composer stays editable while a response streams, and if you
+think of something mid-answer you don't have to choose between
+losing the reply and losing the thought. Press the usual send
+shortcut - Ctrl+Enter on Windows/Linux, Command+Enter on macOS -
+and instead of sending, Nak **queues** the message: your text (and
+any files you attached) leave the composer and appear below the
+reply as a dimmed, dashed card reading "Queued - sends when this
+reply finishes". The reply keeps streaming, untouched.
+
+When the reply finishes, queued messages send themselves, in the
+order you queued them, and the next reply starts. You don't have to
+be watching.
+
+You can queue more than one. Each becomes its own message.
+
+To take a queued message back, click the **x** on its card. If your
+composer is empty the text comes back into it so you can edit and
+re-queue; if you've already started typing something else, the
+queued message is simply discarded rather than clobbering what's in
+front of you.
+
+Two things to know:
+
+- Queued messages live in the browser tab. A page refresh loses
+  them, the same way an unsent draft in the composer would.
+- If the reply ends badly - a rate limit Nak couldn't wait out, or
+  another device taking the conversation over - the queue is **not**
+  sent. The cards stay where they are so you can read the error
+  first, and they go out with your next successful message.
+
 ## Stop and resume
 
 While the model is generating a response, the send button turns
-into a filled square. Click it (or use the same Enter shortcut that
-normally sends - Ctrl+Enter on Windows/Linux, Command+Enter on
-macOS) to stop the response where it is. Whatever the model had
-already produced - partial reasoning, partial answer text, any
-citations that arrived - is saved to the conversation with a
-trailing `--- user interrupted response` marker so you can tell a
-stopped reply from one that finished on its own.
+into a filled square. Click it to stop the response where it is.
+Whatever the model had already produced - partial reasoning,
+partial answer text, any citations that arrived - is saved to the
+conversation with a trailing `--- user interrupted response` marker
+so you can tell a stopped reply from one that finished on its own.
 
-The composer stays editable while the response streams, so you can
-start drafting the next message without waiting for the stop click
-to take effect. Pressing the stop button does not send whatever
-you've typed - it just cancels the current response. After the
-stop lands, the button returns to its normal send icon and your
-draft is still there.
+Stopping does not send whatever you've typed in the composer - it
+just cancels the current response, and your draft is still there
+afterward.
+
+If you have messages queued, the stop button says so: it carries a
+count badge and its tooltip becomes "Stop and send N queued
+messages now". Clicking it is how you skip ahead - the current
+reply is cancelled exactly as above, keeping everything it already
+produced (including any tools that had already finished), and your
+queued messages go out immediately instead of waiting for a reply
+you've stopped caring about.
 
 If the model was in the middle of running a tool when you stopped
 (a web search, a memory lookup, and so on) the tool is cancelled

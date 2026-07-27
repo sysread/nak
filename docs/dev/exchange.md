@@ -134,10 +134,21 @@ indicator until the claim clears.
   so rows the slot persisted during the await window fold
   back in.
 
-- **Stop button / submit-modifier Enter** —
-  `activeSlot?.abortCtl?.abort()`. No `slot.abortReason` write,
-  so the catch sees `abortReason === null` and silently clears
-  the streaming error (the user knows what they did).
+- **Stop button** — `activeSlot?.abortCtl?.abort()`. No
+  `slot.abortReason` write, so the catch sees
+  `abortReason === null` and silently clears the streaming error
+  (the user knows what they did). The submit-modifier Enter used
+  to share this path; it now queues instead (below), so the two
+  affordances diverge on purpose while a turn is in flight.
+
+- **Submit-modifier Enter while streaming** — `queueMessage()` in
+  `Chat.svelte` pushes the composer's contents onto `slot.queued`
+  and clears the composer. Nothing about the in-flight turn
+  changes. The batch fires from
+  `maybeDrainQueuedMessages(threadId)`, called at the tail of both
+  `runExchange` and `reconnectInflightTurn` - see
+  [chat.md](./chat.md) ("The queue drains from two turn-settled
+  tails") for why it is two call sites and what holds it back.
 
 - **Heartbeat-lost (cross-device preemption)** — the
   `ThreadClaimCoordinator`'s `onLost` callback stamps
@@ -165,6 +176,7 @@ indicator until the claim clears.
 | `toolTimings` | yes | Per-tool-call timing pills |
 | `persistedRows` | no | Buffer of every persisted row this exchange produced, consumed by `mergeMessagesById` on thread switch |
 | `abortReason` | no | `'user' \| 'claim' \| null`, read by the catch to distinguish stop-from-user from preempted-by-claim |
+| `queued` | yes | Composer drafts banked with the submit-modifier Enter while this thread streamed, in press order. Drained by `maybeDrainQueuedMessages` at the tail of any settled turn. **Not cleared by `reset()`** - see Gotchas. |
 
 ### Thread response claim columns
 
@@ -377,6 +389,19 @@ the exchange (suppressed by the same condition). The
 `tests/exchange-store.test.ts` regression test asserts the
 internal map is a `SvelteMap` instance specifically to catch any
 future "simplification" back to a plain Map.
+
+### `reset()` clears every field except `queued`
+
+`reset()` is the "this slot is starting a fresh exchange" broom, and
+`queued` is the one field it must not sweep: a queued message is intent
+about the NEXT turn, not residue from the current one. The subtle case
+is the rate-limit retry closure, which re-enters `runExchange` with the
+same ctx - and therefore hits `reset()` again - while the user sits
+watching a 429 back-off and types the very messages this feature exists
+to bank. Clearing there would eat them silently, with the cards
+vanishing from the transcript and no error to explain it. The drain is
+the only thing that empties the array, and it does so immediately
+before persisting the rows. `tests/exchange-slot.test.ts` pins this.
 
 ### `slot.reset()` flips sending false then true
 

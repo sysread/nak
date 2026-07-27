@@ -107,6 +107,22 @@ describe('ExchangeSlot', () => {
     expect(slot.abortReason).toBeNull();
   });
 
+  it('reset() preserves queued messages - they belong to the next turn', () => {
+    // reset() runs at the head of EVERY exchange, including the
+    // rate-limit retry closure's re-entry into runExchange. Clearing
+    // `queued` there would silently eat messages the user banked while
+    // watching a 429 back-off; the drain is the only thing that empties
+    // the array.
+    const slot = new ExchangeSlot();
+    slot.queued = [{ id: 'q1', text: 'and another thing', attachments: [] }];
+    slot.sending = true;
+
+    slot.reset();
+
+    expect(slot.sending).toBe(false);
+    expect(slot.queued).toEqual([{ id: 'q1', text: 'and another thing', attachments: [] }]);
+  });
+
   it('produces independent state between instances', () => {
     const a = new ExchangeSlot();
     const b = new ExchangeSlot();

@@ -129,6 +129,11 @@ One file per use-case under [`use-cases/`](./use-cases/), named
   the Stop button persists a `status='aborted'` row (marker-only even
   when nothing streamed), is never offered for retry, and reads the same
   on a second device.
+- [chat-queued-messages](./use-cases/chat-queued-messages.md) - the
+  submit-modifier Enter banks a message while a reply streams instead
+  of cancelling it; the queue drains on any settled turn, the stop
+  button becomes "stop and send these now", and an errored turn holds
+  the queue back.
 - [chat-recovery-banner](./use-cases/chat-recovery-banner.md) - one
   recovery banner at the transcript tail, never stacked: precedence
   error > interrupted-draft > cut-off, suppressed while a live claim

@@ -94,6 +94,7 @@ import { SvelteMap } from 'svelte/reactivity';
 import type { Message } from '../supabase';
 import type { SubconsciousOp } from '../chat/types';
 import type { SubconsciousStatus } from '../ui/subconscious-status';
+import type { QueuedMessage } from '../ui/message-queue';
 
 interface StreamingError {
   text: string;
@@ -252,6 +253,25 @@ export class ExchangeSlot {
    * by the catch after consumption.
    */
   abortReason: AbortReason = null;
+  /**
+   * Composer drafts the user banked with the submit-modifier Enter
+   * while this thread's turn was streaming, in the order they pressed
+   * it. Drained into real user rows by `maybeDrainQueuedMessages`
+   * (Chat.svelte) once the turn settles - whether it finished on its
+   * own or the user stopped it.
+   *
+   * Deliberately NOT cleared by `reset()`, unlike every other field
+   * here: a queued message is intent about the NEXT turn, not state
+   * belonging to the current one. reset() runs at the head of every
+   * exchange, including the rate-limit retry closure's re-entry into
+   * runExchange, so clearing here would silently eat messages the user
+   * queued while watching a 429 back-off. The drain empties the array
+   * itself, immediately before it persists the rows.
+   *
+   * $state because the transcript renders one card per entry and the
+   * send/stop button changes its meaning when the array is non-empty.
+   */
+  queued = $state<QueuedMessage[]>([]);
 
   /**
    * Reset every field to its idle value. Called at the start of a
@@ -263,6 +283,10 @@ export class ExchangeSlot {
    * Does NOT abort an in-flight request - callers are expected to
    * have settled the lifecycle (called `abortCtl.abort()` and awaited
    * the runExchange promise) before resetting.
+   *
+   * Does NOT clear `queued` either - that array is next-turn intent,
+   * not current-turn state, and this runs at the head of every
+   * exchange. See the field's own comment.
    */
   reset(): void {
     this.sending = false;
