@@ -2525,18 +2525,17 @@
           {/if}
         </div>
 
+        <!--
+          Scope first, legend second, nothing else. The caching rules and
+          the refresh semantics live in docs/user/settings.md - in-pane
+          they were noise between the reader and the one fact that
+          changes how they read the chart.
+        -->
         <p class="subtle">
-          Below: token spend across your entire Venice account, grouped
-          by model. Venice reports billing per account rather than per
-          API key, so this breakdown covers every API key on the account
-          plus anything spent in Venice's own web app - not just the key
-          Nak calls with. The numbers are what Venice reports, not a
-          Nak-side tally. The default 7-day view fetches the first time
-          you open this pane and caches the result for 15 minutes;
-          opening the pane again after that re-fetches automatically.
-          Custom date ranges fetch when you hit Refresh. Bars are
-          scaled by total tokens; the pill on the right is the amount
-          billed in whatever currency each model was charged in.
+          Below: spend across your <strong>entire</strong> Venice account,
+          grouped by model. Venice bills per account, so this covers every
+          API key plus Venice's own web app - not just the key Nak uses.
+          Bars scale by tokens; the pill is the amount billed.
         </p>
         <div class="usage-controls">
           <label class="usage-date">
