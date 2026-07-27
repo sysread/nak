@@ -1039,11 +1039,60 @@ label {
 }
 
 /* Settings → Usage pane. A date-ranged per-model bar chart of billed
-   usage fetched from Venice's /billing/usage endpoint. The chart is
-   a CSS grid so every row's sku / bar / token count / spend pill
-   line up across rows — a table shape without the <table> semantics,
-   which the role="table"/role="row" attributes in markup restore for
-   assistive tech. */
+   usage fetched from Venice's /billing/usage-analytics endpoint. The
+   chart is a CSS grid so every row's sku / bar / token count / spend
+   pill line up across rows — a table shape without the <table>
+   semantics, which the role="table"/role="row" attributes in markup
+   restore for assistive tech. */
+
+/* The per-key headline above the chart. Boxed off from everything
+   below it because the two have different scopes AND different
+   windows: this is one API key over a fixed trailing 7 days, the
+   chart is the whole Venice account over the user's picked range.
+   Run together, a reader takes the small number as a subtotal of the
+   big one and misreads both, so the box, the caption, and the size
+   gap all work to keep them apart. */
+.key-usage {
+  margin: 0.25rem 0 1.25rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-2);
+}
+
+.key-usage > p {
+  margin: 0;
+}
+
+.key-usage-figure {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.key-usage-amount {
+  font-size: 1.9rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+  color: var(--text);
+}
+
+/* Credit denominations (DIEM) sit beside the cash figure rather than
+   below it, but must not compete with it — same "secondary" read the
+   chart's credit pills get, plus a size drop so the dollar figure
+   stays the number the eye lands on first. */
+.key-usage-amount.credit {
+  font-size: 1.2rem;
+  color: var(--muted);
+}
+
+.key-usage-caption {
+  margin: 0.3rem 0 0;
+  font-size: 0.8rem;
+}
+
 .usage-controls {
   display: flex;
   align-items: flex-end;
@@ -4584,6 +4633,7 @@ button.top-bar-pinned {
 :root[data-style='terminal'] .bias-row,
 :root[data-style='terminal'] .obs-card,
 :root[data-style='terminal'] .bias-evidence-item,
+:root[data-style='terminal'] .key-usage,
 :root[data-style='terminal'] .thread-row {
   border-left: 2px solid var(--muted);
 }

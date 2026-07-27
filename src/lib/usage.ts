@@ -49,6 +49,42 @@ export interface UsageModelBucket {
   diem: number;
 }
 
+/**
+ * Trailing-seven-day spend for the single Venice key nak calls with - the
+ * figure the Usage pane leads with, above the account-wide per-model chart.
+ *
+ * Sourced from Venice's `/api_keys` (via the edge function's `key-usage`
+ * route), which is the only endpoint that reports spend per key. It comes with
+ * two constraints the pane has to respect: the window is a FIXED trailing seven
+ * days that does not follow the pane's date pickers, and there is no per-model
+ * breakdown - just these totals.
+ */
+export interface KeyUsage {
+  /** Venice's label for the key, e.g. "nak-personal". */
+  description: string;
+  /** Trailing-seven-day spend in prepaid fiat. */
+  usd: number;
+  /** Trailing-seven-day spend in staked DIEM credits. */
+  diem: number;
+}
+
+/**
+ * Boundary check over the `key-usage` route's response. The edge function has
+ * already selected our key's row and narrowed it to three fields, so this is a
+ * shape assertion rather than the fan-out {@link coerceUsageAnalytics} does.
+ *
+ * Null is a routine answer, not a failure: the route returns null when it
+ * cannot tell which `/api_keys` row is ours (no suffix match, or an ambiguous
+ * one). The pane renders that as a short note where the figure would go.
+ */
+export function coerceKeyUsage(raw: unknown): KeyUsage | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.description !== 'string') return null;
+  if (typeof r.usd !== 'number' || typeof r.diem !== 'number') return null;
+  return { description: r.description, usd: r.usd, diem: r.diem };
+}
+
 export interface UsageRequestOptions {
   /**
    * Inclusive lower bound as a `YYYY-MM-DD` date. Venice's analytics endpoint

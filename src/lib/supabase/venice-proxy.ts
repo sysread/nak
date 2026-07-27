@@ -38,8 +38,10 @@ import { coerceCatalog, type CatalogModel } from '../models/catalog';
 import { coerceImageCatalog, type ImageCatalogModel } from '../models/image-catalog';
 import {
   coerceUsageAnalytics,
+  coerceKeyUsage,
   type UsageRequestOptions,
   type UsageModelBucket,
+  type KeyUsage,
 } from '../usage';
 
 const log = createLogger('supabase');
@@ -160,6 +162,25 @@ export async function fetchUsage(
   });
   if (error) throw await veniceFunctionError(error);
   return coerceUsageAnalytics(data);
+}
+
+/**
+ * Fetch trailing-seven-day spend for the single Venice key the project is
+ * configured with, through the edge function's `key-usage` route. This is the
+ * per-key figure `fetchUsage` structurally cannot provide: Venice's billing
+ * analytics reports per account, so the chart that call feeds covers every key
+ * on the account plus Venice web-app usage.
+ *
+ * Resolves to null - not an error - when the edge function cannot identify
+ * which `/api_keys` row belongs to our key. Errors surface as VeniceError, the
+ * same shape the rest of the pane renders.
+ */
+export async function fetchKeyUsage(client: SupabaseClient): Promise<KeyUsage | null> {
+  const { data, error } = await client.functions.invoke('venice/key-usage', {
+    body: {},
+  });
+  if (error) throw await veniceFunctionError(error);
+  return coerceKeyUsage(data);
 }
 
 /**

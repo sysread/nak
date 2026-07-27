@@ -30,7 +30,7 @@ import type {
   EmbeddingResponse,
   TokenUsage,
 } from './venice';
-import type { UsageRequestOptions, UsageModelBucket } from './usage';
+import type { UsageRequestOptions, UsageModelBucket, KeyUsage } from './usage';
 import { SupabaseError } from './supabase/error';
 // Agent-runs domain slice (the wiki/rem/deep-sleep run + retry
 // routes), same delegation pattern as the slices below.
@@ -330,6 +330,10 @@ export class SupabaseService {
 
   async fetchUsage(opts: UsageRequestOptions = {}): Promise<UsageModelBucket[]> {
     return veniceProxyApi.fetchUsage(this.client, opts);
+  }
+
+  async fetchKeyUsage(): Promise<KeyUsage | null> {
+    return veniceProxyApi.fetchKeyUsage(this.client);
   }
 
   async fetchModels(): Promise<CatalogModel[]> {

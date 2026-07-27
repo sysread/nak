@@ -162,6 +162,8 @@
     formatAmountPerDay,
     formatTokens,
     isCreditCurrency,
+    keyUsageSpendParts,
+    keyUsageTitle,
     modelCountNoun,
     perDayTitle,
     relativeHue,
@@ -172,8 +174,11 @@
   } from '$lib/ui/usage';
   import {
     usage,
+    keyUsage,
     shouldAutoRefreshUsage,
+    shouldAutoRefreshKeyUsage,
     refreshUsage,
+    refreshKeyUsage,
   } from '$lib/usage-store.svelte';
 
   interface Props {
@@ -888,6 +893,17 @@
     }
   });
 
+  // The per-key headline loads on the same lazy-on-open trigger as the chart
+  // above, but is deliberately NOT gated on usageSource: its window is a fixed
+  // trailing seven days that Venice computes, so a user sitting on a custom
+  // date range still wants the figure - it just doesn't answer to their
+  // pickers. Same stale + not-in-flight + last-attempt-didn't-error guard.
+  $effect(() => {
+    if (group === 'usage' && shouldAutoRefreshKeyUsage() && app.supabase) {
+      void refreshKeyUsage(app.supabase);
+    }
+  });
+
   // First-landing-on-the-Model-profiles-pane catalog fetch, same
   // lazy-on-open shape as the Usage auto-refresh above. The catalog
   // populates each profile card's model combobox;
@@ -915,6 +931,13 @@
       customError = 'Not connected yet.';
       return;
     }
+    // Refresh the per-key headline alongside whatever the range branch below
+    // does. Not awaited: it has its own loading/error state and a fixed window,
+    // so it must not hold up the chart. This is also the retry path after a
+    // failed auto-load, since refreshKeyUsage clears the error the on-open
+    // effect's guard trips on.
+    void refreshKeyUsage(app.supabase);
+
     const isDefaultRange =
       usageStart === DEFAULT_USAGE_START && usageEnd === DEFAULT_USAGE_END;
     if (isDefaultRange) {
@@ -2435,44 +2458,85 @@
         {#if appearanceInfo}<p class="subtle">{appearanceInfo}</p>{/if}
       {:else if group === 'usage'}
         <!--
-          Usage pane: a date-ranged snapshot of Venice spend across the
-          whole account, NOT just the key nak calls with. Hits Venice's
-          beta `/billing/usage-analytics` endpoint, which returns the
-          per-model spend + token roll-up pre-aggregated in one cached
-          response; the pane fans that into per-(model, currency) rows
-          and renders a bar chart scaled by total tokens with a spend
-          pill per row. The default rolling-7-
-          day view is cached in `$lib/usage-store.svelte` and fetched
-          lazily on first open of this pane in the session; the `$effect`
-          above also forces a refresh when the cache is older than
+          Usage pane, two scopes stacked. The headline is trailing-7-day
+          spend for the ONE key nak calls with (venice/key-usage ->
+          /api_keys); the chart below is a date-ranged per-model
+          breakdown of the WHOLE Venice account (venice/usage-analytics
+          -> /billing/usage-analytics, pre-aggregated in one cached
+          response, fanned here into per-(model, currency) rows and
+          rendered as a bar chart scaled by total tokens with a spend
+          pill per row). The chart's default rolling-7-day view is
+          cached in `$lib/usage-store.svelte` and fetched lazily on
+          first open of this pane in the session; the `$effect` above
+          also forces a refresh when the cache is older than
           USAGE_STALE_MS. User-picked custom ranges bypass the cache and
           fetch on-demand.
 
-          The account-wide scope is a Venice constraint, not an oversight
-          here - do not try to "fix" it by adding a key filter. No Venice
-          billing endpoint accepts an API-key parameter, and the
-          per-request ledger (/billing/usage-history) carries no key id on
-          its rows, so per-key attribution cannot be reconstructed either.
-          The only per-key data Venice exposes is the analytics response's
-          `byKey` / `byKeyDaily` arrays: totals per key and per key per
-          day, with no model breakdown. Scoping THIS chart to one key is
-          therefore not possible; a key-scoped total is, at the cost of
-          storing our key id (Venice has no whoami endpoint).
+          The chart's account-wide scope is a Venice constraint, not an
+          oversight - do not try to "fix" it by adding a key filter. No
+          Venice billing endpoint accepts an API-key parameter, and the
+          per-request ledger (/billing/usage-history) carries no key id
+          on its rows, so per-model-per-key attribution cannot be
+          reconstructed at all. The headline exists precisely because
+          that is a dead end: /api_keys is a different endpoint with a
+          different shape, giving per-key TOTALS over a fixed window and
+          no model breakdown. The two cannot be merged into one number.
         -->
         <h2>Usage</h2>
+
+        <!--
+          The per-key headline. Leads the pane because it answers the question
+          people actually arrive with - "what has Nak cost me" - which the
+          chart below structurally cannot, Venice billing being per-account.
+          Its window is a FIXED trailing seven days from /api_keys, so it does
+          not move with the date pickers; the caption says so, because a
+          silently unresponsive number reads as a bug.
+        -->
+        <div class="key-usage">
+          {#if keyUsage.loading}
+            <p class="subtle">Loading this key's spend...</p>
+          {:else if keyUsage.error}
+            <p class="error">{keyUsage.error}</p>
+          {:else if keyUsage.data}
+            <div
+              class="key-usage-figure"
+              title={keyUsageTitle(keyUsage.data.description)}
+            >
+              {#each keyUsageSpendParts(keyUsage.data) as part (part.currency)}
+                <span
+                  class="key-usage-amount"
+                  class:credit={isCreditCurrency(part.currency)}
+                  title={spendPillTitle(part.currency)}
+                >
+                  {formatAmount(part.amount, part.currency)}
+                </span>
+              {/each}
+            </div>
+            <p class="key-usage-caption subtle">
+              spent by this project's key (<code>{keyUsage.data.description}</code>)
+              over the last 7 days - a fixed window, not the range below
+            </p>
+          {:else}
+            <p class="subtle">
+              Nak could not work out which of your Venice API keys this
+              project uses, so there is no per-key figure. The account-wide
+              breakdown below is unaffected.
+            </p>
+          {/if}
+        </div>
+
         <p class="subtle">
-          Token spend across your entire Venice account, grouped by
-          model. Venice reports billing per account rather than per
-          API key, so these totals cover every API key on the account
-          plus anything spent in Venice's own web app - not just the
-          key Nak calls with. The numbers are what Venice reports, not
-          a Nak-side tally. The default 7-day view fetches the first
-          time you open this pane and caches the result for 15 minutes;
+          Below: token spend across your entire Venice account, grouped
+          by model. Venice reports billing per account rather than per
+          API key, so this breakdown covers every API key on the account
+          plus anything spent in Venice's own web app - not just the key
+          Nak calls with. The numbers are what Venice reports, not a
+          Nak-side tally. The default 7-day view fetches the first time
+          you open this pane and caches the result for 15 minutes;
           opening the pane again after that re-fetches automatically.
           Custom date ranges fetch when you hit Refresh. Bars are
-          scaled by total tokens; the pill
-          on the right is the amount billed in whatever currency each
-          model was charged in.
+          scaled by total tokens; the pill on the right is the amount
+          billed in whatever currency each model was charged in.
         </p>
         <div class="usage-controls">
           <label class="usage-date">

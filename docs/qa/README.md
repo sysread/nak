@@ -230,6 +230,10 @@ One file per use-case under [`use-cases/`](./use-cases/), named
 - [settings-account-and-updates](./use-cases/settings-account-and-updates.md) -
   Settings pane independence, update-check/reload flow, background-job
   toggles, usage refresh, and credential/export actions.
+- [settings-usage-per-key-spend](./use-cases/settings-usage-per-key-spend.md) -
+  the Usage pane's two scopes: the per-key trailing-7-day headline vs the
+  account-wide per-model chart, that the headline ignores the date pickers,
+  and that the two failure domains are independent.
 - [settings-custom-prompts](./use-cases/settings-custom-prompts.md) - the
   Custom prompts pane: add/edit/delete autosave, drag-and-drop reorder,
   and the order flowing through to the chat composer's prompt toggles.

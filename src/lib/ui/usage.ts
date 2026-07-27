@@ -173,6 +173,38 @@ export function aggregateTotalsByCurrency(buckets: UsageBucket[]): CurrencyTotal
     });
 }
 
+/**
+ * Split the per-key headline figure into the denominations worth showing.
+ * Same grouping rule as {@link aggregateTotalsByCurrency} - a dollar and a
+ * credit are different units, so they get separate pills rather than a
+ * meaningless sum - with USD first.
+ *
+ * Zero-valued denominations drop out, because a key billed entirely in one
+ * currency would otherwise carry a permanent "$0.00 DIEM" pill next to its real
+ * total. A key with no spend at all in either still yields one USD row, so the
+ * headline reads "$0.00" rather than rendering blank and looking broken.
+ */
+export function keyUsageSpendParts(usage: {
+  usd: number;
+  diem: number;
+}): CurrencyTotal[] {
+  const parts: CurrencyTotal[] = [];
+  if (usage.usd > 0) parts.push({ currency: 'USD', amount: usage.usd });
+  if (usage.diem > 0) parts.push({ currency: 'DIEM', amount: usage.diem });
+  return parts.length > 0 ? parts : [{ currency: 'USD', amount: 0 }];
+}
+
+/**
+ * Hover text for the headline figure, naming the key it describes and the
+ * window Venice fixes it to. The window is spelled out because it is NOT the
+ * range the pane's date pickers control - the pickers drive the per-model chart
+ * below, and a reader who assumes one number answers to the other will
+ * misread both.
+ */
+export function keyUsageTitle(description: string): string {
+  return `Spend for the "${description}" Venice API key over the trailing 7 days - a fixed window that does not follow the date range below`;
+}
+
 const tokenFormatter = new Intl.NumberFormat(undefined, {
   notation: 'compact',
   maximumFractionDigits: 1,

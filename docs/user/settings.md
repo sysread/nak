@@ -103,23 +103,46 @@ order the toggles appear in the composer. See
 
 ### Usage
 
-A date-ranged snapshot of what your **whole Venice account** has
-been spending. The project's key is held in your Supabase project's
-`app_config` table - all browser callers reach Venice through an
-edge function that holds the key server-side. Pick a **From** and
-**To** date, hit **Refresh**, and the pane pulls Venice's billing
-analytics via that function - already grouped by model. Each row
-shows a horizontal bar scaled by total tokens, the token count as
-a compact label (e.g. `72k`, `1.2M`), and a pill with the billed
-amount.
+Two figures, answering two different questions. The pane leads with
+**what this project's own Venice key has cost**, then breaks down
+**what your whole Venice account has spent**, by model.
 
-- **These are account totals, not Nak's alone.** Venice reports
-  billing per account, not per API key, and offers no way to filter
-  usage down to a single key. If your Venice account has other API
-  keys, or you have used Venice's own web app, their spend is
-  included in the numbers here. When the project's key is the only
-  thing charging the account, the account total *is* Nak's usage -
-  the two only diverge once something else starts spending.
+The project's key is held in your Supabase project's `app_config`
+table - all browser callers reach Venice through an edge function
+that holds the key server-side.
+
+#### The headline: this key
+
+The large figure at the top is the spend charged to the one API key
+Nak calls Venice with, over the **trailing 7 days**. The key's name
+(as you labelled it in Venice) is printed underneath.
+
+- **This window is fixed.** It is always the last 7 days, and it
+  does **not** follow the From/To dates below it - Venice only
+  reports per-key spend over that one window. Changing the date
+  range moves the breakdown; the headline stays put.
+- If a key is billed in DIEM credits as well as dollars, both show,
+  with the dollar figure leading.
+- If Nak cannot work out which of your Venice keys the project uses,
+  it says so here instead of guessing. The breakdown below is
+  unaffected. This also happens if the project's key is an
+  `INFERENCE` key rather than an `ADMIN` one - Venice only reveals
+  per-key spend to `ADMIN` keys.
+
+#### The breakdown: the whole account
+
+Pick a **From** and **To** date, hit **Refresh**, and the pane pulls
+Venice's billing analytics - already grouped by model. Each row shows
+a horizontal bar scaled by total tokens, the token count as a compact
+label (e.g. `72k`, `1.2M`), and a pill with the billed amount.
+
+- **These rows are account totals, not Nak's alone.** Venice reports
+  this breakdown per account, not per API key, and offers no way to
+  filter it down to a single key. If your Venice account has other
+  API keys, or you have used Venice's own web app, their spend is
+  included here. This is why the headline above exists: it is the
+  only per-key number Venice will give, and the gap between the two
+  is everything on the account that is not Nak.
 
 - The bars are measured in **tokens**, not money. A cheap-but-chatty
   model shows a long bar with a small pill; an expensive-but-concise
