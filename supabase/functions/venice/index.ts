@@ -3,9 +3,13 @@
 // not many small). It routes internally by trailing path segment:
 //   /embed     - browser-triggered, one vector for a search query or (legacy)
 //                a single backfill row. Authenticated as the calling user.
-//   /usage     - browser-triggered, one page of billing usage. The browser's
-//                paging loop calls it once per page so it can drive a per-page
-//                progress indicator. Authenticated as the calling user.
+//   /usage-analytics - browser-triggered, the account-wide per-model billing
+//                roll-up behind the Settings Usage pane's chart. One cached
+//                Venice response, no paging. Authenticated as the calling user.
+//   /key-usage - browser-triggered, trailing-seven-day spend for the ONE key
+//                this function calls Venice with - the per-key figure
+//                /usage-analytics cannot give, since Venice bills per account.
+//                Authenticated as the calling user.
 //   /backfill  - cron-triggered (pg_cron -> pg_net), drains pending embeddings
 //                across every table server-side. Service-role only.
 //   /text-parser - browser-triggered, forwards a multipart file upload to
@@ -37,6 +41,7 @@ import {
   veniceExtractText,
   veniceFetchModels,
   veniceFetchUsageAnalytics,
+  veniceFetchKeyUsage,
   veniceGenerateImage,
   VeniceError,
   type VeniceModelType,
@@ -327,8 +332,12 @@ interface UsageAnalyticsRequestBody {
  * over the per-request /billing/usage ledger this route used to proxy.
  * Authenticated as the calling user: the gateway's verify_jwt has already
  * validated the session JWT (same model as /embed, no service-role check).
- * Usage is account-scoped, so any project member sees the one shared key's
- * usage - consistent with the shared-key trust model.
+ * Venice reports billing per ACCOUNT, not per API key: the response covers
+ * every key on the account plus Venice web-app usage, not just the shared key
+ * this function calls with. No Venice billing endpoint accepts a key filter,
+ * and the per-request ledger carries no key id on its rows, so the pane cannot
+ * narrow this to our key. Any project member therefore sees the whole
+ * account's usage - consistent with the shared-key trust model.
  *
  * Relays Venice's JSON verbatim; the browser (src/lib/usage.ts) picks out and
  * coerces the `byModel` slice, keeping this a thin passthrough with no
@@ -357,6 +366,46 @@ async function handleUsageAnalytics(req: Request): Promise<Response> {
     if (err instanceof VeniceError) {
       // Mirror handleEmbed: surface Venice's 429 as a 429 so the browser can
       // back off; everything else collapses to 502 (bad upstream).
+      return json({ error: err.message, kind: err.kind }, err.kind === 'rate_limit' ? 429 : 502);
+    }
+    return json({ error: (err as Error).message }, 500);
+  }
+}
+
+/**
+ * Browser-triggered proxy for GET /api_keys, reduced to the spend of the one
+ * key this function calls Venice with. Backs the Usage pane's headline figure -
+ * the "what has nak actually cost" number that /billing/usage-analytics cannot
+ * answer, because Venice reports billing per account and offers no key filter.
+ *
+ * Unlike the sibling routes this does NOT relay Venice's body: /api_keys lists
+ * every key on the shared account, and publishing that inventory to every
+ * project member is too high a price for one number. veniceFetchKeyUsage picks
+ * our row server-side (matching on the key's last six characters, the only
+ * whoami handle Venice gives) and returns just its trailing-seven-day spend.
+ *
+ * Responds 200 with a null body when the key cannot be identified - a
+ * legitimate outcome, not an error, and the pane renders it as a short note in
+ * place of the figure. Authenticated as the calling user, same as
+ * /usage-analytics: the gateway's verify_jwt has already validated the session
+ * JWT. POST from the browser (functions.invoke is always POST) even though the
+ * upstream call is a GET; no request body is read.
+ */
+async function handleKeyUsage(): Promise<Response> {
+  const env = await requireVeniceEnv();
+  if (env instanceof Response) return env;
+  const { apiKey } = env;
+
+  try {
+    const result = await veniceFetchKeyUsage({ apiKey });
+    return json(result);
+  } catch (err) {
+    if (err instanceof VeniceError) {
+      // Mirror handleUsageAnalytics: 429 stays a 429 so the browser can back
+      // off, everything else collapses to 502 (bad upstream). A 401 here means
+      // the shared key is INFERENCE-typed rather than ADMIN - /api_keys is
+      // ADMIN-only - and lands as a 502 the pane shows against the headline
+      // alone, leaving the per-model chart below it working.
       return json({ error: err.message, kind: err.kind }, err.kind === 'rate_limit' ? 429 : 502);
     }
     return json({ error: (err as Error).message }, 500);
@@ -1989,6 +2038,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const route = new URL(req.url).pathname.split('/').filter(Boolean).pop();
   if (route === 'embed' && req.method === 'POST') return handleEmbed(req);
   if (route === 'usage-analytics' && req.method === 'POST') return handleUsageAnalytics(req);
+  if (route === 'key-usage' && req.method === 'POST') return handleKeyUsage();
   if (route === 'models' && req.method === 'POST') return handleModels(req);
   if (route === 'backfill' && req.method === 'POST') return handleBackfill(req);
   if (route === 'wiki-sweep' && req.method === 'POST') return handleWikiSweep(req);

@@ -155,8 +155,46 @@ landing tab move together.
   chat composer's prompt toggles AND the order the enabled prompts are
   injected as system messages on each turn (see `chat.md`), so a reorder
   is a deliberate behavioral change, not just cosmetic.
-- **Usage** — a date-ranged snapshot of per-model token spend
-  against the Venice API key. Read-only: it calls Venice's beta
+- **Usage** — two figures over two different scopes, which is the
+  whole design of this pane. The headline is trailing-seven-day
+  spend for the ONE key nak calls with; the chart below it is a
+  date-ranged per-model breakdown of the WHOLE Venice account.
+
+  The split is forced by Venice, not chosen. Billing is reported
+  per account: `/billing/usage-analytics` covers every API key on
+  the account plus Venice web-app usage, and no billing endpoint
+  takes an API-key filter. The per-request ledger
+  (`/billing/usage-history`, successor to the deprecated
+  `/billing/usage`) carries no key id on its rows, so per-key
+  attribution cannot be reconstructed from it either. **The chart
+  therefore cannot be scoped to one key - do not try.**
+
+  Per-key spend comes from a different endpoint entirely:
+  `GET /api_keys`, whose rows carry `usage.trailingSevenDays`
+  (`{usd, vcu, diem}`, as decimal STRINGS) plus a
+  `currentPeriodUsage` that Venice omits for keys with no
+  consumption limits set. Its constraints are why it can only be a
+  headline and not a replacement for the chart: a **fixed** trailing
+  7-day window (no date range) and **no per-model breakdown**.
+  Requires an ADMIN-typed key; an INFERENCE key gets 401 and the
+  headline degrades to an error while the chart keeps working.
+
+  Identifying our own row is the subtle part. Venice has no whoami
+  endpoint - `/api_keys/rate_limits` returns tier and balances but
+  not the calling key's id - so `selectKeyUsage` matches on
+  `last6Chars` against the tail of the key we hold. It fails closed
+  to null on no match AND on multiple matches: six characters is a
+  small key space, and picking either of two colliding rows would
+  silently attribute another key's spend to nak, which is the exact
+  bug this figure exists to fix.
+
+  The `key-usage` edge route is the one Venice proxy that does NOT
+  relay the upstream body verbatim. `/api_keys` lists every key on
+  the shared account (ids, descriptions, suffixes, limits), and the
+  account is shared by every project member; the route selects our
+  row server-side and returns only its spend.
+
+  Read-only: the chart calls Venice's beta
   `/billing/usage-analytics` endpoint, which returns the per-model
   spend + token roll-up pre-aggregated in one cached response, and
   fans that into per-(model, currency) rows client-side
@@ -253,8 +291,11 @@ every update) so it's covered here rather than in its own file.
   `relativeHue` - the median-anchored log-scale blue->green->red
   mapping, driven twice per row: bar hue from token count, spend-pill
   border hue from dollar amount), and the date-picker helpers
-  (`todayYmd`, `ymdDaysAgo`, `daysInPickedRange`). Unit-tested in
-  `tests/usage-hue.test.ts`.
+  (`todayYmd`, `ymdDaysAgo`, `daysInPickedRange`), plus the per-key
+  headline's `keyUsageSpendParts` (non-zero denominations, USD first,
+  falling back to a single zero-USD row so a quiet key renders `$0.00`
+  rather than blank) and `keyUsageTitle`. Unit-tested in
+  `tests/usage-hue.test.ts` and `tests/key-usage.test.ts`.
 - `src/lib/ui/settings.ts` — screen-scoped primitives for the modal
   itself: the Security pane's `authPasswordError` validation + copy,
   the auto-apply toggles' confirmation copy (`toggleNotice`,
@@ -302,15 +343,29 @@ every update) so it's covered here rather than in its own file.
   `totalUnits` from millions-of-tokens to a raw count, dropping
   malformed entries). The one round trip lives on
   `SupabaseService.fetchUsage` (`supabase.ts`), which invokes the
-  `venice/usage-analytics` edge route and hands the JSON here.
-- `src/lib/usage-store.svelte.ts` — reactive cache for the Usage
-  pane's default rolling-7-day window. Nothing runs at boot; the
-  Settings pane drives the first fetch via `refreshUsage`. Wiped
-  by `state.svelte.ts::resetForSignOut()` via `resetUsage` so rows
-  tied to the prior Venice key don't leak into the next sign-in.
-  Exposes
-  `usage` (the `$state` rune), `refreshUsage`, `resetUsage`,
-  `isUsageStale`, plus the `USAGE_STALE_MS` constant.
+  `venice/usage-analytics` edge route and hands the JSON here. Also
+  holds `coerceKeyUsage` + the `KeyUsage` type for the per-key
+  headline, whose round trip is `SupabaseService.fetchKeyUsage` ->
+  the `venice/key-usage` edge route. That coercer is a shape
+  assertion rather than a fan-out (the edge function has already
+  selected and narrowed the row), and **null is a routine answer**,
+  meaning "could not identify which key is ours" - not a failure.
+- `src/lib/usage-store.svelte.ts` — two reactive caches, deliberately
+  separate. `usage` holds the chart's default rolling-7-day window;
+  `keyUsage` holds the per-key headline. They are split because they
+  answer to different inputs: the chart is date-ranged and refetches
+  when the pickers move, while the headline's window is fixed by
+  Venice, so a range change must not invalidate it. In `keyUsage`,
+  a stamped `lastFetchedAt` with null `data` is what distinguishes
+  "asked, key unidentifiable" from "not loaded yet" - the pane
+  renders different copy for each. Nothing runs at boot; the Settings
+  pane drives the first fetch. Both are wiped by
+  `state.svelte.ts::resetForSignOut()` via `resetUsage` so rows tied
+  to the prior Venice key don't leak into the next sign-in. Exposes
+  `usage` and `keyUsage` (the `$state` runes), `refreshUsage`,
+  `refreshKeyUsage`, `resetUsage`, `isUsageStale`,
+  `shouldAutoRefreshUsage`, `shouldAutoRefreshKeyUsage`, plus the
+  `USAGE_STALE_MS` constant.
 - `src/lib/config.ts` — `saveConfig` (keys pane). The Security
   pane's password rotation lives in `supabase.ts`
   (`changeAuthPassword`), not here.
@@ -352,6 +407,16 @@ every update) so it's covered here rather than in its own file.
   and is wiped on sign-out (`resetForSignOut`) so rows billed
   against the previous Venice key don't leak into the next
   sign-in.
+
+  A second `$effect` on the same tab drives the per-key headline
+  via `refreshKeyUsage`. It is deliberately NOT gated on
+  `usageSource`: the headline's window is fixed by Venice, so a
+  user sitting on a custom date range still wants the figure - it
+  simply doesn't answer to their pickers. The Refresh button fires
+  it alongside the chart without awaiting it (independent loading
+  state, and it must not hold up the chart); that is also the retry
+  path after a failed auto-load, since `refreshKeyUsage` clears the
+  error that `shouldAutoRefreshKeyUsage`'s guard trips on.
 - **Security pane submit** — `changeAuthPassword(current, new)` in
   supabase.ts (rotates the Supabase login). Settings catches errors
   and displays them inline.

@@ -22,7 +22,7 @@
  * reload always costs one fetch when the pane is eventually opened.
  */
 import { VeniceError } from './venice';
-import type { UsageRequestOptions, UsageModelBucket } from './usage';
+import type { UsageRequestOptions, UsageModelBucket, KeyUsage } from './usage';
 import { createLogger } from './logger.svelte';
 
 const log = createLogger('usage');
@@ -46,6 +46,34 @@ interface UsageState {
 }
 
 export const usage = $state<UsageState>({
+  data: null,
+  lastFetchedAt: null,
+  loading: false,
+  error: null,
+});
+
+interface KeyUsageState {
+  /**
+   * Null both before the first load AND when Venice's key list gave the edge
+   * function no unambiguous match for our key. `lastFetchedAt` is what
+   * distinguishes the two: non-null with null `data` means "asked, could not
+   * identify the key", which the pane says out loud.
+   */
+  data: KeyUsage | null;
+  lastFetchedAt: number | null;
+  loading: boolean;
+  error: string | null;
+}
+
+/**
+ * The per-key headline figure, cached separately from {@link usage} because the
+ * two answer to different inputs. The chart is date-ranged and refetches when
+ * the user moves the pickers; this is a fixed trailing-seven-day window Venice
+ * computes, so a range change must NOT invalidate it. Sharing one store would
+ * either refetch it pointlessly or make the staleness stamp lie about one of
+ * the two.
+ */
+export const keyUsage = $state<KeyUsageState>({
   data: null,
   lastFetchedAt: null,
   loading: false,
@@ -107,6 +135,12 @@ interface UsageFetcher {
   fetchUsage(opts: UsageRequestOptions): Promise<UsageModelBucket[]>;
 }
 
+/** The slice of SupabaseService that refreshKeyUsage depends on. Narrow for the
+ *  same reasons as {@link UsageFetcher}. */
+interface KeyUsageFetcher {
+  fetchKeyUsage(): Promise<KeyUsage | null>;
+}
+
 /**
  * Fetch the default rolling-7-day window and populate the store.
  * Called from the Settings pane's on-open effect and from the
@@ -141,6 +175,48 @@ export async function refreshUsage(source: UsageFetcher): Promise<void> {
 }
 
 /**
+ * Fetch the per-key headline figure and populate {@link keyUsage}. Fired
+ * alongside `refreshUsage` from the pane's on-open effect and from the Refresh
+ * button. Takes no date range on purpose - Venice fixes this window at a
+ * trailing seven days, so there is nothing for the pane's pickers to vary.
+ *
+ * A null result is a success, not an error: it means the edge function could
+ * not pick our key out of Venice's list. `lastFetchedAt` is stamped either way
+ * so the pane can tell "not loaded yet" from "loaded, unidentifiable".
+ */
+export async function refreshKeyUsage(source: KeyUsageFetcher): Promise<void> {
+  keyUsage.loading = true;
+  keyUsage.error = null;
+  try {
+    keyUsage.data = await source.fetchKeyUsage();
+    keyUsage.lastFetchedAt = Date.now();
+  } catch (err) {
+    const message =
+      err instanceof VeniceError
+        ? err.message
+        : err instanceof Error
+          ? err.message
+          : String(err);
+    keyUsage.error = message;
+    log.warn('refreshKeyUsage failed', { message });
+  } finally {
+    keyUsage.loading = false;
+  }
+}
+
+/**
+ * Whether the on-open effect should auto-load the per-key figure. Same
+ * error-guard reasoning as {@link shouldAutoRefreshUsage}: a failed auto-load
+ * must not re-qualify the instant `loading` clears, or the effect spins into a
+ * retry storm against /api_keys. Manual Refresh is the retry path.
+ */
+export function shouldAutoRefreshKeyUsage(): boolean {
+  if (keyUsage.loading || keyUsage.error !== null) return false;
+  if (keyUsage.lastFetchedAt === null) return true;
+  return Date.now() - keyUsage.lastFetchedAt > USAGE_STALE_MS;
+}
+
+/**
  * Wipe the cached data. Called from `resetForSignOut()` in
  * state.svelte.ts so a subsequent sign-in to a project with a
  * different Venice key starts from a clean slate rather than
@@ -151,5 +227,9 @@ export function resetUsage(): void {
   usage.lastFetchedAt = null;
   usage.loading = false;
   usage.error = null;
+  keyUsage.data = null;
+  keyUsage.lastFetchedAt = null;
+  keyUsage.loading = false;
+  keyUsage.error = null;
   log.info('resetUsage');
 }
