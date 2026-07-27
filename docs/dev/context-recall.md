@@ -218,7 +218,8 @@ for the derived query; everything downstream is identical.
   carrying ~19k chars into a live-path model call.
 - `supabase/functions/venice/priming/context-recall-smoothing.ts` - the
   recall-time smoothing pass (replaces the old string-concat render).
-  `smoothContextRecall` runs one `deepseek-v4-flash` completion over the
+  `smoothContextRecall` runs one `mistral-small-3-2-24b-instruct`
+  completion over the
   gathered index + current exchange and returns `{ note, citations }`;
   the source-numbering / source-block-render / citation-projection /
   `^N^`-extraction helpers are pure and unit-tested via the `__test`
@@ -228,9 +229,37 @@ for the derived query; everything downstream is identical.
 
 The body is produced by the smoothing pass
 (`context-recall-smoothing.ts`), not assembled by string concat. One
-`deepseek-v4-flash` completion (reasoning disabled, like `web_search`)
-reads the gathered index plus the current exchange and emits a short
-first-person recollection that:
+`mistral-small-3-2-24b-instruct` completion (non-reasoning) reads the
+gathered index plus the current exchange and emits a short first-person
+recollection.
+
+The model id is pinned in that file with the full rationale next to it.
+Three properties are load-bearing rather than incidental, so read that
+comment before repointing it:
+
+- **Non-reasoning.** The task is faithful integration of evidence
+  already in context, so a chain-of-thought pass is pure latency on the
+  live turn's critical path. A model with no reasoning pass cannot
+  regress into one. Corollary: `reasoning_effort` must NOT go on the
+  wire for this id - Venice 4xxs on the field for non-reasoning models,
+  so the call sets only `disableThinking`.
+- **Faithful over fluent.** This is the one that bites. The design's
+  safety argument (see "Why deterministic retrieval, cited synthesis")
+  holds only because every claim cites a real row, so a model that
+  invents a specific and pins a citation to it defeats the mechanism
+  rather than degrading it. A creative-tuned id is actively wrong here:
+  a GLM-4.7-Flash-Heretic trial, sampled four times on one fixed input,
+  broke the contract every time - it inverted "you raised the
+  hydration" into "I raised", emitted a fabricated "+60g ^1^" against a
+  source carrying no such number, and twice returned no citations at
+  all. Sample any candidate on a fixed input before pinning it; the
+  gate cannot catch this.
+- **Private serving.** The prompt is the user's own memories, verbatim.
+  A model classified `anonymized` proxies it to an upstream provider
+  with identifying metadata stripped - acceptable for generic work, a
+  poor trade here.
+
+The recollection:
 
 - **Anchors in the past** on each memory's real `created_at`, and
   launders any encoding-time "this conversation" / "(June 2026)"
