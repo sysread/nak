@@ -15,7 +15,9 @@ export const memoryUpdateSchema = {
     'required fields: id, and message (a one-line, commit-style summary ' +
     'of what changed and why, which lands in the memory changelog the ' +
     'user reviews). Then provide at least one of label or data to change ' +
-    `(data capped at ${MAX_MEMORY_DATA_CHARS} chars); omit either to ` +
+    `(data capped at ${MAX_MEMORY_DATA_CHARS} chars, and never longer than ` +
+    'the body you are replacing - a refine tightens or holds steady, it does ' +
+    'not accrete); omit either to ' +
     'leave it unchanged. Returns the updated row.',
   shortDescription: 'edit a saved note',
   // Required fields lead, optional content fields trail - an optional

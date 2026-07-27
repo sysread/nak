@@ -16,7 +16,12 @@ Deno.test('buildMemoryEmbedInput joins label and body with a blank line', () => 
   assertEquals(buildMemoryEmbedInput('gym PIN', '12345'), 'gym PIN\n\n12345');
 });
 
-Deno.test('buildMemoryEmbedInput truncates data past the cap', () => {
+// 8000, NOT the 2500 write-boundary cap in src/lib/memories.ts. The embed
+// truncation deliberately stayed put when the write cap dropped: lowering
+// it would re-embed every legacy row longer than 2500 on a truncated body,
+// making a row's vector depend on when it happened to be embedded. Do not
+// "sync" these two numbers - see the comment on MAX_MEMORY_EMBED_CHARS.
+Deno.test('buildMemoryEmbedInput truncates data past the embed cap', () => {
   const out = buildMemoryEmbedInput('label', 'x'.repeat(9000));
   // 'label' + '\n\n' + 8000 chars
   assertEquals(out.length, 'label\n\n'.length + 8000);

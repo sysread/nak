@@ -25,9 +25,9 @@
 
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { appendMemoryChangelog } from './_memory_changelog.ts';
+import { memoryDataBudgetError } from './_memory_data_budget.ts';
 import { ArgErrors } from './_validate.ts';
 
-const MAX_MEMORY_DATA_CHARS = 8000;
 const MAX_MEMORY_CHANGELOG_MESSAGE_CHARS = 200;
 
 export const memoryReshape: ToolDef = {
@@ -50,13 +50,16 @@ export const memoryReshape: ToolDef = {
       patch.label = args.label.trim();
     }
     if (typeof args.data === 'string' && args.data.length > 0) {
-      if (args.data.length > MAX_MEMORY_DATA_CHARS) {
-        errs.add(
-          `data exceeds ${MAX_MEMORY_DATA_CHARS}-char limit (got ${args.data.length}); split across multiple memories`,
-        );
-      } else {
-        patch.data = args.data;
-      }
+      // Non-growth rule. Stripping write-time framing is the whole point
+      // of a reshape, so the cleaned body should come back shorter; the
+      // budget keys off the row's current length so a legacy over-ceiling
+      // row can still be reframed without being forced to drop facts
+      // (which its own contract forbids). See _memory_data_budget.ts.
+      const overBudget = id
+        ? await memoryDataBudgetError(ctx.adminClient, ctx.userId, [id], args.data)
+        : null;
+      if (overBudget) errs.add(overBudget);
+      else patch.data = args.data;
     }
     if (Object.keys(patch).length === 0 && !errs.any) {
       errs.add('provide at least one of label or data to reshape');

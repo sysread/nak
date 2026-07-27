@@ -206,6 +206,16 @@ for the derived query; everything downstream is identical.
   `CONTEXT_WIKI_LIMIT`). Each layer degrades independently via
   `Promise.allSettled`. The umbrella `context` tool's own gather lives
   separately in `venice/agents/context.ts`.
+
+  **The per-layer caps bound ROWS, not BYTES.** Memory bodies ride
+  inline and verbatim, so the smoothing prompt's size is set by how long
+  those bodies are, not by `CONTEXT_MEMORY_LIMIT`. That is bounded on
+  the WRITE side, by the non-growth rule in
+  [memory.md](./memory.md) -> "The body-length budget". If recall
+  latency regresses, measure the gathered byte volume before suspecting
+  the vector searches: at a 451-memory / 405-thread store the four
+  searches run in under a millisecond, while the memory bodies were
+  carrying ~19k chars into a live-path model call.
 - `supabase/functions/venice/priming/context-recall-smoothing.ts` - the
   recall-time smoothing pass (replaces the old string-concat render).
   `smoothContextRecall` runs one `deepseek-v4-flash` completion over the
@@ -442,3 +452,15 @@ readable content. Registered in the always-on toolbox.
 - **The survey tier and drill-down tier diverge on purpose.** The
   pipeline / `context` tool are deterministic; the `*_recall` tools
   are LLM agents. See "The two recall tiers" above.
+- **The conversation layer's exact-title ILIKE only runs on a short
+  query.** The derived query is the prior assistant turn plus the last
+  user turn, and the arm asks "does any thread title CONTAIN this
+  query" - true only when the query is shorter than a title. It pays
+  off on a bare opening message ("bread") and is a guaranteed zero-row
+  scan of every one of the user's threads once the query carries a full
+  exchange, so `gatherConversations` skips it past
+  `MAX_TITLE_MATCH_QUERY_CHARS` rather than running it to fail.
+  Skipping also keeps a 4000-char pattern out of the PostgREST request
+  URL. The semantic arm carries the layer in every other case.
+  (`ilikeMemories` has the same shape but is only reachable when the
+  embed call failed, so it is left as-is - a rare degraded path.)

@@ -24,10 +24,8 @@
 
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { appendMemoryChangelog } from './_memory_changelog.ts';
+import { memoryDataBudgetError } from './_memory_data_budget.ts';
 import { ArgErrors } from './_validate.ts';
-
-// Mirror of MAX_MEMORY_DATA_CHARS in src/lib/memories.ts.
-const MAX_MEMORY_DATA_CHARS = 8000;
 
 export const memoryConsolidate: ToolDef = {
   name: 'memory_consolidate',
@@ -48,11 +46,23 @@ export const memoryConsolidate: ToolDef = {
     }
     if (label.length === 0) errs.add('label is required');
     if (data.length === 0) errs.add('data is required');
-    else if (data.length > MAX_MEMORY_DATA_CHARS) {
-      errs.add(
-        `data exceeds ${MAX_MEMORY_DATA_CHARS}-char limit (got ${data.length}); ` +
-          'consolidation needs a single condensed body, not the concatenation of two',
+    else if (survivorId && loserId) {
+      // Non-growth rule, keyed off BOTH merge inputs: collapsing two rows
+      // that encode the same fact has no business producing something
+      // longer than the longer input. This is the check that stops
+      // repeated consolidation passes from ratcheting a body upward.
+      const overBudget = await memoryDataBudgetError(
+        ctx.adminClient,
+        ctx.userId,
+        [survivorId, loserId],
+        data,
       );
+      if (overBudget) {
+        errs.add(
+          `${overBudget} Consolidation needs a single condensed body, not the ` +
+            'concatenation of two.',
+        );
+      }
     }
     errs.throwIfAny();
 

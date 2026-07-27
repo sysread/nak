@@ -7,9 +7,9 @@
 
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { appendMemoryChangelog } from './_memory_changelog.ts';
+import { memoryDataBudgetError } from './_memory_data_budget.ts';
 import { ArgErrors } from './_validate.ts';
 
-const MAX_MEMORY_DATA_CHARS = 8000;
 const MAX_MEMORY_CHANGELOG_MESSAGE_CHARS = 200;
 
 export const memoryUpdate: ToolDef = {
@@ -32,13 +32,14 @@ export const memoryUpdate: ToolDef = {
       patch.label = args.label.trim();
     }
     if (typeof args.data === 'string' && args.data.length > 0) {
-      if (args.data.length > MAX_MEMORY_DATA_CHARS) {
-        errs.add(
-          `data exceeds ${MAX_MEMORY_DATA_CHARS}-char limit (got ${args.data.length}); split across multiple memories`,
-        );
-      } else {
-        patch.data = args.data;
-      }
+      // Non-growth rule: a refine may condense or hold steady, never
+      // inflate. See _memory_data_budget.ts for why the budget keys off
+      // the row's current length rather than a flat ceiling.
+      const overBudget = id
+        ? await memoryDataBudgetError(ctx.adminClient, ctx.userId, [id], args.data)
+        : null;
+      if (overBudget) errs.add(overBudget);
+      else patch.data = args.data;
     }
     if (Object.keys(patch).length === 0 && !errs.any) {
       // Only a meaningful complaint once the required fields and the data

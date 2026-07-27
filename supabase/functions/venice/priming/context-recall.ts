@@ -70,6 +70,18 @@ const CONTEXT_FOLLOWUP_LIMIT = 3;
 // message sits at the end and carries the strongest topic signal.
 const MAX_RECALL_QUERY_CHARS = 4000;
 
+// Longest derived query the conversation layer will bother running its
+// exact-title ILIKE against. That arm asks "does any thread title CONTAIN
+// this query", which can only be true when the query is shorter than a
+// title - it pays off on a bare opening message ("bread"), and is a
+// guaranteed zero-row scan of every one of the user's threads once the
+// query carries a full exchange. Thread titles are auto-generated one-
+// liners (the longest in a real store measured 80 chars), so a query past
+// this length cannot be a substring of any of them and the arm is skipped
+// rather than run to fail. Skipping also keeps a 4000-char pattern out of
+// the PostgREST request URL.
+const MAX_TITLE_MATCH_QUERY_CHARS = 80;
+
 export interface ContextIndexMemory {
   id: string;
   label: string;
@@ -444,14 +456,20 @@ async function gatherConversations(
   // the cap.
   const limit = CONTEXT_CONVERSATION_LIMIT + 1;
 
-  const pattern = `%${query.replace(/[\\%_]/g, (m) => `\\${m}`)}%`;
-  const exactPromise = admin
-    .from('threads')
-    .select('id, title')
-    .eq('user_id', userId)
-    .ilike('title', pattern)
-    .order('updated_at', { ascending: false })
-    .limit(limit);
+  // Exact-title arm, only when the query is short enough to be a title
+  // substring (see MAX_TITLE_MATCH_QUERY_CHARS). A longer query resolves
+  // to an empty hit list without touching the DB, and the semantic arm
+  // below carries the layer.
+  const exactPromise =
+    query.length <= MAX_TITLE_MATCH_QUERY_CHARS
+      ? admin
+          .from('threads')
+          .select('id, title')
+          .eq('user_id', userId)
+          .ilike('title', `%${query.replace(/[\\%_]/g, (m) => `\\${m}`)}%`)
+          .order('updated_at', { ascending: false })
+          .limit(limit)
+      : Promise.resolve({ data: [] as ThreadHit[], error: null });
 
   const semanticPromise = queryEmbedding
     ? admin.rpc('search_threads_by_embedding', {

@@ -69,10 +69,10 @@ import { memoryRelate } from '../tools/memory_relate.ts';
 import { memoryUnrelate } from '../tools/memory_unrelate.ts';
 import { conversationSearch } from '../tools/conversation_search.ts';
 
-// Mirror of MAX_MEMORY_DATA_CHARS in src/lib/memories.ts - the same
-// cap tools/memory_consolidate.ts enforces on execute, surfaced in
-// the wire schema so the model sees the limit up front.
-const MAX_MEMORY_DATA_CHARS = 8000;
+// Surfaced in the wire schemas so the model sees the limit up front.
+// Single-sourced from the module that owns the length rule the write
+// paths enforce on execute.
+import { MAX_MEMORY_DATA_CHARS } from '../tools/_memory_data_budget.ts';
 
 // Ported from the browser src/lib/tools/memory_consolidate.schema.ts.
 // Librarian-only: not in reflection's toolbox and not dispatchable
@@ -121,9 +121,11 @@ const MEMORY_CONSOLIDATE_WIRE_SCHEMA: AgentTool['wire'] = {
           minLength: 1,
           maxLength: MAX_MEMORY_DATA_CHARS,
           description:
-            `Consolidated body for the survivor (max ${MAX_MEMORY_DATA_CHARS} chars). ` +
-            'May combine details from both rows; should not introduce facts ' +
-            'absent from both originals.',
+            `Consolidated body for the survivor (max ${MAX_MEMORY_DATA_CHARS} chars, and ` +
+            'never longer than the longer of the two originals). May combine details ' +
+            'from both rows; should not introduce facts absent from both originals. ' +
+            'A merge of two duplicates is a condensation - if your consolidated body ' +
+            'is longer than either input, you are concatenating, not consolidating.',
         },
       },
       required: ['survivor_id', 'loser_id', 'label', 'data'],
@@ -176,8 +178,11 @@ const MEMORY_RESHAPE_WIRE_SCHEMA: AgentTool['wire'] = {
           maxLength: MAX_MEMORY_DATA_CHARS,
           description:
             `Cleaned body, same facts, no write-time framing (max ${MAX_MEMORY_DATA_CHARS} ` +
-            'chars; omit to leave the body unchanged). Provide at least one ' +
-            'of label or data.',
+            'chars, and never longer than the body you are replacing; omit to leave ' +
+            'the body unchanged). Provide at least one of label or data. Stripping ' +
+            'narration should shorten the row - a body that is already over the ' +
+            `${MAX_MEMORY_DATA_CHARS}-char limit is one worth tightening while you are ` +
+            'here, so long as every fact survives.',
         },
         message: {
           type: 'string',

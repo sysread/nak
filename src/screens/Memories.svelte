@@ -38,7 +38,7 @@
     addRelationEdge,
     removeRelationEdge,
   } from '$lib/memories-store.svelte';
-  import { searchMemoriesSemantic, MAX_MEMORY_DATA_CHARS } from '$lib/memories';
+  import { searchMemoriesSemantic } from '$lib/memories';
   // Panel-side UI-behavior primitives - every display decision this
   // screen makes (body-surface selection, action-status vocabulary,
   // form validation, formatters) lives in the companion module; this
@@ -64,6 +64,7 @@
     isDuplicateRelationError,
     memoriesBodySurface,
     memoryActionNotice,
+    memoryDataBudget,
     memoryEditError,
     panelEmptyMessage,
     relationNoteError,
@@ -152,6 +153,7 @@
   let editingId = $state<string | null>(null);
   let editLabel = $state('');
   let editData = $state('');
+  let editOriginalDataLength = $state(0);
   // Required one-line "what changed and why" note that lands in the
   // memory changelog for this edit - the user's manual equivalent of the
   // `message` param the memory_update tool requires of the assistant.
@@ -523,6 +525,9 @@
     editingId = m.id;
     editLabel = m.label;
     editData = m.data;
+    // Snapshot the stored length: it is the headroom term in the body
+    // budget, so a legacy row over the current cap stays editable.
+    editOriginalDataLength = m.data.length;
     editMessage = '';
     saveState = { kind: 'idle' };
     // Cancel any pending delete confirmation when the user pivots to
@@ -554,7 +559,7 @@
     const message = editMessage.trim();
     // Field checks (required-ness, the label/data/message caps) live
     // in memoryEditError so the copy and ordering are testable.
-    const validationError = memoryEditError(label, data, message);
+    const validationError = memoryEditError(label, data, message, editOriginalDataLength);
     if (validationError) {
       saveState = { kind: 'error', message: validationError };
       return;
@@ -1022,11 +1027,11 @@
                   <textarea
                     id="mem-data-{m.id}"
                     class="memory-data-edit"
-                    maxlength={MAX_MEMORY_DATA_CHARS}
+                    maxlength={memoryDataBudget(editOriginalDataLength)}
                     bind:value={editData}
                   ></textarea>
                   <span class="subtle char-count">
-                    {editData.length}/{MAX_MEMORY_DATA_CHARS}
+                    {editData.length}/{memoryDataBudget(editOriginalDataLength)}
                   </span>
                 </div>
                 <!-- Required changelog note for this edit. Mirrors the
