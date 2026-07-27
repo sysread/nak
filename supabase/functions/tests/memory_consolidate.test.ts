@@ -14,6 +14,10 @@ import type { ToolContext } from '../venice/performToolCall.ts';
 
 function makeCtx(
   rpc: (name: string, args: Record<string, unknown>) => { data: unknown; error: { message: string } | null },
+  // Existing `data` bodies of the two merge inputs, as the length-budget
+  // read would see them. Default empty: no row grants headroom, so the
+  // budget lands on the flat MAX_MEMORY_DATA_CHARS ceiling.
+  existingBodies: string[] = [],
 ): {
   ctx: ToolContext;
   rpcCalls: Array<{ name: string; args: Record<string, unknown> }>;
@@ -35,6 +39,12 @@ function makeCtx(
       };
       c.maybeSingle = () =>
         Promise.resolve({ data: { label: 'Loser label' }, error: null });
+      // Thenable so the length-budget read (which awaits the builder
+      // chain directly rather than calling a terminal method) resolves to
+      // a PostgREST-shaped result.
+      c.then = (
+        resolve: (v: { data: unknown; error: null }) => unknown,
+      ) => resolve({ data: existingBodies.map((d) => ({ data: d })), error: null });
       return c;
     },
   } as unknown as SupabaseClient;
@@ -78,18 +88,46 @@ Deno.test('consolidate: rejects self-merge and missing fields before any RPC', a
   assertEquals(rpcCalls.length, 0);
 });
 
-Deno.test('consolidate: rejects oversize data with the split-guidance message', async () => {
+Deno.test('consolidate: rejects data over the flat ceiling when neither input grants headroom', async () => {
   const { ctx, rpcCalls } = makeCtx(okRpc);
   await assertRejects(
     () =>
       memoryConsolidate.execute(
-        { survivor_id: 'a', loser_id: 'b', label: 'x', data: 'z'.repeat(8001) },
+        { survivor_id: 'a', loser_id: 'b', label: 'x', data: 'z'.repeat(2501) },
         ctx,
       ),
     Error,
-    'exceeds 8000-char limit',
+    'over the 2500-char budget',
   );
   assertEquals(rpcCalls.length, 0);
+});
+
+// The non-growth rule, which is the whole point of the budget: a merge of
+// two duplicates may be as long as the LONGER input (so a pair of legacy
+// over-ceiling rows can still be collapsed) but not a character longer.
+// Without this, repeated consolidation passes ratchet a body upward and
+// every future recall prompt pays for it.
+Deno.test('consolidate: allows a body up to the longer input, rejects past it', async () => {
+  const legacy = ['y'.repeat(4000), 'y'.repeat(3000)];
+
+  const atBudget = makeCtx(okRpc, legacy);
+  await memoryConsolidate.execute(
+    { survivor_id: 'a', loser_id: 'b', label: 'x', data: 'z'.repeat(4000) },
+    atBudget.ctx,
+  );
+  assertEquals(atBudget.rpcCalls.length, 1);
+
+  const overBudget = makeCtx(okRpc, legacy);
+  await assertRejects(
+    () =>
+      memoryConsolidate.execute(
+        { survivor_id: 'a', loser_id: 'b', label: 'x', data: 'z'.repeat(4001) },
+        overBudget.ctx,
+      ),
+    Error,
+    'over the 4000-char budget',
+  );
+  assertEquals(overBudget.rpcCalls.length, 0);
 });
 
 Deno.test('consolidate: dispatches the RPC with trimmed args and the b-strict user id', async () => {

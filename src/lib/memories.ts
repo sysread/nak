@@ -58,16 +58,27 @@ export const MEMORY_CONFIDENCE_HEDGED = 0.5;
 export const MAX_MEMORY_CHANGELOG_MESSAGE_CHARS = 200;
 
 /**
- * Hard cap on memory `data` length, enforced at the memory_create /
- * memory_update / memory_consolidate tool boundary. Chosen to stay well under
- * the embedding model's context window (bge-m3 is ~512 tokens ~ 2-4k chars; 8k
- * leaves headroom for the label prefix and worst-case tokenizer inflation) and
- * to keep recall costs bounded - memory_search ships the full `data` back to
- * the LLM, so a 100k-char memory would blow up every future prompt. The
- * server-side embedding backfill applies the same cap defensively when composing
+ * Hard cap on memory `data` length, enforced at every memory write
+ * boundary (memory_create / memory_update / memory_consolidate /
+ * memory_reshape, plus the Memories.svelte edit flow). The server-side
+ * embedding backfill applies the same cap defensively when composing
  * Venice input (supabase/functions/_shared/embed-input.ts).
+ *
+ * The binding constraint is RECALL COST, not the embedding window.
+ * Memory bodies ride inline into the context-recall smoothing prompt -
+ * CONTEXT_MEMORY_LIMIT (6) rows, verbatim, on the live turn's critical
+ * path - and that prompt is re-sent on every recall trigger. The cap is
+ * therefore sized so six worst-case bodies stay affordable rather than
+ * so one body fits the encoder.
+ *
+ * Why this number: measured against a real store, the p75 body was
+ * ~2286 chars while the top-6 gather shipped ~19k chars per recall,
+ * because the rewrite paths ratchet bodies upward (see the non-growth
+ * rule in tools/_memory_data_budget.ts). 2500 sits just above p75, so
+ * it binds on the long tail that drives the cost without fighting the
+ * bulk of the corpus.
  */
-export const MAX_MEMORY_DATA_CHARS = 8000;
+export const MAX_MEMORY_DATA_CHARS = 2500;
 
 export type MemoryConfidenceTag = 'corroborated' | 'hedged' | 'shaky' | null;
 

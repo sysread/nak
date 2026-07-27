@@ -285,16 +285,34 @@ export function memoryEditError(
   label: string,
   data: string,
   message: string,
+  originalDataLength = 0,
 ): string | null {
   if (!label) return 'Label is required.';
   if (label.length > MAX_LABEL_CHARS) {
     return `Label must be ${MAX_LABEL_CHARS} chars or fewer.`;
   }
   if (!data) return 'Data is required.';
-  if (data.length > MAX_MEMORY_DATA_CHARS) {
-    return `Data must be ${MAX_MEMORY_DATA_CHARS} chars or fewer.`;
+  const budget = memoryDataBudget(originalDataLength);
+  if (data.length > budget) {
+    return `Data must be ${budget} chars or fewer.`;
   }
   return changelogMessageError(message, 'saving');
+}
+
+/**
+ * How long this memory's body is allowed to be, given how long it
+ * already is.
+ *
+ * Mirrors the non-growth rule the server-side write tools enforce
+ * (supabase/functions/venice/tools/_memory_data_budget.ts): new content
+ * is bounded by MAX_MEMORY_DATA_CHARS, but a row that already exceeds it
+ * keeps its current length as headroom. Without the headroom term, a
+ * legacy memory written under the old 8000-char cap would be uneditable
+ * from the panel - the textarea would refuse further typing and the save
+ * would fail validation, with no way for the user to fix either.
+ */
+export function memoryDataBudget(originalDataLength: number): number {
+  return Math.max(MAX_MEMORY_DATA_CHARS, originalDataLength);
 }
 
 /** First validation error for the relation picker's optional note,

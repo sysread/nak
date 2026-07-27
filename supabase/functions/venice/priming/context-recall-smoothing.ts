@@ -31,12 +31,41 @@ import {
   type ContextIndexFollowup,
 } from './context-recall.ts';
 
-// Mirror of agentModel('reflection').id - the same fast, cheap, large-
-// context tier reflection already runs on. Reasoning is disabled on the
-// call (disable_thinking) because this is on the live turn's critical
-// path and the task is faithful integration, not deliberation - the
-// same posture web_search takes.
-const SMOOTHING_MODEL = 'deepseek-v4-flash';
+// Held directly here (not via src/lib AGENT_MODELS) because this runs
+// only server-side, same as the second-thoughts reviewer. Repoint here
+// to retune the recollection.
+//
+// Why this id. The pass sits on the live turn's critical path, and its
+// input is the user's own memories verbatim, so three properties matter:
+//
+//   - NON-REASONING. The task is faithful integration of evidence
+//     already in context, not deliberation, so a chain-of-thought pass
+//     is pure latency (the trap CLAUDE.md records having been hit
+//     twice). A model with no reasoning pass at all cannot regress into
+//     one; on a reasoning id the suppression is a flag that has to keep
+//     working. Note this id reports supportsReasoningEffort: false -
+//     `reasoning_effort` must NOT go on the wire for it (Venice 4xxs on
+//     the field for non-reasoning ids), which is why the call below
+//     sets only disableThinking.
+//   - FAITHFUL. This is the load-bearing one. The design's safety
+//     argument (see context-recall.md) is that synthesis drift stays
+//     recoverable because every claim cites a real row - so a model
+//     that invents a specific and pins a citation to it defeats the
+//     whole mechanism. A creative-tuned id is actively wrong here: a
+//     GLM-4.7-Flash-Heretic trial, sampled four times on one fixed
+//     input, violated the contract every time - inverted "you raised
+//     the hydration" into "I raised", emitted a fabricated "+60g ^1^"
+//     against a source carrying no such number, and twice returned no
+//     citations at all. This id was clean on the same input.
+//   - PRIVATE serving. Venice hosts these weights itself, so the memory
+//     bodies never leave its infrastructure. deepseek-v4-flash, the
+//     previous pick, is classified 'anonymized' - the prompt is proxied
+//     to an upstream provider with identifying metadata stripped, which
+//     is a poor trade for a prompt that is nothing but personal facts.
+//
+// 256k context against a ~5k-token prompt, and cheaper per recall than
+// the model it replaced.
+const SMOOTHING_MODEL = 'mistral-small-3-2-24b-instruct';
 
 // The recollection is a short paragraph, not an essay. Cap generously
 // enough that a multi-source recall doesn't get truncated mid-citation.

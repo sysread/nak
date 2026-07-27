@@ -42,6 +42,7 @@ import {
   MEMORY_UNRELATE_WIRE_SCHEMA,
 } from './_agent_tools.ts';
 import { memorySearch } from '../tools/memory_search.ts';
+import { MAX_MEMORY_DATA_CHARS } from '../tools/_memory_data_budget.ts';
 import { memoryCreate } from '../tools/memory_create.ts';
 import { memoryUpdate } from '../tools/memory_update.ts';
 import { memoryInvalidate } from '../tools/memory_invalidate.ts';
@@ -82,9 +83,8 @@ const REFLECTION_CLAIM_TTL_SECONDS = 600;
 
 // Schema caps mirror supabase/functions/venice/tools/memory_*.ts so the
 // wire schemas the agent's model sees match the server-side validators'
-// limits. (8000 / 200 / 80 are the same numbers those tools enforce on
-// execute.)
-const MAX_MEMORY_DATA_CHARS = 8000;
+// limits. (200 / 80 are the same numbers those tools enforce on execute;
+// the data cap is single-sourced from _memory_data_budget.ts.)
 const MAX_MEMORY_CHANGELOG_MESSAGE_CHARS = 200;
 const MAX_MEMORY_LABEL_CHARS = 80;
 
@@ -161,8 +161,10 @@ const MEMORY_UPDATE_WIRE_SCHEMA: AgentTool['wire'] = {
       'required fields: id, and message (a one-line, commit-style summary ' +
       'of what changed and why, which lands in the memory changelog the ' +
       'user reviews). Then provide at least one of label or data to ' +
-      `change (data capped at ${MAX_MEMORY_DATA_CHARS} chars); omit ` +
-      'either to leave it unchanged. Returns the updated row.',
+      `change (data capped at ${MAX_MEMORY_DATA_CHARS} chars, and never ` +
+      'longer than the body you are replacing - a refine tightens or holds ' +
+      'steady, it does not accrete); omit either to leave it unchanged. ' +
+      'Returns the updated row.',
     parameters: {
       type: 'object',
       properties: {

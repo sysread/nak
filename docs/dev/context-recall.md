@@ -206,9 +206,20 @@ for the derived query; everything downstream is identical.
   `CONTEXT_WIKI_LIMIT`). Each layer degrades independently via
   `Promise.allSettled`. The umbrella `context` tool's own gather lives
   separately in `venice/agents/context.ts`.
+
+  **The per-layer caps bound ROWS, not BYTES.** Memory bodies ride
+  inline and verbatim, so the smoothing prompt's size is set by how long
+  those bodies are, not by `CONTEXT_MEMORY_LIMIT`. That is bounded on
+  the WRITE side, by the non-growth rule in
+  [memory.md](./memory.md) -> "The body-length budget". If recall
+  latency regresses, measure the gathered byte volume before suspecting
+  the vector searches: at a 451-memory / 405-thread store the four
+  searches run in under a millisecond, while the memory bodies were
+  carrying ~19k chars into a live-path model call.
 - `supabase/functions/venice/priming/context-recall-smoothing.ts` - the
   recall-time smoothing pass (replaces the old string-concat render).
-  `smoothContextRecall` runs one `deepseek-v4-flash` completion over the
+  `smoothContextRecall` runs one `mistral-small-3-2-24b-instruct`
+  completion over the
   gathered index + current exchange and returns `{ note, citations }`;
   the source-numbering / source-block-render / citation-projection /
   `^N^`-extraction helpers are pure and unit-tested via the `__test`
@@ -218,9 +229,37 @@ for the derived query; everything downstream is identical.
 
 The body is produced by the smoothing pass
 (`context-recall-smoothing.ts`), not assembled by string concat. One
-`deepseek-v4-flash` completion (reasoning disabled, like `web_search`)
-reads the gathered index plus the current exchange and emits a short
-first-person recollection that:
+`mistral-small-3-2-24b-instruct` completion (non-reasoning) reads the
+gathered index plus the current exchange and emits a short first-person
+recollection.
+
+The model id is pinned in that file with the full rationale next to it.
+Three properties are load-bearing rather than incidental, so read that
+comment before repointing it:
+
+- **Non-reasoning.** The task is faithful integration of evidence
+  already in context, so a chain-of-thought pass is pure latency on the
+  live turn's critical path. A model with no reasoning pass cannot
+  regress into one. Corollary: `reasoning_effort` must NOT go on the
+  wire for this id - Venice 4xxs on the field for non-reasoning models,
+  so the call sets only `disableThinking`.
+- **Faithful over fluent.** This is the one that bites. The design's
+  safety argument (see "Why deterministic retrieval, cited synthesis")
+  holds only because every claim cites a real row, so a model that
+  invents a specific and pins a citation to it defeats the mechanism
+  rather than degrading it. A creative-tuned id is actively wrong here:
+  a GLM-4.7-Flash-Heretic trial, sampled four times on one fixed input,
+  broke the contract every time - it inverted "you raised the
+  hydration" into "I raised", emitted a fabricated "+60g ^1^" against a
+  source carrying no such number, and twice returned no citations at
+  all. Sample any candidate on a fixed input before pinning it; the
+  gate cannot catch this.
+- **Private serving.** The prompt is the user's own memories, verbatim.
+  A model classified `anonymized` proxies it to an upstream provider
+  with identifying metadata stripped - acceptable for generic work, a
+  poor trade here.
+
+The recollection:
 
 - **Anchors in the past** on each memory's real `created_at`, and
   launders any encoding-time "this conversation" / "(June 2026)"
@@ -442,3 +481,15 @@ readable content. Registered in the always-on toolbox.
 - **The survey tier and drill-down tier diverge on purpose.** The
   pipeline / `context` tool are deterministic; the `*_recall` tools
   are LLM agents. See "The two recall tiers" above.
+- **The conversation layer's exact-title ILIKE only runs on a short
+  query.** The derived query is the prior assistant turn plus the last
+  user turn, and the arm asks "does any thread title CONTAIN this
+  query" - true only when the query is shorter than a title. It pays
+  off on a bare opening message ("bread") and is a guaranteed zero-row
+  scan of every one of the user's threads once the query carries a full
+  exchange, so `gatherConversations` skips it past
+  `MAX_TITLE_MATCH_QUERY_CHARS` rather than running it to fail.
+  Skipping also keeps a 4000-char pattern out of the PostgREST request
+  URL. The semantic arm carries the layer in every other case.
+  (`ilikeMemories` has the same shape but is only reachable when the
+  embed call failed, so it is left as-is - a rare degraded path.)

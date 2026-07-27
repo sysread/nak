@@ -6,11 +6,12 @@
 
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { appendMemoryChangelog } from './_memory_changelog.ts';
+import { MAX_MEMORY_DATA_CHARS } from './_memory_data_budget.ts';
 import { ArgErrors } from './_validate.ts';
 
-// Mirror of MAX_MEMORY_DATA_CHARS / MAX_MEMORY_CHANGELOG_MESSAGE_CHARS
-// in src/lib/memories.ts.
-const MAX_MEMORY_DATA_CHARS = 8000;
+// Mirror of MAX_MEMORY_CHANGELOG_MESSAGE_CHARS in src/lib/memories.ts.
+// The data cap is single-sourced from _memory_data_budget.ts, which owns
+// the length rule the rewrite paths share.
 const MAX_MEMORY_CHANGELOG_MESSAGE_CHARS = 200;
 
 export const memoryCreate: ToolDef = {

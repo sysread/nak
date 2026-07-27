@@ -557,7 +557,7 @@ from the same ports); the browser carries only the wire schemas.
   writes the changed fields and relies on the trigger to null the
   embedding if either text changed. Does NOT change confidence (a
   rewrite is not corroboration). `message` is required and appends an
-  `update` changelog row.
+  `update` changelog row. Subject to the body-length budget below.
 - `memory_invalidate.execute({ id })` — halves confidence via
   `decay_memory_confidence` RPC. Not destructive. No changelog
   entry (confidence-only).
@@ -570,7 +570,8 @@ from the same ports); the browser carries only the wire schemas.
   data })` — librarian-only merge. Appends an `update` changelog
   row on the survivor with an auto-generated "Merged X into this"
   message (no `message` param on this tool - the label snapshot
-  of the merged-away memory supplies the text).
+  of the merged-away memory supplies the text). Subject to the
+  body-length budget below, keyed off BOTH merge inputs.
 - `memory_reaffirm.execute({ id })` — +0.5 cap 10.0 via
   `reaffirm_memory_confidence`. Gentler than the reflection
   agent's bump (+1.0). Returns `{id, confidence}` post-bump.
@@ -620,6 +621,55 @@ from the same ports); the browser carries only the wire schemas.
   agent's "answer" is whatever `memory_*` tool calls it made;
   the final text is discarded. Returns without error when the
   queue is empty or the claim is lost.
+
+## The body-length budget (non-growth rule)
+
+`supabase/functions/venice/tools/_memory_data_budget.ts` owns one
+rule that every content-write path shares:
+
+> A write may not push a memory body past
+> `MAX_MEMORY_DATA_CHARS` (2500), and a *rewrite* may not make a
+> body longer than it already is.
+
+Formally the budget is `max(MAX_MEMORY_DATA_CHARS, current
+length)` - keyed off the row being rewritten for `memory_update` /
+`memory_reshape`, and off the longer of the two inputs for
+`memory_consolidate`.
+
+**Why.** Memory bodies ride inline into the context-recall
+smoothing prompt - `CONTEXT_MEMORY_LIMIT` rows, verbatim, on the
+live turn's critical path, re-sent on every recall trigger (see
+[context-recall.md](./context-recall.md)). The gather caps ROW
+COUNT, which does nothing about bytes. Measured against a real
+store, the top-6 gather shipped ~19k chars per recall while the
+p75 body was only ~2286 chars, because the rewrite verbs ratchet:
+they run on a cadence (the librarians revisit rows, reflection
+refines them per turn) and an LLM asked to "refine" or "clean up" a
+body reliably returns something slightly longer. Rows that had been
+rewritten averaged 3341 chars against 1441 for rows only ever
+created, and the confidence boost in
+`search_memories_by_embedding` then selected exactly those inflated
+rows into the gather.
+
+**Why headroom rather than a flat ceiling.** A legacy row written
+under the old 8000-char cap must not be wedged. It can still be
+reframed or refined at its current size - it just cannot grow.
+Forcing a hard truncation would also put `memory_reshape` in
+conflict with its own contract, which forbids dropping facts.
+Condensing those rows back under the ceiling is the librarians' job
+(their wire-schema descriptions ask for it), not something a
+validation error should demand in one shot.
+
+**Deliberate divergence:** the embed-side truncation in
+`supabase/functions/_shared/embed-input.ts` stayed at 8000 and must
+NOT be synced down. Lowering it would re-embed every legacy row
+longer than 2500 on a truncated body, making a row's vector depend
+on when it happened to be embedded - the exact ranking drift that
+file's preamble warns about.
+
+The browser edit path mirrors the rule via `memoryDataBudget` in
+`src/lib/ui/memories.ts`, so the Memories panel's textarea
+`maxlength` and counter grant the same headroom.
 
 ## Interactions with other features
 

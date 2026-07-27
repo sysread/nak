@@ -28,6 +28,7 @@ import {
   isDuplicateRelationError,
   memoriesBodySurface,
   memoryActionNotice,
+  memoryDataBudget,
   memoryEditError,
   panelEmptyMessage,
   relationNoteError,
@@ -240,6 +241,27 @@ describe('memoryEditError', () => {
     expect(
       memoryEditError(ok.label, 'x'.repeat(MAX_MEMORY_DATA_CHARS + 1), ok.message),
     ).toBe(`Data must be ${MAX_MEMORY_DATA_CHARS} chars or fewer.`);
+  });
+
+  // A row written under the old 8000-char cap must stay editable: its
+  // current length is headroom, so the user can fix a typo without being
+  // forced to condense, but cannot grow the body further.
+  it('grants a legacy over-cap row its current length as headroom', () => {
+    const legacy = MAX_MEMORY_DATA_CHARS + 3000;
+    expect(memoryEditError(ok.label, 'x'.repeat(legacy), ok.message, legacy)).toBeNull();
+    expect(
+      memoryEditError(ok.label, 'x'.repeat(legacy + 1), ok.message, legacy),
+    ).toBe(`Data must be ${legacy} chars or fewer.`);
+  });
+});
+
+describe('memoryDataBudget', () => {
+  it('floors at the cap and rises to an over-cap row length', () => {
+    expect(memoryDataBudget(0)).toBe(MAX_MEMORY_DATA_CHARS);
+    expect(memoryDataBudget(MAX_MEMORY_DATA_CHARS - 500)).toBe(MAX_MEMORY_DATA_CHARS);
+    expect(memoryDataBudget(MAX_MEMORY_DATA_CHARS + 500)).toBe(
+      MAX_MEMORY_DATA_CHARS + 500,
+    );
   });
 });
 
