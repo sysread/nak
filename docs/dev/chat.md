@@ -60,6 +60,13 @@ A chat turn goes:
   screen already used (`incomplete-turn`, `last-error`,
   `recovery-banner`, `streaming-bubble`, ...); the split contract
   is [frontend-organization.md](./frontend-organization.md).
+- `src/lib/ui/message-queue.ts` - the send-while-streaming queue's
+  primitives: the `QueuedMessage` shape, the three-mode
+  `sendButtonState` (send / stop / continue) that resolves the
+  composer button's disabled state and labels in one pass, and the
+  card-stack copy. The array itself lives on `ExchangeSlot.queued`
+  (thread-scoped state); `Chat.svelte` owns the keystroke wiring
+  and the drain.
 - `src/lib/ui/transcript-export.ts` - pure builders for the
   download-transcript feature: the Markdown document
   (`buildTranscriptMarkdown` - user/assistant turns only, system
@@ -102,7 +109,19 @@ A chat turn goes:
 
 - **Send button / Enter** — `Chat.svelte`'s `send()` builds the
   history, creates an `AbortController`, and calls
-  `runChatLoop(opts)`.
+  `runChatLoop(opts)`. The composer read + attachment validation
+  (`readComposerPayload`) and the user-row persist
+  (`persistUserTurn`) are factored out of `send()` because the
+  queued-message drain below produces identical rows through them.
+- **Queued messages** - the submit-modifier Enter's second mode.
+  While a turn is in flight, Cmd/Ctrl/Shift+Enter routes to
+  `queueMessage()` instead of `send()` or stop: the composer's
+  contents (text + ready attachment chips) are banked on
+  `ExchangeSlot.queued` and the composer clears, while the reply
+  keeps streaming. `maybeDrainQueuedMessages(threadId)` fires the
+  batch once the turn settles - see the Gotchas entry for the two
+  tails it hangs off and the one case that holds the queue back.
+  The button is deliberately NOT the same affordance (below).
 - **Stop button** - the send button's dual mode. While `sending`
   is true the paper-plane icon swaps for a filled square; the
   click handler calls `cancelStream` (`venice.ts`), which
@@ -129,6 +148,16 @@ A chat turn goes:
   endpoint and never offer it for retry, so a second device that
   opens the thread reaches the same verdict the stopping device
   did.
+
+  With messages queued the button gains a count badge and reads
+  "Stop and send N queued message(s) now" (`sendButtonState` in
+  `src/lib/ui/message-queue.ts` resolves all three modes), but the
+  click path is unchanged - it is the ordinary abort above, and the
+  queue drains from the same settled-turn tail a natural finish
+  uses. Nothing extra is discarded to make "cancel and continue"
+  work: completed tool rows and the partial answer persist exactly
+  as a bare stop leaves them, and the queued user rows land after
+  them.
 - **Draft creation** — "New thread" button creates an in-memory-
   only `Thread` row (`isDraft: true`). It materializes to
   Supabase on first send; never written as an empty shell. This
@@ -684,6 +713,31 @@ A chat turn goes:
   streaming bubble to persisted card and stay on the row for as long as
   the thread is loaded. A cold reopen has no in-memory entry and renders
   the header bare - same elision as the tool-duration pills.
+- **The queue drains from two turn-settled tails, not one.**
+  `maybeDrainQueuedMessages(threadId)` is called after the
+  try/catch/finally of BOTH `runExchange` and
+  `reconnectInflightTurn`. One tail is not enough: a turn whose live
+  stream drops mid-answer `return`s out of `runExchange`'s catch into
+  the reconnect poll, so a queue attached to exactly the flaky-network
+  turns users most want to bank against would strand. It is called
+  AFTER the finally, not inside it, so the new exchange acquires the
+  cross-device claim the settling one has already released - and it is
+  deliberately not awaited, so a long queue chains as sibling turns
+  rather than nesting one promise inside the last. The drain asserts
+  `slot.sending = true` synchronously before its first await, mirroring
+  `send()`'s `claimedSlot` pattern, so the composer never flickers back
+  to its idle shape in the handoff gap.
+
+  Two things it deliberately does not do. It does not drain when the
+  settled turn left a `streamingError` on the slot (rate-limit
+  exhaustion, a foreign response claim, a commit conflict): the user
+  needs to read that banner, and a fresh turn would both bury it and
+  most likely fail the same way, so the queue survives as visible cards
+  and drains at the tail of whichever later turn succeeds. And it
+  anchors the new exchange on the LAST queued row, not the first -
+  every entry becomes its own `role='user'` row, so anchoring on the
+  first would make the batch's own siblings trip
+  `commit_assistant_message`'s newer-user-message conflict check.
 - **Drafts must not enter realtime state.** The draft's in-memory
   id is a freshly-minted UUID; if a draft leaks into `addMessage`
   before being materialized, the realtime `INSERT` handler sees a

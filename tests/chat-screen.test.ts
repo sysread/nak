@@ -41,8 +41,13 @@ describe('isMacPlatform', () => {
 
 describe('sendHintLabel', () => {
   it('names the platform submit shortcut', () => {
-    expect(sendHintLabel(true)).toBe('\u2318-enter sends');
-    expect(sendHintLabel(false)).toBe('ctrl-enter sends');
+    expect(sendHintLabel(true, false)).toBe('\u2318-enter sends');
+    expect(sendHintLabel(false, false)).toBe('ctrl-enter sends');
+  });
+
+  it('says the chord queues while a reply is streaming', () => {
+    expect(sendHintLabel(true, true)).toBe('\u2318-enter queues');
+    expect(sendHintLabel(false, true)).toBe('ctrl-enter queues');
   });
 });
 

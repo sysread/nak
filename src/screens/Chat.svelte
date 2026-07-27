@@ -247,6 +247,11 @@
   } from '$lib/ui/subconscious-status';
   import { streamingCardHasContent } from '$lib/ui/streaming-bubble';
   import {
+    sendButtonState,
+    queuedHeadline,
+    queuedAttachmentSummary,
+  } from '$lib/ui/message-queue';
+  import {
     reasoningShouldCollapse,
     reasoningElapsedPill,
     reasoningCharPill,
@@ -3154,15 +3159,114 @@
     void selectThread(id);
   }
 
-  async function send(): Promise<void> {
+  /**
+   * What one composer submission carries: the trimmed text plus the
+   * attachment chips that are ready to ride with it.
+   */
+  interface ComposerPayload {
+    text: string;
+    attachments: LocalAttachment[];
+  }
+
+  /**
+   * Validate the composer's current contents and snapshot them for a
+   * send. Returns null when there is nothing to send, or when an
+   * attachment blocks the send - in which case `error` is painted above
+   * the composer with the reason so the user can remove the file or
+   * switch profile.
+   *
+   * Does NOT clear the composer. `send()` clears only after the thread
+   * is materialized; `queueMessage()` clears immediately. Both need the
+   * same rules applied at the same moment - a queued message is
+   * validated when the user queues it, not when it fires, because at
+   * drain time the composer that caused the error is long gone and an
+   * error banner about it would have no referent.
+   */
+  function readComposerPayload(modelSpec: ModelSpec): ComposerPayload | null {
     const text = composer.trim();
     // Attachments alone (no text) are allowed — a user may "send an
     // image for you to look at". Still require text OR at least one
     // ready attachment so an empty send doesn't fire.
-    const readyAttachments = pendingAttachments.filter((a) => !a.pending && !a.error);
-    const hasAttachments = readyAttachments.length > 0;
-    if ((!text && !hasAttachments) || !app.supabase || !app.venice) return;
+    const attachments = pendingAttachments.filter((a) => !a.pending && !a.error);
+    if (!text && attachments.length === 0) return null;
     error = null;
+    // Pre-send guard on attachments. Block the send if any attachment
+    // is still processing, is in an error state, or can't be read by
+    // the selected model.
+    const stillPending = pendingAttachments.find((a) => a.pending);
+    if (stillPending) {
+      error = {
+        text: `"${stillPending.filename}" is still processing — wait for it to finish.`,
+      };
+      return null;
+    }
+    const erroredChip = pendingAttachments.find((a) => a.error);
+    if (erroredChip) {
+      error = { text: `"${erroredChip.filename}": ${erroredChip.error}` };
+      return null;
+    }
+    // Images are handled on all models via analyze_image(). Only block
+    // non-image attachments with no extractable text - those are a real
+    // dead end with no tool fallback.
+    const unreadable = attachments.find(
+      (a) => !isImageMimeType(a.mime_type) && !isConsumableBy(a, modelSpec)
+    );
+    if (unreadable) {
+      error = {
+        text: `"${unreadable.filename}" has no extractable text — the model won't be able to read it. Remove it to send.`,
+      };
+      return null;
+    }
+    return { text, attachments };
+  }
+
+  /**
+   * Persist one user turn - the message row plus its attachment rows -
+   * and append it to the active view. Shared by the composer send and
+   * the queued-message drain so a message that waited out a stream
+   * lands as exactly the same rows as one sent immediately.
+   *
+   * An attachment-insert failure is non-fatal: the user's typed text
+   * still gets a reply and the transcript reads as plain text. A failed
+   * message insert throws - there is no recoverable shape without the
+   * user row, so the caller surfaces it.
+   *
+   * The append is gated on the target being the thread on screen, the
+   * same guard every persisted-row handler in `runExchange` carries
+   * (see exchange.md, "appendMessage vs recordPersistedRow"). `send()`
+   * always targets the active thread so the gate is a no-op there, but
+   * the queued drain can fire against a thread the user has navigated
+   * away from - ungated, its user rows would appear in whatever
+   * transcript happened to be open. The rows are on screen for that
+   * thread either way once `selectThread` refetches it.
+   */
+  async function persistUserTurn(
+    threadId: string,
+    text: string,
+    attachments: LocalAttachment[]
+  ): Promise<Message> {
+    const supabase = app.supabase;
+    if (!supabase) throw new Error('Not connected.');
+    const userMsg = await supabase.addMessage(threadId, 'user', text);
+    // Positional index matches the chip order so the message list
+    // renders them the way the user queued them.
+    if (attachments.length > 0) {
+      const newRows: NewAttachment[] = attachments.map((a, i) => toNewAttachment(a, i));
+      try {
+        userMsg.attachments = await supabase.addAttachments(userMsg.id, newRows);
+      } catch (err) {
+        log.warn('persistAttachments failed', err);
+        userMsg.attachments = [];
+      }
+    } else {
+      userMsg.attachments = [];
+    }
+    if (threadId === activeThreadId) appendMessage(userMsg);
+    return userMsg;
+  }
+
+  async function send(): Promise<void> {
+    if (!app.supabase || !app.venice) return;
 
     const active = activeThreadId ? findThread(activeThreadId) ?? null : null;
     // Capture the profile BEFORE materializing, since materialize mutates
@@ -3181,35 +3285,9 @@
     // server-side (strip-and-retry on first encounter, then a
     // preemptive strip from the model_feature_rejections record).
     const sendVerbosity: Verbosity = active?.verbosity ?? profile.verbosity;
-    // Pre-send guard on attachments. Block the send if any attachment
-    // is still processing, is in an error state, or can't be read by
-    // the selected model. Surface the reason on `error` — the user sees
-    // it above the composer and can either remove the file or switch
-    // profile.
-    const stillPending = pendingAttachments.find((a) => a.pending);
-    if (stillPending) {
-      error = {
-        text: `"${stillPending.filename}" is still processing — wait for it to finish.`,
-      };
-      return;
-    }
-    const erroredChip = pendingAttachments.find((a) => a.error);
-    if (erroredChip) {
-      error = { text: `"${erroredChip.filename}": ${erroredChip.error}` };
-      return;
-    }
-    // Images are handled on all models via analyze_image(). Only block
-    // non-image attachments with no extractable text - those are a real
-    // dead end with no tool fallback.
-    const unreadable = readyAttachments.find(
-      (a) => !isImageMimeType(a.mime_type) && !isConsumableBy(a, modelSpec)
-    );
-    if (unreadable) {
-      error = {
-        text: `"${unreadable.filename}" has no extractable text — the model won't be able to read it. Remove it to send.`,
-      };
-      return;
-    }
+    const payload = readComposerPayload(modelSpec);
+    if (!payload) return;
+    const text = payload.text;
 
     // Two-layer synchronous guard:
     //
@@ -3267,7 +3345,7 @@
       // Keeping a local copy means a late text-parser completion (if
       // we ever allow background adds) can't retroactively mutate the
       // message we just inserted.
-      const sendAttachments = readyAttachments;
+      const sendAttachments = payload.attachments;
       composer = '';
       pendingAttachments = [];
       // Sending is an explicit "pay attention to the bottom" signal -
@@ -3307,32 +3385,8 @@
 
       let userMessageId: string;
       try {
-        const userMsg = await app.supabase.addMessage(threadId, 'user', text);
+        const userMsg = await persistUserTurn(threadId, text, sendAttachments);
         userMessageId = userMsg.id;
-        // Persist attachment rows. Positional index matches the chip
-        // order so the message list renders them the way the user
-        // queued them. If the insert fails the user message is still
-        // saved and the transcript reads as plain text - an
-        // attachment-less send is recoverable; a missing user message
-        // row is not.
-        if (sendAttachments.length > 0) {
-          const newRows: NewAttachment[] = sendAttachments.map((a, i) =>
-            toNewAttachment(a, i)
-          );
-          try {
-            const rows = await app.supabase.addAttachments(userMsg.id, newRows);
-            userMsg.attachments = rows;
-          } catch (err) {
-            // Non-fatal: surface a warning but keep going. The user's
-            // typed text still gets a reply - the attachments just
-            // won't make it into history.
-            log.warn('persistAttachments failed', err);
-            userMsg.attachments = [];
-          }
-        } else {
-          userMsg.attachments = [];
-        }
-        appendMessage(userMsg);
       } catch (err) {
         // Pre-exchange failure (user message persist). No retry here -
         // the user's row didn't land, so "retry" would mean "try
@@ -3380,6 +3434,167 @@
       // thread). The explicit return paths above also fall through
       // here with the claim intact, so this handles them too.
       if (claimedSlot) claimedSlot.sending = false;
+    }
+  }
+
+  /**
+   * Bank what's in the composer for after the in-flight turn instead of
+   * sending it now. Bound to the same submit-modifier Enter that sends
+   * when idle (see onKeydown).
+   *
+   * The keystroke used to route to stop while a reply streamed, which
+   * meant a user who thought of something mid-answer had to choose
+   * between killing the response and holding the thought. Queueing is
+   * the third option: the reply runs to completion, the draft leaves
+   * the composer so it can't be lost or double-sent, and it fires the
+   * moment the turn settles. The stop BUTTON keeps its cancel meaning -
+   * the two affordances now do different things on purpose.
+   *
+   * Requires an in-flight turn on a materialized thread; with no stream
+   * running there is nothing to wait for and onKeydown routes to send()
+   * instead.
+   */
+  function queueMessage(): void {
+    const active = activeThreadId ? findThread(activeThreadId) ?? null : null;
+    if (!active || active.isDraft || active.archived) return;
+    const slot = exchangeStore.peek(active.id);
+    if (!slot?.sending) return;
+    const profile = resolveModelProfile(app.modelProfiles, active.model ?? null);
+    const payload = readComposerPayload(profileModelSpec(profile));
+    if (!payload) return;
+    slot.queued = [...slot.queued, { id: newLocalId(), ...payload }];
+    composer = '';
+    pendingAttachments = [];
+    // Same "pay attention to the bottom" signal a send gives - the new
+    // card lands below the streaming response.
+    followBottom = true;
+  }
+
+  /**
+   * Drop a queued message before it fires.
+   *
+   * The text and any files that rode with it come back to the composer
+   * when the composer is empty, so an accidental queue is one click
+   * from being editable again. When the user has already started typing
+   * something else the entry is discarded rather than clobbering the
+   * draft in front of them - restoring would destroy work to undo work.
+   */
+  function unqueueMessage(id: string): void {
+    const slot = activeSlot;
+    if (!slot) return;
+    const entry = slot.queued.find((q) => q.id === id);
+    if (!entry) return;
+    slot.queued = slot.queued.filter((q) => q.id !== id);
+    if (composer.trim().length === 0 && pendingAttachments.length === 0) {
+      composer = entry.text;
+      pendingAttachments = entry.attachments;
+    }
+  }
+
+  /**
+   * Fire this thread's queued messages now that its turn has settled.
+   * Called from the tail of every path that ends a turn - runExchange
+   * and the reconnect poll - so the queue drains identically whether
+   * the reply finished on its own or the user hit stop mid-answer.
+   *
+   * That shared tail is what makes the stop button's second meaning
+   * work: with messages queued, "stop" reads as "cancel this reply and
+   * get on with mine." Nothing extra is discarded to make that happen -
+   * the abort persists the partial answer and every completed tool
+   * round exactly as a bare stop does (see stopStreaming), and the
+   * queued rows land after them.
+   *
+   * Deliberately does NOT drain when the turn left an error on the
+   * slot: a rate-limit exhaustion, a cross-device preemption, or a
+   * commit conflict all put a banner in front of the user that a fresh
+   * turn would bury, and the retry would most likely fail the same way.
+   * The queue survives instead, still visible as cards, and drains at
+   * the tail of whichever later turn succeeds.
+   */
+  function maybeDrainQueuedMessages(threadId: string): void {
+    const slot = exchangeStore.peek(threadId);
+    if (!slot || slot.queued.length === 0 || slot.streamingError !== null) return;
+    const thread = findThread(threadId);
+    if (!thread || thread.isDraft || thread.archived) return;
+    // Assert `sending` synchronously - before the async body's first
+    // await - so the composer, the throbber, and the send button never
+    // flicker back to their idle shapes in the gap between this turn's
+    // finally and the next turn's runExchange.
+    slot.sending = true;
+    void runQueuedMessages(threadId, slot);
+  }
+
+  async function runQueuedMessages(threadId: string, slot: ExchangeSlot): Promise<void> {
+    // Take the whole queue up front: anything the user queues from here
+    // on belongs to the turn AFTER this one, not to the batch we are
+    // about to persist.
+    const batch = slot.queued;
+    slot.queued = [];
+    // Cleared once runExchange is on the stack - it owns the sending
+    // flag's lifecycle from that point, exactly as it does for send().
+    let ownsSending = true;
+    try {
+      const thread = findThread(threadId);
+      if (!thread || !app.supabase || !app.venice) return;
+      const profile = resolveModelProfile(app.modelProfiles, thread.model ?? null);
+      const { reasoningEffort: sendReasoning, disableThinking: sendDisableThinking } =
+        thinkingWireForProfile(profile, thread.reasoning_effort ?? null);
+      const sendVerbosity: Verbosity = thread.verbosity ?? profile.verbosity;
+      const systemMessages: { role: 'system'; content: string }[] = app.systemPrompts
+        .filter((p) => activePromptIds.has(p.id) && p.body.trim().length > 0)
+        .map((p) => ({ role: 'system' as const, content: p.body }));
+      const currentUserId = session?.user.id ?? thread.user_id;
+
+      // Same two pre-flight repairs send() makes. The reconnect poll
+      // refetches the thread with listMessages, which can materialize
+      // synthetic recovery rows into `messages`, so this path really can
+      // meet an unhealed tail; and a turn that suspended on ask_user
+      // leaves a pending question the queued message implicitly
+      // abandons, the same way typing over the card does.
+      try {
+        await persistSyntheticRecovery(threadId);
+      } catch (err) {
+        log.warn('persistSyntheticRecovery failed', err);
+      }
+      await cancelPendingAskUser(threadId, 'abandoned_on_new_send');
+
+      // Each queued draft becomes its own user row, in the order the
+      // user queued them. The turn anchors on the LAST one: it is the
+      // newest user message, so commit_assistant_message's
+      // newer-user-message conflict check passes. Anchoring on the first
+      // would make its own siblings look like a competing device's send.
+      let anchor: Message | null = null;
+      for (const entry of batch) {
+        anchor = await persistUserTurn(threadId, entry.text, entry.attachments);
+      }
+      if (!anchor) return;
+
+      followBottom = true;
+      ownsSending = false;
+      await runExchange({
+        threadId,
+        currentUserId,
+        modelId: profile.modelId,
+        modelSpec: profileModelSpec(profile),
+        systemMessages,
+        sendReasoning,
+        sendDisableThinking,
+        sendVerbosity,
+        sendEmphasis: app.emphasisMarkdown,
+        sendUserName: app.userName,
+        sendUserLocation: app.userLocation,
+        originalText: anchor.content,
+        userMessageId: anchor.id,
+      });
+    } catch (err) {
+      // A persist failure here has no composer to fall back to - the
+      // text left it when the user queued. Surface it on the inline
+      // bubble where the queued cards were, so the failure shows up
+      // where they were watching.
+      log.error('queued send failed', err);
+      slot.streamingError = { text: describeError(err) };
+    } finally {
+      if (ownsSending) slot.sending = false;
     }
   }
 
@@ -4502,6 +4717,16 @@
         reasoningCloseTimer = 0;
       }
     }
+    // The turn has fully settled, including the finally's claim release -
+    // so anything the user queued while it ran can go out now. Fired
+    // AFTER the try/finally rather than inside it so the new exchange
+    // acquires the cross-device claim this one has already dropped, and
+    // deliberately not awaited so the queue chains as a sequence of
+    // sibling turns rather than nesting one promise inside the last.
+    // The StreamDisconnectedError branch returns from the catch instead
+    // of reaching here; that path hands off to reconnectInflightTurn,
+    // whose own tail drains.
+    maybeDrainQueuedMessages(ctx.threadId);
   }
 
   /**
@@ -4620,6 +4845,12 @@
         releaseWakeLock();
       }
     }
+    // Second of the two turn-settled tails (runExchange has the other).
+    // A turn the user queued messages against can end here rather than
+    // there whenever the live stream dropped and this poll took over,
+    // so the drain has to hang off both or the queue strands on exactly
+    // the flaky-connection turns it is most annoying to lose.
+    maybeDrainQueuedMessages(threadId);
   }
 
   /**
@@ -5039,19 +5270,20 @@
   // all submit. Plain Enter still inserts a newline so long-form drafts
   // aren't interrupted. `metaKey` maps to the Command key on macOS; on
   // Windows/Linux it's the rarely-pressed Super/Windows key, so including
-  // it there is harmless.
+  // it there is harmless. All three modifiers stay interchangeable in
+  // the queue mode below - a chord that means "submit" in one state and
+  // nothing in another would be worse than either behavior.
   //
-  // While a response is streaming the same keystroke routes to stop
-  // instead of send - the button's dual mode (send <-> stop) is
-  // mirrored by its keyboard shortcut, so users never end up firing
-  // a new send while waiting for the current stream to clear. After
-  // the stream aborts (activeSlot?.sending flips false), the next submit-modifier
-  // Enter fires the draft the user typed while waiting.
+  // While a response is streaming the same keystroke QUEUES the draft
+  // (see queueMessage) rather than sending or stopping. The shortcut and
+  // the button deliberately diverge here: the button is the cancel, the
+  // keystroke is the "and also..." - so a thought that arrives mid-answer
+  // costs the user neither the reply nor the thought.
   function onKeydown(e: KeyboardEvent): void {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey || e.shiftKey)) {
       e.preventDefault();
       if (activeSlot?.sending) {
-        stopStreaming();
+        queueMessage();
       } else {
         void send();
       }
@@ -5096,7 +5328,22 @@
         .userAgentData?.platform ?? navigator.platform ?? '';
     return isMacPlatform(p);
   });
-  const sendHint = $derived(sendHintLabel(isMac));
+  const sendHint = $derived(sendHintLabel(isMac, activeSlot?.sending === true));
+
+  // Mode, disabled state, and labels for the dual-purpose composer
+  // button. Three modes now (send / stop / stop-and-send-the-queue), so
+  // the cascade lives in the primitive rather than three parallel
+  // ternaries in the markup.
+  const sendButton = $derived(
+    sendButtonState({
+      sending: activeSlot?.sending === true,
+      queuedCount: activeSlot?.queued.length ?? 0,
+      stopSettled: activeSlot?.abortCtl === null,
+      composerEmpty: composer.trim().length === 0 && pendingAttachments.length === 0,
+      archived: currentThread?.archived === true,
+      respondingElsewhere,
+    })
+  );
 
   async function signOut(): Promise<void> {
     // Drop the tab-local last-active-thread id so a post-sign-in
@@ -7683,15 +7930,57 @@
                  below it, on purpose: the subconscious checklist and any
                  streaming content live in the card above, and the pulse
                  reads as a separate "the turn is alive" beat underneath.
-                 Being the last element in .messages while sending is what
-                 keeps the follow-bottom scroll (scrollToBottom -> scrollHeight)
-                 anchored to the throbber - the respondingElsewhere / empty /
-                 archived blocks below are all mutually exclusive with an
-                 active local completion, so nothing renders past this. The
-                 wrapper centers the inline-flex Scanner in the pane so it
-                 doesn't read as a stranded artifact in the top-left corner. -->
+                 It is the last element in .messages while sending EXCEPT
+                 when the user has queued messages, whose cards render
+                 below it (they are chronologically after this reply). The
+                 follow-bottom scroll is scrollHeight-based, so it anchors
+                 to whichever of the two is last and stays correct either
+                 way; the respondingElsewhere / empty / archived blocks
+                 further down are all mutually exclusive with an active
+                 local completion. The wrapper centers the inline-flex
+                 Scanner in the pane so it doesn't read as a stranded
+                 artifact in the top-left corner. -->
             <div class="thinking streaming-throbber">
               <Scanner label={activeSlot?.reconnecting ? 'Reconnecting' : 'Thinking'} />
+            </div>
+          {/if}
+          {#if activeSlot && activeSlot.queued.length > 0}
+            <!-- Messages the user banked with the submit-modifier Enter
+                 while this reply streamed. They are real user text that
+                 has NOT been sent - no DB row exists until the queue
+                 drains - so they render as user bubbles (same species,
+                 so the eye reads them as "my words") held back by the
+                 dashed border and reduced opacity.
+
+                 Rendered outside the sending gate on purpose: a turn
+                 that ends on an error does NOT drain the queue (see
+                 maybeDrainQueuedMessages), and messages that survive
+                 have to stay visible or they become invisible pending
+                 sends the user cannot see, edit, or cancel.
+
+                 The per-card x is the escape hatch: without it a
+                 mis-queued message is unrecallable and fires the moment
+                 the turn settles. -->
+            <div class="queued-stack" role="group" aria-label="Queued messages">
+              <div class="queued-heading">{queuedHeadline(activeSlot.queued.length)}</div>
+              {#each activeSlot.queued as entry (entry.id)}
+                {@const attachmentNote = queuedAttachmentSummary(entry)}
+                <div class="msg user queued">
+                  <div class="queued-body">
+                    {#if entry.text}<div class="queued-text">{entry.text}</div>{/if}
+                    {#if attachmentNote}
+                      <div class="queued-attachment-note">{attachmentNote}</div>
+                    {/if}
+                  </div>
+                  <button
+                    type="button"
+                    class="queued-remove"
+                    onclick={() => unqueueMessage(entry.id)}
+                    title="Remove from the queue"
+                    aria-label="Remove queued message"
+                  >×</button>
+                </div>
+              {/each}
             </div>
           {/if}
           {#if respondingElsewhere}
@@ -8172,39 +8461,42 @@
             <!-- Dual-purpose button: sends when idle, stops the in-
                  flight response when a stream is running. The icon
                  swap (paper plane <-> filled square) signals the mode;
-                 the handler branches on `activeSlot?.sending`. While activeSlot?.sending, the
-                 disabled rules that gate the send path (empty composer,
-                 archived thread) are intentionally ignored - stop
-                 must always be clickable once a response is in flight,
-                 regardless of what the user has typed next. -->
+                 sendButtonState resolves which of the three it is.
+                 While a stream runs, the disabled rules that gate the
+                 send path (empty composer, archived thread) are
+                 intentionally ignored - stop must always be clickable
+                 once a response is in flight, regardless of what the
+                 user has typed next.
+
+                 The 'continue' mode keeps the square and the stop
+                 handler: with messages queued, stopping IS the way to
+                 skip ahead to them (runExchange's tail drains the queue
+                 on any settled turn, aborted or not), so a third icon
+                 would imply a third code path that doesn't exist. The
+                 count badge is what marks the difference. -->
             <button
               class="send-btn"
-              class:is-stopping={activeSlot?.sending}
-              onclick={activeSlot?.sending ? stopStreaming : send}
-              disabled={activeSlot?.sending
-                ? activeSlot?.abortCtl === null
-                : (composer.trim().length === 0 && pendingAttachments.length === 0) ||
-                  currentThread?.archived ||
-                  respondingElsewhere}
-              title={activeSlot?.sending
-                ? 'Stop response'
-                : respondingElsewhere
-                  ? 'Another device is responding to this conversation'
-                  : currentThread?.archived
-                    ? 'Archived — restore to continue'
-                    : 'Send'}
-              aria-label={activeSlot?.sending ? 'Stop response' : 'Send'}
+              class:is-stopping={sendButton.mode !== 'send'}
+              onclick={sendButton.mode === 'send' ? send : stopStreaming}
+              disabled={sendButton.disabled}
+              title={sendButton.title}
+              aria-label={sendButton.ariaLabel}
             >
-              {#if activeSlot?.sending}
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"
-                     aria-hidden="true">
-                  <rect x="5" y="5" width="14" height="14" rx="2" />
-                </svg>
-              {:else}
+              {#if sendButton.mode === 'send'}
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"
                      aria-hidden="true">
                   <path d="M2.01 21 23 12 2.01 3 2 10l15 2-15 2z" />
                 </svg>
+              {:else}
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"
+                     aria-hidden="true">
+                  <rect x="5" y="5" width="14" height="14" rx="2" />
+                </svg>
+              {/if}
+              {#if sendButton.mode === 'continue'}
+                <span class="send-btn-queue-count" aria-hidden="true"
+                  >{activeSlot?.queued.length}</span
+                >
               {/if}
             </button>
 

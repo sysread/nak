@@ -48,9 +48,16 @@ export function isMacPlatform(platform: string): boolean {
  * - mirroring the onKeydown submit-modifier set, where metaKey is
  * the Command key on macOS and the rarely-pressed Super/Windows key
  * elsewhere.
+ *
+ * The verb tracks what the keystroke actually does right now: while a
+ * reply is streaming the same chord queues the draft for after the
+ * turn instead of sending it (see queueMessage in Chat.svelte). The
+ * placeholder is the only place that shortcut is discoverable, so it
+ * has to say "queues" during the window where it queues.
  */
-export function sendHintLabel(isMac: boolean): string {
-  return isMac ? '\u2318-enter sends' : 'ctrl-enter sends';
+export function sendHintLabel(isMac: boolean, streaming: boolean): string {
+  const chord = isMac ? '\u2318-enter' : 'ctrl-enter';
+  return streaming ? `${chord} queues` : `${chord} sends`;
 }
 
 /**
