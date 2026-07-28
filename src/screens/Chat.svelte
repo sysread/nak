@@ -8211,7 +8211,15 @@
                     <span class="chip-status chip-spinner" aria-label="Rendering PDF pages"
                     ></span>
                   {:else if status.kind === 'pending'}
-                    <span class="chip-status" aria-label="Processing">…</span>
+                    <!-- Generic in-flight state: no per-page or
+                         compression detail to show, but it is doing
+                         the same kind of work as the two branches
+                         above, so it gets the same ring spinner
+                         rather than a static ellipsis. -->
+                    <span
+                      class="chip-status chip-spinner"
+                      aria-label="Processing"
+                    ></span>
                   {:else if status.kind === 'error'}
                     <span class="chip-status chip-error" aria-label="Error">!</span>
                   {/if}

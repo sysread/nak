@@ -66,8 +66,11 @@ the ONE shared in-flight guard across all four paths
   gap before the first streamed step (the strip is visible from the
   synchronous instant the run starts, not only once a step arrives).
   Live narrated steps in the strip (manual runs carry the activity
-  param); results fold into the strip's result line; the Memories list
-  refreshes without a manual reload (the memories realtime relay).
+  param). The step in flight is marked by an animating `- \ | /`
+  spinner - visibly cycling, not a static or merely pulsing glyph -
+  and settles to a check or cross as the next step opens. Results
+  fold into the strip's result line; the Memories list refreshes
+  without a manual reload (the memories realtime relay).
 - (4) The manual run returns busy (the strip shows the busy
   message); no cadence stamp is consumed.
 - (5) After release, a manual run proceeds normally.

@@ -62,7 +62,12 @@ run with live progress narration
   out-of-scope ones deleted per the librarian's workflow.
 - (4) The strip renders live steps with model-narrated activity
   text (the explicit withProgressNarration wrapper injects the
-  `activity` param on manual runs only); the result card renders
+  `activity` param on manual runs only). The step in flight is
+  marked by an animating `- \ | /` spinner - visibly cycling, not a
+  static or merely rotating glyph - and settles to a check or cross
+  as the next step opens; the "running in the background" notice
+  shown for a run this strip did not start carries the same
+  animating spinner. The result card renders
   the final text as Markdown with a tool-count line; a concurrent
   run surfaces the busy message instead of doubling.
 - (5) `{"accepted":true}` but the drawer shows no librarian run -

@@ -74,8 +74,9 @@ describe('librarianProgressAriaLabel', () => {
 });
 
 describe('stepIcon', () => {
-  it('maps each step status to its glyph', () => {
-    expect(stepIcon('pending')).toBe('…');
+  it('maps each settled step status to its glyph', () => {
+    // Pending rows are not in the domain - the strip renders an
+    // AsciiSpinner in the icon cell rather than a glyph.
     expect(stepIcon('ok')).toBe('✓');
     expect(stepIcon('error')).toBe('✗');
   });

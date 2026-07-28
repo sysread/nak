@@ -96,12 +96,12 @@ export function librarianProgressAriaLabel(
     : 'Rem run progress';
 }
 
-/** Status glyph for a step row. The ellipsis reads as in-flight
- *  (the strip's CSS pulses it), check and cross as settled. */
-export function stepIcon(status: MemoryLibrarianStep['status']): string {
-  if (status === 'pending') return '…';
-  if (status === 'ok') return '✓';
-  return '✗';
+/** Status glyph for a SETTLED step row. Pending rows have no glyph -
+ *  the strip renders an animated `AsciiSpinner` in the icon cell
+ *  instead, so the argument is narrowed to the two settled statuses
+ *  rather than carrying a third arm the markup can never reach. */
+export function stepIcon(status: 'ok' | 'error'): string {
+  return status === 'ok' ? '✓' : '✗';
 }
 
 /**

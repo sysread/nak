@@ -138,6 +138,7 @@
     wikiLibrarianLease,
     wikiLibrarianOutcome,
   } from '$lib/agents/inflight-lease.svelte';
+  import AsciiSpinner from '../components/AsciiSpinner.svelte';
   import Markdown from '../components/Markdown.svelte';
   import WikiChangelogPanel from '../components/WikiChangelogPanel.svelte';
   import WikiSkippedPanel from '../components/WikiSkippedPanel.svelte';
@@ -1391,29 +1392,41 @@
                in-flight lease. We have no step-level fidelity for it -
                that rides the originator's runId-filtered channel - so
                show a low-fidelity "in progress" spinner and keep the
-               Run button disabled until the lease clears. -->
+               Run button disabled until the lease clears.
+               aria-hidden on the glyph cell is load-bearing: this <p>
+               is an aria-live region, and the spinner's frame swaps
+               would otherwise be announced ten times a second. -->
           <p class="subtle wiki-librarian-inflight" aria-live="polite">
-            <span class="librarian-step-glyph" aria-hidden="true">↻</span>
+            <span class="librarian-step-glyph" aria-hidden="true"
+              ><AsciiSpinner /></span
+            >
             The librarian is running in the background…
           </p>
         {/if}
         {#if librarianSteps.length > 0}
-          <!-- Live step list. Each row pairs the rotating-glyph
-               spinner (pending) or a final glyph (ok/error) with the
+          <!-- Live step list. Each row pairs an AsciiSpinner
+               (pending) or a final glyph (ok/error) with the
                model-emitted `activity` narration for tool calls and a
                generic phase label for the surrounding phases. Gives
                the user visible evidence the run is actually doing
                work during the 10-30s the loop runs - the old
                "Working..." button alone reads as "hung." Stays
                visible after the run settles so the user can scan the
-               trail alongside the summary below. -->
+               trail alongside the summary below.
+               aria-hidden on the glyph cell is load-bearing, not
+               decoration: the <ol> is an aria-live region, and the
+               spinner's frame swaps would otherwise be announced ten
+               times a second. -->
           <ol class="librarian-steps" aria-live="polite">
             {#each librarianSteps as step, i (i)}
               <li class="librarian-step status-{step.status}">
-                <span
-                  class="librarian-step-glyph"
-                  aria-hidden="true"
-                >{librarianStepGlyph(step.status)}</span>
+                <span class="librarian-step-glyph" aria-hidden="true">
+                  {#if step.status === 'pending'}
+                    <AsciiSpinner />
+                  {:else}
+                    {librarianStepGlyph(step.status)}
+                  {/if}
+                </span>
                 <span class="librarian-step-label">{step.label}</span>
               </li>
             {/each}
@@ -2127,12 +2140,13 @@
     flex-wrap: wrap;
   }
   /* Live step list shown under the librarian's custom-instructions
-     textarea while a manual run is in flight. The spinner glyph
-     mirrors the chat tool-row pattern - rotate the same Lekton-safe
-     character (used by .tool-status.status-pending in styles.css)
-     rather than swapping sprites. Steps are an <ol> for semantics
-     but rendered without numbering since the labels already imply
-     order. */
+     textarea while a manual run is in flight. The in-flight row's
+     cue is an AsciiSpinner rather than the rotated glyph the chat
+     tool rows still use (.tool-status.status-pending in styles.css):
+     a rotating character at this size reads as a shimmer, while
+     swapping the glyph outright changes the shape every frame.
+     Steps are an <ol> for semantics but rendered without numbering
+     since the labels already imply order. */
   .librarian-steps {
     list-style: none;
     padding: 0;
@@ -2165,9 +2179,11 @@
     overflow-wrap: anywhere;
     word-break: break-word;
   }
+  /* The live row is the focus of the list, so its spinner runs at
+     full text contrast while the settled rows carry the muted
+     ok/error glyph. */
   .librarian-step.status-pending .librarian-step-glyph {
-    color: var(--muted);
-    animation: librarian-step-spin 1.1s linear infinite;
+    color: var(--text);
   }
   .librarian-step.status-ok .librarian-step-glyph {
     color: var(--ok);
@@ -2181,15 +2197,6 @@
   .librarian-step.status-ok .librarian-step-label,
   .librarian-step.status-error .librarian-step-label {
     color: var(--muted);
-  }
-  @keyframes librarian-step-spin {
-    from { transform: rotate(0deg); }
-    to   { transform: rotate(360deg); }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .librarian-step.status-pending .librarian-step-glyph {
-      animation: none;
-    }
   }
   /* Post-run result card. Visually mirrors the chat .msg.assistant
      bubble (surface bg + hairline + rounded corners) so the librarian

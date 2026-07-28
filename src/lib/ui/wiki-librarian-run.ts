@@ -91,14 +91,11 @@ export function appendProgressStep(
 export const LIBRARIAN_BUSY_MESSAGE =
   'A librarian run is already in flight (scheduled or chat-driven). Try again in a moment.';
 
-// Glyph for a step row's status column. Mirrors the chat tool-row
-// vocabulary: the pending glyph is the same Lekton-safe character the
-// strip's CSS rotates for its spinner (see .tool-status.status-pending
-// in styles.css) rather than a swapped sprite.
-export function librarianStepGlyph(status: LibrarianStepStatus): string {
-  if (status === 'pending') return '↻';
-  if (status === 'ok') return '✓';
-  return '✗';
+// Glyph for a SETTLED step row's status column. Pending rows have no
+// glyph - the strip renders an animated AsciiSpinner in the cell
+// instead, so the domain is the two settled statuses only.
+export function librarianStepGlyph(status: 'ok' | 'error'): string {
+  return status === 'ok' ? '✓' : '✗';
 }
 
 // Meta line under the result card: run size in tool calls and articles,

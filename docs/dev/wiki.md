@@ -455,7 +455,8 @@ UI:
   a TTL timer. Started in `Chat.svelte` with the session; read by the
   top-bar sparkle button (disabled while held) and the panel ("a run is
   in progress" low-fidelity spinner when a run THIS strip didn't start
-  is active). Because manual AND scheduled runs claim the same lease,
+  is active - an `<AsciiSpinner>`, the same cue the step list's
+  in-flight row carries; see `docs/dev/components.md`). Because manual AND scheduled runs claim the same lease,
   the UI lights up for background sweeps too, and the lease clearing is
   the backstop that settles every client even if the `result` broadcast
   is dropped. Reusable across fleets via the generic

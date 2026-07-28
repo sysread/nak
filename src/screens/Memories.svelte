@@ -73,6 +73,7 @@
   } from '$lib/ui/memories';
   import { SEARCH_DEBOUNCE_MS } from '$lib/ui/memories-list';
   import type { Memory, MemoryRelation, SimilarMemory } from '$lib/supabase';
+  import AsciiSpinner from '../components/AsciiSpinner.svelte';
   import Markdown from '../components/Markdown.svelte';
   import MemoryChangelogPanel from '../components/MemoryChangelogPanel.svelte';
   import { librarianRun } from '$lib/agents/memory-librarian-run.svelte';
@@ -892,7 +893,7 @@
         <p class="librarian-confirm-desc">{librarianConfirmInfo.description}</p>
         {#if runInFlightElsewhere}
           <p class="subtle librarian-inflight" aria-live="polite">
-            <span class="librarian-inflight-spinner" aria-hidden="true">↻</span>
+            <span aria-hidden="true"><AsciiSpinner /></span>
             A memory-librarian pass is running in the background…
           </p>
         {/if}
@@ -946,8 +947,16 @@
           <ol class="librarian-steps">
             {#each librarianRun.steps as step (step.label + step.status)}
               <li class="librarian-step librarian-step-{step.status}">
+                <!-- aria-hidden on the icon cell is load-bearing, not
+                     decoration: the strip is an aria-live region, and
+                     the spinner's frame swaps would otherwise be
+                     announced ten times a second. -->
                 <span class="librarian-step-icon" aria-hidden="true">
-                  {stepIcon(step.status)}
+                  {#if step.status === 'pending'}
+                    <AsciiSpinner />
+                  {:else}
+                    {stepIcon(step.status)}
+                  {/if}
                 </span>
                 <span class="librarian-step-label">{step.label}</span>
               </li>
@@ -1446,29 +1455,31 @@
     color: var(--text-error);
   }
 
+  /* The live row is the strip's focus, so its spinner runs at full text
+     contrast while settled rows carry the accent or error glyph. Stated
+     explicitly rather than left to the base rule above, whose
+     --text-subtle is undefined project-wide and therefore inherits
+     today - defining that variable later must not dim the spinner. */
   .librarian-step-pending .librarian-step-icon {
-    /* The "…" glyph reads as in-flight; subtle pulse keeps the user
-       reassured the run hasn't hung. Animation is one of the few
-       places a small reactive cue beats a static glyph. */
-    animation: librarian-pulse 1.4s ease-in-out infinite;
+    color: var(--text);
   }
 
+  /* Pulse keyframes stay for .memory-similar-loading, which still
+     pulses a static label; the step rows animate via AsciiSpinner. */
   @keyframes librarian-pulse {
     0%, 100% { opacity: 0.45; }
     50% { opacity: 1; }
   }
 
   /* "Running in the background" notice in the confirm strip when a pass
-     is in flight that this tab didn't start. Reuses the pending pulse so
-     the in-flight cue matches the progress strip's. */
+     is in flight that this tab didn't start. Carries the same
+     AsciiSpinner as the progress strip's pending rows so the two
+     in-flight cues read as one thing. */
   .librarian-inflight {
     display: flex;
     align-items: center;
     gap: 0.4rem;
     margin: 0 0 0.5rem 0;
-  }
-  .librarian-inflight-spinner {
-    animation: librarian-pulse 1.4s ease-in-out infinite;
   }
 
   .librarian-result-line {
