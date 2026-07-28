@@ -246,6 +246,21 @@ the change. Click a label to jump straight to that memory; entries
 for deleted memories show the label in plain text, since there's
 nothing left to open.
 
+Entries that changed a memory's **size** also carry a small chip
+showing by how much - `+412` when the body grew, `-1,203` when it
+shrank, with the bigger moves shown more boldly. It's there because
+long memories are expensive: the assistant replays a recalled
+memory's full text every time it surfaces one, so a memory that
+keeps growing costs a little more on every future turn. The chip
+makes that visible - especially for the librarian's merges, where
+it shows at a glance whether two memories were genuinely condensed
+into one or just stapled together.
+
+Small changes show no chip at all, so the column stays quiet unless
+something really moved. Entries recorded before this was added show
+no chip either - those sizes were never stored and can't be
+recovered.
+
 The log is deliberately about *content*, not confidence churn. It
 records:
 

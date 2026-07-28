@@ -24,7 +24,10 @@
 
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { appendMemoryChangelog } from './_memory_changelog.ts';
-import { memoryDataBudgetError } from './_memory_data_budget.ts';
+import {
+  memoryDataBudgetError,
+  readMemoryDataLengths,
+} from './_memory_data_budget.ts';
 import { ArgErrors } from './_validate.ts';
 
 export const memoryConsolidate: ToolDef = {
@@ -44,6 +47,17 @@ export const memoryConsolidate: ToolDef = {
     if (survivorId && loserId && survivorId === loserId) {
       errs.add('survivor_id and loser_id must differ');
     }
+    // One read serves the non-growth budget and the changelog's
+    // before-size. Keyed by id because the changelog stamp needs the
+    // SURVIVOR specifically, while the budget wants both inputs.
+    const priorLengths =
+      survivorId && loserId
+        ? await readMemoryDataLengths(ctx.adminClient, ctx.userId, [
+            survivorId,
+            loserId,
+          ])
+        : new Map<string, number>();
+
     if (label.length === 0) errs.add('label is required');
     if (data.length === 0) errs.add('data is required');
     else if (survivorId && loserId) {
@@ -51,12 +65,7 @@ export const memoryConsolidate: ToolDef = {
       // that encode the same fact has no business producing something
       // longer than the longer input. This is the check that stops
       // repeated consolidation passes from ratcheting a body upward.
-      const overBudget = await memoryDataBudgetError(
-        ctx.adminClient,
-        ctx.userId,
-        [survivorId, loserId],
-        data,
-      );
+      const overBudget = memoryDataBudgetError(data, [...priorLengths.values()]);
       if (overBudget) {
         errs.add(
           `${overBudget} Consolidation needs a single condensed body, not the ` +
@@ -116,6 +125,12 @@ export const memoryConsolidate: ToolDef = {
         message: loserLabel
           ? `Merged "${loserLabel}" into this memory.`
           : 'Merged a duplicate memory into this one.',
+        // The SURVIVOR's prior length, not survivor+loser combined - see
+        // the column comments in schema.sql. A merge that genuinely
+        // condensed shows a negative delta here even though the store
+        // also shed the loser's row entirely.
+        chars_before: priorLengths.get(survivorId),
+        chars_after: data.length,
       });
     } catch {
       // best-effort by design

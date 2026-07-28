@@ -714,8 +714,35 @@ caller that cannot act on it is noise on a hot path.
 librarians visiting a row and choosing to tighten it. Measured on a
 real store, 93 of 95 over-budget rows had been written to within 90
 days, so the opportunity is frequent - but a row that is genuinely
-dense should and will stay long. Track it by watching the over-budget
-count and total excess chars over time.
+dense should and will stay long.
+
+### Measuring it: changelog size deltas
+
+`memory_changelog.chars_before` / `chars_after` record the body length
+either side of every content write, which is how "is the ratchet
+actually fixed, and are the librarians condensing anything" becomes
+answerable after the fact rather than inferred. The history panel
+renders the delta as a chip (`memorySizeDelta` in
+`src/lib/ui/memory-changelog-panel.ts`).
+
+- **NULL means unknown, 0 means empty**, and the UI depends on the
+  difference. NULL is a row written before the columns existed; 0 is a
+  create's before-size or a delete's after-size. Coercing NULL to 0
+  would render an unrecorded size as an empty body.
+- **`chars_before` is always THIS memory's prior length**, including for
+  a consolidation, where the entry lands on the survivor. Deliberately
+  not survivor+loser combined: per-kind semantics would make the columns
+  double-count when summed across rows.
+- **One read serves two consumers.** `readMemoryDataLengths` is called
+  once per write and feeds both the budget check and the before-stamp.
+  It is id-keyed rather than a bare list precisely so consolidate can
+  pick out the survivor.
+- **The backfill only anchors the latest entry per memory.** Every
+  `data` mutation writes a changelog row, so a surviving memory's most
+  recent entry describes the body it carries right now - exactly
+  recoverable. Older intermediate sizes were never stored and stay NULL.
+  The statement in `schema.sql` is idempotent via a `chars_after is
+  null` guard.
 
 ## Interactions with other features
 

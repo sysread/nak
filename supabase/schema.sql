@@ -1290,6 +1290,49 @@ create table if not exists public.memory_changelog (
   created_at timestamptz not null default now()
 );
 
+-- Body size on either side of the change, so the history panel can show
+-- how much a given edit grew or shrank a memory. Memory bodies are
+-- replayed verbatim into every recall prompt, so size drift is a real
+-- cost signal - these columns are what makes "did that consolidation
+-- actually condense anything" answerable after the fact.
+--
+-- NULL and 0 mean different things and the UI depends on the difference:
+--   NULL - unknown. Rows written before these columns existed, which
+--          cannot be reconstructed (historical sizes were never stored).
+--   0    - known empty. A create has nothing before it; a delete has
+--          nothing after it.
+-- `chars_before` always means "this memory's body immediately before
+-- this change", including for librarian consolidations, where the entry
+-- lands on the survivor. It is deliberately NOT survivor+loser combined:
+-- mixing semantics per-kind would make a column that sums across rows
+-- double-count.
+alter table public.memory_changelog
+  add column if not exists chars_before int,
+  add column if not exists chars_after int;
+
+-- Anchor backfill for pre-existing history. Every `data` mutation writes
+-- a changelog row, so for a memory that still exists its MOST RECENT
+-- entry describes the body the row carries right now - that one value is
+-- exactly recoverable, unlike the older intermediate sizes. Filling it
+-- means the first NEW edit after this ships already has a real
+-- before/after pair instead of a null.
+--
+-- Idempotent via the `chars_after is null` guard: on a re-run the latest
+-- entry per memory already carries a value (either from this backfill or
+-- from the application), so nothing is rewritten. Superseded older
+-- entries stay null, which is correct - their sizes are unknown.
+with latest as (
+  select distinct on (c.memory_id) c.id, m.data
+    from public.memory_changelog c
+    join public.memories m on m.id = c.memory_id
+   order by c.memory_id, c.created_at desc, c.id desc
+)
+update public.memory_changelog c
+   set chars_after = length(latest.data)
+  from latest
+ where c.id = latest.id
+   and c.chars_after is null;
+
 -- Primary access pattern is "page through the user's history newest-
 -- first", so the chronological index is the one that pays its way.
 create index if not exists memory_changelog_user_created_idx

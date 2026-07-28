@@ -107,52 +107,63 @@ export function memoryLengthHint(length: number): string | null {
 
 /**
  * Current `data` length of each id that exists and belongs to the user.
- * Missing ids are simply absent from the map - the caller treats them as
- * contributing no headroom, which lands on the flat ceiling.
+ * A missing id contributes nothing, which lands the caller on the flat
+ * ceiling.
+ *
+ * Callers read this ONCE per write and feed it to both consumers: the
+ * budget check below, and the memory_changelog `chars_before` stamp. An
+ * earlier shape hid this read inside the budget check and skipped it
+ * whenever the new body was already under the ceiling - cheaper, but it
+ * left the changelog with no before-size on exactly the ordinary writes
+ * whose size drift we most want to see.
  *
  * RLS is OFF on the admin client, so the user scope is an explicit
  * user_id filter.
+ *
+ * A read failure returns an empty list rather than throwing. The budget
+ * then falls back to the flat ceiling (errs toward the smaller prompt,
+ * still hands the agent an actionable message) and the changelog records
+ * an unknown before-size, which is honest.
  */
-async function readDataLengths(
+export async function readMemoryDataLengths(
   adminClient: SupabaseClient,
   userId: string,
   ids: readonly string[],
-): Promise<number[]> {
-  if (ids.length === 0) return [];
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (ids.length === 0) return out;
   const { data, error } = await adminClient
     .from('memories')
-    .select('data')
+    .select('id, data')
     .in('id', [...ids])
     .eq('user_id', userId);
-  // A read failure falls back to the flat ceiling rather than failing the
-  // write outright. That errs toward the smaller prompt and still hands
-  // the agent an actionable message; the alternative (skip the check)
-  // would let the ratchet through on exactly the flaky path.
-  if (error) return [];
-  return ((data ?? []) as Array<{ data: string | null }>).map(
-    (r) => r.data?.length ?? 0,
-  );
+  if (error) return out;
+  // Keyed by id, not a bare list: consolidate needs the SURVIVOR's
+  // length for its changelog stamp, which an unordered array of both
+  // merge inputs cannot answer.
+  for (const row of (data ?? []) as Array<{ id?: unknown; data?: unknown }>) {
+    if (typeof row.id !== 'string') continue;
+    out.set(row.id, typeof row.data === 'string' ? row.data.length : 0);
+  }
+  return out;
 }
 
 /**
- * Validate a proposed `data` body against the budget the referenced rows
- * allow. Returns an agent-readable error string, or null when the write
- * is within budget.
+ * Validate a proposed `data` body against the budget the already-stored
+ * rows allow. Returns an agent-readable error string, or null when the
+ * write is within budget.
  *
- * `ids` are the rows whose existing length grants headroom: the row being
- * rewritten for update / reshape, and both merge inputs for consolidate
- * (a merge of two duplicates has no business being longer than the longer
- * input).
+ * Pure: the caller supplies the existing lengths (via
+ * readMemoryDataLengths). `existingLengths` are the rows whose current
+ * size grants headroom - the row being rewritten for update / reshape,
+ * and BOTH merge inputs for consolidate, since a merge of two duplicates
+ * has no business being longer than the longer input.
  */
-export async function memoryDataBudgetError(
-  adminClient: SupabaseClient,
-  userId: string,
-  ids: readonly string[],
+export function memoryDataBudgetError(
   newData: string,
-): Promise<string | null> {
-  if (newData.length <= MAX_MEMORY_DATA_CHARS) return null;
-  const existing = await readDataLengths(adminClient, userId, ids);
-  const budget = Math.max(MAX_MEMORY_DATA_CHARS, ...existing);
+  existingLengths: readonly number[],
+): string | null {
+  const budget = Math.max(MAX_MEMORY_DATA_CHARS, ...existingLengths);
   if (newData.length <= budget) return null;
   return (
     `data is ${newData.length} chars, over the ${budget}-char budget for this write. ` +

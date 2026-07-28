@@ -535,6 +535,8 @@ export class SupabaseService {
     kind: MemoryChangelogKind;
     label_at_change: string;
     message: string;
+    chars_before?: number;
+    chars_after?: number;
   }): Promise<void> {
     return memoriesApi.createMemoryChangelogEntry(this.client, args);
   }

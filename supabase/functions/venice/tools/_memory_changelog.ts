@@ -16,6 +16,23 @@ export interface MemoryChangelogEntry {
   kind: MemoryChangelogKind;
   label_at_change: string;
   message: string;
+  /**
+   * Body length on either side of this change, so the history panel can
+   * show how much the edit grew or shrank the memory.
+   *
+   * Semantics the schema depends on: 0 means known-empty (a create has
+   * nothing before it, a delete nothing after), while omitting the field
+   * leaves NULL, meaning unknown. Only pass undefined when the size
+   * genuinely could not be determined - a null here is indistinguishable
+   * from a pre-feature row in the UI.
+   *
+   * `chars_before` is always THIS memory's prior length, including for a
+   * consolidation (where the entry lands on the survivor). Not
+   * survivor+loser combined: per-kind semantics would make these columns
+   * double-count when summed across rows.
+   */
+  chars_before?: number;
+  chars_after?: number;
 }
 
 export async function appendMemoryChangelog(
@@ -35,6 +52,10 @@ export async function appendMemoryChangelog(
     kind: entry.kind,
     label_at_change: label,
     message,
+    // Omitted sizes ride as NULL ("unknown"), which is distinct from 0
+    // ("known empty") - see the column comments in schema.sql.
+    chars_before: entry.chars_before ?? null,
+    chars_after: entry.chars_after ?? null,
   });
   if (error) throw new Error(`createMemoryChangelogEntry failed: ${error.message}`);
 }

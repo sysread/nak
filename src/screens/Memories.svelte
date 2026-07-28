@@ -576,6 +576,10 @@
           kind: 'update',
           label_at_change: updated.label,
           message,
+          // editOriginalDataLength is snapshotted when the editor opens,
+          // so the before-size is exact without a re-read.
+          chars_before: editOriginalDataLength,
+          chars_after: updated.data.length,
         });
       } catch {
         // best-effort; the edit succeeded regardless.
@@ -685,6 +689,9 @@
             kind: 'delete',
             label_at_change: doomed.label,
             message,
+            // 0 after, not omitted: the body is genuinely gone.
+            chars_before: doomed.data.length,
+            chars_after: 0,
           });
         } catch {
           // best-effort; the delete succeeded regardless.
