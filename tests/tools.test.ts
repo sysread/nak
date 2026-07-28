@@ -43,14 +43,16 @@ describe('tool registry', () => {
     // (memory / conversation / wiki), the search/list/read tools
     // across memories / conversations / wiki / cookbook, the
     // research_docs sub-agent, web search, the title-rename
-    // convenience, the vision sub-call, and the toggle_toolbox meta-
-    // tool itself. This test is the tripwire for someone accidentally
+    // convenience, the two vision sub-calls (analyze_image for pictures,
+    // analyze_pdf_page for a rasterized PDF page), and the toggle_toolbox
+    // meta-tool itself. This test is the tripwire for someone accidentally
     // moving a write tool into the always-on set or dropping a read
     // tool out of it.
     const list = buildToolList([]);
     expect(list.map((t) => t.function.name).sort()).toEqual(
       [
         'analyze_image',
+        'analyze_pdf_page',
         'ask_user',
         'context',
         'conversation_get',
@@ -365,6 +367,7 @@ describe('tool registry', () => {
       'web_search',
       'update_title',
       'analyze_image',
+      'analyze_pdf_page',
     ]) {
       expect(names).toContain(expected);
     }

@@ -27,6 +27,7 @@ import { synthesizeRecoveryMessages } from '../conversation-recovery';
 import type { OpenAIToolCall } from '../tools/types';
 import type { Citation, TokenUsage } from '../venice';
 import { SupabaseError } from './error';
+import { deleteAttachmentPages } from './attachment-pages';
 import { base64ToBytes } from './query-utils';
 import type {
   Attachment,
@@ -178,6 +179,7 @@ export async function addAttachments(
         size_bytes: r.size_bytes,
         storage_path: path,
         extracted_text: r.extracted_text,
+        page_count: r.page_count,
       };
     })
   );
@@ -364,6 +366,13 @@ export async function deleteAttachment(
     .eq('id', attachmentId);
   if (updErr) throw new SupabaseError(updErr.message);
 
+  // Rendered PDF pages have to be dropped explicitly. This path expires the
+  // row rather than deleting it, so the `on delete cascade` that would
+  // otherwise clear message_attachment_pages never fires - without this the
+  // page renders would survive the delete and analyze_pdf_page would keep
+  // serving a document the user asked to remove.
+  await deleteAttachmentPages(client, attachmentId);
+
   if (path) {
     // Swallowed on purpose: attachment-gc reclaims any object the remove
     // misses, and the row is already marked expired regardless.
@@ -427,7 +436,7 @@ export async function listAttachmentSummariesForThread(
   const { data, error } = await client
     .from('message_attachments')
     .select(
-      'filename, mime_type, expired_at, created_at, messages!inner(thread_id)'
+      'filename, mime_type, expired_at, page_count, created_at, messages!inner(thread_id)'
     )
     .eq('messages.thread_id', threadId)
     .order('created_at', { ascending: true });
@@ -436,12 +445,18 @@ export async function listAttachmentSummariesForThread(
     filename: string;
     mime_type: string;
     expired_at: string | null;
+    page_count: number | null;
     created_at: string;
   }>).map((row) => ({
     filename: row.filename,
     mime_type: row.mime_type,
     is_image: row.mime_type.startsWith('image/'),
     expired: row.expired_at !== null,
+    // An expired attachment's page objects were reclaimed along with the
+    // original, so it has nothing left to view regardless of what the column
+    // says. Clearing it here keeps the block formatter from advertising
+    // analyze_pdf_page on a document whose bytes are gone.
+    page_count: row.expired_at !== null ? null : row.page_count,
     created_at: row.created_at,
   }));
 }

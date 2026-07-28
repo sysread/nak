@@ -59,6 +59,11 @@ import * as memoriesApi from './supabase/memories';
 // Messages & attachments domain slice (message read/write, attachment
 // storage), same delegation pattern.
 import * as messagesApi from './supabase/messages';
+// Rasterized-attachment-page slice (the PDF page renders that back
+// analyze_pdf_page). Split from ./supabase/messages.ts because it owns a
+// separate table with its own lifecycle, not because the file grew.
+import * as attachmentPagesApi from './supabase/attachment-pages';
+import type { RenderedPdfPage } from './pdf-pages';
 // Realtime domain slice (subscribe* channels + their paired point
 // reads), same delegation pattern.
 import * as realtimeApi from './supabase/realtime';
@@ -193,6 +198,7 @@ import type { FollowupInspectorRow } from './ui/followups-inspector';
  *                                                    -> ./supabase/memories.ts
  *   Messages & attachments    message read/write, attachment storage
  *                                                    -> ./supabase/messages.ts
+ *                             rasterized PDF pages   -> ./supabase/attachment-pages.ts
  *   Realtime subscriptions & message fetch
  *                             subscribe* + paired point reads
  *                                                    -> ./supabase/realtime.ts
@@ -1302,6 +1308,7 @@ export class SupabaseService {
   // (including the attachment bucket-storage rationale and the
   // interrupted-exchange recovery note on listMessages) live in
   // ./supabase/messages.ts (message read/write + attachment storage)
+  // and ./supabase/attachment-pages.ts (the rasterized PDF page renders)
   // as plain functions taking the client. These methods delegate
   // one-for-one under the same names so call sites and grep targets
   // stay stable.
@@ -1321,6 +1328,26 @@ export class SupabaseService {
     rows: NewAttachment[]
   ): Promise<Attachment[]> {
     return messagesApi.addAttachments(this.client, messageId, rows);
+  }
+
+  /**
+   * Upload the rasterized pages of one already-persisted attachment. Called
+   * after `addAttachments` returns, since the rows FK to the attachment id.
+   * Resolves the caller's user id here because the object key's leading
+   * folder must be it - the bucket's RLS policy keys on that prefix.
+   */
+  async addAttachmentPages(
+    attachmentId: string,
+    pages: readonly RenderedPdfPage[]
+  ): Promise<number> {
+    const session = await this.getSession();
+    if (!session) throw new SupabaseError('Not authenticated.');
+    return attachmentPagesApi.addAttachmentPages(
+      this.client,
+      session.user.id,
+      attachmentId,
+      pages
+    );
   }
 
   async createAttachmentSignedUrls(

@@ -18,8 +18,67 @@ import {
   formatBytes,
   isConsumableBy,
   isImageMimeType,
+  toNewAttachment,
   validateFile,
+  type LocalAttachment,
 } from '../src/lib/attachments';
+
+/** A composer-queued attachment with every field at its inert default. */
+function local(over: Partial<LocalAttachment> = {}): LocalAttachment {
+  return {
+    id: 'la-1',
+    filename: 'doc.pdf',
+    mime_type: 'application/pdf',
+    size_bytes: 1234,
+    data_base64: 'AAAA',
+    extracted_text: null,
+    pending: false,
+    compressing: false,
+    compression: null,
+    page_count: null,
+    pages: [],
+    rendering: null,
+    error: null,
+    ...over,
+  };
+}
+
+describe('toNewAttachment', () => {
+  it('carries page_count through to the insert shape', () => {
+    // The whole downstream contract keys on this field: the pre-send guard,
+    // the <thread_attachments> block, and analyze_pdf_page all read it to
+    // decide whether a PDF has anything to look at. Dropping it here would
+    // leave the pages in the bucket and invisible to the model.
+    expect(toNewAttachment(local({ page_count: 12 }), 0).page_count).toBe(12);
+    expect(toNewAttachment(local(), 0).page_count).toBeNull();
+  });
+
+  it('assigns the caller-supplied position and copies the wire fields', () => {
+    const row = toNewAttachment(
+      local({ filename: 'a.txt', extracted_text: 'hi', size_bytes: 7 }),
+      3
+    );
+    expect(row).toEqual({
+      position: 3,
+      filename: 'a.txt',
+      mime_type: 'application/pdf',
+      size_bytes: 7,
+      data_base64: 'AAAA',
+      extracted_text: 'hi',
+      page_count: null,
+    });
+  });
+
+  it('does not leak the in-memory page blobs into the insert shape', () => {
+    // `pages` is uploaded separately by addAttachmentPages; if it rode along
+    // here the insert would try to write blobs into message_attachments.
+    const row = toNewAttachment(
+      local({ pages: [{ pageNumber: 1, blob: new Blob(['x']) }], page_count: 1 }),
+      0
+    );
+    expect('pages' in row).toBe(false);
+  });
+});
 
 describe('formatBytes', () => {
   it('renders bytes under 1 KiB plainly', () => {
@@ -114,6 +173,36 @@ describe('isConsumableBy', () => {
       isConsumableBy(
         { mime_type: 'application/pdf', extracted_text: '   \n  ' },
         noVision
+      )
+    ).toBe(false);
+  });
+
+  it('accepts a scanned PDF with rendered pages but no extracted text', () => {
+    // The scanned-document case: the text-parser found nothing, but the
+    // rasterized pages are readable through analyze_pdf_page. Before pages
+    // existed the pre-send guard rejected this outright, which is what made
+    // scanned PDFs unsendable.
+    expect(
+      isConsumableBy(
+        { mime_type: 'application/pdf', extracted_text: '', page_count: 4 },
+        noVision
+      )
+    ).toBe(true);
+  });
+
+  it('rejects a PDF that neither extracted nor rendered', () => {
+    // page_count is only set when pages actually rendered, so zero/null is
+    // the "nothing landed" signal and the guard must still block.
+    expect(
+      isConsumableBy(
+        { mime_type: 'application/pdf', extracted_text: null, page_count: null },
+        vision
+      )
+    ).toBe(false);
+    expect(
+      isConsumableBy(
+        { mime_type: 'application/pdf', extracted_text: null, page_count: 0 },
+        vision
       )
     ).toBe(false);
   });

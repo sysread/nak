@@ -8,6 +8,7 @@ import { describe, it, expect } from 'vitest';
 import {
   chipStatus,
   compressionLabel,
+  renderingLabel,
   totalAttachmentBytes,
 } from '../src/lib/ui/composer-attachments';
 
@@ -19,6 +20,7 @@ function chip(overrides: Partial<ChipInput> = {}): ChipInput {
     pending: false,
     error: null,
     compression: null,
+    rendering: null,
     ...overrides,
   };
 }
@@ -28,6 +30,12 @@ describe('compressionLabel', () => {
     expect(
       compressionLabel({ beforeBytes: 2_852_126, afterBytes: 865_280 })
     ).toBe('Reduced from 2.7 MB to 845 KB');
+  });
+});
+
+describe('renderingLabel', () => {
+  it('spells out the page and total', () => {
+    expect(renderingLabel({ done: 1, total: 12 })).toBe('Rendering page 1 of 12');
   });
 });
 
@@ -46,6 +54,20 @@ describe('chipStatus', () => {
 
   it('falls back to pending while text extraction is in flight', () => {
     expect(chipStatus(chip({ pending: true })).kind).toBe('pending');
+  });
+
+  it('shows per-page render progress ahead of the generic pending spinner', () => {
+    // Rasterizing a long PDF is the slowest attach-time step; a bare
+    // spinner there reads as a hang, so the page counter has to win.
+    expect(
+      chipStatus(chip({ pending: true, rendering: { done: 4, total: 30 } }))
+    ).toEqual({ kind: 'rendering', label: 'Rendering page 4 of 30' });
+  });
+
+  it('keeps an error ahead of render progress', () => {
+    expect(
+      chipStatus(chip({ error: 'boom', rendering: { done: 1, total: 3 } })).kind
+    ).toBe('error');
   });
 
   it('reports a completed compression with its label', () => {

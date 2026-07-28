@@ -98,6 +98,11 @@
     validateFile,
     type LocalAttachment,
   } from '$lib/attachments';
+  import {
+    isPdfMimeType,
+    renderPdfPages,
+    type PdfRenderResult,
+  } from '$lib/pdf-pages';
   import { chipStatus, totalAttachmentBytes } from '$lib/ui/composer-attachments';
   import {
     VENICE_EMBEDDING_MODEL,
@@ -1303,6 +1308,9 @@
       pending: true,
       compressing: false,
       compression: null,
+      page_count: null,
+      pages: [],
+      rendering: null,
       error: null,
     };
     pendingAttachments = [...pendingAttachments, draft];
@@ -1326,25 +1334,57 @@
       const buffer = await finalFile.arrayBuffer();
       const base64 = arrayBufferToBase64(buffer);
 
-      let extractedText: string | null = null;
-      if (!isImageMimeType(finalFile.type) && app.supabase) {
-        // Fire the text-parser call through the venice edge function.
-        // Browser-direct calls to Venice's /augment/text-parser were
-        // CORS-rejected (every non-image upload surfaced as "Failed to
-        // fetch" at the chip) - routing through the function fixes it.
-        // Failure stays non-blocking: the user gets a red chip with an
-        // explanation, and the pre-send guard blocks until they remove
-        // or retry.
-        try {
-          extractedText = await app.supabase.extractText(finalFile, finalFile.name);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          patchAttachment(id, {
-            pending: false,
-            error: `Text extraction failed: ${msg}`,
-          });
-          return;
-        }
+      // Text extraction and PDF rasterization run CONCURRENTLY. Extraction
+      // is a network round trip that uploads the whole file to Venice and
+      // dominates the wall clock; rendering is local CPU. Serializing them
+      // would make a scanned PDF wait out both in turn for no reason.
+      //
+      // Extraction resolves to a result object rather than throwing so a PDF
+      // that rendered fine isn't rejected over a text-parser blip - the
+      // readability decision happens once, below, with both results in hand.
+      const supabase = app.supabase;
+      const extraction: Promise<{ text: string | null; error: string | null }> =
+        !isImageMimeType(finalFile.type) && supabase
+          ? supabase
+              .extractText(finalFile, finalFile.name)
+              .then((text) => ({ text, error: null }))
+              .catch((err: unknown) => ({
+                text: null,
+                error: err instanceof Error ? err.message : String(err),
+              }))
+          : Promise.resolve({ text: null, error: null });
+
+      const rasterization: Promise<PdfRenderResult | null> = isPdfMimeType(finalFile.type)
+        ? renderPdfPages(finalFile, (done, total) =>
+            patchAttachment(id, { rendering: { done, total } })
+          ).catch(() =>
+            // Swallowed: an unrenderable PDF (corrupt, password-protected)
+            // still has its text layer, and the readability decision below
+            // covers the case where it has neither. Surfacing a render error
+            // here would reject documents that read perfectly well.
+            null
+          )
+        : Promise.resolve(null);
+
+      const [extracted, render] = await Promise.all([extraction, rasterization]);
+      patchAttachment(id, { rendering: null });
+
+      const extractedText = extracted.text;
+      const extractionError = extracted.error;
+      const hasText = typeof extractedText === 'string' && extractedText.trim().length > 0;
+      const hasPages = (render?.pages.length ?? 0) > 0;
+
+      // Only fail the chip when the file ended up with NO readable form at
+      // all. A PDF whose text-parser call failed but which rasterized is
+      // still fully answerable through analyze_pdf_page, so the extraction
+      // error is only worth surfacing when nothing else landed.
+      if (!isImageMimeType(finalFile.type) && !hasText && !hasPages && extractionError) {
+        patchAttachment(id, {
+          pending: false,
+          rendering: null,
+          error: `Text extraction failed: ${extractionError}`,
+        });
+        return;
       }
 
       patchAttachment(id, {
@@ -1353,12 +1393,23 @@
         data_base64: base64,
         extracted_text: extractedText,
         compression,
+        // page_count stays null unless pages actually rendered, so a
+        // non-null value downstream always means "there is something to
+        // look at" rather than merely "this was a PDF."
+        page_count: hasPages ? (render?.pageCount ?? null) : null,
+        pages: render?.pages ?? [],
         pending: false,
+        rendering: null,
         error: null,
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      patchAttachment(id, { pending: false, compressing: false, error: msg });
+      patchAttachment(id, {
+        pending: false,
+        compressing: false,
+        rendering: null,
+        error: msg,
+      });
     }
   }
 
@@ -3206,15 +3257,17 @@
       error = { text: `"${erroredChip.filename}": ${erroredChip.error}` };
       return null;
     }
-    // Images are handled on all models via analyze_image(). Only block
-    // non-image attachments with no extractable text - those are a real
-    // dead end with no tool fallback.
+    // Images are handled on all models via analyze_image(), and a PDF that
+    // rasterized is readable through analyze_pdf_page even with an empty
+    // text layer (the scanned-document case). Only block a non-image
+    // attachment that has neither - that's a real dead end with no tool
+    // fallback.
     const unreadable = attachments.find(
       (a) => !isImageMimeType(a.mime_type) && !isConsumableBy(a, modelSpec)
     );
     if (unreadable) {
       error = {
-        text: `"${unreadable.filename}" has no extractable text — the model won't be able to read it. Remove it to send.`,
+        text: `"${unreadable.filename}" has no text the parser could read and no pages that could be rendered — the model won't be able to read it. Remove it to send.`,
       };
       return null;
     }
@@ -3255,6 +3308,27 @@
       const newRows: NewAttachment[] = attachments.map((a, i) => toNewAttachment(a, i));
       try {
         userMsg.attachments = await supabase.addAttachments(userMsg.id, newRows);
+        // Rasterized PDF pages upload AFTER the attachment rows commit -
+        // their own rows FK to the attachment id and their object keys embed
+        // it, so neither exists until this point. `addAttachments` returns
+        // rows in the order it was handed them, which is the composer's chip
+        // order, so index alignment with `attachments` holds.
+        //
+        // Non-fatal: a failed page upload costs the model its visual read of
+        // the document, not the message. The user's turn and the extracted
+        // text land either way, so this must never take the send down with
+        // it.
+        await Promise.all(
+          userMsg.attachments.map(async (row, i) => {
+            const local = attachments[i];
+            if (!local || local.pages.length === 0) return;
+            try {
+              await supabase.addAttachmentPages(row.id, local.pages);
+            } catch (err) {
+              log.warn('addAttachmentPages failed', err);
+            }
+          })
+        );
       } catch (err) {
         log.warn('persistAttachments failed', err);
         userMsg.attachments = [];
@@ -8108,7 +8182,10 @@
                   class:pending={a.pending}
                   class:errored={!!a.error}
                   role="listitem"
-                  title={a.error ?? (status.kind === 'compressed' ? status.label : '')}
+                  title={a.error ??
+                    (status.kind === 'compressed' || status.kind === 'rendering'
+                      ? status.label
+                      : '')}
                 >
                   <span class="chip-name">{a.filename}</span>
                   {#if status.kind === 'compressed'}
@@ -8116,6 +8193,12 @@
                          user sees the payoff; the full label is also the
                          chip's tooltip above. -->
                     <span class="chip-size compressed">{status.label}</span>
+                  {:else if status.kind === 'rendering'}
+                    <!-- Same slot as the compression note: a long PDF's
+                         render is the slowest attach-time step, so the page
+                         counter replaces the size rather than sitting beside
+                         a bare spinner the user can't read progress from. -->
+                    <span class="chip-size">{status.label}</span>
                   {:else}
                     <span class="chip-size">{formatBytes(a.size_bytes)}</span>
                   {/if}
@@ -8123,6 +8206,9 @@
                     <span
                       class="chip-status chip-spinner"
                       aria-label="Compressing large image"
+                    ></span>
+                  {:else if status.kind === 'rendering'}
+                    <span class="chip-status chip-spinner" aria-label="Rendering PDF pages"
                     ></span>
                   {:else if status.kind === 'pending'}
                     <span class="chip-status" aria-label="Processing">…</span>

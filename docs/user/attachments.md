@@ -19,10 +19,12 @@ There are three ways to queue a file for the next send:
 
 Each queued file appears as a chip above the textarea. A dashed chip
 means Nak is still processing the file (compressing a large image,
-asking Venice to extract text from a document). When Nak shrinks an
-oversized image the chip shows the result - "Reduced from 2.7 MB to
-845 KB" - so you can see what was saved. The chip fills in once
-processing finishes; the send button unlocks when every chip is ready.
+asking Venice to extract text from a document, rendering the pages of a
+PDF). When Nak shrinks an oversized image the chip shows the result -
+"Reduced from 2.7 MB to 845 KB" - so you can see what was saved. A PDF
+counts its pages as it renders them - "Rendering page 4 of 30". The chip
+fills in once processing finishes; the send button unlocks when every
+chip is ready.
 
 Click the × on a chip to remove it before sending.
 
@@ -41,6 +43,15 @@ Click the × on a chip to remove it before sending.
   that text to your message as a fenced block tagged with the
   filename. The model sees the filename alongside the extracted
   content.
+- **PDFs get a second pass.** Text extraction only recovers a PDF's
+  text layer - which a **scanned** PDF doesn't have at all, and which
+  throws away charts, diagrams, signatures, stamps, and table layout
+  even when it works. So Nak also **renders the PDF's pages as
+  images** while you're attaching it, and the model can look at any
+  one of them the same way it looks at a photo. Ask "what does the
+  chart on page 4 show?" or hand it a scanned receipt and it can read
+  it. Nak renders the first 30 pages of a document; if you ask about a
+  page beyond that, the model will tell you which pages it can see.
 - **Cross-turn recall**. Every chat turn the model also receives a
   short summary of every file ever attached to the conversation -
   live filenames it can still inspect, plus filenames of any deleted
@@ -109,10 +120,12 @@ your conversations, newest first, with:
 
 When you delete a file:
 
-- The file itself is removed from Nak's storage (your space is freed).
+- The file itself is removed from Nak's storage (your space is freed),
+  along with any rendered pages if it was a PDF.
 - The filename, size, and extracted text **stay** in the conversation
   so it's still legible — you'll see the filename with a small clock
-  icon, and the "Text" button keeps working.
+  icon, and the "Text" button keeps working. The model can no longer
+  look at the pages, and will say so rather than guessing.
 
 Deleting is permanent and can't be undone.
 
@@ -128,6 +141,11 @@ re-encodes toward roughly 1 MB, so a multi-megabyte phone photo lands
 small without you doing anything. It's a target, not a hard cut - a
 detailed image may stay a little over, and an image that's already
 small passes through untouched.
+
+A PDF's rendered pages are stored alongside it and count toward your
+storage, though not toward the per-message limits above - roughly a few
+megabytes for a long document. They're deleted with the PDF when you
+remove it from the Artifacts tab.
 
 ## Where to go next
 

@@ -222,6 +222,13 @@ export interface NewAttachment {
   size_bytes: number;
   data_base64: string;
   extracted_text: string | null;
+  /**
+   * Page count of the source document, for formats we rasterize (PDF).
+   * Null for everything else, and null for a PDF whose render produced no
+   * pages - so a non-null value is the signal that `message_attachment_pages`
+   * holds something worth looking at. See `src/lib/pdf-pages.ts`.
+   */
+  page_count: number | null;
 }
 
 /**
@@ -258,6 +265,13 @@ export interface ThreadAttachmentSummary {
   is_image: boolean;
   /** True when the binary has been deleted (a manual Artifacts-tab delete). */
   expired: boolean;
+  /**
+   * Non-null when the document has rasterized pages the model can inspect
+   * with analyze_pdf_page; carries the document's TRUE length, which may
+   * exceed the number of pages actually rendered. The block formatter uses
+   * it to advertise the viewable range honestly.
+   */
+  page_count: number | null;
   /** Insert timestamp, used by the block formatter for stable ordering. */
   created_at: string;
 }
