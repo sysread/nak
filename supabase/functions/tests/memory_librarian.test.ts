@@ -128,3 +128,65 @@ Deno.test('deep-sleep batch renderer marks the seed and renders neighbor scores'
   assertEquals(rows[0], '- [SEED] (conf=2.00, id=s) `seed` - fact');
   assertEquals(rows[1], '- [0.93] (conf=2.00, id=n1) `near` - same fact');
 });
+
+// The librarian's memory_search is the shared tool plus a per-row
+// `hygiene` note on oversized bodies. It is wrapped here rather than
+// annotated in memory_search itself because that tool is shared with the
+// main chat and reflection, neither of which carries memory_reshape -
+// a "this wants condensing" note in front of a caller that cannot act on
+// it is noise on a hot path.
+function scriptedAdminClient(rows: Array<Record<string, unknown>>): unknown {
+  const chain: Record<string, unknown> = {};
+  for (const m of ['select', 'eq', 'order', 'limit', 'or']) chain[m] = () => chain;
+  chain.then = (resolve: (v: { data: unknown; error: null }) => unknown) =>
+    resolve({ data: rows, error: null });
+  return {
+    from: () => chain,
+    // Relation hydration; empty is fine, the search result stands alone.
+    rpc: () => Promise.resolve({ data: [], error: null }),
+  };
+}
+
+async function searchWithHygiene(
+  bodies: string[],
+): Promise<Array<Record<string, unknown>>> {
+  const tool = buildMemoryLibrarianToolbox().tools.find(
+    (t) => t.name === 'memory_search',
+  );
+  if (!tool) throw new Error('memory_search missing from the librarian toolbox');
+  const rows = bodies.map((data, i) => ({
+    id: `m${i}`,
+    label: `row ${i}`,
+    data,
+    confidence: 2.0,
+    updated_at: '2026-07-01T00:00:00Z',
+  }));
+  // Empty query takes the list-all path, which needs no Venice key.
+  const out = await tool.execute(
+    { query: '' },
+    {
+      adminClient: scriptedAdminClient(rows) as never,
+      userId: 'u-1',
+      threadId: null,
+      signal: new AbortController().signal,
+      depth: 0,
+    },
+  );
+  return out as Array<Record<string, unknown>>;
+}
+
+Deno.test('librarian memory_search annotates only the oversized rows', async () => {
+  const [healthy, trim, condense] = await searchWithHygiene([
+    'x'.repeat(500),
+    'x'.repeat(3200),
+    'x'.repeat(7000),
+  ]);
+  // A short row carries no note - absence is how "leave this alone"
+  // reaches the model.
+  assertEquals('hygiene' in healthy, false);
+  assertStringIncludes(String(trim.hygiene), '3200');
+  assertStringIncludes(String(condense.hygiene), '7000');
+  // The wrapper is additive: the underlying row survives untouched.
+  assertEquals(healthy.id, 'm0');
+  assertEquals(trim.data, 'x'.repeat(3200));
+});

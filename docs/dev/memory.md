@@ -671,6 +671,52 @@ The browser edit path mirrors the rule via `memoryDataBudget` in
 `src/lib/ui/memories.ts`, so the Memories panel's textarea
 `maxlength` and counter grant the same headroom.
 
+### Shrinking what is already oversized
+
+The budget only forbids growth - it never compels shrinkage, and a
+rewrite of a 6000-char row may legally return 5999. Bringing legacy
+rows back under the ceiling is the librarians' job, driven by a
+graded per-row signal rather than a blanket instruction:
+
+| tier | body length | what the librarian is told |
+|---|---|---|
+| `ok` | <= 2500 | nothing at all - no annotation |
+| `trim` | 2501-5000 | tighten it if you are reshaping anyway; not worth a rewrite alone |
+| `condense` | > 5000 | worth a rewrite for its own sake |
+
+`memoryLengthTier` / `memoryLengthHint` in
+`tools/_memory_data_budget.ts` own the boundaries. The `condense`
+threshold is `2 * MAX_MEMORY_DATA_CHARS`, so it tracks the budget if
+that is ever retuned.
+
+Three details are load-bearing:
+
+- **A healthy row gets NO annotation**, not `hygiene: 'ok'`. Absence
+  is the signal. Annotating all ~360 within-budget rows would invite
+  the librarian to rewrite short memories that were never a problem,
+  spending model calls and risking fact loss for nothing.
+- **The hint states the row's actual character count.** `memory_search`
+  returns bodies, not sizes, and a model cannot judge length by eye - a
+  prompt saying "shorten rows over 2500 chars" without supplying the
+  number asks for something models are bad at.
+- **Both hints repeat the no-fact-loss rule**, and `condense`
+  explicitly says to leave a genuinely fact-dense row long. Shrink
+  pressure without that guard pushes the model to drop facts to hit a
+  number, against `memory_reshape`'s own contract.
+
+The annotation attaches in `agents/_memory_librarian_tools.ts`
+(`librarianMemorySearch`), NOT in `memory_search` itself: that tool is
+shared with the main chat and reflection, neither of which carries
+`memory_reshape`, and a "this wants condensing" note in front of a
+caller that cannot act on it is noise on a hot path.
+
+**This is opportunistic, not guaranteed.** Healing depends on the
+librarians visiting a row and choosing to tighten it. Measured on a
+real store, 93 of 95 over-budget rows had been written to within 90
+days, so the opportunity is frequent - but a row that is genuinely
+dense should and will stay long. Track it by watching the over-budget
+count and total excess chars over time.
+
 ## Interactions with other features
 
 - **Chat** — the main model invokes `memory_recall` as a tool
