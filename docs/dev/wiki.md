@@ -456,7 +456,12 @@ UI:
   top-bar sparkle button (disabled while held) and the panel ("a run is
   in progress" low-fidelity spinner when a run THIS strip didn't start
   is active - an `<AsciiSpinner>`, the same cue the step list's
-  in-flight row carries; see `docs/dev/components.md`). Because manual AND scheduled runs claim the same lease,
+  in-flight row and its trailing "Working" tail row carry; see
+  `docs/dev/components.md`. The tail row shows whenever the run is
+  live and the bottom row has already settled - `showsRunTail` in
+  `src/lib/ui/librarian-run-tail.ts`, shared with the memory strip -
+  so the list never goes still while more steps are coming).
+  Because manual AND scheduled runs claim the same lease,
   the UI lights up for background sweeps too, and the lease clearing is
   the backstop that settles every client even if the `result` broadcast
   is dropped. Reusable across fleets via the generic

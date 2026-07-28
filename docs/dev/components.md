@@ -103,11 +103,18 @@ Two contracts callers must honour:
 Under `prefers-reduced-motion: reduce` (sampled once at mount) it
 renders a static ellipsis instead of starting the timer.
 
-Consumers: `Memories.svelte` and `Wiki.svelte` - in each, the pending
-row of the librarian run's step list plus the "running in the
-background" notice shown when the in-flight lease is held by a run
-this strip didn't start. See [`./memory.md`](./memory.md) and
-[`./wiki.md`](./wiki.md).
+Consumers: `Memories.svelte` and `Wiki.svelte` - in each, three
+places: the pending row of the librarian run's step list, the
+trailing "Working" tail row (`src/lib/ui/librarian-run-tail.ts`
+decides when that shows), and the "running in the background" notice
+displayed when the in-flight lease is held by a run this strip didn't
+start. See [`./memory.md`](./memory.md) and [`./wiki.md`](./wiki.md).
+
+`showsRunTail` guarantees the two spinners inside a step list are
+mutually exclusive - the tail appears only when the bottom row isn't
+already pending. Worth preserving: two of these one above the other
+mount at different times, so their frames run out of phase and the
+pair reads as a rendering bug.
 
 Deliberately NOT applied to the chat tool-call rows
 (`.tool-status.status-pending`), which keep their rotating glyph. That
