@@ -118,14 +118,26 @@ export type MemoryLibrarianProgress =
   | { kind: 'done'; ok: boolean };
 
 /**
- * Settle the trailing pending row in the step list to 'ok'. Called
- * before pushing a new row, since the previous phase has by
- * definition finished when the next phase emits its first event.
- * Mutates the caller's array in place to match the wiki pattern.
+ * Settle the trailing pending row in the step list. Called before
+ * pushing a new row, since the previous phase has by definition
+ * finished when the next phase emits its first event - hence the 'ok'
+ * default. Mutates the caller's array in place to match the wiki
+ * pattern.
+ *
+ * The 'error' status is for the TERMINAL path: a run that dies
+ * without a `done` event (the detached-run inactivity backstop firing,
+ * a dropped channel, the edge function killed mid-flight) leaves its
+ * last row pending forever. A pending row renders a spinner, so
+ * without this the strip animates indefinitely under a header reading
+ * "finished" next to a red timeout error. Same job as the wiki
+ * strip's finalizeLibrarianSteps.
  */
-export function settleTrailingPending(steps: MemoryLibrarianStep[]): void {
+export function settleTrailingPending(
+  steps: MemoryLibrarianStep[],
+  status: 'ok' | 'error' = 'ok'
+): void {
   const last = steps[steps.length - 1];
-  if (last && last.status === 'pending') last.status = 'ok';
+  if (last && last.status === 'pending') last.status = status;
 }
 
 /**

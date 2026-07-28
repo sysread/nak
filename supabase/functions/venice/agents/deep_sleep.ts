@@ -67,12 +67,41 @@ const DEEP_SLEEP_MIN_INTERVAL_SECONDS = 12 * 3600;
 const DEEP_SLEEP_MIN_SIMILARITY = 0.8;
 
 /**
- * Max number of neighbors (excluding the seed) fetched per run. The
- * seed + 8 neighbors is a comfortable batch for the agent's reasoning
- * loop without blowing the prompt budget on the embedded label/data
- * text.
+ * Max number of neighbors (excluding the seed) fetched per run.
+ *
+ * Sized against the hosted edge-function wall clock, not the prompt
+ * budget. The agent works the batch pair by pair, so the reasoning
+ * rounds it needs grow far faster than the row count - a seed + 8
+ * batch was observed spending six-plus rounds on consolidations and
+ * getting killed mid-flight, which leaves no run outcome persisted
+ * and strands the in-flight lease until its TTL expires.
+ *
+ * On its own this only lowers the ODDS of an overrun;
+ * DEEP_SLEEP_BUDGET_MS is what bounds it.
+ *
+ * The cost of a smaller batch is rotation speed, since a run marks
+ * its ENTIRE batch visited: fewer memories retired per pass means
+ * more passes to sweep the whole set. At a 12h cadence that is a
+ * cheap trade against runs that die and take the lease with them.
  */
-const DEEP_SLEEP_MAX_NEIGHBORS = 8;
+const DEEP_SLEEP_MAX_NEIGHBORS = 4;
+
+/**
+ * Wall-clock budget for the agent loop.
+ *
+ * The hosted edge runtime kills an isolate at roughly 400s, and being
+ * killed is the worst way for this run to end: the code that persists
+ * the run-outcome envelope and releases the in-flight lease never
+ * executes, so nothing is recorded and every client treats the pass
+ * as live until the lease TTL expires ~10 minutes later - locking the
+ * user out of starting another. Stopping one round early instead
+ * costs one consolidation on a pass that repeats every 12h.
+ *
+ * 300s leaves ~100s of headroom for the post-loop writes and for the
+ * loop's next-round estimate coming in low (it extrapolates from the
+ * slowest round so far, which a slower round can still beat).
+ */
+const DEEP_SLEEP_BUDGET_MS = 300_000;
 
 /**
  * Hard floor on the batch size that justifies running the agent.
@@ -496,6 +525,7 @@ async function runReview(args: {
       apiKey,
       signal: new AbortController().signal,
       reasoningEffort: 'low',
+      budgetMs: DEEP_SLEEP_BUDGET_MS,
       complete: args.complete,
       onProgress: args.onProgress,
     },

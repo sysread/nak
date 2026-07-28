@@ -7,6 +7,7 @@
 
 import { assertEquals } from '@std/assert';
 import {
+  roundFitsBudget,
   runHeadlessAgent,
   type AgentProgressEvent,
   type Toolbox,
@@ -177,4 +178,139 @@ Deno.test('a bare toolbox carries no activity param even with onProgress attache
   };
   assertEquals('activity' in params.properties, false);
   assertEquals((params.required ?? []).includes('activity'), false);
+});
+
+// ---------------------------------------------------------------------------
+// Wall-clock budget. The hosted edge runtime kills an isolate around
+// 400s, taking the post-loop outcome write and lease release with it,
+// so the loop stops itself first. The clock is injected for the same
+// reason `complete` is: these assertions are about the decision, not
+// about how fast the test machine runs.
+
+Deno.test('roundFitsBudget: no estimate yet always fits', () => {
+  // Round 1 has nothing to extrapolate from and must never be skipped.
+  assertEquals(roundFitsBudget(0, 300_000, 0), true);
+});
+
+Deno.test('roundFitsBudget: fits while the estimate still leaves room', () => {
+  assertEquals(roundFitsBudget(200_000, 300_000, 50_000), true);
+  // Exactly filling the budget counts as fitting.
+  assertEquals(roundFitsBudget(250_000, 300_000, 50_000), true);
+});
+
+Deno.test('roundFitsBudget: refuses a round that would overrun', () => {
+  assertEquals(roundFitsBudget(260_000, 300_000, 50_000), false);
+  // Already over budget, whatever the estimate.
+  assertEquals(roundFitsBudget(400_000, 300_000, 0), false);
+});
+
+Deno.test('the loop stops before a round it estimates will not fit', async () => {
+  // Clock advances 100s per read. Round 1 therefore measures as 100s
+  // against a 250s budget, so round 3 is refused: 200s elapsed + a
+  // 100s estimate exceeds it.
+  let clock = 0;
+  const now = () => {
+    clock += 100_000;
+    return clock;
+  };
+  let round = 0;
+  const result = await runHeadlessAgent(
+    {
+      model: 'm',
+      messages: [{ role: 'user', content: 'go' }],
+      toolbox: ECHO_TOOLBOX,
+      baseCtx: FAKE_BASE_CTX,
+      apiKey: 'k',
+      signal: new AbortController().signal,
+      budgetMs: 250_000,
+      now,
+      // Never settles - always asks for another tool call, so only the
+      // budget can end this run.
+      // deno-lint-ignore require-await
+      complete: async () => {
+        round += 1;
+        return completion({
+          toolCalls: [
+            {
+              id: `c${round}`,
+              type: 'function',
+              function: { name: 'echo', arguments: '{"value":"hi"}' },
+            },
+          ],
+        });
+      },
+    },
+    0,
+  );
+  assertEquals(result.stoppedByLimit, true);
+  // Stopped on the budget, far short of the 20-round default.
+  assertEquals(result.rounds < 20, true);
+  // Work already done is kept: each tool call committed as it ran.
+  assertEquals(result.toolCalls, result.rounds);
+});
+
+Deno.test('an unset budget leaves the loop unbounded by time', async () => {
+  // Same never-settling model and a clock jumping an hour per read;
+  // without budgetMs the run still goes the full round allowance.
+  let clock = 0;
+  const now = () => {
+    clock += 3_600_000;
+    return clock;
+  };
+  let round = 0;
+  const result = await runHeadlessAgent(
+    {
+      model: 'm',
+      messages: [{ role: 'user', content: 'go' }],
+      toolbox: ECHO_TOOLBOX,
+      baseCtx: FAKE_BASE_CTX,
+      apiKey: 'k',
+      signal: new AbortController().signal,
+      now,
+      maxRounds: 3,
+      // deno-lint-ignore require-await
+      complete: async () => {
+        round += 1;
+        return completion({
+          toolCalls: [
+            {
+              id: `c${round}`,
+              type: 'function',
+              function: { name: 'echo', arguments: '{"value":"hi"}' },
+            },
+          ],
+        });
+      },
+    },
+    0,
+  );
+  assertEquals(result.rounds, 3);
+  assertEquals(result.stoppedByLimit, true);
+});
+
+Deno.test('a budget too small for one round still runs one', async () => {
+  // Zero budget must not produce a zero-round result; callers treat a
+  // completed run as having done at least something.
+  let clock = 0;
+  const now = () => {
+    clock += 100_000;
+    return clock;
+  };
+  const result = await runHeadlessAgent(
+    {
+      model: 'm',
+      messages: [{ role: 'user', content: 'go' }],
+      toolbox: ECHO_TOOLBOX,
+      baseCtx: FAKE_BASE_CTX,
+      apiKey: 'k',
+      signal: new AbortController().signal,
+      budgetMs: 0,
+      now,
+      // deno-lint-ignore require-await
+      complete: async () => completion({ text: 'settled' }),
+    },
+    0,
+  );
+  assertEquals(result.rounds, 1);
+  assertEquals(result.finalText, 'settled');
 });

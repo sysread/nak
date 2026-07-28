@@ -203,6 +203,24 @@ describe('settleTrailingPending', () => {
     expect(steps[0].status).toBe('ok');
   });
 
+  it('can settle the trailing row as failed for the terminal path', () => {
+    // A run that dies without a `done` event leaves its last row
+    // pending, and a pending row spins forever under a header that
+    // already reads "finished".
+    const steps: MemoryLibrarianStep[] = [
+      { label: 'a', status: 'ok' },
+      { label: 'Thinking (round 8)', status: 'pending' },
+    ];
+    settleTrailingPending(steps, 'error');
+    expect(steps[1].status).toBe('error');
+  });
+
+  it('does not resurrect a settled row when finalizing as failed', () => {
+    const steps: MemoryLibrarianStep[] = [{ label: 'a', status: 'ok' }];
+    settleTrailingPending(steps, 'error');
+    expect(steps[0].status).toBe('ok');
+  });
+
   it('handles empty arrays', () => {
     const steps: MemoryLibrarianStep[] = [];
     expect(() => settleTrailingPending(steps)).not.toThrow();

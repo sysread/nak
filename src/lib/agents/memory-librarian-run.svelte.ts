@@ -44,6 +44,7 @@ import { emitMemoryChange } from '../memory-events';
 import { awaitDetachedRun } from './detached-run';
 import {
   pushStep,
+  settleTrailingPending,
   deepSleepResultLine,
   remResultLine,
   recoveredOutcomeUpdate,
@@ -290,6 +291,13 @@ export const librarianRun = {
       state.error = err instanceof Error ? err.message : String(err);
       emitMemoryChange();
     } finally {
+      // Terminal-finalize before clearing `running`. A run that never
+      // delivers its `done` event - the inactivity backstop firing, a
+      // dropped channel, the edge function killed mid-flight - leaves
+      // its last row pending, and a pending row spins forever under a
+      // header that already says the run finished. Settle it as failed
+      // when we have an error to show, done otherwise.
+      settleTrailingPending(state.steps, state.error ? 'error' : 'ok');
       state.running = false;
     }
   },
