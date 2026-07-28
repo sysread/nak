@@ -53,7 +53,7 @@ async function renderedPageNumbers(ctx: ToolContext, attachmentId: string): Prom
  * relays this to the user when it can't see the page they asked about, so it
  * has to be readable prose, not a raw array.
  */
-export function describeRanges(pages: readonly number[]): string {
+function describeRanges(pages: readonly number[]): string {
   const ranges: string[] = [];
   let start = pages[0];
   let prev = pages[0];
@@ -156,3 +156,7 @@ export const analyzePdfPage: ToolDef = {
 };
 
 registerTool(analyzePdfPage);
+
+// Test-only surface. describeRanges has no external caller in production;
+// exporting it outright would widen the tool's API for a unit test.
+export const __test = { describeRanges };

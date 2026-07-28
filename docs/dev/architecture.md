@@ -258,7 +258,10 @@ the function-side wire shape:
 - `SupabaseService.embed(req)` - per-query vector. Routes through
   venice/embed.
 - `SupabaseService.extractText(file, filename)` - multipart upload
-  to venice/text-parser for the per-attachment text extraction.
+  to venice/text-parser for the per-attachment text extraction. It
+  returns a document's TEXT LAYER only; PDFs are additionally
+  rasterized in the browser so the model can look at a page (see
+  [Attachments](./attachments.md), "PDF page rendering").
 
 All four browser entry points share Venice's wire-body builder via
 `buildChatBody(req, streaming)` exported from `venice.ts` - one
@@ -389,6 +392,7 @@ turn:
 | `tool_calls` | Function | Round loop in `getStreamingResponse` |
 | `attachments` (user upload) | Browser | File picker / paste / drag |
 | `attachments` (generated image) | Function | Per-round `attachGeneratedImages` |
+| `message_attachment_pages` (rasterized PDF pages) | Browser | `renderPdfPages` at attach time, uploaded on send |
 | `threads` (insert) | Browser | New-thread button |
 | `threads.title` (manual rename) | Browser | Inline-rename UI |
 | `threads.title` (auto-title) | Function | Curation tail after a completed turn + hourly sweep |

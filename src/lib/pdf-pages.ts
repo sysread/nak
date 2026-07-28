@@ -107,7 +107,9 @@ async function loadPdfjs(): Promise<typeof import('pdfjs-dist')> {
 /**
  * Scale factor that fits a page's natural size under the long-edge cap.
  * Never scales UP - a small page rendered at 1:1 is already as much detail
- * as the source has, and upscaling would only inflate the JPEG.
+ * as the source has, and upscaling would only inflate the JPEG. A
+ * degenerate (zero or negative) page box falls back to 1:1 rather than
+ * dividing by zero, which would hand pdf.js an Infinity viewport.
  */
 function fitScale(width: number, height: number): number {
   const longEdge = Math.max(width, height);
@@ -204,3 +206,13 @@ export async function renderPdfPages(
     await loadingTask.destroy();
   }
 }
+
+/**
+ * Test-only surface. `fitScale` decides how much detail a rendered page
+ * keeps, which is the difference between legible scanned text and a blurry
+ * one - but it has no caller outside `renderPdfPages`, so it stays internal
+ * rather than widening this module's API. `renderPdfPages` itself is not
+ * unit-testable (jsdom has neither a canvas nor a worker, the same reason
+ * `compressImage` is uncovered).
+ */
+export const __test = { fitScale };

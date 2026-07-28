@@ -18,8 +18,67 @@ import {
   formatBytes,
   isConsumableBy,
   isImageMimeType,
+  toNewAttachment,
   validateFile,
+  type LocalAttachment,
 } from '../src/lib/attachments';
+
+/** A composer-queued attachment with every field at its inert default. */
+function local(over: Partial<LocalAttachment> = {}): LocalAttachment {
+  return {
+    id: 'la-1',
+    filename: 'doc.pdf',
+    mime_type: 'application/pdf',
+    size_bytes: 1234,
+    data_base64: 'AAAA',
+    extracted_text: null,
+    pending: false,
+    compressing: false,
+    compression: null,
+    page_count: null,
+    pages: [],
+    rendering: null,
+    error: null,
+    ...over,
+  };
+}
+
+describe('toNewAttachment', () => {
+  it('carries page_count through to the insert shape', () => {
+    // The whole downstream contract keys on this field: the pre-send guard,
+    // the <thread_attachments> block, and analyze_pdf_page all read it to
+    // decide whether a PDF has anything to look at. Dropping it here would
+    // leave the pages in the bucket and invisible to the model.
+    expect(toNewAttachment(local({ page_count: 12 }), 0).page_count).toBe(12);
+    expect(toNewAttachment(local(), 0).page_count).toBeNull();
+  });
+
+  it('assigns the caller-supplied position and copies the wire fields', () => {
+    const row = toNewAttachment(
+      local({ filename: 'a.txt', extracted_text: 'hi', size_bytes: 7 }),
+      3
+    );
+    expect(row).toEqual({
+      position: 3,
+      filename: 'a.txt',
+      mime_type: 'application/pdf',
+      size_bytes: 7,
+      data_base64: 'AAAA',
+      extracted_text: 'hi',
+      page_count: null,
+    });
+  });
+
+  it('does not leak the in-memory page blobs into the insert shape', () => {
+    // `pages` is uploaded separately by addAttachmentPages; if it rode along
+    // here the insert would try to write blobs into message_attachments.
+    const row = toNewAttachment(
+      local({ pages: [{ pageNumber: 1, blob: new Blob(['x']) }], page_count: 1 }),
+      0
+    );
+    expect('pages' in row).toBe(false);
+  });
+});
 
 describe('formatBytes', () => {
   it('renders bytes under 1 KiB plainly', () => {

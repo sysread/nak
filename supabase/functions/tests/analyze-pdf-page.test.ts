@@ -6,7 +6,9 @@
 // rendered. Ranges are not always contiguous: rendering is capped at the
 // leading pages, and an individual page that fails to rasterize is skipped.
 import { assertEquals } from '@std/assert';
-import { describeRanges } from '../venice/tools/analyze_pdf_page.ts';
+import { __test } from '../venice/tools/analyze_pdf_page.ts';
+
+const { describeRanges } = __test;
 
 Deno.test('collapses a contiguous run into one range', () => {
   assertEquals(describeRanges([1, 2, 3, 4, 5]), '1-5');
