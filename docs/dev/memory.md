@@ -138,10 +138,16 @@ in `docs/user/memory.md`. The dev side has five moving parts:
 - `supabase/functions/venice/agents/deep_sleep.ts` — the memory
   librarian's slow-wave consolidation pass. Per run it picks the
   longest-unvisited memory as the seed, embeds it, fetches the
-  top-8 cosine neighbors above 0.80 via
+  top-4 cosine neighbors above 0.80 via
   `search_memories_by_embedding_scored`, and runs the agent on
   the seed + neighbors batch (skipping Venice entirely when the
-  seed is lonely). The agent decides per pair whether to
+  seed is lonely). The neighbor count is sized against the hosted
+  edge wall clock rather than the prompt budget - the agent works
+  the batch pair by pair, so rounds grow much faster than rows, and
+  a seed + 8 batch was observed running past the limit and getting
+  killed mid-flight (no outcome persisted, lease stranded until
+  TTL). It lowers the odds of an overrun without bounding it: the
+  loop still runs under the shared 20-round default. The agent decides per pair whether to
   consolidate, relate, or leave. Marks the entire batch visited
   after a successful run so the next sweep moves on. Exports
   `runDeepSleepSweepTick` (cron path) and `runDeepSleepManual`
@@ -363,7 +369,15 @@ in `docs/user/memory.md`. The dev side has five moving parts:
   the gateway 504; `librarianRun.start` awaits the outcome through
   `awaitDetachedRun` (subscribe-before-POST on the per-user
   `agent-runs:<userId>` channel, resolve on the terminal `result`
-  event). Run liveness for every client is the shared
+  event). `start`'s `finally` TERMINAL-FINALIZES the step list -
+  `settleTrailingPending(steps, error ? 'error' : 'ok')` - which is
+  load-bearing whenever the `result` event never arrives (the
+  inactivity backstop firing, a dropped channel, the edge function
+  killed mid-flight). A pending row renders a spinner, so without it
+  the strip animates forever under a header already reading
+  "finished" beside a red timeout error. The wiki strip's
+  `finalizeLibrarianSteps` is the same guard. Run liveness for every
+  client is the shared
   `memory_librarian_inflight_expires_at` lease, watched via
   `memoryLibrarianLease` (`agents/inflight-lease.svelte.ts`,
   realtime off the `profiles` row), reflecting scheduled background

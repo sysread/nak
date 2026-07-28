@@ -67,12 +67,26 @@ const DEEP_SLEEP_MIN_INTERVAL_SECONDS = 12 * 3600;
 const DEEP_SLEEP_MIN_SIMILARITY = 0.8;
 
 /**
- * Max number of neighbors (excluding the seed) fetched per run. The
- * seed + 8 neighbors is a comfortable batch for the agent's reasoning
- * loop without blowing the prompt budget on the embedded label/data
- * text.
+ * Max number of neighbors (excluding the seed) fetched per run.
+ *
+ * Sized against the hosted edge-function wall clock, not the prompt
+ * budget. The agent works the batch pair by pair, so the reasoning
+ * rounds it needs grow far faster than the row count - a seed + 8
+ * batch was observed spending six-plus rounds on consolidations and
+ * getting killed mid-flight, which leaves no run outcome persisted
+ * and strands the in-flight lease until its TTL expires.
+ *
+ * Note this lowers the ODDS of an overrun without bounding it. The
+ * loop still runs under the shared 20-round default, well above what
+ * the wall clock affords, so a dense enough neighborhood can still
+ * die the same way.
+ *
+ * The cost of a smaller batch is rotation speed, since a run marks
+ * its ENTIRE batch visited: fewer memories retired per pass means
+ * more passes to sweep the whole set. At a 12h cadence that is a
+ * cheap trade against runs that die and take the lease with them.
  */
-const DEEP_SLEEP_MAX_NEIGHBORS = 8;
+const DEEP_SLEEP_MAX_NEIGHBORS = 4;
 
 /**
  * Hard floor on the batch size that justifies running the agent.
