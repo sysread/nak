@@ -585,13 +585,25 @@ Mechanic:
    `deploy.yml`). On a failure, read the per-JOB conclusions before
    diagnosing: Deploy has three jobs (sync-supabase, build, deploy),
    and the schema/edge-function half can succeed while only the
-   Pages publish fails. Known transient: the `deploy` job's
-   `actions/deploy-pages` step failing with "Deployment failed, try
-   again later" seconds after creating the deployment - remediation
-   is `actions_run_trigger` with `rerun_failed_jobs` (the build
-   artifact is reused), then re-check. A real failure (sync-supabase
-   or build red, or a re-run failing the same way) gets diagnosed
-   and reported, not silently retried in a loop.
+   Pages publish fails. Two known transients, both remediated with
+   `actions_run_trigger` + `rerun_failed_jobs`, then re-check:
+   - the `deploy` job's `actions/deploy-pages` step failing with
+     "Deployment failed, try again later" seconds after creating the
+     deployment (the build artifact is reused on re-run);
+   - the `sync-supabase` job's **Deploy edge functions** step dying
+     with `toomanyrequests: Rate exceeded` while pulling
+     `public.ecr.aws/supabase/edge-runtime` - `supabase functions
+     deploy` pulls that image to bundle, and AWS public ECR rate-
+     limits anonymous pulls. It burns its own retries (4s, 8s) and
+     then exits 1. Note the blast radius: this fails BEFORE any
+     function uploads, and `build` + `deploy` are skipped
+     downstream, so NOTHING from the merge is live - not the edge
+     functions, not the frontend. `main` has the code and the running
+     app does not, which is easy to misread as "deployed but broken."
+
+   A real failure (schema apply red, build red, or a re-run failing
+   the same way) gets diagnosed and reported, not silently retried in
+   a loop.
 
 If the user says "merge to main" *and* no PR exists, step 2 (open
 the PR) is implied by the merge instruction - this is the one case
