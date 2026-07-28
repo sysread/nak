@@ -72,7 +72,48 @@ import { conversationSearch } from '../tools/conversation_search.ts';
 // Surfaced in the wire schemas so the model sees the limit up front.
 // Single-sourced from the module that owns the length rule the write
 // paths enforce on execute.
-import { MAX_MEMORY_DATA_CHARS } from '../tools/_memory_data_budget.ts';
+import {
+  MAX_MEMORY_DATA_CHARS,
+  memoryLengthHint,
+} from '../tools/_memory_data_budget.ts';
+
+/**
+ * memory_search as the LIBRARIANS see it: the same rows the shared tool
+ * returns, plus a `hygiene` string on any row whose body is over the
+ * length budget.
+ *
+ * Why this wrapper instead of annotating memory_search itself: that tool
+ * is shared with the main chat and the reflection agent, neither of
+ * which carries memory_reshape. Putting a "this row wants condensing"
+ * note in front of a caller that cannot act on it is noise on a hot
+ * path, so the annotation attaches here, where the toolbox that owns the
+ * rewrite verbs composes it. The wire schema is unchanged - the field is
+ * additive and the librarian prompt explains it.
+ *
+ * Rows within budget get NO field rather than `hygiene: 'ok'`. Absence
+ * is the signal: it keeps the common case free of annotation, and it
+ * means the model never sees a nudge attached to a healthy 500-char row.
+ */
+function librarianMemorySearch(): AgentTool {
+  const base = asAgentTool(memorySearch, MEMORY_SEARCH_WIRE_SCHEMA);
+  return {
+    ...base,
+    execute: async (args, ctx) => {
+      const rows = await base.execute(args, ctx);
+      if (!Array.isArray(rows)) return rows;
+      return rows.map((row) => {
+        // Defensive: the shared tool owns this shape, so read it
+        // loosely rather than assuming it. A row without a string body
+        // passes through untouched.
+        if (typeof row !== 'object' || row === null) return row;
+        const data = (row as { data?: unknown }).data;
+        if (typeof data !== 'string') return row;
+        const hygiene = memoryLengthHint(data.length);
+        return hygiene === null ? row : { ...row, hygiene };
+      });
+    },
+  };
+}
 
 // Ported from the browser src/lib/tools/memory_consolidate.schema.ts.
 // Librarian-only: not in reflection's toolbox and not dispatchable
@@ -180,9 +221,11 @@ const MEMORY_RESHAPE_WIRE_SCHEMA: AgentTool['wire'] = {
             `Cleaned body, same facts, no write-time framing (max ${MAX_MEMORY_DATA_CHARS} ` +
             'chars, and never longer than the body you are replacing; omit to leave ' +
             'the body unchanged). Provide at least one of label or data. Stripping ' +
-            'narration should shorten the row - a body that is already over the ' +
-            `${MAX_MEMORY_DATA_CHARS}-char limit is one worth tightening while you are ` +
-            'here, so long as every fact survives.',
+            'narration should shorten the row. How hard to push on length is per-row, ' +
+            'not a blanket rule: memory_search marks an oversized row with a `hygiene` ' +
+            'note saying how long it is and how much that matters. A row with NO ' +
+            'hygiene note is within budget - do not spend a rewrite making it shorter. ' +
+            'Never drop a fact to hit a length.',
         },
         message: {
           type: 'string',
@@ -203,7 +246,7 @@ export function buildMemoryLibrarianToolbox(): Toolbox {
   return {
     name: 'memory-librarian',
     tools: [
-      asAgentTool(memorySearch, MEMORY_SEARCH_WIRE_SCHEMA),
+      librarianMemorySearch(),
       asAgentTool(memoryConsolidate, MEMORY_CONSOLIDATE_WIRE_SCHEMA),
       asAgentTool(memoryReshape, MEMORY_RESHAPE_WIRE_SCHEMA),
       asAgentTool(memoryInvalidate, MEMORY_INVALIDATE_WIRE_SCHEMA),

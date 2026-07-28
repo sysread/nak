@@ -59,6 +59,16 @@ export interface MemoryChangelogEntry {
   label_at_change: string;
   message: string;
   created_at: string;
+  /**
+   * Body length either side of the change, powering the size-delta chip
+   * in the history panel. `null` means unknown - a row written before
+   * these columns existed, whose size cannot be reconstructed. That is
+   * distinct from `0`, which means genuinely empty (nothing before a
+   * create, nothing after a delete). See the column comments in
+   * supabase/schema.sql.
+   */
+  chars_before: number | null;
+  chars_after: number | null;
 }
 
 /**
@@ -140,5 +150,14 @@ export function coerceMemoryChangelogEntry(
       typeof raw.label_at_change === 'string' ? raw.label_at_change : '',
     message: typeof raw.message === 'string' ? raw.message : '',
     created_at: String(raw.created_at ?? ''),
+    // Anything non-numeric coerces to null ("unknown size"), which is
+    // what a pre-columns row carries. Coercing to 0 instead would make
+    // an unrecorded size render as an empty body.
+    chars_before: coerceCharCount(raw.chars_before),
+    chars_after: coerceCharCount(raw.chars_after),
   };
+}
+
+function coerceCharCount(raw: unknown): number | null {
+  return typeof raw === 'number' && Number.isFinite(raw) ? raw : null;
 }

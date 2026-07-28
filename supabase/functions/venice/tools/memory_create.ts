@@ -80,6 +80,10 @@ export const memoryCreate: ToolDef = {
         kind: 'create',
         label_at_change: (row as { label: string }).label,
         message: changelogMessage,
+        // 0, not undefined: a create genuinely had nothing before it,
+        // which is different from a pre-feature row's unknown size.
+        chars_before: 0,
+        chars_after: (row as { data?: string }).data?.length ?? data.length,
       });
     } catch {
       // best-effort by design

@@ -32,9 +32,11 @@ export const memoryDelete: ToolDef = {
     // changelog row carries a snapshot - the row is about to be
     // deleted and the FK nulls memory_id, leaving label_at_change
     // as the only readable trace.
+    // `data` rides along only for its length, which the changelog records
+    // as the size this delete removed.
     const { data: existing, error: readErr } = await ctx.adminClient
       .from('memories')
-      .select('label')
+      .select('label, data')
       .eq('id', id)
       .eq('user_id', ctx.userId)
       .maybeSingle();
@@ -55,6 +57,9 @@ export const memoryDelete: ToolDef = {
           kind: 'delete',
           label_at_change: (existing as { label: string }).label,
           message,
+          // 0 after, not undefined: the body is genuinely gone.
+          chars_before: (existing as { data?: string }).data?.length,
+          chars_after: 0,
         });
       } catch {
         // best-effort

@@ -52,6 +52,54 @@ export function formatChangelogStamp(iso: string): string {
 }
 
 /**
+ * Below this many characters of change, the delta is noise - a reworded
+ * sentence, a fixed typo - and rendering it on every row would bury the
+ * edits that actually moved a memory's size. Roughly a long sentence.
+ */
+const SIZE_DELTA_FLOOR_CHARS = 120;
+
+export interface MemorySizeDelta {
+  /** Signed change, for the caller's up/down styling. */
+  chars: number;
+  /** Rendered chip text, e.g. "+412" / "-1,203". */
+  label: string;
+  /** True once the change is large enough to deserve visual emphasis. */
+  significant: boolean;
+}
+
+/**
+ * The size-delta chip for a changelog row, or null when there is
+ * nothing worth showing.
+ *
+ * Null in three distinct cases, all of which should render no chip:
+ *   - either size is null (a row from before the columns existed; the
+ *     historical size is unrecoverable, so we say nothing rather than
+ *     implying a zero-length body)
+ *   - the delta is zero (a label-only edit)
+ *   - the delta is under the noise floor
+ *
+ * Memory bodies are replayed verbatim into every recall prompt, so this
+ * is the surface that answers "did that consolidation actually condense
+ * anything, or just concatenate?" - see docs/dev/memory.md.
+ */
+export function memorySizeDelta(
+  entry: Pick<MemoryChangelogEntry, 'chars_before' | 'chars_after'>
+): MemorySizeDelta | null {
+  const { chars_before: before, chars_after: after } = entry;
+  if (before === null || after === null) return null;
+  const chars = after - before;
+  if (Math.abs(chars) < SIZE_DELTA_FLOOR_CHARS) return null;
+  const sign = chars > 0 ? '+' : '-';
+  return {
+    chars,
+    label: `${sign}${Math.abs(chars).toLocaleString()}`,
+    // A create's whole body counts as growth but is not a regression,
+    // so emphasis keys off magnitude only; the caller styles direction.
+    significant: Math.abs(chars) >= SIZE_DELTA_FLOOR_CHARS * 4,
+  };
+}
+
+/**
  * Whether the row's label should render as a clickable link to the
  * underlying memory. False when the memory was deleted
  * (`kind === 'delete'`) or when the FK was cleared by the

@@ -7,7 +7,10 @@
 
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { appendMemoryChangelog } from './_memory_changelog.ts';
-import { memoryDataBudgetError } from './_memory_data_budget.ts';
+import {
+  memoryDataBudgetError,
+  readMemoryDataLengths,
+} from './_memory_data_budget.ts';
 import { ArgErrors } from './_validate.ts';
 
 const MAX_MEMORY_CHANGELOG_MESSAGE_CHARS = 200;
@@ -27,6 +30,14 @@ export const memoryUpdate: ToolDef = {
       );
     }
 
+    // One read serves two consumers: the non-growth budget below and the
+    // changelog's before-size. Empty when the row is unreadable, which
+    // degrades the budget to the flat ceiling and the changelog to an
+    // unknown before-size.
+    const priorLengths = id
+      ? await readMemoryDataLengths(ctx.adminClient, ctx.userId, [id])
+      : new Map<string, number>();
+
     const patch: Record<string, unknown> = {};
     if (typeof args.label === 'string' && args.label.trim().length > 0) {
       patch.label = args.label.trim();
@@ -35,9 +46,7 @@ export const memoryUpdate: ToolDef = {
       // Non-growth rule: a refine may condense or hold steady, never
       // inflate. See _memory_data_budget.ts for why the budget keys off
       // the row's current length rather than a flat ceiling.
-      const overBudget = id
-        ? await memoryDataBudgetError(ctx.adminClient, ctx.userId, [id], args.data)
-        : null;
+      const overBudget = memoryDataBudgetError(args.data, [...priorLengths.values()]);
       if (overBudget) errs.add(overBudget);
       else patch.data = args.data;
     }
@@ -66,6 +75,10 @@ export const memoryUpdate: ToolDef = {
         kind: 'update',
         label_at_change: (row as { label: string }).label,
         message,
+        // Undefined (-> NULL, "unknown") when the prior read failed; a
+        // label-only edit leaves both equal, which reads as a 0 delta.
+        chars_before: priorLengths.get(id),
+        chars_after: (row as { data?: string }).data?.length,
       });
     } catch {
       // best-effort

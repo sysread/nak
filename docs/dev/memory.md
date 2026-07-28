@@ -671,6 +671,79 @@ The browser edit path mirrors the rule via `memoryDataBudget` in
 `src/lib/ui/memories.ts`, so the Memories panel's textarea
 `maxlength` and counter grant the same headroom.
 
+### Shrinking what is already oversized
+
+The budget only forbids growth - it never compels shrinkage, and a
+rewrite of a 6000-char row may legally return 5999. Bringing legacy
+rows back under the ceiling is the librarians' job, driven by a
+graded per-row signal rather than a blanket instruction:
+
+| tier | body length | what the librarian is told |
+|---|---|---|
+| `ok` | <= 2500 | nothing at all - no annotation |
+| `trim` | 2501-5000 | tighten it if you are reshaping anyway; not worth a rewrite alone |
+| `condense` | > 5000 | worth a rewrite for its own sake |
+
+`memoryLengthTier` / `memoryLengthHint` in
+`tools/_memory_data_budget.ts` own the boundaries. The `condense`
+threshold is `2 * MAX_MEMORY_DATA_CHARS`, so it tracks the budget if
+that is ever retuned.
+
+Three details are load-bearing:
+
+- **A healthy row gets NO annotation**, not `hygiene: 'ok'`. Absence
+  is the signal. Annotating all ~360 within-budget rows would invite
+  the librarian to rewrite short memories that were never a problem,
+  spending model calls and risking fact loss for nothing.
+- **The hint states the row's actual character count.** `memory_search`
+  returns bodies, not sizes, and a model cannot judge length by eye - a
+  prompt saying "shorten rows over 2500 chars" without supplying the
+  number asks for something models are bad at.
+- **Both hints repeat the no-fact-loss rule**, and `condense`
+  explicitly says to leave a genuinely fact-dense row long. Shrink
+  pressure without that guard pushes the model to drop facts to hit a
+  number, against `memory_reshape`'s own contract.
+
+The annotation attaches in `agents/_memory_librarian_tools.ts`
+(`librarianMemorySearch`), NOT in `memory_search` itself: that tool is
+shared with the main chat and reflection, neither of which carries
+`memory_reshape`, and a "this wants condensing" note in front of a
+caller that cannot act on it is noise on a hot path.
+
+**This is opportunistic, not guaranteed.** Healing depends on the
+librarians visiting a row and choosing to tighten it. Measured on a
+real store, 93 of 95 over-budget rows had been written to within 90
+days, so the opportunity is frequent - but a row that is genuinely
+dense should and will stay long.
+
+### Measuring it: changelog size deltas
+
+`memory_changelog.chars_before` / `chars_after` record the body length
+either side of every content write, which is how "is the ratchet
+actually fixed, and are the librarians condensing anything" becomes
+answerable after the fact rather than inferred. The history panel
+renders the delta as a chip (`memorySizeDelta` in
+`src/lib/ui/memory-changelog-panel.ts`).
+
+- **NULL means unknown, 0 means empty**, and the UI depends on the
+  difference. NULL is a row written before the columns existed; 0 is a
+  create's before-size or a delete's after-size. Coercing NULL to 0
+  would render an unrecorded size as an empty body.
+- **`chars_before` is always THIS memory's prior length**, including for
+  a consolidation, where the entry lands on the survivor. Deliberately
+  not survivor+loser combined: per-kind semantics would make the columns
+  double-count when summed across rows.
+- **One read serves two consumers.** `readMemoryDataLengths` is called
+  once per write and feeds both the budget check and the before-stamp.
+  It is id-keyed rather than a bare list precisely so consolidate can
+  pick out the survivor.
+- **The backfill only anchors the latest entry per memory.** Every
+  `data` mutation writes a changelog row, so a surviving memory's most
+  recent entry describes the body it carries right now - exactly
+  recoverable. Older intermediate sizes were never stored and stay NULL.
+  The statement in `schema.sql` is idempotent via a `chars_after is
+  null` guard.
+
 ## Interactions with other features
 
 - **Chat** — the main model invokes `memory_recall` as a tool

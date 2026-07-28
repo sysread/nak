@@ -150,6 +150,11 @@ export async function createMemoryChangelogEntry(
     kind: MemoryChangelogKind;
     label_at_change: string;
     message: string;
+    /** Body length either side of the change. Omit when genuinely
+     *  unknown - it lands as NULL, which the panel renders as "no size
+     *  info" rather than as a zero-length body. */
+    chars_before?: number;
+    chars_after?: number;
   }
 ): Promise<void> {
   const session = await getSession(client);
@@ -163,6 +168,8 @@ export async function createMemoryChangelogEntry(
     kind: args.kind,
     label_at_change: label,
     message,
+    chars_before: args.chars_before ?? null,
+    chars_after: args.chars_after ?? null,
   });
   if (error) throw new SupabaseError(error.message);
 }
@@ -184,7 +191,9 @@ export async function listMemoryChangelog(
   const limit = Math.max(1, Math.min(opts.limit ?? 50, 200));
   let q = client
     .from('memory_changelog')
-    .select('id, memory_id, kind, label_at_change, message, created_at')
+    .select(
+      'id, memory_id, kind, label_at_change, message, created_at, chars_before, chars_after',
+    )
     .order('created_at', { ascending: false })
     .limit(limit);
   if (opts.before) q = q.lt('created_at', opts.before);

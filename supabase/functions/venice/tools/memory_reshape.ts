@@ -25,7 +25,10 @@
 
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { appendMemoryChangelog } from './_memory_changelog.ts';
-import { memoryDataBudgetError } from './_memory_data_budget.ts';
+import {
+  memoryDataBudgetError,
+  readMemoryDataLengths,
+} from './_memory_data_budget.ts';
 import { ArgErrors } from './_validate.ts';
 
 const MAX_MEMORY_CHANGELOG_MESSAGE_CHARS = 200;
@@ -45,6 +48,12 @@ export const memoryReshape: ToolDef = {
       );
     }
 
+    // One read serves the non-growth budget and the changelog's
+    // before-size. See memory_update.ts for the same pairing.
+    const priorLengths = id
+      ? await readMemoryDataLengths(ctx.adminClient, ctx.userId, [id])
+      : new Map<string, number>();
+
     const patch: Record<string, unknown> = {};
     if (typeof args.label === 'string' && args.label.trim().length > 0) {
       patch.label = args.label.trim();
@@ -55,9 +64,7 @@ export const memoryReshape: ToolDef = {
       // budget keys off the row's current length so a legacy over-ceiling
       // row can still be reframed without being forced to drop facts
       // (which its own contract forbids). See _memory_data_budget.ts.
-      const overBudget = id
-        ? await memoryDataBudgetError(ctx.adminClient, ctx.userId, [id], args.data)
-        : null;
+      const overBudget = memoryDataBudgetError(args.data, [...priorLengths.values()]);
       if (overBudget) errs.add(overBudget);
       else patch.data = args.data;
     }
@@ -86,6 +93,11 @@ export const memoryReshape: ToolDef = {
         kind: 'update',
         label_at_change: (row as { label: string }).label,
         message,
+        // A reshape that actually condensed shows up here as a negative
+        // delta - the signal for whether the librarians are shrinking
+        // oversized rows or just reframing them.
+        chars_before: priorLengths.get(id),
+        chars_after: (row as { data?: string }).data?.length,
       });
     } catch {
       // best-effort: a failed changelog insert never rolls back the

@@ -14,10 +14,10 @@ import type { ToolContext } from '../venice/performToolCall.ts';
 
 function makeCtx(
   rpc: (name: string, args: Record<string, unknown>) => { data: unknown; error: { message: string } | null },
-  // Existing `data` bodies of the two merge inputs, as the length-budget
-  // read would see them. Default empty: no row grants headroom, so the
-  // budget lands on the flat MAX_MEMORY_DATA_CHARS ceiling.
-  existingBodies: string[] = [],
+  // Existing rows as the id-keyed length-budget read would see them.
+  // Default empty: no row grants headroom, so the budget lands on the
+  // flat MAX_MEMORY_DATA_CHARS ceiling.
+  existingRows: Array<{ id: string; data: string }> = [],
 ): {
   ctx: ToolContext;
   rpcCalls: Array<{ name: string; args: Record<string, unknown> }>;
@@ -44,7 +44,7 @@ function makeCtx(
       // a PostgREST-shaped result.
       c.then = (
         resolve: (v: { data: unknown; error: null }) => unknown,
-      ) => resolve({ data: existingBodies.map((d) => ({ data: d })), error: null });
+      ) => resolve({ data: existingRows, error: null });
       return c;
     },
   } as unknown as SupabaseClient;
@@ -108,7 +108,10 @@ Deno.test('consolidate: rejects data over the flat ceiling when neither input gr
 // Without this, repeated consolidation passes ratchet a body upward and
 // every future recall prompt pays for it.
 Deno.test('consolidate: allows a body up to the longer input, rejects past it', async () => {
-  const legacy = ['y'.repeat(4000), 'y'.repeat(3000)];
+  const legacy = [
+    { id: 'a', data: 'y'.repeat(4000) },
+    { id: 'b', data: 'y'.repeat(3000) },
+  ];
 
   const atBudget = makeCtx(okRpc, legacy);
   await memoryConsolidate.execute(
@@ -116,6 +119,11 @@ Deno.test('consolidate: allows a body up to the longer input, rejects past it', 
     atBudget.ctx,
   );
   assertEquals(atBudget.rpcCalls.length, 1);
+  // The changelog records the SURVIVOR's prior length, not the two
+  // inputs combined - see the column comments in schema.sql.
+  const logged = atBudget.inserted.find((r) => r.table === 'memory_changelog');
+  assertEquals(logged?.chars_before, 4000);
+  assertEquals(logged?.chars_after, 4000);
 
   const overBudget = makeCtx(okRpc, legacy);
   await assertRejects(
