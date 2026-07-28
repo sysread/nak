@@ -22,6 +22,7 @@ export interface ChipCompression {
 export type ChipStatus =
   | { kind: 'compressing' }
   | { kind: 'error' }
+  | { kind: 'rendering'; label: string }
   | { kind: 'pending' }
   | { kind: 'compressed'; label: string }
   | { kind: 'ready' };
@@ -32,17 +33,33 @@ export function compressionLabel(c: ChipCompression): string {
 }
 
 /**
+ * "Rendering page 4 of 30" - progress for the PDF rasterizer. Spelled out
+ * per page because a long document's render is the slowest thing that
+ * happens at attach time, and a bare spinner there reads as a hang.
+ */
+export function renderingLabel(r: { done: number; total: number }): string {
+  return `Rendering page ${r.done} of ${r.total}`;
+}
+
+/**
  * Resolve a pending attachment to its single chip state. Order matters:
  * an error wins over any in-flight flag (it's terminal), then the
  * image-compression spinner is shown ahead of the generic pending spinner
- * (compressing implies pending, but the user-facing copy differs), then a
- * completed compression shows its reduction, else the chip is ready.
+ * (compressing implies pending, but the user-facing copy differs), then the
+ * PDF render's per-page progress for the same reason, then a completed
+ * compression shows its reduction, else the chip is ready.
+ *
+ * `rendering` outranks `pending` but not `compressing`: the two never
+ * co-occur (one is an image path, the other a PDF path), so the relative
+ * order between them is arbitrary - what matters is that both beat the
+ * generic spinner, since both carry strictly more information.
  */
 export function chipStatus(
-  a: Pick<LocalAttachment, 'compressing' | 'pending' | 'error' | 'compression'>
+  a: Pick<LocalAttachment, 'compressing' | 'pending' | 'error' | 'compression' | 'rendering'>
 ): ChipStatus {
   if (a.error) return { kind: 'error' };
   if (a.compressing) return { kind: 'compressing' };
+  if (a.rendering) return { kind: 'rendering', label: renderingLabel(a.rendering) };
   if (a.pending) return { kind: 'pending' };
   if (a.compression) return { kind: 'compressed', label: compressionLabel(a.compression) };
   return { kind: 'ready' };

@@ -724,6 +724,15 @@ create table if not exists public.message_attachments (
 alter table public.message_attachments
   add column if not exists storage_path text;
 
+-- Page count of the source document, for the formats we rasterize (PDF).
+-- Null for everything else. Distinct from the number of rows in
+-- message_attachment_pages: rendering is capped, so a 200-page PDF stores
+-- page_count = 200 alongside far fewer rendered pages. The gap is what
+-- lets the model tell the user "I can see the first N of 200 pages"
+-- instead of silently answering from a truncated view.
+alter table public.message_attachments
+  add column if not exists page_count int;
+
 -- Drop the retired legacy base64 column. Stage 1's reclaim already nulled it
 -- everywhere, no code reads or writes it, and the bytes live in the
 -- `attachments` bucket now. Idempotent: a no-op once the column is gone (and on
@@ -819,6 +828,100 @@ create policy "attachments are self-deletable via thread"
         from public.messages m
         join public.threads t on t.id = m.thread_id
        where m.id = message_attachments.message_id
+         and t.user_id = auth.uid()
+    )
+  );
+
+-- message_attachment_pages -------------------------------------------------
+--
+-- Rasterized pages of an attachment whose format the vision models cannot
+-- read directly (today: PDF). One row per rendered page, bytes in the same
+-- private `attachments` bucket under
+-- `<user_id>/<attachment_id>/pages/<page_number>.jpg`.
+--
+-- Why a separate table rather than more message_attachments rows: page
+-- renders are a derived artifact of ONE attachment, not files in their own
+-- right. Filed as attachments they would surface in the Artifacts tab, the
+-- per-message render, and the <thread_attachments> prompt block, and every
+-- one of those listings would need to remember to filter them back out.
+-- A separate table keeps the special case off the attachments API entirely.
+--
+-- Why rasterize at all: Venice's text-parser returns the text layer, which
+-- a scanned PDF does not have and which drops charts, diagrams, and layout
+-- from the ones that do. The rendered page is what analyze_pdf_page hands
+-- to a vision model, so those PDFs stop being a dead end.
+--
+-- No `expired_at` / nullable `storage_path` analog to message_attachments:
+-- a page render carries no information the parent row doesn't, so there is
+-- nothing worth preserving past the bytes. Deleting the attachment deletes
+-- these rows outright (via the cascade) and their objects with them.
+
+create table if not exists public.message_attachment_pages (
+  id uuid primary key default gen_random_uuid(),
+  attachment_id uuid not null
+    references public.message_attachments(id) on delete cascade,
+  -- 1-based, matching how a PDF reader numbers pages and how the user
+  -- will refer to them in conversation.
+  page_number int not null,
+  storage_path text not null,
+  created_at timestamptz not null default now(),
+  unique (attachment_id, page_number)
+);
+
+-- Anti-join support for the orphan-object GC sweep. Same role the
+-- storage_path index plays on message_attachments: the sweep probes every
+-- attachments-bucket object against both tables, so a page's path has to
+-- be index-probable or the sweep degrades to a seq scan per object.
+create index if not exists message_attachment_pages_storage_path_idx
+  on public.message_attachment_pages (storage_path);
+
+alter table public.message_attachment_pages enable row level security;
+
+-- Via-parent-of-parent-of-parent: page -> attachment -> message -> thread
+-- -> user. One level deeper than the message_attachments policies, same
+-- shape. No update policy - a page render is immutable; it is written once
+-- and deleted with its attachment.
+drop policy if exists "attachment pages are self-selectable via thread"
+  on public.message_attachment_pages;
+create policy "attachment pages are self-selectable via thread"
+  on public.message_attachment_pages
+  for select using (
+    exists (
+      select 1
+        from public.message_attachments a
+        join public.messages m on m.id = a.message_id
+        join public.threads t on t.id = m.thread_id
+       where a.id = message_attachment_pages.attachment_id
+         and t.user_id = auth.uid()
+    )
+  );
+
+drop policy if exists "attachment pages are self-insertable via thread"
+  on public.message_attachment_pages;
+create policy "attachment pages are self-insertable via thread"
+  on public.message_attachment_pages
+  for insert with check (
+    exists (
+      select 1
+        from public.message_attachments a
+        join public.messages m on m.id = a.message_id
+        join public.threads t on t.id = m.thread_id
+       where a.id = message_attachment_pages.attachment_id
+         and t.user_id = auth.uid()
+    )
+  );
+
+drop policy if exists "attachment pages are self-deletable via thread"
+  on public.message_attachment_pages;
+create policy "attachment pages are self-deletable via thread"
+  on public.message_attachment_pages
+  for delete using (
+    exists (
+      select 1
+        from public.message_attachments a
+        join public.messages m on m.id = a.message_id
+        join public.threads t on t.id = m.thread_id
+       where a.id = message_attachment_pages.attachment_id
          and t.user_id = auth.uid()
     )
   );
@@ -13460,6 +13563,14 @@ drop function if exists public.mark_attachments_expired(uuid[]);
 -- idempotent (removing a gone object is a no-op), so overlapping ticks at worst
 -- redo harmless work. security definer + service-role-only: cron has no user
 -- session and the sweep spans every member's objects.
+--
+-- TWO tables claim objects in this bucket: message_attachments (the
+-- originals + generated images) and message_attachment_pages (rasterized
+-- PDF pages). An object is an orphan only when NEITHER points at it -
+-- checking attachments alone would reclaim every page render on the next
+-- tick, which is the shape of the bug this second anti-join exists to
+-- prevent. Any future table that parks bytes in this bucket has to be added
+-- here too.
 drop function if exists public.list_orphan_attachment_objects(int, int);
 create or replace function public.list_orphan_attachment_objects(
   p_min_age_seconds int,
@@ -13474,6 +13585,10 @@ set search_path = public as $$
      and not exists (
        select 1 from public.message_attachments a
         where a.storage_path = o.name
+     )
+     and not exists (
+       select 1 from public.message_attachment_pages p
+        where p.storage_path = o.name
      )
    order by o.created_at asc
    limit p_limit

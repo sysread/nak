@@ -64,6 +64,7 @@ import { contextSchema } from './context.schema';
 import { webSearchSchema } from './web_search.schema';
 import { updateTitleSchema } from './update_title.schema';
 import { analyzeImageSchema } from './analyze_image.schema';
+import { analyzePdfPageSchema } from './analyze_pdf_page.schema';
 import { askUserSchema } from './ask_user.schema';
 
 // --- Gated + remaining always-on tool schemas ------------------------
@@ -144,6 +145,7 @@ const contextTool = serverSideTool(contextSchema);
 const webSearch = serverSideTool(webSearchSchema);
 const updateTitle = serverSideTool(updateTitleSchema);
 const analyzeImage = serverSideTool(analyzeImageSchema);
+const analyzePdfPage = serverSideTool(analyzePdfPageSchema);
 const askUser = serverSideTool(askUserSchema);
 
 // --- Gated tool wrappers --------------------------------------------
@@ -264,6 +266,9 @@ const generateImage = serverSideTool(generateImageSchema);
  *     very first turn before any gated toolbox is on.
  *   - `analyze_image` - vision sub-completion against an image
  *     attached anywhere in the thread.
+ *   - `analyze_pdf_page` - the same, against one rasterized page of
+ *     a PDF attached anywhere in the thread. Covers what the text
+ *     layer can't: scans, charts, diagrams, layout.
  *   - `ask_user` - pose a clarifying multiple-choice question to the
  *     user instead of guessing intent. The chat-loop suspends after
  *     this call lands; the next round starts when the user submits an
@@ -280,7 +285,8 @@ export const alwaysOnToolbox: Toolbox = {
     'memories / conversations / wiki / cookbook / app docs; ' +
     'plus get for memories, conversations, and wiki, and list/get for cookbook) ' +
     'plus web search, ' +
-    'update_title, analyze_image, ask_user, and the toggle_toolbox meta-tool.',
+    'update_title, analyze_image, analyze_pdf_page, ask_user, and the ' +
+    'toggle_toolbox meta-tool.',
   tools: [
     toggleToolbox,
     contextTool,
@@ -308,6 +314,7 @@ export const alwaysOnToolbox: Toolbox = {
     webSearch,
     updateTitle,
     analyzeImage,
+    analyzePdfPage,
     askUser,
   ],
 };

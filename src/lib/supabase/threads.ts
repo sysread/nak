@@ -21,6 +21,7 @@
 import type { SupabaseClient, Session } from '@supabase/supabase-js';
 import type { ThinkingLevel, Verbosity } from '../models';
 import { SupabaseError } from './error';
+import { listAttachmentPagePaths } from './attachment-pages';
 import {
   partitionSelectedTopics,
   topicsFilterClause,
@@ -604,15 +605,25 @@ export async function deleteThread(client: SupabaseClient, threadId: string): Pr
   // thread is gone the rows are gone and their bucket keys are
   // unrecoverable. Includes generated images (same table). Expired rows
   // (storage_path null) have no object left, so we filter them out.
+  //
+  // `id` rides along so the rendered-PDF page objects can be collected in the
+  // same pass - those live in the same bucket under a different table, and
+  // the cascade takes their rows out of reach just as fast.
   const { data: attachRows, error: listErr } = await client
     .from('message_attachments')
-    .select('storage_path, messages!inner(thread_id)')
+    .select('id, storage_path, messages!inner(thread_id)')
     .eq('messages.thread_id', threadId)
     .not('storage_path', 'is', null);
   if (listErr) throw new SupabaseError(listErr.message);
   const paths = (attachRows ?? [])
     .map((r) => (r as { storage_path: string | null }).storage_path)
     .filter((p): p is string => typeof p === 'string' && p.length > 0);
+  paths.push(
+    ...(await listAttachmentPagePaths(
+      client,
+      (attachRows ?? []).map((r) => (r as { id: string }).id)
+    ))
+  );
 
   const { error } = await client.from('threads').delete().eq('id', threadId);
   if (error) throw new SupabaseError(error.message);
@@ -655,15 +666,23 @@ export async function deleteMessages(
   // removes the rows, after which their bucket keys are
   // unrecoverable. Expired rows (storage_path null) have no object
   // left, so they are filtered out.
+  // `id` rides along to collect the rendered-PDF page objects too (same
+  // bucket, separate table, same about-to-cascade problem).
   const { data: attachRows, error: listErr } = await client
     .from('message_attachments')
-    .select('storage_path')
+    .select('id, storage_path')
     .in('message_id', messageIds)
     .not('storage_path', 'is', null);
   if (listErr) throw new SupabaseError(listErr.message);
   const paths = (attachRows ?? [])
     .map((r) => (r as { storage_path: string | null }).storage_path)
     .filter((p): p is string => typeof p === 'string' && p.length > 0);
+  paths.push(
+    ...(await listAttachmentPagePaths(
+      client,
+      (attachRows ?? []).map((r) => (r as { id: string }).id)
+    ))
+  );
 
   const { error } = await client.from('messages').delete().in('id', messageIds);
   if (error) throw new SupabaseError(error.message);

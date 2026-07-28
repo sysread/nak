@@ -17,6 +17,7 @@
 // fictitious module path from the example.
 
 import './analyze_image.ts';
+import './analyze_pdf_page.ts';
 import './ask_user.ts';
 import './conversation_get.ts';
 import './conversation_search.ts';

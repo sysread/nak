@@ -117,6 +117,36 @@ describe('isConsumableBy', () => {
       )
     ).toBe(false);
   });
+
+  it('accepts a scanned PDF with rendered pages but no extracted text', () => {
+    // The scanned-document case: the text-parser found nothing, but the
+    // rasterized pages are readable through analyze_pdf_page. Before pages
+    // existed the pre-send guard rejected this outright, which is what made
+    // scanned PDFs unsendable.
+    expect(
+      isConsumableBy(
+        { mime_type: 'application/pdf', extracted_text: '', page_count: 4 },
+        noVision
+      )
+    ).toBe(true);
+  });
+
+  it('rejects a PDF that neither extracted nor rendered', () => {
+    // page_count is only set when pages actually rendered, so zero/null is
+    // the "nothing landed" signal and the guard must still block.
+    expect(
+      isConsumableBy(
+        { mime_type: 'application/pdf', extracted_text: null, page_count: null },
+        vision
+      )
+    ).toBe(false);
+    expect(
+      isConsumableBy(
+        { mime_type: 'application/pdf', extracted_text: null, page_count: 0 },
+        vision
+      )
+    ).toBe(false);
+  });
 });
 
 describe('arrayBufferToBase64 / base64ToBlob', () => {

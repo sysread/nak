@@ -9,6 +9,11 @@ Venice chat requests as signed URLs (images) or fenced extracted text
 small at the source; attachments then persist until the user deletes them
 from the Artifacts tab (there's no timed expiry sweep).
 
+PDFs additionally get their leading pages **rasterized in the browser at
+upload time** into `message_attachment_pages`, so the model can LOOK at a
+page via `analyze_pdf_page` when the text layer isn't enough (a scan, a
+chart, a signature). See "PDF page rendering" below.
+
 Byte storage follows the app-wide model in
 [`./file-storage.md`](./file-storage.md) (private buckets, signed-URL
 reads, `storage_path` pointers, server-side orphan GC). This doc
@@ -16,10 +21,26 @@ covers the attachment-specific pieces.
 
 ## Files
 
-- `supabase/schema.sql` - the `message_attachments` table + RLS and the
-  `attachments` bucket + its `storage.objects` policies. (The old timed
-  expiry sweep RPCs + cron are retired - see the "Retired: scheduled
-  attachment expiry" block.)
+- `supabase/schema.sql` - the `message_attachments` table (+ its
+  `page_count` column) + RLS, the `message_attachment_pages` child table +
+  RLS, and the `attachments` bucket + its `storage.objects` policies. (The
+  old timed expiry sweep RPCs + cron are retired - see the "Retired:
+  scheduled attachment expiry" block.) `list_orphan_attachment_objects`
+  anti-joins BOTH tables - see Gotchas.
+- `src/lib/pdf-pages.ts` - the browser PDF rasterizer: `renderPdfPages`
+  (dynamic-imports pdf.js, renders the leading pages to JPEG blobs with a
+  yield between pages), `isPdfMimeType`, and the caps
+  (`MAX_RENDERED_PDF_PAGES`, `PDF_PAGE_LONG_EDGE_PX`). The ONLY module in
+  the app that imports `pdfjs-dist`.
+- `src/lib/supabase/attachment-pages.ts` - the page persistence half:
+  `addAttachmentPages` (upload + insert), `listAttachmentPagePaths` (delete
+  paths collect these alongside the originals), `deleteAttachmentPages`.
+- `supabase/functions/venice/tools/analyze_pdf_page.ts` - the edge tool
+  that reads one page row, inlines its bytes, and runs a vision sub-call.
+- `supabase/functions/venice/tools/_vision.ts` - shared by `analyze_image`
+  and `analyze_pdf_page`: `attachmentObjectAsDataUrl` (bucket bytes ->
+  base64 data URL) and `askVision` (primary vision model + one permissive
+  fallback).
 - `src/lib/attachments.ts` - pure helpers: size validation,
   `isConsumableBy` predicate, base64 helpers (composer-side, in-memory),
   canvas-based `compressImage` (the shared upload/generate compressor -
@@ -104,10 +125,16 @@ covers the attachment-specific pieces.
   shows a "Compressing large image..." spinner, then "Reduced from X to Y"
   when it shrank), base64-encodes into the in-memory `pendingAttachments` (a
   `LocalAttachment`), calls `app.supabase.extractText` for non-image files.
+  For a PDF, `renderPdfPages` runs CONCURRENTLY with the extraction call
+  (extraction is a network round trip, rendering is local CPU - serializing
+  them doubles the wait for nothing); the chip narrates "Rendering page N of
+  M" while it works.
 - **User sends** - `send()`: pre-send guard, `addMessage` for the user
   row, then `addAttachments` which uploads each file's bytes to the
   `attachments` bucket (client-minted id -> `<uid>/<id>/<filename>`) and
-  inserts the row with `storage_path`. Before the Venice call the
+  inserts the row with `storage_path`. `addAttachmentPages` follows for any
+  attachment carrying rendered pages (it needs the committed attachment id
+  for both the FK and the object key). Before the Venice call the
   chat-loop pre-resolves signed URLs for the live image attachments and
   threads them through `toVeniceMessage` -> `buildUserVeniceContent`.
 - **Message replayed on reload** - `listMessages` co-fetches attachment
@@ -158,6 +185,42 @@ main-view + top-bar rather than rendering its own panel (the
 - **Thumbnails** - image rows resolve previews through the same batched
   `createAttachmentSignedUrls` the message renderer uses.
 
+## PDF page rendering
+
+Venice's text-parser returns a PDF's **text layer**. That covers most
+documents, but it returns nothing at all for a scanned PDF and it drops
+charts, diagrams, signatures, stamps, and table layout from the ones it
+does handle. Those documents used to be a hard dead end: the pre-send
+guard rejected a text-less PDF outright, and for a text-native one the
+model's only filename-taking tool was `analyze_image`, which rejects a PDF
+and reported it as *absent from the thread* - so the model concluded it
+could not read PDFs and said so.
+
+The fix is to rasterize.
+
+- **Where**: the BROWSER, at upload time (`src/lib/pdf-pages.ts`). Every
+  tool executes server-side in the venice Deno island, which has no PDF
+  rasterizer - putting one there means a multi-megabyte WASM blob in the
+  bundle and its cold-start cost on every chat turn, not just PDF ones.
+  The browser already owns the app's other canvas work and pdf.js is a
+  first-class browser library.
+- **How much**: the leading `MAX_RENDERED_PDF_PAGES` (30) pages, JPEG at
+  `PDF_PAGE_LONG_EDGE_PX` (1400) long edge, quality 0.72 - roughly 3-5 MB
+  of extra upload for a long document. The cap is a COST ceiling, not a
+  capability one; pages past it simply aren't rendered.
+- **Where the bytes go**: the same `attachments` bucket, keyed
+  `<uid>/<attachment_id>/pages/<nnnn>.jpg`, tracked by
+  `message_attachment_pages`.
+- **How the model reaches them**: `analyze_pdf_page(filename, page, query)`.
+  The `<thread_attachments>` block advertises which PDFs have viewable
+  pages and how many, so the model knows the lever exists.
+
+`message_attachments.page_count` holds the document's TRUE length, which
+may exceed the number of rendered pages. It is written only when at least
+one page actually rendered, so **non-null `page_count` means "there is
+something to look at"** rather than merely "this was a PDF" - the pre-send
+guard, the prompt block, and the tool all lean on that invariant.
+
 ## Data model
 
 `public.message_attachments` columns:
@@ -173,7 +236,23 @@ main-view + top-bar rather than rendering its own panel (the
 | `storage_path text` | Object key in the `attachments` bucket; NULL once the object is deleted (expired). |
 | `extracted_text text` | Venice text-parser output; survives expiry. |
 | `expired_at timestamptz` | NULL while live; stamped when the object is deleted. |
+| `page_count int` | Source document's page count, for formats we rasterize (PDF). NULL for everything else AND for a PDF that rendered nothing. |
 | `created_at timestamptz` | Insert time. |
+
+`public.message_attachment_pages` columns:
+
+| Column | Purpose |
+| --- | --- |
+| `id uuid pk` | Surrogate key. |
+| `attachment_id uuid` | FK -> `message_attachments(id)` `on delete cascade`. |
+| `page_number int` | 1-based, matching a PDF reader and how the user cites pages. Unique per attachment. |
+| `storage_path text` | Object key in the `attachments` bucket. NOT NULL - a page render carries nothing worth keeping past its bytes, so it is hard-deleted rather than expired. |
+| `created_at timestamptz` | Insert time. |
+
+Index: `message_attachment_pages_storage_path_idx` (the GC anti-join).
+RLS: three policies (select/insert/delete), via-parent-of-parent-of-parent
+(`attachment -> message -> thread -> user_id`). No update policy; a page
+render is immutable.
 
 Indexes: `message_attachments_message_idx` on `(message_id, position)`
 (per-message fetch order); `message_attachments_live_idx` on
@@ -194,7 +273,13 @@ parent - `messages.thread_id -> threads.user_id = auth.uid()`.
 - **`isConsumableBy(attachment, spec)`**: single source of truth for
   whether the pre-send guard allows a file along. Image -> true (vision
   inlines it; non-vision tiers get an analyze_image note); non-empty
-  `extracted_text` -> true; else false.
+  `extracted_text` -> true; non-null `page_count` -> true (the scanned-PDF
+  case: no text, but the rendered pages are readable); else false.
+- **`analyze_image` never reports a non-image as missing**: its query
+  filters `mime_type like 'image/%'`, so a miss is ambiguous. On a miss it
+  re-queries without the filter and, if the filename IS in the thread,
+  says what the file actually is and where to read it (inlined text, or
+  `analyze_pdf_page` when the document has rendered pages). See Gotchas.
 - **Thread-scoped image lookup**: `analyze_image` (server-side, in the
   venice edge function) reaches an image by joining `message_attachments`
   to `messages` on `thread_id` (most recent match regardless of expiry),
@@ -212,8 +297,11 @@ parent - `messages.thread_id -> threads.user_id = auth.uid()`.
   same RLS chain, same manual-delete path.
 - **`<thread_attachments>` system block**: built once per turn from
   `listAttachmentSummariesForThread` (metadata-only projection). Lists
-  live images, live documents, and expired filenames; empty sections add
-  zero tokens.
+  live images, live documents, documents with viewable pages (filename +
+  page count + the `analyze_pdf_page` call), and expired filenames; empty
+  sections add zero tokens. The summary projection nulls `page_count` for
+  an expired row, since deleting an attachment reclaims its page objects
+  too - a stale count would otherwise keep advertising a gone document.
 - **Attachment-inspection reinforcement**: when the user message that
   opened the turn carries a file (`currentTurnHasAttachments`, threaded
   from `Chat.svelte` and keyed on the opening user-message id), the
@@ -244,8 +332,9 @@ parent - `messages.thread_id -> threads.user_id = auth.uid()`.
   [`../../supabase/functions/README.md`](../../supabase/functions/README.md).
 - **Tools** ([`./tools.md`](./tools.md)) - `generate_image` (images
   toolbox) flows output through the attachment path; `analyze_image`,
-  `doc_create`, `recipe_photos_attach` all read attachment bytes via the
-  bucket (signed URL or `downloadAttachmentBlob`).
+  `analyze_pdf_page`, `doc_create`, `recipe_photos_attach` all read
+  attachment bytes via the bucket (signed URL or `downloadAttachmentBlob`).
+  `analyze_image` and `analyze_pdf_page` share `tools/_vision.ts`.
 - **Models** - `ModelSpec.supportsVision` gates inline images.
 - **Wiki records** (`docs/dev/wiki.md`) - the `record_file_attach` tool
   reuses the thread-scoped filename resolver (the `analyze_image` lookup)
@@ -284,6 +373,56 @@ parent - `messages.thread_id -> threads.user_id = auth.uid()`.
   never delivered them. The server attaches BEFORE it publishes the
   `tool_call_response` that makes the card appear, so the first lookup
   almost always wins; the retry is just insurance.
+
+- **Two tables park bytes in the `attachments` bucket now.**
+  `list_orphan_attachment_objects` anti-joins BOTH `message_attachments`
+  and `message_attachment_pages`. Checking only the first would make the
+  daily `attachment-gc` sweep reclaim every rendered page on its next tick
+  - the pages would vanish a day after upload and `analyze_pdf_page` would
+  start failing on documents that worked yesterday. Any future table that
+  stores objects in this bucket has to be added to that anti-join too.
+
+- **The Artifacts-tab delete must drop page rows explicitly.** That path
+  EXPIRES the attachment (nulls `storage_path`, stamps `expired_at`)
+  rather than deleting the row, so the `on delete cascade` that would
+  otherwise clear `message_attachment_pages` never fires.
+  `deleteAttachment` calls `deleteAttachmentPages` for exactly this
+  reason; without it a "deleted" PDF stays fully viewable through
+  `analyze_pdf_page`.
+
+- **`analyze_image`'s miss diagnostic is mime-aware on purpose.** Its
+  lookup filters `mime_type like 'image/%'`, so a PDF in the thread misses
+  and the naive message - "No image attachment named foo.pdf in this
+  thread" - is FALSE. That exact string is what taught the model that Nak
+  cannot read PDFs: it reads as "the file is gone," so the model gave up
+  and told the user so. The miss path now re-queries without the filter
+  and, when the filename really is present, names the file's actual type
+  and points at the right lever.
+
+- **PDF rasterization is main-thread, with a yield between pages.**
+  pdf.js workerizes parsing but not `page.render`, so a 30-page document
+  would hold the main thread for several seconds and freeze the composer
+  mid-typing. `renderPdfPages` breaks to the event loop between pages.
+  OffscreenCanvas in a worker would avoid the hop and is rejected for the
+  same reason `compressImage` rejects it - Safari < 16.4 lacks it.
+
+- **`page.render` gets the canvas, not a 2D context.** pdf.js treats
+  `canvasContext` as a backwards-compatibility path whose contract
+  requires `canvas` to be null, so passing both is contradictory. It also
+  fills the canvas white itself before drawing - which is load-bearing,
+  not incidental: a page with no background box would otherwise land on
+  transparent black and the JPEG encoder would flatten it to a solid
+  black sheet, sending the whole document to the vision model as blank
+  pages. Don't "helpfully" add a manual fill; it is redundant with what
+  pdf.js already does.
+
+- **pdfjs-dist must stay behind a dynamic import.** It is ~480 kB of
+  library plus a ~1.25 MB worker; only a session that actually attaches a
+  PDF should pay for it. `src/lib/pdf-pages.ts` is the only module that
+  imports it, and it does so inside a function. If Rollup ever warns
+  `pdfjs-dist is dynamically imported by ... but also statically imported
+  by ...`, the split has silently stopped working and every visitor is
+  downloading it.
 
 - **`listArtifacts` must hint the `threads` embed.** `messages` and
   `threads` are joined by more than one relationship: the forward

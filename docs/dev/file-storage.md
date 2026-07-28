@@ -32,6 +32,7 @@ on conflict do nothing`).
 | --- | --- | --- | --- |
 | `documents` | Library uploads | `<user_id>/<document_id>/<filename>` | persistent |
 | `attachments` | chat message files + generated images | `<user_id>/<attachment_id>/<filename>` | persistent; deleted by the user (Artifacts tab) or reclaimed when orphaned |
+| `attachments` | rasterized PDF pages | `<user_id>/<attachment_id>/pages/<nnnn>.jpg` | deleted with their attachment; reclaimed when orphaned |
 | `recipe-images` | cookbook photos | `<user_id>/<sha256>` (content-addressed) | persistent; reclaimed when orphaned |
 | `wiki-record-files` | files attached to wiki records | `<user_id>/<file_id>/<filename>` | persistent; reclaimed when orphaned |
 
@@ -77,9 +78,9 @@ Vault-secret plumbing as the embeddings backfill (see
 missing object or row is a no-op), self-bounding (batch + time budget),
 and deployed via its own line in `.github/workflows/deploy.yml`.
 
-- **`attachment-gc`** (daily): deletes attachment-bucket objects with no
-  `message_attachments` row - the orphans a thread deletion leaves behind
-  (the cascade drops the rows; SQL can't drop the objects). Backed by
+- **`attachment-gc`** (daily): deletes attachment-bucket objects claimed by
+  no row - the orphans a thread deletion leaves behind (the cascade drops
+  the rows; SQL can't drop the objects). Backed by
   `list_orphan_attachment_objects` (a `storage.objects` anti-join over the
   live `storage_path`s, with an age grace window so an in-flight upload's
   object isn't mistaken for an orphan). The client's `deleteThread` and the
@@ -87,6 +88,13 @@ and deployed via its own line in `.github/workflows/deploy.yml`.
   backstop for a failed inline remove or any pre-existing backlog. (There
   is no timed expiry sweep - attachments are kept until the user deletes
   them; images are compressed at upload so they're small at the source.)
+
+  **TWO tables claim objects in this bucket**: `message_attachments`
+  (originals + generated images) and `message_attachment_pages`
+  (rasterized PDF pages). The RPC anti-joins both. Anti-joining only the
+  first would reclaim every page render on the next tick - a PDF that was
+  viewable yesterday silently stops being so. Any new table that parks
+  bytes here has to be added to that RPC.
 - **`recipe-image-gc`** (every 6h): deletes `recipe_images` rows with no
   `recipe_version_images` link AND their bucket object - both insert-side
   and delete-side orphans. Backed by `list_orphan_recipe_images` /
@@ -119,6 +127,13 @@ multipart upload through the venice edge function's `/text-parser`
 route - the function holds the shared key server-side and relays the
 response. Orthogonal to byte storage: extraction produces the
 searchable text, the bucket holds the bytes.
+
+The parser returns a document's **text layer**, which is empty for a
+scanned PDF and drops charts, diagrams, and layout from the rest. Chat
+attachments cover that gap by rasterizing a PDF's leading pages in the
+browser at upload time and storing them as extra objects in the same
+bucket - see [Attachments](./attachments.md), "PDF page rendering."
+Library documents have no equivalent (they are searched by text only).
 
 ## Gotchas
 

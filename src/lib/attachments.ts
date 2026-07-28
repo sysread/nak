@@ -11,6 +11,7 @@
  */
 import type { Attachment, NewAttachment } from './supabase';
 import type { ModelSpec } from './models';
+import type { RenderedPdfPage } from './pdf-pages';
 
 /**
  * Hard ceiling per file, in bytes. Images over this cap are rejected
@@ -133,6 +134,27 @@ export interface LocalAttachment {
    * when the image passed through untouched or the file isn't an image.
    */
   compression: { beforeBytes: number; afterBytes: number } | null;
+  /**
+   * Page count of the source document for formats we rasterize (PDF), or
+   * null when the file isn't one or its render produced nothing usable.
+   * Non-null means `pages` below holds at least one rendered page.
+   */
+  page_count: number | null;
+  /**
+   * Rasterized pages held in memory until send, when they're uploaded to
+   * the bucket by `addAttachmentPages`. Empty for everything but a PDF that
+   * rendered successfully. Kept off `data_base64` on purpose - these are
+   * derived bytes bound for a different table, not the attachment's own.
+   */
+  pages: RenderedPdfPage[];
+  /**
+   * True while the PDF rasterizer is working, with the current page and
+   * total so the chip can narrate a slow render. Null otherwise. Distinct
+   * from `compressing` (images) and from bare `pending` (text extraction)
+   * because a 30-page render is the one attach-time step slow enough that a
+   * generic spinner reads as a hang.
+   */
+  rendering: { done: number; total: number } | null;
   /** If set, the attachment failed to process — render as an error chip. */
   error: string | null;
 }
@@ -154,6 +176,7 @@ export function toNewAttachment(a: LocalAttachment, position: number): NewAttach
     size_bytes: a.size_bytes,
     data_base64: a.data_base64,
     extracted_text: a.extracted_text,
+    page_count: a.page_count,
   };
 }
 
@@ -166,9 +189,18 @@ export function toNewAttachment(a: LocalAttachment, position: number): NewAttach
  *
  * An empty extracted_text string doesn't count — it means the parser
  * ran but found nothing, so there's no signal for the model to use.
+ *
+ * A document with rasterized pages (`page_count` non-null) counts too,
+ * even with no extracted text at all: that is exactly the scanned PDF,
+ * whose only readable form is the rendered page an analyze_pdf_page call
+ * puts in front of a vision model. `page_count` is optional because the
+ * persisted `Attachment` shape doesn't project it - callers passing one get
+ * the text-only judgement, which is what they had before pages existed.
  */
 export function isConsumableBy(
-  a: Pick<Attachment | LocalAttachment, 'mime_type' | 'extracted_text'>,
+  a: Pick<Attachment | LocalAttachment, 'mime_type' | 'extracted_text'> & {
+    page_count?: number | null;
+  },
   _spec: Pick<ModelSpec, 'supportsVision'>
 ): boolean {
   // Images are always consumable: vision tiers inline them directly;
@@ -179,6 +211,7 @@ export function isConsumableBy(
   if (typeof a.extracted_text === 'string' && a.extracted_text.trim().length > 0) {
     return true;
   }
+  if (typeof a.page_count === 'number' && a.page_count > 0) return true;
   return false;
 }
 

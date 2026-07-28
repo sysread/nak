@@ -113,7 +113,19 @@ Notable members (the full ordered list is `alwaysOnToolbox` in
   content-safety block on an innocuous photo). The edge
   implementation (`supabase/functions/venice/tools/analyze_image.ts`)
   looks the image up by filename in the thread, downloads the
-  bytes, and inlines them as a base64 data URL.
+  bytes, and inlines them as a base64 data URL. Its lookup filters
+  on `image/%`, so a miss is ambiguous - it re-queries without the
+  filter and names what the file actually is rather than reporting a
+  present-but-non-image attachment as absent. See
+  `./attachments.md`, Gotchas.
+- `analyze_pdf_page` - the same vision sub-call against ONE rasterized
+  page of a PDF in the thread (`filename`, 1-based `page`, `query`).
+  Covers what the text layer can't: scanned documents, charts,
+  diagrams, signatures, layout. Pages are rendered in the browser at
+  upload time, not on demand, so an out-of-range request comes back
+  naming the pages that ARE viewable. Shares the vision runner and the
+  bytes-to-data-URL helper with `analyze_image` via `tools/_vision.ts`.
+  See `./attachments.md`, "PDF page rendering."
 - `ask_user` - pose a clarifying multiple-choice question instead
   of guessing intent. The turn suspends after the call lands; the
   next round starts when the user submits an answer via the
@@ -424,6 +436,9 @@ Edge dispatch (`supabase/functions/venice/`):
   writes a `message_attachments` row on the terminal assistant
   message, so generated images share storage, the manual-delete
   lifecycle, RLS, and `analyze_image` reachability with user uploads.
+  On the read side, `analyze_image` and `analyze_pdf_page` are the two
+  tools that reach attachment bytes by filename; the `<thread_attachments>`
+  system block is what tells the model which filenames each one accepts.
   See `./attachments.md`.
 - **Memory** - the memory tools ARE the memory CRUD interface. The
   user-facing `memoriesToolbox` packages the writes; the agent

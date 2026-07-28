@@ -51,6 +51,7 @@
     "katex": "^0.16.45",
     "marked": "^18.0.1",
     "marked-katex-extension": "^5.1.8",
+    "pdfjs-dist": "^6.1.200",
     "workbox-window": "^7.4.0"
   }
 }

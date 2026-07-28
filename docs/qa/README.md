@@ -196,6 +196,10 @@ One file per use-case under [`use-cases/`](./use-cases/), named
   attaching files from the composer, waiting for processing,
   post-send previews, extracted-text drawers, and expired-file
   surfaces.
+- [attachments-pdf-page-rendering](./use-cases/attachments-pdf-page-rendering.md) -
+  PDFs rasterized at attach time, `analyze_pdf_page` reading a scan and
+  a chart, `analyze_image`'s mime-aware miss diagnostic, and page-object
+  reclamation on delete and on the GC sweep.
 - [chat-generated-image-card](./use-cases/chat-generated-image-card.md) -
   the dedicated generated-image card resolving by filename and
   rendering without a reload (the per-round attach never echoes over

@@ -31,7 +31,7 @@ const DEFAULT_THREAD_TITLE = 'New conversation';
 
 /**
  * Render the `<thread_attachments>` per-turn metadata block listing
- * every file attachment that has appeared in this conversation. Three
+ * every file attachment that has appeared in this conversation. Four
  * sections, each shown only when non-empty:
  *
  *   - Live images: filenames the model can pass to analyze_image().
@@ -39,8 +39,13 @@ const DEFAULT_THREAD_TITLE = 'New conversation';
  *     the user turn where they were attached. Listed for recall ("yes,
  *     I still have the contract.pdf you sent earlier") - no separate
  *     tool needed to read them.
- *   - Expired: filenames whose binary was reclaimed by the 30-day
- *     expiry sweep. The model knows it can't analyze them and can
+ *   - Viewable pages: the subset of those documents that rasterized,
+ *     with the page count, and the analyze_pdf_page call that reaches
+ *     a page. This is the only affordance a SCANNED PDF has - its
+ *     inlined text is empty, so the "text is inlined" line above
+ *     describes nothing and the model needs somewhere else to go.
+ *   - Expired: filenames whose binary the user deleted from the
+ *     Artifacts tab. The model knows it can't analyze them and can
  *     tell the user the data is gone if asked.
  *
  * Why this lives in the system prompt, not the user turn: the per-
@@ -67,6 +72,11 @@ export function buildThreadAttachmentsBlock(
   // expired - we trust expired_at on the most recent row).
   const liveImages = new Map<string, true>();
   const liveDocs = new Map<string, true>();
+  // Documents with rasterized pages, mapped to the document's page count so
+  // the block can name it. Tracked separately from liveDocs because these
+  // carry a second, differently-shaped affordance (look at a page) on top of
+  // the inlined text every document has.
+  const viewableDocs = new Map<string, number>();
   const expired = new Map<string, true>();
   for (const s of summaries) {
     if (s.expired) {
@@ -74,15 +84,22 @@ export function buildThreadAttachmentsBlock(
       // name, since the binary really is gone now.
       liveImages.delete(s.filename);
       liveDocs.delete(s.filename);
+      viewableDocs.delete(s.filename);
       expired.set(s.filename, true);
     } else if (s.is_image) {
       expired.delete(s.filename);
       liveDocs.delete(s.filename);
+      viewableDocs.delete(s.filename);
       liveImages.set(s.filename, true);
     } else {
       expired.delete(s.filename);
       liveImages.delete(s.filename);
       liveDocs.set(s.filename, true);
+      if (typeof s.page_count === 'number' && s.page_count > 0) {
+        viewableDocs.set(s.filename, s.page_count);
+      } else {
+        viewableDocs.delete(s.filename);
+      }
     }
   }
 
@@ -97,9 +114,24 @@ export function buildThreadAttachmentsBlock(
       `Live documents: ${[...liveDocs.keys()].join(', ')}. Their extracted text is inlined in the user turns where they were attached.`
     );
   }
+  if (viewableDocs.size > 0) {
+    // Named separately from the "Live documents" line because the failure
+    // this prevents is specific: with only the text-is-inlined line, a model
+    // facing a scanned PDF (whose inlined text is empty or garbage) has
+    // nothing to reach for and concludes it cannot read PDFs at all.
+    lines.push(
+      `Viewable pages: ${[...viewableDocs.entries()]
+        .map(([filename, pages]) => `${filename} (${pages} pages)`)
+        .join(', ')}. Call analyze_pdf_page(filename, page, query) to LOOK at a page - ` +
+        'use it when the inlined text is missing or garbled (a scan), or when the answer ' +
+        'depends on a chart, diagram, signature, or layout that text extraction drops. ' +
+        'Long documents render only their leading pages; an out-of-range page comes back ' +
+        'naming the pages that are available.'
+    );
+  }
   if (expired.size > 0) {
     lines.push(
-      `Expired (binary reclaimed after 30d, no longer inspectable): ${[...expired.keys()].join(', ')}.`
+      `Expired (deleted by the user, no longer inspectable): ${[...expired.keys()].join(', ')}.`
     );
   }
   lines.push('</thread_attachments>');
