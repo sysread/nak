@@ -387,7 +387,12 @@ single overflow (**...**) menu to keep the bar uncluttered. The
 panel shows a live step-by-step progress strip while the run
 executes and a one-sentence summary of what the agent did when it
 finishes. The step currently in flight is marked with a spinning
-bar (`- \ | /`); finished steps get a check, failed ones a cross.
+bar (`- \ | /`); finished steps get a check, failed ones a cross. A
+spinning **Working** row sits at the bottom of the list for as long
+as the run is going, so you can always tell the difference between
+"more steps are coming" and "it stopped here". A cross partway down
+the list is usually not the end of the run - the librarian often
+retries a step a different way and carries on.
 You can switch to another drawer tab mid-run and come
 back - the strip picks up where it left off. A full page reload is
 also safe: the run keeps going on the server, the button stays

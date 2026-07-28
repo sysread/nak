@@ -375,7 +375,14 @@ in `docs/user/memory.md`. The dev side has five moving parts:
   in-flight step row both render `<AsciiSpinner>`
   (`docs/dev/components.md`); settled step rows render `stepIcon`'s
   check/cross, which is why that helper's domain is the two settled
-  statuses only. A collision still folds into a `busy`
+  statuses only. A third spinner sits at the BOTTOM of the step list
+  whenever the run is live and the last row is already settled
+  (`showsRunTail`, `src/lib/ui/librarian-run-tail.ts`, shared with the
+  wiki strip). Without it the strip freezes visibly between a tool row -
+  pushed already-settled, since the event carries its outcome - and
+  the next `thinking` event, which users read as a dead run,
+  especially when the last row is a failed call and the agent is
+  actually mid-retry. A collision still folds into a `busy`
   result. Manual runs never touch the cadence stamps. Run OUTCOME
   recovers across a reload the same way the wiki librarian's does: the
   detached handler writes a `{ runId, source, finishedAt, result }`

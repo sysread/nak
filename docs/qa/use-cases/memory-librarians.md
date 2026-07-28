@@ -68,7 +68,13 @@ the ONE shared in-flight guard across all four paths
   Live narrated steps in the strip (manual runs carry the activity
   param). The step in flight is marked by an animating `- \ | /`
   spinner - visibly cycling, not a static or merely pulsing glyph -
-  and settles to a check or cross as the next step opens. Results
+  and settles to a check or cross as the next step opens. A spinning
+  *Working* row holds the bottom of the list for the whole run,
+  including the gap before the first step arrives and the gap after a
+  tool row settles; exactly one spinner is ever visible in the list
+  (the tail yields to a pending row rather than stacking). A failed
+  tool call marks its row with a RED cross and the run continues -
+  the agent commonly retries and later rows keep landing. Results
   fold into the strip's result line; the Memories list refreshes
   without a manual reload (the memories realtime relay).
 - (4) The manual run returns busy (the strip shows the busy

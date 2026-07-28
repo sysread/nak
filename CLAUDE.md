@@ -454,6 +454,25 @@ Mechanics:
 - If a user-facing change ships without doc updates, treat it as a
   bug and file a follow-up.
 
+### markdownlint: keep `$` balanced, or don't write it
+
+markdownlint parses `$...$` as inline math. An ODD number of `$`
+characters in a file opens a math span that runs to the next `$`
+anywhere below, swallowing every code span in between - which
+surfaces as a cluster of MD038 "spaces inside code span" errors on
+innocent lines far from the one you edited. The reported lines are
+never the culprit; the unpaired `$` above them is.
+
+This is easy to trip because the docs are full of Svelte and alias
+sigils (`$lib/...`, `$state`, `$effect`, `$derived`). Writing one
+more of them can flip a previously-even file to odd, and a doc that
+linted clean for a year suddenly fails somewhere else entirely.
+
+Cheapest fix: **spell the path out** - `src/lib/ui/foo.ts` rather
+than `$lib/ui/foo` - in new prose. If you do need the sigil and the
+lint goes red on lines you didn't touch, count `$` in the file
+before believing the reported location.
+
 Stubs in `docs/user/` start as H1 + one-paragraph summary +
 placeholder H2s. Fleshing them out is its own work; what matters
 per-PR is that the relevant page moves forward by the section the

@@ -500,7 +500,12 @@ stays uncluttered. Clicking **sparkles** opens a confirmation strip
 with an optional instructions textarea, then runs the librarian
 against your wiki immediately. While it works, the strip lists each
 step as it happens: the step in flight is marked with a spinning bar
-(`- \ | /`), finished steps get a check, failed ones a cross.
+(`- \ | /`), finished steps get a check, failed ones a cross. A
+spinning **Working** row sits at the bottom for as long as the run is
+going, so you can always tell "more steps are coming" from "it
+stopped here". A cross partway down is usually not the end of the
+run: the librarian often retries a step a different way and carries
+on.
 
 - **Leave the instructions empty** to run the normal periodic sweep
   (the consolidate / fact-check / boundary-tighten pass described

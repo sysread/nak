@@ -88,6 +88,7 @@
     stepIcon,
     type MemoryLibrarianPass,
   } from '$lib/ui/memory-librarian';
+  import { RUN_TAIL_LABEL, showsRunTail } from '$lib/ui/librarian-run-tail';
   import { onMemoryChange } from '$lib/memory-events';
 
   /**
@@ -799,6 +800,11 @@
   const runInFlightElsewhere = $derived(
     memoryLibrarianLease.running && !librarianRun.running,
   );
+  // Trailing "still working" row under the step list - see
+  // showsRunTail for why a settled bottom row needs one.
+  const runTailVisible = $derived(
+    showsRunTail(librarianRun.steps, librarianRun.running),
+  );
 
   // Bridge a recovered manual-run outcome into the librarianRun store so a
   // reload (or a run that finished while this tab watched without local
@@ -943,7 +949,7 @@
             Dismiss
           </button>
         </header>
-        {#if librarianRun.steps.length > 0}
+        {#if librarianRun.steps.length > 0 || runTailVisible}
           <ol class="librarian-steps">
             {#each librarianRun.steps as step (step.label + step.status)}
               <li class="librarian-step librarian-step-{step.status}">
@@ -961,6 +967,16 @@
                 <span class="librarian-step-label">{step.label}</span>
               </li>
             {/each}
+            {#if runTailVisible}
+              <!-- "More is coming" row. Whole row is aria-hidden: the
+                   header already announces that the run is going, so
+                   this would add only spinner-frame noise to the live
+                   region. -->
+              <li class="librarian-step librarian-run-tail" aria-hidden="true">
+                <span class="librarian-step-icon"><AsciiSpinner /></span>
+                <span class="librarian-step-label">{RUN_TAIL_LABEL}</span>
+              </li>
+            {/if}
           </ol>
         {/if}
         {#if librarianRun.resultLine}
@@ -1451,8 +1467,11 @@
     color: var(--accent);
   }
 
+  /* --danger, not --text-error: the latter is not defined anywhere in
+     the project, so a failed step's cross inherited body text and read
+     as an ordinary row rather than an error. */
   .librarian-step-error .librarian-step-icon {
-    color: var(--text-error);
+    color: var(--danger);
   }
 
   /* The live row is the strip's focus, so its spinner runs at full text
@@ -1460,8 +1479,16 @@
      explicitly rather than left to the base rule above, whose
      --text-subtle is undefined project-wide and therefore inherits
      today - defining that variable later must not dim the spinner. */
-  .librarian-step-pending .librarian-step-icon {
+  .librarian-step-pending .librarian-step-icon,
+  .librarian-run-tail .librarian-step-icon {
     color: var(--text);
+  }
+
+  /* The tail row is a status cue, not a step the agent reported, so its
+     label sits back from the named rows above it. */
+  .librarian-run-tail .librarian-step-label {
+    color: var(--muted);
+    font-style: italic;
   }
 
   /* Pulse keyframes stay for .memory-similar-loading, which still

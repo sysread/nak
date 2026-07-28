@@ -133,6 +133,7 @@
     LIBRARIAN_PARTIAL_SAVE_NOTE,
     type LibrarianStep,
   } from '$lib/ui/wiki-librarian-run';
+  import { RUN_TAIL_LABEL, showsRunTail } from '$lib/ui/librarian-run-tail';
   import { awaitDetachedRun } from '$lib/agents/detached-run';
   import {
     wikiLibrarianLease,
@@ -986,6 +987,10 @@
   // when the `done` broadcast never arrives (gateway-timeout case).
   let librarianSteps = $state<LibrarianStep[]>([]);
 
+  // Trailing "still working" row under the step list - see showsRunTail
+  // for why a settled bottom row needs one.
+  const runTailVisible = $derived(showsRunTail(librarianSteps, librarianBusy));
+
   // The runId whose result this strip currently shows. Set by a live run
   // (submitLibrarianRun) and by the recovered-outcome bridge below, so the
   // bridge neither overwrites a live result nor re-applies the same outcome
@@ -1403,7 +1408,7 @@
             The librarian is running in the background…
           </p>
         {/if}
-        {#if librarianSteps.length > 0}
+        {#if librarianSteps.length > 0 || runTailVisible}
           <!-- Live step list. Each row pairs an AsciiSpinner
                (pending) or a final glyph (ok/error) with the
                model-emitted `activity` narration for tool calls and a
@@ -1430,6 +1435,15 @@
                 <span class="librarian-step-label">{step.label}</span>
               </li>
             {/each}
+            {#if runTailVisible}
+              <!-- "More is coming" row. Whole row is aria-hidden: the
+                   strip already announces the run, so this would add
+                   only spinner-frame noise to the live region. -->
+              <li class="librarian-step librarian-run-tail" aria-hidden="true">
+                <span class="librarian-step-glyph"><AsciiSpinner /></span>
+                <span class="librarian-step-label">{RUN_TAIL_LABEL}</span>
+              </li>
+            {/if}
           </ol>
         {/if}
         {#if librarianResult && librarianResult.kind === 'ok'}
@@ -2182,8 +2196,16 @@
   /* The live row is the focus of the list, so its spinner runs at
      full text contrast while the settled rows carry the muted
      ok/error glyph. */
-  .librarian-step.status-pending .librarian-step-glyph {
+  .librarian-step.status-pending .librarian-step-glyph,
+  .librarian-run-tail .librarian-step-glyph {
     color: var(--text);
+  }
+
+  /* The tail row is a status cue, not a step the agent reported, so
+     its label sits back from the named rows above it. */
+  .librarian-run-tail .librarian-step-label {
+    color: var(--muted);
+    font-style: italic;
   }
   .librarian-step.status-ok .librarian-step-glyph {
     color: var(--ok);
