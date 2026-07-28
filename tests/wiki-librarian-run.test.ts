@@ -161,8 +161,9 @@ describe('librarianRunButtonLabel', () => {
 });
 
 describe('librarianStepGlyph', () => {
-  it('maps each status to its row glyph', () => {
-    expect(librarianStepGlyph('pending')).toBe('↻');
+  it('maps each settled status to its row glyph', () => {
+    // Pending rows are not in the domain - the strip renders an
+    // AsciiSpinner in the glyph cell rather than a character.
     expect(librarianStepGlyph('ok')).toBe('✓');
     expect(librarianStepGlyph('error')).toBe('✗');
   });

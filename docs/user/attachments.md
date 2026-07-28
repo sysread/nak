@@ -18,7 +18,8 @@ There are three ways to queue a file for the next send:
   you hover.
 
 Each queued file appears as a chip above the textarea. A dashed chip
-means Nak is still processing the file (compressing a large image,
+with a small spinner means Nak is still processing the file
+(compressing a large image,
 asking Venice to extract text from a document, rendering the pages of a
 PDF). When Nak shrinks an oversized image the chip shows the result -
 "Reduced from 2.7 MB to 845 KB" - so you can see what was saved. A PDF

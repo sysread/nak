@@ -498,7 +498,9 @@ a wide screen they sit side by side as a button group; on a narrow
 screen they collapse into a single overflow (**...**) menu so the bar
 stays uncluttered. Clicking **sparkles** opens a confirmation strip
 with an optional instructions textarea, then runs the librarian
-against your wiki immediately.
+against your wiki immediately. While it works, the strip lists each
+step as it happens: the step in flight is marked with a spinning bar
+(`- \ | /`), finished steps get a check, failed ones a cross.
 
 - **Leave the instructions empty** to run the normal periodic sweep
   (the consolidate / fact-check / boundary-tighten pass described

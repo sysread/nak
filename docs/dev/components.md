@@ -103,9 +103,17 @@ Two contracts callers must honour:
 Under `prefers-reduced-motion: reduce` (sampled once at mount) it
 renders a static ellipsis instead of starting the timer.
 
-Consumers: `Memories.svelte` - the pending row of the librarian
-progress strip, and the "running in the background" notice in the
-confirm strip. See [`./memory.md`](./memory.md).
+Consumers: `Memories.svelte` and `Wiki.svelte` - in each, the pending
+row of the librarian run's step list plus the "running in the
+background" notice shown when the in-flight lease is held by a run
+this strip didn't start. See [`./memory.md`](./memory.md) and
+[`./wiki.md`](./wiki.md).
+
+Deliberately NOT applied to the chat tool-call rows
+(`.tool-status.status-pending`), which keep their rotating glyph. That
+indicator appears on every tool call in every conversation, so
+changing it is a change to the app's overall texture rather than a
+fix to one strip - it wants its own decision.
 
 ## `<ModelCombobox>`
 
