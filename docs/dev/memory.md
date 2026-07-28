@@ -371,7 +371,11 @@ in `docs/user/memory.md`. The dev side has five moving parts:
   launchers stay ENABLED (they're navigation - they open the confirm
   strip), and the lease instead disables the confirm strip's **Run**
   submit and renders a "running in the background" spinner when a pass
-  is in flight elsewhere. A collision still folds into a `busy`
+  is in flight elsewhere. That spinner and the progress strip's
+  in-flight step row both render `<AsciiSpinner>`
+  (`docs/dev/components.md`); settled step rows render `stepIcon`'s
+  check/cross, which is why that helper's domain is the two settled
+  statuses only. A collision still folds into a `busy`
   result. Manual runs never touch the cadence stamps. Run OUTCOME
   recovers across a reload the same way the wiki librarian's does: the
   detached handler writes a `{ runId, source, finishedAt, result }`

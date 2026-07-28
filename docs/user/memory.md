@@ -386,7 +386,9 @@ next scheduled cycle. On a narrow screen the pair collapses into a
 single overflow (**...**) menu to keep the bar uncluttered. The
 panel shows a live step-by-step progress strip while the run
 executes and a one-sentence summary of what the agent did when it
-finishes; you can switch to another drawer tab mid-run and come
+finishes. The step currently in flight is marked with a spinning
+bar (`- \ | /`); finished steps get a check, failed ones a cross.
+You can switch to another drawer tab mid-run and come
 back - the strip picks up where it left off. A full page reload is
 also safe: the run keeps going on the server, the button stays
 disabled until it actually finishes, and the last run's summary is

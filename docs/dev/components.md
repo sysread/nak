@@ -73,6 +73,40 @@ custom property makes the scale prop work without inline keyframes.
 Consumers: `Chat.svelte` (several spots), `Help.svelte` (doc
 transitions), archive loading sentinel in the drawer.
 
+## `<AsciiSpinner>`
+
+File: `src/components/AsciiSpinner.svelte`.
+
+Classic terminal bar spinner - cycles `- \ | /` on a 100ms
+`setInterval`. Takes no props. Frame sequence, cadence, and the
+reduced-motion fallback glyph live in `src/lib/ui/ascii-spinner.ts`;
+the component is the timer plus a `$state` counter.
+
+Picked over `<Scanner>` where the surface is a single character cell
+in a text row rather than a standalone waiting affordance, and over
+the `transform: rotate()` treatment the chat tool rows apply to their
+U+21BB glyph (`.tool-status.status-pending` in `styles.css`) because
+a rotating glyph that small reads as a shimmer - swapping the glyph
+outright changes the shape, which the eye catches at any size.
+
+Two contracts callers must honour:
+
+- **Keep it inside an `aria-hidden` container.** Both current call
+  sites are in `aria-live="polite"` regions; an unhidden spinner
+  would announce its frame sequence ten times a second.
+- **Give it a fixed-width cell** if a label sits beside it. The
+  component pins `--font-mono` and `width: 1ch` so the frames hold
+  their column, but a caller that lets the cell size to content will
+  still shift on frames with different side bearings in a
+  non-Lekton fallback font.
+
+Under `prefers-reduced-motion: reduce` (sampled once at mount) it
+renders a static ellipsis instead of starting the timer.
+
+Consumers: `Memories.svelte` - the pending row of the librarian
+progress strip, and the "running in the background" notice in the
+confirm strip. See [`./memory.md`](./memory.md).
+
 ## `<ModelCombobox>`
 
 File: `src/components/ModelCombobox.svelte`.
