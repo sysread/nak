@@ -32,6 +32,31 @@ import {
 // a per-task cap.
 const DEFAULT_MAX_ROUNDS = 20;
 
+/**
+ * Whether another round is worth starting inside a wall-clock budget.
+ *
+ * Rounds are the unit the loop can stop between, but wall clock is the
+ * thing that actually kills a run: the hosted edge runtime terminates
+ * the isolate mid-flight, so the code after the loop - the one that
+ * persists a run outcome and releases the in-flight lease - never
+ * executes. Stopping one round early is cheap; being killed is not.
+ *
+ * `slowestRoundMs` is the estimate of what the next round costs. The
+ * slowest round SO FAR rather than the mean, because the cost of
+ * underestimating (killed, nothing persisted) is far worse than the
+ * cost of overestimating (one fewer round of consolidation on a run
+ * that repeats every 12h). Pass 0 before any round has completed - no
+ * estimate yet means "go", which is what keeps the first round
+ * unconditional.
+ */
+export function roundFitsBudget(
+  elapsedMs: number,
+  budgetMs: number,
+  slowestRoundMs: number,
+): boolean {
+  return elapsedMs + slowestRoundMs <= budgetMs;
+}
+
 // Maximum nested-agent depth allowed below the main chat. Main chat
 // runs at depth 0; first agent at depth 1; etc. runHeadlessAgent
 // rejects an agent run whose effective depth would exceed this so a
@@ -228,12 +253,31 @@ export interface RunHeadlessAgentOptions {
   signal: AbortSignal;
   /** Upper bound on rounds; defaults to DEFAULT_MAX_ROUNDS. */
   maxRounds?: number;
+  /**
+   * Wall-clock budget in ms. The loop stops before starting a round it
+   * estimates will not fit (see roundFitsBudget) and reports
+   * `stoppedByLimit`. Unset means unbounded.
+   *
+   * Opt-in per agent rather than defaulted, because "too long" is a
+   * policy each caller owns: deep-sleep dying mid-flight strands its
+   * in-flight lease for the lease TTL, while a long reflection is
+   * expected and already handled by its own failure counter. Any agent
+   * whose post-loop work must run - persisting an outcome, releasing a
+   * lease - wants a budget under the platform's kill threshold.
+   */
+  budgetMs?: number;
   /** Optional reasoning_effort knob, forwarded verbatim to Venice. */
   reasoningEffort?: 'low' | 'medium' | 'high';
   /** Optional Venice-specific disable_thinking kill switch. */
   disableThinking?: boolean;
   /** Test seam; defaults to toolComplete (the live Venice call). */
   complete?: AgentCompleteFn;
+  /**
+   * Test seam for the budget clock; defaults to Date.now. Injected for
+   * the same reason `complete` is - it keeps the budget tests
+   * deterministic instead of timing-dependent.
+   */
+  now?: () => number;
   /**
    * Optional live-progress hook. Events only - the hook never alters
    * what the model sees; pair it with withProgressNarration() on the
@@ -250,7 +294,12 @@ export interface RunHeadlessAgentResult {
   rounds: number;
   /** Total number of tool calls issued across all rounds. */
   toolCalls: number;
-  /** True iff we stopped because of maxRounds rather than a clean finish. */
+  /**
+   * True iff we stopped on a limit - maxRounds or the wall-clock
+   * budget - rather than the model settling on a final answer. Tool
+   * calls already made are committed either way; each tool writes as
+   * it runs.
+   */
   stoppedByLimit: boolean;
 }
 
@@ -312,8 +361,29 @@ export async function runHeadlessAgent(
   };
   const wireList = buildToolboxWireList(toolbox);
 
+  const now = opts.now ?? Date.now;
+  // Not `startedAt`: the tool-execution scope below already binds that
+  // name per call, and shadowing the run's own start would be a nasty
+  // read.
+  const runStartedAt = now();
+  // Estimate of what the next round costs, used to stop before a round
+  // that would overrun the budget rather than after it.
+  let slowestRoundMs = 0;
+
   for (let round = 0; round < maxRounds; round += 1) {
     if (signal.aborted) break;
+    // Round 0 is unconditional: a budget too small for even one round
+    // would otherwise return zero rounds, and every caller treats a
+    // completed run as having done at least something.
+    if (
+      round > 0 &&
+      opts.budgetMs !== undefined &&
+      !roundFitsBudget(now() - runStartedAt, opts.budgetMs, slowestRoundMs)
+    ) {
+      stoppedByLimit = true;
+      break;
+    }
+    const roundStartedAt = now();
     rounds += 1;
     emit({ kind: 'thinking', round: rounds });
 
@@ -419,6 +489,11 @@ export async function runHeadlessAgent(
         name: r.call.function.name,
       });
     }
+
+    // Widen the next-round estimate from what this one actually cost.
+    // Only the tool-calling path reaches here; a round that settles on
+    // final text returns above, and its duration would never be needed.
+    slowestRoundMs = Math.max(slowestRoundMs, now() - roundStartedAt);
 
     if (round === maxRounds - 1) {
       stoppedByLimit = true;

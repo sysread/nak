@@ -146,8 +146,13 @@ in `docs/user/memory.md`. The dev side has five moving parts:
   the batch pair by pair, so rounds grow much faster than rows, and
   a seed + 8 batch was observed running past the limit and getting
   killed mid-flight (no outcome persisted, lease stranded until
-  TTL). It lowers the odds of an overrun without bounding it: the
-  loop still runs under the shared 20-round default. The agent decides per pair whether to
+  TTL). The batch size lowers the ODDS of that; what BOUNDS it is
+  `DEEP_SLEEP_BUDGET_MS` (300s), passed to `runHeadlessAgent` as
+  `budgetMs`. The loop stops before starting a round it estimates
+  will not fit and returns `stoppedByLimit`, so the post-loop
+  outcome write and lease release still run - a partial pass
+  instead of a silent death. See `docs/dev/tools.md` for the
+  loop-level mechanism. The agent decides per pair whether to
   consolidate, relate, or leave. Marks the entire batch visited
   after a successful run so the next sweep moves on. Exports
   `runDeepSleepSweepTick` (cron path) and `runDeepSleepManual`

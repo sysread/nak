@@ -415,6 +415,27 @@ Edge dispatch (`supabase/functions/venice/`):
   refused before the first Venice call. Aborts short-circuit at
   round boundaries and cascade into per-tool child controllers.
   Full treatment in `./wiki.md`.
+- **`opts.budgetMs` - the wall-clock bound.** Rounds are what the
+  loop can stop between, but wall clock is what kills a run: the
+  hosted edge runtime terminates the isolate around 400s, and
+  everything after the loop dies with it - the run-outcome write,
+  the in-flight lease release. The result is a pass that persisted
+  nothing and a lease every client honours until its TTL expires.
+  With `budgetMs` set, the loop calls `roundFitsBudget(elapsed,
+  budget, slowestRoundMs)` before each round after the first and
+  stops early with `stoppedByLimit` instead, so the post-loop work
+  still runs. The estimate is the SLOWEST round so far, not the
+  mean: underestimating gets you killed, overestimating costs one
+  round. Round 1 is unconditional, so a run always does something.
+  `opts.now` injects the clock, which is what keeps the budget
+  tests deterministic rather than timing-dependent.
+
+  It is **opt-in per agent**, not defaulted, because "too long" is
+  the caller's policy: deep-sleep sets 300s
+  (`DEEP_SLEEP_BUDGET_MS`) because a death strands its lease, while
+  a long reflection is expected and already handled by its own
+  failure counter. Any agent whose post-loop work must run wants a
+  budget under the platform's kill threshold.
 - **Toggle semantics.** The `toggle_toolbox` tool takes
   `{enabled: string[]}` and replaces the thread's set. Passing
   `{enabled: []}` disables every gated toolbox. The tool returns
