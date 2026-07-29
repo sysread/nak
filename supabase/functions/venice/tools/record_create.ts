@@ -74,6 +74,9 @@ export const recordCreate: ToolDef = {
         'record_create',
         date as string,
         content,
+        // 0 before: a create has nothing before it.
+        0,
+        content.length,
       );
     } catch {
       // swallow - audit row is a convenience, the record is the truth.

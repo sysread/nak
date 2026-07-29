@@ -37,6 +37,29 @@ const MAX_WIKI_CONTENT_CHARS = 16000;
 const MAX_WIKI_CHANGELOG_MESSAGE_CHARS = 200;
 
 /**
+ * Read the article's current content length for the changelog's
+ * before-size. Returns null when the article doesn't exist or isn't
+ * owned - the changelog then records an unknown before-size rather
+ * than implying a zero-length body.
+ */
+async function readArticleContentLength(
+  adminClient: import('@supabase/supabase-js').SupabaseClient,
+  userId: string,
+  articleId: string,
+): Promise<number | null> {
+  const { data, error } = await adminClient
+    .from('wiki_articles')
+    .select('content')
+    .eq('id', articleId)
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (error) return null;
+  if (!data) return null;
+  const content = (data as { content?: unknown }).content;
+  return typeof content === 'string' ? content.length : null;
+}
+
+/**
  * Pull `source_thread_ids` out of the model's arguments, coercing to
  * an array of trimmed strings and dropping anything non-string. The
  * downstream validator (findExistingThreadIds) rejects ids that don't
@@ -94,6 +117,15 @@ export const wikiUpdate: ToolDef = {
     }
     errs.throwIfAny();
 
+    // Read the prior content length before the update so the changelog
+    // can stamp chars_before. One read serving one consumer here (the
+    // memory_update pattern also feeds a budget check; here it's just
+    // the before-size). An unreadable row degrades to an unknown
+    // before-size, which the panel renders as "no size info".
+    const priorContentLength = id
+      ? await readArticleContentLength(ctx.adminClient, ctx.userId, id)
+      : null;
+
     // RLS OFF: the user_id filter scopes the patch to the owner. A
     // foreign or unknown id matches zero rows and .single() surfaces
     // that as an error the agent can read.
@@ -142,6 +174,10 @@ export const wikiUpdate: ToolDef = {
         kind: 'update',
         title_at_change: article.title,
         message,
+        // Undefined (-> NULL, "unknown") when the prior read failed; a
+        // title-only edit leaves both equal, which reads as a 0 delta.
+        chars_before: priorContentLength ?? undefined,
+        chars_after: (row as { content?: string }).content?.length,
       });
     } catch {
       // best-effort; see comment above.

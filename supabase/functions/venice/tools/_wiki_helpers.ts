@@ -28,6 +28,23 @@ export interface WikiChangelogEntry {
   kind: WikiChangelogKind;
   title_at_change: string;
   message: string;
+  /**
+   * Content length on either side of this change, so the history panel
+   * can show how much the edit grew or shrank the article (or record).
+   *
+   * Semantics the schema depends on: 0 means known-empty (a create has
+   * nothing before it, a delete nothing after), while omitting the field
+   * leaves NULL, meaning unknown. Only pass undefined when the size
+   * genuinely could not be determined - a null here is indistinguishable
+   * from a pre-feature row in the UI.
+   *
+   * For article kinds the size measures wiki_articles.content; for
+   * record kinds it measures wiki_records.content. File/link record
+   * writes (which reuse record_update without changing content) pass
+   * undefined - null is the honest answer ("no content size to report").
+   */
+  chars_before?: number;
+  chars_after?: number;
 }
 
 export async function appendWikiChangelog(
@@ -44,6 +61,10 @@ export async function appendWikiChangelog(
     kind: entry.kind,
     title_at_change: title,
     message,
+    // Omitted sizes ride as NULL ("unknown"), which is distinct from 0
+    // ("known empty") - see the column comments in schema.sql.
+    chars_before: entry.chars_before ?? null,
+    chars_after: entry.chars_after ?? null,
   });
   if (error) throw new Error(`createWikiChangelogEntry failed: ${error.message}`);
 }

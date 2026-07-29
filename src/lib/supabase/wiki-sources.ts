@@ -177,6 +177,13 @@ export async function createWikiChangelogEntry(
     kind: WikiChangelogKind;
     title_at_change: string;
     message: string;
+    /** Content length either side of the change. Omit when genuinely
+     *  unknown - it lands as NULL, which the panel renders as "no size
+     *  info" rather than as a zero-length body. For article kinds the
+     *  size measures wiki_articles.content; for record kinds it
+     *  measures wiki_records.content. */
+    chars_before?: number;
+    chars_after?: number;
   }
 ): Promise<void> {
   const session = await getSession(client);
@@ -190,6 +197,8 @@ export async function createWikiChangelogEntry(
     kind: args.kind,
     title_at_change: title,
     message,
+    chars_before: args.chars_before ?? null,
+    chars_after: args.chars_after ?? null,
   });
   if (error) throw new SupabaseError(error.message);
 }
@@ -212,7 +221,7 @@ export async function listWikiChangelog(
   const limit = Math.max(1, Math.min(opts.limit ?? 50, 200));
   let q = client
     .from('wiki_changelog')
-    .select('id, article_id, kind, title_at_change, message, created_at')
+    .select('id, article_id, kind, title_at_change, message, created_at, chars_before, chars_after')
     .order('created_at', { ascending: false })
     .limit(limit);
   if (opts.before) q = q.lt('created_at', opts.before);

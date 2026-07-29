@@ -319,6 +319,10 @@
   let editingId = $state<string | null>(null);
   let editTitle = $state('');
   let editContent = $state('');
+  // Snapshotted when the editor opens, so the changelog's chars_before
+  // is exact without a re-read. Mirrors editOriginalDataLength in
+  // Memories.svelte.
+  let editOriginalContentLength = $state(0);
   // One-line "what did you change and why" message that lands in the
   // wiki changelog when the user clicks Save. The agent paths supply
   // their own message via the tool's `message` arg or the manual
@@ -358,6 +362,7 @@
     editingId = a.id;
     editTitle = a.title;
     editContent = a.content;
+    editOriginalContentLength = a.content.length;
     editMessage = '';
     saveState = { kind: 'idle' };
     cancelDelete();
@@ -369,6 +374,7 @@
     editingId = null;
     editTitle = '';
     editContent = '';
+    editOriginalContentLength = 0;
     editMessage = '';
     saveState = { kind: 'idle' };
   }
@@ -398,6 +404,10 @@
           kind: 'update',
           title_at_change: updated.title,
           message,
+          // editOriginalContentLength is snapshotted when the editor
+          // opens, so the before-size is exact without a re-read.
+          chars_before: editOriginalContentLength,
+          chars_after: updated.content.length,
         });
       } catch {
         // best-effort; see comment above.
@@ -419,6 +429,7 @@
         editingId = null;
         editTitle = '';
         editContent = '';
+        editOriginalContentLength = 0;
         editMessage = '';
         saveState = { kind: 'idle' };
       }
@@ -503,6 +514,9 @@
           kind: 'create',
           title_at_change: created.title,
           message,
+          // 0 before: a create has nothing before it.
+          chars_before: 0,
+          chars_after: created.content.length,
         });
       } catch {
         // best-effort; see comment above.
@@ -575,6 +589,9 @@
             kind: 'delete',
             title_at_change: article.title,
             message,
+            // 0 after, not omitted: the body is genuinely gone.
+            chars_before: article.content.length,
+            chars_after: 0,
           });
         } catch {
           // best-effort; the delete already landed.
@@ -880,6 +897,11 @@
             kind: 'update',
             title_at_change: updated.title,
             message: reason,
+            // article.content is the original body the preview was
+            // against - its length is the before-size. updated.content
+            // is the post-accept body the server just returned.
+            chars_before: article.content.length,
+            chars_after: updated.content.length,
           });
         } catch {
           // best-effort; see comment above.

@@ -89,3 +89,52 @@ export function isExhausted(
 ): boolean {
   return rowsReturned < pageSize;
 }
+
+/**
+ * Below this many characters of change, the delta is noise - a reworded
+ * sentence, a fixed typo - and rendering it on every row would bury the
+ * edits that actually moved an article or record. Roughly a long
+ * sentence. Mirrors the memory panel's noise floor.
+ */
+const SIZE_DELTA_FLOOR_CHARS = 120;
+
+export interface WikiSizeDelta {
+  /** Signed change, for the caller's up/down styling. */
+  chars: number;
+  /** Rendered chip text, e.g. "+412" / "-1,203". */
+  label: string;
+  /** True once the change is large enough to deserve visual emphasis. */
+  significant: boolean;
+}
+
+/**
+ * The size-delta chip for a changelog row, or null when there is
+ * nothing worth showing. Parallel to `memorySizeDelta` in the memory
+ * panel; same noise floor and significance threshold.
+ *
+ * Null in three distinct cases, all of which should render no chip:
+ *   - either size is null (a row from before the columns existed, or a
+ *     file/link record write that has no content to measure)
+ *   - the delta is zero (a label-only edit, a tags-only record edit)
+ *   - the delta is under the noise floor
+ *
+ * For article kinds the size measures wiki_articles.content; for
+ * record kinds it measures wiki_records.content. The kind chip already
+ * distinguishes the two, so a "+412" on an article row means "article
+ * body grew 412 chars" and on a record row means "record content was
+ * 412 chars".
+ */
+export function wikiSizeDelta(
+  entry: Pick<WikiChangelogEntry, 'chars_before' | 'chars_after'>
+): WikiSizeDelta | null {
+  const { chars_before: before, chars_after: after } = entry;
+  if (before === null || after === null) return null;
+  const chars = after - before;
+  if (Math.abs(chars) < SIZE_DELTA_FLOOR_CHARS) return null;
+  const sign = chars > 0 ? '+' : '-';
+  return {
+    chars,
+    label: `${sign}${Math.abs(chars).toLocaleString()}`,
+    significant: Math.abs(chars) >= SIZE_DELTA_FLOOR_CHARS * 4,
+  };
+}

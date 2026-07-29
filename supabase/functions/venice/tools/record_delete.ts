@@ -44,6 +44,9 @@ export const recordDelete: ToolDef = {
           'record_delete',
           e.date,
           e.content,
+          // 0 after: the record content is genuinely gone.
+          e.content.length,
+          0,
         );
       } catch {
         // swallow - best-effort audit row.

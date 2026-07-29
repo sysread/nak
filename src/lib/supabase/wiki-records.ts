@@ -151,7 +151,10 @@ export async function createWikiRecord(
     record.article_id,
     'record_create',
     record.date,
-    record.content
+    record.content,
+    // 0 before: a create has nothing before it.
+    0,
+    record.content.length,
   );
   return record;
 }
@@ -167,6 +170,13 @@ export async function updateWikiRecord(
   id: string,
   patch: { date?: string; content?: string; tags?: string[] }
 ): Promise<WikiRecord> {
+  // Read the prior content length before the update so the changelog
+  // can stamp chars_before. getWikiRecord verifies the record exists
+  // (a non-existent id would fail at the .single() update below
+  // anyway), and its content length is what the changelog needs.
+  const prior = await getWikiRecord(client, id);
+  const priorContentLength = prior?.content.length ?? null;
+
   const { data, error } = await client
     .from('wiki_records')
     .update(patch)
@@ -182,7 +192,11 @@ export async function updateWikiRecord(
     record.article_id,
     'record_update',
     record.date,
-    record.content
+    record.content,
+    // Undefined (-> NULL, "unknown") when the prior read failed; a
+    // tags-only edit leaves both equal, which reads as a 0 delta.
+    priorContentLength ?? undefined,
+    record.content.length,
   );
   return record;
 }
@@ -203,7 +217,10 @@ export async function deleteWikiRecord(
       doomed.article_id,
       'record_delete',
       doomed.date,
-      doomed.content
+      doomed.content,
+      // 0 after: the record content is genuinely gone.
+      doomed.content.length,
+      0,
     );
   }
 }
@@ -221,13 +238,17 @@ async function appendRecordChangelog(
   articleId: string,
   kind: 'record_create' | 'record_update' | 'record_delete',
   date: string,
-  content?: string
+  content?: string,
+  charsBefore?: number,
+  charsAfter?: number,
 ): Promise<void> {
   await appendRecordChangelogMessage(
     client,
     articleId,
     kind,
-    buildRecordChangelogMessage(kind, date, content)
+    buildRecordChangelogMessage(kind, date, content),
+    charsBefore,
+    charsAfter,
   );
 }
 
@@ -243,7 +264,9 @@ async function appendRecordChangelogMessage(
   client: SupabaseClient,
   articleId: string,
   kind: 'record_create' | 'record_update' | 'record_delete',
-  message: string
+  message: string,
+  charsBefore?: number,
+  charsAfter?: number,
 ): Promise<void> {
   try {
     const { data } = await client
@@ -260,6 +283,8 @@ async function appendRecordChangelogMessage(
       kind,
       title_at_change: title,
       message,
+      chars_before: charsBefore,
+      chars_after: charsAfter,
     });
   } catch {
     // Best-effort - see the doc comment. Swallow so the record write

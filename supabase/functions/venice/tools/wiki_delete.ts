@@ -29,16 +29,16 @@ export const wikiDelete: ToolDef = {
     }
     errs.throwIfAny();
 
-    // Capture the title BEFORE the delete so the changelog row can
-    // carry a meaningful title_at_change snapshot. The FK on
-    // wiki_changelog.article_id is ON DELETE SET NULL - without the
-    // snapshot we'd lose both the link AND the title. A missing
-    // article (the model called delete on a stale id) skips the
-    // changelog write; the delete itself is already a no-op against a
-    // non-existent row.
+    // Capture the title AND content length BEFORE the delete so the
+    // changelog row can carry a meaningful title_at_change snapshot
+    // and a chars_before. The FK on wiki_changelog.article_id is ON
+    // DELETE SET NULL - without the snapshot we'd lose both the link
+    // AND the title. A missing article (the model called delete on a
+    // stale id) skips the changelog write; the delete itself is
+    // already a no-op against a non-existent row.
     const { data: existing, error: readErr } = await ctx.adminClient
       .from('wiki_articles')
-      .select('id, title')
+      .select('id, title, content')
       .eq('id', id)
       .eq('user_id', ctx.userId)
       .maybeSingle();
@@ -62,6 +62,9 @@ export const wikiDelete: ToolDef = {
           kind: 'delete',
           title_at_change: (existing as { title: string }).title,
           message,
+          // 0 after, not undefined: the body is genuinely gone.
+          chars_before: (existing as { content?: string }).content?.length,
+          chars_after: 0,
         });
       } catch {
         // best-effort; see the matching comment in wiki_create.ts.

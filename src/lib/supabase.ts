@@ -1110,6 +1110,8 @@ export class SupabaseService {
     kind: WikiChangelogKind;
     title_at_change: string;
     message: string;
+    chars_before?: number;
+    chars_after?: number;
   }): Promise<void> {
     return wikiSourcesApi.createWikiChangelogEntry(this.client, args);
   }

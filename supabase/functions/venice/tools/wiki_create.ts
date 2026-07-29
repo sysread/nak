@@ -98,6 +98,10 @@ export const wikiCreate: ToolDef = {
         kind: 'create',
         title_at_change: article.title,
         message,
+        // 0, not undefined: a create genuinely had nothing before it,
+        // which is different from a pre-feature row's unknown size.
+        chars_before: 0,
+        chars_after: content.length,
       });
     } catch {
       // best-effort; see comment above.

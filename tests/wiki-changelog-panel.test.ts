@@ -15,6 +15,7 @@ import {
   formatChangelogStamp,
   isExhausted,
   kindLabel,
+  wikiSizeDelta,
 } from '../src/lib/ui/wiki-changelog-panel';
 
 function makeEntry(
@@ -110,5 +111,49 @@ describe('isExhausted', () => {
 
   it('treats a zero-row page as exhausted', () => {
     expect(isExhausted(0, 50)).toBe(true);
+  });
+});
+
+describe('wikiSizeDelta', () => {
+  function entry(before: number | null, after: number | null) {
+    return { chars_before: before, chars_after: after };
+  }
+
+  it('renders a signed, thousands-separated label', () => {
+    expect(wikiSizeDelta(entry(1000, 2400))?.label).toBe('+1,400');
+    expect(wikiSizeDelta(entry(4000, 1500))?.label).toBe('-2,500');
+  });
+
+  it('carries the signed magnitude for the caller to style direction', () => {
+    expect(wikiSizeDelta(entry(1000, 2400))?.chars).toBe(1400);
+    expect(wikiSizeDelta(entry(4000, 1500))?.chars).toBe(-2500);
+  });
+
+  // A pre-columns row has unrecoverable historical sizes. Rendering
+  // anything here would imply a zero-length body that never existed.
+  // Also covers file/link record writes that pass null for both.
+  it('shows nothing when either size is unknown', () => {
+    expect(wikiSizeDelta(entry(null, 2400))).toBeNull();
+    expect(wikiSizeDelta(entry(1000, null))).toBeNull();
+    expect(wikiSizeDelta(entry(null, null))).toBeNull();
+  });
+
+  // 0 is a real recorded value, unlike null: a create has nothing before
+  // it and a delete nothing after, and both are worth showing.
+  it('treats a recorded zero as a real size, not a missing one', () => {
+    expect(wikiSizeDelta(entry(0, 1800))?.label).toBe('+1,800');
+    expect(wikiSizeDelta(entry(1800, 0))?.label).toBe('-1,800');
+  });
+
+  it('stays quiet on a label-only edit and on sub-noise churn', () => {
+    expect(wikiSizeDelta(entry(2000, 2000))).toBeNull();
+    expect(wikiSizeDelta(entry(2000, 2050))).toBeNull();
+    expect(wikiSizeDelta(entry(2000, 1950))).toBeNull();
+  });
+
+  it('emphasizes only the large moves', () => {
+    expect(wikiSizeDelta(entry(2000, 2200))?.significant).toBe(false);
+    expect(wikiSizeDelta(entry(2000, 4000))?.significant).toBe(true);
+    expect(wikiSizeDelta(entry(6000, 2000))?.significant).toBe(true);
   });
 });

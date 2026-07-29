@@ -12,6 +12,7 @@ import {
   MAX_WIKI_RECORD_CONTENT_CHARS,
   RECORD_COLUMNS,
   appendRecordChangelog,
+  getOwnedRecord,
   normalizeRecordDate,
   normalizeRecordTags,
 } from './_record_helpers.ts';
@@ -46,6 +47,14 @@ export const recordUpdate: ToolDef = {
     }
     errs.throwIfAny();
 
+    // Read the prior content length before the update so the changelog
+    // can stamp chars_before. getOwnedRecord also verifies ownership,
+    // which the update's user_id filter already does - belt and braces.
+    const prior = id
+      ? await getOwnedRecord(ctx.adminClient, ctx.userId, id)
+      : null;
+    const priorContentLength = prior?.content.length ?? null;
+
     const { data: row, error } = await ctx.adminClient
       .from('wiki_records')
       .update(patch)
@@ -65,6 +74,10 @@ export const recordUpdate: ToolDef = {
         'record_update',
         r.date,
         r.content,
+        // Undefined (-> NULL, "unknown") when the prior read failed; a
+        // tags-only edit leaves both equal, which reads as a 0 delta.
+        priorContentLength ?? undefined,
+        r.content.length,
       );
     } catch {
       // swallow - best-effort audit row.

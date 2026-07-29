@@ -10054,6 +10054,55 @@ create table if not exists public.wiki_changelog (
   created_at timestamptz not null default now()
 );
 
+-- Body size on either side of the change, so the history panel can show
+-- how much a given edit grew or shrank an article (or a record). Parallel
+-- to the columns on memory_changelog; same NULL-vs-0 semantics:
+--   NULL - unknown. Rows written before these columns existed.
+--   0    - known empty. A create has nothing before it; a delete has
+--          nothing after it.
+-- For article kinds (create/update/delete) the size measures
+-- wiki_articles.content; for record kinds (record_*) it measures
+-- wiki_records.content. The kind chip already distinguishes the two, so
+-- a "+412" on an article row means "article body grew 412 chars" and on
+-- a record row means "record content was 412 chars". File/link record
+-- writes (which reuse the record_update kind without changing content)
+-- pass null for both - the noise floor would suppress a zero delta
+-- anyway, but null is the honest answer ("no content size to report").
+alter table public.wiki_changelog
+  add column if not exists chars_before int,
+  add column if not exists chars_after int;
+
+-- Anchor backfill for pre-existing article-kind history. Every
+-- article-content mutation writes a changelog row, so for an article
+-- that still exists its MOST RECENT article-kind entry describes the
+-- body the row carries right now - that one value is exactly
+-- recoverable, unlike older intermediate sizes. Filling it means the
+-- first NEW edit after this ships already has a real before/after pair
+-- instead of a null.
+--
+-- Record-kind rows cannot be backfilled: the changelog has no
+-- record_id FK (record writes are scoped to the parent article_id
+-- only), so there is no way to link a record_kind row to the specific
+-- record it affected. Pre-existing record rows stay null, which is
+-- correct - their sizes are unknown.
+--
+-- Idempotent via the `chars_after is null` guard: on a re-run the
+-- latest entry per article already carries a value (from this backfill
+-- or the application), so nothing is rewritten. Superseded older
+-- entries stay null, which is correct - their sizes are unknown.
+with latest as (
+  select distinct on (c.article_id) c.id, a.content
+    from public.wiki_changelog c
+    join public.wiki_articles a on a.id = c.article_id
+   where c.kind in ('create', 'update', 'delete')
+   order by c.article_id, c.created_at desc, c.id desc
+)
+update public.wiki_changelog c
+   set chars_after = length(latest.content)
+  from latest
+  where c.id = latest.id
+    and c.chars_after is null;
+
 -- Primary access pattern is "page through the user's history newest-
 -- first", so the chronological index is the index that pays its way.
 -- A separate per-article index would let the article panel show its own

@@ -31,6 +31,7 @@
     formatChangelogStamp,
     isExhausted,
     kindLabel,
+    wikiSizeDelta,
   } from '$lib/ui/wiki-changelog-panel';
 
   interface Props {
@@ -147,6 +148,9 @@
   {:else}
     <ul class="wiki-changelog-list">
       {#each entries as entry (entry.id)}
+        <!-- Hoisted here because {@const} must be an immediate child of
+             the block, not of arbitrary markup inside it. -->
+        {@const delta = wikiSizeDelta(entry)}
         <!-- kind- class rides the row as well as the chip so the terminal
              style's left bar (styles.css component deltas) can take the
              action color without reaching into the row's children. -->
@@ -172,6 +176,17 @@
               <span class="wiki-changelog-title-gone">
                 {entry.title_at_change}
               </span>
+            {/if}
+            {#if delta}
+              <span
+                class="wiki-changelog-size"
+                class:grew={delta.chars > 0}
+                class:shrank={delta.chars < 0}
+                class:significant={delta.significant}
+                title="Content {delta.chars > 0
+                  ? 'grew'
+                  : 'shrank'} by {Math.abs(delta.chars).toLocaleString()} characters"
+              >{delta.label}</span>
             {/if}
             <time
               class="wiki-changelog-stamp"
@@ -269,6 +284,39 @@
     background: color-mix(in srgb, #b91c1c 15%, transparent);
     border-color: color-mix(in srgb, #b91c1c 40%, transparent);
     color: #b91c1c;
+  }
+  /* Size-delta chip. Deliberately quieter than the kind chips - it is a
+     secondary signal, and a row with no size change shows nothing here
+     at all, so the column is sparse by design. Tabular figures keep the
+     numbers from jittering as rows scroll past. Same tint-plus-border
+     construction as the kind chips so it survives both themes without
+     per-theme overrides. Mirrors the memory panel's chip. */
+  .wiki-changelog-size {
+    font-size: 0.7rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    padding: 0.1rem 0.35rem;
+    border-radius: var(--radius-pill);
+    border: 1px solid transparent;
+    opacity: 0.75;
+  }
+  /* Growth reads as the direction worth noticing - article bodies and
+     record content are both things the user might want to track drift
+     on. Shrink is the healthy direction and stays visually calm. */
+  .wiki-changelog-size.grew {
+    background: color-mix(in srgb, #b45309 12%, transparent);
+    border-color: color-mix(in srgb, #b45309 30%, transparent);
+    color: #b45309;
+  }
+  .wiki-changelog-size.shrank {
+    background: color-mix(in srgb, #15803d 12%, transparent);
+    border-color: color-mix(in srgb, #15803d 30%, transparent);
+    color: #15803d;
+  }
+  /* A big move earns full opacity rather than a different hue - the
+     direction is already carried by color. */
+  .wiki-changelog-size.significant {
+    opacity: 1;
   }
   .wiki-changelog-link {
     background: none;

@@ -106,7 +106,13 @@ Schema (`supabase/schema.sql`):
   deleted article doesn't take its history with it; `title_at_change`
   snapshot keeps the row readable when `article_id` is nulled;
   `message` has a column-level `char_length` between 1 and 200 CHECK
-  that mirrors `MAX_WIKI_CHANGELOG_MESSAGE_CHARS`) plus append-only
+  that mirrors `MAX_WIKI_CHANGELOG_MESSAGE_CHARS`; `chars_before` /
+  `chars_after` record the content length either side of the change,
+  powering the size-delta chip in the changelog panel - for article
+  kinds the size measures `wiki_articles.content`, for record kinds it
+  measures `wiki_records.content`; NULL means unknown (pre-column rows
+  or file/link record writes that have no content delta), 0 means
+  known-empty) plus append-only
   RLS (select + insert only, no update/delete) and a
   `(user_id, created_at desc)` index for the panel's cursor-paged
   listing. `reset_wiki_data` clears `wiki_changelog` alongside

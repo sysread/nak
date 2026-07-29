@@ -123,6 +123,18 @@ export interface WikiChangelogEntry {
   title_at_change: string;
   message: string;
   created_at: string;
+  /**
+   * Content length either side of the change, powering the size-delta
+   * chip in the history panel. `null` means unknown - a row written
+   * before these columns existed, or a file/link record write that has
+   * no content to measure. That is distinct from `0`, which means
+   * genuinely empty (nothing before a create, nothing after a delete).
+   * For article kinds the size measures wiki_articles.content; for
+   * record kinds it measures wiki_records.content. See the column
+   * comments in supabase/schema.sql.
+   */
+  chars_before: number | null;
+  chars_after: number | null;
 }
 
 /**
@@ -365,5 +377,14 @@ export function coerceWikiChangelogEntry(
       typeof raw.title_at_change === 'string' ? raw.title_at_change : '',
     message: typeof raw.message === 'string' ? raw.message : '',
     created_at: String(raw.created_at ?? ''),
+    // Anything non-numeric coerces to null ("unknown size"), which is
+    // what a pre-columns row carries. Coercing to 0 instead would make
+    // an unrecorded size render as an empty body.
+    chars_before: coerceWikiCharCount(raw.chars_before),
+    chars_after: coerceWikiCharCount(raw.chars_after),
   };
+}
+
+function coerceWikiCharCount(raw: unknown): number | null {
+  return typeof raw === 'number' && Number.isFinite(raw) ? raw : null;
 }

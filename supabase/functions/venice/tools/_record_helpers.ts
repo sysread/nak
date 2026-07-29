@@ -122,6 +122,15 @@ export async function appendRecordChangelog(
   kind: 'record_create' | 'record_update' | 'record_delete',
   date: string,
   content?: string,
+  /**
+   * Record content length either side of the change. Same semantics as
+   * the article size pair: 0 means known-empty, omitted means unknown.
+   * File/link writes (which reuse record_update without touching
+   * content) omit both - the noise floor would suppress a zero delta,
+   * but null is the honest answer.
+   */
+  charsBefore?: number,
+  charsAfter?: number,
 ): Promise<void> {
   await appendRecordChangelogMessage(
     adminClient,
@@ -129,6 +138,8 @@ export async function appendRecordChangelog(
     articleId,
     kind,
     buildRecordChangelogMessage(kind, date, content),
+    charsBefore,
+    charsAfter,
   );
 }
 
@@ -144,6 +155,8 @@ export async function appendRecordChangelogMessage(
   articleId: string,
   kind: 'record_create' | 'record_update' | 'record_delete',
   message: string,
+  charsBefore?: number,
+  charsAfter?: number,
 ): Promise<void> {
   const title = (await getOwnedArticleTitle(adminClient, userId, articleId)) ?? '(record)';
   await appendWikiChangelog(adminClient, userId, {
@@ -151,6 +164,8 @@ export async function appendRecordChangelogMessage(
     kind,
     title_at_change: title,
     message,
+    chars_before: charsBefore,
+    chars_after: charsAfter,
   });
 }
 
