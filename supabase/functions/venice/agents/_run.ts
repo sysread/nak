@@ -266,6 +266,19 @@ export interface RunHeadlessAgentOptions {
    * lease - wants a budget under the platform's kill threshold.
    */
   budgetMs?: number;
+  /**
+   * Per-round max_completion_tokens, forwarded to every completion the
+   * loop makes. Callers should always set this: when the field is
+   * absent from the wire body, the serving backend reserves ITS OWN
+   * default output budget out of the context window - observed at
+   * 65536 tokens - and a long transcript then 400s with "maximum
+   * context length exceeded" even though the agent only ever emits
+   * tool calls plus a short operator summary. Headless-agent output is
+   * small by design; a few thousand tokens of headroom above the
+   * expected reply (reasoning models spend from this budget for their
+   * thinking pass too) reclaims the rest of the window for input.
+   */
+  maxTokens?: number;
   /** Optional reasoning_effort knob, forwarded verbatim to Venice. */
   reasoningEffort?: 'low' | 'medium' | 'high';
   /** Optional Venice-specific disable_thinking kill switch. */
@@ -396,6 +409,7 @@ export async function runHeadlessAgent(
       // helper builds carries a real string field for every row.
       messages: messages.map((m) => ({ ...m, content: m.content ?? '' })),
       tools: wireList,
+      maxTokens: opts.maxTokens,
       reasoningEffort: opts.reasoningEffort,
       disableThinking: opts.disableThinking,
       // Headless agents (wiki, reflection, the librarians) run in the

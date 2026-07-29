@@ -96,10 +96,12 @@ Deno.test('retry: classifier rejection on the primary retries the uncensored fal
     tables: HAPPY_TABLES,
   });
 
+  const efforts: Array<string | undefined> = [];
   const result = await retryWikiThread(admin, 'u', 't-1', {
     // deno-lint-ignore require-await
     complete: async (opts) => {
       models.push(opts.model);
+      efforts.push(opts.reasoningEffort);
       if (opts.model === 'deepseek-v4-flash') throw FILTER_ERROR;
       return completion({ text: 'Fallback ran, no edits warranted.' });
     },
@@ -115,7 +117,10 @@ Deno.test('retry: classifier rejection on the primary retries the uncensored fal
   }
   // Order matters: primary first, fallback second. A reversed order
   // would mean the agent skipped the configured model entirely.
-  assertEquals(models, ['deepseek-v4-flash', 'arcee-trinity-large-thinking']);
+  assertEquals(models, ['deepseek-v4-flash', 'venice-uncensored-1-2']);
+  // The fallback is a non-reasoning model: reasoning_effort must stay
+  // off its wire body (some providers 400 on the unknown field).
+  assertEquals(efforts, ['medium', undefined]);
   // Success advances the pointer + clears the skip marker.
   assertEquals(
     rpcCalls.some((c) => c.name === 'manual_advance_wiki_pointer'),
@@ -172,15 +177,15 @@ Deno.test('retry: both attempts failing surfaces the FALLBACK error', async () =
     complete: async (opts) => {
       models.push(opts.model);
       if (opts.model === 'deepseek-v4-flash') throw FILTER_ERROR;
-      throw new Error('arcee timeout');
+      throw new Error('fallback timeout');
     },
   });
 
   assertEquals(result.kind, 'error');
   // The primary's classifier rejection is no longer the headline once
   // we have moved past it - the fallback's failure is what stopped us.
-  if (result.kind === 'error') assertStringIncludes(result.error, 'arcee timeout');
-  assertEquals(models, ['deepseek-v4-flash', 'arcee-trinity-large-thinking']);
+  if (result.kind === 'error') assertStringIncludes(result.error, 'fallback timeout');
+  assertEquals(models, ['deepseek-v4-flash', 'venice-uncensored-1-2']);
 });
 
 Deno.test('retry: no terminal assistant message is a no-op that never reaches Venice', async () => {
@@ -242,6 +247,112 @@ Deno.test('retry: an already-claimed thread is busy and never reaches Venice', a
     rpcCalls.some((c) => c.name === 'release_wiki_thread_retry_claim'),
     false,
   );
+});
+
+// A completion request is a distill pass when it carries no tools -
+// the tool loop always sends the toolbox wire list, the distill
+// completions never do.
+function isDistillCall(opts: { tools?: readonly unknown[] }): boolean {
+  return !opts.tools || opts.tools.length === 0;
+}
+
+const CTX_ERROR = new Error(
+  "Venice chat/completions 400: {\"error\":{\"message\":\"This model's maximum context length is 163840 tokens. However, you requested 8192 output tokens and your prompt contains at least 160000 input tokens\"}}",
+);
+
+Deno.test('retry: a mid-run context-length rejection distills the transcript and retries, without the uncensored fallback', async () => {
+  const calls: Array<'act' | 'distill'> = [];
+  const models = new Set<string>();
+  const { admin } = makeAdmin({
+    rpc: (name) =>
+      name === 'claim_wiki_thread_for_retry'
+        ? { data: true, error: null }
+        : name === 'compute_wiki_terminal_msg_id'
+          ? { data: 'a1', error: null }
+          : { data: null, error: null },
+    tables: HAPPY_TABLES,
+  });
+
+  const result = await retryWikiThread(admin, 'u', 't-1', {
+    // deno-lint-ignore require-await
+    complete: async (opts) => {
+      models.add(opts.model);
+      if (isDistillCall(opts)) {
+        calls.push('distill');
+        return completion({ text: 'DISTILLED NOTES' });
+      }
+      calls.push('act');
+      // First act attempt: the backend says the transcript is too big.
+      if (calls.filter((c) => c === 'act').length === 1) throw CTX_ERROR;
+      // Second act attempt must be reading notes, not the transcript.
+      const first = opts.messages[0];
+      assertStringIncludes(String(first.content), '<conversation_notes>');
+      assertStringIncludes(String(first.content), 'DISTILLED NOTES');
+      return completion({ text: 'Processed from notes.' });
+    },
+  });
+
+  assertEquals(result.kind, 'ok');
+  if (result.kind === 'ok') assertEquals(result.reasoning, 'Processed from notes.');
+  assertEquals(calls, ['act', 'distill', 'act']);
+  // The context-length path stays on the primary model - the
+  // uncensored fallback is for classifier rejections only.
+  assertEquals([...models], ['deepseek-v4-flash']);
+});
+
+Deno.test('retry: a context-length rejection that survives distillation surfaces as an error', async () => {
+  const { admin, rpcCalls } = makeAdmin({
+    rpc: (name) =>
+      name === 'claim_wiki_thread_for_retry'
+        ? { data: true, error: null }
+        : name === 'compute_wiki_terminal_msg_id'
+          ? { data: 'a1', error: null }
+          : { data: null, error: null },
+    tables: HAPPY_TABLES,
+  });
+
+  const result = await retryWikiThread(admin, 'u', 't-1', {
+    // Every completion - act and distill alike - hits the ceiling.
+    // deno-lint-ignore require-await
+    complete: async () => {
+      throw CTX_ERROR;
+    },
+  });
+
+  assertEquals(result.kind, 'error');
+  if (result.kind === 'error') assertStringIncludes(result.error, 'maximum context length');
+  // No pointer advance: the thread stays visible in the Skipped panel.
+  assertEquals(
+    rpcCalls.some((c) => c.name === 'manual_advance_wiki_pointer'),
+    false,
+  );
+});
+
+Deno.test('retry: agent rounds carry an explicit max_completion_tokens cap', async () => {
+  const caps: Array<number | undefined> = [];
+  const { admin } = makeAdmin({
+    rpc: (name) =>
+      name === 'claim_wiki_thread_for_retry'
+        ? { data: true, error: null }
+        : name === 'compute_wiki_terminal_msg_id'
+          ? { data: 'a1', error: null }
+          : { data: null, error: null },
+    tables: HAPPY_TABLES,
+  });
+
+  const result = await retryWikiThread(admin, 'u', 't-1', {
+    // deno-lint-ignore require-await
+    complete: async (opts) => {
+      caps.push(opts.maxTokens);
+      return completion({ text: 'done' });
+    },
+  });
+
+  assertEquals(result.kind, 'ok');
+  // An absent cap makes the serving backend reserve its own default
+  // output budget (observed 65536 tokens) out of the context window -
+  // the root cause of the 2026-07-23 skipped threads.
+  assertEquals(caps, [8_192]);
 });
 
 Deno.test('retry: a pointer-advance failure after a successful run surfaces as an error', async () => {

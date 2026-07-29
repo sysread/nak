@@ -47,6 +47,12 @@ import {
   type Toolbox,
 } from './_run.ts';
 import { messageToVenice, type VeniceWireMessage } from './_recall_helpers.ts';
+import {
+  distillTranscript,
+  isContextLengthError,
+  renderDistilledNotesBlock,
+  transcriptFitsDirect,
+} from './_accumulator.ts';
 
 // Mirror of agentModel('wikiRecords').id in src/lib/models/index.ts.
 // Balanced model with medium reasoning per the feature spec: parsing
@@ -57,6 +63,25 @@ const WIKI_RECORDS_MODEL = 'deepseek-v4-flash';
 const WIKI_RECORD_CLAIM_TTL_SECONDS = 600;
 const MAX_FAILURES_PER_THREAD = 3;
 const DEFAULT_SWEEP_MAX_THREADS = 3;
+
+// Per-round output cap for the tool loop. Same rationale as the wiki
+// agent's WIKI_MAX_COMPLETION_TOKENS: an absent max_completion_tokens
+// makes the backend reserve its own default output budget (observed
+// 65536 tokens) out of the context window, starving long transcripts
+// of input room. Tool calls plus a short summary fit comfortably in
+// 8192 including the reasoning pass.
+const WIKI_RECORDS_MAX_COMPLETION_TOKENS = 8_192;
+
+// What the distill pass must capture when a transcript exceeds the
+// working context window (see _accumulator.ts). Framed around this
+// agent's job: discrete dated events, not general facts.
+const WIKI_RECORDS_DISTILL_FOCUS =
+  'You are preparing notes for an agent that logs discrete dated events ' +
+  "from the user's life. Capture every concrete event with its date (or " +
+  'the best available date anchor, e.g. "yesterday" relative to a dated ' +
+  'message), what happened, outcomes and quantities, and any files or ' +
+  'images the user shared as evidence (by filename). Ignore abstract ' +
+  'discussion, opinions, and Q&A that do not describe an event.';
 
 // Schema caps mirror src/lib/wiki.ts (MAX_WIKI_RECORD_*).
 const MAX_WIKI_RECORD_CONTENT_CHARS = 8000;
@@ -335,7 +360,16 @@ function normaliseReasoning(finalText: string): string {
 type RecordsRunOutcome =
   | { kind: 'done'; toolCalls: number; reasoning: string; messageCount: number }
   | { kind: 'empty-slice' }
-  | { kind: 'error'; error: string };
+  | {
+    kind: 'error';
+    error: string;
+    /**
+     * True when retrying cannot change the result (a context-length
+     * rejection that survived the distill path); the sweep skips such
+     * threads on the first failure. Mirrors WikiRunOutcome.
+     */
+    deterministic?: boolean;
+  };
 
 async function runExtractionOnThread(
   adminClient: SupabaseClient,
@@ -345,7 +379,8 @@ async function runExtractionOnThread(
   log: EdgeLogger,
   complete?: AgentCompleteFn,
 ): Promise<RecordsRunOutcome> {
-  let convo: VeniceWireMessage[];
+  let transcript: VeniceWireMessage[];
+  let finalTurn: string;
   let messageCount: number;
   let apiKey: string;
   try {
@@ -357,15 +392,16 @@ async function runExtractionOnThread(
     if (!key) return { kind: 'error', error: 'no Venice key configured (app_config unseeded)' };
     apiKey = key;
 
-    convo = slice.map(messageToVenice);
+    transcript = slice.map(messageToVenice);
     // Surface the thread's live attachment filenames so the (text-tier)
     // model knows what it can inspect with analyze_image and attach with
     // record_file_attach - the raw slice carries no attachment metadata.
+    // Kept separate from the transcript so the distill path can swap
+    // the conversation for notes while sending the same instruction.
     const attachmentsNote = await loadThreadAttachmentsNote(adminClient, threadId);
-    convo.push({
-      role: 'user',
-      content: attachmentsNote ? `${attachmentsNote}\n\n${WIKI_RECORDS_PROMPT}` : WIKI_RECORDS_PROMPT,
-    });
+    finalTurn = attachmentsNote
+      ? `${attachmentsNote}\n\n${WIKI_RECORDS_PROMPT}`
+      : WIKI_RECORDS_PROMPT;
   } catch (err) {
     return { kind: 'error', error: err instanceof Error ? err.message : String(err) };
   }
@@ -376,21 +412,59 @@ async function runExtractionOnThread(
     threadId,
   };
 
-  try {
-    log.debug(`asking ${WIKI_RECORDS_MODEL} about thread ${threadId} (${messageCount} messages)`);
-    const result = await runHeadlessAgent(
+  const run = (messages: VeniceWireMessage[]): ReturnType<typeof runHeadlessAgent> =>
+    runHeadlessAgent(
       {
         model: WIKI_RECORDS_MODEL,
-        messages: convo,
+        messages,
         toolbox: buildWikiRecordsToolbox(),
         baseCtx,
         apiKey,
         signal: new AbortController().signal,
         complete,
+        maxTokens: WIKI_RECORDS_MAX_COMPLETION_TOKENS,
         reasoningEffort: 'medium',
       },
       0,
     );
+  // Distilled shape: one user turn carrying the notes block plus the
+  // same final instruction the direct shape ends on.
+  const distilled = async (): Promise<VeniceWireMessage[]> => {
+    const notes = await distillTranscript({
+      apiKey,
+      model: WIKI_RECORDS_MODEL,
+      messages: transcript,
+      focus: WIKI_RECORDS_DISTILL_FOCUS,
+      // 'low': distillation is extraction over evidence already in
+      // context (see CLAUDE.md on sub-completion budgets).
+      reasoningEffort: 'low',
+      complete,
+      onInfo: (m) => log.debug(`thread ${threadId}: ${m}`),
+    });
+    return [{ role: 'user', content: `${renderDistilledNotesBlock(notes)}\n\n${finalTurn}` }];
+  };
+
+  try {
+    log.debug(`asking ${WIKI_RECORDS_MODEL} about thread ${threadId} (${messageCount} messages)`);
+    let result;
+    if (!transcriptFitsDirect(transcript)) {
+      log.info(
+        `thread ${threadId} transcript exceeds the working context window; ` +
+          `distilling before the tool loop`,
+      );
+      result = await run(await distilled());
+    } else {
+      try {
+        result = await run([...transcript, { role: 'user', content: finalTurn }]);
+      } catch (err) {
+        // The estimate said the transcript fits, but the backend
+        // rejected it - a tighter ceiling than the pinned working
+        // window, or mid-loop growth from accumulated tool results.
+        if (!isContextLengthError(err)) throw err;
+        log.warn(`thread ${threadId} hit the context ceiling mid-run; retrying distilled`);
+        result = await run(await distilled());
+      }
+    }
     return {
       kind: 'done',
       toolCalls: result.toolCalls,
@@ -398,7 +472,11 @@ async function runExtractionOnThread(
       messageCount,
     };
   } catch (err) {
-    return { kind: 'error', error: err instanceof Error ? err.message : String(err) };
+    return {
+      kind: 'error',
+      error: err instanceof Error ? err.message : String(err),
+      deterministic: isContextLengthError(err),
+    };
   }
 }
 
@@ -426,12 +504,15 @@ async function recordExtractionFailureOrSkip(
   terminalMsgId: string,
   reason: string,
   userId: string,
+  // 1 for deterministic failures (skip immediately - the retry would
+  // fail identically); MAX_FAILURES_PER_THREAD for transient ones.
+  maxFailures: number = MAX_FAILURES_PER_THREAD,
 ): Promise<'released' | 'skipped' | 'claim-lost'> {
   const { data, error } = await adminClient.rpc('record_wiki_record_failure_or_skip', {
     p_thread_id: threadId,
     p_holder_id: holderId,
     p_msg_id: terminalMsgId,
-    p_max_failures: MAX_FAILURES_PER_THREAD,
+    p_max_failures: maxFailures,
     p_reason: reason,
     p_user_id: userId,
   });
@@ -549,6 +630,7 @@ export async function runWikiRecordsSweepTick(
             terminalMsgId,
             outcome.error,
             userId,
+            outcome.deterministic ? 1 : MAX_FAILURES_PER_THREAD,
           );
         } catch (rpcErr) {
           log.warn(

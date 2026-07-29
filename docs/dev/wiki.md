@@ -149,9 +149,19 @@ Edge function (`supabase/functions/venice/`):
   and fallback constants, and the per-run tunables: model
   `deepseek-v4-flash` (hardcoded mirror of `agentModel('wiki')` -
   `AGENT_MODELS` is a static role->model map, not a per-user tier),
-  fallback `arcee-trinity-large-thinking`, `reasoningEffort:
-  'medium'`, claim TTL 600s, failure cap 3, sweep bound 3
-  threads/tick. Test-only invariants exported via `__test`.
+  fallback `venice-uncensored-1-2`, `reasoningEffort:
+  'medium'`, output cap 8192 tokens/round, claim TTL 600s, failure
+  cap 3, sweep bound 3 threads/tick. Test-only invariants exported
+  via `__test`.
+- `agents/_accumulator.ts` - distill-then-act support for oversized
+  transcripts (port of fnord's accumulator pattern): the pinned
+  `WORKING_CONTEXT_TOKENS` budget, `transcriptFitsDirect`,
+  `distillTranscript` (chunked notes accumulation w/ context-length
+  backoff), `isContextLengthError`, and
+  `renderDistilledNotesBlock`. Shared by `wiki.ts` and
+  `wiki_records.ts`; see "Context-window handling" under the sweep
+  section for the full flow. Unit-tested at
+  `supabase/functions/tests/accumulator.test.ts`.
 - `agents/wiki_manual.ts` - the per-article manual agent (the "Ask
   agent to update" flow). Exports `runWikiManualUpdate(adminClient,
   userId, { articleId, instructions })`: reads the persisted article
@@ -748,7 +758,7 @@ conversation.
 - `wiki_skip_fallback_attempted boolean not null default false` -
   true when the per-thread skip was stamped after the agent already
   retried with the uncensored fallback model
-  (`arcee-trinity-large-thinking` per
+  (`venice-uncensored-1-2` per
   `CONTENT_FILTER_FALLBACK_MODEL` in the edge agent). The
   eligibility predicate's OR clause uses this to re-eligibilise
   legacy content-classifier skips (rows skipped before the fallback
@@ -1042,8 +1052,10 @@ the route, which pg_net ignores but the dev shim prints.
 **Content-classifier fallback (in `runWikiAgentOnThread`).** Before
 the per-thread failure counter ever increments for a classifier
 rejection, the agent itself retries the tool loop once against
-`CONTENT_FILTER_FALLBACK_MODEL` (`arcee-trinity-large-thinking`,
-which does not run the same input classifier). Only the
+`CONTENT_FILTER_FALLBACK_MODEL` (`venice-uncensored-1-2`,
+which does not run the same input classifier; it must support
+function calling and is a non-reasoning model, so the fallback
+attempt keeps `reasoning_effort` off the wire). Only the
 content-filter sentinel (`"Input text data may contain inappropriate
 content"`, matched as a substring of the error message) triggers the
 retry; any other error (network blip, 500, parse failure) returns
@@ -1055,6 +1067,33 @@ and when the counter eventually advances the pointer,
 `wiki_skip_fallback_attempted=true` for a classifier-shaped reason
 so the eligibility predicate's OR clause can't loop the same thread
 back into the queue.
+
+**Context-window handling (distill-then-act, `_accumulator.ts`).**
+Both per-thread agents (article + record extraction) bound what they
+send to Venice. Every tool-loop round carries an explicit
+`max_completion_tokens` (8192); without it, the serving backend
+reserves its own default output budget - observed at 65536 tokens -
+out of the context window, which on 2026-07-23 starved two long
+threads of input room and skipped them ("maximum context length is
+163840 tokens"). The registry's `contextWindow` for the wiki models
+says 1M, but the enforced ceiling demonstrably moves between
+backends serving the same model id, so the agents budget against the
+conservative `WORKING_CONTEXT_TOKENS` (96k) in
+`agents/_accumulator.ts` instead. A transcript estimated over that
+window is **distilled before the tool loop**: the accumulator
+renders the slice to text (tool traffic excerpted), chunks it, and
+folds each chunk into an accumulated notes buffer via one completion
+per chunk - fnord's accumulator pattern - then the normal tool loop
+runs once over the notes instead of the raw transcript, so all
+writes still happen with the full toolbox and dedup discipline
+(chunk passes are read-only by design). A context-length 400 from a
+direct run triggers the same distill path reactively; a 400 during
+distillation backs off the chunk budget (0.2 steps, 0.6 floor)
+before giving up. A context-length error that survives all of that
+is marked `deterministic` on the run outcome and the sweep skips the
+thread on the FIRST failure (`p_max_failures = 1`) with the honest
+reason, instead of burning the transient 3-strike budget on an error
+that repeats identically.
 
 This differs from the journal flow, which uses an atomic
 `upsert_journal_entry_and_mark_thread` RPC because the entry write

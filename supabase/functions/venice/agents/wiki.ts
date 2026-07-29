@@ -82,6 +82,12 @@ import {
   renderUserProfileBlock,
   type WikiUserProfile,
 } from './_wiki_profile.ts';
+import {
+  distillTranscript,
+  isContextLengthError,
+  renderDistilledNotesBlock,
+  transcriptFitsDirect,
+} from './_accumulator.ts';
 
 // Mirror of agentModel('wiki').id in src/lib/models/index.ts.
 // AGENT_MODELS is a static role->model map, NOT one of the per-user
@@ -111,12 +117,49 @@ const CONTENT_FILTER_SENTINEL =
  * bodies it doesn't like even before the model gets a chance to read
  * them - on a wiki run that means the agent can't process the
  * conversation no matter how many retries we throw at it.
- * arcee-trinity-large-thinking does not run that classifier, so a
- * single retry against it unblocks the conversation. We retry exactly
- * once: if the fallback also fails, the failure path records it and
- * the per-thread counter eventually advances the pointer.
+ * venice-uncensored-1-2 does not run that classifier, so a single
+ * retry against it unblocks the conversation. We retry exactly once:
+ * if the fallback also fails, the failure path records it and the
+ * per-thread counter eventually advances the pointer.
+ *
+ * The fallback must support function calling (the agent is a tool
+ * loop) and is NOT a reasoning model, so the fallback attempt keeps
+ * reasoning_effort off the wire. The previous slot holder
+ * (arcee-trinity-large-thinking) vanished from Venice's catalog,
+ * which made every fallback attempt fail with an unknown-model error
+ * - when re-pointing this constant, verify the replacement id exists
+ * in GET /models and reports supportsFunctionCalling.
  */
-const CONTENT_FILTER_FALLBACK_MODEL = 'arcee-trinity-large-thinking';
+const CONTENT_FILTER_FALLBACK_MODEL = 'venice-uncensored-1-2';
+
+/**
+ * Per-round output cap for the agent's tool loop. Without an explicit
+ * max_completion_tokens the serving backend reserves its own default
+ * output budget - observed at 65536 tokens - out of the context
+ * window, which on 2026-07-23 (163840-token backend ceiling) left
+ * only 98304 tokens for input and skipped two long threads. The
+ * agent's real output per round is tool calls plus a two-sentence
+ * operator summary; 8192 leaves the reasoning pass generous headroom
+ * (it spends from this same budget) while reclaiming the rest of the
+ * window for the transcript.
+ */
+const WIKI_MAX_COMPLETION_TOKENS = 8_192;
+
+/**
+ * What the distill pass must capture when a transcript is too large
+ * to feed the tool loop verbatim (see _accumulator.ts). Framed
+ * around the autonomous prompt's prime directive: aspects of the
+ * USER, not a summary of the discussion.
+ */
+const WIKI_DISTILL_FOCUS =
+  'You are preparing notes for an agent that maintains an encyclopedia ' +
+  'about the user. Capture what this conversation reveals about the user: ' +
+  'durable facts, preferences and opinions, projects and skills, ' +
+  'relationships, decisions and reversals, and dated events (keep the ' +
+  'dates). Note subjects the user engaged with in enough depth to deserve ' +
+  'an encyclopedia article, and note topics that came up only in passing ' +
+  'so the agent can see they were shallow. Ignore generic Q&A that ' +
+  'reveals nothing about the user personally.';
 
 // Mirror of the browser wiki manager's WORKER_DEFAULTS
 // (src/lib/agents/wiki/manager.ts pre-cutover): 10-minute claim TTL
@@ -1037,7 +1080,17 @@ function normaliseReasoning(finalText: string): string {
 type WikiRunOutcome =
   | { kind: 'done'; toolCalls: number; reasoning: string; messageCount: number }
   | { kind: 'empty-slice' }
-  | { kind: 'error'; error: string };
+  | {
+    kind: 'error';
+    error: string;
+    /**
+     * True when retrying cannot change the result (a context-length
+     * rejection that survived the distill path). The sweep skips such
+     * threads on the first failure instead of burning the transient
+     * 3-strike budget on an error that will repeat identically.
+     */
+    deterministic?: boolean;
+  };
 
 /**
  * Run the wiki agent's tool loop against one claimed thread. Shared
@@ -1059,7 +1112,8 @@ async function runWikiAgentOnThread(
   log: EdgeLogger,
   complete?: AgentCompleteFn,
 ): Promise<WikiRunOutcome> {
-  let convo: VeniceWireMessage[];
+  let transcript: VeniceWireMessage[];
+  let finalTurn: string;
   let messageCount: number;
   let apiKey: string;
   try {
@@ -1072,7 +1126,7 @@ async function runWikiAgentOnThread(
     apiKey = key;
 
     const profile = await loadWikiProfile(adminClient, userId);
-    convo = slice.map(messageToVenice);
+    transcript = slice.map(messageToVenice);
     // Surface the thread's live attachment filenames so the (text-tier)
     // model knows what it can inspect with analyze_image and attach with
     // record_file_attach - the raw slice carries no attachment metadata.
@@ -1080,11 +1134,10 @@ async function runWikiAgentOnThread(
     // Wiki instruction as the final user turn - the "switch modes"
     // idiom. The model sees the whole prior conversation in its
     // native shape and reads this as "now do this different task."
+    // Kept separate from the transcript so the distill path can swap
+    // the conversation for notes while sending the same instruction.
     const prompt = buildWikiAutonomousPrompt({ userProfile: profile });
-    convo.push({
-      role: 'user',
-      content: attachmentsNote ? `${attachmentsNote}\n\n${prompt}` : prompt,
-    });
+    finalTurn = attachmentsNote ? `${attachmentsNote}\n\n${prompt}` : prompt;
   } catch (err) {
     // History fetch / prompt build failed before any Venice call. No
     // fallback applies; surface as a normal agent error.
@@ -1102,16 +1155,19 @@ async function runWikiAgentOnThread(
 
   const attempt = async (
     model: string,
+    // undefined = keep reasoning_effort off the wire entirely; the
+    // uncensored fallback is a non-reasoning model and some providers
+    // 400 on the unrecognised field.
+    reasoningEffort: 'low' | 'medium' | 'high' | undefined,
   ): Promise<
     | { kind: 'ok'; result: RunHeadlessAgentResult }
     | { kind: 'error'; error: unknown }
   > => {
-    log.debug(`asking ${model} about thread ${threadId} (${messageCount} messages)`);
-    try {
-      const result = await runHeadlessAgent(
+    const run = (messages: VeniceWireMessage[]): Promise<RunHeadlessAgentResult> =>
+      runHeadlessAgent(
         {
           model,
-          messages: convo,
+          messages,
           toolbox: buildWikiToolbox(),
           baseCtx,
           apiKey,
@@ -1120,26 +1176,70 @@ async function runWikiAgentOnThread(
           // runHeadlessAgent run to its own maxRounds backstop.
           signal: new AbortController().signal,
           complete,
-          // 'medium', not 'low': production traffic showed the agent
-          // surface-pattern-matching its way through conversations -
-          // extracting every named entity into a separate article
-          // instead of stopping to ask "what aspect of the user does
-          // this conversation actually reveal?". Medium gives the
-          // model budget to apply the prime-directive framing before
-          // dispatching tool calls.
-          reasoningEffort: 'medium',
+          maxTokens: WIKI_MAX_COMPLETION_TOKENS,
+          reasoningEffort,
         },
         // parentDepth 0: the wiki agent is a top-level agent (depth 1),
         // same as reflection.
         0,
       );
-      return { kind: 'ok', result };
+    // Distilled shape: one user turn carrying the notes block plus the
+    // same final instruction the direct shape ends on. Distills with
+    // THIS attempt's model so the content-filter fallback path also
+    // clears classifier rejections on the distill completions - at the
+    // cost of re-distilling when the fallback fires on an oversized
+    // thread (rare crossing of two rare conditions).
+    const distilled = async (): Promise<VeniceWireMessage[]> => {
+      const notes = await distillTranscript({
+        apiKey,
+        model,
+        messages: transcript,
+        focus: WIKI_DISTILL_FOCUS,
+        // 'low' for reasoning models: distillation is extraction over
+        // evidence already in context (see CLAUDE.md on sub-completion
+        // budgets). undefined stays undefined for the non-reasoning
+        // fallback.
+        reasoningEffort: reasoningEffort === undefined ? undefined : 'low',
+        complete,
+        onInfo: (m) => log.debug(`thread ${threadId}: ${m}`),
+      });
+      return [{ role: 'user', content: `${renderDistilledNotesBlock(notes)}\n\n${finalTurn}` }];
+    };
+    log.debug(`asking ${model} about thread ${threadId} (${messageCount} messages)`);
+    try {
+      if (!transcriptFitsDirect(transcript)) {
+        log.info(
+          `thread ${threadId} transcript exceeds the working context window; ` +
+            `distilling before the tool loop`,
+        );
+        return { kind: 'ok', result: await run(await distilled()) };
+      }
+      try {
+        return {
+          kind: 'ok',
+          result: await run([...transcript, { role: 'user', content: finalTurn }]),
+        };
+      } catch (err) {
+        // The estimate said the transcript fits, but the backend
+        // rejected it anyway - a tighter ceiling than the pinned
+        // working window, or mid-loop growth from accumulated tool
+        // results. Same remedy either way: distill and retry once.
+        if (!isContextLengthError(err)) throw err;
+        log.warn(`thread ${threadId} hit the context ceiling mid-run; retrying distilled`);
+        return { kind: 'ok', result: await run(await distilled()) };
+      }
     } catch (err) {
       return { kind: 'error', error: err };
     }
   };
 
-  const primary = await attempt(WIKI_MODEL);
+  // 'medium', not 'low': production traffic showed the agent
+  // surface-pattern-matching its way through conversations -
+  // extracting every named entity into a separate article instead of
+  // stopping to ask "what aspect of the user does this conversation
+  // actually reveal?". Medium gives the model budget to apply the
+  // prime-directive framing before dispatching tool calls.
+  const primary = await attempt(WIKI_MODEL, 'medium');
   if (primary.kind === 'ok') {
     return {
       kind: 'done',
@@ -1155,6 +1255,10 @@ async function runWikiAgentOnThread(
         primary.error instanceof Error
           ? primary.error.message
           : String(primary.error),
+      // A context-length error surviving attempt()'s distill path
+      // means the thread cannot fit at any chunking - retrying next
+      // sweep would repeat the identical failure.
+      deterministic: isContextLengthError(primary.error),
     };
   }
 
@@ -1162,7 +1266,8 @@ async function runWikiAgentOnThread(
     `content-classifier rejection on thread ${threadId}; ` +
       `retrying with ${CONTENT_FILTER_FALLBACK_MODEL}`,
   );
-  const fallback = await attempt(CONTENT_FILTER_FALLBACK_MODEL);
+  // reasoning_effort omitted: the fallback is a non-reasoning model.
+  const fallback = await attempt(CONTENT_FILTER_FALLBACK_MODEL, undefined);
   if (fallback.kind === 'ok') {
     log.info(
       `fallback ${CONTENT_FILTER_FALLBACK_MODEL} cleared content-filter ` +
@@ -1181,6 +1286,7 @@ async function runWikiAgentOnThread(
       fallback.error instanceof Error
         ? fallback.error.message
         : String(fallback.error),
+    deterministic: isContextLengthError(fallback.error),
   };
 }
 
@@ -1210,12 +1316,15 @@ async function recordWikiFailureOrSkip(
   terminalMsgId: string,
   reason: string,
   userId: string,
+  // 1 for deterministic failures (skip immediately - the retry would
+  // fail identically); MAX_FAILURES_PER_THREAD for transient ones.
+  maxFailures: number = MAX_FAILURES_PER_THREAD,
 ): Promise<'released' | 'skipped' | 'claim-lost'> {
   const { data, error } = await adminClient.rpc('record_wiki_failure_or_skip', {
     p_thread_id: threadId,
     p_holder_id: holderId,
     p_msg_id: terminalMsgId,
-    p_max_failures: MAX_FAILURES_PER_THREAD,
+    p_max_failures: maxFailures,
     p_reason: reason,
     p_user_id: userId,
   });
@@ -1360,6 +1469,7 @@ export async function runWikiSweepTick(
             terminalMsgId,
             outcome.error,
             userId,
+            outcome.deterministic ? 1 : MAX_FAILURES_PER_THREAD,
           );
         } catch (rpcErr) {
           // Counter bookkeeping failed. The original agent error is
