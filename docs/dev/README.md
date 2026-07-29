@@ -170,6 +170,10 @@ changing a contract that other features depend on.
 - [Local dev stack](./local-stack.md) — a throwaway local
   Supabase backend (`mise run dev-start`) isolated from the
   linked cloud project, for schema work without touching prod.
+- [Testing](./testing.md) — the three test islands (vitest,
+  Deno, Playwright), the vitest node/jsdom environment split
+  and how to register a new DOM test, the CSS + markdown
+  guardrail tests, and integration-test gating.
 
 ### Future work
 
