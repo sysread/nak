@@ -542,7 +542,7 @@ export type AgentRole =
  *     shared-capacity-with-foreground note.
  *
  *   deepSleep - deepseek-v4-flash. Memory librarian's slow-wave
- *     consolidation pass: every ~12h, picks a longest-unvisited
+ *     consolidation pass: every ~3h, picks a longest-unvisited
  *     seed memory, fetches its top-k similarity neighbors above the
  *     medium threshold, and decides consolidate-vs-relate-vs-leave
  *     for each pair. Needs the big window so the batch + the

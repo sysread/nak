@@ -51,9 +51,26 @@ import {
 // faithful.
 const DEEP_SLEEP_MODEL = 'deepseek-v4-flash';
 
-// Mirror of the browser manager's minIntervalSeconds (12h between
-// scheduled runs per user). Enforced by claim_next_user_for_deep_sleep.
-const DEEP_SLEEP_MIN_INTERVAL_SECONDS = 12 * 3600;
+/**
+ * Minimum gap between scheduled runs for one user, passed to
+ * claim_next_user_for_deep_sleep as p_min_interval_seconds (the gate
+ * lives in that RPC, so this constant is the whole knob - no schema
+ * change to retune).
+ *
+ * This is the sweep's throughput dial, not a rate limit. The cron
+ * ticks HOURLY (`47 * * * *`); this decides how many of those ticks
+ * find an eligible user instead of returning no-user. A refused tick
+ * costs one indexed claim query and no Venice call, so shortening the
+ * interval adds no ticks - it converts existing refusals into runs.
+ *
+ * 3h rather than 12h because the seed queue has inflow, not just a
+ * backlog: clear_memory_librarian_visit_on_change nulls a memory's
+ * visit stamp whenever its text changes, so every edited memory
+ * re-enters the queue - including the ones deep-sleep itself just
+ * merged. At 12h the queue outran the sweep. The cost is Venice spend
+ * on the extra passes.
+ */
+const DEEP_SLEEP_MIN_INTERVAL_SECONDS = 3 * 3600;
 
 /**
  * Cosine-similarity threshold for a neighbor to land in the batch.
@@ -476,6 +493,33 @@ interface ReviewResult {
   toolCalls: number;
   finalText: string;
   batchSize: number;
+  /** The agent loop ran out of budget or rounds instead of settling. */
+  stoppedByLimit: boolean;
+}
+
+/**
+ * Which of the batch's memories earned a visit stamp.
+ *
+ * A stamp means "the librarian has considered this neighborhood",
+ * which pushes the row to the back of the seed queue. Stamping the
+ * whole batch is right when the agent worked through it and settled.
+ * When the loop stopped on a limit it may have reviewed only the first
+ * few pairs, so stamping everything would retire memories nothing
+ * looked at - they would not resurface until the entire queue cycled.
+ *
+ * Stamping the SEED only is the middle ground: the queue still
+ * advances, so a pathological neighborhood cannot wedge the sweep by
+ * being re-picked forever, but the neighbors stay queued for a pass
+ * that has time for them. Same shape as the lonely-seed path, which
+ * also stamps just the seed.
+ */
+export function visitStampIds(
+  batch: readonly { id: string }[],
+  stoppedByLimit: boolean,
+): string[] {
+  // Batch order is [seed, ...neighbors] - see buildBatchForSeed.
+  if (batch.length === 0) return [];
+  return stoppedByLimit ? [batch[0].id] : batch.map((m) => m.id);
 }
 
 /**
@@ -536,6 +580,7 @@ async function runReview(args: {
     toolCalls: result.toolCalls,
     finalText: result.finalText,
     batchSize: batch.length,
+    stoppedByLimit: result.stoppedByLimit,
   };
 }
 
@@ -559,10 +604,12 @@ export interface DeepSleepSweepSummary {
  * One cron tick: claim the most-overdue eligible user and run one
  * seed-neighborhood review for them. NON-throwing by contract. The
  * cadence stamp lands at claim time, so a tick that ends no-eligible,
- * too-small, or inflight-blocked consumes that user's 12h slot -
- * faithful to the browser loop (its claim also preceded seed
- * selection). An agent error leaves the batch UNVISITED on purpose so
- * the next cycle retries the same neighborhood.
+ * too-small, or inflight-blocked consumes that user's slot
+ * (DEEP_SLEEP_MIN_INTERVAL_SECONDS) - the claim deliberately precedes
+ * seed selection. An agent error leaves the batch UNVISITED on purpose
+ * so the next cycle retries the same neighborhood; a run that stops on
+ * the budget stamps only its seed, so the queue advances without
+ * retiring neighbors nothing reviewed (see visitStampIds).
  */
 export async function runDeepSleepSweepTick(
   adminClient: SupabaseClient,
@@ -625,10 +672,12 @@ export async function runDeepSleepSweepTick(
       log,
       complete: opts.complete,
     });
-    await markVisited(adminClient, userId, batch.map((m) => m.id));
+    await markVisited(adminClient, userId, visitStampIds(batch, result.stoppedByLimit));
     log.info(
       `deep-sleep finished (${result.toolCalls} tool calls over ` +
-        `${result.batchSize} memories, reasoning="${normaliseReasoning(result.finalText)}")`,
+        `${result.batchSize} memories` +
+        `${result.stoppedByLimit ? ', stopped on limit - neighbors left queued' : ''}` +
+        `, reasoning="${normaliseReasoning(result.finalText)}")`,
     );
     return { outcome: 'reviewed', toolCalls: result.toolCalls, batchSize: result.batchSize };
   } catch (err) {
@@ -702,6 +751,9 @@ export async function runDeepSleepManual(
     }
 
     let result: ReviewResult;
+    // Read by the finally below, which cannot see `result` on the throw
+    // path. Staying false there is deliberate - see the comment.
+    let stoppedByLimit = false;
     try {
       result = await runReview({
         adminClient,
@@ -712,9 +764,20 @@ export async function runDeepSleepManual(
         complete: opts.complete,
         onProgress,
       });
+      stoppedByLimit = result.stoppedByLimit;
     } finally {
-      // Visit stamps land even on agent error - see the docblock.
-      await markVisited(adminClient, userId, batch.map((m) => m.id)).catch((err) => {
+      // Visit stamps land even on agent error - see the docblock. The
+      // two non-clean endings get different treatment on purpose: an
+      // error tells us nothing about how far the agent got and the
+      // batch may be why it failed, so the whole batch retires rather
+      // than risk wedging the queue on it. A budget stop is a healthy
+      // batch that merely ran long, so only the seed retires and the
+      // neighbors stay queued for a pass with time for them.
+      await markVisited(
+        adminClient,
+        userId,
+        visitStampIds(batch, stoppedByLimit),
+      ).catch((err) => {
         log.debug(
           'failed to stamp visit timestamps on manual batch',
           err instanceof Error ? err.message : String(err),

@@ -2276,10 +2276,10 @@
             reflection agent couldn't see, fill in missing
             relations between memories you've recalled together,
             and soft-delete contradicted facts. Two passes run on
-            staggered 12h cadences (deep-sleep walks similarity
-            neighborhoods; rem walks recall co-occurrence
-            conversations); both are coordinated across devices so
-            only one run happens per cycle. You can also trigger
+            staggered cadences - deep-sleep every ~3h, walking
+            similarity neighborhoods; rem every ~12h, walking recall
+            co-occurrence conversations - and both are coordinated
+            across devices so only one run happens per cycle. You can also trigger
             either pass on demand from the Memories drawer tab.
           </span>
         </label>

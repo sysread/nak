@@ -166,7 +166,8 @@ interface AppState {
   wikiLibrarianEnabled: boolean;
   /**
    * Memory librarian: when true, the deep-sleep and rem background
-   * agents run on their staggered 12h cadences. Default true;
+   * agents run on their staggered cadences (deep-sleep ~3h, rem
+   * ~12h). Default true;
    * overwritten from Supabase `profiles.settings.memoryLibrarianEnabled`
    * on unlock. The two agents start and stop together - they share
    * the same cross-device lease partition and their work is

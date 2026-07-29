@@ -24,6 +24,7 @@ import { buildMemoryLibrarianToolbox } from '../venice/agents/_memory_librarian_
 import { buildRemPrompt, __test as remTest } from '../venice/agents/rem.ts';
 import {
   buildDeepSleepPrompt,
+  visitStampIds,
   __test as deepSleepTest,
 } from '../venice/agents/deep_sleep.ts';
 
@@ -189,4 +190,34 @@ Deno.test('librarian memory_search annotates only the oversized rows', async () 
   // The wrapper is additive: the underlying row survives untouched.
   assertEquals(healthy.id, 'm0');
   assertEquals(trim.data, 'x'.repeat(3200));
+});
+
+// ---------------------------------------------------------------------------
+// Visit stamping. A stamp pushes a memory to the back of the seed queue,
+// so what gets stamped after a partial pass decides whether unreviewed
+// neighbors quietly retire or stay queued.
+
+Deno.test('visitStampIds: a clean pass retires the whole batch', () => {
+  const batch = [{ id: 'seed' }, { id: 'n1' }, { id: 'n2' }];
+  assertEquals(visitStampIds(batch, false), ['seed', 'n1', 'n2']);
+});
+
+Deno.test('visitStampIds: a limit-stopped pass retires only the seed', () => {
+  // The neighbors may never have been looked at. Stamping them would
+  // retire them as reviewed until the whole queue cycled again.
+  const batch = [{ id: 'seed' }, { id: 'n1' }, { id: 'n2' }];
+  assertEquals(visitStampIds(batch, true), ['seed']);
+});
+
+Deno.test('visitStampIds: the seed still retires, so the queue cannot wedge', () => {
+  // Forward progress is the point: a neighborhood the agent keeps
+  // running out of time on must not be re-picked forever.
+  const batch = [{ id: 'seed' }, { id: 'n1' }];
+  assertEquals(visitStampIds(batch, true).length, 1);
+  assertEquals(visitStampIds(batch, true)[0], 'seed');
+});
+
+Deno.test('visitStampIds: an empty batch stamps nothing', () => {
+  assertEquals(visitStampIds([], false), []);
+  assertEquals(visitStampIds([], true), []);
 });

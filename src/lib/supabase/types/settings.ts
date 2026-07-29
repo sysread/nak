@@ -161,7 +161,8 @@ export interface UserSettings {
   wikiLibrarianEnabled?: boolean;
   /**
    * Memory librarian: when true, the deep-sleep and rem background
-   * agents run on their staggered 12h cadences, consolidating
+   * agents run on their staggered cadences (deep-sleep ~3h, rem
+   * ~12h), consolidating
    * cross-thread duplicate memories and populating the relations
    * graph. Independent of the wiki librarian; default-on like the
    * other librarian toggles. Both sweeps run server-side; see
