@@ -5,7 +5,7 @@
 // through the injected `fetch` so tests can pin discovery / exchange /
 // refresh / tool-list flows against a fake server with no network.
 //
-// Discovery chain (spec-mandated order; see docs/dev/in-progress for the
+// Discovery chain (spec-mandated order; see docs/dev/mcp-integrations.md for the
 // full rationale this file documents):
 //   1. POST an MCP `initialize` JSON-RPC request to the server URL with
 //      no Authorization header. Spec-conformant servers reply 401 and

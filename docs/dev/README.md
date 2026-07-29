@@ -63,6 +63,11 @@ changing a contract that other features depend on.
   expiration worker.
 - [Tools](./tools.md) — the browser-side toolbox catalog +
   the edge-side dispatch (chat tools and agent loops).
+- [MCP integrations](./mcp-integrations.md) — remote MCP
+  server connections: OAuth discovery + DCR + PKCE, per-user
+  token storage, dynamic toolbox popup, edge-side dispatch,
+  daily catalog refresh sweep, and the Settings Integrations
+  pane.
 - [Memory](./memory.md) — `memories` store + reflection
   agent + memory recall.
 - [Wiki](./wiki.md) — flat encyclopedic articles about

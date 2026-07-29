@@ -15,9 +15,8 @@
 > an MCP integration on with `toggle_toolbox` the same way it
 > toggles any built-in (Q4, resolved). Tool namespacing uses
 > `mcp:<integrationId>:<serverToolName>` (Q5, resolved).
-> Deferred product decisions: the curated tier-1 client_id
-> table (Q1) and the explicit trust-gate UX for unknown
-> servers (Q6) are not built - the feature works without them.
+> All open questions from the design phase are resolved or
+> mooted by the implementation; see "Open questions" below.
 
 ## Role in the app
 
@@ -71,10 +70,12 @@ chain is fully mandated:
    auto-mint its own `client_id` with no user interaction.
 
 So a paste-URL runway exists - for servers whose auth server
-implements DCR AND accepts nak's redirect URI. For servers that do
-not, the spec names exactly two fallbacks: (a) the client hardcodes
-a per-vendor `client_id`, or (b) the client shows a UI letting the
-user paste a `client_id` they obtained themselves.
+implements DCR AND accepts nak's redirect URI. For servers
+that do not, the spec names exactly two fallbacks: (a) the
+client hardcodes a per-vendor `client_id`, or (b) the client
+shows a UI letting the user paste a `client_id` they obtained
+themselves. Nak uses (b): the settings form has an optional
+`client_id` field.
 
 The catch discovered during design: **whether a server supports
 DCR is a property of the server, not the protocol.** Probed
@@ -106,49 +107,26 @@ concern still matters for hosted nak because Fastmail's redirect
 URI policy blocks this deployment shape.
 
 Servers that do not support DCR, or that reject nak's hosted
-redirect URI, still force a two-tier model (below).
+redirect URI, fall back to the user-pasted client_id path.
 
-## Tiering
+## Client registration paths
 
-- **Tier 1 - officially supported integrations.** nak ships a
-  small curated table mapping a server URL (or a vendor name)
-  to a pre-registered `client_id`, the scopes list, and the
-  redirect URIs nak will use. The user's flow is literally
-  paste-URL -> one-click OAuth consent -> done. The owner of
-  nak pays the registration email once per vendor; from then
-  on, every nak user with that vendor gets the guided runway.
-- **Tier 2 - generic / user-supplied credentials.** For servers
-  that aren't worth a registration email, or that the user
-  wants to wire into a custom-built MCP server of their own
-  (with their own custom client_id). The settings form falls
-  back to "paste URL + paste client_id + here is the redirect
-  URI you'll want to register on the vendor side."
-- **Tier 0 (off the side, test only).** For some vendors
-  (Fastmail specifically), a user can mint a static API token
-  in their account settings and paste it directly into nak to
-  skip OAuth entirely. Useful for an early-developer v1
-  bootstrap, NOT a substitute for the production OAuth path
-  (Fastmail's static tokens cover JMAP mail only - no CalDAV,
-  no CardDAV, no MCP).
+Two paths cover every server:
 
-A user pasting `https://api.fastmail.com/mcp` should land in
-tier 1 automatically. A user pasting `https://my-friend-s-mcp.test/mcp`
-should land in tier 2 with a clear "you'll need to register a
-client_id with this server and paste it here" affordance. The
-discovery mechanism: nak fetches the resource metadata + auth
-server metadata, checks whether the auth server advertises a
-`registration_endpoint` (RFC 7591). If yes -> DCR is available
--> tier 1 requires no pre-registration for this server (nak
-can register on the fly and the guided runway holds even
-without a curated entry). If no -> the user either picks a
-curated tier-1 entry whose static `client_id` is shipped in
-nak's table, or falls through to tier 2.
-
-Open question 1 below settles where the curated table lives.
+- **DCR (automatic).** When the server's auth server
+  advertises a `registration_endpoint` (RFC 7591), nak
+  self-registers on the fly. No user interaction beyond
+  paste-URL + OAuth consent. Fastmail's MCP surface supports
+  this.
+- **Manual client_id (fallback).** When the server does not
+  support DCR, or rejects nak's redirect URI (hosted
+  Fastmail), the user pastes a `client_id` they obtained
+  themselves. The settings form has a "Client ID (optional)"
+  field for this case.
 
 ## Production-path ownership (browser vs edge function)
 
-Per the frame in [`../architecture.md`](../architecture.md)
+Per the frame in [`./architecture.md`](./architecture.md)
 "Production-path ownership":
 
 - **Browser owns:**
@@ -163,8 +141,8 @@ Per the frame in [`../architecture.md`](../architecture.md)
   - Auth discovery (fetch the well-known metadata, validate,
     decide tier 1 vs 2 vs DCR-on-the-fly).
   - Token storage and retrieval (a new per-user table, RLS,
-    service-role client - the b-strict model from
-    [`../edge-function-auth.md`](../edge-function-auth.md)).
+  service-role client - the b-strict model from
+  [`./edge-function-auth.md`](./edge-function-auth.md)).
   - The actual MCP RPC calls during tool dispatch. Per turn,
     per integration, the function reads the access token from
     storage (refreshing if expired), POSTs the JSON-RPC envelope
@@ -179,7 +157,7 @@ in `app_config` - just per-user and per-integration. The
 model: token-storage here parallels credentials the edge
 function already manages, the browser only triggers flows.
 
-## Data model (proposed; subject to the open questions)
+## Data model
 
 Three new tables in `supabase/schema.sql`, all RLS-scoped to
 `auth.uid() = user_id`, all `create table if not exists`
@@ -208,73 +186,73 @@ following the schema idempotency convention:
   edge function consults this at dispatch time; refreshed on
   the integration-add flow and periodically thereafter.
 
-A `GOOGLE_*` problem we don't recreate: the curated tier-1
-client_ids are NOT per-user and NOT stored in these tables.
-They are nak-shipped constants (the open question is where the
-file lives). The user stores only their own per-instance state
-in these tables; the constant `client_id` is reused across all
-nak users with that integration.
+The `client_id` stored on the integration row is either
+DCR-minted or user-pasted. It is not a secret (OAuth public
+clients ship it in the bundle; the security model relies on
+the registered redirect URI + PKCE + state). The user stores
+only their own per-instance state in these tables.
 
 ## Implementation surfaces
 
 The architectural pieces already exist; this feature threads
 through them.
 
-- **Catalog (browser) -** dynamic toolboxes break the static
+- **Catalog (browser) -** dynamic toolboxes extend the
   `TOOLBOXES` / `GATED_TOOLBOX_NAMES` model in
   [`src/lib/tools/index.ts`](../../src/lib/tools/index.ts).
-  Needs a new "MCP-routed toolbox" category populated per-user
-  from the user's `mcp_integrations` rows at startup. The
-  `toggle_toolbox` mirror warning in
-  [`../tools.md`](../tools.md) Gotchas ("a toolbox added here
-  but not there can't be enabled by the model") applies: the
-  edge-side mirror in
-  `supabase/functions/venice/tools/toggle_tools.ts` needs the
-  same runtime-discovered notion, or the static mirror has to
-  learn to accept unknown toolbox names as MCP-routed.
+  A per-user "MCP-routed toolbox" category is populated from
+  the user's `mcp_integrations` rows at startup. The
+  `toggle_toolbox` mirror in
+  `supabase/functions/venice/tools/toggle_tools.ts` accepts
+  `mcp:`-prefixed names as runtime-discovered toolboxes (see
+  the comment block on `MCP_TOOLBOX_PREFIX` there).
 - **System-prompt catalog (browser) -** `buildCatalog` in
   [`src/lib/chat/system-prompt.ts`](../../src/lib/chat/system-prompt.ts)
-  currently renders `- <name> : <shortDescription>` lines from
-  the static `TOOLBOXES`. Extends naturally: a section listing
-  the user's MCP integrations and the (cached) tools each
-  exposes. Cheap - one short line per tool per the catalog
-  convention, NOT the full JSON schema. See Gotchas - wire
-  vs prompt surfaces are different.
+  renders `- <name> : <shortDescription>` lines from
+  the static `TOOLBOXES` plus a dynamic "Connected
+  integrations" section listing the user's MCP integrations
+  and the (cached) tools each exposes. Cheap - one short
+  line per tool per the catalog convention, NOT the full
+  JSON schema. See Gotchas - wire vs prompt surfaces are
+  different.
 - **Wire `tools` array (browser) -** the bigger inflation
   surface. The full JSON Schema for every enabled tool rides
   on `buildToolList`. MCP server catalogs can be large
-  (Fastmail's likely 15-30 tools). Per-toolbox enablement
-  already gates which schemas are armed; gated MCP toolboxes
-  follow the same shape. See open question 4 for the lazy /
-  on-demand alternative.
+  (Fastmail's 10 tools). Per-toolbox enablement gates which
+  schemas are armed; gated MCP toolboxes follow the same
+  shape as built-in toolboxes.
 - **Edge dispatch -** `performToolCall` in
   `supabase/functions/venice/performToolCall.ts` has a
   module-load registry populated by
   `supabase/functions/venice/tools/index.ts`. MCP-routed tool
-  calls need a new dispatch branch: the tool name resolves to
-  an `mcp_integration_id` + the server-side name; the handler
-  fetches the token, POSTs the JSON-RPC envelope to the
-  integration's server URL, returns the result. Lives
-  alongside the static registry; doesn't replace it.
+  calls have a dispatch branch in
+  [`venice/mcp/dispatch.ts`](../../supabase/functions/venice/mcp/dispatch.ts):
+  the tool name resolves to an `mcp_integration_id` + the
+  server-side name; the handler fetches the token, POSTs the
+  JSON-RPC envelope to the integration's server URL, returns
+  the result. Lives alongside the static registry.
 - **Edge priming / chrome -** the priming stage in
-  `supabase/functions/venice/priming.ts` reads profiles and
-  `threads.*_payload` columns to assemble the per-turn system
-  context. Needs to fetch the user's enabled MCP toolboxes and
-  inject their (cached) tool catalog into the wire `tools`
-  array built for that turn.
-- **Edge OAuth route -** a new venice-function route (or two)
-  handling metadata discovery, DCR registration (when
-  supported), token exchange, and refresh. The browser directs
-  the OAuth code to this route; the function does the token
-  swap and writes the `mcp_oauth_tokens` row.
-- **Settings UI (browser) -** a new Settings modal section
-  matching the existing pane conventions (auto-apply with
-  rollback, see [`../settings.md`](../settings.md)). Form:
-  paste URL + label. The OAuth flow launches in a pop-up or
-  new tab; the deployed Pages URL receives the callback and
-  hands the code to the edge function. Local dev uses
-  `http://localhost:` per RFC rules; the registered
-  redirect URI must allow localhost variants during dev.
+  `supabase/functions/venice/priming.ts` fetches the user's
+  enabled MCP toolboxes and injects their (cached) tool
+  catalog into the wire `tools` array built for that turn.
+- **Edge OAuth routes -** seven routes in the venice
+  function handle metadata discovery, DCR registration,
+  token exchange, token refresh, tool-list fetch,
+  disconnection, and deletion. The browser directs the
+  OAuth code to the token-exchange route; the function does
+  the token swap and writes the `mcp_oauth_tokens` row.
+- **Catalog refresh sweep -** a daily pg_cron job POSTs the
+  `mcp-catalog-refresh` route, which iterates every
+  authorized integration and re-fetches its tool catalog
+  using the stored (auto-refreshed) access token.
+- **Settings UI (browser) -** a Settings modal "Integrations"
+  pane matching the existing pane conventions. Form: paste
+  URL + label + optional client_id. The OAuth flow launches
+  as a full-page redirect; the deployed Pages URL receives
+  the callback and the routing layer hands the code to the
+  Settings pane to finish the exchange. A `!` badge +
+  Reauthorize button surfaces for expired or revoked
+  integrations.
 
 ## Security surface
 
@@ -317,9 +295,13 @@ nak's own system prompt. Two distinct risks:
 ## Open questions (status after implementation)
 
 1. **Where does the tier-1 curated `client_id` table live?**
-   **Deferred.** Not built. The user always supplies or DCR
-   mints the client_id. This is a product enhancement, not a
-   gap - the feature works without it.
+   **Mooted.** DCR mints the client_id automatically when
+   the server supports it (Fastmail's MCP surface does). When
+   the server rejects nak's redirect URI, the user pastes a
+   manual client_id. No curated table is needed - the two
+   paths that exist cover every case. The question was
+   speculative design thinking that the implementation
+   answered.
 2. **v1 scope: tier 1+2 together, or Fastmail-vertical
    end-to-end first?** **Resolved: Fastmail vertical first.**
    The generic DCR-on-the-fly path is the production shape;
@@ -338,10 +320,14 @@ nak's own system prompt. Two distinct risks:
 5. **Tool-name namespacing.** **Resolved:**
    `mcp:<integrationId>:<serverToolName>`. The dispatcher
    splits on the first colon after the `mcp:` prefix.
-6. **Trust-gate UX exactly how.** **Deferred.** No explicit
-   trust-gate UI for unknown servers. The Settings form
-   connects whatever URL is pasted. Worth building before
-   the feature gets wide exposure to arbitrary MCP servers.
+6. **Trust-gate UX exactly how.** **Mooted.** The user
+   pasting the URL and clicking Connect IS the trust gate.
+   They chose to connect to that server. The prompt-injection
+   risk via tool descriptions exists for any toolbox the user
+   enables; the trust decision is "do I let this server's
+   tools into my chat," and the user makes it explicitly by
+   adding the integration. A separate confirmation step would
+   just be a second click on the same decision.
 7. **Catalog refresh cadence.** **Resolved: daily sweep.**
    A pg_cron job at 4:00 UTC POSTs the venice function's
    `mcp-catalog-refresh` route, which iterates every
@@ -363,42 +349,41 @@ nak's own system prompt. Two distinct risks:
 
 ## Interactions
 
-- **Tools ([`../tools.md`](../tools.md)) -** the heaviest
-  coupling. New dynamic-toolbox category alongside the
-  static `TOOLBOXES`. New MCP-routed dispatch branch in
+- **Tools ([`./tools.md`](./tools.md)) -** the heaviest
+  coupling. Dynamic-toolbox category alongside the
+  static `TOOLBOXES`. MCP-routed dispatch branch in
   `performToolCall` alongside the static module-load
-  registry. The mirror warning (the hand-maintained copy of
+  registry. The mirror (the hand-maintained copy of
   `GATED_TOOLBOX_NAMES` in the edge `toggle_tools.ts`) gets a
-  new "MCP-routed toolboxes are dynamic" rule.
-- **Settings ([`../settings.md`](../settings.md)) -** new
-  Settings modal section "MCP / integrations". No new
+  "MCP-routed toolboxes are dynamic" rule via the
+  `MCP_TOOLBOX_PREFIX` prefix check.
+- **Settings ([`./settings.md`](./settings.md)) -** the
+  Settings modal "Integrations" pane. No new
   `profiles.settings` flag required (the per-user
   integrations live in their own tables, not in the settings
   blob). The settings surface that holds `displayTimezone`,
   `intentsEnabled`, etc. is not extended by this feature.
-- **Schema conventions (per [`../architecture.md`](../architecture.md)
+- **Schema conventions (per [`./architecture.md`](./architecture.md)
   "Schema conventions") -** three new tables, all per-user,
   all RLS-scoped, all `create table if not exists`. No
-  claim-RPC needed for token refresh unless we adopt a
-  per-row claim for cross-device coordination (open question
-  on rotation racing).
-- **Edge function auth ([`../edge-function-auth.md`](../edge-function-auth.md))
-  -** the MCP-oauth route and the MCP-tool dispatch route
+  claim-RPC needed for token refresh (single-device v1;
+  cross-device rotation racing is a known deferred concern).
+- **Edge function auth ([`./edge-function-auth.md`](./edge-function-auth.md))
+  -** the MCP-oauth routes and the MCP-tool dispatch route
   join the venice function's existing routes following the
   same b-strict service-role client discipline. Token
-  retrieval is a new private function mints an access token
+  retrieval is a private function that mints an access token
   from a refresh token; never expose the refresh in any
   return path.
-- **Prompt augmentation ([`../prompt-augmentation.md`](../prompt-augmentation.md))
+- **Prompt augmentation ([`./prompt-augmentation.md`](./prompt-augmentation.md))
   -** no per-turn priming contribution. The MCP catalog
   rides the baseline catalog in `buildSystemPrompt`, the same
   surface every other toolbox catalog uses. Not a `*thinking*`
   block, not an appendix; just tool descriptions (one short
   line each).
-- **User docs ([`../../user/`](../../user/)) -** per
-  `CLAUDE.md`, every observable user-behaviour change ships
-  with a `docs/user/` update in the same PR. A new "MCP /
-  integrations" user doc must land with the feature.
+- **User docs ([`../user/`](../user/)) -**
+  [`../user/mcp-integrations.md`](../user/mcp-integrations.md)
+  is the end-user manual for the Integrations pane.
 
 ## Gotchas
 
@@ -406,9 +391,9 @@ nak's own system prompt. Two distinct risks:
   auth spec mandates the discovery chain; whether the auth
   server at the end of it actually implements RFC 7591 is the
   server's choice. A generic MCP client cannot assume DCR is
-  available - it has to handle the no-DCR case (tier 1 curated
-  `client_id` OR tier 2 user-pasted). This is THE
-  load-bearing fact the two-tier model exists to handle.
+  available - it has to handle the no-DCR case (user-pasted
+  `client_id` fallback). This is THE load-bearing fact the
+  two-path model exists to handle.
 - **Refresh-token rotation is strict, per spec.** OAuth 2.1
   section 4.3.1 mandates rotation for public clients; Fastmail
   enforces it explicitly ("MUST replace their previous
@@ -434,8 +419,7 @@ nak's own system prompt. Two distinct risks:
 - **The client_id is not a secret.** OAuth public clients
   ship their `client_id` in the bundle; the security model
   relies on the registered redirect URI + PKCE + state, not
-  on hiding the client_id. The curated tier-1 table in the
-  bundle is fine.
+  on hiding the client_id.
 - **Redirect URI is registered, not derived.** The deployed
   nak Pages URL has to be one of the redirect URIs in the
   vendor's pre-registration (for tier 1). A user self-hosting
@@ -443,11 +427,6 @@ nak's own system prompt. Two distinct risks:
   unless they re-register the client_id themselves with
   their own redirect URI. Localhost dev uses the standard
   localhost variants per RFC.
-- **`intents.md` precedent: in-progress docs aren't in the
-  README index.** This doc lives in `docs/dev/in-progress/`
-  unlinked from the README until graduation; graduation
-  happens when the feature ships (the "Current status" header
-  at the top of this doc is the live state).
 - **Fastmail's DCR scope is `offline_access`-free.** Verified
   2026-07-10 via live OAuth + tools/list + tools/call. The
   scope the MCP server requires is `https://www.fastmail.com/dev/mcp`
@@ -463,16 +442,16 @@ nak's own system prompt. Two distinct risks:
 
 ## Where to go next
 
-- [`../architecture.md`](../architecture.md) - "Production-path
+- [`./architecture.md`](./architecture.md) - "Production-path
   ownership" for the browser-vs-function split this feature
   follows.
-- [`../tools.md`](../tools.md) - the existing tool-calling
+- [`./tools.md`](./tools.md) - the existing tool-calling
   subsystem this feature threads through; the mirror warning
   is the most load-bearing precedent.
-- [`../edge-function-auth.md`](../edge-function-auth.md) -
+- [`./edge-function-auth.md`](./edge-function-auth.md) -
   the service-role client shape the MCP-tool dispatch and the
   token-storage routes follow.
-- [`../prompt-augmentation.md`](../prompt-augmentation.md) -
+- [`./prompt-augmentation.md`](./prompt-augmentation.md) -
   the cross-feature priming contract; this feature adds NO
   priming contribution, just tool catalog entries.
 - The MCP Authorization spec at
