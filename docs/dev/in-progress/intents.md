@@ -7,7 +7,12 @@
 > target samples, 167 employments as of 2026-07-29). The
 > backtest needs 20 control-bearing movement windows; the
 > corpus carries 7, so a verdict is 2-3 months out at the
-> current weekly sampling rate. The June 2026 prod inspection
+> current weekly sampling rate.
+> **Next check-back: late October 2026** (roughly 13 weeks
+> from the 2026-07-29 anchor, when the two long-running
+> targeted intents should carry ~20 windows combined). If the
+> metric decision is still unresolved by then, the data
+> accrual is wasted on the wrong metric - resolve it first. The June 2026 prod inspection
 > predicted samskara fire-count volatility would dominate the
 > signal; the July 2026 data confirms it (target values swing
 > 0-34 across consecutive weekly samples while controls stay
@@ -16,7 +21,9 @@
 > window, or switch to samskara verdicts - should come before
 > building the backtest SQL, because changing the metric
 > changes what intent_target_samples records and thus the
-> query shape. A target-pair dedup bug was also found and
+> query shape. The metric decision deadline is the
+> check-back in late October 2026 - data accruing after
+> that point on the wrong metric is wasted. A target-pair dedup bug was also found and
 > fixed: the minter could seat two active intents on the same
 > (target_kind, target_ref, target_direction) by rephrasing
 > the statement, which the statement-only dedup didn't catch.
@@ -774,7 +781,8 @@ has been running since 2026-06-25 (~1 month):
   167 intent_employments, 6 intent_provenance.
 - 7 control-bearing movement windows (bar needs 20). At
   weekly sampling per intent, reaching 20 windows across the
-  2 long-running targeted intents takes 2-3 more months.
+  2 long-running targeted intents takes 2-3 more months from
+  the 2026-07-29 anchor (target: late October 2026).
 - 2 intents carry efficacy scores (0.39 and 0.56); the
   firewall's pearson correlation needs more than 2 to be
   meaningful.
