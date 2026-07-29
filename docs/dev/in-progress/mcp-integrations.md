@@ -1,12 +1,23 @@
-# MCP integrations (in progress)
+# MCP integrations
 
-> **Status: implementation in progress on branch
-> `mcp-integrations`.** Full-stack wired - settings UI, OAuth
+> **Status: shipped.** Full-stack wired - settings UI, OAuth
 > flow with DCR discovery + PKCE + token exchange, per-user
 > tool-catalog caching, dynamic toolbox popup, edge-side
-> dispatch. Fastmail end-to-end verified locally 2026-07-10 with
-> 10 tools (all read-only); hosted production needs a manual
-> client_id because Fastmail rejects nak's DCR redirect URI.
+> dispatch. Fastmail end-to-end verified locally 2026-07-10
+> with 10 tools (all read-only); hosted production uses a
+> manual client_id because Fastmail rejects nak's DCR
+> redirect URI. A daily catalog-refresh sweep (Q7) keeps
+> cached tool catalogs current without user interaction, and
+> the Settings Integrations pane shows a badge + re-authorize
+> button for expired or revoked integrations (Q8). The OAuth
+> module has Deno test coverage (22 tests). Tool schemas are
+> gated per-thread by `enabledToolboxes` - the model toggles
+> an MCP integration on with `toggle_toolbox` the same way it
+> toggles any built-in (Q4, resolved). Tool namespacing uses
+> `mcp:<integrationId>:<serverToolName>` (Q5, resolved).
+> Deferred product decisions: the curated tier-1 client_id
+> table (Q1) and the explicit trust-gate UX for unknown
+> servers (Q6) are not built - the feature works without them.
 
 ## Role in the app
 
@@ -303,87 +314,52 @@ nak's own system prompt. Two distinct risks:
    (per [`../embeddings.md`](../embeddings.md)) on the
    `mcp_oauth_tokens` row is the precedent.
 
-## Open questions (decisions before code)
+## Open questions (status after implementation)
 
 1. **Where does the tier-1 curated `client_id` table live?**
-   Two shapes:
-   - a) A TS module in the repo
-     (`src/lib/mcp/curated-clients.ts`) committed per vendor,
-     readable by both browser (for settings UI to recognise a
-     known URL on paste) and edge function (for token swap).
-     Mirrors the static-model catalog pattern. Simple,
-     reviewable, but ships the `client_id` in the bundle (it
-     is not a secret; it's a public client identifier).
-   - b) An `app_config` row the edge function reads at request
-     time (per the Venice key pattern). Keeps it out of the
-     bundle but means the browser can't pre-recognise a known
-     URL on paste - has to round-trip through the edge
-     function for discovery hint.
-   - The lean is (a) for transparency and simple change flow.
+   **Deferred.** Not built. The user always supplies or DCR
+   mints the client_id. This is a product enhancement, not a
+   gap - the feature works without it.
 2. **v1 scope: tier 1+2 together, or Fastmail-vertical
-   end-to-end first?** A vertical Fastmail-slice-through-all-
-   layers (settings UI, DCR self-register, edge dispatch, one
-   MCP server with maybe 15-30 tools) proves the pattern
-   against a real server and forces every subsystem to be
-   honest. Since Fastmail's MCP supports DCR, the vertical
-   exercises the pure paste-URL runway exactly as a user
-   experiences it - no tier-1 curated `client_id` needed, no
-   registration email. The generic arbitrary-URL-with-tier-2-
-   fallback defers a hard design question (the trust-gate UX
-   for unknown servers) until v2. The generic-first approach
-   requires speculating at open questions 1, 5, and 6 with no
-   concrete server grounding them.
-3. **Redirect URI handling.** nak's deployed Pages URL is the
-   production redirect URI. Local dev needs the localhost
-   variant. The redirect URI registered with the vendor has to
-   exist before the client_id is registered, AND before the
-   user can complete OAuth. How do we handle the case where
-   the user self-hosts a fork of nak at a different domain
-   without breaking their tier-1 integration? Likely the
-   registered tier-1 redirect URI set includes both the
-   canonical Pages URL and a localhost entry, and the user
-   falls through to tier 2 for exotic self-hosted cases.
-4. **Lazy vs always-armed wire schemas.** Currently every
-   enabled gated toolbox's full JSON Schema rides the wire
-   `tools` array. MCP server catalogs can be large. Option
-   (a): arm all tools of an enabled MCP toolbox by default
-   (same shape as the other gated boxes, just bigger). Option
-   (b): arm a single `<label>_list_tools` meta-tool by
-   default, let the model fetch specific tools'
-   schemas on demand, and only then inflate the wire per-
-   tool. Option (b) trades a round-trip for wire bytes; worth
-   it for very large MCP catalogs. Defer until we see real
-   catalog sizes.
-5. **Tool-name namespacing.** MCP server tools come with
-   arbitrary names. Two connected MCP servers could both
-   expose a `search` tool. Nak needs to namespace them in the
-   catalog: `fastmail.search` or `mcp_<id>.search`? The
-   model needs the human-readable prefix (tier-1 label) more
-   than the integration id. The catalog renderer in the system
-   prompt is the cheap part; the wire dispatch from the edge
-   function back to the right integration is the part that
-   matters.
-6. **Trust-gate UX exactly how.** Tier-1 curated client_ids
-   ship with nak's endorsement (we picked the vendor), so the
-   trust-gate can be relaxed: "nak knows this integration;
-   authorize to grant [scopes]." Tier-2 generic pastes are
-   unknown; the trust-gate has to be explicit and informed.
-   What information does nak surface to the user, how scary
-   does the warning copy read, and how does it frame the
-   scope ask? Open until we know what scope strings actually
-   look like across non-Fastmail servers.
-7. **Catalog refresh cadence.** An MCP server can change its
-   tool catalog. Edge function caches the discovered schemas
-   in `mcp_integration_tools`; when does it refresh? On
-   integration-add for sure, plus never / daily / on-demand?
-   The existing pg_cron sweeps are the obvious model.
-8. **Failure-mode UX.** When the MCP server is unreachable at
-   dispatch time, or the access token is revoked, or the
-   refresh fails, how does the model notify the user without
-   mid-turn aborts? The existing tool-result string is the
-   obvious channel; some failures (revoked token) want a
-   settings-side "your Fastmail integration has been revoked,
-   re-authorize? affordance.
+   end-to-end first?** **Resolved: Fastmail vertical first.**
+   The generic DCR-on-the-fly path is the production shape;
+   tier-2 user-pasted client_id is the fallback for servers
+   that reject nak's redirect URI.
+3. **Redirect URI handling.** **Resolved.** The app URL is
+   the callback target; localhost works for local dev, and
+   manually registered hosted clients use the deployed PWA
+   URL. The routing layer catches `?code=...&state=...` on
+   return and hands them to the Settings Integrations pane.
+4. **Lazy vs always-armed wire schemas.** **Resolved:
+   always-armed, gated per-thread.** MCP tool schemas ride
+   the wire `tools` array only when the integration's
+   `mcp:<id>` toolbox is in the thread's
+   `enabledToolboxes`. Same gate as built-in toolboxes.
+5. **Tool-name namespacing.** **Resolved:**
+   `mcp:<integrationId>:<serverToolName>`. The dispatcher
+   splits on the first colon after the `mcp:` prefix.
+6. **Trust-gate UX exactly how.** **Deferred.** No explicit
+   trust-gate UI for unknown servers. The Settings form
+   connects whatever URL is pasted. Worth building before
+   the feature gets wide exposure to arbitrary MCP servers.
+7. **Catalog refresh cadence.** **Resolved: daily sweep.**
+   A pg_cron job at 4:00 UTC POSTs the venice function's
+   `mcp-catalog-refresh` route, which iterates every
+   authorized integration, calls `getValidAccessToken`
+   (silently refreshes the token if expired), re-fetches
+   the catalog via `listMcpTools`, and upserts the cached
+   schemas. No user interaction needed. A revoked grant
+   marks the integration `expired` so the Settings UI can
+   show a re-authorize badge.
+8. **Failure-mode UX.** **Resolved: dispatch error string
+   and settings badge.** The dispatcher returns a
+   human-readable error string to the model as the tool
+   result (e.g. "MCP integration Fastmail is not
+   authorized; re-authorize it in Settings -> Integrations")
+   so the model can relay it naturally. The Settings
+   Integrations pane shows a `!` badge with an italicized
+   hint and a Reauthorize button for `expired` and
+   `revoked` statuses.
 
 ## Interactions
 
