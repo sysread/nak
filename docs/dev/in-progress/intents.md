@@ -1,23 +1,33 @@
 # Intents (in progress)
 
-> **Status: feature complete; only the backtest's real-corpus
-> harness remains, blocked on field data.** The full
-> self-developing loop (minting, efficacy evaluation, employment
-> classification, the system-prompt injection) plus the
-> read-only inspector are implemented behind the settings
-> toggle, with unit + Deno coverage and live-passing QA
-> walkthroughs. The backtest VERDICT logic is built and tested
-> on provisional fixtures (refresh tracked as a scheduled
-> operator follow-up, not an in-suite tripwire); the
-> only piece left is the query that feeds it a real corpus,
-> which waits on weeks of opted-in usage. The feature ships **off by default**
-> and stays off-by-default until the backtest clears its
-> falsifiable bar. This doc records the design decisions plus
-> the evaluation plan; the Build status below is the live
-> ledger of what exists. When the remaining pieces land and the
-> work closes, graduate the durable parts into a permanent
-> `docs/dev/intents.md` and retire this file per the in-progress
-> doc rules in `CLAUDE.md`.
+> **Status: feature complete; the backtest's real-corpus
+> harness remains unbuilt, blocked on both data volume and a
+> metric decision.** The sole user has been opted in since
+> 2026-06-25, with ~1 month of data accrued (6 intents, 11
+> target samples, 167 employments as of 2026-07-29). The
+> backtest needs 20 control-bearing movement windows; the
+> corpus carries 7, so a verdict is 2-3 months out at the
+> current weekly sampling rate. The June 2026 prod inspection
+> predicted samskara fire-count volatility would dominate the
+> signal; the July 2026 data confirms it (target values swing
+> 0-34 across consecutive weekly samples while controls stay
+> flat at 4.6-5.5). The metric decision - whether to keep
+> fire-count, normalize by trailing baseline, lengthen the
+> window, or switch to samskara verdicts - should come before
+> building the backtest SQL, because changing the metric
+> changes what intent_target_samples records and thus the
+> query shape. A target-pair dedup bug was also found and
+> fixed: the minter could seat two active intents on the same
+> (target_kind, target_ref, target_direction) by rephrasing
+> the statement, which the statement-only dedup didn't catch.
+> The feature ships **off by default** and stays off-by-default
+> until the backtest clears its falsifiable bar. This doc
+> records the design decisions plus the evaluation plan; the
+> Build status below is the live ledger of what exists. When
+> the remaining pieces land and the work closes, graduate the
+> durable parts into a permanent `docs/dev/intents.md` and
+> retire this file per the in-progress doc rules in
+> `CLAUDE.md`.
 
 **Build status.** Landed so far:
 
@@ -157,12 +167,16 @@
     DB-reading harness that feeds it a real corpus is the one
     remaining piece, blocked on field data.
 
-Not yet built: the DB-reading half of the backtest harness
-(blocked on field data - it needs target samples + employment
-accumulated over weeks of real opted-in use). The pure verdict
-logic exists and is tested; only the real-corpus query and the
-data-derived thresholds remain. The sections below document the
-design and the realized behavior.
+Not yet built: the DB-reading half of the backtest harness.
+The sole user has been opted in since 2026-06-25 and data is
+accruing (7 control-bearing movement windows as of
+2026-07-29, against the 20-window bar), but the metric
+decision (see "What the June 2026 prod inspection taught the
+backtest" below) should come before the SQL, because changing
+the metric changes what intent_target_samples records. The
+pure verdict logic exists and is tested; only the real-corpus
+query and the data-derived thresholds remain. The sections
+below document the design and the realized behavior.
 
 Intents are the first layer in nak that is **normative**
 rather than descriptive. Every other user-model the app
@@ -707,10 +721,13 @@ buildCorpus -> runBacktest). So the whole fixture-driven test
 runs the full path.
 
 **Not built: the literal SQL query** that pulls those rows from
-prod into `buildCorpus`. It is a thin I/O wrapper that needs
-real data to mean anything, so it waits on weeks of opted-in
-usage; the pure logic it will feed (mapper + aggregator) is
-complete and tested.
+prod into `buildCorpus`. The sole user has been opted in since
+2026-06-25 and data is accruing (7 control-bearing windows as
+of 2026-07-29, against the 20-window bar), but the metric
+decision should come first - changing the metric changes what
+intent_target_samples records and thus the query shape. The
+pure logic it will feed (mapper + aggregator) is complete and
+tested.
 
 ### What the June 2026 prod inspection taught the backtest
 
@@ -747,6 +764,37 @@ from, baked into the fixtures:
   intent and employment is hourly, so a usable corpus is weeks
   out, and the volatility finding suggests the weekly sample gate
   may want to be *longer*, not shorter.
+
+### July 2026 prod data: the corpus as it stands
+
+Queried the live DB on 2026-07-29. The sole opted-in user
+has been running since 2026-06-25 (~1 month):
+
+- 6 intents (4 active, 2 retired), 11 intent_target_samples,
+  167 intent_employments, 6 intent_provenance.
+- 7 control-bearing movement windows (bar needs 20). At
+  weekly sampling per intent, reaching 20 windows across the
+  2 long-running targeted intents takes 2-3 more months.
+- 2 intents carry efficacy scores (0.39 and 0.56); the
+  firewall's pearson correlation needs more than 2 to be
+  meaningful.
+
+The June inspection's volatility prediction is confirmed in
+real data. Samskara fire-count target values swing wildly
+across consecutive weekly samples (0-34 for one intent, 4-27
+for another) while control values stay flat (4.6-5.5). The
+matched-control lift will be dominated by topic noise, not
+intervention signal. The metric decision should come before
+building the backtest SQL.
+
+Also found and fixed: a target-pair dedup gap in
+`processMintProposals`. The statement-only dedup let the
+minter seat two active intents on the same samskara
+(`8b9e8e0e`, reinforce) by rephrasing the statement
+slightly. The fix adds a `(target_kind, target_ref,
+target_direction)` dedup key alongside the normalized-
+statement key, so two active intents can no longer target
+the same measurable pattern.
 
 ## Settings
 
@@ -849,6 +897,16 @@ NOT user-facing knobs - the toggle is the only control.
   the minter fix stops new churn at the source, the inspector fix
   also covers a genuine cross-sweep re-form (which is allowed and
   should read as "reconsidered", not a duplicate).
+- **Target-pair dedup, not just statement dedup.** The minter
+  can rephrase a statement slightly while keeping the same
+  (target_kind, target_ref, target_direction) binding. Without
+  a target-key dedup, two active intents land on the same
+  samskara or bias, which inflates the active set, double-
+  counts efficacy sampling on that target, and confounds the
+  matched-control backtest (both intents compete for the same
+  control cohort). `processMintProposals` now dedups on both
+  normalized statement text AND target key; removing either
+  check re-opens the gap.
 
 ## QA
 

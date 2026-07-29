@@ -19,8 +19,9 @@
 // prompts. That is the minter agent's job (it is handed both in its
 // prompt and instructed to avoid contradictions) - a pure function
 // cannot read intent. This module enforces the mechanical invariants:
-// well-formed target bindings, no exact-duplicate statements, and the
-// active-set cap.
+// well-formed target bindings, no exact-duplicate statements, no two
+// active intents on the same (target_kind, target_ref,
+// target_direction) binding, and the active-set cap.
 
 /** Mirrors the target_kind / target_direction DB check constraints. */
 export type TargetKind = 'bias' | 'samskara' | 'none';
@@ -54,6 +55,14 @@ export interface ExistingIntent {
   id: string;
   statement: string;
   status: 'active' | 'dormant' | 'retired';
+  /** Target binding, when known. The processor uses (kind, ref,
+   *  direction) to block a new create from targeting the same
+   *  measurable pattern as a surviving existing intent - two active
+   *  intents on the same target inflate the active set, double-count
+   *  efficacy sampling, and confound the matched-control backtest.
+   *  Omitted in test fixtures that don't exercise target dedup; the
+   *  caller always passes it from the DB row. */
+  target?: ProposedTarget;
 }
 
 /**
@@ -93,6 +102,23 @@ export interface MintPlan {
  */
 export function normalizeStatement(s: string): string {
   return s.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+/**
+ * Dedup key for a targeted intent's (kind, ref, direction) binding.
+ * Returns null for free-form intents - no target to collide on. Two
+ * intents that differ only in statement wording but target the same
+ * samskara or bias with the same direction produce the same key, so
+ * the dedup in processMintProposals drops the second one. Without
+ * this, the minter can seat two active intents on the same target by
+ * rephrasing the statement slightly - which wastes a slot, double-
+ * counts efficacy sampling on that target, and confounds the
+ * matched-control backtest (both intents compete for the same
+ * control cohort).
+ */
+export function targetKey(t: ProposedTarget): string | null {
+  if (t.kind === 'none') return null;
+  return `${t.kind}|${t.ref}|${t.direction}`;
 }
 
 /**
@@ -276,23 +302,38 @@ export function processMintProposals(args: {
     return e.status;
   };
 
-  // (3) Dedup set: normalized statements of every intent that ends up
-  // non-retired. Dormant counts (a paused intent blocks its twin);
-  // retired does not (its pattern is free to re-form). An intent whose
-  // same-sweep retire was just cancelled (2b) is non-retired again, so
-  // its statement lands here and drops the duplicate create.
+  // (3) Dedup set: normalized statements AND target keys of every
+  // intent that ends up non-retired. Dormant counts (a paused intent
+  // blocks its twin on both statement and target); retired does not
+  // (its pattern is free to re-form). An intent whose same-sweep retire
+  // was just cancelled (2b) is non-retired again, so its statement and
+  // target land here and drop the duplicate create.
   const seen = new Set<string>();
+  const seenTargets = new Set<string>();
   for (const e of args.existing) {
-    if (finalStatus(e) !== 'retired') seen.add(normalizeStatement(e.statement));
+    if (finalStatus(e) !== 'retired') {
+      seen.add(normalizeStatement(e.statement));
+      if (e.target) {
+        const tk = targetKey(e.target);
+        if (tk) seenTargets.add(tk);
+      }
+    }
   }
 
-  // (3b) Dedup creates against the surviving existing statements and
-  // against earlier creates in the same batch.
+  // (3b) Dedup creates against surviving existing statements/targets
+  // and against earlier creates in the same batch. A create whose
+  // target key collides with an already-seen intent is dropped even
+  // when the statement wording differs - two active intents on the
+  // same (kind, ref, direction) target waste a slot and confound the
+  // matched-control backtest.
   const toCreateAll: ProposedIntent[] = [];
   for (const intent of coerced) {
     const key = normalizeStatement(intent.statement);
     if (seen.has(key)) continue; // dup of a surviving existing or earlier create
+    const tk = targetKey(intent.target);
+    if (tk && seenTargets.has(tk)) continue; // same target as a surviving intent
     seen.add(key);
+    if (tk) seenTargets.add(tk);
     toCreateAll.push(intent);
   }
 

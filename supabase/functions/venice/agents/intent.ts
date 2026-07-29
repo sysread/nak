@@ -25,6 +25,7 @@ import { BIAS_CATALOG, isBiasKey, type BiasKey } from '../../_shared/bias-catalo
 import {
   processMintProposals,
   type ExistingIntent,
+  type TargetKind,
 } from '../../_shared/intent-mint.ts';
 import {
   stepEfficacy,
@@ -551,6 +552,14 @@ async function gatherMinterInput(
     id: r.id,
     statement: r.statement,
     status: r.status,
+    target:
+      r.target_kind === 'none'
+        ? { kind: 'none', ref: null, direction: null }
+        : {
+            kind: r.target_kind as TargetKind,
+            ref: r.target_ref,
+            direction: r.target_direction as TargetDirection,
+          },
   }));
 
   const existingIntents: MinterIntentView[] = intentRows.map((r) => {

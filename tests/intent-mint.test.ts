@@ -13,16 +13,38 @@
 import { describe, it, expect } from 'vitest';
 import {
   normalizeStatement,
+  targetKey,
   isValidTarget,
   coerceProposedIntent,
   processMintProposals,
   ACTIVE_INTENT_CAP,
   type ExistingIntent,
+  type ProposedTarget,
 } from '../supabase/functions/_shared/intent-mint';
 
 describe('normalizeStatement', () => {
   it('trims, collapses whitespace, and lowercases', () => {
     expect(normalizeStatement('  Help   Them  Test ')).toBe('help them test');
+  });
+});
+
+describe('targetKey', () => {
+  it('returns null for free-form intents', () => {
+    expect(targetKey({ kind: 'none', ref: null, direction: null })).toBeNull();
+  });
+  it('produces the same key for the same target binding', () => {
+    const t: ProposedTarget = { kind: 'samskara', ref: 'abc-123', direction: 'reduce' };
+    expect(targetKey(t)).toBe(targetKey(t));
+  });
+  it('produces different keys for different directions on the same ref', () => {
+    const reduce: ProposedTarget = { kind: 'samskara', ref: 'abc', direction: 'reduce' };
+    const reinforce: ProposedTarget = { kind: 'samskara', ref: 'abc', direction: 'reinforce' };
+    expect(targetKey(reduce)).not.toBe(targetKey(reinforce));
+  });
+  it('produces different keys for different kinds on the same ref', () => {
+    const samskara: ProposedTarget = { kind: 'samskara', ref: 'abc', direction: 'reduce' };
+    const bias: ProposedTarget = { kind: 'bias', ref: 'abc', direction: 'reduce' };
+    expect(targetKey(samskara)).not.toBe(targetKey(bias));
   });
 });
 
@@ -308,6 +330,117 @@ describe('processMintProposals - portfolio verbs (changing its mind)', () => {
       rawCreates: [{ statement: 'try the gentler framing instead' }],
       rawRetires: ['1'],
       existing: [ex('1', 'push them directly')],
+      cap: 2,
+    });
+    expect(plan.toRetire).toEqual(['1']);
+    expect(plan.toCreate.map((c) => c.statement)).toEqual(['try the gentler framing instead']);
+  });
+});
+
+describe('processMintProposals - target-pair dedup', () => {
+  const ext = (
+    id: string,
+    statement: string,
+    status: ExistingIntent['status'],
+    target: ProposedTarget,
+  ): ExistingIntent => ({ id, statement, status, target });
+
+  const samReduce = (ref: string): ProposedTarget => ({ kind: 'samskara', ref, direction: 'reduce' });
+  const samReinforce = (ref: string): ProposedTarget => ({ kind: 'samskara', ref, direction: 'reinforce' });
+  const freeForm: ProposedTarget = { kind: 'none', ref: null, direction: null };
+
+  it('drops a create that targets the same binding as an active intent', () => {
+    // The prod bug: the minter rephrased the statement but kept the
+    // same samskara target, so two active intents sat on the same
+    // pattern. The statement dedup didn't catch it because the words
+    // differ; the target dedup must.
+    const plan = processMintProposals({
+      rawCreates: [{
+        statement: 'lean on reframing strength, especially in technical work',
+        target: { kind: 'samskara', ref: 's1', direction: 'reinforce' },
+      }],
+      rawRetires: [],
+      existing: [ext('1', 'lean on reframing strength', 'active', samReinforce('s1'))],
+    });
+    expect(plan.toCreate).toEqual([]);
+  });
+
+  it('drops a create that targets the same binding as a dormant intent', () => {
+    // Pausing is not deletion - the target is still claimed.
+    const plan = processMintProposals({
+      rawCreates: [{
+        statement: 'try a different framing for the same goal',
+        target: { kind: 'samskara', ref: 's1', direction: 'reduce' },
+      }],
+      rawRetires: [],
+      existing: [ext('1', 'help them notice certainty', 'dormant', samReduce('s1'))],
+    });
+    expect(plan.toCreate).toEqual([]);
+  });
+
+  it('allows a create on a target freed by retirement in a prior sweep', () => {
+    // A retired intent's target is free to re-form, same as its statement.
+    const plan = processMintProposals({
+      rawCreates: [{
+        statement: 'try again on this pattern',
+        target: { kind: 'samskara', ref: 's1', direction: 'reduce' },
+      }],
+      rawRetires: [],
+      existing: [ext('1', 'old attempt', 'retired', samReduce('s1'))],
+    });
+    expect(plan.toCreate.map((c) => c.statement)).toEqual(['try again on this pattern']);
+  });
+
+  it('allows a create on the same ref but opposite direction', () => {
+    // Reduce and reinforce are different aims on the same pattern -
+    // not a collision.
+    const plan = processMintProposals({
+      rawCreates: [{
+        statement: 'reinforce this pattern',
+        target: { kind: 'samskara', ref: 's1', direction: 'reinforce' },
+      }],
+      rawRetires: [],
+      existing: [ext('1', 'reduce this pattern', 'active', samReduce('s1'))],
+    });
+    expect(plan.toCreate.map((c) => c.statement)).toEqual(['reinforce this pattern']);
+  });
+
+  it('drops the second of two creates in one batch targeting the same binding', () => {
+    const plan = processMintProposals({
+      rawCreates: [
+        { statement: 'first framing', target: { kind: 'bias', ref: 'confirmation_bias', direction: 'reduce' } },
+        { statement: 'second framing', target: { kind: 'bias', ref: 'confirmation_bias', direction: 'reduce' } },
+      ],
+      rawRetires: [],
+      existing: [],
+    });
+    expect(plan.toCreate.map((c) => c.statement)).toEqual(['first framing']);
+  });
+
+  it('does not block free-form creates by target dedup', () => {
+    // Free-form intents have no target to collide on.
+    const plan = processMintProposals({
+      rawCreates: [
+        { statement: 'free-form goal a' },
+        { statement: 'free-form goal b' },
+      ],
+      rawRetires: [],
+      existing: [ext('1', 'existing free-form', 'active', freeForm)],
+    });
+    expect(plan.toCreate.map((c) => c.statement)).toEqual(['free-form goal a', 'free-form goal b']);
+  });
+
+  it('allows a re-frame: retire one intent and create a new one on the same target', () => {
+    // The minter retires the old lever and proposes a differently-worded
+    // intent on the same target. The retire frees the target, so the
+    // create survives - same shape as the statement-dedup re-frame.
+    const plan = processMintProposals({
+      rawCreates: [{
+        statement: 'try the gentler framing instead',
+        target: { kind: 'samskara', ref: 's1', direction: 'reinforce' },
+      }],
+      rawRetires: ['1'],
+      existing: [ext('1', 'push them directly', 'active', samReinforce('s1'))],
       cap: 2,
     });
     expect(plan.toRetire).toEqual(['1']);
