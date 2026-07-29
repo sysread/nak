@@ -978,6 +978,19 @@ be the first genuine test, and the next-day judge hasn't ruled).
   both tiers. If neither tier qualifies the probe skips at cap exactly
   as it did before eviction existed.
 
+Both eviction tiers are threshold-gated, so pressure can still dry up:
+if the "Probation due" and both "Evictable" readouts sit at zero while
+tier-1 is pinned at cap and the mint probe keeps skipping, no release
+path has material and formation is starved again. The deferred lever
+for that state is demand-driven escalation - relaxing the eviction
+criteria as consecutive skipped-at-cap mint attempts accumulate, so
+pressure scales with exactly the thing being starved. It was
+deliberately not built alongside the tiers (2026-07): it is the only
+option that needs new state (nothing records a skipped mint today),
+and at the time the stale tier had a 40+-row reservoir maturing toward
+it, so the extra machinery had no evidence of need. Re-evaluate only
+on the dried-up signal above.
+
 A released claim is cheap to lose: if the pattern is real and recurs,
 minting re-creates it from fresh substrate. A design road not taken:
 scoring "is this topic recurrent?" by cosine-matching each samskara
