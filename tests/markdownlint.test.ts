@@ -43,6 +43,10 @@ const TARGETS = [
 const REPO_ROOT = join(__dirname, '..');
 
 describe('markdown lints clean', () => {
+  // CI runners (GitHub Actions ubuntu-latest) are slower than local
+  // dev machines; the programmatic main() call can take 5+ seconds
+  // there vs ~1s locally. The old spawnSync had a 30s timeout - this
+  // matches that ceiling.
   it('passes markdownlint-cli2 across the repo', async () => {
     // markdownlint-cli2's `main` returns 0 on success, 1 on
     // violations, 2 on help/usage. It does config-file discovery
@@ -65,5 +69,5 @@ describe('markdown lints clean', () => {
     }
 
     expect(exitCode).toBe(0);
-  });
+  }, 30_000);
 });
