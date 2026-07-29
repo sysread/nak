@@ -224,13 +224,29 @@ gate failure, not a lint suggestion.
   `--environment node` to a file that is on the jsdom list still
   gets jsdom. To test what an unlisted file would do, remove the
   entry.
-- **`mise` may not resolve its tools in an ephemeral sandbox.**
-  Cloud sessions have hit `aqua:charmbracelet/gum: no versions
-  found matching date filter`, which fails `mise run check` before
-  any gate task runs. The documented fallback is the raw pnpm
-  sequence (`pnpm install && pnpm test && pnpm check && pnpm lint
-  && pnpm build && pnpm knip`) - note it must include `knip`, which
-  is part of the gate.
+- **`mise` may not resolve its tools in a restricted sandbox, and
+  the error it prints is a red herring.** You get
+  `aqua:charmbracelet/gum@latest: no versions found for
+  aqua:charmbracelet/gum matching date filter`, which fails
+  `mise run check` before any gate task runs. **There is no date
+  filter.** aqua reads version lists from the GitHub releases API,
+  and a session whose GitHub access is scoped to this repo alone
+  gets denied for `charmbracelet/gum` and `cli/cli`; mise reports
+  the resulting empty list with that phrasing. Do not go looking
+  for a cutoff setting - `mise settings` has none.
+
+  Note the blast radius is wider than the tools involved: **mise
+  resolves the entire `[tools]` set before running any task**, so
+  `gum` and `gh` - which only `supabase-init`, `doctor`,
+  `bootstrap`, and `setup-pages` use, and which already degrade
+  gracefully when absent - block the gate, which needs neither.
+  Removing one would not help while the other remains.
+
+  The fallback is the raw pnpm sequence (`pnpm install && pnpm test
+  && pnpm check && pnpm lint && pnpm build && pnpm knip`) - note it
+  must include `knip`, which is part of the gate. That sequence skips
+  the Deno island, so a change touching `supabase/functions/` is not
+  fully covered by it.
 - **Piping a gate command replaces its exit code** with the pipe
   tail's, so a failed gate reads as success and a chained `git
   commit` runs anyway. Capture the status explicitly or run the

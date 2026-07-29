@@ -741,9 +741,12 @@ covers the full import graph each function deploys with.
 If you prefer raw pnpm (or mise isn't available - ephemeral
 sandboxes, first-time checkouts), the manual sequence is
 `pnpm install && pnpm test && pnpm check && pnpm lint && pnpm build
-&& pnpm knip`. Cloud sandboxes have hit `aqua:charmbracelet/gum: no
-versions found matching date filter`, which fails `mise run check`
-before any gate task runs - the raw sequence is the way through.
+&& pnpm knip`. Cloud sessions cannot run `mise run check` at all:
+mise resolves the whole `[tools]` set before any task, and aqua reads
+version lists from the GitHub releases API, which a session scoped to
+this repo may not reach. The raw sequence is the way through. See
+[`docs/dev/testing.md`](docs/dev/testing.md) for the misleading error
+it surfaces as.
 `pnpm build` is in the gate because Vite/Rollup failures
 (IIFE/code-splitting in worker bundles, PWA manifest injection,
 dynamic-import graphs tsc is happy with but Rollup chokes on) only
