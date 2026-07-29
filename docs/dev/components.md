@@ -77,29 +77,10 @@ transitions), archive loading sentinel in the drawer.
 
 File: `src/components/AsciiSpinner.svelte`.
 
-Cycles a short frame sequence on a `setInterval`. One optional prop,
-`variant`:
-
-```ts
-interface Props { variant?: 'bar' | 'sleep'; }
-```
-
-- **`bar`** (default) - the classic terminal `- \ | /` at 100ms.
-- **`sleep`** - a drowsing `z` / `zZ` / `zZZ` at 320ms, for the memory
-  librarian, whose two passes are both named after sleep stages
-  (deep-sleep for slow-wave, rem for REM). The wiki librarian has no
-  such conceit and stays on `bar`.
-
-The sequences, their cadences, the reduced-motion stand-in, and the
-cell width each needs live in a variant table in
-`src/lib/ui/ascii-spinner.ts`; the component is the timer plus a
-`$state` counter. `spinnerWidthCh` is derived from the widest frame
-rather than written down separately, so editing a sequence cannot
-leave a stale width behind.
-
-The slow `sleep` cadence is safe because what makes these readable is
-the SHAPE changing between frames, not the rate. The pulsing ellipsis
-this replaced failed on opacity-only motion, not on slowness.
+Classic terminal bar spinner - cycles `- \ | /` on a 100ms
+`setInterval`. Takes no props. Frame sequence, cadence, and the
+reduced-motion fallback glyph live in `src/lib/ui/ascii-spinner.ts`;
+the component is the timer plus a `$state` counter.
 
 Picked over `<Scanner>` where the surface is a single character cell
 in a text row rather than a standalone waiting affordance, and over
@@ -110,39 +91,105 @@ outright changes the shape, which the eye catches at any size.
 
 Two contracts callers must honour:
 
-- **Keep it inside an `aria-hidden` container.** Every current call
-  site is in an `aria-live="polite"` region; an unhidden spinner would
-  announce its frame sequence several times a second.
-- **Give it a cell at least `spinnerWidthCh(variant)` wide** if a
-  label sits beside it. The component reserves that width itself and
-  left-aligns, so a growing sequence stays put - but the surrounding
-  column has to be sized for it too, or the widest frame overflows.
-  `Memories.svelte` sizes `.librarian-step-icon` to `3ch` for exactly
-  this reason, which also keeps the settled check/cross rows sharing
-  one gutter.
+- **Keep it inside an `aria-hidden` container.** Every call site is in
+  an `aria-live="polite"` region; an unhidden spinner would announce its
+  frame sequence ten times a second. (`<SleepSpinner>` needs no such
+  wrapper - CSS keyframes mutate no DOM. Do not generalise from it.)
+- **Give it a fixed-width cell** if a label sits beside it. The
+  component pins `--font-mono` and `width: 1ch` so the frames hold
+  their column, but a caller that lets the cell size to content will
+  still shift on frames with different side bearings in a
+  non-Lekton fallback font.
 
 Under `prefers-reduced-motion: reduce` (sampled once at mount) it
-renders that variant's static frame instead of starting the timer -
-an ellipsis for `bar`, a full `zZZ` for `sleep`.
+renders a static ellipsis instead of starting the timer.
 
-Consumers: `Memories.svelte` and `Wiki.svelte` - in each, three
-places: the pending row of the librarian run's step list, the
-trailing "Working" tail row (`src/lib/ui/librarian-run-tail.ts`
-decides when that shows), and the "running in the background" notice
-displayed when the in-flight lease is held by a run this strip didn't
-start. See [`./memory.md`](./memory.md) and [`./wiki.md`](./wiki.md).
+Consumers: `Wiki.svelte`, in three places: the pending row of the
+librarian run's step list, the trailing "Working" tail row
+(`src/lib/ui/librarian-run-tail.ts` decides when that shows), and the
+"running in the background" notice displayed when the in-flight lease
+is held by a run this strip didn't start. See
+[`./wiki.md`](./wiki.md). `Memories.svelte` mirrors those three sites
+with `<SleepSpinner>` - see [`./memory.md`](./memory.md).
 
 `showsRunTail` guarantees the two spinners inside a step list are
 mutually exclusive - the tail appears only when the bottom row isn't
-already pending. Worth preserving: two of these one above the other
-mount at different times, so their frames run out of phase and the
-pair reads as a rendering bug.
+already pending. Worth preserving for BOTH spinner species: two of
+either one above the other mount at different times, so they run out of
+phase and the pair reads as a rendering bug.
 
 Deliberately NOT applied to the chat tool-call rows
 (`.tool-status.status-pending`), which keep their rotating glyph. That
 indicator appears on every tool call in every conversation, so
 changing it is a change to the app's overall texture rather than a
 fix to one strip - it wants its own decision.
+
+## `<SleepSpinner>`
+
+File: `src/components/SleepSpinner.svelte`.
+
+Three **Z's climbing a staircase** with a **brightness wave travelling
+up** them - the memory librarian's in-flight cue. Takes no props. On
+the nose for a subsystem whose two passes are named after sleep stages
+(deep-sleep for slow-wave, rem for REM); the wiki librarian shares the
+strip layout but not the conceit and keeps `<AsciiSpinner>`. That
+contrast is load-bearing - the glyph is how you tell at a glance which
+librarian a strip belongs to.
+
+Legible where the strip's old **pulsing ellipsis** was not, and the
+distinction is worth keeping straight: the ellipsis modulated one
+glyph's opacity uniformly, so nothing moved and the eye read it as
+static. Here the bright spot changes **position**, which reads as
+motion the way marquee bulbs do - even though no glyph ever changes
+shape. "Fading is what we removed" is therefore NOT an argument
+against this; uniform fading is.
+
+**CSS keyframes, not the JS interval `<AsciiSpinner>` runs on.** A
+three-phase chase is what staggered `animation-delay` is for, and it
+buys two things a timer cannot:
+
+- **No DOM mutation**, so the surrounding `aria-live="polite"` region
+  has nothing to announce. The failure mode that forces every
+  `<AsciiSpinner>` call site into an `aria-hidden` wrapper cannot arise
+  here. The component still marks itself `aria-hidden` - decorative
+  noise beside the row's own label - so callers need no wrapper at all.
+- **Reduced motion is a live media query** rather than a value sampled
+  once at mount.
+
+Three things in the stylesheet that look arbitrary and are not:
+
+- **`transform: translateY()` for the staircase, never sub/sup
+  markup.** `<sub>`/`<sup>` shrink the font (~0.83em) and use
+  `vertical-align`, which changes glyph advance width and grows the line
+  box - breaking the `ch` grid and making the step rows taller.
+  Transforms do not participate in layout, so the glyphs keep their
+  `1ch` advance and the row keeps its height.
+- **Negative `animation-delay`s, in an order that looks wrong.** Peak
+  brightness must travel upward, so peaks land at 0, D/3, 2D/3. An
+  element started `x` seconds in next peaks at `duration - x`, so the
+  offsets are 0, **-2D/3**, **-D/3** - which is why mid's delay looks
+  like it belongs to high. They are negative because a positive delay
+  parks the element at its base opacity until it elapses, showing as a
+  visible settling-in on the first cycle.
+- **Opacity against the inherited colour, never literal greys.** The
+  strip hands the spinner full text contrast on a pending row, and the
+  same cascade tints settled rows with the accent or danger colour.
+  Hardcoded greys would ignore the active theme and flatten dark mode.
+
+Uniform `font-size` across the three glyphs is also deliberate: sizing
+them into a growing ramp would make each `1ch` a different width (`ch`
+resolves against the element's own font-size) and the trio would no
+longer total the 3ch the parent column reserves.
+
+The base opacities double as the **reduced-motion state** - brightest
+at the bottom, fading as it rises, which reads as dissipating smoke
+while standing still.
+
+Consumers: `Memories.svelte`, in three places mirroring the
+`<AsciiSpinner>` call sites in `Wiki.svelte` - the pending row of the
+step list, the trailing "Working" tail row, and the "running in the
+background" notice. `.librarian-step-icon` is sized to `3ch` for this;
+see [`./memory.md`](./memory.md).
 
 ## `<ModelCombobox>`
 

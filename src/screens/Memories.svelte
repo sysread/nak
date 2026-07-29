@@ -73,7 +73,7 @@
   } from '$lib/ui/memories';
   import { SEARCH_DEBOUNCE_MS } from '$lib/ui/memories-list';
   import type { Memory, MemoryRelation, SimilarMemory } from '$lib/supabase';
-  import AsciiSpinner from '../components/AsciiSpinner.svelte';
+  import SleepSpinner from '../components/SleepSpinner.svelte';
   import Markdown from '../components/Markdown.svelte';
   import MemoryChangelogPanel from '../components/MemoryChangelogPanel.svelte';
   import { librarianRun } from '$lib/agents/memory-librarian-run.svelte';
@@ -899,7 +899,7 @@
         <p class="librarian-confirm-desc">{librarianConfirmInfo.description}</p>
         {#if runInFlightElsewhere}
           <p class="subtle librarian-inflight" aria-live="polite">
-            <span aria-hidden="true"><AsciiSpinner variant="sleep" /></span>
+            <SleepSpinner />
             A memory-librarian pass is running in the background…
           </p>
         {/if}
@@ -959,7 +959,7 @@
                      announced ten times a second. -->
                 <span class="librarian-step-icon" aria-hidden="true">
                   {#if step.status === 'pending'}
-                    <AsciiSpinner variant="sleep" />
+                    <SleepSpinner />
                   {:else}
                     {stepIcon(step.status)}
                   {/if}
@@ -973,7 +973,7 @@
                    this would add only spinner-frame noise to the live
                    region. -->
               <li class="librarian-step librarian-run-tail" aria-hidden="true">
-                <span class="librarian-step-icon"><AsciiSpinner variant="sleep" /></span>
+                <span class="librarian-step-icon"><SleepSpinner /></span>
                 <span class="librarian-step-label">{RUN_TAIL_LABEL}</span>
               </li>
             {/if}
@@ -1457,10 +1457,10 @@
     font-size: 0.9rem;
   }
 
-  /* 3ch, not 1ch: the pending rows run the `sleep` spinner, whose
-     widest frame is `zZZ`. The whole column is sized to it so the
-     settled check/cross rows share one gutter and the labels form a
-     straight edge whatever a row's status is. */
+  /* 3ch, not 1ch: the pending rows run <SleepSpinner>, which is three
+     Z's wide. The whole column is sized to it so the settled
+     check/cross rows share one gutter and the labels form a straight
+     edge whatever a row's status is. */
   .librarian-step-icon {
     flex: 0 0 3ch;
     color: var(--text-subtle);
@@ -1496,7 +1496,7 @@
   }
 
   /* Pulse keyframes stay for .memory-similar-loading, which still
-     pulses a static label; the step rows animate via AsciiSpinner. */
+     pulses a static label; the step rows animate via SleepSpinner. */
   @keyframes librarian-pulse {
     0%, 100% { opacity: 0.45; }
     50% { opacity: 1; }
@@ -1504,8 +1504,10 @@
 
   /* "Running in the background" notice in the confirm strip when a pass
      is in flight that this tab didn't start. Carries the same
-     AsciiSpinner as the progress strip's pending rows so the two
-     in-flight cues read as one thing. */
+     SleepSpinner as the progress strip's pending rows so the two
+     in-flight cues read as one thing. The spinner owns its own
+     aria-hidden, so this aria-live paragraph needs no wrapper to keep
+     the glyph out of the announcement. */
   .librarian-inflight {
     display: flex;
     align-items: center;

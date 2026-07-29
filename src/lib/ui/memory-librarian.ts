@@ -97,7 +97,7 @@ export function librarianProgressAriaLabel(
 }
 
 /** Status glyph for a SETTLED step row. Pending rows have no glyph -
- *  the strip renders an animated `AsciiSpinner` in the icon cell
+ *  the strip renders an animated `SleepSpinner` in the icon cell
  *  instead, so the argument is narrowed to the two settled statuses
  *  rather than carrying a third arm the markup can never reach. */
 export function stepIcon(status: 'ok' | 'error'): string {
