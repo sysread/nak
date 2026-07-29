@@ -318,6 +318,7 @@ export default defineConfig({
       ['tests/reasoning-picker.test.ts', 'jsdom'],
       ['tests/routing.test.ts', 'jsdom'],
       ['tests/session.test.ts', 'jsdom'],
+      ['tests/sleep-spinner.test.ts', 'jsdom'],
       ['tests/theme.test.ts', 'jsdom'],
       ['tests/verbosity-picker.test.ts', 'jsdom'],
     ],

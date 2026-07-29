@@ -8,10 +8,9 @@ import { render, cleanup } from '@testing-library/svelte';
 import { flushSync } from 'svelte';
 import AsciiSpinner from '../src/components/AsciiSpinner.svelte';
 import {
+  SPINNER_FRAME_MS,
+  SPINNER_STATIC_FRAME,
   spinnerFrame,
-  spinnerFrameMs,
-  spinnerStaticFrame,
-  spinnerWidthCh,
 } from '../src/lib/ui/ascii-spinner';
 
 afterEach(() => {
@@ -49,14 +48,7 @@ function frameOf(container: HTMLElement): string {
 
 describe('spinnerFrame', () => {
   it('walks the bar sequence in order', () => {
-    // Not `.map(spinnerFrame)` - map would pass the array index as the
-    // variant argument.
-    expect([0, 1, 2, 3].map((t) => spinnerFrame(t))).toEqual([
-      '-',
-      '\\',
-      '|',
-      '/',
-    ]);
+    expect([0, 1, 2, 3].map(spinnerFrame)).toEqual(['-', '\\', '|', '/']);
   });
 
   it('wraps past the end of the sequence', () => {
@@ -79,9 +71,9 @@ describe('AsciiSpinner', () => {
     const { container } = render(AsciiSpinner);
 
     expect(frameOf(container)).toBe('-');
-    vi.advanceTimersByTime(spinnerFrameMs());
+    vi.advanceTimersByTime(SPINNER_FRAME_MS);
     expect(frameOf(container)).toBe('\\');
-    vi.advanceTimersByTime(spinnerFrameMs() * 2);
+    vi.advanceTimersByTime(SPINNER_FRAME_MS * 2);
     expect(frameOf(container)).toBe('/');
   });
 
@@ -90,8 +82,8 @@ describe('AsciiSpinner', () => {
     stubReducedMotion(true);
     const { container } = render(AsciiSpinner);
 
-    vi.advanceTimersByTime(spinnerFrameMs() * 5);
-    expect(frameOf(container)).toBe(spinnerStaticFrame());
+    vi.advanceTimersByTime(SPINNER_FRAME_MS * 5);
+    expect(frameOf(container)).toBe(SPINNER_STATIC_FRAME);
   });
 
   it('stops its timer on unmount', () => {
@@ -103,56 +95,5 @@ describe('AsciiSpinner', () => {
     // one spinner mounted per pending row across a long run that adds
     // up to a background timer per completed step.
     expect(vi.getTimerCount()).toBe(0);
-  });
-});
-
-describe('the sleep variant', () => {
-  it('grows a zzz and restarts', () => {
-    // The memory librarian's two passes are both named after sleep
-    // stages, so the sequence says which subsystem is working.
-    expect([0, 1, 2, 3].map((t) => spinnerFrame(t, 'sleep'))).toEqual([
-      'z',
-      'zZ',
-      'zZZ',
-      'z',
-    ]);
-  });
-
-  it('drowses far slower than the bar', () => {
-    // At the bar's cadence a zzz reads as frantic, which is the
-    // opposite of what a sleep pass should look like.
-    expect(spinnerFrameMs('sleep')).toBeGreaterThan(spinnerFrameMs('bar') * 2);
-  });
-
-  it('reserves room for its widest frame', () => {
-    // The caller sizes the cell from this; if it undercounted, a
-    // growing sequence would nudge the label beside it every cycle.
-    expect(spinnerWidthCh('sleep')).toBe(3);
-    expect(spinnerWidthCh('bar')).toBe(1);
-  });
-
-  it('holds a full zzz under reduced motion', () => {
-    expect(spinnerStaticFrame('sleep')).toBe('zZZ');
-  });
-
-  it('renders the sleep sequence when asked for it', () => {
-    vi.useFakeTimers();
-    stubReducedMotion(false);
-    const { container } = render(AsciiSpinner, { props: { variant: 'sleep' } });
-
-    expect(frameOf(container)).toBe('z');
-    vi.advanceTimersByTime(spinnerFrameMs('sleep'));
-    expect(frameOf(container)).toBe('zZ');
-  });
-
-  it('does not tick at the bar cadence when set to sleep', () => {
-    // Guards the wiring: reading the interval off the default variant
-    // would animate the zzz three times too fast.
-    vi.useFakeTimers();
-    stubReducedMotion(false);
-    const { container } = render(AsciiSpinner, { props: { variant: 'sleep' } });
-
-    vi.advanceTimersByTime(spinnerFrameMs('bar'));
-    expect(frameOf(container)).toBe('z');
   });
 });

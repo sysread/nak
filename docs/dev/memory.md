@@ -396,7 +396,10 @@ in `docs/user/memory.md`. The dev side has five moving parts:
   strip), and the lease instead disables the confirm strip's **Run**
   submit and renders a "running in the background" spinner when a pass
   is in flight elsewhere. That spinner and the progress strip's
-  in-flight step row both render `<AsciiSpinner>`
+  in-flight step row both render `<SleepSpinner>` - three Z's with a
+  brightness wave travelling up them, where the wiki strip uses the
+  plain `<AsciiSpinner>` bar; the contrast is how you tell the two
+  librarians' strips apart at a glance
   (`docs/dev/components.md`); settled step rows render `stepIcon`'s
   check/cross, which is why that helper's domain is the two settled
   statuses only. A third spinner sits at the BOTTOM of the step list
