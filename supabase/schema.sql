@@ -15124,3 +15124,72 @@ create policy "mcp_integration_tools are self-deletable" on public.mcp_integrati
 create index if not exists mcp_integration_tools_integration_idx
   on public.mcp_integration_tools (integration_id);
 
+-- ---------------------------------------------------------------------------
+-- Scheduled MCP catalog refresh (pg_cron -> pg_net -> venice/mcp-catalog-refresh)
+--
+-- Daily re-fetch of every authorized integration's tool catalog. Uses the
+-- stored access token (auto-refreshed), so no user interaction is needed.
+-- A revoked grant marks the integration `expired` so the Settings UI can
+-- show a re-authorize badge. Same vault -> pg_net dispatch shape as the
+-- other sweep triggers.
+-- ---------------------------------------------------------------------------
+create or replace function public.nak_trigger_mcp_catalog_refresh()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $fn$
+declare
+  v_url text;
+  v_key text;
+begin
+  begin
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'project_url' $q$ into v_url;
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'service_role_key' $q$ into v_key;
+  exception when others then
+    return;
+  end;
+  if v_url is null or v_key is null then
+    return;
+  end if;
+  begin
+    execute format(
+      $q$ select net.http_post(
+            url := %L,
+            headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', %L),
+            body := '{}'::jsonb
+          ) $q$,
+      v_url || '/functions/v1/venice/mcp-catalog-refresh',
+      'Bearer ' || v_key
+    );
+  exception when others then
+    raise notice 'nak_trigger_mcp_catalog_refresh: dispatch failed: %', sqlerrm;
+  end;
+end;
+$fn$;
+
+revoke all on function public.nak_trigger_mcp_catalog_refresh() from public, anon, authenticated;
+
+do $cron$
+begin
+  if exists (select 1 from pg_available_extensions where name = 'pg_cron')
+     and exists (select 1 from pg_available_extensions where name = 'pg_net') then
+    create extension if not exists pg_cron;
+    create extension if not exists pg_net;
+    if exists (select 1 from cron.job where jobname = 'nak-mcp-catalog-refresh') then
+      perform cron.unschedule('nak-mcp-catalog-refresh');
+    end if;
+    -- 4:00 UTC: once-daily is enough for catalog drift (MCP servers
+    -- don't change their tool surface often), and it sits clear of the
+    -- minute-ladder sweeps.
+    perform cron.schedule(
+      'nak-mcp-catalog-refresh',
+      '0 4 * * *',
+      $job$ select public.nak_trigger_mcp_catalog_refresh(); $job$
+    );
+  end if;
+exception when others then
+  raise notice 'mcp catalog refresh cron setup skipped: %', sqlerrm;
+end
+$cron$;
+

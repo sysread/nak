@@ -482,3 +482,39 @@ function coerceIntegrationRow(raw: Record<string, unknown>): McpIntegrationRow {
     updated_at: String(raw.updated_at ?? ''),
   };
 }
+
+// ---------------------------------------------------------------------------
+// Catalog refresh sweep
+// ---------------------------------------------------------------------------
+
+/**
+ * Every authorized integration across all users. The catalog-refresh
+ * sweep iterates this list to re-fetch each integration's tool catalog
+ * using its stored (auto-refreshed) access token. No claim-RPC needed:
+ * a catalog refresh is idempotent and read-only from the DB's
+ * perspective - two overlapping ticks just re-fetch the same catalog
+ * and the second upsert wins, which is harmless.
+ *
+ * RLS OFF: the service-role client bypasses RLS. The query selects
+ * only the columns the sweep needs (id, user_id, label, server_url)
+ * and filters to `auth_status = 'authorized'` so a revoked or pending
+ * integration is never probed.
+ */
+export async function listAllAuthorizedIntegrations(
+  adminClient: SupabaseClient,
+): Promise<Array<{ id: string; user_id: string; label: string; server_url: string }>> {
+  const { data, error } = await adminClient
+    .from('mcp_integrations')
+    .select('id, user_id, label, server_url')
+    .eq('auth_status', 'authorized');
+  if (error) {
+    throw new Error(`listAllAuthorizedIntegrations failed: ${error.message}`);
+  }
+  if (!Array.isArray(data)) return [];
+  return data.map((row) => ({
+    id: String(row.id),
+    user_id: String(row.user_id),
+    label: String(row.label ?? ''),
+    server_url: String(row.server_url ?? ''),
+  }));
+}

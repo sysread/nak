@@ -106,6 +106,7 @@ import {
   updateIntegrationStatus,
   type McpIntegrationMetadata,
 } from './mcp/token-store.ts';
+import { runMcpCatalogRefreshTick } from './mcp/catalog-refresh.ts';
 // Side-effect import: every tool module under ./tools/ calls
 // registerTool() at module-load via this barrel, populating the
 // performToolCall registry before the first /stream request lands.
@@ -894,6 +895,11 @@ const handleSamskaraEvaluationSweep = sweepHandler(runSamskaraEvaluationSweepTic
 // past the owner's midnight and writes one daily recap row per day.
 // See agents/digest.ts.
 const handleDigestSweep = sweepHandler(runDigestSweepTick);
+// Daily MCP catalog refresh: re-fetches the tool catalog for every
+// authorized integration using the stored (auto-refreshed) access
+// token. No user interaction needed; a revoked grant marks the
+// integration `expired` so the Settings UI can show a badge.
+const handleMcpCatalogRefresh = sweepHandler(runMcpCatalogRefreshTick);
 // All three manual fleet runs (wiki librarian, rem, deep-sleep) are
 // detached: each pass can run minutes (conversation/memory reads over a
 // multi-round loop) past the gateway window, so the route returns
@@ -2053,6 +2059,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     return handleSamskaraEvaluationSweep(req);
   }
   if (route === 'digest-sweep' && req.method === 'POST') return handleDigestSweep(req);
+  if (route === 'mcp-catalog-refresh' && req.method === 'POST') return handleMcpCatalogRefresh(req);
   if (route === 'wiki-retry' && req.method === 'POST') return handleWikiRetry(req);
   if (route === 'wiki-manual-update' && req.method === 'POST') return handleWikiManualUpdate(req);
   if (route === 'wiki-librarian-sweep' && req.method === 'POST') return handleWikiLibrarianSweep(req);
