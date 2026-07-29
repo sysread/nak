@@ -240,7 +240,11 @@ gate failure, not a lint suggestion.
   `gum` and `gh` - which only `supabase-init`, `doctor`,
   `bootstrap`, and `setup-pages` use, and which already degrade
   gracefully when absent - block the gate, which needs neither.
-  Removing one would not help while the other remains.
+  Removing one would not help while the other remains. Only the two
+  entries floating on `latest` fail; `aqua:supabase/cli` is pinned to
+  an exact version, never queries the releases list, and installs
+  fine. Full investigation in
+  [`./in-progress/mise-in-cloud-sandbox.md`](./in-progress/mise-in-cloud-sandbox.md).
 
   The fallback is the raw pnpm sequence (`pnpm install && pnpm test
   && pnpm check && pnpm lint && pnpm build && pnpm knip`) - note it
