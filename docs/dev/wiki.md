@@ -190,7 +190,10 @@ Edge function (`supabase/functions/venice/`):
   `onProgress` also injects a required `activity` narration
   parameter into every tool's wire schema; without a listener the
   wire bytes carry no narration (reflection and both wiki sweeps
-  stay narration-free).
+  stay narration-free). A third seam, `now`, backs the optional
+  `budgetMs` wall-clock bound - opt-in per agent, currently only
+  deep-sleep. See `./tools.md` for why rounds alone are the wrong
+  bound; the wiki librarian has not needed one.
 - `tools/wiki_create.ts`, `tools/wiki_update.ts`,
   `tools/wiki_delete.ts` - the write tools (char caps, best-effort
   changelog + source attribution, unique-violation rephrasing).

@@ -60,8 +60,9 @@ in `docs/user/memory.md`. The dev side has five moving parts:
    invokes the `memory_recall` tool. Read-only.
 4. **The librarians** — rem and deep-sleep, the two tidy-up
    passes, also in the venice edge function. Hourly pg_cron
-   sweeps drive a per-user 12h cadence; the Memories panel's
-   manual buttons trigger the same review cores on demand.
+   sweeps drive per-user cadences (deep-sleep 3h, rem 12h); the
+   Memories panel's manual buttons trigger the same review cores
+   on demand.
 5. **The browser** — `src/screens/Memories.svelte` (panel) plus
    `src/components/MemoryList.svelte` (sidebar) plus
    `src/lib/memories-store.svelte.ts` (shared rune). Reached as a
@@ -152,7 +153,11 @@ in `docs/user/memory.md`. The dev side has five moving parts:
   will not fit and returns `stoppedByLimit`, so the post-loop
   outcome write and lease release still run - a partial pass
   instead of a silent death. See `docs/dev/tools.md` for the
-  loop-level mechanism. The agent decides per pair whether to
+  loop-level mechanism. A budget-stopped pass stamps only its SEED
+  visited (`visitStampIds`), not the whole batch: the queue still
+  advances so a slow neighborhood can't wedge the sweep by being
+  re-picked forever, but neighbors the agent never reached stay
+  queued instead of being retired as reviewed. The agent decides per pair whether to
   consolidate, relate, or leave. Marks the entire batch visited
   after a successful run so the next sweep moves on. Exports
   `runDeepSleepSweepTick` (cron path) and `runDeepSleepManual`
@@ -360,7 +365,7 @@ in `docs/user/memory.md`. The dev side has five moving parts:
   `runRemSweepTick` / `runDeepSleepSweepTick`. Each tick claims
   the most-overdue eligible user via the global SECURITY DEFINER
   RPC (`claim_next_user_for_rem` / `claim_next_user_for_deep_sleep`),
-  which stamps the per-user 12h cadence column BEFORE the run and
+  which stamps the per-user cadence column BEFORE the run and
   gates on the `memoryLibrarianEnabled` Settings toggle. In local
   dev, `scripts/dev-backfill-cron.mjs` ticks both routes.
 - **Librarian manual runs** — the Memories panel's moon
@@ -520,7 +525,7 @@ in `docs/user/memory.md`. The dev side has five moving parts:
   `claim_next_user_for_rem` (EXECUTE locked to `service_role`),
   which pick the most-overdue eligible user and stamp inside the
   claiming UPDATE - BEFORE the run, so a crashed run waits out
-  the 12h interval instead of retrying hot. Eligibility gates on
+  the interval instead of retrying hot. Eligibility gates on
   `settings->>'memoryLibrarianEnabled' is distinct from 'false'`,
   the same string-compare-on-purpose shape as the wiki sweeps (a
   boolean cast could wedge the all-users sweep on one malformed
@@ -631,8 +636,8 @@ from the same ports); the browser carries only the wire schemas.
   `inflight-blocked` / `empty-queue` or `no-eligible` /
   `too-small` / `reviewed` / `error`) that pg_net ignores and the
   dev shim prints. The cadence stamp lands at claim time, so a
-  tick that ends empty or blocked still consumes that user's 12h
-  slot.
+  tick that ends empty or blocked still consumes that user's
+  cadence slot.
 - `runRemManual(adminClient, userId, onProgress?)` /
   `runDeepSleepManual(adminClient, userId, onProgress?)` —
   non-throwing; return result unions the routes relay
@@ -929,15 +934,23 @@ renders the delta as a chip (`memorySizeDelta` in
   (oldest-unvisited first), so without the stamp a poison
   neighborhood - one whose batch reliably kills the agent - would
   wedge the button on the same batch click after click. Stamping
-  on error costs one skipped neighborhood per ~12h; wedging the
-  button costs the feature. (Manual rem keeps the
+  on error costs one skipped neighborhood per cadence slot;
+  wedging the button costs the feature. (Manual rem keeps the
   leave-unprocessed shape - its queue is multi-conversation per
   run, so one failing conversation doesn't pin the button.)
+
+  A run that stops on the wall-clock BUDGET is a third ending,
+  distinct from both: `visitStampIds` stamps the seed only, on
+  either path. The batch is healthy and merely ran long, so the
+  seed retiring keeps the queue advancing (no wedge) while the
+  neighbors the agent never reached stay queued rather than
+  retiring as reviewed.
 - **Cadence stamps land before the run.** The claim RPCs stamp
   `rem_last_run_at` / `deep_sleep_last_run_at` inside the
   claiming UPDATE, so a tick that ends `empty-queue`,
   `too-small`, or `inflight-blocked` still consumes that user's
-  12h slot. A crashed run waits out the interval instead of
+  cadence slot (deep-sleep 3h, rem 12h). A crashed run waits out
+  the interval instead of
   retrying hot; the cost is that a blocked tick is that cycle's
   librarian activity. Manual runs never touch the stamps.
 - **One in-flight guard, two passes, four paths.** The shared

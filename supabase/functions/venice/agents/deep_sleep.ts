@@ -18,7 +18,7 @@
 //      neighborhood.
 //
 // Two entry points share that core: runDeepSleepSweepTick (cron-driven
-// /deep-sleep-sweep; global definer claim stamps the 12h cadence) and
+// /deep-sleep-sweep; global definer claim stamps the cadence) and
 // runDeepSleepManual (user-triggered /deep-sleep-run from the Memories
 // panel; no cadence stamp). Both take the SHARED memory-librarian
 // in-flight guard (see _memory_librarian_tools.ts) so a deep-sleep run
@@ -51,9 +51,26 @@ import {
 // faithful.
 const DEEP_SLEEP_MODEL = 'deepseek-v4-flash';
 
-// Mirror of the browser manager's minIntervalSeconds (12h between
-// scheduled runs per user). Enforced by claim_next_user_for_deep_sleep.
-const DEEP_SLEEP_MIN_INTERVAL_SECONDS = 12 * 3600;
+/**
+ * Minimum gap between scheduled runs for one user, passed to
+ * claim_next_user_for_deep_sleep as p_min_interval_seconds (the gate
+ * lives in that RPC, so this constant is the whole knob - no schema
+ * change to retune).
+ *
+ * This is the sweep's throughput dial, not a rate limit. The cron
+ * ticks HOURLY (`47 * * * *`); this decides how many of those ticks
+ * find an eligible user instead of returning no-user. A refused tick
+ * costs one indexed claim query and no Venice call, so shortening the
+ * interval adds no ticks - it converts existing refusals into runs.
+ *
+ * 3h rather than 12h because the seed queue has inflow, not just a
+ * backlog: clear_memory_librarian_visit_on_change nulls a memory's
+ * visit stamp whenever its text changes, so every edited memory
+ * re-enters the queue - including the ones deep-sleep itself just
+ * merged. At 12h the queue outran the sweep. The cost is Venice spend
+ * on the extra passes.
+ */
+const DEEP_SLEEP_MIN_INTERVAL_SECONDS = 3 * 3600;
 
 /**
  * Cosine-similarity threshold for a neighbor to land in the batch.
@@ -79,10 +96,11 @@ const DEEP_SLEEP_MIN_SIMILARITY = 0.8;
  * On its own this only lowers the ODDS of an overrun;
  * DEEP_SLEEP_BUDGET_MS is what bounds it.
  *
- * The cost of a smaller batch is rotation speed, since a run marks
- * its ENTIRE batch visited: fewer memories retired per pass means
- * more passes to sweep the whole set. At a 12h cadence that is a
- * cheap trade against runs that die and take the lease with them.
+ * The cost of a smaller batch is rotation speed: a clean pass retires
+ * its whole batch, so fewer rows per pass means more passes to sweep
+ * the set. DEEP_SLEEP_MIN_INTERVAL_SECONDS pays that back by running
+ * passes more often, which is the cheaper side of the trade against
+ * runs that die and take the lease with them.
  */
 const DEEP_SLEEP_MAX_NEIGHBORS = 4;
 
@@ -95,7 +113,8 @@ const DEEP_SLEEP_MAX_NEIGHBORS = 4;
  * executes, so nothing is recorded and every client treats the pass
  * as live until the lease TTL expires ~10 minutes later - locking the
  * user out of starting another. Stopping one round early instead
- * costs one consolidation on a pass that repeats every 12h.
+ * costs one consolidation on a pass that comes round again in hours,
+ * and visitStampIds keeps the unreviewed neighbors queued for it.
  *
  * 300s leaves ~100s of headroom for the post-loop writes and for the
  * loop's next-round estimate coming in low (it extrapolates from the
@@ -476,6 +495,33 @@ interface ReviewResult {
   toolCalls: number;
   finalText: string;
   batchSize: number;
+  /** The agent loop ran out of budget or rounds instead of settling. */
+  stoppedByLimit: boolean;
+}
+
+/**
+ * Which of the batch's memories earned a visit stamp.
+ *
+ * A stamp means "the librarian has considered this neighborhood",
+ * which pushes the row to the back of the seed queue. Stamping the
+ * whole batch is right when the agent worked through it and settled.
+ * When the loop stopped on a limit it may have reviewed only the first
+ * few pairs, so stamping everything would retire memories nothing
+ * looked at - they would not resurface until the entire queue cycled.
+ *
+ * Stamping the SEED only is the middle ground: the queue still
+ * advances, so a pathological neighborhood cannot wedge the sweep by
+ * being re-picked forever, but the neighbors stay queued for a pass
+ * that has time for them. Same shape as the lonely-seed path, which
+ * also stamps just the seed.
+ */
+export function visitStampIds(
+  batch: readonly { id: string }[],
+  stoppedByLimit: boolean,
+): string[] {
+  // Batch order is [seed, ...neighbors] - see buildBatchForSeed.
+  if (batch.length === 0) return [];
+  return stoppedByLimit ? [batch[0].id] : batch.map((m) => m.id);
 }
 
 /**
@@ -536,6 +582,7 @@ async function runReview(args: {
     toolCalls: result.toolCalls,
     finalText: result.finalText,
     batchSize: batch.length,
+    stoppedByLimit: result.stoppedByLimit,
   };
 }
 
@@ -559,10 +606,12 @@ export interface DeepSleepSweepSummary {
  * One cron tick: claim the most-overdue eligible user and run one
  * seed-neighborhood review for them. NON-throwing by contract. The
  * cadence stamp lands at claim time, so a tick that ends no-eligible,
- * too-small, or inflight-blocked consumes that user's 12h slot -
- * faithful to the browser loop (its claim also preceded seed
- * selection). An agent error leaves the batch UNVISITED on purpose so
- * the next cycle retries the same neighborhood.
+ * too-small, or inflight-blocked consumes that user's slot
+ * (DEEP_SLEEP_MIN_INTERVAL_SECONDS) - the claim deliberately precedes
+ * seed selection. An agent error leaves the batch UNVISITED on purpose
+ * so the next cycle retries the same neighborhood; a run that stops on
+ * the budget stamps only its seed, so the queue advances without
+ * retiring neighbors nothing reviewed (see visitStampIds).
  */
 export async function runDeepSleepSweepTick(
   adminClient: SupabaseClient,
@@ -625,10 +674,12 @@ export async function runDeepSleepSweepTick(
       log,
       complete: opts.complete,
     });
-    await markVisited(adminClient, userId, batch.map((m) => m.id));
+    await markVisited(adminClient, userId, visitStampIds(batch, result.stoppedByLimit));
     log.info(
       `deep-sleep finished (${result.toolCalls} tool calls over ` +
-        `${result.batchSize} memories, reasoning="${normaliseReasoning(result.finalText)}")`,
+        `${result.batchSize} memories` +
+        `${result.stoppedByLimit ? ', stopped on limit - neighbors left queued' : ''}` +
+        `, reasoning="${normaliseReasoning(result.finalText)}")`,
     );
     return { outcome: 'reviewed', toolCalls: result.toolCalls, batchSize: result.batchSize };
   } catch (err) {
@@ -654,7 +705,7 @@ export type DeepSleepManualResult =
 /**
  * User-triggered run (the Memories panel). Same review core as the
  * sweep but WITHOUT the cadence stamp - a manual run doesn't reset
- * the scheduled 12h clock (browser parity). One deliberate divergence
+ * the scheduled clock. One deliberate divergence
  * from the sweep path, ported from the browser manual runner: the
  * batch's visit stamps land even when the agent errors, so a poison
  * neighborhood can't wedge the manual button on the same batch run
@@ -702,6 +753,9 @@ export async function runDeepSleepManual(
     }
 
     let result: ReviewResult;
+    // Read by the finally below, which cannot see `result` on the throw
+    // path. Staying false there is deliberate - see the comment.
+    let stoppedByLimit = false;
     try {
       result = await runReview({
         adminClient,
@@ -712,9 +766,20 @@ export async function runDeepSleepManual(
         complete: opts.complete,
         onProgress,
       });
+      stoppedByLimit = result.stoppedByLimit;
     } finally {
-      // Visit stamps land even on agent error - see the docblock.
-      await markVisited(adminClient, userId, batch.map((m) => m.id)).catch((err) => {
+      // Visit stamps land even on agent error - see the docblock. The
+      // two non-clean endings get different treatment on purpose: an
+      // error tells us nothing about how far the agent got and the
+      // batch may be why it failed, so the whole batch retires rather
+      // than risk wedging the queue on it. A budget stop is a healthy
+      // batch that merely ran long, so only the seed retires and the
+      // neighbors stay queued for a pass with time for them.
+      await markVisited(
+        adminClient,
+        userId,
+        visitStampIds(batch, stoppedByLimit),
+      ).catch((err) => {
         log.debug(
           'failed to stamp visit timestamps on manual batch',
           err instanceof Error ? err.message : String(err),

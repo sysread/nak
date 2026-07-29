@@ -348,12 +348,15 @@ and the relationships between memories stay sparse. The **memory
 librarian** is a pair of background passes that periodically tidy
 the store:
 
-- **Deep-sleep** (slow-wave consolidation). Every ~12 hours, picks
+- **Deep-sleep** (slow-wave consolidation). Every ~3 hours, picks
   the memory that hasn't been visited in the longest time, finds
   its similarity neighbors, and decides for each pair whether to
   consolidate them (one fact written twice), relate them
-  (genuinely distinct but adjacent), or leave them alone.
-- **Rem** (associative integration). Also every ~12 hours, on a
+  (genuinely distinct but adjacent), or leave them alone. It runs
+  often because editing a memory puts it back in the queue, so
+  there is usually something waiting; when there isn't, the pass
+  costs nothing and does nothing.
+- **Rem** (associative integration). Every ~12 hours, on a
   staggered cadence. Looks at conversations where the recall
   feature surfaced multiple memories together and asks whether
   the memory graph captures the relationships your behavior
