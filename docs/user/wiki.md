@@ -353,7 +353,7 @@ Sometimes the agent can't process a conversation. The most common
 reason is Venice's content classifier rejecting the conversation
 body as inappropriate. When that happens, the agent automatically
 retries the run against an **uncensored fallback model** (currently
-`arcee-trinity-large-thinking`) which doesn't run the same
+`venice-uncensored-1-2`) which doesn't run the same
 classifier, so most conversations the default model balks at get
 processed transparently on the retry. You don't have to do
 anything; it just works on the next sweep.

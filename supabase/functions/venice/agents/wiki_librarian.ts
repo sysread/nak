@@ -1382,6 +1382,11 @@ async function runLibrarianReview(args: LibrarianReviewArgs): Promise<LibrarianR
       baseCtx,
       apiKey,
       signal: args.signal,
+      // Unset max_completion_tokens makes the backend reserve its own
+      // default output budget (observed 65536) out of the context
+      // window; the librarian emits tool calls plus a short summary,
+      // so cap it and keep the window for the article projection.
+      maxTokens: 8_192,
       reasoningEffort: 'low',
       onProgress: args.onProgress,
     },

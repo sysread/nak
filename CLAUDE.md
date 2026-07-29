@@ -415,6 +415,20 @@ map). When adding an agent sub-call:
   rather than treating truncated output as a valid empty
   result - `completeJsonObjectWithMeta` in
   `venice/agents/_curation_helpers.ts` exists for this.
+- ALWAYS set `max_completion_tokens` (`maxTokens`) explicitly,
+  including on `runHeadlessAgent` tool loops. When the field is
+  absent from the wire body, the serving backend reserves its own
+  default output budget out of the context window - observed at
+  65536 tokens - and long inputs then 400 with "maximum context
+  length exceeded" even though the expected output is tiny.
+- Do not treat the registry's `contextWindow`
+  (src/lib/models/index.ts) as an enforced contract. The ceiling
+  belongs to whatever backend is serving the model id and it moves:
+  deepseek-v4-flash enforced 163840 on 2026-07-23 and accepted
+  1M-scale requests a week later. Code that must fit inside a
+  window budgets against a pinned conservative constant (see
+  `WORKING_CONTEXT_TOKENS` in `venice/agents/_accumulator.ts`) and
+  handles the context-length 400 reactively.
 
 ## User-facing documentation
 
