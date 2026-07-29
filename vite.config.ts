@@ -293,9 +293,34 @@ export default defineConfig({
   ],
   test: {
     globals: true,
-    environment: 'jsdom',
+    // Default to `node` - most test files are pure logic with no DOM
+    // dependency. Only the files listed in `environmentMatchGlobs`
+    // below get jsdom (component mounts, localStorage/sessionStorage,
+    // history API, DOMPurify, fake-indexeddb). Defaulting to node
+    // avoids ~350ms of jsdom bootstrap per file across the worker
+    // pool - 126 files x 350ms = ~44s of aggregate environment time
+    // that was burning 4-5s of wall clock on every run.
+    environment: 'node',
     setupFiles: ['./tests/setup.ts'],
     include: ['tests/**/*.test.ts'],
+    // These are the files that need jsdom. New test files default to
+    // node; if they reference DOM globals they fail immediately with
+    // `ReferenceError: document is not defined`, which is the signal
+    // to add the file here. The list was found by running the full
+    // suite with `--environment node` and collecting failures.
+    environmentMatchGlobs: [
+      ['tests/ascii-spinner.test.ts', 'jsdom'],
+      ['tests/click-outside.test.ts', 'jsdom'],
+      ['tests/config.test.ts', 'jsdom'],
+      ['tests/context-ring.test.ts', 'jsdom'],
+      ['tests/holder-id.test.ts', 'jsdom'],
+      ['tests/markdown.test.ts', 'jsdom'],
+      ['tests/reasoning-picker.test.ts', 'jsdom'],
+      ['tests/routing.test.ts', 'jsdom'],
+      ['tests/session.test.ts', 'jsdom'],
+      ['tests/theme.test.ts', 'jsdom'],
+      ['tests/verbosity-picker.test.ts', 'jsdom'],
+    ],
     // Integration tests hit live external services (Venice) and are
     // gated on a real API key in the env. The default `pnpm test`
     // stays hermetic - CI never depends on outbound network or a

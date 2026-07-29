@@ -15,6 +15,12 @@ export default [
       'playwright-report/**',
       'test-results/**',
       'supabase/functions/**',
+      // Vite creates timestamped temp files during build and deletes
+      // them after - when ESLint and Vite run in parallel (the gate
+      // runs all tasks concurrently), ESLint can discover the file
+      // and fail with ENOENT when it's already gone. Ignore the
+      // pattern so the race is benign.
+      'vite.config.ts.timestamp-*.mjs',
     ],
   },
   {

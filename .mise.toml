@@ -122,10 +122,20 @@ description = "Run unit tests (includes the markdownlint guardrail via tests/mar
 depends = ["deps"]
 run = "pnpm test"
 
+[tasks.svelte-check]
+description = "Type-check Svelte components (svelte-check)"
+depends = ["deps"]
+run = "pnpm check"
+
+[tasks.eslint]
+description = "Run ESLint with cache"
+depends = ["deps"]
+run = "pnpm lint"
+
 [tasks.markdownlint]
 description = "Lint all tracked markdown via markdownlint-cli2"
 depends = ["deps"]
-# Globs are quoted so the CLI expands them, not the shell — consistent
+# Globs are quoted so the CLI expands them, not the shell - consistent
 # behavior on fish / zsh / bash. Keep this invocation in sync with
 # tests/markdownlint.test.ts; the two run the same tool against the
 # same targets, one for dev iteration and one as the CI gate.
@@ -137,31 +147,28 @@ depends = ["deps"]
 # Knip's strictness is calibrated in knip.json. The `types` /
 # `duplicates` / `binaries` / `unlisted` rules are intentionally
 # `off` to keep the report focused on actionable dead code rather
-# than churning on interface declarations or near-duplicates. The
-# gate (`check`) does NOT chain knip - rot in untouched corners of
-# the repo should not gate a PR that didn't introduce it. Run
-# manually before merging a feature, and at the start of any
-# session whose task is "find what's no longer paying rent."
+# than churning on interface declarations or near-duplicates. Knip
+# runs in the gate (`mise run check`) - we do the dishes as we cook,
+# so rot in untouched corners gets caught every PR, not deferred.
 run = "pnpm knip"
 
 [tasks.check]
-description = "Full local gate — tests, Deno island, svelte-check, ESLint, production build"
-# `depends` runs `deps`, `test`, and the Deno-island gates
-# (functions-check + functions-test) before this task's own `run`
-# list fires, so the order ends up: deps (pnpm install) → tests
-# (which includes the markdownlint guardrail) + Deno check/test →
-# svelte-check → ESLint → pnpm build. Markdownlint rides the test
-# dep; there's no second invocation here. The explicit `deps` dep is
-# belt-and-suspenders: `test` already depends on it, but naming it
-# here means a future edit that unchains test from the gate won't
-# silently skip the install step.
+description = "Full local gate — tests, Deno island, svelte-check, ESLint, knip, production build — all in parallel"
+# All gate components are parallel `depends`, not a serial `run` list.
+# mise's DAG scheduler runs independent tasks concurrently, so gate
+# time is max(test, svelte-check, eslint, build, knip) ~= 7s instead
+# of the serial sum ~30s. All tasks run to completion even if one
+# fails; the gate reports all failures at once.
 #
-# The Deno island is in the gate (unlike knip) because the edge
-# function is where most of the app's logic now runs, and nothing
-# else type-checks or tests it: deploy bundles without checking, and
-# vitest never sees Deno code. knip stays out because it scans for
-# repo-wide rot a PR didn't introduce; functions-check/test only fail
-# on code the function actually deploys with.
+# The explicit `deps` dep is belt-and-suspenders: `test` and the
+# other tasks already depend on it, but naming it here means a
+# future edit that removes a task from the gate won't silently skip
+# the install step.
+#
+# The Deno island (functions-check + functions-test) is in the gate
+# because the edge function is where most of the app's logic runs,
+# and nothing else type-checks or tests it: deploy bundles without
+# checking, and vitest never sees Deno code.
 #
 # `pnpm build` is part of the gate because Vite + vite-plugin-pwa
 # failures (Rollup IIFE/code-splitting conflicts in worker bundles,
@@ -173,14 +180,12 @@ description = "Full local gate — tests, Deno island, svelte-check, ESLint, pro
 # Supabase project while the new bundle never lands on Pages -
 # forcing a manual schema rollback to re-align. Adding the build to
 # the gate makes Tests fail on the PR / push, which in turn blocks
-# the workflow_run trigger that would kick off Deploy. Cost is
-# ~12-15s on an up-to-date tree.
-depends = ["deps", "test", "functions-check", "functions-test"]
-run = [
-  "pnpm check",
-  "pnpm lint",
-  "pnpm build",
-]
+# the workflow_run trigger that would kick off Deploy.
+#
+# Markdownlint rides the test dep (tests/markdownlint.test.ts calls
+# the programmatic API); there's no separate markdownlint invocation
+# here.
+depends = ["deps", "test", "functions-check", "functions-test", "svelte-check", "eslint", "build", "knip"]
 
 [tasks.dev-start]
 description = "Isolated local dev: bring up a local Supabase stack (Docker), provision it, serve edge functions, drive embedding backfill on an interval (NAK_DEV_BACKFILL=0 to disable), run Vite, and tear the stack down on exit. Never touches the linked cloud project."

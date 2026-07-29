@@ -10,7 +10,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
-    "lint": "eslint . --ext .ts,.svelte",
+    "lint": "eslint . --ext .ts,.svelte --cache --cache-strategy content",
     "knip": "knip",
     "markdownlint": "markdownlint-cli2 'docs/**/*.md' README.md CLAUDE.md 'src/**/CLAUDE.md' 'supabase/**/README.md'",
     "test": "vitest run",

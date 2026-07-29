@@ -377,12 +377,11 @@ orphans.**
    `routing.svelte.ts`, `session.ts`) rather than widening the
    production API.
 
-5. **Run knip before merging non-trivial work.** `mise run knip`
-   catches unused files, exports, and dependencies. Clean tree
-   prints "Unused exports (0)" or one well-understood dynamic-import
-   false positive. The full gate (`mise run check`) does NOT chain
-   knip on purpose - rot in untouched corners shouldn't gate every
-   PR.
+5. **Knip runs in the gate.** `mise run knip` catches unused files,
+   exports, and dependencies. Clean tree prints "Unused exports (0)"
+   or one well-understood dynamic-import false positive. Knip is part
+   of `mise run check` - we do the dishes as we cook, so rot in
+   untouched corners gets caught every PR, not deferred.
 
 6. **Drop the `export` keyword as a first cleanup move.** When knip
    flags an unused export but the symbol is still used inside its
@@ -706,12 +705,14 @@ every gate task `depends = ["deps"]`, which runs `pnpm install
 up-to-date tree.
 
 ```sh
-mise run check           # full local gate: deps + test + deno check/test + svelte-check + lint + build
+mise run check           # full local gate: deps + test + deno check/test + svelte-check + lint + build + knip (all parallel)
 mise run test            # vitest run
 mise run functions-test  # Deno unit tests for the edge functions
 mise run functions-check # deno check over every edge-function entrypoint
+mise run svelte-check    # svelte-check only
+mise run eslint          # ESLint only (cached)
 mise run markdownlint    # markdownlint-cli2 only
-mise run knip            # dead-code scan; NOT in the gate by design
+mise run knip            # dead-code scan; runs in the gate via mise run check
 mise run dev-frontend    # Vite dev server only, no backend
 mise run dev-start       # isolated local dev: local Supabase stack + Vite
 mise run build           # production PWA build
@@ -788,8 +789,7 @@ and reading the build output is theatre.
 
 The cloud agent's correct posture:
 
-1. Run `mise run check` (and `mise run knip` for non-trivial work)
-   so the gate's static guarantees stand.
+1. Run `mise run check` so the gate's static guarantees stand.
 2. Reason carefully about the visual + interaction layer: empty /
    loading / error states, mutual-exclusivity branches in template
    `:else-if` cascades, button placement, icon legibility, mobile-
