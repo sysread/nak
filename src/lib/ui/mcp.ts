@@ -54,6 +54,38 @@ export function mcpStatusLabel(status: McpIntegration['authStatus']): string {
 }
 
 /**
+ * True when an integration's auth status indicates a problem the user
+ * should act on - the grant expired or was revoked, so the server's
+ * tools are unavailable until the user re-authorizes. The Settings
+ * Integrations pane uses this to show a badge and a Reauthorize button
+ * alongside the status label.
+ */
+export function mcpStatusNeedsAttention(
+  status: McpIntegration['authStatus'],
+): boolean {
+  return status === 'expired' || status === 'revoked';
+}
+
+/**
+ * Short explanatory hint for an attention-worthy status. The expired
+ * case covers two scenarios: the OAuth code-exchange window timed out
+ * (the user didn't complete the consent redirect quickly enough), or
+ * the daily catalog-refresh sweep found the refresh token dead (the
+ * server revoked the grant or the refresh token expired). Both resolve
+ * the same way - reauthorize to restart the OAuth flow.
+ */
+export function mcpStatusHint(status: McpIntegration['authStatus']): string | null {
+  switch (status) {
+    case 'expired':
+      return 'The authorization has expired - reauthorize to reconnect.';
+    case 'revoked':
+      return 'The server revoked access - reauthorize to reconnect.';
+    default:
+      return null;
+  }
+}
+
+/**
  * The gated-toolbox name for one integration - the string that lives
  * in `threads.toolboxes_enabled` and that toggle_toolbox validates.
  * The `mcp:` prefix is the contract the server-side toggle handler

@@ -130,6 +130,8 @@
   import {
     mcpRedirectUri,
     mcpStatusLabel,
+    mcpStatusNeedsAttention,
+    mcpStatusHint,
     stashMcpRegisterContext,
     consumeMcpRegisterContext,
     consumeMcpCallback,
@@ -2785,21 +2787,24 @@
                     <span class="mcp-status" data-status={integ.authStatus}>
                       {mcpStatusLabel(integ.authStatus)}
                     </span>
+                    {#if mcpStatusNeedsAttention(integ.authStatus)}
+                      <span class="mcp-badge" title={mcpStatusHint(integ.authStatus) ?? ''}>!</span>
+                    {/if}
                   </div>
                   <div class="mcp-row-actions">
-                    {#if integ.authStatus === 'pending'}
+                    {#if mcpStatusNeedsAttention(integ.authStatus)}
+                      {#if mcpStatusHint(integ.authStatus)}
+                        <p class="mcp-expired-hint">
+                          {mcpStatusHint(integ.authStatus)}
+                        </p>
+                      {/if}
                       <button
                         type="button"
                         class="mcp-retry"
                         onclick={() => onRetryMcp(integ)}
                       >Reauthorize</button>
                     {/if}
-                    {#if integ.authStatus === 'expired'}
-                      <p class="mcp-expired-hint">
-                        Authorization window closed — the server expects the
-                        code exchange to complete within a few minutes. Remove
-                        and re-add, or reauthorize to restart the flow.
-                      </p>
+                    {#if integ.authStatus === 'pending'}
                       <button
                         type="button"
                         class="mcp-retry"

@@ -956,6 +956,25 @@ label {
   color: var(--muted);
 }
 
+.mcp-status[data-status='expired'] {
+  color: var(--warn, #c0392b);
+}
+
+.mcp-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: 50%;
+  background: var(--warn, #c0392b);
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 700;
+  margin-top: 0.15rem;
+  flex-shrink: 0;
+}
+
 .mcp-delete {
   flex-shrink: 0;
 }
