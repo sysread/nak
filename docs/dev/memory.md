@@ -938,11 +938,19 @@ renders the delta as a chip (`memorySizeDelta` in
   wedging the button costs the feature. (Manual rem keeps the
   leave-unprocessed shape - its queue is multi-conversation per
   run, so one failing conversation doesn't pin the button.)
+
+  A run that stops on the wall-clock BUDGET is a third ending,
+  distinct from both: `visitStampIds` stamps the seed only, on
+  either path. The batch is healthy and merely ran long, so the
+  seed retiring keeps the queue advancing (no wedge) while the
+  neighbors the agent never reached stay queued rather than
+  retiring as reviewed.
 - **Cadence stamps land before the run.** The claim RPCs stamp
   `rem_last_run_at` / `deep_sleep_last_run_at` inside the
   claiming UPDATE, so a tick that ends `empty-queue`,
   `too-small`, or `inflight-blocked` still consumes that user's
-  12h slot. A crashed run waits out the interval instead of
+  cadence slot (deep-sleep 3h, rem 12h). A crashed run waits out
+  the interval instead of
   retrying hot; the cost is that a blocked tick is that cycle's
   librarian activity. Manual runs never touch the stamps.
 - **One in-flight guard, two passes, four paths.** The shared

@@ -194,7 +194,7 @@ the recall-quality properties those subsystems now owe.
    ```
 
    Then open the Memories panel and trigger a MANUAL deep-sleep run
-   (the moon button). A manual run ignores the 12h slot gate the
+   (the moon button). A manual run ignores the cadence slot gate the
    scheduled sweep honours. The seed pick now lands on a cluster row,
    and the other two rows ride in as neighbors (a lone memory has no
    neighbors above the threshold and never forms a batch - which is why

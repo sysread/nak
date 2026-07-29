@@ -18,7 +18,7 @@
 //      neighborhood.
 //
 // Two entry points share that core: runDeepSleepSweepTick (cron-driven
-// /deep-sleep-sweep; global definer claim stamps the 12h cadence) and
+// /deep-sleep-sweep; global definer claim stamps the cadence) and
 // runDeepSleepManual (user-triggered /deep-sleep-run from the Memories
 // panel; no cadence stamp). Both take the SHARED memory-librarian
 // in-flight guard (see _memory_librarian_tools.ts) so a deep-sleep run
@@ -96,10 +96,11 @@ const DEEP_SLEEP_MIN_SIMILARITY = 0.8;
  * On its own this only lowers the ODDS of an overrun;
  * DEEP_SLEEP_BUDGET_MS is what bounds it.
  *
- * The cost of a smaller batch is rotation speed, since a run marks
- * its ENTIRE batch visited: fewer memories retired per pass means
- * more passes to sweep the whole set. At a 12h cadence that is a
- * cheap trade against runs that die and take the lease with them.
+ * The cost of a smaller batch is rotation speed: a clean pass retires
+ * its whole batch, so fewer rows per pass means more passes to sweep
+ * the set. DEEP_SLEEP_MIN_INTERVAL_SECONDS pays that back by running
+ * passes more often, which is the cheaper side of the trade against
+ * runs that die and take the lease with them.
  */
 const DEEP_SLEEP_MAX_NEIGHBORS = 4;
 
@@ -112,7 +113,8 @@ const DEEP_SLEEP_MAX_NEIGHBORS = 4;
  * executes, so nothing is recorded and every client treats the pass
  * as live until the lease TTL expires ~10 minutes later - locking the
  * user out of starting another. Stopping one round early instead
- * costs one consolidation on a pass that repeats every 12h.
+ * costs one consolidation on a pass that comes round again in hours,
+ * and visitStampIds keeps the unreviewed neighbors queued for it.
  *
  * 300s leaves ~100s of headroom for the post-loop writes and for the
  * loop's next-round estimate coming in low (it extrapolates from the
@@ -703,7 +705,7 @@ export type DeepSleepManualResult =
 /**
  * User-triggered run (the Memories panel). Same review core as the
  * sweep but WITHOUT the cadence stamp - a manual run doesn't reset
- * the scheduled 12h clock (browser parity). One deliberate divergence
+ * the scheduled clock. One deliberate divergence
  * from the sweep path, ported from the browser manual runner: the
  * batch's visit stamps land even when the agent errors, so a poison
  * neighborhood can't wedge the manual button on the same batch run

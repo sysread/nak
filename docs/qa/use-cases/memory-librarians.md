@@ -48,6 +48,21 @@ the ONE shared in-flight guard across all four paths
 6. Reload recovery: start a manual run (step 3), then reload the page
    mid-run and reopen the Memories tab. After it finishes, reload
    again.
+7. Wall-clock budget: force the agent loop to run out of time by
+   dropping the budget, so a normal batch cannot settle inside it.
+   Temporarily set `DEEP_SLEEP_BUDGET_MS` to something a single round
+   exceeds (e.g. `1`) in
+   `supabase/functions/venice/agents/deep_sleep.ts`, restart
+   `functions serve`, arm a multi-row neighborhood, and run a manual
+   deep-sleep. Note the batch's memory ids first:
+
+   ```sql
+   select id, label, last_librarian_visit_at from memories
+    where user_id = '<user>' and last_librarian_visit_at is null
+    order by id limit 5;
+   ```
+
+   Restore the constant afterwards.
 
 ## Expected
 
@@ -86,10 +101,20 @@ the ONE shared in-flight guard across all four paths
   finishes, a reload restores the last run's result summary from
   `memory_librarian_last_run_outcome` (read on mount). The live
   step-by-step list is NOT restored - only the final summary line.
+- (7) The run ENDS CLEANLY rather than hanging: a result line
+  appears, the lease is released (`memory_librarian_inflight_expires_at`
+  back to null), and an outcome envelope is written. It must not sit
+  on "Deep-sleep running" until the lease TTL expires - that is the
+  failure this budget exists to prevent. Only the SEED carries a new
+  `last_librarian_visit_at`; the neighbors noted in step 7 stay null,
+  so a later pass with time for them picks them up rather than them
+  retiring as reviewed. The `deep-sleep` drawer source logs
+  `stopped on limit - neighbors left queued`.
 
 ## Cleanup
 
-Release any QA-held guard (step 5). Memory edits are real; review
+Release any QA-held guard (step 5). Restore `DEEP_SLEEP_BUDGET_MS`
+if step 7 was run. Memory edits are real; review
 via the memory changelog panel if surprising.
 
 ## Results log
