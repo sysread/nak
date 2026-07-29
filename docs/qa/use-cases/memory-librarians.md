@@ -81,9 +81,12 @@ the ONE shared in-flight guard across all four paths
   gap before the first streamed step (the strip is visible from the
   synchronous instant the run starts, not only once a step arrives).
   Live narrated steps in the strip (manual runs carry the activity
-  param). The step in flight is marked by an animating `- \ | /`
-  spinner - visibly cycling, not a static or merely pulsing glyph -
-  and settles to a check or cross as the next step opens. A spinning
+  param). The step in flight is marked by an animating `z` / `zZ` /
+  `zZZ` spinner - visibly cycling, not a static or merely pulsing
+  glyph - and settles to a check or cross as the next step opens. The
+  glyph column does NOT jump as the zzz grows: the check and cross
+  rows share the same gutter. (The wiki librarian's strip keeps the
+  `- \ | /` bar; only the memory passes drowse.) A spinning
   *Working* row holds the bottom of the list for the whole run,
   including the gap before the first step arrives and the gap after a
   tool row settles; exactly one spinner is ever visible in the list

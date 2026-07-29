@@ -389,9 +389,11 @@ next scheduled cycle. On a narrow screen the pair collapses into a
 single overflow (**...**) menu to keep the bar uncluttered. The
 panel shows a live step-by-step progress strip while the run
 executes and a one-sentence summary of what the agent did when it
-finishes. The step currently in flight is marked with a spinning
-bar (`- \ | /`); finished steps get a check, failed ones a cross. A
-spinning **Working** row sits at the bottom of the list for as long
+finishes. The step currently in flight is marked with a drowsing
+`zzz` that grows and restarts - the two passes are named after sleep
+stages, so the librarian snoozes while it works; finished steps get a
+check, failed ones a cross. A ticking **Working** row sits at the
+bottom of the list for as long
 as the run is going, so you can always tell the difference between
 "more steps are coming" and "it stopped here". A cross partway down
 the list is usually not the end of the run - the librarian often

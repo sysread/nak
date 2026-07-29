@@ -899,7 +899,7 @@
         <p class="librarian-confirm-desc">{librarianConfirmInfo.description}</p>
         {#if runInFlightElsewhere}
           <p class="subtle librarian-inflight" aria-live="polite">
-            <span aria-hidden="true"><AsciiSpinner /></span>
+            <span aria-hidden="true"><AsciiSpinner variant="sleep" /></span>
             A memory-librarian pass is running in the background…
           </p>
         {/if}
@@ -959,7 +959,7 @@
                      announced ten times a second. -->
                 <span class="librarian-step-icon" aria-hidden="true">
                   {#if step.status === 'pending'}
-                    <AsciiSpinner />
+                    <AsciiSpinner variant="sleep" />
                   {:else}
                     {stepIcon(step.status)}
                   {/if}
@@ -973,7 +973,7 @@
                    this would add only spinner-frame noise to the live
                    region. -->
               <li class="librarian-step librarian-run-tail" aria-hidden="true">
-                <span class="librarian-step-icon"><AsciiSpinner /></span>
+                <span class="librarian-step-icon"><AsciiSpinner variant="sleep" /></span>
                 <span class="librarian-step-label">{RUN_TAIL_LABEL}</span>
               </li>
             {/if}
@@ -1457,8 +1457,12 @@
     font-size: 0.9rem;
   }
 
+  /* 3ch, not 1ch: the pending rows run the `sleep` spinner, whose
+     widest frame is `zZZ`. The whole column is sized to it so the
+     settled check/cross rows share one gutter and the labels form a
+     straight edge whatever a row's status is. */
   .librarian-step-icon {
-    flex: 0 0 1rem;
+    flex: 0 0 3ch;
     color: var(--text-subtle);
     font-variant-numeric: tabular-nums;
   }

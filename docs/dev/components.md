@@ -77,10 +77,29 @@ transitions), archive loading sentinel in the drawer.
 
 File: `src/components/AsciiSpinner.svelte`.
 
-Classic terminal bar spinner - cycles `- \ | /` on a 100ms
-`setInterval`. Takes no props. Frame sequence, cadence, and the
-reduced-motion fallback glyph live in `src/lib/ui/ascii-spinner.ts`;
-the component is the timer plus a `$state` counter.
+Cycles a short frame sequence on a `setInterval`. One optional prop,
+`variant`:
+
+```ts
+interface Props { variant?: 'bar' | 'sleep'; }
+```
+
+- **`bar`** (default) - the classic terminal `- \ | /` at 100ms.
+- **`sleep`** - a drowsing `z` / `zZ` / `zZZ` at 320ms, for the memory
+  librarian, whose two passes are both named after sleep stages
+  (deep-sleep for slow-wave, rem for REM). The wiki librarian has no
+  such conceit and stays on `bar`.
+
+The sequences, their cadences, the reduced-motion stand-in, and the
+cell width each needs live in a variant table in
+`src/lib/ui/ascii-spinner.ts`; the component is the timer plus a
+`$state` counter. `spinnerWidthCh` is derived from the widest frame
+rather than written down separately, so editing a sequence cannot
+leave a stale width behind.
+
+The slow `sleep` cadence is safe because what makes these readable is
+the SHAPE changing between frames, not the rate. The pulsing ellipsis
+this replaced failed on opacity-only motion, not on slowness.
 
 Picked over `<Scanner>` where the surface is a single character cell
 in a text row rather than a standalone waiting affordance, and over
@@ -91,17 +110,20 @@ outright changes the shape, which the eye catches at any size.
 
 Two contracts callers must honour:
 
-- **Keep it inside an `aria-hidden` container.** Both current call
-  sites are in `aria-live="polite"` regions; an unhidden spinner
-  would announce its frame sequence ten times a second.
-- **Give it a fixed-width cell** if a label sits beside it. The
-  component pins `--font-mono` and `width: 1ch` so the frames hold
-  their column, but a caller that lets the cell size to content will
-  still shift on frames with different side bearings in a
-  non-Lekton fallback font.
+- **Keep it inside an `aria-hidden` container.** Every current call
+  site is in an `aria-live="polite"` region; an unhidden spinner would
+  announce its frame sequence several times a second.
+- **Give it a cell at least `spinnerWidthCh(variant)` wide** if a
+  label sits beside it. The component reserves that width itself and
+  left-aligns, so a growing sequence stays put - but the surrounding
+  column has to be sized for it too, or the widest frame overflows.
+  `Memories.svelte` sizes `.librarian-step-icon` to `3ch` for exactly
+  this reason, which also keeps the settled check/cross rows sharing
+  one gutter.
 
 Under `prefers-reduced-motion: reduce` (sampled once at mount) it
-renders a static ellipsis instead of starting the timer.
+renders that variant's static frame instead of starting the timer -
+an ellipsis for `bar`, a full `zZZ` for `sleep`.
 
 Consumers: `Memories.svelte` and `Wiki.svelte` - in each, three
 places: the pending row of the librarian run's step list, the
