@@ -145,8 +145,12 @@ The edge functions run on their own toolchain and are invisible to
 vitest. Two tasks cover them, and the gate runs both:
 
 - **`mise run functions-test`** - offline unit tests (fake fetch, no
-  network, no Supabase) over the pure logic in `_shared`. Handler
-  glue is exercised via `dev-start`'s `functions serve`, not here.
+  network, no Supabase) over the pure logic across the functions
+  tree: `_shared`, the `venice/agents/` modules, and the GC
+  entrypoints. Handler glue is exercised via `dev-start`'s
+  `functions serve`, not here. (The task's own description says
+  "pure logic in `_shared`", which undersells it - the suite has
+  grown well past that.)
 - **`mise run functions-check`** - `deno check` over every function
   **entrypoint**.
 
