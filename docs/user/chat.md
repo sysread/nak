@@ -109,6 +109,13 @@ cited sources) expands the same panel on demand. Each row shows
 the title, date where provided, and a short snippet; click the
 title to open the original page in a new tab.
 
+The same tool also handles direct links: paste a URL and ask about
+it, and instead of searching, Nak fetches that one page and reads
+its content directly. Very long pages are truncated, and the model
+is told when that happened. Some sites block automated fetching
+(X/Twitter and Reddit among them); those come back as a tool error
+the model will explain rather than guess around.
+
 There is no on/off toggle for web search - the model decides per
 turn. Questions that don't need current facts won't trigger the
 tool, so they never pay the latency or quota cost of a search.
