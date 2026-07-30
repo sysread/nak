@@ -93,12 +93,20 @@ Notable members (the full ordered list is `alwaysOnToolbox` in
   `docs/dev/` for "how would I add feature X" planning questions.
   The edge implementation reads a build-time bundle, not the
   filesystem - see Interactions, "Help / user docs."
-- `web_search` - runs a one-shot Venice sub-completion with
+- `web_search` - two retrieval modes behind one name. With `query`,
+  runs a one-shot Venice sub-completion with
   `enable_web_search: 'on'` + `enable_web_citations: true` and
-  returns `{answer, citations}`. Always-on because time-sensitive
-  questions (news, prices, today's weather) are the canonical case
-  for search and we don't want the model to refuse or hedge while
-  waiting for a toolbox flip. Read-only (no DB writes).
+  returns `{answer, citations}`. With `url`, posts the link to
+  Venice's `/augment/scrape` endpoint (`veniceScrapeUrl` in
+  `_shared/venice.ts`) and returns `{url, content}` - the page as
+  markdown, capped at 32k chars with a `truncated` flag, plus a
+  single self-citation so the page shows in the reply's sources
+  panel. The split exists because the search pipeline is built
+  around queries and searches FOR a bare URL instead of reading
+  it. Always-on because time-sensitive questions (news, prices,
+  today's weather) are the canonical case for search and we don't
+  want the model to refuse or hedge while waiting for a toolbox
+  flip. Read-only (no DB writes).
   Deliberately absent from every agent toolbox - background agents
   have no reason to reach for live web data, and giving them the
   tool would burn search quota and pollute memories with scraped

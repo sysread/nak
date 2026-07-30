@@ -1,9 +1,18 @@
 // web_search (function-side port)
 //
-// Calls Venice with enable_web_search='on' through a one-shot
-// non-streaming completion against a dedicated search model, harvests
-// the synthesized answer plus web_search_citations, and returns them
-// to the model. Wire schema lives in src/lib/tools/web_search.schema.ts.
+// Two retrieval modes behind one tool name:
+//
+// - query mode: calls Venice with enable_web_search='on' through a
+//   one-shot non-streaming completion against a dedicated search
+//   model, harvests the synthesized answer plus web_search_citations,
+//   and returns them to the model.
+// - url mode: posts the URL to Venice's /augment/scrape endpoint and
+//   returns the page content as markdown, verbatim. The search
+//   pipeline is built around queries and does poorly when handed a
+//   bare URL - it searches FOR the URL instead of reading it - so
+//   direct links skip the search model entirely.
+//
+// Wire schema lives in src/lib/tools/web_search.schema.ts.
 //
 // The search model is mistral-small, a non-reasoning instruct model -
 // the right class here because faithfulness is the priority (a
@@ -19,6 +28,15 @@
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { readVeniceKey } from './_venice_key.ts';
 import { toolComplete } from './_venice_complete.ts';
+import { veniceScrapeUrl } from '../../_shared/venice.ts';
+
+// Ceiling on scraped-page content returned to the model, in
+// characters (~8k tokens - the same order as the query mode's
+// 8196-token answer cap). Scraped pages are unbounded; an article
+// index or a docs page can run hundreds of KB of markdown, which
+// would blow the chat context in one tool round. Truncation is
+// flagged in the result so the model knows the tail is missing.
+const SCRAPE_MAX_CHARS = 32_000;
 
 // Mirror of agentModel('webSearch') in src/lib/models/index.ts. Same
 // same-PR sync discipline as the other browser-mirror constants.
@@ -60,9 +78,20 @@ export const webSearch: ToolDef = {
   name: 'web_search',
   async execute(args: Record<string, unknown>, ctx: ToolContext) {
     const query = typeof args.query === 'string' ? args.query.trim() : '';
-    if (query.length === 0) {
-      throw new Error('web_search requires a non-empty `query` argument');
+    const url = typeof args.url === 'string' ? args.url.trim() : '';
+    if (query.length === 0 && url.length === 0) {
+      throw new Error(
+        'web_search requires either a `query` (to search) or a `url` (to fetch one page)'
+      );
     }
+
+    if (url.length > 0) {
+      // A URL wins over a query when both arrive: the model naming a
+      // specific page is the stronger signal of intent, and scraping
+      // it answers the query-shaped framing anyway.
+      return await executeScrape(url, ctx);
+    }
+
     const contextHint =
       typeof args.context_hint === 'string' ? args.context_hint.trim() : '';
 
@@ -107,5 +136,37 @@ export const webSearch: ToolDef = {
     return { answer: trimmed, citations: result.citations };
   },
 };
+
+// url mode: fetch one page via Venice's scrape endpoint and hand its
+// markdown to the model raw - no sub-completion, no synthesis. The
+// single self-citation makes the fetched page surface in the reply's
+// sources panel through the same tool-citation harvest the query
+// mode's citations ride (getStreamingResponse.ts).
+async function executeScrape(url: string, ctx: ToolContext) {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`web_search: \`url\` is not a valid URL: ${url}`);
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(
+      `web_search: \`url\` must be http(s), got ${parsed.protocol}//`
+    );
+  }
+
+  const apiKey = await readVeniceKey(ctx.adminClient);
+  if (!apiKey) throw new Error('no Venice key configured (app_config unseeded)');
+
+  const content = await veniceScrapeUrl({ apiKey, url, signal: ctx.signal });
+
+  const truncated = content.length > SCRAPE_MAX_CHARS;
+  return {
+    url,
+    content: truncated ? content.slice(0, SCRAPE_MAX_CHARS) : content,
+    ...(truncated ? { truncated: true } : {}),
+    citations: [{ title: url, url, content: null, date: null, index: 1 }],
+  };
+}
 
 registerTool(webSearch);
