@@ -2002,7 +2002,7 @@
   });
 
   // Realtime: the memories twin of the wiki relay above. Every memory
-  // writer is server-side now (reflection on the chat-turn tail, the
+  // writer is server-side now (the hourly reflection sweep, the
   // rem / deep-sleep librarian sweeps), so this subscription is how an
   // open Memories panel learns a background write landed.
   $effect(() => {

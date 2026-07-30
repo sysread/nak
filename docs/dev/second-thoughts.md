@@ -63,7 +63,7 @@ user live.
 
 Runs as a turn-tail unit (`secondThoughtsOnTurnTail`), FIRST in the
 `EdgeRuntime.waitUntil` tail of `getStreamingResponse.ts` where
-`curateOnTurnTail` / `samskaraOnTurnTail` / `reflectOneThread` also run,
+`curateOnTurnTail` / `samskaraOnTurnTail` also run,
 and only on `terminalKind === 'completed'`. Detached, so it adds zero
 latency to the user-visible turn. Best-effort and non-throwing: a
 failure leaves the row without a verdict, never breaks the turn.
@@ -331,7 +331,7 @@ composition + wiring.
 ## Interactions
 
 - **Chat ([`chat.md`](./chat.md))** - the reviewer is a turn-tail unit
-  next to curation/samskara/reflection. The refinement reuses the
+  next to curation/samskara. The refinement reuses the
   browser send/regenerate flow for one extra APPEND turn anchored to the
   original user message; it touches the send path,
   `commit_assistant_message`'s anchor handling (append does not conflict

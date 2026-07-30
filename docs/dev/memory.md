@@ -41,11 +41,11 @@ ride the system prompt independently.
 ## Role in the app
 
 Every turn the main chat model can call `memory_recall` to pull in
-relevant memories; at the tail of each completed streaming chat turn,
-the venice edge function fires a reflection pass that reads a settled
-thread and decides whether to write, update, or invalidate memories
-based on what it saw. The store lives in each user's own Supabase;
-the writes happen through the same tool harness the main chat uses.
+relevant memories; on an hourly cron cadence, the venice edge
+function's reflection sweep reads settled threads and decides whether
+to write, update, or invalidate memories based on what it saw. The
+store lives in each user's own Supabase; the writes happen through
+the same tool harness the main chat uses.
 
 From the user's perspective this is the Memory feature documented
 in `docs/user/memory.md`. The dev side has five moving parts:
@@ -53,8 +53,8 @@ in `docs/user/memory.md`. The dev side has five moving parts:
 1. **The store** — `memories` table, RLS-scoped, with a pgvector
    `embedding` column populated asynchronously.
 2. **The writer** — the reflection agent runs in the venice edge
-   function, reads settled threads end-to-end, and uses a
-   write-scoped subset of the memory tools.
+   function on the hourly sweep, reads settled threads end-to-end,
+   and uses a write-scoped subset of the memory tools.
 3. **The reader** — the recall agent runs in the venice edge
    function, inline in the tool dispatch when the main model
    invokes the `memory_recall` tool. Read-only.
@@ -124,9 +124,9 @@ in `docs/user/memory.md`. The dev side has five moving parts:
   `memory_conversation` row per surfaced memory - the
   co-occurrence hint queue rem drains.
 - `supabase/functions/venice/agents/reflection.ts` — the reflection
-  agent. Exports `reflectOneThread(adminClient, userId)`; runs
-  write-scoped with no return value (side effects = memory tool
-  calls). Its prompt instructs TIMELESS memories - no "this session",
+  agent. Exports `runReflectionSweepTick(adminClient)`; runs
+  write-scoped (side effects = memory tool calls) and returns a
+  per-tick drain summary. Its prompt instructs TIMELESS memories - no "this session",
   no write-date narration, no first-person AI self-logging - because a
   body that stamps when it was written reads back later as a
   current-chat event (the row's `created_at` already records when it
@@ -327,26 +327,25 @@ in `docs/user/memory.md`. The dev side has five moving parts:
   headless read-only tool loop on the fast tier. Returns a
   structured JSON output the tool encodes as the `role='tool'`
   message payload for the next round.
-- **Reflection (edge function tail)** — at the end of each
-  successfully completed streaming chat turn, `getStreamingResponse`
-  fires `reflectOneThread(adminClient, userId)` via
-  `EdgeRuntime.waitUntil` as background work after the chat response
-  ships. Each invocation opportunistically drains one day-gate-
-  eligible thread from the existing reflection queue - NOT
-  necessarily the thread that just finished. Claim mutual exclusion
-  is the per-thread claim RPC (each call uses a fresh random holder
-  id); no `worker_leases` row is involved.
-- **Reflection catch-up sweep** — pg_cron job
+- **Reflection sweep (the only driver)** — pg_cron job
   `nak-reflection-sweep` (hourly, minute 27) pg_net-POSTs
-  `/reflection-sweep` -> `runReflectionSweepTick`, which claims the
-  most-overdue eligible thread across ALL users
+  `/reflection-sweep` -> `runReflectionSweepTick`, which drains the
+  day-gated queue one thread at a time: claim the most-overdue
+  eligible thread across ALL users
   (`claim_next_thread_for_reflection_sweep`, SECURITY DEFINER,
-  per-owner timezone off the profile) and runs the same shared
-  reflect body. Exists because the tail only fires when its owner
-  converses - without it a dormant account's queue never moves. The
-  per-thread claim makes tail + sweep double-driving safe. The dev
-  shim ticks this route too.
-- **Reflection attempt cap** — both reflection claims count
+  per-owner timezone off the profile), reflect it, claim the next -
+  until the queue is empty, the per-tick cap (5 threads) is hit, or
+  the tick's time budget (180s of new claims) is spent; the next
+  hourly tick resumes. Reflection deliberately does NOT ride the
+  chat turn's waitUntil tail (unlike curation and samskara): the
+  fixed cadence gives the user a predictable window to edit or
+  retry a settled conversation before reflection reads it, and the
+  strictly sequential drain keeps at most one reflection agent
+  writing to the store per tick. Claim mutual exclusion is the
+  per-thread claim RPC (each cycle uses a fresh random holder id);
+  no `worker_leases` row is involved, and overlapping ticks simply
+  claim different threads. The dev shim ticks this route too.
+- **Reflection attempt cap** — the sweep claim counts
   ATTEMPTS at claim time (`threads.reflection_attempt_msg_id` +
   `reflection_attempt_count`): three claims against the same
   terminal message and the thread stops being offered, until a new
@@ -503,7 +502,7 @@ in `docs/user/memory.md`. The dev side has five moving parts:
 - **Reflection claim columns** — `threads.reflection_holder_id`
   and `threads.reflection_claim_expires_at` are the mutual-
   exclusion primitive for the server-side reflection path.
-  The claim-RPC pair (`claim_next_thread_for_reflection` /
+  The claim-RPC pair (`claim_next_thread_for_reflection_sweep` /
   `mark_thread_reflected_if_claimed`) uses a fresh random holder
   id per call; there is no `worker_leases` row for reflection.
 - **`memories.last_librarian_visit_at timestamptz`** — per-row
@@ -651,14 +650,16 @@ from the same ports); the browser carries only the wire schemas.
   `done`); attaching it also injects the `activity` narration
   parameter into the tools' wire schemas, so the sweep paths
   (no listener) stay narration-free.
-- `reflectOneThread(adminClient, userId)` — the edge function
-  entry point. Claims one day-gate-eligible thread (newest message
-  on a prior calendar day in the user's timezone, with >= 2 user
-  messages), runs the reflection agent's headless tool loop, and
-  stamps `last_reflected_msg_id` via a claim-guarded RPC. The
-  agent's "answer" is whatever `memory_*` tool calls it made;
-  the final text is discarded. Returns without error when the
-  queue is empty or the claim is lost.
+- `runReflectionSweepTick(adminClient)` — the edge function
+  entry point. Drains day-gate-eligible threads (newest message
+  on a prior calendar day in the owner's timezone, with >= 2 user
+  messages) one at a time up to the per-tick cap/budget. Each
+  cycle runs the reflection agent's headless tool loop and stamps
+  `last_reflected_msg_id` via a claim-guarded RPC. The agent's
+  "answer" is whatever `memory_*` tool calls it made; the final
+  text is discarded. Non-throwing; returns a per-tick summary
+  (`reflected` / `claimLost` / `emptySlice` counters plus what
+  stopped the drain).
 
 ## The body-length budget (non-growth rule)
 
@@ -826,11 +827,11 @@ renders the delta as a chip (`memorySizeDelta` in
   `./topics.md` under "Memory topics" for the unit shape, the
   schema deltas, and the trigger / claim discipline.
 - **Summaries / conversation recall** — separate store (thread
-  rows), separate agents. Summary and reflection both run in the
-  venice edge function, fired from the completed-chat-turn tail
-  with an hourly sweep as catch-up. Both use the same per-row
-  claim-RPC pattern on `threads` but have independent claim
-  columns and no shared lease.
+  rows), separate agents. Both run in the venice edge function:
+  summary from the completed-chat-turn tail with an hourly sweep
+  as catch-up, reflection from its hourly sweep only. Both use
+  the same per-row claim-RPC pattern on `threads` but have
+  independent claim columns and no shared lease.
 - **Logging** - the reflection agent and both librarian passes
   emit breadcrumbs through `createEdgeLogger` (sources
   `reflection`, `rem`, `deep-sleep`), which both writes to the

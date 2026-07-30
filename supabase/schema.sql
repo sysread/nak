@@ -992,8 +992,8 @@ alter table public.threads
   add column if not exists last_reflected_msg_id uuid references public.messages(id) on delete set null,
   add column if not exists reflection_holder_id text,
   add column if not exists reflection_claim_expires_at timestamptz,
-  -- Attempt accounting, stamped AT CLAIM TIME by both reflection
-  -- claims. Counting attempts (not failures) is deliberate: a run
+  -- Attempt accounting, stamped AT CLAIM TIME by the sweep claim.
+  -- Counting attempts (not failures) is deliberate: a run
   -- that dies to the invocation wall clock never reaches an error
   -- handler, so a failure counter would miss exactly the deaths that
   -- need bounding. Three attempts at the same terminal message and
@@ -4541,8 +4541,8 @@ grant execute on function public.nak_sweep_stale_streams() to service_role;
 
 -- Reflection pipeline RPCs -----------------------------------------------
 --
--- The reflection agent's worker runs on the same claim/lease pattern as
--- the embeddings worker, but against `threads` instead of `memories`
+-- The reflection agent runs on the same claim/lease pattern as the
+-- embeddings worker, but against `threads` instead of `memories`
 -- and with a different "what does 'needs work' mean?" predicate.
 --
 -- "Needs reflection" = there exists a terminal assistant message in the
@@ -4554,121 +4554,25 @@ grant execute on function public.nak_sweep_stale_streams() to service_role;
 -- user prompt + assistant reply, no follow-up) doesn't burn Venice
 -- calls reflecting on a conversation that hadn't actually started yet.
 --
--- The function returns `(thread_id, terminal_msg_id)` atomically. The
--- worker fetches messages up to `terminal_msg_id` (so a race where the
+-- The claim returns `(thread_id, terminal_msg_id)` atomically. The
+-- agent fetches messages up to `terminal_msg_id` (so a race where the
 -- user adds more turns mid-reflection just queues the thread for the
 -- next cycle), runs its tool-call loop, and calls
 -- `mark_thread_reflected_if_claimed` with the same msg_id it got here.
--- If the claim was lost (device B took over mid-reflection) the mark
--- returns false and the whole run is discarded — device B will redo it.
+-- If the claim was lost (another run took over mid-reflection) the mark
+-- returns false and the whole run is discarded — the winner redoes it.
 
--- Claim the oldest thread in need of reflection and return its id plus
--- the terminal assistant message we should reflect up to. `for update
--- skip locked` is belt-and-suspenders under the lease invariant (only
--- one device should be claiming at a time); it costs nothing and
--- removes an entire class of wrong answer from the corner where two
--- devices briefly both think they hold the lease.
+-- The per-user claim variant (claim_next_thread_for_reflection) is
+-- retired: reflection is sweep-only, and the cross-user sweep claim
+-- below is the single claiming path. The drops cover every signature
+-- the variant ever shipped with.
 drop function if exists public.claim_next_thread_for_reflection(text, int);
 drop function if exists public.claim_next_thread_for_reflection(text, int, text);
-create or replace function public.claim_next_thread_for_reflection(
-  p_holder_id text,
-  p_ttl_seconds int,
-  -- User's display timezone from Settings -> AI -> About you;
-  -- determines the calendar day the eligibility gate buckets on.
-  -- Same shape as claim_next_thread_for_wiki - we want the
-  -- reflection pass to leave in-flight conversations alone so a
-  -- memory derived from a half-finished thought doesn't land
-  -- before the user has a chance to correct or extend it. The
-  -- memory_recall tool has no per-conversation source attribution
-  -- on memories, so a same-day write could ride straight back into
-  -- the conversation that produced it.
-  p_timezone text default 'UTC',
-  -- b-strict escape hatch (see search_memories_by_embedding): the
-  -- browser supervisor calls with auth.uid() in scope and leaves this
-  -- null; the venice edge function fires reflection from a chat turn's
-  -- waitUntil tail with a service-role client that has no uid, so it
-  -- passes the thread owner's id explicitly. security invoker stays
-  -- correct because service_role bypasses RLS and the coalesce scopes
-  -- the claim to one user either way.
-  p_user_id uuid default null
-) returns table (thread_id uuid, terminal_msg_id uuid)
-language sql security invoker as $$
-  with candidate as (
-    -- Oldest thread (by updated_at ascending) that has a terminal
-    -- assistant message newer than what we've reflected on, passes the
-    -- token-volume guard, lands on a calendar day strictly before
-    -- today in the user's timezone, and isn't currently claimed. The
-    -- terminal-message lookup is a lateral join so we get both the
-    -- thread row AND the specific msg id to mark up to, in one
-    -- round trip. The newest-message lookup is a second lateral so
-    -- the day-gate buckets on messages.created_at - same source
-    -- the wiki claim uses, stable against unrelated bumps to
-    -- threads.updated_at.
-    select t.id as thread_id, term.msg_id as terminal_msg_id
-      from public.threads t
-      cross join lateral (
-        select m.id as msg_id
-          from public.messages m
-         where m.thread_id = t.id
-           and m.role = 'assistant'
-           and (m.tool_calls is null
-                or jsonb_typeof(m.tool_calls) <> 'array'
-                or jsonb_array_length(m.tool_calls) = 0)
-           and m.content is not null
-           and length(m.content) > 0
-         order by m.created_at desc
-         limit 1
-      ) term
-      cross join lateral (
-        select m2.created_at
-          from public.messages m2
-         where m2.thread_id = t.id
-         order by m2.created_at desc
-         limit 1
-      ) newest
-     where t.user_id = coalesce(p_user_id, auth.uid())
-       and term.msg_id is distinct from t.last_reflected_msg_id
-       -- Attempt cap: stop offering a terminal message that has
-       -- already burned three claims (see the column comment on
-       -- reflection_attempt_count). A different terminal message
-       -- means new conversation turns landed - fresh budget.
-       and (term.msg_id is distinct from t.reflection_attempt_msg_id
-            or t.reflection_attempt_count < 3)
-       and (t.reflection_claim_expires_at is null
-            or t.reflection_claim_expires_at < now())
-       and (newest.created_at at time zone p_timezone)::date
-             < (now() at time zone p_timezone)::date
-       and (
-         -- At least two user messages on the thread. A single user
-         -- prompt + assistant reply is a one-shot Q&A; we only want
-         -- to reflect once the user came back with a follow-up, which
-         -- is the cheapest signal that the conversation has substance
-         -- worth turning into memories.
-         select count(*)
-           from public.messages m2
-          where m2.thread_id = t.id
-            and m2.role = 'user'
-       ) >= 2
-     order by t.updated_at asc
-     limit 1
-     for update of t skip locked
-  )
-  update public.threads t
-     set reflection_holder_id = p_holder_id,
-         reflection_claim_expires_at = now() + make_interval(secs => p_ttl_seconds),
-         reflection_attempt_count = case
-           when t.reflection_attempt_msg_id is distinct from c.terminal_msg_id then 1
-           else t.reflection_attempt_count + 1
-         end,
-         reflection_attempt_msg_id = c.terminal_msg_id
-    from candidate c
-   where t.id = c.thread_id
-  returning t.id as thread_id, c.terminal_msg_id;
-$$;
+drop function if exists public.claim_next_thread_for_reflection(text, int, text, uuid);
 
 -- Record a completed reflection IF the claim is still ours. Returns
 -- true on success, false when the claim expired or was stolen (another
--- device took over). The worker treats false the same way
+-- run took over). The agent treats false the same way
 -- save_memory_embedding_if_claimed does: drop the work, loop to the
 -- next row. Any memory writes the agent already made during the run
 -- stay — they're owned by the user, not the claim, and re-reflection
@@ -4679,9 +4583,9 @@ create or replace function public.mark_thread_reflected_if_claimed(
   p_thread_id uuid,
   p_holder_id text,
   p_msg_id uuid,
-  -- b-strict escape hatch, same as the claim RPC above: null from the
-  -- browser (auth.uid() in scope), the thread owner's id from the
-  -- service-role edge-function caller.
+  -- b-strict escape hatch: the service-role edge-function caller has
+  -- no auth.uid(), so it passes the thread owner's id explicitly
+  -- (coalesced below).
   p_user_id uuid default null
 ) returns boolean
 language plpgsql security invoker as $$
@@ -4701,12 +4605,9 @@ begin
   return updated > 0;
 end $$;
 
--- service_role grants for the edge-function reflection driver (the
--- venice function fires reflection from a chat turn's waitUntil tail).
--- The browser keeps calling these as the authenticated user; these
--- grants just let the service-role client reach them too.
-grant execute on function
-  public.claim_next_thread_for_reflection(text, int, text, uuid) to service_role;
+-- service_role grant for the edge-function reflection driver (the
+-- venice function's sweep tick marks threads with a service-role
+-- client, passing the owner's id through the b-strict escape hatch).
 grant execute on function
   public.mark_thread_reflected_if_claimed(uuid, text, uuid, uuid) to service_role;
 
@@ -4736,15 +4637,14 @@ exception when others then
   return 'UTC';
 end $$;
 
--- Global reflection sweep claim: the cron catch-up drain's variant of
--- claim_next_thread_for_reflection. Same candidate predicate, but
--- across ALL users - the timezone comes off each owner's profile
--- (nak_safe_timezone, UTC fallback) instead of a parameter. The
--- per-turn waitUntil tail only drains when its owner converses, so
--- without this sweep a dormant account's reflection queue never
--- moves. Tail + sweep double-driving is safe by construction: the
--- per-thread claim columns are the mutual exclusion, so whichever
--- driver claims first wins and the other sees no candidate.
+-- Global reflection sweep claim: reflection's only claiming path.
+-- Picks the most-overdue eligible thread across ALL users - the
+-- timezone comes off each owner's profile (nak_safe_timezone, UTC
+-- fallback). The sweep tick calls this in a drain loop (claim ->
+-- reflect -> claim the next), and overlapping ticks are safe by
+-- construction: the per-thread claim columns are the mutual
+-- exclusion, so whichever caller claims first wins and the other
+-- sees a different candidate or none.
 drop function if exists public.claim_next_thread_for_reflection_sweep(text, int);
 create or replace function public.claim_next_thread_for_reflection_sweep(
   p_holder_id text,
@@ -13063,17 +12963,17 @@ end
 $cron$;
 
 -- ---------------------------------------------------------------------------
--- Scheduled reflection catch-up sweep (pg_cron -> pg_net -> venice function)
+-- Scheduled reflection sweep (pg_cron -> pg_net -> venice function)
 --
--- Reflection's primary driver is the chat turn's waitUntil tail in
--- getStreamingResponse - one eligible older thread drains per
--- completed turn. This hourly sweep is the catch-up path for queues
--- the tail can't reach: a user who stops conversing leaves eligible
--- threads stranded (no turns -> no draining). One thread per tick,
--- claimed across all users by claim_next_thread_for_reflection_sweep;
--- the per-thread claim columns make tail + sweep double-driving safe.
--- Same Vault-secret custody and no-op-until-seeded behavior as the
--- other sweep triggers above.
+-- Reflection's ONLY driver. Each hourly tick drains the day-gated
+-- queue one thread at a time (claimed across all users by
+-- claim_next_thread_for_reflection_sweep) until it runs empty or the
+-- tick's cap/time budget stops it; the next tick resumes. Memory
+-- formation deliberately does not ride the chat turn's tail - the
+-- fixed cadence gives the user a predictable window to edit or retry
+-- a settled conversation before reflection reads it. Same
+-- Vault-secret custody and no-op-until-seeded behavior as the other
+-- sweep triggers above.
 -- ---------------------------------------------------------------------------
 
 create or replace function public.nak_trigger_reflection_sweep()

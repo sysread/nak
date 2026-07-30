@@ -2,7 +2,7 @@
 //
 // Runs from the streaming function's completed-turn waitUntil tail
 // (getStreamingResponse.ts), a sibling to curateOnTurnTail /
-// samskaraOnTurnTail / reflectOneThread. After a turn commits, it
+// samskaraOnTurnTail. After a turn commits, it
 // re-reads what the model just said and reports a FELT CONFIDENCE -
 // stands behind it, or something feels off - onto the terminal
 // assistant row's `second_thoughts` jsonb column.

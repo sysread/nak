@@ -34,9 +34,12 @@ or overly behavioral. That's intentional.
 
 ## How it grows
 
-When a conversation settles (no new messages for a while), a
-background agent reads the whole thread and decides whether anything
-it saw is worth remembering. For each candidate memory, the agent:
+When a conversation settles (its newest message is at least a
+calendar day old), an hourly background pass reads the whole thread
+and decides whether anything it saw is worth remembering. The lag is
+deliberate: until that pass runs, you can still edit or retry any
+part of the conversation and memory formation only ever sees the
+corrected version. For each candidate memory, the agent:
 
 1. **Searches existing memories** for anything close. Duplicates are
    worse than nothing — they dilute search.

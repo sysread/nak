@@ -254,7 +254,7 @@ toast is just a glance cue that the bias model is forming.
   LLM work.
 - **`samskaraOnTurnTail(admin, userId)`** - fired from
   `getStreamingResponse`'s `EdgeRuntime.waitUntil` tail on
-  completed turns, sequenced curation -> samskara -> reflection.
+  completed turns, sequenced curation -> samskara.
   Runs the session-responsive phases: a capped assimilate drain,
   then one pair-relate probe, then one mint-tier1 probe. (Reaction
   scoring is no longer a tail phase - it moved to the next-day
@@ -566,8 +566,8 @@ embeddings backfill's claim -> process -> save shape. Two
 drivers run the phases, split by timing sensitivity:
 
 - **Turn tail** (`samskaraOnTurnTail`) - an assimilate drain
-  capped at `TAIL_ASSIMILATE_CAP` (3) so the
-  chain never delays reflection behind it, then one pair-relate
+  capped at `TAIL_ASSIMILATE_CAP` (3) so one tail invocation
+  never monopolises the background budget, then one pair-relate
   probe, then one mint-tier1 probe (the in-session toast
   surface).
 - **Hourly sweep** (`runSamskaraSweepTick`) - a cross-user
@@ -1175,7 +1175,7 @@ summarizer reads samskaras to feed the agent.
   options struct, and samskara is currently the only caller.
   Function side, `getStreamingResponse`'s waitUntil tail drives
   `samskaraOnTurnTail` on every completed turn, sequenced
-  curation -> samskara -> reflection. `Chat.svelte` mounts the
+  curation -> samskara. `Chat.svelte` mounts the
   single `<SamskaraMoodSync />` component and owns the
   `subscribeToSamskaraInserts` realtime subscription that turns
   `samskara-mint` Broadcast events into `SAMSKARA_MINT_EVENT`. See
@@ -1192,9 +1192,9 @@ summarizer reads samskaras to feed the agent.
   predictive bias the model formed on its own. No data flows
   between them. The reflection agent reads thread transcripts
   and writes memories; the samskara assimilator reads
-  individual exchanges and writes substrate. Both ride the same
-  waitUntil tail, samskara first (reflection can span minutes
-  and samskara carries the fleet's only hard timing window).
+  individual exchanges and writes substrate. Samskara rides the
+  waitUntil tail (it carries the fleet's only hard timing
+  window); reflection is sweep-only on an hourly cadence.
   See `./memory.md`.
 - **Bias profile** - sibling server-side pipeline, no data flow.
   Bias profile aggregates cognitive-bias observations across

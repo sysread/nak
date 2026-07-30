@@ -18,8 +18,8 @@
 //     (the two memory librarians; same most-overdue-user claim shape
 //     with their own 12h cadences);
 //   - `nak_trigger_reflection_sweep()` hourly -> POST /reflection-sweep
-//     (reflection's catch-up drain - the chat-turn tail is the primary
-//     driver, this reaches queues whose owners stopped conversing);
+//     (reflection's only driver - each tick drains eligible threads
+//     one at a time until its cap or time budget stops it);
 //   - `nak_trigger_curation_sweep()` hourly -> POST /curation-sweep,
 //     `nak_trigger_bias_sweep()` hourly -> POST /bias-sweep, and
 //     `nak_trigger_samskara_sweep()` hourly -> POST /samskara-sweep

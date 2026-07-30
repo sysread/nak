@@ -6,28 +6,29 @@
 // user. The model's final text is discarded - the memory_* side effects
 // ARE the output.
 //
-// Drive shape - it drains OLDER threads, not "this" one. This module is
-// fired from getStreamingResponse's terminal tail (via edgeWaitUntil)
-// once per completed chat turn, but it does NOT reflect the thread that
-// just finished. claim_next_thread_for_reflection only claims a thread
-// whose newest message lands on a PRIOR calendar day in the user's
-// timezone and that carries >= 2 user messages. So each turn-completion
-// opportunistically drains ONE reflection-eligible thread from the
-// existing day-gated queue. The day-gate exists because memory_recall
-// has no per-conversation source attribution: a memory derived from a
+// Drive shape - the hourly cron sweep is the ONLY driver. Each tick
+// drains the day-gated queue one thread at a time (claim -> reflect ->
+// claim the next) until the queue is empty, the per-tick cap is hit,
+// or the tick's time budget runs out; the next hourly tick resumes.
+// The sweep claim only offers a thread whose newest message lands on a
+// PRIOR calendar day in the owner's timezone and that carries >= 2
+// user messages. The day-gate exists because memory_recall has no
+// per-conversation source attribution: a memory derived from a
 // half-finished thought must not ride straight back into the same
-// conversation that produced it. Faithful to the browser supervisor's
-// behaviour (same queue, same gate); only the driver changed from a
-// supervisor poll to a chat-activity piggyback.
+// conversation that produced it. Reflection deliberately does NOT ride
+// the chat turn's waitUntil tail the way curation and samskara do:
+// memory formation gets a fixed, predictable cadence (edit or retry a
+// conversation any time before the next hourly tick after midnight and
+// reflection only ever sees the corrected thread), and the queue
+// drains for dormant users at the same rate as active ones.
 //
-// No lease coordinator. The browser ran reflection under a
-// LeaseCoordinator so that only one of several open tabs/devices drove
-// the supervisor at a time. Server-side that coordination is moot: the
-// claim RPC's atomic per-thread claim+TTL IS the mutual exclusion. Two
-// concurrent edge invocations that both call claim simply get two
-// different threads (or one gets none) - more reflection throughput, not
-// a correctness problem. So this module claims with a fresh per-call
-// holder id and skips the lease machinery entirely.
+// No lease coordinator, and no global singleton guard. The claim RPC's
+// atomic per-thread claim+TTL IS the mutual exclusion: two overlapping
+// ticks that both call claim simply get two different threads (or one
+// gets none). Within a tick the drain loop is strictly sequential, so
+// at most one reflection agent per tick is writing to the memory store
+// at a time - which is what keeps near-simultaneous duplicate writes
+// unlikely without any cross-invocation coordination.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createEdgeLogger } from '../../_shared/edge-log.ts';
@@ -450,106 +451,17 @@ function buildReflectionToolbox(): Toolbox {
   };
 }
 
-/**
- * Resolve the user's display timezone for the day-gate. Stored in
- * profiles.settings.displayTimezone (Settings -> AI -> About you).
- * Falls back to UTC, matching the claim RPC's own p_timezone default.
- */
-async function loadDisplayTimezone(
-  adminClient: SupabaseClient,
-  userId: string,
-): Promise<string> {
-  const { data, error } = await adminClient
-    .from('profiles')
-    .select('settings')
-    .eq('user_id', userId)
-    .maybeSingle<{ settings: Record<string, unknown> | null }>();
-  if (error || !data?.settings) return 'UTC';
-  const tz = data.settings.displayTimezone;
-  return typeof tz === 'string' && tz.length > 0 ? tz : 'UTC';
-}
-
-/** Outcome of one reflectOneThread cycle, for the caller's diagnostic log. */
-export interface ReflectionCycleResult {
+/** Outcome of one claim+reflect cycle inside a sweep tick's drain loop. */
+interface ReflectionCycleResult {
   outcome: 'no-thread' | 'empty-slice' | 'reflected' | 'claim-lost' | 'error';
   threadId?: string;
   toolCalls?: number;
 }
 
 /**
- * Run one reflection cycle for `userId`: claim the oldest day-gate-
- * eligible thread, reflect on it, mark it done. A no-op when the queue
- * is empty. Best-effort and NON-throwing by contract - the caller fires
- * this from a chat turn's background tail and must not let a reflection
- * failure touch the turn's recorded outcome, so every failure path is
- * caught here, logged, and folded into an `error` result. Progress is
- * logged through an edge logger so the browser Logs drawer sees the
- * cycle even though it runs server-side; flush() at the end guarantees
- * the final line lands before the waitUntil tail tears down.
- */
-export async function reflectOneThread(
-  adminClient: SupabaseClient,
-  userId: string,
-): Promise<ReflectionCycleResult> {
-  const log = createEdgeLogger(userId, 'reflection');
-  try {
-    const timezone = await loadDisplayTimezone(adminClient, userId);
-    // Fresh holder per call - see the no-lease rationale in the file
-    // preamble. The claim+mark pair share this one holder; nothing else
-    // needs to recognise it.
-    const holderId = crypto.randomUUID();
-
-    // Claim atomically. p_user_id is the b-strict escape hatch: the
-    // service-role admin client has no auth.uid(), so the RPC scopes to
-    // the thread owner via coalesce(p_user_id, auth.uid()).
-    const { data: claimRows, error: claimErr } = await adminClient.rpc(
-      'claim_next_thread_for_reflection',
-      {
-        p_holder_id: holderId,
-        p_ttl_seconds: REFLECTION_CLAIM_TTL_SECONDS,
-        p_timezone: timezone,
-        p_user_id: userId,
-      },
-    );
-    if (claimErr) {
-      throw new Error(`claim_next_thread_for_reflection failed: ${claimErr.message}`);
-    }
-    const claim = Array.isArray(claimRows) ? claimRows[0] : claimRows;
-    if (!claim || typeof claim.thread_id !== 'string') {
-      // Routine: the day-gated queue is empty on most turns. trace tier
-      // so it's available when actively watching but stays out of the
-      // default drawer view.
-      log.trace('no reflection-eligible thread to drain this turn');
-      return { outcome: 'no-thread' };
-    }
-    const threadId = claim.thread_id as string;
-    const terminalMsgId = claim.terminal_msg_id as string;
-    return await reflectClaimedThread(
-      adminClient,
-      userId,
-      log,
-      threadId,
-      terminalMsgId,
-      holderId,
-    );
-  } catch (err) {
-    log.error(
-      'reflection cycle failed',
-      err instanceof Error ? err : new Error(String(err)),
-    );
-    return { outcome: 'error' };
-  } finally {
-    // Flush before the waitUntil tail settles so the outcome line (the
-    // one worth seeing) isn't dropped as an un-awaited broadcast.
-    await log.flush();
-  }
-}
-
-/**
- * The run half shared by both reflection drivers (the chat-turn tail
- * and the cron catch-up sweep): the caller already holds the
+ * The run half of one drain cycle: the caller already holds the
  * per-thread claim; this reflects the thread and marks it done.
- * Throws on infrastructure failure - each driver owns its own
+ * Throws on infrastructure failure - the cycle wrapper owns the
  * catch/log/flush posture.
  */
 async function reflectClaimedThread(
@@ -590,10 +502,9 @@ async function reflectClaimedThread(
         toolbox: buildReflectionToolbox(),
         baseCtx,
         apiKey,
-        // No outer turn to cancel - reflection runs in a background
-        // tail or a cron tick, after any user-visible work already
-        // shipped. A never-aborting signal lets runHeadlessAgent run
-        // to its own maxRounds backstop.
+        // No outer turn to cancel - reflection runs in a cron tick,
+        // never on a user-visible path. A never-aborting signal lets
+        // runHeadlessAgent run to its own maxRounds backstop.
         signal: new AbortController().signal,
       },
       // parentDepth 0: reflection is a top-level agent (depth 1), same
@@ -629,17 +540,93 @@ async function reflectClaimedThread(
 }
 
 /**
- * One cron catch-up tick: claim the most-overdue reflection-eligible
- * thread across ALL users and reflect on it. The chat-turn tail is
- * reflection's primary driver but only fires when its owner
- * converses; this sweep drains queues the tail can't reach. One
- * thread per tick - the hourly schedule resumes the drain, matching
- * the other fleets' pacing. Double-driving with the tail is safe:
- * the per-thread claim columns are the mutual exclusion, so
- * whichever driver claims first wins. Non-throwing, same contract
- * as reflectOneThread.
+ * Per-tick thread cap for the sweep's drain loop. Bounds one tick's
+ * worst-case Venice spend; a backlog deeper than the cap drains
+ * across successive hourly ticks. Sequential on purpose - one
+ * reflection agent writing to the memory store at a time keeps
+ * near-simultaneous duplicate writes unlikely.
+ */
+const REFLECTION_SWEEP_MAX_THREADS = 5;
+
+/**
+ * Wall-clock cutoff for claiming ANOTHER thread within one tick. The
+ * hosted edge runtime kills an isolate at roughly 400s (see
+ * DEEP_SLEEP_BUDGET_MS in deep_sleep.ts for the fuller story), so a
+ * loop that kept claiming until empty would compound several long
+ * reflections into a guaranteed mid-flight death. Stopping new claims
+ * at 180s leaves a reflection claimed at the cutoff over 200s to
+ * finish - most do. One that doesn't dies exactly as it would have
+ * under a single-claim tick, and the attempt cap (3 claims per
+ * terminal message) keeps such a thread from wedging the queue.
+ */
+const REFLECTION_SWEEP_BUDGET_MS = 180_000;
+
+/** What one sweep tick did, and why its drain loop stopped. */
+export interface ReflectionSweepSummary {
+  reflected: number;
+  claimLost: number;
+  emptySlice: number;
+  stoppedBy: 'empty-queue' | 'cap' | 'budget' | 'error';
+}
+
+/**
+ * One cron tick: drain the reflection queue across ALL users, one
+ * thread at a time - claim the most-overdue eligible thread, reflect
+ * it, claim the next - until the queue is empty, the per-tick cap is
+ * hit, or the time budget is spent. The hourly schedule resumes the
+ * drain. This is reflection's ONLY driver (see the file preamble for
+ * why it does not ride the chat turn's tail). Non-throwing: cycle
+ * failures are folded into the summary, and an `error` cycle stops
+ * the loop rather than hot-looping a broken dependency.
  */
 export async function runReflectionSweepTick(
+  adminClient: SupabaseClient,
+): Promise<ReflectionSweepSummary> {
+  const startedAt = Date.now();
+  const summary: ReflectionSweepSummary = {
+    reflected: 0,
+    claimLost: 0,
+    emptySlice: 0,
+    stoppedBy: 'cap',
+  };
+  for (let i = 0; i < REFLECTION_SWEEP_MAX_THREADS; i++) {
+    // The first cycle always runs regardless of the budget - a tick
+    // must make at least one unit of progress, same guarantee the
+    // old single-claim tick gave.
+    if (i > 0 && Date.now() - startedAt > REFLECTION_SWEEP_BUDGET_MS) {
+      summary.stoppedBy = 'budget';
+      return summary;
+    }
+    const cycle = await sweepClaimAndReflectOnce(adminClient);
+    switch (cycle.outcome) {
+      case 'no-thread':
+        summary.stoppedBy = 'empty-queue';
+        return summary;
+      case 'error':
+        summary.stoppedBy = 'error';
+        return summary;
+      case 'reflected':
+        summary.reflected += 1;
+        break;
+      case 'claim-lost':
+        // Another tick's claim outlived ours mid-run; the queue may
+        // still hold more work, so keep draining.
+        summary.claimLost += 1;
+        break;
+      case 'empty-slice':
+        summary.emptySlice += 1;
+        break;
+    }
+  }
+  return summary;
+}
+
+/**
+ * One drain cycle: claim the most-overdue reflection-eligible thread
+ * across all users and reflect it. Non-throwing; every failure path
+ * folds into an `error` result for the loop to act on.
+ */
+async function sweepClaimAndReflectOnce(
   adminClient: SupabaseClient,
 ): Promise<ReflectionCycleResult> {
   const holderId = crypto.randomUUID();
