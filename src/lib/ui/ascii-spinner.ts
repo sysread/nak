@@ -1,9 +1,10 @@
 /**
- * Frame data for the text spinner that marks an in-flight row in the
- * wiki librarian-run strip (`src/components/AsciiSpinner.svelte`,
- * rendered by `src/screens/Wiki.svelte`). The sequence and the wrap
- * arithmetic live here so they can be tested without mounting a
- * component or running timers.
+ * Frame data for the text spinner that marks an in-flight wiki-agent
+ * surface (`src/components/AsciiSpinner.svelte`, rendered by the
+ * librarian-run strip in `src/screens/Wiki.svelte` and the Skipped
+ * panel's Retrying button in `WikiSkippedPanel.svelte`). The sequence
+ * and the wrap arithmetic live here so they can be tested without
+ * mounting a component or running timers.
  *
  * The memory strip does NOT use this - it runs `SleepSpinner.svelte`,
  * whose frames are CSS keyframes rather than data, because its passes

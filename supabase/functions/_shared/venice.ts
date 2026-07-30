@@ -340,16 +340,22 @@ async function veniceCompleteOnce(opts: VeniceCompleteOptions): Promise<unknown>
 
   if (!res.ok) {
     const errBody = await res.text().catch(() => '');
+    // 600, not the 200 the other endpoints use: completions errors are
+    // the ones that land verbatim in user-facing surfaces (the Wiki
+    // Skipped panel stores this message as the per-thread skip reason),
+    // and Venice's context-length 400 body runs past 200 chars - the
+    // old cap cut it mid-sentence ("...for a total of at least 1638").
+    // 600 covers every observed completions error body whole.
     if (res.status === 429) {
       throw new VeniceError(
-        `Venice chat/completions 429: ${errBody.slice(0, 200)}`,
+        `Venice chat/completions 429: ${errBody.slice(0, 600)}`,
         'rate_limit',
         429,
         parseVeniceRetryAfterMs(res.headers)
       );
     }
     throw new VeniceError(
-      `Venice chat/completions ${res.status}: ${errBody.slice(0, 200)}`,
+      `Venice chat/completions ${res.status}: ${errBody.slice(0, 600)}`,
       'http',
       res.status
     );

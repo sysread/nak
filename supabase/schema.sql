@@ -9642,11 +9642,12 @@ begin
            wiki_claim_expires_at = null,
            wiki_failure_count = 0,
            wiki_last_skip_at = now(),
-           -- Truncate at 500 chars to keep the row reasonable when the
-           -- error body is a large HTTP response. The UI shows enough
-           -- to identify the failure mode (Venice's classifier message
-           -- is short); a longer body would just bloat the row store.
-           wiki_last_skip_reason = nullif(left(coalesce(p_reason, ''), 500), ''),
+           -- Truncate at 1000 chars to keep the row reasonable when
+           -- the error body is a large HTTP response. Sized above the
+           -- edge client's 600-char completions error-body cap plus
+           -- its message prefix, so the Skipped panel shows the whole
+           -- captured error rather than clipping it a second time.
+           wiki_last_skip_reason = nullif(left(coalesce(p_reason, ''), 1000), ''),
            -- If the agent gave up with a content-classifier reason,
            -- we know the in-agent primary -> fallback retry already
            -- ran (the wiki agent always tries the fallback for that
@@ -10721,7 +10722,10 @@ begin
            wiki_record_claim_expires_at = null,
            wiki_record_failure_count = 0,
            wiki_record_last_skip_at = now(),
-           wiki_record_last_skip_reason = nullif(left(coalesce(p_reason, ''), 500), '')
+           -- 1000 mirrors the wiki agent's skip-reason cap: above the
+           -- edge client's 600-char completions error-body slice plus
+           -- prefix, so the stored reason is never clipped twice.
+           wiki_record_last_skip_reason = nullif(left(coalesce(p_reason, ''), 1000), '')
      where id = p_thread_id;
     return 'skipped';
   end if;

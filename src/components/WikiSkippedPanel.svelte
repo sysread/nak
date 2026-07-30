@@ -37,6 +37,7 @@
   import { app } from '$lib/state.svelte';
   import { navigate } from '$lib/routing.svelte';
   import { onWikiChange, emitWikiChange } from '$lib/wiki-events';
+  import AsciiSpinner from './AsciiSpinner.svelte';
   import {
     displayTitle,
     formatSkipTimestamp,
@@ -275,7 +276,18 @@
                 disabled={retrying[row.threadId] || row.retrying}
                 title="Re-run the wiki agent against this conversation now"
               >
-                {retrying[row.threadId] || row.retrying ? 'Retrying...' : 'Retry'}
+                {#if retrying[row.threadId] || row.retrying}
+                  <!-- Same in-flight cue as the librarian strip. The
+                       aria-hidden wrapper is load-bearing: the spinner
+                       swaps its glyph ten times a second, and a screen
+                       reader would announce every frame; the button's
+                       "Retrying..." text is the accessible signal. -->
+                  <span class="wiki-skipped-retry-spinner" aria-hidden="true"
+                    ><AsciiSpinner /></span
+                  >Retrying...
+                {:else}
+                  Retry
+                {/if}
               </button>
               {#if retryError[row.threadId]}
                 <span class="wiki-skipped-retry-error" role="status">
@@ -383,6 +395,9 @@
   .wiki-skipped-retry:disabled {
     cursor: progress;
     opacity: 0.7;
+  }
+  .wiki-skipped-retry-spinner {
+    margin-right: 0.4rem;
   }
   .wiki-skipped-retry-error {
     color: var(--danger, #b91c1c);
