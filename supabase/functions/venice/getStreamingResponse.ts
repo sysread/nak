@@ -75,7 +75,6 @@ import {
   stripGeneratedImage,
   type GeneratedImagePayload,
 } from './tools/_generated_image.ts';
-import { reflectOneThread } from './agents/reflection.ts';
 import { curateOnTurnTail } from './agents/curation.ts';
 import { samskaraOnTurnTail } from './agents/samskara.ts';
 import { secondThoughtsOnTurnTail } from './agents/second_thoughts.ts';
@@ -1169,26 +1168,20 @@ export async function getStreamingResponse(
       `${runId} end terminalKind=${terminalKind} persistedId=${persistedId || 'none'}`,
     );
 
-    // Reflection piggyback. A completed chat turn is the trigger that
-    // drains ONE day-gate-eligible OLDER thread from the reflection
-    // queue (not this thread - see agents/reflection.ts for why). The
-    // hourly /reflection-sweep cron route is the catch-up sibling for
-    // users who stopped conversing; the per-thread claim makes the two
-    // drivers safe together. Runs here in the already-detached waitUntil tail,
-    // after the response shipped and the channels tore down, so it never
-    // delays the user-visible turn. reflectOneThread is non-throwing and
-    // logs its own outcome (to the function log + the user's Logs
-    // drawer); the catch is a defensive backstop so a reflection bug
-    // still can't disturb this turn's already-committed row.
+    // Reflection deliberately does NOT run here. Memory formation is
+    // sweep-only (the hourly /reflection-sweep cron drain) so it keeps
+    // a fixed, predictable cadence: the user can edit or retry a
+    // conversation any time before the first hourly tick after the
+    // day-gate opens and reflection only ever sees the corrected
+    // thread. See the drive-shape preamble in agents/reflection.ts.
     if (terminalKind === 'completed') {
       // Second-thoughts reflex, FIRST in the tail: re-read the turn we
       // just committed and write a self-doubt verdict onto the terminal
       // assistant row. The browser hydrates it via the messages UPDATE
       // echo (subscribeToMessages listens for UPDATE), so the
       // per-message slide-down lands a beat after the reply settles.
-      // Ordered ahead of curation/samskara/reflection so the
-      // user-visible verdict isn't starved behind reflection, which can
-      // span minutes of tool rounds. Guarded on persistedId - a turn
+      // Ordered ahead of curation/samskara so the user-visible verdict
+      // ships before the housekeeping work. Guarded on persistedId - a turn
       // that committed no assistant row (should not happen on the
       // 'completed' path, but cheap to check) has nothing to review.
       if (persistedId) {
@@ -1204,33 +1197,25 @@ export async function getStreamingResponse(
           log.error(`${runId} second-thoughts tail failed:`, err);
         }
       }
-      // Curation piggyback, BEFORE reflection on purpose: the chain is
-      // sequential and reflection can span minutes of tool rounds,
-      // while curation is a handful of quick completions whose first
+      // Curation piggyback: a handful of quick completions whose first
       // unit (auto-title) is the user-visible one - a brand-new
       // conversation sits on the 'New conversation' placeholder until
-      // it runs. Same non-throwing contract and hourly catch-up
-      // sibling (/curation-sweep) as reflection below.
+      // it runs. Non-throwing, with an hourly catch-up sibling
+      // (/curation-sweep) for users who stop conversing.
       try {
         await curateOnTurnTail(opts.adminClient, opts.userId);
       } catch (err) {
         log.error(`${runId} curation tail failed:`, err);
       }
-      // Samskara before reflection: reflection can span minutes of
-      // tool rounds, and the samskara rotation carries the fleet's
-      // only hard timing window (reaction-classify must catch a fired
-      // cohort 1-10 minutes after the fire - this turn's user message
-      // is what resolves the PREVIOUS turn's cohort). The hourly
+      // Samskara last: the rotation carries the fleet's only hard
+      // timing window (reaction-classify must catch a fired cohort
+      // 1-10 minutes after the fire - this turn's user message is what
+      // resolves the PREVIOUS turn's cohort). The hourly
       // /samskara-sweep cron is the catch-up sibling.
       try {
         await samskaraOnTurnTail(opts.adminClient, opts.userId);
       } catch (err) {
         log.error(`${runId} samskara tail failed:`, err);
-      }
-      try {
-        await reflectOneThread(opts.adminClient, opts.userId);
-      } catch (err) {
-        log.error(`${runId} reflection tail failed:`, err);
       }
     }
 

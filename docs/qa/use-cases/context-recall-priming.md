@@ -170,7 +170,7 @@ the recall-quality properties those subsystems now owe.
 8. **Timeless writer (reflection).** In a SEPARATE existing thread (>= 2
    user messages, last activity on a prior calendar day so the drain is
    eligible), hold a short exchange that teaches one clear new fact about
-   the user. Let reflection run (chat-turn tail, or the hourly sweep; see
+   the user. Let reflection run (the hourly sweep; see
    [reflection-drain](./reflection-drain.md) to force it). Inspect the
    newest memory:
 

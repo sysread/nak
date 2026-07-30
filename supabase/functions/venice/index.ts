@@ -861,16 +861,15 @@ const handleWikiRecordsSweep = sweepHandler(runWikiRecordsSweepTick);
 const handleWikiLibrarianSweep = sweepHandler(runWikiLibrarianSweepTick);
 const handleRemSweep = sweepHandler(runRemSweepTick);
 const handleDeepSleepSweep = sweepHandler(runDeepSleepSweepTick);
-// Reflection's catch-up drain. The primary driver stays the chat
-// turn's waitUntil tail in getStreamingResponse; this route exists so
-// a user who stops conversing still gets their queue drained, and so
-// reflection's trigger surface is visible in this routing table like
-// every other fleet's.
+// Reflection's ONLY driver: an hourly drain loop that claims and
+// reflects eligible threads one at a time until the queue is empty or
+// the tick's cap/budget stops it. Deliberately not tail-driven - see
+// the drive-shape preamble in agents/reflection.ts.
 const handleReflectionSweep = sweepHandler(runReflectionSweepTick);
 // Curation catch-up drain (auto-title, thread topics, summaries,
 // memory topics, recipe topics). The primary driver is the chat
-// turn's waitUntil tail in getStreamingResponse, same dual-driver
-// shape as reflection; this route is what drains work created
+// turn's waitUntil tail in getStreamingResponse; this route is
+// what drains work created
 // server-side (rem / deep-sleep consolidations re-queue memory tags)
 // or left behind by a failed tail attempt.
 const handleCurationSweep = sweepHandler(runCurationSweepTick);

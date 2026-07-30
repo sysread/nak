@@ -488,7 +488,7 @@ export function subscribeToGroceryChanges(
 /**
  * Subscribe to any change on the signed-in user's memories. The
  * wiki-articles twin above, for the memory writers that all live
- * server-side now (reflection on the chat-turn tail, the rem and
+ * server-side now (the hourly reflection sweep, the rem and
  * deep-sleep librarian sweeps): the caller (Chat.svelte) routes the
  * notification into emitMemoryChange so an open Memories panel
  * refetches through the path it already had. Same coarse contract -

@@ -306,10 +306,13 @@ browser tab being open.** The fleet runs server-side in the
 venice edge function on two kinds of trigger:
 
 - **Chat-turn tail** - `getStreamingResponse` registers a
-  sequential curation -> samskara -> reflection chain under
+  sequential curation -> samskara chain under
   `EdgeRuntime.waitUntil` after each completed turn. The tail
   is the low-latency driver for work the user notices
-  in-session: thread titles, samskara mints, fresh memories.
+  in-session: thread titles, samskara mints. Reflection is
+  deliberately NOT in the chain - memory formation is
+  sweep-only so it keeps a fixed, predictable cadence (see
+  `memory.md`).
 - **pg_cron sweeps** - scheduled jobs that pg_net-POST a
   function route, as the catch-up and maintenance drivers.
   The minute ladder: embed backfill `*/5`, bias `:03`, wiki

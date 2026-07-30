@@ -412,15 +412,13 @@ A chat turn goes:
   `last_summarised_msg_id`. The chat loop creates that
   assistant message; the background workers pick it up on
   their next poll. See `./summaries.md`.
-- **Reflection** — driven directly from the completed-turn
-  tail. `getStreamingResponse` (the streaming orchestrator)
-  fires `reflectOneThread` via `EdgeRuntime.waitUntil` after
-  the chat response ships, draining one day-gate-eligible
-  thread from the reflection queue as background work. The
-  chat loop creates the terminal assistant message that makes
-  a thread eligible; reflection acts on it on the same turn's
-  tail (after at least a calendar day has elapsed). See
-  `./memory.md`.
+- **Reflection** — no direct call. The chat loop creates the
+  terminal assistant message that makes a thread eligible;
+  the hourly reflection sweep (reflection's only driver)
+  picks the thread up once its newest message is at least a
+  calendar day old. Deliberately not tail-driven, so edits
+  and retries any time before that sweep are what reflection
+  sees. See `./memory.md`.
 - **Topics** — `Chat.svelte` owns the `selectedTopics` /
   `topicsVocabulary` state for the drawer's topic-filter
   dropdown and threads `selectedTopics` through the three
