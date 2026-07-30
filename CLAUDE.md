@@ -740,7 +740,13 @@ covers the full import graph each function deploys with.
 
 If you prefer raw pnpm (or mise isn't available - ephemeral
 sandboxes, first-time checkouts), the manual sequence is
-`pnpm install && pnpm test && pnpm check && pnpm lint && pnpm build`.
+`pnpm install && pnpm test && pnpm check && pnpm lint && pnpm build
+&& pnpm knip`. Cloud sessions cannot run `mise run check` at all:
+mise resolves the whole `[tools]` set before any task, and aqua reads
+version lists from the GitHub releases API, which a session scoped to
+this repo may not reach. The raw sequence is the way through. See
+[`docs/dev/testing.md`](docs/dev/testing.md) for the misleading error
+it surfaces as.
 `pnpm build` is in the gate because Vite/Rollup failures
 (IIFE/code-splitting in worker bundles, PWA manifest injection,
 dynamic-import graphs tsc is happy with but Rollup chokes on) only
@@ -755,6 +761,20 @@ Always run the gate before committing - including for CSS- or
 markdown-only changes. The test suite includes a postcss parse of
 every stylesheet under `src/` (`tests/styles.test.ts`) and a
 markdownlint pass over the doc tree (`tests/markdownlint.test.ts`).
+
+**Adding a test that mounts a component or touches a DOM global?
+Register it in `environmentMatchGlobs` in `vite.config.ts` in the
+same change.** vitest defaults to the `node` environment and jsdom
+is opt-in per file BY NAME, so a new file that needs a DOM dies on
+`ReferenceError: document is not defined`. The list cannot know
+about a file that did not exist when it was written, which makes
+this invisible on a branch that forked before the split: the test
+passes locally under the old jsdom default, the rebase is clean, the
+files are disjoint, and it fails only in CI.
+
+Full details - the other two test islands, the guardrail tests,
+integration-test gating, `tests/setup.ts` - are in
+[`docs/dev/testing.md`](docs/dev/testing.md).
 
 ### Check exit codes, not piped output
 
@@ -778,7 +798,7 @@ bitten us:
   imported by Y, dynamic import will not move module into another
   chunk.` Means your code-splitting isn't actually splitting because
   another module pulls the same target statically.
-- `(!) Some chunks are larger than 500 kB after minification.`
+- `(!) Some chunks are larger than 750 kB after minification.`
   Advisory; the asset list tells you which chunk is over.
 
 When doing bundle-shape work, grep the build output for `(!)` and

@@ -170,6 +170,11 @@ docs imported via `import.meta.glob`.
   data-touching feature depends on. A broken schema
   migration halts the deploy; a broken build halts the
   publish.
+- **Testing** — the gate (`mise run check`) exists to keep a
+  green Tests job from landing a change that breaks the
+  deploy: `pnpm build` runs in the gate, and the postcss and
+  markdownlint guardrail tests close the CSS and markdown
+  versions of the same hole. See `./testing.md`.
 - **Help** — Vite's `import.meta.glob` is what makes the
   user docs ship with the PWA. Each doc file becomes its
   own lazy chunk in `dist/assets/`. See `./help.md`.
