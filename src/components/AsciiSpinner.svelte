@@ -1,7 +1,9 @@
 <!--
-  Text spinner for in-flight rows in the manual librarian-run strips
-  (`src/screens/Memories.svelte`). Cycles the classic terminal bar
-  frames `- \ | /` on a timer.
+  Text spinner for in-flight wiki-agent surfaces: the librarian-run
+  strip's step rows (`src/screens/Wiki.svelte`) and the Skipped
+  panel's Retrying button (`src/components/WikiSkippedPanel.svelte`).
+  The memory strip uses `SleepSpinner.svelte` instead. Cycles the
+  classic terminal bar frames `- \ | /` on a timer.
 
   Why a JS timer instead of the CSS `transform: rotate()` trick the
   chat tool rows use on their U+21BB glyph (`.tool-status.status-pending`
