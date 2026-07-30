@@ -228,33 +228,30 @@ gate failure, not a lint suggestion.
   `--environment node` to a file that is on the jsdom list still
   gets jsdom. To test what an unlisted file would do, remove the
   entry.
-- **`mise` may not resolve its tools in a restricted sandbox, and
-  the error it prints is a red herring.** You get
-  `aqua:charmbracelet/gum@latest: no versions found for
-  aqua:charmbracelet/gum matching date filter`, which fails
-  `mise run check` before any gate task runs. **There is no date
-  filter.** aqua reads version lists from the GitHub releases API,
-  and a session whose GitHub access is scoped to this repo alone
-  gets denied for `charmbracelet/gum` and `cli/cli`; mise reports
-  the resulting empty list with that phrasing. Do not go looking
-  for a cutoff setting - `mise settings` has none.
+- **Every `[tools]` entry in `.mise.toml` must be an exact pin, or
+  `mise run check` dies in restricted sandboxes - and the error it
+  prints is a red herring.** A `latest` version spec makes aqua call
+  the GitHub releases-list API (`api.github.com/repos/<x>/releases`),
+  which the cloud agent proxy 403s for any repo outside the session's
+  scope. mise renders the resulting empty list as `no versions found
+  for aqua:<tool> matching date filter` - **there is no date filter**;
+  `mise settings` has none. Do not go looking for a cutoff setting.
+  An exact pin skips the list call and downloads the release asset
+  directly, which the sandbox allows - verified by pinning `gh` and
+  `gum` in a cloud session and watching the full gate go green,
+  Deno island included (jsr.io and registry.npmjs.org are reachable).
 
-  Note the blast radius is wider than the tools involved: **mise
-  resolves the entire `[tools]` set before running any task**, so
-  `gum` and `gh` - which only `supabase-init`, `doctor`,
-  `bootstrap`, and `setup-pages` use, and which already degrade
-  gracefully when absent - block the gate, which needs neither.
-  Removing one would not help while the other remains. Only the two
-  entries floating on `latest` fail; `aqua:supabase/cli` is pinned to
-  an exact version, never queries the releases list, and installs
-  fine. Full investigation in
-  [`./in-progress/mise-in-cloud-sandbox.md`](./in-progress/mise-in-cloud-sandbox.md).
+  Note the blast radius is wider than the tool involved: **mise
+  resolves the entire `[tools]` set before running any task**, so a
+  single floating entry blocks the gate even when the gate never
+  uses that tool. If the gate suddenly fails this way in a sandbox,
+  someone reintroduced a `latest` spec - pin it.
 
-  The fallback is the raw pnpm sequence (`pnpm install && pnpm test
-  && pnpm check && pnpm lint && pnpm build && pnpm knip`) - note it
-  must include `knip`, which is part of the gate. That sequence skips
-  the Deno island, so a change touching `supabase/functions/` is not
-  fully covered by it.
+  If mise itself is unavailable, the fallback is the raw pnpm
+  sequence (`pnpm install && pnpm test && pnpm check && pnpm lint
+  && pnpm build && pnpm knip`) - note it must include `knip`, which
+  is part of the gate. That sequence skips the Deno island, so a
+  change touching `supabase/functions/` is not fully covered by it.
 - **Piping a gate command replaces its exit code** with the pipe
   tail's, so a failed gate reads as success and a chained `git
   commit` runs anyway. Capture the status explicitly or run the

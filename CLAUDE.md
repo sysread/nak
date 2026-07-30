@@ -741,12 +741,13 @@ covers the full import graph each function deploys with.
 If you prefer raw pnpm (or mise isn't available - ephemeral
 sandboxes, first-time checkouts), the manual sequence is
 `pnpm install && pnpm test && pnpm check && pnpm lint && pnpm build
-&& pnpm knip`. Cloud sessions cannot run `mise run check` at all:
-mise resolves the whole `[tools]` set before any task, and aqua reads
-version lists from the GitHub releases API, which a session scoped to
-this repo may not reach. The raw sequence is the way through. See
-[`docs/dev/testing.md`](docs/dev/testing.md) for the misleading error
-it surfaces as.
+&& pnpm knip`. Cloud sessions run `mise run check` normally - every
+`[tools]` entry in `.mise.toml` is an exact pin, and that is
+load-bearing: a `latest` spec needs a GitHub releases-list API call
+the sandbox proxy blocks, and mise resolves the whole `[tools]` set
+before any task, so one floating entry aborts the gate. See
+[`docs/dev/testing.md`](docs/dev/testing.md) for the misleading
+error it surfaces as.
 `pnpm build` is in the gate because Vite/Rollup failures
 (IIFE/code-splitting in worker bundles, PWA manifest injection,
 dynamic-import graphs tsc is happy with but Rollup chokes on) only
