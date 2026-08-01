@@ -220,7 +220,11 @@ through them.
   on `buildToolList`. MCP server catalogs can be large
   (Fastmail's 10 tools). Per-toolbox enablement gates which
   schemas are armed; gated MCP toolboxes follow the same
-  shape as built-in toolboxes.
+  shape as built-in toolboxes. (The /stream envelope separately
+  carries the FULL catalog - disabled MCP boxes included - via
+  `buildToolCatalog` for mid-turn toolbox rearming; that is
+  browser-to-function POST weight only, never Venice-wire or
+  model-context cost. See `tools.md`.)
 - **Edge dispatch -** `performToolCall` in
   `supabase/functions/venice/performToolCall.ts` has a
   module-load registry populated by
