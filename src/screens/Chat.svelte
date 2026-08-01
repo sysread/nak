@@ -1877,9 +1877,8 @@
           prevTopics.some((p, i) => p !== nextTopics[i]);
         // If the toolboxes_enabled column changed on the active
         // thread, drive the composer's brief flash so a human eye
-        // notices the LLM-initiated state flip. Under streaming-root
-        // the in-process onToolboxesEnabledChange handler is dead
-        // (tools execute server-side), so the realtime UPDATE echo is
+        // notices the LLM-initiated state flip. toggle_toolbox
+        // executes server-side, so the realtime UPDATE echo is
         // the only signal we have here. User-initiated flips path
         // through setToolboxEnabled, which patches the local thread
         // row optimistically before the realtime UPDATE arrives - so
@@ -4334,18 +4333,6 @@
                   updated_at: new Date().toISOString(),
                 });
               }
-            },
-            onToolboxesEnabledChange: (enabled) => {
-              patchThread(ctx.threadId, {
-                toolboxes_enabled: [...enabled],
-              });
-              // Brief flash on the composer toolbox so a human eye
-              // notices the LLM-initiated state flip. User-initiated
-              // flips don't flash (the click itself is the feedback).
-              toolboxFlash = true;
-              setTimeout(() => {
-                toolboxFlash = false;
-              }, 600);
             },
             onIntuitionUpdate: (payload: IntuitionPayload) => {
               // Patch the in-memory thread row so the modal and any
