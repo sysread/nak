@@ -80,6 +80,11 @@ import { samskaraOnTurnTail } from './agents/samskara.ts';
 import { secondThoughtsOnTurnTail } from './agents/second_thoughts.ts';
 import { createEdgeLogger } from '../_shared/edge-log.ts';
 import { runServerPriming, type PrimingInputs } from './priming.ts';
+import {
+  buildToolsFromCatalog,
+  enabledSetFromToggleResult,
+  type ToolCatalog,
+} from './tool_catalog.ts';
 
 // Magic flag the ask_user tool returns to suspend the round chain
 // pending a user answer. Mirrors src/lib/tools/ask_user.ts'
@@ -181,9 +186,20 @@ export interface OrchestratorOpts {
   /**
    * Full Venice wire body for the first round. Already shaped by the
    * browser via buildChatBody; the orchestrator copies it round-to-
-   * round, mutating only `messages` between rounds.
+   * round, mutating only `messages` between rounds - plus `tools`,
+   * rebuilt from `toolCatalog` after a successful toggle_toolbox.
    */
   bodyTemplate: VeniceWireBody;
+  /**
+   * The full tool catalog (always-on defs + every gated toolbox's
+   * defs), shipped by the browser alongside the pre-filtered
+   * bodyTemplate.tools. Lets the round chain rearm `body.tools` the
+   * moment the model enables a toolbox mid-turn, instead of the new
+   * box's tools staying undeclared until the next envelope POST.
+   * Absent (older browser build, malformed field) degrades to the
+   * frozen-array behavior.
+   */
+  toolCatalog?: ToolCatalog;
   /** Admin Supabase client (service role) for DB writes and Realtime. */
   adminClient: SupabaseClient;
   /**
@@ -697,6 +713,36 @@ export async function getStreamingResponse(
       for (const o of outcomes) {
         if (!o.ok) {
           log.error(`${runId} round ${round} ${o.request.name} failed: ${o.errorMessage}`);
+        }
+      }
+
+      // Rearm the wire tools array after a successful toggle_toolbox.
+      // The browser filtered bodyTemplate.tools against the toolbox
+      // state at envelope-POST time; without this rebuild, a toolbox
+      // the model enables mid-turn ships no tool schemas for the rest
+      // of the turn, and a backend that holds the model to the
+      // declared list coerces the intended write call onto the nearest
+      // declared name (observed as followup_create coming out as
+      // followup_list, repeatedly, right after a successful toggle).
+      // Last successful toggle wins - the tool replaces the whole set.
+      // Guarded on Array.isArray(body.tools): a turn that shipped no
+      // tools cannot have dispatched a toggle, so a missing array here
+      // means the field was deliberately stripped and must stay off
+      // the wire.
+      if (opts.toolCatalog && Array.isArray(body.tools)) {
+        for (let i = outcomes.length - 1; i >= 0; i -= 1) {
+          const o = outcomes[i];
+          if (!o.ok || o.request.name !== 'toggle_toolbox') continue;
+          const enabled = enabledSetFromToggleResult(o.result);
+          if (enabled === null) break;
+          body = {
+            ...body,
+            tools: buildToolsFromCatalog(opts.toolCatalog, enabled),
+          };
+          log.info(
+            `${runId} round ${round} rearmed tools for [${enabled.join(', ')}]: ${(body.tools as unknown[]).length} defs`,
+          );
+          break;
         }
       }
 

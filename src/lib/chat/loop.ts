@@ -60,7 +60,7 @@
  */
 
 import type { VeniceMessage } from '../venice';
-import { buildToolList } from '../tools';
+import { buildToolList, buildToolCatalog } from '../tools';
 import { buildSystemPrompt } from './system-prompt';
 import { recordSubstrateStub } from '../samskara';
 import { createLogger } from '../logger.svelte';
@@ -107,11 +107,13 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   } = opts;
   // Copy so we can extend locally each round without mutating the caller.
   const history: VeniceMessage[] = [...opts.history];
-  // Snapshot the thread's current toolbox set. Mutated in the loop
-  // whenever the model calls `toggle_toolbox` so later rounds see the
-  // new wire catalog. Returned to the caller at the end for local
-  // state rehydration.
-  let toolboxesEnabled: readonly string[] = thread.toolboxes_enabled;
+  // Turn-entry snapshot of the thread's toolbox set. Shapes the first
+  // round's wire `tools` array and the metadata state block. A mid-turn
+  // toggle_toolbox lands server-side: the orchestrator rearms its own
+  // tools array from the envelope's toolCatalog, and the browser's
+  // thread row catches up via the realtime echo - nothing mutates this
+  // snapshot. Returned to the caller for local state rehydration.
+  const toolboxesEnabled: readonly string[] = thread.toolboxes_enabled;
   // Snapshot the user's connected MCP integrations as dynamic
   // toolboxes for this turn. Built once at turn entry from the
   // caller-supplied list (Chat.svelte computes it from app state via
@@ -261,6 +263,10 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       messages: requestMessages,
       signal,
       tools: buildToolList(toolboxesEnabled, mcpToolboxes),
+      // Full catalog for the server-side round chain: lets it rearm
+      // `tools` mid-turn when the model enables a toolbox, instead of
+      // the new box's schemas staying undeclared until the next turn.
+      toolCatalog: buildToolCatalog(mcpToolboxes),
       reasoningEffort,
       disableThinking,
       verbosity,

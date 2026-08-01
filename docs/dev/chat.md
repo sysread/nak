@@ -387,12 +387,15 @@ A chat turn goes:
   `runExchange` resolved from `ctx.threadId`. See
   `./exchange.md` for the full lifecycle and the
   `respondingElsewhere` / observer-side wiring.
-- **Tools** - every main-chat round's `/stream` request body
-  carries `tools: buildToolList(thread.toolboxes_enabled)` assembled
-  on the browser side. The function-side `performToolCall`
-  dispatches each call against its own (ported) tool registry,
-  persists results as `role='tool'` rows, and echoes them back into
-  the next round's request. See `./tools.md`.
+- **Tools** - the `/stream` envelope carries two tool payloads
+  assembled on the browser side: `tools: buildToolList(
+  thread.toolboxes_enabled)` (the first round's pre-filtered wire
+  array) and `toolCatalog: buildToolCatalog(...)` (the full
+  always-on + gated catalog the orchestrator rebuilds `tools` from
+  after a mid-turn `toggle_toolbox`). The function-side
+  `performToolCall` dispatches each call against its own (ported)
+  tool registry, persists results as `role='tool'` rows, and echoes
+  them back into the next round's request. See `./tools.md`.
 - **Memory (recall)** — `memory_recall` is a tool; the main model
   calls it whenever it judges prior memory context would help. The
   chat loop dispatches it like any other tool. See `./memory.md`.
@@ -496,12 +499,19 @@ A chat turn goes:
   [./auto-title.md](./auto-title.md).
 - **`toggle_toolbox` is the only tool that mutates the round
   loop's gated-toolbox set in-flight.** The function-side round
-  loop inspects each tool's name and, when it sees
-  `toggle_toolbox`, applies the new toolbox-enabled set in
-  memory (no DB re-read) and emits a `toolboxes_enabled_change`
-  broadcast event so the browser can flash the composer
-  toolbox button. If you add another tool that also flips
-  thread state, it needs similar special-casing or a refetch.
+  loop inspects each round's outcomes and, when a `toggle_toolbox`
+  call succeeded, rebuilds the wire `tools` array in memory from the
+  envelope's `toolCatalog` (no DB re-read; see
+  `venice/tool_catalog.ts`), so a toolbox the model enables is
+  callable in the SAME turn. Without the rebuild the array stays
+  frozen at its envelope-POST shape, and a model backend that holds
+  the model to the declared tool list coerces the intended write
+  call onto the nearest declared name. The browser has no in-process
+  signal for the flip - it notices via the `threads` realtime UPDATE
+  echo and flashes the composer toolbox button off the row delta
+  (see the drawer-refresh handler in `Chat.svelte`). If you add
+  another tool that also flips thread state, it needs similar
+  special-casing or a refetch.
 - **The round boundary needs an explicit signal; the browser
   can't derive it.** The round loop runs inside the edge function
   now, so the browser sees only a flat stream of deltas. The live

@@ -49,7 +49,7 @@
  * decay confidence. The user-facing surface keeps hard-delete because
  * "forget X" is user-directed and unambiguous. Don't collapse the two.
  */
-import type { ToolDef, OpenAIToolDef, Toolbox } from './types';
+import type { ToolDef, OpenAIToolDef, Toolbox, ToolCatalog } from './types';
 
 // --- Always-on tool schemas ------------------------------------------
 // Schema-only registrations: every browser `execute()` is dead - tool
@@ -643,6 +643,37 @@ export function buildToolList(
 }
 
 /**
+ * The full catalog for the /stream envelope: always-on defs plus every
+ * gated toolbox's defs keyed by name (static boxes in TOOLBOXES order,
+ * then MCP boxes). The venice orchestrator rebuilds the wire `tools`
+ * array from this after a mid-turn toggle_toolbox call - without it, a
+ * toolbox the model enables mid-turn ships no schemas until the next
+ * envelope POST, and a backend that holds the model to the declared
+ * tool list turns the enable-then-write flow into a wrong-tool call.
+ *
+ * Key order is load-bearing: the server iterates `gated` in insertion
+ * order, so emitting boxes here in the same order buildToolList walks
+ * them keeps a rebuilt array identical to what buildToolList would
+ * produce for the same enabled set
+ * (tests/tool-catalog-parity.test.ts pins this).
+ */
+export function buildToolCatalog(
+  mcpToolboxes: readonly Toolbox[] = []
+): ToolCatalog {
+  const gated: Record<string, OpenAIToolDef[]> = {};
+  for (const tb of GATED_TOOLBOXES) {
+    gated[tb.name] = tb.tools.map(toOpenAIToolDef);
+  }
+  for (const tb of mcpToolboxes) {
+    gated[tb.name] = tb.tools.map(toOpenAIToolDef);
+  }
+  return {
+    alwaysOn: alwaysOnToolbox.tools.map(toOpenAIToolDef),
+    gated,
+  };
+}
+
+/**
  * Look up the optional pretty-formatter overrides a tool may
  * declare on its schema. Used by the tool-call detail panel
  * (`src/components/ToolCalls.svelte` via `src/lib/ui/tool-calls.ts`)
@@ -668,5 +699,5 @@ export { toOpenAIToolDef };
 // `toggleToolbox` is read by chat/system-prompt.ts for its `.name`; re-exported
 // for that one consumer.
 export { toggleToolbox };
-export type { ToolDef, OpenAIToolDef, ToolContext, ToolResult, Toolbox } from './types';
+export type { ToolDef, OpenAIToolDef, ToolContext, ToolResult, Toolbox, ToolCatalog } from './types';
 export type { OpenAIToolCall } from './types';

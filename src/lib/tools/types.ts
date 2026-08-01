@@ -90,6 +90,24 @@ export interface OpenAIToolDef {
 }
 
 /**
+ * The full tool catalog the chat envelope ships alongside the
+ * pre-filtered wire `tools` array: always-on defs plus every gated
+ * toolbox's defs keyed by toolbox name (static boxes in TOOLBOXES
+ * order, then MCP integration boxes - key order is the order the
+ * server rebuilds in). The venice edge function rebuilds `tools`
+ * from this after a mid-turn toggle_toolbox, so a toolbox the model
+ * enables becomes callable in the same turn. Built by
+ * `buildToolCatalog` in `./index.ts`; the server-side consumer keeps
+ * its own structural mirror of this shape
+ * (supabase/functions/venice/tool_catalog.ts) - same two-interfaces
+ * posture as ToolContext.
+ */
+export interface ToolCatalog {
+  alwaysOn: OpenAIToolDef[];
+  gated: Record<string, OpenAIToolDef[]>;
+}
+
+/**
  * OpenAI / Venice wire shape for one item in `choices[0].message.tool_calls`.
  * `arguments` is a JSON-encoded string (not a parsed object) — the model
  * may emit fragments across SSE deltas, so we accumulate then parse once.

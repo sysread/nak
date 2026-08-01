@@ -59,6 +59,7 @@ import {
   type ModelPriceCaps,
 } from '../_shared/price-cap.ts';
 import { getStreamingResponse } from './getStreamingResponse.ts';
+import { coerceToolCatalog } from './tool_catalog.ts';
 import { retryWikiThread, runWikiSweepTick } from './agents/wiki.ts';
 import { runDigestSweepTick } from './agents/digest.ts';
 import { runWikiManualUpdate } from './agents/wiki_manual.ts';
@@ -1004,6 +1005,14 @@ interface StreamRequestBody {
    */
   body?: Record<string, unknown>;
   /**
+   * The full tool catalog (always-on defs + gated toolboxes keyed by
+   * name), built by buildToolCatalog() (src/lib/tools/index.ts).
+   * Coerced through coerceToolCatalog and forwarded so the round
+   * chain can rearm `tools` after a mid-turn toggle_toolbox. Optional:
+   * an envelope without it keeps the turn's tools array frozen.
+   */
+  toolCatalog?: unknown;
+  /**
    * Reconnect-only flag. When true, the function does NOT start a new
    * completion - it returns the existing in-flight envelope (or a
    * no-stream marker when nothing is in flight) so the browser can
@@ -1334,6 +1343,9 @@ async function handleStreamFresh(
         (id): id is string => typeof id === 'string' && UUID_RE.test(id),
       )
     : [];
+  // Malformed or absent catalogs coerce to null and are simply not
+  // forwarded - the turn degrades to a frozen tools array, never a 400.
+  const toolCatalog = coerceToolCatalog(body.toolCatalog);
   const promise = getStreamingResponse({
     apiKey,
     threadId: body.threadId,
@@ -1343,6 +1355,7 @@ async function handleStreamFresh(
     bodyTemplate: body.body as Record<string, unknown>,
     adminClient: ctx.admin,
     priming: body.priming,
+    ...(toolCatalog !== null ? { toolCatalog } : {}),
   });
   edgeWaitUntil(promise);
 
