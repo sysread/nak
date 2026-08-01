@@ -307,11 +307,11 @@ A chat turn goes:
   gateway records only the bare status code.
 - `ChatLoopHandlers` - the event surface the UI uses: text
   updates, tool start/done/error, persistence events,
-  `onToolboxesEnabledChange` (for the composer toolbox flash
-  when `toggle_toolbox` fires), `onGuardRetry` (a
-  function-side output guard discarded a junk attempt and is
-  re-rolling). Every handler is optional; the loop runs cleanly
-  with none of them. (Generated images are NOT delivered through
+  `onGuardRetry` (a function-side output guard discarded a junk
+  attempt and is re-rolling). Every handler is optional; the loop
+  runs cleanly with none of them. (A model-driven `toggle_toolbox`
+  flip has NO handler: the composer toolbox flash keys off the
+  `threads` realtime UPDATE echo in the drawer-refresh path.) (Generated images are NOT delivered through
   a handler: the function attaches them server-side per round and
   `GeneratedImageCard` resolves them by filename - see
   [./attachments.md](./attachments.md).)

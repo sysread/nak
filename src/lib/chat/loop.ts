@@ -112,7 +112,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   // toggle_toolbox lands server-side: the orchestrator rearms its own
   // tools array from the envelope's toolCatalog, and the browser's
   // thread row catches up via the realtime echo - nothing mutates this
-  // snapshot. Returned to the caller for local state rehydration.
+  // snapshot.
   const toolboxesEnabled: readonly string[] = thread.toolboxes_enabled;
   // Snapshot the user's connected MCP integrations as dynamic
   // toolboxes for this turn. Built once at turn entry from the
@@ -321,7 +321,6 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     stoppedByLimit,
     interrupted,
     conflictDetected,
-    toolboxesEnabled,
     awaitingUserAnswer,
   };
 }

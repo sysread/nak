@@ -51,14 +51,6 @@ export interface ChatLoopHandlers {
   /** A tool-result row has been written (fires once per tool). */
   onToolResultPersisted?(message: Message): void;
   /**
-   * The thread's gated-toolbox set changed during the round (triggered
-   * by a `toggle_toolbox` call from the model). UI surfaces this as
-   * a flash on the composer toolbox button. The handler receives the
-   * new enabled array verbatim; callers wanting a delta should diff
-   * against what they stored.
-   */
-  onToolboxesEnabledChange?(enabled: readonly string[]): void;
-  /**
    * The thread title changed mid-turn (triggered by an `update_title`
    * call from the model). Fires with the sanitised title the handler
    * actually wrote. The UI uses this to patch the thread row and
@@ -367,12 +359,6 @@ export interface ChatLoopResult {
    * Only set when userMessageId was provided; always false otherwise.
    */
   conflictDetected: boolean;
-  /**
-   * The thread's enabled gated-toolbox set at the end of the loop.
-   * Callers persist this back to local state so subsequent user sends
-   * see the same surface the model last saw.
-   */
-  toolboxesEnabled: readonly string[];
   /**
    * Non-null when the loop exited because the model called the
    * `ask_user` tool and is now waiting on a human answer. The tool-
