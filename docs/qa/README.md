@@ -71,7 +71,9 @@ One file per use-case under [`use-cases/`](./use-cases/), named
   reconnect, stale-row janitor.
 - [chat-reasoning-collapse](./use-cases/chat-reasoning-collapse.md) -
   the live reasoning panel's open / auto-collapse / manual-latch
-  behavior and its elapsed-ms + char-count header pills.
+  behavior, its elapsed-ms + char-count header pills, and the
+  click-anywhere-to-collapse body affordance shared with tool-call
+  cards.
 - [chat-recall-agents](./use-cases/chat-recall-agents.md) - the
   mid-turn recall agents (memory_recall and siblings), their drawer
   sources, and memory_conversation seeding.

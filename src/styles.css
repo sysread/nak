@@ -4210,6 +4210,10 @@ button.top-bar-pinned {
 
 .tool-detail {
   padding: 0.4rem 0.5rem 0.5rem;
+  /* The whole expanded panel collapses on click (ToolCalls.svelte);
+     the pointer signals the affordance. Text inside stays
+     drag-selectable regardless. */
+  cursor: pointer;
 }
 
 /* The "arguments" / "result" section headers inside the

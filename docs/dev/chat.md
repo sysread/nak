@@ -705,10 +705,12 @@ A chat turn goes:
   boundary stays open to the hand-off. Crucially the panel is NOT
   re-opened on every delta - the prior shape did that, which made a
   mid-stream collapse impossible because the next delta snapped it
-  back open. A header click sets `slot.reasoningUserToggled`, which
-  latches OFF every automatic open/close for the rest of the round
-  (the user's choice is law); it resets per round in
-  `onAssistantPersisted`. While streaming the header carries two pills
+  back open. A header click - or a click anywhere on the open body,
+  which collapses it (guarded by `clickShouldCollapse` in
+  `src/lib/ui/collapse-click.ts` so drag-selections don't count) -
+  sets `slot.reasoningUserToggled`, which latches OFF every automatic
+  open/close for the rest of the round (the user's choice is law); it
+  resets per round in `onAssistantPersisted`. While streaming the header carries two pills
   - elapsed-ms (frozen at `reasoningEndedAt`, the first answer delta)
   and a live char count - driven by the same rAF `nowMs` ticker as the
   tool-duration pills; that ticker's `$effect` gate now also runs while

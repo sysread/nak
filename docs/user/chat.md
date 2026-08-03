@@ -84,6 +84,12 @@ collapse or expand it yourself, even mid-stream. Your choice sticks
 for the rest of that response — Nak won't auto-open or auto-close it
 behind you once you've touched it.
 
+While the panel is open, clicking anywhere on the reasoning text
+also collapses it - a long trace would otherwise make you scroll
+all the way back up to the little header toggle. Selecting text to
+copy doesn't count as that click, so highlighting a passage won't
+snap the panel shut.
+
 After the fact, every message that has saved reasoning shows a
 thought-balloon "Reasoning" header at the top of the bubble. Click
 it to expand the block-quote back open — handy for reading *why* the
@@ -99,7 +105,11 @@ benefits from live web data - news, prices, sports scores, releases
 past its training cutoff, today's weather. When the model invokes
 the tool, you see a tool-call card in the transcript for the
 search, then the final answer. Any sources the search surfaced
-come back as citations attached to the reply.
+come back as citations attached to the reply. Click a tool-call
+card to expand its arguments and result; click anywhere on the
+expanded detail (except a link or button inside it) to collapse
+it again - no need to scroll back to the card's header row.
+Selecting text to copy won't collapse it.
 
 Sourced claims may be marked with small `^N^` superscripts in the
 text. Click one and Nak expands the sources list under the message
