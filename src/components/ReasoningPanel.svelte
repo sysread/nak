@@ -35,6 +35,7 @@
 -->
 <script lang="ts">
   import { cubicOut } from 'svelte/easing';
+  import { clickShouldCollapse } from '$lib/ui/collapse-click';
   import { safeSlide } from '$lib/ui/safe-slide';
 
   interface Props {
@@ -63,8 +64,9 @@
     elapsedPill?: string | null;
     charPill?: string | null;
     /**
-     * Fired when the user clicks the header. The streaming parent uses
-     * it to latch "the user took manual control" so its automatic
+     * Fired when the user toggles the panel - the header click, or the
+     * collapse-by-clicking-the-body path. The streaming parent uses it
+     * to latch "the user took manual control" so its automatic
      * open/collapse stops fighting the click for the rest of the turn.
      * Persisted rows don't pass it - there's no automation to suppress.
      */
@@ -166,9 +168,26 @@
            on a timer mid-stream, which can fire while the chat shell is
            display:none behind an open modal. Plain slide measures NaN height
            there and floods the console - see src/lib/ui/safe-slide.ts. -->
+      <!-- Clicking anywhere on the expanded body collapses it - a long
+           trace pushes the header toggle far off-screen, so collapsing
+           from the bottom shouldn't require scrolling back up. Pointer
+           convenience only: the header button above stays the
+           accessible, keyboard-reachable toggle, so no role/tabindex
+           here (a focusable wall of text would be a worse experience
+           for keyboard users than the existing button). The guard skips
+           the click that ends a text drag-selection so copying a
+           passage doesn't snap the panel shut. -->
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
       <blockquote
         class="reasoning-body"
+        title="Click to collapse"
         transition:safeSlide={{ duration, easing: cubicOut }}
+        onclick={(event) => {
+          if (!clickShouldCollapse(event.target, window.getSelection())) return;
+          open = false;
+          onToggle?.();
+        }}
       >
         {reasoning}
       </blockquote>
@@ -270,8 +289,11 @@
   /* Block-quote body — dark-grey italic per product direction.
      Left border is the block-quote affordance; pre-wrap preserves
      the streamed linebreaks; word-break guards against a long
-     un-broken identifier overflowing on narrow viewports. */
+     un-broken identifier overflowing on narrow viewports.
+     cursor: pointer signals the click-to-collapse affordance on the
+     whole body; text stays drag-selectable regardless. */
   .reasoning-body {
+    cursor: pointer;
     margin: 0.25rem 0 0;
     padding: 0.35rem 0 0.35rem 0.75rem;
     border-left: 3px solid var(--border);

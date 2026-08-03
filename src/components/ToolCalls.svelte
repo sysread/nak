@@ -43,6 +43,7 @@
   import type { OpenAIToolCall } from '$lib/tools';
   import type { Message } from '$lib/supabase';
   import Markdown from './Markdown.svelte';
+  import { clickShouldCollapse } from '$lib/ui/collapse-click';
   import {
     activityFor,
     DEFAULT_DETAIL_VIEW,
@@ -150,7 +151,27 @@
       {#if isOpen}
         {@const view = viewMode[call.id] ?? DEFAULT_DETAIL_VIEW}
         {@const formatters = formattersFor(call.function.name)}
-        <div class="tool-detail">
+        <!-- Clicking anywhere on the expanded detail collapses it - a
+             long result pushes the row toggle far off-screen, so
+             collapsing from the bottom shouldn't require scrolling back
+             up. Pointer convenience only: the row button above stays
+             the accessible, keyboard-reachable toggle, so no
+             role/tabindex here. The guard leaves clicks on the
+             view-mode toggle and on links in markdown-rendered results
+             to their own behavior, and skips the click that ends a
+             text drag-selection so copying a payload doesn't snap the
+             panel shut. -->
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div
+          class="tool-detail"
+          title="Click to collapse"
+          onclick={(event) => {
+            if (clickShouldCollapse(event.target, window.getSelection())) {
+              toggle(call.id);
+            }
+          }}
+        >
           <div class="tool-detail-header">
             <h3 class="tool-detail-label">arguments</h3>
             <!-- Per-call view toggle. The button label names the

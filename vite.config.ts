@@ -311,6 +311,7 @@ export default defineConfig({
     environmentMatchGlobs: [
       ['tests/ascii-spinner.test.ts', 'jsdom'],
       ['tests/click-outside.test.ts', 'jsdom'],
+      ['tests/collapse-click.test.ts', 'jsdom'],
       ['tests/config.test.ts', 'jsdom'],
       ['tests/context-ring.test.ts', 'jsdom'],
       ['tests/holder-id.test.ts', 'jsdom'],

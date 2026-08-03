@@ -396,6 +396,11 @@ Collapsible tool-call log rendered inside an assistant bubble
 when that turn invoked tools. One row per call: status glyph,
 tool name, plus a duration or live-ticker pill. Clicking a row
 expands into a detail panel with the arguments and result.
+Clicking anywhere on the expanded detail collapses it again -
+guarded by `clickShouldCollapse` (`src/lib/ui/collapse-click.ts`)
+so links, the view-mode toggle, and text drag-selections keep
+their own behavior. The row button stays the accessible keyboard
+toggle; the body click is pointer-only convenience.
 
 The detail panel renders in one of two views, per-call:
 
@@ -600,7 +605,12 @@ File: `src/components/ReasoningPanel.svelte`.
 Collapsible per-message reasoning/thinking panel rendered above the
 assistant body. Shows elapsed-ms and char-count pills during
 streaming; freezes on hand-off to the persisted card. Auto-collapse
-logic lives in `src/lib/ui/reasoning-panel.ts`.
+logic lives in `src/lib/ui/reasoning-panel.ts`. When open, a click
+anywhere on the block-quote body collapses the panel (and fires
+`onToggle` so the streaming parent latches manual control) -
+guarded by `clickShouldCollapse` (`src/lib/ui/collapse-click.ts`)
+so text drag-selections don't collapse it. The header button stays
+the accessible keyboard toggle.
 
 Consumers: `Chat.svelte` (streaming + persisted assistant bubbles).
 

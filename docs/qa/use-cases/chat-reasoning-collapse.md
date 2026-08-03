@@ -8,7 +8,11 @@ reasoning panel opens once, then yields"). Exercises
 `reasoningShouldCollapse` / `reasoningElapsedPill` / `reasoningCharPill`
 (`src/lib/ui/reasoning-panel.ts`), the `ExchangeSlot` reasoning fields
 (`reasoningUserToggled` / `reasoningStartedAt` / `reasoningEndedAt`),
-and the open/collapse + pill wiring in `Chat.svelte`.
+and the open/collapse + pill wiring in `Chat.svelte`. Also covers the
+click-anywhere-to-collapse affordance on expanded panel bodies -
+`clickShouldCollapse` (`src/lib/ui/collapse-click.ts`) - which is
+shared between the reasoning block quote and the tool-call detail
+panel (`ToolCalls.svelte`), so steps 8-10 exercise both.
 
 ## Preconditions
 
@@ -39,6 +43,18 @@ and the open/collapse + pill wiring in `Chat.svelte`.
 7. Note the pills on a completed turn's "Reasoning" header, send one
    more message in the thread, then switch to another thread and back.
    Finally, reload the page (or reopen the thread on another device).
+8. Expand a persisted "Reasoning" panel and click once anywhere on
+   the italic reasoning text itself (not the header). Re-expand it,
+   then drag-select a few words of the reasoning and release the
+   mouse over the panel.
+9. During a live streaming turn with the panel open, click the
+   reasoning text body to collapse it, and keep watching as more
+   thinking streams.
+10. Send a prompt that triggers a tool call (e.g. "What's the weather
+    in Tokyo right now?" for `web_search`). Expand the tool-call card,
+    then: (a) click the "view: json" toggle; (b) click a link in the
+    rendered result if one is present; (c) drag-select part of the
+    result; (d) click once on plain text inside the detail panel.
 
 ## Expected
 
@@ -65,6 +81,17 @@ and the open/collapse + pill wiring in `Chat.svelte`.
   full page reload - or reopening the thread on another device - the
   header renders WITHOUT pills: the timing is in-memory only, never
   saved, same elision as the tool-duration pills.
+- (8) The body click collapses the panel (cursor shows a pointer over
+  the body). The drag-select does NOT collapse it - the selection
+  survives and the panel stays open.
+- (9) The mid-stream body click collapses the panel AND latches
+  manual control, exactly like a header click: the panel does not
+  snap back open as further thinking deltas arrive.
+- (10) (a) the view toggle flips to raw JSON without collapsing the
+  panel; (b) the link opens without collapsing the panel; (c) the
+  drag-select leaves the panel open with the selection intact;
+  (d) the plain-text click collapses the detail back to the summary
+  row.
 
 ## Cleanup
 
@@ -75,3 +102,4 @@ None - sends are normal turns; delete the test thread if desired.
 | Date | Env | Commit | Result | Notes |
 | ---- | --- | ------ | ------ | ----- |
 | 2026-06-28 | - | claude/reasoning-collapse-streaming-rlmdev | not executed | authored alongside the feature; cloud session has no browser - needs a manual run against a local stack for the baseline |
+| 2026-08-03 | - | claude/message-card-collapse-29ho59 | not executed | steps 8-10 (body-click collapse on reasoning + tool-call panels) authored alongside the feature; cloud session has no browser - needs a manual local-stack run |
