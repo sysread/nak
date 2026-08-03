@@ -1,5 +1,6 @@
 #!/bin/bash
-# SessionStart hook: resync the sandbox's local `main` with `origin/main`.
+# SessionStart hook: trust the repo's mise config, then resync the
+# sandbox's local `main` with `origin/main`.
 #
 # Problem this solves: Claude Code's web sandbox shares filesystem
 # state across sessions. Local `main` drifts from `origin/main` as
@@ -30,6 +31,15 @@ if [ "${CLAUDE_CODE_REMOTE:-}" != "true" ]; then
 fi
 
 cd "$CLAUDE_PROJECT_DIR"
+
+# Trust the repo's mise config. The trust db lives in the container's
+# home directory, so every fresh sandbox starts untrusted and the
+# first `mise run` dies with a misleading "error parsing config file"
+# until someone trusts it. Idempotent; non-fatal so a missing mise
+# binary doesn't block the git sync below.
+if command -v mise >/dev/null 2>&1; then
+  mise trust "$CLAUDE_PROJECT_DIR/.mise.toml" || true
+fi
 
 # Defensive: skip if not a git repo.
 if ! git rev-parse --git-dir >/dev/null 2>&1; then
