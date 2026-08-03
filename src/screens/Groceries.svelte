@@ -562,25 +562,27 @@
         if (e.key === 'Enter' && canCreate) addNewItem();
       }}
     />
-    <button
-      type="button"
-      class="grocery-sections-toggle"
-      class:active={manageSections}
-      aria-pressed={manageSections}
-      title="Manage sections"
-      onclick={() => (manageSections = !manageSections)}
-    >Sections</button>
-    <button
-      type="button"
-      class="grocery-sections-toggle grocery-shopping-toggle"
-      class:active={shoppingActive}
-      aria-pressed={shoppingActive}
-      disabled={shoppingBusy}
-      title={shoppingActive
-        ? 'End the shopping trip (also ends automatically at midnight)'
-        : 'Start a shopping trip - items you mark off go to the In-cart section'}
-      onclick={toggleShopping}
-    >{shoppingToggleLabel(shoppingActive)}</button>
+    <div class="grocery-controls-toggles">
+      <button
+        type="button"
+        class="grocery-sections-toggle"
+        class:active={manageSections}
+        aria-pressed={manageSections}
+        title="Manage sections"
+        onclick={() => (manageSections = !manageSections)}
+      >Sections</button>
+      <button
+        type="button"
+        class="grocery-sections-toggle grocery-shopping-toggle"
+        class:active={shoppingActive}
+        aria-pressed={shoppingActive}
+        disabled={shoppingBusy}
+        title={shoppingActive
+          ? 'End the shopping trip (also ends automatically at midnight)'
+          : 'Start a shopping trip - items you mark off go to the In-cart section'}
+        onclick={toggleShopping}
+      >{shoppingToggleLabel(shoppingActive)}</button>
+    </div>
   </div>
 
   <!-- Same toggle idiom as the sidebar's show-recipe-ingredients
@@ -1028,16 +1030,24 @@
     flex-direction: column;
     min-height: 0;
   }
+  /* Stacked, not a single row: the add input is the panel's primary
+     control and is used one-handed on a phone, where sharing a line
+     with the Sections / shopping toggles squeezed it to a sliver. It
+     gets the full line; the toggles ride a row beneath it. */
   .grocery-controls {
     display: flex;
+    flex-direction: column;
     gap: 0.35rem;
-    align-items: center;
     padding: 0.4rem 0.6rem;
     margin-bottom: 0.5rem;
   }
   .grocery-controls .sidebar-search-input {
-    flex: 1;
-    min-width: 0;
+    width: 100%;
+  }
+  .grocery-controls-toggles {
+    display: flex;
+    gap: 0.35rem;
+    align-items: center;
   }
   .grocery-sections-toggle {
     flex-shrink: 0;
