@@ -4,19 +4,26 @@
 
 The Groceries tab end to end
 ([dev: grocery list](../../dev/grocery-list.md)): the ingredient
-checkboxes on recipes and the recipe-edit invalidation
+checkboxes on recipes and the name-aware recipe-edit invalidation
 trigger ([dev: cookbook](../../dev/cookbook.md)), the main panel's
-needed / acquired shopping flow with the collapsed history, the
-add-input's acquired-history suggestions, section management (add /
+on-list / acquired shopping flow with the collapsed history, the
+add-input's catalog suggestions, section management (add /
 rename / delete / drag reorder), the item photo path
 ([dev: file storage](../../dev/file-storage.md)), the sidebar's
 all-items browse (search + status/section filters + checkbox
 toggles), and the realtime relay between the Cookbook pane and an
 open Groceries tab.
 
+Data-model note: a row on either surface is a durable
+`grocery_products` variant; being "on the list" is an open
+`grocery_list_entries` row, and each purchase closes one. The
+panel's uncheck records a purchase; the sidebar's and the recipe
+view's uncheck un-plan (no purchase). Product rows - and their
+learned sections - survive all of it.
+
 Layout note: the SIDEBAR (drawer) is the all-items browse over the
-full purchase history; the MAIN PANEL is the current shopping list.
-Steps below name which surface they mean.
+full catalog; the MAIN PANEL is the current shopping list. Steps
+below name which surface they mean.
 
 ## Preconditions
 
@@ -62,13 +69,14 @@ Steps below name which surface they mean.
     **Show recipe ingredients**, uncheck `eggs` in the sidebar, then
     re-check it.
 14. Back on the recipe (Recipes tab), uncheck `flour`.
-15. Re-check `flour`, then edit the recipe (pencil), change `3` eggs
-    to `4`, and save the edit.
+15. Re-check `flour`, then edit the recipe (pencil) TWICE: first
+    change `3` eggs to `4` and save; then rename `@flour{200%g}` to
+    `@bread flour{200%g}` and save again.
 16. Return to the Groceries tab.
-17. In the DB, confirm the trigger really fired:
+17. In the DB, confirm the trigger's name matching:
 
     ```sh
-    mise run dev-sql "select name, needed, recipe_id from grocery_items order by created_at"
+    mise run dev-sql "select p.name, p.recipe_id, e.acquired_at from grocery_products p left join grocery_list_entries e on e.product_id = p.id order by p.created_at, e.added_at"
     ```
 
 18. On the recipe, click **Add all to grocery list**, then tap the
@@ -142,24 +150,30 @@ Steps below name which surface they mean.
   **Staples** header; `eggs` / `flour` are absent until **Show
   recipe ingredients** is ticked, after which they appear under an
   **Ingredients** header below Staples. The `Acquired` filter shows
-  only bought rows (muted). Unchecking `eggs` in the sidebar drops
-  it from the main panel's needed list into Acquired; re-checking
-  restores it, section intact - the sidebar checkbox and the panel
-  are two views of the same flag.
-- (14) Unchecking `flour` on the recipe removes it from both
-  Groceries surfaces (open in another window to watch the realtime
-  refresh) - a recipe-side uncheck DELETES the row rather than
-  moving it to acquired.
-- (15-16) After the recipe edit, ALL of this recipe's items
-  (`flour` from the re-check, and `eggs` regardless of its needed
-  state) are gone from both surfaces; `paper towels` (manual, no
-  recipe link) survives.
-- (17) Only rows with `recipe_id is null` remain.
+  only previously-bought off-list rows (muted). Unchecking `eggs`
+  in the sidebar drops it from the main panel's list WITHOUT adding
+  a new purchase to the Acquired history (the sidebar un-plans, it
+  never "buys"); re-checking restores it, section intact.
+- (14) Unchecking `flour` on the recipe removes it from the main
+  panel's list (open in another window to watch the realtime
+  refresh), but its product survives: the sidebar (with recipe
+  ingredients shown) still lists `flour`, unchecked. A recipe-side
+  uncheck un-plans; it does not forget the ingredient.
+- (15-16) The amount-only edit (3 -> 4 eggs) removes NOTHING -
+  quantity is not part of identity. The rename edit drops `flour`
+  (its name no longer parses from the source) from both surfaces
+  while `eggs` keeps its row AND its section; `paper towels`
+  (standalone, no recipe link) is never touched.
+- (17) `flour` has no `grocery_products` row; `eggs` still has one
+  (with its entry history); `paper towels` remains with
+  `recipe_id is null`.
 - (18) Add-all puts every ingredient on the list (checkboxes all
-  checked); tapping the `salt` TEXT unchecks it - the whole row is
+  checked; `bread flour` is a NEW product - the rename dropped old
+  `flour`); tapping the `salt` TEXT unchecks it - the whole row is
   the toggle target.
 - (19) The re-checked `eggs` lands directly under **Bakery** - the
-  section assignment stuck to the name across row deletion.
+  product row survived the uncheck, so its section came back with
+  it.
 - (20) While dragging `salt`, the hovered card shows an accent
   outline + tinted title; dropping files `salt` into Bakery (and
   sticks for future adds). In the section manager, an accent
@@ -201,8 +215,10 @@ Delete the leftover manual items from the Groceries tab (editor ->
 Delete), un-bookmark the test recipe, and optionally reset sections:
 
 ```sh
-mise run dev-sql "delete from grocery_items; delete from grocery_sections"
+mise run dev-sql "delete from grocery_products; delete from grocery_sections"
 ```
+
+(Entries cascade with their products.)
 
 (The canned set re-seeds on the next Groceries-tab load.)
 

@@ -1,10 +1,10 @@
 # Grocery remodel: products + list entries, then auto-sectioning
 
-Status: OPEN. Milestone 1 not started. When a milestone lands,
-graduate its durable content into
-[`../grocery-list.md`](../grocery-list.md) and update the Status
-line; when both land, retire this doc per the in-progress rules in
-CLAUDE.md.
+Status: MILESTONE 1 IMPLEMENTED (schema split, backfill, client
+rewrite, bridge semantics - graduated into
+[`../grocery-list.md`](../grocery-list.md)). Milestone 2
+(auto-sectioning) not started. When it lands, retire this doc per
+the in-progress rules in CLAUDE.md.
 
 Read [`../grocery-list.md`](../grocery-list.md) first; this plan
 assumes its vocabulary (the recipe bridge, the sticky prefs

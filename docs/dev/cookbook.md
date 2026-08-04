@@ -404,11 +404,14 @@ keystrokes; the LLM tool path keeps using `listRecipes`.
 - **Grocery list** (`./grocery-list.md`) — the ingredient-checkbox
   bridge: `recipeToHtml`'s `ingredientCheckboxes` option, the
   detail pane's delegated handler + checked-state sync, and the
-  `clear_grocery_items_on_recipe_change` trigger, which deletes a
-  recipe's grocery items whenever `recipes.cooklang` changes. Any
-  new write path that touches `cooklang` inherits that side effect
-  by construction; a write path that changes ingredients WITHOUT
-  touching `cooklang` would silently skip it (none exists today).
+  `clear_stale_grocery_products_on_recipe_change` trigger, which
+  deletes a recipe's grocery products whose ingredient names no
+  longer parse out of `recipes.cooklang` after a change (a SQL
+  regex over the `@`-token syntax; a drift-guard test compares it
+  against `parseCooklang`). Any new write path that touches
+  `cooklang` inherits that side effect by construction; a write
+  path that changes ingredients WITHOUT touching `cooklang` would
+  silently skip it (none exists today).
 - **Offline cache** (`./offline-cache.md`) — a recipe's `favorite` or
   `upcoming` flag is what saves it offline: the offline-sync reconcile
   mirrors the union of both buckets into IndexedDB. The Cookbook

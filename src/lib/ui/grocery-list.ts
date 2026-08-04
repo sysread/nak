@@ -13,7 +13,7 @@
  * src/screens/Cookbook.svelte.
  */
 import type { Ingredient } from '../cooklang';
-import type { GroceryItemView, GrocerySection } from '../supabase';
+import type { GroceryProductView, GrocerySection } from '../supabase';
 
 /**
  * Debounce for the add-to-list suggestion search. Matches the sibling
@@ -57,7 +57,7 @@ export interface GrocerySectionGroup {
   /** Null for the "Other" pseudo-section. */
   id: string | null;
   name: string;
-  items: GroceryItemView[];
+  items: GroceryProductView[];
 }
 
 /**
@@ -78,10 +78,10 @@ export interface GrocerySectionGroup {
  */
 export function groupItemsBySection(
   sections: readonly GrocerySection[],
-  items: readonly GroceryItemView[]
+  items: readonly GroceryProductView[]
 ): GrocerySectionGroup[] {
-  const byId = new Map<string, GroceryItemView[]>();
-  const other: GroceryItemView[] = [];
+  const byId = new Map<string, GroceryProductView[]>();
+  const other: GroceryProductView[] = [];
   const known = new Set(sections.map((s) => s.id));
   for (const item of items) {
     if (item.section_id !== null && known.has(item.section_id)) {
@@ -92,7 +92,7 @@ export function groupItemsBySection(
       other.push(item);
     }
   }
-  const alphabetical = (list: GroceryItemView[]): GroceryItemView[] =>
+  const alphabetical = (list: GroceryProductView[]): GroceryProductView[] =>
     list.sort((a, b) => a.name.localeCompare(b.name));
   const groups: GrocerySectionGroup[] = [
     { id: null, name: OTHER_SECTION_LABEL, items: alphabetical(other) },
@@ -187,17 +187,17 @@ export function acquiredHeaderLabel(count: number, hasMore: boolean): string {
 /**
  * Whether the add-input should offer a "create new item" action for
  * the typed text: non-empty, and not a duplicate (by normalized name)
- * of a suggestion (which would reuse its row) or of an item already
- * on the needed list (which would double it up).
+ * of a suggestion (which would revive its product) or of a product
+ * already on the list (which would double it up).
  */
 export function canCreateGroceryItem(
   query: string,
-  suggestions: readonly GroceryItemView[],
-  needed: readonly GroceryItemView[]
+  suggestions: readonly GroceryProductView[],
+  onList: readonly GroceryProductView[]
 ): boolean {
   const key = normalizeGroceryName(query);
   if (key.length === 0) return false;
-  return ![...suggestions, ...needed].some(
+  return ![...suggestions, ...onList].some(
     (i) => normalizeGroceryName(i.name) === key
   );
 }
@@ -256,23 +256,28 @@ export function isShoppingTripActive(
 }
 
 /**
- * Split the acquired window for an active trip: rows touched since
- * the trip started (unchecking bumps updated_at) are "in the cart";
- * everything older stays plain history. With no active trip the cart
- * is empty and the history is untouched - the caller renders the
- * idle message instead.
+ * Split the acquired window for an active trip: products whose
+ * current entry was PURCHASED since the trip started are "in the
+ * cart"; everything older stays plain history. `acquired_at` is the
+ * entry's purchase stamp, so an unrelated product edit can never
+ * fake a row into the cart. With no active trip the cart is empty
+ * and the history is untouched - the caller renders the idle message
+ * instead. Rows with no acquired_at (never bought) cannot appear in
+ * the acquired window by construction; they fall to history
+ * defensively.
  */
 export function splitAcquiredForTrip(
-  acquired: readonly GroceryItemView[],
+  acquired: readonly GroceryProductView[],
   startedAt: string | undefined,
   active: boolean
-): { cart: GroceryItemView[]; history: GroceryItemView[] } {
+): { cart: GroceryProductView[]; history: GroceryProductView[] } {
   if (!active || !startedAt) return { cart: [], history: [...acquired] };
   const startMs = Date.parse(startedAt);
-  const cart: GroceryItemView[] = [];
-  const history: GroceryItemView[] = [];
+  const cart: GroceryProductView[] = [];
+  const history: GroceryProductView[] = [];
   for (const item of acquired) {
-    (Date.parse(item.updated_at) >= startMs ? cart : history).push(item);
+    const boughtMs = item.acquired_at ? Date.parse(item.acquired_at) : NaN;
+    (boughtMs >= startMs ? cart : history).push(item);
   }
   return { cart, history };
 }
@@ -300,10 +305,10 @@ export const GROCERY_STATUS_FILTER_OPTIONS: ReadonlyArray<{
 ];
 
 /**
- * Map the status filter to listGroceryItemsPage's `needed` argument
- * (undefined = no filter).
+ * Map the status filter to listGroceryProductsPage's `onList`
+ * argument (undefined = no filter).
  */
-export function browseNeededArg(filter: GroceryStatusFilter): boolean | undefined {
+export function browseOnListArg(filter: GroceryStatusFilter): boolean | undefined {
   if (filter === 'needed') return true;
   if (filter === 'acquired') return false;
   return undefined;
@@ -314,7 +319,7 @@ export const BROWSE_SECTION_ALL = '';
 export const BROWSE_SECTION_OTHER = '__other';
 
 /**
- * Map the section-filter select value to listGroceryItemsPage's
+ * Map the section-filter select value to listGroceryProductsPage's
  * `sectionId` argument (undefined = no filter, 'other' = null-section
  * bucket, anything else = a section id).
  */
@@ -328,23 +333,23 @@ export function browseSectionArg(selected: string): string | 'other' | undefined
 export interface GroceryBrowseGroup {
   key: 'staples' | 'ingredients';
   label: string;
-  items: GroceryItemView[];
+  items: GroceryProductView[];
 }
 
 /**
  * Split the loaded browse window by provenance: "Staples" are
- * manually-entered items (no recipe link - the things the user buys
+ * standalone products (no recipe link - the things the user buys
  * as a matter of course), "Ingredients" came from recipe checkboxes.
- * Empty groups are dropped; each group keeps the window's recency
- * order. Client-side over the loaded window on purpose - the two
- * groups share one paged query, so rows join their group as pages
- * load rather than each group paging separately.
+ * Empty groups are dropped; each group keeps the window's order.
+ * Client-side over the loaded window on purpose - the two groups
+ * share one paged query, so rows join their group as pages load
+ * rather than each group paging separately.
  */
 export function splitBrowseRows(
-  rows: readonly GroceryItemView[]
+  rows: readonly GroceryProductView[]
 ): GroceryBrowseGroup[] {
-  const staples: GroceryItemView[] = [];
-  const ingredients: GroceryItemView[] = [];
+  const staples: GroceryProductView[] = [];
+  const ingredients: GroceryProductView[] = [];
   for (const row of rows) {
     (row.recipe_id === null ? staples : ingredients).push(row);
   }
@@ -404,37 +409,41 @@ export function sectionDropEdge(
 
 // Recipe bridge ---------------------------------------------------------
 
-/** A recipe ingredient's matching grocery row, for the checkbox sync. */
+/** A recipe ingredient's matching catalog product, for the checkbox sync. */
 export interface RecipeCheckboxItem {
+  /** The product's id - the revival / un-plan target. */
   id: string;
-  /** The row's on-list flag - what the checkbox displays. */
-  needed: boolean;
+  /** The product's on-list flag - what the checkbox displays. */
+  onList: boolean;
 }
 
 /**
- * Map a recipe's parsed ingredients to their grocery-item rows (by
- * normalized name) for the detail pane's checkbox sync. The checkbox
- * displays the matched row's `needed` flag - "is this on my list
- * right now" - so removing or buying the item on the list side
- * unchecks it here, and re-checking revives the existing row rather
- * than inserting a duplicate. Duplicate ingredient names collapse
- * onto the same row, and unmatched rows (e.g. an item renamed after
- * checking) are simply unmatched - they still belong to the recipe
- * and still get wiped on a recipe edit.
+ * Map a recipe's parsed ingredients to the recipe's catalog products
+ * (by normalized name) for the detail pane's checkbox sync. The
+ * products are already recipe-scoped (fetched by recipe_id), so name
+ * matching within them is effectively (recipe_id, name) identity.
+ * The checkbox displays the matched product's `on_list` flag - "is
+ * this on my list right now" - so removing or buying it on the list
+ * side unchecks it here, and re-checking revives the existing
+ * product (keeping its learned section) rather than inserting a
+ * duplicate. Duplicate ingredient names collapse onto the same
+ * product, and unmatched products (e.g. one renamed after checking)
+ * are simply unmatched - they still belong to the recipe and are
+ * still dropped when their name no longer parses from the source.
  */
 export function recipeCheckboxItemIds(
   ingredients: readonly Ingredient[],
-  recipeItems: readonly { id: string; name: string; needed: boolean }[]
+  recipeItems: readonly { id: string; name: string; on_list: boolean }[]
 ): Map<string, RecipeCheckboxItem> {
   const byName = new Map<string, RecipeCheckboxItem>();
-  // A needed row wins on a name collision (the checkbox should read
-  // checked if ANY matching row is on the list); otherwise first row
-  // wins. Collisions are rare - rows are recipe-scoped.
+  // An on-list product wins on a name collision (the checkbox should
+  // read checked if ANY matching product is on the list); otherwise
+  // first one wins. Collisions are rare - products are recipe-scoped.
   for (const item of recipeItems) {
     const key = normalizeGroceryName(item.name);
     const prior = byName.get(key);
-    if (!prior || (!prior.needed && item.needed)) {
-      byName.set(key, { id: item.id, needed: item.needed });
+    if (!prior || (!prior.onList && item.on_list)) {
+      byName.set(key, { id: item.id, onList: item.on_list });
     }
   }
   const out = new Map<string, RecipeCheckboxItem>();
@@ -447,11 +456,12 @@ export function recipeCheckboxItemIds(
 }
 
 /**
- * Plan the "add all ingredients" batch: which existing rows to
- * revive (present but not needed) and which ingredients to insert
- * fresh, deduped by normalized name so a recipe that mentions
- * @butter twice adds it once. Already-needed rows are skipped -
- * the batch is idempotent, so mashing the button is harmless.
+ * Plan the "add all ingredients" batch: which existing products to
+ * revive (present but off the list) and which ingredients need a
+ * fresh product, deduped by normalized name so a recipe that
+ * mentions @butter twice adds it once. Already-on-list products are
+ * skipped - the batch is idempotent, so mashing the button is
+ * harmless.
  */
 export function partitionIngredientsForAdd(
   ingredients: readonly Ingredient[],
@@ -466,19 +476,20 @@ export function partitionIngredientsForAdd(
     seen.add(key);
     const entry = entries.get(key);
     if (entry === undefined) create.push(ing);
-    else if (!entry.needed) reviveIds.push(entry.id);
+    else if (!entry.onList) reviveIds.push(entry.id);
   }
   return { reviveIds, create };
 }
 
 /**
- * Build the createGroceryItem payload for a checked recipe
+ * Build the createGroceryProduct payload for a checked recipe
  * ingredient: name and cooklang quantity/unit verbatim (free-form
- * text by design), a note naming the source recipe, and the recipe
- * link that scopes the row to the invalidation trigger. Section is
- * left null (Other) - the shopper files it later if they care.
+ * text by design; the quantity lands on the product's open entry),
+ * a note naming the source recipe, and the recipe link that scopes
+ * the product to the invalidation trigger. Section is left null
+ * (unfiled) - the shopper files it later if they care.
  */
-export function groceryItemFromIngredient(
+export function groceryProductFromIngredient(
   ingredient: Ingredient,
   recipe: { id: string; title: string }
 ): {

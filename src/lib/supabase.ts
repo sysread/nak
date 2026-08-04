@@ -48,8 +48,8 @@ import * as digestsApi from './supabase/digests';
 // search, bucket upload + signed download URLs), same delegation
 // pattern.
 import * as documentsApi from './supabase/documents';
-// Grocery-list domain slice (sections, items, acquired-history search,
-// product photos), same delegation pattern.
+// Grocery-list domain slice (sections, catalog products, list
+// entries, product photos), same delegation pattern.
 import * as groceryApi from './supabase/grocery';
 // Memories domain slice: the facade's memory methods (both the CRUD +
 // changelog group and the confidence / search / relations group)
@@ -128,9 +128,10 @@ import type {
   RecipePhoto,
   RecipePhotoInput,
   GrocerySection,
-  GroceryItem,
-  GroceryItemView,
-  GroceryItemPatch,
+  GroceryProduct,
+  GroceryProductView,
+  GroceryProductPatch,
+  GroceryEntryPatch,
   Document,
   UserSettings,
   TopicVocabulary,
@@ -702,8 +703,9 @@ export class SupabaseService {
   // Grocery list -----------------------------------------------------------
   //
   // Extracted domain slice: implementations and doc comments live in
-  // ./supabase/grocery.ts (sections, items, the acquired-history
-  // search, and the product-photo upload/upsert pair).
+  // ./supabase/grocery.ts (sections, catalog products, list entries,
+  // the grocery_products_view read paths, and the product-photo
+  // upload/upsert pair).
 
   async listGrocerySections(): Promise<GrocerySection[]> {
     return groceryApi.listGrocerySections(this.client);
@@ -729,40 +731,42 @@ export class SupabaseService {
     return groceryApi.reorderGrocerySections(this.client, sectionIds);
   }
 
-  async listNeededGroceryItems(): Promise<GroceryItemView[]> {
-    return groceryApi.listNeededGroceryItems(this.client);
+  async listOnListGroceryProducts(): Promise<GroceryProductView[]> {
+    return groceryApi.listOnListGroceryProducts(this.client);
   }
 
-  async listAcquiredGroceryItemsPage(opts: {
+  async listAcquiredGroceryProductsPage(opts: {
     offset: number;
     pageSize: number;
-  }): Promise<{ rows: GroceryItemView[]; hasMore: boolean }> {
-    return groceryApi.listAcquiredGroceryItemsPage(this.client, opts);
+  }): Promise<{ rows: GroceryProductView[]; hasMore: boolean }> {
+    return groceryApi.listAcquiredGroceryProductsPage(this.client, opts);
   }
 
-  async listGroceryItemsPage(opts: {
+  async listGroceryProductsPage(opts: {
     offset: number;
     pageSize: number;
     query?: string;
-    needed?: boolean;
+    onList?: boolean;
     sectionId?: string | 'other';
     manualOnly?: boolean;
-  }): Promise<{ rows: GroceryItemView[]; hasMore: boolean }> {
-    return groceryApi.listGroceryItemsPage(this.client, opts);
+  }): Promise<{ rows: GroceryProductView[]; hasMore: boolean }> {
+    return groceryApi.listGroceryProductsPage(this.client, opts);
   }
 
-  async searchAcquiredGroceryItems(
+  async searchGrocerySuggestions(
     query: string,
     limit: number
-  ): Promise<GroceryItemView[]> {
-    return groceryApi.searchAcquiredGroceryItems(this.client, query, limit);
+  ): Promise<GroceryProductView[]> {
+    return groceryApi.searchGrocerySuggestions(this.client, query, limit);
   }
 
-  async listGroceryItemsForRecipe(recipeId: string): Promise<GroceryItem[]> {
-    return groceryApi.listGroceryItemsForRecipe(this.client, recipeId);
+  async listGroceryProductsForRecipe(
+    recipeId: string
+  ): Promise<GroceryProductView[]> {
+    return groceryApi.listGroceryProductsForRecipe(this.client, recipeId);
   }
 
-  async createGroceryItem(input: {
+  async createGroceryProduct(input: {
     name: string;
     count?: string | null;
     unit?: string | null;
@@ -770,20 +774,38 @@ export class SupabaseService {
     section_id?: string | null;
     recipe_id?: string | null;
     image_id?: string | null;
-  }): Promise<GroceryItem> {
-    return groceryApi.createGroceryItem(this.client, input);
+  }): Promise<GroceryProduct> {
+    return groceryApi.createGroceryProduct(this.client, input);
   }
 
-  async updateGroceryItem(id: string, patch: GroceryItemPatch): Promise<void> {
-    return groceryApi.updateGroceryItem(this.client, id, patch);
+  async updateGroceryProduct(
+    id: string,
+    patch: GroceryProductPatch
+  ): Promise<void> {
+    return groceryApi.updateGroceryProduct(this.client, id, patch);
   }
 
-  async setGroceryItemNeeded(id: string, needed: boolean): Promise<void> {
-    return groceryApi.setGroceryItemNeeded(this.client, id, needed);
+  async updateGroceryListEntry(
+    entryId: string,
+    patch: GroceryEntryPatch
+  ): Promise<void> {
+    return groceryApi.updateGroceryListEntry(this.client, entryId, patch);
   }
 
-  async deleteGroceryItem(id: string): Promise<void> {
-    return groceryApi.deleteGroceryItem(this.client, id);
+  async setProductOnList(
+    productId: string,
+    on: boolean,
+    qty?: { count?: string | null; unit?: string | null }
+  ): Promise<void> {
+    return groceryApi.setProductOnList(this.client, productId, on, qty);
+  }
+
+  async removeProductFromList(productId: string): Promise<void> {
+    return groceryApi.removeProductFromList(this.client, productId);
+  }
+
+  async deleteGroceryProduct(id: string): Promise<void> {
+    return groceryApi.deleteGroceryProduct(this.client, id);
   }
 
   async upsertGroceryItemImage(

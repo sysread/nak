@@ -3,7 +3,7 @@ import {
   OTHER_SECTION_LABEL,
   acquiredHeaderLabel,
   canCreateGroceryItem,
-  groceryItemFromIngredient,
+  groceryProductFromIngredient,
   groupItemsBySection,
   itemDetailLine,
   itemQuantityLabel,
@@ -11,27 +11,32 @@ import {
   recipeCheckboxItemIds,
   sectionOrderAfterDrag,
 } from '../src/lib/ui/grocery-list';
-import type { GroceryItemView, GrocerySection } from '../src/lib/supabase';
-import type { Ingredient } from '../src/lib/cooklang';
+import type { GroceryProductView, GrocerySection } from '../src/lib/supabase';
+import { parseCooklang, type Ingredient } from '../src/lib/cooklang';
 
 function section(id: string, name: string, position: number): GrocerySection {
   return { id, name, position, created_at: '2026-01-01T00:00:00Z' };
 }
 
-function item(overrides: Partial<GroceryItemView> & { name: string }): GroceryItemView {
+function item(
+  overrides: Partial<GroceryProductView> & { name: string }
+): GroceryProductView {
   return {
     id: overrides.name,
-    count: null,
-    unit: null,
     note: null,
     section_id: null,
-    needed: true,
+    section_source: null,
     recipe_id: null,
     image_id: null,
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
     recipe_title: null,
     image_url: null,
+    entry_id: 'e-' + overrides.name,
+    count: null,
+    unit: null,
+    acquired_at: null,
+    on_list: true,
     ...overrides,
   };
 }
@@ -169,20 +174,22 @@ describe('acquiredHeaderLabel', () => {
 });
 
 describe('canCreateGroceryItem', () => {
-  const suggestions = [item({ name: 'Eggs', needed: false })];
-  const needed = [item({ name: 'Milk' })];
+  const suggestions = [
+    item({ name: 'Eggs', on_list: false, acquired_at: '2026-01-02T00:00:00Z' }),
+  ];
+  const onList = [item({ name: 'Milk' })];
 
   it('allows a genuinely new name', () => {
-    expect(canCreateGroceryItem('butter', suggestions, needed)).toBe(true);
+    expect(canCreateGroceryItem('butter', suggestions, onList)).toBe(true);
   });
   it('refuses empty input', () => {
-    expect(canCreateGroceryItem('   ', suggestions, needed)).toBe(false);
+    expect(canCreateGroceryItem('   ', suggestions, onList)).toBe(false);
   });
-  it('refuses a name matching a suggestion (reuse its row instead)', () => {
-    expect(canCreateGroceryItem('eggs ', suggestions, needed)).toBe(false);
+  it('refuses a name matching a suggestion (revive its product instead)', () => {
+    expect(canCreateGroceryItem('eggs ', suggestions, onList)).toBe(false);
   });
-  it('refuses a name already on the needed list', () => {
-    expect(canCreateGroceryItem('MILK', suggestions, needed)).toBe(false);
+  it('refuses a name already on the list', () => {
+    expect(canCreateGroceryItem('MILK', suggestions, onList)).toBe(false);
   });
 });
 
@@ -218,19 +225,49 @@ describe('isShoppingTripActive', () => {
 });
 
 describe('splitAcquiredForTrip', () => {
-  it('routes rows touched since the trip start into the cart', async () => {
+  it('routes purchases stamped since the trip start into the cart', async () => {
     const { splitAcquiredForTrip } = await import('../src/lib/ui/grocery-list');
     const startedAt = '2026-07-15T18:00:00Z';
-    const inCart = item({ name: 'eggs', needed: false, updated_at: '2026-07-15T18:05:00Z' });
-    const old = item({ name: 'milk', needed: false, updated_at: '2026-07-10T10:00:00Z' });
+    const inCart = item({
+      name: 'eggs',
+      on_list: false,
+      acquired_at: '2026-07-15T18:05:00Z',
+    });
+    const old = item({
+      name: 'milk',
+      on_list: false,
+      acquired_at: '2026-07-10T10:00:00Z',
+    });
     const { cart, history } = splitAcquiredForTrip([inCart, old], startedAt, true);
     expect(cart.map((i) => i.name)).toEqual(['eggs']);
     expect(history.map((i) => i.name)).toEqual(['milk']);
   });
 
+  it('is keyed on the purchase stamp, not the product edit time', async () => {
+    // An old purchase whose PRODUCT was edited mid-trip must stay in
+    // history - the pre-split model derived cart membership from
+    // updated_at and had exactly this false positive.
+    const { splitAcquiredForTrip } = await import('../src/lib/ui/grocery-list');
+    const edited = item({
+      name: 'milk',
+      on_list: false,
+      acquired_at: '2026-07-10T10:00:00Z',
+      updated_at: '2026-07-15T18:30:00Z',
+    });
+    const { cart, history } = splitAcquiredForTrip(
+      [edited],
+      '2026-07-15T18:00:00Z',
+      true
+    );
+    expect(cart).toEqual([]);
+    expect(history.map((i) => i.name)).toEqual(['milk']);
+  });
+
   it('returns an empty cart when no trip is active', async () => {
     const { splitAcquiredForTrip } = await import('../src/lib/ui/grocery-list');
-    const rows = [item({ name: 'eggs', needed: false, updated_at: '2026-07-15T18:05:00Z' })];
+    const rows = [
+      item({ name: 'eggs', on_list: false, acquired_at: '2026-07-15T18:05:00Z' }),
+    ];
     const { cart, history } = splitAcquiredForTrip(rows, '2026-07-15T18:00:00Z', false);
     expect(cart).toEqual([]);
     expect(history).toHaveLength(1);
@@ -238,11 +275,11 @@ describe('splitAcquiredForTrip', () => {
 });
 
 describe('browse filter mapping', () => {
-  it('maps status filters to the needed argument', async () => {
-    const { browseNeededArg } = await import('../src/lib/ui/grocery-list');
-    expect(browseNeededArg('all')).toBeUndefined();
-    expect(browseNeededArg('needed')).toBe(true);
-    expect(browseNeededArg('acquired')).toBe(false);
+  it('maps status filters to the onList argument', async () => {
+    const { browseOnListArg } = await import('../src/lib/ui/grocery-list');
+    expect(browseOnListArg('all')).toBeUndefined();
+    expect(browseOnListArg('needed')).toBe(true);
+    expect(browseOnListArg('acquired')).toBe(false);
   });
 
   it('maps section select values to the sectionId argument', async () => {
@@ -310,42 +347,42 @@ describe('sectionDropEdge', () => {
 });
 
 describe('recipeCheckboxItemIds', () => {
-  it('maps ingredients to rows by normalized name, carrying needed', () => {
+  it('maps ingredients to products by normalized name, carrying on_list', () => {
     const map = recipeCheckboxItemIds(
       [ingredient({ name: 'Flour' }), ingredient({ name: 'salt' })],
-      [{ id: 'r1', name: 'flour', needed: true }]
+      [{ id: 'r1', name: 'flour', on_list: true }]
     );
-    expect(map.get('flour')).toEqual({ id: 'r1', needed: true });
+    expect(map.get('flour')).toEqual({ id: 'r1', onList: true });
     expect(map.has('salt')).toBe(false);
   });
 
-  it('collapses duplicate ingredient names onto one row', () => {
+  it('collapses duplicate ingredient names onto one product', () => {
     const map = recipeCheckboxItemIds(
       [ingredient({ name: 'butter' }), ingredient({ name: 'Butter' })],
-      [{ id: 'r2', name: 'butter', needed: false }]
+      [{ id: 'r2', name: 'butter', on_list: false }]
     );
     expect(map.size).toBe(1);
-    expect(map.get('butter')).toEqual({ id: 'r2', needed: false });
+    expect(map.get('butter')).toEqual({ id: 'r2', onList: false });
   });
 
-  it('prefers a needed row when two rows share a name', () => {
+  it('prefers an on-list product when two share a name', () => {
     const map = recipeCheckboxItemIds(
       [ingredient({ name: 'eggs' })],
       [
-        { id: 'old', name: 'eggs', needed: false },
-        { id: 'live', name: 'Eggs', needed: true },
+        { id: 'old', name: 'eggs', on_list: false },
+        { id: 'live', name: 'Eggs', on_list: true },
       ]
     );
-    expect(map.get('eggs')).toEqual({ id: 'live', needed: true });
+    expect(map.get('eggs')).toEqual({ id: 'live', onList: true });
   });
 });
 
 describe('partitionIngredientsForAdd', () => {
-  it('splits into revive / create, skipping needed rows and dup names', async () => {
+  it('splits into revive / create, skipping on-list products and dup names', async () => {
     const { partitionIngredientsForAdd } = await import('../src/lib/ui/grocery-list');
     const entries = new Map([
-      ['flour', { id: 'f1', needed: true }],
-      ['eggs', { id: 'e1', needed: false }],
+      ['flour', { id: 'f1', onList: true }],
+      ['eggs', { id: 'e1', onList: false }],
     ]);
     const { reviveIds, create } = partitionIngredientsForAdd(
       [
@@ -361,9 +398,9 @@ describe('partitionIngredientsForAdd', () => {
   });
 });
 
-describe('groceryItemFromIngredient', () => {
+describe('groceryProductFromIngredient', () => {
   it('carries quantity/unit verbatim and links the recipe', () => {
-    const payload = groceryItemFromIngredient(
+    const payload = groceryProductFromIngredient(
       ingredient({ name: 'onion', qty: '2-3', unit: 'large' }),
       { id: 'rec-1', title: 'French Onion Soup' }
     );
@@ -375,4 +412,98 @@ describe('groceryItemFromIngredient', () => {
       recipe_id: 'rec-1',
     });
   });
+});
+
+// --- SQL invalidation-trigger drift guard ---------------------------------
+//
+// clear_stale_grocery_products_on_recipe_change (schema.sql) extracts
+// ingredient names from cooklang with a SQL regex instead of the
+// TypeScript parser (a trigger cannot call parseCooklang). This suite
+// runs a character-for-character JS mirror of that SQL extraction
+// against parseCooklang across representative sources so the two
+// implementations cannot drift silently: if either side changes what
+// counts as an ingredient token, a set mismatch fails the gate.
+//
+// The SQL uses POSIX [[:alnum:]] where the mirror uses \p{L}\p{N} -
+// equivalent over a UTF-8 database, and exactly the parser's
+// NAME_CHARS class.
+
+/** JS mirror of the trigger's comment stripping + token regex. */
+function sqlMirrorIngredientNames(src: string): Set<string> {
+  let s = src.replace(/\[-[\s\S]*?-\]/g, '');
+  s = s.replace(/--[^\n]*/g, '');
+  const SEG = "(?:[\\p{L}\\p{N}_'-]+|\\([^)]*\\))";
+  const RUN = `${SEG}(?:[ \\t]${SEG})*`;
+  const RE = new RegExp(
+    `@\\??(?:(${RUN})\\{[^}]*\\}|([\\p{L}\\p{N}_'-]+))`,
+    'gu'
+  );
+  const names = new Set<string>();
+  for (const m of s.matchAll(RE)) {
+    names.add(normalizeGroceryName(m[1] ?? m[2] ?? ''));
+  }
+  names.delete('');
+  return names;
+}
+
+/** Every ingredient token the parser sees, across all step kinds. */
+function parserIngredientNames(src: string): Set<string> {
+  const names = new Set<string>();
+  for (const step of parseCooklang(src).steps) {
+    for (const ing of step.ingredients) {
+      names.add(normalizeGroceryName(ing.name));
+    }
+  }
+  return names;
+}
+
+describe('SQL invalidation regex mirrors parseCooklang', () => {
+  const SAMPLES: Array<{ label: string; src: string }> = [
+    {
+      label: 'bare and braced ingredients in prose',
+      src: 'Add @salt and @black pepper{1%tsp} to the @chicken{1%lb}.',
+    },
+    {
+      label: 'declaration block with sections and reset',
+      src: [
+        '# Soup',
+        '@onion{2}',
+        '@?cilantro{1%tbsp}',
+        '# Finishing',
+        "@grandmother's chutney{1%jar}",
+        '----',
+        'Simmer the @onion until soft.',
+      ].join('\n'),
+    },
+    {
+      label: 'parenthetical name segments keep their braces',
+      src: '@flour (all-purpose){200%g} and @sugar{1%cup}',
+    },
+    {
+      label: 'comments are stripped before extraction',
+      src: [
+        'Add @salt. -- do not add @pepper',
+        '[- a block comment mentioning @nutmeg',
+        'across lines -]',
+        'Then @butter{2%tbsp}.',
+      ].join('\n'),
+    },
+    {
+      label: 'cookware and timers are not ingredients',
+      src: 'Heat the #pan{} and wait ~{10%minutes} before adding @oil.',
+    },
+    {
+      // Escapes rather than literals to keep the file ASCII; the
+      // point is that \p{L} (mirror) and [[:alpha:]] (SQL, UTF-8 DB)
+      // both accept accented letters.
+      label: 'unicode names',
+      src: '@cr\u00e8me fra\u00eeche{2%tbsp} and @jalape\u00f1o{1}',
+    },
+  ];
+
+  for (const { label, src } of SAMPLES) {
+    it(label, () => {
+      expect(sqlMirrorIngredientNames(src)).toEqual(parserIngredientNames(src));
+    });
+  }
 });

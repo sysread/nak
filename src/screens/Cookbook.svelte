@@ -79,10 +79,10 @@
     versionRowState,
     type DraftPhoto,
   } from '$lib/ui/cookbook-screen';
-  import type { GroceryItem, Recipe, RecipeVersion } from '$lib/supabase';
+  import type { GroceryProductView, Recipe, RecipeVersion } from '$lib/supabase';
   import { onGroceryChange, emitGroceryChange } from '$lib/grocery-events';
   import {
-    groceryItemFromIngredient,
+    groceryProductFromIngredient,
     normalizeGroceryName,
     partitionIngredientsForAdd,
     recipeCheckboxItemIds,
@@ -948,13 +948,13 @@
 
   // --- grocery-bridge state (the ingredient checkboxes) ---
 
-  // Grocery rows linked to the open recipe. A checkbox mirrors the
-  // matched row's `needed` flag - "is this on my list right now" -
-  // so removing or buying the item on the list side unchecks it
+  // Catalog products linked to the open recipe. A checkbox mirrors
+  // the matched product's `on_list` flag - "is this on my list right
+  // now" - so removing or buying it on the list side unchecks it
   // here. Refetched on recipe change and on the grocery change
-  // event, which also covers the invalidation trigger's wipe after
+  // event, which also covers the invalidation trigger's delete after
   // a recipe edit.
-  let recipeGroceryItems = $state<GroceryItem[]>([]);
+  let recipeGroceryItems = $state<GroceryProductView[]>([]);
 
   async function loadRecipeGroceryItems(): Promise<void> {
     const id = activeId;
@@ -963,7 +963,7 @@
       return;
     }
     try {
-      recipeGroceryItems = await app.supabase.listGroceryItemsForRecipe(id);
+      recipeGroceryItems = await app.supabase.listGroceryProductsForRecipe(id);
     } catch {
       // Non-fatal for the recipe view - the checkboxes just render
       // unchecked until the next successful refetch.
@@ -991,17 +991,18 @@
     const entries = recipeCheckboxItemIds(parsedDetail.ingredients, items);
     for (const input of el.querySelectorAll<HTMLInputElement>('input.cook-buy')) {
       const name = input.dataset.ing ?? '';
-      // Checked = the matched row is on the current list. A row that
-      // was bought or removed on the list side reads unchecked here;
-      // re-checking revives it (see onRenderChange).
-      input.checked = entries.get(normalizeGroceryName(name))?.needed === true;
+      // Checked = the matched product is on the current list. One
+      // that was bought or removed on the list side reads unchecked
+      // here; re-checking revives it (see onRenderChange).
+      input.checked = entries.get(normalizeGroceryName(name))?.onList === true;
     }
   });
 
   // "Add all to grocery list": batch the whole ingredient set onto
-  // the list - revive rows that exist but aren't needed, insert the
-  // rest - then one refetch + one event nudge. Idempotent (already-
-  // needed rows are skipped), so a double-tap is harmless.
+  // the list - revive products that exist but are off the list,
+  // create the rest - then one refetch + one event nudge. Idempotent
+  // (already-on-list products are skipped), so a double-tap is
+  // harmless.
   let addAllBusy = $state(false);
 
   function onAddAllIngredients(): void {
@@ -1018,11 +1019,11 @@
           entries
         );
         for (const id of reviveIds) {
-          await supabase.setGroceryItemNeeded(id, true);
+          await supabase.setProductOnList(id, true);
         }
         for (const ingredient of create) {
-          await supabase.createGroceryItem(
-            groceryItemFromIngredient(ingredient, {
+          await supabase.createGroceryProduct(
+            groceryProductFromIngredient(ingredient, {
               id: recipe.id,
               title: recipe.title,
             })
@@ -1037,11 +1038,15 @@
   }
 
   // Delegated change handler for the grocery checkboxes ({@html}
-  // markup can't carry Svelte handlers). Checking inserts a grocery
-  // item carrying the cooklang quantity verbatim plus a note naming
-  // this recipe; unchecking deletes the row. Either way the rows
-  // refetch and the checked-state effect reconciles the DOM - on a
-  // failed write that reconcile is also what rolls the checkbox back.
+  // markup can't carry Svelte handlers). Checking revives the
+  // recipe's existing product for that ingredient name, or creates
+  // one carrying the cooklang quantity verbatim plus a note naming
+  // this recipe; unchecking UN-PLANS - the open entry is deleted,
+  // while the product row (and its learned section, note, photo)
+  // survives for the next time this recipe gets cooked. Either way
+  // the products refetch and the checked-state effect reconciles the
+  // DOM - on a failed write that reconcile is also what rolls the
+  // checkbox back.
   function onRenderChange(e: Event): void {
     const target = e.target;
     if (!(target instanceof HTMLInputElement)) return;
@@ -1057,17 +1062,17 @@
         const entry = existing.get(key);
         if (target.checked) {
           if (entry) {
-            // A row already exists (bought on a past trip, or removed
-            // from the list without deleting) - revive it instead of
-            // inserting a duplicate.
-            if (!entry.needed) await supabase.setGroceryItemNeeded(entry.id, true);
+            // A product already exists (bought on a past trip, or
+            // un-planned earlier) - revive it, keeping its learned
+            // section, instead of inserting a duplicate.
+            if (!entry.onList) await supabase.setProductOnList(entry.id, true);
           } else {
             const ingredient = parsed.ingredients.find(
               (i) => normalizeGroceryName(i.name) === key
             );
             if (ingredient) {
-              await supabase.createGroceryItem(
-                groceryItemFromIngredient(ingredient, {
+              await supabase.createGroceryProduct(
+                groceryProductFromIngredient(ingredient, {
                   id: recipe.id,
                   title: recipe.title,
                 })
@@ -1075,11 +1080,7 @@
             }
           }
         } else if (entry) {
-          // Un-planning deletes the row outright (rather than flipping
-          // needed false) so the wipe-on-recipe-edit story stays
-          // simple: rows linked to a recipe are exactly the checked
-          // set plus what was bought for it.
-          await supabase.deleteGroceryItem(entry.id);
+          await supabase.removeProductFromList(entry.id);
         }
       } finally {
         await loadRecipeGroceryItems();
