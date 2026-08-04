@@ -3,7 +3,7 @@
 // grocery-item-images bucket). Cron-triggered (pg_cron -> pg_net ->
 // here; nak_trigger_grocery_image_gc in schema.sql). Service-role only.
 //
-// A row is orphaned when no grocery_items.image_id references it -
+// A row is orphaned when no grocery_products.image_id references it -
 // simpler than the recipe sweep's link-table anti-join, but the same
 // list / re-checked-delete / object-remove drain, so this function
 // reuses the recipe sweep's pure driver (runRecipeImageGc): the loop is

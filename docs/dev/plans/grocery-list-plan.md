@@ -5,7 +5,11 @@ reference is [`../grocery-list.md`](../grocery-list.md); where the
 implementation diverged from this plan, that doc wins. Notable
 divergences: all four milestones shipped in one change rather than
 separately, and the grocery-image GC reuses the recipe sweep's
-table-agnostic drain driver instead of cloning it.
+table-agnostic drain driver instead of cloning it. The
+`grocery_items` single-table model this plan describes was later
+split into `grocery_products` + `grocery_list_entries` (see
+[`../in-progress/grocery-remodel-plan.md`](../in-progress/grocery-remodel-plan.md)),
+which also retired the sticky section prefs designed here.
 
 Read [`../cookbook.md`](../cookbook.md) first; this plan assumes its
 data model, tool/relay vocabulary, and the file-storage conventions

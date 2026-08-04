@@ -10,16 +10,18 @@
    *
    * Three stacked regions:
    *  - the add-to-list input, whose debounced suggestions search the
-   *    acquired history (previously bought items) - picking one flips
-   *    its row back to needed with section / note / photo intact;
-   *  - the needed list: one CARD per store section ("Other" pinned
+   *    off-list standalone products (the durable catalog; every
+   *    same-name variant is its own suggestion) - picking one
+   *    revives that product with section / note / photo intact;
+   *  - the current list: one CARD per store section ("Other" pinned
    *    first as the intake tray, then the user's order), section
    *    name as the card title, items one per row. Empty cards are
    *    hidden by default; a "Show empty sections" toggle opts into
    *    the full store layout (useful when filing items).
    *    Checkboxes render CHECKED (inverted from the recipe view):
-   *    the shopper unchecks items as they land in the cart, which
-   *    moves them down to...
+   *    the shopper unchecks items as they land in the cart (a
+   *    purchase - it stamps the entry's acquired_at), which moves
+   *    them down to...
    *  - the acquired history: greyed-out, collapsed by default (it
    *    grows every trip, forever), windowed with a "show more" tail.
    *
@@ -38,7 +40,7 @@
     loadMoreAcquired,
   } from '$lib/grocery-store.svelte';
   import { onGroceryChange } from '$lib/grocery-events';
-  import type { GroceryItemView } from '$lib/supabase';
+  import type { GroceryProductView } from '$lib/supabase';
   import {
     ACQUIRED_PAGE_SIZE,
     sectionDropEdge,
@@ -67,7 +69,7 @@
   import { onMount } from 'svelte';
 
   let addQuery = $state('');
-  let suggestions = $state<GroceryItemView[]>([]);
+  let suggestions = $state<GroceryProductView[]>([]);
   let suggestBusy = $state(false);
   let suggestAbort: AbortController | null = null;
 
@@ -225,9 +227,11 @@
     dragItemId = null;
     dragOverSection = undefined;
     if (!supabase || !itemId) return;
-    const current = grocery.needed.find((i) => i.id === itemId);
+    const current = grocery.onList.find((i) => i.id === itemId);
     if (!current || current.section_id === sectionId) return;
-    void mutate(() => supabase.updateGroceryItem(itemId, { section_id: sectionId }));
+    void mutate(() =>
+      supabase.updateGroceryProduct(itemId, { section_id: sectionId })
+    );
   }
 
   // Section management mode.
@@ -285,7 +289,7 @@
     suggestAbort = ctl;
     suggestBusy = true;
     try {
-      const hits = await app.supabase.searchAcquiredGroceryItems(
+      const hits = await app.supabase.searchGrocerySuggestions(
         q,
         GROCERY_SUGGESTION_LIMIT
       );
@@ -327,27 +331,37 @@
     const supabase = app.supabase;
     const name = addQuery.trim();
     if (!supabase || name.length === 0) return;
-    void mutate(() => supabase.createGroceryItem({ name })).then((ok) => {
+    void mutate(() => supabase.createGroceryProduct({ name })).then((ok) => {
       if (ok) addQuery = '';
     });
   }
 
-  function reuseSuggestion(item: GroceryItemView): void {
+  function reuseSuggestion(item: GroceryProductView): void {
     const supabase = app.supabase;
     if (!supabase) return;
-    void mutate(() => supabase.setGroceryItemNeeded(item.id, true)).then((ok) => {
+    void mutate(() => supabase.setProductOnList(item.id, true)).then((ok) => {
       if (ok) addQuery = '';
     });
   }
 
-  function setNeeded(item: GroceryItemView, needed: boolean): void {
+  // The row checkbox verb: off the list = a PURCHASE (stamps the open
+  // entry's acquired_at), back on = a fresh open entry (revival). The
+  // un-plan verb (delete the entry without recording a buy) belongs
+  // to the recipe view's checkboxes, not this panel.
+  function setOnList(item: GroceryProductView, on: boolean): void {
     const supabase = app.supabase;
     if (!supabase) return;
-    void mutate(() => supabase.setGroceryItemNeeded(item.id, needed));
+    void mutate(() => supabase.setProductOnList(item.id, on));
   }
 
-  function startEdit(item: GroceryItemView): void {
+  // The entry whose quantity the editor edits - the current entry of
+  // the row the pencil was clicked on (open for list rows, the
+  // latest purchase for history rows).
+  let editingEntryId: string | null = null;
+
+  function startEdit(item: GroceryProductView): void {
     editingId = item.id;
+    editingEntryId = item.entry_id;
     draftName = item.name;
     draftCount = item.count ?? '';
     draftUnit = item.unit ?? '';
@@ -364,27 +378,37 @@
   function saveEdit(): void {
     const supabase = app.supabase;
     const id = editingId;
+    const entryId = editingEntryId;
     if (!supabase || !id || saveBusy) return;
     saveBusy = true;
-    void mutate(() =>
-      supabase.updateGroceryItem(id, {
+    void mutate(async () => {
+      await supabase.updateGroceryProduct(id, {
         name: draftName,
-        count: draftCount.trim() || null,
-        unit: draftUnit.trim() || null,
         note: draftNote.trim() || null,
         section_id: draftSection === OTHER_SECTION_VALUE ? null : draftSection,
         image_id: draftImageId,
-      })
-    ).then((ok) => {
+      });
+      // Quantity rides the entry, not the product. A product with no
+      // entry at all (an un-planned recipe ingredient) has no
+      // quantity to save.
+      if (entryId) {
+        await supabase.updateGroceryListEntry(entryId, {
+          count: draftCount.trim() || null,
+          unit: draftUnit.trim() || null,
+        });
+      }
+    }).then((ok) => {
       saveBusy = false;
       if (ok) editingId = null;
     });
   }
 
-  function deleteItem(item: GroceryItemView): void {
+  // The one verb that forgets a variant: entries cascade, so the
+  // product's purchase history goes with it.
+  function deleteItem(item: GroceryProductView): void {
     const supabase = app.supabase;
     if (!supabase) return;
-    void mutate(() => supabase.deleteGroceryItem(item.id)).then((ok) => {
+    void mutate(() => supabase.deleteGroceryProduct(item.id)).then((ok) => {
       if (ok && editingId === item.id) editingId = null;
     });
   }
@@ -536,13 +560,13 @@
   const acquiredSplit = $derived(
     splitAcquiredForTrip(grocery.acquired, shoppingStartedAt, shoppingActive)
   );
-  const neededGroups = $derived(
+  const listGroups = $derived(
     filterSectionGroups(
-      groupItemsBySection(grocery.sections, grocery.needed),
+      groupItemsBySection(grocery.sections, grocery.onList),
       showEmptySections
     )
   );
-  const canCreate = $derived(canCreateGroceryItem(addQuery, suggestions, grocery.needed));
+  const canCreate = $derived(canCreateGroceryItem(addQuery, suggestions, grocery.onList));
   const suggesting = $derived(addQuery.trim().length > 0);
 </script>
 
@@ -738,13 +762,13 @@
     </div>
   {/if}
 
-  {#snippet itemRow(item: GroceryItemView, needed: boolean)}
+  {#snippet itemRow(item: GroceryProductView, onList: boolean)}
     <div
       class="grocery-item-row"
-      class:acquired={!needed}
+      class:acquired={!onList}
       class:lifted={dragItemId === item.id}
     >
-      {#if needed}
+      {#if onList}
         <!-- Drag-to-file handle. Only the handle is draggable so the
              row's tap targets (checkbox, edit) keep their gestures. -->
         <span
@@ -767,14 +791,14 @@
         >&#8942;&#8942;</span>
       {/if}
       <label class="grocery-check-label">
-        <!-- Inverted from the recipe view on purpose: needed items
+        <!-- Inverted from the recipe view on purpose: on-list items
              render CHECKED and the shopper unchecks as they buy. -->
         <input
           type="checkbox"
           class="grocery-check"
-          checked={needed}
-          aria-label={needed ? `Mark ${item.name} as acquired` : `Put ${item.name} back on the list`}
-          onchange={() => setNeeded(item, !needed)}
+          checked={onList}
+          aria-label={onList ? `Mark ${item.name} as acquired` : `Put ${item.name} back on the list`}
+          onchange={() => setOnList(item, !onList)}
         />
       </label>
       <!-- The whole row body is a second checkbox target - at the
@@ -784,8 +808,8 @@
       <button
         type="button"
         class="grocery-item-body"
-        title={needed ? 'Mark as acquired' : 'Put back on the list'}
-        onclick={() => setNeeded(item, !needed)}
+        title={onList ? 'Mark as acquired' : 'Put back on the list'}
+        onclick={() => setOnList(item, !onList)}
       >
         <!-- The name owns its own line and wraps in full. Nothing
              shares the line with it: the shopper scans an aisle card
@@ -874,7 +898,7 @@
   {:else if grocery.error && !grocery.loaded}
     <p class="error grocery-error">{grocery.error}</p>
   {:else}
-    {#if grocery.needed.length === 0}
+    {#if grocery.onList.length === 0}
       <p class="subtle grocery-empty">
         Nothing on the list. Add items above, or check ingredients off
         an upcoming or favorite recipe.
@@ -885,7 +909,7 @@
          then the user's sections in their order. Empty cards are
          hidden unless the "Show empty sections" toggle above opts
          into the full store layout. -->
-    {#each neededGroups as group (group.id ?? '__other')}
+    {#each listGroups as group (group.id ?? '__other')}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <!-- Drag-and-drop is a pointer shortcut; the keyboard path to
            the same write is the item editor's section picker. -->

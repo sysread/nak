@@ -43,7 +43,8 @@
 --   messages  individual turns within a thread (incl. OpenAI-shape tool rows)
 --   memories  freeform notes CRUD-able by the user and the memory_* tools
 --   recipes   Cooklang recipes CRUD-able by the user and the recipe_* tools
---   grocery_items / grocery_sections   the grocery list (user-driven UI only)
+--   grocery_products / grocery_list_entries / grocery_sections
+--                                       the grocery list (user-driven UI only)
 --
 -- All tables have Row Level Security enabled so an authenticated user
 -- can only access rows they own. The publishable key the browser uses
@@ -3358,36 +3359,23 @@ begin
      order by l.position;
 end $$;
 
--- grocery_sections / grocery_items ----------------------------------------
+-- grocery_sections / grocery_products / grocery_list_entries ---------------
 --
--- The grocery list. Items are user-owned shopping-list rows organized
--- by store section (aisle). Two intake paths: manual adds from the
--- Groceries drawer tab, and per-ingredient checkboxes on bookmarked
--- (upcoming / favorite) recipes in the Cookbook detail pane.
+-- The grocery list. Two intake paths: manual adds from the Groceries
+-- drawer tab, and per-ingredient checkboxes on recipes in the
+-- Cookbook detail pane.
 --
 -- Sections are free-form, user-ordered rows. The permanent "Other"
--- section is deliberately NOT a row: items with `section_id is null`
--- render in a fixed "Other" pseudo-section pinned last in the list.
--- That makes Other undeletable and unrenamable by construction, and
--- lets section deletion be `on delete set null` - a deleted section's
--- items fall back to Other instead of vanishing. Canned starter
--- sections are seeded lazily by the client (needs an auth context the
--- sync script doesn't have), guarded against double-seeding.
+-- section is deliberately NOT a row: products with `section_id is
+-- null` render in a fixed "Other" pseudo-section. That makes Other
+-- undeletable and unrenamable by construction, and lets section
+-- deletion be `on delete set null` - a deleted section's products
+-- fall back to Other instead of vanishing. Canned starter sections
+-- are seeded lazily by the client (needs an auth context the sync
+-- script doesn't have), guarded against double-seeding.
 --
--- `needed` is the shopping flag: true = still to buy (renders in the
--- main list), false = acquired (renders greyed-out in a collapsed
--- history section, and feeds the add-input's "previously bought"
--- suggestion search). Unchecking at the store flips it false; the row
--- is kept, not deleted, so the purchase history accumulates.
---
--- `count` is free-form TEXT, not numeric: recipe quantities arrive
--- verbatim from cooklang ("1/2", "2-3", "a pinch") and a numeric
--- column would mangle them. `unit` is free-form for the same reason
--- ("package", "loaf").
---
--- `recipe_id` links checkbox-added items back to their recipe (null =
--- manually added). `on delete cascade`: deleting a recipe removes its
--- list items. Recipe EDITS are handled by the trigger below.
+-- Products and list entries are split on purpose - the full rationale
+-- rides the table definitions below.
 
 create table if not exists public.grocery_sections (
   id uuid primary key default gen_random_uuid(),
@@ -3449,19 +3437,48 @@ begin
   end if;
 end $$;
 
-create table if not exists public.grocery_items (
+-- The catalog / list split ------------------------------------------------
+--
+-- Two tables model what a single `grocery_items` table used to
+-- conflate:
+--
+--   grocery_products      the durable catalog. One row per product
+--                         VARIANT ("corn, canned, canned-goods aisle,
+--                         photo"); rows live forever and carry
+--                         everything that makes a variant itself
+--                         (name, note, section, photo, source recipe).
+--                         Same-name standalone variants coexist by
+--                         design - identity is label PLUS details,
+--                         never label alone.
+--   grocery_list_entries  list membership as events. An OPEN entry
+--                         (acquired_at is null) means "on the list
+--                         right now"; buying stamps acquired_at, so
+--                         the acquired history is a real purchase log
+--                         (one row per buy). Un-planning a recipe
+--                         ingredient deletes its open ENTRY - the
+--                         product row, and with it the learned
+--                         section, survives.
+--
+-- Quantity (`count` / `unit`) rides the entry, not the product:
+-- amounts are per-add and are not part of a variant's identity.
+
+create table if not exists public.grocery_products (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
   name text not null,
-  -- Free-form quantity text ("2", "1/2", "2-3"). Null = unspecified.
-  count text,
-  -- Free-form unit ("lb", "package", "loaf"). Null = unspecified.
-  unit text,
   note text,
   section_id uuid references public.grocery_sections(id) on delete set null,
-  -- True = still to buy; false = acquired / purchase history.
-  needed boolean not null default true,
-  -- Source recipe for checkbox-added items; null for manual adds.
+  -- Who decided the section. 'user' = chosen in the UI (or inherited
+  -- from the pre-split schema); 'auto' = filed by the auto-sectioning
+  -- agent; null = unfiled. Disambiguates `section_id is null`, which
+  -- alone cannot distinguish "deliberately filed in Other"
+  -- (section_source = 'user') from "not yet classified" (null) - and
+  -- the classifier may only ever touch rows where it is null.
+  section_source text check (section_source in ('user', 'auto')),
+  -- Source recipe for checkbox-added products; null for standalone.
+  -- `on delete cascade`: deleting a recipe removes its products (and
+  -- their entries through the product FK). Recipe EDITS are handled
+  -- by the invalidation trigger below.
   recipe_id uuid references public.recipes(id) on delete cascade,
   -- image_id (optional product photo) is added below, after the
   -- grocery_item_images table it references exists - an inline FK here
@@ -3470,38 +3487,90 @@ create table if not exists public.grocery_items (
   updated_at timestamptz not null default now()
 );
 
--- Serves both list panes: the needed list is fetched whole, the
--- acquired history is fetched as a recency window.
-create index if not exists grocery_items_user_needed_idx
-  on public.grocery_items (user_id, needed, updated_at desc);
+-- Name lookups: suggestion search, revival matching, and the browse
+-- pager's alphabetical ordering all key on the normalized name.
+create index if not exists grocery_products_user_name_idx
+  on public.grocery_products (user_id, lower(btrim(name)));
 
 -- Reverse lookup for the invalidation trigger's delete and the
 -- recipe-detail checkbox-state query.
-create index if not exists grocery_items_recipe_idx
-  on public.grocery_items (recipe_id) where recipe_id is not null;
+create index if not exists grocery_products_recipe_idx
+  on public.grocery_products (recipe_id) where recipe_id is not null;
 
-alter table public.grocery_items enable row level security;
+alter table public.grocery_products enable row level security;
 
-drop policy if exists "grocery_items are self-selectable" on public.grocery_items;
-create policy "grocery_items are self-selectable" on public.grocery_items
+drop policy if exists "grocery_products are self-selectable" on public.grocery_products;
+create policy "grocery_products are self-selectable" on public.grocery_products
   for select using (auth.uid() = user_id);
 
-drop policy if exists "grocery_items are self-insertable" on public.grocery_items;
-create policy "grocery_items are self-insertable" on public.grocery_items
+drop policy if exists "grocery_products are self-insertable" on public.grocery_products;
+create policy "grocery_products are self-insertable" on public.grocery_products
   for insert with check (auth.uid() = user_id);
 
-drop policy if exists "grocery_items are self-updatable" on public.grocery_items;
-create policy "grocery_items are self-updatable" on public.grocery_items
+drop policy if exists "grocery_products are self-updatable" on public.grocery_products;
+create policy "grocery_products are self-updatable" on public.grocery_products
   for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
-drop policy if exists "grocery_items are self-deletable" on public.grocery_items;
-create policy "grocery_items are self-deletable" on public.grocery_items
+drop policy if exists "grocery_products are self-deletable" on public.grocery_products;
+create policy "grocery_products are self-deletable" on public.grocery_products
+  for delete using (auth.uid() = user_id);
+
+create table if not exists public.grocery_list_entries (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  product_id uuid not null references public.grocery_products(id) on delete cascade,
+  -- Free-form quantity text ("2", "1/2", "2-3"). Null = unspecified.
+  -- Recipe quantities arrive verbatim from cooklang and a numeric
+  -- column would mangle them; `unit` is free-form for the same reason
+  -- ("package", "loaf").
+  count text,
+  unit text,
+  added_at timestamptz not null default now(),
+  -- Null = on the list now. Set = bought at that moment; the In-cart
+  -- card during a shopping trip is exactly the entries acquired since
+  -- the trip started, so no updated_at heuristics are involved.
+  acquired_at timestamptz
+);
+
+-- At most one OPEN entry per product: "on the list" is a boolean per
+-- variant, and revival must never stack duplicate open rows.
+create unique index if not exists grocery_list_entries_open_uidx
+  on public.grocery_list_entries (product_id) where acquired_at is null;
+
+-- The current list is fetched whole (open entries), the purchase
+-- history as a recency window.
+create index if not exists grocery_list_entries_user_open_idx
+  on public.grocery_list_entries (user_id) where acquired_at is null;
+create index if not exists grocery_list_entries_user_acquired_idx
+  on public.grocery_list_entries (user_id, acquired_at desc)
+  where acquired_at is not null;
+
+alter table public.grocery_list_entries enable row level security;
+
+drop policy if exists "grocery_list_entries are self-selectable" on public.grocery_list_entries;
+create policy "grocery_list_entries are self-selectable" on public.grocery_list_entries
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "grocery_list_entries are self-insertable" on public.grocery_list_entries;
+create policy "grocery_list_entries are self-insertable" on public.grocery_list_entries
+  for insert with check (auth.uid() = user_id);
+
+drop policy if exists "grocery_list_entries are self-updatable" on public.grocery_list_entries;
+create policy "grocery_list_entries are self-updatable" on public.grocery_list_entries
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "grocery_list_entries are self-deletable" on public.grocery_list_entries;
+create policy "grocery_list_entries are self-deletable" on public.grocery_list_entries
   for delete using (auth.uid() = user_id);
 
 -- Recipe-change invalidation. Ingredients are embedded in the recipe's
--- cooklang markup, not discrete rows, so after an edit there is no way
--- to know which list items still correspond to real ingredients -
--- wholesale deletion of the recipe's items is the only honest answer.
+-- cooklang markup, not discrete rows, so products key on the
+-- ingredient NAME: after an edit, a product whose normalized name
+-- still parses out of the new source is the same ingredient (its
+-- learned section, note, and photo stay valid); one whose name is
+-- gone was renamed or removed and is dropped, entries cascading with
+-- it. Amount-only edits change no names and delete nothing.
+--
 -- A trigger (rather than client-side cleanup) covers every write path
 -- uniformly: the Cookbook modal, the server-dispatched recipe_update
 -- LLM tool, and revert all funnel through an UPDATE on recipes.
@@ -3509,119 +3578,66 @@ create policy "grocery_items are self-deletable" on public.grocery_items
 -- rating changes, and title/source edits leave the ingredient list
 -- intact, so they leave the grocery list intact too. Recipe DELETEs
 -- are covered by the FK cascade, not this trigger.
-create or replace function public.clear_grocery_items_on_recipe_change()
+--
+-- Name extraction mirrors the client parser's ingredient tokens
+-- (src/lib/cooklang.ts): strip [- block -] and `--` line comments,
+-- then take every `@name` / `@?name` / `@multi word name{...}` token.
+-- Two deliberate divergences, both on the safe side:
+--   - This is the union of @-tokens ANYWHERE in the source, while the
+--     client's checkbox list narrows to declaration lines when a
+--     recipe uses declaration blocks. A kept-but-unlisted product is
+--     benign (it simply has no checkbox); a wrongly-deleted one
+--     destroys the user's learned section. Supersets only ever keep
+--     more.
+--   - POSIX classes ([:alnum:]) stand in for the client's \p{L}\p{N};
+--     both are Unicode-aware over a UTF-8 database.
+-- tests/grocery-list.test.ts runs this exact regex (mirrored in JS)
+-- against parseCooklang across sample recipes so drift fails the gate.
+create or replace function public.clear_stale_grocery_products_on_recipe_change()
 returns trigger language plpgsql as $$
+declare
+  v_src text;
 begin
   if new.cooklang is distinct from old.cooklang then
-    delete from public.grocery_items where recipe_id = new.id;
+    v_src := regexp_replace(coalesce(new.cooklang, ''), '\[-.*?-\]', '', 'g');
+    v_src := regexp_replace(v_src, '--[^\n]*', '', 'g');
+    delete from public.grocery_products p
+     where p.recipe_id = new.id
+       and lower(btrim(p.name)) not in (
+         select lower(btrim(coalesce(m[1], m[2])))
+           from regexp_matches(
+             v_src,
+             '@\??(?:((?:[[:alnum:]_''-]+|\([^)]*\))(?:[ \t](?:[[:alnum:]_''-]+|\([^)]*\)))*)\{[^}]*\}|([[:alnum:]_''-]+))',
+             'g'
+           ) as m
+       );
   end if;
   return new;
 end $$;
 
 drop trigger if exists clear_grocery_items_on_recipe_change on public.recipes;
-create trigger clear_grocery_items_on_recipe_change
+drop function if exists public.clear_grocery_items_on_recipe_change();
+drop trigger if exists clear_stale_grocery_products_on_recipe_change on public.recipes;
+create trigger clear_stale_grocery_products_on_recipe_change
   after update on public.recipes
-  for each row execute function public.clear_grocery_items_on_recipe_change();
+  for each row execute function public.clear_stale_grocery_products_on_recipe_change();
 
--- Sticky section assignments -----------------------------------------------
+-- Retired: grocery_section_prefs -------------------------------------------
 --
--- Filing an item into a section should stick to the NAME, not the
--- row: grocery rows are deleted freely (recipe-side unchecks, the
--- recipe-edit invalidation wipe above, manual deletes), and without
--- this the user re-files "eggs" into Dairy every time a recipe
--- re-adds it. `grocery_section_prefs` remembers the last section the
--- user chose per normalized item name, maintained entirely by
--- triggers so every write path (item editor, recipe checkboxes, both
--- add inputs) participates without client code:
---
---   - setting an item's section (insert or update, non-null) upserts
---     the preference for that name;
---   - explicitly moving an item back to Other (update to null)
---     deletes the preference - the last explicit choice wins;
---   - inserting an item WITHOUT a section fills it from the
---     preference (BEFORE INSERT, so the row lands pre-filed).
---
--- Section deletion cascades through the prefs FK, so names filed in
--- a deleted section fall back to Other on their next add - matching
--- what happened to the live rows.
-
-create table if not exists public.grocery_section_prefs (
-  user_id uuid not null references auth.users(id) on delete cascade,
-  -- lower(btrim(name)) - matches the client's normalizeGroceryName so
-  -- "Eggs " and "eggs" share one preference.
-  name_key text not null,
-  section_id uuid not null references public.grocery_sections(id) on delete cascade,
-  updated_at timestamptz not null default now(),
-  primary key (user_id, name_key)
-);
-
-alter table public.grocery_section_prefs enable row level security;
-
--- Self-* policies: the triggers below run as the invoking user (RLS
--- applies), so the user needs full CRUD on their own prefs.
-drop policy if exists "grocery_section_prefs are self-selectable" on public.grocery_section_prefs;
-create policy "grocery_section_prefs are self-selectable" on public.grocery_section_prefs
-  for select using (auth.uid() = user_id);
-
-drop policy if exists "grocery_section_prefs are self-insertable" on public.grocery_section_prefs;
-create policy "grocery_section_prefs are self-insertable" on public.grocery_section_prefs
-  for insert with check (auth.uid() = user_id);
-
-drop policy if exists "grocery_section_prefs are self-updatable" on public.grocery_section_prefs;
-create policy "grocery_section_prefs are self-updatable" on public.grocery_section_prefs
-  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
-
-drop policy if exists "grocery_section_prefs are self-deletable" on public.grocery_section_prefs;
-create policy "grocery_section_prefs are self-deletable" on public.grocery_section_prefs
-  for delete using (auth.uid() = user_id);
-
--- Fill a section-less insert from the remembered preference. BEFORE
--- INSERT so the row lands pre-filed and realtime/readers never see
--- an unfiled flash.
-create or replace function public.fill_grocery_section_from_pref()
-returns trigger language plpgsql as $$
-begin
-  if new.section_id is null then
-    select p.section_id into new.section_id
-      from public.grocery_section_prefs p
-     where p.user_id = new.user_id
-       and p.name_key = lower(btrim(new.name));
-  end if;
-  return new;
-end $$;
-
-drop trigger if exists fill_grocery_section_from_pref on public.grocery_items;
-create trigger fill_grocery_section_from_pref
-  before insert on public.grocery_items
-  for each row execute function public.fill_grocery_section_from_pref();
-
--- Record the preference whenever a section is set, and drop it when
--- the user explicitly files an item back to Other. Insert-with-null
--- is NOT a preference signal (it is the "no choice yet" default the
--- fill trigger just handled); update-to-null is, because the only
--- paths that null a section_id are the user's editor and a section
--- deletion (whose cascade already removed the matching prefs, making
--- this trigger's delete a no-op for that case).
-create or replace function public.remember_grocery_section_pref()
-returns trigger language plpgsql as $$
-begin
-  if new.section_id is not null then
-    insert into public.grocery_section_prefs (user_id, name_key, section_id, updated_at)
-    values (new.user_id, lower(btrim(new.name)), new.section_id, now())
-    on conflict (user_id, name_key)
-      do update set section_id = excluded.section_id, updated_at = now();
-  elsif tg_op = 'UPDATE' and old.section_id is not null then
-    delete from public.grocery_section_prefs p
-     where p.user_id = new.user_id
-       and p.name_key = lower(btrim(new.name));
-  end if;
-  return new;
-end $$;
-
-drop trigger if exists remember_grocery_section_pref on public.grocery_items;
-create trigger remember_grocery_section_pref
-  after insert or update of section_id, name on public.grocery_items
-  for each row execute function public.remember_grocery_section_pref();
+-- The pre-split schema kept a name-keyed section memory
+-- (grocery_section_prefs + fill/remember triggers) because item rows
+-- were deleted freely and took their learned section with them. With
+-- the catalog split, product rows ARE the memory - they live forever
+-- and carry their section - and a name-keyed side-table is actively
+-- wrong for the variant model (it can hold only one section per
+-- name, so "canned corn" and "fresh corn" would fight over it). The
+-- drops are unconditional so deployed databases converge; fresh
+-- installs no-op. The triggers targeted the old grocery_items table
+-- (dropped by the backfill below), so only the functions and the
+-- table need explicit cleanup.
+drop function if exists public.fill_grocery_section_from_pref() cascade;
+drop function if exists public.remember_grocery_section_pref() cascade;
+drop table if exists public.grocery_section_prefs;
 
 -- grocery_item_images ------------------------------------------------------
 --
@@ -3630,7 +3646,7 @@ create trigger remember_grocery_section_pref
 -- bytes in a private bucket, one metadata row per (user_id, sha256),
 -- rows immutable (byte changes mean a different sha, which means a
 -- different row). Unlike recipe photos there is no link table - an
--- item has at most one photo via `grocery_items.image_id`, and the
+-- product has at most one photo via `grocery_products.image_id`, and the
 -- same image row may be shared by several items (the dedup upsert
 -- returns the existing id).
 
@@ -3694,18 +3710,108 @@ create policy "grocery-item-images bucket is self-deletable" on storage.objects
     and (storage.foldername(name))[1] = auth.uid()::text
   );
 
--- Optional product photo on an item, at most one. Declared here (not
--- inline in the grocery_items create) because this table is created
--- after grocery_items in file order. `set null` (not cascade) so
--- GC-ing an image row never deletes the list item it decorated.
-alter table public.grocery_items
+-- Optional product photo, at most one per product. Declared here (not
+-- inline in the grocery_products create) because this table is created
+-- after grocery_products in file order. `set null` (not cascade) so
+-- GC-ing an image row never deletes the product it decorated. The
+-- images table keeps its historical grocery_item_images name: its
+-- rows are content-addressed into the `grocery-item-images` bucket by
+-- stored storage_path, and renaming table + bucket buys nothing.
+alter table public.grocery_products
   add column if not exists image_id uuid
     references public.grocery_item_images(id) on delete set null;
 
 -- Reverse lookup for the orphan sweep's anti-join and the FK's
 -- on-delete-set-null resolution.
-create index if not exists grocery_items_image_idx
-  on public.grocery_items (image_id) where image_id is not null;
+create index if not exists grocery_products_image_idx
+  on public.grocery_products (image_id) where image_id is not null;
+
+-- One-time backfill from the pre-split grocery_items table. Guarded
+-- on that table's existence, so a database that has already migrated
+-- (or a fresh install that never had it) no-ops. Sits here, after
+-- grocery_products.image_id exists, because the copy carries the
+-- photo link. Mapping:
+--   - every item row becomes a product with the same id (so image
+--     references and any external row references stay valid);
+--   - section_source is 'user' for filed rows - pre-split sections
+--     were user-chosen or inherited from the user's own prefs, both
+--     user-shaped - and null (unfiled) for section-less rows;
+--   - each row gets exactly one entry carrying its count/unit:
+--     needed rows an OPEN entry, acquired rows an entry stamped with
+--     updated_at, the closest thing the old model had to a purchase
+--     timestamp (the needed flip was the last write in the common
+--     case).
+-- The old table is dropped at the end, which is also what removes it
+-- from the realtime publication and drops its indexes and policies.
+do $$
+begin
+  if exists (
+    select 1 from information_schema.tables
+    where table_schema = 'public' and table_name = 'grocery_items'
+  ) then
+    insert into public.grocery_products
+      (id, user_id, name, note, section_id, section_source, recipe_id,
+       image_id, created_at, updated_at)
+    select id, user_id, name, note, section_id,
+           case when section_id is not null then 'user' end,
+           recipe_id, image_id, created_at, updated_at
+      from public.grocery_items
+    on conflict (id) do nothing;
+    insert into public.grocery_list_entries
+      (user_id, product_id, count, unit, added_at, acquired_at)
+    select user_id, id, count, unit, created_at,
+           case when needed then null else updated_at end
+      from public.grocery_items;
+    drop table public.grocery_items;
+  end if;
+end $$;
+
+-- Read model for every grocery client surface: each product flattened
+-- with its CURRENT entry (the open one when the product is on the
+-- list, else the most recent purchase), the source recipe's title,
+-- and the photo's storage path. One view instead of per-surface
+-- PostgREST embeds so the panel list, the acquired-history window,
+-- the sidebar browse pager, the add-input suggestions, and the
+-- recipe-checkbox sync all page and filter server-side against the
+-- same flat columns. security_invoker so the base tables' RLS
+-- applies to the querying user; declared after the backfill because
+-- it reads grocery_products.image_id, which exists only from that
+-- point in file order. Dropped and recreated (not `or replace`) so a
+-- column change never trips postgres's "cannot change view columns"
+-- error on re-apply.
+--
+--   on_list      true when an open entry exists.
+--   entry_id     the current entry (null only for a product with no
+--                entries at all - e.g. a recipe ingredient that was
+--                un-planned).
+--   count/unit   the current entry's quantity.
+--   acquired_at  the current entry's purchase time; null while open.
+--                The In-cart split during a shopping trip is
+--                `acquired_at >= trip start`, client-side.
+drop view if exists public.grocery_products_view;
+create view public.grocery_products_view
+with (security_invoker = true) as
+select p.id, p.user_id, p.name, p.note, p.section_id, p.section_source,
+       p.recipe_id, p.image_id, p.created_at, p.updated_at,
+       r.title as recipe_title,
+       img.storage_path as image_storage_path,
+       ce.id as entry_id,
+       ce.count, ce.unit, ce.acquired_at,
+       (ce.id is not null and ce.acquired_at is null) as on_list
+  from public.grocery_products p
+  left join public.recipes r on r.id = p.recipe_id
+  left join public.grocery_item_images img on img.id = p.image_id
+  left join lateral (
+    select e.id, e.count, e.unit, e.acquired_at
+      from public.grocery_list_entries e
+     where e.product_id = p.id
+     -- Open entry first (there is at most one, by the partial unique
+     -- index), else newest purchase.
+     order by (e.acquired_at is null) desc, e.acquired_at desc
+     limit 1
+  ) ce on true;
+
+grant select on public.grocery_products_view to authenticated;
 
 -- Image upsert RPC, twin of recipe_image_upsert: returns the existing
 -- row's id when (user_id, sha256) already maps to one, otherwise
@@ -3749,10 +3855,10 @@ end $$;
 
 -- Orphan reclamation for grocery-item images: same sweep shape as
 -- recipe-image-gc (edge function + cron; SQL can't delete Storage
--- objects). An image row is orphaned when no grocery_items.image_id
--- references it - covers both delete-side orphans (item deleted or
--- re-photographed) and insert-side orphans (upserted but the item
--- save failed).
+-- objects). An image row is orphaned when no
+-- grocery_products.image_id references it - covers both delete-side
+-- orphans (product deleted or re-photographed) and insert-side
+-- orphans (upserted but the product save failed).
 drop function if exists public.list_orphan_grocery_item_images(int);
 create or replace function public.list_orphan_grocery_item_images(p_limit int)
 returns table (id uuid, storage_path text)
@@ -3761,7 +3867,7 @@ set search_path = public as $$
   select gi.id, gi.storage_path
     from public.grocery_item_images gi
    where not exists (
-     select 1 from public.grocery_items it where it.image_id = gi.id
+     select 1 from public.grocery_products it where it.image_id = gi.id
    )
    order by gi.created_at asc
    limit p_limit
@@ -3781,7 +3887,7 @@ set search_path = public as $$
   delete from public.grocery_item_images gi
    where gi.id = any(p_ids)
      and not exists (
-       select 1 from public.grocery_items it where it.image_id = gi.id
+       select 1 from public.grocery_products it where it.image_id = gi.id
      )
   returning gi.id, gi.storage_path, gi.user_id
 $$;
@@ -11983,18 +12089,29 @@ begin
   ) then
     alter publication supabase_realtime add table public.wiki_record_links;
   end if;
-  -- grocery_items / grocery_sections feed the Groceries drawer tab's
-  -- refresh relay (subscribeToGroceryChanges -> emitGroceryChange):
-  -- a checkbox click in the Cookbook detail pane, the invalidation
-  -- trigger's bulk delete on a recipe edit, and a second device at the
-  -- store all reach an open Groceries tab through this stream.
+  -- The grocery tables feed the Groceries drawer tab's refresh relay
+  -- (subscribeToGroceryChanges -> emitGroceryChange): a checkbox
+  -- click in the Cookbook detail pane, the invalidation trigger's
+  -- delete on a recipe edit, and a second device at the store all
+  -- reach an open Groceries tab through this stream. Products and
+  -- entries are both members because either can change alone (a
+  -- section filing touches only the product; a buy touches only the
+  -- entry).
   if not exists (
     select 1 from pg_publication_tables
     where pubname = 'supabase_realtime'
       and schemaname = 'public'
-      and tablename = 'grocery_items'
+      and tablename = 'grocery_products'
   ) then
-    alter publication supabase_realtime add table public.grocery_items;
+    alter publication supabase_realtime add table public.grocery_products;
+  end if;
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'grocery_list_entries'
+  ) then
+    alter publication supabase_realtime add table public.grocery_list_entries;
   end if;
   if not exists (
     select 1 from pg_publication_tables
@@ -12076,9 +12193,12 @@ alter table public.wiki_record_files replica identity using index wiki_record_fi
 create unique index if not exists wiki_record_links_replident_idx
   on public.wiki_record_links (id, user_id);
 alter table public.wiki_record_links replica identity using index wiki_record_links_replident_idx;
-create unique index if not exists grocery_items_replident_idx
-  on public.grocery_items (id, user_id);
-alter table public.grocery_items replica identity using index grocery_items_replident_idx;
+create unique index if not exists grocery_products_replident_idx
+  on public.grocery_products (id, user_id);
+alter table public.grocery_products replica identity using index grocery_products_replident_idx;
+create unique index if not exists grocery_list_entries_replident_idx
+  on public.grocery_list_entries (id, user_id);
+alter table public.grocery_list_entries replica identity using index grocery_list_entries_replident_idx;
 create unique index if not exists grocery_sections_replident_idx
   on public.grocery_sections (id, user_id);
 alter table public.grocery_sections replica identity using index grocery_sections_replident_idx;

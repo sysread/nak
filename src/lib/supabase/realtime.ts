@@ -451,13 +451,16 @@ export function subscribeToWikiRecordChanges(
 
 /**
  * Subscribe to any change on the signed-in user's grocery list. One
- * channel, two tables (items + sections) folded into the same coarse
- * "something changed" notification - the caller (Chat.svelte) routes
- * it into emitGroceryChange and the Groceries tab refetches whole.
- * This is how a checkbox click in the Cookbook detail pane, the
- * recipe-edit invalidation trigger's bulk delete, and a second device
- * at the store all reach an open list. DELETE delivery rides each
- * table's (id, user_id) replica-identity index (see schema.sql).
+ * channel, three tables (products + entries + sections) folded into
+ * the same coarse "something changed" notification - the caller
+ * (Chat.svelte) routes it into emitGroceryChange and the Groceries
+ * tab refetches whole. This is how a checkbox click in the Cookbook
+ * detail pane, the recipe-edit invalidation trigger's delete, and a
+ * second device at the store all reach an open list. DELETE delivery
+ * rides each table's (id, user_id) replica-identity index (see
+ * schema.sql). Products and entries are separate members because
+ * either can change alone (a section filing touches only the
+ * product; a buy touches only the entry).
  */
 export function subscribeToGroceryChanges(
   client: SupabaseClient,
@@ -465,7 +468,11 @@ export function subscribeToGroceryChanges(
   onChange: () => void
 ): () => void {
   const channel = client.channel(`grocery:${userId}`);
-  for (const table of ['grocery_items', 'grocery_sections']) {
+  for (const table of [
+    'grocery_products',
+    'grocery_list_entries',
+    'grocery_sections',
+  ]) {
     channel.on(
       'postgres_changes' as never,
       {

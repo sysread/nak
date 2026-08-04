@@ -1,9 +1,19 @@
 /**
  * Grocery domain slice of the Supabase data layer: store sections
- * (list / create / rename / delete / reorder / first-run seed) and
- * list items (list / create / update / delete / needed-flag toggle /
- * acquired-history search), plus the item product-photo upload and
- * signed-URL resolution against the `grocery-item-images` bucket.
+ * (list / create / rename / delete / reorder / first-run seed),
+ * catalog products (create / update / delete), list entries (open /
+ * acquire / remove), the read paths over the flattened
+ * `grocery_products_view`, and the product-photo upload + signed-URL
+ * resolution against the `grocery-item-images` bucket.
+ *
+ * The write vocabulary mirrors the two-table model:
+ *   - products are the durable catalog (name / note / section /
+ *     photo / source recipe); deleting one is the only destructive
+ *     verb and cascades its entries;
+ *   - "on the list" is an OPEN entry; setProductOnList flips it by
+ *     inserting an open entry (revival) or stamping acquired_at
+ *     (a purchase); removeProductFromList deletes the open entry
+ *     without recording a purchase (un-planning).
  *
  * Same RLS posture as the cookbook slice: every query is scoped to
  * the signed-in user automatically; only inserts need an explicit
@@ -21,9 +31,10 @@ import type { SupabaseClient, Session } from '@supabase/supabase-js';
 import { SupabaseError } from './error';
 import { base64ToBytes, ilikeFilterPattern } from './query-utils';
 import type {
-  GroceryItem,
-  GroceryItemPatch,
-  GroceryItemView,
+  GroceryProduct,
+  GroceryProductPatch,
+  GroceryProductView,
+  GroceryEntryPatch,
   GrocerySection,
 } from './types';
 
@@ -148,8 +159,8 @@ export async function renameGrocerySection(
 }
 
 /**
- * Delete a section. Its items fall back to the "Other" pseudo-section
- * via the FK's `on delete set null` - nothing is lost.
+ * Delete a section. Its products fall back to the "Other"
+ * pseudo-section via the FK's `on delete set null` - nothing is lost.
  */
 export async function deleteGrocerySection(
   client: SupabaseClient,
@@ -174,42 +185,32 @@ export async function reorderGrocerySections(
   if (error) throw new SupabaseError(error.message);
 }
 
-// Items ----------------------------------------------------------------------
+// Products (read paths over grocery_products_view) ---------------------------
 
-// The embedded-select projection every item read uses. PostgREST
-// resolves the two FK embeds (recipes via recipe_id, images via
-// image_id) as single objects or single-element arrays depending on
-// serialisation mode; toItemView copes with both.
-const ITEM_SELECT =
-  'id, name, count, unit, note, section_id, needed, recipe_id, image_id, ' +
-  'created_at, updated_at, recipes(title), grocery_item_images(storage_path)';
+// The flat projection every read uses. The view (see schema.sql)
+// already joins the recipe title, the photo's storage path, and the
+// product's CURRENT entry (open when on the list, else the latest
+// purchase), so no PostgREST embeds are involved.
+const VIEW_SELECT =
+  'id, name, note, section_id, section_source, recipe_id, image_id, ' +
+  'created_at, updated_at, recipe_title, image_storage_path, ' +
+  'entry_id, count, unit, acquired_at, on_list';
 
-type RecipeEmbed = { title: string } | Array<{ title: string }> | null;
-type ImageEmbed =
-  | { storage_path: string }
-  | Array<{ storage_path: string }>
-  | null;
-type ItemRow = GroceryItem & {
-  recipes?: RecipeEmbed;
-  grocery_item_images?: ImageEmbed;
+type ViewRow = Omit<GroceryProductView, 'image_url'> & {
+  image_storage_path: string | null;
 };
 
-function embedded<T>(embed: T | T[] | null | undefined): T | null {
-  if (embed === null || embed === undefined) return null;
-  return Array.isArray(embed) ? (embed[0] ?? null) : embed;
-}
-
 /**
- * Map raw embedded rows into GroceryItemView, batch-resolving signed
- * URLs for every photo in one Storage call. Items whose signing fails
+ * Map raw view rows into GroceryProductView, batch-resolving signed
+ * URLs for every photo in one Storage call. Rows whose signing fails
  * degrade to no photo rather than failing the list read.
  */
-async function toItemViews(
+async function toProductViews(
   client: SupabaseClient,
-  rows: ItemRow[]
-): Promise<GroceryItemView[]> {
+  rows: ViewRow[]
+): Promise<GroceryProductView[]> {
   const paths = rows
-    .map((r) => embedded(r.grocery_item_images)?.storage_path)
+    .map((r) => r.image_storage_path)
     .filter((p): p is string => typeof p === 'string');
   const signed = new Map<string, string>();
   if (paths.length > 0) {
@@ -225,84 +226,91 @@ async function toItemViews(
     }
   }
   return rows.map((r) => {
-    const { recipes, grocery_item_images, ...item } = r;
-    const path = embedded(grocery_item_images)?.storage_path ?? null;
+    const { image_storage_path, ...product } = r;
     return {
-      ...item,
-      recipe_title: embedded(recipes)?.title ?? null,
-      image_url: (path && signed.get(path)) || null,
+      ...product,
+      image_url:
+        (image_storage_path && signed.get(image_storage_path)) || null,
     };
   });
 }
 
 /**
- * The active shopping list: every `needed` item, newest first. Fetched
- * whole - an active trip's list is small by nature (the unbounded set
- * is the acquired history, which is windowed below).
+ * The active shopping list: every product with an open entry, most
+ * recently updated first. Fetched whole - the current list is small
+ * by nature (the unbounded set is the purchase history, windowed
+ * below).
  */
-export async function listNeededGroceryItems(
+export async function listOnListGroceryProducts(
   client: SupabaseClient
-): Promise<GroceryItemView[]> {
+): Promise<GroceryProductView[]> {
   const { data, error } = await client
-    .from('grocery_items')
-    .select(ITEM_SELECT)
-    .eq('needed', true)
+    .from('grocery_products_view')
+    .select(VIEW_SELECT)
+    .eq('on_list', true)
     .order('updated_at', { ascending: false });
   if (error) throw new SupabaseError(error.message);
-  return toItemViews(client, (data ?? []) as unknown as ItemRow[]);
+  return toProductViews(client, (data ?? []) as unknown as ViewRow[]);
 }
 
 /**
- * One recency window of the acquired history (needed = false), newest
- * first. Windowed, never fetched whole - this set grows unboundedly
- * over shopping trips. `hasMore` is derived from the +1 overfetch,
- * same shape as listRecipesPage.
+ * One recency window of the purchase history: products NOT on the
+ * list, most recently acquired first. Windowed, never fetched whole -
+ * this set grows over shopping trips forever. `hasMore` is derived
+ * from the +1 overfetch, same shape as listRecipesPage. Products with
+ * no entries at all (un-planned recipe ingredients) are excluded:
+ * they were never bought, so they are catalog-only until revived.
  */
-export async function listAcquiredGroceryItemsPage(
+export async function listAcquiredGroceryProductsPage(
   client: SupabaseClient,
   opts: { offset: number; pageSize: number }
-): Promise<{ rows: GroceryItemView[]; hasMore: boolean }> {
+): Promise<{ rows: GroceryProductView[]; hasMore: boolean }> {
   const { data, error } = await client
-    .from('grocery_items')
-    .select(ITEM_SELECT)
-    .eq('needed', false)
-    .order('updated_at', { ascending: false })
+    .from('grocery_products_view')
+    .select(VIEW_SELECT)
+    .eq('on_list', false)
+    .not('acquired_at', 'is', null)
+    .order('acquired_at', { ascending: false })
     .order('id', { ascending: false })
     .range(opts.offset, opts.offset + opts.pageSize);
   if (error) throw new SupabaseError(error.message);
-  const rows = (data ?? []) as unknown as ItemRow[];
+  const rows = (data ?? []) as unknown as ViewRow[];
   const hasMore = rows.length > opts.pageSize;
   const windowRows = hasMore ? rows.slice(0, opts.pageSize) : rows;
-  return { rows: await toItemViews(client, windowRows), hasMore };
+  return { rows: await toProductViews(client, windowRows), hasMore };
 }
 
 /**
- * One recency window of the full item corpus for the sidebar's
- * all-items browse: optional ILIKE name search, optional status
- * filter (`needed`), optional section filter (`sectionId`;
- * `'other'` matches the null-section pseudo-bucket), and
- * `manualOnly` to restrict to manually-entered rows (recipe_id is
- * null - the sidebar's "Staples", shown by default with the
- * recipe-sourced rows behind a toggle). Server-side filters so the
- * page window stays honest. Windowed like the acquired page - the
- * corpus grows every shopping trip, forever. `hasMore` derives from
- * the +1 overfetch, same shape as listRecipesPage.
+ * One window of the full catalog for the sidebar's all-items browse:
+ * optional ILIKE name search, optional status filter (`onList`;
+ * false = "acquired", i.e. off the list but bought at least once),
+ * optional section filter (`sectionId`; `'other'` matches the
+ * null-section pseudo-bucket), and `manualOnly` to restrict to
+ * standalone products (recipe_id is null - the sidebar's "Staples",
+ * shown by default with the recipe-sourced rows behind a toggle).
+ * Server-side filters so the page window stays honest. `hasMore`
+ * derives from the +1 overfetch, same shape as listRecipesPage.
  */
-export async function listGroceryItemsPage(
+export async function listGroceryProductsPage(
   client: SupabaseClient,
   opts: {
     offset: number;
     pageSize: number;
     query?: string;
-    needed?: boolean;
+    onList?: boolean;
     sectionId?: string | 'other';
     manualOnly?: boolean;
   }
-): Promise<{ rows: GroceryItemView[]; hasMore: boolean }> {
-  let q = client.from('grocery_items').select(ITEM_SELECT);
+): Promise<{ rows: GroceryProductView[]; hasMore: boolean }> {
+  let q = client.from('grocery_products_view').select(VIEW_SELECT);
   const query = opts.query?.trim() ?? '';
   if (query.length > 0) q = q.ilike('name', ilikeFilterPattern(query));
-  if (opts.needed !== undefined) q = q.eq('needed', opts.needed);
+  if (opts.onList === true) q = q.eq('on_list', true);
+  else if (opts.onList === false) {
+    // "Acquired" means bought before, not merely absent from the
+    // list - a never-bought, un-planned recipe product is neither.
+    q = q.eq('on_list', false).not('acquired_at', 'is', null);
+  }
   if (opts.sectionId === 'other') q = q.is('section_id', null);
   else if (opts.sectionId !== undefined) q = q.eq('section_id', opts.sectionId);
   if (opts.manualOnly === true) q = q.is('recipe_id', null);
@@ -310,82 +318,75 @@ export async function listGroceryItemsPage(
   // or repeat a colliding row across page boundaries). Ordered by the
   // column's collation server-side - a client re-sort of a paged
   // window would disagree with the server's page seams, same
-  // rationale as the recipe sidebar's A-Z sort. Replaced the original
-  // recency order: the browse reads as a catalog index, not a feed.
+  // rationale as the recipe sidebar's A-Z sort.
   q = q
     .order('name', { ascending: true })
     .order('id', { ascending: true })
     .range(opts.offset, opts.offset + opts.pageSize);
   const { data, error } = await q;
   if (error) throw new SupabaseError(error.message);
-  const rows = (data ?? []) as unknown as ItemRow[];
+  const rows = (data ?? []) as unknown as ViewRow[];
   const hasMore = rows.length > opts.pageSize;
   const windowRows = hasMore ? rows.slice(0, opts.pageSize) : rows;
-  return { rows: await toItemViews(client, windowRows), hasMore };
+  return { rows: await toProductViews(client, windowRows), hasMore };
 }
 
 /**
- * Suggestion source for the add-to-list input: acquired items
- * (needed = false) whose name matches the query, newest first,
- * deduped by normalized name so "eggs" bought on ten trips is one
- * suggestion. Picking a suggestion flips that row back to needed
- * (see setGroceryItemNeeded) rather than inserting a duplicate.
+ * Suggestion source for the add-to-list input: standalone products
+ * NOT currently on the list whose name matches the query. Every
+ * variant is its own suggestion (identity is label plus details, so
+ * "corn, canned" and "corn, fresh" both offer themselves); picking
+ * one revives that exact product via setProductOnList. Recipe
+ * products are excluded - they are managed from their recipe, and
+ * their names are poor evidence without the recipe's context.
  */
-export async function searchAcquiredGroceryItems(
+export async function searchGrocerySuggestions(
   client: SupabaseClient,
   query: string,
   limit: number
-): Promise<GroceryItemView[]> {
+): Promise<GroceryProductView[]> {
   const trimmed = query.trim();
   if (trimmed.length === 0) return [];
-  // Overfetch beyond `limit` so the name-dedup below still fills the
-  // suggestion list when the same item dominates the recent history.
   const { data, error } = await client
-    .from('grocery_items')
-    .select(ITEM_SELECT)
-    .eq('needed', false)
+    .from('grocery_products_view')
+    .select(VIEW_SELECT)
+    .eq('on_list', false)
+    .is('recipe_id', null)
     .ilike('name', ilikeFilterPattern(trimmed))
-    .order('updated_at', { ascending: false })
-    .limit(limit * 5);
+    // Most recently bought first; never-bought variants trail.
+    .order('acquired_at', { ascending: false, nullsFirst: false })
+    .limit(limit);
   if (error) throw new SupabaseError(error.message);
-  const rows = (data ?? []) as unknown as ItemRow[];
-  const seen = new Set<string>();
-  const deduped: ItemRow[] = [];
-  for (const r of rows) {
-    const key = r.name.trim().toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    deduped.push(r);
-    if (deduped.length >= limit) break;
-  }
-  return toItemViews(client, deduped);
+  return toProductViews(client, (data ?? []) as unknown as ViewRow[]);
 }
 
 /**
- * Plain item rows linked to a recipe, any needed state. Drives the
- * recipe detail pane's ingredient checkbox sync - the checkbox
- * mirrors the matched row's `needed` flag, and rows with
- * `needed = false` are fetched too so a re-check can revive the
- * existing row instead of inserting a duplicate.
+ * Every product linked to a recipe, with its current entry state.
+ * Drives the recipe detail pane's ingredient checkbox sync - the
+ * checkbox mirrors `on_list`, and off-list products are fetched too
+ * so a re-check can revive the existing product (keeping its learned
+ * section) instead of inserting a duplicate.
  */
-export async function listGroceryItemsForRecipe(
+export async function listGroceryProductsForRecipe(
   client: SupabaseClient,
   recipeId: string
-): Promise<GroceryItem[]> {
+): Promise<GroceryProductView[]> {
   const { data, error } = await client
-    .from('grocery_items')
-    .select(
-      'id, name, count, unit, note, section_id, needed, recipe_id, image_id, created_at, updated_at'
-    )
+    .from('grocery_products_view')
+    .select(VIEW_SELECT)
     .eq('recipe_id', recipeId);
   if (error) throw new SupabaseError(error.message);
-  // Through `unknown` because supabase-js special-cases a selected
-  // column literally named `count` (its aggregate helper) and infers
-  // it as number; ours is the free-form quantity text column.
-  return (data ?? []) as unknown as GroceryItem[];
+  return toProductViews(client, (data ?? []) as unknown as ViewRow[]);
 }
 
-export async function createGroceryItem(
+// Product + entry writes -----------------------------------------------------
+
+/**
+ * Create a catalog product and put it on the list (an open entry).
+ * The quantity rides the entry, not the product - amounts are
+ * per-add and not part of a variant's identity.
+ */
+export async function createGroceryProduct(
   client: SupabaseClient,
   input: {
     name: string;
@@ -396,86 +397,173 @@ export async function createGroceryItem(
     recipe_id?: string | null;
     image_id?: string | null;
   }
-): Promise<GroceryItem> {
+): Promise<GroceryProduct> {
   const session = await getSession(client);
   if (!session) throw new SupabaseError('Not authenticated.');
   const name = input.name.trim();
-  if (name.length === 0) throw new SupabaseError('item name is required');
+  if (name.length === 0) throw new SupabaseError('product name is required');
   const { data, error } = await client
-    .from('grocery_items')
+    .from('grocery_products')
     .insert({
       user_id: session.user.id,
       name,
-      count: input.count ?? null,
-      unit: input.unit ?? null,
       note: input.note ?? null,
       section_id: input.section_id ?? null,
+      // A caller-provided section is a user choice; otherwise the
+      // product starts unfiled (renders in Other until filed by the
+      // user or, later, the auto-sectioning agent).
+      section_source: input.section_id != null ? 'user' : null,
       recipe_id: input.recipe_id ?? null,
       image_id: input.image_id ?? null,
-      needed: true,
     })
     .select(
-      'id, name, count, unit, note, section_id, needed, recipe_id, image_id, created_at, updated_at'
+      'id, name, note, section_id, section_source, recipe_id, image_id, created_at, updated_at'
     )
     .single();
   if (error) throw new SupabaseError(error.message);
-  // Same `count`-column inference quirk as listGroceryItemsForRecipe.
-  return data as unknown as GroceryItem;
+  const product = data as GroceryProduct;
+  await openEntry(client, session.user.id, product.id, {
+    count: input.count ?? null,
+    unit: input.unit ?? null,
+  });
+  return product;
+}
+
+/** Insert an open entry, tolerating one already being open. */
+async function openEntry(
+  client: SupabaseClient,
+  userId: string,
+  productId: string,
+  qty: { count: string | null; unit: string | null }
+): Promise<void> {
+  const { error } = await client.from('grocery_list_entries').insert({
+    user_id: userId,
+    product_id: productId,
+    count: qty.count,
+    unit: qty.unit,
+  });
+  // 23505 = unique_violation on the one-open-entry-per-product index:
+  // the product is already on the list (a concurrent add from another
+  // surface), which is the state the caller wanted - not an error.
+  if (error && error.code !== '23505') throw new SupabaseError(error.message);
 }
 
 /**
- * Partial update. Absent field = leave unchanged; explicit null =
- * clear (name excepted - it can only be replaced). Bumps updated_at
- * so an edited item floats to the top of its recency-ordered pane.
+ * Flip a product's list membership.
+ *
+ *   on = true    open an entry (revival). The optional quantity is
+ *                for the new entry; a product already on the list is
+ *                a no-op.
+ *   on = false   stamp the open entry's acquired_at - a PURCHASE.
+ *                For un-planning without recording a purchase, use
+ *                removeProductFromList instead.
  */
-export async function updateGroceryItem(
+export async function setProductOnList(
+  client: SupabaseClient,
+  productId: string,
+  on: boolean,
+  qty?: { count?: string | null; unit?: string | null }
+): Promise<void> {
+  if (on) {
+    const session = await getSession(client);
+    if (!session) throw new SupabaseError('Not authenticated.');
+    await openEntry(client, session.user.id, productId, {
+      count: qty?.count ?? null,
+      unit: qty?.unit ?? null,
+    });
+    return;
+  }
+  const { error } = await client
+    .from('grocery_list_entries')
+    .update({ acquired_at: new Date().toISOString() })
+    .eq('product_id', productId)
+    .is('acquired_at', null);
+  if (error) throw new SupabaseError(error.message);
+}
+
+/**
+ * Un-plan: delete the product's open entry WITHOUT recording a
+ * purchase. The product row - and with it the learned section, note,
+ * and photo - survives. This is the recipe checkbox's uncheck verb;
+ * nothing fake enters the purchase history.
+ */
+export async function removeProductFromList(
+  client: SupabaseClient,
+  productId: string
+): Promise<void> {
+  const { error } = await client
+    .from('grocery_list_entries')
+    .delete()
+    .eq('product_id', productId)
+    .is('acquired_at', null);
+  if (error) throw new SupabaseError(error.message);
+}
+
+/**
+ * Partial product update. Absent field = leave unchanged; explicit
+ * null = clear (name excepted - it can only be replaced). Setting
+ * `section_id` (including to null = Other) stamps
+ * `section_source = 'user'`: a user edit is authoritative and the
+ * auto-sectioning agent never overwrites it. Bumps updated_at.
+ */
+export async function updateGroceryProduct(
   client: SupabaseClient,
   id: string,
-  patch: GroceryItemPatch
+  patch: GroceryProductPatch
 ): Promise<void> {
   const update: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if ('name' in patch) {
     const name = (patch.name ?? '').trim();
-    if (name.length === 0) throw new SupabaseError('item name is required');
+    if (name.length === 0) throw new SupabaseError('product name is required');
     update.name = name;
   }
-  if ('count' in patch) update.count = patch.count ?? null;
-  if ('unit' in patch) update.unit = patch.unit ?? null;
   if ('note' in patch) update.note = patch.note ?? null;
-  if ('section_id' in patch) update.section_id = patch.section_id ?? null;
+  if ('section_id' in patch) {
+    update.section_id = patch.section_id ?? null;
+    update.section_source = 'user';
+  }
   if ('image_id' in patch) update.image_id = patch.image_id ?? null;
-  const { error } = await client.from('grocery_items').update(update).eq('id', id);
-  if (error) throw new SupabaseError(error.message);
-}
-
-/**
- * Flip the shopping flag. Unchecking at the store (needed -> false)
- * moves the row into the acquired history; re-checking (or picking it
- * from the add-input suggestions) brings it back onto the list with
- * its section / note / photo intact. Bumps updated_at so both panes'
- * recency ordering reflects the flip.
- */
-export async function setGroceryItemNeeded(
-  client: SupabaseClient,
-  id: string,
-  needed: boolean
-): Promise<void> {
   const { error } = await client
-    .from('grocery_items')
-    .update({ needed, updated_at: new Date().toISOString() })
+    .from('grocery_products')
+    .update(update)
     .eq('id', id);
   if (error) throw new SupabaseError(error.message);
 }
 
-export async function deleteGroceryItem(
+/**
+ * Update the quantity on a specific entry (the editor's count/unit
+ * fields). Timestamps are owned by the open/acquire verbs.
+ */
+export async function updateGroceryListEntry(
   client: SupabaseClient,
-  id: string
+  entryId: string,
+  patch: GroceryEntryPatch
 ): Promise<void> {
-  const { error } = await client.from('grocery_items').delete().eq('id', id);
+  const update: Record<string, unknown> = {};
+  if ('count' in patch) update.count = patch.count ?? null;
+  if ('unit' in patch) update.unit = patch.unit ?? null;
+  if (Object.keys(update).length === 0) return;
+  const { error } = await client
+    .from('grocery_list_entries')
+    .update(update)
+    .eq('id', entryId);
   if (error) throw new SupabaseError(error.message);
 }
 
-// Item photos ----------------------------------------------------------------
+/**
+ * Delete a product outright - the editor's Delete button. Entries
+ * cascade, so its purchase history goes with it; this is the one
+ * verb that forgets a variant.
+ */
+export async function deleteGroceryProduct(
+  client: SupabaseClient,
+  id: string
+): Promise<void> {
+  const { error } = await client.from('grocery_products').delete().eq('id', id);
+  if (error) throw new SupabaseError(error.message);
+}
+
+// Product photos -------------------------------------------------------------
 
 /**
  * Upload photo bytes to the `grocery-item-images` bucket at the

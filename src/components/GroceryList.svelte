@@ -1,20 +1,22 @@
 <script lang="ts">
   /*
    * Sidebar grocery browse. Shown in the left drawer when the
-   * Groceries tab is active. This is the catalog surface over EVERY
-   * item ever added - needed and acquired alike - with a debounced
-   * name search, a status filter (All / On list / Acquired), and a
-   * section filter, windowed with an infinite-scroll tail because
-   * the purchase history grows every trip, forever.
+   * Groceries tab is active. This is the catalog surface over every
+   * product variant - on the list and off it alike - with a
+   * debounced name search, a status filter (All / On list /
+   * Acquired), and a section filter, windowed with an
+   * infinite-scroll tail because the catalog grows forever.
    *
    * The working surface (the current shopping list, grouped by
    * section, with the add-input, the inline editor, and section
    * management) is the main panel next door -
    * src/screens/Groceries.svelte. The sidebar's one verb is the
-   * checkbox: checked = on the current list; toggling flips the
-   * row's `needed` flag, so restocking a past purchase is "find it,
-   * check it". A search with no matching item offers an Add action
-   * for a brand-new name.
+   * checkbox: checked = on the current list. Checking revives the
+   * product (opens an entry); unchecking UN-PLANS it - the open
+   * entry is deleted, no purchase is recorded. Marking things
+   * bought is the panel's job, where the shopper actually is; this
+   * surface is for planning the list. A search with no matching
+   * product offers an Add action for a brand-new name.
    *
    * Composition-only: every UI-behavior decision lives in
    * src/lib/ui/grocery-list.ts.
@@ -22,7 +24,7 @@
   import { app } from '$lib/state.svelte';
   import { grocery, loadGroceries } from '$lib/grocery-store.svelte';
   import { onGroceryChange, emitGroceryChange } from '$lib/grocery-events';
-  import type { GroceryItemView } from '$lib/supabase';
+  import type { GroceryProductView } from '$lib/supabase';
   import { infiniteScroll } from '$lib/actions/infinite-scroll';
   import {
     BROWSE_SECTION_ALL,
@@ -31,7 +33,7 @@
     GROCERY_SEARCH_DEBOUNCE_MS,
     GROCERY_STATUS_FILTER_OPTIONS,
     OTHER_SECTION_LABEL,
-    browseNeededArg,
+    browseOnListArg,
     browseSectionArg,
     canCreateGroceryItem,
     computeBrowseView,
@@ -51,7 +53,7 @@
   // with cooking plans. The toggle widens the window to both groups.
   let showRecipeItems = $state(false);
 
-  let rows = $state<GroceryItemView[]>([]);
+  let rows = $state<GroceryProductView[]>([]);
   let hasMore = $state(false);
   let loading = $state(false);
   let loadingMore = $state(false);
@@ -68,11 +70,11 @@
     const seq = ++fetchSeq;
     loading = true;
     try {
-      const page = await app.supabase.listGroceryItemsPage({
+      const page = await app.supabase.listGroceryProductsPage({
         offset: 0,
         pageSize: GROCERY_BROWSE_PAGE_SIZE,
         query,
-        needed: browseNeededArg(statusFilter),
+        onList: browseOnListArg(statusFilter),
         sectionId: browseSectionArg(sectionFilter),
         manualOnly: !showRecipeItems,
       });
@@ -93,11 +95,11 @@
     const seq = fetchSeq;
     loadingMore = true;
     try {
-      const page = await app.supabase.listGroceryItemsPage({
+      const page = await app.supabase.listGroceryProductsPage({
         offset: rows.length,
         pageSize: GROCERY_BROWSE_PAGE_SIZE,
         query,
-        needed: browseNeededArg(statusFilter),
+        onList: browseOnListArg(statusFilter),
         sectionId: browseSectionArg(sectionFilter),
         manualOnly: !showRecipeItems,
       });
@@ -145,12 +147,17 @@
     }
   });
 
-  function toggleNeeded(item: GroceryItemView): void {
+  // Checking revives the product; unchecking un-plans it (deletes
+  // the open entry, no purchase recorded). This surface is for
+  // planning, so its uncheck must never write purchase history -
+  // marking things bought happens on the panel's rows.
+  function toggleOnList(item: GroceryProductView): void {
     const supabase = app.supabase;
     if (!supabase) return;
     void (async () => {
       try {
-        await supabase.setGroceryItemNeeded(item.id, !item.needed);
+        if (item.on_list) await supabase.removeProductFromList(item.id);
+        else await supabase.setProductOnList(item.id, true);
         error = null;
       } catch (err) {
         error = err instanceof Error ? err.message : String(err);
@@ -168,7 +175,7 @@
     if (!supabase || name.length === 0) return;
     void (async () => {
       try {
-        await supabase.createGroceryItem({ name });
+        await supabase.createGroceryProduct({ name });
         error = null;
         query = '';
       } catch (err) {
@@ -266,26 +273,27 @@
     {#each splitBrowseRows(rows) as group (group.key)}
       <BucketHeader label={group.label} flourish={group.key === 'ingredients'} />
       {#each group.items as item (item.id)}
-      <div class="grocery-browse-row" class:on-list={item.needed}>
+      <div class="grocery-browse-row" class:on-list={item.on_list}>
         <label class="grocery-check-label">
           <!-- Checked = on the current shopping list. The sidebar's
-               single verb: toggling flips `needed`, which is how a
-               past purchase gets restocked from the history. -->
+               single verb: checking revives the product, unchecking
+               un-plans it - how a past purchase gets restocked from
+               the catalog, and how a stray add gets withdrawn. -->
           <input
             type="checkbox"
             class="grocery-check"
-            checked={item.needed}
-            aria-label={item.needed
+            checked={item.on_list}
+            aria-label={item.on_list
               ? `Remove ${item.name} from the list`
               : `Add ${item.name} to the list`}
-            onchange={() => toggleNeeded(item)}
+            onchange={() => toggleOnList(item)}
           />
         </label>
         <button
           type="button"
           class="grocery-browse-body"
-          title={item.needed ? 'Remove from list' : 'Add to list'}
-          onclick={() => toggleNeeded(item)}
+          title={item.on_list ? 'Remove from list' : 'Add to list'}
+          onclick={() => toggleOnList(item)}
         >
           <!-- Name alone on its line, wrapping. The drawer is the
                narrowest surface the catalog renders on, so anything

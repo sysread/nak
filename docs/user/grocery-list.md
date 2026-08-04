@@ -33,29 +33,36 @@ recipe; unchecking it removes it again. An **Add all to grocery
 list** button above the recipe checks everything at once (items
 already on the list are left alone).
 
-Section assignments are sticky by name: once you file "eggs" into
-Dairy, every future add of "eggs" - from any recipe or the add
-input, even after the item was removed - lands in Dairy
-automatically. Filing an item back into Other clears the memory.
+Every ingredient you check gets its own permanent entry, scoped to
+that recipe: file this recipe's "corn" into Frozen once and it
+lands there every time you cook the recipe again, even after
+unchecking or buying it. The same ingredient name in a different
+recipe (or added by hand) is a separate entry with its own section -
+canned corn for the chowder and fresh corn for the salad never
+fight over one memory.
 
 Two things to know:
 
 - The checkbox means "this is on my list right now." Removing the
   item from the list (or checking it off during a shopping trip)
   unchecks it on the recipe too; re-checking it puts the same item
-  back on the list.
-- **Editing a recipe's ingredients clears that recipe's items from
-  the grocery list.** Ingredients live inside the recipe text, so
-  after an edit the app can't tell which list items still match -
-  re-check the ones you still need. Bookmark toggles and rating
-  changes don't do this; only changes to the recipe body.
+  back on the list, in its remembered section.
+- **Editing a recipe removes its renamed or deleted ingredients
+  from the grocery list.** Ingredients whose names survive the edit
+  keep their entries (and sections); ones that disappear from the
+  recipe text are dropped. Quantity-only changes remove nothing,
+  and bookmark toggles and rating changes never touch the list.
 
 ## Adding directly
 
 The **Add to list** input at the top of the main panel searches
-everything you've bought before (by name) as you type. Pick a suggestion to put that
-item back on the list - it keeps its section, note, and photo from
-last time. If nothing matches, an "Add" action creates a fresh item.
+your staples - items you've added by hand before - as you type.
+Pick a suggestion to put that item back on the list; it keeps its
+section, note, and photo from last time. If you keep variants of
+the same thing (say, canned and fresh corn as separate items with
+different notes and sections), each shows as its own suggestion.
+Recipe ingredients don't appear here - they're managed from their
+recipes. If nothing matches, an "Add" action creates a fresh item.
 
 ## Shopping
 
@@ -69,9 +76,8 @@ when you're filing items and want the full store layout. Every
 item on the list shows a **checked** box - as you
 put things in your cart, uncheck them. Unchecked items drop into the
 greyed-out **Acquired** section at the bottom, which stays collapsed
-until you open it (it keeps your whole purchase history, which is
-also what powers the add-input suggestions). Re-check an acquired
-item to put it back on the list.
+until you open it (it keeps your whole purchase history). Re-check
+an acquired item to put it back on the list.
 
 Each row reads top to bottom: the item **name** on its own line,
 then a smaller grey line under it with the count and unit, your
@@ -86,8 +92,8 @@ tap the pencil at the row's right edge: name, count, unit, a
 free-form note, its section, and an optional photo (handy for "this
 exact brand" label shots). Delete lives in the same editor. You can also drag an
 item by its handle onto another section's card to re-file it - the
-target card highlights as you hover, and the move is remembered as
-that item's sticky section. On a phone, press and hold the handle
+target card highlights as you hover, and the item keeps that
+section from then on. On a phone, press and hold the handle
 for a second (a small vibration confirms where supported), then
 slide to the target card and release; the same hold-and-slide works
 for reordering sections in the Sections manager.

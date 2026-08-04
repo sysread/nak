@@ -1,7 +1,7 @@
 /**
  * Shared reactive state for the grocery list. The drawer's Groceries
  * tab (GroceryList.svelte) and the Cookbook detail pane's ingredient
- * checkboxes both mutate grocery items, so the list state lives in a
+ * checkboxes both mutate grocery state, so it lives in a
  * module-level rune (mirroring `cookbook-store.svelte.ts`) and every
  * writer refreshes through `loadGroceries`.
  *
@@ -9,15 +9,16 @@
  * after any local mutation; the grocery realtime relay in Chat.svelte
  * fires the `nak:grocery:changed` event (see grocery-events.ts) when a
  * server-originated write lands - a Cookbook checkbox click, the
- * recipe-edit invalidation trigger's bulk delete, or another device.
+ * recipe-edit invalidation trigger's delete, or another device.
  *
- * The needed list is fetched whole (an active shopping trip is small);
- * the acquired history is a recency window because it accumulates one
- * row per item per trip, forever. `loadMoreAcquired` extends the
- * window; `loadGroceries` resets it to the first page.
+ * The current list (products with an open entry) is fetched whole -
+ * an active shopping trip is small; the acquired history is a
+ * recency window because it accumulates purchases forever.
+ * `loadMoreAcquired` extends the window; `loadGroceries` resets it
+ * to the first page.
  */
 import type {
-  GroceryItemView,
+  GroceryProductView,
   GrocerySection,
   SupabaseService,
 } from './supabase';
@@ -26,10 +27,10 @@ import { ACQUIRED_PAGE_SIZE } from './ui/grocery-list';
 interface GroceryState {
   /** User-ordered sections. The "Other" pseudo-section is not here. */
   sections: GrocerySection[];
-  /** Complete active shopping list (needed = true), newest first. */
-  needed: GroceryItemView[];
-  /** Recency window of the acquired history (needed = false). */
-  acquired: GroceryItemView[];
+  /** Complete current shopping list (open entries), newest first. */
+  onList: GroceryProductView[];
+  /** Recency window of the purchase history (off-list, bought before). */
+  acquired: GroceryProductView[];
   /** False once the acquired history has been paged to the end. */
   acquiredHasMore: boolean;
   /** True while a loadMoreAcquired page is in flight. */
@@ -43,7 +44,7 @@ interface GroceryState {
 
 export const grocery = $state<GroceryState>({
   sections: [],
-  needed: [],
+  onList: [],
   acquired: [],
   acquiredHasMore: false,
   loadingMore: false,
@@ -53,7 +54,7 @@ export const grocery = $state<GroceryState>({
 });
 
 /**
- * Reload everything: sections, the whole needed list, and the first
+ * Reload everything: sections, the whole current list, and the first
  * page of the acquired history. Seeds the canned starter sections on
  * a brand-new account (zero section rows) before the first read so
  * the section picker is never empty on day one. Safe to call
@@ -67,15 +68,15 @@ export async function loadGroceries(supabase: SupabaseService): Promise<void> {
       await supabase.seedGrocerySectionsIfEmpty();
       sections = await supabase.listGrocerySections();
     }
-    const [needed, acquiredPage] = await Promise.all([
-      supabase.listNeededGroceryItems(),
-      supabase.listAcquiredGroceryItemsPage({
+    const [onList, acquiredPage] = await Promise.all([
+      supabase.listOnListGroceryProducts(),
+      supabase.listAcquiredGroceryProductsPage({
         offset: 0,
         pageSize: ACQUIRED_PAGE_SIZE,
       }),
     ]);
     grocery.sections = sections;
-    grocery.needed = needed;
+    grocery.onList = onList;
     grocery.acquired = acquiredPage.rows;
     grocery.acquiredHasMore = acquiredPage.hasMore;
     grocery.error = null;
@@ -96,7 +97,7 @@ export async function loadMoreAcquired(supabase: SupabaseService): Promise<void>
   if (grocery.loadingMore || !grocery.acquiredHasMore) return;
   grocery.loadingMore = true;
   try {
-    const page = await supabase.listAcquiredGroceryItemsPage({
+    const page = await supabase.listAcquiredGroceryProductsPage({
       offset: grocery.acquired.length,
       pageSize: ACQUIRED_PAGE_SIZE,
     });

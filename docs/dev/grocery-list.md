@@ -2,64 +2,80 @@
 
 A section-organized shopping list on the Groceries drawer tab (above
 Recipes), fed two ways: per-ingredient checkboxes on every recipe's
-detail pane in the Cookbook, and manual adds. Two surfaces, matching the other tabs' "list in drawer,
-content in panel" split:
+detail pane in the Cookbook, and manual adds.
+
+The domain is split into a durable **product catalog**
+(`grocery_products` - one row per variant, unique by label PLUS
+details, living forever) and **list entries**
+(`grocery_list_entries` - membership as events: an open entry means
+"on the list now", a closed one records a purchase). The product
+rows are the section/note/photo memory; list churn only ever
+touches entries. Shipped from the remodel plan at
+[`in-progress/grocery-remodel-plan.md`](./in-progress/grocery-remodel-plan.md)
+(milestone 2 of that plan - LLM auto-sectioning - is still open).
+
+Two surfaces, matching the other tabs' "list in drawer, content in
+panel" split:
 
 - the **sidebar** (`GroceryList.svelte`) is the all-items browse - a
-  windowed, infinite-scrolled catalog of every item ever added,
+  windowed, infinite-scrolled catalog of every product variant,
   alphabetical by name (ordered server-side so the page seams stay
   honest), with a debounced name search plus status (All / On list /
-  Acquired) and section filters. Rows split by provenance: manually-entered
+  Acquired) and section filters. Rows split by provenance: standalone
   "Staples" first, recipe-sourced "Ingredients" below - and the
   Ingredients group is hidden by default behind a "Show recipe
   ingredients" toggle (a server-side `manualOnly` filter, so paging
   stays honest). Its one verb is the checkbox: checked = on the
-  current list; toggling flips `needed`, which is how a past
-  purchase gets restocked. An unmatched search offers an Add action.
+  current list. Checking revives the product (opens an entry);
+  unchecking UN-PLANS (deletes the open entry, records no purchase) -
+  the planning surface must never write purchase history. An
+  unmatched search offers an Add action.
 - the **main panel** (`src/screens/Groceries.svelte`) is the working
   surface: the current list as one card per store section (section
   name as the card title, items one per row, alphabetical; Other
   pinned first as the intake tray for unfiled adds; empty cards
   hidden behind a default-off "Show empty sections" toggle), the
-  add-input with
-  acquired-history suggestions, the collapsed acquired history, the
-  inline item editor (name / count / unit / note / section / photo /
-  delete), item drag-to-file (a needed row's handle drops onto a
-  section card, saving its section - with an accent highlight on the
-  hovered card; the section manager's reorder shows an insertion
-  line via `sectionDropEdge`), whole-card section reorder (title-bar
-  handles, shown ONLY when "Show empty sections" is on - with cards
-  hidden, a drag would silently leapfrog invisible sections), and
-  section management. Full-width,
+  add-input with suggestions over the off-list standalone catalog
+  (every same-name variant is its own suggestion; picking one
+  revives that product), the collapsed acquired history, the inline
+  item editor (name / count / unit / note / section / photo /
+  delete - name/note/section/photo save to the product, count/unit
+  to its current entry), item drag-to-file (an on-list row's handle
+  drops onto a section card, saving its section - with an accent
+  highlight on the hovered card; the section manager's reorder
+  shows an insertion line via `sectionDropEdge`), whole-card
+  section reorder (title-bar handles, shown ONLY when "Show empty
+  sections" is on - with cards hidden, a drag would silently
+  leapfrog invisible sections), and section management. Full-width,
   which is what a phone at the store sees once the drawer closes.
   Both drags work on touch via the Settings custom-prompts
   long-press pattern (hold the grip ~1s, haptic tick, slide,
   release); native HTML5 DnD covers pointer. The editor's section
-  picker remains the keyboard path.
+  picker remains the keyboard path. The panel checkbox's uncheck IS
+  a purchase (stamps the open entry's `acquired_at`); its re-check
+  opens a fresh entry, leaving the old purchase in the log.
 
-Shipped from the plan at
+Originally shipped from the plan at
 [`plans/grocery-list-plan.md`](./plans/grocery-list-plan.md); this doc
 owns current reality.
-
-> **Open work:** a data-model split (product catalog vs. list
-> entries) plus LLM auto-sectioning is planned at
-> [`in-progress/grocery-remodel-plan.md`](./in-progress/grocery-remodel-plan.md).
-> It retires `grocery_section_prefs` and changes the recipe-bridge
-> delete semantics described below.
 
 ## Files
 
 - `src/lib/supabase/grocery.ts` - the data-layer domain slice:
   sections (list / create / rename / delete / reorder RPC /
-  first-run seed), items (needed list, acquired-history page,
-  acquired search, CRUD, needed-flag toggle, per-recipe rows), and
-  the product-photo upload + `grocery_item_image_upsert` pair.
-  Facade methods on `SupabaseService` delegate one-for-one.
+  first-run seed), the `grocery_products_view` read paths (current
+  list, acquired-history page, browse pager, suggestion search,
+  per-recipe rows), the product + entry writes (create / update /
+  delete product; `setProductOnList` / `removeProductFromList` /
+  `updateGroceryListEntry`), and the product-photo upload +
+  `grocery_item_image_upsert` pair. Facade methods on
+  `SupabaseService` delegate one-for-one.
 - `src/lib/supabase/types/grocery.ts` - `GrocerySection`,
-  `GroceryItem`, `GroceryItemView` (item + recipe title + signed
-  photo URL), `GroceryItemPatch`.
+  `GroceryProduct`, `GroceryProductView` (a view row: product +
+  current entry + recipe title + signed photo URL),
+  `GroceryProductPatch`, `GroceryEntryPatch`.
 - `src/lib/grocery-store.svelte.ts` - module-level `$state`:
-  `sections`, the complete `needed` array, the windowed `acquired`
+  `sections`, the complete `onList` array, the windowed `acquired`
   array (+ `acquiredHasMore` / `loadMoreAcquired`), `loadGroceries`.
 - `src/lib/grocery-events.ts` - the rune-free event bus
   (`nak:grocery:changed`): `emitGroceryChange` / `onGroceryChange`.
@@ -69,7 +85,7 @@ owns current reality.
   `filterSectionGroups` for the empty-cards toggle), quantity
   labels, the row detail line (`itemDetailLine` - qty / note /
   recipe title joined for the block under an item's name, shared by
-  both list surfaces), the add-input create-vs-reuse decision
+  both list surfaces), the add-input create-vs-revive decision
   (`canCreateGroceryItem`), the acquired disclosure copy, the DnD
   next-state helpers (`sectionOrderAfterDrag` + the `sectionDropEdge`
   insertion-line decision), the shopping-trip helpers
@@ -78,25 +94,27 @@ owns current reality.
   helpers (status/section filter mapping, `splitBrowseRows`
   provenance grouping, the `computeBrowseView` render decision),
   name normalization, and the recipe-bridge helpers
-  (`recipeCheckboxItemIds`, `groceryItemFromIngredient`,
+  (`recipeCheckboxItemIds`, `groceryProductFromIngredient`,
   `partitionIngredientsForAdd`). Tested at
-  `tests/grocery-list.test.ts`.
+  `tests/grocery-list.test.ts`, which also carries the JS mirror of
+  the invalidation trigger's SQL name-extraction regex.
 - `src/components/GroceryList.svelte` - the sidebar all-items
   browse: debounced search, status + section filters (mapped to the
-  service pager via `browseNeededArg` / `browseSectionArg`), a
+  service pager via `browseOnListArg` / `browseSectionArg`), a
   windowed listing with an infinite-scroll sentinel
-  (`listGroceryItemsPage`), the provenance split + recipe-items
-  toggle (`splitBrowseRows` / `manualOnly`), per-row needed toggles,
-  and the unmatched-search Add action.
+  (`listGroceryProductsPage`), the provenance split + recipe-items
+  toggle (`splitBrowseRows` / `manualOnly`), per-row list toggles
+  (check = revive, uncheck = un-plan), and the unmatched-search Add
+  action.
 - `src/screens/Groceries.svelte` - the main-panel shopping list:
-  add-input with debounced acquired-history suggestions, the
-  section cards (row taps toggle `needed`; the pencil opens the
-  inline editor: name / count / unit / note / section / photo /
-  delete), the empty-sections toggle, both drags (item-to-card
-  filing and whole-card reorder, pointer + long-press touch), the
-  Start/Finish shopping trip toggle with the In-cart section, the
-  collapsed acquired history, and the Sections manage mode (add /
-  rename / delete / DnD reorder).
+  add-input with debounced catalog suggestions, the section cards
+  (row taps toggle list membership - uncheck is a purchase; the
+  pencil opens the inline editor: name / count / unit / note /
+  section / photo / delete), the empty-sections toggle, both drags
+  (item-to-card filing and whole-card reorder, pointer + long-press
+  touch), the Start/Finish shopping trip toggle with the In-cart
+  section, the collapsed acquired history, and the Sections manage
+  mode (add / rename / delete / DnD reorder).
 - `src/screens/Cookbook.svelte` - the recipe side of the bridge:
   `recipeToHtml(..., { ingredientCheckboxes })` on the live detail
   view, the delegated `onchange` handler on the render container,
@@ -117,90 +135,121 @@ owns current reality.
 ## Data model
 
 All in `supabase/schema.sql` under "grocery_sections /
-grocery_items":
+grocery_products / grocery_list_entries":
 
 - `grocery_sections`: `id`, `user_id`, `name`, `position` (dense
   from 0), `created_at`. Self-* RLS. The permanent "Other" section
-  is NOT a row - items with `section_id is null` render in a fixed
-  Other pseudo-section pinned last, which makes Other undeletable /
+  is NOT a row - products with `section_id is null` render in a
+  fixed Other pseudo-section, which makes Other undeletable /
   unrenamable by construction, and section deletion is
-  `on delete set null` (items fall back to Other). Canned starter
+  `on delete set null` (products fall back to Other). Canned starter
   sections seed lazily client-side
   (`seedGrocerySectionsIfEmpty`) - per-user rows need an auth
   context the sync script doesn't have. Reorder is the
   `grocery_sections_reorder` RPC: the id array must be a
   permutation of the caller's whole section set.
-- `grocery_items`: `name`, `count text` (free-form - cooklang
-  quantities like "1/2" / "2-3" ride verbatim), `unit text`
-  (free-form: "package", "loaf"), `note`, `section_id` (null =
-  Other), `needed boolean` (true = to buy; false = acquired
-  history), `recipe_id` (null = manual add; FK
-  `on delete cascade`), `image_id` (nullable FK to
-  `grocery_item_images`, `on delete set null`), timestamps. Self-*
-  RLS. Rows are kept when bought (needed flips false), never
-  deleted by shopping - the history is the add-input's suggestion
-  corpus.
+- `grocery_products`: the durable catalog. `name`, `note`,
+  `section_id` (null = Other or unfiled), `section_source`
+  (`'user'` / `'auto'` / null - who decided the section; a user
+  edit stamps `'user'` and nothing overwrites it, and null is what
+  the future auto-sectioning agent is allowed to fill),
+  `recipe_id` (null = standalone; FK `on delete cascade`),
+  `image_id` (nullable FK to `grocery_item_images`,
+  `on delete set null`), timestamps. Self-* RLS. Rows are unique by
+  label PLUS details by design - same-name standalone variants
+  coexist ("canned corn" / "fresh corn"), and recipe products are
+  effectively unique per `(recipe_id, normalized name)`. Products
+  are the section/note/photo memory: buying and un-planning never
+  delete them.
+- `grocery_list_entries`: list membership as events. `product_id`
+  (FK `on delete cascade`), `count` / `unit` text (free-form -
+  cooklang quantities like "1/2" / "2-3" ride verbatim; units like
+  "package", "loaf"), `added_at`, `acquired_at` (null = on the list
+  now; set = purchased then). A partial unique index allows at most
+  one OPEN entry per product; the acquired entries are the purchase
+  log, one row per buy.
+- `grocery_products_view`: the flat read model every client surface
+  queries - product columns plus recipe title, photo storage path,
+  the CURRENT entry (open if one exists, else the latest purchase),
+  and an `on_list` boolean. `security_invoker`, so base-table RLS
+  applies. One view instead of per-surface PostgREST embeds keeps
+  every filter server-side and the paging honest.
 - `grocery_item_images` + the private `grocery-item-images` bucket:
   a direct clone of the `recipe_images` content-addressed pattern
   (`<user_id>/<sha256>`, unique `(user_id, sha256)`, immutable
-  rows, signed-URL reads). At most one photo per item via
-  `grocery_items.image_id`; no link table. See
+  rows, signed-URL reads). At most one photo per product via
+  `grocery_products.image_id`; no link table. The table and bucket
+  keep their historical "item" names - rows are content-addressed
+  into the bucket by stored path, and renaming buys nothing. See
   [`./file-storage.md`](./file-storage.md).
-- `grocery_section_prefs`: sticky name-to-section memory, keyed on
-  `(user_id, lower(btrim(name)))` and maintained entirely by
-  triggers on `grocery_items` - setting a section upserts the
-  preference, explicitly filing back to Other deletes it, and a
-  section-less INSERT is pre-filled from it (BEFORE INSERT). Rows
-  are deleted freely (recipe unchecks, the invalidation wipe), so
-  the memory deliberately lives outside the item rows; section
-  deletion cascades through the prefs FK so those names fall back
-  to Other. No client code participates - every add path inherits
-  the behavior for free.
-- Realtime: both tables are `supabase_realtime` publication members
-  with `(id, user_id)` replica-identity indexes (DELETE delivery -
-  same gotcha as recipes).
+- Retired: `grocery_section_prefs`, the pre-split name-keyed sticky
+  section memory. Product rows are the memory now, and a name-keyed
+  table cannot represent same-name variants (one section per name).
+  The schema drops it unconditionally so deployed databases
+  converge.
+- One-time backfill: schema.sql carries an existence-guarded DO
+  block that transforms a pre-split `grocery_items` table into
+  products (same ids, `section_source = 'user'` where filed) plus
+  one entry each (open for `needed` rows, else stamped with
+  `updated_at`), then drops the old table. Fresh installs no-op.
+- Realtime: products, entries, and sections are all
+  `supabase_realtime` publication members with `(id, user_id)`
+  replica-identity indexes (DELETE delivery - same gotcha as
+  recipes). Products and entries are separate members because
+  either changes alone (a filing touches the product; a buy touches
+  the entry).
 
 ## The recipe bridge
 
 - Checkboxes render on EVERY recipe's live detail view. They were
   originally gated on the upcoming / favorite bookmarks, but a
-  recipe's items outlive its bookmark (un-bookmarking leaves the
+  recipe's products outlive its bookmark (un-bookmarking leaves the
   list alone by design), and the gate left those surviving items
   with no recipe-side management surface.
 - Ingredients have no stable identity (they are parsed out of the
   cooklang source at read time), so everything keys on the
-  normalized (trimmed, lowercased) ingredient NAME:
-  `recipeCheckboxItemIds` maps parsed ingredients to grocery rows,
-  the sync effect sets `checked` per input's `data-ing`, and the
+  normalized (trimmed, lowercased) ingredient NAME within the
+  recipe's products - effectively `(recipe_id, name)` identity,
+  since the fetch is already scoped by `recipe_id`:
+  `recipeCheckboxItemIds` maps parsed ingredients to products, the
+  sync effect sets `checked` per input's `data-ing`, and the
   delegated handler resolves clicks back to an ingredient.
-- A checkbox mirrors its matched row's `needed` flag - "is this on
-  my list right now". Removing or buying the item on the list side
-  unchecks it on the recipe; re-checking revives the existing row
-  (setGroceryItemNeeded) instead of inserting a duplicate.
-  Unchecking in the recipe view deletes the row outright. (The
-  original design showed row EXISTENCE instead, so a store purchase
-  didn't "un-plan" the recipe - real use found that reading
-  surprising, so the semantics were flipped.)
-- Checking inserts a row carrying the cooklang qty/unit verbatim, a
-  `"For <title>"` note, `recipe_id`, `needed = true`, and a null
-  section - which the `fill_grocery_section_from_pref` trigger
-  replaces with the name's remembered section when one exists.
+- A checkbox mirrors its matched product's `on_list` flag - "is
+  this on my list right now". Removing or buying it on the list
+  side unchecks it on the recipe; re-checking revives the existing
+  product (`setProductOnList`) - keeping its learned section, note,
+  and photo - instead of inserting a duplicate. Unchecking in the
+  recipe view UN-PLANS: `removeProductFromList` deletes the open
+  entry, records no purchase, and leaves the product row as this
+  recipe's memory for that ingredient.
+- First-time checking creates a product carrying a `"For <title>"`
+  note, `recipe_id`, and a null section (unfiled), plus an open
+  entry with the cooklang qty/unit verbatim.
 - The detail pane also has an "Add all to grocery list" button:
-  revives existing not-needed rows, inserts the rest (deduped by
-  normalized name via `partitionIngredientsForAdd`), skips rows
+  revives existing off-list products, creates the rest (deduped by
+  normalized name via `partitionIngredientsForAdd`), skips products
   already on the list - idempotent by construction. Each ingredient
   row is a `<label>` wrapping its checkbox, so tapping the text
   toggles it via native label semantics (no extra JS).
-- **Invalidation**: the `clear_grocery_items_on_recipe_change`
-  trigger (AFTER UPDATE on `recipes`, only when `cooklang` is
-  distinct) deletes every `grocery_items` row with that
-  `recipe_id`. Wholesale on purpose - after an edit there is no way
-  to know which items still correspond to real ingredients. A
-  trigger rather than client cleanup so every write path (modal,
-  server-dispatched `recipe_update` tool, revert) is covered.
-  Bookmark / rating / title changes don't touch `cooklang` and
-  leave the list alone. Recipe DELETE is the FK cascade, not the
-  trigger.
+- **Invalidation**: the
+  `clear_stale_grocery_products_on_recipe_change` trigger (AFTER
+  UPDATE on `recipes`, only when `cooklang` is distinct) deletes
+  the recipe's products whose normalized name no longer parses out
+  of the new source - renamed/removed ingredients drop (entries
+  cascade), surviving names keep their memory, amount-only edits
+  delete nothing. The trigger extracts names with a SQL regex over
+  the cooklang `@`-token syntax (a trigger can't call
+  `parseCooklang`); it deliberately takes the UNION of tokens
+  anywhere in the source rather than the parser's
+  declaration-narrowed list - supersets only ever keep more, and a
+  kept-but-unlisted product is benign while a wrongly-deleted one
+  destroys memory. `tests/grocery-list.test.ts` runs a JS mirror of
+  the exact SQL extraction against `parseCooklang` so drift fails
+  the gate. A trigger rather than client cleanup so every write
+  path (modal, server-dispatched `recipe_update` tool, revert) is
+  covered. Bookmark / rating / title changes don't touch `cooklang`
+  and leave the list alone. Recipe DELETE is the FK cascade, not
+  the trigger.
 
 ## Shopping trips
 
@@ -209,26 +258,26 @@ The "Start shopping" / "Finish shopping" button on the panel toggles
 `UserSettings`). While a trip is active, items unchecked from the
 list surface in the **In cart** card between the section cards and
 the acquired disclosure - membership is derived, not stored:
-`needed = false` AND `updated_at >= trip start` (unchecking bumps
-`updated_at`), split client-side by `splitAcquiredForTrip`. The
-acquired-history disclosure excludes the cart rows while a trip is
-active. A trip is active only while the local calendar day still
-matches the start timestamp (`isShoppingTripActive`), so it expires
-at midnight in the user's timezone with no cron or cleanup write -
-the stale timestamp just reads as inactive; a minute-tick in the
-panel re-evaluates so an open tab crosses midnight too. Idle, the
-In-cart card shows `CART_IDLE_MESSAGE`.
-
-Gotcha: editing an old acquired item mid-trip bumps its
-`updated_at`, which reads as "in the cart" until the trip ends.
-Rare enough not to pay for a dedicated column; revisit if it bites.
+off-list AND `acquired_at >= trip start` (the panel's uncheck
+stamps the open entry's `acquired_at`), split client-side by
+`splitAcquiredForTrip`. Because the split keys on the purchase
+stamp - not `updated_at` - editing an old item mid-trip can no
+longer fake it into the cart (a real gotcha of the pre-split
+model). The acquired-history disclosure excludes the cart rows
+while a trip is active. A trip is active only while the local
+calendar day still matches the start timestamp
+(`isShoppingTripActive`), so it expires at midnight in the user's
+timezone with no cron or cleanup write - the stale timestamp just
+reads as inactive; a minute-tick in the panel re-evaluates so an
+open tab crosses midnight too. Idle, the In-cart card shows
+`CART_IDLE_MESSAGE`.
 
 ## Refresh model
 
 Local UI writes call `loadGroceries` directly (via the component's
 `mutate` wrapper). Server-originated writes - the invalidation
-trigger's bulk delete, a Cookbook checkbox click reaching an open
-Groceries tab, another device - arrive through the
+trigger's stale-product delete, a Cookbook checkbox click reaching
+an open Groceries tab, another device - arrive through the
 `subscribeToGroceryChanges` relay in Chat.svelte, which fires the
 `nak:grocery:changed` CustomEvent; the panel (`Groceries.svelte`),
 the sidebar browse window, and the Cookbook detail pane's row fetch
@@ -243,7 +292,7 @@ echo (the echo is a harmless idempotent refetch).
 
 `grocery-image-gc` edge function + `nak-grocery-image-gc` cron
 (every 6h, offset from the recipe sweep): deletes
-`grocery_item_images` rows no `grocery_items.image_id` references,
+`grocery_item_images` rows no `grocery_products.image_id` references,
 then their bucket objects. Backed by
 `list_orphan_grocery_item_images` / `delete_orphan_grocery_item_images`
 (the delete re-checks still-orphaned). Removing a photo in the item
@@ -278,13 +327,27 @@ Deployed via its own line in `deploy.yml`.
   "2-3". Don't add arithmetic (quantity merging) without changing
   the representation.
 - **Name normalization is the only ingredient identity.** Renaming
-  a checkbox-added item in the list breaks its match with the
-  recipe checkbox (the box shows unchecked again); the row still
-  belongs to the recipe and still gets wiped on a recipe edit.
-  Accepted trade - see the plan doc for the rationale.
+  a checkbox-added product in the list breaks its match with the
+  recipe checkbox (the box shows unchecked again); the product still
+  belongs to the recipe, and because its new name no longer parses
+  from the source it is dropped on the next cooklang edit. Accepted
+  trade - see the plan docs for the rationale.
+- **The two uncheck verbs are different on purpose.** The panel's
+  uncheck is a purchase (stamps `acquired_at`); the sidebar's and
+  the recipe view's uncheck is an un-plan (deletes the open entry,
+  no purchase). Wiring a planning surface to the purchase verb
+  pollutes the purchase log with things never bought.
 - **The acquired history is never fetched whole.** It grows one row
-  per item per trip forever; every read is a recency window
+  per purchase forever; every read is a recency window
   (`ACQUIRED_PAGE_SIZE`). Keep it that way.
+- **The invalidation trigger's regex must track the parser.** The
+  SQL name extraction in
+  `clear_stale_grocery_products_on_recipe_change` duplicates the
+  cooklang `@`-token grammar; the drift-guard suite in
+  `tests/grocery-list.test.ts` mirrors it in JS and compares
+  against `parseCooklang`. Changing INGREDIENT_RE in
+  `src/lib/cooklang.ts` (or the SQL) without updating the other
+  side fails that suite - that is the alarm working, not noise.
 - **Seeding is client-side and racy by a round trip.** Two tabs
   racing the first load can in principle double-seed the canned
   sections; the count re-check narrows the window and a double
