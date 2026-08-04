@@ -41,6 +41,12 @@ Shipped from the plan at
 [`plans/grocery-list-plan.md`](./plans/grocery-list-plan.md); this doc
 owns current reality.
 
+> **Open work:** a data-model split (product catalog vs. list
+> entries) plus LLM auto-sectioning is planned at
+> [`in-progress/grocery-remodel-plan.md`](./in-progress/grocery-remodel-plan.md).
+> It retires `grocery_section_prefs` and changes the recipe-bridge
+> delete semantics described below.
+
 ## Files
 
 - `src/lib/supabase/grocery.ts` - the data-layer domain slice:
