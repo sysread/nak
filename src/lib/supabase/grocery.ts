@@ -531,6 +531,55 @@ export async function updateGroceryProduct(
 }
 
 /**
+ * The auto-sectioning agent's save: file a product into a section
+ * ONLY while it is still unfiled (`section_source is null`). A user
+ * filing that lands while the classification is in flight wins -
+ * the conditional update simply matches zero rows. Never called
+ * with a null section; "the model was unsure" is expressed by not
+ * calling this at all, which leaves the product unfiled.
+ */
+export async function autoFileGroceryProduct(
+  client: SupabaseClient,
+  id: string,
+  sectionId: string
+): Promise<void> {
+  const { error } = await client
+    .from('grocery_products')
+    .update({
+      section_id: sectionId,
+      section_source: 'auto',
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', id)
+    .is('section_source', null);
+  if (error) throw new SupabaseError(error.message);
+}
+
+/**
+ * Example items for the auto-sectioning prompt: standalone filed
+ * products as (name, section_id) pairs. Manual-only on purpose -
+ * recipe ingredients are poor evidence without their recipe's
+ * context ("corn" filed under Frozen for one stir-fry teaches the
+ * wrong lesson), and excluding them keeps the prompt short. The cap
+ * bounds prompt growth on a big catalog; most-recently-updated rows
+ * win, which biases the examples toward current filing habits.
+ */
+export async function listSectionExampleProducts(
+  client: SupabaseClient,
+  limit: number
+): Promise<Array<{ name: string; section_id: string }>> {
+  const { data, error } = await client
+    .from('grocery_products')
+    .select('name, section_id')
+    .is('recipe_id', null)
+    .not('section_id', 'is', null)
+    .order('updated_at', { ascending: false })
+    .limit(limit);
+  if (error) throw new SupabaseError(error.message);
+  return (data ?? []) as Array<{ name: string; section_id: string }>;
+}
+
+/**
  * Update the quantity on a specific entry (the editor's count/unit
  * fields). Timestamps are owned by the open/acquire verbs.
  */

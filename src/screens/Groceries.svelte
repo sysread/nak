@@ -52,6 +52,7 @@
     acquiredHeaderLabel,
     canCreateGroceryItem,
     isShoppingTripActive,
+    sectionNameFor,
     shoppingToggleLabel,
     splitAcquiredForTrip,
     filterSectionGroups,
@@ -60,6 +61,7 @@
     itemQuantityLabel,
     sectionOrderAfterDrag,
   } from '$lib/ui/grocery-list';
+  import { autoFileProducts } from '$lib/grocery-section-agent';
   import {
     arrayBufferToBase64,
     maybeDownscaleImage,
@@ -327,13 +329,39 @@
     }
   }
 
-  function addNewItem(): void {
+  /**
+   * Create a standalone product from the add input. `auto` fires the
+   * section classifier in the background AFTER the insert resolves -
+   * the add is instant either way, and an auto-added item hops from
+   * Other into its section when the classification lands (the
+   * conditional save means a manual filing in the meantime wins).
+   */
+  function addNewItem(auto: boolean): void {
     const supabase = app.supabase;
     const name = addQuery.trim();
     if (!supabase || name.length === 0) return;
-    void mutate(() => supabase.createGroceryProduct({ name })).then((ok) => {
-      if (ok) addQuery = '';
-    });
+    void (async () => {
+      let product;
+      try {
+        product = await supabase.createGroceryProduct({ name });
+        actionError = null;
+      } catch (err) {
+        actionError = errMsg(err);
+        return;
+      }
+      addQuery = '';
+      await loadGroceries(supabase);
+      if (auto) {
+        // Fire-and-forget: autoFileProducts never throws, and the
+        // emit refreshes every grocery surface when a filing landed
+        // (the realtime echo would too, but this is immediate).
+        void autoFileProducts(supabase, [product]).then((filed) => {
+          if (filed && app.supabase) {
+            void loadGroceries(app.supabase);
+          }
+        });
+      }
+    })();
   }
 
   function reuseSuggestion(item: GroceryProductView): void {
@@ -583,19 +611,44 @@
       autocomplete="off"
       spellcheck="false"
       onkeydown={(e) => {
-        if (e.key === 'Enter' && canCreate) addNewItem();
+        if (e.key === 'Enter' && addQuery.trim().length > 0) addNewItem(false);
       }}
     />
     {#if suggesting}
-      <!-- Suggestion dropdown: previously bought items (needed = false)
-           matching the query, plus a create action for a new name.
-           Picking a suggestion reuses its row (section / note / photo
-           intact) instead of inserting a duplicate. Rendered between
-           the input and the toggles row so the create action is the
-           very next thing under the text being typed - with the
-           toggles in between, the eye had to jump over them to find
-           "Add". -->
+      <!-- Suggestion dropdown, rendered between the input and the
+           toggles row so the create actions are the very next thing
+           under the text being typed. Two create actions lead:
+             Add "X" (Other) - always offered; instant, unfiled, no
+               model call. Also the ONLY path to a new variant of an
+               existing name, so it never hides behind a match. Enter
+               triggers this one.
+             Add "X" (Auto)  - only for an unmatched name; same
+               instant insert, then the section classifier files it
+               in the background. Auto on an existing name would just
+               be guessing between the user's own variants, so the
+               match hides it.
+           Below them, the catalog suggestions: off-list standalone
+           products matching the query, each variant its own row with
+           its section in grey. Picking one revives that product
+           (section / note / photo intact) instead of inserting a
+           duplicate. -->
       <div class="grocery-suggestions" role="listbox" aria-label="Item suggestions">
+        <button
+          type="button"
+          class="grocery-suggestion grocery-suggestion-new"
+          onclick={() => addNewItem(false)}
+        >
+          Add "{addQuery.trim()}" (Other)
+        </button>
+        {#if canCreate}
+          <button
+            type="button"
+            class="grocery-suggestion grocery-suggestion-new"
+            onclick={() => addNewItem(true)}
+          >
+            Add "{addQuery.trim()}" (Auto)
+          </button>
+        {/if}
         {#if suggestBusy}
           <div class="search-status"><Scanner label="Searching items" size={0.8} /></div>
         {:else}
@@ -611,15 +664,11 @@
               {#if itemQuantityLabel(s)}
                 <span class="grocery-item-qty">{itemQuantityLabel(s)}</span>
               {/if}
+              <span class="grocery-suggestion-section">
+                {sectionNameFor(s.section_id, grocery.sections)}
+              </span>
             </button>
           {/each}
-          {#if canCreate}
-            <button type="button" class="grocery-suggestion grocery-suggestion-new" onclick={addNewItem}>
-              Add "{addQuery.trim()}"
-            </button>
-          {:else if suggestions.length === 0}
-            <p class="subtle grocery-suggestion-hint">Already on the list.</p>
-          {/if}
         {/if}
       </div>
     {/if}
@@ -1153,10 +1202,14 @@
   .grocery-suggestion-new {
     color: var(--accent);
   }
-  .grocery-suggestion-hint {
-    padding: 0.45rem 0.6rem;
-    margin: 0;
-    font-size: 0.8rem;
+  /* Grey section label at the row's right edge: the suggestion list
+     is where same-name variants are told apart, and the section is
+     the fastest tell ("corn - Frozen" vs "corn - Canned goods"). */
+  .grocery-suggestion-section {
+    margin-left: auto;
+    flex-shrink: 0;
+    font-size: 0.75rem;
+    color: var(--muted);
   }
 
   /* Section manager. */

@@ -81,6 +81,7 @@
   } from '$lib/ui/cookbook-screen';
   import type { GroceryProductView, Recipe, RecipeVersion } from '$lib/supabase';
   import { onGroceryChange, emitGroceryChange } from '$lib/grocery-events';
+  import { autoFileProducts } from '$lib/grocery-section-agent';
   import {
     groceryProductFromIngredient,
     normalizeGroceryName,
@@ -978,6 +979,39 @@
     return onGroceryChange(() => void loadRecipeGroceryItems());
   });
 
+  // Normalized ingredient names whose section classification is in
+  // flight - their checkboxes render as spinners (see the sync
+  // effect + .cook-buy-busy). Reassigned (never mutated) so the
+  // effect reacts. Keyed by name, not product id, because the
+  // spinner targets DOM inputs which only know their data-ing name.
+  let classifyingNames = $state<ReadonlySet<string>>(new Set());
+
+  /**
+   * Background-classify freshly created recipe products - ONE call
+   * for the whole batch - with this recipe as context, tracking the
+   * in-flight names for the checkbox spinners. Fire-and-forget: the
+   * checkboxes are already checked and the items already on the
+   * list; this only decides which section they hop to.
+   */
+  function classifyRecipeProducts(
+    products: Array<{ id: string; name: string }>,
+    recipe: { title: string; cooklang: string }
+  ): void {
+    const supabase = app.supabase;
+    if (!supabase || products.length === 0) return;
+    const keys = products.map((p) => normalizeGroceryName(p.name));
+    classifyingNames = new Set([...classifyingNames, ...keys]);
+    void autoFileProducts(supabase, products, {
+      title: recipe.title,
+      cooklang: recipe.cooklang,
+    }).then((filed) => {
+      const next = new Set(classifyingNames);
+      for (const k of keys) next.delete(k);
+      classifyingNames = next;
+      if (filed) emitGroceryChange();
+    });
+  }
+
   // Sync the rendered checkboxes' checked state from the grocery rows.
   // The render is an {@html} string, so state can't ride the markup -
   // this effect walks the mounted inputs after every render/data
@@ -987,14 +1021,21 @@
     const el = detailRenderEl;
     void detailHtml;
     const items = recipeGroceryItems;
+    const busy = classifyingNames;
     if (!el || !parsedDetail) return;
     const entries = recipeCheckboxItemIds(parsedDetail.ingredients, items);
     for (const input of el.querySelectorAll<HTMLInputElement>('input.cook-buy')) {
-      const name = input.dataset.ing ?? '';
+      const key = normalizeGroceryName(input.dataset.ing ?? '');
       // Checked = the matched product is on the current list. One
       // that was bought or removed on the list side reads unchecked
       // here; re-checking revives it (see onRenderChange).
-      input.checked = entries.get(normalizeGroceryName(name))?.onList === true;
+      input.checked = entries.get(key)?.onList === true;
+      // While the section classifier runs for this ingredient, the
+      // box renders as a spinner (CSS on .cook-buy-busy) and stops
+      // accepting clicks - a toggle mid-classification would race
+      // the background save.
+      input.classList.toggle('cook-buy-busy', busy.has(key));
+      input.disabled = busy.has(key);
     }
   });
 
@@ -1021,14 +1062,20 @@
         for (const id of reviveIds) {
           await supabase.setProductOnList(id, true);
         }
+        const created: Array<{ id: string; name: string }> = [];
         for (const ingredient of create) {
-          await supabase.createGroceryProduct(
+          const product = await supabase.createGroceryProduct(
             groceryProductFromIngredient(ingredient, {
               id: recipe.id,
               title: recipe.title,
             })
           );
+          created.push({ id: product.id, name: product.name });
         }
+        // One classification call for the whole batch - revived
+        // products keep their remembered sections and are not
+        // re-classified.
+        classifyRecipeProducts(created, recipe);
       } finally {
         await loadRecipeGroceryItems();
         emitGroceryChange();
@@ -1071,11 +1118,17 @@
               (i) => normalizeGroceryName(i.name) === key
             );
             if (ingredient) {
-              await supabase.createGroceryProduct(
+              const product = await supabase.createGroceryProduct(
                 groceryProductFromIngredient(ingredient, {
                   id: recipe.id,
                   title: recipe.title,
                 })
+              );
+              // First time this ingredient exists for the recipe -
+              // let the classifier file it (recipe as context).
+              classifyRecipeProducts(
+                [{ id: product.id, name: product.name }],
+                recipe
               );
             }
           }
@@ -2256,6 +2309,26 @@
      box. */
   .cookbook-render :global(.cook-buy-label) {
     cursor: pointer;
+  }
+
+  /* While the section classifier runs for an ingredient, its box
+     becomes a spinner: appearance:none clears the native checkbox
+     paint so the element is a bare square we can restyle as an
+     accent-topped ring. The input is disabled for the duration (a
+     toggle would race the background save), hence the wait cursor. */
+  .cookbook-render :global(.cook-buy.cook-buy-busy) {
+    appearance: none;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: cook-buy-spin 700ms linear infinite;
+    cursor: wait;
+  }
+
+  @keyframes cook-buy-spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
 
   /* Batch add-all shortcut above the rendered recipe, tucked toward

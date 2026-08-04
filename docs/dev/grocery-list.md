@@ -10,9 +10,8 @@ details, living forever) and **list entries**
 (`grocery_list_entries` - membership as events: an open entry means
 "on the list now", a closed one records a purchase). The product
 rows are the section/note/photo memory; list churn only ever
-touches entries. Shipped from the remodel plan at
-[`in-progress/grocery-remodel-plan.md`](./in-progress/grocery-remodel-plan.md)
-(milestone 2 of that plan - LLM auto-sectioning - is still open).
+touches entries. New unfiled products can be **auto-sectioned** by a
+small-model sub-completion (see "Auto-sectioning" below).
 
 Two surfaces, matching the other tabs' "list in drawer, content in
 panel" split:
@@ -29,15 +28,19 @@ panel" split:
   current list. Checking revives the product (opens an entry);
   unchecking UN-PLANS (deletes the open entry, records no purchase) -
   the planning surface must never write purchase history. An
-  unmatched search offers an Add action.
+  unmatched search offers the `(Other)` / `(Auto)` create pair
+  (unfiled vs. background auto-sectioning).
 - the **main panel** (`src/screens/Groceries.svelte`) is the working
   surface: the current list as one card per store section (section
   name as the card title, items one per row, alphabetical; Other
   pinned first as the intake tray for unfiled adds; empty cards
   hidden behind a default-off "Show empty sections" toggle), the
   add-input with suggestions over the off-list standalone catalog
-  (every same-name variant is its own suggestion; picking one
-  revives that product), the collapsed acquired history, the inline
+  (every same-name variant is its own suggestion with its section
+  in grey; picking one revives that product; `Add "X" (Other)`
+  always leads the dropdown - it is also the new-variant path and
+  the Enter action - with `Add "X" (Auto)` beside it for unmatched
+  names), the collapsed acquired history, the inline
   item editor (name / count / unit / note / section / photo /
   delete - name/note/section/photo save to the product, count/unit
   to its current entry), item drag-to-file (an on-list row's handle
@@ -98,6 +101,12 @@ owns current reality.
   `partitionIngredientsForAdd`). Tested at
   `tests/grocery-list.test.ts`, which also carries the JS mirror of
   the invalidation trigger's SQL name-extraction regex.
+- `src/lib/grocery-section-agent.ts` - the auto-sectioning
+  sub-completion (see "Auto-sectioning" below): prompt assembly and
+  answer parsing as pure functions
+  (`tests/grocery-section-agent.test.ts`), the `complete()` call on
+  the `grocerySection` model slot, and the `autoFileProducts`
+  fire-and-forget entry every add path shares.
 - `src/components/GroceryList.svelte` - the sidebar all-items
   browse: debounced search, status + section filters (mapped to the
   service pager via `browseOnListArg` / `browseSectionArg`), a
@@ -251,6 +260,52 @@ grocery_products / grocery_list_entries":
   and leave the list alone. Recipe DELETE is the FK cascade, not
   the trigger.
 
+## Auto-sectioning
+
+`src/lib/grocery-section-agent.ts` files just-created, unfiled
+products into the user's own sections via a `grocerySection`
+sub-completion (`AGENT_MODELS` -> `mistral-small-3-2-24b-instruct`;
+non-reasoning classification, rationale on the slot's docblock in
+`src/lib/models/index.ts`). The contract, end to end:
+
+- **Insert first, classify after.** Every add stays instant; the
+  agent runs fire-and-forget and the item hops from Other into its
+  section when the call returns. Latency shapes only the hop.
+- **Prompt**: the user's sections as a numbered list, each with up
+  to `SECTION_EXAMPLES_PER_SECTION` example items - standalone
+  filed products ONLY (`listSectionExampleProducts`), because
+  recipe ingredients are poor evidence without their recipe's
+  context - plus, for recipe-originated adds, the recipe title and
+  cooklang source (only the recipe disambiguates fresh vs. canned
+  vs. frozen "corn"). The model answers a JSON map of name ->
+  section number, 0 for "no fit". `response_format: json_object`,
+  `temperature 0`, explicit `maxTokens` with headroom, and a
+  `finish_reason === 'length'` check per CLAUDE.md "Venice
+  sub-completions".
+- **Fail closed.** Unparseable answer, truncation, out-of-range
+  number, transport error: the product simply stays in Other,
+  exactly where it would be without the agent. `autoFileProducts`
+  never throws.
+- **The save is conditional**: `autoFileGroceryProduct` updates
+  `section_id` + `section_source = 'auto'` ONLY where
+  `section_source is null`, so a manual filing that lands while the
+  call is in flight wins and is never overwritten. User edits stamp
+  `'user'`, which the agent never touches - each product is
+  classified at most once, ever.
+- **Batch, never fan out.** "Add all to grocery list" classifies
+  every freshly-created ingredient in ONE call.
+- **Who triggers it**: the panel and sidebar `Add "X" (Auto)`
+  actions (standalone, no recipe context); the recipe checkbox and
+  Add-all paths automatically for first-time ingredients (with
+  context). Revived products are never re-classified - their
+  section is the memory. While a recipe ingredient's classification
+  is in flight, its checkbox renders as a spinner and is disabled
+  (`.cook-buy-busy` in Cookbook.svelte; a toggle mid-flight would
+  race the background save).
+
+Prompt assembly and answer parsing are pure functions tested at
+`tests/grocery-section-agent.test.ts`.
+
 ## Shopping trips
 
 The "Start shopping" / "Finish shopping" button on the panel toggles
@@ -316,6 +371,12 @@ Deployed via its own line in `deploy.yml`.
   `updateSettings` whitelist together.
 - **Routing** - `drawer=groceries` joins the DrawerTab union in
   `routing.svelte.ts`.
+- **Models** (`src/lib/models/index.ts`) - the `grocerySection`
+  slot in `AGENT_MODELS`; retuning the auto-sectioning model means
+  editing that slot, not the agent module. The call rides the
+  non-streaming `complete()` seam of the venice proxy
+  (`src/lib/supabase/venice-proxy.ts`), including its 429 retry
+  loop.
 - **LLM tools** - none, deliberately. The list is user-driven UI;
   the schema and service layer are tool-ready if a `groceries`
   toolbox ever earns its keep.

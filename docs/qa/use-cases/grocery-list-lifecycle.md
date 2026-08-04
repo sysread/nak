@@ -7,8 +7,10 @@ The Groceries tab end to end
 checkboxes on recipes and the name-aware recipe-edit invalidation
 trigger ([dev: cookbook](../../dev/cookbook.md)), the main panel's
 on-list / acquired shopping flow with the collapsed history, the
-add-input's catalog suggestions, section management (add /
-rename / delete / drag reorder), the item photo path
+add-input's catalog suggestions and (Other)/(Auto) create pair,
+LLM auto-sectioning on both surfaces (steps 24-26; needs a Venice
+key), section management (add / rename / delete / drag reorder),
+the item photo path
 ([dev: file storage](../../dev/file-storage.md)), the sidebar's
 all-items browse (search + status/section filters + checkbox
 toggles), and the realtime relay between the Cookbook pane and an
@@ -108,6 +110,23 @@ below name which surface they mean.
     drawer, at desktop width and at a phone-narrow viewport. Repeat
     with a name containing no spaces at all
     (`extraabsorbentselectasizepapertowels12megarolls`).
+24. In the main panel's add input, type `frozen waffles` (a name
+    not in the catalog) and look at the dropdown. Click
+    **Add "frozen waffles" (Auto)** and watch the list for a few
+    seconds.
+25. Type `frozen waffles` again and look at the dropdown. Click
+    **Add "frozen waffles" (Other)**, then check the DB:
+
+    ```sh
+    mise run dev-sql "select name, section_id, section_source from grocery_products where name ilike 'frozen%'"
+    ```
+
+26. Create a recipe `Corn Chowder QA` with body
+    `Simmer @corn{1%can} with @heavy cream{1%cup}.`, check the
+    `corn` checkbox, and watch it while the section is decided.
+    Then, in the main panel, drag the `heavy cream` row (still
+    classifying or already filed) into a section of your choice and
+    re-check the DB's `section_source` for both rows.
 
 ## Expected
 
@@ -208,11 +227,34 @@ below name which surface they mean.
   drawer. A recipe-sourced row whose note is exactly
   `For <recipe title>` shows that note ONCE, without the recipe
   title repeated after it.
+- (24) The dropdown leads with BOTH create actions - (Other) and
+  (Auto) - since the name matches nothing. After clicking (Auto),
+  `frozen waffles` appears under **Other** immediately, then hops
+  into a sensible section (Frozen, with the canned starters) within
+  a few seconds. If the model declines or errors, it simply stays
+  in Other - either way the add itself never blocks.
+- (25) With a matching product now in the catalog, the dropdown
+  shows the `frozen waffles` suggestion (section name in grey at
+  the row's right edge) and ONLY the (Other) create action - (Auto)
+  hides on a matched name. Clicking (Other) creates a SECOND
+  variant that lands in Other and stays there (no model call). The
+  DB shows two rows: one with `section_source = 'auto'` (step 24)
+  and one unfiled (`section_id` and `section_source` null).
+- (26) While the section is being decided, the `corn` checkbox
+  renders as a small spinner and ignores clicks; when it settles,
+  `corn` sits in a canned-goods-appropriate section (the recipe
+  context - `1%can` - is what steers it away from Produce/Frozen;
+  exact section depends on your section names). Dragging
+  `heavy cream` to a section of your choice stamps
+  `section_source = 'user'` for it, and that filing is never
+  overwritten even if the classifier answers afterwards; `corn`
+  reads `'auto'` (or null if the model declined).
 
 ## Cleanup
 
 Delete the leftover manual items from the Groceries tab (editor ->
-Delete), un-bookmark the test recipe, and optionally reset sections:
+Delete), delete the `Corn Chowder QA` recipe, un-bookmark the test
+recipe, and optionally reset sections:
 
 ```sh
 mise run dev-sql "delete from grocery_products; delete from grocery_sections"
