@@ -22,6 +22,8 @@ import type {
   GrocerySection,
   SupabaseService,
 } from './supabase';
+import { autoFileProducts } from './grocery-section-agent';
+import { emitGroceryChange } from './grocery-events';
 import { ACQUIRED_PAGE_SIZE } from './ui/grocery-list';
 
 interface GroceryState {
@@ -40,6 +42,14 @@ interface GroceryState {
   loaded: boolean;
   /** Last error from a load attempt. Cleared on the next successful load. */
   error: string | null;
+  /**
+   * Product ids whose auto-sectioning call is in flight - their rows
+   * render a "choosing a section" spinner on both list surfaces.
+   * Lives here (not per-component) because the add can originate in
+   * the sidebar while the row renders in the panel. Reassigned, never
+   * mutated, so effects react.
+   */
+  classifying: ReadonlySet<string>;
 }
 
 export const grocery = $state<GroceryState>({
@@ -51,7 +61,34 @@ export const grocery = $state<GroceryState>({
   loading: false,
   loaded: false,
   error: null,
+  classifying: new Set(),
 });
+
+/**
+ * Fire-and-forget auto-sectioning with row feedback: marks the
+ * products as classifying (their rows spin), runs the ONE
+ * classification call, unmarks, and nudges every grocery surface
+ * when a filing landed. Both manual add paths (the panel's and the
+ * sidebar's "(Auto)" actions) funnel through here; the Cookbook
+ * bridge keeps its own name-keyed variant because its spinner
+ * targets rendered checkbox DOM, not store rows. Never throws
+ * (autoFileProducts fails closed).
+ */
+export async function autoFileProductsTracked(
+  supabase: SupabaseService,
+  products: ReadonlyArray<{ id: string; name: string }>
+): Promise<void> {
+  const ids = products.map((p) => p.id);
+  grocery.classifying = new Set([...grocery.classifying, ...ids]);
+  try {
+    const filed = await autoFileProducts(supabase, products);
+    if (filed) emitGroceryChange();
+  } finally {
+    const next = new Set(grocery.classifying);
+    for (const id of ids) next.delete(id);
+    grocery.classifying = next;
+  }
+}
 
 /**
  * Reload everything: sections, the whole current list, and the first

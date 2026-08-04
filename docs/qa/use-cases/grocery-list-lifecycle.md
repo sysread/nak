@@ -229,10 +229,13 @@ below name which surface they mean.
   title repeated after it.
 - (24) The dropdown leads with BOTH create actions - (Other) and
   (Auto) - since the name matches nothing. After clicking (Auto),
-  `frozen waffles` appears under **Other** immediately, then hops
-  into a sensible section (Frozen, with the canned starters) within
-  a few seconds. If the model declines or errors, it simply stays
-  in Other - either way the add itself never blocks.
+  `frozen waffles` appears under **Other** immediately with a small
+  spinning ring beside its name (also visible on the sidebar's row
+  while the drawer is open), then hops into a sensible section
+  (Frozen, with the canned starters) within a few seconds and the
+  ring disappears. If the model declines or errors, the ring still
+  stops and the item simply stays in Other - either way the add
+  itself never blocks.
 - (25) With a matching product now in the catalog, the dropdown
   shows the `frozen waffles` suggestion (section name in grey at
   the row's right edge) and ONLY the (Other) create action - (Auto)

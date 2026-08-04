@@ -82,7 +82,8 @@ Above the suggestions sit two create actions:
 - **Add "..." (Auto)** - shown when the name doesn't match
   anything you have: the item lands in Other and then hops into
   the section the app picks for it a moment later, judging by your
-  own sections and what you've filed where. If it can't decide,
+  own sections and what you've filed where. While it's deciding, a
+  small spinner turns next to the item's name. If it can't decide,
   the item just stays in Other. Filing it yourself - now or ever -
   always wins and is never overwritten.
 
