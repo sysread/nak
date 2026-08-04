@@ -298,10 +298,17 @@ non-reasoning classification, rationale on the slot's docblock in
   actions (standalone, no recipe context); the recipe checkbox and
   Add-all paths automatically for first-time ingredients (with
   context). Revived products are never re-classified - their
-  section is the memory. While a recipe ingredient's classification
-  is in flight, its checkbox renders as a spinner and is disabled
-  (`.cook-buy-busy` in Cookbook.svelte; a toggle mid-flight would
-  race the background save).
+  section is the memory.
+- **In-flight feedback**: the manual paths funnel through
+  `autoFileProductsTracked` (grocery-store.svelte.ts), which tracks
+  the in-flight product ids in `grocery.classifying` - store-level
+  because the add can originate in the sidebar while the row
+  renders in the panel - and both surfaces show a small accent ring
+  beside the row's name while its id is in the set. The Cookbook
+  bridge keeps its own name-keyed variant (its spinner targets the
+  rendered checkbox DOM, which renders as a disabled spinning ring
+  via `.cook-buy-busy`; a toggle mid-flight would race the
+  background save).
 
 Prompt assembly and answer parsing are pure functions tested at
 `tests/grocery-section-agent.test.ts`.

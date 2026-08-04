@@ -38,6 +38,7 @@
     grocery,
     loadGroceries,
     loadMoreAcquired,
+    autoFileProductsTracked,
   } from '$lib/grocery-store.svelte';
   import { onGroceryChange } from '$lib/grocery-events';
   import type { GroceryProductView } from '$lib/supabase';
@@ -61,7 +62,6 @@
     itemQuantityLabel,
     sectionOrderAfterDrag,
   } from '$lib/ui/grocery-list';
-  import { autoFileProducts } from '$lib/grocery-section-agent';
   import {
     arrayBufferToBase64,
     maybeDownscaleImage,
@@ -352,14 +352,10 @@
       addQuery = '';
       await loadGroceries(supabase);
       if (auto) {
-        // Fire-and-forget: autoFileProducts never throws, and the
-        // emit refreshes every grocery surface when a filing landed
-        // (the realtime echo would too, but this is immediate).
-        void autoFileProducts(supabase, [product]).then((filed) => {
-          if (filed && app.supabase) {
-            void loadGroceries(app.supabase);
-          }
-        });
+        // Fire-and-forget with row feedback: the store tracks the
+        // in-flight id (the row spins in the Other card) and nudges
+        // every surface when the filing lands.
+        void autoFileProductsTracked(supabase, [product]);
       }
     })();
   }
@@ -863,8 +859,21 @@
         <!-- The name owns its own line and wraps in full. Nothing
              shares the line with it: the shopper scans an aisle card
              by item name, and a name clipped by a quantity or a note
-             beside it is a name they have to tap to read. -->
-        <span class="grocery-item-name">{item.name}</span>
+             beside it is a name they have to tap to read. The
+             classifying ring is the one exception - it marks "the
+             app is choosing a section for this" while the (Auto)
+             call runs, and disappears when the row hops. -->
+        <span class="grocery-item-name">
+          {item.name}
+          {#if grocery.classifying.has(item.id)}
+            <span
+              class="grocery-classifying-ring"
+              role="status"
+              aria-label="Choosing a section"
+              title="Choosing a section"
+            ></span>
+          {/if}
+        </span>
         {#if itemDetailLine(item)}
           <span class="grocery-item-meta">{itemDetailLine(item)}</span>
         {/if}
@@ -1433,6 +1442,28 @@
     font-weight: 600;
     overflow-wrap: anywhere;
   }
+  /* Auto-sectioning feedback: a small accent-topped ring beside the
+     item name while the classifier decides its section. Same visual
+     idiom as the recipe checkboxes' .cook-buy-busy spinner, sized to
+     ride inline with the name text. */
+  .grocery-classifying-ring {
+    display: inline-block;
+    width: 0.7rem;
+    height: 0.7rem;
+    margin-left: 0.3rem;
+    vertical-align: -0.05rem;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: grocery-classify-spin 700ms linear infinite;
+  }
+
+  @keyframes grocery-classify-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
   /* Suggestion-dropdown only: in the list rows the quantity is folded
      into the detail line under the name. */
   .grocery-item-qty {

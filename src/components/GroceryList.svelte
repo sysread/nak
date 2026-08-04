@@ -22,7 +22,11 @@
    * src/lib/ui/grocery-list.ts.
    */
   import { app } from '$lib/state.svelte';
-  import { grocery, loadGroceries } from '$lib/grocery-store.svelte';
+  import {
+    grocery,
+    loadGroceries,
+    autoFileProductsTracked,
+  } from '$lib/grocery-store.svelte';
   import { onGroceryChange, emitGroceryChange } from '$lib/grocery-events';
   import type { GroceryProductView } from '$lib/supabase';
   import { infiniteScroll } from '$lib/actions/infinite-scroll';
@@ -43,7 +47,6 @@
   } from '$lib/ui/grocery-list';
   import Scanner from './Scanner.svelte';
   import BucketHeader from './BucketHeader.svelte';
-  import { autoFileProducts } from '$lib/grocery-section-agent';
   import { onMount } from 'svelte';
 
   let query = $state('');
@@ -194,9 +197,10 @@
         emitGroceryChange();
       }
       if (auto) {
-        void autoFileProducts(supabase, [product]).then((filed) => {
-          if (filed) emitGroceryChange();
-        });
+        // Fire-and-forget with row feedback: the store tracks the
+        // in-flight id so the product's rows spin on both surfaces,
+        // and nudges every surface when the filing lands.
+        void autoFileProductsTracked(supabase, [product]);
       }
     })();
   }
@@ -321,7 +325,19 @@
                sharing the name's line eats the part the reader came
                for. Quantity / note / recipe title go below it, same
                composition as the panel's rows. -->
-          <span class="grocery-browse-name">{item.name}</span>
+          <span class="grocery-browse-name">
+            {item.name}
+            {#if grocery.classifying.has(item.id)}
+              <!-- Auto-sectioning in flight for this product - same
+                   ring the panel row shows. -->
+              <span
+                class="grocery-classifying-ring"
+                role="status"
+                aria-label="Choosing a section"
+                title="Choosing a section"
+              ></span>
+            {/if}
+          </span>
           {#if itemDetailLine(item)}
             <span class="grocery-browse-meta">{itemDetailLine(item)}</span>
           {/if}
@@ -480,6 +496,24 @@
     font-size: 0.72rem;
     color: var(--muted);
     overflow-wrap: anywhere;
+  }
+  /* Auto-sectioning feedback beside the name - same ring as the
+     panel rows and the recipe checkboxes' busy state. */
+  .grocery-classifying-ring {
+    display: inline-block;
+    width: 0.7rem;
+    height: 0.7rem;
+    margin-left: 0.3rem;
+    vertical-align: -0.05rem;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: grocery-classify-spin 700ms linear infinite;
+  }
+  @keyframes grocery-classify-spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
   .grocery-browse-thumb {
     flex-shrink: 0;
