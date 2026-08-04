@@ -498,7 +498,8 @@ export type AgentRole =
   | 'intuition'
   | 'recall'
   | 'conversationRecall'
-  | 'wikiRecall';
+  | 'wikiRecall'
+  | 'grocerySection';
 
 /**
  * Background-agent role -> Venice id. The right-hand side is checked
@@ -620,6 +621,20 @@ export type AgentRole =
  *     distinct slot so the three recall surfaces can be retuned
  *     independently if one regresses.
  *
+ *   grocerySection - mistral-small-3-2-24b-instruct. The grocery
+ *     auto-sectioning sub-completion: given the user's own store
+ *     sections (with example items) and one or a handful of new item
+ *     names - plus the source recipe's cooklang when the add came
+ *     from a recipe checkbox, since "corn" can be fresh, canned, or
+ *     frozen and only the recipe disambiguates - pick a section per
+ *     name. Pure classification over evidence already in context, so
+ *     a non-reasoning instruct model is the right class (see
+ *     CLAUDE.md "Venice sub-completions"): no CoT pass to burn the
+ *     budget, and the call is fire-and-forget after an instant
+ *     insert, so latency only shapes how soon the item hops out of
+ *     Other. Shares the id with webSearch but is a distinct slot,
+ *     so it can be retuned alone.
+ *
  * The five curation agents (auto-title, summary, thread topics,
  * memory topics, recipe topics), the bias pipeline, and the samskara
  * formation agents have no slots here: they run server-side in the
@@ -639,6 +654,7 @@ export const AGENT_MODELS = {
   recall:             'deepseek-v4-flash',
   conversationRecall: 'deepseek-v4-flash',
   wikiRecall:         'deepseek-v4-flash',
+  grocerySection:     'mistral-small-3-2-24b-instruct',
 } as const satisfies Record<AgentRole, ModelId>;
 
 /**

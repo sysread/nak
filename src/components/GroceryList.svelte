@@ -43,6 +43,7 @@
   } from '$lib/ui/grocery-list';
   import Scanner from './Scanner.svelte';
   import BucketHeader from './BucketHeader.svelte';
+  import { autoFileProducts } from '$lib/grocery-section-agent';
   import { onMount } from 'svelte';
 
   let query = $state('');
@@ -169,19 +170,33 @@
     })();
   }
 
-  function addNewItem(): void {
+  /**
+   * Create a standalone product from the unmatched search. `auto`
+   * fires the section classifier after the insert - same
+   * fire-and-forget contract as the panel's add input: the add is
+   * instant, and the item hops out of Other when the classification
+   * lands.
+   */
+  function addNewItem(auto: boolean): void {
     const supabase = app.supabase;
     const name = query.trim();
     if (!supabase || name.length === 0) return;
     void (async () => {
+      let product;
       try {
-        await supabase.createGroceryProduct({ name });
+        product = await supabase.createGroceryProduct({ name });
         error = null;
         query = '';
       } catch (err) {
         error = err instanceof Error ? err.message : String(err);
+        return;
       } finally {
         emitGroceryChange();
+      }
+      if (auto) {
+        void autoFileProducts(supabase, [product]).then((filed) => {
+          if (filed) emitGroceryChange();
+        });
       }
     })();
   }
@@ -246,9 +261,15 @@
 
   {#if canCreate}
     <!-- The searched name matches nothing anywhere in the corpus -
-         offer to create it directly onto the current list. -->
-    <button type="button" class="grocery-browse-add" onclick={addNewItem}>
-      Add "{query.trim()}" to the list
+         offer to create it directly onto the current list. (Other)
+         lands it unfiled; (Auto) additionally runs the section
+         classifier in the background. Same pair as the panel's
+         add-input create actions. -->
+    <button type="button" class="grocery-browse-add" onclick={() => addNewItem(false)}>
+      Add "{query.trim()}" (Other)
+    </button>
+    <button type="button" class="grocery-browse-add" onclick={() => addNewItem(true)}>
+      Add "{query.trim()}" (Auto)
     </button>
   {/if}
 

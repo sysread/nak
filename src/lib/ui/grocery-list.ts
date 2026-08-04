@@ -121,6 +121,22 @@ export function filterSectionGroups(
 }
 
 /**
+ * Display name of a product's section for the suggestion dropdown's
+ * grey label: the section's name, "Other" for null, and "Other" as
+ * the fallback for a section id that no longer resolves (deleted
+ * mid-session) - matching where groupItemsBySection would file it.
+ */
+export function sectionNameFor(
+  sectionId: string | null,
+  sections: readonly GrocerySection[]
+): string {
+  if (sectionId === null) return OTHER_SECTION_LABEL;
+  return (
+    sections.find((s) => s.id === sectionId)?.name ?? OTHER_SECTION_LABEL
+  );
+}
+
+/**
  * Compact quantity string for an item row: "2 lb", "1/2", "loaf", or
  * null when the item carries neither a count nor a unit (render
  * nothing rather than an empty chip).

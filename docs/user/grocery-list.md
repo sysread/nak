@@ -41,6 +41,15 @@ recipe (or added by hand) is a separate entry with its own section -
 canned corn for the chowder and fresh corn for the salad never
 fight over one memory.
 
+The first time an ingredient goes on the list, the app files it
+into one of your sections for you, reading the recipe to tell
+forms apart (the chowder's corn is canned; the salad's is fresh).
+The ingredient's checkbox spins briefly while that happens - the
+item is already on the list, in Other, and hops into its section a
+moment later. If no section fits, it stays in Other. Any section
+you set yourself sticks permanently; the app never second-guesses
+you.
+
 Two things to know:
 
 - The checkbox means "this is on my list right now." Removing the
@@ -60,9 +69,24 @@ your staples - items you've added by hand before - as you type.
 Pick a suggestion to put that item back on the list; it keeps its
 section, note, and photo from last time. If you keep variants of
 the same thing (say, canned and fresh corn as separate items with
-different notes and sections), each shows as its own suggestion.
-Recipe ingredients don't appear here - they're managed from their
-recipes. If nothing matches, an "Add" action creates a fresh item.
+different notes and sections), each shows as its own suggestion,
+with its section in grey so you can tell them apart. Recipe
+ingredients don't appear here - they're managed from their recipes.
+
+Above the suggestions sit two create actions:
+
+- **Add "..." (Other)** - always available (Enter triggers it):
+  the item lands unfiled in the Other card, for you to file
+  yourself. This is also how you create a new variant of a name
+  you already have.
+- **Add "..." (Auto)** - shown when the name doesn't match
+  anything you have: the item lands in Other and then hops into
+  the section the app picks for it a moment later, judging by your
+  own sections and what you've filed where. If it can't decide,
+  the item just stays in Other. Filing it yourself - now or ever -
+  always wins and is never overwritten.
+
+The same pair appears in the sidebar when a search matches nothing.
 
 ## Shopping
 

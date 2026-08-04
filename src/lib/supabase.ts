@@ -800,6 +800,16 @@ export class SupabaseService {
     return groceryApi.setProductOnList(this.client, productId, on, qty);
   }
 
+  async autoFileGroceryProduct(id: string, sectionId: string): Promise<void> {
+    return groceryApi.autoFileGroceryProduct(this.client, id, sectionId);
+  }
+
+  async listSectionExampleProducts(
+    limit: number
+  ): Promise<Array<{ name: string; section_id: string }>> {
+    return groceryApi.listSectionExampleProducts(this.client, limit);
+  }
+
   async removeProductFromList(productId: string): Promise<void> {
     return groceryApi.removeProductFromList(this.client, productId);
   }
