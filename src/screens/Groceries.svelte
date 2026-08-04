@@ -562,6 +562,43 @@
         if (e.key === 'Enter' && canCreate) addNewItem();
       }}
     />
+    {#if suggesting}
+      <!-- Suggestion dropdown: previously bought items (needed = false)
+           matching the query, plus a create action for a new name.
+           Picking a suggestion reuses its row (section / note / photo
+           intact) instead of inserting a duplicate. Rendered between
+           the input and the toggles row so the create action is the
+           very next thing under the text being typed - with the
+           toggles in between, the eye had to jump over them to find
+           "Add". -->
+      <div class="grocery-suggestions" role="listbox" aria-label="Item suggestions">
+        {#if suggestBusy}
+          <div class="search-status"><Scanner label="Searching items" size={0.8} /></div>
+        {:else}
+          {#each suggestions as s (s.id)}
+            <button
+              type="button"
+              class="grocery-suggestion"
+              role="option"
+              aria-selected="false"
+              onclick={() => reuseSuggestion(s)}
+            >
+              <span class="grocery-item-name">{s.name}</span>
+              {#if itemQuantityLabel(s)}
+                <span class="grocery-item-qty">{itemQuantityLabel(s)}</span>
+              {/if}
+            </button>
+          {/each}
+          {#if canCreate}
+            <button type="button" class="grocery-suggestion grocery-suggestion-new" onclick={addNewItem}>
+              Add "{addQuery.trim()}"
+            </button>
+          {:else if suggestions.length === 0}
+            <p class="subtle grocery-suggestion-hint">Already on the list.</p>
+          {/if}
+        {/if}
+      </div>
+    {/if}
     <div class="grocery-controls-toggles">
       <button
         type="button"
@@ -595,40 +632,6 @@
 
   {#if actionError}
     <p class="error grocery-error">{actionError}</p>
-  {/if}
-
-  {#if suggesting}
-    <!-- Suggestion dropdown: previously bought items (needed = false)
-         matching the query, plus a create action for a new name.
-         Picking a suggestion reuses its row (section / note / photo
-         intact) instead of inserting a duplicate. -->
-    <div class="grocery-suggestions" role="listbox" aria-label="Item suggestions">
-      {#if suggestBusy}
-        <div class="search-status"><Scanner label="Searching items" size={0.8} /></div>
-      {:else}
-        {#each suggestions as s (s.id)}
-          <button
-            type="button"
-            class="grocery-suggestion"
-            role="option"
-            aria-selected="false"
-            onclick={() => reuseSuggestion(s)}
-          >
-            <span class="grocery-item-name">{s.name}</span>
-            {#if itemQuantityLabel(s)}
-              <span class="grocery-item-qty">{itemQuantityLabel(s)}</span>
-            {/if}
-          </button>
-        {/each}
-        {#if canCreate}
-          <button type="button" class="grocery-suggestion grocery-suggestion-new" onclick={addNewItem}>
-            Add "{addQuery.trim()}"
-          </button>
-        {:else if suggestions.length === 0}
-          <p class="subtle grocery-suggestion-hint">Already on the list.</p>
-        {/if}
-      {/if}
-    </div>
   {/if}
 
   {#if manageSections}
@@ -1094,9 +1097,10 @@
   }
 
   /* Suggestion dropdown. Rendered in flow (not floating) so it never
-     fights the drawer's stacking context on mobile. */
+     fights the drawer's stacking context on mobile. Sits inside the
+     controls column between the input and the toggles row; the
+     column's gap owns the spacing, so no margins of its own. */
   .grocery-suggestions {
-    margin: -0.3rem 0.6rem 0.5rem;
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     overflow: hidden;
