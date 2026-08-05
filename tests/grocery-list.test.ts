@@ -164,6 +164,21 @@ describe('itemDetailLine', () => {
   });
 });
 
+describe('sectionNameFor', () => {
+  const sections = [section('a', 'Produce', 0), section('b', 'Dairy', 1)];
+
+  it('resolves a section id to its display name', async () => {
+    const { sectionNameFor } = await import('../src/lib/ui/grocery-list');
+    expect(sectionNameFor('b', sections)).toBe('Dairy');
+  });
+
+  it('falls back to Other for null and for a deleted section id', async () => {
+    const { sectionNameFor } = await import('../src/lib/ui/grocery-list');
+    expect(sectionNameFor(null, sections)).toBe(OTHER_SECTION_LABEL);
+    expect(sectionNameFor('gone', sections)).toBe(OTHER_SECTION_LABEL);
+  });
+});
+
 describe('acquiredHeaderLabel', () => {
   it('shows exact count when fully loaded', () => {
     expect(acquiredHeaderLabel(3, false)).toBe('Acquired (3)');
