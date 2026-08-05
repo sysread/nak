@@ -71,7 +71,8 @@ You can reach these pages two ways:
   with a dedicated modal and a tab in the conversation drawer.
 - [Grocery list](./grocery-list.md) — the Groceries drawer tab: a
   phone-friendly shopping list organized by store section, fed by
-  ingredient checkboxes on your upcoming and favorite recipes.
+  ingredient checkboxes on every recipe and direct adds, with new
+  items auto-filed into your sections for you.
 - [Samskara](./samskara.md) — the instincts Nak forms about you as you
   chat: the read-only Samskara tab (browse the whole corpus, tier-1 and
   tier-2 compounds, plus a pipeline-health readout), the per-conversation
