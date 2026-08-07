@@ -25,24 +25,44 @@ function summary(over: Partial<ThreadAttachmentSummary> = {}): ThreadAttachmentS
 
 describe('buildThreadAttachmentsBlock', () => {
   it('returns null for a thread with no attachments so a clean chat pays nothing', () => {
-    expect(buildThreadAttachmentsBlock([])).toBeNull();
+    expect(buildThreadAttachmentsBlock([], false)).toBeNull();
   });
 
-  it('lists images against analyze_image and documents as inlined text', () => {
-    const block = buildThreadAttachmentsBlock([
-      summary({ filename: 'shot.png', mime_type: 'image/png', is_image: true }),
-      summary({ filename: 'notes.txt' }),
-    ]);
+  it('lists images against analyze_image and documents as inlined text on a non-vision tier', () => {
+    const block = buildThreadAttachmentsBlock(
+      [
+        summary({ filename: 'shot.png', mime_type: 'image/png', is_image: true }),
+        summary({ filename: 'notes.txt' }),
+      ],
+      false
+    );
     expect(block).toContain('Live images: shot.png');
-    expect(block).toContain('analyze_image(filename, query)');
+    expect(block).toContain('Call analyze_image(filename, query) to inspect');
     expect(block).toContain('Live documents: notes.txt');
     expect(block).not.toContain('Viewable pages');
+  });
+
+  it('tells a vision tier its images are already visible instead of pointing at analyze_image', () => {
+    // On a vision-capable model every live image is inlined as an
+    // image_url part, so instructing "call analyze_image to inspect"
+    // makes the model pay a slow vision sub-completion for an image it
+    // can already see - the exact regression this phrasing split fixes.
+    const block = buildThreadAttachmentsBlock(
+      [summary({ filename: 'shot.png', mime_type: 'image/png', is_image: true })],
+      true
+    );
+    expect(block).toContain('Live images: shot.png');
+    expect(block).toContain('directly visible to you');
+    expect(block).not.toContain('to inspect any of them');
+    // The tool stays named as the fallback for an image that failed to
+    // inline (expired URL, resolution miss) - it must not vanish.
+    expect(block).toContain('only if you cannot actually see');
   });
 
   it('advertises analyze_pdf_page with the page count for a rasterized PDF', () => {
     const block = buildThreadAttachmentsBlock([
       summary({ filename: 'scan.pdf', mime_type: 'application/pdf', page_count: 12 }),
-    ]);
+    ], false);
     expect(block).toContain('Viewable pages: scan.pdf (12 pages)');
     expect(block).toContain('analyze_pdf_page(filename, page, query)');
     // Still a document, so the inlined-text line stays - a text-native PDF
@@ -53,7 +73,7 @@ describe('buildThreadAttachmentsBlock', () => {
   it('omits the viewable line for a PDF that produced no pages', () => {
     const block = buildThreadAttachmentsBlock([
       summary({ filename: 'plain.pdf', mime_type: 'application/pdf', page_count: null }),
-    ]);
+    ], false);
     expect(block).toContain('Live documents: plain.pdf');
     expect(block).not.toContain('Viewable pages');
   });
@@ -68,7 +88,7 @@ describe('buildThreadAttachmentsBlock', () => {
         page_count: 5,
         expired: true,
       }),
-    ]);
+    ], false);
     expect(block).toContain('Expired');
     expect(block).toContain('gone.pdf');
     expect(block).not.toContain('Viewable pages');
@@ -90,7 +110,7 @@ describe('buildThreadAttachmentsBlock', () => {
         expired: true,
         created_at: '2026-01-02T00:00:00Z',
       }),
-    ]);
+    ], false);
     expect(block).not.toContain('Viewable pages');
     expect(block).toContain('Expired');
   });
@@ -99,7 +119,7 @@ describe('buildThreadAttachmentsBlock', () => {
     const block = buildThreadAttachmentsBlock([
       summary({ filename: 'a.pdf', mime_type: 'application/pdf', page_count: 2 }),
       summary({ filename: 'b.pdf', mime_type: 'application/pdf', page_count: 40 }),
-    ]);
+    ], false);
     expect(block).toContain('a.pdf (2 pages)');
     expect(block).toContain('b.pdf (40 pages)');
   });

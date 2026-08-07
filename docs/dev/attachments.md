@@ -40,7 +40,9 @@ covers the attachment-specific pieces.
 - `supabase/functions/venice/tools/_vision.ts` - shared by `analyze_image`
   and `analyze_pdf_page`: `attachmentObjectAsDataUrl` (bucket bytes ->
   base64 data URL) and `askVision` (primary vision model + one permissive
-  fallback).
+  fallback, each attempt bounded by a per-attempt abort so a hung
+  upstream degrades to the fallback rather than hitting the turn's wall
+  deadline).
 - `src/lib/attachments.ts` - pure helpers: size validation,
   `isConsumableBy` predicate, base64 helpers (composer-side, in-memory),
   canvas-based `compressImage` (the shared upload/generate compressor -
@@ -299,7 +301,12 @@ parent - `messages.thread_id -> threads.user_id = auth.uid()`.
   `listAttachmentSummariesForThread` (metadata-only projection). Lists
   live images, live documents, documents with viewable pages (filename +
   page count + the `analyze_pdf_page` call), and expired filenames; empty
-  sections add zero tokens. The summary projection nulls `page_count` for
+  sections add zero tokens. The live-images line is tier-aware: a
+  vision-capable model is told the images are already inlined and
+  visible (analyze_image only as a can't-see fallback), while a
+  non-vision model is told to call `analyze_image` - instructing a
+  vision tier to call the tool made it pay a slow vision sub-completion
+  for images it could already see. The summary projection nulls `page_count` for
   an expired row, since deleting an attachment reclaims its page objects
   too - a stale count would otherwise keep advertising a gone document.
 - **Attachment-inspection reinforcement**: when the user message that

@@ -323,6 +323,15 @@ export interface ChatLoopOptions {
    */
   currentTurnHasAttachments?: boolean;
   /**
+   * Whether the send-time model accepts inline image_url parts
+   * (ModelSpec.supportsVision, snapshotted by the caller alongside the
+   * history build so both read the same spec). Drives the
+   * thread-attachments block's live-images phrasing: a vision model is
+   * told its images are already visible instead of being instructed to
+   * call analyze_image for them. See `buildMetadataSystemMessage`.
+   */
+  modelSupportsVision?: boolean;
+  /**
    * The dynamic MCP-integration toolboxes the user has authorized,
    * built by the caller (Chat.svelte) via buildMcpToolboxes from
    * `app.mcpIntegrations` + `app.mcpToolSchemas`. Forwarded to

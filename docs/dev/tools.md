@@ -118,7 +118,10 @@ Notable members (the full ordered list is `alwaysOnToolbox` in
   attachment identified by filename and a caller-supplied query.
   Runs against a primary vision model first and falls back once to
   a permissive uncensored model on any failure (e.g. a spurious
-  content-safety block on an innocuous photo). The edge
+  content-safety block on an innocuous photo). Each attempt is
+  bounded by a per-attempt abort (`VISION_ATTEMPT_TIMEOUT_MS` in
+  `tools/_vision.ts`) so a hung vision upstream degrades to the
+  fallback instead of eating the turn's wall deadline. The edge
   implementation (`supabase/functions/venice/tools/analyze_image.ts`)
   looks the image up by filename in the thread, downloads the
   bytes, and inlines them as a base64 data URL. Its lookup filters

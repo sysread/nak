@@ -86,6 +86,13 @@ export interface ToolCompletionOptions {
    * fail the whole sub-call. Forwarded to veniceComplete.
    */
   retryRateLimit?: boolean;
+  /**
+   * Aborts the in-flight fetch (and any pending backoff sleep inside
+   * veniceComplete). Callers that must bound a sub-completion's latency
+   * themselves set this - a hung upstream otherwise runs until the
+   * turn's wall deadline. Forwarded to veniceComplete.
+   */
+  signal?: AbortSignal;
 }
 
 export async function toolComplete(opts: ToolCompletionOptions): Promise<ToolCompletionResult> {
@@ -127,6 +134,7 @@ export async function toolComplete(opts: ToolCompletionOptions): Promise<ToolCom
     apiKey: opts.apiKey,
     body,
     retryRateLimit: opts.retryRateLimit,
+    signal: opts.signal,
   });
   return parseCompletion(raw);
 }

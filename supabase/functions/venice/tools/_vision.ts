@@ -11,19 +11,37 @@ import { toolComplete } from './_venice_complete.ts';
 // Vision queries run against the primary model first and retry once against
 // the uncensored fallback on any failure.
 //
-// Primary - e2ee-qwen3-vl-30b-a3b-p: 128k context, native vision, no
-// reasoning. The stricter content posture, used for the common case.
+// Primary - qwen3-vl-235b-a22b: 128k context, native vision, no reasoning,
+// multi-image, Venice privacy tier "private" (Venice-hosted, not proxied to
+// a third party). The stricter content posture, used for the common case.
+// The earlier e2ee-qwen3-vl-30b-a3b-p (Venice's only E2EE-served vision id)
+// is deliberately NOT used: measured 2026-08-07 it failed every probe
+// (87s connection drop, then repeated 180s+ hangs) while this id answered
+// the same query in 5-20s. E2EE serving is not a requirement here - the
+// fallback below was never E2EE either.
 //
 // Fallback - venice-uncensored-1-2: same vision wire contract, but
 // permissive. The motivating case is Venice's content-safety filter
 // spuriously rejecting an innocuous photo (a loaf of home-baked bread
-// tripped it); the uncensored model describes it without the block.
+// tripped it); the uncensored model describes it without the block. Also
+// much the faster of the pair (~50 tok/s vs ~14), so a primary timeout
+// degrades to a quick answer rather than a second slow one.
 //
 // These ids mirror MODELS entries in src/lib/models/index.ts but are
 // duplicated here because the edge function is a Deno island and can't
 // import from src/lib (see supabase/functions/README.md).
-const PRIMARY_VISION_MODEL = 'e2ee-qwen3-vl-30b-a3b-p';
+const PRIMARY_VISION_MODEL = 'qwen3-vl-235b-a22b';
 const FALLBACK_VISION_MODEL = 'venice-uncensored-1-2';
+
+// Per-attempt latency ceiling. Without one, a hung vision upstream runs
+// until the turn's 380s wall deadline (WALL_DEADLINE_MS in
+// getStreamingResponse.ts) and the user sees the whole turn die with
+// "wall timeout" instead of the tool degrading to the fallback model.
+// 90s covers the slowest legitimate answer observed on the primary
+// (~65s for a ~900-token exhaustive description at ~14 tok/s) with
+// headroom, while still leaving most of the wall budget for the
+// fallback attempt and the rest of the turn.
+const VISION_ATTEMPT_TIMEOUT_MS = 90_000;
 
 /**
  * Download one object from the `attachments` bucket and encode it as a
@@ -77,20 +95,31 @@ async function runOne(
   imageUrl: string,
   label: string,
 ): Promise<string> {
-  const result = await toolComplete({
-    apiKey,
-    model,
-    messages: [
-      {
-        role: 'user',
-        content: [
-          { type: 'text', text: query },
-          { type: 'image_url', image_url: { url: imageUrl } },
-        ] as unknown as string,
-      },
-    ],
-    maxTokens: 8196,
-  });
+  // Bound this attempt's wall clock. The abort surfaces as a thrown
+  // VeniceError('network') out of toolComplete, which the caller treats
+  // like any other failure: primary falls back, fallback propagates.
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), VISION_ATTEMPT_TIMEOUT_MS);
+  let result;
+  try {
+    result = await toolComplete({
+      apiKey,
+      model,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: query },
+            { type: 'image_url', image_url: { url: imageUrl } },
+          ] as unknown as string,
+        },
+      ],
+      maxTokens: 8196,
+      signal: ctl.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
 
   const trimmed = result.text.trim();
   if (trimmed.length === 0) {
