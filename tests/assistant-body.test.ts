@@ -14,6 +14,7 @@ import {
   isCitationsUnavailable,
   parseCitationRefHref,
   showCitationsControls,
+  showMessageActions,
 } from '../src/lib/ui/assistant-body';
 
 describe('hasCitationRefsInBody', () => {
@@ -115,5 +116,26 @@ describe('parseCitationRefHref', () => {
 
   it('returns null for non-numeric tails (defensive against future emitters)', () => {
     expect(parseCitationRefHref('#cite-')).toBeNull();
+  });
+});
+
+describe('showMessageActions', () => {
+  it('renders the bar for a normal reply with content', () => {
+    expect(showMessageActions('Hello.', true)).toBe(true);
+  });
+
+  it('renders the bar for content even without a regenerate target', () => {
+    // e.g. a caller that omits onRegenerate still gets copy/citations.
+    expect(showMessageActions('Hello.', false)).toBe(true);
+  });
+
+  it('renders the bar for an empty body when a regenerate target exists', () => {
+    // A turn aborted mid-tool-call persists tool_calls with no text;
+    // the regenerate button is the escape hatch from the hung call.
+    expect(showMessageActions('', true)).toBe(true);
+  });
+
+  it('hides the bar when there is neither content nor a regenerate target', () => {
+    expect(showMessageActions('', false)).toBe(false);
   });
 });

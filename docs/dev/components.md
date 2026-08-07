@@ -374,9 +374,17 @@ markdown content, the reasoning panel above and the citations
 panel below, and the action bar (copy, citations toggle,
 context ring, regenerate).
 
+The action bar renders when there is content OR a regenerate
+target (`showMessageActions`): a turn aborted mid-tool-call
+persists an assistant row with `tool_calls` but an empty body,
+and that row still needs its regenerate escape hatch.
+Content-dependent controls (copy, citations) gate on content
+individually.
+
 Decision logic (the `^N^` citation-ref detector, the
 orphan-refs `citationsUnavailable` predicate, the
-controls-visibility gate, the `#cite-N` href parser, the
+controls-visibility gate, the action-bar gate, the `#cite-N`
+href parser, the
 flash delay matching the slide-down) lives in
 `src/lib/ui/assistant-body.ts` and is unit-tested at
 `tests/assistant-body.test.ts`. The `.svelte` file owns

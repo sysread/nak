@@ -45,6 +45,7 @@
     isCitationsUnavailable,
     parseCitationRefHref,
     showCitationsControls,
+    showMessageActions,
   } from '$lib/ui/assistant-body';
   import { coerceSecondThoughts, isDoubt } from '$lib/ui/second-thoughts';
   import { webCitationToDisplay } from '$lib/ui/citations';
@@ -249,7 +250,13 @@
   <SecondThoughtsPanel verdict={secondThoughtsVerdict} {onRefine} {disabled} />
 {/if}
 
-{#if content}
+<!-- The action bar renders whenever there is content OR a regenerate
+     target - a turn aborted mid-tool-call persists an assistant row
+     with tool_calls but empty content, and that row still needs its
+     regenerate escape hatch. See showMessageActions for the full
+     rationale; content-dependent controls (copy, citations) still
+     gate on content individually. -->
+{#if showMessageActions(content, onRegenerate !== undefined)}
   <div class="msg-actions">
     {#if stamp}
       <!-- Left-aligned timestamp. `margin-right: auto` on `.msg-time`
@@ -257,7 +264,9 @@
            the right edge of the bar. -->
       <span class="msg-time">{stamp}</span>
     {/if}
-    <CopyButton text={content} ariaLabel="Copy message" {disabled} />
+    {#if content}
+      <CopyButton text={content} ariaLabel="Copy message" {disabled} />
+    {/if}
     {#if controlsVisible}
       <!-- Citations toggle — numbered badge doubles as count AND the
            "source list" affordance. Inline-linked in the markdown as
