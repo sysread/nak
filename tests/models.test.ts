@@ -59,14 +59,14 @@ describe('MODELS (active registry)', () => {
   });
   it('marks the vision-capable ids as supportsVision=true', () => {
     // Vision-capable entries today: analyze_image's server-side vision
-    // sub-call primary (e2ee-qwen3-vl-30b-a3b-p) and its uncensored
+    // sub-call primary (qwen3-vl-235b-a22b) and its uncensored
     // fallback (venice-uncensored-1-2), plus qwen-3-7-plus (which
     // inlines image_url parts directly rather than routing through
     // analyze_image). The seed profile's deepseek-v4-flash is text-only
     // - vision goes through analyze_image.
     const visionIds = new Set([
       'venice-uncensored-1-2',
-      'e2ee-qwen3-vl-30b-a3b-p',
+      'qwen3-vl-235b-a22b',
       'qwen-3-7-plus',
     ]);
     for (const [id, spec] of Object.entries(MODELS)) {
@@ -268,7 +268,7 @@ describe('AGENT_MODELS (background agents)', () => {
     expect(AGENT_MODELS.intuition).toBe('nvidia-nemotron-3-nano-30b-a3b');
     // No vision slot here: analyze_image's vision sub-call runs
     // server-side in the venice edge function, which holds the primary
-    // (e2ee-qwen3-vl-30b-a3b-p) and uncensored-fallback
+    // (qwen3-vl-235b-a22b) and uncensored-fallback
     // (venice-uncensored-1-2) ids directly - AGENT_MODELS is the
     // browser-side agent registry and doesn't drive it. The five
     // curation agents (auto-title, summary, thread/memory/recipe

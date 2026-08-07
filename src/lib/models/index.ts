@@ -226,8 +226,8 @@ export const MODELS = {
     supportsVision: false,
     supportsResponseFormat: true,
   },
-  'e2ee-qwen3-vl-30b-a3b-p': {
-    id: 'e2ee-qwen3-vl-30b-a3b-p',
+  'qwen3-vl-235b-a22b': {
+    id: 'qwen3-vl-235b-a22b',
     contextWindow: 128_000,
     // Not a reasoning model: it has no chain-of-thought pass, so the
     // analyze_image call must not send `reasoning_effort` (Venice 4xxs
@@ -241,8 +241,10 @@ export const MODELS = {
     // analyze_image.ts) and falls back to venice-uncensored-1-2 when
     // this model fails. Listed here as a known Venice model and to back
     // the supportsVision contract; the edge tool holds the id directly
-    // (it can't import from src/lib). The `e2ee-` prefix is Venice's
-    // marker for end-to-end-encrypted serving.
+    // (it can't import from src/lib). Chosen over Venice's E2EE-served
+    // e2ee-qwen3-vl-30b-a3b-p, which hung or dropped the connection on
+    // every latency probe; see the rationale comment in
+    // supabase/functions/venice/tools/_vision.ts.
     supportsVision: true,
     supportsResponseFormat: true,
   },

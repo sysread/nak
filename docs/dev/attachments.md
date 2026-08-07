@@ -40,7 +40,9 @@ covers the attachment-specific pieces.
 - `supabase/functions/venice/tools/_vision.ts` - shared by `analyze_image`
   and `analyze_pdf_page`: `attachmentObjectAsDataUrl` (bucket bytes ->
   base64 data URL) and `askVision` (primary vision model + one permissive
-  fallback).
+  fallback, each attempt bounded by a per-attempt abort so a hung
+  upstream degrades to the fallback rather than hitting the turn's wall
+  deadline).
 - `src/lib/attachments.ts` - pure helpers: size validation,
   `isConsumableBy` predicate, base64 helpers (composer-side, in-memory),
   canvas-based `compressImage` (the shared upload/generate compressor -
