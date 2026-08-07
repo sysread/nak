@@ -124,6 +124,10 @@ One file per use-case under [`use-cases/`](./use-cases/), named
 - [chat-ask-user](./use-cases/chat-ask-user.md) - the ask_user
   tool's suspend/resume lifecycle and the AskUserCard's
   pre-populated question/options.
+- [chat-regenerate-from-here](./use-cases/chat-regenerate-from-here.md) -
+  the regenerate button's visibility (every assistant reply,
+  including tool-call-only cards from a stopped turn), the hover
+  preview, replace-range semantics, and abort restore.
 - [chat-cutoff-retry](./use-cases/chat-cutoff-retry.md) - retrying a
   dead tail (partial-text cutoff or reasoning-only stall) red-outlines
   and replaces it rather than appending a continuation.

@@ -45,6 +45,7 @@
     isCitationsUnavailable,
     parseCitationRefHref,
     showCitationsControls,
+    showMessageActions,
   } from '$lib/ui/assistant-body';
   import { coerceSecondThoughts, isDoubt } from '$lib/ui/second-thoughts';
   import { webCitationToDisplay } from '$lib/ui/citations';
@@ -250,13 +251,12 @@
 {/if}
 
 <!-- The action bar renders whenever there is content OR a regenerate
-     target. A turn aborted mid-tool-call persists an assistant row
-     with tool_calls but empty content; gating the bar on content
-     alone left that row with no regenerate affordance, so the only
-     way past a hung tool call was to send a new message on top of it.
-     Content-dependent controls (copy, citations) still gate on
-     content individually. -->
-{#if content || onRegenerate}
+     target - a turn aborted mid-tool-call persists an assistant row
+     with tool_calls but empty content, and that row still needs its
+     regenerate escape hatch. See showMessageActions for the full
+     rationale; content-dependent controls (copy, citations) still
+     gate on content individually. -->
+{#if showMessageActions(content, onRegenerate !== undefined)}
   <div class="msg-actions">
     {#if stamp}
       <!-- Left-aligned timestamp. `margin-right: auto` on `.msg-time`

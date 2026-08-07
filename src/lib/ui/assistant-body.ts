@@ -82,6 +82,22 @@ export function citationsToggleTitle(
 }
 
 /**
+ * Whether the `.msg-actions` bar renders at all. True when there
+ * is content to act on, OR a regenerate target even without
+ * content - a turn aborted mid-tool-call persists an assistant
+ * row with tool_calls but an empty body, and that row still
+ * needs its regenerate affordance (it is the escape hatch from a
+ * hung tool call). Content-dependent controls inside the bar
+ * (copy, citations) gate on content individually.
+ */
+export function showMessageActions(
+  content: string,
+  hasRegenerateTarget: boolean
+): boolean {
+  return content.length > 0 || hasRegenerateTarget;
+}
+
+/**
  * Delay before flashing the matching citation row when the user
  * clicks a `^N^` superscript. Zero when the panel was already
  * open (no slide to wait for); 240ms otherwise to cover the
