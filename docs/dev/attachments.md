@@ -301,7 +301,12 @@ parent - `messages.thread_id -> threads.user_id = auth.uid()`.
   `listAttachmentSummariesForThread` (metadata-only projection). Lists
   live images, live documents, documents with viewable pages (filename +
   page count + the `analyze_pdf_page` call), and expired filenames; empty
-  sections add zero tokens. The summary projection nulls `page_count` for
+  sections add zero tokens. The live-images line is tier-aware: a
+  vision-capable model is told the images are already inlined and
+  visible (analyze_image only as a can't-see fallback), while a
+  non-vision model is told to call `analyze_image` - instructing a
+  vision tier to call the tool made it pay a slow vision sub-completion
+  for images it could already see. The summary projection nulls `page_count` for
   an expired row, since deleting an attachment reclaims its page objects
   too - a stale count would otherwise keep advertising a gone document.
 - **Attachment-inspection reinforcement**: when the user message that

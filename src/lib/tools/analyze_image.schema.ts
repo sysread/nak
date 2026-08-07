@@ -6,11 +6,13 @@ export const analyzeImageSchema = {
   name: 'analyze_image',
   description:
     'Send an image attached anywhere in the current conversation to a ' +
-    'vision-capable model with a focused query. The ' +
-    '<thread_attachments> system block lists every available filename ' +
-    "(case-sensitive). Phrase query as a direct instruction to the " +
-    "vision model (e.g. \"What text appears in this image?\"). Returns " +
-    "the vision model's plain-text answer.",
+    'vision-capable model with a focused query. If an attached image ' +
+    'is already visible to you inline, answer from what you see ' +
+    'instead of calling this tool - it is for images you cannot see. ' +
+    'The <thread_attachments> system block lists every available ' +
+    "filename (case-sensitive). Phrase query as a direct instruction " +
+    "to the vision model (e.g. \"What text appears in this image?\"). " +
+    "Returns the vision model's plain-text answer.",
   shortDescription: 'analyze any image in the conversation via vision model',
   parameters: {
     type: 'object',

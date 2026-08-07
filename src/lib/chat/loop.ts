@@ -104,6 +104,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     skipPriming,
     refinementDoubtNote,
     currentTurnHasAttachments,
+    modelSupportsVision,
   } = opts;
   // Copy so we can extend locally each round without mutating the caller.
   const history: VeniceMessage[] = [...opts.history];
@@ -221,6 +222,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     mcpToolboxes,
     attachmentSummaries,
     currentTurnHasAttachments: currentTurnHasAttachments ?? false,
+    modelSupportsVision,
     emphasisMarkdown,
     threadTitle: thread.title,
     titleManuallySet: thread.title_manually_set,

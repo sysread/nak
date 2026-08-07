@@ -4123,6 +4123,11 @@
           skipPriming: ctx.isRefinement ? true : undefined,
           refinementDoubtNote: ctx.isRefinement ? ctx.refinementDoubtNote : undefined,
           currentTurnHasAttachments,
+          // Same spec that routed the images above: on a vision tier
+          // they inline as image_url parts, and the metadata message
+          // must not tell the model to analyze_image what it already
+          // sees.
+          modelSupportsVision: ctx.modelSpec.supportsVision,
           // Dynamic MCP-integration toolboxes, built at turn entry
           // from app state. Each authorized integration becomes a
           // gated `mcp:<id>` toolbox the model can toggle on; the

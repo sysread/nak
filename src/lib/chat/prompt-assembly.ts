@@ -34,7 +34,16 @@ const DEFAULT_THREAD_TITLE = 'New conversation';
  * every file attachment that has appeared in this conversation. Four
  * sections, each shown only when non-empty:
  *
- *   - Live images: filenames the model can pass to analyze_image().
+ *   - Live images: phrased by tier. On a vision-capable model every
+ *     live image is already inlined as an image_url part in the user
+ *     turn that carried it (see buildUserVeniceContent and the signed
+ *     URL pre-resolution in Chat.svelte), so the line says the images
+ *     are directly visible and analyze_image is only a fallback.
+ *     Telling a vision model to "call analyze_image to inspect" - the
+ *     non-vision phrasing - made it obediently pay a slow vision
+ *     sub-completion for an image it could already see. On a
+ *     non-vision model the images are invisible on the wire and
+ *     analyze_image() is the only lever, so the line says to call it.
  *   - Live documents: filenames whose extracted text is inlined in
  *     the user turn where they were attached. Listed for recall ("yes,
  *     I still have the contract.pdf you sent earlier") - no separate
@@ -62,7 +71,8 @@ const DEFAULT_THREAD_TITLE = 'New conversation';
  * turns.
  */
 export function buildThreadAttachmentsBlock(
-  summaries: ThreadAttachmentSummary[]
+  summaries: ThreadAttachmentSummary[],
+  modelSupportsVision: boolean
 ): string | null {
   if (summaries.length === 0) return null;
 
@@ -106,7 +116,11 @@ export function buildThreadAttachmentsBlock(
   const lines: string[] = ['<thread_attachments>'];
   if (liveImages.size > 0) {
     lines.push(
-      `Live images: ${[...liveImages.keys()].join(', ')}. Call analyze_image(filename, query) to inspect any of them.`
+      modelSupportsVision
+        ? `Live images: ${[...liveImages.keys()].join(', ')}. These are inlined in the ` +
+          'conversation and directly visible to you - answer from what you see. Call ' +
+          'analyze_image(filename, query) only if you cannot actually see one of them.'
+        : `Live images: ${[...liveImages.keys()].join(', ')}. Call analyze_image(filename, query) to inspect any of them.`
     );
   }
   if (liveDocs.size > 0) {
@@ -300,6 +314,15 @@ interface MetadataSystemMessageOptions {
   mcpToolboxes?: readonly Toolbox[];
   attachmentSummaries: ThreadAttachmentSummary[];
   /**
+   * Whether the model receiving this turn accepts inline image_url
+   * parts. Flips the thread-attachments live-images line between "you
+   * can already see these" (vision) and "call analyze_image() to see
+   * them" (non-vision). Optional so older callers keep the non-vision
+   * phrasing, which is safe on any tier - it merely over-recommends
+   * the tool.
+   */
+  modelSupportsVision?: boolean;
+  /**
    * True when the user message that opened this turn carries one or
    * more attachments. Drives the anti-fabrication reinforcement
    * section - distinct from `attachmentSummaries`, which is the
@@ -377,7 +400,10 @@ export function buildMetadataSystemMessage(
   // block, not the whole cached prefix.
   sections.push(buildToolboxStateBlock(opts.enabledToolboxes, opts.mcpToolboxes ?? []));
 
-  const attachments = buildThreadAttachmentsBlock(opts.attachmentSummaries);
+  const attachments = buildThreadAttachmentsBlock(
+    opts.attachmentSummaries,
+    opts.modelSupportsVision ?? false,
+  );
   if (attachments !== null) sections.push(attachments);
 
   // Anti-fabrication reinforcement, fired only on turns where the user
