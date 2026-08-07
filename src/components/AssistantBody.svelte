@@ -249,7 +249,14 @@
   <SecondThoughtsPanel verdict={secondThoughtsVerdict} {onRefine} {disabled} />
 {/if}
 
-{#if content}
+<!-- The action bar renders whenever there is content OR a regenerate
+     target. A turn aborted mid-tool-call persists an assistant row
+     with tool_calls but empty content; gating the bar on content
+     alone left that row with no regenerate affordance, so the only
+     way past a hung tool call was to send a new message on top of it.
+     Content-dependent controls (copy, citations) still gate on
+     content individually. -->
+{#if content || onRegenerate}
   <div class="msg-actions">
     {#if stamp}
       <!-- Left-aligned timestamp. `margin-right: auto` on `.msg-time`
@@ -257,7 +264,9 @@
            the right edge of the bar. -->
       <span class="msg-time">{stamp}</span>
     {/if}
-    <CopyButton text={content} ariaLabel="Copy message" {disabled} />
+    {#if content}
+      <CopyButton text={content} ariaLabel="Copy message" {disabled} />
+    {/if}
     {#if controlsVisible}
       <!-- Citations toggle — numbered badge doubles as count AND the
            "source list" affordance. Inline-linked in the markdown as

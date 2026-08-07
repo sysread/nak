@@ -168,6 +168,12 @@ If the regenerated turn fails partway (network drop, rate limit, you
 hit Stop), the greyed messages restore to normal and nothing is
 deleted. Try again, or carry on as if you hadn't clicked.
 
+The button also appears on replies that consist only of tool calls
+with no text - for example a turn you stopped while a tool call was
+still running. Regenerating from there discards the interrupted tool
+round and re-runs the turn from your prompt, which is the clean way
+out of a tool call that hung.
+
 ## Message timestamps
 
 Every message card carries the time it was created at the left edge of
