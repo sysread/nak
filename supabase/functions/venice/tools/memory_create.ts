@@ -53,7 +53,7 @@ export const memoryCreate: ToolDef = {
         // when the message only stated the range.
         errs.add(
           `confidence must be in [1.0, 10.0] (got ${args.confidence}); ` +
-            'it is a 1-10 scale, not a 0-1 probability',
+            'it is a decimal on a 1-10 scale, not a 0-1 probability',
         );
       } else {
         confidence = args.confidence;
