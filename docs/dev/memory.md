@@ -458,11 +458,15 @@ in `docs/user/memory.md`. The dev side has five moving parts:
     `where embedding_model <> $current`
   - `embedding_claim_holder`, `embedding_claim_expires` — per-row
     claim for the embeddings backfill
-  - `confidence real default 1.0` — starts at 1.0 on create;
+  - `confidence real default 1.0` — starts at 1.0 on create
+    (`memory_create` accepts an optional initial value in [1.0, 10.0]);
     `memory_invalidate` halves it (reflection-only, ×0.5);
-    `memory_update` and `memory_reshape` rewrite content only and do
-    NOT change confidence (corroboration is its own explicit signal,
-    not a side effect of an edit); the `memory_reaffirm` lever calls
+    `memory_reshape` rewrites content only and does NOT change
+    confidence; chat-side `memory_update` accepts an optional direct
+    confidence set in [1.0, 10.0] (for correcting a value that is
+    outright wrong - reflection's mirrored schema deliberately omits
+    it so background agents move confidence only through the graded
+    levers); the `memory_reaffirm` lever calls
     `reaffirm_memory_confidence` (+0.5 cap 10.0) and `memory_doubt`
     calls `doubt_memory_confidence` (×0.7 no floor). The
     `bump_memory_confidence` RPC exists in the schema but is currently
@@ -590,13 +594,13 @@ from the same ports); the browser carries only the wire schemas.
   The trigger nulls the embedding; the backfill embeds it on its
   next pass. `message` is required (commit-style) and appends a
   `create` changelog row.
-- `memory_update.execute({ id, label?, data?, message? })` —
-  writes the changed fields and relies on the trigger to null the
-  embedding if either text changed. Does NOT change confidence (a
-  rewrite is not corroboration); a `confidence` arg is rejected with
-  a pointer at memory_reaffirm / memory_doubt. `message` is optional
-  (defaults to `Updated: <label>`) and appends an `update` changelog
-  row. Subject to the body-length budget below.
+- `memory_update.execute({ id, label?, data?, message?, confidence? })`
+  — writes the changed fields and relies on the trigger to null the
+  embedding if either text changed. Optional `confidence` sets the
+  stored value directly ([1.0, 10.0]; exposed in the chat schema only,
+  not reflection's mirror - see the column note above). `message` is
+  optional (defaults to `Updated: <label>`) and appends an `update`
+  changelog row. Subject to the body-length budget below.
 - `memory_invalidate.execute({ id })` — halves confidence via
   `decay_memory_confidence` RPC. Not destructive. No changelog
   entry (confidence-only).
@@ -900,12 +904,11 @@ renders the delta as a chip (`memorySizeDelta` in
   but it means "why is this memory not showing up in search"
   can have two answers (unembedded, or invalidated-below-
   threshold).
-- **Confidence is bumped on every `memory_update`, not just
-  on meaningful changes.** A no-op update still bumps the
-  counter (up to the 10.0 cap). The agent's prompt discourages
-  meaningless updates, but if you ever expose update to a
-  looser caller, consider whether that counter needs
-  gating.
+- **A `memory_update` rewrite does not bump confidence.** Content
+  edits and confidence moves are independent: the graded levers
+  (reaffirm/doubt/invalidate) and the chat-side direct set are the
+  only confidence writers, so a no-op rewrite cannot inflate the
+  counter.
 - **Confidence deltas are per-layer.** Reflection agent uses
   the stronger bump (+1.0) and halving decay (×0.5) because it
   operates on settled evidence; the chat-side reaffirm (+0.5)

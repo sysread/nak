@@ -65,8 +65,8 @@ const MEMORY_SEARCH_WIRE_SCHEMA: AgentTool['wire'] = {
         limit: {
           type: 'integer',
           minimum: 1,
-          maximum: 100,
-          description: 'Max results (default 20, max 100).',
+          maximum: 50,
+          description: 'Max results (default 10, max 50).',
         },
       },
       additionalProperties: false,

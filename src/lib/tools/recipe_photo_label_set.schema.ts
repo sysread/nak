@@ -56,7 +56,7 @@ export const recipePhotoLabelSetSchema = {
         minLength: 1,
         maxLength: 500,
         description:
-          'One-line history note. Examples: "Captioned the finished ' +
+          'One-line history note; lands in the recipe changelog the user reviews. Examples: "Captioned the finished ' +
           'plate", "Cleared the obsolete progress-shot caption".',
       },
     },

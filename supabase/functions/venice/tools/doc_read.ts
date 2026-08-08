@@ -35,6 +35,10 @@ export const docRead: ToolDef = {
       typeof args.document_id === 'string' ? args.document_id.trim() : '';
     if (!documentId) throw new Error('document_id is required');
 
+    if (typeof args.start_line !== 'number' || typeof args.end_line !== 'number' ||
+        !Number.isFinite(args.start_line) || !Number.isFinite(args.end_line)) {
+      throw new Error('start_line and end_line are required and must be numbers');
+    }
     const start = Math.max(1, Math.floor(Number(args.start_line)));
     const rawEnd = Math.max(start, Math.floor(Number(args.end_line)));
     const end = Math.min(rawEnd, start + DOC_READ_MAX_SPAN - 1);

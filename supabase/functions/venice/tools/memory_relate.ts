@@ -18,7 +18,10 @@ const RELATION_KINDS: readonly string[] = [
   'generalises',
   'specialises',
 ];
-const MEMORY_RELATE_MAX_NOTE_CHARS = 200;
+// Mirror of MEMORY_RELATE_MAX_NOTE_CHARS in
+// src/lib/tools/memory_relate.schema.ts - the cap every wire schema
+// advertises. A lower copy here rejected schema-legal notes.
+const MEMORY_RELATE_MAX_NOTE_CHARS = 500;
 
 export const memoryRelate: ToolDef = {
   name: 'memory_relate',

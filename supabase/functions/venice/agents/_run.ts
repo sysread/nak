@@ -455,11 +455,14 @@ export async function runHeadlessAgent(
         return { call, ok: false as const, error };
       }
       // The model-emitted narration the wire schema requires when a
-      // progress listener is attached; absent otherwise. Tools read
-      // specific keys and never see it.
+      // progress listener is attached; absent otherwise. It belongs to
+      // this runner, not the tool: strip it before dispatch, because
+      // tools validate unknown argument keys (rejectUnknownArgs) and
+      // would reject the very key the narrated schema marks required.
       const activity = typeof args.activity === 'string' ? args.activity : '';
+      const { activity: _activity, ...toolArgs } = args;
       try {
-        const value = await executeToolboxCall(toolbox, call.function.name, args, ctx);
+        const value = await executeToolboxCall(toolbox, call.function.name, toolArgs, ctx);
         emit({
           kind: 'tool',
           name: call.function.name,

@@ -16,7 +16,8 @@ export const webSearchSchema = {
     'page content comes back directly as markdown (truncated: true ' +
     'flags a cut-off tail). Never put a URL in `query`; the search ' +
     'backend searches FOR the URL instead of reading it. Provide query ' +
-    'or url, not both. Returns {answer, citations} for a search and ' +
+    'or url, not both (if both are sent, url wins and query is ignored). ' +
+    'Returns {answer, citations} for a search and ' +
     '{url, content} for a fetch; citations surface automatically on ' +
     'your next reply (you may reference them inline as ^N^).',
   shortDescription: 'search the live web or fetch a specific URL',

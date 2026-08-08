@@ -12,8 +12,10 @@
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { ArgErrors, rejectUnknownArgs } from './_validate.ts';
 
-const MAX_RECIPE_TITLE_CHARS = 200;
-const MAX_RECIPE_COOKLANG_CHARS = 16_000;
+// Mirror of src/lib/recipe-limits.ts - the caps the wire schema
+// advertises. Divergent copies here rejected schema-legal bodies.
+const MAX_RECIPE_TITLE_CHARS = 160;
+const MAX_RECIPE_COOKLANG_CHARS = 20_000;
 
 // Mirror of validateCooklangSource in src/lib/cooklang.ts. Catches
 // LLM-authoring quirks (backtick code spans, `@modifier @ingredient`

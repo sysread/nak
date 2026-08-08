@@ -34,7 +34,7 @@ export const recipePhotosReorderSchema = {
         minLength: 1,
         maxLength: 500,
         description:
-          'One-line history note. Examples: "Moved the finished plate ' +
+          'One-line history note; lands in the recipe changelog the user reviews. Examples: "Moved the finished plate ' +
           'first", "Grouped prep shots before the served photo".',
       },
     },

@@ -34,8 +34,9 @@ function formatWikiUpdateArgs(args: Record<string, unknown>): string {
 export const wikiUpdateSchema = {
   name: 'wiki_update',
   description:
-    'Update a wiki article by id. Omit title or content to leave that ' +
-    `field unchanged. title capped at ${MAX_WIKI_TITLE_CHARS} chars ` +
+    'Update a wiki article by id. Provide at least one of title or ' +
+    'content; omit the other to leave it unchanged.' +
+    `  title capped at ${MAX_WIKI_TITLE_CHARS} chars ` +
     `(must remain unique per user); content capped at ${MAX_WIKI_CONTENT_CHARS} chars. ` +
     'Use wiki_search to find the id. Returns the updated row. Preserve ' +
     'existing facts unless the user has explicitly contradicted them. ' +

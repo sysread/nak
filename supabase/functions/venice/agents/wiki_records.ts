@@ -89,8 +89,8 @@ const MAX_WIKI_RECORD_TAGS = 24;
 const MAX_WIKI_RECORD_TAG_CHARS = 40;
 const MAX_RECORD_LINK_LABEL_CHARS = 120;
 
-const WIKI_SEARCH_DEFAULT_LIMIT = 8;
-const WIKI_SEARCH_MAX_LIMIT = 25;
+const WIKI_SEARCH_DEFAULT_LIMIT = 5;
+const WIKI_SEARCH_MAX_LIMIT = 20;
 
 // ---------------------------------------------------------------------------
 // Wire schemas for the extraction toolbox. wiki_search / wiki_list find

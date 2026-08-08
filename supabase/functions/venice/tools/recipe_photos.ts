@@ -20,6 +20,7 @@
 // recipe.
 
 import { requireThreadId, registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
+import { ArgErrors, rejectUnknownArgs } from './_validate.ts';
 
 interface AttachmentRow {
   id: string;
@@ -67,6 +68,11 @@ function projectPhotos(
 export const recipePhotosAttach: ToolDef = {
   name: 'recipe_photos_attach',
   async execute(args: Record<string, unknown>, ctx: ToolContext) {
+    {
+      const errs = new ArgErrors();
+      rejectUnknownArgs(errs, args, ['recipe_id', 'filenames', 'labels', 'change_message']);
+      errs.throwIfAny();
+    }
     const recipeId = typeof args.recipe_id === 'string' ? args.recipe_id : '';
     if (!recipeId) throw new Error('recipe_id is required');
     const filenames = Array.isArray(args.filenames)
@@ -235,6 +241,11 @@ export const recipePhotosAttach: ToolDef = {
 export const recipePhotosRemove: ToolDef = {
   name: 'recipe_photos_remove',
   async execute(args: Record<string, unknown>, ctx: ToolContext) {
+    {
+      const errs = new ArgErrors();
+      rejectUnknownArgs(errs, args, ['recipe_id', 'photo_ids', 'change_message']);
+      errs.throwIfAny();
+    }
     const recipeId = typeof args.recipe_id === 'string' ? args.recipe_id : '';
     if (!recipeId) throw new Error('recipe_id is required');
     const photoIds = Array.isArray(args.photo_ids)
@@ -270,6 +281,11 @@ export const recipePhotosRemove: ToolDef = {
 export const recipePhotosReorder: ToolDef = {
   name: 'recipe_photos_reorder',
   async execute(args: Record<string, unknown>, ctx: ToolContext) {
+    {
+      const errs = new ArgErrors();
+      rejectUnknownArgs(errs, args, ['recipe_id', 'photo_ids', 'change_message']);
+      errs.throwIfAny();
+    }
     const recipeId = typeof args.recipe_id === 'string' ? args.recipe_id : '';
     if (!recipeId) throw new Error('recipe_id is required');
     const photoIds = Array.isArray(args.photo_ids)
@@ -307,31 +323,47 @@ export const recipePhotosReorder: ToolDef = {
 export const recipePhotoLabelSet: ToolDef = {
   name: 'recipe_photo_label_set',
   async execute(args: Record<string, unknown>, ctx: ToolContext) {
+    {
+      const errs = new ArgErrors();
+      rejectUnknownArgs(errs, args, ['recipe_id', 'labels', 'change_message']);
+      errs.throwIfAny();
+    }
     const recipeId = typeof args.recipe_id === 'string' ? args.recipe_id : '';
     if (!recipeId) throw new Error('recipe_id is required');
-    const photos = Array.isArray(args.photos) ? args.photos : [];
-    if (photos.length === 0) {
-      throw new Error('photos must contain at least one entry');
+    // Param names mirror the wire schema exactly (labels / photo_id):
+    // an earlier port read `photos` / `id`, so every schema-conformant
+    // call failed with an error naming a parameter the schema doesn't
+    // have and the model had no path to a successful call.
+    const labels = Array.isArray(args.labels) ? args.labels : [];
+    if (labels.length === 0) {
+      throw new Error('labels must contain at least one entry');
     }
     const imageIds: string[] = [];
     const imageLabels: (string | null)[] = [];
-    for (const p of photos) {
+    for (const p of labels) {
       if (!p || typeof p !== 'object') {
-        throw new Error('each photos entry must be an object with id + label');
+        throw new Error('each labels entry must be an object with photo_id + label');
       }
-      const id = (p as Record<string, unknown>).id;
-      if (typeof id !== 'string' || id.length === 0) {
-        throw new Error('each photos entry must have a non-empty id');
+      const photoId = (p as Record<string, unknown>).photo_id;
+      if (typeof photoId !== 'string' || photoId.length === 0) {
+        throw new Error('each labels entry must have a non-empty photo_id');
       }
-      imageIds.push(id);
+      imageIds.push(photoId);
       const rawLabel = (p as Record<string, unknown>).label;
       if (rawLabel === null || rawLabel === undefined) {
         imageLabels.push(null);
       } else if (typeof rawLabel === 'string') {
         const trimmed = rawLabel.trim();
+        // Mirror of RECIPE_PHOTO_LABEL_MAX_CHARS in
+        // src/lib/tools/recipe_photo_label_set.schema.ts.
+        if (trimmed.length > 200) {
+          throw new Error(
+            `labels[].label exceeds 200-char limit (got ${trimmed.length})`,
+          );
+        }
         imageLabels.push(trimmed.length === 0 ? null : trimmed);
       } else {
-        throw new Error('photos[].label must be a string or null');
+        throw new Error('labels[].label must be a string or null');
       }
     }
     const changeMessage =

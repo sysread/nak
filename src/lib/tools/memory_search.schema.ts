@@ -1,8 +1,8 @@
 /**
  * Schema-only export for memory_search. Impl lives in `./memory_search`.
  */
-export const MEMORY_SEARCH_DEFAULT_LIMIT = 20;
-export const MEMORY_SEARCH_MAX_LIMIT = 100;
+export const MEMORY_SEARCH_DEFAULT_LIMIT = 10;
+export const MEMORY_SEARCH_MAX_LIMIT = 50;
 
 export const memorySearchSchema = {
   name: 'memory_search',

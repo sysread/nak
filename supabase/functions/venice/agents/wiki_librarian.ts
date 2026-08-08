@@ -112,8 +112,9 @@ const WIKI_SEARCH_WIRE_SCHEMA: AgentTool['wire'] = {
       type: 'object',
       properties: {
         query: { type: 'string', description: 'Natural-language query.' },
-        limit: { type: 'integer', minimum: 1, maximum: 50 },
+        limit: { type: 'integer', minimum: 1, maximum: 20 },
       },
+      required: ['query'],
       additionalProperties: false,
     },
   },
@@ -132,6 +133,7 @@ const CONVERSATION_SEARCH_WIRE_SCHEMA: AgentTool['wire'] = {
         query: { type: 'string', description: 'Natural-language query.' },
         limit: { type: 'integer', minimum: 1, maximum: 50 },
       },
+      required: ['query'],
       additionalProperties: false,
     },
   },
@@ -176,7 +178,7 @@ const MEMORY_SEARCH_WIRE_SCHEMA: AgentTool['wire'] = {
       type: 'object',
       properties: {
         query: { type: 'string' },
-        limit: { type: 'integer', minimum: 1, maximum: 100 },
+        limit: { type: 'integer', minimum: 1, maximum: 50 },
       },
       additionalProperties: false,
     },
@@ -292,7 +294,7 @@ const RECORD_CREATE_WIRE_SCHEMA: AgentTool['wire'] = {
       properties: {
         article_id: { type: 'string', description: 'Article the record belongs to.' },
         date: { type: 'string', description: 'ISO "YYYY-MM-DD" date of the entry.' },
-        content: { type: 'string', minLength: 1, description: 'The dated entry text, Markdown.' },
+        content: { type: 'string', minLength: 1, maxLength: 8000, description: 'The dated entry text, Markdown (max 8000 chars).' },
         tags: { type: 'array', items: { type: 'string' } },
       },
       required: ['article_id', 'date', 'content'],
@@ -308,7 +310,7 @@ const RECORD_UPDATE_WIRE_SCHEMA: AgentTool['wire'] = {
     description:
       "Edit a record's date, content, or tags. Use to correct an outdated " +
       'record or merge a duplicate\'s detail into the one you keep. Pass id ' +
-      'and any subset of date, content, tags (tags replaces the whole array).',
+      'and at least one of date, content, tags (tags replaces the whole array).',
     parameters: {
       type: 'object',
       properties: {

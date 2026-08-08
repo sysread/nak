@@ -31,7 +31,10 @@ export const conversationSearch: ToolDef = {
   name: 'conversation_search',
   async execute(args: Record<string, unknown>, ctx: ToolContext) {
     const query = typeof args.query === 'string' ? args.query.trim() : '';
-    if (query.length === 0) return [];
+    // Error, not an empty result: every wire schema marks query required,
+    // and a silent [] reads as "no matches" when the real problem is a
+    // dropped argument.
+    if (query.length === 0) throw new Error('query is required');
 
     const rawLimit =
       typeof args.limit === 'number' ? args.limit : CONVERSATION_SEARCH_DEFAULT_LIMIT;

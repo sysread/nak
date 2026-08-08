@@ -49,6 +49,9 @@ export const docCreate: ToolDef = {
     if (!filename) throw new Error('filename is required');
     const description =
       typeof args.description === 'string' ? args.description.trim() : '';
+    // Required by the wire schema; an empty description defeats the
+    // find-it-later purpose the schema description insists on.
+    if (!description) throw new Error('description is required');
     const title =
       typeof args.title === 'string' && args.title.trim().length > 0
         ? args.title.trim()

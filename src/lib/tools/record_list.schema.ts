@@ -36,7 +36,7 @@ export const recordListSchema = {
       },
       limit: {
         type: 'number',
-        description: 'Optional. Max records to return (default 50).',
+        description: 'Optional. Max records to return (default 50, max 200).',
       },
     },
     required: ['article_id'],

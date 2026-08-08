@@ -118,7 +118,8 @@ export const recipeSaveSchema = {
         minLength: 1,
         maxLength: 500,
         description:
-          'Optional one-line history note. Defaults to "Initial ' +
+          'Optional one-line history note; lands in the recipe changelog ' +
+          'the user reviews. Defaults to "Initial ' +
           'version" when omitted - only set it when you have something ' +
           'more specific than "first save" to record (e.g. "Imported ' +
           'from NYT Cooking", "Captured from prose the user pasted").',
