@@ -23,25 +23,16 @@
 // in the function logs, so flush() is about drawer fidelity, not data
 // safety.
 
-// Wire shape shared with the browser. MUST stay structurally identical
-// to SerializableLogEntry / SerializableDetail in
-// src/lib/logger.svelte.ts - the browser reconstitutes this payload
-// (fromSerializableDetail) without a runtime schema check, so a drift
-// here surfaces as a silently mis-rendered drawer entry, not an error.
-export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error';
+// Wire shape shared with the browser via _shared/log-wire.ts.
+// Both sides import the same types so a drift surfaces as a
+// type-check error, not a silently mis-rendered drawer entry.
+import type {
+  LogLevel,
+  SerializableDetail,
+  SerializableLogEntry,
+} from './log-wire.ts';
 
-export type SerializableDetail =
-  | { kind: 'string'; value: string }
-  | { kind: 'json'; value: unknown }
-  | { kind: 'error'; name: string; message: string; stack: string | null };
-
-export interface SerializableLogEntry {
-  timestamp: number;
-  level: LogLevel;
-  source: string | null;
-  message: string;
-  details: SerializableDetail[];
-}
+export type { LogLevel, SerializableDetail, SerializableLogEntry };
 
 export interface EdgeLogger {
   trace(message: string, ...details: unknown[]): void;

@@ -34,8 +34,13 @@
  */
 
 import { untrack } from 'svelte';
+import type {
+  LogLevel,
+  SerializableDetail,
+  SerializableLogEntry,
+} from '$shared/log-wire';
 
-export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error';
+export type { LogLevel, SerializableDetail, SerializableLogEntry };
 
 /** Runtime predicate. Used when coercing persisted settings jsonb that
  *  carries a caller-supplied `defaultLogLevel` - any other shape falls
@@ -115,23 +120,11 @@ export interface Logger {
   error(message: string, ...details: unknown[]): void;
 }
 
-// Drawer wire format, shared with the edge logger
-// (supabase/functions/_shared/edge-log.ts). Explicit tagged union
-// instead of raw `unknown` so the receiving side can reconstitute
-// Error instances (which otherwise lose their stack through JSON
+// Drawer wire format, shared with the edge logger via
+// _shared/log-wire.ts. Explicit tagged union instead of raw
+// `unknown` so the receiving side can reconstitute Error
+// instances (which otherwise lose their stack through JSON
 // serialization) and safely stringify the rest.
-export type SerializableDetail =
-  | { kind: 'string'; value: string }
-  | { kind: 'json'; value: unknown }
-  | { kind: 'error'; name: string; message: string; stack: string | null };
-
-export interface SerializableLogEntry {
-  timestamp: number;
-  level: LogLevel;
-  source: string | null;
-  message: string;
-  details: SerializableDetail[];
-}
 
 // Cap the buffer. 2000 entries is enough to cover a few hours of a
 // chatty session (the edge fleets' relayed logs plus local breadcrumbs

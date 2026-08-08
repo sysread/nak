@@ -245,7 +245,7 @@ backtick code span in the cooklang source, verify the validation error surfaces 
 `supabase/functions/venice/tools/recipe_save.ts`, `supabase/functions/venice/tools/recipe_update.ts`, edge mirror of
 `recipe-limits.ts` if applicable.
 
-## Fix 9: Extract logger wire types to shared module [ ]
+## Fix 9: Extract logger wire types to shared module [x]
 
 **Problem.** `_shared/edge-log.ts:31-40` serializes log entries that `src/lib/logger.svelte.ts:123-133` deserializes
 with no runtime schema check. The edge comment warns: "MUST stay structurally identical... a drift here surfaces as a
