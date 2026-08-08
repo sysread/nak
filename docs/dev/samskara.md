@@ -992,10 +992,22 @@ be the first genuine test, and the next-day judge hasn't ruled).
   stalest-first. Without this tier one genuine test ever is a lifetime
   pass, and a mature corpus fills with claims established once and
   never re-engaged. Rows with a real track record (tally > 1.0) are
-  untouchable, the staleness clock only matters under cap pressure (an
-  idle account never bleeds), and the pending-fire guard applies to
-  both tiers. If neither tier qualifies the probe skips at cap exactly
-  as it did before eviction existed.
+  untouchable by this tier, the staleness clock only matters under cap
+  pressure (an idle account never bleeds), and the pending-fire guard
+  applies to both of these tiers. When neither qualifies, a **third
+  tier evicts on demonstrated failure**: the lowest-health row whose
+  posterior sits more than 15% below the user's own `p0`. Low health
+  is earned - under the k=5 shrinkage a row needs roughly two full
+  contradictions' worth of net miss evidence to fall below
+  `0.85 * p0` - so every victim is a claim the judge genuinely tested
+  and rejected, never one that is merely quiet. This tier drops the
+  pending-fire guard on purpose: that guard spares a row whose
+  in-flight fire may be its FIRST test, but a row this far under
+  water cannot be exonerated by one more verdict, and on an active
+  day the guard empties the pool (2026-08 measurement: 115 of 150
+  tier-1 rows carried a fire awaiting next-day judgment). If no tier
+  qualifies the probe skips at cap exactly as it did before eviction
+  existed.
 
 Eviction is reachable from BOTH mint probes on purpose. When only the
 recency probe could evict, sweep order decided who minted: recency
@@ -1008,18 +1020,24 @@ is decided by whether a qualified victim exists when a probe wants a
 slot, not by which probe runs first; within one sweep the two probes
 draw victims from the same pool in turn.
 
-Both eviction tiers are threshold-gated, so pressure can still dry up:
-if the "Probation due" and both "Evictable" readouts sit at zero while
+All eviction tiers are threshold-gated, so pressure can still dry up:
+if the "Probation due" and all "Evictable" readouts sit at zero while
 tier-1 is pinned at cap and the mint probe keeps skipping, no release
-path has material and formation is starved again. The deferred lever
-for that state is demand-driven escalation - relaxing the eviction
-criteria as consecutive skipped-at-cap mint attempts accumulate, so
-pressure scales with exactly the thing being starved. It was
-deliberately not built alongside the tiers (2026-07): it is the only
-option that needs new state (nothing records a skipped mint today),
-and at the time the stale tier had a 40+-row reservoir maturing toward
-it, so the extra machinery had no evidence of need. Re-evaluate only
-on the dried-up signal above.
+path has material and formation is starved. This state actually
+occurred (2026-08-08): the first two tiers had zero victims - the
+judge rework engages most fires now, so `confirm_count = 0` rows
+(tier one's requirement) barely exist, and nothing could yet be 90
+days stale in a corpus whose judge only started ruling in July - and
+every mint path sat blocked at cap for ~42 hours while the
+association backlog grew. The health tier is the remedy: it keys on
+the one signal the judge rework made trustworthy (a discriminating
+posterior) and needs no new state. The earlier-deferred alternative,
+demand-driven escalation (relaxing criteria as skipped-at-cap
+attempts accumulate), stays deferred for the same reason as before:
+it is the only option needing new state (nothing records a skipped
+mint), and the health tier's pool regenerates continuously as
+verdicts land. Re-evaluate it only if all three readouts sit at zero
+while the cap is pinned and probes keep skipping.
 
 A released claim is cheap to lose: if the pattern is real and recurs,
 minting re-creates it from fresh substrate. A design road not taken:
@@ -1792,10 +1810,11 @@ keeping up" signal; a stable floor is the resting state.
 **Decay-standing legibility.** The release machinery (probation reap +
 cap-pressure eviction, see the decay section) surfaces on both
 diagnostics reads. The Overview Corpus card shows a **"Probation due"**
-count and an **"Evictable (untested / stale)"** pair (three
-`samskara_health_snapshot` columns whose predicates deliberately mirror
-`samskara_reap_untested` / `samskara_evict_for_mint`'s two tiers - keep
-them in lockstep). All are informational, not dotted: probation-due
+count and an **"Evictable (untested / stale / unhealthy)"** triple
+(four `samskara_health_snapshot` columns whose predicates deliberately
+mirror `samskara_reap_untested` / `samskara_evict_for_mint`'s three
+tiers - keep them in lockstep). All are informational, not dotted:
+probation-due
 drains at the next hourly reap tick (a value that never drains means
 the reaper cron is stalled), and a nonzero evictable pool is the normal
 resting state while the tier-1 cap is pinned. The Corpus detail pane

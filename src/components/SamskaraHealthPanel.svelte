@@ -271,21 +271,24 @@
         <span class="health-label">Near-dead / never-fired</span>
         <span class="health-value">{snap.nearDead} / {snap.neverFired}</span>
       </div>
-      <!-- Informational, not dotted: all three counts describe the
+      <!-- Informational, not dotted: all these counts describe the
            release machinery working, not a fault. Probation-due rows
            drain at the next hourly reap tick (a value that never
-           drains would mean the reaper cron is stalled); the two
+           drains would mean the reaper cron is stalled); the three
            evictable tiers (untested-but-heavily-judged, then
-           weakly-established-gone-stale) are the pool a capped mint
-           may draw a victim from, and nonzero is the normal resting
-           state while the cap is pinned. -->
+           weakly-established-gone-stale, then health-below-baseline)
+           are the pool a capped mint may draw a victim from, and
+           nonzero is the normal resting state while the cap is
+           pinned. -->
       <div class="health-row">
         <span class="health-label">Probation due</span>
         <span class="health-value">{snap.probationEligible}</span>
       </div>
       <div class="health-row">
-        <span class="health-label">Evictable (untested / stale)</span>
-        <span class="health-value">{snap.evictable} / {snap.evictableStale}</span>
+        <span class="health-label">Evictable (untested / stale / unhealthy)</span>
+        <span class="health-value">
+          {snap.evictable} / {snap.evictableStale} / {snap.evictableUnhealthy}
+        </span>
       </div>
       <div class="health-row">
         <span class="health-label">Substrate / associations</span>
