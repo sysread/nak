@@ -77,6 +77,10 @@ One file per use-case under [`use-cases/`](./use-cases/), named
 - [chat-recall-agents](./use-cases/chat-recall-agents.md) - the
   mid-turn recall agents (memory_recall and siblings), their drawer
   sources, and memory_conversation seeding.
+- [tools-untrusted-content-notice](./use-cases/tools-untrusted-content-notice.md) -
+  the untrusted-content tag on web_search (search + fetch) and
+  MCP-routed results, including an adversarial page that tries to
+  instruct the model.
 - [context-recall-priming](./use-cases/context-recall-priming.md) - the
   boundary-triggered recall pipeline: the smoothed, laundered, cited
   `<think>` recollection, its citations UI, the timeless reflection

@@ -24,11 +24,19 @@
 //
 // Empty-text-with-citations is treated as an error rather than a
 // silent empty result - mirror of the browser path's discipline.
+//
+// Both modes tag their result with the untrusted-content notice (see
+// ../untrusted-content.ts). Query mode needs it as much as url mode
+// does: the synthesis is written by our own sub-model, but that model
+// read attacker-reachable pages to write it, so a directive planted on
+// a search hit can launder itself into the summary text and into the
+// citation snippets riding alongside it.
 
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { readVeniceKey } from './_venice_key.ts';
 import { toolComplete } from './_venice_complete.ts';
 import { veniceScrapeUrl } from '../../_shared/venice.ts';
+import { withUntrustedNotice } from '../untrusted-content.ts';
 
 // Ceiling on scraped-page content returned to the model, in
 // characters (~8k tokens - the same order as the query mode's
@@ -133,7 +141,10 @@ export const webSearch: ToolDef = {
       );
     }
 
-    return { answer: trimmed, citations: result.citations };
+    return withUntrustedNotice('a live web search', {
+      answer: trimmed,
+      citations: result.citations,
+    });
   },
 };
 
@@ -161,12 +172,12 @@ async function executeScrape(url: string, ctx: ToolContext) {
   const content = await veniceScrapeUrl({ apiKey, url, signal: ctx.signal });
 
   const truncated = content.length > SCRAPE_MAX_CHARS;
-  return {
+  return withUntrustedNotice(`the web page ${url}`, {
     url,
     content: truncated ? content.slice(0, SCRAPE_MAX_CHARS) : content,
     ...(truncated ? { truncated: true } : {}),
     citations: [{ title: url, url, content: null, date: null, index: 1 }],
-  };
+  });
 }
 
 registerTool(webSearch);

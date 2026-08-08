@@ -130,6 +130,13 @@ There is no on/off toggle for web search - the model decides per
 turn. Questions that don't need current facts won't trigger the
 tool, so they never pay the latency or quota cost of a search.
 
+Whatever comes back - a search summary or a fetched page - is
+handed to the model tagged as untrusted: content to read and
+report on, never instructions to follow. A page that tries to
+tell Nak what to do is something Nak surfaces to you rather than
+obeys. Expand a tool-call card's result and you will see the tag
+as an `untrusted_content_notice` line above the payload.
+
 ## Thinking and reasoning effort
 
 ## Regenerating a response
