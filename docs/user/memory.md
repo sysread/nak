@@ -147,7 +147,8 @@ back to plain substring search when the embedding service is
 unreachable. Typing into the sidebar filters the listing in
 place. Click a row in the sidebar to open that memory in the
 main panel - one card at a time, with the full body, confidence
-tag, last-touched timestamp, relations, and the inline edit /
+chip (plus a tag when the score leaves the neutral band),
+last-touched timestamp, relations, and the inline edit /
 delete / reaffirm / doubt / + Relate controls.
 
 Rows in the sidebar are tinted by confidence so you can scan the
@@ -193,10 +194,10 @@ From the panel you can:
   and the sibling action buttons disable, so you can see the
   click registered; on completion a brief *Reaffirmed ✓* /
   *Doubted ✓* pulse appears next to the buttons before they
-  return to normal. The chip in the header row shows the
-  resulting tag (corroborated / hedged / shaky) or a numeric
-  value when it's in the neutral band, and the sidebar row's
-  background tint updates to match.
+  return to normal. The numeric chip in the header row updates to
+  the new value, a tag (corroborated / hedged / shaky) appears
+  beside it when the score leaves the neutral band, and the
+  sidebar row's background tint updates to match.
 - **Link memories.** *+ Relate* opens an inline picker: choose a
   relation kind (supports / contradicts / generalises /
   specialises), search for a target memory to link to, optionally

@@ -370,11 +370,10 @@ export function relativeTime(iso: string, now: number = Date.now()): string {
 }
 
 /**
- * Hover-title for the confidence badge/chip. The default view shows
- * only the qualitative tag (or the quiet numeric chip); this keeps
- * the raw number reachable for curious users without cluttering the
- * card, and appends the tag name when one applies so the tooltip
- * reads the same on both renderings.
+ * Hover-title for the confidence badge/chip. The chip rounds to one
+ * decimal; this keeps the two-decimal value reachable for curious
+ * users, and appends the tag name when one applies so the tooltip
+ * reads the same on both elements.
  */
 export function confidenceTooltip(confidence: number): string {
   const tag = classifyMemoryConfidence(confidence);
@@ -383,8 +382,8 @@ export function confidenceTooltip(confidence: number): string {
 }
 
 /**
- * Label for the quiet numeric chip shown when a memory's confidence
- * lands in the neutral band (no qualitative tag). The tilde marks
+ * Label for the quiet numeric chip shown on every memory card,
+ * alongside the qualitative tag when one applies. The tilde marks
  * the value as a rough gauge rather than a precise score; one
  * decimal matches that reading.
  */
