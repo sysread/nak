@@ -94,7 +94,7 @@ streams, verify cancel works (stop a mid-generation response), verify reconnect 
 **Files.** `src/lib/venice.ts`, new `src/lib/chat/stream-transport.ts`, `src/Chat.svelte`,
 `src/lib/chat/stream-events.ts`, `src/lib/chat/loop.ts`, `tests/venice.test.ts`.
 
-## Fix 3: Extract MCP OAuth handlers from router [ ]
+## Fix 3: Extract MCP OAuth handlers from router [x]
 
 **Problem.** Three MCP route handlers in `supabase/functions/venice/index.ts` contain ~410 lines of inline OAuth
 orchestration:
