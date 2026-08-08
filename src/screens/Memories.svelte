@@ -1109,20 +1109,20 @@
               <div class="memory-view">
                 <div class="memory-header-row">
                   <span class="memory-card-label">{m.label}</span>
-                  <!-- Qualitative tag when confidence is outside the
-                       neutral band; otherwise a quiet numeric chip so
-                       the raw value stays visible. The tooltip carries
-                       the exact number either way. -->
+                  <!-- The numeric chip is always visible so a reaffirm
+                       or doubt reads as a value change rather than the
+                       number vanishing behind a tag; the qualitative
+                       tag rides beside it when confidence leaves the
+                       neutral band. -->
+                  <span
+                    class="subtle memory-confidence-chip"
+                    title={confidenceTooltip(m.confidence)}
+                  >{confidenceChipLabel(m.confidence)}</span>
                   {#if confidenceTag}
                     <span
                       class="memory-confidence-tag tag-{confidenceTag}"
                       title={confidenceTooltip(m.confidence)}
                     >{confidenceTag}</span>
-                  {:else}
-                    <span
-                      class="subtle memory-confidence-chip"
-                      title={confidenceTooltip(m.confidence)}
-                    >{confidenceChipLabel(m.confidence)}</span>
                   {/if}
                   <span class="subtle memory-card-meta" title={m.updated_at}>
                     {relativeTime(m.updated_at)}
@@ -1730,11 +1730,11 @@
      override needed. The confirmed-delete button picks up the red
      fill and ink-on-danger text color from there. */
 
-  /* Confidence indicators. The three tags (corroborated / hedged /
-     shaky) are the meaningful cases; neutral memories get a quiet
-     numeric chip instead so the user can still see the raw value. The
-     tag colours are restrained - this is diagnostic chrome, not a
-     headline element. */
+  /* Confidence indicators. The quiet numeric chip is always shown;
+     the three tags (corroborated / hedged / shaky) appear beside it
+     when confidence leaves the neutral band. The tag colours are
+     restrained - this is diagnostic chrome, not a headline
+     element. */
   .memory-confidence-tag,
   .memory-confidence-chip {
     font-size: 0.7rem;
