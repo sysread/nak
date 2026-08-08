@@ -8,7 +8,7 @@
 
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { appendMemoryChangelog } from './_memory_changelog.ts';
-import { ArgErrors } from './_validate.ts';
+import { ArgErrors, rejectUnknownArgs } from './_validate.ts';
 
 const MAX_MEMORY_CHANGELOG_MESSAGE_CHARS = 200;
 
@@ -19,6 +19,7 @@ export const memoryDelete: ToolDef = {
     const message = typeof args.message === 'string' ? args.message.trim() : '';
 
     const errs = new ArgErrors();
+    rejectUnknownArgs(errs, args, ['id', 'message']);
     if (!id) errs.add('id is required');
     if (!message) errs.add('message is required');
     else if (message.length > MAX_MEMORY_CHANGELOG_MESSAGE_CHARS) {

@@ -12,7 +12,7 @@
 // needs to see the current photos.
 
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
-import { ArgErrors } from './_validate.ts';
+import { ArgErrors, rejectUnknownArgs } from './_validate.ts';
 
 const MAX_RECIPE_TITLE_CHARS = 200;
 const MAX_RECIPE_COOKLANG_CHARS = 16_000;
@@ -44,6 +44,7 @@ export const recipeUpdate: ToolDef = {
     const id = typeof args.id === 'string' ? args.id : '';
 
     const errs = new ArgErrors();
+    rejectUnknownArgs(errs, args, ['id', 'title', 'cooklang', 'change_message', 'rating', 'source', 'source_url']);
     if (!id) errs.add('id is required');
 
     // Build the RPC arg bundle from the patch shape. The RPC uses

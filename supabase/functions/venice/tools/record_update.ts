@@ -7,7 +7,7 @@
 // date/content change.
 
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
-import { ArgErrors } from './_validate.ts';
+import { ArgErrors, rejectUnknownArgs } from './_validate.ts';
 import {
   MAX_WIKI_RECORD_CONTENT_CHARS,
   RECORD_COLUMNS,
@@ -22,6 +22,7 @@ export const recordUpdate: ToolDef = {
   async execute(args: Record<string, unknown>, ctx: ToolContext) {
     const id = typeof args.id === 'string' ? args.id.trim() : '';
     const errs = new ArgErrors();
+    rejectUnknownArgs(errs, args, ['id', 'content', 'date', 'tags']);
     if (!id) errs.add('id is required');
 
     const patch: Record<string, unknown> = {};
