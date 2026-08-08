@@ -35,6 +35,35 @@ export function rejectUnknownArgs(
   }
 }
 
+// Name a value's JSON type for a type-error message. Models routinely
+// quote numeric arguments ({"confidence": "5.0"}); a bare "must be a
+// finite number" reads as a range complaint when the value looks right,
+// so the rejection has to say what type actually arrived.
+export function describeJsonType(value: unknown): string {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return 'an array';
+  const t = typeof value;
+  if (t === 'object') return 'an object';
+  if (t === 'string') return 'a string';
+  if (t === 'boolean') return 'a boolean';
+  if (t === 'number') return 'a number';
+  return t;
+}
+
+// Validate a required-to-be-numeric argument. Returns the number when
+// valid; records a type error naming what arrived otherwise.
+export function requireFiniteNumber(
+  errs: ArgErrors,
+  name: string,
+  value: unknown,
+): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  errs.add(
+    `type error: ${name} expects a finite number, but ${describeJsonType(value)} was found`,
+  );
+  return null;
+}
+
 export class ArgErrors {
   private readonly problems: string[] = [];
 

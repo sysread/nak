@@ -12,7 +12,7 @@ import {
   memoryDataBudgetError,
   readMemoryDataLengths,
 } from './_memory_data_budget.ts';
-import { ArgErrors, rejectUnknownArgs } from './_validate.ts';
+import { ArgErrors, rejectUnknownArgs, requireFiniteNumber } from './_validate.ts';
 
 const MAX_MEMORY_CHANGELOG_MESSAGE_CHARS = 200;
 
@@ -63,15 +63,16 @@ export const memoryUpdate: ToolDef = {
     // corrected without a pile of reaffirm round trips. Confidence-only
     // patches skip the embedding-reset trigger, which keys on label/data.
     if (args.confidence !== undefined) {
-      if (typeof args.confidence !== 'number' || !Number.isFinite(args.confidence)) {
-        errs.add('confidence must be a finite number');
-      } else if (args.confidence < 1.0 || args.confidence > 10.0) {
+      const confidence = requireFiniteNumber(errs, 'confidence', args.confidence);
+      if (confidence === null) {
+        // Type error already recorded.
+      } else if (confidence < 1.0 || confidence > 10.0) {
         errs.add(
-          `confidence must be in [1.0, 10.0] (got ${args.confidence}); ` +
+          `confidence must be in [1.0, 10.0] (got ${confidence}); ` +
             'it is a decimal on a 1-10 scale, not a 0-1 probability',
         );
       } else {
-        patch.confidence = args.confidence;
+        patch.confidence = confidence;
       }
     }
 
