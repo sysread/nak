@@ -6,23 +6,22 @@ import { MAX_MEMORY_CHANGELOG_MESSAGE_CHARS } from '../memories';
 
 export const memoryUpdateSchema = {
   name: 'memory_update',
-  // Required fields (id, message) named before the optional content
-  // fields. The required `message` previously trailed the optional
-  // label/data in both the prose and the property list, which let
-  // models skip it as if it were optional like the fields ahead of it.
+  // Only id is required; every omitted field is left unchanged. The
+  // changelog message defaults server-side, mirroring memory_create -
+  // models were observed skipping it (or inventing a param to carry it)
+  // and round-tripping the rejection when it was required.
   description:
-    'Update a memory by id (use memory_search to find the id). Two ' +
-    'required fields: id, and message (a one-line, commit-style summary ' +
-    'of what changed and why, which lands in the memory changelog the ' +
-    'user reviews). Then provide at least one of label or data to change ' +
+    'Update a memory by id (use memory_search to find the id). Only id is ' +
+    'required. Provide at least one of label or data to change; any field ' +
+    'you omit is left unchanged ' +
     `(data capped at ${MAX_MEMORY_DATA_CHARS} chars, and never longer than ` +
     'the body you are replacing - a refine tightens or holds steady, it does ' +
-    'not accrete); omit either to ' +
-    'leave it unchanged. Returns the updated row.',
+    'not accrete). Optional message is a one-line, commit-style summary of ' +
+    'what changed and why, which lands in the memory changelog the user ' +
+    'reviews; omit it to auto-derive one from the label. This tool does NOT ' +
+    'change confidence - use memory_reaffirm or memory_doubt for that. ' +
+    'Returns the updated row.',
   shortDescription: 'edit a saved note',
-  // Required fields lead, optional content fields trail - an optional
-  // field between required ones invites models to treat the later
-  // required field as optional too.
   parameters: {
     type: 'object',
     properties: {
@@ -30,18 +29,19 @@ export const memoryUpdateSchema = {
         type: 'string',
         description: 'Required. UUID of the memory (from memory_search).',
       },
+      label: { type: 'string', minLength: 1, maxLength: 80 },
+      data: { type: 'string', minLength: 1, maxLength: MAX_MEMORY_DATA_CHARS },
       message: {
         type: 'string',
         minLength: 1,
         maxLength: MAX_MEMORY_CHANGELOG_MESSAGE_CHARS,
         description:
-          'Required. One-line, commit-style summary of what changed and ' +
-          'why. Lands in the memory changelog.',
+          'Optional. One-line, commit-style summary of what changed and ' +
+          'why; lands in the memory changelog. Omit to auto-derive from ' +
+          'the label.',
       },
-      label: { type: 'string', minLength: 1, maxLength: 80 },
-      data: { type: 'string', minLength: 1, maxLength: MAX_MEMORY_DATA_CHARS },
     },
-    required: ['id', 'message'],
+    required: ['id'],
     additionalProperties: false,
   },
 } as const;

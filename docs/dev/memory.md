@@ -590,11 +590,13 @@ from the same ports); the browser carries only the wire schemas.
   The trigger nulls the embedding; the backfill embeds it on its
   next pass. `message` is required (commit-style) and appends a
   `create` changelog row.
-- `memory_update.execute({ id, label?, data?, message })` —
+- `memory_update.execute({ id, label?, data?, message? })` —
   writes the changed fields and relies on the trigger to null the
   embedding if either text changed. Does NOT change confidence (a
-  rewrite is not corroboration). `message` is required and appends an
-  `update` changelog row. Subject to the body-length budget below.
+  rewrite is not corroboration); a `confidence` arg is rejected with
+  a pointer at memory_reaffirm / memory_doubt. `message` is optional
+  (defaults to `Updated: <label>`) and appends an `update` changelog
+  row. Subject to the body-length budget below.
 - `memory_invalidate.execute({ id })` — halves confidence via
   `decay_memory_confidence` RPC. Not destructive. No changelog
   entry (confidence-only).
