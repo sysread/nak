@@ -257,6 +257,18 @@ export function formatValence(v: number | null): string {
   return `${sign}${v.toFixed(2)}`;
 }
 
+export function formatScore(v: number): string {
+  return v.toFixed(3);
+}
+
+export function formatConfidence(v: number): string {
+  return v.toFixed(2);
+}
+
+export function formatHealth(v: number): string {
+  return v.toFixed(2);
+}
+
 /**
  * Walk messages in transcript order and assign 1..N to user
  * messages. Matches the runtime countUserRounds() the chat loop

@@ -322,7 +322,7 @@ correctly. Export a recipe to markdown, verify the output.
 
 **Files.** `src/lib/cooklang.ts`, new `src/lib/cooklang-render.ts` (if proceeding).
 
-## Fix 13: Fix CohortPanel inline number formatting [ ]
+## Fix 13: Fix CohortPanel inline number formatting [x]
 
 **Problem.** `src/components/CohortPanel.svelte` lines 210, 215, 216 format `score`, `confidence`, and `health` with
 inline `.toFixed()` while the adjacent line 214 calls `formatValence()` from the companion module `cohort-panel.ts`. The

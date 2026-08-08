@@ -33,7 +33,10 @@
     cohortCountLabel,
     fireVerdictLabel,
     fireVerdictStatusClass,
+    formatConfidence,
+    formatHealth,
     formatRelative,
+    formatScore,
     formatValence,
     isCollapsedView,
     resolutionLabel,
@@ -207,13 +210,13 @@
       class="fire-score"
       title="cosine^1.3 * sqrt(health * confidence) * sample-size bonus"
     >
-      score {fire.score.toFixed(3)}
+      score {formatScore(fire.score)}
     </span>
     {#if fire.samskara}
       <span class="fire-meta">
         val {formatValence(fire.samskara.valence)} ·
-        conf {fire.samskara.confidence.toFixed(2)} ·
-        health {fire.samskara.health.toFixed(2)}
+        conf {formatConfidence(fire.samskara.confidence)} ·
+        health {formatHealth(fire.samskara.health)}
       </span>
     {:else}
       <span class="fire-meta subtle">samskara deleted since fire</span>
