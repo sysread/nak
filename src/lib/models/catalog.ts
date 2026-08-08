@@ -11,8 +11,9 @@
  * populate the per-tier model dropdown and to snapshot a chosen model's
  * capabilities into `profiles.settings.tierModels`. The two never merge:
  * curated flags are keyed by concrete id and keep applying to a
- * user-picked id automatically (e.g. the slop guard arms on
- * deepseek-v4-flash whoever points a tier at it), while the catalog
+ * user-picked id automatically (e.g. the server-side slop guard
+ * arms on deepseek-v4-flash whoever points a tier at it), while the
+ * catalog
  * supplies the window/pricing/capability data the registry would
  * otherwise have to hardcode for every model the user might choose.
  *

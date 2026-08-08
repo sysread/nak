@@ -71,7 +71,6 @@
     type TopicVocabulary,
   } from '$lib/supabase';
   import { runChatLoop, toVeniceMessage } from '$lib/chat/loop';
-  import { GuardExhaustedError } from '$lib/stream-guards';
   import { slopNoticeCopy } from '$lib/ui/slop-notice';
   import { ExchangeStore, mergeMessagesById } from '$lib/exchange/exchange-store.svelte';
   import type { ExchangeSlot } from '$lib/exchange/exchange-slot.svelte';
@@ -4723,14 +4722,18 @@
             void runExchange(ctx);
           },
         };
-      } else if (err instanceof GuardExhaustedError) {
-        // The model kept emitting a junk completion (e.g. a leaked
-        // special token) past the output guard's re-roll cap. Re-sending
-        // is the right move - the failure is stochastic, so a fresh
-        // request usually clears it - so park a retry closure next to
-        // the message, same as the rate-limit path.
+      } else if (err instanceof Error && err.message.startsWith('Stream guard "')) {
+        // Guard exhaustion: the model kept emitting a junk completion
+        // (e.g. a leaked special token) past the output guard's re-roll
+        // cap. The server collapses GuardExhaustedError to kind='internal'
+        // on the Broadcast error event, so the browser receives it as a
+        // VeniceError - not a GuardExhaustedError instance. Detect it by
+        // the message prefix, same as getStreamingResponse.ts does for
+        // threads.last_error. Re-sending is the right move because the
+        // failure is stochastic, so park a retry closure next to the
+        // message, same as the rate-limit path.
         slot.streamingError = {
-          text: `The model kept returning a malformed response (${err.attempts} attempts). Try again.`,
+          text: 'The model kept returning a malformed response. Try again.',
           retry: () => {
             void runExchange(ctx);
           },
@@ -7812,7 +7815,7 @@
           {/if}
           <!-- Discarded "oops, all slop!" notice cards. One per streaming
                attempt an output guard rejected this turn (e.g. a leaked
-               special token; see stream-guards.ts). Rendered above the
+                special token; see supabase/functions/venice/stream-guards.ts). Rendered above the
                live bubble so the failed attempt reads as having come
                before the replacement now streaming in below. Gated on
                the array, NOT on `sending`, so a card can finish its

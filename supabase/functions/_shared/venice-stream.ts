@@ -713,7 +713,7 @@ export interface StreamGuard {
  * total) - bumped from two after the deepseek-v4-flash family's
  * special-token leak proved more sticky than initial calibration
  * suggested. Five rolls at four distinct temperatures (see the
- * RETRY_TEMPERATURE_SCHEDULE in stream-guards.ts) gives the sampler
+ * RETRY_TEMPERATURE_SCHEDULE in venice/stream-guards.ts) gives the sampler
  * enough variance to clear a stochastic glitch in nearly every
  * observed case; past five we accept that the model is in a
  * degenerate mode for this prompt and surface the error so the user

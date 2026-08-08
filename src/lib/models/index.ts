@@ -147,9 +147,9 @@ export interface ModelSpec {
    * True when this model is known to leak its own special tokens into
    * the content stream - opening a reply with the literal text of a
    * control token (and usually a burst of unrelated code) instead of
-   * answering. Arms the client-side special-token-leak guard for the
-   * model (see `streamGuardsFor` in ../stream-guards.ts), which detects
-   * the leak by the token's opening delimiter and re-rolls.
+   * answering. The server-side special-token-leak guard (in
+   * supabase/functions/venice/stream-guards.ts) detects the leak by
+   * the token's opening delimiter and re-rolls.
    *
    * DeepSeek-family models on Venice sometimes open with their own
    * `<｜begin▁of▁sentence｜>` token. We deliberately do NOT also send a
@@ -157,7 +157,7 @@ export interface ModelSpec {
    * the output, so it would truncate a legitimate reply that mentions
    * one of these sequences mid-stream (a real case for nak, whose users
    * discuss these tokens), and we have no verified token ids for the
-   * model. The client guard is anchored to the opening, so it only
+   * model. The guard is anchored to the opening, so it only
    * fires on the actual failure mode.
    */
   readonly leaksSpecialTokens?: boolean;
@@ -299,9 +299,9 @@ export type ModelId = keyof typeof MODELS;
  *
  * Note the curated safety flags (leaksSpecialTokens) are deliberately
  * NOT snapshotted - those keep living in MODELS keyed by concrete id,
- * so `modelLeaksSpecialTokens(profile.modelId)` still arms the slop
- * guard for a profile pointed at a known-leaky model. The catalog
- * can't supply that flag, so there's nothing to snapshot.
+ * so the server-side slop guard arms for a profile pointed at a
+ * known-leaky model. The catalog can't supply that flag, so there's
+ * nothing to snapshot.
  */
 export interface ModelProfile {
   /** Stable identity threads reference; survives renames. */
@@ -784,15 +784,4 @@ export function thinkingWireForProfile(
 ): { reasoningEffort?: ReasoningEffort; disableThinking: boolean } {
   if (!profile.supportsReasoning) return { disableThinking: false };
   return thinkingToWire(threadLevel ?? profile.thinking);
-}
-
-/**
- * True when the model is known to leak its own special tokens into the
- * content stream, which arms the client-side special-token-leak guard
- * for it (see `streamGuardsFor`). False for unconfigured ids - including
- * retired ids, which don't carry the flag.
- */
-export function modelLeaksSpecialTokens(id: string | null | undefined): boolean {
-  if (typeof id !== 'string' || id.length === 0) return false;
-  return (MODELS as Readonly<Record<string, ModelSpec>>)[id]?.leaksSpecialTokens === true;
 }

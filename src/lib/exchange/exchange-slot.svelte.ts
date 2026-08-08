@@ -104,7 +104,7 @@ interface StreamingError {
 /**
  * A discarded streaming attempt, surfaced as a transient "oops, all
  * slop!" notice card. Created when an output guard re-rolls a junk
- * completion (e.g. a leaked special token; see stream-guards.ts) and
+ * completion (e.g. a leaked special token; see supabase/functions/venice/stream-guards.ts) and
  * removed - with a CRT-power-off animation - once the replacement
  * response persists. Never written to Supabase; lives only for the
  * duration of the exchange. `dying` flips true to trigger the removal
