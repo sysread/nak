@@ -7,7 +7,7 @@
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { appendMemoryChangelog } from './_memory_changelog.ts';
 import { MAX_MEMORY_DATA_CHARS } from './_memory_data_budget.ts';
-import { ArgErrors, rejectUnknownArgs } from './_validate.ts';
+import { ArgErrors, rejectUnknownArgs, requireFiniteNumber } from './_validate.ts';
 
 // Mirror of MAX_MEMORY_CHANGELOG_MESSAGE_CHARS in src/lib/memories.ts.
 // The data cap is single-sourced from _memory_data_budget.ts, which owns
@@ -46,18 +46,19 @@ export const memoryCreate: ToolDef = {
 
     let confidence: number | undefined;
     if (args.confidence !== undefined) {
-      if (typeof args.confidence !== 'number' || !Number.isFinite(args.confidence)) {
-        errs.add('confidence must be a finite number');
-      } else if (args.confidence < 1.0 || args.confidence > 10.0) {
+      const coerced = requireFiniteNumber(errs, 'confidence', args.confidence);
+      if (coerced === null) {
+        // Type error already recorded.
+      } else if (coerced < 1.0 || coerced > 10.0) {
         // Name the wrong reading in the rejection: models were observed
         // sending 0-1 probabilities and retrying with more of the same
         // when the message only stated the range.
         errs.add(
-          `confidence must be in [1.0, 10.0] (got ${args.confidence}); ` +
+          `confidence must be in [1.0, 10.0] (got ${coerced}); ` +
             'it is a decimal on a 1-10 scale, not a 0-1 probability',
         );
       } else {
-        confidence = args.confidence;
+        confidence = coerced;
       }
     }
 
