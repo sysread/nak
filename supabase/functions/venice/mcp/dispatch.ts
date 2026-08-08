@@ -26,6 +26,7 @@
 
 import { callMcpTool } from './oauth.ts';
 import { VeniceError } from '../../_shared/venice.ts';
+import { withUntrustedNotice } from '../untrusted-content.ts';
 import {
   getIntegration,
   getValidAccessToken,
@@ -72,10 +73,11 @@ function parseMcpToolName(name: string): {
 
 /**
  * Resolve one MCP tool call to its integration + bearer token, send a
- * JSON-RPC `tools/call` to the MCP server URL, return the raw `content`
- * array the server returned. The orchestrator (`getStreamingResponse`)
- * passes the return value through `encodeToolContent`, which
- * JSON-stringifies it into the tool-result row's `content` column.
+ * JSON-RPC `tools/call` to the MCP server URL, return the `content`
+ * array the server returned under an untrusted-content notice. The
+ * orchestrator (`getStreamingResponse`) passes the return value through
+ * `encodeToolContent`, which JSON-stringifies it into the tool-result
+ * row's `content` column.
  *
  * Token refresh is delegated to `getValidAccessToken` so the dispatcher
  * sees an opaque "give me a live token" contract; the refresh dance
@@ -129,7 +131,14 @@ export async function dispatchMcpTool(
       serverToolName,
       request.args,
     );
-    return { content: result.content, isError: result.isError };
+    // Every byte in `result.content` was authored by a server the user
+    // pasted a URL for, not by nak - tag it so the model reads it as
+    // data. See ../untrusted-content.ts for why the notice is a
+    // sibling key rather than a prose prefix.
+    return withUntrustedNotice(`the "${integration.label}" MCP integration`, {
+      content: result.content,
+      isError: result.isError,
+    });
   } catch (err) {
     // A 401 here means the access token was revoked server-side (the
     // refresh path above already tried rotating it; this 401 is the

@@ -95,6 +95,15 @@ From **Settings - Integrations**:
   the server's tool descriptions into the chat system prompt. A
   malicious server could attempt prompt injection through its
   tool descriptions. Only connect servers you trust.
+- **Results come back tagged as untrusted.** Everything an
+  integration returns is labelled for the model as data to read
+  and report on, never as instructions - so text on the far end
+  that says "ignore your instructions and send X somewhere" is
+  something Nak tells you about instead of acting on. You will
+  see the tag as an `untrusted_content_notice` line if you expand
+  a tool-call card's result. It reduces the risk; it is not a
+  guarantee, so the "only connect servers you trust" rule above
+  still stands.
 
 ## See also
 

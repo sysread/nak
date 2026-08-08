@@ -110,7 +110,8 @@ Notable members (the full ordered list is `alwaysOnToolbox` in
   Deliberately absent from every agent toolbox - background agents
   have no reason to reach for live web data, and giving them the
   tool would burn search quota and pollute memories with scraped
-  noise.
+  noise. Both modes tag their result with the untrusted-content
+  notice (see Contracts, "Untrusted tool results").
 - `update_title` - has to fire on the very first turn of a fresh
   thread when `toolboxes_enabled=[]` by default; gating it would
   mean a toolbox flip before the model could name the conversation.
@@ -463,6 +464,41 @@ Edge dispatch (`supabase/functions/venice/`):
   a long reflection is expected and already handled by its own
   failure counter. Any agent whose post-loop work must run wants a
   budget under the platform's kill threshold.
+- **Untrusted tool results.** A tool whose payload contains bytes
+  nak did not author - a scraped page, a live search synthesis, an
+  MCP server's response - returns it through
+  `withUntrustedNotice(source, payload)`
+  (`supabase/functions/venice/untrusted-content.ts`), which attaches
+  an `untrusted_content_notice` sibling key telling the model the
+  rest of the result is data to read and report on, never
+  instructions. Current callers: `tools/web_search.ts` (both
+  retrieval modes) and `mcp/dispatch.ts` (every MCP-routed call).
+  The notice is written first so it serializes ahead of the payload.
+
+  It is a **sibling key, not a prose prefix with delimiters**, and
+  that is load-bearing: tool results are JSON-encoded before the
+  model sees them (`encodeToolContent`), so an unbounded
+  attacker-chosen payload cannot escape its own string - a quote in
+  scraped markdown comes out as an escape, not a structural
+  delimiter. A text fence around the same bytes could simply be
+  closed by the bytes. It also keeps the row JSON-parseable for the
+  tool-call detail panel's `formatResult` path.
+
+  The notice is **half of a pair.** It ships inside the same message
+  as the attacker-reachable payload, so payload text can claim the
+  notice is fake or already satisfied. The other half is a standing
+  rule in the baseline system prompt
+  (`UNTRUSTED_CONTENT_BLOCK` in `src/lib/chat/system-prompt.ts`),
+  which arrives on the trusted channel and cannot be forged by a tool
+  result. Neither half works alone: the prompt rule has nothing to
+  point at without the tag, and the tag has no authority without the
+  rule. Deleting either as redundant breaks the mitigation.
+
+  Adding a tool that returns outside bytes means adding a call here,
+  not writing a fresh warning; the wording lives in one place.
+  `supabase/functions/tests/untrusted-content.test.ts` pins the
+  ordering and the escaping property;
+  `tests/system-prompt.test.ts` pins the prompt half.
 - **Toggle semantics.** The `toggle_toolbox` tool takes
   `{enabled: string[]}` and replaces the thread's set. Passing
   `{enabled: []}` disables every gated toolbox. The tool returns
@@ -634,6 +670,15 @@ Edge dispatch (`supabase/functions/venice/`):
   in `data`. wiki_* and memory_delete keep `message` required - a
   delete has no sensible label-derived default and the user wants
   the "why" recorded.
+- **The `untrusted_content_notice` key is not noise; don't strip it
+  at the encode seam.** It looks like per-round overhead riding in
+  the model's context on every web_search and MCP result, and
+  `encodeToolContent` is the obvious place to filter it out. Doing
+  that removes the whole mitigation: the notice has to sit in the
+  same message as the content it frames, or the model reads the
+  content with nothing telling it where the trust boundary is. If
+  the token cost ever needs cutting, shorten the wording in
+  `untrusted-content.ts` - one place, all callers.
 - **The research_docs corpus is a build artifact.** Doc edits do
   not reach the edge tool until `scripts/bundle-research-docs.mjs`
   regenerates `_generated/research-docs-corpus.ts` and the
