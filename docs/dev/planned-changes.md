@@ -18,7 +18,8 @@ investigation cycles and the lessons learned are worth saving.
 - [Biometric unlock for the master password](#biometric-unlock-for-the-master-password)
   (obsolete - the master-password layer was removed; kept as WebAuthn PRF reference)
 - [Samskara calibration: cohort cutoff and the tier-2 confirm bar](#samskara-calibration-cohort-cutoff-and-the-tier-2-confirm-bar)
-  (deferred from the 2026-07 prod audit; both wait on post-fix data)
+  (cohort cutoff resolved 2026-08-08; tier-2 confirm bar re-measures
+  a few weeks after)
 
 ## Retire the browser supervisor
 
@@ -469,46 +470,45 @@ Lifecycle invariants:
 
 ## Samskara calibration: cohort cutoff and the tier-2 confirm bar
 
-**Status:** deferred, waiting on data. Two calibration items from the
-2026-07-03 prod audit of the samskara system ([samskara.md](./samskara.md)),
-deliberately sequenced AFTER the fixes that landed that week (the
-batched next-day judge, the two-step verdict prompt, the reasoning
-token budget, the evidence-model recalibration in #402, and the
-tier-1 mint gate). Both decisions depend on how the corpus behaves
-now that health actually discriminates.
+**Status:** cohort cutoff RESOLVED (2026-08-08); tier-2 confirm bar
+still deferred, now unblocked for re-measure. Two calibration items
+from the 2026-07-03 prod audit of the samskara system
+([samskara.md](./samskara.md)), deliberately sequenced AFTER the
+fixes that landed that week (the batched next-day judge, the two-step
+verdict prompt, the reasoning token budget, the evidence-model
+recalibration in #402, and the tier-1 mint gate).
 
 **Context worth preserving** (2026-07-10 measurements, single-user
 prod corpus of ~150 tier-1 / ~45 tier-2):
 
-- **Cohort cutoff.** Fires run ~19 per cohort, pinned at the fire
-  RPC's kMax (22) rather than thinned by relevance - the
-  `FIRE_SCORE_FLOOR` (0.01) cuts nothing because the score
-  distribution starts around 0.29 (p10). Consequences: the priming
-  formatter budget-trims most of the cohort (fires are logged but
-  never shown to the model), the judge's per-thread prediction list
-  is padded, fire_count inflates, and the co-fire graph saturates -
-  the base-rate-binding regime tier-2's lift gate exists to fight.
-  Candidate fixes, in rough preference order: a relative cut (drop
-  fires below some fraction of the cohort's top score), or cap
-  recorded fires near what `PRIMING_CHAR_BUDGET` actually renders
-  (~11, the log-scaled k). Do NOT recalibrate against a flat score
-  distribution: health began spreading only after 2026-07-06 (#402),
-  and the right threshold should be read off the post-spread
-  distribution. The samskara.md gotcha "No health threshold at fire
-  time" still applies - the long tail is wanted; the cap-bound
-  everything-fires regime is not.
-- **Tier-2 confirm bar.** `samskara_tier2_declines` has ZERO rows
-  ever - the tier-2 minter has never once declined a candidate - and
-  tier-2 grew ~10/week to 23% of the corpus. Either detection's lift
-  gate is doing all the filtering (possible) or the minter
-  rubber-stamps (likely, given the tier-1 minter's decline rate is
-  healthy). Re-measure AFTER the cohort cutoff lands: smaller, more
-  relevant cohorts thin the co-fire graph and may fix the candidate
-  stream on their own. If declines are still zero after that, tighten
+- **Cohort cutoff - resolved 2026-08-08.** Fires ran ~19-22 per
+  cohort, pinned at the fire RPC's kMax (22) rather than thinned by
+  relevance. The originally-preferred fix (a relative score cut) was
+  measured across three two-week windows (07-24, 08-07, 08-08) and
+  rejected on structural grounds: the fire RPC truncates at k BY
+  SCORE, so the recorded cohort is definitionally the closest-scored
+  k rows and its within-cohort ratios stay compressed (median fire
+  ~0.84 of cohort top, <3% below 0.7x) no matter how much health
+  spreads - a knee cannot appear inside the top-k. Shipped instead:
+  kMax reduced from `topKForCorpusSize * 2` (22) to the rendered set
+  (`topKForCorpusSize` = 11) in `venice/priming/samskara.ts`, since
+  fires past the priming render are pure bookkeeping. The samskara.md
+  gotcha "No health threshold at fire time" still applies - the long
+  tail within the rendered set is wanted.
+- **Tier-2 confirm bar.** `samskara_tier2_declines` had ZERO rows
+  through 2026-07-24 (one decline since) - the tier-2 minter almost
+  never declines a candidate - and tier-2 grew to 58 rows, ~28% of
+  the corpus, before flatlining. Either detection's lift gate is
+  doing all the filtering (possible, given the flatline) or the
+  minter rubber-stamps (still plausible). Re-measure a few weeks
+  AFTER the 2026-08-08 cohort-cutoff change: halved cohorts thin the
+  co-fire graph, which slows absolute co-fire accrual (lift, a
+  ratio, is unaffected) and may fix the candidate stream on their
+  own. If tier-2 resumes growing with near-zero declines, tighten
   the TIER2_MINTER_PROMPT with an explicit decline criterion (the
   counterfactual-test pattern from the judge's held bar in #402 is
   the precedent).
 
 The audit trail (queries, verdict-mix baselines, the health
-histogram progression) lives in the 2026-07-03/07-10 session; the
+histogram progression) lives in the 2026-07/08 session; the
 durable numbers above are what the next session needs.
