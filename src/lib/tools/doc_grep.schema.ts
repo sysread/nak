@@ -16,8 +16,9 @@ export const docGrepSchema = {
     'surrounding section. POSIX regex, case-insensitive by default. Omit ' +
     'document_id to search across every document. Broaden with alternations ' +
     '(e.g. "water|flood|leak|seepage") when the user\'s wording may differ ' +
-    'from the document\'s. Returns {document_id, title, line_number, ' +
-    'line_text, context_before[], context_after[]}[] plus match_count. ' +
+    'from the document\'s. Returns {match_count, truncated, matches: ' +
+    '[{document_id, title, line_number, line_text, context_before[], ' +
+    'context_after[]}]}; an invalid regex comes back as {error}. ' +
     'Reach for this the way you would grep a large file before reading it.',
   shortDescription: 'regex-search inside documents for exact lines',
   parameters: {

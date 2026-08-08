@@ -13,6 +13,7 @@ export const followupUpdateSchema = {
     'ask-cooldown, so the moved plan can be raised fresh after the new ' +
     'date. Pass relevant_after as null to clear the date entirely ' +
     '(the follow-up then only surfaces when the topic comes up). ' +
+    'Provide at least one of question, context, or relevant_after. ' +
     'Only open follow-ups can be updated.',
   shortDescription: 'reschedule or revise a follow-up',
   parameters: {

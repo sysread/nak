@@ -6,7 +6,9 @@ import { MAX_RECIPE_COOKLANG_CHARS, MAX_RECIPE_TITLE_CHARS } from '../recipe-lim
 export const recipeUpdateSchema = {
   name: 'recipe_update',
   description:
-    'Update a recipe by id. Omit a field to leave it unchanged; pass ' +
+    'Update a recipe by id. Provide at least one of title, cooklang, ' +
+    'source, source_url, or rating; omit a field to leave it unchanged. ' +
+    'Pass ' +
     'null for source / source_url / rating to clear them. cooklang ' +
     `capped at ${MAX_RECIPE_COOKLANG_CHARS} chars; section / declaration / ` +
     'continuation rules match recipe_save. Same authoring constraints ' +
@@ -55,7 +57,7 @@ export const recipeUpdateSchema = {
         minLength: 1,
         maxLength: 500,
         description:
-          'One-line history note. Examples: "Fixed servings ' +
+          'One-line history note; lands in the recipe changelog the user reviews. Examples: "Fixed servings ' +
           'metadata", "Removed tahini per user dietary note".',
       },
     },

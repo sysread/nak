@@ -2,8 +2,8 @@
  * Schema-only export for conversation_search. Impl lives in
  * `./conversation_search`.
  */
-export const CONVERSATION_SEARCH_DEFAULT_LIMIT = 20;
-export const CONVERSATION_SEARCH_MAX_LIMIT = 100;
+export const CONVERSATION_SEARCH_DEFAULT_LIMIT = 10;
+export const CONVERSATION_SEARCH_MAX_LIMIT = 50;
 
 export const conversationSearchSchema = {
   name: 'conversation_search',
@@ -13,8 +13,7 @@ export const conversationSearchSchema = {
     'archived, match_kind, similarity?}[]. summary is auto-generated ' +
     'after the first terminal assistant turn (null on brand-new ' +
     'threads). Archived threads are included; weigh the archived flag ' +
-    'lower if freshness matters. Embedding match runs alongside an ' +
-    'exact title substring match; exact hits sort first.',
+    'lower if freshness matters.',
   shortDescription: 'search past conversations by topic',
   parameters: {
     type: 'object',

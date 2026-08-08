@@ -188,8 +188,8 @@ const MAX_WIKI_CHANGELOG_MESSAGE_CHARS = 200;
 // wiki_search impl clamps to its own slightly tighter limit; the
 // numbers here are the model-facing contract the browser agent
 // shipped, kept identical across the migration.)
-const WIKI_SEARCH_DEFAULT_LIMIT = 8;
-const WIKI_SEARCH_MAX_LIMIT = 25;
+const WIKI_SEARCH_DEFAULT_LIMIT = 5;
+const WIKI_SEARCH_MAX_LIMIT = 20;
 
 // ---------------------------------------------------------------------------
 // Wire schemas for the wiki toolbox. Ported from the browser

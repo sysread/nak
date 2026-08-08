@@ -2,8 +2,8 @@
  * Schema-only export for the recipe_list tool. Impl lives in
  * `./recipe_list` and re-exports the schema via spread.
  */
-export const RECIPE_LIST_DEFAULT_LIMIT = 40;
-export const RECIPE_LIST_MAX_LIMIT = 200;
+export const RECIPE_LIST_DEFAULT_LIMIT = 100;
+export const RECIPE_LIST_MAX_LIMIT = 500;
 
 export const recipeListSchema = {
   name: 'recipe_list',

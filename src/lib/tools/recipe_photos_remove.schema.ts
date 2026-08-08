@@ -31,7 +31,7 @@ export const recipePhotosRemoveSchema = {
         minLength: 1,
         maxLength: 500,
         description:
-          'One-line history note. Examples: "Removed the blurry first ' +
+          'One-line history note; lands in the recipe changelog the user reviews. Examples: "Removed the blurry first ' +
           'attempt", "Dropped the redundant overhead shot".',
       },
     },

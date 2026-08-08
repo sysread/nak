@@ -1,9 +1,10 @@
 // memory_update (function-side port)
 //
-// Patch a memory's label and/or data. Either field can be omitted to
-// leave it alone. Any change fires the schema trigger that nulls the
-// embedding, queuing the row for re-embedding by the worker. Wire
-// schema in src/lib/tools/memory_update.schema.ts.
+// Patch a memory's label, data, and/or confidence. Any field can be
+// omitted to leave it alone. A label/data change fires the schema
+// trigger that nulls the embedding, queuing the row for re-embedding
+// by the worker; a confidence-only patch does not. Wire schema in
+// src/lib/tools/memory_update.schema.ts.
 
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { appendMemoryChangelog } from './_memory_changelog.ts';
@@ -35,17 +36,6 @@ export const memoryUpdate: ToolDef = {
       );
     }
 
-    // Confidence is not part of this tool's contract - it moves through
-    // the graded levers (memory_reaffirm / memory_doubt). Models were
-    // observed trying to set it here; silently ignoring the arg would
-    // let them believe the write took, so name the right tools instead.
-    if (args.confidence !== undefined) {
-      errs.add(
-        'memory_update does not change confidence; use memory_reaffirm ' +
-          '(+0.5) or memory_doubt (x0.7) instead',
-      );
-    }
-
     // One read serves two consumers: the non-growth budget below and the
     // changelog's before-size. Empty when the row is unreadable, which
     // degrades the budget to the flat ceiling and the changelog to an
@@ -66,11 +56,30 @@ export const memoryUpdate: ToolDef = {
       if (overBudget) errs.add(overBudget);
       else patch.data = args.data;
     }
+    // Direct confidence set, same [1.0, 10.0] contract as memory_create's
+    // initial confidence. The graded levers (memory_reaffirm +0.5,
+    // memory_doubt x0.7) remain the evidence-based path for nudges; the
+    // direct set exists so a wrongly-initialized confidence can be
+    // corrected without a pile of reaffirm round trips. Confidence-only
+    // patches skip the embedding-reset trigger, which keys on label/data.
+    if (args.confidence !== undefined) {
+      if (typeof args.confidence !== 'number' || !Number.isFinite(args.confidence)) {
+        errs.add('confidence must be a finite number');
+      } else if (args.confidence < 1.0 || args.confidence > 10.0) {
+        errs.add(
+          `confidence must be in [1.0, 10.0] (got ${args.confidence}); ` +
+            'it is a decimal on a 1-10 scale, not a 0-1 probability',
+        );
+      } else {
+        patch.confidence = args.confidence;
+      }
+    }
+
     if (Object.keys(patch).length === 0 && !errs.any) {
       // Only a meaningful complaint once the required fields and the data
       // length are otherwise clean - an empty patch alongside a bad data
       // arg would be a misleading second error for the same root cause.
-      errs.add('provide at least one of label or data');
+      errs.add('provide at least one of label, data, or confidence');
     }
     errs.throwIfAny();
     patch.updated_at = new Date().toISOString();

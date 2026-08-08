@@ -25,9 +25,10 @@ export const recordUpdateSchema = {
   name: 'record_update',
   description:
     "Edit an existing record's date, content, or tags. Provide id (from " +
-    'record_list or record_search) and any subset of date, content, tags. ' +
-    'Omitted fields are left unchanged; passing tags replaces the whole ' +
-    'array. Returns the updated record row.',
+    'record_list or record_search) and at least one of date, content, ' +
+    'tags. Omitted fields are left unchanged; passing tags replaces the whole ' +
+    'array. Also appends a history entry to the article changelog the ' +
+    'user reviews. Returns the updated record row.',
   shortDescription: 'edit a record',
   formatArgs: formatRecordUpdateArgs,
   parameters: {

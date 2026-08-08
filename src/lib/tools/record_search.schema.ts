@@ -22,7 +22,7 @@ export const recordSearchSchema = {
       },
       limit: {
         type: 'number',
-        description: 'Optional. Max records to return (default 20).',
+        description: 'Optional. Max records to return (default 10, max 30).',
       },
     },
     required: ['query'],

@@ -107,11 +107,12 @@ const MEMORY_CREATE_WIRE_SCHEMA: AgentTool['wire'] = {
   function: {
     name: 'memory_create',
     description:
-      'Save a new memory. Three required fields: label (short handle, ' +
-      `1-${MAX_MEMORY_LABEL_CHARS} chars), data (the full content, max ` +
-      `${MAX_MEMORY_DATA_CHARS} chars - split if longer), and message (a ` +
-      'one-line, commit-style summary of what you saved and why, which ' +
-      'lands in the memory changelog the user reviews). Optional ' +
+      'Save a new memory. Two required fields: label (short handle, ' +
+      `1-${MAX_MEMORY_LABEL_CHARS} chars) and data (the full content, max ` +
+      `${MAX_MEMORY_DATA_CHARS} chars - split if longer). Optional message ` +
+      'is a one-line, commit-style summary of what you saved and why, ' +
+      'which lands in the memory changelog the user reviews; omit it to ' +
+      'auto-derive one from the label. Optional ' +
       'confidence is a decimal on a 1-10 scale (>= 1.0 and <= 10.0, ' +
       'e.g. 2.5; default 1.0), NOT a 0-1 probability - values below ' +
       '1.0 are rejected. It marks a memory ' +
@@ -138,8 +139,10 @@ const MEMORY_CREATE_WIRE_SCHEMA: AgentTool['wire'] = {
           minLength: 1,
           maxLength: MAX_MEMORY_CHANGELOG_MESSAGE_CHARS,
           description:
-            'Required. One-line, commit-style summary of what this memory ' +
-            'captures and why you saved it. Lands in the memory changelog.',
+            'Optional. One-line, commit-style summary of what this memory ' +
+            'captures and why you saved it; lands in the memory changelog. ' +
+            'Omit to auto-derive from the label. Not a place for the ' +
+            'content - that goes in data.',
         },
         confidence: {
           type: 'number',
@@ -152,12 +155,19 @@ const MEMORY_CREATE_WIRE_SCHEMA: AgentTool['wire'] = {
             'Raise only with converging evidence in the current exchange.',
         },
       },
-      required: ['label', 'data', 'message'],
+      required: ['label', 'data'],
       additionalProperties: false,
     },
   },
 };
 
+// Deliberately narrower than the chat canonical
+// (src/lib/tools/memory_update.schema.ts): the chat toolbox exposes a
+// direct confidence set on this tool, the reflection toolbox does not.
+// A background agent moving confidence only through the graded levers
+// (reaffirm/doubt/invalidate) cannot systematically inflate the store;
+// the direct set is reserved for the chat model acting on an explicit
+// user instruction.
 const MEMORY_UPDATE_WIRE_SCHEMA: AgentTool['wire'] = {
   type: 'function',
   function: {
@@ -292,7 +302,8 @@ const FOLLOWUP_UPDATE_WIRE_SCHEMA: AgentTool['wire'] = {
     description:
       'Revise or reschedule an open follow-up when the conversation ' +
       'shows the plan MOVED rather than resolved. Pass relevant_after ' +
-      'as null to clear the date. Only open follow-ups can be updated.',
+      'as null to clear the date. Provide at least one of question, ' +
+      'context, or relevant_after. Only open follow-ups can be updated.',
     parameters: {
       type: 'object',
       properties: {

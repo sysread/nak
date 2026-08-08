@@ -18,8 +18,10 @@ export const memoryUpdateSchema = {
     'the body you are replacing - a refine tightens or holds steady, it does ' +
     'not accrete). Optional message is a one-line, commit-style summary of ' +
     'what changed and why, which lands in the memory changelog the user ' +
-    'reviews; omit it to auto-derive one from the label. This tool does NOT ' +
-    'change confidence - use memory_reaffirm or memory_doubt for that. ' +
+    'reviews; omit it to auto-derive one from the label. Optional ' +
+    'confidence sets the stored confidence directly (a decimal >= 1.0 and ' +
+    '<= 10.0, NOT a 0-1 probability); prefer memory_reaffirm / ' +
+    'memory_doubt for incremental evidence-based nudges. ' +
     'Returns the updated row.',
   shortDescription: 'edit a saved note',
   parameters: {
@@ -39,6 +41,16 @@ export const memoryUpdateSchema = {
           'Optional. One-line, commit-style summary of what changed and ' +
           'why; lands in the memory changelog. Omit to auto-derive from ' +
           'the label.',
+      },
+      confidence: {
+        type: 'number',
+        minimum: 1.0,
+        maximum: 10.0,
+        description:
+          'Optional. Directly set confidence: a decimal >= 1.0 and ' +
+          '<= 10.0 (e.g. 2.5). NOT a 0-1 probability. Prefer ' +
+          'memory_reaffirm / memory_doubt for incremental nudges; use ' +
+          'this to correct a confidence that is outright wrong.',
       },
     },
     required: ['id'],

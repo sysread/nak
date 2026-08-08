@@ -1,8 +1,8 @@
 /**
  * Schema-only export for doc_list. Impl lives in `./doc_list`.
  */
-export const DOC_LIST_DEFAULT_LIMIT = 50;
-export const DOC_LIST_MAX_LIMIT = 200;
+export const DOC_LIST_DEFAULT_LIMIT = 100;
+export const DOC_LIST_MAX_LIMIT = 500;
 
 export const docListSchema = {
   name: 'doc_list',

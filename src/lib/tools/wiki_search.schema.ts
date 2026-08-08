@@ -1,8 +1,8 @@
 /**
  * Schema-only export for wiki_search. Impl lives in `./wiki_search`.
  */
-export const WIKI_SEARCH_DEFAULT_LIMIT = 8;
-export const WIKI_SEARCH_MAX_LIMIT = 25;
+export const WIKI_SEARCH_DEFAULT_LIMIT = 5;
+export const WIKI_SEARCH_MAX_LIMIT = 20;
 
 export const wikiSearchSchema = {
   name: 'wiki_search',

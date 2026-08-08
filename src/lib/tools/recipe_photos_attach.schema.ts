@@ -49,7 +49,7 @@ export const recipePhotosAttachSchema = {
         minLength: 1,
         maxLength: 500,
         description:
-          'One-line history note. Examples: "Added the finished plate ' +
+          'One-line history note; lands in the recipe changelog the user reviews. Examples: "Added the finished plate ' +
           'photo", "Saved the dough progress shot".',
       },
     },

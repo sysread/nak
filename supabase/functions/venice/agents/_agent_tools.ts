@@ -61,8 +61,8 @@ export const MEMORY_SEARCH_WIRE_SCHEMA: AgentTool['wire'] = {
         limit: {
           type: 'integer',
           minimum: 1,
-          maximum: 100,
-          description: 'Max results (default 20, max 100).',
+          maximum: 50,
+          description: 'Max results (default 10, max 50).',
         },
       },
       additionalProperties: false,
@@ -86,8 +86,7 @@ export const CONVERSATION_SEARCH_WIRE_SCHEMA: AgentTool['wire'] = {
       'archived, match_kind, similarity?}[]. summary is auto-generated ' +
       'after the first terminal assistant turn (null on brand-new ' +
       'threads). Archived threads are included; weigh the archived flag ' +
-      'lower if freshness matters. Embedding match runs alongside an ' +
-      'exact title substring match; exact hits sort first.',
+      'lower if freshness matters.',
     parameters: {
       type: 'object',
       properties: {
@@ -98,8 +97,8 @@ export const CONVERSATION_SEARCH_WIRE_SCHEMA: AgentTool['wire'] = {
         limit: {
           type: 'integer',
           minimum: 1,
-          maximum: 100,
-          description: 'Max results (default 20, max 100).',
+          maximum: 50,
+          description: 'Max results (default 10, max 50).',
         },
       },
       required: ['query'],
@@ -123,7 +122,7 @@ export const MEMORY_INVALIDATE_WIRE_SCHEMA: AgentTool['wire'] = {
     description:
       'Mark a memory as contradicted/outdated, halving its confidence ' +
       'so it stops surfacing in search. Repeated invalidation hides it ' +
-      "entirely; the row isn't hard-deleted, so memory_update / " +
+      "entirely; the row isn't hard-deleted, so memory_reaffirm / " +
       'memory_create can restore confidence later. Returns ' +
       '{id, confidence} post-decay.',
     parameters: {

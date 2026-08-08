@@ -9,8 +9,8 @@ import { registerTool, type ToolContext, type ToolDef } from '../performToolCall
 
 // Mirror of MAX_DOCUMENT_TITLE_CHARS / MAX_DOCUMENT_DESCRIPTION_CHARS
 // in src/lib/documents.ts.
-const MAX_DOCUMENT_TITLE_CHARS = 200;
-const MAX_DOCUMENT_DESCRIPTION_CHARS = 1000;
+const MAX_DOCUMENT_TITLE_CHARS = 300;
+const MAX_DOCUMENT_DESCRIPTION_CHARS = 2000;
 
 export const docUpdate: ToolDef = {
   name: 'doc_update',

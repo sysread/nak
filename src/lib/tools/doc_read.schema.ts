@@ -7,7 +7,7 @@
  * document can't blow the context window in one call. The model pages with
  * successive reads, exactly like reading a big file in offset/limit windows.
  */
-export const DOC_READ_MAX_SPAN = 400;
+export const DOC_READ_MAX_SPAN = 500;
 
 export const docReadSchema = {
   name: 'doc_read',
