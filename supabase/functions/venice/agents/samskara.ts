@@ -1025,6 +1025,43 @@ async function tier1AtCap(
 }
 
 /**
+ * Cap-or-evict gate shared by BOTH tier-1 mint probes. Returns true
+ * when the probe may proceed: the corpus is below cap, or cap-pressure
+ * eviction (samskara_evict_for_mint, see the decay section of the dev
+ * doc) freed a slot. Shared on purpose: entry to a capped corpus is
+ * decided by whether a qualified eviction victim exists, NOT by probe
+ * order. When only the recency probe could evict, it ran first in the
+ * sweep and refilled every slot it freed, so the association probe -
+ * gated on the same cap - starved permanently behind an
+ * ever-growing unconsumed-edge backlog (1,082 edges at the 2026-08
+ * audit). Eviction errors and no-victim both return false (the probe
+ * skips, evidence intact); the next cap-hit retries.
+ */
+async function ensureTier1Headroom(
+  admin: SupabaseClient,
+  userId: string,
+  log: EdgeLogger,
+  probeTag: string,
+): Promise<boolean> {
+  if (!(await tier1AtCap(admin, userId, log))) return true;
+  const { data: evicted, error: evictErr } = await admin.rpc('samskara_evict_for_mint', {
+    p_user_id: userId,
+  });
+  if (evictErr || !evicted) {
+    if (evictErr) {
+      log.debug(`${probeTag}: eviction RPC failed; skipping mint`, { error: evictErr.message });
+    } else {
+      log.trace(`${probeTag}: tier-1 at cap, nothing evictable; skipping`);
+    }
+    return false;
+  }
+  log.info(`${probeTag}: evicted samskara to free a capped slot`, {
+    evictedId: evicted as string,
+  });
+  return true;
+}
+
+/**
  * Mint-tier1 probe: build a topical cluster from the recent window,
  * ask the minter, embed, dedup-guard against the existing corpus,
  * insert with provenance. The INSERT doubles as the toast signal via
@@ -1036,29 +1073,7 @@ async function mintTier1Probe(
   log: EdgeLogger,
   apiKey: string,
 ): Promise<void> {
-  if (await tier1AtCap(admin, userId, log)) {
-    // Cap-pressure eviction: before giving up the slot, ask the DB to
-    // release the corpus's most-disproven untested row (judged 10+
-    // times, zero genuine engagements - see samskara_evict_for_mint in
-    // schema.sql). Null means nothing qualifies, and the probe skips
-    // exactly as it did before eviction existed. Errors also skip: a
-    // transient RPC blip must not stall the probe, and the next cap-hit
-    // retries the eviction.
-    const { data: evicted, error: evictErr } = await admin.rpc('samskara_evict_for_mint', {
-      p_user_id: userId,
-    });
-    if (evictErr || !evicted) {
-      if (evictErr) {
-        log.debug('mint-tier1: eviction RPC failed; skipping mint', { error: evictErr.message });
-      } else {
-        log.trace('mint-tier1: tier-1 at cap, nothing evictable; skipping');
-      }
-      return;
-    }
-    log.info('mint-tier1: evicted untested samskara to free a capped slot', {
-      evictedId: evicted as string,
-    });
-  }
+  if (!(await ensureTier1Headroom(admin, userId, log, 'mint-tier1'))) return;
   const recent = await recentEmbeddedSubstrate(admin, userId, MINT_WINDOW);
   if (recent.length < MINT_CLUSTER_MIN) return;
   const clusterRows = buildTopicalCluster(recent);
@@ -1237,13 +1252,11 @@ async function mintTier1FromAssociationsProbe(
   log: EdgeLogger,
   apiKey: string,
 ): Promise<void> {
-  // Gate BEFORE reading the cluster: a skip is a non-verdict, so the
-  // hub's edges stay unstamped and the evidence is intact for the
-  // sweep that runs once headroom opens.
-  if (await tier1AtCap(admin, userId, log)) {
-    log.trace('mint-tier1-assoc: tier-1 population at cap; skipping');
-    return;
-  }
+  // Gate (and, at cap, evict) BEFORE reading the cluster: a skip is a
+  // non-verdict, so the hub's edges stay unstamped and the evidence is
+  // intact for the sweep that runs once headroom opens or a victim
+  // qualifies.
+  if (!(await ensureTier1Headroom(admin, userId, log, 'mint-tier1-assoc'))) return;
   const { data, error } = await admin.rpc('samskara_association_cluster', {
     p_user_id: userId,
   });

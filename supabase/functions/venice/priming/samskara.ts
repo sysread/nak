@@ -154,13 +154,24 @@ export async function queryFiredSamskaras(opts: {
   // invariant to the zero-extension.
   const padded = padEmbeddingForStorage(rawEmbedding);
 
-  // Top-k: log10-dampened. We don't know the true corpus size at
-  // this layer without an extra round trip, so we ask for a generous
-  // 25 (K_BASE=5, log10(100+10) ~= 2.04, ceil = 11 - bump to 25
-  // because the long tail is what the design is built around). The
-  // RPC returns at most that many; the formatter trims by token
-  // budget, not by row count.
-  const kMax = topKForCorpusSize(100, K_BASE) * 2;
+  // Top-k: log10-dampened, sized to the RENDERED set rather than a
+  // generous multiple of it. The formatter's PRIMING_CHAR_BUDGET
+  // renders roughly this many fires (top three in full, the rest
+  // abbreviated), so rows past it never reach the model and exist
+  // only as bookkeeping: they pad the next-day judge's per-thread
+  // prediction list, inflate fire_count, and saturate the co-fire
+  // graph that dedup and tier-2 detection read. A score-based cutoff
+  // was measured as the alternative (2026-08 prod audit) and
+  // rejected: the fire RPC truncates at k BY SCORE, so the recorded
+  // cohort is definitionally the closest-scored k rows and its
+  // within-cohort ratios stay compressed (median fire ~0.84 of the
+  // cohort top) no matter how much the health distribution spreads -
+  // there is no knee to cut at, only this structural line. We don't
+  // know the true corpus size at this layer without an extra round
+  // trip, so n=100 stands in (K_BASE=5, log10(110) ~= 2.04 -> k=11);
+  // the RPC returns at most that many and the formatter still trims
+  // by token budget.
+  const kMax = topKForCorpusSize(100, K_BASE);
 
   let rows: FireRow[] | null;
   try {

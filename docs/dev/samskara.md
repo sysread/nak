@@ -556,8 +556,15 @@ with an explicit `p_user_id`.
   entries one by one if abbreviation alone doesn't fit.
 - `topKForCorpusSize(n, kBase): number` - computes
   `max(1, ceil(kBase * log10(n + 10)))`. The fire call passes
-  `topKForCorpusSize(100, K_BASE) * 2 = 22` as a generous upper
-  bound; the formatter does the budget trim.
+  `topKForCorpusSize(100, K_BASE) = 11` - the rendered set, not a
+  generous multiple of it. Fires past what `PRIMING_CHAR_BUDGET`
+  renders never reach the model and are pure bookkeeping (judge
+  padding, fire_count inflation, co-fire saturation). A score-based
+  cutoff was measured and rejected (2026-08): the RPC truncates at k
+  BY SCORE, so recorded cohorts are definitionally the closest-scored
+  k rows and their within-cohort ratios stay compressed regardless of
+  health spread - there is no knee to calibrate against, only this
+  structural line. The formatter still does the budget trim.
 
 ### Formation side (edge function, fast-model agent calls)
 
@@ -638,12 +645,12 @@ logs and yields to the next phase.
   {sample_labels, sample_situations, reinforcement}) ->
   {prediction, inner_voice, valence, confidence} | null` (null
   covers both parse failure and an explicit `confirm: false`
-  refusal). The probe is population-gated: while the user's
-  tier-1 count sits at or above `TIER1_POPULATION_CAP` (150,
-  mirroring the collapse RPC's `p_target_count` - see the
-  treadmill gotcha) it returns before any Venice spend, so new
-  claims enter only as the reaper or the Hebbian dedup pass
-  makes room. Below cap, the
+  refusal). The probe is population-gated via the shared
+  `ensureTier1Headroom` helper: at or above `TIER1_POPULATION_CAP`
+  (150, mirroring the collapse RPC's `p_target_count` - see the
+  treadmill gotcha) it first attempts cap-pressure eviction
+  (`samskara_evict_for_mint`, see the decay section) and returns
+  before any Venice spend when no victim qualifies. With headroom, the
   phase fetches the recent embedded substrate window, then
   builds a **topical cluster**: it seeds on the most recent row
   and keeps only the later rows whose situation embedding is
@@ -689,10 +696,11 @@ logs and yields to the next phase.
   ONLY) - mints from the association graph instead of the recency
   window, so cross-session recurrence that no recency window can
   co-locate still reaches the minter. Carries the same
-  `TIER1_POPULATION_CAP` gate as Mint-tier1, checked BEFORE the
-  cluster read: a gated skip is a non-verdict, so the hub's edges
-  stay unstamped and the evidence waits intact for the sweep that
-  runs once headroom opens. Below cap, `samskara_association_cluster`
+  `ensureTier1Headroom` cap-or-evict gate as Mint-tier1, checked
+  BEFORE the cluster read: a gated skip is a non-verdict, so the
+  hub's edges stay unstamped and the evidence waits intact. The
+  gate parity matters - see the probe-order note in the eviction
+  section. With headroom, `samskara_association_cluster`
   picks the hub (the substrate row with the most summed
   reinforcement over its UNCONSUMED edges, >= 2 distinct partners)
   and returns ONE representative (highest-reinforcement) edge per
@@ -959,8 +967,10 @@ be the first genuine test, and the next-day judge hasn't ruled).
   situation isn't part of the user's life. The window is wall-clock and
   calibrated to daily use; a long-idle account under-tests its corpus
   and would need it widened.
-- **Cap-pressure eviction** (`samskara_evict_for_mint`, called by the
-  mint-tier1 probe only when the population cap blocks a mint): frees
+- **Cap-pressure eviction** (`samskara_evict_for_mint`, called by
+  BOTH tier-1 mint probes - recency and association, via the shared
+  `ensureTier1Headroom` gate - when the population cap blocks a
+  mint): frees
   one slot by deleting the most-disproven untested row - judged >= 10
   times with zero genuine engagements, >= 14 days old, ranked
   most-judged-first. Decay by replacement: it runs exactly as fast as
@@ -977,6 +987,17 @@ be the first genuine test, and the next-day judge hasn't ruled).
   idle account never bleeds), and the pending-fire guard applies to
   both tiers. If neither tier qualifies the probe skips at cap exactly
   as it did before eviction existed.
+
+Eviction is reachable from BOTH mint probes on purpose. When only the
+recency probe could evict, sweep order decided who minted: recency
+runs first, evicted, and refilled the slot in the same probe, so the
+association probe - gated on the same cap - never saw headroom and its
+unconsumed-edge backlog grew without bound (1,082 edges at the 2026-08
+audit, months of cross-session evidence never reaching the minter).
+With the shared `ensureTier1Headroom` gate, entry to a capped corpus
+is decided by whether a qualified victim exists when a probe wants a
+slot, not by which probe runs first; within one sweep the two probes
+draw victims from the same pool in turn.
 
 Both eviction tiers are threshold-gated, so pressure can still dry up:
 if the "Probation due" and both "Evictable" readouts sit at zero while
@@ -1447,10 +1468,12 @@ summarizer reads samskaras to feed the agent.
   (heavy or timing-insensitive), and moving a phase across that
   line should be a deliberate decision.
 - **Minting is population-gated; the overflow merge is a backstop,
-  not the make-room mechanism.** Both tier-1 mint probes skip while
-  the tier-1 count sits at `TIER1_POPULATION_CAP` (150), so at cap
-  the corpus changes only through the reaper (repeated real failure)
-  and the Hebbian dedup pass (true duplicates). Without the gate,
+  not the make-room mechanism.** Both tier-1 mint probes go through
+  the shared `ensureTier1Headroom` gate: at `TIER1_POPULATION_CAP`
+  (150) they first try cap-pressure eviction and skip when no victim
+  qualifies, so at cap the corpus changes only through the reaper
+  (repeated real failure), the Hebbian dedup pass (true duplicates),
+  and eviction of provably-useless rows. Without the gate,
   every mint at cap forced the collapse RPC's overflow pass to
   greedy-merge two DISTINCT claims at its 0.60 cosine floor - the
   same "related but distinct" band tier-2 detection owns - and a
