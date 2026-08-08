@@ -50,14 +50,21 @@ export function describeJsonType(value: unknown): string {
   return t;
 }
 
-// Validate a required-to-be-numeric argument. Returns the number when
-// valid; records a type error naming what arrived otherwise.
+// Validate a required-to-be-numeric argument. Accepts a finite number,
+// or a string that parses to one - models routinely quote numeric
+// arguments ({"confidence": "5.0"}) and rejecting those only buys a
+// retry round trip. Anything else records a type error naming what
+// actually arrived, so the model's fix is obvious.
 export function requireFiniteNumber(
   errs: ArgErrors,
   name: string,
   value: unknown,
 ): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
   errs.add(
     `type error: ${name} expects a finite number, but ${describeJsonType(value)} was found`,
   );
