@@ -29,12 +29,11 @@ import {
   findExistingThreadIds,
 } from './_wiki_helpers.ts';
 import { ArgErrors, rejectUnknownArgs } from './_validate.ts';
-
-// Mirror of MAX_WIKI_TITLE_CHARS / MAX_WIKI_CONTENT_CHARS /
-// MAX_WIKI_CHANGELOG_MESSAGE_CHARS in src/lib/wiki.ts.
-const MAX_WIKI_TITLE_CHARS = 200;
-const MAX_WIKI_CONTENT_CHARS = 16000;
-const MAX_WIKI_CHANGELOG_MESSAGE_CHARS = 200;
+import {
+  MAX_WIKI_TITLE_CHARS,
+  MAX_WIKI_CONTENT_CHARS,
+  MAX_WIKI_CHANGELOG_MESSAGE_CHARS,
+} from '../../_shared/wiki-limits.ts';
 
 /**
  * Read the article's current content length for the changelog's

@@ -182,7 +182,7 @@ imports nothing from the facade.
 
 **Files.** New `src/lib/supabase/session.ts`, the 10 slice modules listed above.
 
-## Fix 7: Consolidate MAX_WIKI_CONTENT_CHARS edge-internal copies [ ]
+## Fix 7: Consolidate MAX_WIKI_CONTENT_CHARS edge-internal copies [x]
 
 **Problem.** `MAX_WIKI_CONTENT_CHARS = 16000` appears in 5 locations. Three of those are edge-internal copies that don't
 even import from the edge's own `_shared/embed-input.ts` mirror:

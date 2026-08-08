@@ -88,6 +88,11 @@ import {
   renderDistilledNotesBlock,
   transcriptFitsDirect,
 } from './_accumulator.ts';
+import {
+  MAX_WIKI_TITLE_CHARS,
+  MAX_WIKI_CONTENT_CHARS,
+  MAX_WIKI_CHANGELOG_MESSAGE_CHARS,
+} from '../../_shared/wiki-limits.ts';
 
 // Mirror of agentModel('wiki').id in src/lib/models/index.ts.
 // AGENT_MODELS is a static role->model map, NOT one of the per-user
@@ -175,14 +180,6 @@ const MAX_FAILURES_PER_THREAD = 3;
 // backlog drains at maxThreads-per-hour, which matches the queue's
 // natural fill rate (eligibility only changes at day boundaries).
 const DEFAULT_SWEEP_MAX_THREADS = 3;
-
-// Schema caps mirror src/lib/wiki.ts (MAX_WIKI_TITLE_CHARS /
-// MAX_WIKI_CONTENT_CHARS / MAX_WIKI_CHANGELOG_MESSAGE_CHARS) so the
-// wire schemas the agent's model sees match the limits the registered
-// tool impls enforce on execute.
-const MAX_WIKI_TITLE_CHARS = 200;
-const MAX_WIKI_CONTENT_CHARS = 16000;
-const MAX_WIKI_CHANGELOG_MESSAGE_CHARS = 200;
 
 // Mirror of src/lib/tools/wiki_search.schema.ts. (The server-side
 // wiki_search impl clamps to its own slightly tighter limit; the

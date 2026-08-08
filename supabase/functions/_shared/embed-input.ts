@@ -35,12 +35,7 @@ const MAX_RECIPE_EMBED_CHARS = 16000;
 // worst case and under bge-m3's ~512-token (~2-4k char) window.
 const MAX_THREAD_EMBED_INPUT_CHARS = 2000;
 
-// Mirrors MAX_WIKI_CONTENT_CHARS in src/lib/wiki.ts.
-const MAX_WIKI_CONTENT_CHARS = 16000;
-
-// Mirrors MAX_WIKI_RECORD_CONTENT_CHARS in src/lib/wiki.ts. Records are
-// short discrete jots, not consolidated articles, so the cap is tighter.
-const MAX_WIKI_RECORD_CONTENT_CHARS = 8000;
+import { MAX_WIKI_CONTENT_CHARS, MAX_WIKI_RECORD_CONTENT_CHARS } from './wiki-limits.ts';
 
 // Substrate situation/outcome have no schema-level cap yet; these match the
 // memory-side order of magnitude and leave headroom for tokenizer inflation.

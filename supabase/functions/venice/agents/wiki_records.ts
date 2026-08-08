@@ -53,6 +53,7 @@ import {
   renderDistilledNotesBlock,
   transcriptFitsDirect,
 } from './_accumulator.ts';
+import { MAX_WIKI_RECORD_CONTENT_CHARS } from '../../_shared/wiki-limits.ts';
 
 // Mirror of agentModel('wikiRecords').id in src/lib/models/index.ts.
 // Balanced model with medium reasoning per the feature spec: parsing
@@ -83,8 +84,6 @@ const WIKI_RECORDS_DISTILL_FOCUS =
   'images the user shared as evidence (by filename). Ignore abstract ' +
   'discussion, opinions, and Q&A that do not describe an event.';
 
-// Schema caps mirror src/lib/wiki.ts (MAX_WIKI_RECORD_*).
-const MAX_WIKI_RECORD_CONTENT_CHARS = 8000;
 const MAX_WIKI_RECORD_TAGS = 24;
 const MAX_WIKI_RECORD_TAG_CHARS = 40;
 const MAX_RECORD_LINK_LABEL_CHARS = 120;

@@ -12,11 +12,15 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { appendWikiChangelog } from './_wiki_helpers.ts';
+import {
+  MAX_WIKI_CHANGELOG_MESSAGE_CHARS,
+  MAX_WIKI_RECORD_CONTENT_CHARS,
+} from '../../_shared/wiki-limits.ts';
 
-// Mirror of MAX_WIKI_CHANGELOG_MESSAGE_CHARS in src/lib/wiki.ts.
-const MAX_WIKI_CHANGELOG_MESSAGE_CHARS = 200;
+// Re-export so record_create.ts / record_update.ts keep their
+// existing import path.
+export { MAX_WIKI_RECORD_CONTENT_CHARS };
 
-export const MAX_WIKI_RECORD_CONTENT_CHARS = 8000;
 export const MAX_WIKI_RECORD_TAGS = 24;
 export const MAX_WIKI_RECORD_TAG_CHARS = 40;
 // Mirror of MAX_RECORD_LINK_LABEL_CHARS in src/lib/wiki.ts.

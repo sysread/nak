@@ -9,9 +9,7 @@
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { appendWikiChangelog } from './_wiki_helpers.ts';
 import { ArgErrors, rejectUnknownArgs } from './_validate.ts';
-
-// Mirror of MAX_WIKI_CHANGELOG_MESSAGE_CHARS in src/lib/wiki.ts.
-const MAX_WIKI_CHANGELOG_MESSAGE_CHARS = 200;
+import { MAX_WIKI_CHANGELOG_MESSAGE_CHARS } from '../../_shared/wiki-limits.ts';
 
 export const wikiDelete: ToolDef = {
   name: 'wiki_delete',
