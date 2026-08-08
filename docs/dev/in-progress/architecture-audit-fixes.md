@@ -163,7 +163,7 @@ perspective.
 
 **Files.** `src/lib/stream-guards.ts`, `src/Chat.svelte`, `tests/stream-guards.test.ts`.
 
-## Fix 6: Extract getSession to shared module [ ]
+## Fix 6: Extract getSession to shared module [x]
 
 **Problem.** Ten slice modules in `src/lib/supabase/` each define a private 4-line `getSession(client)` function. Same
 code, 10 copies, 40 lines total.

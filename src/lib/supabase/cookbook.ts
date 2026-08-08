@@ -26,8 +26,9 @@
  * directly. Row types live in ./types; the topic-filter and ILIKE
  * helpers shared with the thread / memory paths live in ./query-utils.
  */
-import type { SupabaseClient, Session } from '@supabase/supabase-js';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { SupabaseError } from './error';
+import { getSession } from './session';
 import {
   base64ToBytes,
   ilikeFilterPattern,
@@ -47,12 +48,6 @@ import type {
  * storage upload path keeps its exact error behavior without reaching
  * back into SupabaseService.
  */
-async function getSession(client: SupabaseClient): Promise<Session | null> {
-  const { data, error } = await client.auth.getSession();
-  if (error) throw new SupabaseError(error.message);
-  return data.session;
-}
-
 // TTL for recipe-image display signed URLs. Generous (6h) so a recipe
 // detail / lightbox kept open through a session keeps rendering; a
 // longer-open pane re-resolves on reload.

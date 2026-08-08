@@ -16,8 +16,9 @@
  * with these methods live in ./venice-proxy.ts - settings CRUD and
  * edge-function invocation are separate concerns.
  */
-import type { SupabaseClient, Session } from '@supabase/supabase-js';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { SupabaseError } from './error';
+import { getSession } from './session';
 import {
   coerceSettings,
   coerceSystemPrompt,
@@ -39,12 +40,6 @@ import { isLogLevel } from '../logger.svelte';
  * settings reads/writes keep their exact error behavior without
  * reaching back into SupabaseService.
  */
-async function getSession(client: SupabaseClient): Promise<Session | null> {
-  const { data, error } = await client.auth.getSession();
-  if (error) throw new SupabaseError(error.message);
-  return data.session;
-}
-
 export async function getSettings(client: SupabaseClient): Promise<UserSettings> {
   const session = await getSession(client);
   if (!session) throw new SupabaseError('Not authenticated.');

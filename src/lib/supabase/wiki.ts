@@ -22,8 +22,9 @@
  * `app.supabase.<method>()` and should not import this module
  * directly. Row types and coercers live in ./types.
  */
-import type { SupabaseClient, Session } from '@supabase/supabase-js';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { SupabaseError } from './error';
+import { getSession } from './session';
 import { ilikeLogicTreePattern } from './query-utils';
 import type { WikiArticle, OffsetPage } from './types';
 import { coerceWikiArticle } from './types';
@@ -34,12 +35,6 @@ import { coerceWikiArticle } from './types';
  * article insert keeps its exact error behavior without reaching back
  * into SupabaseService.
  */
-async function getSession(client: SupabaseClient): Promise<Session | null> {
-  const { data, error } = await client.auth.getSession();
-  if (error) throw new SupabaseError(error.message);
-  return data.session;
-}
-
 /**
  * Alphabetical listing of every wiki article for the current user.
  * Sort key is `lower(title)` so case differences ("Apple" vs

@@ -22,8 +22,9 @@
  * itself is ./wiki.ts; the background agent-run routes are
  * ./agent-runs.ts.
  */
-import type { SupabaseClient, Session } from '@supabase/supabase-js';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { SupabaseError } from './error';
+import { getSession } from './session';
 import type {
   WikiArticleSource,
   WikiArticleRelated,
@@ -38,12 +39,6 @@ import { coerceWikiChangelogEntry } from './types';
  * changelog insert keeps its exact error behavior without reaching
  * back into SupabaseService.
  */
-async function getSession(client: SupabaseClient): Promise<Session | null> {
-  const { data, error } = await client.auth.getSession();
-  if (error) throw new SupabaseError(error.message);
-  return data.session;
-}
-
 /**
  * Return the bibliography for one article: every thread that has
  * been attributed, joined with the thread's title, ordered by

@@ -27,8 +27,9 @@
  * methods here one-for-one under the same names. Row types live in
  * ./types/grocery.
  */
-import type { SupabaseClient, Session } from '@supabase/supabase-js';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { SupabaseError } from './error';
+import { getSession } from './session';
 import { base64ToBytes, ilikeFilterPattern } from './query-utils';
 import type {
   GroceryProduct,
@@ -44,12 +45,6 @@ import type {
  * storage upload path keeps its exact error behavior without reaching
  * back into SupabaseService.
  */
-async function getSession(client: SupabaseClient): Promise<Session | null> {
-  const { data, error } = await client.auth.getSession();
-  if (error) throw new SupabaseError(error.message);
-  return data.session;
-}
-
 // TTL for product-photo display signed URLs. Generous (6h, same as
 // recipe images) so a list kept open through a shopping trip keeps
 // rendering; a longer-open view re-resolves on reload.

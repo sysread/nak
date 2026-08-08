@@ -114,9 +114,12 @@ The layout:
   pattern builders, base64 decode) in
   `src/lib/supabase/query-utils.ts`. Both are internal to the data
   layer.
-- Slices that need the signed-in user replicate a small private
-  `getSession(client)` mirror of the facade's unwrap rather than
-  reaching back into the class - grep any slice for the precedent.
+- Slices that need the signed-in user call the shared
+  `getSession(client)` helper in `src/lib/supabase/session.ts`
+  rather than reaching back into the class - the facade imports
+  the slices, so a slice importing the facade would create a
+  cycle. `session.ts` sits alongside `error.ts` and
+  `query-utils.ts` as a cross-slice helper.
 
 Only auth/session methods (which own the client's auth surface) and
 the `listIntents` straggler (waiting on an intents slice) remain

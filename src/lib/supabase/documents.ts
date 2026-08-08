@@ -30,8 +30,9 @@
  * shared with the thread / memory / recipe paths lives in
  * ./query-utils.
  */
-import type { SupabaseClient, Session } from '@supabase/supabase-js';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { SupabaseError } from './error';
+import { getSession } from './session';
 import { ilikeLogicTreePattern } from './query-utils';
 import type { Document, OffsetPage } from './types';
 import { coerceDocument } from './types';
@@ -42,12 +43,6 @@ import { coerceDocument } from './types';
  * metadata insert and storage upload keep their exact error behavior
  * without reaching back into SupabaseService.
  */
-async function getSession(client: SupabaseClient): Promise<Session | null> {
-  const { data, error } = await client.auth.getSession();
-  if (error) throw new SupabaseError(error.message);
-  return data.session;
-}
-
 // Documents ----------------------------------------------------------------
 
 export async function createDocument(

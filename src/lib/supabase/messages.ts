@@ -22,11 +22,12 @@
  * directly. Row types and coercers live in ./types; the base64
  * decoder shared with the recipe-photo path lives in ./query-utils.
  */
-import type { SupabaseClient, Session } from '@supabase/supabase-js';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { synthesizeRecoveryMessages } from '../conversation-recovery';
 import type { OpenAIToolCall } from '../tools/types';
 import type { Citation, TokenUsage } from '../venice';
 import { SupabaseError } from './error';
+import { getSession } from './session';
 import { deleteAttachmentPages } from './attachment-pages';
 import { base64ToBytes } from './query-utils';
 import type {
@@ -44,12 +45,6 @@ import { coerceAttachmentRow } from './types';
  * addAttachments keeps its exact error behavior without reaching back
  * into SupabaseService.
  */
-async function getSession(client: SupabaseClient): Promise<Session | null> {
-  const { data, error } = await client.auth.getSession();
-  if (error) throw new SupabaseError(error.message);
-  return data.session;
-}
-
 export async function listMessages(
   client: SupabaseClient,
   threadId: string

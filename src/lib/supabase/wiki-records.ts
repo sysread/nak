@@ -24,8 +24,9 @@
  * methods live in the sibling ./wiki.ts; the changelog message
  * wording helpers live in ../wiki, shared with the edge-side tools.
  */
-import type { SupabaseClient, Session } from '@supabase/supabase-js';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { SupabaseError } from './error';
+import { getSession } from './session';
 import { base64ToBytes, ilikeLogicTreePattern } from './query-utils';
 import type {
   WikiRecord,
@@ -65,12 +66,6 @@ import { sha256Hex } from '../attachments';
  * record / file / link inserts keep their exact error behavior
  * without reaching back into SupabaseService.
  */
-async function getSession(client: SupabaseClient): Promise<Session | null> {
-  const { data, error } = await client.auth.getSession();
-  if (error) throw new SupabaseError(error.message);
-  return data.session;
-}
-
 // Wiki records ---------------------------------------------------------
 
 /**
