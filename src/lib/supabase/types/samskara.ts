@@ -60,6 +60,10 @@ export interface SamskaraHealthSnapshot {
    *  whose last genuine verdict is 90+ days old - the eviction
    *  fallback tier when no untested victim qualifies. */
   evictableStale: number;
+  /** Rows whose health sits more than 15% below the user's own
+   *  population prior - repeatedly disproven claims, the last-resort
+   *  eviction tier when neither of the above qualifies. */
+  evictableUnhealthy: number;
   associations: number;
   /** Association edges not yet fed to the association-mint pass. Drains across sweeps. */
   associationsUnconsumed: number;

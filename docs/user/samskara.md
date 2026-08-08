@@ -24,8 +24,10 @@ on its own as later conversations contradict it, and eventually stops
 mattering. Instincts that never connect at all fade too: one that goes
 45 days without a single genuine engagement is quietly released, and
 when the corpus is full, a new instinct can displace one that has fired
-many times without ever actually mattering - or one that proved itself
-only once, long ago, and hasn't genuinely engaged in months.
+many times without ever actually mattering, one that proved itself
+only once, long ago, and hasn't genuinely engaged in months - or one
+whose health has sunk well below your corpus's own baseline through
+repeated failed predictions.
 
 You can see samskara from three places, by how specific the information
 is:

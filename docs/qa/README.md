@@ -187,8 +187,14 @@ One file per use-case under [`use-cases/`](./use-cases/), named
 - [bias-pipeline](./use-cases/bias-pipeline.md) - the bias sweep's
   analyze and aggregate phases, their DB writes, and the
   diagnostics modal + prompt-block readers.
-- [samskara-decay](./use-cases/samskara-decay.md) - the decay
-  pass's three health nudges, exercised deterministically via SQL.
+- [samskara-decay](./use-cases/samskara-decay.md) - the
+  relevance-gated health posterior: verdict-apply math, the p0
+  prior, and the dead-row reaper, exercised deterministically via
+  SQL; the live judge as the hosted tail.
+- [samskara-cap-eviction](./use-cases/samskara-cap-eviction.md) -
+  `samskara_evict_for_mint`'s three victim tiers, the shared
+  cap-or-evict mint gate, and the Health-panel pool readouts that
+  mirror them.
 - [samskara-formation](./use-cases/samskara-formation.md) - the
   seven-phase formation rotation (assimilate through
   compound-regen) plus the mint toast surface.

@@ -213,6 +213,13 @@ export function verdictCountList(counts: {
  * the SQL release machinery in schema.sql (samskara_reap_untested,
  * samskara_evict_for_mint) - keep them in lockstep, or the pane
  * predicts a fate the workers won't deliver.
+ *
+ * Deliberate omission: samskara_evict_for_mint's third tier (health
+ * below 0.85 * the population prior p0) is NOT mirrored here. It
+ * compares a row against a corpus-wide aggregate the pane never
+ * fetches, so releaseStatus covers only the two row-local tiers; the
+ * corpus-level "Evictable (... / unhealthy)" count on the Overview
+ * card is where that tier surfaces.
  */
 
 /** Days a never-genuinely-tested samskara survives before the hourly reaper releases it. */
