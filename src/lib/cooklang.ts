@@ -1329,41 +1329,4 @@ export function recipeToMarkdown(
  * text via `renderInlineEmphasis`. Plain-text and markdown exports
  * leave them as authored.
  */
-export function validateCooklangSource(src: string): string[] {
-  const errors: string[] = [];
-
-  // Backtick code spans — `like this`. Single-line only so we don't
-  // misfire on a recipe that happens to have two backticks far apart.
-  if (/`[^`\n]+`/.test(src)) {
-    errors.push(
-      'markdown code spans (`like this`) are not valid Cooklang and ' +
-        'render as literal backticks. Remove the backticks; plain text ' +
-        'in a step is already prose. (Inline emphasis is supported - ' +
-        '`**bold**`, `*italic*`, and `_italic_` all render in step ' +
-        'text - but code spans are not.)',
-    );
-  }
-
-  // `@modifier @ingredient{...}` — two `@`-tokens separated only by
-  // whitespace, with the SECOND one carrying a `{` body. Whitespace-
-  // only between is what marks this as "modifier + thing"; any prose
-  // between (`@salt and @pepper`) is a legitimate "two ingredients
-  // mentioned in the same sentence" pattern and shouldn't fire. The
-  // `\??` after each `@` keeps the check effective when either token
-  // also carries the optional-ingredient modifier (`@?`).
-  const NAME = "[\\p{L}\\p{N}\\-_']+";
-  const MODIFIER_PAIR_RE = new RegExp(`@\\??${NAME}[ \\t]+@\\??${NAME}\\{`, 'u');
-  if (MODIFIER_PAIR_RE.test(src)) {
-    errors.push(
-      'detected `@modifier @ingredient{...}` pattern (e.g. `@pre-minced ' +
-        '@garlic{1%tbsp}`). This produces two separate ingredient entries ' +
-        'because each `@token` is its own ingredient. Write modifier + ' +
-        'ingredient as a single multi-word name inside braces: ' +
-        '`@pre-minced garlic{1%tbsp}`. For "use X or Y" alternatives, put ' +
-        'only the primary on `@` and write the substitute as plain prose: ' +
-        '`@garlic{4%cloves} smashed (or 1 tbsp pre-minced garlic)`.',
-    );
-  }
-
-  return errors;
-}
+export { validateCooklangSource } from '$shared/cooklang-validate';

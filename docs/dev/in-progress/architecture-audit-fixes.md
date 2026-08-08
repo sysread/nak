@@ -211,7 +211,7 @@ Add a parity test that compares the two values (same pattern as `bias-catalog-pa
 `supabase/functions/venice/tools/wiki_create.ts`, `supabase/functions/venice/agents/wiki_records.ts`,
 `supabase/functions/venice/tools/_record_helpers.ts`, `supabase/functions/_shared/embed-input.ts`, new parity test file.
 
-## Fix 8: Extract validateCooklangSource to shared module [ ]
+## Fix 8: Extract validateCooklangSource to shared module [x]
 
 **Problem.** `validateCooklangSource` is duplicated 3 times with diverged error messages:
 

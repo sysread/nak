@@ -19,26 +19,7 @@ import { ArgErrors, rejectUnknownArgs } from './_validate.ts';
 const MAX_RECIPE_TITLE_CHARS = 160;
 const MAX_RECIPE_COOKLANG_CHARS = 20_000;
 
-function validateCooklangSource(src: string): string[] {
-  const errors: string[] = [];
-  if (/`[^`\n]+`/.test(src)) {
-    errors.push(
-      'markdown code spans (`like this`) are not valid Cooklang and ' +
-        'render as literal backticks. Remove the backticks.',
-    );
-  }
-  // `\??` after each `@` keeps the check effective when either token
-  // also carries the optional-ingredient modifier (`@?`).
-  const NAME = "[\\p{L}\\p{N}\\-_']+";
-  const MODIFIER_PAIR_RE = new RegExp(`@\\??${NAME}[ \\t]+@\\??${NAME}\\{`, 'u');
-  if (MODIFIER_PAIR_RE.test(src)) {
-    errors.push(
-      'detected `@modifier @ingredient{...}` pattern. Write modifier + ' +
-        'ingredient as a single multi-word name inside braces.',
-    );
-  }
-  return errors;
-}
+import { validateCooklangSource } from '../../_shared/cooklang-validate.ts';
 
 export const recipeUpdate: ToolDef = {
   name: 'recipe_update',

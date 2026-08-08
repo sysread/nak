@@ -17,31 +17,7 @@ import { ArgErrors, rejectUnknownArgs } from './_validate.ts';
 const MAX_RECIPE_TITLE_CHARS = 160;
 const MAX_RECIPE_COOKLANG_CHARS = 20_000;
 
-// Mirror of validateCooklangSource in src/lib/cooklang.ts. Catches
-// LLM-authoring quirks (backtick code spans, `@modifier @ingredient`
-// patterns) BEFORE the row lands in the DB.
-function validateCooklangSource(src: string): string[] {
-  const errors: string[] = [];
-  if (/`[^`\n]+`/.test(src)) {
-    errors.push(
-      'markdown code spans (`like this`) are not valid Cooklang and ' +
-        'render as literal backticks. Remove the backticks; plain text ' +
-        'in a step is already prose.',
-    );
-  }
-  // `\??` after each `@` keeps the check effective when either token
-  // also carries the optional-ingredient modifier (`@?`).
-  const NAME = "[\\p{L}\\p{N}\\-_']+";
-  const MODIFIER_PAIR_RE = new RegExp(`@\\??${NAME}[ \\t]+@\\??${NAME}\\{`, 'u');
-  if (MODIFIER_PAIR_RE.test(src)) {
-    errors.push(
-      'detected `@modifier @ingredient{...}` pattern (e.g. `@pre-minced ' +
-        '@garlic{1%tbsp}`). Write modifier + ingredient as a single ' +
-        'multi-word name inside braces: `@pre-minced garlic{1%tbsp}`.',
-    );
-  }
-  return errors;
-}
+import { validateCooklangSource } from '../../_shared/cooklang-validate.ts';
 
 export const recipeSave: ToolDef = {
   name: 'recipe_save',
