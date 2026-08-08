@@ -19,7 +19,9 @@ export const memoryCreateSchema = {
     'chars - split if longer). Optional message is a one-line, commit-style ' +
     'summary of what you saved and why, which lands in the memory changelog ' +
     'the user reviews; omit it to auto-derive one from the label. Optional ' +
-    'confidence (1.0..10.0, default 1.0) marks a memory as already-' +
+    'confidence is a decimal on a 1-10 scale (>= 1.0 and <= 10.0, e.g. ' +
+    '2.5; default 1.0), NOT a 0-1 probability - values below 1.0 are ' +
+    'rejected. It marks a memory as already-' +
     'corroborated; raise above default only with converging evidence in the ' +
     'current exchange. Returns the created memory row.',
   shortDescription: 'save a new note',
@@ -49,12 +51,17 @@ export const memoryCreateSchema = {
           'Omit to auto-derive from the label. Not a place for the content - ' +
           'that goes in data.',
       },
+      // Models were observed reading this as a 0-1 probability and
+      // round-tripping the below-minimum rejection repeatedly; the
+      // description names the scale and the wrong reading explicitly.
       confidence: {
         type: 'number',
         minimum: 1.0,
         maximum: 10.0,
         description:
-          'Optional initial confidence (1.0..10.0, default 1.0). ' +
+          'Optional initial confidence: a decimal >= 1.0 and <= 10.0 ' +
+          '(e.g. 2.5; default 1.0). ' +
+          'NOT a 0-1 probability - values below 1.0 are rejected. ' +
           'Raise only with converging evidence in the current exchange.',
       },
     },

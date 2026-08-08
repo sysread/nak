@@ -48,7 +48,13 @@ export const memoryCreate: ToolDef = {
       if (typeof args.confidence !== 'number' || !Number.isFinite(args.confidence)) {
         errs.add('confidence must be a finite number');
       } else if (args.confidence < 1.0 || args.confidence > 10.0) {
-        errs.add(`confidence must be in [1.0, 10.0] (got ${args.confidence})`);
+        // Name the wrong reading in the rejection: models were observed
+        // sending 0-1 probabilities and retrying with more of the same
+        // when the message only stated the range.
+        errs.add(
+          `confidence must be in [1.0, 10.0] (got ${args.confidence}); ` +
+            'it is a decimal on a 1-10 scale, not a 0-1 probability',
+        );
       } else {
         confidence = args.confidence;
       }

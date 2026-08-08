@@ -112,9 +112,12 @@ const MEMORY_CREATE_WIRE_SCHEMA: AgentTool['wire'] = {
       `${MAX_MEMORY_DATA_CHARS} chars - split if longer), and message (a ` +
       'one-line, commit-style summary of what you saved and why, which ' +
       'lands in the memory changelog the user reviews). Optional ' +
-      'confidence (1.0..10.0, default 1.0) marks a memory as already-' +
-      'corroborated; raise above default only with converging evidence ' +
-      'in the current exchange. Returns the created memory row.',
+      'confidence is a decimal on a 1-10 scale (>= 1.0 and <= 10.0, ' +
+      'e.g. 2.5; default 1.0), NOT a 0-1 probability - values below ' +
+      '1.0 are rejected. It marks a memory ' +
+      'as already-corroborated; raise above default only with ' +
+      'converging evidence in the current exchange. Returns the ' +
+      'created memory row.',
     parameters: {
       type: 'object',
       properties: {
@@ -143,7 +146,9 @@ const MEMORY_CREATE_WIRE_SCHEMA: AgentTool['wire'] = {
           minimum: 1.0,
           maximum: 10.0,
           description:
-            'Optional initial confidence (1.0..10.0, default 1.0). ' +
+            'Optional initial confidence: a decimal >= 1.0 and <= 10.0 ' +
+            '(e.g. 2.5; default 1.0). ' +
+            'NOT a 0-1 probability - values below 1.0 are rejected. ' +
             'Raise only with converging evidence in the current exchange.',
         },
       },
