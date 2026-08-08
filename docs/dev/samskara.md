@@ -595,7 +595,11 @@ below).
 
 There are no per-phase throttles. One trigger runs one rotation,
 so the trigger cadence (turn or tick) IS the rate limit -
-nothing rotates continuously. A Venice rate-limit re-throws out
+nothing rotates continuously. The one bounded exception:
+mint-tier1-assoc adjudicates up to `ASSOC_HUBS_PER_TICK` (3) hubs
+per rotation - each a minter call - stopping at the first
+non-verdict or when headroom runs out; the constant is the spend
+ceiling. A Venice rate-limit re-throws out
 of any phase and abandons the rest of the rotation (the next
 turn or tick retries with fresh budget); any other phase failure
 logs and yields to the next phase.
@@ -695,12 +699,17 @@ logs and yields to the next phase.
 - **Mint-tier1-assoc** (`mintTier1FromAssociationsProbe`, SWEEP
   ONLY) - mints from the association graph instead of the recency
   window, so cross-session recurrence that no recency window can
-  co-locate still reaches the minter. Carries the same
+  co-locate still reaches the minter. Adjudicates up to
+  `ASSOC_HUBS_PER_TICK` (3) hubs per sweep tick - a verdict stamps
+  the fed hub's edges so the next cluster read returns a different
+  hub; any other outcome breaks the loop. Each hub carries the same
   `ensureTier1Headroom` cap-or-evict gate as Mint-tier1, checked
   BEFORE the cluster read: a gated skip is a non-verdict, so the
   hub's edges stay unstamped and the evidence waits intact. The
   gate parity matters - see the probe-order note in the eviction
-  section. With headroom, `samskara_association_cluster`
+  section - and a declined hub does not fill the slot its eviction
+  freed, so one victim can fund several adjudications in a tick.
+  With headroom, `samskara_association_cluster`
   picks the hub (the substrate row with the most summed
   reinforcement over its UNCONSUMED edges, >= 2 distinct partners)
   and returns ONE representative (highest-reinforcement) edge per
@@ -1770,6 +1779,15 @@ verdicts - the judge rules per samskara). The per-samskara
 the verdict tally beside it is the raw lifetime count, so not-borne-out
 reads as its own bucket instead of folding silently into disconfirm.
 These are diagnostic summary reads, not user-facing controls.
+
+**The associations "awaiting mint" count never reaches zero.** A large
+share of unconsumed edges are singletons - pairs whose endpoints have
+no other unconsumed connections (336 of 1,083 at the 2026-08 audit).
+The hub-picker requires >= 2 distinct partners, so singletons wait for
+corroboration BY DESIGN: one lone pair is not a pattern yet, and a new
+edge touching either endpoint re-qualifies it. Read the count's TREND,
+not its level - sustained growth in the reachable share is the "not
+keeping up" signal; a stable floor is the resting state.
 
 **Decay-standing legibility.** The release machinery (probation reap +
 cap-pressure eviction, see the decay section) surfaces on both

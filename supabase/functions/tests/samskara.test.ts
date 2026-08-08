@@ -22,6 +22,7 @@ const {
   MINT_CLUSTER_MAX,
   MINT_CLUSTER_MIN,
   TIER1_POPULATION_CAP,
+  ASSOC_HUBS_PER_TICK,
   buildTopicalCluster,
   buildAssociationCluster,
   cosine,
@@ -133,6 +134,9 @@ Deno.test('caps and thresholds hold their designed relationships', () => {
   // mint/cap-merge treadmill (cap here higher) or freezes minting
   // permanently (cap here lower) - change both together.
   assertEquals(TIER1_POPULATION_CAP, 150);
+  // Bounded small on purpose: each hub is one minter call and the
+  // probe runs every sweep tick - the cap IS the spend ceiling.
+  assert(ASSOC_HUBS_PER_TICK >= 1 && ASSOC_HUBS_PER_TICK <= 5);
 });
 
 // --- helpers ----------------------------------------------------------------
