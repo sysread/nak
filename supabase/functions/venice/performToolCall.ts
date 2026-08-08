@@ -189,14 +189,24 @@ export async function performToolCall(
   request: ToolCallRequest,
   ctx: ToolContext,
 ): Promise<unknown> {
+  // The chat wire injects a REQUIRED `activity` narration param into
+  // every tool def (src/lib/tools/wire.ts) for the UI's tool-call
+  // pills; it belongs to the harness, not the tool. Strip it before
+  // dispatch: tools validate unknown argument keys (rejectUnknownArgs
+  // in _validate.ts) and would otherwise reject the very key the wire
+  // schema demands on every call. The agent runner (_run.ts) does the
+  // same for narrated agent toolboxes.
+  const { activity: _activity, ...args } = request.args;
   const tool = REGISTRY.get(request.name);
-  if (tool) return await tool.execute(request.args, ctx);
+  if (tool) return await tool.execute(args, ctx);
   // MCP-routed tools are not in the static registry; dispatch via
   // the MCP client. The wire name `mcp:<integrationId>:<tool>`
   // carries the integration pointer; `dispatchMcpTool` resolves it
   // against `ctx.adminClient` + `ctx.userId` (b-strict service-role).
+  // The stripped args ride along - MCP servers validate their own
+  // schemas and `activity` is not in them either.
   if (isMcpToolName(request.name)) {
-    return await dispatchMcpTool(request, ctx);
+    return await dispatchMcpTool({ ...request, args }, ctx);
   }
   throw new ToolNotImplementedError(request.name);
 }
