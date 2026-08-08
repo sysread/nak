@@ -16,7 +16,7 @@ import {
   appendWikiChangelog,
   attachWikiArticleSources,
 } from './_wiki_helpers.ts';
-import { ArgErrors } from './_validate.ts';
+import { ArgErrors, rejectUnknownArgs } from './_validate.ts';
 
 // Mirror of MAX_WIKI_TITLE_CHARS / MAX_WIKI_CONTENT_CHARS /
 // MAX_WIKI_CHANGELOG_MESSAGE_CHARS in src/lib/wiki.ts.
@@ -31,6 +31,7 @@ export const wikiCreate: ToolDef = {
     const content = typeof args.content === 'string' ? args.content : '';
     const message = typeof args.message === 'string' ? args.message.trim() : '';
     const errs = new ArgErrors();
+    rejectUnknownArgs(errs, args, ['title', 'content', 'message']);
     if (!title) errs.add('title is required');
     else if (title.length > MAX_WIKI_TITLE_CHARS) {
       errs.add(`title exceeds ${MAX_WIKI_TITLE_CHARS}-char limit (got ${title.length})`);

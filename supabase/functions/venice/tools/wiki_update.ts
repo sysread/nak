@@ -28,7 +28,7 @@ import {
   attachWikiArticleSources,
   findExistingThreadIds,
 } from './_wiki_helpers.ts';
-import { ArgErrors } from './_validate.ts';
+import { ArgErrors, rejectUnknownArgs } from './_validate.ts';
 
 // Mirror of MAX_WIKI_TITLE_CHARS / MAX_WIKI_CONTENT_CHARS /
 // MAX_WIKI_CHANGELOG_MESSAGE_CHARS in src/lib/wiki.ts.
@@ -85,6 +85,7 @@ export const wikiUpdate: ToolDef = {
     const message = typeof args.message === 'string' ? args.message.trim() : '';
 
     const errs = new ArgErrors();
+    rejectUnknownArgs(errs, args, ['id', 'title', 'content', 'message', 'source_thread_ids']);
     if (!id) errs.add('id is required');
     if (!message) errs.add('message is required');
     else if (message.length > MAX_WIKI_CHANGELOG_MESSAGE_CHARS) {

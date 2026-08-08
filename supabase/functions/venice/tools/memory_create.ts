@@ -7,7 +7,7 @@
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { appendMemoryChangelog } from './_memory_changelog.ts';
 import { MAX_MEMORY_DATA_CHARS } from './_memory_data_budget.ts';
-import { ArgErrors } from './_validate.ts';
+import { ArgErrors, rejectUnknownArgs } from './_validate.ts';
 
 // Mirror of MAX_MEMORY_CHANGELOG_MESSAGE_CHARS in src/lib/memories.ts.
 // The data cap is single-sourced from _memory_data_budget.ts, which owns
@@ -22,6 +22,7 @@ export const memoryCreate: ToolDef = {
     const message = typeof args.message === 'string' ? args.message.trim() : '';
 
     const errs = new ArgErrors();
+    rejectUnknownArgs(errs, args, ['label', 'data', 'message', 'confidence']);
     if (!label) errs.add('label is required');
     if (!data) errs.add('data is required');
     else if (data.length > MAX_MEMORY_DATA_CHARS) {

@@ -13,6 +13,28 @@
 // fix. Each problem string is preserved verbatim in the combined message, so
 // substring-based test assertions and the model-facing wording are unchanged
 // from the standalone throws they replace.
+// Flag argument keys the tool does not read. Without this, a hallucinated
+// parameter fails on whichever required field it displaced ("message is
+// required") - accurate but useless, because the model's actual mistake is
+// never named. Observed in prod: memory_update called with an invented
+// `activity` param round-tripped the required-message rejection three
+// times and the model concluded the tool itself was buggy. Keys with
+// tool-specific rejections (memory_update's `confidence`) belong in
+// `known` so the specific message fires instead of the generic one.
+export function rejectUnknownArgs(
+  errs: ArgErrors,
+  args: Record<string, unknown>,
+  known: readonly string[],
+): void {
+  for (const key of Object.keys(args)) {
+    if (!known.includes(key)) {
+      errs.add(
+        `unrecognized parameter: ${key} - check the tool spec for the valid parameters`,
+      );
+    }
+  }
+}
+
 export class ArgErrors {
   private readonly problems: string[] = [];
 

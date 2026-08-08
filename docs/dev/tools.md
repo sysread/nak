@@ -623,15 +623,17 @@ Edge dispatch (`supabase/functions/venice/`):
   are present; an empty-patch "provide at least one of" only fires
   when nothing else is wrong) so one root cause never doubles up as
   two errors.
-- **`memory_create` `message` is optional; the changelog line is
-  derived when omitted.** Unlike the other changelog-bearing writes,
-  memory_create defaults `message` to `Created: <label>` server-side.
-  Models kept dumping the full memory body into `message` and then
-  round-tripping its 200-char cap; making it optional removes the
-  field as a failure surface for the common save-a-fact path. The
-  content always belongs in `data`. memory_update/wiki_* keep
-  `message` required - an edit/delete has no sensible label-derived
-  default and the user wants the "why" recorded.
+- **`memory_create` / `memory_update` `message` is optional; the
+  changelog line is derived when omitted.** memory_create defaults
+  `message` to `Created: <label>` and memory_update to
+  `Updated: <label>` server-side. Models kept dumping the full memory
+  body into `message` and round-tripping its 200-char cap, or
+  omitting it (and inventing param names to carry it) and
+  round-tripping the required-field rejection; making it optional
+  removes the field as a failure surface. The content always belongs
+  in `data`. wiki_* and memory_delete keep `message` required - a
+  delete has no sensible label-derived default and the user wants
+  the "why" recorded.
 - **The research_docs corpus is a build artifact.** Doc edits do
   not reach the edge tool until `scripts/bundle-research-docs.mjs`
   regenerates `_generated/research-docs-corpus.ts` and the

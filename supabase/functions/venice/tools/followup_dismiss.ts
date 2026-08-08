@@ -8,13 +8,14 @@
 // src/lib/tools/followup_dismiss.schema.ts. Auth: b-strict.
 
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
-import { ArgErrors } from './_validate.ts';
+import { ArgErrors, rejectUnknownArgs } from './_validate.ts';
 
 export const followupDismiss: ToolDef = {
   name: 'followup_dismiss',
   async execute(args: Record<string, unknown>, ctx: ToolContext) {
     const id = typeof args.id === 'string' ? args.id.trim() : '';
     const errs = new ArgErrors();
+    rejectUnknownArgs(errs, args, ['id']);
     if (!id) errs.add('id is required (from followup_list)');
     errs.throwIfAny();
 

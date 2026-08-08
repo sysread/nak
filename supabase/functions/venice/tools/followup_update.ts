@@ -11,7 +11,7 @@ import {
   MAX_FOLLOWUP_CONTEXT_CHARS,
   MAX_FOLLOWUP_QUESTION_CHARS,
 } from '../../_shared/followups.ts';
-import { ArgErrors } from './_validate.ts';
+import { ArgErrors, rejectUnknownArgs } from './_validate.ts';
 import { parseRelevantAfter } from './followup_create.ts';
 
 export const followupUpdate: ToolDef = {
@@ -20,6 +20,7 @@ export const followupUpdate: ToolDef = {
     const id = typeof args.id === 'string' ? args.id.trim() : '';
 
     const errs = new ArgErrors();
+    rejectUnknownArgs(errs, args, ['id', 'question', 'context', 'relevant_after']);
     if (!id) errs.add('id is required (from followup_list)');
 
     const patch: Record<string, unknown> = {};

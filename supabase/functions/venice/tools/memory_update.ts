@@ -11,7 +11,7 @@ import {
   memoryDataBudgetError,
   readMemoryDataLengths,
 } from './_memory_data_budget.ts';
-import { ArgErrors } from './_validate.ts';
+import { ArgErrors, rejectUnknownArgs } from './_validate.ts';
 
 const MAX_MEMORY_CHANGELOG_MESSAGE_CHARS = 200;
 
@@ -22,11 +22,27 @@ export const memoryUpdate: ToolDef = {
     const message = typeof args.message === 'string' ? args.message.trim() : '';
 
     const errs = new ArgErrors();
+    rejectUnknownArgs(errs, args, ['id', 'label', 'data', 'message', 'confidence']);
     if (!id) errs.add('id is required');
-    if (!message) errs.add('message is required');
-    else if (message.length > MAX_MEMORY_CHANGELOG_MESSAGE_CHARS) {
+    // The changelog message is optional: when the model omits it we
+    // synthesize one from the row's label so an edit never blocks on it.
+    // Models were observed omitting message (or inventing param names to
+    // carry it) and round-tripping the rejection; defaulting removes the
+    // field as a failure surface, mirroring memory_create.
+    if (message.length > MAX_MEMORY_CHANGELOG_MESSAGE_CHARS) {
       errs.add(
         `message exceeds ${MAX_MEMORY_CHANGELOG_MESSAGE_CHARS}-char limit (got ${message.length})`,
+      );
+    }
+
+    // Confidence is not part of this tool's contract - it moves through
+    // the graded levers (memory_reaffirm / memory_doubt). Models were
+    // observed trying to set it here; silently ignoring the arg would
+    // let them believe the write took, so name the right tools instead.
+    if (args.confidence !== undefined) {
+      errs.add(
+        'memory_update does not change confidence; use memory_reaffirm ' +
+          '(+0.5) or memory_doubt (x0.7) instead',
       );
     }
 
@@ -74,7 +90,9 @@ export const memoryUpdate: ToolDef = {
         memory_id: (row as { id: string }).id,
         kind: 'update',
         label_at_change: (row as { label: string }).label,
-        message,
+        // Post-update label: when the edit renamed the row, the derived
+        // line names what the memory is now called.
+        message: message || `Updated: ${(row as { label: string }).label}`,
         // Undefined (-> NULL, "unknown") when the prior read failed; a
         // label-only edit leaves both equal, which reads as a 0 delta.
         chars_before: priorLengths.get(id),
