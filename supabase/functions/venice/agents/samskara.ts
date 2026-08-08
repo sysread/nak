@@ -132,6 +132,19 @@ const MINT_CLUSTER_MIN = 3;
 const TIER1_POPULATION_CAP = 150;
 
 /**
+ * Hubs the association-mint probe adjudicates per sweep tick. One per
+ * tick drained the unconsumed-edge backlog at ~4 edges/hour best case
+ * - a 2026-08 audit measured 747 reachable edges across 409 eligible
+ * hubs against that rate, months of latency for evidence that already
+ * exists. Three per tick caps the extra spend at two mistral-small
+ * calls per hour (sweep-only) while cutting the drain to weeks. Each
+ * iteration re-checks headroom, and a declined hub does not fill the
+ * slot its eviction freed, so one victim can fund several
+ * adjudications in a single tick.
+ */
+const ASSOC_HUBS_PER_TICK = 3;
+
+/**
  * mint-tier1 reads just enough recent substrate to seed one topical
  * cluster (it is deliberately recency-seeded). pair-relate no longer
  * reads a recency window - it seeds corpus-wide via
@@ -1245,6 +1258,12 @@ async function stampConsumed(
  * insert) leaves the edges unstamped for a later retry - never stamp
  * evidence we didn't actually adjudicate. New corroboration re-opens
  * the hub as fresh unstamped edges.
+ *
+ * The probe adjudicates up to ASSOC_HUBS_PER_TICK hubs per run. A
+ * verdict stamps the fed hub's edges, so the next cluster read returns
+ * a DIFFERENT hub; any other outcome breaks the loop - no-headroom and
+ * no-hub are terminal for the tick, and a non-verdict must not re-ask
+ * the same unchanged hub within it.
  */
 async function mintTier1FromAssociationsProbe(
   admin: SupabaseClient,
@@ -1252,11 +1271,32 @@ async function mintTier1FromAssociationsProbe(
   log: EdgeLogger,
   apiKey: string,
 ): Promise<void> {
+  for (let i = 0; i < ASSOC_HUBS_PER_TICK; i++) {
+    const outcome = await assocHubOnce(admin, userId, log, apiKey);
+    if (outcome !== 'verdict') break;
+  }
+}
+
+/**
+ * Adjudicate one association hub: gate, read the top cluster, ask the
+ * minter, apply the verdict. Returns 'verdict' when the hub's edges
+ * were stamped (mint, dedup-hit, or decline) so the caller may safely
+ * loop to the next hub.
+ */
+async function assocHubOnce(
+  admin: SupabaseClient,
+  userId: string,
+  log: EdgeLogger,
+  apiKey: string,
+): Promise<'no-headroom' | 'no-hub' | 'no-verdict' | 'verdict'> {
   // Gate (and, at cap, evict) BEFORE reading the cluster: a skip is a
   // non-verdict, so the hub's edges stay unstamped and the evidence is
   // intact for the sweep that runs once headroom opens or a victim
-  // qualifies.
-  if (!(await ensureTier1Headroom(admin, userId, log, 'mint-tier1-assoc'))) return;
+  // qualifies. A declined hub does not fill the slot its eviction
+  // freed, so one victim can fund several adjudications in a tick.
+  if (!(await ensureTier1Headroom(admin, userId, log, 'mint-tier1-assoc'))) {
+    return 'no-headroom';
+  }
   const { data, error } = await admin.rpc('samskara_association_cluster', {
     p_user_id: userId,
   });
@@ -1264,7 +1304,7 @@ async function mintTier1FromAssociationsProbe(
   const edges = (Array.isArray(data) ? data : []) as AssociationEdgeRow[];
   if (edges.length === 0) {
     log.trace('mint-tier1-assoc: no hub with unconsumed evidence');
-    return;
+    return 'no-hub';
   }
 
   const cluster = buildAssociationCluster(edges);
@@ -1285,7 +1325,7 @@ async function mintTier1FromAssociationsProbe(
     log.debug('mint-tier1-assoc: no verdict, leaving edges unconsumed', {
       edges: edgeIds.length,
     });
-    return;
+    return 'no-verdict';
   }
 
   // Clean refusal: the cluster supports no claim. The evidence is
@@ -1293,7 +1333,7 @@ async function mintTier1FromAssociationsProbe(
   if (minted === 'declined') {
     await stampConsumed(admin, userId, edgeIds, log);
     log.trace('mint-tier1-assoc: minter declined the cluster', { edges: edgeIds.length });
-    return;
+    return 'verdict';
   }
 
   const predEmbedding = await embedPrediction(apiKey, minted.prediction);
@@ -1301,7 +1341,7 @@ async function mintTier1FromAssociationsProbe(
     // Reached a mint decision but couldn't embed it (transient). Leave
     // unconsumed; the retry re-mints and embeds.
     log.debug('mint-tier1-assoc: prediction embed failed, leaving edges unconsumed');
-    return;
+    return 'no-verdict';
   }
 
   // Dedup guard, identical to the recency path: a near-duplicate of an
@@ -1326,7 +1366,7 @@ async function mintTier1FromAssociationsProbe(
         cosine: top.cosine,
         candidate: shorten(minted.prediction),
       });
-      return;
+      return 'verdict';
     }
   } catch (err) {
     if (err instanceof VeniceError) throw err;
@@ -1353,14 +1393,14 @@ async function mintTier1FromAssociationsProbe(
   const id = await insertMint(admin, userId, log, 1, minted, predEmbedding, provenance);
   // Stamp only when the samskara row actually landed: a failed insert
   // leaves the edges unconsumed so the next sweep retries cleanly.
-  if (id) {
-    await stampConsumed(admin, userId, edgeIds, log);
-    log.info('mint-tier1-assoc: minted samskara', {
-      id,
-      prediction: shorten(minted.prediction),
-      edges: edgeIds.length,
-    });
-  }
+  if (!id) return 'no-verdict';
+  await stampConsumed(admin, userId, edgeIds, log);
+  log.info('mint-tier1-assoc: minted samskara', {
+    id,
+    prediction: shorten(minted.prediction),
+    edges: edgeIds.length,
+  });
+  return 'verdict';
 }
 
 /**
@@ -1803,6 +1843,7 @@ export const __test = {
   MINT_CLUSTER_MAX,
   MINT_CLUSTER_MIN,
   TIER1_POPULATION_CAP,
+  ASSOC_HUBS_PER_TICK,
   PAIR_RELATE_COSINE_FLOOR,
   buildTopicalCluster,
   buildAssociationCluster,
