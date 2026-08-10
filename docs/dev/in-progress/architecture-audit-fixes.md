@@ -53,7 +53,7 @@ Leave the edge copy as the single source.
 **Files.** `src/lib/stream-guards.ts`, `supabase/functions/venice/stream-guards.ts`, possibly
 `tests/stream-guards.test.ts`.
 
-## Fix 2: Split venice.ts into three modules [ ]
+## Fix 2: Split venice.ts into three modules [x]
 
 **Problem.** `src/lib/venice.ts` is 2036 lines and mixes three transport layers that have nothing to do with each other:
 
