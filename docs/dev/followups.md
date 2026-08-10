@@ -103,7 +103,12 @@ gather (never inferred by the smoothing model):
   `src/screens/Intents.svelte` - the read-only inspector: the
   follow-ups section of the shared seedling modal (grouping,
   the open-card status chip, headlines, the intents-off title),
-  fed by `listFollowups()` in `src/lib/supabase.ts`. The
+  fed by `listFollowups()` in `src/lib/supabase.ts` (uncapped:
+  a fetch-side cap would make the disclosure's hidden count
+  understate the real history). The closed groups
+  (answered, let-go) render five rows plus a "Show N more"
+  disclosure from `src/lib/ui/history-disclosure.ts`, shared with
+  the intents half; "Waiting to ask" is never collapsed. The
   seedling pill (`src/lib/ui/diagnostic-pills.ts`) is always
   present because of this section; the intents toggle only
   switches its copy. See

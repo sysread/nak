@@ -50,7 +50,18 @@ the off-by-default majority sees no intentions section at all.
 3. **Open the inspector.** Click the seedling pill.
 4. **Read the groups.** Confirm the three sections and the per-card
    content.
-5. **Empty state.** Delete the forged rows
+5. **History disclosure.** Forge enough retired rows to exceed the
+   five-row preview, then reopen the inspector:
+
+   ```sql
+   insert into intents (user_id, statement, status, target_kind)
+   select '$UID', 'Nudge them about filler topic ' || g, 'retired', 'none'
+     from generate_series(1, 7) g;
+   ```
+
+   Read the "Let go" group, click its "Show N more" link, then click
+   again.
+6. **Empty state.** Delete the forged rows
    (`delete from intents where user_id = '$UID';`), reopen the
    inspector.
 
@@ -80,7 +91,14 @@ the off-by-default majority sees no intentions section at all.
   reads "not landing", the free-form active row reads "open-ended"
   (never a number), and a targeted row with null efficacy would read
   "too new to tell"; the "updated ..." relative time.
-- (5) With no rows, the modal shows the empty-state copy ("No
+- (5) "Let go" renders exactly 5 cards - the most recently updated
+  ones - followed by a "Show 3 more" text link (8 retired rows, 5
+  shown). Clicking it expands the group in place with no refetch and
+  no spinner, and the link becomes "Show fewer"; clicking that
+  re-collapses to 5. Active and Paused are unaffected - both render
+  in full with no link. Reopening the modal returns the group to
+  collapsed.
+- (6) With no rows, the modal shows the empty-state copy ("No
   intentions yet ... Nak reviews your patterns once a day ..."), not
   an error or a blank panel.
 

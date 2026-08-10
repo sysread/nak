@@ -52,6 +52,11 @@ manages the set itself, the same way it manages its
 inspector still exist (they carry follow-ups), but no intentions
 section appears and none are formed.
 
+The **Let go** group is history and gets long, so only the five most
+recent are shown; a **"Show N more"** link under them tells you how many
+are hidden and reveals the rest in place. Active and paused intentions
+are never collapsed - those are still shaping replies.
+
 If Nak lets a goal go and later takes it back up, the active card is
 marked **"reconsidered"** rather than appearing a second time under
 "Let go" - so the same wording showing up again reads as a deliberate

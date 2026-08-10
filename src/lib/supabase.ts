@@ -858,9 +858,12 @@ export class SupabaseService {
    * Every followup row for the inspector (the follow-ups half of the
    * seedling modal). Same read-only contract and same straggler status
    * as listIntents above. Includes closed rows - the modal shows the
-   * history - capped so an old account's tail doesn't grow the payload
-   * unbounded; the cap comfortably exceeds what the grouped view
-   * renders legibly.
+   * history, collapsed to a preview per group with the hidden count on
+   * the disclosure button ($lib/ui/history-disclosure). No row cap here:
+   * a fetch-side cap silently drops the tail, so the button's count
+   * would understate how much history exists, which is exactly the
+   * dishonesty the collapsed view is built to avoid. Render cost is
+   * bounded by the disclosure instead.
    */
   async listFollowups(): Promise<FollowupInspectorRow[]> {
     const { data, error } = await this.client
@@ -868,8 +871,7 @@ export class SupabaseService {
       .select(
         'id, question, context, status, relevant_after, resolution, created_at, updated_at',
       )
-      .order('updated_at', { ascending: false })
-      .limit(100);
+      .order('updated_at', { ascending: false });
     if (error) throw new SupabaseError(error.message);
     return (data ?? []) as FollowupInspectorRow[];
   }
