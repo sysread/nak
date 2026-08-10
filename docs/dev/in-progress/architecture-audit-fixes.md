@@ -290,7 +290,7 @@ shows).
 **Files.** `supabase/functions/venice/getStreamingResponse.ts`, new `supabase/functions/venice/stream-commit.ts`, new
 `supabase/functions/venice/tools/_attachment_io.ts`.
 
-## Fix 11: Extract resolveStreamContext from index.ts [ ]
+## Fix 11: Extract resolveStreamContext from index.ts [x]
 
 **Problem.** `resolveStreamContext` in `supabase/functions/venice/index.ts` (lines 1089-1264, 175 lines) contains the
 stale-row janitor and the `stream_started_at` pre-row probe. This is stream-lifecycle business logic, not routing glue.
