@@ -1056,8 +1056,13 @@ describe('recipeToHtml — Timers block', () => {
     const instructionsIdx = html.indexOf('Instructions</h3>');
     const timersBlock = html.slice(timersIdx, instructionsIdx);
     expect(timersBlock).toContain('<ul class="cook-timers">');
-    expect(timersBlock).toContain('<li>30 minutes</li>');
-    expect(timersBlock).toContain('<li>rest: 10 minutes</li>');
+    // Anonymous timer: duration in a span, step text in a context span.
+    expect(timersBlock).toContain('cook-timer-duration');
+    expect(timersBlock).toContain('30 minutes');
+    expect(timersBlock).toContain('cook-timer-context');
+    expect(timersBlock).toContain('Simmer');
+    // Named timer: label is the context, no context span.
+    expect(timersBlock).toContain('rest: 10 minutes');
   });
 
   it('places the Timers block after Cookware and before Instructions', () => {
@@ -1100,7 +1105,9 @@ describe('recipeToMarkdown — Timers block', () => {
   it('renders a Timers block with named and anonymous timers', () => {
     const md = recipeToMarkdown('Test', parseCooklang('Simmer ~{30%minutes}.\nLet ~rest{10%minutes}.'));
     expect(md).toContain('## Timers');
-    expect(md).toContain('- 30 minutes');
+    // Anonymous timer: duration followed by step text in parentheses.
+    expect(md).toContain('- 30 minutes (Simmer');
+    // Named timer: label is the context.
     expect(md).toContain('- rest: 10 minutes');
   });
 

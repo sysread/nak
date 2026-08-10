@@ -28,6 +28,45 @@ import type { Recipe, Step, Ingredient, Timer } from './cooklang';
 // ---------------------------------------------------------------------------
 
 /**
+ * A timer paired with the step text it appeared in, so the Timers
+ * list can show context for anonymous timers. Built from
+ * {@link Recipe.steps} by {@link collectTimersWithContext}.
+ */
+interface TimerWithContext {
+  timer: Timer;
+  /** Step text for anonymous timers; null for named timers (the name IS the context). */
+  stepText: string | null;
+}
+
+/**
+ * Walk the recipe steps and collect every time-unit timer, paired
+ * with the text of the step it appeared in. Deduplicates by
+ * (name, duration, unit) - same key the parser's dedupeTimers uses.
+ *
+ * Named timers carry their name as context, so stepText is null.
+ * Anonymous timers carry the step text so the renderer can show
+ * "what was this timer for?" without the cook having to scan the
+ * instructions.
+ */
+function collectTimersWithContext(recipe: Recipe): TimerWithContext[] {
+  const seen = new Set<string>();
+  const out: TimerWithContext[] = [];
+  for (const step of recipe.steps) {
+    for (const timer of step.timers) {
+      if (!isTimeTimer(timer)) continue;
+      const key = `${timer.name ?? ''}|${timer.duration}|${timer.unit ?? ''}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({
+        timer,
+        stepText: timer.name ? null : step.text,
+      });
+    }
+  }
+  return out;
+}
+
+/**
  * Minimal HTML-entity escape for rendering user text into a trusted
  * container. We don't use DOMPurify here - the output has no user-
  * supplied HTML or URLs, just escaped text wrapped in our own tags -
@@ -418,12 +457,23 @@ export function recipeToHtml(recipe: Recipe, opts: RecipeHtmlOptions = {}): stri
     out.push('</ul>');
   }
 
-  const timeTimers = recipe.timers.filter(isTimeTimer);
-  if (timeTimers.length > 0) {
+  const timersWithContext = collectTimersWithContext(recipe);
+  if (timersWithContext.length > 0) {
     out.push('<h3>Timers</h3>');
     out.push('<ul class="cook-timers">');
-    for (const timer of timeTimers) {
-      out.push(`<li>${esc(formatTimer(timer))}</li>`);
+    for (const { timer, stepText } of timersWithContext) {
+      const du = esc(formatTimer(timer));
+      if (stepText) {
+        // Anonymous timer: show the duration, then the step text
+        // as a muted fade-out line so the cook knows what it's for.
+        out.push(
+          `<li><span class="cook-timer-duration">${du}</span>` +
+            `<span class="cook-timer-context">${esc(stepText)}</span></li>`,
+        );
+      } else {
+        // Named timer: the name is the context.
+        out.push(`<li>${du}</li>`);
+      }
     }
     out.push('</ul>');
   }
@@ -758,15 +808,23 @@ export function recipeToMarkdown(
 
   // Timers - same flat treatment as cookware. The markdown target is a
   // human-readable doc, so a glance at "how long does this step take"
-  // is useful prep info. Each timer renders as `name: duration unit`
-  // when named, or `duration unit` when anonymous. Filtered to time
-  // units only - Cooklang timer syntax accepts any unit, and some
-  // recipes use it for non-time measurements like altitude.
-  const mdTimeTimers = recipe.timers.filter(isTimeTimer);
-  if (mdTimeTimers.length > 0) {
+  // is useful prep info. Named timers show `name: duration unit`;
+  // anonymous timers show `duration unit` followed by the step text
+  // in parentheses so the context survives the copy-paste. Filtered
+  // to time units only.
+  const mdTimers = collectTimersWithContext(recipe);
+  if (mdTimers.length > 0) {
     lines.push('## Timers', '');
-    for (const timer of mdTimeTimers) {
-      lines.push(`- ${formatTimer(timer)}`);
+    for (const { timer, stepText } of mdTimers) {
+      const du = formatTimer(timer);
+      if (stepText) {
+        // Truncate step text for the markdown target - no fade-out
+        // CSS here, so cap at a reasonable length.
+        const ctx = stepText.length > 80 ? stepText.slice(0, 77) + '...' : stepText;
+        lines.push(`- ${du} (${ctx})`);
+      } else {
+        lines.push(`- ${du}`);
+      }
     }
     lines.push('');
   }

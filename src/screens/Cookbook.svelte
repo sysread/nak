@@ -2266,6 +2266,49 @@
     opacity: 0.75;
   }
 
+  /* Timers list - same list-style as ingredients/cookware (accent dot
+     marker). Anonymous timers get a fade-out context line beneath the
+     duration showing the step text, so a cook scanning the list knows
+     what each timer is for without reading the full instructions. */
+  .cookbook-render :global(ul.cook-timers) {
+    list-style: none;
+    margin: 0.25rem 0 0.75rem;
+    padding: 0;
+  }
+  .cookbook-render :global(ul.cook-timers li) {
+    position: relative;
+    padding: 0.15rem 0 0.15rem 1rem;
+  }
+  .cookbook-render :global(ul.cook-timers li::before) {
+    content: '';
+    position: absolute;
+    left: 0.2rem;
+    top: 0.7em;
+    width: 0.35rem;
+    height: 0.35rem;
+    border-radius: var(--radius-round);
+    background: var(--accent);
+    opacity: 0.75;
+  }
+  .cookbook-render :global(.cook-timer-duration) {
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+  }
+  .cookbook-render :global(.cook-timer-context) {
+    display: block;
+    color: var(--muted);
+    font-style: italic;
+    font-size: 0.85em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: clip;
+    /* Fade-out at the end of the line instead of an ellipsis. A
+       mask-image gradient fades the last ~4rem into transparency.
+       -webkit prefix for Safari; standard mask for everything else. */
+    -webkit-mask-image: linear-gradient(to right, black calc(100% - 4rem), transparent);
+    mask-image: linear-gradient(to right, black calc(100% - 4rem), transparent);
+  }
+
   /* Quantity chip — tiny inline pill that picks up the accent tint.
      Lets a skimming eye lock onto the numbers first ("1 cup… 2 tsp…")
      before resolving the ingredient name. `tabular-nums` keeps mixed
