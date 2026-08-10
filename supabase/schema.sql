@@ -7842,6 +7842,85 @@ end $$;
 revoke all on function public.samskara_reap_untested(int) from public, anon, authenticated;
 grant execute on function public.samskara_reap_untested(int) to service_role;
 
+-- Junk-thread fire expiry: stamp a terminal 'not-engaged' on fires
+-- whose owning thread the judge will never evaluate.
+--
+-- Fires are recorded on EVERY user message, including the first
+-- message of a thread. The evaluation sweep's junk-data gate skips
+-- threads with fewer than two user messages forever (a one-round
+-- lookup is not evidence about the user), so fires on abandoned
+-- one-round threads stay verdict-null permanently. Left alone, that
+-- sediment poisons two other readings: the "awaiting judgment" count
+-- grows without bound (measured 2026-08-10: 1,840 of 2,084 pending
+-- fires were sediment, the oldest from April), and - much worse - the
+-- spare-the-pending-test guard in samskara_reap_untested and
+-- samskara_evict_for_mint reads each sediment fire as "test in
+-- flight" and permanently shields its samskara: 132 of 150 tier-1
+-- rows were exempt from every guarded release path.
+--
+-- 'not-engaged' is the honest terminal verdict: the predicted
+-- situation never genuinely arose in that thread. It carries no
+-- health evidence (the sweep never passes not-engaged fires to
+-- samskara_apply_evaluation), so expiry only unblocks bookkeeping -
+-- it cannot move any posterior.
+--
+-- The abandonment test is ACTIVITY-relative, not wall-clock: a
+-- thread's fires expire only once the user has written a message in
+-- a DIFFERENT thread at least 24h after this thread's newest
+-- message - "came back and moved on". A user idle for a week or a
+-- month produces no later activity, so nothing expires while they
+-- are away, and the gap can never be caused by absence alone.
+--
+-- If an expired thread later gains its second user round, the judge
+-- evaluates the thread normally; the pre-stamped round-1 fires keep
+-- their terminal verdict (a small, accepted evidence loss - the
+-- alternative is sediment that never clears).
+create or replace function public.samskara_expire_junk_thread_fires()
+returns int
+language plpgsql security definer set search_path = public as $$
+declare
+  affected int;
+begin
+  with junk_threads as (
+    select t.id, t.user_id, newest.at as newest_at
+      from public.threads t
+      cross join lateral (
+        select max(m.created_at) as at
+          from public.messages m where m.thread_id = t.id
+      ) newest
+     where exists (
+             select 1 from public.samskara_fires f
+              where f.thread_id = t.id and f.verdict is null
+           )
+       and (
+             select count(*) from public.messages m
+              where m.thread_id = t.id and m.role = 'user'
+           ) < 2
+  ),
+  abandoned as (
+    select jt.id
+      from junk_threads jt
+     where exists (
+             select 1
+               from public.messages m2
+               join public.threads t2 on t2.id = m2.thread_id
+              where t2.user_id = jt.user_id
+                and m2.thread_id <> jt.id
+                and m2.role = 'user'
+                and m2.created_at >= jt.newest_at + interval '24 hours'
+           )
+  )
+  update public.samskara_fires f
+     set verdict = 'not-engaged'
+    from abandoned a
+   where f.thread_id = a.id
+     and f.verdict is null;
+  get diagnostics affected = row_count;
+  return affected;
+end $$;
+revoke all on function public.samskara_expire_junk_thread_fires() from public, anon, authenticated;
+grant execute on function public.samskara_expire_junk_thread_fires() to service_role;
+
 -- Cap-pressure eviction: free one tier-1 slot for a pending mint by
 -- deleting the corpus's most-disproven untested row. Called by the
 -- mint-tier1 probe only when the population cap blocks a mint, so
@@ -7892,10 +7971,13 @@ grant execute on function public.samskara_reap_untested(int) to service_role;
 -- the first two carry: that guard exists to spare a row whose
 -- in-flight fire may be its FIRST genuine test, but a row this far
 -- under water cannot be exonerated by one more verdict (a single held
--- moves the posterior only a few points), and on any active day the
--- guard would empty the pool entirely (measured 2026-08: 115 of 150
--- tier-1 rows carried a fire awaiting next-day judgment, leaving 1
--- eligible victim out of 11 below the ratio). Ranked lowest-health
+-- moves the posterior only a few points), and the guard shrinks the
+-- pool sharply on any active day - every row that fired since the
+-- last judge pass carries a pending fire (measured 2026-08: the guard
+-- left 1 eligible victim out of 11 below the ratio; most of that
+-- pending-set was junk-thread sediment, since cleared by
+-- samskara_expire_junk_thread_fires, but same-day pendings alone
+-- still cover much of an active corpus). Ranked lowest-health
 -- first, larger evidence tally as the tiebreak (the better-measured
 -- failure goes before the marginal one).
 --
@@ -13599,13 +13681,18 @@ $cron$;
 -- and the samskara_decay_sweep function itself is dropped above.
 --
 -- The freed minute-13 slot now drives the REAPERS: pure-SQL passes (no
--- pg_net, same shape the old decay used). samskara_reap_dead deletes
--- repeatedly-contradicted, long-quiet samskaras; samskara_reap_untested
--- deletes never-genuinely-tested rows past the 45-day probation window
--- (the one-off-lookup mints that would otherwise hold tier-1 slots at
--- the p0 baseline forever). Tested-and-baseline rows are spared by
--- both. Was :13/:43; one pass a day's worth of cadence suffices, so a
--- single :13 tick runs both in one statement.
+-- pg_net, same shape the old decay used). samskara_expire_junk_thread_fires
+-- runs FIRST so the guards in the two reapers see its terminal verdicts
+-- in the same tick: it clears the permanently-unjudgeable fires on
+-- abandoned one-round threads that would otherwise read as "test in
+-- flight" and shield their samskaras from every release path.
+-- samskara_reap_dead deletes repeatedly-contradicted, long-quiet
+-- samskaras; samskara_reap_untested deletes never-genuinely-tested rows
+-- past the 45-day probation window (the one-off-lookup mints that would
+-- otherwise hold tier-1 slots at the p0 baseline forever).
+-- Tested-and-baseline rows are spared by both. Was :13/:43; one pass a
+-- day's worth of cadence suffices, so a single :13 tick runs all three
+-- in one statement.
 do $cron$
 begin
   if exists (select 1 from pg_available_extensions where name = 'pg_cron') then
@@ -13619,7 +13706,7 @@ begin
     perform cron.schedule(
       'nak-samskara-reap',
       '13 * * * *',
-      $job$ select public.samskara_reap_dead(), public.samskara_reap_untested(); $job$
+      $job$ select public.samskara_expire_junk_thread_fires(), public.samskara_reap_dead(), public.samskara_reap_untested(); $job$
     );
   end if;
 exception when others then
