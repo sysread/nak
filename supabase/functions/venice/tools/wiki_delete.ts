@@ -8,7 +8,7 @@
 
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { appendWikiChangelog } from './_wiki_helpers.ts';
-import { ArgErrors, rejectUnknownArgs } from './_validate.ts';
+import { ArgErrors } from './_validate.ts';
 import { MAX_WIKI_CHANGELOG_MESSAGE_CHARS } from '../../_shared/wiki-limits.ts';
 
 export const wikiDelete: ToolDef = {
@@ -18,7 +18,6 @@ export const wikiDelete: ToolDef = {
     const message = typeof args.message === 'string' ? args.message.trim() : '';
 
     const errs = new ArgErrors();
-    rejectUnknownArgs(errs, args, ['id', 'message']);
     if (!id) errs.add('id is required');
     if (!message) errs.add('message is required');
     else if (message.length > MAX_WIKI_CHANGELOG_MESSAGE_CHARS) {

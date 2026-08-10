@@ -26,14 +26,16 @@ import { registerTool, type ToolDef } from '../performToolCall.ts';
 const ASK_USER_PENDING_FLAG = '__ask_user_pending__';
 
 // Mirror of the limits in src/lib/tools/ask_user.schema.ts. The
-// schema-side enforces these at request-build time too; we clamp
-// here as belt-and-braces in case a malformed args string snuck
-// past Venice's tools validation.
+// schema-side enforces these at request-build time; the central
+// validator (performToolCall) enforces them at dispatch time.
+// We clamp here as belt-and-braces in case a malformed args string
+// snuck past both. Values match the schema exactly so the clamps
+// never reject a call the schema would accept.
 const ASK_USER_MIN_OPTIONS = 2;
-const ASK_USER_MAX_OPTIONS = 5;
-const ASK_USER_QUESTION_MAX_CHARS = 280;
+const ASK_USER_MAX_OPTIONS = 4;
+const ASK_USER_QUESTION_MAX_CHARS = 240;
 const ASK_USER_LABEL_MAX_CHARS = 60;
-const ASK_USER_DESCRIPTION_MAX_CHARS = 280;
+const ASK_USER_DESCRIPTION_MAX_CHARS = 200;
 
 interface AskUserOption {
   label: string;

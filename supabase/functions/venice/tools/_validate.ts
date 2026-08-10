@@ -97,3 +97,149 @@ export class ArgErrors {
     }
   }
 }
+
+// Check whether a value matches a JSON Schema type string. Only the five
+// types the validator supports are checked; an unrecognised type string
+// (or a non-string type field) passes through as a match so the validator
+// does not reject on a schema it doesn't fully understand.
+function matchesJsonType(value: unknown, expectedType: string): boolean {
+  switch (expectedType) {
+    case 'string':
+      return typeof value === 'string';
+    case 'number':
+      return typeof value === 'number';
+    case 'boolean':
+      return typeof value === 'boolean';
+    case 'array':
+      return Array.isArray(value);
+    case 'object':
+      // JSON null is its own type, not an object.
+      return typeof value === 'object' && value !== null && !Array.isArray(value);
+    default:
+      return true;
+  }
+}
+
+// Central schema-based argument validator. Runs the JSON Schema checks that
+// are mechanical enough to generalise - unknown keys (additionalProperties),
+// missing required fields, type mismatches, string length bounds, numeric
+// range bounds, and enum membership - and throws an ArgErrors combined error
+// listing every problem in one pass.
+//
+// This does NOT replace per-tool validation: cross-field rules, semantic
+// constraints, and type coercion (like requireFiniteNumber accepting quoted
+// numerics) stay in the tool. The validator rejects type mismatches rather
+// than coercing, so tools that rely on coercion keep their own logic and
+// call validateToolArgs first for the mechanical checks.
+//
+// Only top-level properties are checked. Nested objects and array items are
+// left to the tool, which has the domain knowledge to validate them.
+export function validateToolArgs(
+  schema: Record<string, unknown> | undefined,
+  args: Record<string, unknown>,
+): void {
+  if (!schema) return;
+  const properties = schema.properties as
+    | Record<string, Record<string, unknown>>
+    | undefined;
+  if (!properties) return;
+
+  const errs = new ArgErrors();
+  const knownKeys = Object.keys(properties);
+
+  // Unknown-key rejection. Only fires when the schema explicitly closes the
+  // object with additionalProperties: false - schemas that allow extra keys
+  // pass them through. This replaces the per-tool rejectUnknownArgs calls,
+  // which hardcoded the known-key list; the schema already has it.
+  if (schema.additionalProperties === false) {
+    for (const key of Object.keys(args)) {
+      if (!knownKeys.includes(key)) {
+        errs.add(
+          `unrecognized parameter: ${key} - check the tool spec for the valid parameters`,
+        );
+      }
+    }
+  }
+
+  // Required-field check. The `activity` param is injected into the schema's
+  // properties and required array at wire-projection time (injectActivityParam
+  // in src/lib/tools/wire.ts) so the model narrates each call. The dispatcher
+  // strips `activity` from args before calling the validator, so it is always
+  // absent from args. Skipping it here prevents a false "missing required
+  // parameter: activity" rejection on every single tool call. This is the
+  // one hard-coded exemption in the validator.
+  const required = Array.isArray(schema.required)
+    ? (schema.required as string[])
+    : [];
+  for (const field of required) {
+    if (field === 'activity') continue;
+    if (args[field] === undefined) {
+      errs.add(`missing required parameter: ${field}`);
+    }
+  }
+
+  // Per-property checks: type, length bounds, range bounds, enum. Only keys
+  // the schema declares are checked here; unknown keys were handled above.
+  for (const [name, value] of Object.entries(args)) {
+    const propSchema = properties[name];
+    if (!propSchema) continue;
+
+    const expectedType = propSchema.type;
+    if (
+      typeof expectedType === 'string' &&
+      !matchesJsonType(value, expectedType)
+    ) {
+      errs.add(
+        `type error: ${name} expects a ${expectedType}, but ${describeJsonType(value)} was found`,
+      );
+      // A type mismatch makes the length/range/enum checks meaningless -
+      // you can't check maxLength on a number. Skip to the next property
+      // so the model gets the one fix that matters: correct the type.
+      continue;
+    }
+
+    if (
+      typeof value === 'string' &&
+      typeof propSchema.maxLength === 'number' &&
+      value.length > propSchema.maxLength
+    ) {
+      errs.add(
+        `${name} exceeds maximum length of ${propSchema.maxLength} characters (got ${value.length})`,
+      );
+    }
+
+    if (
+      typeof value === 'string' &&
+      typeof propSchema.minLength === 'number' &&
+      value.length < propSchema.minLength
+    ) {
+      errs.add(
+        `${name} is shorter than minimum length of ${propSchema.minLength} characters`,
+      );
+    }
+
+    if (
+      typeof value === 'number' &&
+      typeof propSchema.minimum === 'number' &&
+      value < propSchema.minimum
+    ) {
+      errs.add(`${name} is below the minimum of ${propSchema.minimum}`);
+    }
+
+    if (
+      typeof value === 'number' &&
+      typeof propSchema.maximum === 'number' &&
+      value > propSchema.maximum
+    ) {
+      errs.add(`${name} exceeds the maximum of ${propSchema.maximum}`);
+    }
+
+    if (Array.isArray(propSchema.enum) && !propSchema.enum.includes(value)) {
+      errs.add(
+        `${name} must be one of: ${(propSchema.enum as unknown[]).join(', ')}`,
+      );
+    }
+  }
+
+  errs.throwIfAny();
+}

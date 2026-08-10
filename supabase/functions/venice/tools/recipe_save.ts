@@ -10,7 +10,7 @@
 // if that file's check list grows, mirror the additions here.
 
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
-import { ArgErrors, rejectUnknownArgs } from './_validate.ts';
+import { ArgErrors } from './_validate.ts';
 
 // Mirror of src/lib/recipe-limits.ts - the caps the wire schema
 // advertises. Divergent copies here rejected schema-legal bodies.
@@ -33,7 +33,6 @@ export const recipeSave: ToolDef = {
         ? args.source_url.trim()
         : null;
     const errs = new ArgErrors();
-    rejectUnknownArgs(errs, args, ['title', 'cooklang', 'change_message', 'rating', 'source', 'source_url']);
     let rating: number | null = null;
     if (typeof args.rating === 'number') {
       if (!Number.isInteger(args.rating) || args.rating < 1 || args.rating > 5) {

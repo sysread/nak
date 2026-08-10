@@ -11,7 +11,7 @@ import {
   MAX_FOLLOWUP_CONTEXT_CHARS,
   MAX_FOLLOWUP_QUESTION_CHARS,
 } from '../../_shared/followups.ts';
-import { ArgErrors, rejectUnknownArgs } from './_validate.ts';
+import { ArgErrors } from './_validate.ts';
 
 /**
  * Parse the model-supplied relevant_after into an ISO timestamptz.
@@ -35,7 +35,6 @@ export const followupCreate: ToolDef = {
     const context = typeof args.context === 'string' ? args.context.trim() : '';
 
     const errs = new ArgErrors();
-    rejectUnknownArgs(errs, args, ['question', 'context', 'relevant_after']);
     if (!question) errs.add('question is required');
     else if (question.length > MAX_FOLLOWUP_QUESTION_CHARS) {
       errs.add(

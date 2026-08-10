@@ -29,7 +29,7 @@ import {
   memoryDataBudgetError,
   readMemoryDataLengths,
 } from './_memory_data_budget.ts';
-import { ArgErrors, rejectUnknownArgs } from './_validate.ts';
+import { ArgErrors } from './_validate.ts';
 
 const MAX_MEMORY_CHANGELOG_MESSAGE_CHARS = 200;
 
@@ -40,7 +40,6 @@ export const memoryReshape: ToolDef = {
     const message = typeof args.message === 'string' ? args.message.trim() : '';
 
     const errs = new ArgErrors();
-    rejectUnknownArgs(errs, args, ['id', 'label', 'data', 'message']);
     if (!id) errs.add('id is required');
     if (!message) errs.add('message is required');
     else if (message.length > MAX_MEMORY_CHANGELOG_MESSAGE_CHARS) {

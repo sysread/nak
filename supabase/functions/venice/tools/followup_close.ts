@@ -9,7 +9,7 @@
 
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { MAX_FOLLOWUP_RESOLUTION_CHARS } from '../../_shared/followups.ts';
-import { ArgErrors, rejectUnknownArgs } from './_validate.ts';
+import { ArgErrors } from './_validate.ts';
 
 export const followupClose: ToolDef = {
   name: 'followup_close',
@@ -18,7 +18,6 @@ export const followupClose: ToolDef = {
     const resolution = typeof args.resolution === 'string' ? args.resolution.trim() : '';
 
     const errs = new ArgErrors();
-    rejectUnknownArgs(errs, args, ['id', 'resolution']);
     if (!id) errs.add('id is required (from followup_list)');
     if (!resolution) errs.add('resolution is required - one line on what the answer was');
     else if (resolution.length > MAX_FOLLOWUP_RESOLUTION_CHARS) {

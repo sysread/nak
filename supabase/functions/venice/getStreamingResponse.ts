@@ -84,6 +84,7 @@ import {
   buildToolsFromCatalog,
   enabledSetFromToggleResult,
   type ToolCatalog,
+  schemaMapFromCatalog,
 } from './tool_catalog.ts';
 
 // Magic flag the ask_user tool returns to suspend the round chain
@@ -241,6 +242,13 @@ export async function getStreamingResponse(
   // used to be. runId stays in each message as the per-turn
   // correlator.
   const log = createEdgeLogger(opts.userId, 'stream');
+
+  // Build a name -> JSON Schema lookup from the tool catalog once
+  // per turn. Passed to runOneToolCall for central schema validation
+  // before dispatch. Null when no catalog shipped (older browser or
+  // test); the validator is a no-op in that case.
+  const schemaMap = schemaMapFromCatalog(opts.toolCatalog ?? null);
+
   log.debug(
     `${runId} start model=${opts.bodyTemplate.model ?? 'unknown'} toolsLen=${Array.isArray(opts.bodyTemplate.tools) ? opts.bodyTemplate.tools.length : 0}`,
   );
@@ -703,7 +711,7 @@ export async function getStreamingResponse(
         `${runId} round ${round} dispatching ${roundToolCalls.length} tool call(s): ${roundToolCalls.map((tc) => tc.name).join(', ')}`,
       );
       const outcomes = await Promise.all(
-        roundToolCalls.map((tc) => runOneToolCall(tc, ctx)),
+        roundToolCalls.map((tc) => runOneToolCall(tc, ctx, schemaMap)),
       );
       log.info(
         `${runId} round ${round} outcomes: ${outcomes.map((o) => `${o.request.name}=${o.ok ? 'ok' : 'err'}`).join(', ')}`,
@@ -1286,9 +1294,11 @@ interface ToolOutcome {
 async function runOneToolCall(
   request: ToolCallRequest,
   ctx: ToolContext,
+  schemaMap: Map<string, Record<string, unknown>> | null,
 ): Promise<ToolOutcome> {
   try {
-    const result = await performToolCall(request, ctx);
+    const schema = schemaMap?.get(request.name);
+    const result = await performToolCall(request, ctx, schema);
     return { request, ok: true, result, errorMessage: '' };
   } catch (err) {
     const message = err instanceof Error

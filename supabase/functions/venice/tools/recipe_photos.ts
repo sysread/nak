@@ -20,7 +20,6 @@
 // recipe.
 
 import { requireThreadId, registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
-import { ArgErrors, rejectUnknownArgs } from './_validate.ts';
 
 interface AttachmentRow {
   id: string;
@@ -68,11 +67,6 @@ function projectPhotos(
 export const recipePhotosAttach: ToolDef = {
   name: 'recipe_photos_attach',
   async execute(args: Record<string, unknown>, ctx: ToolContext) {
-    {
-      const errs = new ArgErrors();
-      rejectUnknownArgs(errs, args, ['recipe_id', 'filenames', 'labels', 'change_message']);
-      errs.throwIfAny();
-    }
     const recipeId = typeof args.recipe_id === 'string' ? args.recipe_id : '';
     if (!recipeId) throw new Error('recipe_id is required');
     const filenames = Array.isArray(args.filenames)
@@ -241,11 +235,6 @@ export const recipePhotosAttach: ToolDef = {
 export const recipePhotosRemove: ToolDef = {
   name: 'recipe_photos_remove',
   async execute(args: Record<string, unknown>, ctx: ToolContext) {
-    {
-      const errs = new ArgErrors();
-      rejectUnknownArgs(errs, args, ['recipe_id', 'photo_ids', 'change_message']);
-      errs.throwIfAny();
-    }
     const recipeId = typeof args.recipe_id === 'string' ? args.recipe_id : '';
     if (!recipeId) throw new Error('recipe_id is required');
     const photoIds = Array.isArray(args.photo_ids)
@@ -281,11 +270,6 @@ export const recipePhotosRemove: ToolDef = {
 export const recipePhotosReorder: ToolDef = {
   name: 'recipe_photos_reorder',
   async execute(args: Record<string, unknown>, ctx: ToolContext) {
-    {
-      const errs = new ArgErrors();
-      rejectUnknownArgs(errs, args, ['recipe_id', 'photo_ids', 'change_message']);
-      errs.throwIfAny();
-    }
     const recipeId = typeof args.recipe_id === 'string' ? args.recipe_id : '';
     if (!recipeId) throw new Error('recipe_id is required');
     const photoIds = Array.isArray(args.photo_ids)
@@ -323,11 +307,6 @@ export const recipePhotosReorder: ToolDef = {
 export const recipePhotoLabelSet: ToolDef = {
   name: 'recipe_photo_label_set',
   async execute(args: Record<string, unknown>, ctx: ToolContext) {
-    {
-      const errs = new ArgErrors();
-      rejectUnknownArgs(errs, args, ['recipe_id', 'labels', 'change_message']);
-      errs.throwIfAny();
-    }
     const recipeId = typeof args.recipe_id === 'string' ? args.recipe_id : '';
     if (!recipeId) throw new Error('recipe_id is required');
     // Param names mirror the wire schema exactly (labels / photo_id):

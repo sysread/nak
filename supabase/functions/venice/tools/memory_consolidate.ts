@@ -28,7 +28,7 @@ import {
   memoryDataBudgetError,
   readMemoryDataLengths,
 } from './_memory_data_budget.ts';
-import { ArgErrors, rejectUnknownArgs } from './_validate.ts';
+import { ArgErrors } from './_validate.ts';
 
 export const memoryConsolidate: ToolDef = {
   name: 'memory_consolidate',
@@ -40,7 +40,6 @@ export const memoryConsolidate: ToolDef = {
     const data = typeof args.data === 'string' ? args.data : '';
 
     const errs = new ArgErrors();
-    rejectUnknownArgs(errs, args, ['survivor_id', 'loser_id', 'label', 'data']);
     if (!survivorId) errs.add('survivor_id is required');
     if (!loserId) errs.add('loser_id is required');
     // Only meaningful once both ids are present; otherwise the empty-string

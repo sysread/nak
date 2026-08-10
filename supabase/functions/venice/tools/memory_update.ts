@@ -12,7 +12,7 @@ import {
   memoryDataBudgetError,
   readMemoryDataLengths,
 } from './_memory_data_budget.ts';
-import { ArgErrors, rejectUnknownArgs, requireFiniteNumber } from './_validate.ts';
+import { ArgErrors, requireFiniteNumber } from './_validate.ts';
 
 const MAX_MEMORY_CHANGELOG_MESSAGE_CHARS = 200;
 
@@ -23,7 +23,6 @@ export const memoryUpdate: ToolDef = {
     const message = typeof args.message === 'string' ? args.message.trim() : '';
 
     const errs = new ArgErrors();
-    rejectUnknownArgs(errs, args, ['id', 'label', 'data', 'message', 'confidence']);
     if (!id) errs.add('id is required');
     // The changelog message is optional: when the model omits it we
     // synthesize one from the row's label so an edit never blocks on it.

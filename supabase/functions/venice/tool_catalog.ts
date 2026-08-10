@@ -123,3 +123,29 @@ export function enabledSetFromToggleResult(result: unknown): string[] | null {
   if (!enabled.every((n): n is string => typeof n === 'string')) return null;
   return enabled;
 }
+
+/**
+ * Build a name -> parameters lookup from the catalog. Used by the
+ * central validator in performToolCall to find the JSON Schema for a
+ * called tool without scanning the catalog on every call.
+ *
+ * Returns null when the catalog is null (no catalog shipped). An empty
+ * map means the catalog shipped but no defs had readable names - the
+ * validator will be a no-op for every call, which is safe.
+ */
+export function schemaMapFromCatalog(
+  catalog: ToolCatalog | null,
+): Map<string, Record<string, unknown>> | null {
+  if (!catalog) return null;
+  const map = new Map<string, Record<string, unknown>>();
+  for (const def of [...catalog.alwaysOn, ...Object.values(catalog.gated).flat()]) {
+    const name = wireName(def);
+    if (!name) continue;
+    const fn = (def as Record<string, unknown>).function as Record<string, unknown> | undefined;
+    const params = fn?.parameters;
+    if (params && typeof params === 'object') {
+      map.set(name, params as Record<string, unknown>);
+    }
+  }
+  return map;
+}

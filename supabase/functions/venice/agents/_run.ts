@@ -27,6 +27,7 @@ import {
   sanitizeToolCallsForWire,
   type OpenAIToolCall,
 } from './_wire.ts';
+import { validateToolArgs } from '../tools/_validate.ts';
 
 // Upper bound on rounds a headless run can take. Coarse backstop, not
 // a per-task cap.
@@ -196,6 +197,10 @@ async function executeToolboxCall(
         `Agents are bounded contexts; the model called a tool it does not have access to.`,
     );
   }
+  // Central schema validation: check args against the tool's wire
+  // schema before dispatch. Closes the gap on the 38 tools that
+  // had no rejectUnknownArgs and standardizes error messages.
+  validateToolArgs(tool.wire.function.parameters, args);
   return await tool.execute(args, ctx);
 }
 

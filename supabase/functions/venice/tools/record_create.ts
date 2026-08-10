@@ -10,7 +10,7 @@
 // carries the live thread), so a record records where it came from.
 
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
-import { ArgErrors, rejectUnknownArgs } from './_validate.ts';
+import { ArgErrors } from './_validate.ts';
 import {
   MAX_WIKI_RECORD_CONTENT_CHARS,
   RECORD_COLUMNS,
@@ -29,7 +29,6 @@ export const recordCreate: ToolDef = {
     const tags = normalizeRecordTags(args.tags);
 
     const errs = new ArgErrors();
-    rejectUnknownArgs(errs, args, ['article_id', 'content', 'date', 'tags']);
     if (!articleId) errs.add('article_id is required');
     if (!date) errs.add(dateErr ?? 'date is required (ISO "YYYY-MM-DD")');
     if (!content) errs.add('content is required');

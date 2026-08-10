@@ -336,7 +336,7 @@ metadata (score, valence, confidence, health) displays with correct formatting.
 
 **Files.** `src/components/CohortPanel.svelte`, `src/lib/ui/cohort-panel.ts`, `tests/cohort-panel.test.ts`.
 
-## Fix 14: Centralize tool argument validation at the dispatch points [ ]
+## Fix 14: Centralize tool argument validation at the dispatch points [x]
 
 **Problem.** Every tool hand-rolls its own argument validation. There is no central validator. The browser is the source
 of truth for tool specs (`src/lib/tools/*.schema.ts`, composed by `buildToolList` in `src/lib/tools/index.ts`). The edge

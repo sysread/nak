@@ -8,7 +8,7 @@
 // Wire schema lives in src/lib/tools/memory_relate.schema.ts.
 
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
-import { ArgErrors, rejectUnknownArgs } from './_validate.ts';
+import { ArgErrors } from './_validate.ts';
 
 // Mirror of RELATION_KINDS / MEMORY_RELATE_MAX_NOTE_CHARS in
 // src/lib/tools/memory_relate.schema.ts.
@@ -30,7 +30,6 @@ export const memoryRelate: ToolDef = {
     const toId = typeof args.to_id === 'string' ? args.to_id : '';
     const kindArg = typeof args.kind === 'string' ? args.kind : '';
     const errs = new ArgErrors();
-    rejectUnknownArgs(errs, args, ['from_id', 'to_id', 'kind', 'note']);
     if (!fromId) errs.add('from_id is required');
     if (!toId) errs.add('to_id is required');
     if (!kindArg) errs.add('kind is required');

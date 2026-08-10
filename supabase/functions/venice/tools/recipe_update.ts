@@ -12,7 +12,7 @@
 // needs to see the current photos.
 
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
-import { ArgErrors, rejectUnknownArgs } from './_validate.ts';
+import { ArgErrors } from './_validate.ts';
 
 // Mirror of src/lib/recipe-limits.ts - the caps the wire schema
 // advertises. Divergent copies here rejected schema-legal bodies.
@@ -27,7 +27,6 @@ export const recipeUpdate: ToolDef = {
     const id = typeof args.id === 'string' ? args.id : '';
 
     const errs = new ArgErrors();
-    rejectUnknownArgs(errs, args, ['id', 'title', 'cooklang', 'change_message', 'rating', 'source', 'source_url']);
     if (!id) errs.add('id is required');
 
     // Build the RPC arg bundle from the patch shape. The RPC uses

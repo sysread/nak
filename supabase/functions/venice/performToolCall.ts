@@ -39,11 +39,8 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ToolCallRequest } from '../_shared/venice-stream.ts';
-// MCP-routed dispatch is a per-user concern resolved at call time
-// from the mcp_integrations cache; imported here rather than
-// self-registered into the static REGISTRY because there is no
-// single impl - the wire name carries the integration id.
 import { dispatchMcpTool, isMcpToolName } from './mcp/dispatch.ts';
+import { validateToolArgs } from './tools/_validate.ts';
 
 /**
  * Per-tool execution context the function side passes into every
@@ -188,23 +185,30 @@ export class ToolNotImplementedError extends Error {
 export async function performToolCall(
   request: ToolCallRequest,
   ctx: ToolContext,
+  schema?: Record<string, unknown>,
 ): Promise<unknown> {
   // The chat wire injects a REQUIRED `activity` narration param into
   // every tool def (src/lib/tools/wire.ts) for the UI's tool-call
   // pills; it belongs to the harness, not the tool. Strip it before
-  // dispatch: tools validate unknown argument keys (rejectUnknownArgs
-  // in _validate.ts) and would otherwise reject the very key the wire
-  // schema demands on every call. The agent runner (_run.ts) does the
-  // same for narrated agent toolboxes.
+  // validation and dispatch: the central validator checks
+  // additionalProperties against the schema (which includes activity
+  // as a known property), and tools would otherwise reject the very
+  // key the wire schema demands on every call. The agent runner
+  // (_run.ts) does the same for narrated agent toolboxes.
   const { activity: _activity, ...args } = request.args;
+
+  // Central schema validation: check args against the tool's JSON
+  // Schema before dispatch. Closes the gap on the 38 tools that had
+  // no rejectUnknownArgs and standardizes error messages. MCP tools
+  // are skipped (no server-side schema; the MCP server validates its
+  // own). When no schema is passed (e.g. tests), validation is a
+  // no-op.
+  if (schema && !isMcpToolName(request.name)) {
+    validateToolArgs(schema, args);
+  }
+
   const tool = REGISTRY.get(request.name);
   if (tool) return await tool.execute(args, ctx);
-  // MCP-routed tools are not in the static registry; dispatch via
-  // the MCP client. The wire name `mcp:<integrationId>:<tool>`
-  // carries the integration pointer; `dispatchMcpTool` resolves it
-  // against `ctx.adminClient` + `ctx.userId` (b-strict service-role).
-  // The stripped args ride along - MCP servers validate their own
-  // schemas and `activity` is not in them either.
   if (isMcpToolName(request.name)) {
     return await dispatchMcpTool({ ...request, args }, ctx);
   }
