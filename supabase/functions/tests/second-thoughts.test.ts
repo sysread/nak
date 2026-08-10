@@ -10,7 +10,7 @@
 import { assert, assertEquals } from '@std/assert';
 import { __test } from '../venice/agents/second_thoughts.ts';
 
-const { parseVerdict, serializeExchange } = __test;
+const { parseVerdict, serializeExchange, serializeBackground } = __test;
 
 // --- parseVerdict -------------------------------------------------------
 
@@ -133,4 +133,35 @@ Deno.test('serializeExchange surfaces a tool URL even when it sits past the trun
   // Even though the URL is far past the 4k cutoff, it is surfaced.
   assert(out.includes('source URLs this tool returned'));
   assert(out.includes(url), 'the cited URL must survive truncation');
+});
+
+// --- serializeBackground ------------------------------------------------
+
+Deno.test('serializeBackground fences prior turns separately from the review', () => {
+  const out = serializeBackground([
+    { id: '1', role: 'user', content: 'I keep bees on the north field', reasoning: null, tool_calls: null, tool_call_id: null, name: null },
+    { id: '2', role: 'assistant', content: 'Three hives is a good start.', reasoning: 'irrelevant here', tool_calls: null, tool_call_id: null, name: null },
+  ]);
+  assert(out.startsWith('<conversation_so_far>'));
+  assert(out.trimEnd().endsWith('</conversation_so_far>'));
+  assert(out.includes('I keep bees'));
+  // Background is WHAT was discussed, not how the answer was reached -
+  // reasoning stays out so the block cannot be mistaken for a second
+  // exchange to review.
+  assert(!out.includes('irrelevant here'));
+});
+
+Deno.test('serializeBackground clips a long prior message', () => {
+  const long = 'q'.repeat(5000);
+  const out = serializeBackground([
+    { id: '1', role: 'assistant', content: long, reasoning: null, tool_calls: null, tool_call_id: null, name: null },
+  ]);
+  assert(out.includes('...[clipped]'));
+  assert(!out.includes(long));
+});
+
+Deno.test('serializeBackground emits nothing on a first turn', () => {
+  // No history means the prompt must be byte-identical to what it was
+  // before background existed - the caller skips the block entirely.
+  assertEquals(serializeBackground([]), '');
 });
