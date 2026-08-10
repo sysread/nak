@@ -24,6 +24,14 @@
 // topic reads as invented context when the earlier topic is invisible.
 // Background establishes what was said; it is not reviewed itself.
 //
+// The other fabrication-shaped false positive is about PROVENANCE: the
+// reviewer flags correctly-sourced citations because the evidence for
+// them is outside what it was shown. Tool results are truncated, and
+// earlier turns' tool results are absent entirely, so the serializer
+// preserves the evidence that survives cheaply - the URLs a tool
+// returned (this turn and earlier) and a mechanical verbatim check of
+// the assistant's quotations against the FULL untruncated results.
+//
 // The DELIBERATION half is the user-triggered refinement in
 // Chat.svelte; an unacted doubt just displays.
 //
@@ -134,6 +142,8 @@ interface TurnContext {
   slice: TurnRow[];
   /** The last few user/assistant rows before the anchor, oldest first. */
   background: TurnRow[];
+  /** Source URLs that tools returned in those earlier turns. */
+  backgroundUrls: string[];
 }
 
 /**
@@ -152,8 +162,9 @@ interface TurnContext {
  * discrepancies: when a thread moves from topic A to topic B and the
  * answer legitimately refers back to A, a reviewer that sees only the B
  * exchange reads the reference as projected context and raises a doubt
- * for something plainly on the record. Tool rows are excluded - they
- * belong to turns already answered and are pure bulk here.
+ * for something plainly on the record. Earlier tool RESULTS are too
+ * bulky to replay as prose, so only their source URLs come along - see
+ * `backgroundUrls` below.
  */
 async function loadTurnContext(
   adminClient: SupabaseClient,
@@ -171,17 +182,37 @@ async function loadTurnContext(
   const startIdx = all.findIndex((m) => m.id === userMessageId);
   const endIdx = all.findIndex((m) => m.id === terminalMsgId);
   if (startIdx < 0 || endIdx < 0 || endIdx < startIdx) {
-    return { slice: [], background: [] };
+    return { slice: [], background: [], backgroundUrls: [] };
   }
-  const background = all
-    .slice(0, startIdx)
+  const before = all.slice(0, startIdx);
+  const background = before
     .filter(
       (m) =>
         (m.role === 'user' || m.role === 'assistant') &&
         (m.content?.trim().length ?? 0) > 0,
     )
     .slice(-BACKGROUND_ROWS);
-  return { slice: all.slice(startIdx, endIdx + 1), background };
+  // Prior tool RESULTS are far too bulky to replay, but their source
+  // URLs are the provenance an answer keeps drawing on after the turn
+  // that fetched them. Without these, a later turn that cites a page
+  // found two turns ago looks to the reviewer like a fabricated
+  // citation - the same failure the in-slice surfaced-URL line fixes,
+  // displaced by a turn. Anchored to the same window as the prose so
+  // the two describe the same stretch of conversation.
+  const firstBackgroundIdx = background.length > 0
+    ? before.indexOf(background[0])
+    : before.length;
+  const backgroundUrls: string[] = [];
+  for (const m of before.slice(firstBackgroundIdx)) {
+    if (m.role !== 'tool' || !m.content) continue;
+    for (const url of extractUrls(m.content)) {
+      if (backgroundUrls.includes(url)) continue;
+      backgroundUrls.push(url);
+      if (backgroundUrls.length >= MAX_SURFACED_URLS) break;
+    }
+    if (backgroundUrls.length >= MAX_SURFACED_URLS) break;
+  }
+  return { slice: all.slice(startIdx, endIdx + 1), background, backgroundUrls };
 }
 
 /**
@@ -229,6 +260,80 @@ function extractUrls(text: string): string[] {
   return out;
 }
 
+// Shortest quoted span worth verifying against tool results. Below
+// this, quotation marks are usually scare quotes or a single term, and
+// a coincidental match proves nothing.
+const MIN_QUOTE_CHARS = 24;
+
+// Cap on verified quotes echoed back into the transcript, so a
+// quote-heavy answer cannot itself blow the budget the truncation is
+// there to protect.
+const MAX_VERIFIED_QUOTES = 12;
+
+/**
+ * Collapse whitespace so a quote that survived markdown rewrapping
+ * still matches the tool result it came from. Line breaks and runs of
+ * spaces differ constantly between a JSON tool payload and the prose
+ * that quotes it; nothing else about the text is normalized, because a
+ * looser match would start confirming quotes that were never returned.
+ */
+function normalizeForQuoteMatch(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Pull the double-quoted spans out of assistant prose. Handles the
+ * curly quotes a model emits as readily as ASCII ones.
+ */
+function extractQuotedSpans(text: string): string[] {
+  const matches = text.match(/["“]([^"“”]{1,600})["”]/g) ?? [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of matches) {
+    const inner = normalizeForQuoteMatch(raw.slice(1, -1));
+    if (inner.length < MIN_QUOTE_CHARS) continue;
+    if (seen.has(inner)) continue;
+    seen.add(inner);
+    out.push(inner);
+  }
+  return out;
+}
+
+/**
+ * Confirm which of the assistant's quotations appear verbatim in the
+ * FULL text of some tool result, before truncation.
+ *
+ * The sibling of the surfaced-URL line, and it exists for the same
+ * production failure one field over: a web_search result runs ~14k
+ * chars and the transcript keeps the first 4k, so a passage the
+ * assistant quoted from deep in the result is invisible to the
+ * reviewer, which then reports a correctly-sourced quotation as
+ * invented. Matching here is deterministic - no model judgement - so a
+ * confirmation is a fact the reviewer can be told to trust. A quote
+ * that fails to match is NOT reported as suspect: the assistant may
+ * have quoted the user, or a paraphrase may have defeated the match,
+ * and the prompt handles unmatched material through the general
+ * truncation rule instead.
+ */
+export function verifiedQuotes(rows: readonly TurnRow[]): string[] {
+  const haystack = rows
+    .filter((m) => m.role === 'tool')
+    .map((m) => normalizeForQuoteMatch(m.content ?? ''))
+    .join('\n');
+  if (haystack.length === 0) return [];
+  const out: string[] = [];
+  for (const m of rows) {
+    if (m.role !== 'assistant' || !m.content) continue;
+    for (const quote of extractQuotedSpans(m.content)) {
+      if (!haystack.includes(quote)) continue;
+      if (out.includes(quote)) continue;
+      out.push(quote);
+      if (out.length >= MAX_VERIFIED_QUOTES) return out;
+    }
+  }
+  return out;
+}
+
 /**
  * Serialize the preceding conversation into its own fence. Content
  * only - no reasoning, no tool calls, each message clipped to its
@@ -239,7 +344,10 @@ function extractUrls(text: string): string[] {
  * which keeps a first-turn prompt byte-identical to what it was before
  * background existed.
  */
-export function serializeBackground(rows: readonly TurnRow[]): string {
+export function serializeBackground(
+  rows: readonly TurnRow[],
+  toolUrls: readonly string[] = [],
+): string {
   if (rows.length === 0) return '';
   const parts: string[] = ['<conversation_so_far>'];
   for (const m of rows) {
@@ -248,6 +356,12 @@ export function serializeBackground(rows: readonly TurnRow[]): string {
       ? `${body.slice(0, MAX_BACKGROUND_CHARS)}...[clipped]`
       : body;
     parts.push(`[${m.role}]\n${clipped}`);
+  }
+  if (toolUrls.length > 0) {
+    parts.push(
+      `(source URLs tools returned earlier in this conversation: ` +
+        `${toolUrls.join(', ')})`,
+    );
   }
   parts.push('</conversation_so_far>');
   return parts.join('\n\n');
@@ -300,6 +414,18 @@ export function serializeExchange(rows: readonly TurnRow[]): string {
     }
     // system rows never appear in a turn slice; ignore defensively.
   }
+  // Quotations confirmed against the untruncated tool results, so a
+  // passage quoted from past a result's cutoff is still demonstrably
+  // sourced. Emitted after the rows, as a statement about the exchange
+  // as a whole rather than about any one tool result.
+  const quotes = verifiedQuotes(rows);
+  if (quotes.length > 0) {
+    const lines = quotes.map((q) => `  - "${q}"`).join('\n');
+    parts.push(
+      `(quotations confirmed verbatim in the tool results above, ` +
+        `including the parts truncated here:\n${lines})`,
+    );
+  }
   parts.push('</exchange_under_review>');
   return parts.join('\n\n');
 }
@@ -348,12 +474,28 @@ Because you are low-context by design, be humble about "reframe" and
 common way to be wrong here is to flag something as unsupported when it
 is merely unshown. When in doubt, choose "conviction".
 
-Provenance check before doubting a URL or citation: the assistant may
-cite sources it got from tools. Before flagging a URL as fabricated,
-look at the tool results - including any "source URLs this tool
-returned" lines. A URL that appears anywhere in a tool result WAS
-legitimately returned by a search or scrape; do NOT flag it. Only doubt
-a URL that appears in NONE of the tool results.
+Provenance check before doubting a citation, a quotation, or a fact
+attributed to a tool. The assistant may cite sources it got from tools,
+and what you are shown of those tools is INCOMPLETE:
+
+- Tool results are shown to you shortened. A result ending in
+  "...[truncated]" continues past what you can read, and most of a
+  search result's substance lives in the part you cannot see. Material
+  you cannot find in the visible portion is therefore NOT evidence of
+  anything - do not report a quotation, figure, or claim as unsourced
+  because you could not locate it in a truncated result.
+- Any URL in a tool result, or in a "source URLs this tool returned"
+  line, WAS legitimately returned by a search or scrape. So was any URL
+  in the "source URLs tools returned earlier in this conversation"
+  line - that tool ran in an earlier turn you are not shown. Do NOT
+  flag those.
+- Anything in a "quotations confirmed verbatim" line has been checked
+  mechanically against the full untruncated result and IS accurate.
+  Treat it as settled fact, never as something to doubt.
+
+Doubt a citation only when it CONTRADICTS what a tool result plainly
+says, or when the assistant cites a source with no tool call behind it
+anywhere in the exchange.
 
 Respond with ONLY a JSON object, no prose around it:
 {"disposition": "conviction" | "hedge" | "reframe" | "correct",
@@ -467,7 +609,7 @@ export async function secondThoughtsOnTurnTail(
 ): Promise<void> {
   const log = createEdgeLogger(userId, 'second-thoughts');
   try {
-    const { slice: rows, background } = await loadTurnContext(
+    const { slice: rows, background, backgroundUrls } = await loadTurnContext(
       adminClient,
       threadId,
       userMessageId,
@@ -493,7 +635,7 @@ export async function secondThoughtsOnTurnTail(
       return;
     }
 
-    const prior = serializeBackground(background);
+    const prior = serializeBackground(background, backgroundUrls);
     const transcript = serializeExchange(rows);
     const body = prior
       ? `${prior}\n\n${transcript}\n\n${INSTRUCTION}`
@@ -545,4 +687,9 @@ export async function secondThoughtsOnTurnTail(
 
 // Test-only surface: the parser + serializer are asserted in
 // supabase/functions/tests/second-thoughts.test.ts.
-export const __test = { parseVerdict, serializeExchange, serializeBackground };
+export const __test = {
+  parseVerdict,
+  serializeExchange,
+  serializeBackground,
+  verifiedQuotes,
+};
