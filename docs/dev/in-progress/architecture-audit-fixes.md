@@ -266,7 +266,7 @@ with correct level, source, and detail fields.
 **Files.** `src/lib/logger.svelte.ts`, `supabase/functions/_shared/edge-log.ts`, new
 `supabase/functions/_shared/log-wire.ts`, possibly new parity test file.
 
-## Fix 10: Extract terminal-write block from getStreamingResponse.ts [ ]
+## Fix 10: Extract terminal-write block from getStreamingResponse.ts [x]
 
 **Problem.** The finally block of `getStreamingResponse.ts` (lines 1026-1178, ~155 lines) handles commit-vs-transition
 branching, the `commit_assistant_message` RPC call, conflict detection, `transitionRowTo`, `stream_started_at` clearing,
