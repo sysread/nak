@@ -443,8 +443,8 @@ The `if (existingSlot?.sending) return;` guard at the top of
 `send()` blocks per-thread, not globally. A user on thread A
 which is mid-stream can switch to thread B and send there - both
 exchanges run in parallel against their own slots. Phase 2 of
-the refactor (see `docs/dev/planned-changes.md` for the original
-plan history if needed) intentionally removed the global
+the refactor (plan history, if needed, is in the git history of
+`docs/dev/planned-changes.md`) intentionally removed the global
 serialization.
 
 ### Orphan-draft banner

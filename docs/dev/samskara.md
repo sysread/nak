@@ -1805,6 +1805,23 @@ the verdict tally beside it is the raw lifetime count, so not-borne-out
 reads as its own bucket instead of folding silently into disconfirm.
 These are diagnostic summary reads, not user-facing controls.
 
+**"Awaiting judgment" counts only genuinely-pending fires - junk-thread
+sediment expires.** Fires land on every user message, including round
+one of a thread that never gets a round two; the judge's junk-data
+gate skips such threads forever, so their fires would stay
+verdict-null permanently. Unexpired, that sediment inflated the
+awaiting-judgment readout (2026-08-10 audit: 1,840 of 2,084 pending
+fires, oldest from April) and - the real damage - permanently
+shielded 132 of 150 tier-1 rows from probation and guarded eviction,
+because the spare-the-pending-test guards read any verdict-null fire
+as a test in flight. `samskara_expire_junk_thread_fires` (on the :13
+reaper cron) stamps those fires with a terminal `not-engaged` once
+the user has demonstrably moved on (a user message in a DIFFERENT
+thread 24h+ after the junk thread's newest message - activity-
+relative on purpose, so an idle account never expires anything). A
+persistently large or growing awaiting-judgment count is therefore a
+real judge problem again, not sediment.
+
 **The associations "awaiting mint" count never reaches zero.** A large
 share of unconsumed edges are singletons - pairs whose endpoints have
 no other unconsumed connections (336 of 1,083 at the 2026-08 audit).
