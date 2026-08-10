@@ -986,3 +986,143 @@ Stir in @butter{2%tbsp}.`;
     }
   });
 });
+
+describe('parseCooklang — timer deduplication', () => {
+  it('deduplicates identical anonymous timers across steps', () => {
+    const r = parseCooklang('Simmer for ~{30%minutes}.\nReduce and simmer ~{30%minutes} more.');
+    expect(r.timers).toEqual([{ name: null, duration: '30', unit: 'minutes' }]);
+  });
+
+  it('deduplicates identical named timers', () => {
+    const r = parseCooklang('~rest{10%minutes}\nLet it ~rest{10%minutes} again.');
+    expect(r.timers).toEqual([{ name: 'rest', duration: '10', unit: 'minutes' }]);
+  });
+
+  it('keeps timers with different durations or units', () => {
+    const r = parseCooklang('Simmer ~{30%minutes}.\nThen broil ~{5%minutes}.');
+    expect(r.timers).toEqual([
+      { name: null, duration: '30', unit: 'minutes' },
+      { name: null, duration: '5', unit: 'minutes' },
+    ]);
+  });
+
+  it('keeps a named and an anonymous timer with the same duration/unit', () => {
+    const r = parseCooklang('~{30%minutes}\n~rest{30%minutes}');
+    expect(r.timers).toEqual([
+      { name: null, duration: '30', unit: 'minutes' },
+      { name: 'rest', duration: '30', unit: 'minutes' },
+    ]);
+  });
+});
+
+describe('parseCooklang — section depth', () => {
+  it('tracks depth 2 for == Section ==', () => {
+    const r = parseCooklang('== Soup ==\nSimmer.');
+    expect(r.steps[0]!.sectionDepth).toBe(2);
+  });
+
+  it('tracks depth 3 for === Section ===', () => {
+    const r = parseCooklang('=== Soup ===\nSimmer.');
+    expect(r.steps[0]!.sectionDepth).toBe(3);
+  });
+
+  it('tracks depth 4 for ==== Section ====', () => {
+    const r = parseCooklang('==== Soup ====\nSimmer.');
+    expect(r.steps[0]!.sectionDepth).toBe(4);
+  });
+
+  it('defaults to depth 2 for # Section', () => {
+    const r = parseCooklang('# Soup\nSimmer.');
+    expect(r.steps[0]!.sectionDepth).toBe(2);
+  });
+
+  it('clears sectionDepth on dash-only reset', () => {
+    const r = parseCooklang('# Soup\n@egg{1}\n--\nBeat the egg.');
+    const instruction = r.steps.find((s) => s.kind === 'instruction');
+    expect(instruction?.sectionDepth).toBe(null);
+  });
+
+  it('sectionDepth is null for steps before any header', () => {
+    const r = parseCooklang('Bring water to a boil.\n== Soup ==\nSimmer.');
+    expect(r.steps[0]!.sectionDepth).toBe(null);
+  });
+});
+
+describe('recipeToHtml — Timers block', () => {
+  it('renders a Timers block with named and anonymous timers', () => {
+    const html = cooklangToHtml('Simmer ~{30%minutes}.\nLet ~rest{10%minutes} at room temp.');
+    const timersIdx = html.indexOf('Timers</h3>');
+    expect(timersIdx).toBeGreaterThan(-1);
+    const instructionsIdx = html.indexOf('Instructions</h3>');
+    const timersBlock = html.slice(timersIdx, instructionsIdx);
+    expect(timersBlock).toContain('<ul class="cook-timers">');
+    expect(timersBlock).toContain('<li>30 minutes</li>');
+    expect(timersBlock).toContain('<li>rest: 10 minutes</li>');
+  });
+
+  it('places the Timers block after Cookware and before Instructions', () => {
+    const html = cooklangToHtml('Stir in a #bowl{}.\nSimmer ~{30%minutes}.');
+    const cookwareIdx = html.indexOf('Cookware</h3>');
+    const timersIdx = html.indexOf('Timers</h3>');
+    const instructionsIdx = html.indexOf('Instructions</h3>');
+    expect(cookwareIdx).toBeLessThan(timersIdx);
+    expect(timersIdx).toBeLessThan(instructionsIdx);
+  });
+
+  it('omits the Timers block when there are no timers', () => {
+    const html = cooklangToHtml('Stir in @flour{200%g}.');
+    expect(html).not.toContain('Timers</h3>');
+    expect(html).not.toContain('cook-timers');
+  });
+});
+
+describe('recipeToHtml — section depth heading levels', () => {
+  it('uses h4 for depth 2 (==)', () => {
+    const html = cooklangToHtml('== Soup ==\nSimmer @lentils{200%g}.');
+    expect(html).toContain('<h4 class="cook-section"');
+    expect(html).not.toContain('<h5 class="cook-section"');
+  });
+
+  it('uses h5 for depth 3 (===)', () => {
+    const html = cooklangToHtml('=== Soup ===\nSimmer @lentils{200%g}.');
+    expect(html).toContain('<h5 class="cook-section"');
+    expect(html).not.toContain('<h4 class="cook-section"');
+  });
+
+  it('uses h6 for depth 4 (====)', () => {
+    const html = cooklangToHtml('==== Soup ====\nSimmer @lentils{200%g}.');
+    expect(html).toContain('<h6 class="cook-section"');
+    expect(html).not.toContain('<h5 class="cook-section"');
+  });
+});
+
+describe('recipeToMarkdown — Timers block', () => {
+  it('renders a Timers block with named and anonymous timers', () => {
+    const md = recipeToMarkdown('Test', parseCooklang('Simmer ~{30%minutes}.\nLet ~rest{10%minutes}.'));
+    expect(md).toContain('## Timers');
+    expect(md).toContain('- 30 minutes');
+    expect(md).toContain('- rest: 10 minutes');
+  });
+
+  it('omits the Timers block when there are no timers', () => {
+    const md = recipeToMarkdown('Test', parseCooklang('Stir in @flour{200%g}.'));
+    expect(md).not.toContain('## Timers');
+  });
+});
+
+describe('recipeToMarkdown — section depth heading levels', () => {
+  it('uses ### for depth 2 (==)', () => {
+    const md = recipeToMarkdown('Test', parseCooklang('== Soup ==\nSimmer @lentils{200%g}.'));
+    expect(md).toContain('### Soup');
+  });
+
+  it('uses #### for depth 3 (===)', () => {
+    const md = recipeToMarkdown('Test', parseCooklang('=== Soup ===\nSimmer @lentils{200%g}.'));
+    expect(md).toContain('#### Soup');
+  });
+
+  it('uses ##### for depth 4 (====)', () => {
+    const md = recipeToMarkdown('Test', parseCooklang('==== Soup ====\nSimmer @lentils{200%g}.'));
+    expect(md).toContain('##### Soup');
+  });
+});

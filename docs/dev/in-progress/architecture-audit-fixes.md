@@ -302,7 +302,7 @@ mid-stream, reopen the thread, verify the stale-row janitor cleans up and the ne
 
 **Files.** `supabase/functions/venice/index.ts`, new `supabase/functions/venice/stream-probe.ts`.
 
-## Fix 12: Extract cooklang.ts validation and rendering [ ]
+## Fix 12: Extract cooklang.ts validation and rendering [x]
 
 **Problem.** `src/lib/cooklang.ts` (1369 lines) mixes 6 concerns: types, parser, HTML rendering, TOC, plain-text export,
 markdown export, and validation. Nearly half the file is rendering/export code with no implementation coupling to the
