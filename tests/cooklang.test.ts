@@ -884,10 +884,9 @@ describe('recipeToHtml — heading anchor ids', () => {
     expect(html).toContain('<h3 id="cook-instructions">Instructions</h3>');
   });
 
-  it('leaves the Cookware h3 id-less (not a TOC target)', () => {
+  it('gives the Cookware h3 a TOC anchor id', () => {
     const html = cooklangToHtml('Stir @flour{200%g} in a #bowl{}.');
-    expect(html).toContain('<h3>Cookware</h3>');
-    expect(html).not.toContain('id="cook-cookware"');
+    expect(html).toContain('id="cook-cookware"');
   });
 
   it('gives the same section name distinct ids per block', () => {

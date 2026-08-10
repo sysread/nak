@@ -303,9 +303,10 @@ function ingredientBulletLine(ing: Ingredient): string {
 // TOC helpers
 // ---------------------------------------------------------------------------
 
-// Two blocks carry a navigable table-of-contents entry: Ingredients and
-// Instructions. Cookware and Timers are flat asides, not TOC targets.
-type TocBlock = 'ingredients' | 'instructions';
+// Four blocks carry a navigable table-of-contents entry: Ingredients,
+// Cookware, Timers, and Instructions. Cookware and Timers are flat
+// (no section sub-entries), so their TOC entries have no sections.
+type TocBlock = 'ingredients' | 'cookware' | 'timers' | 'instructions';
 
 /**
  * Anchor id for a recipe heading. Shared by `recipeToHtml` (which stamps
@@ -449,7 +450,7 @@ export function recipeToHtml(recipe: Recipe, opts: RecipeHtmlOptions = {}): stri
   }
 
   if (recipe.cookware.length > 0) {
-    out.push('<h3>Cookware</h3>');
+    out.push(`<h3 id="${tocHeadingId('cookware', null)}">Cookware</h3>`);
     out.push('<ul class="cook-cookware">');
     for (const cw of recipe.cookware) {
       out.push(`<li>${esc(cw.name)}</li>`);
@@ -459,7 +460,7 @@ export function recipeToHtml(recipe: Recipe, opts: RecipeHtmlOptions = {}): stri
 
   const timersWithContext = collectTimersWithContext(recipe);
   if (timersWithContext.length > 0) {
-    out.push('<h3>Timers</h3>');
+    out.push(`<h3 id="${tocHeadingId('timers', null)}">Timers</h3>`);
     out.push('<ul class="cook-timers">');
     for (const { timer, stepText } of timersWithContext) {
       const du = esc(formatTimer(timer));
@@ -573,6 +574,17 @@ export function recipeToc(recipe: Recipe): RecipeTocEntry[] {
       }
     }
     entries.push({ id: tocHeadingId('ingredients', null), label: 'Ingredients', sections });
+  }
+
+  // Cookware and Timers are flat blocks (no section sub-entries).
+  // They appear in the TOC as simple jump links when non-empty,
+  // between Ingredients and Instructions to match the HTML order.
+  if (recipe.cookware.length > 0) {
+    entries.push({ id: tocHeadingId('cookware', null), label: 'Cookware', sections: [] });
+  }
+
+  if (collectTimersWithContext(recipe).length > 0) {
+    entries.push({ id: tocHeadingId('timers', null), label: 'Timers', sections: [] });
   }
 
   const instructionSteps = recipe.steps.filter((s) => s.kind === 'instruction');
