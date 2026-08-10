@@ -21,6 +21,13 @@ without having to cram the entire history into a context window.
 > (`recordSubstrateStub`) stays browser-side - it is not priming. The
 > formation pipeline + sweeps remain server-side as before.
 
+**Diagnosing the system as a whole:** use the `samskara-audit`
+project skill (`.claude/skills/samskara-audit/SKILL.md`). It walks
+every stage's inter-stage contract against live data before any
+synthesis - the pipeline's failures have historically been contract
+gaps between individually-healthy stages, which symptom-first
+debugging misses.
+
 ## Role in the app
 
 A samskara is a one-line predictive claim ("in situations like
