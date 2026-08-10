@@ -7,17 +7,25 @@
 // stands behind it, or something feels off - onto the terminal
 // assistant row's `second_thoughts` jsonb column.
 //
-// The design (docs/dev/in-progress/second-thoughts.md) models doubt
-// and the resolution of doubt as two different mental motions. This
-// module is the REFLEX half: fast, cheap, and deliberately
-// LOW-CONTEXT. It sees ONLY the turn slice - the most recent user
-// message plus the assistant/tool rows that answered it (reasoning
-// included) - and NOT the pregame priming chain or any prior
-// conversation. That narrowness is the point, not a limitation: a
-// reviewer that replayed the author's full context would rationalize
-// instead of doubt. The DELIBERATION half (a full-context correction
-// round that can overrule the reflex) is phase 2 and does not exist
-// yet, so in v1 a raised doubt simply displays, unresolved.
+// The design (docs/dev/second-thoughts.md) models doubt and the
+// resolution of doubt as two different mental motions. This module is
+// the REFLEX half: fast, cheap, and deliberately LOW-CONTEXT. It
+// reviews ONLY the turn slice - the most recent user message plus the
+// assistant/tool rows that answered it, reasoning included - and never
+// sees the pregame priming chain (intuition / samskara / context
+// recall). That exclusion is the load-bearing one: a reviewer that
+// replayed the author's own inner monologue would rationalize instead
+// of doubt.
+//
+// It does get a short BACKGROUND window of preceding user/assistant
+// content, which is a different thing from the priming chain. Reviewing
+// a turn with no idea what the conversation had established made the
+// reflex fabricate discrepancies - a legitimate callback to an earlier
+// topic reads as invented context when the earlier topic is invisible.
+// Background establishes what was said; it is not reviewed itself.
+//
+// The DELIBERATION half is the user-triggered refinement in
+// Chat.svelte; an unacted doubt just displays.
 //
 // Two guards against the model "continuing the conversation" as a
 // fourth voice instead of reviewing it:
@@ -92,6 +100,18 @@ const MAX_NOTE_CHARS = 800;
 // and the fenced transcript should stay small.
 const MAX_TOOL_RESULT_CHARS = 4000;
 
+// How many prior user/assistant rows precede the turn under review in
+// the background block. Six is roughly three exchanges - enough to
+// cover the "conversation pivoted from A to B and the answer still
+// leans on A" case that produced the reviewer's most common false
+// positive, without turning the reflex into a full-transcript audit.
+const BACKGROUND_ROWS = 6;
+
+// Per-message cap inside the background block. The background exists
+// to establish WHAT was discussed, not to be re-read closely, so a
+// long earlier answer is worth its opening paragraph and nothing more.
+const MAX_BACKGROUND_CHARS = 600;
+
 // Minimal row shape the reviewer reads. Includes `reasoning`, which
 // loadThreadSliceUpTo deliberately omits - the reviewer weighs the
 // model's own stated justification, so it needs the thinking text.
@@ -106,30 +126,62 @@ interface TurnRow {
 }
 
 /**
+ * What the reviewer reads: the turn under review, plus a short window
+ * of what preceded it.
+ */
+interface TurnContext {
+  /** The anchor user message through the terminal assistant row. */
+  slice: TurnRow[];
+  /** The last few user/assistant rows before the anchor, oldest first. */
+  background: TurnRow[];
+}
+
+/**
  * Load the turn slice: the anchor user message through the terminal
  * assistant row, inclusive. Fetches the thread's rows and slices by id
  * so a race that appended a newer turn between commit and this read
  * doesn't widen the slice - we stop at the terminal row we were handed.
- * Returns [] when either anchor is missing (the caller skips the
- * review).
+ * Returns an empty slice when either anchor is missing (the caller
+ * skips the review).
+ *
+ * Also returns the preceding user/assistant rows as BACKGROUND. The
+ * reviewer's independence contract is about the pregame priming chain
+ * (intuition / samskara / context-recall), which is what would make it
+ * rationalize the answer instead of doubting it - it is not about the
+ * conversation itself. Without any history the reflex reliably invents
+ * discrepancies: when a thread moves from topic A to topic B and the
+ * answer legitimately refers back to A, a reviewer that sees only the B
+ * exchange reads the reference as projected context and raises a doubt
+ * for something plainly on the record. Tool rows are excluded - they
+ * belong to turns already answered and are pure bulk here.
  */
-async function loadTurnSlice(
+async function loadTurnContext(
   adminClient: SupabaseClient,
   threadId: string,
   userMessageId: string,
   terminalMsgId: string,
-): Promise<TurnRow[]> {
+): Promise<TurnContext> {
   const { data, error } = await adminClient
     .from('messages')
     .select('id, role, content, reasoning, tool_calls, tool_call_id, name')
     .eq('thread_id', threadId)
     .order('created_at', { ascending: true });
-  if (error) throw new Error(`loadTurnSlice failed: ${error.message}`);
+  if (error) throw new Error(`loadTurnContext failed: ${error.message}`);
   const all = (data ?? []) as TurnRow[];
   const startIdx = all.findIndex((m) => m.id === userMessageId);
   const endIdx = all.findIndex((m) => m.id === terminalMsgId);
-  if (startIdx < 0 || endIdx < 0 || endIdx < startIdx) return [];
-  return all.slice(startIdx, endIdx + 1);
+  if (startIdx < 0 || endIdx < 0 || endIdx < startIdx) {
+    return { slice: [], background: [] };
+  }
+  const background = all
+    .slice(0, startIdx)
+    .filter(
+      (m) =>
+        (m.role === 'user' || m.role === 'assistant') &&
+        (m.content?.trim().length ?? 0) > 0,
+    )
+    .slice(-BACKGROUND_ROWS);
+  return { slice: all.slice(startIdx, endIdx + 1), background };
 }
 
 /**
@@ -175,6 +227,30 @@ function extractUrls(text: string): string[] {
     if (out.length >= MAX_SURFACED_URLS) break;
   }
   return out;
+}
+
+/**
+ * Serialize the preceding conversation into its own fence. Content
+ * only - no reasoning, no tool calls, each message clipped to its
+ * opening - because this block answers "what has this conversation
+ * established?" and nothing else. It is deliberately a SEPARATE fence
+ * from the exchange under review so the reviewer cannot drift into
+ * critiquing an older answer. Returns '' when there is no history,
+ * which keeps a first-turn prompt byte-identical to what it was before
+ * background existed.
+ */
+export function serializeBackground(rows: readonly TurnRow[]): string {
+  if (rows.length === 0) return '';
+  const parts: string[] = ['<conversation_so_far>'];
+  for (const m of rows) {
+    const body = m.content.trim();
+    const clipped = body.length > MAX_BACKGROUND_CHARS
+      ? `${body.slice(0, MAX_BACKGROUND_CHARS)}...[clipped]`
+      : body;
+    parts.push(`[${m.role}]\n${clipped}`);
+  }
+  parts.push('</conversation_so_far>');
+  return parts.join('\n\n');
 }
 
 /**
@@ -234,11 +310,17 @@ are NOT continuing the conversation and you are NOT the assistant. Your
 only job is to re-read the assistant's most recent response and report
 how confident you feel about it.
 
-You see ONLY the latest exchange - the user's message and the
-assistant's response (with its reasoning and any tool calls). You do
-NOT see the earlier conversation, the assistant's background context,
-or anything it knew about the user. This is deliberate: you are a gut
-check, not a full audit. Judge what is in front of you.
+You review ONE thing: the exchange inside <exchange_under_review> -
+the user's latest message and the assistant's response to it (with its
+reasoning and any tool calls). If a <conversation_so_far> block appears
+before it, that is BACKGROUND ONLY: it is there so you know what has
+already been discussed. Do not review it, do not judge the older
+answers in it, and do not treat a topic change inside it as a problem.
+
+You still do NOT see everything. The assistant also knows things from
+outside this conversation - earlier conversations, stored notes about
+the user, its own background context - none of which is shown to you.
+You are a gut check, not a full audit.
 
 Report one disposition:
 - "conviction": the response holds up. This is the DEFAULT and by far
@@ -248,14 +330,23 @@ Report one disposition:
   should. A caveat is missing.
 - "reframe": you suspect the assistant misread what was being asked, or
   approached it the wrong way - it may have answered a different
-  question than the one intended, or projected context that wasn't
-  stated.
+  question than the one the user was asking.
 - "correct": you suspect an outright factual error in the response.
 
+Grounding check before doubting a reference to the user or to earlier
+discussion. The assistant referring to something you were not shown is
+NOT by itself evidence of anything. Check the background block first:
+if the thing it referenced is in there, it is grounded, even if the
+conversation has since moved to another topic - carrying a detail
+forward across a topic change is good work, not a discrepancy. If it is
+in neither block, assume it came from context you cannot see, because
+it usually did. Doubt it only when the response CONTRADICTS what the
+user actually said in this exchange.
+
 Because you are low-context by design, be humble about "reframe" and
-"correct": an inference that looks unsupported to you may be perfectly
-justified by context you cannot see. Raise real doubt, but do not
-manufacture it - when in doubt, choose "conviction".
+"correct". Raise real doubt, but do not manufacture it - the most
+common way to be wrong here is to flag something as unsupported when it
+is merely unshown. When in doubt, choose "conviction".
 
 Provenance check before doubting a URL or citation: the assistant may
 cite sources it got from tools. Before flagging a URL as fabricated,
@@ -273,7 +364,9 @@ The note is written in the assistant's own first-person voice ("I said
 X, but I'm not sure...") - it is the twinge itself, phrased as
 something to reconsider, never as a command.`;
 
-const INSTRUCTION = `Above is the exchange to review. Emit the JSON verdict now.`;
+const INSTRUCTION =
+  `Review the exchange in <exchange_under_review> only; anything in ` +
+  `<conversation_so_far> is background. Emit the JSON verdict now.`;
 
 /**
  * Strip a leading/trailing markdown code fence some models add despite
@@ -374,7 +467,7 @@ export async function secondThoughtsOnTurnTail(
 ): Promise<void> {
   const log = createEdgeLogger(userId, 'second-thoughts');
   try {
-    const rows = await loadTurnSlice(
+    const { slice: rows, background } = await loadTurnContext(
       adminClient,
       threadId,
       userMessageId,
@@ -400,10 +493,14 @@ export async function secondThoughtsOnTurnTail(
       return;
     }
 
+    const prior = serializeBackground(background);
     const transcript = serializeExchange(rows);
+    const body = prior
+      ? `${prior}\n\n${transcript}\n\n${INSTRUCTION}`
+      : `${transcript}\n\n${INSTRUCTION}`;
     const messages: VeniceWireMessage[] = [
       { role: 'system', content: SYSTEM_PROMPT },
-      { role: 'user', content: `${transcript}\n\n${INSTRUCTION}` },
+      { role: 'user', content: body },
     ];
 
     const text = await completeJsonObject({
@@ -448,4 +545,4 @@ export async function secondThoughtsOnTurnTail(
 
 // Test-only surface: the parser + serializer are asserted in
 // supabase/functions/tests/second-thoughts.test.ts.
-export const __test = { parseVerdict, serializeExchange };
+export const __test = { parseVerdict, serializeExchange, serializeBackground };

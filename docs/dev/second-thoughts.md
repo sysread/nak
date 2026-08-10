@@ -33,23 +33,31 @@ modeled as two separate passes with opposite properties.**
   the thread's own tier with everything it normally sees, and can call
   `web_search`. Triggered by the user, not the system.
 
-The asymmetry is the point: **the doubt does not need the context; the
-answer to the doubt does.** This is what lets the reviewer stay pure
+The asymmetry is the point: **the doubt needs far less context than the
+answer to the doubt does.** This is what lets the reviewer stay cheap
 and narrow (below) without destroying the contextual inference nak
-exists to produce - the reflex is *allowed* to twinge at a good
-contextual leap, because the deliberation is where that twinge gets
-adjudicated and, most often, overruled.
+exists to produce - the reflex is *allowed* to twinge at a leap whose
+basis is genuinely invisible to it, because the deliberation is where
+that twinge gets adjudicated and, most often, overruled. The reviewer
+is not allowed to twinge at a leap grounded in the visible thread; see
+the background window below.
 
 Worked example (the case this feature must not regress). User has
-asthma; days later asks "do any Colorado fires threaten Colorado
-Springs?" The model correctly weaves in an N95 precaution keyed to the
-asthma history. A pure reviewer, seeing only this turn, *should*
-twinge: "the user didn't mention asthma - projection?" That is the
-reflex working. The deliberation, with the full history, answers:
-"warranted - stand by it." Suppressing the twinge would blind the
-reflex to real projection; letting the reflex *rewrite* unadjudicated
-would strip the best part of the answer. Two passes, opposite context
-budgets, resolves both.
+asthma; days later, in a THREAD THAT NEVER MENTIONS IT, asks "do any
+Colorado fires threaten Colorado Springs?" The model correctly weaves
+in an N95 precaution keyed to the asthma history. The reviewer sees no
+asthma anywhere - not in the exchange, not in the background window -
+so it may twinge: "the user didn't mention asthma - projection?" That
+is the reflex working, and the deliberation, with the full history,
+answers "warranted - stand by it." Suppressing the twinge entirely
+would blind the reflex to real projection; letting the reflex *rewrite*
+unadjudicated would strip the best part of the answer.
+
+The near-identical case that is NOT allowed to twinge: the asthma came
+up earlier *in this thread*. Then it sits in the background window, and
+a doubt there is pure noise - the reviewer is contradicting the visible
+record. The background window exists to separate these two, because
+without it they are indistinguishable and the reflex flags both.
 
 **Not a pre-finalization gate.** The response streams token-by-token to
 the browser as Venice emits it, so by the time it is complete the user
@@ -73,14 +81,16 @@ doubting?" would need a completion that reads the turn - which is the
 reflex itself, so a gate is a false economy. `conviction` (the common
 verdict) is the cheap-and-quiet outcome, not a skipped pass.
 
-### Input contract: pure and narrow
+### Input contract: one turn reviewed, a little background
 
-The reviewer sees **only** the most recent user message plus the LLM
+The reviewer **reviews** only the most recent user message plus the LLM
 messages that follow it in the same turn - the assistant response
-(content **and** reasoning) plus any tool calls and their result rows.
+(content **and** reasoning) plus any tool calls and their result rows,
+fenced as `<exchange_under_review>`.
+
 It does NOT see the pregame priming chain (intuition / samskara /
-context-recall `<think>` blocks) or prior conversation history. Two
-reasons:
+context-recall `<think>` blocks). That exclusion is the load-bearing
+one, for two reasons:
 
 - **Independence.** A reviewer that replays the author's inner
   monologue shares the frame that produced the answer, so it
@@ -89,10 +99,33 @@ reasons:
   case where the priming itself steered the answer wrong.
 - **Fidelity to the reflex.** The gut twinge is low-context by nature.
 
-Including the assistant's **reasoning** in the slice makes the reviewer
-sharper, not blinder: it weighs the model's own stated justification
-("they have asthma, so N95 advice is relevant") rather than guessing
-intent from the prose alone.
+It DOES see a short **background** window: the last
+`BACKGROUND_ROWS` (6) user/assistant messages before the anchor,
+content only, each clipped to `MAX_BACKGROUND_CHARS` (600), in a
+separate `<conversation_so_far>` fence that the prompt marks as
+not-under-review. Background is a different thing from the priming
+chain - it is the public record of the conversation, not the author's
+inner monologue, so it costs nothing on the independence axis.
+
+Reviewing with *zero* history made the reflex fabricate discrepancies,
+which is the failure mode that dominated real doubts: a thread moves
+from topic A to topic B, the answer legitimately carries an A detail
+forward, and a reviewer who can only see the B exchange reports "I
+referred to A but there is no evidence of A." Every such doubt is
+noise, and noise is what makes the panel worth ignoring. The background
+block turns those into `conviction` while leaving genuine projection -
+a reference to something in NEITHER block - still flaggable, though the
+prompt tells the reviewer to assume unshown-but-uncontradicted material
+came from context it cannot see (cross-thread memory, samskara, stored
+notes) and to doubt only an outright CONTRADICTION of what the user
+said in this exchange. On a first turn the block is omitted entirely,
+so the prompt is unchanged from the no-background shape.
+
+Including the assistant's **reasoning** in the reviewed slice makes the
+reviewer sharper, not blinder: it weighs the model's own stated
+justification ("they have asthma, so N95 advice is relevant") rather
+than guessing intent from the prose alone. Background carries no
+reasoning - it establishes what was said, nothing more.
 
 ### Guarding against conversational takeover
 
@@ -237,8 +270,9 @@ and fires the RPC best-effort for persistence across reload / device.
 ## Files
 
 - `supabase/functions/venice/agents/second_thoughts.ts` -
-  `secondThoughtsOnTurnTail`, the reviewer: turn-slice loader, the
-  fenced serializer (`serializeExchange`), the system prompt, the
+  `secondThoughtsOnTurnTail`, the reviewer: the turn-slice +
+  background loader (`loadTurnContext`), the two fenced serializers
+  (`serializeExchange`, `serializeBackground`), the system prompt, the
   `completeJsonObject` call, and the verdict parser (`parseVerdict` +
   `extractJsonObject`). Pure surface pinned by
   `supabase/functions/tests/second-thoughts.test.ts`.
@@ -316,10 +350,11 @@ composition + wiring.
 
 ## Contracts
 
-- **Reviewer input is the turn slice only** - the most recent user
+- **The reviewer reviews the turn slice only** - the most recent user
   message and the assistant/tool rows that follow it (with reasoning),
-  serialized as a fenced document. No priming chain, no prior history.
-  Changing this changes what "doubt" means.
+  serialized as a fenced document, plus a clipped
+  `<conversation_so_far>` background block it is told not to review.
+  **No priming chain, ever.** Changing this changes what "doubt" means.
 - **The reviewer never blocks or fails a turn.** Best-effort, detached,
   non-throwing.
 - **A verdict is additive metadata on a committed row.** The reviewer
@@ -377,11 +412,19 @@ composition + wiring.
   prompt tells the reviewer that a URL in any tool result is
   legitimately sourced. Preserve key evidence past truncation for any
   new provenance-bearing tool shape.
-- **A pure reviewer twinging at a good contextual leap is correct
-  behavior, not a bug.** The reflex is supposed to doubt the asthma
-  paragraph; the refinement is supposed to overrule it. "Fixing" the
-  reviewer to stop doubting contextual inferences also blinds it to
-  real projection.
+- **A reviewer twinging at a leap it genuinely cannot see the basis
+  for is correct behavior, not a bug.** The reflex is supposed to doubt
+  a cross-thread asthma inference; the refinement is supposed to
+  overrule it. "Fixing" the reviewer to stop doubting contextual
+  inferences outright also blinds it to real projection. Doubting
+  something the BACKGROUND window plainly contains is the actual bug,
+  and is what the window and the prompt's grounding check exist to
+  prevent - if that class of false positive comes back, widen or fix
+  the background block, do not mute the disposition.
+- **Background is not the priming chain and must never become it.**
+  Widening the window is a tuning knob; feeding the reviewer intuition
+  / samskara / context-recall `<think>` blocks breaks the independence
+  contract and turns the reflex into a rationalizer.
 - **Imperative doubt framing destroys good answers.** Without an
   explicit license to reject, the smart model rubber-stamps the cheap
   reviewer's low-context flags. See the permit-rejection contract.

@@ -58,6 +58,13 @@ render path through `AssistantBody.svelte`
 9. (Refinement gating) Scroll up to an OLDER answer that carried a
    doubt verdict and look for a button; also confirm the button on the
    latest answer is absent/disabled while a send is in flight.
+10. (Background window) In a fresh thread, establish a detail in topic
+    A ("I keep three beehives on the north field"), then pivot: ask two
+    or three unrelated questions about topic B (say, sourdough). Now
+    ask something in topic B whose answer naturally calls the topic-A
+    detail back ("would any of this interfere with what else I have
+    going on out there?"). Wait for the reply, then read that row's
+    `second_thoughts` with the SQL above.
 
 ## Expected
 
@@ -118,6 +125,14 @@ render path through `AssistantBody.svelte`
   answer is refinable, since a refinement appends at the tail). The
   latest answer's button is absent or disabled while any send is in
   flight.
+- (10) The verdict is `conviction` (no panel). The reviewer is shown a
+  `<conversation_so_far>` block covering the last six user/assistant
+  messages, so the bee detail is on the visible record and a callback
+  to it is grounded, not projection. A doubt whose note says the
+  assistant referenced something the user never mentioned - when the
+  user demonstrably did, within the window - is the regression this
+  step guards. Note the window is six messages: pushing the topic-A
+  detail further back than that legitimately puts it out of view.
 
 ## Cleanup
 
@@ -130,3 +145,4 @@ render path through `AssistantBody.svelte`
 | ---- | --- | ------ | ------ | ----- |
 | 2026-07-01 | - | claude/second-thoughts-feature-nca3sf | not executed | authored alongside the v1 feature; cloud session has no browser - needs a manual run against a local stack for the baseline |
 | 2026-07-05 | - | claude/samskara-second-thoughts-lnuuge | not executed | step-8 expectations updated for the refinement's doubt-keyed samskara probe (read-only, logged under the samskara source); cloud session has no browser - baseline for the v1 refinement flow was never run either |
+| 2026-08-10 | - | claude/second-thoughts-effectiveness-7a3dyh | not executed | step 10 added for the reviewer's background window (the topic-pivot false-positive class); cloud session has no browser, and no pre-change baseline exists for any step in this file |

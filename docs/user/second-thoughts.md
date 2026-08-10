@@ -22,8 +22,7 @@ something. It comes in three flavors:
 - **Overconfident** (soft highlight) - the answer is basically fine but
   sounded more certain than it should; a caveat was missing.
 - **May have misread** (soft highlight) - the assistant suspects it
-  answered a slightly different question than you meant, or leaned on
-  context you didn't state.
+  answered a slightly different question than you meant.
 - **Possible error** (red) - it suspects an actual factual mistake.
 
 When one appears, the note expands on its own and offers a button in the
@@ -55,9 +54,11 @@ answer as its current one rather than getting confused by having said
 two things.
 
 Because the reviewer is a fast, deliberately *low-context* model - it
-sees only the latest question and answer, not the whole conversation or
-everything Nak knows about you - it will sometimes raise a doubt about
-something that was actually justified by context it couldn't see. That
+sees the latest question and answer plus a short recap of the messages
+just before them, but not the older parts of a long conversation and
+not everything Nak knows about you from elsewhere - it will sometimes
+raise a doubt about something that was actually justified by context it
+couldn't see. That
 is exactly why *you* hold the button: a gut check isn't a final ruling.
 If a flag looks wrong, just don't click - it costs nothing. And even
 when you do click, the assistant is free to reconsider and decide its
