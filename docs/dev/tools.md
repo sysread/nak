@@ -484,6 +484,15 @@ Edge dispatch (`supabase/functions/venice/`):
   closed by the bytes. It also keeps the row JSON-parseable for the
   tool-call detail panel's `formatResult` path.
 
+  The notice covers tool RESULTS only. An MCP server's tool
+  **descriptions** are the other server-authored surface and cannot
+  be tagged this way - they are prompt text, not tool output. They
+  are disclaimed instead, at the "Connected integrations" section of
+  `buildCatalog`, and flattened to one line each by `oneLine` so a
+  line break in a description cannot forge a catalog row. See
+  [`./mcp-integrations.md`](./mcp-integrations.md) "Security
+  surface."
+
   The notice is **half of a pair.** It ships inside the same message
   as the attacker-reachable payload, so payload text can claim the
   notice is fake or already satisfied. The other half is a standing
