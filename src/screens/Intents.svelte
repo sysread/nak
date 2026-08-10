@@ -40,11 +40,22 @@
     type FollowupInspectorRow,
     type GroupedFollowups,
   } from '$lib/ui/followups-inspector';
+  import {
+    visibleHistory,
+    disclosureLabel,
+    HISTORY_PREVIEW,
+  } from '$lib/ui/history-disclosure';
 
   interface Props {
     onClose: () => void;
   }
   let { onClose }: Props = $props();
+
+  // Which history groups the user has expanded, keyed by the group keys
+  // used in the markup below ('retired', 'answered', 'letGo'). Collapsed
+  // is the default on every open - the closed groups are the reference
+  // material, not the reason the modal was opened.
+  let expandedHistory = $state<Record<string, boolean>>({});
 
   let intentRows = $state<IntentRow[]>([]);
   let followupRows = $state<FollowupInspectorRow[]>([]);
@@ -126,17 +137,22 @@
             {:else}
               <p class="headline">{activeHeadline(grouped.active.length)}</p>
 
+              <!-- `history` marks the groups that only accumulate: they
+                   are collapsed to a preview so the live groups above
+                   stay readable in an old account. Active and paused are
+                   never collapsed - both still shape replies. -->
               {#each [
-                { key: 'active', title: 'Active', blurb: 'Shaping replies now.', list: grouped.active },
-                { key: 'dormant', title: 'Paused', blurb: 'Set aside while the pattern is quiet; may return.', list: grouped.dormant },
-                { key: 'retired', title: 'Let go', blurb: "Abandoned - not working, or no longer relevant. Kept for the record.", list: grouped.retired },
+                { key: 'active', title: 'Active', blurb: 'Shaping replies now.', list: grouped.active, history: false },
+                { key: 'dormant', title: 'Paused', blurb: 'Set aside while the pattern is quiet; may return.', list: grouped.dormant, history: false },
+                { key: 'retired', title: 'Let go', blurb: "Abandoned - not working, or no longer relevant. Kept for the record.", list: grouped.retired, history: true },
               ] as section (section.key)}
                 {#if section.list.length > 0}
+                  {@const shownIntents = visibleHistory(section.list, !section.history || expandedHistory[section.key])}
                   <section class="block">
                     <h3 class="block-title">{section.title}</h3>
                     <p class="block-blurb subtle">{section.blurb}</p>
 
-                    {#each section.list as intent (intent.id)}
+                    {#each shownIntents.shown as intent (intent.id)}
                       {@const view = efficacyView(intent)}
                       {@const parts = splitStatement(intent.statement)}
                       <article class="intent-card" class:retired={intent.status === 'retired'}>
@@ -165,6 +181,14 @@
                         {/if}
                       </article>
                     {/each}
+
+                    {#if section.history && section.list.length > HISTORY_PREVIEW}
+                      <button
+                        type="button"
+                        class="disclosure"
+                        onclick={() => (expandedHistory[section.key] = !expandedHistory[section.key])}
+                      >{disclosureLabel(shownIntents.hidden)}</button>
+                    {/if}
                   </section>
                 {/if}
               {/each}
@@ -207,10 +231,11 @@
             {/if}
 
             {#if followups.answered.length > 0}
+              {@const shownAnswered = visibleHistory(followups.answered, expandedHistory.answered)}
               <section class="block">
                 <h3 class="block-title">Answered</h3>
                 <p class="block-blurb subtle">You told Nak how it went.</p>
-                {#each followups.answered as loop (loop.id)}
+                {#each shownAnswered.shown as loop (loop.id)}
                   <article class="intent-card retired">
                     <p class="intent-statement">
                       <strong class="intent-lead">{loop.question}</strong>
@@ -223,17 +248,26 @@
                     </div>
                   </article>
                 {/each}
+
+                {#if followups.answered.length > HISTORY_PREVIEW}
+                  <button
+                    type="button"
+                    class="disclosure"
+                    onclick={() => (expandedHistory.answered = !expandedHistory.answered)}
+                  >{disclosureLabel(shownAnswered.hidden)}</button>
+                {/if}
               </section>
             {/if}
 
             {#if followups.letGo.length > 0}
+              {@const shownLetGo = visibleHistory(followups.letGo, expandedHistory.letGo)}
               <section class="block">
                 <h3 class="block-title">Let go</h3>
                 <p class="block-blurb subtle">
                   Dropped without an answer - you waved it off, or it went
                   stale. Kept for the record.
                 </p>
-                {#each followups.letGo as loop (loop.id)}
+                {#each shownLetGo.shown as loop (loop.id)}
                   <article class="intent-card retired">
                     <p class="intent-statement">
                       <strong class="intent-lead">{loop.question}</strong>
@@ -243,6 +277,14 @@
                     </div>
                   </article>
                 {/each}
+
+                {#if followups.letGo.length > HISTORY_PREVIEW}
+                  <button
+                    type="button"
+                    class="disclosure"
+                    onclick={() => (expandedHistory.letGo = !expandedHistory.letGo)}
+                  >{disclosureLabel(shownLetGo.hidden)}</button>
+                {/if}
               </section>
             {/if}
           {/if}
@@ -468,6 +510,24 @@
     font-size: 0.78rem;
     line-height: 1.4;
     font-style: italic;
+  }
+
+  /* Text-button styling for the history disclosure - it reveals rows
+     already in memory, so it must not read as a primary action
+     competing with the cards it sits under. */
+  .disclosure {
+    background: none;
+    border: none;
+    padding: 0.1rem 0;
+    font: inherit;
+    font-size: 0.78rem;
+    color: var(--text-2);
+    cursor: pointer;
+    text-decoration: underline;
+  }
+
+  .disclosure:hover {
+    color: var(--text);
   }
 
   .empty {

@@ -68,7 +68,10 @@ diagnostics menu on a narrow screen) opens a read-only inspector of
 Nak's follow-ups: **Waiting to ask** (with when each will be raised -
 "ready to ask", "asking after Jul 6", or "when it comes up"),
 **Answered** (with the outcome you shared), and **Let go** (dropped
-without an answer). If you've turned on
+without an answer). The two closed groups are history and only show
+their five most recent entries; a **"Show N more"** link under each
+tells you how many are hidden and reveals the rest in place. **Waiting
+to ask** is never collapsed. If you've turned on
 [working intentions](./intents.md), those appear in the same
 inspector, in their own section - both are notes Nak keeps to itself
 about the future.

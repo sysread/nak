@@ -145,6 +145,12 @@
     (`src/lib/ui/intents-inspector.ts`); the data read is
     `listIntents()`, fetched only when the toggle is on. No
     write controls - the minter owns the set.
+    The "Let go" group renders five rows plus a "Show N more"
+    disclosure (`src/lib/ui/history-disclosure.ts`, shared with
+    the follow-ups half of the modal); active and paused are
+    never collapsed. The fetch stays uncapped on purpose - a
+    fetch-side cap would make the disclosure's hidden count
+    understate the real history.
     A retired intent whose statement matches a still-live (active
     or dormant) one is suppressed from "Let go" and the live card
     is flagged "reconsidered" (`reformedIds` + `REFORMED_NOTE`),

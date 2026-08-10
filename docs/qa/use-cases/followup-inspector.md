@@ -48,7 +48,18 @@ The intents half of the shared modal is covered by
 2. **Open the inspector.** Click the pill.
 3. **Read the groups and chips.** Confirm the sections and each
    open card's status chip.
-4. **Empty state.** Delete the forged rows
+4. **History disclosure.** Forge enough closed rows to exceed the
+   five-row preview, then reopen the inspector:
+
+   ```sql
+   insert into followups (user_id, question, context, status)
+   select '$UID', 'Ask about filler topic ' || g, '', 'dismissed'
+     from generate_series(1, 7) g;
+   ```
+
+   Read the "Let go" group, click its "Show N more" link, then
+   click again.
+5. **Empty state.** Delete the forged rows
    (`delete from followups where user_id = '$UID';`), reopen the
    inspector.
 
@@ -71,7 +82,14 @@ The intents half of the shared modal is covered by
   - **Answered**: the interview card, dimmed, with "Outcome: Got
     the offer; negotiating start date".
   - **Let go**: the diet card, dimmed, no outcome line.
-- (4) With no rows, the follow-ups section shows its empty copy
+- (4) "Let go" renders exactly 5 cards - the most recently updated
+  ones - followed by a "Show 3 more" text link (8 closed rows, 5
+  shown). Clicking it expands the group in place with no refetch
+  and no spinner, and the link becomes "Show fewer"; clicking that
+  re-collapses to 5. "Waiting to ask" is unaffected and still shows
+  all three open cards. Reopening the modal returns the group to
+  collapsed.
+- (5) With no rows, the follow-ups section shows its empty copy
   ("No follow-ups yet..."), not an error or a blank panel.
 
 ## Cleanup
@@ -84,4 +102,4 @@ delete from followups where user_id = '$UID';
 
 | Date | Env | Commit | Result | Notes |
 | ---- | --- | ------ | ------ | ----- |
-| - | - | - | - | Authored with the inspector; first execution pending a live stack + browser. Grouping/chip/title logic is unit-covered in `tests/followups-inspector.test.ts`; this case proves the render, the always-present pill, and the intents-off modal shape, which units cannot reach. |
+| - | - | - | - | Authored with the inspector; first execution pending a live stack + browser. Grouping/chip/title logic is unit-covered in `tests/followups-inspector.test.ts`; this case proves the render, the always-present pill, the intents-off modal shape, and the history-disclosure interaction, which units cannot reach. |
