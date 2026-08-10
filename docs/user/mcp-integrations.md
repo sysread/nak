@@ -95,6 +95,13 @@ From **Settings - Integrations**:
   the server's tool descriptions into the chat system prompt. A
   malicious server could attempt prompt injection through its
   tool descriptions. Only connect servers you trust.
+- **Tool descriptions are labelled as the server's claims.** The
+  list of an integration's tools is written by that server, so Nak
+  marks the section as not coming from Nak and tells the model to
+  read each line as a claim about what a tool does - never as an
+  instruction to follow. A description that tries to tell the model
+  to do something extra before calling a tool is something Nak
+  reports rather than obeys.
 - **Results come back tagged as untrusted.** Everything an
   integration returns is labelled for the model as data to read
   and report on, never as instructions - so text on the far end
