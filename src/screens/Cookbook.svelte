@@ -2333,6 +2333,15 @@
     font-style: italic;
   }
 
+  /* Author notes on declaration-line ingredients: the free text
+     after `@name{qty%unit}` (e.g. "or neutral oil", "add 1 tbsp
+     extra water"). Same muted treatment as (optional) so the
+     primary ingredient reads first. */
+  .cookbook-render :global(.cook-note) {
+    color: var(--muted);
+    font-size: 0.85em;
+  }
+
   /* Grocery checkbox on bookmarked recipes' ingredient rows. Sized as
      a thumb target (matching the grocery list's own checkboxes) and
      vertically centered against the qty pill so a tall row reads as

@@ -273,14 +273,17 @@ function ingredientsListItems(ings: Ingredient[], checkboxes: boolean): string {
     const qty = formatQtyUnit(ing.qty, ing.unit);
     const qtyHtml = qty.length > 0 ? `<span class="cook-qty">${esc(qty)}</span> ` : '';
     const optHtml = ing.optional ? ' <span class="cook-optional">(optional)</span>' : '';
+    const noteHtml = ing.note
+      ? ` <span class="cook-note">${esc(ing.note)}</span>`
+      : '';
     if (checkboxes) {
       const checkboxHtml = `<input type="checkbox" class="cook-buy" data-ing="${esc(ing.name)}" aria-label="Add ${esc(ing.name)} to grocery list"> `;
       out.push(
-        `<li><label class="cook-buy-label">${checkboxHtml}${qtyHtml}<span class="cook-name">${esc(ing.name)}</span>${optHtml}</label></li>`
+        `<li><label class="cook-buy-label">${checkboxHtml}${qtyHtml}<span class="cook-name">${esc(ing.name)}</span>${optHtml}${noteHtml}</label></li>`
       );
     } else {
       out.push(
-        `<li>${qtyHtml}<span class="cook-name">${esc(ing.name)}</span>${optHtml}</li>`
+        `<li>${qtyHtml}<span class="cook-name">${esc(ing.name)}</span>${optHtml}${noteHtml}</li>`
       );
     }
   }
@@ -296,7 +299,8 @@ function ingredientsListItems(ings: Ingredient[], checkboxes: boolean): string {
 function ingredientBulletLine(ing: Ingredient): string {
   const qty = formatQtyUnit(ing.qty, ing.unit);
   const name = ing.optional ? `${ing.name} (optional)` : ing.name;
-  return qty.length > 0 ? `- ${qty} ${name}` : `- ${name}`;
+  const base = qty.length > 0 ? `- ${qty} ${name}` : `- ${name}`;
+  return ing.note ? `${base} — ${ing.note}` : base;
 }
 
 // ---------------------------------------------------------------------------

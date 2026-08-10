@@ -42,7 +42,7 @@ function item(
 }
 
 function ingredient(overrides: Partial<Ingredient> & { name: string }): Ingredient {
-  return { qty: null, unit: null, optional: false, ...overrides };
+  return { qty: null, unit: null, optional: false, note: null, ...overrides };
 }
 
 describe('normalizeGroceryName', () => {

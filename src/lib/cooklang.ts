@@ -95,6 +95,16 @@ export interface Ingredient {
    * sentence around it already carries the hedging ("if using").
    */
   optional: boolean;
+  /**
+   * Free text the author wrote after the `{}` on a declaration line,
+   * e.g. `@Butter{3%tbsp} or neutral oil` carries `note: "or neutral
+   * oil"`. Null when the declaration had no trailing text, when the
+   * line had multiple ingredients (the note can't be assigned to one),
+   * or for ingredients extracted from instruction prose (not
+   * declarations). Renderers show the note after the ingredient,
+   * muted, so the cook sees alternatives and prep hints at a glance.
+   */
+  note: string | null;
 }
 
 export interface Cookware {
@@ -392,7 +402,7 @@ function tokenizeLine(line: string): LineTokens {
     const name = (m[2] ?? m[4]!).trim();
     const body = m[3];
     const { qty, unit } = body !== undefined ? parseQtyUnit(body) : { qty: null, unit: null };
-    ingredients.push({ name, qty, unit, optional });
+    ingredients.push({ name, qty, unit, optional, note: null });
     edits.push([m.index!, m.index! + m[0].length, name]);
   }
   for (const m of line.matchAll(COOKWARE_RE)) {
@@ -565,6 +575,25 @@ export function parseCooklang(src: string): Recipe {
     // the right heuristic.
     const declaration = isDeclarationLine(line);
     const tok = tokenizeLine(line);
+
+    // For single-ingredient declaration lines, extract the note text
+    // the author wrote after the `{}`. tokenizeLine replaces the
+    // `@name{qty%unit}` token with just `name`, so the text is
+    // "name <rest of line>". Stripping the leading ingredient name
+    // leaves the note. Leading punctuation (commas, semicolons) that
+    // authors put between the {} and the note is stripped so the note
+    // reads cleanly. Only applies when one ingredient is on the line -
+    // with multiple, the text interleaves names and we can't assign
+    // the note to one.
+    if (declaration && tok.ingredients.length === 1) {
+      const ing = tok.ingredients[0]!;
+      const afterName = tok.text.trimStart().slice(ing.name.length).trim();
+      const cleaned = afterName.replace(/^[,;:.\s]+/, '').trim();
+      if (cleaned.length > 0) {
+        ing.note = cleaned;
+      }
+    }
+
     steps.push({
       text: declaration ? '' : tok.text,
       ingredients: tok.ingredients,

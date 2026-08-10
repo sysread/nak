@@ -7001,25 +7001,8 @@
                (and a Settings button). Both went away when memories
                graduated to a sibling drawer tab next to chats /
                recipes - the Memories tab IS the entry
-               point now. The Cookbook icon below stays because it's
-               a one-tap affordance to the Recipes tab from any
-               panel; the Memories tab covers that role itself. -->
-          <button
-            class="secondary icon-btn"
-            onclick={() => onPickRecipesTab()}
-            title="Cookbook"
-            aria-label="Cookbook"
-          >
-            <!-- Feather-style "book" glyph — paths taken from the Feather
-                 Icons "book" icon so it visually matches the rest of the
-                 footer row (help, settings, lock) that also use 16×16
-                 Feather-style strokes. -->
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
-              <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
-            </svg>
-          </button>
+               point now. The Cookbook button was also removed for
+               the same reason - the Recipes drawer tab covers it. -->
           <button
             class="secondary icon-btn"
             onclick={() => navigate({ modal: 'settings' })}
