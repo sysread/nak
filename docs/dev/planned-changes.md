@@ -495,19 +495,24 @@ prod corpus of ~150 tier-1 / ~45 tier-2):
   fires past the priming render are pure bookkeeping. The samskara.md
   gotcha "No health threshold at fire time" still applies - the long
   tail within the rendered set is wanted.
-- **Tier-2 confirm bar.** `samskara_tier2_declines` had ZERO rows
-  through 2026-07-24 (one decline since) - the tier-2 minter almost
-  never declines a candidate - and tier-2 grew to 58 rows, ~28% of
-  the corpus, before flatlining. Either detection's lift gate is
-  doing all the filtering (possible, given the flatline) or the
-  minter rubber-stamps (still plausible). Re-measure a few weeks
-  AFTER the 2026-08-08 cohort-cutoff change: halved cohorts thin the
-  co-fire graph, which slows absolute co-fire accrual (lift, a
-  ratio, is unaffected) and may fix the candidate stream on their
-  own. If tier-2 resumes growing with near-zero declines, tighten
-  the TIER2_MINTER_PROMPT with an explicit decline criterion (the
-  counterfactual-test pattern from the judge's held bar in #402 is
-  the precedent).
+- **Tier-2 confirm bar - downgraded to observation (2026-08-10
+  audit).** The minter still almost never declines (1 lifetime), but
+  the rubber-stamp harm hypothesis failed on outcome data. Mint
+  timeline shows the growth was a BACKFILL, not runaway: tier-2
+  went live mid-June, burst 28 mints in its first two weeks over the
+  accumulated co-fire graph, then decelerated (16 -> 5 -> 1 -> 0 ->
+  4 per week) - the deceleration predates the 08-08 cohort halving.
+  Outcome quality: tier-2 fires OUTPERFORM tier-1 - held rate 0.819
+  vs 0.785 on genuine tests, genuine-engagement rate 77% vs 21%,
+  avg health 0.897 vs 0.869. Child semantic coherence is low (26 of
+  45 multi-child compounds below the 0.60 topical floor, median
+  0.588) but that is consistent with behavioural (co-fire) grouping
+  plus the GENERALIZE mandate, and the outcomes say it works. No
+  prompt change warranted on current evidence. Re-check at the Sept
+  1 review: confirm the mint rate stays low-single-digits/week and
+  the tier-2 held-rate edge persists; a renewed high mint rate WITH
+  falling tier-2 held rate would re-open the decline-criterion
+  question.
 
 The audit trail (queries, verdict-mix baselines, the health
 histogram progression) lives in the 2026-07/08 session; the
