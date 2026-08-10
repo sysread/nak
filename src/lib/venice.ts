@@ -398,6 +398,14 @@ export type StreamEvent =
    * terminal round is signaled by `end`, not this event.
    */
   | { type: 'round_committed'; id: string }
+  /**
+   * Server published BEGIN: priming is complete, the first Venice
+   * completion is about to start. The browser uses this to dismiss
+   * the pregame (subconscious priming) card - without it, a model
+   * that goes straight to tool calls without preamble text would
+   * leave the card stuck visible with checkmarks.
+   */
+  | { type: 'begin' }
   // Turn-entry priming events. The server runs priming (samskara,
   // context-recall, intuition) as the opening stage of the streaming
   // function and publishes these so the browser drives the same

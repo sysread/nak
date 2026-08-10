@@ -307,6 +307,12 @@ export async function consumeStreamEvents(opts: {
         case 'context_recall_payload':
           handlers?.onContextRecallUpdate?.(ev.payload);
           break;
+        case 'begin':
+          // Priming complete, completion starting. Dismiss the pregame
+          // card so it does not stay visible when a model emits tool
+          // calls without preamble text.
+          handlers?.onBegin?.();
+          break;
         case 'error':
           // The server reported a terminal stream failure. Stash it
           // with a kind matching the original VeniceError categorization

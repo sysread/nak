@@ -93,6 +93,13 @@ export interface ChatLoopHandlers {
   onSubconsciousStart?(op: SubconsciousOp): void;
   onSubconsciousEnd?(op: SubconsciousOp): void;
   /**
+   * Priming is complete and the first Venice completion is about to
+   * start. The UI dismisses the pregame (subconscious priming) card
+   * on this signal so it does not stay visible when a model emits
+   * tool calls without preamble text.
+   */
+  onBegin?(): void;
+  /**
    * The current round hit a Venice 429 and the loop is going to wait
    * before re-issuing the request. Fires once per wait, before the
    * sleep starts; `onRateLimitResolved` fires when the next attempt

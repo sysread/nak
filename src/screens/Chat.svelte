@@ -4401,6 +4401,15 @@
                 slot.subconsciousStatus.set(op, 'done');
               }
             },
+            onBegin: () => {
+              // Priming complete, completion starting. Dismiss the
+              // pregame card so it does not stay visible when a model
+              // emits tool calls without preamble text. Without this,
+              // the card only dismisses on the first text/reasoning
+              // delta, which non-reasoning models may not emit before
+              // calling tools.
+              slot.subconsciousDismissed = true;
+            },
             onRateLimitWait: ({ attempt, until }) => {
               // Venice returned 429 and the chat-loop is about to
               // sleep before re-issuing the round. Surface the wait

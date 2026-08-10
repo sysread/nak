@@ -471,6 +471,12 @@ function setupStreamSubscription(
     const coerced = coerceContextRecallPayload(p.payload);
     if (coerced) push({ type: 'context_recall_payload', payload: coerced });
   });
+  // BEGIN: priming complete, completion starting. The browser uses
+  // this to dismiss the pregame card. Without it, a model that emits
+  // tool calls without preamble text leaves the card stuck.
+  channel.on('broadcast', { event: 'BEGIN' }, () => {
+    push({ type: 'begin' });
+  });
   channel.on('broadcast', { event: 'END' }, ({ payload }) => {
     const p = payload as {
       persistedAssistantId?: string;
