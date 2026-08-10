@@ -65,6 +65,13 @@ render path through `AssistantBody.svelte`
     detail back ("would any of this interfere with what else I have
     going on out there?"). Wait for the reply, then read that row's
     `second_thoughts` with the SQL above.
+11. (Citation provenance) Ask something that forces a web search and
+    invites quotation ("search for the latest NOAA guidance on X and
+    quote the part that matters"). Wait for the reply, confirm it
+    actually quotes and cites, then read that row's `second_thoughts`.
+12. (Cross-turn citation) Immediately after step 11, WITHOUT searching
+    again, ask a follow-up that leans on the same source ("does that
+    guidance cover Y too?"). Read that row's `second_thoughts`.
 
 ## Expected
 
@@ -133,6 +140,18 @@ render path through `AssistantBody.svelte`
   user demonstrably did, within the window - is the regression this
   step guards. Note the window is six messages: pushing the topic-A
   detail further back than that legitimately puts it out of view.
+- (11) The verdict is `conviction`. A doubt whose note questions
+  whether a quoted passage or a cited URL is real is the regression -
+  the transcript hands the reviewer a "source URLs this tool returned"
+  line and a "quotations confirmed verbatim" line covering exactly that
+  material, and the prompt tells it both are settled. Worth checking in
+  the `chat`-source wire log that the quoted passage really did come
+  from past the 4k truncation point, or the step proved nothing.
+- (12) The verdict is `conviction`. The tool result from step 11 is not
+  in this turn's slice at all; its URLs reach the reviewer through the
+  `<conversation_so_far>` block's "source URLs tools returned earlier"
+  line. A fabricated-citation doubt here means that line is missing or
+  the window slid past the searching turn.
 
 ## Cleanup
 
@@ -146,3 +165,4 @@ render path through `AssistantBody.svelte`
 | 2026-07-01 | - | claude/second-thoughts-feature-nca3sf | not executed | authored alongside the v1 feature; cloud session has no browser - needs a manual run against a local stack for the baseline |
 | 2026-07-05 | - | claude/samskara-second-thoughts-lnuuge | not executed | step-8 expectations updated for the refinement's doubt-keyed samskara probe (read-only, logged under the samskara source); cloud session has no browser - baseline for the v1 refinement flow was never run either |
 | 2026-08-10 | - | claude/second-thoughts-effectiveness-7a3dyh | not executed | step 10 added for the reviewer's background window (the topic-pivot false-positive class); cloud session has no browser, and no pre-change baseline exists for any step in this file |
+| 2026-08-10 | - | claude/second-thoughts-effectiveness-7a3dyh | not executed | steps 11-12 added for citation provenance (quotes past the tool-result truncation, and citations whose search ran in an earlier turn); cloud session has no browser |

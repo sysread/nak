@@ -101,8 +101,9 @@ one, for two reasons:
 
 It DOES see a short **background** window: the last
 `BACKGROUND_ROWS` (6) user/assistant messages before the anchor,
-content only, each clipped to `MAX_BACKGROUND_CHARS` (600), in a
-separate `<conversation_so_far>` fence that the prompt marks as
+content only, each clipped to `MAX_BACKGROUND_CHARS` (600), plus the
+source URLs any tool returned across that same window, in a separate
+`<conversation_so_far>` fence that the prompt marks as
 not-under-review. Background is a different thing from the priming
 chain - it is the public record of the conversation, not the author's
 inner monologue, so it costs nothing on the independence axis.
@@ -272,7 +273,8 @@ and fires the RPC best-effort for persistence across reload / device.
 - `supabase/functions/venice/agents/second_thoughts.ts` -
   `secondThoughtsOnTurnTail`, the reviewer: the turn-slice +
   background loader (`loadTurnContext`), the two fenced serializers
-  (`serializeExchange`, `serializeBackground`), the system prompt, the
+  (`serializeExchange`, `serializeBackground`), the provenance
+  preservers (`extractUrls`, `verifiedQuotes`), the system prompt, the
   `completeJsonObject` call, and the verdict parser (`parseVerdict` +
   `extractJsonObject`). Pure surface pinned by
   `supabase/functions/tests/second-thoughts.test.ts`.
@@ -355,6 +357,10 @@ composition + wiring.
   serialized as a fenced document, plus a clipped
   `<conversation_so_far>` background block it is told not to review.
   **No priming chain, ever.** Changing this changes what "doubt" means.
+- **Evidence the truncation hides must be preserved, not restored by
+  raising caps.** Source URLs and verbatim-confirmed quotations ride
+  the transcript as summary lines; provenance survives independent of
+  how long a tool result is.
 - **The reviewer never blocks or fails a turn.** Best-effort, detached,
   non-throwing.
 - **A verdict is additive metadata on a committed row.** The reviewer
@@ -401,17 +407,37 @@ composition + wiring.
 
 ## Gotchas
 
-- **Truncating a tool result must never hide its source URLs.** The
-  slice caps each tool result at `MAX_TOOL_RESULT_CHARS` (4k), but a
-  `web_search` result runs ~14k chars with citation URLs deep in the
-  list. Cutting the body dropped a cited URL, and the reviewer then
-  wrongly flagged a legitimately-sourced URL as fabricated - the model
-  DID cite it; the reviewer just couldn't see the source.
+- **Truncating a tool result must never hide the evidence for what the
+  answer cited.** The slice caps each tool result at
+  `MAX_TOOL_RESULT_CHARS` (4k), but a `web_search` result runs ~14k
+  chars, so most of its substance is invisible. Anything the assistant
+  drew from the cut portion looks unsupported, and the reviewer reports
+  correctly-sourced material as invented. This has now bitten twice, in
+  two fields: first URLs, then quoted text. Both are handled by
+  preserving the evidence rather than raising the cap:
   `serializeExchange` appends every URL from the FULL content
-  (`extractUrls`) as a "source URLs this tool returned" line, and the
-  prompt tells the reviewer that a URL in any tool result is
-  legitimately sourced. Preserve key evidence past truncation for any
-  new provenance-bearing tool shape.
+  (`extractUrls`) as a "source URLs this tool returned" line, and
+  `verifiedQuotes` mechanically confirms the assistant's quoted spans
+  against the FULL untruncated results, echoing the confirmed ones back
+  as a "quotations confirmed verbatim" line the prompt tells the
+  reviewer to treat as settled. **Any new provenance-bearing tool shape
+  needs the same treatment** - assume the reviewer will flag whatever
+  the truncation hides.
+- **An unmatched quote is never reported as suspect.** `verifiedQuotes`
+  is a one-way check: a match is proof of provenance, a non-match is
+  nothing. The assistant may be quoting the user, or a paraphrase may
+  have defeated the substring match, and a "these quotes were NOT
+  found" line would manufacture exactly the doubt this feature is
+  trying to stop. Only whitespace is normalized before matching -
+  anything looser starts confirming quotes no tool returned, which is
+  worse than confirming none.
+- **Prior turns' tool results are gone, but their URLs are not.** A
+  turn that cites a page found two turns ago has no tool row in the
+  slice at all. `loadTurnContext` collects source URLs from tool rows
+  across the background window into `backgroundUrls`, rendered as one
+  line inside `<conversation_so_far>`. Without it the background
+  window's own effect makes things worse: the reviewer sees the claim
+  carried forward but not what sourced it.
 - **A reviewer twinging at a leap it genuinely cannot see the basis
   for is correct behavior, not a bug.** The reflex is supposed to doubt
   a cross-thread asthma inference; the refinement is supposed to

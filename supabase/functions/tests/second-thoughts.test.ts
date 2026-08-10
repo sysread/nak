@@ -10,7 +10,8 @@
 import { assert, assertEquals } from '@std/assert';
 import { __test } from '../venice/agents/second_thoughts.ts';
 
-const { parseVerdict, serializeExchange, serializeBackground } = __test;
+const { parseVerdict, serializeExchange, serializeBackground, verifiedQuotes } =
+  __test;
 
 // --- parseVerdict -------------------------------------------------------
 
@@ -164,4 +165,77 @@ Deno.test('serializeBackground emits nothing on a first turn', () => {
   // No history means the prompt must be byte-identical to what it was
   // before background existed - the caller skips the block entirely.
   assertEquals(serializeBackground([]), '');
+});
+
+// --- quotation provenance -----------------------------------------------
+
+Deno.test('serializeExchange confirms a quote that lives past the truncation point', () => {
+  // The sibling of the surfaced-URL case: the assistant quotes a passage
+  // sitting deep in a 14k web_search result. The body is cut at 4k, so
+  // without the confirmation line the reviewer sees a quotation it
+  // cannot find and reports correctly-sourced text as invented.
+  const quote = 'the caldera has been quiet since the 1918 eruption';
+  const longResult = `{"snippet":"${'z'.repeat(9000)}","body":"${quote}"}`;
+  const out = serializeExchange([
+    { id: '1', role: 'user', content: 'what does the survey say?', reasoning: null, tool_calls: null, tool_call_id: null, name: null },
+    { id: '2', role: 'assistant', content: `The survey notes "${quote}".`, reasoning: null, tool_calls: null, tool_call_id: null, name: null },
+    { id: '3', role: 'tool', content: longResult, reasoning: null, tool_calls: null, tool_call_id: 'c1', name: 'web_search' },
+  ]);
+  assert(out.includes('...[truncated]'), 'the long body should truncate');
+  assert(out.includes('quotations confirmed verbatim'));
+  assert(out.includes(quote), 'the quote must survive truncation');
+});
+
+Deno.test('verifiedQuotes matches across whitespace rewrapping', () => {
+  // Markdown prose rewraps; the tool payload keeps the original breaks.
+  // Only whitespace is normalized - nothing looser, or the check would
+  // start confirming quotes that were never returned.
+  const found = verifiedQuotes([
+    { id: '1', role: 'assistant', content: 'It said "a long enough phrase to check\nacross a line break".', reasoning: null, tool_calls: null, tool_call_id: null, name: null },
+    { id: '2', role: 'tool', content: 'noise a long enough phrase to check across a line break noise', reasoning: null, tool_calls: null, tool_call_id: 'c1', name: 'web_search' },
+  ]);
+  assertEquals(found.length, 1);
+});
+
+Deno.test('verifiedQuotes ignores short quotes and unmatched ones', () => {
+  const found = verifiedQuotes([
+    // Too short to be evidence of anything - a coincidental match on a
+    // scare-quoted term proves nothing.
+    { id: '1', role: 'assistant', content: 'It is a "widget" per the docs.', reasoning: null, tool_calls: null, tool_call_id: null, name: null },
+    // Long enough, but absent from the tool result. NOT reported: an
+    // unmatched quote is not evidence of fabrication either (the
+    // assistant may be quoting the user), so the list stays empty.
+    { id: '2', role: 'assistant', content: 'The report claims "something never returned by any tool at all".', reasoning: null, tool_calls: null, tool_call_id: null, name: null },
+    { id: '3', role: 'tool', content: 'a widget is a thing', reasoning: null, tool_calls: null, tool_call_id: 'c1', name: 'web_search' },
+  ]);
+  assertEquals(found, []);
+});
+
+Deno.test('verifiedQuotes returns nothing when the turn used no tools', () => {
+  assertEquals(
+    verifiedQuotes([
+      { id: '1', role: 'assistant', content: 'As Kennedy put it, "ask not what your country can do for you".', reasoning: null, tool_calls: null, tool_call_id: null, name: null },
+    ]),
+    [],
+  );
+});
+
+Deno.test('serializeBackground carries earlier turns source URLs', () => {
+  // A citation whose search ran two turns ago has no tool result in the
+  // slice at all; the URL line is the only provenance that survives.
+  const url = 'https://example.gov/survey/2026';
+  const out = serializeBackground(
+    [{ id: '1', role: 'assistant', content: 'The survey backs that up.', reasoning: null, tool_calls: null, tool_call_id: null, name: null }],
+    [url],
+  );
+  assert(out.includes('source URLs tools returned earlier'));
+  assert(out.includes(url));
+});
+
+Deno.test('serializeBackground omits the URL line when no earlier tool ran', () => {
+  const out = serializeBackground(
+    [{ id: '1', role: 'user', content: 'morning', reasoning: null, tool_calls: null, tool_call_id: null, name: null }],
+    [],
+  );
+  assert(!out.includes('source URLs'));
 });
