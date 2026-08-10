@@ -25,13 +25,13 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { createEdgeLogger } from '../../_shared/edge-log.ts';
 import { readVeniceKey } from '../tools/_venice_key.ts';
 import { completeJsonObjectWithMeta } from './_curation_helpers.ts';
+import { DIGEST_MODEL } from '../../_shared/agent-models.ts';
 
 // Server-side model id, held here directly (this module cannot import
 // from src/lib; same convention as the curation agents). deepseek's
 // big window matters: the input is a full day of conversation across
 // every thread, which can run long, while the output is a small JSON
 // object.
-const DIGEST_MODEL = 'deepseek-v4-flash';
 
 // Claim TTL. A digest run is one fetch plus one completion - minutes,
 // not hours - so ten minutes of headroom covers a slow completion

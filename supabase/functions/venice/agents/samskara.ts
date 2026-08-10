@@ -50,13 +50,13 @@ import {
   VENICE_EMBEDDING_MODEL,
   padEmbeddingForStorage,
 } from '../../_shared/backfill.ts';
+import { SAMSKARA_MODEL } from '../../_shared/agent-models.ts';
 
 /**
  * Model for every formation phase: five short JSON-out calls plus one
  * prose paragraph, all comfortably fast-tier work. Mistral-small does
  * not accept reasoning_effort, so no call here sends it.
  */
-const SAMSKARA_MODEL = 'mistral-small-3-2-24b-instruct';
 
 /**
  * Per-row claim TTL for the assimilate queue, seconds. Generous - one

@@ -37,6 +37,7 @@ import { createEdgeLogger } from '../../_shared/edge-log.ts';
 import { readVeniceKey } from '../tools/_venice_key.ts';
 import { completeJsonObject } from './_curation_helpers.ts';
 import type { VeniceWireMessage } from './_recall_helpers.ts';
+import { SECOND_THOUGHTS_MODEL } from '../../_shared/agent-models.ts';
 
 // The reviewer model. A fast, NON-REASONING instruct model - the same
 // class (and literally the same id) the web_search / summary / topics
@@ -52,7 +53,6 @@ import type { VeniceWireMessage } from './_recall_helpers.ts';
 // directly here rather than in src/lib AGENT_MODELS because this agent
 // runs only server-side, like the curation / bias / samskara agents.
 // Repoint here to retune the reflex.
-const SECOND_THOUGHTS_MODEL = 'mistral-small-3-2-24b-instruct';
 
 // The disposition spectrum. 'conviction' is the common "no second
 // thoughts" verdict; the reviewer is instructed to bias heavily

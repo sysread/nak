@@ -37,12 +37,7 @@ import {
   renderUserProfileBlock,
   type WikiUserProfile,
 } from './_wiki_profile.ts';
-
-// Mirror of agentModel('wiki').id in src/lib/models/index.ts - the same
-// model the autonomous agent pins (WIKI_MODEL in ./wiki.ts). The browser
-// manual flow resolved agentModel('wiki') at runtime; hardcoding the
-// mirror here stays faithful after the cutover.
-const WIKI_MANUAL_MODEL = 'deepseek-v4-flash';
+import { WIKI_MANUAL_MODEL } from '../../_shared/agent-models.ts';
 
 // Upper bound on the model's reply. A full-article rewrite echoes the
 // entire body back (not a diff), and the body cap is 16000 chars

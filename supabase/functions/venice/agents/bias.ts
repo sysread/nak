@@ -36,12 +36,7 @@ import {
   type ConversationContribution,
   type FeedbackContribution,
 } from '../../_shared/bias-math.ts';
-
-// Mirror of agentModel('bias').id in src/lib/models/index.ts at port
-// time - a static role->model map, not a per-user configurable tier,
-// so hardcoding stays faithful after the cutover (same approach as
-// the curation units).
-const BIAS_MODEL = 'mistral-small-3-2-24b-instruct';
+import { BIAS_MODEL } from '../../_shared/agent-models.ts';
 
 // Per-thread claim TTL, seconds. Generous enough that one LLM call
 // against a long transcript comfortably fits inside it - the same

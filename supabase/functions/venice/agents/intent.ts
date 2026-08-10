@@ -33,8 +33,7 @@ import {
   type EfficacyEvidence,
   type TargetDirection,
 } from '../../_shared/intent-math.ts';
-
-const INTENT_MODEL = 'mistral-small-3-2-24b-instruct';
+import { INTENT_MODEL } from '../../_shared/agent-models.ts';
 
 // Generous token ceiling: the agent emits a small JSON plan, but a
 // thorough portfolio review with rationales over a handful of intents

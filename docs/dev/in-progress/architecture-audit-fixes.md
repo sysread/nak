@@ -118,7 +118,7 @@ server URL, verify the OAuth redirect flow fires, verify a configured integratio
 
 **Files.** `supabase/functions/venice/index.ts`, new `supabase/functions/venice/mcp/handlers.ts` (or per-route files).
 
-## Fix 4: Extract agent model IDs to shared module [ ]
+## Fix 4: Extract agent model IDs to shared module [x]
 
 **Problem.** Every edge agent hardcodes its model ID as a const with a "Mirror of agentModel('xxx').id" comment.
 Ten-plus files, no parity test. A model swap in the browser's `AGENT_MODELS` registry with no matching edge edit means

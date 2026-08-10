@@ -45,11 +45,7 @@ import {
   type AgentToolContext,
   withProgressNarration,
 } from './_run.ts';
-
-// Mirror of agentModel('deepSleep').id in src/lib/models/index.ts - a
-// static role->model map, not a per-user tier, so hardcoding stays
-// faithful.
-const DEEP_SLEEP_MODEL = 'deepseek-v4-flash';
+import { DEEP_SLEEP_MODEL } from '../../_shared/agent-models.ts';
 
 /**
  * Minimum gap between scheduled runs for one user, passed to

@@ -26,12 +26,7 @@ import {
   completeJsonObject,
   CURATION_CLAIM_TTL_SECONDS,
 } from './_curation_helpers.ts';
-
-// Mirror of agentModel('recipeTopics').id in src/lib/models/index.ts.
-// AGENT_MODELS is a static role->model map, NOT one of the per-user
-// configurable tiers, so the browser path resolved this same constant -
-// hardcoding it here stays faithful after the cutover.
-const RECIPE_TOPICS_MODEL = 'mistral-small-3-2-24b-instruct';
+import { RECIPE_TOPICS_MODEL } from '../../_shared/agent-models.ts';
 
 // Mirror of UNTAGGED_TOPIC_SENTINEL in src/lib/supabase.ts - the
 // filter UI's "no topics on this row" marker, forbidden as a tag.

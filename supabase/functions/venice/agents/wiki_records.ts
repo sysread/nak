@@ -54,12 +54,11 @@ import {
   transcriptFitsDirect,
 } from './_accumulator.ts';
 import { MAX_WIKI_RECORD_CONTENT_CHARS } from '../../_shared/wiki-limits.ts';
+import { WIKI_RECORDS_MODEL } from '../../_shared/agent-models.ts';
 
-// Mirror of agentModel('wikiRecords').id in src/lib/models/index.ts.
 // Balanced model with medium reasoning per the feature spec: parsing
 // whether a turn describes a discrete loggable event (vs general Q&A)
 // needs nuance, same as the article agent.
-const WIKI_RECORDS_MODEL = 'deepseek-v4-flash';
 
 const WIKI_RECORD_CLAIM_TTL_SECONDS = 600;
 const MAX_FAILURES_PER_THREAD = 3;

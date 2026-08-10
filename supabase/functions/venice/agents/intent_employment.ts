@@ -26,8 +26,7 @@ import { createEdgeLogger, type EdgeLogger } from '../../_shared/edge-log.ts';
 import { readVeniceKey } from '../tools/_venice_key.ts';
 import { toolComplete } from '../tools/_venice_complete.ts';
 import { loadThreadSlice, messageToVenice } from './_recall_helpers.ts';
-
-const INTENT_EMPLOYMENT_MODEL = 'mistral-small-3-2-24b-instruct';
+import { INTENT_EMPLOYMENT_MODEL } from '../../_shared/agent-models.ts';
 const INTENT_EMPLOYMENT_MAX_TOKENS = 2048;
 const INTENT_EMPLOYMENT_CLAIM_TTL_SECONDS = 300;
 const INTENT_EMPLOYMENT_MIN_USER_MESSAGES = 2;

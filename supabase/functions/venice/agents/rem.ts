@@ -47,10 +47,7 @@ import {
   type AgentToolContext,
   withProgressNarration,
 } from './_run.ts';
-
-// Mirror of agentModel('rem').id in src/lib/models/index.ts - a static
-// role->model map, not a per-user tier, so hardcoding stays faithful.
-const REM_MODEL = 'deepseek-v4-flash';
+import { REM_MODEL } from '../../_shared/agent-models.ts';
 
 // Mirror of the browser manager's minIntervalSeconds (12h between
 // scheduled runs per user). Enforced by claim_next_user_for_rem.

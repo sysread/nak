@@ -26,6 +26,7 @@ import { readVeniceKey } from '../tools/_venice_key.ts';
 import { toolComplete } from '../tools/_venice_complete.ts';
 import { sanitizeTitle } from '../tools/_title.ts';
 import { CURATION_CLAIM_TTL_SECONDS } from './_curation_helpers.ts';
+import { AUTO_TITLE_MODEL } from '../../_shared/agent-models.ts';
 
 // Shared with the other server-side curation agents (summary, topics,
 // bias, samskara): a cheap, fast, non-reasoning instruct model. Those
@@ -34,7 +35,6 @@ import { CURATION_CLAIM_TTL_SECONDS } from './_curation_helpers.ts';
 // titling on a separate (e2ee) model bought no real privacy, and one
 // shared id keeps the curation family on a single, better-provisioned
 // model rather than a small one prone to 429 overload.
-const AUTO_TITLE_MODEL = 'mistral-small-3-2-24b-instruct';
 
 /**
  * System prompt for the title-gen sub-call. Short on purpose: the

@@ -69,10 +69,7 @@ import {
   type Toolbox,
   withProgressNarration,
 } from './_run.ts';
-
-// Mirror of agentModel('wikiLibrarian').id in src/lib/models/index.ts
-// (static role->model map, not a configurable tier).
-const WIKI_LIBRARIAN_MODEL = 'deepseek-v4-flash';
+import { WIKI_LIBRARIAN_MODEL } from '../../_shared/agent-models.ts';
 
 // Mirror of the browser librarian's knobs: 400-char excerpts keep a
 // hundred-article prompt inside the window; wikis below 3 articles

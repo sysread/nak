@@ -35,13 +35,13 @@ import { readVeniceKey } from '../tools/_venice_key.ts';
 import { loadThreadSliceUpTo } from './_agent_tools.ts';
 import { completeJsonObjectWithMeta } from './_curation_helpers.ts';
 import { messageToVenice, type VeniceWireMessage } from './_recall_helpers.ts';
+import { EVALUATION_MODEL } from '../../_shared/agent-models.ts';
 
 // Mirrors the reflection tier: the judge, like reflection, reads a
 // whole settled conversation and reasons over it, so the same
 // model fits. Not yet a distinct AGENT_MODELS role - if the judge
 // later needs separate tuning, add a 'samskaraEvaluation' role to
 // src/lib/models/index.ts and mirror agentModel(...).id here.
-const EVALUATION_MODEL = 'deepseek-v4-flash';
 
 // 600s matches the other next-day sweeps (reflection, wiki). A judge
 // run is one structured completion over the transcript plus a couple

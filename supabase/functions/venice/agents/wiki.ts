@@ -93,12 +93,7 @@ import {
   MAX_WIKI_CONTENT_CHARS,
   MAX_WIKI_CHANGELOG_MESSAGE_CHARS,
 } from '../../_shared/wiki-limits.ts';
-
-// Mirror of agentModel('wiki').id in src/lib/models/index.ts.
-// AGENT_MODELS is a static role->model map, NOT one of the per-user
-// configurable tiers, so the browser path resolved this same constant -
-// hardcoding it here stays faithful after the cutover.
-const WIKI_MODEL = 'deepseek-v4-flash';
+import { WIKI_MODEL, CONTENT_FILTER_FALLBACK_MODEL } from '../../_shared/agent-models.ts';
 
 /**
  * Sentinel substring Venice emits when its content classifier rejects
@@ -135,7 +130,6 @@ const CONTENT_FILTER_SENTINEL =
  * - when re-pointing this constant, verify the replacement id exists
  * in GET /models and reports supportsFunctionCalling.
  */
-const CONTENT_FILTER_FALLBACK_MODEL = 'venice-uncensored-1-2';
 
 /**
  * Per-round output cap for the agent's tool loop. Without an explicit

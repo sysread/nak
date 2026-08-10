@@ -30,12 +30,7 @@ import {
   trimToCompleteTurn,
   trimToFirstUserOrSystem,
 } from './_curation_helpers.ts';
-
-// Mirror of agentModel('summary').id in src/lib/models/index.ts.
-// AGENT_MODELS is a static role->model map, NOT one of the per-user
-// configurable tiers, so the browser path resolved this same constant -
-// hardcoding it here stays faithful after the cutover.
-const SUMMARY_MODEL = 'mistral-small-3-2-24b-instruct';
+import { SUMMARY_MODEL } from '../../_shared/agent-models.ts';
 
 /**
  * The summary instruction, appended as the final user turn to a

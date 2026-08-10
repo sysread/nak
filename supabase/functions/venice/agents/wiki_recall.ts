@@ -28,8 +28,7 @@ import {
   type RecallNote,
   type VeniceWireMessage,
 } from './_recall_helpers.ts';
-
-const WIKI_RECALL_MODEL = 'deepseek-v4-flash';
+import { WIKI_RECALL_MODEL } from '../../_shared/agent-models.ts';
 
 const WIKI_SEARCH_WIRE_SCHEMA: AgentTool['wire'] = {
   type: 'function',

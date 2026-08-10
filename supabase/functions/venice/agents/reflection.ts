@@ -65,12 +65,7 @@ import {
   messageToVenice,
   type VeniceWireMessage,
 } from './_recall_helpers.ts';
-
-// Mirror of agentModel('reflection').id in src/lib/models/index.ts.
-// AGENT_MODELS is a static role->model map, NOT one of the per-user
-// configurable tiers, so the browser path resolved this same constant -
-// hardcoding it here stays faithful after the cutover.
-const REFLECTION_MODEL = 'deepseek-v4-flash';
+import { REFLECTION_MODEL } from '../../_shared/agent-models.ts';
 
 // 600s matches the other fleets' claim TTLs (wiki, librarian). The
 // browser-era 120s looked generous but a substantial thread's
