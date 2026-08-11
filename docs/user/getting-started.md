@@ -10,10 +10,11 @@ and sending your first message.
 - A **Supabase** account and a new project on it. The free tier
   is fine. Nak stores your conversations, memories, recipes, and
   attachments there.
-- A **Venice.ai** account and API key. Nak runs every model call
-  against Venice. The key gets seeded into your Supabase project
-  once and held server-side; you do not enter it into the
-  browser.
+- A **Venice.ai** account and API key. Nak runs chat, image
+  generation, and its background agents against Venice. (Embeddings
+  run locally in the edge function and don't need Venice.) The key
+  gets seeded into your Supabase project once and held server-side;
+  you do not enter it into the browser.
 
 ## Creating your Supabase project
 

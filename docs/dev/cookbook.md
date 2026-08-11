@@ -375,7 +375,7 @@ RPCs: `claim_next_pending_recipe`, `save_recipe_embedding_if_claimed`,
 same `for update skip locked` claim discipline. The recipe input
 builder is the `recipes` entry in `EMBED_SOURCES`
 (`supabase/functions/_shared/embed-input.ts`), drained by the
-server-side backfill alongside the other four sources.
+server-side backfill alongside the other six sources.
 
 Search wrapper: `SupabaseService.searchRecipes({query, queryEmbedding,
 limit})` merges semantic hits (RPC, cosine order) and ILIKE hits

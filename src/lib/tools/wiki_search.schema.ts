@@ -9,7 +9,7 @@ export const wikiSearchSchema = {
   description:
     "Semantic search over the user's wiki - flat encyclopedic articles " +
     'about topics, people, places, and projects in their life (with ' +
-    'substring fallback for rows the embeddings worker has not yet ' +
+    'substring fallback for rows the embeddings backfill has not yet ' +
     'processed). Returns {id, title, content, updated_at, similarity?}[] ' +
     'ranked by relevance. Articles are NEVER auto-injected into the chat; ' +
     'this is the only way to surface them.',

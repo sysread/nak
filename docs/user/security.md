@@ -2,8 +2,8 @@
 
 Nak is bring-your-own-infrastructure: your Supabase project
 holds your data, the Venice API key on your Supabase project
-pays for your own usage. This page covers what's stored where
-and what protects it.
+pays for your chat, image generation, and background-agent usage.
+This page covers what's stored where and what protects it.
 
 ## What's stored where
 

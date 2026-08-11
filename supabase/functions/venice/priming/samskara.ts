@@ -6,8 +6,8 @@
 // ./samskara-format.ts; this file owns the Supabase + Venice IO.
 //
 // Adjacent server-side modules this leans on:
-//   - ../../_shared/venice.ts        veniceEmbed (POST /embeddings)
-//   - ../../_shared/backfill.ts      VENICE_EMBEDDING_MODEL + the
+//   - ../../_shared/local-embed.ts   localEmbed (Supabase.ai.Session)
+//   - ../../_shared/backfill.ts      EMBEDDING_MODEL + the
 //                                    zero-extension padding helper
 //   - ../../_shared/edge-log.ts      the drawer-mirroring EdgeLogger
 //
@@ -20,14 +20,13 @@
 //   - The service-role admin client has no auth.uid(), so both RPCs are
 //     called with the explicit p_user_id the orchestrator passes
 //     through (the b-strict overload the schema added).
-//   - Embedding goes through veniceEmbed with the shared key.
+//   - Embedding goes through localEmbed (Supabase.ai.Session).
 
 import { type SupabaseClient } from '@supabase/supabase-js';
 import { type EdgeLogger } from '../../_shared/edge-log.ts';
-import { veniceEmbed } from '../../_shared/venice.ts';
+import { localEmbed } from '../../_shared/local-embed.ts';
 import {
   padEmbeddingForStorage,
-  VENICE_EMBEDDING_MODEL,
 } from '../../_shared/backfill.ts';
 import {
   FIRE_SCORE_FLOOR,
@@ -133,13 +132,7 @@ export async function queryFiredSamskaras(opts: {
   log.debug('fire: embedding query text', { chars: trimmed.length });
   let rawEmbedding: number[] | undefined;
   try {
-    const resp = await veniceEmbed({
-      apiKey,
-      model: VENICE_EMBEDDING_MODEL,
-      input: trimmed,
-      signal,
-    });
-    rawEmbedding = resp.data[0]?.embedding;
+    rawEmbedding = await localEmbed(trimmed);
   } catch (err) {
     log.debug('fire embed failed', err);
     return null;

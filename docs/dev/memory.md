@@ -450,10 +450,10 @@ in `docs/user/memory.md`. The dev side has five moving parts:
 - **`memories` table** (full definition in schema.sql).
   Key columns:
   - `id`, `user_id`, `label`, `data`, `created_at`, `updated_at`
-  - `embedding vector(2048)` — padded from the 1024-dim native
-    Venice embedding (see `padEmbeddingForStorage` in
+  - `embedding vector(2048)` — padded from the 384-dim native
+    gte-small embedding (see `padEmbeddingForStorage` in
     `models.ts` for why)
-  - `embedding_model text` — records which Venice model produced
+  - `embedding_model text` — records which model produced
     the vector; a future rotation reselects stale rows by
     `where embedding_model <> $current`
   - `embedding_claim_holder`, `embedding_claim_expires` — per-row
@@ -821,7 +821,7 @@ renders the delta as a chip (`memorySizeDelta` in
   `memories.embedding` on a poll of `embedding is null`. Memory
   search's vector path reads that column; the ILIKE fallback
   covers the "just written, not yet embedded" window. Deep-sleep
-  re-embeds its seed through the same Venice model to query the
+  re-embeds its seed through the same gte-small model to query the
   scored neighbor RPC. See `./embeddings.md`.
 - **Topics** - the memory-topics curation unit (server-side, in
   the venice function) tags each memory with 1-4 short topic
@@ -890,9 +890,9 @@ renders the delta as a chip (`memorySizeDelta` in
   meant to satisfy. The recall agent (`agents/recall.ts`) drops
   any trailing assistant-with-tool_calls row before handing the
   transcript to its model.
-- **Embedding dimensions are padded.** Venice's current model
-  emits 1024 dims; the column is `vector(2048)` for future
-  compat. The padding is zero-extension; cosine similarity is
+- **Embedding dimensions are padded.** The current model
+  (gte-small) emits 384 dims; the column is `vector(2048)` for
+  future compat. The padding is zero-extension; cosine similarity is
   invariant. If you wire a different embedding source, route it
   through `padEmbeddingForStorage` or it'll hit a shape error
   on write.

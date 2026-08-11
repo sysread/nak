@@ -184,6 +184,10 @@ One file per use-case under [`use-cases/`](./use-cases/), named
 - [background-maintenance](./use-cases/background-maintenance.md) -
   embed backfill, attachment expiry, recipe-image GC, and their
   per-user drawer summaries.
+- [embeddings-local-inference](./use-cases/embeddings-local-inference.md) -
+  the local gte-small embedding model: `/embed` route output dims,
+  stored vector dims, semantic search finding a test memory, manual
+  backfill re-embedding a nulled row.
 - [curation-units](./use-cases/curation-units.md) - the venice
   function's five curation units (auto-title, thread topics, memory
   topics, recipe topics, summary) on both drivers: chat-turn tail

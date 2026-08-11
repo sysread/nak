@@ -71,7 +71,7 @@ Schema (`supabase/schema.sql`):
 - Cron dispatch: `nak_trigger_wiki_sweep()` reads `project_url` /
   `service_role_key` from vault and POSTs `/wiki-sweep` via pg_net;
   the `nak-wiki-sweep` pg_cron job fires it hourly at minute 7
-  (offset from the embed backfill's `*/5` grid so the two pg_net
+  (offset from the embed backfill's every-minute grid so the two pg_net
   dispatches don't stack on the same tick). Clone of the
   embed-backfill dispatch pattern.
 - Realtime: `wiki_articles` is a member of the `supabase_realtime`
@@ -95,7 +95,7 @@ Schema (`supabase/schema.sql`):
   `nak_trigger_wiki_librarian_sweep()` POSTs `/wiki-librarian-sweep`
   via pg_net; the `nak-wiki-librarian-sweep` job fires it hourly at
   minute 37 (offset from the wiki sweep's minute 7 and the backfill's
-  `*/5` grid so the heavy dispatches never share a tick).
+  every-minute grid so the heavy dispatches never share a tick).
 - Realtime authorization for live librarian runs: the "agent-run
   channel: owner subscribe" policy on `realtime.messages` admits the
   signed-in user to their private `agent-runs:<userId>` Broadcast
@@ -1261,8 +1261,8 @@ label-and-data shape), truncates content to
 `claim_next_pending_wiki_article` /
 `save_wiki_article_embedding_if_claimed`.
 
-The same `text-embedding-bge-m3` model and 2048-dim padded vectors
-as memories and journal entries.
+The same `gte-small` model (384-dim, zero-padded to 2048) and padded
+vectors as memories and journal entries.
 
 ### Autonomous vs manual agent split
 

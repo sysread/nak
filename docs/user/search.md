@@ -30,10 +30,10 @@ list while the embedding round-trip and the database query run.
 The actual results appear once they arrive, replacing the scanner.
 Searches typically complete in under a second.
 
-If your network is offline, or the embedding model is briefly
-unreachable, Nak falls back to the substring-only pass quietly -
-your search will still return matches, just ranked by recency
-rather than meaning.
+If your network is offline, or the embedding round-trip times out
+(a cold start on the edge function can take several seconds), Nak
+falls back to the substring-only pass quietly - your search will
+still return matches, just ranked by recency rather than meaning.
 
 ## Ordering
 

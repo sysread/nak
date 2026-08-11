@@ -9,11 +9,11 @@
  * browse-memories modal — a drift here would be a confusing bug
  * ("why doesn't the UI find what the assistant finds?").
  *
- * Why the ILIKE fallback: embeddings are populated by a background
- * worker that polls every ~30s. A memory the user just wrote is
- * `embedding is null` until the worker catches up, so a pure vector
+ * Why the ILIKE fallback: embeddings are populated by a server-side
+ * backfill that runs every minute. A memory the user just wrote is
+ * `embedding is null` until the backfill catches up, so a pure vector
  * search would hide it. We always run the ILIKE path against
- * unembedded rows and merge results in — vector hits first, then any
+ * unembedded rows and merge results in - vector hits first, then any
  * ILIKE hits the vector search missed. The merged set is deduped and
  * capped at `limit`.
  *

@@ -7,9 +7,11 @@ what you're working on, and pre-computing search indexes. This page
 explains what each one does, what (if anything) you see when it runs,
 and what knobs exist to control it.
 
-None of this leaves your browser except as API calls to Venice (for
-the model work) and Supabase (for storage). Memories, summaries, and
-embeddings all land in your own Supabase project — the one whose URL
+None of this leaves your Supabase project except as API calls to Venice
+(for chat, image generation, and the background agents) and Supabase
+(for storage). Embeddings run locally in the edge function using a
+built-in model - no external API call. Memories, summaries, and
+embeddings all land in your own Supabase project - the one whose URL
 and key you entered during [getting started](./getting-started.md).
 
 ## Auto-titling
@@ -197,7 +199,8 @@ short window (up to a few minutes) until the next scheduled pass
 catches up; during that window, searches still match it by substring
 and promote to semantic results once the embedding lands.
 
-Cost: Venice's embedding endpoint, one call per unembedded row. The
+Cost: none. Embeddings are computed locally in the edge function
+using a built-in model (gte-small) - no external API call. The
 schedule processes a bounded batch per run and resumes on the next
 run, so a large backlog drains over several passes rather than in one
 burst.

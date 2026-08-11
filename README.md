@@ -17,7 +17,9 @@ own, and that project owns every piece of infrastructure it touches.
   server-side in the function; tokens come back to the browser over a
   Supabase realtime channel and render token-by-token in the UI. Running
   the turn server-side means it survives the tab closing or the PWA
-  backgrounding mid-stream.
+  backgrounding mid-stream. **Embeddings** run locally in the edge
+  function via `Supabase.ai.Session('gte-small')` - a native Rust ONNX
+  model pre-bundled in the edge-runtime image, no external API call.
 - **Data/Auth**: Supabase, configured by you, using `supabase-js` with the
   public **publishable key** and Row Level Security.
 - **Config storage**: Your Supabase URL and Supabase publishable key are
@@ -62,8 +64,9 @@ The wizard will:
 6. **Seed your Venice API key** directly into the project's `app_config`
    table over Supabase's Management API (get a key at
    <https://venice.ai/settings/api>). Use an **Admin** key so the in-app
-   **Usage** view works - billing needs admin scope; chat and embeddings
-   work with a standard key. The key is written server-side; it never
+   **Usage** view works - billing needs admin scope; chat works
+   with a standard key. (Embeddings run locally in the edge function
+   and need no Venice key at all.) The key is written server-side; it never
    touches the browser.
 7. **Seed the edge-function secrets** the Venice function needs (project URL
    and a service-role key, stored in Supabase Vault for the cron backfill to
@@ -127,8 +130,8 @@ by hand:
    `insert into public.app_config (id, venice_api_key) values (true, '<your
    key>') on conflict (id) do update set venice_api_key = excluded.venice_api_key;`.
    Get a key at <https://venice.ai/settings/api> - use an **Admin** key if you
-   want the in-app **Usage** view (billing needs admin scope; a standard key
-   covers chat and embeddings).
+   want the in-app **Usage** view (billing needs admin scope; a
+   standard key covers chat).
 5. **Deploy the edge functions** to your project:
    `supabase functions deploy venice` (plus `attachment-gc` and
    `recipe-image-gc`). The `venice` function is what holds the key and relays

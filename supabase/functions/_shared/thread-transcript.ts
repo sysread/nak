@@ -29,7 +29,7 @@
 // _shared/backfill.ts - a chunk budget is a property of the embedding
 // model, not of the chunker, and keeping it next to the declaration is
 // what makes a model rotation trip over the fact that every number in
-// it was measured against bge-m3's tokenizer.
+// it was measured against a specific model's tokenizer.
 import { EMBEDDING_MAX_INPUT_CHARS } from './backfill.ts';
 
 export { EMBEDDING_MAX_INPUT_CHARS };
@@ -121,10 +121,11 @@ function renderToolCalls(toolCalls: readonly unknown[]): string[] {
  * carries nothing worth indexing (an empty assistant row that exists
  * only to hang tool calls off still renders those calls).
  *
- * The role prefix is deliberate: bge-m3 is a general text encoder with
- * no notion of chat structure, so "user:" / "assistant:" are just
- * words that give the model something to bind a speaker distinction
- * to. Without them a question and its answer embed identically.
+ * The role prefix is deliberate: gte-small (like its predecessor
+ * bge-m3) is a general text encoder with no notion of chat structure,
+ * so "user:" / "assistant:" are just words that give the model
+ * something to bind a speaker distinction to. Without them a question
+ * and its answer embed identically.
  */
 export function renderMessage(msg: TranscriptMessage): string | null {
   const content = typeof msg.content === 'string' ? msg.content.trim() : '';

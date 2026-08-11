@@ -13,7 +13,7 @@
  * Embedding pipeline: the cookbook stays small enough that the LLM
  * tool path (`recipe_list`, `recipe_search`) gets by on ILIKE alone,
  * but the human-facing drawer search (`RecipeList.svelte`) wires
- * through the shared embeddings worker so a fuzzy query ("fluffy
+ * through the embeddings backfill so a fuzzy query ("fluffy
  * potato side") can find a recipe by meaning rather than title
  * substring. Same claim/save/search RPC trio as the wiki source.
  *

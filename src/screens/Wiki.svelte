@@ -266,7 +266,7 @@
     // Re-run on content updates: when the autonomous agent or the
     // librarian touches the article, updated_at moves and the
     // bibliography may have gained a row. Same for See Also after
-    // the embedding worker re-embeds.
+    // the embedding backfill re-embeds.
     void article.updated_at;
     const id = article.id;
     let cancelled = false;

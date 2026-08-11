@@ -17,10 +17,6 @@
 // drift apart.
 import type { VeniceErrorKind } from './venice-stream.ts';
 
-export interface EmbeddingResponse {
-  data: { index: number; embedding: number[] }[];
-}
-
 // Kind discipline within this file: the non-streaming helpers below
 // collapse ALL non-OK Venice responses - including 401/403 - to
 // 'http' on purpose. Their function-side handlers route every non-OK
@@ -87,60 +83,6 @@ function parseVeniceRetryAfterMs(headers: Headers): number | null {
 }
 
 const DEFAULT_BASE_URL = 'https://api.venice.ai/api/v1';
-
-export interface VeniceEmbedOptions {
-  apiKey: string;
-  model: string;
-  input: string | string[];
-  baseUrl?: string;
-  fetchImpl?: typeof fetch;
-  signal?: AbortSignal;
-}
-
-/**
- * POST /embeddings against Venice. Mirrors the browser client's request shape
- * (OpenAI-compatible `{ model, input }` body, Bearer auth) so a row embedded
- * server-side is byte-identical to one embedded in the worker today.
- */
-export async function veniceEmbed(opts: VeniceEmbedOptions): Promise<EmbeddingResponse> {
-  const baseUrl = (opts.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, '');
-  const fetchImpl = opts.fetchImpl ?? fetch;
-
-  let res: Response;
-  try {
-    res = await fetchImpl(`${baseUrl}/embeddings`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${opts.apiKey}`,
-      },
-      body: JSON.stringify({ model: opts.model, input: opts.input }),
-      signal: opts.signal,
-    });
-  } catch (err) {
-    throw new VeniceError(
-      `Network error contacting Venice: ${(err as Error).message}`,
-      'network'
-    );
-  }
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    // 429 is the one status callers branch on (back-off vs give-up), so it
-    // gets its own kind; everything else is a generic http failure.
-    throw new VeniceError(
-      `Venice embeddings ${res.status}: ${body.slice(0, 200)}`,
-      res.status === 429 ? 'rate_limit' : 'http',
-      res.status
-    );
-  }
-
-  try {
-    return (await res.json()) as EmbeddingResponse;
-  } catch {
-    throw new VeniceError('Failed to parse Venice embedding response.', 'parse');
-  }
-}
 
 export interface UsageAnalyticsParams {
   /** Inclusive lower bound, `YYYY-MM-DD`. Both bounds or neither. */
@@ -396,7 +338,7 @@ export interface VeniceImageGenResult {
 /**
  * POST /image/generate against Venice. Camel-cased options map to Venice's
  * snake_case wire shape; only fields the caller supplied are forwarded (matches
- * the wire discipline veniceEmbed uses). Pins `variants: 1` and
+ * the wire discipline the other Venice helpers use). Pins `variants: 1` and
  * `return_binary: false` so the response is a single base64 image ready to
  * drop into a message_attachments row - the generate_image tool downstream
  * never wants raw bytes or multi-image output.

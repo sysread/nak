@@ -13,21 +13,31 @@ protocol the backfill drains through.
 A memory that's just been written is `embedding is null`; so is a
 thread chunk the rechunk unit just rewrote, and the
 same for recipes, wiki articles, and substrate rows. A `pg_cron` job
-fires every 5 minutes, POSTs to the edge function's `/backfill`
-route, and the function claims pending rows across all five tables,
-asks Venice's `/embeddings` endpoint for vectors, and writes them
+fires every minute, POSTs to the edge function's `/backfill`
+route, and the function claims pending rows across all seven tables,
+embeds them with the built-in gte-small model, and writes them
 back under a claim guard - all server-side, no open tab required.
+
+Embeddings are produced by `Supabase.ai.Session('gte-small')`, a
+native Rust ONNX runtime pre-bundled in the edge-runtime Docker
+image. No external API call, no Venice dependency. The model emits
+384-dim vectors, zero-extended to the 2048-dim storage column by
+`padEmbeddingForStorage`. Cold start (model load) takes ~7s on a
+fresh worker; warm inference is ~100-180ms per call. The edge
+runtime's 2s CPU-time budget per worker caps the backfill batch at
+12 rows per invocation.
 
 Downstream: `memory_search`, `conversation_search`, and the drawer
 searches run cosine-similarity against these vectors. Unembedded
 rows are covered by ILIKE fallbacks on the search side, so a just-
 written memory is never invisible - just semantically under-ranked
-until the next sweep catches up (at most ~5 minutes).
+until the next sweep catches up (at most ~1 minute).
 
 The other direction - embedding a *search query* to run cosine
 search - also goes through the function. `SupabaseService.embed`
-calls `venice/embed`, which holds the shared key and relays a single
-vector synchronously. Browser callers (`memory_search`,
+calls `venice/embed`, which runs the query through
+`Supabase.ai.Session('gte-small')` and returns a single vector
+synchronously. Browser callers (`memory_search`,
 `conversation_search`, the drawers, context recall) keep the same
 `{ model, input } -> { data: [{ embedding }] }` request/response
 shape they had against `VeniceClient.embed`; the only change at the
@@ -35,6 +45,10 @@ call site is which client handle they hold.
 
 ## Files
 
+- `supabase/functions/_shared/local-embed.ts` - the
+  `Supabase.ai.Session('gte-small')` wrapper. Module-scoped session
+  persists across requests in the warm window. Exports `localEmbed`,
+  the `string -> number[]` function all embed callers use.
 - `supabase/functions/venice/index.ts` - the edge function.
   `/embed` is the thin per-call proxy (one vector for a query);
   `/backfill` is the cron target that runs the server-side drain.
@@ -42,14 +56,12 @@ call site is which client handle they hold.
 - `supabase/functions/_shared/backfill.ts` - `runBackfill`, the
   claim -> embed -> pad -> save orchestration. I/O-free (injected
   deps) so it unit-tests offline. Also holds the ported
-  `padEmbeddingForStorage` and the model constant.
+  `padEmbeddingForStorage` and the model constant (`EMBEDDING_MODEL`).
 - `supabase/functions/_shared/embed-input.ts` - per-source text
   composition (which columns, soft boundary, char caps) plus the
   `EMBED_SOURCES` registry mapping each source to its claim RPC,
   save RPC, and input builder. Ported from the old browser adapters;
   kept in TS so truncation stays byte-identical to historical rows.
-- `supabase/functions/_shared/venice.ts` - the Venice `/embeddings`
-  wire shape (request/response, error mapping), fetch-injectable.
 - `supabase/schema.sql` - the `claim_next_pending_*` /
   `save_*_embedding_if_claimed` RPCs (now `security definer` global
   sweeps; see below), the `clear_*_embedding_on_change` triggers,
@@ -58,17 +70,20 @@ call site is which client handle they hold.
 
 ## Entry points
 
-- **`pg_cron` -> `nak_trigger_embed_backfill()`** - every 5 minutes,
+- **`pg_cron` -> `nak_trigger_embed_backfill()`** - every minute,
   the job calls the trigger function, which reads the `project_url`
   and `service_role_key` Vault secrets and `pg_net.http_post`s to
   `/functions/v1/venice/backfill`. No-ops if the secrets are
   unseeded, so an un-provisioned project simply doesn't backfill.
+  The every-minute cadence (up from every 5) was set when the model
+  switched from Venice's bge-m3 to local gte-small inference; once
+  the re-embedding drain completes, the cadence can be relaxed.
 - **`handleBackfill` in the function** - authenticates the caller as
   the service role by decoding the bearer JWT's `role` claim and
   requiring `role === 'service_role'` (the gateway's verify_jwt has
   already validated the signature). It then drives `runBackfill` over
-  the five sources, bounded by a batch cap (50 rows) and a time budget
-  (25s) per invocation. The schedule resumes the drain next tick.
+  the seven sources, bounded by a batch cap (12 rows) and a time budget
+  (30s) per invocation. The schedule resumes the drain next tick.
 - **`runBackfill(deps, opts)`** - round-robins one claim attempt per
   source per pass; embeds and saves whatever it claims; stops when a
   full pass claims nothing (queue drained), the cap or budget is
@@ -105,21 +120,21 @@ role) is their only caller.
 
 ### Padding
 
-Venice's current embedding model emits 1024 dims; the column is
-`vector(2048)` for forward compat. `padEmbeddingForStorage` zero-
-extends. Cosine similarity is invariant under zero-extension. The
-function pads (not the SQL) so the stored shape matches what the
-browser worker wrote historically.
+The gte-small model emits 384 dims; the column is `vector(2048)` for
+forward compat. `padEmbeddingForStorage` zero-extends. Cosine
+similarity is invariant under zero-extension. The function pads (not
+the SQL) so the stored shape is consistent.
 
 ### Timing
 
-- Cron cadence: every 5 minutes (`*/5 * * * *`).
-- Per-invocation bounds: 50 rows or 25s, whichever first. The 25s
-  budget sits well under the edge runtime wall-clock limit - nearly
-  all of it is awaiting Venice (I/O, not CPU). Both are tunables in
-  `venice/index.ts`.
-- Row claim TTL: 120s. Rate-limit back-off: the invocation bails and
-  the next tick resumes.
+- Cron cadence: every minute (`* * * * *`).
+- Per-invocation bounds: 12 rows or 30s, whichever first. The 12-row
+  cap is set by the edge runtime's 2s CPU-time budget: at ~130ms CPU
+  per gte-small inference, 12 rows stays safely under the limit with
+  headroom for claim/save RPC round-trips.
+- Row claim TTL: 120s. No rate-limit back-off (local inference has no
+  rate limits); the invocation bails on the time/row budget and the
+  next tick resumes.
 
 ## Worker-fleet coordination (retired)
 
@@ -148,7 +163,7 @@ lease era.
 
 ## Interactions with other features
 
-- **Memory** - `memories` is one of the five backfill sources. The
+- **Memory** - `memories` is one of the seven backfill sources. The
   `clear_memory_embedding_on_change` trigger reselects edited rows.
   `memory_search`'s vector path reads `memories.embedding`; ILIKE
   fallback covers unembedded rows. See `./memory.md`.
@@ -170,9 +185,10 @@ lease era.
 - **Wiki / Samskara** - `wiki_articles` and `samskara_substrate` are
   sources; the substrate claim skips unassimilated rows
   (`situation is null`). See `./wiki.md`, `./samskara.md`.
-- **Shared config** - the function reads the project-global Venice
-  key from `app_config` server-side (service role). Browser callers
-  never see the key.
+- **Shared config** - embeddings no longer need the Venice key. The
+  function uses `Supabase.ai.Session('gte-small')`, a model pre-bundled
+  in the edge runtime. The Venice key in `app_config` is still used by
+  the chat, image generation, and text extraction routes.
 - **Build & deploy** - the `pg_cron`/`pg_net` block and the converted
   RPCs ship in `schema.sql`, and the `venice` function is deployed,
   both by the deploy's `sync-supabase` job (the function via a
@@ -217,6 +233,12 @@ lease era.
   HTTP call and returns; it does not wait for the backfill to finish.
   That's why each invocation self-bounds and the claim protocol
   resumes the drain - never assume one tick drains the whole queue.
+- **CPU time, not I/O, is the binding constraint.** The Venice-era
+  backfill was I/O-bound (most of the 25s budget was awaiting Venice
+  HTTP responses). Local inference is CPU-bound: each `session.run()`
+  call uses ~130ms of the worker's 2s CPU-time budget. The 12-row
+  batch cap is sized for this. Bumping it risks the edge runtime
+  killing the worker mid-batch.
 
 ## Where to go next
 

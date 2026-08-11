@@ -204,9 +204,10 @@ Load-bearing patterns the schema uses repeatedly:
 
 - **Columns over migrations.** New per-row state is an
   `add column if not exists`, not a new table. E.g. `threads` has
-  grown `toolboxes_enabled`, `archived`, `summary`, `embedding`, plus
-  reflection/summary/embedding claim columns — no migrations, just
-  idempotent column adds.
+  grown `toolboxes_enabled`, `archived`, `summary`, plus reflection/
+  summary claim columns - no migrations, just idempotent column
+  adds. (Thread-level embeddings moved to `thread_chunks`; the old
+  `threads.embedding` columns were dropped.)
 - **Claim-RPC pattern.** Any row a background job might process
   carries `<kind>_claim_holder text` + `<kind>_claim_expires
   timestamptz`. The RPC `claim_next_pending_<kind>` picks the oldest
@@ -234,10 +235,12 @@ Load-bearing patterns the schema uses repeatedly:
 
 The Venice API key is project-global and held server-side in the
 `app_config` table. Every Venice call (streaming chat, one-shot
-chat, embeddings, text extraction, image generation, billing usage)
-routes through the `venice` edge function, which reads the shared
-key, talks to Venice, and relays the response. The browser never
-holds the key. The split between the browser-side wire shape and
+chat, text extraction, image generation, billing usage) routes
+through the `venice` edge function, which reads the shared key,
+talks to Venice, and relays the response. Embeddings are the
+exception: they run locally via `Supabase.ai.Session('gte-small')`,
+a native ONNX model pre-bundled in the edge-runtime image, with no
+Venice key or external API call. The browser never holds the key. The split between the browser-side wire shape and
 the function-side wire shape:
 
 **Browser side** (`src/lib/venice.ts` and `src/lib/supabase.ts`):
@@ -279,7 +282,9 @@ Venice base URL; the function does.
   guards, persistence, retry/control-channel fan-out. See
   [Streaming and tool dispatch in the venice edge function](./chat.md).
 - `/complete`, `/embed`, `/text-parser`, `/usage`, `/models`,
-  `/image/generate` - one-shot relays.
+  `/image/generate` - one-shot relays. `/embed` uses the built-in
+  `Supabase.ai.Session('gte-small')` (local ONNX inference, no Venice
+  key); the rest relay to Venice.
 - `/backfill` - service-role-only, the embedding backfill cron
   target.
 
@@ -319,7 +324,8 @@ venice edge function on two kinds of trigger:
   `memory.md`).
 - **pg_cron sweeps** - scheduled jobs that pg_net-POST a
   function route, as the catch-up and maintenance drivers.
-  The minute ladder: embed backfill `*/5`, bias `:03`, wiki
+  The minute ladder: embed backfill `* * * * *` (every minute, up
+  from `*/5` for the gte-small migration drain), bias `:03`, wiki
   `:07`, samskara decay `:13`/`:43`, rem + attachment expiry
   `:17`, samskara sweep `:23`, reflection `:27`, librarian +
   recipe-image GC `:37`, deep-sleep `:47`, curation `:57`.
@@ -409,7 +415,7 @@ turn:
 | `threads.bias_active_at_turn` | Function | Bias priming in `getStreamingResponse` |
 | `topics`, recipe edits, memory rows, settings | Browser | Direct user action UIs |
 | `topics` / `summary` derivations | Function | Curation tail after a completed turn + hourly sweep |
-| Embedding rows | Function | `pg_cron` + venice `/embed-backfill` |
+| Embedding rows | Function | `pg_cron` + venice `/backfill` |
 | `samskaras` / substrate enrichment | Function | Samskara tail + hourly sweep |
 
 The auto-title case is the test of the frame: the same
