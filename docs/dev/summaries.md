@@ -43,9 +43,9 @@ sees an empty queue. There is no worker lease for this unit.
 - `supabase/functions/venice/agents/summary.ts` - the work unit:
   `summariseOneThread` (per-user claim, tail driver),
   `sweepClaimAndSummarise` (cross-user claim, sweep driver), the
-  shared run half, the summary prompt, and `condenseHistory` (the
-  first-40 + last-80 transcript truncation with turn-boundary
-  trimming).
+  shared run half, and the summary prompt. Transcript sizing lives
+  in `_curation_helpers.ts` (`completeOverThreadSlice`), shared
+  with thread-topics.
 - `supabase/functions/venice/agents/curation.ts` - the composition
   layer that orders the five units and owns the drain loops.
 - `supabase/schema.sql` (summaries sections) - `threads.summary`,
@@ -113,7 +113,10 @@ sees an empty queue. There is no worker lease for this unit.
   summarisation runs on the first 40 + last 80, each half trimmed
   to a safe turn boundary so the wire never serialises a
   `tool -> user` role sequence. Caps token spend and keeps the
-  summary biased toward opening framing + recent state.
+  summary biased toward opening framing + recent state. A second
+  pass then excerpts oversized rows and drops from the middle until
+  the transcript fits the token budget - the message cap alone does
+  not bound request size (see Gotchas).
 
 ## Interactions with other features
 
@@ -156,6 +159,15 @@ sees an empty queue. There is no worker lease for this unit.
   visible without blowing token budget. A long thread that pivots
   multiple times may produce a summary biased toward the final
   topic; we live with that.
+- **The message cap is not a size cap.** 120 turns of a tool-heavy
+  thread is routinely six figures of tokens, which the serving
+  backend rejects outright. `completeOverThreadSlice` in
+  `_curation_helpers.ts` is what actually bounds the request: it
+  excerpts oversized rows (tool results hardest), drops from the
+  middle until the transcript fits `CURATION_INPUT_TOKEN_BUDGET`,
+  and halves the budget for one retry if the backend rejects it
+  anyway. Summary and thread-topics share it. See the topics doc's
+  Gotchas for the incident that drove it.
 - **Long conversations re-summarise on every settle.** Each new
   terminal-assistant-message past `last_summarised_msg_id` reopens
   the claim. The new summary overwrites the old; no diff-only

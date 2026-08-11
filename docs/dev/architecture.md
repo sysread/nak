@@ -183,8 +183,9 @@ conversation heals permanently. No other reader persists the
 synthesis - it is regenerated on each read until the user
 revisits and sends.
 
-The `summary` agent's `condenseHistory` additionally trims its
-head/tail seam via `trimToCompleteTurn` /
+The curation units' `condenseForCuration` (in
+`_curation_helpers.ts`, shared by summary and thread-topics)
+additionally trims its head/tail seam via `trimToCompleteTurn` /
 `trimToFirstUserOrSystem` from the same module: a long-thread
 split can otherwise leave a `tool -> user` boundary mid-array
 even on a healthy thread.

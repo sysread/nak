@@ -244,6 +244,22 @@ threads tagged with either.
   `mistral-small-3-2-24b-instruct` in all three topics units (and
   summary) mirrors the corresponding `agentModel(...)` entries in
   `src/lib/models/index.ts`. Change both together.
+- **The 120-message cap does not bound request size.** Thread
+  topics sends a transcript, and 120 turns of a tool-using thread
+  (search dumps, article bodies, file reads) blew past the serving
+  backend's real ceiling: `context_length_exceeded`, "maximum
+  context length is 128000 tokens ... your prompt contains 131949
+  input tokens". Note the registry entry for that model claims
+  256k - the ceiling belongs to whichever backend is serving the id
+  and is not a contract (see CLAUDE.md). Sizing now lives in
+  `completeOverThreadSlice` (`_curation_helpers.ts`), shared with
+  summary: message cap, then per-row excerpting (tool results at 2k
+  chars, prose at 8k), then a middle-out drop until the estimate
+  fits `CURATION_INPUT_TOKEN_BUDGET` (64k, deliberately half the
+  smallest observed ceiling because the 4-chars-per-token estimate
+  is optimistic for JSON), then one halved-budget retry if the
+  backend rejects it regardless. The newest message always survives
+  so a pathological final turn can't wedge the queue.
 
 ## Memory topics
 

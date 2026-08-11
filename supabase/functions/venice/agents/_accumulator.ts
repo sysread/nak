@@ -11,10 +11,14 @@
 // partial knowledge of the conversation.
 //
 // Consumers: agents/wiki.ts and agents/wiki_records.ts (the two
-// sweep agents that feed whole thread slices to a model). The other
-// slice consumers (reflection, summary, samskara_evaluation,
-// thread_topics) still send unbounded slices and can adopt this
-// module when their inputs start hitting the same wall.
+// sweep agents that feed whole thread slices to a model), plus
+// agents/_curation_helpers.ts, which borrows estimateWireTokens and
+// isContextLengthError for the cheaper truncate-and-shrink sizing the
+// curation units use (a topic list doesn't justify a distill pass per
+// chunk the way an encyclopedia article does). The remaining slice
+// consumers - reflection and samskara_evaluation - still send
+// unbounded slices and can adopt this module when their inputs start
+// hitting the same wall.
 
 import { toolComplete } from '../tools/_venice_complete.ts';
 import type { AgentCompleteFn } from './_run.ts';

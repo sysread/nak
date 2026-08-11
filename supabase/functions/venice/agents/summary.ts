@@ -22,13 +22,9 @@ import { createEdgeLogger, type EdgeLogger } from '../../_shared/edge-log.ts';
 import { readVeniceKey } from '../tools/_venice_key.ts';
 import { toolComplete } from '../tools/_venice_complete.ts';
 import { loadThreadSliceUpTo } from './_agent_tools.ts';
-import type { StoredMessage, VeniceWireMessage } from './_recall_helpers.ts';
 import {
+  completeOverThreadSlice,
   CURATION_CLAIM_TTL_SECONDS,
-  messageToWire,
-  repairToolCallFanIn,
-  trimToCompleteTurn,
-  trimToFirstUserOrSystem,
 } from './_curation_helpers.ts';
 import { SUMMARY_MODEL } from '../../_shared/agent-models.ts';
 
@@ -78,35 +74,6 @@ function trimSummary(raw: string): string {
     .replace(/^["'`]+|["'`]+$/g, '')
     .trim();
   return stripped.length > 600 ? stripped.slice(0, 600) : stripped;
-}
-
-/**
- * Cap the number of messages we feed to the model. Very long threads
- * (500+ messages) would stretch the fast model's context; a
- * conversation summary doesn't benefit from every turn, so we send
- * the earliest + most-recent messages and let a symmetric gap in the
- * middle carry the missing span. The first turns establish topic,
- * the last turns establish outcome - the middle is usually
- * refinement that the summary doesn't need.
- */
-const MAX_INPUT_MESSAGES = 120;
-
-function condenseHistory(all: StoredMessage[]): StoredMessage[] {
-  if (all.length <= MAX_INPUT_MESSAGES) return all;
-  // Take the first 40 and the last 80 - outcomes carry more summary
-  // weight than origins, and the middle is dominated by iteration.
-  //
-  // The naive split lands the seam wherever index 40 / length-80 fall,
-  // which on a tool-using thread can put a `tool` row at the end of
-  // head and a `user` row at the start of tail - the wire then
-  // serialises as `tool -> user`, which providers reject with
-  // "Unexpected role 'user' after role 'tool'". Trim each half to a
-  // safe boundary before concatenating: head ends at a complete turn
-  // (no trailing tool / orphan-tool_calls assistant), tail starts at
-  // a fresh user (or system) row.
-  const head = trimToCompleteTurn(all.slice(0, 40));
-  const tail = trimToFirstUserOrSystem(all.slice(-80));
-  return [...head, ...tail];
 }
 
 /** Outcome of one summary cycle, mirroring the browser unit's CycleResult vocabulary. */
@@ -159,25 +126,30 @@ async function summariseClaimedThread(
     const apiKey = await readVeniceKey(adminClient);
     if (!apiKey) throw new Error('no Venice key configured (app_config unseeded)');
 
-    const condensed = repairToolCallFanIn(condenseHistory(slice));
-    const convo: VeniceWireMessage[] = condensed.map(messageToWire);
-    convo.push({ role: 'user', content: SUMMARY_PROMPT });
-
+    // completeOverThreadSlice owns the transcript sizing: message cap,
+    // per-row excerpting, token budget, and the shrink-retry on a
+    // context-length rejection.
+    //
     // Non-streaming call: we only want the final text. 2048 is the
     // project-wide floor on agent sub-call caps; the prompt's 2-3
     // sentence target lands well under that. The prompt controls
     // length, not the cap.
-    const result = await toolComplete({
-      apiKey,
-      model: SUMMARY_MODEL,
-      // Background curation agent: ride out a transient 429 rather than
-      // failing the summary on one "model overloaded".
-      retryRateLimit: true,
-      messages: convo,
-      maxTokens: 2048,
-    });
+    const { result, messageCount } = await completeOverThreadSlice(
+      slice,
+      SUMMARY_PROMPT,
+      (messages) =>
+        toolComplete({
+          apiKey,
+          model: SUMMARY_MODEL,
+          // Background curation agent: ride out a transient 429 rather
+          // than failing the summary on one "model overloaded".
+          retryRateLimit: true,
+          messages,
+          maxTokens: 2048,
+        }),
+    );
     summary = trimSummary(result.text);
-    inputMessageCount = condensed.length;
+    inputMessageCount = messageCount;
   } catch (err) {
     log.debug(
       `thread ${threadId} agent reported error`,
@@ -323,4 +295,4 @@ export async function sweepClaimAndSummarise(
 // Test-only surface: the output trim and the head/tail condense are
 // behavior parity with the browser agent (src/lib/agents/summary/)
 // and get asserted in supabase/functions/tests/curation.test.ts.
-export const __test = { trimSummary, condenseHistory };
+export const __test = { trimSummary };
