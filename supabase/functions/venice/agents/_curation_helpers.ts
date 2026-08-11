@@ -12,6 +12,7 @@
 
 import { veniceComplete } from '../../_shared/venice.ts';
 import type { StoredMessage, VeniceWireMessage } from './_recall_helpers.ts';
+import { estimateWireTokens, isContextLengthError } from './_accumulator.ts';
 import {
   type OpenAIToolCall,
   sanitizeToolCallIdForWire,
@@ -253,6 +254,188 @@ export function repairToolCallFanIn(messages: StoredMessage[]): StoredMessage[] 
 }
 
 /**
+ * Cap on how many messages of a thread go to a curation model. Very
+ * long threads (500+ messages) would stretch the fast model's context;
+ * neither a summary nor a topic list benefits from every turn, so we
+ * send the earliest + most-recent messages and let a gap in the middle
+ * carry the missing span. The first turns establish topic, the last
+ * turns establish outcome - the middle is usually refinement that
+ * neither output needs.
+ */
+const MAX_INPUT_MESSAGES = 120;
+const HEAD_MESSAGES = 40;
+const TAIL_MESSAGES = 80;
+
+/**
+ * Estimated-token ceiling for the transcript a curation unit sends.
+ *
+ * The message-count cap above bounds turns, not bytes: 120 turns of a
+ * tool-heavy thread (search dumps, article bodies, file reads) is
+ * routinely six figures of tokens. That is what a thread-topics call
+ * died on with "This model's maximum context length is 128000 tokens
+ * ... your prompt contains 131949 input tokens".
+ *
+ * 64k is deliberately half the smallest ceiling observed in
+ * production (128000, on the mistral-small backend serving summary
+ * and the three topics units). Two reasons for the wide margin:
+ * estimateWireTokens assumes 4 chars/token, which is right for
+ * English prose and badly optimistic for the JSON and code that fills
+ * tool results; and the ceiling belongs to whatever backend is
+ * serving the model id, which moves under us (see CLAUDE.md on the
+ * model registry's contextWindow not being a contract). Truncating a
+ * transcript costs a little fidelity on threads that were already
+ * being truncated by message count; a 400 costs the whole cycle.
+ */
+export const CURATION_INPUT_TOKEN_BUDGET = 64_000;
+
+/**
+ * Floor for the shrink-retry loop below. Under this the transcript is
+ * too small to describe the thread at all, so a unit is better off
+ * reporting an error (and retrying on a later cycle) than saving a
+ * summary or tag set derived from a handful of turns.
+ */
+const MIN_INPUT_TOKEN_BUDGET = 8_000;
+
+/**
+ * Share of the budget reserved for the most recent messages. Mirrors
+ * the 40/80 head/tail split of the message cap, for the same reason:
+ * outcomes carry more weight than origins, but origin is what tells
+ * the model what the thread was launched into.
+ */
+const TAIL_BUDGET_SHARE = 2 / 3;
+
+/**
+ * Per-message content caps. Tool results are mostly environmental
+ * (search dumps, page bodies the chat already read) and a single one
+ * can outweigh a dozen user turns, so they get the tighter cap - same
+ * value and rationale as TOOL_RESULT_EXCERPT_CHARS in ./_accumulator.ts.
+ * Prose gets a looser cap that only bites on pasted blobs.
+ *
+ * These also guarantee the budget walk below can make progress: with
+ * every row bounded, no single message can exceed the budget on its
+ * own and wedge the loop.
+ */
+const TOOL_RESULT_CHARS = 2_000;
+const PROSE_CHARS = 8_000;
+
+function excerptOversized(m: StoredMessage): StoredMessage {
+  const cap = m.role === 'tool' ? TOOL_RESULT_CHARS : PROSE_CHARS;
+  const content = m.content ?? '';
+  if (content.length <= cap) return m;
+  return {
+    ...m,
+    content: `${content.slice(0, cap)}\n[... ${content.length - cap} more chars omitted]`,
+  };
+}
+
+/**
+ * Drop messages from the middle until the transcript fits `budget`.
+ * Walks backward from the newest message filling the tail share, then
+ * forward from the oldest filling whatever is left, and re-trims both
+ * halves to safe wire boundaries (the seam can otherwise land on a
+ * `tool` row followed by a `user` row, which providers reject - see
+ * repairToolCallFanIn above).
+ *
+ * The newest message is always kept: a thread whose final turn alone
+ * exceeds the budget still gets tagged off that turn rather than
+ * failing the cycle forever.
+ */
+function fitToTokenBudget(messages: StoredMessage[], budget: number): StoredMessage[] {
+  if (messages.length === 0) return messages;
+  // Cost each row exactly as it will be sent, tool-call JSON included.
+  const costs = messages.map((m) => estimateWireTokens([messageToWire(m)]));
+  const total = costs.reduce((a, b) => a + b, 0);
+  if (total <= budget) return messages;
+
+  const tailBudget = Math.floor(budget * TAIL_BUDGET_SHARE);
+  let tailStart = messages.length - 1;
+  let tailSpent = costs[tailStart];
+  while (tailStart > 0 && tailSpent + costs[tailStart - 1] <= tailBudget) {
+    tailStart--;
+    tailSpent += costs[tailStart];
+  }
+
+  const headBudget = budget - tailSpent;
+  let headEnd = 0;
+  let headSpent = 0;
+  while (headEnd < tailStart && headSpent + costs[headEnd] <= headBudget) {
+    headSpent += costs[headEnd];
+    headEnd++;
+  }
+
+  return [
+    ...trimToCompleteTurn(messages.slice(0, headEnd)),
+    ...trimToFirstUserOrSystem(messages.slice(tailStart)),
+  ];
+}
+
+/**
+ * Condense a thread slice into the transcript a curation unit sends:
+ * cap the message count, excerpt oversized rows, then drop from the
+ * middle until the whole thing fits the token budget. Each stage is a
+ * no-op on a slice already inside its limit, so a short thread comes
+ * back with its rows intact (in a fresh array - the excerpt pass
+ * copies, unlike repairToolCallFanIn above).
+ */
+function condenseForCuration(
+  all: StoredMessage[],
+  budget = CURATION_INPUT_TOKEN_BUDGET,
+): StoredMessage[] {
+  // The naive count split lands the seam wherever index 40 /
+  // length-80 fall, which on a tool-using thread can put a `tool` row
+  // at the end of head and a `user` row at the start of tail - the
+  // wire then serialises as `tool -> user`, which providers reject
+  // with "Unexpected role 'user' after role 'tool'". Trim each half to
+  // a safe boundary before concatenating.
+  const capped =
+    all.length <= MAX_INPUT_MESSAGES
+      ? all
+      : [
+          ...trimToCompleteTurn(all.slice(0, HEAD_MESSAGES)),
+          ...trimToFirstUserOrSystem(all.slice(-TAIL_MESSAGES)),
+        ];
+  return fitToTokenBudget(capped.map(excerptOversized), budget);
+}
+
+/**
+ * Run one curation completion over a thread slice: condense the slice
+ * to something the model can accept, repair the tool-call fan-in,
+ * append the unit's instruction as the final user turn, and hand the
+ * wire messages to `send`.
+ *
+ * On a context-length rejection the budget is halved and the whole
+ * thing rebuilt - the proactive budget is an estimate over a
+ * chars-per-token ratio that no tokenizer actually honours, so the
+ * reactive half is what covers content dense enough to beat it (CJK,
+ * base64, minified payloads). Below MIN_INPUT_TOKEN_BUDGET the error
+ * propagates and the unit's own catch folds it into an 'error'
+ * outcome. Any other failure propagates immediately - retrying a
+ * transport error at a smaller size buys nothing.
+ *
+ * Returns the send's result plus how many transcript messages went
+ * out, which the units report in their completion breadcrumb.
+ */
+export async function completeOverThreadSlice<T>(
+  slice: StoredMessage[],
+  instruction: string,
+  send: (messages: VeniceWireMessage[]) => Promise<T>,
+): Promise<{ result: T; messageCount: number }> {
+  let budget = CURATION_INPUT_TOKEN_BUDGET;
+  for (;;) {
+    const condensed = repairToolCallFanIn(condenseForCuration(slice, budget));
+    const convo: VeniceWireMessage[] = condensed.map(messageToWire);
+    convo.push({ role: 'user', content: instruction });
+    try {
+      return { result: await send(convo), messageCount: condensed.length };
+    } catch (err) {
+      const next = Math.floor(budget / 2);
+      if (!isContextLengthError(err) || next < MIN_INPUT_TOKEN_BUDGET) throw err;
+      budget = next;
+    }
+  }
+}
+
+/**
  * Non-streaming completion pinned to JSON-object output. The topics
  * units (thread/memory/recipe) need `response_format: {type:
  * "json_object"}` for parity with their browser counterparts - the
@@ -326,3 +509,9 @@ export async function completeJsonObjectWithMeta(
     finishReason: typeof choice.finish_reason === 'string' ? choice.finish_reason : null,
   };
 }
+
+// Test-only surface: condenseForCuration is exercised directly in
+// supabase/functions/tests/curation.test.ts (seam safety, message cap,
+// token budget) but has no production caller outside
+// completeOverThreadSlice above.
+export const __test = { condenseForCuration };

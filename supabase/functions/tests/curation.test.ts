@@ -17,7 +17,11 @@ import { __test as threadTopics } from '../venice/agents/thread_topics.ts';
 import { __test as memoryTopics } from '../venice/agents/memory_topics.ts';
 import { __test as recipeTopics } from '../venice/agents/recipe_topics.ts';
 import { __test as curation } from '../venice/agents/curation.ts';
-import { repairToolCallFanIn } from '../venice/agents/_curation_helpers.ts';
+import {
+  CURATION_INPUT_TOKEN_BUDGET,
+  repairToolCallFanIn,
+  __test as curationHelpers,
+} from '../venice/agents/_curation_helpers.ts';
 import type { StoredMessage } from '../venice/agents/_recall_helpers.ts';
 
 // --- auto_title: sanitizeTitle ------------------------------------------
@@ -71,12 +75,14 @@ Deno.test('sanitizeTitle returns empty string on whitespace-only input', () => {
   assertEquals(autoTitle.sanitizeTitle('\n\n   \r\n  '), '');
 });
 
-// --- summary: trimSummary + condenseHistory ------------------------------
+// --- summary: trimSummary -------------------------------------------------
 
 Deno.test('trimSummary strips wrapping quotes and caps at 600 chars', () => {
   assertEquals(summary.trimSummary('  "A summary."  '), 'A summary.');
   assertEquals(summary.trimSummary('x'.repeat(700)).length, 600);
 });
+
+// --- condenseForCuration: message cap + token budget ----------------------
 
 function storedMsg(role: StoredMessage['role'], i: number, toolCalls = false): StoredMessage {
   return {
@@ -91,12 +97,12 @@ function storedMsg(role: StoredMessage['role'], i: number, toolCalls = false): S
   };
 }
 
-Deno.test('condenseHistory passes short threads through untouched', () => {
+Deno.test('condenseForCuration passes short threads through untouched', () => {
   const all = Array.from({ length: 10 }, (_, i) => storedMsg('user', i));
-  assertEquals(summary.condenseHistory(all), all);
+  assertEquals(curationHelpers.condenseForCuration(all), all);
 });
 
-Deno.test('condenseHistory trims the head/tail seam to safe wire boundaries', () => {
+Deno.test('condenseForCuration trims the head/tail seam to safe wire boundaries', () => {
   // 200 rows so the 40/-80 split engages. Put a tool row at index 39
   // (end of head) and an assistant row at index 120 (start of tail):
   // without the seam trims the wire would serialise tool -> assistant
@@ -107,7 +113,7 @@ Deno.test('condenseHistory trims the head/tail seam to safe wire boundaries', ()
     if (i === 120) return storedMsg('assistant', i);
     return storedMsg(i % 2 === 0 ? 'user' : 'assistant', i);
   });
-  const out = summary.condenseHistory(all);
+  const out = curationHelpers.condenseForCuration(all);
   assert(out.length < all.length);
   // Head must not end on a tool row or an assistant with unanswered
   // tool_calls; tail must start at a user (or system) row.
@@ -115,6 +121,61 @@ Deno.test('condenseHistory trims the head/tail seam to safe wire boundaries', ()
   assertEquals(headEnd.role === 'tool', false);
   const tailStartIdx = out.findIndex((m) => Number(m.id.slice(1)) >= 120);
   assertEquals(out[tailStartIdx].role, 'user');
+});
+
+// Rough mirror of estimateWireTokens' 4-chars-per-token assumption, so
+// the assertions below can talk in tokens without importing the
+// accumulator's private constant.
+function estimatedTokens(messages: StoredMessage[]): number {
+  return messages.reduce(
+    (sum, m) =>
+      sum +
+      Math.ceil(
+        (m.content.length + (m.tool_calls ? JSON.stringify(m.tool_calls).length : 0)) / 4,
+      ),
+    0,
+  );
+}
+
+Deno.test('condenseForCuration excerpts oversized rows, tool results hardest', () => {
+  const bigTool: StoredMessage = { ...storedMsg('tool', 1), content: 'x'.repeat(50_000) };
+  const bigUser: StoredMessage = { ...storedMsg('user', 2), content: 'y'.repeat(50_000) };
+  const [outTool, outUser] = curationHelpers.condenseForCuration([bigTool, bigUser]);
+  // Tool results carry the tighter cap (2k vs 8k) - one search dump
+  // must not displace a dozen user turns.
+  assert(outTool.content.length < outUser.content.length);
+  assert(outTool.content.length < 2_500);
+  assert(outUser.content.length < 8_500);
+});
+
+Deno.test('condenseForCuration drops from the middle until the token budget fits', () => {
+  // 100 rows x ~8k chars each is ~200k estimated tokens under the
+  // message cap - exactly the shape that 400d thread-topics with
+  // "maximum context length is 128000 tokens".
+  const all = Array.from({ length: 100 }, (_, i) => ({
+    ...storedMsg(i % 2 === 0 ? 'user' : 'assistant', i),
+    content: `${i}`.padEnd(8_000, 'z'),
+  }));
+  assert(estimatedTokens(all) > CURATION_INPUT_TOKEN_BUDGET);
+
+  const out = curationHelpers.condenseForCuration(all);
+  assert(estimatedTokens(out) <= CURATION_INPUT_TOKEN_BUDGET);
+  // Both ends survive: origin tells the model what the thread was
+  // launched into, outcome is what it mostly gets tagged on.
+  assertEquals(out[0].id, 'm0');
+  assertEquals(out[out.length - 1].id, 'm99');
+});
+
+Deno.test('condenseForCuration keeps the newest row when it alone busts the budget', () => {
+  // A pathological final turn must still produce a transcript - an
+  // empty one would fail the cycle forever instead of tagging off what
+  // the thread most recently said.
+  const out = curationHelpers.condenseForCuration(
+    [{ ...storedMsg('user', 0), content: 'q'.repeat(400_000) }],
+    100,
+  );
+  assertEquals(out.length, 1);
+  assertEquals(out[0].id, 'm0');
 });
 
 // --- repairToolCallFanIn: wire-shape repair before the Venice call --------

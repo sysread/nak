@@ -231,13 +231,19 @@ export const MEMORY_UNRELATE_WIRE_SCHEMA: AgentTool['wire'] = {
  * in between claim and fetch doesn't change what the agent processes -
  * the extra turns queue the thread for the next cycle instead.
  *
- * No char-budget trim: matches the browser agents, which sent the
- * whole slice. The tightest window among this helper's consumers is
- * 256k (mistral-small for summary / thread_topics; reflection and wiki
- * run deepseek-v4-flash, wider at 1M). The day-gated queues plus that
- * 256k floor make an over-budget thread a rare corner; if it ever
- * bites, trimming is a separate follow-up, not a silent divergence
- * here.
+ * No budget trim here, deliberately: sizing belongs to the caller,
+ * which is the only thing that knows its model's ceiling and how much
+ * fidelity it can trade away. The curation units (summary,
+ * thread_topics) go through completeOverThreadSlice in
+ * ./_curation_helpers.ts, which caps message count, excerpts oversized
+ * rows, and fits the result to a token budget; the wiki fleet distills
+ * over-budget transcripts via ./_accumulator.ts.
+ *
+ * Do not size against the model registry's contextWindow: the entry
+ * for mistral-small claims 256k and the backend serving it enforces
+ * 128000 (a thread-topics call died on "your prompt contains 131949
+ * input tokens"). The ceiling belongs to the backend and it moves -
+ * see CLAUDE.md on budgeting against a pinned conservative constant.
  */
 export async function loadThreadSliceUpTo(
   adminClient: SupabaseClient,

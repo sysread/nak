@@ -16,14 +16,10 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { createEdgeLogger, type EdgeLogger } from '../../_shared/edge-log.ts';
 import { readVeniceKey } from '../tools/_venice_key.ts';
 import { loadThreadSliceUpTo } from './_agent_tools.ts';
-import type { StoredMessage, VeniceWireMessage } from './_recall_helpers.ts';
 import {
   completeJsonObject,
+  completeOverThreadSlice,
   CURATION_CLAIM_TTL_SECONDS,
-  messageToWire,
-  repairToolCallFanIn,
-  trimToCompleteTurn,
-  trimToFirstUserOrSystem,
 } from './_curation_helpers.ts';
 import { TOPICS_MODEL } from '../../_shared/agent-models.ts';
 
@@ -96,23 +92,6 @@ function buildTopicsPrompt(existingTopics: readonly string[]): string {
   const list =
     existingTopics.length === 0 ? '(none yet)' : existingTopics.join(', ');
   return TOPICS_PROMPT_PREFIX + list + TOPICS_PROMPT_SUFFIX;
-}
-
-/**
- * Cap the conversation feed at first 40 + last 80 messages. Same
- * shape as ./summary.ts - outcomes carry more topic weight than
- * origins but origin tells you what the thread was launched into, so
- * we want both ends. The trim helpers prevent a tool/user seam from
- * corrupting the wire framing (see the condenseHistory comment in
- * ./summary.ts for the failure mode).
- */
-const MAX_INPUT_MESSAGES = 120;
-
-function condenseHistory(all: StoredMessage[]): StoredMessage[] {
-  if (all.length <= MAX_INPUT_MESSAGES) return all;
-  const head = trimToCompleteTurn(all.slice(0, 40));
-  const tail = trimToFirstUserOrSystem(all.slice(-80));
-  return [...head, ...tail];
 }
 
 /**
@@ -251,23 +230,28 @@ async function tagClaimedThread(
       const apiKey = await readVeniceKey(adminClient);
       if (!apiKey) throw new Error('no Venice key configured (app_config unseeded)');
 
-      const condensed = repairToolCallFanIn(condenseHistory(slice));
-      const convo: VeniceWireMessage[] = condensed.map(messageToWire);
-      convo.push({ role: 'user', content: buildTopicsPrompt(existingTopics) });
-
+      // completeOverThreadSlice owns the transcript sizing: message
+      // cap, per-row excerpting, token budget, and the shrink-retry on
+      // a context-length rejection.
+      //
       // Bounded JSON output - 512 tokens is a generous cap for an
       // object whose longest plausible body is `{"topics":["a","b",
       // "c","d"]}` with 40-char tags. The json_object response format
       // pins the model to JSON shape so the parser doesn't have to
       // handle freeform prose around the object.
-      const text = await completeJsonObject({
-        apiKey,
-        model: TOPICS_MODEL,
-        messages: convo,
-        maxTokens: 512,
-      });
+      const { result: text, messageCount } = await completeOverThreadSlice(
+        slice,
+        buildTopicsPrompt(existingTopics),
+        (messages) =>
+          completeJsonObject({
+            apiKey,
+            model: TOPICS_MODEL,
+            messages,
+            maxTokens: 512,
+          }),
+      );
       topics = parseTopics(text);
-      inputMessageCount = condensed.length;
+      inputMessageCount = messageCount;
     }
   } catch (err) {
     log.debug(
