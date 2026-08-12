@@ -233,8 +233,10 @@ async function pageThreads(
  *
  * Exact hits are ILIKE matches against `title` (substring, case-
  * insensitive) — same escape pattern as `searchMemories`. Semantic
- * hits come from the `search_threads_by_embedding` RPC against
- * `title + summary` embeddings populated by the background workers.
+ * hits come from the `search_thread_chunks_by_embedding` RPC, which
+ * ranks the transcript chunks written by the rechunk unit and keeps
+ * each thread's best-matching one — so a thread can be found by what
+ * was said in it, not only by the words in its title and summary.
  * Both queries run in parallel; the merge puts every exact hit
  * before every semantic hit, deduping by id on the way through so a
  * thread can't appear twice.
@@ -255,8 +257,9 @@ export async function searchThreads(
      * filter the drawer's date-sorted list uses. Exact (ILIKE) hits
      * are filtered server-side via the same `topicsFilterClause`
      * helper the list paths use; semantic hits come back from the
-     * embedding RPC without topic columns, so we re-fetch the matched
-     * rows and filter in memory rather than touching the RPC signature.
+     * chunk-search RPC without topic columns, so we re-fetch the
+     * matched rows and filter in memory rather than touching the RPC
+     * signature.
      * Matches the "topic filter constrains search too" UX decision -
      * see docs/dev/topics.md.
      */
@@ -280,8 +283,10 @@ export async function searchThreads(
   if (topicsClause) exactQ = exactQ.or(topicsClause);
   const exactPromise = exactQ;
 
+  // security invoker + RLS on thread_chunks means the browser client
+  // needs no user filter here; p_user_id defaults to auth.uid().
   const semanticPromise = opts.queryEmbedding
-    ? client.rpc('search_threads_by_embedding', {
+    ? client.rpc('search_thread_chunks_by_embedding', {
         query_embedding: opts.queryEmbedding,
         match_limit: limit,
       })

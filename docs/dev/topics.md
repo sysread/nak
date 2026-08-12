@@ -195,17 +195,16 @@ threads tagged with either.
 - **Search** - `searchThreads` accepts a `selectedTopics`
   parameter. Exact (ILIKE) hits are filtered server-side via the
   same `topicsFilterClause`; semantic hits are filtered client-
-  side because the embedding RPC doesn't read the topics column.
+  side because the chunk-search RPC doesn't read the topics column.
   Same outcome: "search within the active topic filter."
 - **Auto-title** - runs first by design. The topics claim's
   eligibility predicate excludes threads still on the placeholder
   title, so the topic vocabulary doesn't get seeded with junk on
   brand-new threads that haven't been auto-titled yet.
 - **Summaries** - sibling curation unit, same plumbing shape.
-  Both write a derived column on the thread row; tagging doesn't
-  invalidate the embedding (the
-  `clear_thread_embedding_on_change` trigger only fires on
-  `title` / `summary` changes).
+  Both write a derived column on the thread row, and neither
+  touches any embedding: what gets embedded is `thread_chunks`,
+  derived from the messages rather than from these columns.
 - **Logging** - the drivers emit progress and error breadcrumbs
   through `createEdgeLogger(userId, 'topics')` (siblings:
   `'memory-topics'`, `'recipe-topics'`), which reach the in-app

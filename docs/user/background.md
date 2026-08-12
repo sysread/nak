@@ -161,23 +161,23 @@ No toggle.
 
 ## Embeddings
 
-Vector embeddings are computed for every memory, thread summary,
+Vector embeddings are computed for every memory, conversation,
 recipe, wiki article, and a few other text fields. Embeddings are
 what make `memory_search`, `conversation_search`, and the drawer
 searches find things by meaning rather than by exact keyword match.
 
-Your conversations are indexed twice over: once by title and summary,
-and once by **what was actually said in them**, sliced into pieces
-small enough for the embedding model to read. The second index is
-what lets the assistant find a conversation from the words you used
-rather than the words in its title - asking about "the loaf where I
-ran out of lentils" can find that conversation even though it is
-filed under something like "Bread Recipe Modification Advice". When
-it finds a match that way, it can open the conversation at the part
-that matched instead of at the most recent messages.
+Your conversations are indexed by **what was actually said in them**,
+sliced into pieces small enough for the embedding model to read. That
+is what lets the assistant find a conversation from the words you
+used rather than the words in its title - asking about "the loaf
+where I ran out of lentils" can find that conversation even though it
+is filed under something like "Bread Recipe Modification Advice".
+When it finds a match that way, it can open the conversation at the
+part that matched instead of at the most recent messages.
 
-Long conversations are indexed in full, but a freshly-changed one
-takes a few minutes to catch up.
+Long conversations are indexed in full. A conversation you have just
+added to takes a few minutes to catch up, and until it does, it can
+still be found by title but not yet by its newest content.
 
 Like the rest of the items on this page, this does **not** run in
 your browser. It runs on your Supabase project on a schedule (every

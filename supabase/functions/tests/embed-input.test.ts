@@ -7,7 +7,6 @@ import { assertEquals } from '@std/assert';
 import {
   buildMemoryEmbedInput,
   buildRecipeEmbedInput,
-  buildThreadEmbedInput,
   buildWikiEmbedInput,
   buildSubstrateEmbedInput,
 } from '../_shared/embed-input.ts';
@@ -25,17 +24,6 @@ Deno.test('buildMemoryEmbedInput truncates data past the embed cap', () => {
   const out = buildMemoryEmbedInput('label', 'x'.repeat(9000));
   // 'label' + '\n\n' + 8000 chars
   assertEquals(out.length, 'label\n\n'.length + 8000);
-});
-
-Deno.test('buildThreadEmbedInput uses title alone when summary is null/empty', () => {
-  assertEquals(buildThreadEmbedInput('Debugging mobile scroll', null), 'Debugging mobile scroll');
-  assertEquals(buildThreadEmbedInput('t', ''), 't');
-});
-
-Deno.test('buildThreadEmbedInput joins title and summary, capped at 2000', () => {
-  assertEquals(buildThreadEmbedInput('t', 's'), 't\n\ns');
-  const out = buildThreadEmbedInput('title', 's'.repeat(5000));
-  assertEquals(out.length, 2000);
 });
 
 Deno.test('buildRecipeEmbedInput drops a blank source line', () => {

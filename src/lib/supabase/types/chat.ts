@@ -425,9 +425,11 @@ export interface ThreadSearchHit {
  * to judge relevance — title + the summary agent's 2–3 sentence topical
  * summary — plus just enough metadata (archived, updated_at) to order
  * and weigh results. `summary` is nullable because the summary worker
- * runs asynchronously after the first terminal assistant turn; a brand-
- * new thread may have an embedding (populated from title alone) but no
- * summary yet.
+ * runs asynchronously after the first terminal assistant turn, so a
+ * brand-new thread carries a title and no summary. That no longer
+ * affects whether the thread is searchable - ranking runs over
+ * `thread_chunks`, which is built from the messages - but a null
+ * summary does leave the model with less to judge a hit on.
  */
 export interface ThreadSummaryRow {
   id: string;
