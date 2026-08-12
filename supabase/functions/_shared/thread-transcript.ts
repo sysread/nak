@@ -20,21 +20,14 @@
 // _shared/embed-input.ts, and the rechunk unit that keeps
 // `thread_chunks` in step with a growing thread.
 
-// Mirrors VENICE_EMBEDDING_MAX_INPUT_TOKENS / EMBEDDING_CHARS_PER_TOKEN
-// / EMBEDDING_INPUT_SAFETY_MARGIN / EMBEDDING_MAX_INPUT_CHARS in
-// src/lib/models/index.ts - kept in sync by hand because the Deno
-// island does not import from the Vite app (same arrangement as
-// VENICE_EMBEDDING_MODEL in _shared/backfill.ts). The rationale for
-// each number, including the measured chars-per-token table, lives on
-// the definitions there; do not re-tune these without reading it.
-export const VENICE_EMBEDDING_MAX_INPUT_TOKENS = 8192;
-export const EMBEDDING_CHARS_PER_TOKEN = 2.2;
-export const EMBEDDING_INPUT_SAFETY_MARGIN = 0.85;
-export const EMBEDDING_MAX_INPUT_CHARS = Math.floor(
-  VENICE_EMBEDDING_MAX_INPUT_TOKENS *
-    EMBEDDING_INPUT_SAFETY_MARGIN *
-    EMBEDDING_CHARS_PER_TOKEN,
-);
+// Sizing lives beside the model id it is measured against, in
+// _shared/backfill.ts - a chunk budget is a property of the embedding
+// model, not of the chunker, and keeping it next to the declaration is
+// what makes a model rotation trip over the fact that every number in
+// it was measured against bge-m3's tokenizer.
+import { EMBEDDING_MAX_INPUT_CHARS } from './backfill.ts';
+
+export { EMBEDDING_MAX_INPUT_CHARS };
 
 /**
  * Per-row excerpt caps applied while rendering. Tool results are the

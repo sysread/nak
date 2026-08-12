@@ -680,71 +680,18 @@ export function agentModel(role: AgentRole): ModelSpec {
  */
 export const VENICE_EMBEDDING_MODEL = 'text-embedding-bge-m3';
 
-/**
- * Hard input ceiling VENICE_EMBEDDING_MODEL enforces, in tokens.
- * Authoritative source is `GET /models?type=embedding`, which reports
- * it as `model_spec.maxInputTokens` per model - re-read that endpoint
- * when rotating VENICE_EMBEDDING_MODEL rather than assuming the new
- * model shares this ceiling (the catalog currently ranges from 512 on
- * multilingual-e5-large-instruct to 32768 on the qwen3 pair).
- *
- * Exceeding it is a hard 400 ("Input text exceeds the maximum token
- * limit of 8192 tokens"), NOT a silent truncation - which is why the
- * chunker below can treat its token estimate as a sizing heuristic
- * and recover reactively instead of having to be exactly right.
- */
-export const VENICE_EMBEDDING_MAX_INPUT_TOKENS = 8192;
-
-/**
- * Conservative characters-per-token divisor for sizing embedding
- * input. Venice exposes no tokenizer endpoint, so chunk sizing is an
- * estimate; this is deliberately pessimistic (a LOW ratio over-counts
- * tokens and therefore under-fills a chunk, which is the safe
- * direction).
- *
- * Measured against bge-m3's own reported `usage.prompt_tokens` on real
- * thread content:
- *
- *   prose             3.86 chars/token
- *   cooklang recipes  2.44
- *   tool-call JSON    2.24   <- transcripts embed these verbatim
- *   bare UUIDs        1.67
- *   base64            1.35
- *
- * 2.2 sits under every non-degenerate sample. It does NOT cover
- * base64 or UUID-dense content, and deliberately so: sizing for the
- * pathological case would roughly halve every ordinary chunk. Content
- * that beats the estimate gets caught by the 400 and re-split.
- *
- * End-to-end check: a full EMBEDDING_MAX_INPUT_CHARS chunk of mixed
- * transcript (prose turns, tool-call lines, JSON tool results in the
- * proportions a real thread carries) measured 5286 tokens against the
- * 8192 ceiling - a real ratio of 2.90, so the chunk lands at roughly
- * two thirds of the limit. That slack is the point, not waste: it is
- * what absorbs a thread whose content skews denser than the sample.
- *
- * Re-measure when rotating the model - a different tokenizer moves
- * every number in that table.
- */
-export const EMBEDDING_CHARS_PER_TOKEN = 2.2;
-
-/**
- * Fraction of the token ceiling a chunk is allowed to target. The gap
- * absorbs estimation error in EMBEDDING_CHARS_PER_TOKEN on top of the
- * conservative ratio itself.
- */
-export const EMBEDDING_INPUT_SAFETY_MARGIN = 0.85;
-
-/**
- * Chunk size in characters, derived from the three constants above.
- * Text longer than this is split before embedding; see the chunker in
- * `supabase/functions/_shared/thread-transcript.ts`.
- */
-export const EMBEDDING_MAX_INPUT_CHARS = Math.floor(
-  VENICE_EMBEDDING_MAX_INPUT_TOKENS *
-    EMBEDDING_INPUT_SAFETY_MARGIN *
-    EMBEDDING_CHARS_PER_TOKEN,
-);
+// ROTATING THE EMBEDDING MODEL INVALIDATES MORE THAN THIS STRING.
+// Transcript chunking is sized against this specific model's input
+// ceiling and its tokenizer's characters-per-token behaviour, both
+// measured empirically. Those constants -
+// VENICE_EMBEDDING_MAX_INPUT_TOKENS, EMBEDDING_CHARS_PER_TOKEN,
+// EMBEDDING_INPUT_SAFETY_MARGIN, EMBEDDING_MAX_INPUT_CHARS - live in
+// supabase/functions/_shared/backfill.ts beside the Deno island's
+// mirror of this id, because that is where they are consumed. Read the
+// measurement table on EMBEDDING_CHARS_PER_TOKEN there and re-measure
+// before changing the model here: every number in it is specific to
+// bge-m3's tokenizer, and a model with a different ceiling (the catalog
+// ranges from 512 to 32768) will size chunks wrongly in silence.
 
 // --- Image generation ------------------------------------------------------
 

@@ -6,13 +6,15 @@
 import { assert, assertEquals } from '@std/assert';
 import {
   chunkTranscript,
-  EMBEDDING_CHARS_PER_TOKEN,
-  EMBEDDING_INPUT_SAFETY_MARGIN,
   EMBEDDING_MAX_INPUT_CHARS,
   renderMessage,
   type TranscriptMessage,
-  VENICE_EMBEDDING_MAX_INPUT_TOKENS,
 } from '../_shared/thread-transcript.ts';
+import {
+  EMBEDDING_CHARS_PER_TOKEN,
+  EMBEDDING_INPUT_SAFETY_MARGIN,
+  VENICE_EMBEDDING_MAX_INPUT_TOKENS,
+} from '../_shared/backfill.ts';
 
 function msg(over: Partial<TranscriptMessage> & { id: string }): TranscriptMessage {
   return {

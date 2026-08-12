@@ -20,6 +20,72 @@ export const VENICE_EMBEDDING_MODEL = 'text-embedding-bge-m3';
 export const EMBEDDING_STORAGE_DIMS = 2048;
 
 /**
+ * Hard input ceiling VENICE_EMBEDDING_MODEL enforces, in tokens.
+ * Authoritative source is `GET /models?type=embedding`, which reports it
+ * per model as `model_spec.maxInputTokens` - re-read that endpoint when
+ * rotating the model rather than assuming the new one shares this
+ * ceiling (the catalog currently ranges from 512 on
+ * multilingual-e5-large-instruct to 32768 on the qwen3 pair).
+ *
+ * Exceeding it is a hard 400 ("Input text exceeds the maximum token
+ * limit of 8192 tokens"), NOT a silent truncation - which is what lets
+ * the chunker treat its token estimate as a sizing heuristic and
+ * recover reactively (embedWithShrink below) instead of having to be
+ * exactly right.
+ */
+export const VENICE_EMBEDDING_MAX_INPUT_TOKENS = 8192;
+
+/**
+ * Conservative characters-per-token divisor for sizing embedding input.
+ * Venice exposes no tokenizer endpoint, so chunk sizing is an estimate;
+ * this is deliberately pessimistic, because a LOW ratio over-counts
+ * tokens and therefore under-fills a chunk - the safe direction.
+ *
+ * Measured against bge-m3's own reported `usage.prompt_tokens` on real
+ * thread content:
+ *
+ *   prose             3.86 chars/token
+ *   cooklang recipes  2.44
+ *   tool-call JSON    2.24   <- transcripts embed these verbatim
+ *   bare UUIDs        1.67
+ *   base64            1.35
+ *
+ * 2.2 sits under every non-degenerate sample. It does NOT cover base64
+ * or UUID-dense content, deliberately: sizing for the pathological case
+ * would roughly halve every ordinary chunk. Content that beats the
+ * estimate is caught by the 400 and re-split.
+ *
+ * End-to-end check: a full EMBEDDING_MAX_INPUT_CHARS chunk of mixed
+ * transcript (prose turns, tool-call lines, JSON tool results in the
+ * proportions a real thread carries) measured 5286 tokens against the
+ * 8192 ceiling - a real ratio of 2.90, so the chunk lands at about two
+ * thirds of the limit. That slack is the point, not waste: it absorbs a
+ * thread whose content skews denser than the sample.
+ *
+ * EVERY NUMBER IN THAT TABLE IS TOKENIZER-SPECIFIC. Re-measure when
+ * rotating VENICE_EMBEDDING_MODEL.
+ */
+export const EMBEDDING_CHARS_PER_TOKEN = 2.2;
+
+/**
+ * Fraction of the token ceiling a chunk may target. Absorbs estimation
+ * error in EMBEDDING_CHARS_PER_TOKEN on top of that divisor's own
+ * conservatism.
+ */
+export const EMBEDDING_INPUT_SAFETY_MARGIN = 0.85;
+
+/**
+ * Chunk size in characters, derived from the three constants above.
+ * Text longer than this is split before embedding - see chunkTranscript
+ * in _shared/thread-transcript.ts.
+ */
+export const EMBEDDING_MAX_INPUT_CHARS = Math.floor(
+  VENICE_EMBEDDING_MAX_INPUT_TOKENS *
+    EMBEDDING_INPUT_SAFETY_MARGIN *
+    EMBEDDING_CHARS_PER_TOKEN,
+);
+
+/**
  * Zero-extend a Venice embedding to the storage dimension. Cosine similarity is
  * invariant under zero-extension, so a padded vector ranks identically to its
  * native prefix. A longer-than-storage input is a bug (stale dim or someone
