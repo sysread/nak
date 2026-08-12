@@ -1,8 +1,8 @@
-// Curation composition: drives the five claim-based housekeeping units
+// Curation composition: drives the six claim-based housekeeping units
 // (auto_title, thread_topics, summary, memory_topics, recipe_topics -
-// the function-side ports of the browser's supervised worker fleet)
-// from the two server-side triggers that replaced the browser
-// supervisor poll:
+// the function-side ports of the browser's supervised worker fleet -
+// plus rechunk, which has no browser ancestor) from the two
+// server-side triggers that replaced the browser supervisor poll:
 //
 //   - curateOnTurnTail: fired from a chat turn's waitUntil tail, once
 //     per completed turn, scoped to the turn's user. The primary
@@ -27,6 +27,7 @@ import { sweepClaimAndSummarise, summariseOneThread } from './summary.ts';
 import { sweepClaimAndTagThread, tagOneThread } from './thread_topics.ts';
 import { sweepClaimAndTagMemory, tagOneMemory } from './memory_topics.ts';
 import { sweepClaimAndTagRecipe, tagOneRecipe } from './recipe_topics.ts';
+import { rechunkOneThread, sweepClaimAndRechunk } from './thread_chunks.ts';
 
 /**
  * Per-unit drain cap for the chat-turn tail. A turn produces at most
@@ -38,10 +39,45 @@ const TAIL_DRAIN_CAP = 3;
 
 /**
  * Per-queue drain cap for one cron sweep tick. Bounds a tick's
- * worst-case Venice spend (5 queues x 10 completions); a backlog
- * deeper than the cap drains across successive hourly ticks.
+ * worst-case Venice spend (one completion per row across the
+ * model-calling queues; rechunk makes no model call); a backlog deeper
+ * than the cap drains across successive hourly ticks.
  */
 const SWEEP_QUEUE_CAP = 10;
+
+/**
+ * The outcome every unit returns when its cycle failed - a Venice
+ * rejection, a Supabase error, a throw inside the unit. Named here
+ * because the drain loops treat it differently from the other
+ * non-progress outcomes: 'empty-queue' means the queue is genuinely
+ * dry and 'empty-summary' means the row was deliberately released to
+ * its TTL, but 'error' says nothing about the rows BEHIND the one
+ * that failed.
+ */
+const ERROR_OUTCOME = 'error';
+
+/**
+ * Consecutive errored rows that end a drain pass.
+ *
+ * One deterministically-failing row must not stall its queue. An
+ * errored row keeps its claim until the TTL expires, so the next
+ * claim in the same pass skips past it and reaches the row behind -
+ * but only if the loop keeps going. Treating a single error as
+ * "stop draining" makes the head of the queue a single point of
+ * failure, because claim order is `updated_at asc` and the same row
+ * is therefore re-claimed first on every subsequent tick.
+ *
+ * That is not hypothetical: one thread that failed every summary
+ * attempt held the head of the summary queue and produced 24 claims
+ * and 0 saves across ten hours - every tick broke on the first row,
+ * so nothing behind it was ever tried, and the backlog only drained
+ * once that row's underlying failure was fixed.
+ *
+ * A RUN of errors is a different signal - a failing backend rather
+ * than a bad row - and hammering it burns the tick's Venice budget
+ * for nothing, so the pass still bails once errors come consecutively.
+ */
+const MAX_CONSECUTIVE_ERRORS = 3;
 
 /** Per-tick tally returned to the sweep caller, one counter per queue. */
 export interface CurationSweepSummary {
@@ -50,6 +86,7 @@ export interface CurationSweepSummary {
   summarised: number;
   memoriesTagged: number;
   recipesTagged: number;
+  rechunked: number;
 }
 
 /**
@@ -69,10 +106,14 @@ interface CurationUnit {
    * Outcomes after which the drain loop should claim again: the cycle
    * consumed a row (saved it, lost it to a racing run, or released it
    * for retry) and the queue may hold more. Everything else - empty
-   * queue, empty model output left to TTL, error - stops the drain;
-   * this mirrors the browser supervisor's progress/nap classification
+   * queue, empty model output left to TTL - stops the drain; this
+   * mirrors the browser supervisor's progress/nap classification
    * (src/lib/agents/supervisor/loop.ts), where only these outcomes
    * counted as 'progress'.
+   *
+   * ERROR_OUTCOME is deliberately absent from every unit's set and is
+   * NOT classified here: it is neither progress nor a reason to stop,
+   * so drainUnit handles it separately (see MAX_CONSECUTIVE_ERRORS).
    */
   drainOn: ReadonlySet<string>;
   runForUser(
@@ -141,7 +182,65 @@ const UNITS: readonly CurationUnit[] = [
     runForUser: tagOneRecipe,
     sweepOnce: sweepClaimAndTagRecipe,
   },
+  {
+    // The one unit that makes no model call - pure text processing plus
+    // a write - so it costs the tail nothing but a round trip. Runs
+    // last because its output feeds the embed backfill on a separate
+    // (5-minute) cron, not this walk: being a few seconds later into
+    // the chunk queue changes nothing downstream.
+    source: 'rechunk',
+    tallyKey: 'rechunked',
+    savedOutcome: 'rechunked',
+    drainOn: new Set(['rechunked', 'claim-lost']),
+    runForUser: rechunkOneThread,
+    sweepOnce: sweepClaimAndRechunk,
+  },
 ];
+
+/**
+ * Drain one unit's queue, up to `cap` rows, reporting every outcome to
+ * `onOutcome` and every contract-violating throw to `onThrow`. Shared
+ * by both drivers so the progress classification and the error
+ * tolerance cannot drift apart between the tail and the sweep.
+ *
+ * Returns true when the pass used its whole cap with the queue still
+ * producing claimable rows - the caller decides whether that is worth
+ * reporting.
+ */
+async function drainUnit(
+  unit: CurationUnit,
+  cap: number,
+  runOnce: () => Promise<string>,
+  onOutcome: (outcome: string) => void,
+  onThrow: (err: unknown) => void,
+): Promise<boolean> {
+  let consecutiveErrors = 0;
+  for (let i = 0; i < cap; i++) {
+    let outcome: string;
+    try {
+      outcome = await runOnce();
+    } catch (err) {
+      // The unit fns are non-throwing by contract; this guard exists so
+      // a contract violation in one unit still cannot starve the units
+      // after it.
+      onThrow(err);
+      return false;
+    }
+    onOutcome(outcome);
+    if (outcome === ERROR_OUTCOME) {
+      // The failed row holds its claim until the TTL expires, so the
+      // next claim in this pass steps over it and reaches the row
+      // behind. That step-over is the whole point: it is what keeps a
+      // single bad row from wedging the queue head.
+      consecutiveErrors++;
+      if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) return false;
+      continue;
+    }
+    consecutiveErrors = 0;
+    if (!unit.drainOn.has(outcome)) return false;
+  }
+  return true;
+}
 
 /**
  * Run the curation units for `userId`, sequentially in UNITS order,
@@ -161,17 +260,16 @@ export async function curateOnTurnTail(
   for (const unit of UNITS) {
     const log = createEdgeLogger(userId, unit.source);
     try {
-      for (let i = 0; i < TAIL_DRAIN_CAP; i++) {
-        const outcome = await unit.runForUser(adminClient, userId, log);
-        if (!unit.drainOn.has(outcome)) break;
-      }
-    } catch (err) {
-      // The unit fns are non-throwing by contract; this guard exists
-      // so a contract violation in one unit still cannot starve the
-      // units after it.
-      log.error(
-        `${unit.source} tail drain failed`,
-        err instanceof Error ? err : new Error(String(err)),
+      await drainUnit(
+        unit,
+        TAIL_DRAIN_CAP,
+        () => unit.runForUser(adminClient, userId, log),
+        () => {},
+        (err) =>
+          log.error(
+            `${unit.source} tail drain failed`,
+            err instanceof Error ? err : new Error(String(err)),
+          ),
       );
     } finally {
       await log.flush();
@@ -197,37 +295,30 @@ export async function runCurationSweepTick(
     summarised: 0,
     memoriesTagged: 0,
     recipesTagged: 0,
+    rechunked: 0,
   };
   for (const unit of UNITS) {
-    let drained = 0;
-    let stillDraining = true;
-    while (drained < SWEEP_QUEUE_CAP) {
-      let outcome: string;
-      try {
-        outcome = await unit.sweepOnce(adminClient);
-      } catch (err) {
-        // Same contract guard as the tail driver: sweep fns are
-        // non-throwing, but one queue blowing up must not stop the
-        // remaining queues from draining this tick.
+    const cappedOut = await drainUnit(
+      unit,
+      SWEEP_QUEUE_CAP,
+      () => unit.sweepOnce(adminClient),
+      (outcome) => {
+        if (outcome === unit.savedOutcome) tally[unit.tallyKey]++;
+      },
+      // Same contract guard as the tail driver: sweep fns are
+      // non-throwing, but one queue blowing up must not stop the
+      // remaining queues from draining this tick.
+      (err) =>
         console.error(
           `[curation-sweep] ${unit.source} sweep cycle threw:`,
           err instanceof Error ? err.message : String(err),
-        );
-        stillDraining = false;
-        break;
-      }
-      drained++;
-      if (outcome === unit.savedOutcome) tally[unit.tallyKey]++;
-      if (!unit.drainOn.has(outcome)) {
-        stillDraining = false;
-        break;
-      }
-    }
-    // No silent caps: when the loop exhausted its budget while the
+        ),
+    );
+    // No silent caps: when the pass exhausted its budget while the
     // queue was still producing claimable rows, say so - a queue that
-    // hits the cap every tick is growing faster than the sweep
-    // drains it and someone should notice.
-    if (stillDraining && drained >= SWEEP_QUEUE_CAP) {
+    // hits the cap every tick is growing faster than the sweep drains
+    // it and someone should notice.
+    if (cappedOut) {
       console.log(
         `[curation-sweep] ${unit.source} queue cap (${SWEEP_QUEUE_CAP}) reached with rows still pending`,
       );
@@ -241,4 +332,11 @@ export async function runCurationSweepTick(
 // and the drain sets encode the browser supervisor's progress/nap
 // classification, so both get asserted in
 // supabase/functions/tests/curation.test.ts.
-export const __test = { UNITS, TAIL_DRAIN_CAP, SWEEP_QUEUE_CAP };
+export const __test = {
+  UNITS,
+  TAIL_DRAIN_CAP,
+  SWEEP_QUEUE_CAP,
+  ERROR_OUTCOME,
+  MAX_CONSECUTIVE_ERRORS,
+  drainUnit,
+};

@@ -219,4 +219,15 @@ export const EMBED_SOURCES: EmbedSource[] = [
     saveRpc: 'save_followup_embedding_if_claimed',
     buildInput: (row) => buildFollowupEmbedInput(str(row.question), str(row.context)),
   },
+  {
+    name: 'thread-chunks',
+    claimRpc: 'claim_next_pending_thread_chunk', // returns (id, content, user_id)
+    saveRpc: 'save_thread_chunk_embedding_if_claimed',
+    // The only source whose input needs no composition: the rechunk unit
+    // already rendered and sized this text (see
+    // _shared/thread-transcript.ts), so re-truncating it here would
+    // silently shorten what the chunker deliberately packed to the
+    // model's budget. Passed through verbatim on purpose.
+    buildInput: (row) => str(row.content),
+  },
 ];

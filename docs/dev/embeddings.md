@@ -157,8 +157,12 @@ lease era.
   `summary` changes, so a fresh summary reselects the row. The
   summary agent worker writes `threads.summary`; the server-side
   backfill then embeds it. See `./summaries.md`.
-- **Conversation recall** - `conversation_search`'s vector path reads
-  `threads.embedding`; ILIKE-on-title covers unembedded rows. See
+- **Conversation recall** - `conversation_search` queries two indexes
+  and merges them: `thread_chunks.embedding` (the message text,
+  sliced into embedding-sized pieces) and `threads.embedding` (title +
+  summary). `thread_chunks` is a source in its own right, fed by the
+  rechunk curation unit rather than by a column trigger - the input is
+  the thread's messages, not any column on `threads`. See
   `./conversation-recall.md`.
 - **Cookbook** - `recipes` is a source so the drawer's recipe search
   can rank by meaning; `clear_recipe_embedding_on_change` fires on

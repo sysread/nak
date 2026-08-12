@@ -680,6 +680,19 @@ export function agentModel(role: AgentRole): ModelSpec {
  */
 export const VENICE_EMBEDDING_MODEL = 'text-embedding-bge-m3';
 
+// ROTATING THE EMBEDDING MODEL INVALIDATES MORE THAN THIS STRING.
+// Transcript chunking is sized against this specific model's input
+// ceiling and its tokenizer's characters-per-token behaviour, both
+// measured empirically. Those constants -
+// VENICE_EMBEDDING_MAX_INPUT_TOKENS, EMBEDDING_CHARS_PER_TOKEN,
+// EMBEDDING_INPUT_SAFETY_MARGIN, EMBEDDING_MAX_INPUT_CHARS - live in
+// supabase/functions/_shared/backfill.ts beside the Deno island's
+// mirror of this id, because that is where they are consumed. Read the
+// measurement table on EMBEDDING_CHARS_PER_TOKEN there and re-measure
+// before changing the model here: every number in it is specific to
+// bge-m3's tokenizer, and a model with a different ceiling (the catalog
+// ranges from 512 to 32768) will size chunks wrongly in silence.
+
 // --- Image generation ------------------------------------------------------
 
 /**
