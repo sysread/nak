@@ -477,11 +477,20 @@ export function buildMetadataSystemMessage(
         ].join('\n'),
       );
     } else {
+      // "Before replying" is load-bearing here, not copy symmetry with
+      // the placeholder branch above. A rename issued AFTER the answer
+      // is written puts the tool call on the same assistant row as that
+      // answer; the loop then feeds the tool result back and the model
+      // writes its answer a SECOND time, so the user reads the same
+      // reply twice with minor wording drift. Renaming first keeps the
+      // tool call on its own round, before there is any prose to
+      // duplicate.
       sections.push(
         [
           `Current conversation title: "${opts.threadTitle}". If the topic`,
           'has meaningfully shifted, call `update_title` with a better',
-          '3-6 word title. Cosmetic drift is not a reason to rename.',
+          '3-6 word title BEFORE replying - do not rename after you have',
+          'written your answer. Cosmetic drift is not a reason to rename.',
         ].join('\n'),
       );
     }
