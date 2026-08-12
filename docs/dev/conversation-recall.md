@@ -21,10 +21,11 @@ Two shared signals drive this feature's value:
   summary into `threads.summary`. Without that, the recall
   agent would have to fetch full message histories to judge
   relevance.
-- **Thread embeddings.** The embeddings backfill vectorizes
-  `title + summary` into `threads.embedding`. The recall
-  agent's search ranks threads against a query vector without
-  scanning bodies.
+- **Transcript chunks.** The rechunk unit slices each thread's
+  messages into `thread_chunks` and the embeddings backfill
+  vectorizes them. Search ranks those chunks and keeps each
+  thread's best-matching one, so a conversation surfaces for
+  what was said in it rather than for how it was labelled.
 
 Both signals are background; recall is the read-time consumer.
 
@@ -33,9 +34,8 @@ Both signals are background; recall is the read-time consumer.
 - `src/lib/tools/conversation_recall.schema.ts` — the main-chat
   tool definition (schema only; the implementation lives
   server-side).
-- `supabase/functions/venice/tools/conversation_search.ts` — merges
-  chunk hits with title+summary hits, keeping the better score per
-  thread. Chunk hits carry a `passage` back.
+- `supabase/functions/venice/tools/conversation_search.ts` — ranks
+  transcript chunks; every hit carries the `passage` that matched.
 - `supabase/functions/venice/tools/conversation_get.ts` — windows a
   thread's transcript, optionally anchored on a `query`.
 - `supabase/functions/_shared/thread-transcript.ts` — renders a
@@ -49,9 +49,9 @@ Both signals are background; recall is the read-time consumer.
   recall-instruction user turn, runs `runHeadlessAgent` with a
   `conversation_search`-only toolbox, and returns a
   `RecallNote`.
-- `supabase/schema.sql` (summaries + embeddings + search RPCs)
-  — `threads.summary`, `threads.embedding`,
-  `search_threads_by_embedding` RPC,
+- `supabase/schema.sql` (summaries + chunks + search RPCs)
+  — `threads.summary`, the `thread_chunks` table and its two
+  work queues, `search_thread_chunks_by_embedding` RPC,
   `listThreadSummariesByIds` surface.
 
 ## Entry points
@@ -69,12 +69,14 @@ Both signals are background; recall is the read-time consumer.
 
 - **`threads.summary`** — 2-3 sentences written by the summary
   worker. Null until summarized. See `./summaries.md`.
-- **`threads.embedding`** — `vector(2048)`, populated by the
-  embeddings backfill after a summary lands. A trigger
-  (`clear_thread_embedding_on_change`) nulls this column (and
-  `embedding_model` + both embed claim columns) whenever
-  `title` or `summary` changes, so the worker re-embeds on its
-  next poll.
+- **`thread_chunks`** — one row per embedding-sized slice of a
+  thread's transcript, each carrying `content`, the message
+  range it covers, and a `vector(2048)`. Written by the rechunk
+  curation unit whenever `threads.last_chunked_msg_id` falls
+  behind the thread's newest message, then vectorized by the
+  embeddings backfill. Chunk boundaries are packed greedily from
+  the first message, so appending a turn rewrites only the last
+  partial chunk and everything before it keeps its vector.
 - **`ThreadSearchHit`** — core hit fields come from the backend
   search; the tool layer hydrates summaries for display. The
   merged list preserves ordering (exact before semantic) and
@@ -92,11 +94,9 @@ Both signals are background; recall is the read-time consumer.
 ## Contracts
 
 - `conversation_search.execute({ query, limit, include_current })`
-  — merges chunk hits and thread-level hits into one row per
-  thread, keeping the higher similarity. Chunk hits carry
-  `passage`, the excerpt that matched; feed it back as
-  `conversation_get`'s `query`. A chunk-index failure degrades
-  to title+summary results rather than failing the search.
+  — one row per thread, scored by that thread's best-matching
+  chunk. Every hit carries `passage`, the excerpt that matched;
+  feed it back as `conversation_get`'s `query`.
 - `conversation_get.execute({ id, query? })` — returns a window
   of the transcript plus `window: {start, end, total}` and
   `matched_query`. With `query`, the window centres on the
@@ -130,11 +130,12 @@ Both signals are background; recall is the read-time consumer.
   opening the full message history. No summary means the
   agent sees only the title, which substantially degrades
   recall quality. See `./summaries.md`.
-- **Embeddings** — the worker populates `threads.embedding`
-  from `title + summary`. The search RPC's cosine-similarity
-  path reads that column. The exact-ILIKE fallback covers the
-  "just summarized, not yet embedded" window. See
-  `./embeddings.md`.
+- **Embeddings** — the backfill vectorizes `thread_chunks`
+  rows, which the rechunk curation unit writes. The search RPC's
+  cosine path reads those vectors. A thread the rechunk unit
+  has not reached yet (`last_chunked_msg_id` null) is
+  unrankable; exact-ILIKE covers that window in the callers
+  that have an exact arm. See `./embeddings.md`.
 - **Tools** — `conversation_recall` lives in the main chat's
   `TOOLS` list but is excluded from every agent toolbox
   (reflection, memory recall, conversation recall itself);
@@ -154,13 +155,12 @@ Both signals are background; recall is the read-time consumer.
   runs inside the venice edge function under the same
   `EdgeRuntime.waitUntil` as the streaming loop. Survives a
   browser disconnect mid-recall.
-- **Search covers message text, not just title + summary.** The
-  thread-level vector is built from 2000 chars of `title +
-  summary`, which meant the words a user actually typed were
-  never in the index — a thread auto-titled "Bread Recipe
-  Modification Advice" could not be found by searching
-  "lentils" despite that word opening its first message. The
-  chunk index (`thread_chunks`) is what fixes that, and it is
+- **Search covers message text.** Threads once carried a single
+  vector over 2000 chars of `title + summary`, which meant the
+  words a user actually typed were never in the index — a thread
+  auto-titled "Bread Recipe Modification Advice" could not be
+  found by searching "lentils" despite that word opening its
+  first message. `thread_chunks` is what replaced it, and it is
   why queries should be written in the user's words rather than
   in title-ish paraphrase.
 - **Chunk scores are aggregated, never chunk vectors.**
@@ -170,11 +170,13 @@ Both signals are background; recall is the read-time consumer.
   rebuild exactly the centroid dilution the chunking exists to
   remove: in a 107-message thread any one topic is a couple of
   percent of the mean direction and still would not rank.
-- **Both indexes are queried and merged, and that is the
-  migration path.** A thread has no chunk rows until the
-  rechunk unit reaches it. Dropping the title+summary half
-  before the backfill has drained silently narrows recall to
-  recently-touched threads.
+- **A thread is unrankable until it has been chunked.** There is
+  no second index to fall back on any more. `last_chunked_msg_id`
+  null means no chunk rows, which means the thread cannot appear
+  in a semantic hit list at all. The window is normally minutes —
+  the rechunk unit runs on every chat turn's tail — but it is a
+  real hole after a bulk import or a restore, and only the
+  callers with an exact-ILIKE arm paper over it.
 - **`conversation_get` without a `query` returns the thread's
   TAIL.** That default is a trap on long threads and was the
   original bug: a caller correctly identified a 107-message

@@ -31,10 +31,6 @@ const MAX_MEMORY_EMBED_CHARS = 8000;
 // and can run several kilobytes), so the truncation lives only here.
 const MAX_RECIPE_EMBED_CHARS = 16000;
 
-// Summaries are 2-3 sentences by design; 2000 chars is comfortably past the
-// worst case and under bge-m3's ~512-token (~2-4k char) window.
-const MAX_THREAD_EMBED_INPUT_CHARS = 2000;
-
 import { MAX_WIKI_CONTENT_CHARS, MAX_WIKI_RECORD_CONTENT_CHARS } from './wiki-limits.ts';
 
 // Substrate situation/outcome have no schema-level cap yet; these match the
@@ -78,18 +74,6 @@ export function buildRecipeEmbedInput(
   return joined.length > MAX_RECIPE_EMBED_CHARS
     ? joined.slice(0, MAX_RECIPE_EMBED_CHARS)
     : joined;
-}
-
-/**
- * Compose the string Venice embeds for a thread. Title first - it's the user's
- * own mental index, and when the summary is still null (the summary agent
- * hasn't caught up) the title alone is a valid if weaker signal.
- */
-export function buildThreadEmbedInput(title: string, summary: string | null): string {
-  const combined = summary ? `${title}\n\n${summary}` : title;
-  return combined.length > MAX_THREAD_EMBED_INPUT_CHARS
-    ? combined.slice(0, MAX_THREAD_EMBED_INPUT_CHARS)
-    : combined;
 }
 
 /**
@@ -180,12 +164,6 @@ export const EMBED_SOURCES: EmbedSource[] = [
     claimRpc: 'claim_next_pending_memory', // returns (id, label, data, user_id)
     saveRpc: 'save_memory_embedding_if_claimed',
     buildInput: (row) => buildMemoryEmbedInput(str(row.label), str(row.data)),
-  },
-  {
-    name: 'threads',
-    claimRpc: 'claim_next_pending_thread_for_embedding', // returns (id, title, summary, user_id)
-    saveRpc: 'save_thread_embedding_if_claimed',
-    buildInput: (row) => buildThreadEmbedInput(str(row.title), strOrNull(row.summary)),
   },
   {
     name: 'recipes',

@@ -471,8 +471,14 @@ async function gatherConversations(
           .limit(limit)
       : Promise.resolve({ data: [] as ThreadHit[], error: null });
 
+  // Ranks transcript chunks and keeps each thread's best-matching one,
+  // so this layer surfaces a conversation for what was SAID in it
+  // rather than only for how its title and summary read. That matters
+  // most here: unlike the conversation_search tool, nothing downstream
+  // gets to rephrase and retry - whatever this arm returns is what the
+  // model is primed with.
   const semanticPromise = queryEmbedding
-    ? admin.rpc('search_threads_by_embedding', {
+    ? admin.rpc('search_thread_chunks_by_embedding', {
         query_embedding: queryEmbedding,
         match_limit: limit,
         p_user_id: userId,

@@ -12,22 +12,27 @@ When a thread's newest terminal assistant message is past
 `last_summarised_msg_id`, the summary unit claims it, asks the fast
 model (`mistral-small-3-2-24b-instruct`, hardcoded in the agent
 module) for a 2-3 sentence topical summary, and writes the result
-back via a claim-guarded RPC. The server-side embeddings backfill
-then picks up the row (the `clear_thread_embedding_on_change`
-trigger nulled its embedding on the write) and produces a vector
-over `title + summary`.
+back via a claim-guarded RPC.
 
-That vector is what `conversation_search` ranks against, which is
-what the `conversation_recall` tool consumes. Summaries are also
-shipped to the recall agent as body text so it can judge whether
-a thread is worth opening without fetching full message history.
+The summary is not an embedding input. Threads once carried a single
+vector over `title + summary`, and that vector was what
+`conversation_search` ranked against - which meant a conversation
+could only be found by how it was labelled, never by what was said
+in it. Ranking now runs over `thread_chunks` (see
+`./conversation-recall.md`), built from the messages themselves.
+
+What the summary is still for: it rides along on every search hit
+and in the recall agent's context as body text, so the model can
+judge whether a thread is worth opening without fetching its full
+message history. That is a display and triage role, not a retrieval
+one - a thread with a null summary is still fully searchable.
 
 Two drivers run the unit:
 
 - **Chat-turn tail** - `curateOnTurnTail(admin, userId)` fires from
   `getStreamingResponse.ts`'s `waitUntil` tail on every completed
-  turn, walking the five curation units (auto-title first, then
-  topics, summary, memory topics, recipe topics) with a per-unit
+  turn, walking the six curation units (auto-title first, then
+  topics, summary, memory topics, recipe topics, rechunk) with a per-unit
   drain cap of 3.
 - **Hourly curation sweep** - the `/curation-sweep` route (pg_cron
   job `nak-curation-sweep`, minute 57) runs `runCurationSweepTick`
@@ -52,8 +57,7 @@ sees an empty queue. There is no worker lease for this unit.
   `last_summarised_msg_id`, the claim columns,
   `claim_next_thread_for_summary`,
   `claim_next_thread_for_summary_sweep`,
-  `save_thread_summary_if_claimed`, and the
-  `clear_thread_embedding_on_change` trigger.
+  and `save_thread_summary_if_claimed`.
 
 ## Entry points
 
@@ -81,15 +85,11 @@ sees an empty queue. There is no worker lease for this unit.
   overwrites `summary` rather than appending.
 - **`threads.summary_claim_holder`** +
   **`threads.summary_claim_expires`** - per-row claim, the sole
-  mutual exclusion between the two drivers. Same shape as the
-  embeddings claim columns; partial index on
+  mutual exclusion between the two drivers. Same shape as every
+  other per-row claim in the file; partial index on
   `summary_claim_holder is not null` keeps it tiny in steady state.
   Claim TTL is `CURATION_CLAIM_TTL_SECONDS` (120s), shared by all
-  five curation units.
-- **`clear_thread_embedding_on_change` trigger** - fires on UPDATE
-  when `title` or `summary` changes; nulls the `embedding` +
-  `embedding_model` + embed claim columns. Ensures a fresh summary
-  gets a fresh embedding automatically without a coordinating flag.
+  six curation units.
 
 ## Contracts
 
@@ -124,11 +124,12 @@ sees an empty queue. There is no worker lease for this unit.
 
 - **Chat** - chat's job is just to write messages; the completed
   turn's tail is what drives this unit. See `./chat.md`.
-- **Embeddings** - the `clear_thread_embedding_on_change` trigger
-  nulls `threads.embedding` whenever `threads.summary` changes, so
-  the embeddings backfill's next run reselects the row. The summary
-  unit and the backfill hand off through the row's state, not
-  through an explicit signal. See `./embeddings.md`.
+- **Embeddings** - none, any more. Writing a summary used to
+  invalidate the thread's vector and hand the row to the embeddings
+  backfill; that vector is gone, and what gets embedded now
+  (`thread_chunks`) is derived from the messages, so a summary write
+  neither triggers nor blocks any embedding work. See
+  `./embeddings.md`.
 - **Conversation recall** - reads `threads.summary` to judge
   relevance without fetching full message history. A missing
   summary means the recall agent sees only the thread title;

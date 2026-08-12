@@ -426,6 +426,20 @@ Deno.test('curation walks auto-title first - title latency is load-bearing UX', 
   );
 });
 
+Deno.test('only the model-free unit gets the raised sweep cap', () => {
+  // The two caps bound different resources - Venice spend vs. database
+  // time - so a unit that starts calling a model must drop back to the
+  // default rather than inheriting the model-free one.
+  for (const unit of curation.UNITS) {
+    if (unit.source === 'rechunk') {
+      assertEquals(unit.sweepCap, curation.SWEEP_QUEUE_CAP_MODEL_FREE);
+    } else {
+      assertEquals(unit.sweepCap, undefined);
+    }
+  }
+  assert(curation.SWEEP_QUEUE_CAP_MODEL_FREE > curation.SWEEP_QUEUE_CAP);
+});
+
 Deno.test('every unit tallies into a distinct counter on its own saved outcome', () => {
   // A unit sharing another's tallyKey would silently double-count the
   // sweep's per-queue numbers, which are the only visibility into

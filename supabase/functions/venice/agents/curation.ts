@@ -38,12 +38,27 @@ import { rechunkOneThread, sweepClaimAndRechunk } from './thread_chunks.ts';
 const TAIL_DRAIN_CAP = 3;
 
 /**
- * Per-queue drain cap for one cron sweep tick. Bounds a tick's
- * worst-case Venice spend (one completion per row across the
- * model-calling queues; rechunk makes no model call); a backlog deeper
+ * Default per-queue drain cap for one cron sweep tick. Bounds a tick's
+ * worst-case Venice spend - one completion per row, per model-calling
+ * queue - so raising it multiplies across all of them. A backlog deeper
  * than the cap drains across successive hourly ticks.
  */
-const SWEEP_QUEUE_CAP = 10;
+const SWEEP_QUEUE_CAP = 25;
+
+/**
+ * Drain cap for a queue whose unit makes NO model call. Only rechunk
+ * qualifies today: it is a read, a text transform, and a write, so its
+ * per-row cost is a couple of DB round trips rather than a completion.
+ * The sweep is hourly, which makes the cap - not the cadence - the
+ * thing that decides whether a backlog measured in hundreds drains in
+ * hours or days.
+ *
+ * Deliberately NOT folded into SWEEP_QUEUE_CAP: the two numbers bound
+ * different resources (Venice spend vs. database time) and should move
+ * independently. A unit that starts calling a model must drop back to
+ * the default.
+ */
+const SWEEP_QUEUE_CAP_MODEL_FREE = 250;
 
 /**
  * The outcome every unit returns when its cycle failed - a Venice
@@ -102,6 +117,12 @@ interface CurationUnit {
   tallyKey: keyof CurationSweepSummary;
   /** The outcome that means "claimed, worked, saved". */
   savedOutcome: string;
+  /**
+   * Per-tick sweep cap for this queue. Omitted means SWEEP_QUEUE_CAP,
+   * which is sized against Venice spend; a model-free unit overrides it
+   * with SWEEP_QUEUE_CAP_MODEL_FREE.
+   */
+  sweepCap?: number;
   /**
    * Outcomes after which the drain loop should claim again: the cycle
    * consumed a row (saved it, lost it to a racing run, or released it
@@ -191,6 +212,7 @@ const UNITS: readonly CurationUnit[] = [
     source: 'rechunk',
     tallyKey: 'rechunked',
     savedOutcome: 'rechunked',
+    sweepCap: SWEEP_QUEUE_CAP_MODEL_FREE,
     drainOn: new Set(['rechunked', 'claim-lost']),
     runForUser: rechunkOneThread,
     sweepOnce: sweepClaimAndRechunk,
@@ -278,8 +300,9 @@ export async function curateOnTurnTail(
 }
 
 /**
- * One cron sweep tick: walk the five queues cross-user, draining each
- * up to SWEEP_QUEUE_CAP rows via the SECURITY DEFINER *_sweep claims.
+ * One cron sweep tick: walk every queue cross-user, draining each up to
+ * its own cap (SWEEP_QUEUE_CAP, or the unit's `sweepCap` override) via
+ * the SECURITY DEFINER *_sweep claims.
  * Per-claim drawer logging lives inside the unit sweep fns (each
  * claim names its own user); this level logs only composition-scoped
  * events - cap truncation and contract violations - to the function
@@ -298,9 +321,10 @@ export async function runCurationSweepTick(
     rechunked: 0,
   };
   for (const unit of UNITS) {
+    const cap = unit.sweepCap ?? SWEEP_QUEUE_CAP;
     const cappedOut = await drainUnit(
       unit,
-      SWEEP_QUEUE_CAP,
+      cap,
       () => unit.sweepOnce(adminClient),
       (outcome) => {
         if (outcome === unit.savedOutcome) tally[unit.tallyKey]++;
@@ -320,7 +344,7 @@ export async function runCurationSweepTick(
     // it and someone should notice.
     if (cappedOut) {
       console.log(
-        `[curation-sweep] ${unit.source} queue cap (${SWEEP_QUEUE_CAP}) reached with rows still pending`,
+        `[curation-sweep] ${unit.source} queue cap (${cap}) reached with rows still pending`,
       );
     }
   }
@@ -336,6 +360,7 @@ export const __test = {
   UNITS,
   TAIL_DRAIN_CAP,
   SWEEP_QUEUE_CAP,
+  SWEEP_QUEUE_CAP_MODEL_FREE,
   ERROR_OUTCOME,
   MAX_CONSECUTIVE_ERRORS,
   drainUnit,

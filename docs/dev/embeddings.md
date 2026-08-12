@@ -1,6 +1,6 @@
 # Embeddings
 
-The pipeline that vectorizes memories, thread summaries, recipes,
+The pipeline that vectorizes memories, conversation transcripts, recipes,
 wiki articles, and samskara substrate so semantic search works.
 Backfill (turning `embedding is null` rows into vectors) runs
 server-side on a `pg_cron` schedule behind the `venice` edge
@@ -11,7 +11,7 @@ protocol the backfill drains through.
 ## Role in the app
 
 A memory that's just been written is `embedding is null`; so is a
-thread whose title or summary changed (trigger-invalidated), and the
+thread chunk the rechunk unit just rewrote, and the
 same for recipes, wiki articles, and substrate rows. A `pg_cron` job
 fires every 5 minutes, POSTs to the edge function's `/backfill`
 route, and the function claims pending rows across all five tables,
@@ -152,17 +152,17 @@ lease era.
   `clear_memory_embedding_on_change` trigger reselects edited rows.
   `memory_search`'s vector path reads `memories.embedding`; ILIKE
   fallback covers unembedded rows. See `./memory.md`.
-- **Summaries** - `threads` is a source; the
-  `clear_thread_embedding_on_change` trigger fires when `title` or
-  `summary` changes, so a fresh summary reselects the row. The
-  summary agent worker writes `threads.summary`; the server-side
-  backfill then embeds it. See `./summaries.md`.
-- **Conversation recall** - `conversation_search` queries two indexes
-  and merges them: `thread_chunks.embedding` (the message text,
-  sliced into embedding-sized pieces) and `threads.embedding` (title +
-  summary). `thread_chunks` is a source in its own right, fed by the
-  rechunk curation unit rather than by a column trigger - the input is
-  the thread's messages, not any column on `threads`. See
+- **Summaries** - no longer an embedding input. `threads` used to be
+  a source, vectorizing `title + summary`; that column and its
+  trigger are gone. Summaries survive as the text a search hit shows
+  the model, not as something retrieval ranks on. See
+  `./summaries.md`.
+- **Conversation recall** - `thread_chunks` is the source behind
+  every conversation search: the transcript sliced into
+  embedding-sized pieces, ranked per chunk and aggregated to threads
+  by best match. Unlike every other source it is fed by a curation
+  unit (rechunk) rather than by a column trigger, because its input
+  is the thread's MESSAGES rather than any column on `threads`. See
   `./conversation-recall.md`.
 - **Cookbook** - `recipes` is a source so the drawer's recipe search
   can rank by meaning; `clear_recipe_embedding_on_change` fires on
@@ -222,7 +222,8 @@ lease era.
 
 - `./memory.md` - first consumer: memory search + the ILIKE fallback.
 - `./summaries.md` - the sibling worker that produces the
-  `threads.summary` field this feature then embeds.
+  `threads.summary` field search hits carry, though nothing
+  embeds it any more.
 - `./conversation-recall.md` - second consumer: thread search.
 - `./architecture.md` - the worker model (still used by the agent
   fleet) in context.

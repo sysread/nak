@@ -136,10 +136,11 @@ metadata-message details.
 - **Topics** - the thread-topics unit's eligibility predicate
   excludes placeholder-titled threads, so auto-title gets first
   crack at every new row. See `./topics.md`.
-- **Embeddings** - the `clear_thread_embedding_on_change` trigger
-  nulls `threads.embedding` whenever `threads.title` changes, so
-  the embeddings backfill's next run re-embeds the thread with its
-  freshly-titled state. See `./embeddings.md`.
+- **Embeddings** - none, any more. Retitling used to invalidate the
+  thread's `title + summary` vector and force a re-embed; that vector
+  is gone. Search ranks `thread_chunks`, which is derived from the
+  messages, so a title change costs nothing and also buys nothing in
+  retrieval terms. See `./embeddings.md`.
 - **Logging** - both drivers emit progress and error breadcrumbs
   through `createEdgeLogger(userId, 'auto-title')`, which reach the
   in-app Logs drawer over the `logs:<userId>` Broadcast topic. See

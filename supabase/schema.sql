@@ -1106,41 +1106,41 @@ create index if not exists threads_reflection_claim_idx
   on public.threads (reflection_claim_expires_at)
   where reflection_holder_id is not null;
 
--- Summarisation + search pipeline ----------------------------------------
+-- Summarisation pipeline -------------------------------------------------
 --
--- Two pipelines cooperate to make conversations searchable:
+-- The summary agent (supabase/functions/venice/agents/summary.ts) takes
+-- a thread and writes a 2-3 sentence topical summary into
+-- `threads.summary`. `last_summarised_msg_id` points at the terminal
+-- assistant message we've summarised up to - same shape as
+-- `last_reflected_msg_id`, same reasons (stable ids, no clock skew).
+-- Two drivers run it: the chat turn's waitUntil tail (per-user) and the
+-- hourly curation sweep (cross-user). The per-thread claim columns are
+-- the only mutual exclusion between them - there is no worker lease for
+-- this unit.
 --
---   1. The summary agent (supabase/functions/venice/agents/summary.ts)
---      takes a thread and writes a 2-3 sentence topical summary into
---      `threads.summary`. `last_summarised_msg_id` points at the
---      terminal assistant message we've summarised up to - same shape
---      as `last_reflected_msg_id`, same reasons (stable ids, no clock
---      skew). Two drivers run it: the chat turn's waitUntil tail
---      (per-user) and the hourly curation sweep (cross-user). The
---      per-thread claim columns are the only mutual exclusion between
---      them - there is no worker lease for this unit.
---
---   2. The embeddings worker (src/lib/embeddings/*) then embeds
---      `title + summary` into `embedding` so the search RPC below can
---      cosine-rank threads against a query vector. The trigger in
---      `clear_thread_embedding_on_change` wipes the embedding when
---      either input changes, so the worker picks the row up again on
---      its next poll.
---
--- `embedding` is vector(2048) to match memories — same padding helper,
--- same forward-compat headroom for a future native-2048 model. No HNSW
--- index for the same reason memories skip it: per-user thread counts
--- stay tiny (hundreds at most), so seq scan is fast enough; halfvec +
--- HNSW is the escape hatch if that ever stops being true.
+-- The summary is NOT an embedding input any more. Threads used to carry
+-- a single vector over `title + summary`, which could only match a
+-- conversation on how it was labelled and never on what was said in it -
+-- see the `public.thread_chunks` section for what replaced it. The
+-- summary survives because it is still what a search hit shows the model
+-- so it can judge a thread without opening it.
 alter table public.threads
   add column if not exists summary text,
   add column if not exists last_summarised_msg_id uuid references public.messages(id) on delete set null,
   add column if not exists summary_claim_holder text,
-  add column if not exists summary_claim_expires timestamptz,
-  add column if not exists embedding vector(2048),
-  add column if not exists embedding_model text,
-  add column if not exists embedding_claim_holder text,
-  add column if not exists embedding_claim_expires timestamptz;
+  add column if not exists summary_claim_expires timestamptz;
+
+-- Retired: the per-thread title+summary embedding, superseded by
+-- public.thread_chunks. Dropping the columns drops the vectors with
+-- them, which is intended - they describe an indexing scheme nothing
+-- reads any more, and thread_chunks rebuilds from the messages
+-- themselves. Idempotent, so re-applying against a project that never
+-- had the columns is a no-op.
+alter table public.threads
+  drop column if exists embedding,
+  drop column if exists embedding_model,
+  drop column if exists embedding_claim_holder,
+  drop column if exists embedding_claim_expires;
 
 -- Partial claim indexes: same shape as the reflection one. Only carry
 -- live claims so the index stays tiny in steady state.
@@ -1148,9 +1148,7 @@ create index if not exists threads_summary_claim_idx
   on public.threads (summary_claim_expires)
   where summary_claim_holder is not null;
 
-create index if not exists threads_embedding_claim_idx
-  on public.threads (embedding_claim_expires)
-  where embedding_claim_holder is not null;
+drop index if exists threads_embedding_claim_idx;
 
 -- Auto-title pipeline ---------------------------------------------------
 --
@@ -1211,30 +1209,12 @@ create index if not exists threads_topics_claim_idx
   on public.threads (topics_claim_expires)
   where topics_claim_holder is not null;
 
--- Invalidate the embedding whenever its inputs change. Pending =
--- `embedding is null`, so the embeddings worker will re-embed on its
--- next poll. We null the claim columns too — an in-flight worker save
--- would otherwise land a stale embedding, since its guard checks
--- `claim_holder = $me and claim_expires > now()` and both of those
--- would still match without this clear. Same invariant as the memories
--- trigger.
-create or replace function public.clear_thread_embedding_on_change()
-  returns trigger language plpgsql as $$
-begin
-  if new.title is distinct from old.title
-     or new.summary is distinct from old.summary then
-    new.embedding := null;
-    new.embedding_model := null;
-    new.embedding_claim_holder := null;
-    new.embedding_claim_expires := null;
-  end if;
-  return new;
-end $$;
-
+-- Retired alongside the title+summary thread embedding it invalidated.
+-- Chunk invalidation is not a column trigger: `thread_chunks` is rebuilt
+-- from the MESSAGES by the rechunk unit, driven off
+-- `threads.last_chunked_msg_id` rather than off any column on this row.
 drop trigger if exists clear_thread_embedding_on_change on public.threads;
-create trigger clear_thread_embedding_on_change
-  before update on public.threads
-  for each row execute function public.clear_thread_embedding_on_change();
+drop function if exists public.clear_thread_embedding_on_change();
 
 -- memories ---------------------------------------------------------------
 --
@@ -5988,75 +5968,12 @@ language sql security invoker as $$
   );
 $$;
 
--- Thread embedding pipeline RPCs ----------------------------------------
---
--- The embeddings worker is multi-source: memories and now threads.
--- This claim RPC returns the inputs the worker will concatenate —
--- `title` plus `summary` — so the worker doesn't need a second round
--- trip to read them. A freshly-created thread with its placeholder
--- title and no summary yet is skipped (empty string wouldn't produce
--- a meaningful embedding); the worker will pick it up on a later
--- poll once either the autoTitle or the summary agent has landed.
+-- Retired: the per-thread title+summary embedding claim/save pair. Its
+-- queue is gone from EMBED_SOURCES; public.thread_chunks carries the
+-- equivalent pair (claim_next_pending_thread_chunk /
+-- save_thread_chunk_embedding_if_claimed) further down.
 drop function if exists public.claim_next_pending_thread_for_embedding(text, int);
--- Global service-definer sweep, same shape as claim_next_pending_memory:
--- no auth.uid() filter, owner-privileged, EXECUTE locked to service_role below.
--- The title/summary eligibility predicate is preserved.
-create or replace function public.claim_next_pending_thread_for_embedding(
-  p_holder_id text,
-  p_ttl_seconds int
-) returns table (id uuid, title text, summary text, user_id uuid)
-language sql security definer
-set search_path = public as $$
-  with candidate as (
-    select t.id
-      from public.threads t
-     where t.embedding is null
-       and (t.embedding_claim_expires is null
-            or t.embedding_claim_expires < now())
-       and (t.title is distinct from 'New conversation' or t.summary is not null)
-     order by t.updated_at desc
-     limit 1
-     for update skip locked
-  )
-  update public.threads t
-     set embedding_claim_holder = p_holder_id,
-         embedding_claim_expires = now() + make_interval(secs => p_ttl_seconds)
-    from candidate c
-   where t.id = c.id
-  returning t.id, t.title, t.summary, t.user_id;
-$$;
-
--- Save the thread embedding IF our claim is still valid. Same shape
--- as save_memory_embedding_if_claimed — false = skip, not an error.
 drop function if exists public.save_thread_embedding_if_claimed(uuid, text, vector, text);
-create or replace function public.save_thread_embedding_if_claimed(
-  p_id uuid,
-  p_holder_id text,
-  p_embedding vector(2048),
-  p_embedding_model text
-) returns boolean
-language plpgsql security definer
-set search_path = public as $$
-declare
-  updated int;
-begin
-  update public.threads
-     set embedding = p_embedding,
-         embedding_model = p_embedding_model,
-         embedding_claim_holder = null,
-         embedding_claim_expires = null
-   where id = p_id
-     and embedding_claim_holder = p_holder_id
-     and embedding_claim_expires > now();
-  get diagnostics updated = row_count;
-  return updated > 0;
-end $$;
-
--- Service-role only - see the note on the memory pair.
-revoke all on function public.claim_next_pending_thread_for_embedding(text, int) from public, anon, authenticated;
-revoke all on function public.save_thread_embedding_if_claimed(uuid, text, vector, text) from public, anon, authenticated;
-grant execute on function public.claim_next_pending_thread_for_embedding(text, int) to service_role;
-grant execute on function public.save_thread_embedding_if_claimed(uuid, text, vector, text) to service_role;
 
 -- thread_chunks pipeline RPCs --------------------------------------------
 --
@@ -6344,36 +6261,11 @@ language sql stable security invoker as $$
    limit match_limit
 $$;
 
--- Cosine-similarity search over threads. Returns a small projection
--- (id + the columns the drawer renders) plus the raw similarity score
--- so the client can merge this into its exact-match list without a
--- second fetch. Archived threads are included — the drawer greys them
--- and the client-side rank stays "exact before semantic" regardless
--- of which bucket each hit lives in.
--- p_user_id: b-strict escape hatch; see search_memories_by_embedding
--- for the full rationale.
+-- Retired: cosine search over the per-thread title+summary embedding.
+-- Replaced by public.search_thread_chunks_by_embedding, which ranks
+-- transcript chunks and aggregates to threads by best-matching chunk.
 drop function if exists public.search_threads_by_embedding(vector, int);
 drop function if exists public.search_threads_by_embedding(vector, int, uuid);
-create or replace function public.search_threads_by_embedding(
-  query_embedding vector(2048),
-  match_limit int,
-  p_user_id uuid default null
-) returns table (
-  id uuid,
-  title text,
-  archived boolean,
-  updated_at timestamptz,
-  similarity real
-)
-language sql stable security invoker as $$
-  select id, title, archived, updated_at,
-         (1 - (embedding <=> query_embedding))::real as similarity
-    from public.threads
-   where user_id = coalesce(p_user_id, auth.uid())
-     and embedding is not null
-   order by embedding <=> query_embedding asc
-   limit match_limit
-$$;
 
 -- Confidence adjustment RPCs ---------------------------------------------
 --
@@ -7515,7 +7407,7 @@ begin
   --
   -- Pattern matches the other thread-touching RPCs in this file
   -- (mark_thread_reflected_if_claimed, save_thread_summary_if_claimed,
-  -- save_thread_embedding_if_claimed): silent skip on a non-owned
+  -- save_thread_chunks_if_claimed): silent skip on a non-owned
   -- target rather than raising. Those RPCs embed
   -- `user_id = auth.uid()` directly in their UPDATE's WHERE so an
   -- unowned row has no effect; we do the moral equivalent here by
