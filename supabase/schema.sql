@@ -356,6 +356,16 @@ alter table public.threads
 alter table public.threads
   add column if not exists context_recall_payload jsonb;
 
+-- Rechunk bookkeeping for public.thread_chunks (see that table below).
+-- last_chunked_msg_id is the newest message the chunk rows were built
+-- from; a thread re-qualifies for rechunking when its newest message
+-- differs. Same claim-column shape as every other per-row work queue
+-- in this file.
+alter table public.threads
+  add column if not exists last_chunked_msg_id uuid,
+  add column if not exists chunk_claim_holder text,
+  add column if not exists chunk_claim_expires timestamptz;
+
 create index if not exists threads_user_updated_idx
   on public.threads (user_id, updated_at desc);
 
@@ -376,6 +386,76 @@ create policy "threads are self-updatable" on public.threads
 drop policy if exists "threads are self-deletable" on public.threads;
 create policy "threads are self-deletable" on public.threads
   for delete using (auth.uid() = user_id);
+
+-- thread_chunks -----------------------------------------------------------
+--
+-- Embedding-sized slices of a thread's transcript, many rows per thread.
+-- This is what makes conversation_search able to match on what the user
+-- actually wrote: threads.embedding covers only `title + summary`
+-- (2000 chars, see _shared/embed-input.ts), so a thread auto-titled
+-- "Bread Recipe Modification Advice" was unfindable by searching for
+-- "lentils" despite that word opening its first message.
+--
+-- Why many rows instead of one richer thread vector: averaging a
+-- 107-message thread into a single embedding yields a centroid close to
+-- nothing in particular - any one topic is a few percent of its
+-- direction and still will not rank. Chunks are ranked individually and
+-- aggregated back to a thread on the SIMILARITY SCORES at query time
+-- (search_thread_chunks_by_embedding below), never by combining
+-- vectors.
+--
+-- Rows are derived data, rebuilt by the rechunk unit from the messages
+-- themselves - safe to delete wholesale, they regenerate. The chunker
+-- (supabase/functions/_shared/thread-transcript.ts) packs greedily from
+-- the first message, which makes chunk_index stable as a thread grows:
+-- appending rewrites only the last partial chunk.
+create table if not exists public.thread_chunks (
+  id uuid primary key default gen_random_uuid(),
+  thread_id uuid not null references public.threads(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  -- 0-based position within the thread. Unique per thread, and stable
+  -- across appends by construction (see the chunker's greedy packing).
+  chunk_index int not null,
+  content text not null,
+  -- Message range this chunk covers, for anchoring a passage fetch back
+  -- to the transcript. Deliberately NOT foreign keys: a chunk is a
+  -- snapshot, and a deleted message should leave a stale anchor to be
+  -- rebuilt on the next rechunk rather than cascade-deleting a row the
+  -- rechunk unit is about to rewrite anyway.
+  start_msg_id uuid,
+  end_msg_id uuid,
+  embedding vector(2048),
+  embedding_model text,
+  embedding_claim_holder text,
+  embedding_claim_expires timestamptz,
+  created_at timestamptz not null default now(),
+  unique (thread_id, chunk_index)
+);
+
+-- Covers both the rechunk unit's per-thread replace and the search
+-- RPC's join back from a chunk hit to its thread.
+create index if not exists thread_chunks_thread_idx
+  on public.thread_chunks (thread_id, chunk_index);
+
+-- The embed backfill claims on `embedding is null`; this keeps that
+-- scan off a sequential read as the table grows.
+create index if not exists thread_chunks_pending_embed_idx
+  on public.thread_chunks (user_id)
+  where embedding is null;
+
+-- No HNSW/ivfflat index on embedding, for the same reason as
+-- public.memories: exact scan is correct at this corpus size and an
+-- approximate index silently changes recall.
+
+alter table public.thread_chunks enable row level security;
+
+-- Read-only to the owner. Writes go exclusively through the
+-- service-role RPCs below (the rechunk unit and the embed backfill), so
+-- there is deliberately no self-insert/update/delete policy - a client
+-- has no business hand-editing derived rows.
+drop policy if exists "thread chunks are self-selectable" on public.thread_chunks;
+create policy "thread chunks are self-selectable" on public.thread_chunks
+  for select using (auth.uid() = user_id);
 
 -- messages ---------------------------------------------------------------
 
@@ -5977,6 +6057,247 @@ revoke all on function public.claim_next_pending_thread_for_embedding(text, int)
 revoke all on function public.save_thread_embedding_if_claimed(uuid, text, vector, text) from public, anon, authenticated;
 grant execute on function public.claim_next_pending_thread_for_embedding(text, int) to service_role;
 grant execute on function public.save_thread_embedding_if_claimed(uuid, text, vector, text) to service_role;
+
+-- thread_chunks pipeline RPCs --------------------------------------------
+--
+-- Two queues feed public.thread_chunks:
+--   1. rechunk  - claim a thread whose newest message is past
+--      last_chunked_msg_id, rebuild its chunk rows from the messages.
+--   2. embed    - claim a chunk row with a null embedding, vectorize it.
+-- Queue 2 is just another EMBED_SOURCES entry and shares the backfill
+-- machinery; queue 1 is driven by the rechunk unit in
+-- venice/agents/thread_chunks.ts.
+
+-- Claim the next thread needing a rechunk. Cross-user sweep shape
+-- (security definer, no auth.uid() filter), newest-first to match the
+-- other embedding claims - recall queries target recent threads, so
+-- fresh work is worth more than deep backlog.
+drop function if exists public.claim_next_thread_for_rechunk(text, int);
+create or replace function public.claim_next_thread_for_rechunk(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns table (thread_id uuid, terminal_msg_id uuid, user_id uuid)
+language sql security definer
+set search_path = public as $$
+  with candidate as (
+    select t.id as thread_id, term.msg_id as terminal_msg_id, t.user_id as user_id
+      from public.threads t
+      cross join lateral (
+        -- Newest message of ANY role: chunks index tool calls and tool
+        -- results too, so a turn that ended in a tool row still counts
+        -- as new material to index.
+        select m.id as msg_id
+          from public.messages m
+         where m.thread_id = t.id
+         order by m.created_at desc
+         limit 1
+      ) term
+     where term.msg_id is distinct from t.last_chunked_msg_id
+       and (t.chunk_claim_expires is null
+            or t.chunk_claim_expires < now())
+     order by t.updated_at desc
+     limit 1
+     for update of t skip locked
+  )
+  update public.threads t
+     set chunk_claim_holder = p_holder_id,
+         chunk_claim_expires = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c
+   where t.id = c.thread_id
+  returning t.id as thread_id, c.terminal_msg_id, t.user_id;
+$$;
+
+-- Replace a thread's chunk rows, IF our claim is still valid.
+-- p_chunks is [{index, text, start_msg_id, end_msg_id}, ...] in
+-- chunk_index order.
+--
+-- The load-bearing detail is the `where` on the conflict update: a
+-- chunk whose content is byte-identical is skipped entirely and KEEPS
+-- its embedding. Combined with the chunker's greedy packing (chunk N
+-- depends only on the messages before it), appending a message to a
+-- 107-message thread re-embeds the last partial chunk and nothing else.
+-- Dropping that guard would turn every new message into a full
+-- re-embed of the whole thread.
+drop function if exists public.save_thread_chunks_if_claimed(uuid, text, uuid, uuid, jsonb);
+create or replace function public.save_thread_chunks_if_claimed(
+  p_thread_id uuid,
+  p_holder_id text,
+  p_msg_id uuid,
+  p_user_id uuid,
+  p_chunks jsonb
+) returns boolean
+language plpgsql security definer
+set search_path = public as $$
+declare
+  updated int;
+begin
+  -- Cheap bail before doing any write work: if the claim is gone, a
+  -- racing run already owns this thread.
+  perform 1
+     from public.threads
+    where id = p_thread_id
+      and chunk_claim_holder = p_holder_id
+      and chunk_claim_expires > now();
+  if not found then
+    return false;
+  end if;
+
+  insert into public.thread_chunks
+      (thread_id, user_id, chunk_index, content, start_msg_id, end_msg_id)
+  select p_thread_id,
+         p_user_id,
+         (c->>'index')::int,
+         c->>'text',
+         nullif(c->>'start_msg_id', '')::uuid,
+         nullif(c->>'end_msg_id', '')::uuid
+    from jsonb_array_elements(coalesce(p_chunks, '[]'::jsonb)) c
+  on conflict (thread_id, chunk_index) do update
+     set content = excluded.content,
+         start_msg_id = excluded.start_msg_id,
+         end_msg_id = excluded.end_msg_id,
+         -- Content changed, so the stored vector describes text that no
+         -- longer exists. Null the claim columns alongside it or an
+         -- in-flight embed save would land a stale vector (its guard
+         -- checks holder + expiry, both of which would still match).
+         embedding = null,
+         embedding_model = null,
+         embedding_claim_holder = null,
+         embedding_claim_expires = null
+   where public.thread_chunks.content is distinct from excluded.content;
+
+  -- A thread can shrink (messages deleted, or excerpt caps changing the
+  -- render). Drop chunk rows past the new tail.
+  delete from public.thread_chunks
+   where thread_id = p_thread_id
+     and chunk_index >= jsonb_array_length(coalesce(p_chunks, '[]'::jsonb));
+
+  update public.threads
+     set last_chunked_msg_id = p_msg_id,
+         chunk_claim_holder = null,
+         chunk_claim_expires = null
+   where id = p_thread_id
+     and chunk_claim_holder = p_holder_id
+     and chunk_claim_expires > now();
+  get diagnostics updated = row_count;
+  return updated > 0;
+end $$;
+
+-- Claim / save for the chunk embedding queue. Same contract as every
+-- other EMBED_SOURCES pair: claim returns the text to embed, save
+-- returns false (not an error) when the claim was lost.
+drop function if exists public.claim_next_pending_thread_chunk(text, int);
+create or replace function public.claim_next_pending_thread_chunk(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns table (id uuid, content text, user_id uuid)
+language sql security definer
+set search_path = public as $$
+  with candidate as (
+    select c.id
+      from public.thread_chunks c
+     where c.embedding is null
+       and (c.embedding_claim_expires is null
+            or c.embedding_claim_expires < now())
+     order by c.created_at desc
+     limit 1
+     for update skip locked
+  )
+  update public.thread_chunks c
+     set embedding_claim_holder = p_holder_id,
+         embedding_claim_expires = now() + make_interval(secs => p_ttl_seconds)
+    from candidate cd
+   where c.id = cd.id
+  returning c.id, c.content, c.user_id;
+$$;
+
+drop function if exists public.save_thread_chunk_embedding_if_claimed(uuid, text, vector, text);
+create or replace function public.save_thread_chunk_embedding_if_claimed(
+  p_id uuid,
+  p_holder_id text,
+  p_embedding vector(2048),
+  p_embedding_model text
+) returns boolean
+language plpgsql security definer
+set search_path = public as $$
+declare
+  updated int;
+begin
+  update public.thread_chunks
+     set embedding = p_embedding,
+         embedding_model = p_embedding_model,
+         embedding_claim_holder = null,
+         embedding_claim_expires = null
+   where id = p_id
+     and embedding_claim_holder = p_holder_id
+     and embedding_claim_expires > now();
+  get diagnostics updated = row_count;
+  return updated > 0;
+end $$;
+
+revoke all on function public.claim_next_thread_for_rechunk(text, int) from public, anon, authenticated;
+revoke all on function public.save_thread_chunks_if_claimed(uuid, text, uuid, uuid, jsonb) from public, anon, authenticated;
+revoke all on function public.claim_next_pending_thread_chunk(text, int) from public, anon, authenticated;
+revoke all on function public.save_thread_chunk_embedding_if_claimed(uuid, text, vector, text) from public, anon, authenticated;
+grant execute on function public.claim_next_thread_for_rechunk(text, int) to service_role;
+grant execute on function public.save_thread_chunks_if_claimed(uuid, text, uuid, uuid, jsonb) to service_role;
+grant execute on function public.claim_next_pending_thread_chunk(text, int) to service_role;
+grant execute on function public.save_thread_chunk_embedding_if_claimed(uuid, text, vector, text) to service_role;
+
+-- Cosine-similarity search over thread CHUNKS, aggregated back to one
+-- row per thread.
+--
+-- The aggregation is max-similarity on the SCORES: rank every chunk
+-- against the query, keep each thread's single best chunk, order
+-- threads by that. This is the whole reason chunks exist - a thread
+-- matches because one passage in it matches, not because the thread's
+-- average direction is vaguely related. Averaging the vectors instead
+-- would reproduce exactly the dilution that made title+summary search
+-- fail on long threads.
+--
+-- Returns the matching passage's anchors and an excerpt alongside the
+-- thread projection, so a caller can jump straight to the relevant
+-- part of the transcript instead of re-reading the thread's tail.
+drop function if exists public.search_thread_chunks_by_embedding(vector, int, uuid);
+create or replace function public.search_thread_chunks_by_embedding(
+  query_embedding vector(2048),
+  match_limit int,
+  p_user_id uuid default null
+) returns table (
+  id uuid,
+  title text,
+  archived boolean,
+  updated_at timestamptz,
+  similarity real,
+  chunk_index int,
+  start_msg_id uuid,
+  end_msg_id uuid,
+  excerpt text
+)
+language sql stable security invoker as $$
+  with ranked as (
+    select c.thread_id,
+           c.chunk_index,
+           c.start_msg_id,
+           c.end_msg_id,
+           c.content,
+           (1 - (c.embedding <=> query_embedding))::real as similarity,
+           row_number() over (
+             partition by c.thread_id
+             order by c.embedding <=> query_embedding asc
+           ) as rn
+      from public.thread_chunks c
+     where c.user_id = coalesce(p_user_id, auth.uid())
+       and c.embedding is not null
+  )
+  select t.id, t.title, t.archived, t.updated_at,
+         r.similarity, r.chunk_index, r.start_msg_id, r.end_msg_id,
+         left(r.content, 400) as excerpt
+    from ranked r
+    join public.threads t on t.id = r.thread_id
+   where r.rn = 1
+   order by r.similarity desc
+   limit match_limit
+$$;
 
 -- Cosine-similarity search over threads. Returns a small projection
 -- (id + the columns the drawer renders) plus the raw similarity score
