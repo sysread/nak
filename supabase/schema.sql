@@ -6068,12 +6068,58 @@ grant execute on function public.save_thread_embedding_if_claimed(uuid, text, ve
 -- machinery; queue 1 is driven by the rechunk unit in
 -- venice/agents/thread_chunks.ts.
 
--- Claim the next thread needing a rechunk. Cross-user sweep shape
--- (security definer, no auth.uid() filter), newest-first to match the
--- other embedding claims - recall queries target recent threads, so
--- fresh work is worth more than deep backlog.
+-- Claim the next thread needing a rechunk, for one user. Driven from a
+-- chat turn's waitUntil tail, so a thread is re-indexed seconds after
+-- the turn that changed it rather than waiting for the hourly sweep.
+--
+-- Newest-first, matching the other embedding claims and unlike the
+-- summary queue's oldest-first: recall targets recent conversations, so
+-- fresh work is worth more here than deep backlog.
 drop function if exists public.claim_next_thread_for_rechunk(text, int);
+drop function if exists public.claim_next_thread_for_rechunk(text, int, uuid);
 create or replace function public.claim_next_thread_for_rechunk(
+  p_holder_id text,
+  p_ttl_seconds int,
+  -- b-strict escape hatch, same as the summary claim: the edge function
+  -- drives this from a service-role client with no auth.uid().
+  p_user_id uuid default null
+) returns table (thread_id uuid, terminal_msg_id uuid)
+language sql security invoker as $$
+  with candidate as (
+    select t.id as thread_id, term.msg_id as terminal_msg_id
+      from public.threads t
+      cross join lateral (
+        -- Newest message of ANY role: chunks index tool calls and tool
+        -- results too, so a turn that ended in a tool row still counts
+        -- as new material to index.
+        select m.id as msg_id
+          from public.messages m
+         where m.thread_id = t.id
+         order by m.created_at desc
+         limit 1
+      ) term
+     where t.user_id = coalesce(p_user_id, auth.uid())
+       and term.msg_id is distinct from t.last_chunked_msg_id
+       and (t.chunk_claim_expires is null
+            or t.chunk_claim_expires < now())
+     order by t.updated_at desc
+     limit 1
+     for update of t skip locked
+  )
+  update public.threads t
+     set chunk_claim_holder = p_holder_id,
+         chunk_claim_expires = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c
+   where t.id = c.thread_id
+  returning t.id as thread_id, c.terminal_msg_id;
+$$;
+
+-- Cross-user sweep variant, same candidate predicate, returning the
+-- owner so the unit can scope its save. Tail + sweep double-driving is
+-- safe by construction: the per-thread claim columns are the mutual
+-- exclusion.
+drop function if exists public.claim_next_thread_for_rechunk_sweep(text, int);
+create or replace function public.claim_next_thread_for_rechunk_sweep(
   p_holder_id text,
   p_ttl_seconds int
 ) returns table (thread_id uuid, terminal_msg_id uuid, user_id uuid)
@@ -6083,9 +6129,6 @@ set search_path = public as $$
     select t.id as thread_id, term.msg_id as terminal_msg_id, t.user_id as user_id
       from public.threads t
       cross join lateral (
-        -- Newest message of ANY role: chunks index tool calls and tool
-        -- results too, so a turn that ended in a tool row still counts
-        -- as new material to index.
         select m.id as msg_id
           from public.messages m
          where m.thread_id = t.id
@@ -6234,11 +6277,13 @@ begin
   return updated > 0;
 end $$;
 
-revoke all on function public.claim_next_thread_for_rechunk(text, int) from public, anon, authenticated;
+revoke all on function public.claim_next_thread_for_rechunk(text, int, uuid) from public, anon, authenticated;
+revoke all on function public.claim_next_thread_for_rechunk_sweep(text, int) from public, anon, authenticated;
 revoke all on function public.save_thread_chunks_if_claimed(uuid, text, uuid, uuid, jsonb) from public, anon, authenticated;
 revoke all on function public.claim_next_pending_thread_chunk(text, int) from public, anon, authenticated;
 revoke all on function public.save_thread_chunk_embedding_if_claimed(uuid, text, vector, text) from public, anon, authenticated;
-grant execute on function public.claim_next_thread_for_rechunk(text, int) to service_role;
+grant execute on function public.claim_next_thread_for_rechunk(text, int, uuid) to service_role;
+grant execute on function public.claim_next_thread_for_rechunk_sweep(text, int) to service_role;
 grant execute on function public.save_thread_chunks_if_claimed(uuid, text, uuid, uuid, jsonb) to service_role;
 grant execute on function public.claim_next_pending_thread_chunk(text, int) to service_role;
 grant execute on function public.save_thread_chunk_embedding_if_claimed(uuid, text, vector, text) to service_role;

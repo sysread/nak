@@ -1,8 +1,8 @@
-// Curation composition: drives the five claim-based housekeeping units
+// Curation composition: drives the six claim-based housekeeping units
 // (auto_title, thread_topics, summary, memory_topics, recipe_topics -
-// the function-side ports of the browser's supervised worker fleet)
-// from the two server-side triggers that replaced the browser
-// supervisor poll:
+// the function-side ports of the browser's supervised worker fleet -
+// plus rechunk, which has no browser ancestor) from the two
+// server-side triggers that replaced the browser supervisor poll:
 //
 //   - curateOnTurnTail: fired from a chat turn's waitUntil tail, once
 //     per completed turn, scoped to the turn's user. The primary
@@ -27,6 +27,7 @@ import { sweepClaimAndSummarise, summariseOneThread } from './summary.ts';
 import { sweepClaimAndTagThread, tagOneThread } from './thread_topics.ts';
 import { sweepClaimAndTagMemory, tagOneMemory } from './memory_topics.ts';
 import { sweepClaimAndTagRecipe, tagOneRecipe } from './recipe_topics.ts';
+import { rechunkOneThread, sweepClaimAndRechunk } from './thread_chunks.ts';
 
 /**
  * Per-unit drain cap for the chat-turn tail. A turn produces at most
@@ -38,8 +39,9 @@ const TAIL_DRAIN_CAP = 3;
 
 /**
  * Per-queue drain cap for one cron sweep tick. Bounds a tick's
- * worst-case Venice spend (5 queues x 10 completions); a backlog
- * deeper than the cap drains across successive hourly ticks.
+ * worst-case Venice spend (one completion per row across the
+ * model-calling queues; rechunk makes no model call); a backlog deeper
+ * than the cap drains across successive hourly ticks.
  */
 const SWEEP_QUEUE_CAP = 10;
 
@@ -84,6 +86,7 @@ export interface CurationSweepSummary {
   summarised: number;
   memoriesTagged: number;
   recipesTagged: number;
+  rechunked: number;
 }
 
 /**
@@ -178,6 +181,19 @@ const UNITS: readonly CurationUnit[] = [
     drainOn: new Set(['tagged', 'claim-lost']),
     runForUser: tagOneRecipe,
     sweepOnce: sweepClaimAndTagRecipe,
+  },
+  {
+    // The one unit that makes no model call - pure text processing plus
+    // a write - so it costs the tail nothing but a round trip. Runs
+    // last because its output feeds the embed backfill on a separate
+    // (5-minute) cron, not this walk: being a few seconds later into
+    // the chunk queue changes nothing downstream.
+    source: 'rechunk',
+    tallyKey: 'rechunked',
+    savedOutcome: 'rechunked',
+    drainOn: new Set(['rechunked', 'claim-lost']),
+    runForUser: rechunkOneThread,
+    sweepOnce: sweepClaimAndRechunk,
   },
 ];
 
@@ -279,6 +295,7 @@ export async function runCurationSweepTick(
     summarised: 0,
     memoriesTagged: 0,
     recipesTagged: 0,
+    rechunked: 0,
   };
   for (const unit of UNITS) {
     const cappedOut = await drainUnit(

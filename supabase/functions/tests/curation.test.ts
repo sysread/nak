@@ -422,8 +422,19 @@ Deno.test('memory parseTopics caps at 4; recipe parseTopics caps at 6', () => {
 Deno.test('curation walks auto-title first - title latency is load-bearing UX', () => {
   assertEquals(
     curation.UNITS.map((u) => u.source),
-    ['auto-title', 'topics', 'summary', 'memory-topics', 'recipe-topics'],
+    ['auto-title', 'topics', 'summary', 'memory-topics', 'recipe-topics', 'rechunk'],
   );
+});
+
+Deno.test('every unit tallies into a distinct counter on its own saved outcome', () => {
+  // A unit sharing another's tallyKey would silently double-count the
+  // sweep's per-queue numbers, which are the only visibility into
+  // whether a queue is draining.
+  const keys = curation.UNITS.map((u) => u.tallyKey);
+  assertEquals(new Set(keys).size, keys.length);
+  for (const unit of curation.UNITS) {
+    assert(unit.drainOn.has(unit.savedOutcome));
+  }
 });
 
 Deno.test('curation drain sets mirror the browser supervisor progress classification', () => {

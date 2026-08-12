@@ -83,6 +83,10 @@ export interface BackfillOptions {
   /** Recognize a rate-limit error so the loop can stop early. Defaults to
    *  matching VeniceError's `kind === 'rate_limit'`. */
   isRateLimit?: (err: unknown) => boolean;
+  /** Recognize an input-too-long rejection so the row can be shrunk and
+   *  retried rather than failing forever. Defaults to matching the
+   *  embeddings endpoint's message. */
+  isInputTooLong?: (err: unknown) => boolean;
 }
 
 export interface BackfillSummary {
@@ -103,6 +107,56 @@ function defaultIsRateLimit(err: unknown): boolean {
 }
 
 /**
+ * Venice rejects an over-long embedding input with a 400 whose message
+ * names the ceiling ("Input text exceeds the maximum token limit of
+ * 8192 tokens"). Matched on the message because the wire body carries
+ * no machine-readable code for it - a `kind` check like the rate-limit
+ * one above has nothing to key on.
+ */
+function defaultIsInputTooLong(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /maximum token limit|exceeds the maximum|context length/i.test(message);
+}
+
+/**
+ * Floor on the shrink retry. Below this an input has lost so much of
+ * its content that the vector no longer describes the row, and a bad
+ * vector is worse than a missing one - it ranks, wrongly.
+ */
+const MIN_EMBED_INPUT_CHARS = 500;
+
+/**
+ * Embed `input`, halving it on an input-too-long rejection.
+ *
+ * Chunk sizing is an estimate: Venice exposes no tokenizer, so the
+ * chunker budgets characters against a conservative chars-per-token
+ * divisor (see _shared/thread-transcript.ts). Content denser than the
+ * estimate - a pasted base64 blob, a wall of UUIDs - beats it and gets
+ * rejected. Without this retry such a row is claimed, fails, and is
+ * re-claimed on every subsequent tick forever: permanently unembedded
+ * and burning a slot each time.
+ *
+ * Halving rather than trimming to a computed size because the rejection
+ * does not say how far over the input was, and it mirrors the shrink
+ * loop in venice/agents/_curation_helpers.ts.
+ */
+async function embedWithShrink(
+  embed: (input: string) => Promise<number[] | undefined>,
+  input: string,
+  isInputTooLong: (err: unknown) => boolean,
+): Promise<number[] | undefined> {
+  let text = input;
+  for (;;) {
+    try {
+      return await embed(text);
+    } catch (err) {
+      if (!isInputTooLong(err) || text.length <= MIN_EMBED_INPUT_CHARS) throw err;
+      text = text.slice(0, Math.floor(text.length / 2));
+    }
+  }
+}
+
+/**
  * Drain pending embeddings across every source until the queue empties, the
  * batch cap is hit, the time budget lapses, or Venice rate-limits us.
  *
@@ -118,6 +172,7 @@ export async function runBackfill(
 ): Promise<BackfillSummary> {
   const now = opts.now ?? Date.now;
   const isRateLimit = opts.isRateLimit ?? defaultIsRateLimit;
+  const isInputTooLong = opts.isInputTooLong ?? defaultIsInputTooLong;
   const start = now();
   const summary: BackfillSummary = {
     embedded: 0,
@@ -153,7 +208,7 @@ export async function runBackfill(
 
       let vector: number[] | undefined;
       try {
-        vector = await deps.embed(row.input);
+        vector = await embedWithShrink(deps.embed, row.input, isInputTooLong);
       } catch (err) {
         if (isRateLimit(err)) {
           // Back off the whole invocation - the next cron tick resumes from the
