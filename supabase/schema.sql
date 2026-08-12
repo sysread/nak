@@ -391,8 +391,8 @@ create policy "threads are self-deletable" on public.threads
 --
 -- Embedding-sized slices of a thread's transcript, many rows per thread.
 -- This is what makes conversation_search able to match on what the user
--- actually wrote: threads.embedding covers only `title + summary`
--- (2000 chars, see _shared/embed-input.ts), so a thread auto-titled
+-- actually wrote. Threads previously carried a single vector over
+-- `title + summary` (2000 chars), so a thread auto-titled
 -- "Bread Recipe Modification Advice" was unfindable by searching for
 -- "lentils" despite that word opening its first message.
 --
@@ -10641,14 +10641,23 @@ language sql stable security invoker as $$
        and embedding is not null
   ),
   floor as (
-    select coalesce(
-             min(1 - (t.embedding <=> (select embedding from target))),
-             0.0
-           )::real as min_sim
+    -- Per source conversation, its BEST-matching chunk; then the
+    -- minimum across sources. Threads no longer carry a single vector
+    -- (see the thread_chunks section), so "how close is this
+    -- conversation to the article" is now a max over that thread's
+    -- chunks - the same reduction the conversation search RPC uses.
+    -- Taking the min of those maxima preserves the original meaning:
+    -- the bar is set by the LEAST related source the article cites.
+    select coalesce(min(best.sim), 0.0)::real as min_sim
       from public.wiki_article_sources ws
-      join public.threads t on t.id = ws.thread_id
+      cross join lateral (
+        select max(1 - (c.embedding <=> (select embedding from target))) as sim
+          from public.thread_chunks c
+         where c.thread_id = ws.thread_id
+           and c.embedding is not null
+      ) best
      where ws.article_id = p_article_id
-       and t.embedding is not null
+       and best.sim is not null
   )
   select a.id,
          a.title,
