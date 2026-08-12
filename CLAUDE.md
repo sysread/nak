@@ -98,6 +98,63 @@ more than one is pending, end with a `[n/X] points to resolve`
 tracker. The second/third question often turns out to be downstream
 of the first answer, making batching actively wasteful.
 
+### Write plainly
+
+The end-of-task wall of dense text is the failure mode this section
+exists to prevent. Correctness over comfort does not mean density
+over clarity.
+
+- **7th grade reading level.** Newspaper prose. Short words when
+  short words work.
+- **One idea per sentence.** Split a sentence that carries two.
+- **No convoluted conditional logic.** Sentences that nest "if X,
+  unless Y, except when Z" should become three sentences, or a
+  short list.
+- **Short paragraphs.** Three or four sentences, then a break.
+
+### Build understanding, don't dump conclusions
+
+Use instructional design. Lead the user from what they already know
+to the thing you want them to understand. Inductive order: the
+concrete case first, the general rule after. State the shape of the
+problem before the mechanism, and the mechanism before the fix.
+
+The user asked for this thing, so they already know why it matters.
+Don't re-motivate it. Start at what changed and why it works.
+
+### Describe technical detail by shape or by analogy
+
+**This project is the user's practice in releasing the samskara of
+direct knowledge of the code base.** The whole thing is built by
+AI, on purpose. Treat the user as an experienced software engineer
+who has never read this code base.
+
+That means: engineering concepts need no explanation. Race
+conditions, migrations, indexes, caching - all fair game by name.
+Nak's *specifics* do. File paths, function names, line numbers,
+variable names, and symbol names are noise unless the user asked
+where something lives.
+
+Describe a problem by its shape - which moving parts, in what
+relationship, producing what visible symptom.
+
+Good: "There is a race between the worker that saves the
+conversation and the worker that generates embeddings from the
+transcript. The embedding worker sometimes starts first. When it
+does, it fails with an obscure error about a missing resource."
+
+Bad: "`enqueueEmbeddings()` in `src/lib/jobs/embed.ts:142` fires
+before the `thread_messages` insert commits, so the `select` on
+line 87 returns zero rows and the RPC 404s."
+
+Reach for an analogy when the shape alone is still abstract.
+"Priming payloads are like a sticky note left on the thread - the
+next turn reads it instead of recomputing" beats a paragraph about
+cache columns.
+
+The user will ask for specifics when they want them. Offer the
+shape first, then say you can go deeper.
+
 ## Keep the user informed while working
 
 The web UI for Claude Code reads silence as "hung." Emit short text
@@ -741,13 +798,16 @@ covers the full import graph each function deploys with.
 If you prefer raw pnpm (or mise isn't available - ephemeral
 sandboxes, first-time checkouts), the manual sequence is
 `pnpm install && pnpm test && pnpm check && pnpm lint && pnpm build
-&& pnpm knip`. Cloud sessions run `mise run check` normally - every
-`[tools]` entry in `.mise.toml` is an exact pin, and that is
-load-bearing: a `latest` spec needs a GitHub releases-list API call
-the sandbox proxy blocks, and mise resolves the whole `[tools]` set
-before any task, so one floating entry aborts the gate. See
+&& pnpm knip`. Cloud sessions run `mise run check` normally,
+and two rules in `.mise.toml` keep it that way. Every version spec is
+an exact pin, because a `latest` spec needs a GitHub releases-list API
+call the sandbox proxy blocks. And `[tools]` holds only what the gate
+itself needs - mise resolves that whole set before any task, so a tool
+the gate never invokes can still abort it. Tools used by one setup
+task are declared on that task with `tools = { ... }`. When you add a
+tool, ask which of the two rules applies. See
 [`docs/dev/testing.md`](docs/dev/testing.md) for the misleading
-error it surfaces as.
+error a floating spec surfaces as.
 `pnpm build` is in the gate because Vite/Rollup failures
 (IIFE/code-splitting in worker bundles, PWA manifest injection,
 dynamic-import graphs tsc is happy with but Rollup chokes on) only
