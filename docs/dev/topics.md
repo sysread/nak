@@ -108,7 +108,11 @@ threads tagged with either.
 - **Outcome vocabulary** - each cycle returns a
   `ThreadTopicsOutcome` (`empty-queue` / `tagged` / `claim-lost` /
   `empty-topics` / `error`). The drain loops keep claiming on
-  `tagged` and `claim-lost` and stop on the rest.
+  `tagged` and `claim-lost` and stop on `empty-queue` /
+  `empty-topics`. `error` is not classified here - `drainUnit` steps
+  over an errored row so one failing thread cannot wedge the queue
+  head, bailing only after `MAX_CONSECUTIVE_ERRORS` (see
+  `./summaries.md` gotchas).
 
 ## Data model
 

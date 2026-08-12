@@ -67,7 +67,9 @@ sees an empty queue. There is no worker lease for this unit.
   `error`). The drain loops keep claiming on `summarised` and
   `claim-lost`; `empty-summary` deliberately stops the drain (the
   claim is left to expire via TTL, so re-claiming immediately would
-  just skip past the row).
+  just skip past the row). `error` is handled by `drainUnit` rather
+  than by the per-unit `drainOn` set - see the head-of-line gotcha
+  below.
 
 ## Data model
 
@@ -154,6 +156,20 @@ sees an empty queue. There is no worker lease for this unit.
   clear the claim. The TTL expiring is what re-queues the row -
   this is the deliberate backoff for transient model misbehavior,
   and why `empty-summary` stops the drain loop.
+- **An errored row must not wedge the queue.** Claims come off
+  `order by t.updated_at asc`, so the oldest eligible thread is
+  re-claimed FIRST on every tick. If the drain pass stopped on
+  `error`, one deterministically-failing thread would block every
+  row behind it forever. It did: a single thread failing on
+  `context_length_exceeded` held the head of the queue and produced
+  24 claims and 0 saves over ten hours, and the whole backlog
+  drained within the hour once its underlying failure was fixed.
+  `drainUnit` in `curation.ts` now steps over an errored row - the
+  row keeps its claim until the TTL expires, so the next claim in
+  the same pass reaches the row behind it - and only bails after
+  `MAX_CONSECUTIVE_ERRORS` in a row, which reads as a failing
+  backend rather than one bad row. Watch for `picked up` lines with
+  no matching `finished` line: that pairing is the symptom.
 - **Truncation is pragmatic, not principled.** First 40 + last 80
   messages is a heuristic that keeps a mid-conversation topic shift
   visible without blowing token budget. A long thread that pivots

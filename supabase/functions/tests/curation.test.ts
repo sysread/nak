@@ -436,4 +436,77 @@ Deno.test('curation drain sets mirror the browser supervisor progress classifica
   for (const source of ['topics', 'memory-topics', 'recipe-topics']) {
     assertEquals([...bySource.get(source)!.drainOn].sort(), ['claim-lost', 'tagged']);
   }
+  // 'error' belongs to none of them - drainUnit owns that outcome, and
+  // a unit that classified it either way would defeat the step-over.
+  for (const unit of curation.UNITS) {
+    assert(!unit.drainOn.has(curation.ERROR_OUTCOME));
+  }
+});
+
+// A drain harness over a scripted outcome list: `runOnce` walks the
+// script, and the returned log records what drainUnit actually
+// consumed so a test can assert how far the pass got.
+function drainOver(outcomes: readonly string[], cap: number) {
+  const unit = { drainOn: new Set(['saved', 'claim-lost']) } as never;
+  const seen: string[] = [];
+  const throws: unknown[] = [];
+  let i = 0;
+  return {
+    seen,
+    throws,
+    run: () =>
+      curation.drainUnit(
+        unit,
+        cap,
+        () => {
+          const next = outcomes[i++];
+          if (next === 'THROW') throw new Error('contract violation');
+          return Promise.resolve(next ?? 'empty-queue');
+        },
+        (o: string) => seen.push(o),
+        (e: unknown) => throws.push(e),
+      ),
+  };
+}
+
+Deno.test('drain steps over an isolated failing row instead of stalling', async () => {
+  // The regression this guards: a poisoned row at the head of the
+  // queue (claim order is updated_at asc) used to break the pass on
+  // its first iteration, so the rows behind it were never claimed.
+  const h = drainOver(['error', 'saved', 'saved'], 5);
+  await h.run();
+  assertEquals(h.seen, ['error', 'saved', 'saved', 'empty-queue']);
+});
+
+Deno.test('drain bails once errors run consecutively - a failing backend, not a bad row', async () => {
+  const h = drainOver(Array(10).fill('error'), 10);
+  await h.run();
+  assertEquals(h.seen.length, curation.MAX_CONSECUTIVE_ERRORS);
+});
+
+Deno.test('drain resets its error run on any progress outcome', async () => {
+  // Alternating error/saved must never accumulate to the bail
+  // threshold - each save proves the backend is alive.
+  const h = drainOver(['error', 'saved', 'error', 'saved', 'error', 'saved'], 6);
+  await h.run();
+  assertEquals(h.seen.length, 6);
+});
+
+Deno.test('drain still stops on a non-progress outcome and on a thrown unit', async () => {
+  const stopped = drainOver(['empty-queue', 'saved'], 5);
+  await stopped.run();
+  assertEquals(stopped.seen, ['empty-queue']);
+
+  const threw = drainOver(['THROW', 'saved'], 5);
+  await threw.run();
+  assertEquals(threw.seen, []);
+  assertEquals(threw.throws.length, 1);
+});
+
+Deno.test('drain reports cap exhaustion only when the queue is still producing', async () => {
+  const capped = drainOver(['saved', 'saved'], 2);
+  assertEquals(await capped.run(), true);
+
+  const dry = drainOver(['saved', 'empty-queue'], 5);
+  assertEquals(await dry.run(), false);
 });

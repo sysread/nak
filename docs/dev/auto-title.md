@@ -68,7 +68,10 @@ metadata-message details.
   (`empty-queue` / `titled` / `no-title` / `claim-lost` / `error`).
   The drain loops in `curation.ts` keep claiming on `titled`,
   `no-title`, and `claim-lost` (the cycle consumed a row and the
-  queue may hold more) and stop on the rest.
+  queue may hold more) and stop on `empty-queue`. `error` is not
+  classified here - `drainUnit` steps over an errored row so one
+  failing thread cannot wedge the queue head, bailing only after
+  `MAX_CONSECUTIVE_ERRORS` (see `../dev/summaries.md` gotchas).
 
 ## Data model
 
