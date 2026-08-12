@@ -798,13 +798,16 @@ covers the full import graph each function deploys with.
 If you prefer raw pnpm (or mise isn't available - ephemeral
 sandboxes, first-time checkouts), the manual sequence is
 `pnpm install && pnpm test && pnpm check && pnpm lint && pnpm build
-&& pnpm knip`. Cloud sessions run `mise run check` normally - every
-`[tools]` entry in `.mise.toml` is an exact pin, and that is
-load-bearing: a `latest` spec needs a GitHub releases-list API call
-the sandbox proxy blocks, and mise resolves the whole `[tools]` set
-before any task, so one floating entry aborts the gate. See
+&& pnpm knip`. Cloud sessions run `mise run check` normally,
+and two rules in `.mise.toml` keep it that way. Every version spec is
+an exact pin, because a `latest` spec needs a GitHub releases-list API
+call the sandbox proxy blocks. And `[tools]` holds only what the gate
+itself needs - mise resolves that whole set before any task, so a tool
+the gate never invokes can still abort it. Tools used by one setup
+task are declared on that task with `tools = { ... }`. When you add a
+tool, ask which of the two rules applies. See
 [`docs/dev/testing.md`](docs/dev/testing.md) for the misleading
-error it surfaces as.
+error a floating spec surfaces as.
 `pnpm build` is in the gate because Vite/Rollup failures
 (IIFE/code-splitting in worker bundles, PWA manifest injection,
 dynamic-import graphs tsc is happy with but Rollup chokes on) only

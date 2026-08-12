@@ -2,19 +2,26 @@
 node = "20.11.1"
 pnpm = "10.33.4"
 deno = "2.8.0"
-# gh and supabase are installed via mise's `aqua` backend, which pulls from
-# the curated aqua registry so binary names resolve correctly across
-# platforms. If aqua fails for you, comment these out and install manually
-# — the wizard (`mise run doctor`) will tell you what's missing.
+# Only tools the GATE needs live in [tools]. mise resolves this whole set
+# before dispatching ANY task, so every entry here is a network fetch that
+# `mise run check` must survive - even for a tool the gate never invokes.
+# gh and gum are therefore declared on the individual tasks that shell out
+# to them (see `tools = { ... }` on setup / pages-enable / doctor /
+# supabase-init), which keeps them off the gate's critical path entirely.
 #
-# gh and gum are PINNED, not floating on `latest`, because resolving
-# `latest` requires an api.github.com releases-list call that cloud agent
-# sandboxes cannot make (the agent proxy 403s api.github.com for repos
-# outside the session's scope). mise resolves the ENTIRE [tools] set before
-# dispatching any task, so a single unresolvable entry aborts `mise run
-# check` even though the gate never uses gh or gum. An exact pin skips the
-# list call and downloads the release asset directly, which the sandbox
-# allows. Bump the pins deliberately; both tools' CLI surfaces are stable.
+# This matters because aqua fetches gh through GitHub's API asset endpoint
+# rather than a plain release download, and the cloud agent proxy 403s
+# api.github.com for repos outside the session's scope. The denial is
+# intermittent, not absolute, which is worse: a gh entry in [tools] makes
+# the gate fail at random in a sandbox, on a tool it does not use. Pinning
+# does not fix this - the pin only skips the releases-LIST call, and the
+# asset download still goes through the API. Per-task scoping does fix it.
+#
+# supabase stays here despite the same aqua backend: eight tasks need it
+# (every dev-* and functions-* task), its downloads go straight to the
+# release URL rather than the API, and it has never failed in a sandbox.
+# Listing it per-task would be noise for no gain.
+#
 # supabase is PINNED, because `mise run dev-start` drives a local stack
 # whose reproducibility is tied to the CLI version: it determines the
 # config.toml shape, the Docker image versions pulled, and the
@@ -36,10 +43,7 @@ deno = "2.8.0"
 # hosted realtime resolves opaque keys. When a future CLI fixes #4219, this is
 # the place to note it: bump, then flip dev-local.mjs's readStatus back to
 # prefer PUBLISHABLE_KEY and re-test that realtime connects locally.
-# gum drives the interactive config widgets in `mise run supabase-init`.
-"aqua:cli/cli"           = "2.74.0"
-"aqua:supabase/cli"      = "2.101.0"
-"aqua:charmbracelet/gum" = "0.16.2"
+"aqua:supabase/cli" = "2.101.0"
 
 # Note: markdownlint-cli2 is a pnpm devDependency — the `deps` task
 # below provisions it via `pnpm install --frozen-lockfile`, and every
@@ -58,12 +62,23 @@ NODE_ENV = "development"
 # `mise tasks` lists them with descriptions.
 # ----------------------------------------------------------------------------
 
+# gh is pinned rather than floating on `latest` because a `latest` spec makes
+# aqua call the GitHub releases-list API, which restricted sandboxes 403.
+# The pin appears on all three gh tasks below - bump them together.
 [tasks.doctor]
 description = "Check that all prerequisites are installed and authenticated"
+# doctor declares gh so its report matches what the wizard will actually see.
+# The binary-presence line then always passes for mise users, which is
+# correct - mise is providing it. The load-bearing checks are the ones after
+# it (is gh authenticated, does the token carry the repo and workflow
+# scopes), and those still exercise the user's real credentials. Running
+# `node scripts/doctor.mjs` outside mise still reports a genuinely missing gh.
+tools = { "aqua:cli/cli" = "2.74.0" }
 run = "node scripts/doctor.mjs"
 
 [tasks.setup]
 description = "Interactive first-time setup wizard (Pages + Supabase + Venice)"
+tools = { "aqua:cli/cli" = "2.74.0" }
 run = "node scripts/bootstrap.mjs"
 # `raw = true` gives the task direct TTY access so gh/supabase CLI prompts,
 # device-code flows, and password inputs work the same as running the
@@ -72,11 +87,15 @@ raw = true
 
 [tasks.pages-enable]
 description = "Enable GitHub Pages on this fork with Actions as the source"
+tools = { "aqua:cli/cli" = "2.74.0" }
 run = "node scripts/setup-pages.mjs"
 raw = true
 
 [tasks.supabase-init]
 description = "Supabase setup + config: create/link project, apply schema, edit app config (Venice key) via gum, configure auth URLs, seed main user. Re-runnable."
+# gum drives the interactive config widgets. The script degrades gracefully
+# when gum is absent, so this declaration is a convenience, not a hard dep.
+tools = { "aqua:charmbracelet/gum" = "0.16.2" }
 run = "node scripts/setup-supabase.mjs"
 raw = true
 

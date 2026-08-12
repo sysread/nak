@@ -228,24 +228,40 @@ gate failure, not a lint suggestion.
   `--environment node` to a file that is on the jsdom list still
   gets jsdom. To test what an unlisted file would do, remove the
   entry.
-- **Every `[tools]` entry in `.mise.toml` must be an exact pin, or
-  `mise run check` dies in restricted sandboxes - and the error it
-  prints is a red herring.** A `latest` version spec makes aqua call
-  the GitHub releases-list API (`api.github.com/repos/<x>/releases`),
-  which the cloud agent proxy 403s for any repo outside the session's
-  scope. mise renders the resulting empty list as `no versions found
-  for aqua:<tool> matching date filter` - **there is no date filter**;
-  `mise settings` has none. Do not go looking for a cutoff setting.
-  An exact pin skips the list call and downloads the release asset
-  directly, which the sandbox allows - verified by pinning `gh` and
-  `gum` in a cloud session and watching the full gate go green,
-  Deno island included (jsr.io and registry.npmjs.org are reachable).
+- **`[tools]` in `.mise.toml` is the gate's dependency list, so only
+  tools the gate needs belong there.** mise resolves the entire
+  `[tools]` set before dispatching any task, so every entry is a
+  network fetch `mise run check` must survive - including entries the
+  gate never invokes. A tool used by one setup task is declared on
+  that task instead:
 
-  Note the blast radius is wider than the tool involved: **mise
-  resolves the entire `[tools]` set before running any task**, so a
-  single floating entry blocks the gate even when the gate never
-  uses that tool. If the gate suddenly fails this way in a sandbox,
-  someone reintroduced a `latest` spec - pin it.
+  ```toml
+  [tasks.pages-enable]
+  tools = { "aqua:cli/cli" = "2.74.0" }
+  run = "node scripts/setup-pages.mjs"
+  ```
+
+  `gh` and `gum` are scoped this way. `supabase` stays global because
+  eight tasks need it.
+
+  This is not stylistic. In a restricted sandbox the agent proxy 403s
+  `api.github.com` for repos outside the session's scope, and aqua
+  fetches `gh` through the API's release-asset endpoint rather than a
+  plain download URL. The denial is intermittent, which is the bad
+  kind: a global `gh` entry makes the gate fail at random on a tool it
+  does not use.
+
+- **Every version spec must be an exact pin, and the error a floating
+  spec prints is a red herring.** A `latest` spec makes aqua call the
+  releases-list API (`api.github.com/repos/<x>/releases`), 403'd in the
+  same sandboxes. mise renders the empty list as `no versions found for
+  aqua:<tool> matching date filter` - **there is no date filter**;
+  `mise settings` has none. Do not go looking for a cutoff setting. An
+  exact pin skips the list call.
+
+  Pinning alone does not rescue a tool whose asset download also goes
+  through the API - that is what per-task scoping is for. The two rules
+  are complementary, not alternatives.
 
   If mise itself is unavailable, the fallback is the raw pnpm
   sequence (`pnpm install && pnpm test && pnpm check && pnpm lint
