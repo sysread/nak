@@ -93,10 +93,14 @@ Both signals are background; recall is the read-time consumer.
 
 ## Contracts
 
-- `conversation_search.execute({ query, limit, include_current })`
-  — one row per thread, scored by that thread's best-matching
-  chunk. Every hit carries `passage`, the excerpt that matched;
-  feed it back as `conversation_get`'s `query`.
+- `conversation_search.execute({ query, limit, include_current,
+  within_days?, prefer_recent? })` — one row per thread, scored by
+  that thread's best-matching chunk. Every hit carries `passage`,
+  the excerpt that matched; feed it back as `conversation_get`'s
+  `query`. `within_days` is a hard floor on `threads.updated_at`
+  applied before ranking; `prefer_recent` adds a small decaying
+  bonus to the ORDERING only. The reported `similarity` is always
+  the raw cosine either way.
 - `conversation_get.execute({ id, query? })` — returns a window
   of the transcript plus `window: {start, end, total}` and
   `matched_query`. With `query`, the window centres on the
@@ -177,6 +181,20 @@ Both signals are background; recall is the read-time consumer.
   the rechunk unit runs on every chat turn's tail — but it is a
   real hole after a bulk import or a restore, and only the
   callers with an exact-ILIKE arm paper over it.
+- **Similarity has no time dimension, and the scores are tightly
+  packed.** Ranking is pure cosine, so "the conversation from
+  yesterday" returns the best topical match from any date — this
+  bit for real: a thread updated the previous day ranked 22nd of
+  478 because the query described a topic it only half matched.
+  `within_days` is the fix for a stated time frame;
+  `prefer_recent` only breaks near-ties. The preference is
+  deliberately tiny (+0.05 decaying over 7 days) because the
+  top-10 similarity band spans about 0.04 on the live corpus:
+  measured, +0.10 already promotes a thread that ranked 14th on
+  relevance to first, and a MULTIPLICATIVE boost of 1.5x would add
+  ~0.30 and make recency the entire ranking. If you retune this,
+  re-measure the band first — the safe magnitude is a property of
+  the corpus, not a constant.
 - **`conversation_get` without a `query` returns the thread's
   TAIL.** That default is a trap on long threads and was the
   original bug: a caller correctly identified a 107-message

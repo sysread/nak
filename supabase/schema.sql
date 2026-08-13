@@ -6219,11 +6219,37 @@ grant execute on function public.save_thread_chunk_embedding_if_claimed(uuid, te
 -- Returns the matching passage's anchors and an excerpt alongside the
 -- thread projection, so a caller can jump straight to the relevant
 -- part of the transcript instead of re-reading the thread's tail.
+--
+-- Recency. Cosine similarity has no time dimension, so "the conversation
+-- we had on Tuesday" is not expressible as a query - a caller could only
+-- search by topic and then eyeball `updated_at` on whatever came back.
+-- Two knobs cover that:
+--
+--   p_updated_after - a hard floor on the thread's updated_at, applied
+--     BEFORE ranking so match_limit spends its budget inside the window
+--     rather than on older threads that then get discarded.
+--
+--   p_recency_boost - an additive, decaying nudge to the ORDERING only.
+--     Sized by the caller; see CONVERSATION_SEARCH_RECENCY_BOOST in
+--     venice/tools/conversation_search.ts for why it is small. Additive
+--     rather than multiplicative because scores here sit in a narrow
+--     band (median ~0.54, p99 ~0.71 on a 478-thread corpus), so a
+--     multiplier large enough to matter would lift a median-relevance
+--     recent thread above the best match in the corpus - recency would
+--     stop being a preference and start being the whole ranking.
+--
+-- `similarity` is always the RAW cosine, never the boosted value. The
+-- model reads that number to judge how good a hit is, so inflating it
+-- would make the tool lie about relevance in order to express a
+-- preference about time.
 drop function if exists public.search_thread_chunks_by_embedding(vector, int, uuid);
+drop function if exists public.search_thread_chunks_by_embedding(vector, int, uuid, timestamptz, real);
 create or replace function public.search_thread_chunks_by_embedding(
   query_embedding vector(2048),
   match_limit int,
-  p_user_id uuid default null
+  p_user_id uuid default null,
+  p_updated_after timestamptz default null,
+  p_recency_boost real default 0
 ) returns table (
   id uuid,
   title text,
@@ -6242,22 +6268,32 @@ language sql stable security invoker as $$
            c.start_msg_id,
            c.end_msg_id,
            c.content,
+           t.title,
+           t.archived,
+           t.updated_at,
            (1 - (c.embedding <=> query_embedding))::real as similarity,
            row_number() over (
              partition by c.thread_id
              order by c.embedding <=> query_embedding asc
            ) as rn
       from public.thread_chunks c
+      join public.threads t on t.id = c.thread_id
      where c.user_id = coalesce(p_user_id, auth.uid())
        and c.embedding is not null
+       and (p_updated_after is null or t.updated_at >= p_updated_after)
   )
-  select t.id, t.title, t.archived, t.updated_at,
+  select r.thread_id, r.title, r.archived, r.updated_at,
          r.similarity, r.chunk_index, r.start_msg_id, r.end_msg_id,
          left(r.content, 400) as excerpt
     from ranked r
-    join public.threads t on t.id = r.thread_id
    where r.rn = 1
-   order by r.similarity desc
+   -- Exponential decay with a 7-day constant: today gets the full
+   -- boost, a week ago ~37% of it, a month ago ~1%. Zero boost (the
+   -- default) collapses this to a plain similarity sort.
+   order by r.similarity
+              + p_recency_boost
+              * exp(-extract(epoch from (now() - r.updated_at)) / 86400.0 / 7.0)
+            desc
    limit match_limit
 $$;
 
