@@ -17,7 +17,11 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createEdgeLogger, type EdgeLogger } from '../../_shared/edge-log.ts';
-import { chunkTranscript, type TranscriptMessage } from '../../_shared/thread-transcript.ts';
+import {
+  CHUNK_RENDER_VERSION,
+  chunkTranscript,
+  type TranscriptMessage,
+} from '../../_shared/thread-transcript.ts';
 import { CURATION_CLAIM_TTL_SECONDS } from './_curation_helpers.ts';
 
 /** Outcome of one rechunk cycle, mirroring the other curation units' vocabulary. */
@@ -92,6 +96,7 @@ async function rechunkClaimedThread(
       p_holder_id: holderId,
       p_msg_id: terminalMsgId,
       p_user_id: userId,
+      p_render_version: CHUNK_RENDER_VERSION,
       p_chunks: chunks.map((c) => ({
         index: c.index,
         text: c.text,
@@ -133,6 +138,7 @@ export async function rechunkOneThread(
       p_holder_id: holderId,
       p_ttl_seconds: CURATION_CLAIM_TTL_SECONDS,
       p_user_id: userId,
+      p_render_version: CHUNK_RENDER_VERSION,
     });
     if (error) throw new Error(`claim_next_thread_for_rechunk failed: ${error.message}`);
     claim = Array.isArray(data) ? data[0] : data;
@@ -168,6 +174,7 @@ export async function sweepClaimAndRechunk(
     const { data, error } = await adminClient.rpc('claim_next_thread_for_rechunk_sweep', {
       p_holder_id: holderId,
       p_ttl_seconds: CURATION_CLAIM_TTL_SECONDS,
+      p_render_version: CHUNK_RENDER_VERSION,
     });
     if (error) {
       throw new Error(`claim_next_thread_for_rechunk_sweep failed: ${error.message}`);

@@ -16,6 +16,11 @@
 // similarity SCORES at query time (see the search RPC in schema.sql),
 // never by combining the vectors themselves.
 //
+// What gets indexed: user and assistant prose, plus the tool CALLS an
+// assistant made (name and arguments). Tool RESULTS are excluded - see
+// renderMessage for why, and CHUNK_RENDER_VERSION for how a change to
+// that decision propagates to threads already chunked.
+//
 // Consumers: the chunk-embedding backfill source in
 // _shared/embed-input.ts, and the rechunk unit that keeps
 // `thread_chunks` in step with a growing thread.
@@ -30,17 +35,29 @@ import { EMBEDDING_MAX_INPUT_CHARS } from './backfill.ts';
 export { EMBEDDING_MAX_INPUT_CHARS };
 
 /**
- * Per-row excerpt caps applied while rendering. Tool results are the
- * reason these exist: a single `conversation_search` result row is
- * routinely 6-12kB of JSON - UUIDs, similarity floats, ISO timestamps -
- * which is both the densest content per token (measured 2.24 chars per
- * token, against 3.86 for prose) and the least useful to retrieve on.
- * Letting one search dump fill a whole chunk would bury the prose that
- * a query actually needs to match.
+ * Bump when a change to this module alters the text it produces for
+ * the SAME messages.
  *
- * The head is kept rather than the tail: tool results lead with the
- * payload that identifies them (a recipe's title and ingredients, a
- * search hit's title) and trail into pagination noise.
+ * The rechunk unit re-qualifies a thread by comparing its newest
+ * message against `threads.last_chunked_msg_id`, which cannot see a
+ * change to the renderer: edit the rules here and every existing
+ * thread keeps its old chunks forever, because no message moved. This
+ * constant is the missing signal - the claim predicate treats a
+ * mismatched `threads.chunk_render_version` as work to do, so bumping
+ * it re-chunks the corpus.
+ *
+ * Cheap to bump: `save_thread_chunks_if_claimed` skips chunks whose
+ * text is byte-identical, so threads the change does not actually
+ * affect are re-rendered, compared, and left alone without spending an
+ * embedding call.
+ *
+ * 1 - initial: prose, tool calls, and excerpted tool results.
+ * 2 - tool result BODIES dropped from the index.
+ */
+export const CHUNK_RENDER_VERSION = 2;
+
+/**
+ * Per-row excerpt caps applied while rendering.
  *
  * Mirrors the excerpt discipline in venice/agents/_curation_helpers.ts,
  * which sizes transcripts for the curation models rather than for the
@@ -48,7 +65,6 @@ export { EMBEDDING_MAX_INPUT_CHARS };
  * retrieval quality, those serve a context window, and they will drift
  * apart.
  */
-const MAX_TOOL_RESULT_CHARS = 2_000;
 const MAX_PROSE_CHARS = 8_000;
 const MAX_TOOL_CALL_ARGS_CHARS = 500;
 
@@ -114,11 +130,24 @@ export function renderMessage(msg: TranscriptMessage): string | null {
   const content = typeof msg.content === 'string' ? msg.content.trim() : '';
   const parts: string[] = [];
 
-  if (msg.role === 'tool') {
-    if (content.length === 0) return null;
-    const label = msg.name ? `tool ${msg.name}` : 'tool';
-    return `${label}: ${excerpt(content, MAX_TOOL_RESULT_CHARS)}`;
-  }
+  // Tool RESULTS are not indexed. They were 34.8% of the corpus by
+  // character and made 29% of chunks majority-machine-output: search
+  // result arrays, wiki article bodies, recipe payloads, each carrying
+  // UUIDs and float scores. Three problems with indexing them. They
+  // describe whatever the tool happened to return rather than what the
+  // conversation was about - a thread about meatballs carried a chunk
+  // that was mostly a wiki dump about brownies. They are the densest
+  // content per token (2.24 chars/token against 3.86 for prose), so
+  // they consume budget fastest. And because every tool-using thread
+  // accumulates the same shapes of JSON, they pull unrelated
+  // conversations toward a common region of the space, which is what
+  // compressed the score band and left the model unable to tell a good
+  // hit from a mediocre one.
+  //
+  // The CALL is kept (below) - it carries what the model was looking
+  // for, in the user's vocabulary, which is exactly the retrieval
+  // signal the result lacks.
+  if (msg.role === 'tool') return null;
 
   if (Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
     parts.push(...renderToolCalls(msg.tool_calls));

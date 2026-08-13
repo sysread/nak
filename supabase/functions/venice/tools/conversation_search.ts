@@ -31,6 +31,28 @@ import { readVeniceKey } from './_venice_key.ts';
 
 const CONVERSATION_SEARCH_DEFAULT_LIMIT = 10;
 const CONVERSATION_SEARCH_MAX_LIMIT = 50;
+const CONVERSATION_SEARCH_MAX_WITHIN_DAYS = 1825;
+
+/**
+ * Additive recency nudge for `prefer_recent`, decaying with a 7-day
+ * constant (see the RPC). Sized against the live corpus rather than
+ * picked: measured over 478 threads, the top-10 similarity band spans
+ * about 0.04, and rank displacement behaves like this -
+ *
+ *   +0.03  1 new thread in the top 10, best topical match still first
+ *   +0.05  2 new threads,              best topical match still first
+ *   +0.10  4 new threads,              #1 becomes a thread ranked 14th
+ *          on relevance
+ *   +0.20  9 of 10 results are new - effectively "recent threads"
+ *
+ * 0.05 is the last value that reorders the tail without letting recency
+ * outvote topic. Note how small it has to be: a MULTIPLICATIVE boost of
+ * even 1.5x adds ~0.30 to a typical score, six times past this and three
+ * times past the point where the ranking stops being about the query.
+ * That is why this knob is additive and why it is capped here rather
+ * than exposed to the model.
+ */
+const CONVERSATION_SEARCH_RECENCY_BOOST = 0.05;
 
 /** A chunk hit: a thread projection plus the passage that matched. */
 interface ChunkEmbeddingHit {
@@ -61,6 +83,15 @@ export const conversationSearch: ToolDef = {
       Math.min(CONVERSATION_SEARCH_MAX_LIMIT, Math.floor(rawLimit)),
     );
 
+    const withinDays =
+      typeof args.within_days === 'number' && Number.isFinite(args.within_days)
+        ? Math.max(
+            1,
+            Math.min(CONVERSATION_SEARCH_MAX_WITHIN_DAYS, Math.floor(args.within_days)),
+          )
+        : null;
+    const preferRecent = args.prefer_recent === true;
+
     // Fetch limit + 1 so a post-fetch self-exclusion doesn't push
     // results under the asked-for count.
     const fetchLimit = limit + 1;
@@ -88,6 +119,10 @@ export const conversationSearch: ToolDef = {
         query_embedding: queryEmbedding,
         match_limit: fetchLimit,
         p_user_id: ctx.userId,
+        p_updated_after: withinDays === null
+          ? null
+          : new Date(Date.now() - withinDays * 86_400_000).toISOString(),
+        p_recency_boost: preferRecent ? CONVERSATION_SEARCH_RECENCY_BOOST : 0,
       },
     );
     if (error) {

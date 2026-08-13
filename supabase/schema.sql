@@ -364,7 +364,14 @@ alter table public.threads
 alter table public.threads
   add column if not exists last_chunked_msg_id uuid,
   add column if not exists chunk_claim_holder text,
-  add column if not exists chunk_claim_expires timestamptz;
+  add column if not exists chunk_claim_expires timestamptz,
+  -- Which revision of the chunk RENDERER produced the current rows.
+  -- Message-driven invalidation cannot see a change to the rendering
+  -- rules, so without this a change to what gets indexed would leave
+  -- every already-chunked thread on the old shape forever. Default 0
+  -- so pre-existing rows read as stale and re-chunk once.
+  -- See CHUNK_RENDER_VERSION in _shared/thread-transcript.ts.
+  add column if not exists chunk_render_version int not null default 0;
 
 create index if not exists threads_user_updated_idx
   on public.threads (user_id, updated_at desc);
@@ -5994,12 +6001,16 @@ drop function if exists public.save_thread_embedding_if_claimed(uuid, text, vect
 -- fresh work is worth more here than deep backlog.
 drop function if exists public.claim_next_thread_for_rechunk(text, int);
 drop function if exists public.claim_next_thread_for_rechunk(text, int, uuid);
+drop function if exists public.claim_next_thread_for_rechunk(text, int, uuid, int);
 create or replace function public.claim_next_thread_for_rechunk(
   p_holder_id text,
   p_ttl_seconds int,
   -- b-strict escape hatch, same as the summary claim: the edge function
   -- drives this from a service-role client with no auth.uid().
-  p_user_id uuid default null
+  p_user_id uuid default null,
+  -- Current CHUNK_RENDER_VERSION. A thread whose rows were built by an
+  -- older renderer is claimable even when no message has changed.
+  p_render_version int default 0
 ) returns table (thread_id uuid, terminal_msg_id uuid)
 language sql security invoker as $$
   with candidate as (
@@ -6016,7 +6027,8 @@ language sql security invoker as $$
          limit 1
       ) term
      where t.user_id = coalesce(p_user_id, auth.uid())
-       and term.msg_id is distinct from t.last_chunked_msg_id
+       and (term.msg_id is distinct from t.last_chunked_msg_id
+            or t.chunk_render_version is distinct from p_render_version)
        and (t.chunk_claim_expires is null
             or t.chunk_claim_expires < now())
      order by t.updated_at desc
@@ -6036,9 +6048,11 @@ $$;
 -- safe by construction: the per-thread claim columns are the mutual
 -- exclusion.
 drop function if exists public.claim_next_thread_for_rechunk_sweep(text, int);
+drop function if exists public.claim_next_thread_for_rechunk_sweep(text, int, int);
 create or replace function public.claim_next_thread_for_rechunk_sweep(
   p_holder_id text,
-  p_ttl_seconds int
+  p_ttl_seconds int,
+  p_render_version int default 0
 ) returns table (thread_id uuid, terminal_msg_id uuid, user_id uuid)
 language sql security definer
 set search_path = public as $$
@@ -6052,7 +6066,8 @@ set search_path = public as $$
          order by m.created_at desc
          limit 1
       ) term
-     where term.msg_id is distinct from t.last_chunked_msg_id
+     where (term.msg_id is distinct from t.last_chunked_msg_id
+            or t.chunk_render_version is distinct from p_render_version)
        and (t.chunk_claim_expires is null
             or t.chunk_claim_expires < now())
      order by t.updated_at desc
@@ -6079,12 +6094,16 @@ $$;
 -- Dropping that guard would turn every new message into a full
 -- re-embed of the whole thread.
 drop function if exists public.save_thread_chunks_if_claimed(uuid, text, uuid, uuid, jsonb);
+drop function if exists public.save_thread_chunks_if_claimed(uuid, text, uuid, uuid, jsonb, int);
 create or replace function public.save_thread_chunks_if_claimed(
   p_thread_id uuid,
   p_holder_id text,
   p_msg_id uuid,
   p_user_id uuid,
-  p_chunks jsonb
+  p_chunks jsonb,
+  -- Stamped onto the thread so a later renderer change can tell these
+  -- rows apart from ones it produced itself.
+  p_render_version int default 0
 ) returns boolean
 language plpgsql security definer
 set search_path = public as $$
@@ -6133,6 +6152,7 @@ begin
 
   update public.threads
      set last_chunked_msg_id = p_msg_id,
+         chunk_render_version = p_render_version,
          chunk_claim_holder = null,
          chunk_claim_expires = null
    where id = p_thread_id
@@ -6194,14 +6214,14 @@ begin
   return updated > 0;
 end $$;
 
-revoke all on function public.claim_next_thread_for_rechunk(text, int, uuid) from public, anon, authenticated;
-revoke all on function public.claim_next_thread_for_rechunk_sweep(text, int) from public, anon, authenticated;
-revoke all on function public.save_thread_chunks_if_claimed(uuid, text, uuid, uuid, jsonb) from public, anon, authenticated;
+revoke all on function public.claim_next_thread_for_rechunk(text, int, uuid, int) from public, anon, authenticated;
+revoke all on function public.claim_next_thread_for_rechunk_sweep(text, int, int) from public, anon, authenticated;
+revoke all on function public.save_thread_chunks_if_claimed(uuid, text, uuid, uuid, jsonb, int) from public, anon, authenticated;
 revoke all on function public.claim_next_pending_thread_chunk(text, int) from public, anon, authenticated;
 revoke all on function public.save_thread_chunk_embedding_if_claimed(uuid, text, vector, text) from public, anon, authenticated;
-grant execute on function public.claim_next_thread_for_rechunk(text, int, uuid) to service_role;
-grant execute on function public.claim_next_thread_for_rechunk_sweep(text, int) to service_role;
-grant execute on function public.save_thread_chunks_if_claimed(uuid, text, uuid, uuid, jsonb) to service_role;
+grant execute on function public.claim_next_thread_for_rechunk(text, int, uuid, int) to service_role;
+grant execute on function public.claim_next_thread_for_rechunk_sweep(text, int, int) to service_role;
+grant execute on function public.save_thread_chunks_if_claimed(uuid, text, uuid, uuid, jsonb, int) to service_role;
 grant execute on function public.claim_next_pending_thread_chunk(text, int) to service_role;
 grant execute on function public.save_thread_chunk_embedding_if_claimed(uuid, text, vector, text) to service_role;
 
@@ -6219,11 +6239,37 @@ grant execute on function public.save_thread_chunk_embedding_if_claimed(uuid, te
 -- Returns the matching passage's anchors and an excerpt alongside the
 -- thread projection, so a caller can jump straight to the relevant
 -- part of the transcript instead of re-reading the thread's tail.
+--
+-- Recency. Cosine similarity has no time dimension, so "the conversation
+-- we had on Tuesday" is not expressible as a query - a caller could only
+-- search by topic and then eyeball `updated_at` on whatever came back.
+-- Two knobs cover that:
+--
+--   p_updated_after - a hard floor on the thread's updated_at, applied
+--     BEFORE ranking so match_limit spends its budget inside the window
+--     rather than on older threads that then get discarded.
+--
+--   p_recency_boost - an additive, decaying nudge to the ORDERING only.
+--     Sized by the caller; see CONVERSATION_SEARCH_RECENCY_BOOST in
+--     venice/tools/conversation_search.ts for why it is small. Additive
+--     rather than multiplicative because scores here sit in a narrow
+--     band (median ~0.54, p99 ~0.71 on a 478-thread corpus), so a
+--     multiplier large enough to matter would lift a median-relevance
+--     recent thread above the best match in the corpus - recency would
+--     stop being a preference and start being the whole ranking.
+--
+-- `similarity` is always the RAW cosine, never the boosted value. The
+-- model reads that number to judge how good a hit is, so inflating it
+-- would make the tool lie about relevance in order to express a
+-- preference about time.
 drop function if exists public.search_thread_chunks_by_embedding(vector, int, uuid);
+drop function if exists public.search_thread_chunks_by_embedding(vector, int, uuid, timestamptz, real);
 create or replace function public.search_thread_chunks_by_embedding(
   query_embedding vector(2048),
   match_limit int,
-  p_user_id uuid default null
+  p_user_id uuid default null,
+  p_updated_after timestamptz default null,
+  p_recency_boost real default 0
 ) returns table (
   id uuid,
   title text,
@@ -6242,22 +6288,32 @@ language sql stable security invoker as $$
            c.start_msg_id,
            c.end_msg_id,
            c.content,
+           t.title,
+           t.archived,
+           t.updated_at,
            (1 - (c.embedding <=> query_embedding))::real as similarity,
            row_number() over (
              partition by c.thread_id
              order by c.embedding <=> query_embedding asc
            ) as rn
       from public.thread_chunks c
+      join public.threads t on t.id = c.thread_id
      where c.user_id = coalesce(p_user_id, auth.uid())
        and c.embedding is not null
+       and (p_updated_after is null or t.updated_at >= p_updated_after)
   )
-  select t.id, t.title, t.archived, t.updated_at,
+  select r.thread_id, r.title, r.archived, r.updated_at,
          r.similarity, r.chunk_index, r.start_msg_id, r.end_msg_id,
          left(r.content, 400) as excerpt
     from ranked r
-    join public.threads t on t.id = r.thread_id
    where r.rn = 1
-   order by r.similarity desc
+   -- Exponential decay with a 7-day constant: today gets the full
+   -- boost, a week ago ~37% of it, a month ago ~1%. Zero boost (the
+   -- default) collapses this to a plain similarity sort.
+   order by r.similarity
+              + p_recency_boost
+              * exp(-extract(epoch from (now() - r.updated_at)) / 86400.0 / 7.0)
+            desc
    limit match_limit
 $$;
 

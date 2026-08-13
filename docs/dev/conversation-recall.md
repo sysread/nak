@@ -39,7 +39,8 @@ Both signals are background; recall is the read-time consumer.
 - `supabase/functions/venice/tools/conversation_get.ts` — windows a
   thread's transcript, optionally anchored on a `query`.
 - `supabase/functions/_shared/thread-transcript.ts` — renders a
-  thread's messages (including tool calls) and slices them into
+  thread's messages (prose plus tool CALLS; tool results are not
+  indexed) and slices them into
   embedding-sized chunks.
 - `supabase/functions/venice/agents/thread_chunks.ts` — the rechunk
   curation unit that keeps `thread_chunks` in step with a thread.
@@ -93,10 +94,14 @@ Both signals are background; recall is the read-time consumer.
 
 ## Contracts
 
-- `conversation_search.execute({ query, limit, include_current })`
-  — one row per thread, scored by that thread's best-matching
-  chunk. Every hit carries `passage`, the excerpt that matched;
-  feed it back as `conversation_get`'s `query`.
+- `conversation_search.execute({ query, limit, include_current,
+  within_days?, prefer_recent? })` — one row per thread, scored by
+  that thread's best-matching chunk. Every hit carries `passage`,
+  the excerpt that matched; feed it back as `conversation_get`'s
+  `query`. `within_days` is a hard floor on `threads.updated_at`
+  applied before ranking; `prefer_recent` adds a small decaying
+  bonus to the ORDERING only. The reported `similarity` is always
+  the raw cosine either way.
 - `conversation_get.execute({ id, query? })` — returns a window
   of the transcript plus `window: {start, end, total}` and
   `matched_query`. With `query`, the window centres on the
@@ -177,6 +182,43 @@ Both signals are background; recall is the read-time consumer.
   the rechunk unit runs on every chat turn's tail — but it is a
   real hole after a bulk import or a restore, and only the
   callers with an exact-ILIKE arm paper over it.
+- **Tool RESULTS are not indexed; tool CALLS are.** Result bodies
+  were 34.8% of the corpus by character and made 29% of chunks
+  majority-machine-output — search result arrays, wiki bodies,
+  recipe payloads, all UUIDs and float scores. They describe what
+  a tool returned rather than what the conversation was about (one
+  thread about meatballs carried a chunk that was mostly a wiki
+  dump about brownies), they are the densest content per token,
+  and because every tool-using thread accumulates the same JSON
+  shapes they pulled unrelated conversations toward one region of
+  the space. The call is kept because its arguments record what
+  the model was looking for, in the user's vocabulary.
+- **A renderer change does not self-heal; a message change does.**
+  The rechunk claim compares a thread's newest message against
+  `last_chunked_msg_id`, which cannot see an edit to the rendering
+  rules — change what gets indexed and every already-chunked
+  thread keeps its old rows forever. `CHUNK_RENDER_VERSION` in
+  `_shared/thread-transcript.ts` is the signal: it is stamped onto
+  `threads.chunk_render_version` at save time and compared in the
+  claim predicate, so bumping it re-chunks the corpus with no
+  manual SQL. Bumping is cheap — the save RPC skips chunks whose
+  text is byte-identical, so unaffected threads are re-rendered,
+  compared, and left alone without an embedding call. **If you
+  change what `renderMessage` emits, bump it.**
+- **Similarity has no time dimension, and the scores are tightly
+  packed.** Ranking is pure cosine, so "the conversation from
+  yesterday" returns the best topical match from any date — this
+  bit for real: a thread updated the previous day ranked 22nd of
+  478 because the query described a topic it only half matched.
+  `within_days` is the fix for a stated time frame;
+  `prefer_recent` only breaks near-ties. The preference is
+  deliberately tiny (+0.05 decaying over 7 days) because the
+  top-10 similarity band spans about 0.04 on the live corpus:
+  measured, +0.10 already promotes a thread that ranked 14th on
+  relevance to first, and a MULTIPLICATIVE boost of 1.5x would add
+  ~0.30 and make recency the entire ranking. If you retune this,
+  re-measure the band first — the safe magnitude is a property of
+  the corpus, not a constant.
 - **`conversation_get` without a `query` returns the thread's
   TAIL.** That default is a trap on long threads and was the
   original bug: a caller correctly identified a 107-message
