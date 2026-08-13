@@ -364,7 +364,14 @@ alter table public.threads
 alter table public.threads
   add column if not exists last_chunked_msg_id uuid,
   add column if not exists chunk_claim_holder text,
-  add column if not exists chunk_claim_expires timestamptz;
+  add column if not exists chunk_claim_expires timestamptz,
+  -- Which revision of the chunk RENDERER produced the current rows.
+  -- Message-driven invalidation cannot see a change to the rendering
+  -- rules, so without this a change to what gets indexed would leave
+  -- every already-chunked thread on the old shape forever. Default 0
+  -- so pre-existing rows read as stale and re-chunk once.
+  -- See CHUNK_RENDER_VERSION in _shared/thread-transcript.ts.
+  add column if not exists chunk_render_version int not null default 0;
 
 create index if not exists threads_user_updated_idx
   on public.threads (user_id, updated_at desc);
@@ -5994,12 +6001,16 @@ drop function if exists public.save_thread_embedding_if_claimed(uuid, text, vect
 -- fresh work is worth more here than deep backlog.
 drop function if exists public.claim_next_thread_for_rechunk(text, int);
 drop function if exists public.claim_next_thread_for_rechunk(text, int, uuid);
+drop function if exists public.claim_next_thread_for_rechunk(text, int, uuid, int);
 create or replace function public.claim_next_thread_for_rechunk(
   p_holder_id text,
   p_ttl_seconds int,
   -- b-strict escape hatch, same as the summary claim: the edge function
   -- drives this from a service-role client with no auth.uid().
-  p_user_id uuid default null
+  p_user_id uuid default null,
+  -- Current CHUNK_RENDER_VERSION. A thread whose rows were built by an
+  -- older renderer is claimable even when no message has changed.
+  p_render_version int default 0
 ) returns table (thread_id uuid, terminal_msg_id uuid)
 language sql security invoker as $$
   with candidate as (
@@ -6016,7 +6027,8 @@ language sql security invoker as $$
          limit 1
       ) term
      where t.user_id = coalesce(p_user_id, auth.uid())
-       and term.msg_id is distinct from t.last_chunked_msg_id
+       and (term.msg_id is distinct from t.last_chunked_msg_id
+            or t.chunk_render_version is distinct from p_render_version)
        and (t.chunk_claim_expires is null
             or t.chunk_claim_expires < now())
      order by t.updated_at desc
@@ -6036,9 +6048,11 @@ $$;
 -- safe by construction: the per-thread claim columns are the mutual
 -- exclusion.
 drop function if exists public.claim_next_thread_for_rechunk_sweep(text, int);
+drop function if exists public.claim_next_thread_for_rechunk_sweep(text, int, int);
 create or replace function public.claim_next_thread_for_rechunk_sweep(
   p_holder_id text,
-  p_ttl_seconds int
+  p_ttl_seconds int,
+  p_render_version int default 0
 ) returns table (thread_id uuid, terminal_msg_id uuid, user_id uuid)
 language sql security definer
 set search_path = public as $$
@@ -6052,7 +6066,8 @@ set search_path = public as $$
          order by m.created_at desc
          limit 1
       ) term
-     where term.msg_id is distinct from t.last_chunked_msg_id
+     where (term.msg_id is distinct from t.last_chunked_msg_id
+            or t.chunk_render_version is distinct from p_render_version)
        and (t.chunk_claim_expires is null
             or t.chunk_claim_expires < now())
      order by t.updated_at desc
@@ -6079,12 +6094,16 @@ $$;
 -- Dropping that guard would turn every new message into a full
 -- re-embed of the whole thread.
 drop function if exists public.save_thread_chunks_if_claimed(uuid, text, uuid, uuid, jsonb);
+drop function if exists public.save_thread_chunks_if_claimed(uuid, text, uuid, uuid, jsonb, int);
 create or replace function public.save_thread_chunks_if_claimed(
   p_thread_id uuid,
   p_holder_id text,
   p_msg_id uuid,
   p_user_id uuid,
-  p_chunks jsonb
+  p_chunks jsonb,
+  -- Stamped onto the thread so a later renderer change can tell these
+  -- rows apart from ones it produced itself.
+  p_render_version int default 0
 ) returns boolean
 language plpgsql security definer
 set search_path = public as $$
@@ -6133,6 +6152,7 @@ begin
 
   update public.threads
      set last_chunked_msg_id = p_msg_id,
+         chunk_render_version = p_render_version,
          chunk_claim_holder = null,
          chunk_claim_expires = null
    where id = p_thread_id
@@ -6194,14 +6214,14 @@ begin
   return updated > 0;
 end $$;
 
-revoke all on function public.claim_next_thread_for_rechunk(text, int, uuid) from public, anon, authenticated;
-revoke all on function public.claim_next_thread_for_rechunk_sweep(text, int) from public, anon, authenticated;
-revoke all on function public.save_thread_chunks_if_claimed(uuid, text, uuid, uuid, jsonb) from public, anon, authenticated;
+revoke all on function public.claim_next_thread_for_rechunk(text, int, uuid, int) from public, anon, authenticated;
+revoke all on function public.claim_next_thread_for_rechunk_sweep(text, int, int) from public, anon, authenticated;
+revoke all on function public.save_thread_chunks_if_claimed(uuid, text, uuid, uuid, jsonb, int) from public, anon, authenticated;
 revoke all on function public.claim_next_pending_thread_chunk(text, int) from public, anon, authenticated;
 revoke all on function public.save_thread_chunk_embedding_if_claimed(uuid, text, vector, text) from public, anon, authenticated;
-grant execute on function public.claim_next_thread_for_rechunk(text, int, uuid) to service_role;
-grant execute on function public.claim_next_thread_for_rechunk_sweep(text, int) to service_role;
-grant execute on function public.save_thread_chunks_if_claimed(uuid, text, uuid, uuid, jsonb) to service_role;
+grant execute on function public.claim_next_thread_for_rechunk(text, int, uuid, int) to service_role;
+grant execute on function public.claim_next_thread_for_rechunk_sweep(text, int, int) to service_role;
+grant execute on function public.save_thread_chunks_if_claimed(uuid, text, uuid, uuid, jsonb, int) to service_role;
 grant execute on function public.claim_next_pending_thread_chunk(text, int) to service_role;
 grant execute on function public.save_thread_chunk_embedding_if_claimed(uuid, text, vector, text) to service_role;
 

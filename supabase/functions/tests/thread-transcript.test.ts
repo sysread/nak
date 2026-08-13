@@ -5,6 +5,7 @@
 
 import { assert, assertEquals } from '@std/assert';
 import {
+  CHUNK_RENDER_VERSION,
   chunkTranscript,
   EMBEDDING_MAX_INPUT_CHARS,
   renderMessage,
@@ -88,20 +89,38 @@ Deno.test('renderMessage keeps both the tool calls and the prose on one row', ()
   assertEquals(rendered, 'assistant calls recipe_get({})\nassistant: let me look that up');
 });
 
-Deno.test('renderMessage labels tool results by tool name and excerpts them', () => {
-  const rendered = renderMessage(
-    msg({ id: 'e', role: 'tool', name: 'conversation_search', content: 'x'.repeat(9000) }),
+Deno.test('renderMessage does not index tool results at all', () => {
+  // Tool results were 34.8% of the indexed corpus by character and made
+  // 29% of chunks majority-machine-output. They describe whatever a tool
+  // returned rather than what the conversation was about - one thread
+  // about meatballs carried a chunk that was mostly a wiki dump about
+  // brownies - and because every tool-using thread accumulates the same
+  // JSON shapes, indexing them pulled unrelated conversations toward a
+  // common region of the space.
+  assertEquals(
+    renderMessage(
+      msg({ id: 'e', role: 'tool', name: 'conversation_search', content: 'x'.repeat(9000) }),
+    ),
+    null,
   );
-  assert(rendered !== null);
-  assert(rendered.startsWith('tool conversation_search: '));
-  // Tool results are capped harder than prose - a search dump is the
-  // densest and least useful content in a transcript.
-  assert(rendered.length < 2_100);
+  // Even a short, readable-looking one.
+  assertEquals(
+    renderMessage(msg({ id: 'e2', role: 'tool', name: 'recipe_get', content: 'sourdough' })),
+    null,
+  );
+});
+
+Deno.test('the render version is bumped whenever this module changes shape', () => {
+  // The rechunk unit re-qualifies threads on message changes, which
+  // cannot see an edit to the rendering rules. Without a bump, changing
+  // what gets indexed leaves every existing thread on the old shape
+  // forever. Version 2 is "tool result bodies dropped".
+  assertEquals(CHUNK_RENDER_VERSION, 2);
 });
 
 Deno.test('renderMessage drops rows that carry nothing indexable', () => {
   assertEquals(renderMessage(msg({ id: 'f', content: '   ' })), null);
-  assertEquals(renderMessage(msg({ id: 'g', role: 'tool', content: '' })), null);
+  assertEquals(renderMessage(msg({ id: 'g', role: 'tool', content: 'anything' })), null);
   assertEquals(renderMessage(msg({ id: 'h', content: '', tool_calls: [] })), null);
   // Malformed tool_calls must not fabricate an empty call line.
   assertEquals(renderMessage(msg({ id: 'i', content: '', tool_calls: [{ nope: 1 }] })), null);
