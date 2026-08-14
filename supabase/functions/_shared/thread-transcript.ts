@@ -53,8 +53,13 @@ export { EMBEDDING_MAX_INPUT_CHARS };
  *
  * 1 - initial: prose, tool calls, and excerpted tool results.
  * 2 - tool result BODIES dropped from the index.
+ * 3 - chunk budget cut from ~15315 to ~957 chars for gte-small's
+ *     512-token max sequence length. The ONNX runtime silently
+ *     truncates past this limit, so the old chunks had ~89% of their
+ *     text ignored by the embedder. Re-chunking at the smaller budget
+ *     means each chunk fits wholly within the model's window.
  */
-export const CHUNK_RENDER_VERSION = 2;
+export const CHUNK_RENDER_VERSION = 3;
 
 /**
  * Per-row excerpt caps applied while rendering.
