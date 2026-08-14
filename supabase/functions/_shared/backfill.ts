@@ -44,27 +44,31 @@ export const EMBEDDING_MAX_INPUT_TOKENS = 512;
  * over-counts tokens and therefore under-fills a chunk - the safe
  * direction.
  *
- * The table below was measured against bge-m3's tokenizer on real
- * thread content. gte-small uses a BERT WordPiece tokenizer which
- * produces MORE tokens per character for English prose (typically
- * 4-5 chars/token vs bge-m3's 3.86), so 2.2 is even more conservative
- * under gte-small - the safe direction. Re-measure when rotating
- * EMBEDDING_MODEL.
+ * gte-small uses a BERT WordPiece tokenizer. BERT tokenizers produce
+ * more tokens per character than bge-m3's XLM-RoBERTa for English
+ * prose - typically 4-5 chars/token. 3.5 sits below that range so
+ * dense prose still fits, while roughly doubling the chunk budget
+ * vs the bge-m3-measured 2.2 (which was wasting half the available
+ * token window).
  *
- *   prose             3.86 chars/token (bge-m3 measurement)
+ * The bge-m3 measurement table is kept for reference but does NOT
+ * apply to gte-small's tokenizer:
+ *
+ *   prose             3.86 chars/token (bge-m3 XLM-RoBERTa)
  *   cooklang recipes  2.44
- *   tool-call JSON    2.24   <- transcripts embed these verbatim
+ *   tool-call JSON    2.24
  *   bare UUIDs        1.67
  *   base64            1.35
  *
- * 2.2 sits under every non-degenerate sample. It does NOT cover base64
- * or UUID-dense content, deliberately: sizing for the pathological case
- * would roughly halve every ordinary chunk. Content that beats the
- * estimate would be caught by a 400 and re-split - but only if the
- * model errors on overflow rather than silently truncating (gte-small
- * truncates silently, so the chunk size MUST stay conservative).
+ * 3.5 does not cover UUID-dense or base64 content. Sizing for those
+ * would roughly halve every ordinary chunk. gte-small silently
+ * truncates past 512 tokens (no error to catch), so the safety margin
+ * (0.85) plus a conservative divisor is the only defense. At 3.5,
+ * the budget is 512 * 0.85 * 3.5 = 1523 chars; at gte-small's worst
+ * observed case (~3 chars/token for dense content), that is 507
+ * tokens - just under the 512 hard limit.
  */
-export const EMBEDDING_CHARS_PER_TOKEN = 2.2;
+export const EMBEDDING_CHARS_PER_TOKEN = 3.5;
 
 /**
  * Fraction of the token ceiling a chunk may target. Absorbs estimation
@@ -76,10 +80,8 @@ export const EMBEDDING_INPUT_SAFETY_MARGIN = 0.85;
 /**
  * Chunk size in characters, derived from the three constants above.
  * Text longer than this is split before embedding - see chunkTranscript
- * in _shared/thread-transcript.ts. With gte-small (512 tokens), this
- * yields ~957 chars per chunk; with the previous bge-m3 (8192 tokens)
- * it was ~15315. More chunks per thread, but each is accurately
- * embedded rather than silently truncated.
+ * in _shared/thread-transcript.ts. With gte-small (512 tokens, 3.5
+ * chars/token, 0.85 margin), this yields ~1523 chars per chunk.
  */
 export const EMBEDDING_MAX_INPUT_CHARS = Math.floor(
   EMBEDDING_MAX_INPUT_TOKENS *

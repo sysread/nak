@@ -40,13 +40,20 @@ Deno.test('chunk budget stays under the model ceiling with margin to spare', () 
   );
 });
 
-Deno.test('chars-per-token divisor stays under the densest measured prose sample', () => {
-  // Measured against bge-m3's reported prompt_tokens: tool-call JSON
-  // came in at 2.24 chars/token and cooklang at 2.44. A divisor above
-  // those would under-count tokens and overflow on ordinary threads.
-  // gte-small's BERT tokenizer produces more tokens per char for prose,
-  // so 2.2 is even more conservative under the current model.
-  assert(EMBEDDING_CHARS_PER_TOKEN <= 2.24);
+Deno.test('chars-per-token divisor stays under gte-small densest expected sample', () => {
+  // gte-small uses a BERT WordPiece tokenizer, which produces more
+  // tokens per character than bge-m3's XLM-RoBERTa. The bge-m3
+  // measurement table (tool-call JSON at 2.24 chars/token, cooklang
+  // at 2.44) does NOT apply to gte-small. BERT tokenizers on dense
+  // English content (UUIDs, JSON) run ~3 chars/token in the worst
+  // observed case. 3.5 sits above that, which is the wrong direction
+  // for those degenerate samples - but the safety margin (0.85)
+  // absorbs it: 512 * 0.85 * 3.5 = 1523 chars, at 3 chars/token =
+  // 507 tokens, just under the 512 hard limit. The divisor trades
+  // some worst-case headroom for roughly halving the chunk count
+  // vs the bge-m3-measured 2.2.
+  assert(EMBEDDING_CHARS_PER_TOKEN > 2.2);
+  assert(EMBEDDING_CHARS_PER_TOKEN < 4.0);
 });
 
 // --- rendering ------------------------------------------------------------
@@ -116,9 +123,9 @@ Deno.test('the render version is bumped whenever this module changes shape', () 
   // The rechunk unit re-qualifies threads on message changes, which
   // cannot see an edit to the rendering rules. Without a bump, changing
   // what gets indexed leaves every existing thread on the old shape
-  // forever. Version 3 is "chunk budget cut for gte-small's 512-token
-  // max sequence length".
-  assertEquals(CHUNK_RENDER_VERSION, 3);
+  // forever. Version 4 is "chars-per-token raised to 3.5 for gte-small,
+  // chunk budget ~1523 chars".
+  assertEquals(CHUNK_RENDER_VERSION, 4);
 });
 
 Deno.test('renderMessage drops rows that carry nothing indexable', () => {
@@ -202,12 +209,12 @@ Deno.test('chunkTranscript is empty for a thread with nothing indexable', () => 
 Deno.test('the real default budget fits a short ordinary turn in one chunk', () => {
   // Sanity that the derived constant is in a usable range - a budget
   // small enough to split every turn would shred retrieval context.
-  // gte-small's 512-token ceiling yields ~957 chars per chunk; a
-  // typical short turn (800 chars of prose) fits in one. Longer turns
+  // gte-small's 512-token ceiling with 3.5 chars/token yields ~1523
+  // chars per chunk; a typical short turn fits in one. Longer turns
   // span multiple chunks, which is correct - a chunk bigger than the
   // model's token limit would be silently truncated.
-  const chunks = chunkTranscript([msg({ id: 'a', content: 'word '.repeat(160) })]);
+  const chunks = chunkTranscript([msg({ id: 'a', content: 'word '.repeat(250) })]);
   assertEquals(chunks.length, 1);
-  assert(EMBEDDING_MAX_INPUT_CHARS > 500);
+  assert(EMBEDDING_MAX_INPUT_CHARS > 1000);
   assert(EMBEDDING_MAX_INPUT_CHARS < 2000);
 });

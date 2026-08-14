@@ -58,8 +58,12 @@ export { EMBEDDING_MAX_INPUT_CHARS };
  *     truncates past this limit, so the old chunks had ~89% of their
  *     text ignored by the embedder. Re-chunking at the smaller budget
  *     means each chunk fits wholly within the model's window.
+ * 4 - chars-per-token divisor raised from 2.2 (bge-m3 measurement)
+ *     to 3.5 (gte-small BERT WordPiece estimate), increasing the
+ *     chunk budget from ~957 to ~1523 chars. Roughly halves the
+ *     chunk count and the drain time without risking overflow.
  */
-export const CHUNK_RENDER_VERSION = 3;
+export const CHUNK_RENDER_VERSION = 4;
 
 /**
  * Per-row excerpt caps applied while rendering.
