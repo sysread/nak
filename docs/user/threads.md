@@ -60,6 +60,23 @@ you actually had.
 The button is greyed out while the conversation is empty, still a
 draft, or while the Daily digest panel is open.
 
+## Copying the conversation ID
+
+Next to the download button sits a copy button (two overlapping
+pages). Clicking it puts the conversation's internal ID - a UUID -
+on your clipboard. On a phone, the same action lives in the
+three-dot overflow menu as **Copy conversation ID**.
+
+This is handy when you need to point something outside the app at
+an exact conversation - for example, an AI coding agent with
+database access. Paste the ID instead of describing the thread and
+hoping it finds the right one.
+
+The Recipes and Wiki tabs have the same button in the same spot for
+the open recipe or article - see
+[Cookbook](./cookbook.md#copying-a-recipes-id) and
+[Wiki](./wiki.md#copying-an-articles-id).
+
 ## Filtering by topic
 
 The conversation drawer has a **Topics** button between the search

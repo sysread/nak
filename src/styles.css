@@ -3717,9 +3717,9 @@ button.top-bar-pinned {
   .top-bar-group {
     display: none;
   }
-  /* On mobile the transcript download lives in the chats overflow
-     menu; the standalone desktop button beside the logs toggle would
-     crowd the bar, so it hides here. */
+  /* On mobile the transcript download and copy-ID live in the chats
+     overflow menu; the standalone desktop buttons beside the logs
+     toggle would crowd the bar, so they hide here. */
   button.transcript-export-toggle {
     display: none;
   }

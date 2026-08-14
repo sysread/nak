@@ -24,8 +24,17 @@
      * controls while the replacement turn is in flight.
      */
     disabled?: boolean;
+    /** Extra class on the button element, e.g. for responsive hiding. */
+    class?: string;
+    /**
+     * Glyph size in px. The 14px default matches the message-bubble
+     * action row; bar placements (top bar, wiki header) pass 16 so the
+     * button's content height matches its `secondary icon-btn`
+     * neighbors, whose Feather glyphs are 16px.
+     */
+    size?: number;
   }
-  let { text, label = 'Copy', ariaLabel, disabled = false }: Props = $props();
+  let { text, label = 'Copy', ariaLabel, disabled = false, class: extraClass = '', size = 14 }: Props = $props();
 
   let copied = $state(false);
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -56,7 +65,7 @@
      text affordance. -->
 <button
   type="button"
-  class="copy-btn"
+  class="copy-btn {extraClass}"
   class:copied
   onclick={onClick}
   {disabled}
@@ -64,7 +73,7 @@
   title={copied ? 'Copied' : (ariaLabel ?? label)}
 >
   {#if copied}
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
          stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"
          aria-hidden="true">
       <polyline points="20 6 9 17 4 12" />
@@ -72,7 +81,7 @@
   {:else}
     <!-- The classic "two overlapping pages" copy glyph: foreground sheet
          (the rect) sitting on top of a background sheet (the path). -->
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
          stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
          aria-hidden="true">
       <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />

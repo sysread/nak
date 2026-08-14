@@ -79,7 +79,12 @@ A chat turn goes:
   three places: the desktop button beside the logs toggle, the
   chats overflow menu on mobile, and each thread row's kebab
   menu (which fetches that thread's rows via `listMessages`
-  when it isn't the active one).
+  when it isn't the active one). Beside the desktop download
+  button sits a `<CopyButton>` that puts the active thread's id
+  on the clipboard (duplicated into the mobile overflow menu);
+  the recipes and wiki tabs render the same trailing copy-ID
+  button off `route.recipe` / `route.wiki_article_id`. Pure
+  glue, no lib module - the ids come straight off the route.
 - `src/lib/chat/loop.ts` - `runChatLoop`, `toVeniceMessage`, and
   the per-turn priming + event-routing orchestration. Issues one
   `venice.streamChat` call per turn; the function-side round

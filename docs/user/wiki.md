@@ -144,6 +144,16 @@ populated Records section shows a Contents box with just the section
 links. A bare article with no headings and none of those sections has
 no Contents box at all.
 
+## Copying an article's ID
+
+With an article open, a copy button (two overlapping pages) sits in
+the top-right of the top bar, next to the logs toggle. It puts the
+article's internal ID - a UUID - on your clipboard. Useful when you
+need to point something outside the app at this exact article - for
+example, an AI coding agent with database access. The same button
+exists for [conversations](./threads.md#copying-the-conversation-id)
+and [recipes](./cookbook.md#copying-a-recipes-id).
+
 ## Favorites and offline access
 
 Each open article has a **star** button in its header. Click it to

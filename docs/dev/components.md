@@ -519,8 +519,18 @@ interface Props {
   text: string;
   label?: string;     // default: 'Copy'
   ariaLabel?: string;
+  disabled?: boolean; // regenerate-from-here locks the action bar
+  class?: string;     // extra classes, e.g. `secondary icon-btn`
+  size?: number;      // glyph px; default 14 (bubble scale), bars pass 16
 }
 ```
+
+The `class` + `size` pair exists for top-bar placements: the bare
+`.copy-btn` base is sized for the message-bubble action row (14px
+glyph, tight padding) and reads undersized between 30px
+`secondary icon-btn` neighbors. Bar consumers pass
+`class="secondary icon-btn"` (those rules win on specificity, so
+the box matches) and `size={16}` (so the content height matches).
 
 Clipboard failures (permission denied, insecure context) are
 swallowed silently — the absence of the "Copied!" flash is itself
@@ -533,7 +543,9 @@ paths are intentionally parallel; see the comments in
 `src/components/Markdown.svelte` and `src/lib/markdown.ts`'s
 `renderer.code` for why.
 
-Consumers: assistant message action bar in `Chat.svelte`.
+Consumers: assistant message action bar in `Chat.svelte`, and the
+top-bar copy-ID buttons (conversation / recipe / wiki article),
+also in `Chat.svelte`.
 
 ## `<SecretInput>`
 

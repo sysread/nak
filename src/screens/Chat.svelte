@@ -72,6 +72,7 @@
   } from '$lib/supabase';
   import { runChatLoop, toVeniceMessage } from '$lib/chat/loop';
   import { slopNoticeCopy } from '$lib/ui/slop-notice';
+  import CopyButton from '../components/CopyButton.svelte';
   import { ExchangeStore, mergeMessagesById } from '$lib/exchange/exchange-store.svelte';
   import type { ExchangeSlot } from '$lib/exchange/exchange-slot.svelte';
   import { ThreadClaimCoordinator } from '$lib/exchange/thread-claim-coordinator';
@@ -7143,6 +7144,17 @@
             <line x1="12" y1="15" x2="12" y2="3" />
           </svg>
         {/snippet}
+        {#snippet copyIdIcon()}
+          <!-- Feather "copy" - two overlapping pages, the standard
+               copy-to-clipboard glyph. Same shape CopyButton.svelte
+               uses inline, extracted here so it can render inside a
+               TopBarActions overflow entry on mobile. -->
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+          </svg>
+        {/snippet}
         {#snippet changelogIcon()}
           <!-- Feather "clock" - reads as "history / audit log". -->
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -7226,6 +7238,15 @@
               ),
               onclick: () => { if (activeThreadId) void exportTranscript(activeThreadId); },
               icon: transcriptDownloadIcon,
+            },
+            {
+              id: 'copy-thread-id',
+              label: 'Copy conversation ID',
+              title: 'Copy this conversation\'s ID to clipboard',
+              class: 'transcript-export-menu-only',
+              disabled: !activeThreadId,
+              onclick: () => { if (activeThreadId) void navigator.clipboard.writeText(activeThreadId); },
+              icon: copyIdIcon,
             },
           ]}
           <TopBarActions {actions} menuLabel="Chat actions" />
@@ -7425,6 +7446,43 @@
           >
             {@render transcriptDownloadIcon()}
           </button>
+          <!-- Desktop-only copy-thread-ID. Sits beside the transcript
+               download button so the two "get this conversation's data"
+               actions are adjacent. Same mobile-hide pattern: the
+               overflow menu carries the mobile copy. `secondary icon-btn`
+               rides along so the button matches its 30px top-bar
+               neighbors - the bare .copy-btn base is sized for the
+               message-bubble action row and reads undersized here. -->
+          {#if activeThreadId}
+            <CopyButton
+              text={activeThreadId}
+              ariaLabel="Copy conversation ID"
+              class="secondary icon-btn transcript-export-toggle"
+              size={16}
+            />
+          {/if}
+        {:else if drawerTab === 'recipes' && route.recipe}
+          <!-- Copy-recipe-ID, mirroring the chats tab's copy-thread-ID
+               placement beside the logs toggle. Pasting the UUID into a
+               chat lets an agent reference the open recipe by id. Always
+               visible (no mobile-hide class): the recipes top bar has no
+               overflow-menu duplicate to defer to, and copying ids on
+               mobile is this button's whole reason to exist. -->
+          <CopyButton
+            text={route.recipe}
+            ariaLabel="Copy recipe ID"
+            class="secondary icon-btn"
+            size={16}
+          />
+        {:else if drawerTab === 'wiki' && route.wiki_article_id}
+          <!-- Copy-article-ID, same placement contract as the recipe
+               copy above. -->
+          <CopyButton
+            text={route.wiki_article_id}
+            ariaLabel="Copy article ID"
+            class="secondary icon-btn"
+            size={16}
+          />
         {/if}
         <!-- Logs drawer toggle. Lives outside the per-tab branches so it
              appears as the trailing top-bar action on chats, recipes,

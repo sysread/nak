@@ -235,6 +235,10 @@ One file per use-case under [`use-cases/`](./use-cases/), named
   downloading a conversation as a Markdown transcript from the
   top-bar button, the mobile overflow menu, and the thread-row
   kebab menu, with the disabled states and content filtering.
+- [copy-entity-ids](./use-cases/copy-entity-ids.md) - the top-bar
+  copy-ID buttons for the open conversation / recipe / wiki
+  article, the per-tab gating, and the chats tab's mobile
+  overflow duplicate.
 - [memory-browser-actions](./use-cases/memory-browser-actions.md) - the
   Memories tab's browse/search/filter flows, edit/reaffirm/doubt,
   relate/unrelate, delete, and recall visibility.

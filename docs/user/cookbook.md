@@ -420,6 +420,16 @@ Three copy buttons on every detail pane:
 Nak doesn't send your recipes anywhere; the copy happens entirely in
 your browser.
 
+## Copying a recipe's ID
+
+With a recipe open, a copy button (two overlapping pages) sits in
+the top-right of the top bar, next to the logs toggle. It puts the
+recipe's internal ID - a UUID - on your clipboard. Useful when you
+need to point something outside the app at this exact recipe - for
+example, an AI coding agent with database access. The same button
+exists for [conversations](./threads.md#copying-the-conversation-id)
+and [wiki articles](./wiki.md#copying-an-articles-id).
+
 ## Limits
 
 - Recipe source is capped at 20 000 characters. A typical recipe
