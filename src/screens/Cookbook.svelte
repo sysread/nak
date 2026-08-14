@@ -2460,36 +2460,13 @@
     left: 0.4rem;
   }
   .cookbook-edit-panes {
-    display: flex;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
     gap: 1rem;
-    align-items: flex-start;
-  }
-  .cookbook-edit-source-col {
-    /* User-resizable: the drag handle is on the right edge.
-       The preview column flexes to fill the remaining width. */
-    flex: 0 0 50%;
-    min-width: 25%;
-    max-width: 75%;
-    resize: horizontal;
-    overflow: hidden;
-  }
-  .cookbook-edit-preview-col {
-    flex: 1;
-    min-width: 0;
   }
   @media (max-width: 800px) {
     .cookbook-edit-panes {
-      flex-direction: column;
-    }
-    .cookbook-edit-source-col {
-      flex: 0 0 auto;
-      width: 100%;
-      max-width: none;
-      resize: none;
-      overflow: visible;
-    }
-    .cookbook-edit-preview-col {
-      width: 100%;
+      grid-template-columns: 1fr;
     }
   }
   .cookbook-edit-textarea {
