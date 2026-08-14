@@ -92,3 +92,4 @@ scratch/
 # scripts/bundle-research-docs.mjs from docs/user + docs/dev; regenerated
 # by `mise run bundle-docs`, by dev-start, and by the CI deploy step.
 supabase/functions/venice/_generated/
+recipe-edit-before.png
