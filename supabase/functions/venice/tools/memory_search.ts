@@ -18,9 +18,8 @@
 // ports).
 
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
-import { padEmbeddingForStorage, VENICE_EMBEDDING_MODEL } from '../../_shared/backfill.ts';
-import { veniceEmbed } from '../../_shared/venice.ts';
-import { readVeniceKey } from './_venice_key.ts';
+import { padEmbeddingForStorage } from '../../_shared/backfill.ts';
+import { localEmbed } from '../../_shared/local-embed.ts';
 
 const MEMORY_SEARCH_DEFAULT_LIMIT = 10;
 const MEMORY_SEARCH_MAX_LIMIT = 50;
@@ -153,17 +152,9 @@ async function searchMemories(
 
   // Try embed. On any failure, fall back to ILIKE so the user still
   // gets substring matches without a hard error.
-  const apiKey = await readVeniceKey(ctx.adminClient);
-  if (!apiKey) return ilikeMemories(ctx, query, limit);
-
   let rawEmbedding: number[] | undefined;
   try {
-    const response = await veniceEmbed({
-      apiKey,
-      model: VENICE_EMBEDDING_MODEL,
-      input: query,
-    });
-    rawEmbedding = response.data[0]?.embedding;
+    rawEmbedding = await localEmbed(query);
   } catch {
     return ilikeMemories(ctx, query, limit);
   }

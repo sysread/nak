@@ -37,7 +37,6 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import {
   veniceComplete,
-  veniceEmbed,
   veniceExtractText,
   veniceFetchModels,
   veniceFetchUsageAnalytics,
@@ -49,9 +48,10 @@ import {
 import { EMBED_SOURCES } from '../_shared/embed-input.ts';
 import {
   runBackfill,
-  VENICE_EMBEDDING_MODEL,
+  EMBEDDING_MODEL,
   type BackfillDeps,
 } from '../_shared/backfill.ts';
+import { localEmbed } from '../_shared/local-embed.ts';
 import {
   resolveStreamContext,
   type StreamEnvelope,
@@ -105,12 +105,16 @@ const CORS_HEADERS: Record<string, string> = {
 
 // Backfill tunables. One invocation processes at most BACKFILL_MAX_ROWS rows or
 // runs for at most BACKFILL_TIME_BUDGET_MS, whichever comes first, then returns;
-// the */5 cron tick resumes from the same claim state. The budget sits well
-// under the edge runtime's wall-clock limit - nearly all of it is spent
-// awaiting Venice (I/O, not CPU). ROW_CLAIM_TTL_SECONDS is longer than a single
-// invocation so an overlapping tick can't steal a row this one is still saving.
-const BACKFILL_MAX_ROWS = 50;
-const BACKFILL_TIME_BUDGET_MS = 25_000;
+// the cron tick resumes from the same claim state. With local inference
+// (Supabase.ai.Session), each embed call takes ~100-180ms of CPU. The edge
+// runtime's 2s CPU-time budget per worker is the binding constraint, but
+// overshooting it is safe: the worker is killed mid-batch, the claim TTL
+// (120s) expires the unfinished rows, and the next tick re-claims them. Net
+// throughput is higher at 25 than at a "safe" 12 because the kill-and-retry
+// overhead is small compared to the extra rows each tick completes. The time
+// budget is secondary since inference is CPU-bound, not I/O-bound.
+const BACKFILL_MAX_ROWS = 25;
+const BACKFILL_TIME_BUDGET_MS = 30_000;
 const ROW_CLAIM_TTL_SECONDS = 120;
 
 function json(body: unknown, status = 200): Response {
@@ -274,7 +278,7 @@ function edgeWaitUntil(promise: Promise<unknown>): void {
 }
 
 interface EmbedRequestBody {
-  input?: string | string[];
+  input?: string;
   model?: string;
 }
 
@@ -285,23 +289,20 @@ async function handleEmbed(req: Request): Promise<Response> {
   } catch {
     return json({ error: 'invalid JSON body' }, 400);
   }
-  if (!body.input || !body.model) {
-    return json({ error: 'body must include `input` and `model`' }, 400);
+  if (!body.input) {
+    return json({ error: 'body must include `input`' }, 400);
   }
 
-  const env = await requireVeniceEnv();
-  if (env instanceof Response) return env;
-  const { apiKey } = env;
-
+  // Local inference via the built-in gte-small model. No API key or
+  // Venice env needed - the model is pre-bundled in the edge runtime.
+  // The browser still sends `model` in the body for backward compat;
+  // the server ignores it since the model is fixed to EMBEDDING_MODEL.
   try {
-    const result = await veniceEmbed({ apiKey, model: body.model, input: body.input });
-    return json(result);
+    const embedding = await localEmbed(body.input);
+    // Wrap in the OpenAI-compatible { data: [{ embedding }] } shape the
+    // browser's veniceProxyApi.embed expects (see venice-proxy.ts).
+    return json({ data: [{ embedding }] });
   } catch (err) {
-    if (err instanceof VeniceError) {
-      // Surface Venice's 429 as a 429 so the caller can apply its rate-limit
-      // back-off; everything else collapses to 502 (bad upstream).
-      return json({ error: err.message, kind: err.kind }, err.kind === 'rate_limit' ? 429 : 502);
-    }
     return json({ error: (err as Error).message }, 500);
   }
 }
@@ -635,9 +636,11 @@ async function handleTextParser(req: Request): Promise<Response> {
 async function handleBackfill(req: Request): Promise<Response> {
   if (!isServiceRole(req)) return json({ error: 'forbidden' }, 403);
 
-  const env = await requireVeniceEnv();
-  if (env instanceof Response) return env;
-  const { admin, apiKey } = env;
+  // The backfill needs the admin client for claim/save RPCs but no
+  // longer needs the Venice API key - embeddings are produced locally
+  // by Supabase.ai.Session (see _shared/local-embed.ts).
+  const admin = await requireAdmin();
+  if (admin instanceof Response) return admin;
 
   // One holder id per invocation. The claim/save RPCs guard on it so an
   // overlapping invocation (a slow tick still running when the next fires)
@@ -668,8 +671,7 @@ async function handleBackfill(req: Request): Promise<Response> {
       return { id: String(row.id), input: source.buildInput(row) };
     },
     embed: async (input) => {
-      const resp = await veniceEmbed({ apiKey, model: VENICE_EMBEDDING_MODEL, input });
-      return resp.data[0]?.embedding;
+      return await localEmbed(input);
     },
     save: async (sourceIndex, id, embedding) => {
       const source = EMBED_SOURCES[sourceIndex];
@@ -677,7 +679,7 @@ async function handleBackfill(req: Request): Promise<Response> {
         p_id: id,
         p_holder_id: holderId,
         p_embedding: embedding,
-        p_embedding_model: VENICE_EMBEDDING_MODEL,
+        p_embedding_model: EMBEDDING_MODEL,
       });
       if (error) throw error;
       const saved = data === true;
@@ -695,7 +697,6 @@ async function handleBackfill(req: Request): Promise<Response> {
     sourceCount: EMBED_SOURCES.length,
     maxRows: BACKFILL_MAX_ROWS,
     timeBudgetMs: BACKFILL_TIME_BUDGET_MS,
-    isRateLimit: (err) => err instanceof VeniceError && err.kind === 'rate_limit',
   });
 
   // One drawer line per affected user, after the drain settles. Most

@@ -9,42 +9,49 @@
 // runBackfill is deliberately I/O-free: it takes injected claim/embed/save
 // callbacks so the round-robin, batch-cap, time-budget, and error policy are
 // unit-testable under `deno test` with fakes and no network. venice/index.ts
-// wires the real deps (Supabase service-role RPCs + veniceEmbed) into it.
+// wires the real deps (Supabase service-role RPCs + localEmbed) into it.
 
-// Native output dimension of the embedding model (bge-m3 emits 1024) and the
-// wider storage column the vector is zero-extended into. Mirrors
-// VENICE_EMBEDDING_MODEL / VENICE_EMBEDDING_DIMS / EMBEDDING_STORAGE_DIMS in
-// src/lib/models/index.ts - kept in sync by hand because the Deno island does
-// not import from the Vite app (see _shared/venice.ts).
-export const VENICE_EMBEDDING_MODEL = 'text-embedding-bge-m3';
+// Identifier recorded in the embedding_model column of each embedded
+// row, and the model id passed to Supabase.ai.Session. gte-small is a
+// 33M-param English text embedding model (384 dims, MTEB 61.36) pre-
+// bundled in the edge-runtime Docker image. Mirrors EMBEDDING_MODEL /
+// EMBEDDING_DIMS / EMBEDDING_STORAGE_DIMS in src/lib/models/index.ts -
+// kept in sync by hand because the Deno island does not import from the
+// Vite app (see _shared/venice.ts).
+export const EMBEDDING_MODEL = 'gte-small';
 export const EMBEDDING_STORAGE_DIMS = 2048;
 
 /**
- * Hard input ceiling VENICE_EMBEDDING_MODEL enforces, in tokens.
- * Authoritative source is `GET /models?type=embedding`, which reports it
- * per model as `model_spec.maxInputTokens` - re-read that endpoint when
- * rotating the model rather than assuming the new one shares this
- * ceiling (the catalog currently ranges from 512 on
- * multilingual-e5-large-instruct to 32768 on the qwen3 pair).
+/**
+ * Hard input ceiling the embedding model enforces, in tokens.
+ * gte-small is a BERT-based model with a max sequence length of 512
+ * tokens. The ONNX runtime silently truncates input past this limit
+ * rather than erroring, so the chunker must stay under it by
+ * construction - the embedWithShrink retry loop below is a safety net
+ * for future models that error instead of truncating, but it cannot
+ * recover from a silent truncation (there is no error to catch).
  *
- * Exceeding it is a hard 400 ("Input text exceeds the maximum token
- * limit of 8192 tokens"), NOT a silent truncation - which is what lets
- * the chunker treat its token estimate as a sizing heuristic and
- * recover reactively (embedWithShrink below) instead of having to be
- * exactly right.
+ * Re-measure when rotating EMBEDDING_MODEL: the max sequence length is
+ * model-specific and varies widely (512 for gte-small, 8192 for the
+ * previous bge-m3, up to 32768 on some qwen variants).
  */
-export const VENICE_EMBEDDING_MAX_INPUT_TOKENS = 8192;
+export const EMBEDDING_MAX_INPUT_TOKENS = 512;
 
 /**
  * Conservative characters-per-token divisor for sizing embedding input.
- * Venice exposes no tokenizer endpoint, so chunk sizing is an estimate;
- * this is deliberately pessimistic, because a LOW ratio over-counts
- * tokens and therefore under-fills a chunk - the safe direction.
+ * The edge runtime exposes no tokenizer endpoint, so chunk sizing is an
+ * estimate; this is deliberately pessimistic, because a LOW ratio
+ * over-counts tokens and therefore under-fills a chunk - the safe
+ * direction.
  *
- * Measured against bge-m3's own reported `usage.prompt_tokens` on real
- * thread content:
+ * The table below was measured against bge-m3's tokenizer on real
+ * thread content. gte-small uses a BERT WordPiece tokenizer which
+ * produces MORE tokens per character for English prose (typically
+ * 4-5 chars/token vs bge-m3's 3.86), so 2.2 is even more conservative
+ * under gte-small - the safe direction. Re-measure when rotating
+ * EMBEDDING_MODEL.
  *
- *   prose             3.86 chars/token
+ *   prose             3.86 chars/token (bge-m3 measurement)
  *   cooklang recipes  2.44
  *   tool-call JSON    2.24   <- transcripts embed these verbatim
  *   bare UUIDs        1.67
@@ -53,17 +60,9 @@ export const VENICE_EMBEDDING_MAX_INPUT_TOKENS = 8192;
  * 2.2 sits under every non-degenerate sample. It does NOT cover base64
  * or UUID-dense content, deliberately: sizing for the pathological case
  * would roughly halve every ordinary chunk. Content that beats the
- * estimate is caught by the 400 and re-split.
- *
- * End-to-end check: a full EMBEDDING_MAX_INPUT_CHARS chunk of mixed
- * transcript (prose turns, tool-call lines, JSON tool results in the
- * proportions a real thread carries) measured 5286 tokens against the
- * 8192 ceiling - a real ratio of 2.90, so the chunk lands at about two
- * thirds of the limit. That slack is the point, not waste: it absorbs a
- * thread whose content skews denser than the sample.
- *
- * EVERY NUMBER IN THAT TABLE IS TOKENIZER-SPECIFIC. Re-measure when
- * rotating VENICE_EMBEDDING_MODEL.
+ * estimate would be caught by a 400 and re-split - but only if the
+ * model errors on overflow rather than silently truncating (gte-small
+ * truncates silently, so the chunk size MUST stay conservative).
  */
 export const EMBEDDING_CHARS_PER_TOKEN = 2.2;
 
@@ -77,21 +76,25 @@ export const EMBEDDING_INPUT_SAFETY_MARGIN = 0.85;
 /**
  * Chunk size in characters, derived from the three constants above.
  * Text longer than this is split before embedding - see chunkTranscript
- * in _shared/thread-transcript.ts.
+ * in _shared/thread-transcript.ts. With gte-small (512 tokens), this
+ * yields ~957 chars per chunk; with the previous bge-m3 (8192 tokens)
+ * it was ~15315. More chunks per thread, but each is accurately
+ * embedded rather than silently truncated.
  */
 export const EMBEDDING_MAX_INPUT_CHARS = Math.floor(
-  VENICE_EMBEDDING_MAX_INPUT_TOKENS *
+  EMBEDDING_MAX_INPUT_TOKENS *
     EMBEDDING_INPUT_SAFETY_MARGIN *
     EMBEDDING_CHARS_PER_TOKEN,
 );
 
 /**
- * Zero-extend a Venice embedding to the storage dimension. Cosine similarity is
- * invariant under zero-extension, so a padded vector ranks identically to its
- * native prefix. A longer-than-storage input is a bug (stale dim or someone
- * else's vector), so we throw rather than silently truncate - a truncated
- * vector would look like a correctness bug dressed up as a perf regression when
- * searches start returning the wrong rows. Mirrors padEmbeddingForStorage in
+ * Zero-extend an embedding vector to the storage dimension. Cosine
+ * similarity is invariant under zero-extension, so a padded vector
+ * ranks identically to its native prefix. A longer-than-storage input
+ * is a bug (stale dim or someone else's vector), so we throw rather
+ * than silently truncate - a truncated vector would look like a
+ * correctness bug dressed up as a perf regression when searches start
+ * returning the wrong rows. Mirrors padEmbeddingForStorage in
  * src/lib/models/index.ts.
  */
 export function padEmbeddingForStorage(embedding: readonly number[]): number[] {
@@ -121,7 +124,7 @@ export interface BackfillDeps {
   claim: (sourceIndex: number) => Promise<ClaimedRow | null>;
   /**
    * Produce an embedding for `input`. Returns the native-dimension vector, or
-   * undefined/empty when Venice returned no vector. Throws on failure - a
+   * undefined/empty when the model returned no vector. Throws on failure - a
    * rate-limit is recognized via `isRateLimit` so the invocation can bail
    * early and let the next cron tick resume.
    */
@@ -173,11 +176,17 @@ function defaultIsRateLimit(err: unknown): boolean {
 }
 
 /**
- * Venice rejects an over-long embedding input with a 400 whose message
+ * The embedding model rejects an over-long input with a 400 whose message
  * names the ceiling ("Input text exceeds the maximum token limit of
  * 8192 tokens"). Matched on the message because the wire body carries
  * no machine-readable code for it - a `kind` check like the rate-limit
  * one above has nothing to key on.
+ *
+ * NOTE: Supabase.ai.Session (gte-small) does NOT error on overflow -
+ * it silently truncates at the model's max sequence length (512 tokens).
+ * This matcher is a safety net for future models that error instead of
+ * truncating; under gte-small the chunk size must stay conservative by
+ * construction (see EMBEDDING_MAX_INPUT_TOKENS above).
  */
 function defaultIsInputTooLong(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
@@ -194,7 +203,7 @@ const MIN_EMBED_INPUT_CHARS = 500;
 /**
  * Embed `input`, halving it on an input-too-long rejection.
  *
- * Chunk sizing is an estimate: Venice exposes no tokenizer, so the
+ * Chunk sizing is an estimate: the edge runtime exposes no tokenizer, so the
  * chunker budgets characters against a conservative chars-per-token
  * divisor (see _shared/thread-transcript.ts). Content denser than the
  * estimate - a pasted base64 blob, a wall of UUIDs - beats it and gets
@@ -224,7 +233,7 @@ async function embedWithShrink(
 
 /**
  * Drain pending embeddings across every source until the queue empties, the
- * batch cap is hit, the time budget lapses, or Venice rate-limits us.
+ * batch cap is hit, the time budget lapses, or the model rate-limits us.
  *
  * Round-robin (one claim attempt per source per pass) is what keeps a large
  * memories backlog from starving threads/recipes/wiki - the same fairness the

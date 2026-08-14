@@ -143,8 +143,8 @@ bottom, so a large account never stops at a fixed cap.
 
 The search box at the top of the sidebar runs a semantic match -
 paraphrases and synonyms count, not just substrings - and falls
-back to plain substring search when the embedding service is
-unreachable. Typing into the sidebar filters the listing in
+ back to plain substring search when the embedding is
+ unavailable. Typing into the sidebar filters the listing in
 place. Click a row in the sidebar to open that memory in the
 main panel - one card at a time, with the full body, confidence
 chip (plus a tag when the score leaves the neutral band),

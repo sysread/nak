@@ -197,8 +197,8 @@ sees an empty queue. There is no worker lease for this unit.
 
 ## Where to go next
 
-- `./embeddings.md` - the downstream worker that reads the summary
-  to produce the search vector.
+- `./embeddings.md` - the backfill that embeds memories, recipes,
+  wiki, samskara substrate, follow-ups, and thread transcript chunks.
 - `./conversation-recall.md` - the primary consumer of summaries.
 - `./memory.md` - reflection, the memory-write counterpart; same
   per-row claim-RPC pattern on `threads`, same tail + sweep

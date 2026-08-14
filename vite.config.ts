@@ -67,19 +67,18 @@ export default defineConfig({
     conditions: process.env.VITEST ? ['browser'] : [],
   },
   // Vite 5 does NOT apply the top-level `plugins` array to worker
-  // bundles. Each Web Worker (embeddings / reflection / summary /
-  // attachment-expiry / samskara) transitively imports
-  // src/lib/logger.svelte.ts, which declares its reactive buffer at
-  // module scope via `$state(...)`. Without the Svelte plugin in
-  // the worker build, that rune reaches the browser as a bare
-  // identifier and every worker crashes at load with "Uncaught
-  // ReferenceError: $state is not defined" - silently for four of
-  // them (reflection / summary / embedding / attachment-expiry emit
-  // no main-thread progress heartbeat when dead) and loudly for
-  // samskara once its manager started routing progress messages.
-  // The factory form (`() => [svelte()]`) is required so the worker
+  // bundles. The only remaining Web Worker is pdfjs (PDF page
+  // rasterization), but the worker plugins block was originally
+  // added for the now-retired browser worker fleet (embeddings /
+  // reflection / summary / attachment-expiry / samskara). Those
+  // workers transitively imported src/lib/logger.svelte.ts, which
+  // declares its reactive buffer at module scope via `$state(...)`.
+  // Without the Svelte plugin in the worker build, that rune reaches
+  // the browser as a bare identifier and the worker crashes at load
+  // with "Uncaught ReferenceError: $state is not defined". The
+  // factory form (`() => [svelte()]`) is required so the worker
   // bundle gets its own plugin instance rather than sharing state
-  // with the main bundle. See
+  // with the main bundle. Kept for pdfjs and any future worker. See
   // https://vite.dev/guide/features.html#web-workers
   worker: {
     plugins: () => [svelte()],

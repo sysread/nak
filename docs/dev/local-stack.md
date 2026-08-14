@@ -126,9 +126,11 @@ layer to the same immediacy.
   Docker is down.
 - **The local stack does not proxy Venice.** The app calls
   Venice directly with whatever key the imported config carries.
-  Login works without a key; chat and embeddings do not. Supply
-  `VENICE_API_KEY` or answer the prompt; a blank answer writes a
-  `REPLACE_WITH_VENICE_KEY` placeholder you edit before
+  Login works without a key; chat and image generation do not.
+  Embeddings run locally via `Supabase.ai.Session('gte-small')`
+  (pre-bundled in the edge-runtime image) and need no Venice key.
+  Supply `VENICE_API_KEY` or answer the prompt; a blank answer
+  writes a `REPLACE_WITH_VENICE_KEY` placeholder you edit before
   importing.
 - **schema.sql creates its extensions before first use.**
   `pgcrypto` and `vector` are created up top, ahead of the
@@ -198,6 +200,7 @@ The script wires the edge functions into the local stack:
 - [Build & deploy](./build-deploy.md) - the cloud counterpart:
   the sync-on-deploy workflow that applies the same
   `schema.sql` to the linked project.
-- [Embeddings](./embeddings.md) - the first consumer of the
-  edge-functions shared key; the `app_config` seed above keeps
-  its local-vs-shared path testable.
+- [Embeddings](./embeddings.md) - no longer uses the shared Venice
+  key; embeddings run locally via `Supabase.ai.Session('gte-small')`
+  (pre-bundled in the edge-runtime image). The `app_config` seed above
+  is still needed for chat and image generation.

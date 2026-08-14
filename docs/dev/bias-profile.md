@@ -190,8 +190,8 @@ interval lower bound (not the mean) as the surfacing gate.
   unchanged - the assembly site moved server-side, the output did
   not. Absent entirely on cold start - no placeholder text.
 - **`nak-bias-sweep` pg_cron job** - hourly at minute :03 (the
-  x7 ladder is full; :03 starts a new column clear of the */5
-  embed ticks and the :13/:43 samskara decay). The job calls
+  x7 ladder is full; :03 starts a new column clear of the
+  every-minute embed ticks and the :13/:43 samskara decay). The job calls
   `nak_trigger_bias_sweep()`, which reads the project URL and
   service-role key from Vault and pg_net-POSTs the venice
   function's `bias-sweep` route. The route's `sweepHandler`

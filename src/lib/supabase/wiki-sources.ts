@@ -121,7 +121,7 @@ export async function listSourceThreadIdsForArticles(
  * raw embeddings.
  *
  * Returns an empty array when the article has no embedding yet (the
- * embeddings worker hasn't caught up after a content change),
+ * embeddings backfill hasn't caught up after a content change),
  * when no other articles clear the floor, or when there are simply
  * no other articles. All three are honest "nothing to suggest".
  */

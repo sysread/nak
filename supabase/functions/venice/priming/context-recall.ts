@@ -17,8 +17,8 @@
 // wiki_get).
 //
 // Service-side specifics:
-//   - Embeddings go through veniceEmbed with the shared key handed in by
-//     the orchestrator.
+//   - Embeddings go through localEmbed (Supabase.ai.Session) with no
+//     API key needed; the model is pre-bundled in the edge runtime.
 //   - The three searches hit the same RPCs the memory_search / wiki_search
 //     tools use, called with an explicit p_user_id arg because the admin
 //     client has no auth.uid().
@@ -44,9 +44,8 @@ import {
 import { smoothContextRecall } from './context-recall-smoothing.ts';
 import {
   padEmbeddingForStorage,
-  VENICE_EMBEDDING_MODEL,
 } from '../../_shared/backfill.ts';
-import { veniceEmbed } from '../../_shared/venice.ts';
+import { localEmbed } from '../../_shared/local-embed.ts';
 import { selectDueFollowups } from '../../_shared/followups.ts';
 // Confidence-tag classifier is single-sourced in the memory_search tool
 // port; reuse it so the bands cannot drift between the tool and recall.
@@ -344,19 +343,13 @@ async function gatherContextIndex(
   }
 
   // Embed once and share the vector across all three layers. A failure
-  // (no key, Venice unreachable) degrades to a null embedding - the
-  // memory layer falls back to ILIKE, the conversation layer to exact-
-  // title-only, and the wiki layer to nothing, each independently.
+  // degrades to a null embedding - the memory layer falls back to ILIKE,
+  // the conversation layer to exact-title-only, and the wiki layer to
+  // nothing, each independently.
   let queryEmbedding: number[] | null = null;
   try {
-    const response = await veniceEmbed({
-      apiKey: opts.apiKey,
-      model: VENICE_EMBEDDING_MODEL,
-      input: query,
-      signal,
-    });
-    const raw = response.data[0]?.embedding;
-    if (raw && raw.length > 0) queryEmbedding = padEmbeddingForStorage(raw);
+    const raw = await localEmbed(query);
+    if (raw.length > 0) queryEmbedding = padEmbeddingForStorage(raw);
   } catch {
     // Degrade per-layer rather than failing the gather. The fallbacks
     // below each handle a null embedding.

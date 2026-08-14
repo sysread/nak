@@ -671,27 +671,36 @@ export function agentModel(role: AgentRole): ModelSpec {
 // --- Embeddings ------------------------------------------------------------
 
 /**
- * Venice's embeddings model. Single constant rather than a tier because
- * Venice only ships one embeddings model today. If Venice ever
- * introduces a second model, this string becomes the current default
- * and the `embedding_model` column on each row lets us locate rows
- * stamped with the older id (`where embedding_model <> VENICE_EMBEDDING_MODEL`)
- * for re-embedding.
+ * Identifier of the embedding model in use. Sent in the request body to
+ * the venice edge function's /embed route (the server ignores it - the
+ * model is fixed by Supabase.ai.Session - but the field stays for
+ * backward compat). Also recorded in each row's `embedding_model` column
+ * so a future model rotation can locate rows stamped with the older id
+ * (`where embedding_model <> EMBEDDING_MODEL`) for re-embedding.
+ *
+ * gte-small is a 33M-param English text embedding model (384 dims, MTEB
+ * 61.36) pre-bundled in the Supabase edge-runtime Docker image. Inference
+ * runs locally on the edge function worker via Supabase.ai.Session - no
+ * external API call, no Venice dependency.
+ *
+ * Mirrors EMBEDDING_MODEL in supabase/functions/_shared/backfill.ts -
+ * kept in sync by hand because the Deno island does not import from the
+ * Vite app.
  */
-export const VENICE_EMBEDDING_MODEL = 'text-embedding-bge-m3';
+export const VENICE_EMBEDDING_MODEL = 'gte-small';
 
 // ROTATING THE EMBEDDING MODEL INVALIDATES MORE THAN THIS STRING.
 // Transcript chunking is sized against this specific model's input
 // ceiling and its tokenizer's characters-per-token behaviour, both
 // measured empirically. Those constants -
-// VENICE_EMBEDDING_MAX_INPUT_TOKENS, EMBEDDING_CHARS_PER_TOKEN,
+// EMBEDDING_MAX_INPUT_TOKENS, EMBEDDING_CHARS_PER_TOKEN,
 // EMBEDDING_INPUT_SAFETY_MARGIN, EMBEDDING_MAX_INPUT_CHARS - live in
 // supabase/functions/_shared/backfill.ts beside the Deno island's
 // mirror of this id, because that is where they are consumed. Read the
 // measurement table on EMBEDDING_CHARS_PER_TOKEN there and re-measure
 // before changing the model here: every number in it is specific to
-// bge-m3's tokenizer, and a model with a different ceiling (the catalog
-// ranges from 512 to 32768) will size chunks wrongly in silence.
+// the model's tokenizer, and a model with a different ceiling will
+// size chunks wrongly in silence.
 
 // --- Image generation ------------------------------------------------------
 
@@ -711,9 +720,10 @@ export const VENICE_DEFAULT_IMAGE_MODEL = 'venice-sd35';
 
 /**
  * Native output dimension of VENICE_EMBEDDING_MODEL - the length of each
- * `embedding` array returned by /embeddings. bge-m3 emits 1024.
+ * `embedding` array returned by the edge function's /embed route.
+ * gte-small emits 384.
  */
-export const VENICE_EMBEDDING_DIMS = 1024;
+export const VENICE_EMBEDDING_DIMS = 384;
 
 /**
  * Column dimension of `memories.embedding` in `supabase/schema.sql`. We

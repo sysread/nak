@@ -198,7 +198,7 @@ per-row `user_id` scoping.
 - **Embeddings** (`docs/dev/embeddings.md`) - the Library is
   deliberately NOT a backfill source. It was one (a sixth
   `document_chunks` source) in the chunked design; the embeddings doc
-  is back to five sources.
+  now lists seven sources (none of which is document chunks).
 
 ## Gotchas
 

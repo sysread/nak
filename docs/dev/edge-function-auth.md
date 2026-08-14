@@ -35,11 +35,12 @@ read this end to end before writing the first query.
 
 Routes that do *not* outlive their request - `/embed`, `/usage`,
 `/text-parser`, `/image-generate`, `/complete` - stay on the
-user-scoped pattern (gateway's `verify_jwt` validates the JWT, the
-function reads the shared Venice key with the admin client purely
-to access `app_config`, but user-owned data is not touched). Adding
-a new b-strict route requires the same discipline below; otherwise
-keep the request-scoped shape.
+user-scoped pattern (gateway's `verify_jwt` validates the JWT;
+`/embed` uses the built-in `Supabase.ai.Session` and needs no
+Venice key at all, while the others read the shared Venice key
+with the admin client purely to access `app_config`, but user-owned
+data is not touched). Adding a new b-strict route requires the same
+discipline below; otherwise keep the request-scoped shape.
 
 ## The trust chain
 

@@ -1,6 +1,6 @@
 // Per-source embed-text composition for the server-side backfill route.
 //
-// Each embeddable table feeds Venice a single string built from a few of its
+// Each embeddable table feeds the embedding model a single string built from a
 // columns. The composition (which columns, in what order, with what soft
 // boundary, capped at what length) is load-bearing: a row embedded here must
 // produce the *same* vector it would have in the browser worker, or cosine
@@ -16,7 +16,7 @@
 // byte-for-byte. See docs/dev/in-progress/venice-edge-functions/embeddings.md.
 
 // Defensive truncation so a historical row can't loop the backfill on an
-// input Venice rejects for context overflow.
+// input the model rejects for context overflow.
 //
 // This deliberately does NOT track MAX_MEMORY_DATA_CHARS in
 // src/lib/memories.ts, which the write boundary lowered to 2500. Lowering
@@ -24,7 +24,7 @@
 // on a truncated body, and a row's vector must not depend on when it
 // happened to be embedded - that is the ranking drift the file preamble
 // warns about. The write cap bounds what NEW content can be; this bound
-// only exists to keep Venice from choking on a pre-cap row.
+// only exists to keep the model from choking on a pre-cap row.
 const MAX_MEMORY_EMBED_CHARS = 8000;
 
 // Recipes have no application-side length cap (cooklang is the source of truth
@@ -45,9 +45,9 @@ const MAX_FOLLOWUP_EMBED_CHARS = 2000;
 
 
 /**
- * Compose the string Venice embeds for a memory row. The label carries a lot
+ * Compose the string the embedding model sees for a memory row. The label carries a lot
  * of semantic weight for short notes ("gym PIN", "mom's birthday") so it leads
- * verbatim; the double-newline is a soft boundary that biases bge-m3 to weigh
+ * verbatim; the double-newline is a soft boundary that biases the model to weigh
  * label against body rather than smearing them.
  */
 export function buildMemoryEmbedInput(label: string, data: string): string {

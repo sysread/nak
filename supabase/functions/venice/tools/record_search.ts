@@ -8,9 +8,8 @@
 // failed tool call.
 
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
-import { padEmbeddingForStorage, VENICE_EMBEDDING_MODEL } from '../../_shared/backfill.ts';
-import { veniceEmbed } from '../../_shared/venice.ts';
-import { readVeniceKey } from './_venice_key.ts';
+import { padEmbeddingForStorage } from '../../_shared/backfill.ts';
+import { localEmbed } from '../../_shared/local-embed.ts';
 
 const RECORD_SEARCH_DEFAULT_LIMIT = 10;
 const RECORD_SEARCH_MAX_LIMIT = 30;
@@ -36,18 +35,10 @@ export const recordSearch: ToolDef = {
       typeof args.limit === 'number' ? args.limit : RECORD_SEARCH_DEFAULT_LIMIT;
     const limit = Math.max(1, Math.min(RECORD_SEARCH_MAX_LIMIT, Math.floor(rawLimit)));
 
-    const apiKey = await readVeniceKey(ctx.adminClient);
-    if (!apiKey) return { records: [] };
-
     let queryEmbedding: number[] | null = null;
     try {
-      const resp = await veniceEmbed({
-        apiKey,
-        model: VENICE_EMBEDDING_MODEL,
-        input: query,
-      });
-      const raw = resp.data[0]?.embedding;
-      if (raw && raw.length > 0) queryEmbedding = padEmbeddingForStorage(raw);
+      const raw = await localEmbed(query);
+      if (raw.length > 0) queryEmbedding = padEmbeddingForStorage(raw);
     } catch {
       return { records: [] };
     }

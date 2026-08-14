@@ -347,16 +347,16 @@ describe('verbosity', () => {
 });
 
 describe('embedding constants', () => {
-  it('stores the Venice embeddings model id', () => {
-    expect(VENICE_EMBEDDING_MODEL).toBe('text-embedding-bge-m3');
+  it('stores the embedding model id', () => {
+    expect(VENICE_EMBEDDING_MODEL).toBe('gte-small');
   });
   it('has storage dim > native dim so padding always has room', () => {
     expect(EMBEDDING_STORAGE_DIMS).toBeGreaterThanOrEqual(VENICE_EMBEDDING_DIMS);
   });
-  it('native dim matches bge-m3 (1024)', () => {
-    // If Venice ever swaps the model, this constant and the schema must
+  it('native dim matches gte-small (384)', () => {
+    // If the model ever swaps, this constant and the schema must
     // move together - the test exists so the swap isn't silent.
-    expect(VENICE_EMBEDDING_DIMS).toBe(1024);
+    expect(VENICE_EMBEDDING_DIMS).toBe(384);
   });
   it('storage dim matches the column in supabase/schema.sql (2048)', () => {
     expect(EMBEDDING_STORAGE_DIMS).toBe(2048);

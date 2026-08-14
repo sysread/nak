@@ -1230,9 +1230,10 @@ drop function if exists public.clear_thread_embedding_on_change();
 -- to read and write it directly without a schema it has to learn.
 --
 -- The `embedding` column is sized at 2048 dims for forward compatibility.
--- Venice's current embeddings model (text-embedding-bge-m3) emits 1024
--- dims; the worker zero-pads to 2048 before storing. Cosine similarity is
--- invariant to the extra zeros (the padded suffix contributes nothing to
+-- The current embedding model (gte-small, via Supabase.ai.Session) emits
+-- 384 dims; the backfill zero-pads to 2048 before storing. Cosine
+-- similarity is invariant to the extra zeros (the padded suffix
+-- contributes nothing to
 -- the dot product and scales both vectors' norms identically), so we can
 -- eventually switch to a native-2048 model without a column-type
 -- migration. See src/lib/models.ts for the padding helper.
@@ -13156,13 +13157,85 @@ $fn$;
 
 revoke all on function public.nak_trigger_embed_backfill() from public, anon, authenticated;
 
--- Enable pg_cron + pg_net and (re)schedule the every-5-minutes backfill. Guarded
--- on extension availability so the local dev stack (which ships neither) still
--- applies schema.sql cleanly - same lesson as the vector-extension ordering fix
--- near the top of this file. Idempotent: re-applying schema.sql reschedules the
--- single named job rather than stacking duplicates. The outer handler also
--- swallows a "pg_cron requires shared_preload_libraries" failure, so a partial
--- local image can't break the apply.
+-- One-time migration: null all embeddings stamped with a model other
+-- than gte-small so the backfill sweep re-embeds them. Using a broad
+-- condition (`embedding_model is not null and <> 'gte-small'`) rather
+-- than naming the old model id means a deploy that re-applies schema
+-- while the old edge function is still live also catches any rows the
+-- old function re-embedded with bge-m3 during the deploy window.
+-- Idempotent: once all rows carry 'gte-small', the WHERE clause
+-- matches nothing on re-apply.
+do $migration$
+begin
+  -- memories
+  update public.memories
+     set embedding = null,
+         embedding_model = null,
+         embedding_claim_holder = null,
+         embedding_claim_expires = null
+   where embedding_model is not null and embedding_model <> 'gte-small';
+
+  -- recipes
+  update public.recipes
+     set embedding = null,
+         embedding_model = null,
+         embedding_claim_holder = null,
+         embedding_claim_expires = null
+   where embedding_model is not null and embedding_model <> 'gte-small';
+
+  -- wiki_articles
+  update public.wiki_articles
+     set embedding = null,
+         embedding_model = null,
+         embedding_claim_holder = null,
+         embedding_claim_expires = null
+   where embedding_model is not null and embedding_model <> 'gte-small';
+
+  -- wiki_records
+  update public.wiki_records
+     set embedding = null,
+         embedding_model = null,
+         embedding_claim_holder = null,
+         embedding_claim_expires = null
+   where embedding_model is not null and embedding_model <> 'gte-small';
+
+  -- samskara_substrate (column is situation_embedding, not embedding)
+  update public.samskara_substrate
+     set situation_embedding = null,
+         embedding_model = null,
+         embedding_claim_holder = null,
+         embedding_claim_expires = null
+   where embedding_model is not null and embedding_model <> 'gte-small';
+
+  -- followups
+  update public.followups
+     set embedding = null,
+         embedding_model = null,
+         embedding_claim_holder = null,
+         embedding_claim_expires = null
+   where embedding_model is not null and embedding_model <> 'gte-small';
+
+  -- thread_chunks (created by the conversation-search feature, which
+  -- deployed to prod using bge-m3 before this migration lands)
+  update public.thread_chunks
+     set embedding = null,
+         embedding_model = null,
+         embedding_claim_holder = null,
+         embedding_claim_expires = null
+   where embedding_model is not null and embedding_model <> 'gte-small';
+
+exception when others then
+  raise notice 'embedding migration: %', sqlerrm;
+end
+$migration$;
+
+-- Enable pg_cron + pg_net and (re)schedule the backfill. Runs every minute
+-- (not every 5) so the one-time re-embedding drain after the gte-small
+-- model switch completes in hours rather than days. Once the queue is
+-- drained, the cadence can be relaxed back to */5. Guarded on extension
+-- availability so the local dev stack (which ships neither) still applies
+-- schema.sql cleanly. Idempotent: re-applying schema.sql reschedules the
+-- single named job rather than stacking duplicates.
 do $cron$
 begin
   if exists (select 1 from pg_available_extensions where name = 'pg_cron')
@@ -13174,7 +13247,7 @@ begin
     end if;
     perform cron.schedule(
       'nak-embed-backfill',
-      '*/5 * * * *',
+      '* * * * *',
       $job$ select public.nak_trigger_embed_backfill(); $job$
     );
   end if;

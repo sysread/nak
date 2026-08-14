@@ -45,9 +45,9 @@ import { createEdgeLogger, type EdgeLogger } from '../../_shared/edge-log.ts';
 import { publishSamskaraMint } from '../../_shared/samskara-mint.ts';
 import { readVeniceKey } from '../tools/_venice_key.ts';
 import { toolComplete } from '../tools/_venice_complete.ts';
-import { veniceEmbed, VeniceError } from '../../_shared/venice.ts';
+import { VeniceError } from '../../_shared/venice.ts';
+import { localEmbed } from '../../_shared/local-embed.ts';
 import {
-  VENICE_EMBEDDING_MODEL,
   padEmbeddingForStorage,
 } from '../../_shared/backfill.ts';
 import { SAMSKARA_MODEL } from '../../_shared/agent-models.ts';
@@ -668,15 +668,10 @@ function shorten(s: string, max = 80): string {
  * backfill uses for substrate. Null on any failure - the caller skips
  * the mint rather than inserting an unfireable row.
  */
-async function embedPrediction(apiKey: string, prediction: string): Promise<number[] | null> {
+async function embedPrediction(prediction: string): Promise<number[] | null> {
   try {
-    const resp = await veniceEmbed({
-      apiKey,
-      model: VENICE_EMBEDDING_MODEL,
-      input: prediction,
-    });
-    const raw = resp.data[0]?.embedding;
-    if (!raw || raw.length === 0) return null;
+    const raw = await localEmbed(prediction);
+    if (raw.length === 0) return null;
     return padEmbeddingForStorage(raw);
   } catch (err) {
     if (err instanceof VeniceError && err.kind === 'rate_limit') throw err;
@@ -1114,7 +1109,7 @@ async function mintTier1Probe(
     return;
   }
 
-  const predEmbedding = await embedPrediction(apiKey, minted.prediction);
+  const predEmbedding = await embedPrediction(minted.prediction);
   if (!predEmbedding) return;
 
   // Dedup guard: the minter only sees the cluster and cheerfully
@@ -1336,7 +1331,7 @@ async function assocHubOnce(
     return 'verdict';
   }
 
-  const predEmbedding = await embedPrediction(apiKey, minted.prediction);
+  const predEmbedding = await embedPrediction(minted.prediction);
   if (!predEmbedding) {
     // Reached a mint decision but couldn't embed it (transient). Leave
     // unconsumed; the retry re-mints and embeds.
@@ -1466,7 +1461,7 @@ async function mintTier2Probe(
     return;
   }
 
-  const predEmbedding = await embedPrediction(apiKey, minted.prediction);
+  const predEmbedding = await embedPrediction(minted.prediction);
   if (!predEmbedding) return;
 
   try {

@@ -14,7 +14,7 @@ import {
 import {
   EMBEDDING_CHARS_PER_TOKEN,
   EMBEDDING_INPUT_SAFETY_MARGIN,
-  VENICE_EMBEDDING_MAX_INPUT_TOKENS,
+  EMBEDDING_MAX_INPUT_TOKENS,
 } from '../_shared/backfill.ts';
 
 function msg(over: Partial<TranscriptMessage> & { id: string }): TranscriptMessage {
@@ -33,10 +33,10 @@ Deno.test('chunk budget stays under the model ceiling with margin to spare', () 
   // The whole point of the margin is that the estimate can be wrong in
   // the direction of "more tokens than we thought" and still fit.
   const estimatedTokens = EMBEDDING_MAX_INPUT_CHARS / EMBEDDING_CHARS_PER_TOKEN;
-  assert(estimatedTokens <= VENICE_EMBEDDING_MAX_INPUT_TOKENS);
+  assert(estimatedTokens <= EMBEDDING_MAX_INPUT_TOKENS);
   assertEquals(
     Math.round(estimatedTokens),
-    Math.round(VENICE_EMBEDDING_MAX_INPUT_TOKENS * EMBEDDING_INPUT_SAFETY_MARGIN),
+    Math.round(EMBEDDING_MAX_INPUT_TOKENS * EMBEDDING_INPUT_SAFETY_MARGIN),
   );
 });
 
@@ -44,6 +44,8 @@ Deno.test('chars-per-token divisor stays under the densest measured prose sample
   // Measured against bge-m3's reported prompt_tokens: tool-call JSON
   // came in at 2.24 chars/token and cooklang at 2.44. A divisor above
   // those would under-count tokens and overflow on ordinary threads.
+  // gte-small's BERT tokenizer produces more tokens per char for prose,
+  // so 2.2 is even more conservative under the current model.
   assert(EMBEDDING_CHARS_PER_TOKEN <= 2.24);
 });
 
@@ -196,10 +198,15 @@ Deno.test('chunkTranscript is empty for a thread with nothing indexable', () => 
   assertEquals(chunkTranscript([msg({ id: 'a', content: '' })], 100), []);
 });
 
-Deno.test('the real default budget fits a long ordinary turn in one chunk', () => {
+Deno.test('the real default budget fits a short ordinary turn in one chunk', () => {
   // Sanity that the derived constant is in a usable range - a budget
   // small enough to split every turn would shred retrieval context.
-  const chunks = chunkTranscript([msg({ id: 'a', content: 'word '.repeat(1_000) })]);
+  // gte-small's 512-token ceiling yields ~957 chars per chunk; a
+  // typical short turn (800 chars of prose) fits in one. Longer turns
+  // span multiple chunks, which is correct - a chunk bigger than the
+  // model's token limit would be silently truncated.
+  const chunks = chunkTranscript([msg({ id: 'a', content: 'word '.repeat(160) })]);
   assertEquals(chunks.length, 1);
-  assert(EMBEDDING_MAX_INPUT_CHARS > 10_000);
+  assert(EMBEDDING_MAX_INPUT_CHARS > 500);
+  assert(EMBEDDING_MAX_INPUT_CHARS < 2000);
 });

@@ -172,11 +172,12 @@ toast is just a glance cue that the bias model is forming.
   harness.
 - `supabase/functions/_shared/embed-input.ts` - the
   `samskara-substrate` entry in `EMBED_SOURCES` registers substrate
-  as a third source the server-side embeddings backfill drains
-  alongside memories and threads. The cron-driven backfill claims
+  as one of seven sources the server-side embeddings backfill
+  drains. The cron-driven backfill claims
   `samskara_substrate where situation_embedding is null and situation
   is not null` (via `samskara_claim_next_substrate_embed`), embeds via
-  Venice, and saves under a guard. Mirrors the memories source entry.
+  `localEmbed` (Supabase.ai.Session), and saves under a guard.
+  Mirrors the memories source entry.
 - `supabase/functions/venice/agents/samskara.ts` - the formation
   pipeline. The five agent prompts (`ASSIMILATOR_PROMPT`,
   `RELATOR_PROMPT`, `MINTER_PROMPT`, `TIER2_MINTER_PROMPT`,
@@ -205,7 +206,7 @@ toast is just a glance cue that the bias model is forming.
   `samskara_cluster_thread_fires(thread, threshold)` that
   greedy-clusters a thread's fires by cosine similarity on
   their samskaras' prediction embeddings (per-cohort, in score
-  order; default threshold 0.7 sits in BGE-M3's "topically
+  order; default threshold 0.7 sits in gte-small's "topically
   similar" band, with a slider in the modal for live tuning -
   higher reads as "near-duplicate sentence", lower reads as
   "loosely related"). A private
@@ -278,7 +279,7 @@ toast is just a glance cue that the bias model is forming.
   picks up the `samskara-substrate` source automatically. No
   samskara-specific entry point on that side; the `EMBED_SOURCES`
   registry entry shapes the same claim/build/save flow memories and
-  threads do.
+  the other sources do.
 - **Mint relay** - `insertMint` publishes a `samskara-mint`
   Broadcast event (`(tier, valence, confidence)`) on the user's
   private `samskaras:<uuid>` topic via
@@ -320,8 +321,8 @@ chat time; enriched in the background.
   charge; zero is neutral.
 - `situation_embedding vector(2048)` - null until the
   embeddings backfill fills it from the enriched `situation`
-  text. Padded from 1024-dim Venice native via
-  `padEmbeddingForStorage` (see `src/lib/models.ts`).
+  text. Padded from 384-dim gte-small native via
+  `padEmbeddingForStorage` (see `src/lib/models/index.ts`).
 - Claim columns for each pending phase: `(embedding_claim_holder,
   embedding_claim_expires)` for the substrate-embed source and
   `(assimilate_claim_holder, assimilate_claim_expires)` for the
@@ -532,9 +533,9 @@ with an explicit `p_user_id`.
   than `STALE_CEILING_HOURS` (24h). Fetch/RPC errors are
   swallowed and surface as null so a transient blip doesn't
   propagate into the orchestrator's priming path.
-- `fireSamskaras({ admin, userId, apiKey, threadId, userRound,
+- `fireSamskaras({ admin, userId, threadId, userRound,
   userText, signal?, log }): Promise<FireResult | null>` - embeds
-  `userText` via Venice, pads the query, runs `samskara_fire_top_k`,
+  `userText` via `localEmbed`, pads the query, runs `samskara_fire_top_k`,
   drops dead-tail rows below `FIRE_SCORE_FLOOR`, and persists a
   `samskara_fires` row per surviving hit via `samskara_record_fires`.
   `cohort_id` is generated with `crypto.randomUUID`. Returns null
@@ -1672,7 +1673,7 @@ summarizer reads samskaras to feed the agent.
   usually assimilates turn N-1's stub; the sweep catches
   strays. The full in-session path for a new claim is: stub
   (browser, end of turn N) -> assimilate (tail of N+1) ->
-  situation embedding (the */5 embed backfill) -> mint probe
+   situation embedding (the every-minute embed backfill) -> mint probe
   (tail of N+2). A few minutes and a couple of turns is the
   expected mint latency - a toast that doesn't appear on the
   very turn that earned it is normal, not a bug.

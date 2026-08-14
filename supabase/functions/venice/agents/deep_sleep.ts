@@ -26,10 +26,9 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createEdgeLogger, type EdgeLogger } from '../../_shared/edge-log.ts';
-import { veniceEmbed } from '../../_shared/venice.ts';
+import { localEmbed } from '../../_shared/local-embed.ts';
 import {
   padEmbeddingForStorage,
-  VENICE_EMBEDDING_MODEL,
 } from '../../_shared/backfill.ts';
 import { readVeniceKey } from '../tools/_venice_key.ts';
 import { classifyMemoryConfidence } from '../tools/memory_search.ts';
@@ -376,14 +375,9 @@ async function pickSeed(
  */
 type EmbedFn = (input: string) => Promise<number[] | undefined>;
 
-function defaultEmbed(apiKey: string): EmbedFn {
+function defaultEmbed(): EmbedFn {
   return async (input) => {
-    const response = await veniceEmbed({
-      apiKey,
-      model: VENICE_EMBEDDING_MODEL,
-      input,
-    });
-    return response.data[0]?.embedding;
+    return await localEmbed(input);
   };
 }
 
@@ -649,7 +643,7 @@ export async function runDeepSleepSweepTick(
       adminClient,
       userId,
       seed,
-      opts.embed ?? defaultEmbed(apiKey),
+      opts.embed ?? defaultEmbed(),
     );
     if (batch.length < DEEP_SLEEP_MIN_BATCH_SIZE) {
       // Lonely seed: stamp its visit so the next sweep moves on; no
@@ -735,7 +729,7 @@ export async function runDeepSleepManual(
       adminClient,
       userId,
       seed,
-      opts.embed ?? defaultEmbed(apiKey),
+      opts.embed ?? defaultEmbed(),
     );
     onProgress?.({ kind: 'preparing', batchSize: batch.length });
 
