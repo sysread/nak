@@ -116,8 +116,9 @@ Deno.test('the render version is bumped whenever this module changes shape', () 
   // The rechunk unit re-qualifies threads on message changes, which
   // cannot see an edit to the rendering rules. Without a bump, changing
   // what gets indexed leaves every existing thread on the old shape
-  // forever. Version 2 is "tool result bodies dropped".
-  assertEquals(CHUNK_RENDER_VERSION, 2);
+  // forever. Version 3 is "chunk budget cut for gte-small's 512-token
+  // max sequence length".
+  assertEquals(CHUNK_RENDER_VERSION, 3);
 });
 
 Deno.test('renderMessage drops rows that carry nothing indexable', () => {
