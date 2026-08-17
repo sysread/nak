@@ -5,6 +5,17 @@
 // trigger that nulls the embedding, queuing the row for re-embedding
 // by the worker; a confidence-only patch does not. Wire schema in
 // src/lib/tools/memory_update.schema.ts.
+//
+// The echoed row deliberately omits `topics`. The same label/data change
+// also fires clear_memory_topics_on_change, which empties the column so
+// the memory-topics curation unit re-tags the row, and the RETURNING
+// clause reads the row back AFTER that trigger - so the field would read
+// as an empty list precisely when the model had just edited the text.
+// Reporting it invites "your tags are gone" on a write that lost
+// nothing. Selecting it only on the confidence-only path (where it does
+// survive) would be worse: the model has no way to tell an accurate
+// empty list from a re-queued one. memory_search and memory_get are the
+// read-back paths once the unit has caught up.
 
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { appendMemoryChangelog } from './_memory_changelog.ts';
@@ -90,7 +101,7 @@ export const memoryUpdate: ToolDef = {
       .update(patch)
       .eq('id', id)
       .eq('user_id', ctx.userId)
-      .select('id, label, data, confidence, topics, created_at, updated_at')
+      .select('id, label, data, confidence, created_at, updated_at')
       .single();
     if (error) throw new Error(`updateMemory failed: ${error.message}`);
 
