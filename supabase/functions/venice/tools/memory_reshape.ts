@@ -83,7 +83,13 @@ export const memoryReshape: ToolDef = {
       .update(patch)
       .eq('id', id)
       .eq('user_id', ctx.userId)
-      .select('id, label, data, confidence, topics, created_at, updated_at')
+      // No `topics`: a reshape always changes label or data, so it always
+      // fires clear_memory_topics_on_change, and the RETURNING clause
+      // reads the row back after that trigger has emptied the column.
+      // The field could only ever echo an empty list here, reading as
+      // "the reshape dropped the tags" when the curation unit has merely
+      // been asked to re-tag. Same reasoning as memory_update.
+      .select('id, label, data, confidence, created_at, updated_at')
       .single();
     if (error) throw new Error(`reshapeMemory failed: ${error.message}`);
 

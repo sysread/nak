@@ -857,6 +857,23 @@ renders the delta as a chip (`memorySizeDelta` in
 
 ## Gotchas
 
+- **A write tool must not echo `topics`.** `memory_update` and
+  `memory_reshape` select the row back with `RETURNING`, which runs
+  AFTER `clear_memory_topics_on_change` has emptied the column to
+  re-queue the row for the memory-topics curation unit. Echoing the
+  field therefore reports an empty tag list at exactly the moment the
+  model edited the text, and reads as "your tags were dropped" on a
+  write that lost nothing - the same false alarm the recipe tools hit
+  (see `./cookbook.md`). Both tools leave `topics` out of the select
+  entirely; `tests/memory_write_shape.test.ts` asserts on the column
+  list, not just the response, so re-adding it to the select fails the
+  gate. Selecting it only on `memory_update`'s confidence-only path
+  (where the trigger does not fire and the tags do survive) would be
+  worse than omitting it: the model would have no way to tell an
+  accurate empty list from a re-queued one. `memory_search` and
+  `memory_get` are the read-back paths. `memory_create` keeps its
+  `topics` because an insert never fires the trigger - a new memory
+  genuinely has no tags yet.
 - **DELETE events need the (id, user_id) replica identity.** The
   `subscribeToMemoryChanges` relay filters on `user_id`, but a
   DELETE's WAL record carries only the table's replica identity -

@@ -8,7 +8,9 @@ export const recordDeleteSchema = {
     'Delete a record the user no longer wants kept. Provide id (from ' +
     'record_list or record_search). Hard delete - records are historical ' +
     'documentation, so only remove one when the user explicitly asks or ' +
-    'it is clearly a duplicate / mistake. Returns {deleted: true}.',
+    'it is clearly a duplicate / mistake. Returns {deleted: true}, or ' +
+    '{deleted: false} when no record with that id exists - check the ' +
+    'flag rather than assuming the delete landed.',
   shortDescription: 'delete a record',
   parameters: {
     type: 'object',
