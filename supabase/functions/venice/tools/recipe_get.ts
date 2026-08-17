@@ -8,12 +8,7 @@
 // Auth: b-strict. recipes.user_id direct ownership filter.
 
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
-
-interface RecipePhotoMeta {
-  id: string;
-  position: number;
-  label: string | null;
-}
+import { readRecipePhotoMeta } from './_recipe_helpers.ts';
 
 export const recipeGet: ToolDef = {
   name: 'recipe_get',
@@ -34,35 +29,10 @@ export const recipeGet: ToolDef = {
     if (recipeErr) throw new Error(`getRecipe failed: ${recipeErr.message}`);
     if (!recipe) return { found: false };
 
-    // Newest recipe_version row carries the current photo set. The
-    // browser-side wrapper joins recipe_version_images in one round;
-    // mirror the join here. RLS-OFF rationale: recipe ownership was
-    // already validated above, and recipe_versions inherits ownership
-    // through recipe_id, so an unscoped lookup by recipe_id is safe.
-    const { data: versionRow, error: versionErr } = await ctx.adminClient
-      .from('recipe_versions')
-      .select('id, recipe_version_images(position, image_id, label)')
-      .eq('recipe_id', id)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (versionErr) throw new Error(`listRecipePhotoMeta failed: ${versionErr.message}`);
-
-    let photos: RecipePhotoMeta[] = [];
-    if (versionRow) {
-      type LinkRow = { position: number; image_id: string; label: string | null };
-      const links = (versionRow as { recipe_version_images?: LinkRow[] | null })
-        .recipe_version_images;
-      if (Array.isArray(links)) {
-        photos = links
-          .map((l) => ({
-            id: l.image_id,
-            position: l.position,
-            label: l.label ?? null,
-          }))
-          .sort((a, b) => a.position - b.position);
-      }
-    }
+    // Newest recipe_version row carries the current photo set; the
+    // shared helper owns that join (recipe_update reads it back the
+    // same way). Ownership was validated by the select above.
+    const photos = await readRecipePhotoMeta(ctx.adminClient, id);
 
     return {
       found: true,

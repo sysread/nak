@@ -18,7 +18,9 @@ export const recipeUpdateSchema = {
     'multi-word braced name (`@pre-minced garlic{1%tbsp}`), not two ' +
     '`@` tokens; mark optional ingredients with `@?` ' +
     '(`@?cilantro{2%tbsp}`). change_message is REQUIRED and lands in the recipe ' +
-    'history. Returns the updated row.',
+    "history. Returns the updated row plus the recipe's current photo " +
+    'list, which this tool never changes - use the recipe_photos_* ' +
+    'tools to edit photos.',
   shortDescription: 'edit a saved recipe',
   parameters: {
     type: 'object',

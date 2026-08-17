@@ -309,6 +309,11 @@ yet.
   "mexican".
 - **Tags are managed for you.** No manual tagging UI; any edit to a
   recipe re-queues it, and the worker re-tags it on its next pass.
+- **An edited recipe goes untagged until the worker catches up.**
+  Re-queuing clears the old tags immediately, so a recipe you just
+  edited drops out of its topic filters and shows under **untagged**
+  for a while - the worker's sweep runs hourly. The tags come back
+  on their own; nothing was lost.
 
 The pill row below the dropdown carries the active selection; each
 pill's × clears just that one tag, and a "clear" link appears when

@@ -46,11 +46,18 @@ unaffected.
   `CustomEvent` (`nak:recipes:changed`) so tools stay UI-unaware - its
   handler calls `loadRecipes`, i.e. a tool mutation resets the list to
   the top rather than trying to patch a row in the middle of a page.
-- `src/lib/tools/recipe_save.ts`, `recipe_list.ts`, `recipe_get.ts`,
-  `recipe_update.ts`, `recipe_delete.ts`, `recipe_photos_attach.ts`,
-  `recipe_photos_remove.ts`, `recipe_photos_reorder.ts`,
-  `recipe_photo_label_set.ts` — the nine LLM tools. Mutating tools
-  fire `notifyCookbookChanged` on success.
+- `src/lib/tools/recipe_*.schema.ts` — the nine LLM tools' wire
+  schemas (name, description, JSON Schema parameters). Schema only;
+  the browser never executes a recipe tool.
+- `supabase/functions/venice/tools/recipe_save.ts`, `recipe_list.ts`,
+  `recipe_get.ts`, `recipe_update.ts`, `recipe_delete.ts`, and
+  `recipe_photos.ts` (which carries all four photo verbs) — the
+  implementations, dispatched function-side against the admin client.
+  `_recipe_helpers.ts` holds `readRecipePhotoMeta`, the "newest
+  version's link set" read that `recipe_get` and `recipe_update`
+  both answer photo questions with. Mutating tools reach the UI
+  through the realtime relay, not `notifyCookbookChanged` - see the
+  relay gotcha below.
 - `src/lib/supabase.ts` — `Recipe`, `RecipeVersion`, `RecipePhoto`,
   `RecipePhotoMeta`, and `RecipePhotoInput` types + `createRecipe /
   updateRecipe / deleteRecipe / getRecipe / listRecipes /
@@ -284,9 +291,12 @@ unaffected.
 - `MAX_RECIPE_COOKLANG_CHARS = 20_000`, `MAX_RECIPE_TITLE_CHARS = 160`
   — shared between the tools and the modal so schema validation
   agrees everywhere.
-- Tool contract follows the standard `ToolDef` (see `./tools.md`);
-  mutating tools (`recipe_save / update / delete`) call
-  `notifyCookbookChanged()` before returning.
+- Tool contract follows the standard `ToolDef` (see `./tools.md`).
+  The tools run function-side, so a mutation reaches the UI through
+  the `recipes` realtime relay rather than an in-process notify call.
+- A mutating tool's response must describe state it actually read
+  back, not the shape the caller asked for. See the echoed-row gotcha
+  below for the two fields this went wrong on.
 
 ## Versioning
 
@@ -500,6 +510,23 @@ keystrokes; the LLM tool path keeps using `listRecipes`.
   doesn't grow a new concern. Edit-pane photo controls live in
   their own form-row between the change-message field and the
   cooklang+preview panes.
+- **A tool's echoed row is a claim about live state - read it back.**
+  `recipe_update` answered with a hardcoded `photos: []` and echoed the
+  `topics` column, and both read as data loss to the model, which
+  relayed "your photos and tags are gone" to the user after an edit
+  that had preserved every one of them. Photos: the RPC inherits the
+  previous version's links when `p_set_image_ids` is false, so the tool
+  reads the post-write link set back through
+  `readRecipePhotoMeta` (`tools/_recipe_helpers.ts`, shared with
+  `recipe_get`) instead of asserting a shape. Topics: the
+  `clear_recipe_topics_on_change` trigger empties the column so the
+  curation unit re-tags the row, and the RPC's `return query` reads the
+  row back AFTER that trigger fires - so the field is always `[]` on
+  this path and the tool strips it rather than echoing a number that
+  only ever means "re-queued." `recipe_save`'s `photos: []` is a
+  different case and stays: a create passes `p_image_ids: null`, so
+  the recipe genuinely has no photos yet.
+  `tests/recipe_update.test.ts` guards both.
 - **Photo IDs are stable across versions.** A photo upserted into
   `recipe_images` keeps the same id forever for that user;
   reordering or appending changes the link rows, not the image

@@ -4,14 +4,16 @@
 // (p_user_id-aware). Cooklang validation mirrors recipe_save's
 // inline check.
 //
-// What we skip: the photo set is left alone (the RPC inherits the
-// previous version's link set when p_set_image_ids=false). The
-// browser-side echo of "current photo set" via listRecipePhotoMeta
-// is also skipped - the recipe-photo manipulation tools aren't
-// ported for v1, and recipe_get is the alternative when the model
-// needs to see the current photos.
+// This tool never sets the photo list (p_set_image_ids=false), so the
+// RPC carries the previous version's links onto the new version. The
+// response still reads those links back and reports them: an update
+// that reported `photos: []` looked like it had wiped the recipe's
+// photos, and the model relayed that to the user as data loss on an
+// edit that had in fact preserved every photo. Changing the photo set
+// is the recipe_photos_* tools' job.
 
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
+import { readRecipePhotoMeta } from './_recipe_helpers.ts';
 import { ArgErrors } from './_validate.ts';
 
 // Mirror of src/lib/recipe-limits.ts - the caps the wire schema
@@ -133,7 +135,18 @@ export const recipeUpdate: ToolDef = {
     const rows = (data ?? []) as Array<Record<string, unknown>>;
     if (rows.length === 0) throw new Error('updateRecipe returned no row');
 
-    return { ...rows[0], photos: [] };
+    // Drop `topics` from the echoed row. The
+    // clear_recipe_topics_on_change trigger empties the column on any
+    // content edit so the recipe-topics curation unit re-tags it, and
+    // the RPC reads the row back after that trigger has fired - so this
+    // field is ALWAYS an empty array here, whatever the recipe was
+    // tagged with a moment earlier and will be tagged with again once
+    // the unit catches up. Echoing it invited the model to report the
+    // tags as lost. Callers that want the live tags read them back with
+    // recipe_get after the curation unit has run.
+    const { topics: _requeuedTopics, ...row } = rows[0];
+
+    return { ...row, photos: await readRecipePhotoMeta(ctx.adminClient, id) };
   },
 };
 
