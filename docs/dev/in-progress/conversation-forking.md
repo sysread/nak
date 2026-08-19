@@ -371,6 +371,18 @@ Pure ordering refactor; transcripts render identically.
   at fractional midpoints instead of forged created_at; the
   move-to-tail path sets position = max+1 instead of re-stamping
   created_at.
+- Prove completeness of the switch, don't assert it: grep for
+  `order by.*created_at` (TS and SQL) and require every remaining
+  hit to be one of the documented cross-thread orderings. Ship it
+  as a guardrail test with an explicit allowlist of the legitimate
+  sites (same pattern as the existing style/markdownlint guardrail
+  tests), not a one-time manual check - the failure mode this
+  guards against is invisible on fresh data, where created_at
+  order and position order coincide; it only diverges once a
+  recovery row lands with a fractional position and an honest
+  timestamp. A missed reader works in every demo and misorders
+  exactly the transcripts that needed healing, and a guardrail
+  keeps the next session from reintroducing one.
 - Verify: gate + M0 ordering baseline re-run.
 
 ### M2 - fork columns + transcript resolver
