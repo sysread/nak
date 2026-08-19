@@ -176,7 +176,10 @@ objects, since the inline path reclaimed those explicitly.
 ### GC
 
 A scheduled SQL function (pg_cron, alongside the existing sweeps),
-also callable ad hoc for tests. Per pass:
+also callable ad hoc for tests. Schedule it at minute :43 - the
+hourly ladder is dense (3, 7, 13, 17, 23, 27, 33, 37, 47, 53, 57
+are taken, plus every-minute and every-ten-minute jobs), and :43
+is the gap clear of all of them. Per pass:
 
 1. Compute each thread's **keep watermark**, bottom-up over the
    forest: infinity if visible; else the max fork position among
@@ -240,7 +243,8 @@ would duplicate output:
 | bias | full transcript | resolver + fork framing |
 | context recall / intuition priming | full transcript | resolver + boundary marker; cached payloads never inherited |
 | conversation_get tool / recall agents | other threads' transcripts | resolver + boundary marker; list-style tools filter hidden threads; direct-id fetch of a hidden thread stays allowed (its content is part of live conversations) |
-| auto-title | placeholder-titled threads | no change - forks inherit a real title so the poll never matches them |
+| auto-title | placeholder-titled threads | no code change, but note: a fork of a still-placeholder-titled parent inherits the placeholder, so the poll matches the fork and titles it independently. Acceptable - both threads get real titles - but two threads sharing an opening may get near-identical titles |
+| followups | user-scoped, cross-thread | no change - followups attach to the user's life, not a thread, so they surface in forks (and survive hidden parents) by existing design |
 | digest | day-window across threads | no change; note the gotcha that pre-fork rows report under the owning (possibly hidden) thread's title |
 
 **Fork framing presentation** (for the workers marked "fork
@@ -332,9 +336,24 @@ Pure ordering refactor; transcripts render identically.
 
 - Schema: `messages.position numeric`; backfill per thread by
   (created_at, id); before-insert trigger assigns floor(max)+1
-  under a per-thread row lock on the parent thread (serializes
-  concurrent appends; writers already touch the thread row);
-  unique index on (thread_id, position).
+  under a per-thread row lock on the parent thread; unique index
+  on (thread_id, position).
+- The thread-row lock is NEW contention the trigger introduces,
+  not a lock writers already held: the edge function's round
+  persistence inserts touch only the messages table, and the
+  browser's insert updates the thread row in a separate call after
+  the insert, not in the same transaction. The lock is exactly the
+  serialization appends need (two writers on the same thread take
+  turns; different threads never contend), and insert transactions
+  are short, but it is a behavior change to acknowledge, not a
+  free ride on an existing lock.
+- Index companions for the ordering switch: the two indexes that
+  serve created_at ordering today - the per-thread transcript
+  index and the partial streaming-probe index - need position
+  equivalents ((thread_id, position asc); (thread_id, position
+  desc) where streaming), or the switched queries sort on top of a
+  scan. Drop the created_at versions in the same change once the
+  last reader has switched - dead indexes are dead code.
 - Switch every message read site from order-by created_at to
   order-by position (~10 files: browser list, edge agents, tools).
 - Switch the SQL side too: schema.sql has ~14 per-thread
@@ -366,6 +385,11 @@ so the resolver provably returns exactly the old per-thread query.
   context agent, summary/topics/bias/recall/conversation_get,
   agent-tools transcript loader). The chunker and the by-id /
   windowed readers stay on direct queries per the worker table.
+- Audit consumers of the browser message list for a uniform
+  `thread_id` assumption: post-resolver, the list contains rows
+  from ancestor threads too (UUID ids keep id-keyed merging
+  correct, but anything reading a row's thread_id to answer
+  "which thread am I in" gets an ancestor's id on a fork).
 - Verify: gate + streaming and regenerate baselines re-run.
 
 ### M3 - hidden threads + GC + delete rewired
@@ -380,6 +404,20 @@ Externally identical delete behavior via new machinery.
   auto-title placeholder poll, the realtime thread-change handlers,
   and every list-style conversation tool. Grep for `from('threads')`
   and the thread-facing RPCs and check each site against this list.
+- The semantic chunk-search RPC is on that list and easy to miss
+  because it is server-side: it joins chunks to threads filtering
+  only by user, and BOTH of its edge-function callers (the
+  conversation-search tool and context-recall's conversation
+  layer) exclude only the current thread post-fetch. Without a
+  hidden filter in the RPC, a deleted thread's chunks keep
+  surfacing in recall until GC collects them. Add the one-line
+  hidden filter in M3. NOTE the M4 handoff: once forks exist, a
+  hidden ancestor's chunks are live content (they belong to
+  visible conversations' prefixes), so M4's hidden-hit resolution
+  must REPLACE the blanket filter on the semantic path - include
+  hidden threads' chunks, resolve each hit to the nearest visible
+  descendant, drop hits with none. Leaving the M3 filter in place
+  through M4 would silently blind recall to every shared prefix.
 - Whole-thread delete becomes "hide"; inline storage reclamation
   retires (daily attachment-gc takes over; confirm PDF-page
   coverage).
