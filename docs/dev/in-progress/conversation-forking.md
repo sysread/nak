@@ -82,6 +82,14 @@ directly by the edge-function agents. This is the single choke
 point every full-transcript reader goes through; with zero forks
 in the database it degenerates to exactly today's one-thread query.
 
+The streaming chat loop needs no switch of its own: it never reads
+the messages table for history - it receives the transcript in the
+request body, built by the browser from its in-memory message
+list. The loop therefore inherits fork resolution the moment the
+browser's message load switches to the resolver. The edge-function
+agents are the opposite case: they read transcripts directly from
+the DB and are exactly the readers the resolver switch targets.
+
 ### Fork semantics
 
 `forkConversation(threadId, msgId)` - one primitive for every
@@ -99,9 +107,18 @@ entry point:
 - Does NOT inherit: summary, topics, cached priming payloads
   (intuition / context-recall - they are keyed to message ids and
   would mis-prime the fork), archived state, response claims.
-- Worker cursors are **seeded to the fork point** (see the worker
-  table below) so extraction-type workers treat the shared prefix
-  as already processed.
+- Worker cursors start **null** - nothing is seeded. This is
+  sufficient: a fresh fork's own segment is empty, so the claim
+  RPCs find no terminal message and never fire; once the first
+  post-fork turn lands, the per-thread "rows since cursor" reads
+  cover only the fork's own segment, and the inherited prefix
+  (owned by ancestors) can never match a per-thread query. The
+  prefix is structurally unreachable for re-processing. Seeding
+  cursors to the fork point was considered and rejected: the
+  fork-point message belongs to another thread, and a cursor id
+  that a worker's own per-thread query can never return is a
+  cross-thread oddity every cursor consumer would have to
+  tolerate.
 
 Two callers:
 
@@ -134,6 +151,15 @@ Edge cases:
   completion on the fork - no `supersededIds`, because nothing in
   the fork needs deleting. The existing superseded-rows path stays
   for private-tail regenerates.
+- Recovery synthesis over an unhealed inherited prefix (the parent
+  was interrupted mid-turn and the user forked from before the
+  interruption): the in-memory synthesis runs as usual so every
+  reader sees a wire-valid sequence, but the persistence pass must
+  only write synthetic rows whose gap lies in the fork's **own
+  segment** - persisting into an ancestor's segment would drop
+  rows into the wrong thread's coordinate system. Inherited-prefix
+  gaps stay in-memory-only for the fork; they heal durably when
+  (and only when) a thread that owns the gap revisits it.
 
 ### Whole-thread deletion
 
@@ -155,17 +181,28 @@ also callable ad hoc for tests. Per pass:
 1. Compute each thread's **keep watermark**, bottom-up over the
    forest: infinity if visible; else the max fork position among
    live children; else nothing.
-2. Delete rows in a thread's segment past its watermark (a hidden
-   parent's tail beyond its last surviving fork point is
-   unreachable).
-3. Delete thread rows whose watermark is "nothing"; the existing
-   cascade / set-null policies handle every downstream table -
-   they were all designed for row destruction already.
+2. Process threads in a single **leaf-to-root** pass. Per thread:
+   watermark "nothing" means delete the thread row (its children
+   are already gone by the traversal order, and the cascade
+   removes its segment); a finite watermark means the thread
+   survives and only its segment rows past the watermark are
+   trimmed. The existing cascade / set-null policies handle every
+   downstream table - they were all designed for row destruction
+   already.
+
+The leaf-to-root order is load-bearing, not a style choice. A
+chain of hidden threads that are all collectible (edit-fork of an
+edit-fork, then the leaf is deleted) has each child's fork-point
+FK pointing into its parent's segment. Deleting a parent's rows -
+directly or via thread-row cascade - is blocked by the restrict FK
+until the child thread row is gone, so children must be collected
+before parents. A two-phase design (trim all segments, then drop
+all empty threads) deadlocks on exactly this case.
 
 The GC never touches a reachable row, so `forked_from_msg_id`
 (declared `on delete restrict` as a belt-and-suspenders check) can
-never dangle: the restrict FK turns a GC bug into a loud error
-instead of a silently broken fork.
+never dangle: the restrict FK turns a GC ordering bug into a loud
+error instead of a silently broken fork.
 
 ### Reference-graph audit (why destruction is already safe)
 
@@ -193,11 +230,11 @@ would duplicate output:
 
 | Worker | Reads | Treatment |
 | --- | --- | --- |
-| summary | full transcript | resolver + fork framing; summary covers the whole conversation (the fork IS a whole conversation); cursor seeded so nothing runs until the first post-fork turn |
+| summary | full transcript | resolver + fork framing; summary covers the whole conversation (the fork IS a whole conversation); nothing runs until the first post-fork turn (empty own segment = no terminal message for the claim RPC) |
 | thread topics | full transcript | same as summary |
-| reflection (memory) | new rows since cursor | cursor seeded to fork point; prefix already reflected in the parent - no duplicate memories |
-| samskara evaluation | new rows since cursor | cursor seeded; same rationale |
-| wiki extraction + wiki records | new rows since cursor | cursor seeded; re-extracting the prefix would duplicate wiki records |
+| reflection (memory) | new rows since cursor | cursor starts null; per-thread reads cover only the own segment, so the prefix (already reflected in the parent) is never re-read - no duplicate memories |
+| samskara evaluation | new rows since cursor | cursor null; same rationale |
+| wiki extraction + wiki records | new rows since cursor | cursor null; per-thread scope keeps the prefix out, so no duplicate wiki records |
 | chunker / embeddings | own segment only | does NOT switch to the resolver - chunks the thread's own rows; shared prefixes are already chunked under their owning thread, so recall search dedups for free |
 | second thoughts | current turn only | no change - the turn anchor is always at-or-after the fork point |
 | bias | full transcript | resolver + fork framing |
@@ -300,6 +337,17 @@ Pure ordering refactor; transcripts render identically.
   unique index on (thread_id, position).
 - Switch every message read site from order-by created_at to
   order-by position (~10 files: browser list, edge agents, tools).
+- Switch the SQL side too: schema.sql has ~14 per-thread
+  `order by m.created_at` sites inside RPC functions - the claim
+  RPCs that find a thread's terminal message (reflection,
+  evaluation, summary, topics, wiki, wiki-records) and the
+  auto-title first-user lookup. These MUST move to position in the
+  same milestone: post-M1, recovery rows carry honest timestamps
+  but fractional mid-transcript positions, so the two orderings
+  genuinely disagree about which row is terminal. Cross-thread
+  orderings (picking which thread to process first, e.g.
+  `order by newest.created_at`) stay on created_at - those are
+  wall-clock comparisons between threads, not within-thread order.
 - Replace the two timestamp forgeries: the recovery path inserts
   at fractional midpoints instead of forged created_at; the
   move-to-tail path sets position = max+1 instead of re-stamping
@@ -324,7 +372,14 @@ so the resolver provably returns exactly the old per-thread query.
 
 Externally identical delete behavior via new machinery.
 
-- All thread list / search / poll surfaces filter hidden.
+- All thread list / search / poll surfaces filter hidden. Missing
+  one puts a hidden thread back in the drawer, so enumerate rather
+  than trust "all": the four list methods (recent / older /
+  archived / since), searchThreads (both the exact ILIKE query and
+  the semantic-hit re-fetch), the topics-filter paths, the
+  auto-title placeholder poll, the realtime thread-change handlers,
+  and every list-style conversation tool. Grep for `from('threads')`
+  and the thread-facing RPCs and check each site against this list.
 - Whole-thread delete becomes "hide"; inline storage reclamation
   retires (daily attachment-gc takes over; confirm PDF-page
   coverage).
@@ -339,7 +394,8 @@ First user-visible feature. Forks can now exist, so everything
 that must be fork-aware lands in this milestone, not later.
 
 - `forkConversation` (supabase slice + any SQL support): creation,
-  inheritance list, cursor seeding, reparent rule.
+  inheritance list, null cursors (no seeding - see the fork
+  semantics section), reparent rule.
 - Drawer menu "Fork" item; open-on-create; drawer fork indicator.
 - Worker fork framing (marker + preamble per the table).
 - Recall/search hidden-hit resolution (hidden threads become
@@ -382,7 +438,11 @@ The behavior-changing milestone; its baselines were locked in M0.
   lives - inherent to structural sharing; the user docs must say
   so plainly.
 - The digest reports pre-fork rows under the owning (possibly
-  hidden) thread's title for the day they were written.
+  hidden) thread's title for the day they were written - a title
+  the user can no longer find in the drawer. Mitigation to decide
+  during M4: resolve a hidden owning thread to its nearest visible
+  descendant for display, the same resolution the recall/search
+  surfaces use for chunk hits.
 - The response-claim system is per-thread; parent and fork can
   stream concurrently by design.
 - Position is numeric on purpose (fractional recovery inserts);
