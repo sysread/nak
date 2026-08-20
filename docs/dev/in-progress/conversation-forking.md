@@ -226,6 +226,40 @@ The GC only ever destroys unreachable rows, so these policies fire
 in exactly the situations they were designed for. The one new
 reference - the fork point - is the restrict FK above.
 
+### Data safety: deploy windows and rollback
+
+The deploy pipeline applies schema + edge functions minutes before
+the new frontend goes live, so every milestone has a mixed-version
+window: OLD frontend against NEW schema and functions. The
+standing constraint: **each milestone's schema must serve both
+frontends during that window.** The plan's milestones satisfy it
+by being purely additive - new columns with safe defaults, new
+functions, new indexes; no existing column dropped or retyped, no
+existing FK changed. The M1 recovery-row divergence (documented in
+M1) is the only known window artifact, and it mis-orders
+transiently rather than losing anything.
+
+Rollback is loss-free at every milestone:
+
+- M1 revert: the position column stays (additive) and code
+  reverts to created_at ordering, which matches position order
+  for backfilled and normally-appended rows alike. NULL
+  stragglers wait for the next apply's backfill sweep.
+- M2 revert: fork columns are all NULL; the resolver goes
+  uncalled; direct queries return identical rows.
+- M3 revert: code reverts to destructive delete. Threads hidden
+  before the revert reappear in the drawer - a UX surprise, not
+  data loss; the user deletes them again destructively.
+- M4+: forks and hidden ancestors are real data by then; revert
+  means disabling entry points, not reverting reads - the
+  resolver and hidden filters must stay.
+
+The single operation with corruption reach is the M1 position
+backfill - the only statement that touches every existing message
+row. Its guards (deterministic ordering, NULL-only idempotence,
+per-thread-max offset) are specified in M1; nothing else in the
+plan modifies existing rows at all.
+
 ### Worker treatment
 
 Two families, decided by whether re-processing shared prefix rows
@@ -338,6 +372,30 @@ Pure ordering refactor; transcripts render identically.
   (created_at, id); before-insert trigger assigns floor(max)+1
   under a per-thread row lock on the parent thread; unique index
   on (thread_id, position).
+- The backfill MUST be collision-safe: assign
+  per-thread-max(existing position) + row_number(), never
+  row_number() alone. Two reasons. First, schema.sql re-applies
+  start-to-finish on every deploy, so the backfill statement runs
+  forever with its `where position is null` guard - it is a
+  permanent sweeper for NULL stragglers, not a one-shot migration.
+  Second, stragglers are real: within a single schema apply there
+  is a window between the backfill statement and the trigger's
+  creation where a concurrent insert lands with a NULL position
+  (the unique index admits NULLs). A non-offset backfill would
+  then assign that straggler position 1, collide with the unique
+  index, fail the schema apply, and block every deploy after -
+  a deploy-blocking landmine, not a display glitch.
+- The trigger assigns ONLY when the incoming row has no position;
+  a caller-provided value passes through untouched. The recovery
+  path depends on this: it inserts at fractional midpoints, which
+  the trigger must not override with a tail position. Concretely,
+  the browser insert helper's created_at override is replaced by
+  an optional position parameter.
+- The move-to-tail path is an UPDATE, so the trigger never fires
+  for it: it must set position = floor(max)+1 explicitly. The
+  client library cannot express a subquery in an UPDATE, so this
+  is a read-then-write (safe: the response claim serializes the
+  streaming loop per thread) or a one-line RPC.
 - The thread-row lock is NEW contention the trigger introduces,
   not a lock writers already held: the edge function's round
   persistence inserts touch only the messages table, and the
@@ -368,9 +426,18 @@ Pure ordering refactor; transcripts render identically.
   `order by newest.created_at`) stay on created_at - those are
   wall-clock comparisons between threads, not within-thread order.
 - Replace the two timestamp forgeries: the recovery path inserts
-  at fractional midpoints instead of forged created_at; the
-  move-to-tail path sets position = max+1 instead of re-stamping
-  created_at.
+  at fractional midpoints instead of forged
+  neighbor-created_at-plus-1ms; the move-to-tail path sets
+  position explicitly instead of re-stamping created_at (both per
+  the trigger/UPDATE mechanics above).
+- Known deploy-window divergence, accepted: the deploy applies
+  schema + edge functions minutes before the new frontend, so an
+  old-frontend recovery insert in that window carries no position
+  and the trigger puts it at the tail - new readers see it at the
+  end while the old frontend shows it mid-conversation via the
+  forged timestamp. Narrow (minutes), rare (recovery rows only),
+  self-healing (post-deploy recovery uses fractional positions),
+  and no data is lost - only transiently mis-ordered for agents.
 - Prove completeness of the switch, don't assert it: grep for
   `order by.*created_at` (TS and SQL) and require every remaining
   hit to be one of the documented cross-thread orderings. Ship it
