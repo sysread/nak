@@ -248,8 +248,11 @@ Rollback is loss-free at every milestone:
 - M2 revert: fork columns are all NULL; the resolver goes
   uncalled; direct queries return identical rows.
 - M3 revert: code reverts to destructive delete. Threads hidden
-  before the revert reappear in the drawer - a UX surprise, not
-  data loss; the user deletes them again destructively.
+  but not yet swept reappear in the drawer - a UX surprise, not
+  data loss; the user deletes them again destructively. Threads
+  the GC already collected are permanently gone, which is not a
+  loss either: the user deleted them, and this is exactly the
+  outcome today's destructive delete produces, deferred one sweep.
 - M4+: forks and hidden ancestors are real data by then; revert
   means disabling entry points, not reverting reads - the
   resolver and hidden filters must stay.
@@ -259,6 +262,21 @@ backfill - the only statement that touches every existing message
 row. Its guards (deterministic ordering, NULL-only idempotence,
 per-thread-max offset) are specified in M1; nothing else in the
 plan modifies existing rows at all.
+
+**Backup/restore interaction** (a backup/restore tool is in
+development locally, not yet in the repo - re-verify this contract
+when it lands): a pre-M1 backup carries no position column, so its
+restore depends on two properties this plan already requires - the
+schema apply recreates the column as NULL and the backfill sweeps
+every NULL row into correct per-thread positions. A restore that
+inserts rows with triggers disabled (the pg_dump replica-role
+convention) is also covered: rows land with NULL positions and the
+same sweep assigns them. Post-M1 backups carry positions and
+restore verbatim; the NULL-only backfill is a no-op over them.
+The dependency runs one way: the backup tool needs nothing from
+this plan beyond what M1 already guarantees, but weakening either
+backfill guard (NULL-only idempotence, per-thread-max offset)
+would silently break pre-M1 restores.
 
 ### Worker treatment
 
@@ -385,6 +403,33 @@ Pure ordering refactor; transcripts render identically.
   then assign that straggler position 1, collide with the unique
   index, fail the schema apply, and block every deploy after -
   a deploy-blocking landmine, not a display glitch.
+- The SQL has a trap that turns the clear prose into exactly that
+  landmine: computing the max in the same subquery that filters
+  `where position is null` aggregates over ONLY the NULL rows, so
+  max is NULL, coalesces to 0, and positions start from 1. The max
+  must be computed over ALL rows first, then joined to the NULL
+  rows:
+
+  ```sql
+  with thread_max as (
+    select thread_id, coalesce(max(position), 0) as mx
+      from public.messages group by thread_id
+  ), null_ranked as (
+    select m.id,
+           tm.mx + row_number() over (
+             partition by m.thread_id
+             order by m.created_at, m.id
+           ) as new_pos
+      from public.messages m
+      join thread_max tm on tm.thread_id = m.thread_id
+     where m.position is null
+  )
+  update public.messages m
+     set position = nr.new_pos
+    from null_ranked nr
+   where m.id = nr.id;
+  ```
+
 - The trigger assigns ONLY when the incoming row has no position;
   a caller-provided value passes through untouched. The recovery
   path depends on this: it inserts at fractional midpoints, which
