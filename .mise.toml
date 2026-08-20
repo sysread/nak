@@ -28,22 +28,34 @@ deno = "2.8.0"
 # `supabase status -o json` key names that scripts/dev-local.mjs reads
 # (ANON_KEY / SERVICE_ROLE_KEY). A floating `latest` could shift any of
 # those under a routine `mise install`. Bump deliberately after confirming
-# `mise run dev-start` still reaches Vite on the new version. 2.101.0 is the
-# latest verified good (dev-start drove a full local stack on it - start,
-# status-key read, schema apply, teardown).
+# `mise run dev-start` still reaches Vite on the new version. 2.115.0 is
+# the latest; verify dev-start on it before trusting the pin.
 #
 # REALTIME CAVEAT (do not "modernize" the local key without reading this):
-# this CLI ships realtime image v2.86.3, which authenticates the WebSocket
-# apikey by verifying it as a JWT. The modern sb_publishable_ key is opaque,
-# not a JWT, so local realtime rejects it (`MalformedJWT`) and the app's live
-# message/thread updates silently stop - REST and auth still work, which makes
-# it look fine on load. That is upstream bug supabase/cli#4219. Because of it
-# dev-local.mjs deliberately writes the LEGACY anon JWT (not the publishable
-# key) as the app's client key in nak-local-config.json. Prod is unaffected -
-# hosted realtime resolves opaque keys. When a future CLI fixes #4219, this is
-# the place to note it: bump, then flip dev-local.mjs's readStatus back to
-# prefer PUBLISHABLE_KEY and re-test that realtime connects locally.
-"aqua:supabase/cli" = "2.101.0"
+# the CLI's bundled realtime image authenticates the WebSocket apikey by
+# verifying it as a JWT. The modern sb_publishable_ key is opaque, not a
+# JWT, so local realtime rejects it (`MalformedJWT`) and the app's live
+# message/thread updates silently stop - REST and auth still work, which
+# makes it look fine on load. That is upstream bug supabase/cli#4219,
+# which was stale-closed as "not_planned" on 2026-06-17 without a fix.
+# Because of it dev-local.mjs deliberately writes the LEGACY anon JWT
+# (not the publishable key) as the app's client key in
+# nak-local-config.json. Prod is unaffected - hosted realtime resolves
+# opaque keys. If a future CLI bundles a realtime image that accepts
+# opaque keys, flip dev-local.mjs's readStatus back to prefer
+# PUBLISHABLE_KEY and re-test that realtime connects locally.
+#
+# STORAGE SUBCOMMAND CAVEAT (backup/restore scripts):
+# `supabase storage ls` and `supabase storage cp` require the
+# --experimental flag as of 2.115.0. scripts/backup.mjs and
+# scripts/restore.mjs pass --experimental on every storage call. If a
+# future CLI stabilizes these subcommands (drops the flag) or changes
+# their output format (e.g. `storage ls` stops printing one-bucket-per-
+# line with trailing slashes), the scripts break. When bumping the pin:
+# verify `supabase storage ls ss:/// --local --experimental` still
+# returns bucket names one-per-line with trailing slashes, and that
+# `supabase storage cp -r` still downloads/uploads correctly.
+"aqua:supabase/cli" = "2.115.0"
 
 # Note: markdownlint-cli2 is a pnpm devDependency — the `deps` task
 # below provisions it via `pnpm install --frozen-lockfile`, and every
@@ -277,4 +289,19 @@ raw = true
 description = "Deploy the venice edge function to the linked Supabase project."
 depends = ["bundle-docs"]
 run = "supabase functions deploy venice"
+raw = true
+
+[tasks.backup]
+description = "Back up the Supabase database (schema + data) and all storage objects to backups/. NAK_TARGET=local (default) or linked."
+# raw = true so supabase CLI progress output streams to the TTY.
+run = "node scripts/backup.mjs"
+raw = true
+
+[tasks.restore]
+description = "Restore a Supabase project from a backup archive. NAK_TARGET=local (default) or linked (DANGEROUS: wipes prod)."
+# gum drives the backup-selection picker. The script degrades to a
+# numbered list when gum is absent, so this declaration is a convenience,
+# not a hard dep.
+tools = { "aqua:charmbracelet/gum" = "0.16.2" }
+run = "node scripts/restore.mjs"
 raw = true
