@@ -15,6 +15,8 @@ export default [
       'playwright-report/**',
       'test-results/**',
       'supabase/functions/**',
+      'supabase/.temp/**',
+      'scripts/seed-backup-test.mjs',
       // Vite creates timestamped temp files during build and deletes
       // them after - when ESLint and Vite run in parallel (the gate
       // runs all tasks concurrently), ESLint can discover the file
@@ -24,7 +26,7 @@ export default [
     ],
   },
   {
-    files: ['**/*.ts'],
+    files: ['**/*.ts', '**/*.mjs'],
     languageOptions: {
       parser: tsParser,
       parserOptions: { sourceType: 'module', ecmaVersion: 2022 },

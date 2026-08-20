@@ -93,3 +93,8 @@ scratch/
 # by `mise run bundle-docs`, by dev-start, and by the CI deploy step.
 supabase/functions/venice/_generated/
 recipe-edit-before.png
+
+# Local backups (mise run backup / mise run restore).
+# Tar.gz archives with DB dumps + storage objects; never commit.
+backups/
+scripts/seed-backup-test.mjs

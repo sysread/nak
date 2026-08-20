@@ -6,7 +6,7 @@
 //   0 — wizard can run (green + blue items). Auth/scope items that the
 //       wizard resolves automatically are printed as info, not blockers.
 //   1 — at least one hard blocker the wizard can't fix on its own.
-import { banner, step, info, ok, warn, hint, fail, style } from './lib/ui.mjs';
+import { banner, step, info, ok, hint, fail, style } from './lib/ui.mjs';
 import { which } from './lib/shell.mjs';
 import { ghAvailable, ghAuthStatus, REQUIRED_SCOPES } from './lib/github.mjs';
 import { supaAvailable, readAccessToken } from './lib/supabase.mjs';

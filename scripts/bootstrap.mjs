@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { banner, info, ok, bail, confirm, style } from './lib/ui.mjs';
-import { ghAvailable, ghAuthStatus } from './lib/github.mjs';
+import { ghAvailable } from './lib/github.mjs';
 import { supaAvailable } from './lib/supabase.mjs';
 import { getRepoSlug, pagesUrl } from './lib/repo.mjs';
 
