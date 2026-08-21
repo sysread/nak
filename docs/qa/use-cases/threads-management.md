@@ -64,3 +64,4 @@ reply lock ([dev: auth-session](../../dev/auth-session.md),
 
 | Date | Env | Commit | Result | Notes |
 | ---- | --- | ------ | ------ | ----- |
+| 2026-08-21 | local (mise run dev-start) | f5e6c90b | PARTIAL | 10/11 steps pass. Step 7 not executable as written: `clear` is gated on 2+ selected topics (TopicsFilter.svelte), so it is absent after removing one of two pills; verified by re-selecting then clearing. Reply-lock steps (8-11) verified only after giving session B a distinct nak:holder:id - two tabs on one origin share the holder and the lock never fires, so Preconditions need a different origin/profile. Unrelated observation: MCP tool names (mcp:<uuid>:<tool>) 400 at Venice and break topics/summary curation. |
