@@ -34,17 +34,20 @@ gate in `src/components/AssistantBody.svelte`, commit path
   invoked a tool (ask something that triggers memory or web search).
   Note the thread id.
 - For the tool-call-only step: a prompt that reliably starts a
-  slow tool call (e.g. attach an image and ask for analysis), so
-  Stop can land while the call is still pending.
+  slow tool call, so Stop can land while the call is still
+  pending. Enable the images toolbox and ask for a generated
+  picture (`generate_image` runs long enough); attach-an-image
+  analysis finishes too fast to catch.
 
 ## Steps
 
 1. Visibility sweep. Hover each message in the thread. Note which
    rows offer the circular-arrow regenerate button in their action
    row.
-2. Hover preview. Hover the regenerate button on the SECOND
-   assistant reply without clicking. Observe the transcript. Move
-   the pointer away.
+2. Hover preview. Hover the regenerate button on the second turn's
+   assistant reply (counting turns from the top; on a tool turn,
+   the terminal reply carries the button) without clicking. Observe
+   the transcript. Move the pointer away.
 3. Regenerate the latest reply. Click regenerate on the last
    assistant reply. Watch the greyed range while the new reply
    streams, then let it finish.
@@ -69,23 +72,28 @@ gate in `src/components/AssistantBody.svelte`, commit path
 ## Expected
 
 - (1) Every assistant reply has the button, including ones with tool
-  cards. User messages show the trash button instead; the
-  generated-image card, ask-user card, and "Renamed to" lines have
-  no regenerate button.
+  cards. User messages show the trash button instead. Auxiliary
+  cards (generated-image, ask-user, "Renamed to" lines) have no
+  regenerate button - check whichever of them the thread happens to
+  contain; this case's preconditions do not stage them all.
 - (2) The hovered reply and every row below it (including later user
   messages) get the red `.regen-target` outline; rows above stay
   normal. Leaving the button clears all outlines; no rows were
   deleted (step 3's query count is unchanged).
 - (3) The old reply greys out but stays readable while the new one
-  streams below; when it lands the greyed row is gone from the view
-  and the DB - the query shows exactly one assistant row for that
-  user message, the new one.
+  streams below; when it lands the greyed range is gone from the
+  view and the DB - the query shows exactly one assistant ROUND for
+  that user message (the new reply, plus its tool rows if the new
+  turn used tools).
 - (4) The clicked reply AND every later turn (your third prompt and
   its reply) grey out; one new reply replaces them all. The query
   shows the thread now ends user-2 -> new reply - the third-turn
   rows are gone.
-- (5) The stopped card shows the tool row in its error state (no
-  spinner) and the action row IS present with the regenerate button
+- (5) The stopped card's tool row settles to its true outcome, never
+  a spinner: error while no result row exists, flipping to success
+  if the server-side dispatch completed anyway and its result row
+  lands (realtime or reload) - Stop aborts the browser's view, not
+  the dispatch. The action row IS present with the regenerate button
   - even though the reply has no text (so no copy button).
 - (6) The tool-call-only card and its tool rows grey, then are
   replaced by the fresh reply; the interrupted tool round is gone
@@ -102,3 +110,6 @@ superseded rows, and the abort path restored everything else.
 
 | Date | Env | Commit | Result | Notes |
 | ---- | --- | ------ | ------ | ----- |
+| 2026-08-21 | local (mise run dev-start) | f5e6c90b | 6/7 pass, 1 fail | Steps 1-6 pass. Step 7 fails as written: abort restores the greyed rows and deletes nothing, but persists a new empty-assistant + tool + "user interrupted response" round (20 -> 23 rows), so "query count unchanged" does not hold. Bugs: (a) regen-target grey/red-outline left stuck on the rebuilt transcript after a commit - intermittent, painted 4 of 5 survivors incl. rows never in range on step 4, clears only on the next regenerate hover; (b) generated-image-host cards inside a range never grey though they are deleted; (c) a stopped tool call renders a failed mark though the tool succeeded server-side. Doc fixes needed: the slow-tool precondition is unusable (enable the images toolbox and prompt for image generation instead); "SECOND assistant reply" is ambiguous with tool turns; Expected (3) should say "assistant round" not "assistant row"; Expected (1)'s ask-user and renamed-to negatives are never staged. |
+| 2026-08-21 | local (mise run dev-start) | 9afb543e | re-QA (5,7): 5 PASS, 7 FAIL | Step 5 restated expectation passes: stopped generate_image card settles to its true outcome - error immediately after Stop, flipping to success once the server-side result row landed (verified after reload; the realtime flip did not fire in the aborted run's view). Step 7 still fails: a mid-stream Stop on a regen misclassifies as terminalKind=error with a false "Couldn't reach Venice" banner + last_error (reproduced 5/5 with mid-stream clicks vs 4/4 clean completions without). Mechanism: the aborted SSE read surfaces as an error event (kind=network) via errorEventFor, and the orchestrator's error-event case (getStreamingResponse.ts round-loop case 'error') never checks ctl.signal.aborted - so the aborted-regen rollback, gated on terminalKind='aborted', never engages for mid-SSE stops. No orphan rows appeared only because round 0 had not inserted any yet. Pre-existing classification (plain-turn mid-text Stops show the same false error), now load-bearing for this expectation. |
+| 2026-08-21 | local (mise run dev-start) | f5a49bea | re-QA (7): PASS | Mid-stream Stop on a regen now ends terminalKind=aborted (log: "stream error superseded by abort (user_cancel)"), 3/3 reproductions: no error banner, no orphan round, row count unchanged, last_error stays null, view clean after the abort. Plain-turn mid-text Stop re-verified in the same session: aborted terminal with the deliberate-abort marker row persisted per the chat-stop contract, no false network error. Step 7's expectation (greyed rows return, nothing deleted, thread usable) holds at this head. |

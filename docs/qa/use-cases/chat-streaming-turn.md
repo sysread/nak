@@ -52,11 +52,14 @@ subconscious priming pipelines' fire policy
 ## Expected
 
 - (2-3) The reply streams into the bubble; the drawer's `stream`
-  source shows, keyed by one runId: a `start` line (debug), a
-  `round 0` line (debug), an event tally (debug), and
-  `end terminalKind=completed` (info). Turns that dispatch tools
-  additionally show `dispatching N tool call(s)` and an
-  `outcomes:` line at info.
+  source shows, keyed by one runId: a `start` line (debug), an
+  in-flight probe verdict line (debug), a
+  `stream_started_at stamped` line (debug), a `round 0` line
+  (debug), an event tally (debug), a `stream_started_at cleared`
+  line (debug), and `end terminalKind=completed` (info) - seven
+  lines for a no-tool turn. Turns that dispatch tools additionally
+  show `dispatching N tool call(s)` and an `outcomes:` line at
+  info.
 - (2, cold caches) Both subconscious caches repopulate with
   `trigger='cold'`:
 
@@ -97,3 +100,4 @@ delete from messages where content = 'orphan' and thread_id = '<thread>';
 | 2026-06-10 | local | 64acd30 | pass (2 cold) | both caches repopulated `trigger='cold'` after manual clear |
 | 2026-06-10 | local | a5e5f22 | pass (4) | reconnect probe returned the exact noStreamInFlight envelope |
 | 2026-06-10 | local | a5e5f22 | pass (5) | forged orphan flipped to error and the reply streamed in one send; last_error null at end state (cleared by the successful commit - expectation refined to match) |
+| 2026-08-21 | local (mise run dev-start) | f5e6c90b | pass (1-5) | all steps pass on one thread; DB checks via PostgREST from page context (QA agent has no shell). Cold triggers confirmed both caches. Reconnect probe exact-match. Janitor flipped orphan to error, reply streamed same send; transient last_error caught at T+0.5s, null at end. Doc drift: stream source now emits 3 lines the Expected inventory omits (in-flight probe verdict, stream_started_at stamped, stream_started_at cleared). |

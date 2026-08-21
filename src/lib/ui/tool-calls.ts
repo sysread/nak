@@ -62,7 +62,13 @@ export function statusFor(
 ): Status {
   const t = timings[callId];
   const result = resultsByCallId[callId];
-  if (t && !t.endedAt) return sending ? 'pending' : 'error';
+  // A timing with no end only means THIS SESSION never saw the finish
+  // - the server-side dispatch keeps running through a Stop, and its
+  // persisted result row can land afterwards (realtime or reload).
+  // When that row exists, classify from its content below instead of
+  // from the stale local timing; without the `!result` guard a
+  // stopped-but-actually-successful tool rendered a red X forever.
+  if (t && !t.endedAt && !result) return sending ? 'pending' : 'error';
   if (t?.error) return 'error';
   if (t?.endedAt) return 'ok';
   if (result) {

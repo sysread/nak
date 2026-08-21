@@ -17,6 +17,7 @@ import {
   type OpenAIToolCall,
   sanitizeToolCallIdForWire,
   sanitizeToolCallsForWire,
+  sanitizeToolNameForWire,
 } from './_wire.ts';
 
 /**
@@ -102,7 +103,10 @@ export function messageToWire(m: StoredMessage): VeniceWireMessage {
       ...(m.tool_call_id != null
         ? { tool_call_id: sanitizeToolCallIdForWire(m.tool_call_id) }
         : {}),
-      ...(m.name ? { name: m.name } : {}),
+      // Sanitized for the same reason as the assistant side's
+      // tool_calls[].function.name: MCP-routed names carry colons
+      // that strict backends 400 on in undeclared replays.
+      ...(m.name ? { name: sanitizeToolNameForWire(m.name) } : {}),
     };
   }
   const out: VeniceWireMessage = { role: m.role, content: m.content };

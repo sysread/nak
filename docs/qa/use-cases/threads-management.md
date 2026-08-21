@@ -12,7 +12,10 @@ reply lock ([dev: auth-session](../../dev/auth-session.md),
 
 - Local stack up (`mise run dev-start`), signed in as the dev user in one
   browser.
-- A second signed-in session for the same user in another tab or browser.
+- A second signed-in session for the same user in a DIFFERENT
+  browser profile (or a different browser / private window). Two
+  tabs on one origin share the same holder id in localStorage, so
+  the reply lock never fires between them.
 - Two threads available: one new thread with no manual rename yet, and
   one other thread to switch to during the lock check.
 
@@ -27,9 +30,11 @@ reply lock ([dev: auth-session](../../dev/auth-session.md),
    reply to settle.
 5. Open the thread drawer `Topics` filter and note any topic pills that
    now appear for the thread.
-6. Select one topic that matches the thread and one topic from another
-   active thread.
-7. Remove one selected topic with its pill `×`, then click `clear`.
+6. Select one topic that matches the thread and two topics from
+   other active threads (three selected total - the `clear` control
+   only renders while 2+ topics are selected).
+7. Remove one selected topic with its pill `×`, then click `clear`
+   on the remaining two.
 8. In session A, start a new reply in `Pinned QA thread` and leave it
    streaming.
 9. In session B, open `Pinned QA thread`.
@@ -64,3 +69,4 @@ reply lock ([dev: auth-session](../../dev/auth-session.md),
 
 | Date | Env | Commit | Result | Notes |
 | ---- | --- | ------ | ------ | ----- |
+| 2026-08-21 | local (mise run dev-start) | f5e6c90b | PARTIAL | 10/11 steps pass. Step 7 not executable as written: `clear` is gated on 2+ selected topics (TopicsFilter.svelte), so it is absent after removing one of two pills; verified by re-selecting then clearing. Reply-lock steps (8-11) verified only after giving session B a distinct nak:holder:id - two tabs on one origin share the holder and the lock never fires, so Preconditions need a different origin/profile. Unrelated observation: MCP tool names (mcp:<uuid>:<tool>) 400 at Venice and break topics/summary curation. |
