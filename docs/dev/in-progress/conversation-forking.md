@@ -377,10 +377,21 @@ green and its QA baseline re-executed.
 
 ### M0 - QA baselines (before any code)
 
-Status: use-cases shipped (chat-message-ordering,
-chat-delete-from-here); baseline EXECUTION is pending - a local
-QA agent runs them against the unchanged code and logs the rows.
-A pre-M1 backup of the hosted project has been taken.
+Status: DONE (2026-08-21). Use-cases shipped and executed against
+unchanged code by a local QA agent; baseline rows are in each
+results log, stamped with the docs-only commits. A pre-M1 backup
+of the hosted project was taken. The runs also surfaced five
+pre-existing app bugs, fixed and QA-re-verified in the same PR
+(MCP tool names 400ing agent sub-completions, the aborted-regen
+orphan round, the interrupted-prune view lie, stopped tool calls
+rendering failed after server-side success, leaked think blocks -
+plus the mid-stream Stop misclassifying as a network error, which
+gated the regen rollback). Net effect for M1: the baselines
+describe INTENDED behavior, so its re-runs diff against a clean
+contract. Two cosmetic observations remain open, logged in the
+regenerate case's results row: an intermittent stale regen-grey on
+rebuilt rows, and generated-image cards not greying inside a regen
+range.
 
 Per the docs/qa rules: backfill use-cases FIRST and execute them
 against unchanged code, so post-change runs prove preservation,
