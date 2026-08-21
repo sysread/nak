@@ -89,8 +89,11 @@ gate in `src/components/AssistantBody.svelte`, commit path
   its reply) grey out; one new reply replaces them all. The query
   shows the thread now ends user-2 -> new reply - the third-turn
   rows are gone.
-- (5) The stopped card shows the tool row in its error state (no
-  spinner) and the action row IS present with the regenerate button
+- (5) The stopped card's tool row settles to its true outcome, never
+  a spinner: error while no result row exists, flipping to success
+  if the server-side dispatch completed anyway and its result row
+  lands (realtime or reload) - Stop aborts the browser's view, not
+  the dispatch. The action row IS present with the regenerate button
   - even though the reply has no text (so no copy button).
 - (6) The tool-call-only card and its tool rows grey, then are
   replaced by the fresh reply; the interrupted tool round is gone

@@ -4517,9 +4517,16 @@
       //      rows from `messages` (which drops them from the DOM)
       //      and clear both the fade delays and the pending-delete
       //      id list in one state flip.
+      // `!interrupted` is load-bearing: an aborted regenerate can
+      // still carry partial finalText, but the server never ran the
+      // commit RPC, so the superseded rows are all still in the DB.
+      // Pruning them here made the view lie until the next reload
+      // rebuilt the rows (and left the aborted partial as an orphan
+      // below them).
       if (
         pendingDeleteIds.length > 0 &&
         loopResult.finalText.trim().length > 0 &&
+        !loopResult.interrupted &&
         !loopResult.conflictDetected
       ) {
         const idsToDelete = pendingDeleteIds;

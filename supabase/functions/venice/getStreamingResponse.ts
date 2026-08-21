@@ -79,6 +79,7 @@ import { curateOnTurnTail } from './agents/curation.ts';
 import { samskaraOnTurnTail } from './agents/samskara.ts';
 import { secondThoughtsOnTurnTail } from './agents/second_thoughts.ts';
 import { createEdgeLogger } from '../_shared/edge-log.ts';
+import { splitLeakedThink } from './think-leak.ts';
 import { runServerPriming, type PrimingInputs } from './priming.ts';
 import {
   buildToolsFromCatalog,
@@ -289,6 +290,13 @@ export async function getStreamingResponse(
   });
 
   let assistantRowId: string | null = null;
+  // Every message row this run inserts BESIDES the streaming assistant
+  // row (round assistant rows, tool-result rows). The aborted-
+  // regenerate rollback in the finally deletes them by id: an aborted
+  // regen must leave the thread exactly as it was before the click,
+  // and these rows would otherwise survive as an orphan round below
+  // the restored originals.
+  const runRowIds: string[] = [];
   let rowUpdateTimer: ReturnType<typeof setTimeout> | null = null;
   let lastUpdateContent = '';
 
@@ -678,6 +686,7 @@ export async function getStreamingResponse(
         accum.reasoning,
         roundToolCalls,
       );
+      runRowIds.push(assistantRoundRow.id);
 
       // Round-boundary signal. The round's assistant content (text +
       // reasoning) is final the moment its completion stream ends and the
@@ -860,6 +869,7 @@ export async function getStreamingResponse(
         outcomes,
         suspendIdx,
       );
+      runRowIds.push(...toolResultRows.map((r) => r.id));
 
       // Append to history for the next round.
       history.push({
@@ -1013,7 +1023,21 @@ export async function getStreamingResponse(
     // retry. 'error' still requires something to preserve - an error row
     // with no partial has nothing to show and renders through other
     // affordances (threads.last_error), so an empty one is pure noise.
+    // An aborted REGENERATE rolls back instead of persisting. The
+    // aborted-marker row exists so a stopped turn doesn't leave a bare
+    // user-message tail another device would misread as a crashed turn
+    // - but a regen's thread tail after rollback is the ORIGINAL
+    // settled reply (the superseded rows were never deleted; only the
+    // 'completed' commit RPC deletes them), so the marker's job doesn't
+    // apply and keeping this run's rows would strand an orphan round
+    // below the restored originals.
+    const rollbackAbortedRegen =
+      terminalKind === 'aborted' &&
+      opts.supersededIds !== undefined &&
+      opts.supersededIds.length > 0;
+
     if (
+      !rollbackAbortedRegen &&
       assistantRowId === null &&
       (terminalKind === 'aborted' ||
         (terminalKind === 'error' &&
@@ -1030,6 +1054,37 @@ export async function getStreamingResponse(
         log.error(`${runId} failed to persist cut-off partial row:`, err);
       }
     }
+
+    if (rollbackAbortedRegen) {
+      // Delete every row this run inserted (round rows, tool results,
+      // and the streaming assistant row if one materialized). Cascades
+      // reclaim attachment link rows; orphaned storage objects are
+      // swept by the daily attachment-gc. Best-effort: a failed delete
+      // degrades to the pre-rollback behavior (an orphan round the
+      // user can delete by hand), it must not mask the abort terminal.
+      const ids = assistantRowId !== null ? [...runRowIds, assistantRowId] : [...runRowIds];
+      if (ids.length > 0) {
+        try {
+          const { error } = await opts.adminClient
+            .from('messages')
+            .delete()
+            .in('id', ids);
+          if (error) throw new Error(error.message);
+          log.info(`${runId} aborted regen rolled back ${ids.length} row(s)`);
+        } catch (err) {
+          log.error(`${runId} aborted-regen rollback failed:`, err);
+        }
+      }
+      // Nothing persisted: the END event's persistedAssistantId must
+      // read empty so the browser doesn't reference a deleted row.
+      assistantRowId = null;
+    }
+
+    // Relocate a leaked leading <think> block from the content channel
+    // into reasoning before anything persists - see think-leak.ts for
+    // the failure mode (degraded backends echoing the priming pattern
+    // into the reply body).
+    const settled = splitLeakedThink(accum.content, accum.reasoning);
 
     // Terminal write: commit to 'complete' via the SECURITY DEFINER
     // RPC on the happy path; otherwise transition the row to the
@@ -1065,10 +1120,10 @@ export async function getStreamingResponse(
             p_assistant_message_id: assistantRowId,
             p_user_message_id: opts.userMessageId,
             p_user_id: opts.userId,
-            p_content: accum.content,
+            p_content: settled.content,
             p_model: opts.bodyTemplate.model ?? null,
             p_usage: accum.usage,
-            p_reasoning: accum.reasoning,
+            p_reasoning: settled.reasoning,
             p_citations: finalCitations,
             p_superseded_ids:
               opts.supersededIds && opts.supersededIds.length > 0
@@ -1119,15 +1174,15 @@ export async function getStreamingResponse(
         // through other affordances and don't carry the marker.
         const terminalContent =
           terminalKind === 'aborted'
-            ? withInterruptedMarker(accum.content)
-            : accum.content;
+            ? withInterruptedMarker(settled.content)
+            : settled.content;
         await transitionRowTo(
           opts.adminClient,
           assistantRowId,
           terminalKind,
           {
             content: terminalContent,
-            reasoning: accum.reasoning,
+            reasoning: settled.reasoning,
             usage: accum.usage,
             citations: finalCitations,
           },
@@ -1401,11 +1456,13 @@ async function persistRoundToolResults(
   outcomes: ToolOutcome[],
   suspendIdx: number,
 ): Promise<Array<{
+  id: string;
   tool_call_id: string;
   name: string;
   content: string;
 }>> {
   const rows: Array<{
+    id: string;
     tool_call_id: string;
     name: string;
     content: string;
@@ -1432,14 +1489,20 @@ async function persistRoundToolResults(
           : { ok: false, error: new Error(o.errorMessage) },
       );
     }
-    // RLS OFF: thread ownership already verified upstream.
-    const { error } = await opts.adminClient.from('messages').insert({
-      thread_id: opts.threadId,
-      role: 'tool',
-      content,
-      tool_call_id: o.request.id,
-      name: o.request.name,
-    });
+    // RLS OFF: thread ownership already verified upstream. The id
+    // rides back so the orchestrator can track every row this run
+    // inserted (the aborted-regenerate rollback deletes by id).
+    const { data, error } = await opts.adminClient
+      .from('messages')
+      .insert({
+        thread_id: opts.threadId,
+        role: 'tool',
+        content,
+        tool_call_id: o.request.id,
+        name: o.request.name,
+      })
+      .select('id')
+      .single();
     if (error) {
       // Tool result rows missing on the next round would leave
       // orphaned tool_call_ids on the wire; surface the failure.
@@ -1448,6 +1511,7 @@ async function persistRoundToolResults(
       );
     }
     rows.push({
+      id: (data as { id: string }).id,
       tool_call_id: o.request.id,
       name: o.request.name,
       content,

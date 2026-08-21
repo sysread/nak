@@ -49,6 +49,22 @@ describe('statusFor', () => {
     expect(statusFor('c1', t, {}, false)).toBe('error');
   });
 
+  it('classifies from the result row when one landed after a stop, despite the open timing', () => {
+    // Stop only aborts the browser's view of the turn - the server-
+    // side dispatch keeps running and persists its result row. The
+    // open local timing must not outrank that row, or a tool that
+    // actually succeeded renders a red X forever.
+    const t: Record<string, CallTiming> = { c1: { startedAt: 100 } };
+    const results = { c1: makeResultMessage('{"ok":true,"value":42}') };
+    expect(statusFor('c1', t, results, false)).toBe('ok');
+  });
+
+  it('still reports error from a landed result row that carries an error key', () => {
+    const t: Record<string, CallTiming> = { c1: { startedAt: 100 } };
+    const results = { c1: makeResultMessage('{"error":"boom"}') };
+    expect(statusFor('c1', t, results, false)).toBe('error');
+  });
+
   it('is error when the timing carries the error flag', () => {
     const t: Record<string, CallTiming> = {
       c1: { startedAt: 100, endedAt: 200, error: true },

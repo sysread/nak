@@ -47,6 +47,33 @@ export function sanitizeToolCallIdForWire(id: string): string {
   return out;
 }
 
+// Pattern OpenAI-compatible validators accept for a tool/function
+// name. MCP-routed tools violate it by construction - their wire
+// names are `mcp:<integrationId>:<serverToolName>` (see
+// ../mcp/dispatch.ts), and the colons 400 the whole request on
+// strict Venice backends when the name appears in a replayed
+// transcript. The main chat loop is unaffected (it declares those
+// tools in the request's `tools` array); the agent sub-completions
+// replay history with NO tools declared, which is where the strict
+// name check bites - observed killing the topics/summary curation
+// units on threads that had used MCP tools.
+const WIRE_NAME_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
+
+/**
+ * Map an arbitrary tool name to one the strict validators accept.
+ * Idempotent for already-valid names. Deterministic character
+ * replacement (not hashing) so an assistant row's
+ * tool_calls[].function.name and the paired tool-result row's `name`
+ * land at the same value without shared state. Names in a replayed
+ * transcript are descriptive only - nothing dispatches on them - so
+ * lossy replacement is safe.
+ */
+export function sanitizeToolNameForWire(name: string): string {
+  if (WIRE_NAME_PATTERN.test(name)) return name;
+  const safe = name.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
+  return safe.length > 0 ? safe : 'tool';
+}
+
 /**
  * Normalise a tool-call's arguments JSON string for the wire and
  * sanitise its id. Parse-and-restringify when the blob is valid JSON
@@ -73,11 +100,14 @@ export function sanitizeToolCallsForWire(
       }
     }
     const safeId = sanitizeToolCallIdForWire(call.id);
-    if (safe === raw && safeId === call.id) return call;
+    const safeName = sanitizeToolNameForWire(call.function.name);
+    if (safe === raw && safeId === call.id && safeName === call.function.name) {
+      return call;
+    }
     return {
       ...call,
       id: safeId,
-      function: { ...call.function, arguments: safe },
+      function: { ...call.function, name: safeName, arguments: safe },
     };
   });
 }

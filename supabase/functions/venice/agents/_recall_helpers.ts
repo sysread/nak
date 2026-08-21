@@ -5,6 +5,13 @@
 // parseRecallOutput - so the function and browser paths produce the
 // same model context and parse the same response shapes.
 
+import {
+  type OpenAIToolCall,
+  sanitizeToolCallIdForWire,
+  sanitizeToolCallsForWire,
+  sanitizeToolNameForWire,
+} from './_wire.ts';
+
 export interface StoredMessage {
   id: string;
   role: 'user' | 'assistant' | 'system' | 'tool';
@@ -85,17 +92,28 @@ export function trimToCharBudget(
  * {role, content}.
  */
 export function messageToVenice(m: StoredMessage): VeniceWireMessage {
+  // Ids, names, and argument blobs all go through the _wire
+  // sanitizers: replayed transcripts carry whatever the original turn
+  // persisted, including MCP tool names (`mcp:<id>:<tool>`) whose
+  // colons strict backends 400 on when no tools array declares them,
+  // and tool-call ids some backends reject by length/alphabet. The
+  // sanitizers are idempotent and deterministic, so the assistant
+  // row's call and the paired tool row land at matching values.
   if (m.role === 'tool') {
     return {
       role: 'tool',
       content: m.content,
-      ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}),
-      ...(m.name ? { name: m.name } : {}),
+      ...(m.tool_call_id
+        ? { tool_call_id: sanitizeToolCallIdForWire(m.tool_call_id) }
+        : {}),
+      ...(m.name ? { name: sanitizeToolNameForWire(m.name) } : {}),
     };
   }
   const out: VeniceWireMessage = { role: m.role, content: m.content };
   if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
-    out.tool_calls = m.tool_calls as VeniceWireMessage['tool_calls'];
+    out.tool_calls = sanitizeToolCallsForWire(
+      m.tool_calls as OpenAIToolCall[],
+    ) as VeniceWireMessage['tool_calls'];
   }
   return out;
 }
