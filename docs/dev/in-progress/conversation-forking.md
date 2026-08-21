@@ -414,11 +414,12 @@ created_at honestly precedes them, fractional recovery positions
 mid-conversation), the streaming case (PASS 5/5 - stream inventory
 unchanged), and a delete-from-here spot-check (position assignment
 is gap-tolerant after a range delete). One incidental QA
-observation, pre-existing and out of M1 scope, logged for follow-up:
-the M0 think-leak relocation only matches a leading `<think>` tag,
-so a leak whose `<` was glitched away by the provider (content
-starting with bare `think>`; seen on deepseek-v4-flash) is not
-caught. Deltas from the spec below, chosen at implementation:
+observation, pre-existing but fixed in the same PR (dishes as we
+cook): the M0 think-leak relocation only matched a full leading
+`<think>` tag, missing leaks whose `<` the provider glitched away
+(content starting with bare `think>`; seen on deepseek-v4-flash) -
+the matcher now treats both tags' leading `<` as optional. Deltas
+from the spec below, chosen at implementation:
 
 - Move-to-tail took the RPC option (`move_message_to_tail`), not
   read-then-write: it shares the insert trigger's thread-row lock,
