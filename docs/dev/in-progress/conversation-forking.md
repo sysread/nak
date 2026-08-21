@@ -1,6 +1,6 @@
 # Conversation forking
 
-Status: M0 done; M1 implemented, in QA. Update the milestone
+Status: M0 and M1 done. Update the milestone
 checklist as work lands; graduate durable content into a permanent
 `docs/dev/forking.md` (started in M3) and retire this doc when the
 last milestone ships.
@@ -407,9 +407,18 @@ not just self-consistency.
 
 ### M1 - explicit message positions
 
-Status: IMPLEMENTED (2026-08-21) - awaiting QA re-run of the
-ordering baseline. Deltas from the spec below, chosen at
-implementation:
+Status: DONE (2026-08-21). QA re-ran the ordering baseline (PASS
+5/5 - same observable transcript as M0, with the M1 contract
+verified: terminal-reply position above its tool rows while its
+created_at honestly precedes them, fractional recovery positions
+mid-conversation), the streaming case (PASS 5/5 - stream inventory
+unchanged), and a delete-from-here spot-check (position assignment
+is gap-tolerant after a range delete). One incidental QA
+observation, pre-existing and out of M1 scope, logged for follow-up:
+the M0 think-leak relocation only matches a leading `<think>` tag,
+so a leak whose `<` was glitched away by the provider (content
+starting with bare `think>`; seen on deepseek-v4-flash) is not
+caught. Deltas from the spec below, chosen at implementation:
 
 - Move-to-tail took the RPC option (`move_message_to_tail`), not
   read-then-write: it shares the insert trigger's thread-row lock,
