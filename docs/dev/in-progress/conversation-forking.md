@@ -1,6 +1,6 @@
 # Conversation forking
 
-Status: PLANNED - no milestone started yet. Update the milestone
+Status: M0 done; M1 implemented, in QA. Update the milestone
 checklist as work lands; graduate durable content into a permanent
 `docs/dev/forking.md` (started in M3) and retire this doc when the
 last milestone ships.
@@ -406,6 +406,39 @@ not just self-consistency.
 - Log baseline rows in each results table.
 
 ### M1 - explicit message positions
+
+Status: IMPLEMENTED (2026-08-21) - awaiting QA re-run of the
+ordering baseline. Deltas from the spec below, chosen at
+implementation:
+
+- Move-to-tail took the RPC option (`move_message_to_tail`), not
+  read-then-write: it shares the insert trigger's thread-row lock,
+  so it cannot race a concurrent insert's tail assignment.
+- The recovery synthesizer assigns each synthetic row its
+  fractional position at synthesis time (between its real
+  neighbors, always strictly below the next integer so the tail
+  trigger can never collide with a healed row). The in-memory
+  view, the merge sort, and the persistence pass all read the same
+  value, and the persistence pass no longer needs its own
+  anchoring walk. A side benefit: the unique (thread_id, position)
+  index turns the cross-tab double-heal race into an insert error
+  instead of duplicate recovery rows.
+- The guardrail test (tests/ordering-guardrail.test.ts) enforces a
+  nearby "wall-clock" / "legacy order" comment on every deliberate
+  created_at ordering of messages, rather than a line-number
+  allowlist - self-maintaining, and it doubles as the "non-
+  conforming code requires a comment" rule. Sanity pins on the
+  known allowed sites keep the scanner honest.
+- Deliberately NOT switched: commit_assistant_message's
+  newer-user-message conflict check still compares user rows by
+  created_at. User rows are never forged and always tail-append,
+  so the two orderings agree; it is a comparison, not an ORDER BY,
+  so the guardrail ignores it. Revisit when M2's resolver work
+  touches that RPC.
+- The five day-gate "newest message" laterals and the digest's
+  cross-thread day window stay on created_at on purpose (they ask
+  when the thread last saw a write, not transcript order); each
+  now carries the wall-clock comment the guardrail requires.
 
 Pure ordering refactor; transcripts render identically.
 

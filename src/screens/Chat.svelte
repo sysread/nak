@@ -1699,17 +1699,16 @@
    * the synthesizer's idempotency check sees the persisted recovery
    * row sitting in the gap and no-ops.
    *
-   * Position-preserving: synthesizeRecoveryMessages places each
-   * synthetic at its correct array index (right after the broken
-   * tool block that needs healing). The DB stores message order by
-   * `created_at`, so persisting needs to anchor each synthetic's
-   * `created_at` to land in the same slot. Strategy: walk the
-   * freshly-fetched + synthesized list, and for each synthetic, set
-   * its created_at to the preceding non-synthetic row's created_at
-   * plus 1ms (bump per consecutive synthetic). This puts the row
-   * exactly after its anchor in the ordering, fixing the previous
-   * bug where every recovery row got `default now()` and piled up
-   * at the tail regardless of which gap it was supposed to heal.
+   * Position-preserving: synthesizeRecoveryMessages assigns each
+   * synthetic a fractional position strictly between its real
+   * neighbors when it builds the list, so persisting is just writing
+   * each synthetic with the position it already carries - the row
+   * lands in the same transcript slot the in-memory view shows,
+   * while its created_at stays an honest "when the heal happened".
+   * The unique (thread_id, position) index turns a cross-tab race
+   * (both tabs healing the same gap) into an insert error instead of
+   * a duplicate row; the callers' catch treats any insert failure as
+   * "heal again on the next revisit".
    *
    * Re-fetching as input: the local `messages` array may be stale
    * (another tab could have already healed some gaps). Using the
@@ -1733,29 +1732,16 @@
       messages = beforeWrite;
       return;
     }
-    // Walk the synthesized list and persist each synthetic at the
-    // created_at of its preceding non-synthetic neighbor + 1ms.
-    // Consecutive synthetics (a recovery tool block + recovery
-    // assistant for one gap) bump by an additional ms each so they
-    // stay in array order at the same anchor.
-    let prevReal: { created_at: string } | null = null;
-    let bumpMs = 1;
-    for (const m of beforeWrite) {
-      if (m.synthetic) {
-        const anchorAt = prevReal?.created_at ?? m.created_at;
-        const insertAt = new Date(
-          new Date(anchorAt).getTime() + bumpMs
-        ).toISOString();
-        await app.supabase.addMessage(threadId, m.role, m.content, {
-          tool_call_id: m.tool_call_id ?? undefined,
-          name: m.name ?? undefined,
-          created_at: insertAt,
-        });
-        bumpMs += 1;
-      } else {
-        prevReal = m;
-        bumpMs = 1;
-      }
+    for (const m of synthetics) {
+      await app.supabase.addMessage(threadId, m.role, m.content, {
+        tool_call_id: m.tool_call_id ?? undefined,
+        name: m.name ?? undefined,
+        // Never undefined in practice - the synthesizer positions
+        // every synthetic - but a defensive fall-through here means
+        // the insert trigger appends at the tail rather than the
+        // whole heal failing.
+        position: m.position ?? undefined,
+      });
     }
     if (activeThreadId !== threadId) return;
     messages = await app.supabase.listMessages(threadId);
@@ -2543,7 +2529,7 @@
       // and onToolResultPersisted fire while the await is in flight,
       // pushing into slot.persistedRows. The snapshot may or may not
       // include those rows depending on when its underlying query
-      // ran. mergeMessagesById de-dupes by id and orders by created_at
+      // ran. mergeMessagesById de-dupes by id and orders by position
       // ascending (matching listMessages' own ORDER BY), so either
       // path lands the same final transcript. Empty buffer is fast-
       // pathed inside mergeMessagesById; non-streaming threads pay

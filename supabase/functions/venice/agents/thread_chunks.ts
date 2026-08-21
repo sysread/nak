@@ -55,7 +55,7 @@ async function loadThreadMessages(
     .from('messages')
     .select('id, role, content, tool_calls, name')
     .eq('thread_id', threadId)
-    .order('created_at', { ascending: true });
+    .order('position', { ascending: true });
   if (error) throw new Error(`listMessages failed: ${error.message}`);
   return (data ?? []) as TranscriptMessage[];
 }

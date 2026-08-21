@@ -107,7 +107,7 @@ export async function resolveStreamContext(
     .select('id, content, created_at')
     .eq('thread_id', threadId)
     .eq('status', 'streaming')
-    .order('created_at', { ascending: false })
+    .order('position', { ascending: false })
     .limit(1)
     .maybeSingle();
 

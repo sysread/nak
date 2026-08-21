@@ -466,7 +466,7 @@ async function analyzeClaimedThread(
       .from('messages')
       .select('id, role, content')
       .eq('thread_id', threadId)
-      .order('created_at', { ascending: true });
+      .order('position', { ascending: true });
     if (error) throw new Error(error.message);
     transcript = (data ?? [])
       .filter(

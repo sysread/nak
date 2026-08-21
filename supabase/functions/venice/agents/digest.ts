@@ -140,6 +140,9 @@ async function fetchDayMessages(
     .in('role', ['user', 'assistant'])
     .gte('created_at', dayStart)
     .lt('created_at', dayEnd)
+    // Wall-clock ordering on purpose: this is a cross-thread day
+    // window ("what happened today, in the order it happened"), not a
+    // per-thread transcript - position only orders within one thread.
     .order('created_at', { ascending: true })
     .limit(MAX_MESSAGES_FETCHED);
   if (error) throw new Error(`day-message fetch failed: ${error.message}`);

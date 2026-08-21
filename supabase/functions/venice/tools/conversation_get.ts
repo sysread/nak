@@ -210,7 +210,7 @@ export const conversationGet: ToolDef = {
       .from('messages')
       .select('role, content')
       .eq('thread_id', id)
-      .order('created_at', { ascending: true });
+      .order('position', { ascending: true });
     if (rowsErr) throw new Error(`listMessages failed: ${rowsErr.message}`);
 
     const messageRows = (rows ?? []) as MessageRow[];

@@ -1,6 +1,6 @@
 /**
  * The chat transcript's render plan - the fold from the raw message
- * list (src/lib/supabase Message rows in created_at order) into the
+ * list (src/lib/supabase Message rows in position order) into the
  * block list the message loop in src/screens/Chat.svelte renders.
  * Pure functions only - no runes, no Svelte imports, no DOM. The
  * screen wraps `buildMessageBlocks` in a $derived so message

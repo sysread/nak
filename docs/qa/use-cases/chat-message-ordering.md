@@ -1,26 +1,30 @@
-# Chat: message ordering - display order, DB order, and the two forged-timestamp paths
+# Chat: message ordering - display order, DB order, and the two explicit-placement paths
 
 ## Covers
 
 Transcript ordering end to end ([dev: chat](../../dev/chat.md);
 recovery synthesis in `src/lib/conversation-recovery.ts`, recovery
-persistence in `src/screens/Chat.svelte`). Today the canonical sort
-is `created_at`. All rows get the DB clock at insert (the column
-defaults to now() server-side); only two code paths write
-runtime-clock values, forging timestamps to control placement:
+persistence in `src/screens/Chat.svelte`). The canonical sort is the
+explicit per-thread `position` column: a before-insert trigger
+assigns the next tail position when the caller omits one, and
+`created_at` is display metadata only. Two code paths place rows
+explicitly instead of appending:
 
 1. **Recovery persistence** - synthetic rows healing an interrupted
-   tool exchange are written with a forged
-   `created_at = neighbor + 1ms` so they land mid-conversation.
-2. **Round-boundary re-stamp** - the streaming assistant row is
-   born before its tool rows and gets its `created_at` re-stamped
-   so the terminal reply sorts after them.
+   tool exchange are written at fractional positions strictly
+   between their real neighbors, so they land mid-conversation.
+2. **Round-boundary move-to-tail** - the streaming assistant row is
+   born before its tool rows and is moved to the thread's tail
+   position at the round boundary so the terminal reply sorts after
+   them. Its `created_at` keeps the birth time.
 
-This case is the BASELINE for the conversation-forking work's M1
-(explicit message positions - see
-`docs/dev/in-progress/conversation-forking.md`). Execute it against
-unchanged code first; after M1 the same steps must produce the same
-observable order, with the canonical sort switched to `position`.
+This case was the M0 BASELINE for the conversation-forking work's
+M1 (explicit message positions - see
+`docs/dev/in-progress/conversation-forking.md`), executed against
+pre-position code with `created_at` as the sort (first results row).
+Post-M1 runs must produce the SAME observable transcript order from
+the same steps; the queries below read `position` order, which is
+what the app now sorts by.
 
 ## Preconditions
 
@@ -42,10 +46,10 @@ observable order, with the canonical sort switched to `position`.
 
    ```sql
    select role, left(content, 30) as head,
-          created_at
+          position, created_at
      from messages
     where thread_id = '<thread>'
-    order by created_at, id;
+    order by position, id;
    ```
 
    Compare the row order against the transcript on screen, top to
@@ -62,11 +66,11 @@ observable order, with the canonical sort switched to `position`.
    ```sql
    delete from messages
     where thread_id = '<thread>'
-      and created_at > (select created_at from messages
-                         where thread_id = '<thread>'
-                           and tool_calls is not null
-                           and jsonb_array_length(tool_calls) > 0
-                         order by created_at desc limit 1);
+      and position > (select position from messages
+                       where thread_id = '<thread>'
+                         and tool_calls is not null
+                         and jsonb_array_length(tool_calls) > 0
+                       order by position desc limit 1);
    ```
 
    Reload the thread and read the transcript tail.
@@ -78,10 +82,10 @@ observable order, with the canonical sort switched to `position`.
    ```sql
    select role, left(content, 40) as head,
           content like '%nak:recovery%' as is_recovery,
-          created_at
+          position, created_at
      from messages
     where thread_id = '<thread>'
-    order by created_at, id;
+    order by position, id;
    ```
 
 5. **Cross-reader agreement.** With the thread now containing
@@ -97,8 +101,11 @@ observable order, with the canonical sort switched to `position`.
 - (2) The tool turn reads, in both the query and on screen:
   user prompt, assistant row carrying tool_calls, one tool row per
   call, terminal assistant reply - in that order. The terminal
-  reply's `created_at` is later than the tool rows' even though
-  streaming began before them (the round-boundary re-stamp).
+  reply's `position` is greater than the tool rows' even though
+  streaming began before them (the round-boundary move-to-tail).
+  Its `created_at` may be EARLIER than the tool rows' - that is the
+  honest birth time, deliberately no longer re-stamped, and it must
+  not affect the rendered order.
 - (3) The reloaded tail shows the tool-group card with a
   synthesized "(tool execution was interrupted...)" result folded
   in - not an error, and not a raw dangling tool-call card. No
@@ -111,7 +118,10 @@ observable order, with the canonical sort switched to `position`.
 - (4) The recovery rows are now persisted (`is_recovery = true`)
   and sit BETWEEN the assistant-with-tool_calls row and the new
   user prompt in the query order - mid-conversation, not at the
-  tail. The new user prompt and its reply follow them.
+  tail. Their `position` values are fractional (strictly between
+  the neighbors' integers) while their `created_at` is the heal
+  time (recent, later than the rows around them) - position wins.
+  The new user prompt and its reply follow them.
 - (5) The visible transcript is the step-4 query order with the
   recovery rows omitted: every NON-recovery row renders, in the
   same relative order the query reports (a correct subsequence).

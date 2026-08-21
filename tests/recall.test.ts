@@ -46,6 +46,7 @@ function makeMessage(
     role,
     content,
     created_at: createdAt,
+    position: 1,
   };
 }
 

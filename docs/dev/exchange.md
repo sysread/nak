@@ -65,7 +65,7 @@ indicator until the claim clears.
   — pure helper used by `selectThread` and the safety-net
   reconcile effect. Folds a buffered-rows list into a
   listMessages snapshot, de-duping by id and ordering by
-  `created_at` ascending. Handles the race where
+  `position` ascending. Handles the race where
   `onAssistantPersisted` fires during the await between
   `messages = []` and `messages = fetched`.
 - `src/lib/exchange/thread-claim-coordinator.ts` —
@@ -331,10 +331,11 @@ own writes is a no-op.
 ### `mergeMessagesById(fetched, buffered): Message[]`
 
 Pure helper. Returns a fresh array de-duped by `id`, ordered by
-`created_at` ascending. The `fetched` snapshot wins on duplicates
-(canonical state from the DB). Fast path for `buffered.length === 0`.
-Equal `created_at` ties break by `id` so the order is
-deterministic.
+`position` ascending (null positions sort to the tail, matching the
+slot the backfill sweep assigns them). The `fetched` snapshot wins on
+duplicates (canonical state from the DB). Fast path for
+`buffered.length === 0`. Equal positions tie-break by `id` so the
+order is deterministic.
 
 ## Interactions
 

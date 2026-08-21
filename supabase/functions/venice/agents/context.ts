@@ -153,7 +153,7 @@ export const contextTool: ToolDef = {
           .from('messages')
           .select('role, content')
           .eq('thread_id', requireThreadId(ctx))
-          .order('created_at', { ascending: true });
+          .order('position', { ascending: true });
         if (msgErr) {
           // Degrade quietly - we cannot derive a query without the
           // thread, so the umbrella returns the empty index.
