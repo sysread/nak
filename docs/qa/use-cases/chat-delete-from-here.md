@@ -95,3 +95,4 @@ Delete the thread (drawer kebab, Delete).
 
 | Date | Env | Commit | Result | Notes |
 | ---- | --- | ------ | ------ | ----- |
+| 2026-08-21 | local (mise run dev-start) | f5e6c90b | PASS | All six steps verified incl. storage-object removal from the bucket (stronger than the doc's link-row check). Doc gaps found: every trash click fires a confirm() dialog the steps never mention, and step 6's parenthetical is the mandatory path after step 5 (thread is always empty then). Model: Mistral Small (deepseek-v4-flash was guard-failing all prompts this run). |

@@ -115,3 +115,4 @@ synthetic content not worth keeping.
 
 | Date | Env | Commit | Result | Notes |
 | ---- | --- | ------ | ------ | ----- |
+| 2026-08-21 | local (mise run dev-start) | f5e6c90b | PARTIAL | Steps 1-4 pass (append order, tool-round re-stamp, forge + synthesis-on-read, neighbor+1ms persistence all verified). Step 5 fails as written: the UI deliberately filters recovery rows (message-blocks.ts), so on-screen order is a correct subsequence of query order, never an exact match - Expected (3)'s italicised-note disjunct and Expected (5) need restating to what renders. Env note: deepseek-v4-flash leaked glitch tokens repeatedly (guard retries visible); Mistral Small used for later turns. |
