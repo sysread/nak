@@ -148,10 +148,19 @@ info(`Discovered ${buckets.length} bucket${buckets.length === 1 ? '' : 's'}: ${b
     ]);
 
     if (code !== 0) {
-      // An empty bucket or a bucket that doesn't exist on this target
-      // is not a hard failure - warn and continue.
-      const msg = stderr.trim().slice(0, 300);
-      warn(`Bucket "${bucket}" skipped: ${msg || 'no objects or error'}`);
+      // An empty bucket makes the CLI exit non-zero with
+      // "Object not found: /<bucket>/" on stderr. That is not an
+      // error - there is simply nothing to copy. Distinguish it
+      // from a genuine failure so an empty bucket does not read as
+      // a data-loss warning.
+      const clean = stderr
+        .replace(/^WARN:.*$/gm, '')
+        .trim();
+      if (/Object not found/i.test(clean)) {
+        info(`Bucket "${bucket}" is empty`);
+      } else {
+        warn(`Bucket "${bucket}" skipped: ${clean.slice(0, 300) || 'no objects or error'}`);
+      }
     } else {
       // Count downloaded files on disk (CLI prints progress to stderr,
       // not stdout, so counting stdout lines is unreliable).
