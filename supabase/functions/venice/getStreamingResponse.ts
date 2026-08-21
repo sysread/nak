@@ -553,6 +553,30 @@ export async function getStreamingResponse(
             break;
           }
           case 'error': {
+            // A deliberate abort surfaces HERE, not only at the loop
+            // boundaries: cancelling mid-SSE rejects the in-flight
+            // read, and the completion wrapper converts the
+            // AbortError into an error event with kind='network'.
+            // Without this check a user's Stop classified as a false
+            // "couldn't reach Venice" error (banner + last_error),
+            // and the aborted-regen rollback - gated on the
+            // 'aborted' terminal - never engaged for the mid-stream
+            // timing users actually hit. Same wall-vs-cancel
+            // decision as the loop-boundary checks.
+            if (ctl.signal.aborted) {
+              if (ctl.signal.reason === WALL_TIMEOUT_REASON) {
+                terminalKind = 'error';
+                terminalDetail = 'wall timeout';
+                lastErrorInput = { kind: 'wall_timeout' };
+              } else {
+                terminalKind = 'aborted';
+                terminalDetail = undefined;
+              }
+              log.debug(
+                `${runId} round ${round} stream error superseded by abort (${String(ctl.signal.reason ?? 'user cancel')})`,
+              );
+              break roundLoop;
+            }
             terminalKind = 'error';
             terminalDetail = ev.message;
             // The StreamSignal carries the typed VeniceErrorKind that
