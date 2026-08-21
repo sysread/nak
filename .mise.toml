@@ -292,13 +292,13 @@ run = "supabase functions deploy venice"
 raw = true
 
 [tasks.backup]
-description = "Back up the Supabase database (schema + data) and all storage objects to backups/. NAK_TARGET=local (default) or linked."
+description = "Back up the Supabase database (schema + data) and all storage objects to backups/. Archive named <timestamp>-<target>.tar.gz. NAK_TARGET=local (default) or linked."
 # raw = true so supabase CLI progress output streams to the TTY.
 run = "node scripts/backup.mjs"
 raw = true
 
 [tasks.restore]
-description = "Restore a Supabase project from a backup archive. NAK_TARGET=local (default) or linked (DANGEROUS: wipes prod)."
+description = "Restore a Supabase project from a backup archive. Filters archives by target suffix. NAK_TARGET=local (default) or linked (DANGEROUS: wipes prod)."
 # gum drives the backup-selection picker. The script degrades to a
 # numbered list when gum is absent, so this declaration is a convenience,
 # not a hard dep.

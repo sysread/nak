@@ -82,7 +82,9 @@ const ts =
   `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}` +
   `-${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
 
-const workDir = join(BACKUPS_DIR, ts);
+// Archive name includes the target so local and linked backups
+// are distinguishable at a glance and restore can filter by target.
+const workDir = join(BACKUPS_DIR, `${ts}-${target}`);
 const archivePath = `${workDir}.tar.gz`;
 
 if (existsSync(archivePath)) {
