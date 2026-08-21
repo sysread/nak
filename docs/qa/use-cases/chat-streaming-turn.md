@@ -52,11 +52,14 @@ subconscious priming pipelines' fire policy
 ## Expected
 
 - (2-3) The reply streams into the bubble; the drawer's `stream`
-  source shows, keyed by one runId: a `start` line (debug), a
-  `round 0` line (debug), an event tally (debug), and
-  `end terminalKind=completed` (info). Turns that dispatch tools
-  additionally show `dispatching N tool call(s)` and an
-  `outcomes:` line at info.
+  source shows, keyed by one runId: a `start` line (debug), an
+  in-flight probe verdict line (debug), a
+  `stream_started_at stamped` line (debug), a `round 0` line
+  (debug), an event tally (debug), a `stream_started_at cleared`
+  line (debug), and `end terminalKind=completed` (info) - seven
+  lines for a no-tool turn. Turns that dispatch tools additionally
+  show `dispatching N tool call(s)` and an `outcomes:` line at
+  info.
 - (2, cold caches) Both subconscious caches repopulate with
   `trigger='cold'`:
 

@@ -15,7 +15,10 @@ button + hover wiring in `src/screens/Chat.svelte`):
 3. **Click semantics.** Clicking deletes the user message and
    everything after it from the view and the DB, reverting the
    thread to its pre-message state. Attachments on deleted rows are
-   reclaimed (link rows cascade; storage objects removed).
+   reclaimed (link rows cascade; storage objects removed
+   best-effort - the delete path swallows Storage errors and the
+   daily attachment-gc sweep backstops, so a transient Storage
+   failure here is not a regression).
 4. **Disabled mid-send.** The button is disabled while a reply is
    streaming on the thread.
 
@@ -33,6 +36,9 @@ this case must keep passing as written.
   (`<thread>`).
 - One image file to attach in step 4.
 - SQL access via `mise run dev-sql` (or psql to 127.0.0.1:54322).
+- Every trash click fires a browser confirm() dialog ("Delete this
+  message and everything after it?") - accept it. An automated
+  executor must handle the dialog or it stalls on every delete.
 
 ## Steps
 
@@ -63,9 +69,10 @@ this case must keep passing as written.
    query.
 5. **Delete the first message.** Click the trash button on the
    FIRST user message. Read the transcript and the drawer.
-6. **Disabled mid-send.** Send a prompt and, while the reply is
-   streaming, hover the trash button on an earlier user message
-   (send another turn first if the thread is empty from step 5).
+6. **Disabled mid-send.** The thread is always empty after step 5,
+   so this is a two-send step: (a) send a throwaway prompt and let
+   its reply finish; (b) send another prompt and, while it streams,
+   hover the trash button on the step-(a) user message.
 
 ## Expected
 
@@ -83,9 +90,9 @@ this case must keep passing as written.
 - (5) The transcript is empty but the THREAD still exists - it
   remains in the drawer with its title, and the composer accepts a
   new message.
-- (6) The trash button renders disabled (not clickable) while the
-  send is in flight, and becomes active again when the reply
-  settles.
+- (6) The trash button renders with the disabled attribute (still
+  present, not hidden) while the send is in flight, and becomes
+  active again when the reply settles.
 
 ## Cleanup
 

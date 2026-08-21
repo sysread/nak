@@ -34,17 +34,20 @@ gate in `src/components/AssistantBody.svelte`, commit path
   invoked a tool (ask something that triggers memory or web search).
   Note the thread id.
 - For the tool-call-only step: a prompt that reliably starts a
-  slow tool call (e.g. attach an image and ask for analysis), so
-  Stop can land while the call is still pending.
+  slow tool call, so Stop can land while the call is still
+  pending. Enable the images toolbox and ask for a generated
+  picture (`generate_image` runs long enough); attach-an-image
+  analysis finishes too fast to catch.
 
 ## Steps
 
 1. Visibility sweep. Hover each message in the thread. Note which
    rows offer the circular-arrow regenerate button in their action
    row.
-2. Hover preview. Hover the regenerate button on the SECOND
-   assistant reply without clicking. Observe the transcript. Move
-   the pointer away.
+2. Hover preview. Hover the regenerate button on the second turn's
+   assistant reply (counting turns from the top; on a tool turn,
+   the terminal reply carries the button) without clicking. Observe
+   the transcript. Move the pointer away.
 3. Regenerate the latest reply. Click regenerate on the last
    assistant reply. Watch the greyed range while the new reply
    streams, then let it finish.
@@ -69,17 +72,19 @@ gate in `src/components/AssistantBody.svelte`, commit path
 ## Expected
 
 - (1) Every assistant reply has the button, including ones with tool
-  cards. User messages show the trash button instead; the
-  generated-image card, ask-user card, and "Renamed to" lines have
-  no regenerate button.
+  cards. User messages show the trash button instead. Auxiliary
+  cards (generated-image, ask-user, "Renamed to" lines) have no
+  regenerate button - check whichever of them the thread happens to
+  contain; this case's preconditions do not stage them all.
 - (2) The hovered reply and every row below it (including later user
   messages) get the red `.regen-target` outline; rows above stay
   normal. Leaving the button clears all outlines; no rows were
   deleted (step 3's query count is unchanged).
 - (3) The old reply greys out but stays readable while the new one
-  streams below; when it lands the greyed row is gone from the view
-  and the DB - the query shows exactly one assistant row for that
-  user message, the new one.
+  streams below; when it lands the greyed range is gone from the
+  view and the DB - the query shows exactly one assistant ROUND for
+  that user message (the new reply, plus its tool rows if the new
+  turn used tools).
 - (4) The clicked reply AND every later turn (your third prompt and
   its reply) grey out; one new reply replaces them all. The query
   shows the thread now ends user-2 -> new reply - the third-turn

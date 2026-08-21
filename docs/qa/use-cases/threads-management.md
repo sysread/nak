@@ -12,7 +12,10 @@ reply lock ([dev: auth-session](../../dev/auth-session.md),
 
 - Local stack up (`mise run dev-start`), signed in as the dev user in one
   browser.
-- A second signed-in session for the same user in another tab or browser.
+- A second signed-in session for the same user in a DIFFERENT
+  browser profile (or a different browser / private window). Two
+  tabs on one origin share the same holder id in localStorage, so
+  the reply lock never fires between them.
 - Two threads available: one new thread with no manual rename yet, and
   one other thread to switch to during the lock check.
 
@@ -27,9 +30,11 @@ reply lock ([dev: auth-session](../../dev/auth-session.md),
    reply to settle.
 5. Open the thread drawer `Topics` filter and note any topic pills that
    now appear for the thread.
-6. Select one topic that matches the thread and one topic from another
-   active thread.
-7. Remove one selected topic with its pill `×`, then click `clear`.
+6. Select one topic that matches the thread and two topics from
+   other active threads (three selected total - the `clear` control
+   only renders while 2+ topics are selected).
+7. Remove one selected topic with its pill `×`, then click `clear`
+   on the remaining two.
 8. In session A, start a new reply in `Pinned QA thread` and leave it
    streaming.
 9. In session B, open `Pinned QA thread`.

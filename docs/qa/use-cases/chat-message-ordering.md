@@ -5,9 +5,9 @@
 Transcript ordering end to end ([dev: chat](../../dev/chat.md);
 recovery synthesis in `src/lib/conversation-recovery.ts`, recovery
 persistence in `src/screens/Chat.svelte`). Today the canonical sort
-is `created_at` (browser clock for user rows, edge-function clock
-for assistant/tool rows), and two code paths forge timestamps to
-control placement:
+is `created_at`. All rows get the DB clock at insert (the column
+defaults to now() server-side); only two code paths write
+runtime-clock values, forging timestamps to control placement:
 
 1. **Recovery persistence** - synthetic rows healing an interrupted
    tool exchange are written with a forged
@@ -27,8 +27,12 @@ observable order, with the canonical sort switched to `position`.
 - Local stack up (`mise run dev-start`), signed in as the dev user
   (`dev@nak.local` / `devpass123`).
 - A fresh thread for this case. Note its id (`<thread>`).
-- One prompt known to trigger a tool call (e.g. "search the web for
-  today's date" with the web toolbox on, or a memory-recall ask).
+- One prompt known to trigger a tool call. A memory-recall ask
+  fires reliably ("Search my memories for anything about X and tell
+  me what you find" - `memory_search` is always-on). Do NOT use the
+  venice-native web-search toggle to satisfy this: it produces
+  citations with NO tool_calls rows, which silently breaks the
+  step-3 forge (the subquery finds nothing and deletes nothing).
 - SQL access via `mise run dev-sql` (or psql to 127.0.0.1:54322).
 
 ## Steps
@@ -53,7 +57,7 @@ observable order, with the canonical sort switched to `position`.
 3. **Forge an interrupted tool exchange.** Using the step-2 turn's
    rows, delete the tool result row(s) and the terminal assistant
    reply, leaving the assistant-with-tool_calls row as the thread
-   tail (substitute the ids you see):
+   tail:
 
    ```sql
    delete from messages
@@ -61,6 +65,7 @@ observable order, with the canonical sort switched to `position`.
       and created_at > (select created_at from messages
                          where thread_id = '<thread>'
                            and tool_calls is not null
+                           and jsonb_array_length(tool_calls) > 0
                          order by created_at desc limit 1);
    ```
 
@@ -94,17 +99,25 @@ observable order, with the canonical sort switched to `position`.
   call, terminal assistant reply - in that order. The terminal
   reply's `created_at` is later than the tool rows' even though
   streaming began before them (the round-boundary re-stamp).
-- (3) The reloaded tail shows recovery content in place of the
-  missing rows (a synthesized tool result and/or an italicised
-  recovery note) rather than an error or a raw dangling tool-call
-  card. Nothing new is in the DB yet - the step-1 query still shows
-  the assistant-with-tool_calls row as the last row.
+- (3) The reloaded tail shows the tool-group card with a
+  synthesized "(tool execution was interrupted...)" result folded
+  in - not an error, and not a raw dangling tool-call card. No
+  separate recovery note renders: the UI deliberately filters
+  recovery rows (see the block comment in
+  `src/lib/ui/message-blocks.ts` - they read as noise to the user),
+  so the synthesis is visible only through the healed tool card.
+  Nothing new is in the DB yet - the step-1 query still shows the
+  assistant-with-tool_calls row as the last row.
 - (4) The recovery rows are now persisted (`is_recovery = true`)
   and sit BETWEEN the assistant-with-tool_calls row and the new
   user prompt in the query order - mid-conversation, not at the
   tail. The new user prompt and its reply follow them.
-- (5) Query order and display order agree; the recovery rows render
-  at the same mid-transcript position the query reports.
+- (5) The visible transcript is the step-4 query order with the
+  recovery rows omitted: every NON-recovery row renders, in the
+  same relative order the query reports (a correct subsequence).
+  The persisted recovery rows themselves never render - the same
+  UI filter as (3) - and no error or incomplete-turn banner
+  appears.
 
 ## Cleanup
 
