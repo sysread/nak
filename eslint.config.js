@@ -83,4 +83,14 @@ export default [
       'no-console': 'off',
     },
   },
+  {
+    // scripts/*.mjs are CLI tools that use console.log for all
+    // terminal output (progress, status, results). The no-console
+    // rule is for app code that should route through the logger;
+    // these scripts have no logger and stdout is their purpose.
+    files: ['scripts/**/*.mjs'],
+    rules: {
+      'no-console': 'off',
+    },
+  },
 ];
