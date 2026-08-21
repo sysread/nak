@@ -128,6 +128,16 @@ One file per use-case under [`use-cases/`](./use-cases/), named
 - [chat-ask-user](./use-cases/chat-ask-user.md) - the ask_user
   tool's suspend/resume lifecycle and the AskUserCard's
   pre-populated question/options.
+- [chat-message-ordering](./use-cases/chat-message-ordering.md) -
+  transcript ordering end to end: display vs DB order, tool-round
+  ordering, and the two forged-timestamp paths (mid-transcript
+  recovery persistence, round-boundary re-stamp). Baseline for the
+  forking work's M1 position switch.
+- [chat-delete-from-here](./use-cases/chat-delete-from-here.md) -
+  the trash button on user messages: visibility, hover preview,
+  delete-through-tail semantics incl. attachment reclamation, and
+  the mid-send disabled state. Baseline for the forking work's M1
+  and M6.
 - [chat-regenerate-from-here](./use-cases/chat-regenerate-from-here.md) -
   the regenerate button's visibility (every assistant reply,
   including tool-call-only cards from a stopped turn), the hover

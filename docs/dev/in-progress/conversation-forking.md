@@ -263,20 +263,26 @@ row. Its guards (deterministic ordering, NULL-only idempotence,
 per-thread-max offset) are specified in M1; nothing else in the
 plan modifies existing rows at all.
 
-**Backup/restore interaction** (a backup/restore tool is in
-development locally, not yet in the repo - re-verify this contract
-when it lands): a pre-M1 backup carries no position column, so its
-restore depends on two properties this plan already requires - the
-schema apply recreates the column as NULL and the backfill sweeps
-every NULL row into correct per-thread positions. A restore that
-inserts rows with triggers disabled (the pg_dump replica-role
-convention) is also covered: rows land with NULL positions and the
-same sweep assigns them. Post-M1 backups carry positions and
-restore verbatim; the NULL-only backfill is a no-op over them.
-The dependency runs one way: the backup tool needs nothing from
-this plan beyond what M1 already guarantees, but weakening either
-backfill guard (NULL-only idempotence, per-thread-max offset)
-would silently break pre-M1 restores.
+**Backup/restore interaction** (verified against the landed
+`mise run backup` / `mise run restore` tooling): a restore applies
+the backup's OWN schema dump and then a copy of the repo's
+schema.sql that was **frozen into the archive at backup time** -
+it does not read the current repo. So restoring a pre-M1 backup
+after M1 ships leaves the database without the position column,
+while the deployed code expects it. The required follow-up step:
+after restoring an archive older than M1, apply the current repo
+schema.sql to the restored target (the linked project gets this
+from `mise run sync` or the next deploy's sync job; local, apply
+schema.sql via psql). That apply creates the column as NULL and
+the backfill sweeps every row into correct per-thread positions.
+The data apply runs with triggers disabled (replica role), which
+is also covered: restored rows land with NULL positions and the
+same sweep assigns them. Post-M1 backups carry positions in the
+data dump and restore verbatim; the NULL-only backfill is a no-op
+over them. The dependency runs one way: the backup tool needs
+nothing from this plan, but weakening either backfill guard
+(NULL-only idempotence, per-thread-max offset) silently breaks
+older-archive restores.
 
 ### Worker treatment
 
@@ -371,13 +377,19 @@ green and its QA baseline re-executed.
 
 ### M0 - QA baselines (before any code)
 
+Status: use-cases shipped (chat-message-ordering,
+chat-delete-from-here); baseline EXECUTION is pending - a local
+QA agent runs them against the unchanged code and logs the rows.
+A pre-M1 backup of the hosted project has been taken.
+
 Per the docs/qa rules: backfill use-cases FIRST and execute them
 against unchanged code, so post-change runs prove preservation,
 not just self-consistency.
 
-- New use-case: message ordering + delete-from-here (covering the
-  mid-transcript recovery-row insertion and the delete gesture;
-  today neither has a walkthrough).
+- New use-cases: chat-message-ordering (display vs DB order, the
+  tool-round re-stamp, mid-transcript recovery persistence) and
+  chat-delete-from-here (visibility, hover preview, delete
+  semantics incl. attachment reclamation, mid-send disable).
 - Re-execute existing: chat-regenerate-from-here,
   threads-management (delete/archive), chat-streaming-turn.
 - Log baseline rows in each results table.
