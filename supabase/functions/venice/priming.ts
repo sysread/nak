@@ -45,6 +45,8 @@ import {
 import {
   formatPrimingThinks,
   formatRefinementFireThink,
+  SAMSKARA_COMPOUND_THINK_MARKER,
+  SAMSKARA_FIRE_THINK_MARKER,
 } from './priming/samskara-format.ts';
 import {
   type IntuitionPayload,
@@ -573,7 +575,7 @@ async function runRefinementPriming(opts: ServerPrimingOpts): Promise<void> {
       const insertAt = Math.max(0, opts.history.length - 1);
       opts.history.splice(insertAt, 0, {
         role: 'assistant',
-        content: `<think>\n${body}\n</think>`,
+        content: `<think>\n${SAMSKARA_FIRE_THINK_MARKER}\n${body}\n</think>`,
       });
       samskaraLog.info('refinement probe: spliced', {
         fired: fired?.length ?? 0,
@@ -777,13 +779,19 @@ async function runThinkChain(opts: ThinkChainOpts): Promise<void> {
     if (msg !== null) thinks.push(msg);
   }
   if (samskaraThinks.compound !== null) {
-    thinks.push({ role: 'assistant', content: `<think>\n${samskaraThinks.compound}\n</think>` });
+    thinks.push({
+      role: 'assistant',
+      content: `<think>\n${SAMSKARA_COMPOUND_THINK_MARKER}\n${samskaraThinks.compound}\n</think>`,
+    });
   }
   if (samskaraThinks.fire !== null) {
-    thinks.push({ role: 'assistant', content: `<think>\n${samskaraThinks.fire}\n</think>` });
+    thinks.push({
+      role: 'assistant',
+      content: `<think>\n${SAMSKARA_FIRE_THINK_MARKER}\n${samskaraThinks.fire}\n</think>`,
+    });
   }
   if (intuitionCache && isPayloadFreshForInjection(intuitionCache, nowMs)) {
-    thinks.push(buildIntuitionThinkMessage(intuitionCache));
+    thinks.push(buildIntuitionThinkMessage(intuitionCache, currentUserRound));
   }
   if (thinks.length > 0) {
     const insertAt = Math.max(0, history.length - 1);
