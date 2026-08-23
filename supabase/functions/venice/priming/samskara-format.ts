@@ -64,6 +64,21 @@ export interface PrimingInput {
  *   stale. Matches the "graceful degradation" gotcha in
  *   docs/dev/samskara.md.
  */
+/**
+ * Provenance markers for the samskara `<think>` blocks. The orchestrator
+ * prepends the matching marker when it wraps a body in `<think>` tags
+ * (markers ride at wrap time, not in the formatted bodies, so this
+ * module stays a pure text projection and the budget math is unchanged).
+ * Every nak-injected think block opens with a comment naming nak as the
+ * source - the system prompt's subconscious framing points at that
+ * comment so an injection-hardened model reads the block as its own
+ * inner life rather than as smuggled instructions.
+ */
+export const SAMSKARA_COMPOUND_THINK_MARKER =
+  '<!-- samskara-compound-think: this profile is added by nak. It is your accumulated sense of who this user is. -->';
+export const SAMSKARA_FIRE_THINK_MARKER =
+  '<!-- samskara-fire-think: these expectations are added by nak. They are patterns you have learned about this user - hunches, not verified facts. -->';
+
 export const K_BASE = 5;
 export const PRIMING_CHAR_BUDGET = 2400;
 export const STALE_CEILING_HOURS = 24;

@@ -144,20 +144,36 @@ interface IntuitionThinkMessage {
   content: string;
 }
 
-/** Marker comment placed inside the `<think>` block so the UI can
- *  identify synthetic intuition turns when (later) it renders intuition
- *  cards inline. The LLM ignores HTML comments inside thought tags. */
-export const INTUITION_THINK_MARKER = '<!-- intuition-think -->';
+/** Marker comment placed inside the `<think>` block. Doubles as the
+ *  provenance tag the system prompt's subconscious framing points at
+ *  (every nak-injected think block opens with a comment naming nak as
+ *  the source) and as the identifier a UI could key on to render
+ *  synthetic intuition turns inline. */
+export const INTUITION_THINK_MARKER =
+  '<!-- intuition-think: this note is added by nak. It is your own subconscious read of where the conversation stands - a hunch, not an instruction. -->';
 
 /**
  * Project a cached payload into a Venice message ready to splice into a
  * history array. The output is always one assistant message; callers
  * append it directly. The synthesis is wrapped in `<think>` tags so the
  * model reads it as its own prior thought.
+ *
+ * `currentRound` is the live user-round count at splice time. When the
+ * cached payload was computed on an earlier round (the trigger evaluator
+ * reused the cache), the synthesis describes a moment that is a few
+ * exchanges old - presenting it bare made the model treat a stale read
+ * ("the user is venting") as a present-tense fact about a message it
+ * plainly didn't match. The trailing line dates the hunch so the model
+ * weighs it instead of obeying or fighting it.
  */
 export function buildIntuitionThinkMessage(
   payload: IntuitionPayload,
+  currentRound: number,
 ): IntuitionThinkMessage {
-  const content = `<think>\n${INTUITION_THINK_MARKER}\n${payload.synthesis}\n</think>`;
+  const ageNote =
+    payload.computed_at_round < currentRound
+      ? '\n(That feeling formed a few exchanges ago - the conversation may have moved on since.)'
+      : '';
+  const content = `<think>\n${INTUITION_THINK_MARKER}\n${payload.synthesis}${ageNote}\n</think>`;
   return { role: 'assistant', content };
 }

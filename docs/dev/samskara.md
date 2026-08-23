@@ -558,7 +558,11 @@ with an explicit `p_user_id`.
 - `formatPrimingThinks({ compoundSummary, fire }): { compound,
   fire }` - pure. Returns the two `<think>`-block bodies (or null
   per field when the signal is absent): the compound paragraph and
-  the fire bullets sorted by score descending. Keeps the top three
+  the fire bullets sorted by score descending. The orchestrator
+  prepends the `SAMSKARA_*_THINK_MARKER` provenance comments when it
+  wraps the bodies in `<think>` tags (markers ride at wrap time so
+  this stays a pure projection and the budget math is untouched; see
+  prompt-augmentation.md -> "Provenance markers"). Keeps the top three
   fires in full form and abbreviates the rest when total length
   exceeds `PRIMING_CHAR_BUDGET` (2400 chars); drops the weakest
   entries one by one if abbreviation alone doesn't fit.

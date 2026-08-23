@@ -190,10 +190,13 @@ export interface ContextRecallThinkMessage {
   content: string;
 }
 
-/** Marker comment placed inside the `<think>` block so a future debug
- *  surface can identify synthetic context-recall turns. The LLM ignores
- *  HTML comments inside thought tags. */
-export const CONTEXT_RECALL_THINK_MARKER = '<!-- context-recall-think -->';
+/** Marker comment placed inside the `<think>` block. Doubles as the
+ *  provenance tag the system prompt's subconscious framing points at
+ *  (every nak-injected think block opens with a comment naming nak as
+ *  the source, so the model's injection defenses stand down) and as the
+ *  identifier a future debug surface can key on. */
+export const CONTEXT_RECALL_THINK_MARKER =
+  '<!-- context-recall-think: this recollection is added by nak. It is what you remembered from past conversations that looked relevant - leads, not verified facts. -->';
 
 /**
  * Project a cached payload into a message ready to splice into a

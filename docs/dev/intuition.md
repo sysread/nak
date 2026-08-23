@@ -129,9 +129,14 @@ thread by the first response.
   `buildIntuitionThinkMessage` (in `intuition-payload.ts`) projects
   the cached payload to the synthetic assistant message
   (`<think>{INTUITION_THINK_MARKER}\n{synthesis}\n</think>`) - the
-  HTML-comment marker is inside the `<think>` block so the LLM
-  ignores it; a UI could use it to identify synthetic intuition
-  turns when listing message blocks.
+  HTML-comment marker is inside the `<think>` block and doubles as
+  the provenance tag the system prompt's subconscious framing points
+  at (see prompt-augmentation.md -> "Provenance markers"); a UI could
+  also use it to identify synthetic intuition turns. The builder takes
+  the live user-round count and appends a dating line when the cached
+  payload was computed on an earlier round, so a reused synthesis
+  reads as a slightly old feeling rather than a present-tense verdict
+  about a message it never saw.
 - The brain pill that opens the modal is the `intuition` entry in
   the shared diagnostic-pill column - second from the top (recall
   bulb above; bias, samskara mood, intents below). It is rendered
@@ -316,6 +321,15 @@ demand.
   Inside the `<think>` block, the LLM treats it as scratch
   noise (HTML comments inside thought blocks are common) and
   the UI never renders the block as text in the first place.
+- **The synthesis voice is a fourth-wall contract.** The synthesis
+  must be first-person self-talk ("They're just venting - I want to
+  listen"), never a second-person directive ("Your task is..."). A
+  directive-voiced synthesis reads as someone else's instructions
+  inside the model's own thought, which injection-hardened models
+  flag as an attack - GLM 5.3 called an imperative synthesis "fake
+  inner voice notes" and told the user about it. SYNTHESIS_PROMPT
+  carries the voice constraint; if you edit it, keep the first-person
+  requirement and the ban on addressing the conscious agent as "you".
 - **No turn id column on `messages`.** Round id is derived
   from `count(user messages in history)`, which works as long
   as the message order is stable. If a future feature

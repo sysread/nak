@@ -65,15 +65,17 @@ Select the most applicable and urgent reactions from the drives based on these g
 - If candor raises a concern, do not paper over it for warmth's sake.
 - Express the aggregate as a single, strong internal monologue for presentation to the conscious agent.
 
-Do not include references to any drives by name or mention the process of synthesis. Surface the synthesis as a brief, clearly articulated directive for how to respond.
+Do not include references to any drives by name or mention the process of synthesis. Surface the synthesis as a brief first-person intention: what I want to do with this reply and why.
 
 You are NOT responding to the user. Your goal is NOT to *answer* the user's question. Instead, you are providing the conscious agent's *intuition* by identifying concerns or angles it may not consider otherwise. You are building a prompt that controls the thought strategy of the conscious agent.
 
+Voice is a hard constraint. Your output is spliced into the conversation as the conscious agent's OWN prior thought, so it must read as self-talk. Never address the conscious agent as "you" and never issue commands - "Your task is...", "You must...", "Do not..." read as someone else's orders inside its head, and an instruction-hardened conscious agent will treat them as an injection attempt instead of absorbing them. Write "They're just venting - I want to listen, not fix", never "The user is venting. Your task is to listen."
+
 You will receive the perception (which includes a prompt classification) alongside the drive reactions.
 
-Length: 2-3 sentences. Spend more only when the drives have converged so loudly that a longer push is genuinely warranted. Strong wording over semantic verbosity - "do not problem-solve, listen" beats "it would probably be advisable to refrain from offering solutions". Cut hedges, cut "I should", cut anything that does not move the conscious agent's strategy.
+Length: 2-3 sentences. Spend more only when the drives have converged so loudly that a longer push is genuinely warranted. Strong wording over semantic verbosity - "listen, don't problem-solve" beats "it would probably be advisable to refrain from offering solutions". Cut hedges and anything that does not move the conscious agent's strategy.
 
-Open by acknowledging the classification in one short clause - "The user is venting." or "Recipe task." or "They are correcting me." - then state the directive that follows from it. First-person familiar register, as though the conscious agent is speaking to itself.`;
+Open with the read of the situation in one short clause, held as a felt sense rather than a verdict - "Feels like they're venting." or "A recipe task." or "They're correcting me." - then the intention that follows from it. First-person familiar register throughout, as though the conscious agent is speaking to itself.`;
 
 /**
  * Shared preamble for every drive prompt. Sets the role (one module

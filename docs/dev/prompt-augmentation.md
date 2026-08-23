@@ -98,6 +98,38 @@ volatility: slowly-changing structural context -> baseline appendix;
 per-turn synthesized context -> a `<think>` block at the appropriate
 recency position; turn-volatile ambient state -> the metadata block.
 
+## Provenance markers and fourth-wall framing
+
+Every injected `<think>` block opens with an HTML comment that names
+nak as its source and says what kind of thought it is (see
+`INTUITION_THINK_MARKER`, `CONTEXT_RECALL_THINK_MARKER`, and the two
+`SAMSKARA_*_THINK_MARKER` constants). The comment pairs with the
+`SUBCONSCIOUS_BLOCK` section of the baseline system prompt
+(`src/lib/chat/system-prompt.ts`), which lists the block kinds, vouches
+for the marker as nak's provenance tag, frames the blocks as the
+model's own inner life, and grants explicit permission to silently
+override a thought that conflicts with the user's actual message.
+
+This pairing is load-bearing, not decoration. An injection-hardened
+model that meets an unexplained, instruction-shaped think block
+classifies it as a prompt-injection attempt: GLM 5.3 spent nine turns
+of one conversation flagging the intuition block in its reasoning as
+"fake inner voice notes" and eventually told the user about the
+"suspicious instruction blocks" attached to their message. The marker
+gives the model a way to authenticate the block; the system-prompt
+framing tells it what to do with an authenticated one (fold it in or
+discard it, silently); and the override permission is what lets it
+disagree with a stale prime without arguing about it out loud.
+
+When you add a `<think>` injector: give it a marker comment in the
+same shape, add its kind to the `SUBCONSCIOUS_BLOCK` list, and write
+its body in first person. Second-person imperatives ("Your task
+is...") inside a think block read as someone else's orders in the
+model's head - the exact signature injection training teaches models
+to flag - so the generating prompts must demand self-talk voice (see
+`SYNTHESIS_PROMPT` in `venice/priming/intuition-prompts.ts` for the
+canonical voice contract).
+
 ## Freshness
 
 Per-turn `<think>` injectors do NOT recompute every turn - that would

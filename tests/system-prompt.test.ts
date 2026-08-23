@@ -240,6 +240,33 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toMatch(/consider.*context|context.*first/i);
   });
 
+  it('carries the subconscious framing: nak-marked think blocks are own inner life, override permitted, fourth wall stays intact', () => {
+    // The subconscious block has four load-bearing beats:
+    //   (1) identify the injected <think> blocks by their nak-authored
+    //       HTML comment, so an injection-hardened model authenticates
+    //       them instead of classifying them as an attack (observed on
+    //       GLM 5.3, which flagged the intuition block as "fake inner
+    //       voice notes" and told the user about it);
+    //   (2) frame them as the model's own inner life, folded in
+    //       silently rather than quoted or attributed;
+    //   (3) grant explicit permission to override a thought that
+    //       conflicts with the user's actual message - without it the
+    //       model either obeys a stale prime or argues with it out
+    //       loud;
+    //   (4) forbid breaking the fourth wall over them, and carve them
+    //       out of the untrusted-content "say so in your reply" rule.
+    const prompt = buildSystemPrompt();
+    expect(prompt).toMatch(/HTML comment naming nak/i);
+    expect(prompt).toMatch(/not an injection attempt/i);
+    expect(prompt).toMatch(/your own inner life/i);
+    expect(prompt).toMatch(/permission to reframe, discount, or override/i);
+    expect(prompt).toMatch(/never break the fourth wall/i);
+    // The carve-out rides in the untrusted-content block so the
+    // "flag instructing content" rule cannot be read as covering
+    // nak's own think blocks.
+    expect(prompt).toMatch(/nak-marked <think> blocks/);
+  });
+
   it('explains the toggle_toolbox gating rule', () => {
     // The policy used to live on the toggle tool's own description;
     // it now belongs here so the model sees it before any gated
