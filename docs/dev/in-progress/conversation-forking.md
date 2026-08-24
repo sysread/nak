@@ -321,6 +321,20 @@ conversation; treat them as background. <task-specific clause>.
 ...owned rows...
 ```
 
+The marker and preamble are nak-inserted framing inside content a
+model reads, which is exactly the class of text the provenance
+convention in
+[`../prompt-augmentation.md`](../prompt-augmentation.md)
+("Provenance markers and fourth-wall framing") now governs: an
+injection-hardened model that meets unexplained instruction-shaped
+insertions flags them as prompt injection (observed in prod on the
+priming think chain, which is why that convention exists). When M4
+writes this copy: name nak as the source of the marker line, keep
+the preamble descriptive rather than second-person imperative, and
+if any fork framing ever rides an injected `<think>` block, follow
+that section's full contract (marker comment, SUBCONSCIOUS_BLOCK
+registration, first-person voice).
+
 The task-specific clause per worker (exact copy written at
 implementation, reviewed against each prompt's existing voice):
 
