@@ -1715,6 +1715,15 @@
    * DB's current state as the input - then synthesizing - avoids
    * writing recovery rows that are no longer needed.
    *
+   * Own-segment only: a forked thread's transcript opens with rows
+   * inherited from ancestor threads, and a gap in that inherited
+   * prefix synthesizes rows carrying the ANCESTOR's thread_id (the
+   * anchor rule in conversation-recovery). Persisting those from
+   * here would write into another thread's position coordinates, so
+   * they stay in-memory-only for this thread - they heal durably
+   * when a thread that owns the gap revisits it. On a thread with no
+   * fork ancestry every synthetic is own-segment and all heal here.
+   *
    * After persisting, we re-fetch and assign messages from scratch
    * rather than swapping in the persisted rows by id. The realtime
    * subscriber races our addMessage calls - it fires its own
@@ -1725,10 +1734,12 @@
   async function persistSyntheticRecovery(threadId: string): Promise<void> {
     if (!app.supabase) return;
     const beforeWrite = await app.supabase.listMessages(threadId);
-    const synthetics = beforeWrite.filter((m) => m.synthetic);
+    const synthetics = beforeWrite.filter(
+      (m) => m.synthetic && m.thread_id === threadId
+    );
     if (synthetics.length === 0) {
-      // Either nothing to heal, or another tab already healed it.
-      // Adopt the DB view wholesale.
+      // Either nothing to heal (or nothing this thread owns), or
+      // another tab already healed it. Adopt the DB view wholesale.
       messages = beforeWrite;
       return;
     }
@@ -2529,13 +2540,13 @@
       // and onToolResultPersisted fire while the await is in flight,
       // pushing into slot.persistedRows. The snapshot may or may not
       // include those rows depending on when its underlying query
-      // ran. mergeMessagesById de-dupes by id and orders by position
-      // ascending (matching listMessages' own ORDER BY), so either
-      // path lands the same final transcript. Empty buffer is fast-
-      // pathed inside mergeMessagesById; non-streaming threads pay
-      // nothing.
+      // ran. mergeMessagesById de-dupes by id and slots the buffered
+      // rows into the thread's own segment by position (inherited
+      // fork-prefix rows keep their snapshot order), so either path
+      // lands the same final transcript. Empty buffer is fast-pathed
+      // inside mergeMessagesById; non-streaming threads pay nothing.
       const bufferedRows = exchangeStore.peek(id)?.persistedRows ?? [];
-      messages = mergeMessagesById(visibleFetched, bufferedRows);
+      messages = mergeMessagesById(visibleFetched, bufferedRows, id);
       // Eager-cancel any pending ask_user sentinel left over from a
       // prior session. The chat-loop suspends without persisting the
       // priming state, and we can't restart inference from where it
@@ -2775,7 +2786,7 @@
         const fetched = await supabase.listMessages(threadId);
         if (activeThreadId !== threadId) return;
         const bufferedRows = exchangeStore.peek(threadId)?.persistedRows ?? [];
-        messages = mergeMessagesById(fetched, bufferedRows);
+        messages = mergeMessagesById(fetched, bufferedRows, threadId);
       } catch (err) {
         // Best-effort: a failed reconciliation just leaves the
         // realtime-delivered state in place. The user can still
@@ -4885,7 +4896,7 @@
       // selectThread re-fetches when they return.
       if (threadId === activeThreadId) {
         const fresh = await supabase.listMessages(threadId);
-        messages = mergeMessagesById(fresh, slot.persistedRows);
+        messages = mergeMessagesById(fresh, slot.persistedRows, threadId);
         log.debug(
           `reconnect settled thread=${threadId} tail=${fresh.at(-1)?.role ?? 'empty'}` +
             ` tailStatus=${fresh.at(-1)?.status ?? 'none'} rows=${fresh.length}`,

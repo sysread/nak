@@ -61,7 +61,21 @@ function makeAdmin(script: FakeAdminScript): {
   const admin = {
     rpc: (name: string, args: Record<string, unknown>) => {
       rpcCalls.push({ name, args });
-      return Promise.resolve(script.rpc(name, args));
+      // thread_transcript is the transcript read path (a
+      // set-returning function the loader chains .select() on), so
+      // serve it from the `messages` table stub - scripts keep
+      // declaring transcript data under `tables.messages`. Every
+      // other rpc resolves its scripted result; chain() keeps the
+      // return awaitable whether or not the caller chains further.
+      if (name === 'thread_transcript') {
+        return chain(
+          script.tables['messages'] ?? {
+            data: null,
+            error: { message: 'no stub for thread_transcript' },
+          },
+        );
+      }
+      return chain(script.rpc(name, args));
     },
     from: (table: string) =>
       chain(script.tables[table] ?? { data: null, error: { message: `no stub for table ${table}` } }),

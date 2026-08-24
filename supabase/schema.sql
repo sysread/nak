@@ -806,6 +806,116 @@ revoke all on function public.move_message_to_tail(uuid, uuid)
 grant execute on function public.move_message_to_tail(uuid, uuid)
   to service_role;
 
+-- Conversation forking ------------------------------------------------------
+--
+-- A thread row owns a SEGMENT - the run of messages it minted itself -
+-- not necessarily a whole conversation. A conversation is the
+-- concatenation of segments along the path from a root thread down to
+-- one node: threads form a forest (parent set at creation, never
+-- changed), a trie of conversation histories with shared prefixes
+-- stored once near the roots. Until the fork entry points ship, every
+-- column below is null/false on every row and thread_transcript
+-- degenerates to the plain per-thread query.
+--
+-- forked_from_thread_id: parent thread; null for roots.
+-- forked_from_msg_id: the fork point - the last message this thread
+--   shares with its parent, always a row of the PARENT's own segment
+--   (the reparent rule: a fork's parent is whichever thread owns the
+--   fork-point message, which may be an ancestor of the thread the
+--   user forked from). Restrict, not cascade, on purpose: only the
+--   forking GC destroys shared rows, and it collects child threads
+--   before trimming parents - the restrict FK turns a GC ordering bug
+--   into a loud error instead of a silently broken fork.
+-- hidden: the thread is structure only - it holds rows other threads'
+--   transcripts depend on, but no list surface shows it and nobody is
+--   talking in it.
+alter table public.threads
+  add column if not exists forked_from_thread_id uuid
+    references public.threads(id) on delete restrict;
+alter table public.threads
+  add column if not exists forked_from_msg_id uuid
+    references public.messages(id) on delete restrict;
+alter table public.threads
+  add column if not exists hidden boolean not null default false;
+
+-- A fork point without a parent (or a parent without a fork point) is
+-- meaningless - the pair travels together.
+alter table public.threads drop constraint if exists threads_fork_pair_check;
+alter table public.threads
+  add constraint threads_fork_pair_check
+  check ((forked_from_thread_id is null) = (forked_from_msg_id is null));
+
+-- Serve the restrict-FK enforcement probes (every thread/message
+-- delete checks for referencing forks) and the GC's children-of-parent
+-- walk. Partial on not-null: forks are sparse relative to root
+-- threads, and an equality probe implies the predicate.
+create index if not exists threads_forked_from_thread_idx
+  on public.threads (forked_from_thread_id)
+  where forked_from_thread_id is not null;
+create index if not exists threads_forked_from_msg_idx
+  on public.threads (forked_from_msg_id)
+  where forked_from_msg_id is not null;
+
+-- Resolve a thread's full transcript across fork boundaries: walk the
+-- ancestor chain root-ward, take each ancestor's segment up to the
+-- fork point its child recorded, then the thread's own whole segment,
+-- ordered (segment depth, position). Rows return verbatim (setof
+-- messages), so each carries its OWNING thread_id - callers tell
+-- inherited prefix from owned tail by comparing it to the id they
+-- asked for.
+--
+-- This is the single choke point for full-transcript readers (browser
+-- thread load, summary / topics / bias / recall agents, the
+-- conversation_get tool). By-id, windowed, current-turn, and
+-- per-segment readers (the chunker) stay on direct queries.
+--
+-- Position alone is NOT global order across segments: a fork's own
+-- segment restarts at 1 while its inherited prefix also starts at 1,
+-- so callers must preserve the row order this function returns and
+-- never re-sort by bare position. plpgsql rather than sql for exactly
+-- that contract: an inlinable sql body could lose its ORDER BY when
+-- the planner flattens it into the calling query, while RETURN QUERY
+-- hands rows over in the order written.
+--
+-- SECURITY INVOKER on purpose: the browser's authenticated role
+-- resolves through the threads/messages RLS policies - every thread
+-- on an ancestor path belongs to the same user (forks never cross
+-- users), so ownership covers the whole chain and an unowned or
+-- unknown id yields zero rows, same as a direct query. The agents'
+-- service role bypasses RLS here exactly as it does on direct reads.
+create or replace function public.thread_transcript(p_thread_id uuid)
+returns setof public.messages
+language plpgsql stable as $$
+begin
+  return query
+  with recursive chain as (
+    -- The requested thread: whole own segment, no cutoff.
+    select t.id, t.forked_from_thread_id, t.forked_from_msg_id,
+           0 as depth, null::uuid as cut_msg_id
+      from public.threads t
+     where t.id = p_thread_id
+    union all
+    -- Each ancestor: its segment up to the fork point its child
+    -- recorded (the reparent rule guarantees that message lies in
+    -- this ancestor's own segment). The depth guard is a backstop
+    -- against a corrupted parent cycle turning this into an
+    -- unkillable query - the forest is append-only by construction
+    -- (a parent is set once, at creation, to an already-existing
+    -- thread), so real chains stay far below it.
+    select t.id, t.forked_from_thread_id, t.forked_from_msg_id,
+           c.depth + 1, c.forked_from_msg_id
+      from public.threads t
+      join chain c on t.id = c.forked_from_thread_id
+     where c.depth < 100
+  )
+  select m.*
+    from chain c
+    join public.messages m on m.thread_id = c.id
+    left join public.messages cut on cut.id = c.cut_msg_id
+   where c.cut_msg_id is null or m.position <= cut.position
+   order by c.depth desc, m.position asc;
+end $$;
+
 -- Second-thoughts self-review verdict for a completed assistant turn.
 -- Written by the second_thoughts reviewer agent
 -- (supabase/functions/venice/agents/second_thoughts.ts) from the

@@ -1,6 +1,6 @@
 # Conversation forking
 
-Status: M0 and M1 done. Update the milestone
+Status: M0, M1, and M2 done. Update the milestone
 checklist as work lands; graduate durable content into a permanent
 `docs/dev/forking.md` (started in M3) and retire this doc when the
 last milestone ships.
@@ -578,6 +578,60 @@ Pure ordering refactor; transcripts render identically.
 - Verify: gate + M0 ordering baseline re-run.
 
 ### M2 - fork columns + transcript resolver
+
+Status: DONE (2026-08-24). Gate green; QA re-ran the streaming
+baseline (PASS 1-5, identical to M1) and the regenerate baseline
+(PASS 1-7, identical to M1's re-run), and spot-checked the DB: fork
+columns all null, and thread_transcript's output full-outer-join
+diffed against the direct per-thread query with zero mismatches -
+same ids, positions, thread_ids, and order. Deltas and findings from
+the spec below, chosen at implementation:
+
+- The resolver is one SECURITY INVOKER plpgsql function returning
+  `setof public.messages` - not a separate browser wrapper. The
+  browser calls it as an RPC and RLS scopes the whole ancestor
+  chain (forks never cross users); the agents call the same
+  function through the service role. Returning the table type
+  keeps the column list tracking the messages table automatically.
+- Row order is the function's CONTRACT, not a convention: position
+  restarts per segment, so callers must preserve arrival order and
+  never re-sort by bare position. plpgsql (RETURN QUERY) rather
+  than an inlinable sql body so the planner can never flatten away
+  the internal ORDER BY (depth desc, position asc).
+- A depth-100 recursion guard backstops a corrupted parent cycle
+  (forest-ness is a creation-time convention, not a DB
+  constraint); a `threads_fork_pair_check` CHECK enforces the
+  "parent and fork point travel together" invariant; partial
+  indexes on both FK columns serve the restrict-probe on every
+  message/thread delete and the future GC's children walk.
+- The thread_id audit found and fixed three fork-readiness bugs
+  ahead of need (all no-ops until forks exist, all unit-tested
+  now): recovery synthetics are stamped with their ANCHOR row's
+  thread_id instead of the list head's (a fork transcript's head
+  is an ancestor's row); `mergeMessagesById` takes the viewed
+  thread's id and position-sorts only the own segment, keeping
+  inherited prefix rows in snapshot order; and
+  `persistSyntheticRecovery` skips synthetics whose thread_id is
+  not the viewed thread (inherited-prefix heals stay
+  in-memory-only, per the fork-semantics edge case).
+- Two M4 notes discovered in the audit. First, the browser's
+  realtime message subscription filters on the viewed thread's id,
+  so post-fork UPDATEs to inherited rows (an ask_user rewrite or
+  second-thoughts verdict landing in the parent) won't reach a
+  fork viewer live - display staleness only; the next full load
+  resolves it. Second, the M4-to-M6 window where forks exist but
+  edit-forks don't is corruption-safe by accident of design:
+  delete-from-here and regenerate ranges always run to the tail,
+  so a range starting in an inherited prefix necessarily includes
+  the fork-point row, and the restrict FK fails the whole delete
+  atomically - a loud error, not data loss. M6 replaces that error
+  with the edit-fork flow.
+- The wiki behavior tests' fake admin client routes
+  `thread_transcript` to its `messages` table stub - new
+  agent-path tests that stub transcript reads should follow that
+  pattern rather than stubbing `.from('messages')`.
+
+Original spec:
 
 Still zero behavior change: the columns exist but are always null,
 so the resolver provably returns exactly the old per-thread query.

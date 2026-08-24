@@ -64,10 +64,11 @@ indicator until the claim clears.
 - `src/lib/exchange/exchange-store.svelte.ts::mergeMessagesById`
   — pure helper used by `selectThread` and the safety-net
   reconcile effect. Folds a buffered-rows list into a
-  listMessages snapshot, de-duping by id and ordering by
-  `position` ascending. Handles the race where
-  `onAssistantPersisted` fires during the await between
-  `messages = []` and `messages = fetched`.
+  listMessages snapshot for the viewed thread, de-duping by id
+  and position-sorting only the thread's own segment (inherited
+  fork-prefix rows keep snapshot order at the head). Handles the
+  race where `onAssistantPersisted` fires during the await
+  between `messages = []` and `messages = fetched`.
 - `src/lib/exchange/thread-claim-coordinator.ts` —
   `ThreadClaimCoordinator`: wraps the three Supabase claim RPCs
   (`acquire_thread_response_claim`,
@@ -130,7 +131,7 @@ indicator until the claim clears.
 
 - **`selectThread(id)` in `Chat.svelte`** — does NOT touch
   streaming state (per-slot now). Loads via
-  `messages = mergeMessagesById(fetched, slot.persistedRows)`
+  `messages = mergeMessagesById(fetched, slot.persistedRows, id)`
   so rows the slot persisted during the await window fold
   back in.
 
@@ -328,13 +329,18 @@ own writes is a no-op.
   server-side TTL will sweep a non-released claim eventually
   anyway.
 
-### `mergeMessagesById(fetched, buffered): Message[]`
+### `mergeMessagesById(fetched, buffered, threadId): Message[]`
 
-Pure helper. Returns a fresh array de-duped by `id`, ordered by
-`position` ascending (null positions sort to the tail, matching the
-slot the backfill sweep assigns them). The `fetched` snapshot wins on
-duplicates (canonical state from the DB). Fast path for
-`buffered.length === 0`. Equal positions tie-break by `id` so the
+Pure helper. Returns a fresh array de-duped by `id`. Ordering is
+segment-aware: `position` restarts per fork segment, so rows
+inherited from ancestor threads (`thread_id !== threadId`) keep their
+snapshot order at the head, and only the thread's own rows - the
+segment every buffered row belongs to - are sorted by `position`
+ascending (null positions sort to the tail, matching the slot the
+backfill sweep assigns them). On a thread with no fork ancestry every
+row is "own", which reduces to the old whole-list sort. The `fetched`
+snapshot wins on duplicates (canonical state from the DB). Fast path
+for `buffered.length === 0`. Equal positions tie-break by `id` so the
 order is deterministic.
 
 ## Interactions

@@ -118,13 +118,13 @@ describe('ExchangeStore', () => {
 describe('mergeMessagesById', () => {
   it('returns the fetched list unchanged when the buffer is empty', () => {
     const fetched = [msg('a', 1), msg('b', 2)];
-    expect(mergeMessagesById(fetched, [])).toEqual(fetched);
+    expect(mergeMessagesById(fetched, [], 't1')).toEqual(fetched);
   });
 
   it('folds a buffer-only row into the right timeline slot', () => {
     const fetched = [msg('a', 1), msg('c', 3)];
     const buffered = [msg('b', 2)];
-    const merged = mergeMessagesById(fetched, buffered);
+    const merged = mergeMessagesById(fetched, buffered, 't1');
     expect(merged.map((m) => m.id)).toEqual(['a', 'b', 'c']);
   });
 
@@ -134,14 +134,14 @@ describe('mergeMessagesById', () => {
     // them to either end.
     const fetched = [msg('a', 1), msg('c', 2)];
     const buffered = [msg('b', 1.5)];
-    const merged = mergeMessagesById(fetched, buffered);
+    const merged = mergeMessagesById(fetched, buffered, 't1');
     expect(merged.map((m) => m.id)).toEqual(['a', 'b', 'c']);
   });
 
   it('prefers the fetched row when the buffer has the same id', () => {
     const fetched = [msg('a', 1, { content: 'canonical' })];
     const buffered = [msg('a', 1, { content: 'stale' })];
-    const merged = mergeMessagesById(fetched, buffered);
+    const merged = mergeMessagesById(fetched, buffered, 't1');
     expect(merged).toHaveLength(1);
     expect(merged[0].content).toBe('canonical');
   });
@@ -152,14 +152,31 @@ describe('mergeMessagesById', () => {
     // matching the tail slot the next backfill sweep assigns it.
     const fetched = [msg('z', null), msg('m', 5)];
     const buffered = [msg('a', null)];
-    const merged = mergeMessagesById(fetched, buffered);
+    const merged = mergeMessagesById(fetched, buffered, 't1');
     expect(merged.map((m) => m.id)).toEqual(['m', 'a', 'z']);
   });
 
   it('handles a buffer that lands strictly after the snapshot', () => {
     const fetched = [msg('a', 1)];
     const buffered = [msg('b', 2), msg('c', 3)];
-    const merged = mergeMessagesById(fetched, buffered);
+    const merged = mergeMessagesById(fetched, buffered, 't1');
     expect(merged.map((m) => m.id)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('keeps inherited fork-prefix rows at the head instead of sorting by position', () => {
+    // A fork-resolved snapshot opens with ancestor-owned rows whose
+    // positions restart independently of the fork's own segment.
+    // Sorting the whole list by bare position would interleave the
+    // segments (parent 1,2 with own 1,2); the merge must leave the
+    // inherited head in snapshot order and only position-sort the
+    // thread's own rows plus the buffer.
+    const fetched = [
+      msg('p1', 1, { thread_id: 'parent' }),
+      msg('p2', 2, { thread_id: 'parent' }),
+      msg('own1', 1),
+    ];
+    const buffered = [msg('own2', 2)];
+    const merged = mergeMessagesById(fetched, buffered, 't1');
+    expect(merged.map((m) => m.id)).toEqual(['p1', 'p2', 'own1', 'own2']);
   });
 });

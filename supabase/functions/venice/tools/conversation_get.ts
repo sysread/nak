@@ -203,14 +203,15 @@ export const conversationGet: ToolDef = {
     if (summaryErr) throw new Error(`listThreadSummariesByIds failed: ${summaryErr.message}`);
     if (!summary) return { found: false };
 
-    // RLS OFF: ownership pre-validated on the threads row above; a
-    // by-thread_id select here is safe because thread ownership was
-    // just confirmed for this requester.
+    // RLS OFF: ownership pre-validated on the threads row above, and
+    // fork ancestry never crosses users, so resolving the transcript
+    // for a thread this requester owns is safe. thread_transcript
+    // folds in inherited fork-prefix rows in transcript order (its
+    // contract - no re-sort) and degenerates to the plain per-thread
+    // query when there is no ancestry.
     const { data: rows, error: rowsErr } = await ctx.adminClient
-      .from('messages')
-      .select('role, content')
-      .eq('thread_id', id)
-      .order('position', { ascending: true });
+      .rpc('thread_transcript', { p_thread_id: id })
+      .select('role, content');
     if (rowsErr) throw new Error(`listMessages failed: ${rowsErr.message}`);
 
     const messageRows = (rows ?? []) as MessageRow[];

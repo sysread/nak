@@ -228,6 +228,43 @@ describe('synthetic position placement', () => {
   });
 });
 
+describe('synthetic thread_id anchoring', () => {
+  it('stamps synthetics with the anchor row thread_id, not the list head', () => {
+    // A fork-resolved transcript opens with ancestor-owned rows. A gap
+    // healed in the fork's own segment must synthesize rows belonging
+    // to the fork - keying off the list head would claim (and later
+    // persist into) the ancestor's position coordinates.
+    const thread = [
+      msg('user', 'inherited', { thread_id: 'parent' }),
+      msg('assistant', 'inherited reply', { thread_id: 'parent' }),
+      msg('user', 'own turn', { thread_id: 'fork' }),
+      msg('assistant', '', { thread_id: 'fork', tool_calls: [call('c1')] }),
+    ];
+    const out = synthesizeRecoveryMessages(thread);
+    const synth = out.filter((m) => m.synthetic);
+    expect(synth.length).toBeGreaterThan(0);
+    for (const s of synth) expect(s.thread_id).toBe('fork');
+  });
+
+  it('stamps a mid-prefix heal with the ancestor thread_id', () => {
+    // A gap inside the INHERITED prefix belongs to the ancestor
+    // segment. The persist pass skips foreign-segment synthetics, so
+    // this stamp is what keeps a prefix heal in-memory-only for the
+    // fork (it heals durably when a thread that owns the gap revisits
+    // it).
+    const thread = [
+      msg('assistant', '', { thread_id: 'parent', tool_calls: [call('c9')] }),
+      msg('user', 'later inherited turn', { thread_id: 'parent' }),
+      msg('user', 'own turn', { thread_id: 'fork' }),
+      msg('assistant', 'own reply', { thread_id: 'fork' }),
+    ];
+    const out = synthesizeRecoveryMessages(thread);
+    const synth = out.filter((m) => m.synthetic);
+    expect(synth.length).toBeGreaterThan(0);
+    for (const s of synth) expect(s.thread_id).toBe('parent');
+  });
+});
+
 describe('trimToCompleteTurn', () => {
   it('returns the array unchanged when the last row is a complete turn', () => {
     const thread = [msg('user', 'hi'), msg('assistant', 'hello')];
