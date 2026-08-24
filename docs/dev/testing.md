@@ -139,6 +139,44 @@ Presence of the key **is** the opt-in - there is no separate flag to
 remember. The default `pnpm test` stays hermetic, so CI never
 depends on outbound network or a credential.
 
+## Scratch Postgres for schema-section validation
+
+Nothing in the gate executes `supabase/schema.sql` - vitest never
+sees SQL, functions-check only type-checks Deno, and the file's
+first real execution is the deploy's sync job. For a non-trivial
+schema change (a new function, a backfill, a trigger), exercise it
+against a live scratch Postgres BEFORE the PR. This is how the
+position backfill, the thread_transcript resolver, and the fork GC
+were validated; each run caught behavior a read-through would have
+missed.
+
+The recipe, with the traps already hit so they aren't rediscovered:
+
+1. Postgres refuses to run as root, and its user can't traverse the
+   session scratchpad's parent dirs. Use a dedicated user and /tmp:
+   `useradd -m nakpg; mkdir /tmp/nakpg; chown nakpg /tmp/nakpg`.
+2. `su nakpg` does not inherit PATH - call the binaries by full
+   path: `/usr/lib/postgresql/16/bin/initdb -D /tmp/nakpg/data -A
+   trust`, then `pg_ctl` with `-k /tmp/nakpg -c listen_addresses=`
+   (unix socket only), and `psql -h /tmp/nakpg`.
+3. pgvector and pg_cron are not installed, so the FULL schema.sql
+   cannot apply. Extract just the section under test by its banner
+   comments (`sed -n '/^-- Section start .../,/^-- Next section/p'`)
+   and create minimal stub tables for what it references. The
+   pg_cron `do` blocks in schema.sql are already guarded on
+   `pg_available_extensions` and no-op cleanly.
+4. Sections that `revoke`/`grant` need the Supabase roles to exist:
+   create `anon`, `authenticated`, and `service_role` as plain roles
+   first, or the apply dies mid-section.
+5. Run tests with `\set ON_ERROR_STOP on`, assert idempotence by
+   re-applying the extracted section over live data, and probe
+   constraint behavior inside `do $$ begin ... exception when ... $$`
+   blocks so an expected failure doesn't abort the script.
+
+The extraction step is also the honesty check: if the section can't
+be applied standalone against stubs, its coupling to the rest of the
+file is worth understanding before it ships.
+
 ## The Deno island
 
 The edge functions run on their own toolchain and are invisible to
