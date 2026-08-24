@@ -455,6 +455,23 @@ A chat turn goes:
 
 ## Gotchas
 
+- **The mobile on-screen keyboard is handled twice, once per
+  platform family.** Android Chrome overlays the keyboard on the
+  page by default (it stopped resizing the layout viewport in
+  Chrome 108), so the viewport meta tag in `index.html` carries
+  `interactive-widget=resizes-content` to restore the resize
+  behavior. iOS Safari ignores that key entirely; there
+  `src/lib/keyboard-inset.ts` mirrors the layout-vs-visual
+  viewport gap into the `--keyboard-inset` CSS variable, and the
+  root height rule in `styles.css` subtracts it so the composer
+  rides above the keyboard. `dvh` units do NOT cover this - they
+  track the URL bar, not the keyboard, by spec. The listener
+  approach exists specifically for the "switch away and return
+  with the keyboard still open" case, where no focus event fires
+  to trigger the browser's own scroll-into-view. Untested on real
+  iOS hardware (the author has no iOS device): a keyboard drawn
+  over the app without the app reacting means this seam is the
+  likely culprit.
 - **System prompts are re-assembled every round, browser-side.**
   The baseline tool-framing system message is NOT persisted - it's
   built from the tool registry at request-time by

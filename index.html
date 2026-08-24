@@ -2,7 +2,15 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!--
+      interactive-widget=resizes-content makes the on-screen keyboard
+      shrink the layout viewport (Chrome on Android 108+ defaults to
+      overlaying the keyboard on the page instead, which leaves the
+      composer hidden underneath it when the user returns to the app
+      with the keyboard already open). iOS Safari ignores this key; the
+      visualViewport listener in src/lib/keyboard-inset.ts covers it.
+    -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
     <meta name="theme-color" content="#0b0d10" />
     <meta name="description" content="Nak — a bring-your-own-infrastructure AI chat PWA using Venice.ai and Supabase." />
     <!--
