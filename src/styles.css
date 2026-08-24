@@ -302,10 +302,13 @@ html, body, #app {
        mobile alike. */
   overflow: hidden;
   max-width: 100vw;
-  /* Belt and braces for iOS: with the document pinned, a fall-through
-     touch drag can still rubber-band the body; `none` (not `contain`)
-     suppresses the local bounce on the root scroller. */
-  overscroll-behavior-y: none;
+  /* Deliberately NO overscroll-behavior here: the browser's native
+     pull-to-refresh (drag down from the top and release to reload)
+     rides on the document being allowed to overscroll, and `none`
+     kills it. The `overflow: hidden` above is what prevents the app
+     shell from actually scrolling out of view; the residual cost of
+     leaving overscroll at `auto` is the transient rubber-band bounce
+     on a touch drag, which snaps back on release. */
 }
 
 html {
