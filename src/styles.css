@@ -280,35 +280,41 @@ body {
   box-sizing: border-box;
 }
 
+/* The document must never scroll - every screen scrolls internally
+   (.messages in chat, .center for the full-page screens, the modal
+   shells for the overlays). But the lock lives on #app, NOT on
+   html/body: `overflow: hidden` on the root is the classic trick for
+   DISABLING Chrome's pull-to-refresh (the gesture only fires when the
+   viewport is a scrollable target), and the reload gesture must keep
+   working. So html/body stay at default overflow and #app clips.
+
+   Why clipping #app is sufficient: everything the app renders lives
+   inside #app (the only body-level additions are transient invisible
+   helpers - download anchors, a clipboard textarea), and fixed-position
+   elements never contribute scrollable overflow. So with #app clipping
+   its own content, the document simply has no overflow in either axis:
+
+   - x: stray wide content (long URLs, wide messages) would otherwise
+     push the document wider than the viewport - on mobile that
+     triggers an auto-shrink-to-fit that reads as a persistent zoom.
+   - y: absolutely positioned chrome hanging past the viewport
+     (composer popovers, the wharf column, the drawer mid-animation)
+     counts as scrollable overflow even though it never affects
+     layout, and a drag or wheel landing on non-scrollable chrome
+     (the composer, the top bar) scrolled the entire app shell out of
+     view - on desktop and mobile alike.
+
+   No overscroll-behavior anywhere on the root either - pull-to-refresh
+   also rides on the document being allowed to overscroll. The accepted
+   residual is the transient rubber-band bounce on a touch drag, which
+   snaps back on release. */
 html, body, #app {
   height: 100%;
   margin: 0;
-  /* The document must never scroll - every screen scrolls internally
-     (.messages in chat, .center for the full-page screens, the modal
-     shells for the overlays). `hidden` on both axes, not just x:
+}
 
-     - x: stray wide content (long URLs, wide messages, the fixed drawer
-       during animation) would push the document wider than the viewport;
-       on mobile that triggers an auto-shrink-to-fit that reads as a
-       persistent zoom.
-     - y: `overflow-x: hidden` alone silently computes overflow-y to
-       `auto` (the visible/hidden axis combination is not expressible),
-       which made the document a live scroller. Absolutely positioned
-       chrome hanging past the viewport (composer popovers, the wharf
-       column, the drawer mid-animation) counts as scrollable overflow
-       even though it never affects layout, so a drag or scroll gesture
-       landing on non-scrollable chrome (the composer, the top bar)
-       scrolled the entire app shell out of view - on desktop and
-       mobile alike. */
+#app {
   overflow: hidden;
-  max-width: 100vw;
-  /* Deliberately NO overscroll-behavior here: the browser's native
-     pull-to-refresh (drag down from the top and release to reload)
-     rides on the document being allowed to overscroll, and `none`
-     kills it. The `overflow: hidden` above is what prevents the app
-     shell from actually scrolling out of view; the residual cost of
-     leaving overscroll at `auto` is the transient rubber-band bounce
-     on a touch drag, which snaps back on release. */
 }
 
 html {
