@@ -33,6 +33,18 @@ matters to you.
 
 ## Deleting a thread
 
+Open the three-dot menu on a conversation's row in the drawer and
+choose **Delete**. The conversation disappears immediately from
+every list and from search, on all your devices.
+
+Under the hood the actual cleanup is deferred: a background sweep
+destroys the conversation's data within the hour, and a daily sweep
+reclaims any attached files' storage. You will not see any of this -
+a deleted conversation is gone from the moment you delete it. The
+deferral exists for conversation forking: when a conversation's
+early history is shared with another conversation, the shared part
+survives for as long as anything still builds on it.
+
 ## Downloading a transcript
 
 You can save any conversation as a Markdown file. Two ways to get

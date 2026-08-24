@@ -61,6 +61,10 @@ export async function listRecentThreads(
     .from('threads')
     .select('*')
     .eq('archived', false)
+    // Hidden threads are deleted (or, post-forking, pure shared
+    // structure) - no list surface shows them. Same filter on every
+    // list/search read in this slice.
+    .eq('hidden', false)
     .gte('updated_at', cutoff)
     .order('updated_at', { ascending: false })
     .order('id', { ascending: false })
@@ -134,6 +138,7 @@ export async function listThreadsSince(
     .from('threads')
     .select('*')
     .eq('archived', opts.archived)
+    .eq('hidden', false)
     .gte('updated_at', opts.target.updated_at)
     .order('updated_at', { ascending: false })
     .order('id', { ascending: false });
@@ -201,6 +206,7 @@ async function pageThreads(
     .from('threads')
     .select('*')
     .eq('archived', opts.archived)
+    .eq('hidden', false)
     .order('updated_at', { ascending: false })
     .order('id', { ascending: false })
     .limit(opts.pageSize + 1);
@@ -276,6 +282,7 @@ export async function searchThreads(
   let exactQ = client
     .from('threads')
     .select('*')
+    .eq('hidden', false)
     .ilike('title', pattern)
     .order('updated_at', { ascending: false })
     .order('id', { ascending: false })
@@ -371,6 +378,9 @@ export async function searchThreads(
         verbosity: null,
         toolboxes_enabled: [],
         archived: row.archived,
+        // The RPC filters hidden threads out of its hits, so every
+        // stubbed row is visible by construction.
+        hidden: false,
         title_manually_set: false,
         intuition_payload: null,
         context_recall_payload: null,
@@ -599,46 +609,26 @@ export async function setThreadArchived(
   if (error) throw new SupabaseError(error.message);
 }
 
+/**
+ * Delete a conversation, as the user sees it: the thread is HIDDEN,
+ * not destroyed. Every list/search surface filters hidden, so it
+ * vanishes instantly; the hourly fork GC destroys whatever nothing
+ * visible depends on (with zero forks, the whole thread) and the
+ * cascade fans out through the reference graph exactly as the old
+ * direct delete did. Storage objects orphan with the cascade and the
+ * daily attachment-gc reclaims them - the inline object reclamation
+ * this function used to do is retired with the direct delete.
+ *
+ * Why deferred: once forks exist, rows of a "deleted" conversation
+ * may be the shared prefix of live forks. Hide-then-GC gives every
+ * delete the same semantics whether or not anything depends on it.
+ */
 export async function deleteThread(client: SupabaseClient, threadId: string): Promise<void> {
-  // Collect the thread's live attachment object keys BEFORE the delete:
-  // threads -> messages -> message_attachments all cascade, so once the
-  // thread is gone the rows are gone and their bucket keys are
-  // unrecoverable. Includes generated images (same table). Expired rows
-  // (storage_path null) have no object left, so we filter them out.
-  //
-  // `id` rides along so the rendered-PDF page objects can be collected in the
-  // same pass - those live in the same bucket under a different table, and
-  // the cascade takes their rows out of reach just as fast.
-  const { data: attachRows, error: listErr } = await client
-    .from('message_attachments')
-    .select('id, storage_path, messages!inner(thread_id)')
-    .eq('messages.thread_id', threadId)
-    .not('storage_path', 'is', null);
-  if (listErr) throw new SupabaseError(listErr.message);
-  const paths = (attachRows ?? [])
-    .map((r) => (r as { storage_path: string | null }).storage_path)
-    .filter((p): p is string => typeof p === 'string' && p.length > 0);
-  paths.push(
-    ...(await listAttachmentPagePaths(
-      client,
-      (attachRows ?? []).map((r) => (r as { id: string }).id)
-    ))
-  );
-
-  const { error } = await client.from('threads').delete().eq('id', threadId);
+  const { error } = await client
+    .from('threads')
+    .update({ hidden: true })
+    .eq('id', threadId);
   if (error) throw new SupabaseError(error.message);
-
-  // Best-effort object reclamation AFTER the rows are gone (the reverse of
-  // deleteDocument's object-then-row order): the thread has already left the
-  // user's view, so a Storage hiccup must not resurrect it. Any object left
-  // behind here is caught by the daily attachment-gc sweep (bucket objects
-  // with no message_attachments row), so we swallow the remove error rather
-  // than fail the delete. Doing it after the cascade also means a partial
-  // failure can't strand a live row pointing at a deleted object (which would
-  // render as a broken image).
-  if (paths.length > 0) {
-    await client.storage.from('attachments').remove(paths);
-  }
 }
 
 export async function deleteMessages(

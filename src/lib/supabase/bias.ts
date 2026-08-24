@@ -300,6 +300,9 @@ export async function biasListProcessedThreads(
     .select(
       'id, title, bias_processed_at, bias_observations(count)'
     )
+    // Deleted (hidden) threads are invisible to every list surface,
+    // the debug modal included.
+    .eq('hidden', false)
     .not('bias_processed_at', 'is', null)
     .order('bias_processed_at', { ascending: false })
     .limit(limit);

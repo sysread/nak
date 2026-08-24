@@ -83,11 +83,15 @@ and deployed via its own line in `.github/workflows/deploy.yml`.
   the rows; SQL can't drop the objects). Backed by
   `list_orphan_attachment_objects` (a `storage.objects` anti-join over the
   live `storage_path`s, with an age grace window so an in-flight upload's
-  object isn't mistaken for an orphan). The client's `deleteThread` and the
-  Artifacts-tab per-file delete remove their objects inline; this is the
-  backstop for a failed inline remove or any pre-existing backlog. (There
-  is no timed expiry sweep - attachments are kept until the user deletes
-  them; images are compressed at upload so they're small at the source.)
+  object isn't mistaken for an orphan). Thread deletion leans on this
+  sweep as its PRIMARY reclaimer: deleting a conversation hides the
+  thread, the hourly fork GC cascades the rows away (see
+  [`./forking.md`](./forking.md)), and the objects orphan until this
+  sweep runs. Delete-from-here and the Artifacts-tab per-file delete
+  still remove their objects inline, with this sweep as the backstop
+  for a failed remove or any pre-existing backlog. (There is no timed
+  expiry sweep - attachments are kept until the user deletes them;
+  images are compressed at upload so they're small at the source.)
 
   **TWO tables claim objects in this bucket**: `message_attachments`
   (originals + generated images) and `message_attachment_pages`

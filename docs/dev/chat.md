@@ -606,7 +606,9 @@ A chat turn goes:
   gated by the "messages are self-deletable via thread" RLS policy.
   Correctness rests entirely on the schema's FK contracts, NOT on app
   cleanup: `message_attachments` cascade (their bucket objects are
-  reclaimed best-effort, same order as `deleteThread`); every
+  reclaimed best-effort inline - unlike whole-thread delete, which is
+  now hide-then-GC with the daily attachment-gc reclaiming objects);
+  every
   `threads.last_*_msg_id` watermark and `bias_observations`
   `evidence_message_id` is `ON DELETE SET NULL`, so the next
   reflection/summary/topics/wiki/evaluation cycle re-runs from a

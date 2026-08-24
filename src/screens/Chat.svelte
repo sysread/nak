@@ -1847,6 +1847,21 @@
         rebucketThread(t);
       },
       onUpdate: (t) => {
+        // Delete arrives as an UPDATE now: the delete gesture hides
+        // the thread (the fork GC destroys it later), so the echo
+        // every device gets is hidden=true - treat it exactly like
+        // the DELETE event below. Without this branch, rebucketThread
+        // would re-insert the deleted thread into the drawer.
+        if (t.hidden) {
+          removeThread(t.id);
+          if (activeThreadId === t.id) {
+            activeThreadId = null;
+            messages = [];
+            setSessionThreadId(null);
+            navigate({ cid: null });
+          }
+          return;
+        }
         // Three cases rolled into one call to rebucketThread:
         //   1. archived flipped → migrate between archivedPage and
         //      recent/older.
@@ -3064,6 +3079,7 @@
       verbosity: null,
       toolboxes_enabled: [],
       archived: false,
+      hidden: false,
       title_manually_set: false,
       intuition_payload: null,
       context_recall_payload: null,

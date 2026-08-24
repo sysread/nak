@@ -459,6 +459,9 @@ async function gatherConversations(
           .from('threads')
           .select('id, title')
           .eq('user_id', userId)
+          // Deleted (hidden) threads never surface in recall; the
+          // semantic arm's RPC applies the same filter server-side.
+          .eq('hidden', false)
           .ilike('title', `%${query.replace(/[\\%_]/g, (m) => `\\${m}`)}%`)
           .order('updated_at', { ascending: false })
           .limit(limit)

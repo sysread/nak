@@ -1,6 +1,6 @@
 # Conversation forking
 
-Status: M0, M1, and M2 done. Update the milestone
+Status: M0-M2 done; M3 implemented, awaiting QA. Update the milestone
 checklist as work lands; graduate durable content into a permanent
 `docs/dev/forking.md` (started in M3) and retire this doc when the
 last milestone ships.
@@ -651,6 +651,52 @@ so the resolver provably returns exactly the old per-thread query.
 - Verify: gate + streaming and regenerate baselines re-run.
 
 ### M3 - hidden threads + GC + delete rewired
+
+Status: implemented (2026-08-24), gate green; QA pending (stamp DONE
+when the threads-management baseline re-run and the new
+threads-delete-gc walkthrough log their rows). Deltas and findings
+from the spec below, chosen at implementation:
+
+- The GC is `collect_hidden_threads()`, returning
+  (deleted_threads, trimmed_messages) so ad hoc runs and the QA
+  walkthrough assert on what a pass did. Kept-set recursion uses
+  UNION so a corrupted parent cycle terminates (dedup) rather than
+  hanging; the doomed-ordering recursion walks down from roots,
+  which a cycle is unreachable from - so corruption is left in
+  place loudly rather than swept wrongly. Validated live on scratch
+  Postgres: no-op pass, plain-delete deferral, watermark trim to a
+  fractional fork point with the fork's transcript still resolving,
+  idempotence, and a four-thread leaf-to-root collapse through the
+  restrict FKs.
+- Beyond the enumerated list surfaces, every thread claim RPC
+  (summary, topics, auto-title, reflection, evaluation, wiki,
+  wiki-records) now skips hidden threads - the old destructive
+  delete removed a thread before a sweep could see it, so spending
+  agent tokens on a deleted thread would be NEW behavior, not
+  preserved behavior. The chunker claims are the deliberate
+  exception (commented in place): once edit-forks exist, a hidden
+  thread's trimmed segment is live shared prefix and its
+  just-written rows must still get chunked, or recall goes blind to
+  them; cost today is at most one wasted chunk pass per deleted
+  thread. list_user_topics and the topics claim's vocabulary CTE
+  also filter hidden.
+- The delete gesture reaches other devices as an UPDATE with
+  hidden=true, not a DELETE event - the browser's realtime
+  thread-UPDATE handler grew a hidden branch that mirrors the
+  DELETE path (without it, rebucketThread would re-insert the
+  deleted thread). The GC's later hard delete still arrives as a
+  DELETE for a thread already out of the UI.
+- PDF-page coverage verified as the plan asked: attachment-gc's
+  orphan lister anti-joins BOTH message_attachments and
+  message_attachment_pages, so page renders orphaned by the GC
+  cascade reclaim on the same daily pass as originals. No new code
+  needed.
+- The empty "Deleting a thread" stub in docs/user/threads.md got
+  its section (instant disappearance, deferred cleanup, why);
+  docs/dev/forking.md started with the data model, invariants,
+  resolver contract, and GC, per the milestone.
+
+Original spec:
 
 Externally identical delete behavior via new machinery.
 
