@@ -116,10 +116,8 @@ export class ExchangeStore {
 /**
  * Merge `fetched` (the canonical snapshot from listMessages) with
  * `buffered` (rows the slot's chat-loop handlers persisted but may
- * not be in the snapshot). De-dupes by id. The merged list is sorted
- * by `position` ascending - matching listMessages' own ORDER BY -
- * so a row that landed in the DB after the snapshot still falls into
- * the correct place relative to its neighbours.
+ * not be in the snapshot), for the thread the screen is showing.
+ * De-dupes by id, fetched rows winning.
  *
  * Use case: selecting a thread whose slot is mid-exchange. Between
  * `messages = []` (clear) and `messages = fetched` (snapshot resolve),
@@ -127,23 +125,40 @@ export class ExchangeStore {
  * with new rows. The buffer captures them; the merge folds them back
  * in regardless of where they landed in the timeline.
  *
- * position is the per-thread transcript order (fractional on healed
- * recovery rows; see the Message type doc). A null position sorts to
- * the tail - matching where the backfill sweep will place the row -
- * and ties break by id so the order is deterministic. Both inputs are
- * read-only; the result is a fresh array.
+ * Ordering: `position` is per-SEGMENT transcript order, not global -
+ * a forked thread's snapshot opens with rows inherited from ancestor
+ * threads whose positions restart independently, so sorting the whole
+ * list by position would interleave the segments. Inherited rows
+ * (thread_id !== threadId) keep their snapshot order at the head;
+ * only the thread's own rows - the segment every buffered row belongs
+ * to - are sorted by position (fractional on healed recovery rows;
+ * see the Message type doc). A null position sorts to the tail,
+ * matching where the backfill sweep will place the row, and ties
+ * break by id so the order is deterministic. On a thread with no fork
+ * ancestry every row is "own" and this is the old whole-list sort.
+ * Both inputs are read-only; the result is a fresh array.
  */
-export function mergeMessagesById(fetched: Message[], buffered: Message[]): Message[] {
+export function mergeMessagesById(
+  fetched: Message[],
+  buffered: Message[],
+  threadId: string
+): Message[] {
   if (buffered.length === 0) return fetched;
   const byId = new Map<string, Message>();
   for (const m of fetched) byId.set(m.id, m);
   for (const m of buffered) {
     if (!byId.has(m.id)) byId.set(m.id, m);
   }
-  return Array.from(byId.values()).sort((a, b) => {
+  const inherited: Message[] = [];
+  const own: Message[] = [];
+  for (const m of byId.values()) {
+    (m.thread_id === threadId ? own : inherited).push(m);
+  }
+  own.sort((a, b) => {
     const pa = a.position ?? Number.POSITIVE_INFINITY;
     const pb = b.position ?? Number.POSITIVE_INFINITY;
     if (pa !== pb) return pa < pb ? -1 : 1;
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
+  return inherited.concat(own);
 }

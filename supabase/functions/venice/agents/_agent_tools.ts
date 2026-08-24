@@ -250,11 +250,17 @@ export async function loadThreadSliceUpTo(
   threadId: string,
   terminalMsgId: string,
 ): Promise<StoredMessage[]> {
+  // thread_transcript resolves across fork boundaries: a forked
+  // thread's result opens with rows inherited from ancestor segments,
+  // then its own. Rows arrive in transcript order and that order is
+  // the function's contract - never re-sort by position, which
+  // restarts per segment. With no fork ancestry this is exactly the
+  // old per-thread query. The terminal slice below still works on a
+  // fork: claims are made against the thread's own rows, which sit at
+  // the tail of the resolved transcript.
   const { data, error } = await adminClient
-    .from('messages')
-    .select('id, role, content, tool_calls, tool_call_id, name')
-    .eq('thread_id', threadId)
-    .order('position', { ascending: true });
+    .rpc('thread_transcript', { p_thread_id: threadId })
+    .select('id, role, content, tool_calls, tool_call_id, name');
   if (error) throw new Error(`listMessages failed: ${error.message}`);
   const all = (data ?? []) as StoredMessage[];
   const idx = all.findIndex((m) => m.id === terminalMsgId);

@@ -457,18 +457,21 @@ async function analyzeClaimedThread(
   }
 
   // Transcript: user + assistant turns with id + content; tool calls
-  // and reasoning are not in scope for bias detection. Direct table
-  // read - the service role bypasses RLS and the claim already
-  // established ownership.
+  // and reasoning are not in scope for bias detection. Read via the
+  // thread_transcript resolver (service role; the claim already
+  // established ownership): a forked thread's inherited prefix rows
+  // arrive first, in transcript order - the function's contract, so
+  // no re-sort - and a thread without ancestry resolves to the plain
+  // per-thread query.
   let transcript: TranscriptLine[];
   try {
     const { data, error } = await adminClient
-      .from('messages')
-      .select('id, role, content')
-      .eq('thread_id', threadId)
-      .order('position', { ascending: true });
+      .rpc('thread_transcript', { p_thread_id: threadId })
+      .select('id, role, content');
     if (error) throw new Error(error.message);
-    transcript = (data ?? [])
+    // The untyped rpc builder types `data` as object-or-array; a
+    // set-returning function always yields an array.
+    transcript = ((data ?? []) as Array<{ id: string; role: string; content: string | null }>)
       .filter(
         (m): m is { id: string; role: 'user' | 'assistant'; content: string } =>
           (m.role === 'user' || m.role === 'assistant') &&

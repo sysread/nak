@@ -49,11 +49,18 @@ export async function listMessages(
   client: SupabaseClient,
   threadId: string
 ): Promise<Message[]> {
-  const { data, error } = await client
-    .from('messages')
-    .select('*')
-    .eq('thread_id', threadId)
-    .order('position', { ascending: true });
+  // thread_transcript resolves the transcript across fork boundaries:
+  // for a forked thread the result starts with rows inherited from
+  // ancestor threads (their thread_id is the ancestor's, and their
+  // positions restart per segment), then the thread's own rows. The
+  // function returns rows in transcript order and that order is the
+  // contract - do NOT re-sort by bare position, which is only unique
+  // within one segment. On a thread with no fork ancestry this is
+  // exactly the old per-thread query. RLS scopes the whole chain to
+  // the signed-in user (forks never cross users).
+  const { data, error } = await client.rpc('thread_transcript', {
+    p_thread_id: threadId,
+  });
   if (error) throw new SupabaseError(error.message);
   const messages = (data ?? []) as Message[];
   // Hydrate attachments in a second query keyed by message id. Keeps

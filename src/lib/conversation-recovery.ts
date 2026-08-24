@@ -231,7 +231,6 @@ function assignSyntheticPositions(rows: Message[]): void {
 export function synthesizeRecoveryMessages(messages: Message[]): Message[] {
   if (messages.length === 0) return messages;
 
-  const threadId = messages[0].thread_id;
   const result: Message[] = [];
   let synthIdx = 0;
   let modified = false;
@@ -252,8 +251,14 @@ export function synthesizeRecoveryMessages(messages: Message[]): Message[] {
         j++;
       }
       const missing = m.tool_calls.filter((c) => !answered.has(c.id));
+      // Synthetics inherit the ANCHOR row's thread_id, not the list
+      // head's: a fork-resolved transcript opens with rows owned by
+      // ancestor threads, and a synthetic keyed to the list head
+      // would claim (and later persist into) the wrong thread's
+      // coordinate system. The anchor is the row whose gap is being
+      // healed, so its segment is always the right home.
       for (const call of missing) {
-        result.push(makeRecoveryTool(threadId, call, synthIdx++));
+        result.push(makeRecoveryTool(m.thread_id, call, synthIdx++));
         modified = true;
       }
       const toolBlockLength = j - i - 1 + missing.length;
@@ -267,7 +272,7 @@ export function synthesizeRecoveryMessages(messages: Message[]): Message[] {
         toolBlockLength > 0 &&
         (next === null || next.role !== 'assistant')
       ) {
-        result.push(makeRecoveryAssistant(threadId, synthIdx++));
+        result.push(makeRecoveryAssistant(m.thread_id, synthIdx++));
         modified = true;
       }
       i = j;
@@ -288,7 +293,8 @@ export function synthesizeRecoveryMessages(messages: Message[]): Message[] {
       }
       const next = j < messages.length ? messages[j] : null;
       if (next === null || next.role !== 'assistant') {
-        result.push(makeRecoveryAssistant(threadId, synthIdx++));
+        // Same anchor rule as above: the orphan run's own thread_id.
+        result.push(makeRecoveryAssistant(m.thread_id, synthIdx++));
         modified = true;
       }
       i = j;

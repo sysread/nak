@@ -148,12 +148,13 @@ export const contextTool: ToolDef = {
           ? args.topic.trim()
           : '';
       if (query.length === 0) {
-        // RLS OFF: scoped via parent thread.
+        // RLS OFF: scoped via parent thread. thread_transcript
+        // resolves inherited fork-prefix rows too, in transcript
+        // order (its contract - no re-sort); with no fork ancestry
+        // it is the plain per-thread query.
         const { data: msgs, error: msgErr } = await ctx.adminClient
-          .from('messages')
-          .select('role, content')
-          .eq('thread_id', requireThreadId(ctx))
-          .order('position', { ascending: true });
+          .rpc('thread_transcript', { p_thread_id: requireThreadId(ctx) })
+          .select('role, content');
         if (msgErr) {
           // Degrade quietly - we cannot derive a query without the
           // thread, so the umbrella returns the empty index.

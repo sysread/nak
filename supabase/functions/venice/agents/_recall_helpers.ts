@@ -1,9 +1,8 @@
 // Recall-agent helpers shared across memory_recall, conversation_recall,
-// wiki_recall, and context (which composes the three). Match the
-// browser-side implementations in src/lib/agents/recall/agent.ts -
-// trimToLastUserTurn, trimToCharBudget, messageToVenice,
-// parseRecallOutput - so the function and browser paths produce the
-// same model context and parse the same response shapes.
+// wiki_recall, and context (which composes the three): transcript
+// loading + trimming, the Venice wire projection, and recall-output
+// parsing. The wire projection mirrors the browser's messageToVenice
+// in src/lib/tools/wire.ts so both paths hand models the same shape.
 
 import {
   type OpenAIToolCall,
@@ -175,27 +174,32 @@ export function logPreview(text: string, max = 120): string {
 }
 
 /**
- * Load the thread's messages from Supabase, trim to last user turn,
+ * Load the thread's transcript from Supabase, trim to last user turn,
  * trim to char budget. Used by every recall agent as the first step
  * before composing the prompt + running the headless tool loop.
+ *
+ * Reads via the thread_transcript resolver, which folds in rows
+ * inherited from fork ancestors (in transcript order - the function's
+ * contract; never re-sort by position, which restarts per segment)
+ * and degenerates to the plain per-thread query when the thread has
+ * no fork ancestry.
  */
 export async function loadThreadSlice(
-  adminClient: { from: (table: string) => unknown },
+  adminClient: { rpc: (fn: string, args: Record<string, unknown>) => unknown },
   threadId: string,
 ): Promise<StoredMessage[]> {
-  type SupabaseQuery = {
-    select: (cols: string) => SupabaseQuery;
-    eq: (col: string, val: unknown) => SupabaseQuery;
-    order: (col: string, opts: { ascending: boolean }) => Promise<{
+  type SupabaseRpc = {
+    select: (cols: string) => Promise<{
       data: StoredMessage[] | null;
       error: { message: string } | null;
     }>;
   };
-  const q = adminClient.from('messages') as SupabaseQuery;
-  const { data, error } = await q
-    .select('id, role, content, tool_calls, tool_call_id, name')
-    .eq('thread_id', threadId)
-    .order('position', { ascending: true });
+  const q = adminClient.rpc('thread_transcript', {
+    p_thread_id: threadId,
+  }) as SupabaseRpc;
+  const { data, error } = await q.select(
+    'id, role, content, tool_calls, tool_call_id, name',
+  );
   if (error) throw new Error(`listMessages failed: ${error.message}`);
   return trimToCharBudget(trimToLastUserTurn((data ?? []) as StoredMessage[]));
 }
