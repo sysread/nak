@@ -194,9 +194,16 @@ export function logPreview(text: string, max = 120): string {
  * no fork ancestry.
  */
 export async function loadThreadSlice(
+  // Structurally typed, and deliberately SHALLOW: `from` returns
+  // unknown rather than TitleClient's chain because type-checking the
+  // fully-generic SupabaseClient against a nested structural shape
+  // trips TS2589 (excessively deep instantiation) - and does so
+  // nondeterministically across check orders, so a locally-green
+  // graph can still fail in CI. The framing call below casts instead.
   adminClient: {
     rpc: (fn: string, args: Record<string, unknown>) => unknown;
-  } & TitleClient,
+    from: (table: string) => unknown;
+  },
   threadId: string,
 ): Promise<StoredMessage[]> {
   type SupabaseRpc = {
@@ -218,5 +225,5 @@ export async function loadThreadSlice(
   // Framing runs AFTER the trims so the boundary is computed on the
   // rows the model will actually see; a slice whose inherited prefix
   // was fully trimmed away gets no framing, correctly.
-  return applyForkFraming(adminClient, threadId, trimmed);
+  return applyForkFraming(adminClient as unknown as TitleClient, threadId, trimmed);
 }
