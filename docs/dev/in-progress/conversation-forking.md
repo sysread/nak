@@ -1,6 +1,6 @@
 # Conversation forking
 
-Status: M0-M2 done; M3 implemented, awaiting QA. Update the milestone
+Status: M0-M3 done. Update the milestone
 checklist as work lands; graduate durable content into a permanent
 `docs/dev/forking.md` (started in M3) and retire this doc when the
 last milestone ships.
@@ -652,10 +652,13 @@ so the resolver provably returns exactly the old per-thread query.
 
 ### M3 - hidden threads + GC + delete rewired
 
-Status: implemented (2026-08-24), gate green; QA pending (stamp DONE
-when the threads-management baseline re-run and the new
-threads-delete-gc walkthrough log their rows). Deltas and findings
-from the spec below, chosen at implementation:
+Status: DONE (2026-08-24). Gate green; QA ran the new
+threads-delete-gc walkthrough (PASS 1-7: instant hide, deferred DB
+destruction, sweep counts (1,0) then idempotent (0,0), end state
+matching the old destructive delete, cross-device hidden-as-delete
+echo code-verified) and re-ran the threads-management baseline (PASS,
+identical to M0). Deltas and findings from the spec below, chosen at
+implementation:
 
 - The GC is `collect_hidden_threads()`, returning
   (deleted_threads, trimmed_messages) so ad hoc runs and the QA
