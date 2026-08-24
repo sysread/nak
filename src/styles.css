@@ -308,6 +308,20 @@ html, body, #app {
   overscroll-behavior-y: none;
 }
 
+html {
+  /* --keyboard-inset is how much of the layout viewport the mobile
+     on-screen keyboard covers, maintained by src/lib/keyboard-inset.ts.
+     It is non-zero only on browsers where the keyboard overlays the
+     page instead of resizing it (iOS Safari); subtracting it here
+     shrinks the root, and body/#app follow at 100% of it, so the chat
+     composer sits above the keyboard. Only the root subtracts - putting
+     the calc on body or #app too would compound the subtraction.
+     Everywhere else the variable stays 0px and this is plain full
+     height. Must come after the html, body, #app group above so it
+     wins the height tie. */
+  height: calc(100% - var(--keyboard-inset, 0px));
+}
+
 body {
   background: var(--bg);
   color: var(--text);

@@ -24,6 +24,7 @@
   import { devConfigFromEnv, devAutoLogin } from '$lib/dev-bootstrap';
   import { applyTheme } from '$lib/theme';
   import { initUpdateWatcher } from '$lib/update.svelte';
+  import { initKeyboardInset } from '$lib/keyboard-inset';
   import { initRouting } from '$lib/routing.svelte';
   import Setup from './screens/Setup.svelte';
   import Chat from './screens/Chat.svelte';
@@ -40,6 +41,10 @@
     // state.svelte.ts without a DOM don't trip over `registerSW`'s
     // window dependency.
     initUpdateWatcher();
+
+    // Track the mobile on-screen keyboard so the shell shrinks above
+    // it instead of letting it paint over the composer.
+    initKeyboardInset();
 
     // When mode === 'system', follow OS changes live.
     const media = window.matchMedia('(prefers-color-scheme: dark)');
