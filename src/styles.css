@@ -289,6 +289,17 @@ html, body, #app {
      like a persistent zoom. */
   overflow-x: hidden;
   max-width: 100vw;
+  /* Kill the document's vertical overscroll bounce. The chat shell fills
+     the viewport and scrolls internally, so the document itself has
+     nothing to scroll - but on mobile a touch drag that starts on a
+     non-scrollable element (the composer, the top bar) falls through to
+     the document, and Safari/Chrome rubber-band the whole app upward,
+     which reads as the entire UI sliding off-screen while a response
+     streams. `none` (not `contain`) is required: on the root scroller,
+     `contain` still allows the local bounce. Screens that genuinely
+     overflow the viewport (Auth, Setup on short screens) still scroll -
+     this only removes the past-the-edge bounce. */
+  overscroll-behavior-y: none;
 }
 
 body {
