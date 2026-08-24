@@ -1,6 +1,6 @@
 # Conversation forking
 
-Status: M0-M3 done; M4 implemented, awaiting QA. Update the milestone
+Status: M0-M4 done. Update the milestone
 checklist as work lands; graduate durable content into a permanent
 `docs/dev/forking.md` (started in M3) and retire this doc when the
 last milestone ships.
@@ -735,9 +735,13 @@ Externally identical delete behavior via new machinery.
 
 ### M4 - fork primitive + drawer Fork + worker treatment
 
-Status: implemented (2026-08-24), awaiting QA - stamp DONE when the
-threads-fork use-case results land. Gate green (2239 vitest + 535
-Deno); the rewritten chunk-search RPC exercised on scratch Postgres
+Status: DONE (2026-08-24). QA passed at 02f1dc64: threads-fork 1-9
+(fork shape, independent continuation, delete-parent keeping the
+prefix with a (0, 2) sweep, search resolving to the fork),
+threads-delete-gc re-run with fork coexistence, threads-management
+baseline unchanged - results rows in each use-case log. Gate green
+(2239 vitest + 535 Deno); the rewritten chunk-search RPC exercised
+on scratch Postgres
 (9-scenario matrix: visible passthrough, hidden-no-descendant drop,
 covered-fork resolution with dedupe, uncovered-fork drop, two-level
 chain through a hidden middle, stale-anchor drop, tie-break to the
