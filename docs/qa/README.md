@@ -246,6 +246,11 @@ One file per use-case under [`use-cases/`](./use-cases/), named
   conversation as hide-then-sweep: instant disappearance from every
   surface, the deferred DB destruction via the fork GC, sweep
   idempotence, and the realtime hidden-as-delete echo.
+- [threads-fork](./use-cases/threads-fork.md) - forking a
+  conversation from the drawer: open-on-create, the fork indicator,
+  segment sharing (nothing copied), independent continuation, null
+  worker cursors, shared-prefix survival when the parent is
+  deleted, and search resolving hits to the visible fork.
 - [threads-transcript-export](./use-cases/threads-transcript-export.md) -
   downloading a conversation as a Markdown transcript from the
   top-bar button, the mobile overflow menu, and the thread-row

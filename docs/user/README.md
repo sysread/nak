@@ -37,6 +37,9 @@ You can reach these pages two ways:
   compression, and managing files from the Artifacts tab.
 - [Threads](./threads.md) — the conversation drawer, pinning,
   archiving, renaming, deleting.
+- [Forking a conversation](./forking.md) — branch a conversation into
+  a second timeline that shares its history: try a different
+  direction without losing the one you have.
 - [Daily digest](./daily-digest.md) — the day-by-day journal of your
   conversations: once a day an agent recaps what you discussed, one
   card per day, reachable from the calendar button next to "New

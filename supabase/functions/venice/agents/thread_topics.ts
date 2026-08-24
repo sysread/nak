@@ -218,8 +218,14 @@ async function tagClaimedThread(
   try {
     // Slicing the history at the claimed terminal message means a race
     // where the user added turns mid-tagging simply queues the thread
-    // for the next cycle.
-    const slice = await loadThreadSliceUpTo(adminClient, threadId, terminalMsgId);
+    // for the next cycle. The fork clause mirrors summary's: topics
+    // must cover the whole conversation including the inherited
+    // prefix, since the fork reads as one conversation to the user.
+    const slice = await loadThreadSliceUpTo(adminClient, threadId, terminalMsgId, {
+      forkClause:
+        'Choose topics for the conversation as a whole, including the ' +
+        'inherited messages.',
+    });
     if (slice.length === 0) {
       // Pathological empty thread - nothing to tag. Treated as the
       // empty-output case below (claim released, row requeues) so the

@@ -1,9 +1,10 @@
 # Conversation forking
 
-The structural layer for forked conversations: explicit message
-positions, fork columns on threads, the `thread_transcript`
-resolver, hidden threads, and the fork GC. The fork ENTRY POINTS
-(creating a fork from the drawer or a message card, edit-forks on
+Forked conversations: explicit message positions, fork columns on
+threads, the `thread_transcript` resolver, hidden threads, the fork
+GC, the fork primitive with its drawer entry point, worker fork
+framing, and hidden-hit search resolution. The remaining entry
+points (fork-from-message card buttons, edit-forks on
 delete/regenerate) are still in flight - see
 [`./in-progress/conversation-forking.md`](./in-progress/conversation-forking.md)
 for the milestone plan. This doc owns the machinery that has
@@ -89,6 +90,74 @@ umbrella, bias, and the `conversation_get` tool. Per-segment
 direct queries. With zero forks the resolver degenerates to the
 plain per-thread query.
 
+## Creating a fork
+
+One primitive serves every entry point: `forkThread` in the threads
+slice of the Supabase layer (facade method of the same name). It
+resolves a fork point, applies the reparent rule (the new thread's
+parent is whichever thread OWNS the fork-point message), and inserts
+the new thread row. What the fork inherits from the thread the user
+forked: title (verbatim), the manual-title flag, the model /
+reasoning / verbosity pins, and the enabled toolboxes. What it does
+NOT inherit: summary, topics, cached priming payloads (they are
+keyed to message rounds and would mis-prime the fork), archived
+state, response claims, and every worker cursor - null cursors are
+deliberate, see "Worker treatment" below.
+
+Fork-point rules live in `src/lib/forking.ts` as pure primitives: a
+fork can anchor on a user row or a settled assistant row without
+tool calls. Mid-round assistant rows and tool rows would freeze a
+dangling exchange into the shared prefix, and a still-streaming row
+is not settled content yet. The drawer's whole-conversation fork
+walks back from the segment tail past invalid rows to the newest
+anchor; a fork whose own segment is still empty falls back to its
+own fork point, minting a sibling.
+
+UI: the drawer row menu's "Fork" item (disabled for drafts) creates
+and opens the fork; forked threads render a muted git-branch glyph
+before the drawer title, which is how the user tells a fork from its
+identically-titled parent.
+
+## Worker fork framing
+
+A forked thread's resolved transcript opens with inherited rows. The
+live chat wire deliberately gets NO framing - to the user and the
+responding model, the fork IS the conversation - but background
+agents replaying the transcript get the boundary explained, in a
+provenance-marked voice (see
+[`./prompt-augmentation.md`](./prompt-augmentation.md), "Provenance
+markers and fourth-wall framing": unexplained instruction-shaped
+insertions get flagged as prompt injection by hardened models).
+
+The shared framing module (`_fork_framing.ts` under
+`venice/agents/`) splices two system rows into a slice that
+contains inherited rows: a preamble at the head naming nak and the
+parent conversation's title, and a FORK POINT marker line at the
+inherited/own boundary. The boundary is found by row ownership
+(first row whose thread_id matches the requested thread), which
+degrades correctly when transcript trimming drops part or all of
+the prefix: fewer inherited rows move the marker, none at all
+produce no framing. Unforked threads pay one array scan and are
+returned untouched.
+
+Where it applies:
+
+- **The two shared transcript loaders** frame automatically, so
+  every replay-style agent (summary, topics, reflection, wiki,
+  wiki-records, samskara evaluation, the recall agents, intent
+  employment) gets the same treatment with no per-agent wiring.
+  Summary and topics pass a task clause ("cover the conversation as
+  a whole") because their default reading of "inherited context"
+  would wrongly exclude the prefix from their output.
+- **Bias** builds a JSON payload rather than a message replay: it
+  gets a `fork_note` field (preamble plus a "only cite evidence
+  below the marker" clause - the inherited rows were already
+  analyzed under the parent) and a marker entry without an id, so
+  the observer cannot cite the marker as evidence.
+- **conversation_get** splices the marker into its windowed
+  transcript when the window straddles the boundary - marker only,
+  no preamble, per the read-only-assembler posture.
+
 ## Hidden threads and deletion
 
 Deleting a conversation sets `hidden = true` - nothing else. Every
@@ -97,14 +166,27 @@ list/search/poll surface excludes hidden threads server-side:
 - Browser: the drawer's list reads and the exact search arm in
   `src/lib/supabase/threads.ts`, the bias debug modal's thread
   list.
-- SQL: `search_thread_chunks_by_embedding` (semantic search AND
-  recall's conversation layer ride it), `list_user_topics` (the
-  topics dropdown), and every thread claim RPC (summary, topics,
-  auto-title, reflection, evaluation, wiki, wiki-records) - a
-  deleted thread never spends agent tokens. The chunker claims are
-  the deliberate exception (see the comment there): chunks are
-  recall's index and an edit-forked thread's trimmed segment is
-  live shared prefix, so hidden threads still get chunked.
+- SQL: `list_user_topics` (the topics dropdown) and every thread
+  claim RPC (summary, topics, auto-title, reflection, evaluation,
+  wiki, wiki-records) - a deleted thread never spends agent tokens.
+  The chunker claims are the deliberate exception (see the comment
+  there): chunks are recall's index and a hidden thread's segment
+  can be live shared prefix, so hidden threads still get chunked.
+- `search_thread_chunks_by_embedding` (semantic search AND recall's
+  conversation layer) does NOT filter hidden threads - it RESOLVES
+  them. A hit on a hidden thread's chunk walks down the fork tree to
+  the nearest visible descendant whose transcript contains the
+  chunk's rows (first hop proves containment against the child's
+  fork position; deeper hops are free because a grandchild inherits
+  its parent's entire inherited prefix), presents that thread as the
+  hit, dedupes to the strongest chunk per presented thread, and
+  drops hits with no visible descendant - so a plain deleted
+  conversation stops surfacing the moment it is deleted, while a
+  shared prefix stays searchable through the fork that carries it.
+  The recency filter and boost run against the PRESENTED thread's
+  updated_at. Chunk anchors are soft pointers; a stale anchor cannot
+  prove containment and drops out conservatively until the next
+  rechunk.
 - Realtime: the browser's thread-UPDATE handler treats
   `hidden = true` as the delete signal (removes the row from the
   drawer, closes it if active). The delete gesture reaches other
@@ -145,10 +227,23 @@ what a sweep did; run it ad hoc with
   ranges run to the tail, so a range starting in an inherited
   prefix always includes the fork-point row and the restrict FK
   fails the whole statement loudly.
-- `search_thread_chunks_by_embedding`'s blanket hidden filter must
-  be REPLACED by hidden-hit resolution when forks ship (M4) - a
-  hidden ancestor's chunks are live content by then. The comment on
-  the RPC carries the handoff.
+- The daily digest reports pre-fork rows under the owning (possibly
+  hidden) thread's title. Decided in M4: accepted without code. A
+  fork inherits its parent's title verbatim, so the "unreachable"
+  title the digest shows matches the visible fork's title anyway;
+  a rename of the fork can drift them apart, which is cosmetic.
+- Cross-user fork forgery (a hand-crafted insert pointing
+  forked_from at another user's thread) is not schema-enforced.
+  It leaks nothing - the resolver is SECURITY INVOKER, so RLS
+  returns zero foreign rows - but it would pin the foreign thread
+  against GC via the restrict FK. The browser primitive only forks
+  rows RLS let it read; a schema-level guard (composite FK on
+  user_id) was judged not worth the migration for a personal app.
+- Realtime UPDATEs to inherited rows do not reach a fork's open
+  message list (the subscription filters on the fork's own
+  thread_id). Display-only staleness on rare paths (a
+  second-thoughts verdict landing on a shared row); a refetch
+  heals it.
 - A restored pre-fork backup archive lacks the fork columns until
   the current schema.sql is applied to the target; the columns
   arrive null/false, which is the correct state for every pre-fork
@@ -156,8 +251,9 @@ what a sweep did; run it ad hoc with
 
 ## Interactions
 
-- **Chat** ([`./chat.md`](./chat.md)) - the drawer delete gesture,
-  the realtime hidden-as-delete handler, message ordering.
+- **Chat** ([`./chat.md`](./chat.md)) - the drawer Fork item +
+  fork indicator, the delete gesture, the realtime hidden-as-delete
+  handler, message ordering.
 - **Exchange** ([`./exchange.md`](./exchange.md)) -
   `mergeMessagesById` is segment-aware: inherited prefix rows keep
   resolver order; only own-segment rows position-sort.
@@ -169,10 +265,16 @@ what a sweep did; run it ad hoc with
 - **Search / recall**
   ([`./conversation-recall.md`](./conversation-recall.md),
   [`./context-recall.md`](./context-recall.md)) - the chunk-search
-  RPC's hidden filter serves both drawer search and recall's
-  conversation layer.
+  RPC's hidden-hit resolution serves both drawer search and
+  recall's conversation layer; conversation_get splices the fork
+  marker into windowed transcripts.
 - **Background workers** ([`./summaries.md`](./summaries.md),
   [`./topics.md`](./topics.md), [`./auto-title.md`](./auto-title.md),
   [`./memory.md`](./memory.md), [`./wiki.md`](./wiki.md)) - every
   thread claim RPC skips hidden threads; the chunker
   ([`./embeddings.md`](./embeddings.md)) deliberately does not.
+  Transcript replays get fork framing via the shared loaders.
+- **Prompt augmentation**
+  ([`./prompt-augmentation.md`](./prompt-augmentation.md)) - the
+  fork preamble and FORK POINT marker follow its provenance-marking
+  convention (nak-attributed, descriptive voice).

@@ -453,6 +453,10 @@ export class SupabaseService {
     return threadsApi.renameThread(this.client, threadId, title, opts);
   }
 
+  async forkThread(sourceThreadId: string, forkMsgId?: string): Promise<Thread> {
+    return threadsApi.forkThread(this.client, sourceThreadId, forkMsgId);
+  }
+
   async setThreadModel(threadId: string, model: string | null): Promise<void> {
     return threadsApi.setThreadModel(this.client, threadId, model);
   }

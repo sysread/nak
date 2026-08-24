@@ -113,8 +113,15 @@ async function summariseClaimedThread(
   try {
     // Slicing the history at the claimed terminal message means a race
     // where the user added turns mid-summary simply queues the thread
-    // for the next cycle.
-    const slice = await loadThreadSliceUpTo(adminClient, threadId, terminalMsgId);
+    // for the next cycle. The fork clause counters the framing's
+    // "inherited from the parent" preamble on forked threads: the fork
+    // reads as ONE conversation to the user, so the summary must cover
+    // the inherited prefix too, not treat it as someone else's context.
+    const slice = await loadThreadSliceUpTo(adminClient, threadId, terminalMsgId, {
+      forkClause:
+        'Summarize the conversation as a whole, including the inherited ' +
+        'messages - the fork reads as one continuous conversation.',
+    });
     if (slice.length === 0) {
       // Pathological empty thread - nothing to summarise. Leave the
       // claim to the TTL; the claim predicate requires a terminal

@@ -77,6 +77,18 @@ export interface Thread {
    */
   hidden: boolean;
   /**
+   * Fork ancestry pair (see docs/dev/forking.md). `forked_from_thread_id`
+   * is the parent thread whose segment this thread's transcript
+   * continues from; `forked_from_msg_id` is the fork point - the last
+   * message shared with that parent, always a row of the parent's own
+   * segment. Both null on root threads. The drawer renders a fork
+   * indicator off the thread half; the fork primitive reads the msg
+   * half as its fallback fork point when a thread's own segment is
+   * still empty.
+   */
+  forked_from_thread_id: string | null;
+  forked_from_msg_id: string | null;
+  /**
    * True once the user has explicitly renamed the thread (via the title
    * input, or by materializing a draft with an explicit title). The chat
    * loop reads this to suppress the title-note / `update_title`
@@ -510,6 +522,12 @@ export function coerceThread(row: Record<string, unknown>): Thread {
     // Drift-tolerant like archived: a row predating the column reads
     // as visible, which is what every pre-forking row is.
     hidden: row.hidden === true,
+    // Fork ancestry: non-string (absent column, pre-fork row) reads as
+    // a root thread, which is what every pre-fork row is.
+    forked_from_thread_id:
+      typeof row.forked_from_thread_id === 'string' ? row.forked_from_thread_id : null,
+    forked_from_msg_id:
+      typeof row.forked_from_msg_id === 'string' ? row.forked_from_msg_id : null,
     title_manually_set: row.title_manually_set === true,
     // Pass jsonb through unchanged. The intuition module owns the
     // parse/coerce - see coerceIntuitionPayload in

@@ -6706,15 +6706,25 @@ create or replace function public.search_thread_chunks_by_embedding(
   excerpt text
 )
 language sql stable security invoker as $$
-  with ranked as (
+  -- Hidden threads' chunks stay in scope, resolved to a visible
+  -- conversation rather than filtered out. A hidden thread's rows can
+  -- be the live shared prefix of visible forks (see the "Conversation
+  -- forking" section above), so a blanket hidden filter would blind
+  -- recall and drawer search to every shared prefix; but surfacing the
+  -- hidden thread itself would hand the UI a conversation the user
+  -- cannot open. Resolution: a hit on a hidden thread walks down the
+  -- fork tree to its nearest visible descendant whose transcript
+  -- contains the chunk's rows, presents THAT thread as the hit, and is
+  -- dropped when no such descendant exists (a deleted conversation
+  -- awaiting GC - its chunks stop surfacing the moment it is deleted,
+  -- not a GC cycle later).
+  with recursive ranked as (
     select c.thread_id,
            c.chunk_index,
            c.start_msg_id,
            c.end_msg_id,
            c.content,
-           t.title,
-           t.archived,
-           t.updated_at,
+           t.hidden,
            (1 - (c.embedding <=> query_embedding))::real as similarity,
            row_number() over (
              partition by c.thread_id
@@ -6722,31 +6732,105 @@ language sql stable security invoker as $$
            ) as rn
       from public.thread_chunks c
       join public.threads t on t.id = c.thread_id
-     -- Hidden threads are excluded so a deleted conversation's chunks
-     -- stop surfacing in recall/search the moment it is deleted, not a
-     -- GC cycle later. M4 HANDOFF: once forks exist, a hidden
-     -- ancestor's chunks are live content (they belong to visible
-     -- conversations' shared prefixes) - the fork milestone must
-     -- REPLACE this blanket filter with hidden-hit resolution (include
-     -- hidden threads' chunks, resolve each hit to the nearest visible
-     -- descendant, drop hits with none). Leaving it in place would
-     -- silently blind recall to every shared prefix.
      where c.user_id = coalesce(p_user_id, auth.uid())
-       and not t.hidden
        and c.embedding is not null
-       and (p_updated_after is null or t.updated_at >= p_updated_after)
+  ),
+  best as (
+    select r.* from ranked r where r.rn = 1
+  ),
+  -- Walk down from each hidden-thread hit toward visible descendants.
+  -- The first hop out of the chunk's owning thread must prove
+  -- containment: the child's fork point (a row of the owner's own
+  -- segment) must sit at or past the chunk's last row, otherwise the
+  -- child's inherited prefix stops before the chunk. Deeper hops need
+  -- no check - a grandchild inherits its parent's ENTIRE inherited
+  -- prefix (fork-point truncation only applies within the direct
+  -- parent's own segment), so containment is monotone below the first
+  -- hop. A chunk whose end anchor went stale (anchors are soft
+  -- pointers; a trimmed row leaves them dangling until the next
+  -- rechunk) cannot prove containment and drops out here,
+  -- conservatively. The walk only continues through hidden nodes
+  -- (visible = destination), and the depth guard bounds a corrupted
+  -- parent cycle, same posture as thread_transcript.
+  walk as (
+    select b.thread_id as chunk_thread,
+           b.end_msg_id,
+           b.thread_id as at_thread,
+           true as at_hidden,
+           0 as depth
+      from best b
+     where b.hidden
+    union all
+    select w.chunk_thread,
+           w.end_msg_id,
+           ch.id,
+           ch.hidden,
+           w.depth + 1
+      from walk w
+      join public.threads ch on ch.forked_from_thread_id = w.at_thread
+     where w.at_hidden
+       and w.depth < 100
+       and (w.depth > 0
+            or exists (
+              select 1
+                from public.messages fm
+                join public.messages em on em.id = w.end_msg_id
+               where fm.id = ch.forked_from_msg_id
+                 and em.thread_id = w.chunk_thread
+                 and fm.position >= em.position))
+  ),
+  -- Nearest visible descendant per hidden hit; ties (several forks at
+  -- the same depth contain the chunk) go to the most recently active.
+  resolved_hidden as (
+    select distinct on (w.chunk_thread)
+           w.chunk_thread,
+           w.at_thread as display_id
+      from walk w
+      join public.threads d on d.id = w.at_thread
+     where not w.at_hidden
+     order by w.chunk_thread, w.depth asc, d.updated_at desc, d.id
+  ),
+  -- Each surviving hit under the thread the UI will present: visible
+  -- owners as themselves, hidden owners as their resolved descendant.
+  display as (
+    select b.thread_id as display_id, b.similarity, b.chunk_index,
+           b.start_msg_id, b.end_msg_id, b.content
+      from best b
+     where not b.hidden
+    union all
+    select rh.display_id, b.similarity, b.chunk_index,
+           b.start_msg_id, b.end_msg_id, b.content
+      from resolved_hidden rh
+      join best b on b.thread_id = rh.chunk_thread
+  ),
+  -- Resolution can land a hidden ancestor's hit on a thread that also
+  -- has its own hit: keep the strongest chunk per presented thread.
+  -- The recency filter runs against the PRESENTED thread's updated_at
+  -- (a live fork keeps its shared prefix searchable even after the
+  -- hidden owner's own clock went stale).
+  deduped as (
+    select d.display_id, t.title, t.archived, t.updated_at,
+           d.similarity, d.chunk_index, d.start_msg_id, d.end_msg_id,
+           d.content,
+           row_number() over (
+             partition by d.display_id
+             order by d.similarity desc
+           ) as drn
+      from display d
+      join public.threads t on t.id = d.display_id
+     where p_updated_after is null or t.updated_at >= p_updated_after
   )
-  select r.thread_id, r.title, r.archived, r.updated_at,
-         r.similarity, r.chunk_index, r.start_msg_id, r.end_msg_id,
-         left(r.content, 400) as excerpt
-    from ranked r
-   where r.rn = 1
+  select dd.display_id, dd.title, dd.archived, dd.updated_at,
+         dd.similarity, dd.chunk_index, dd.start_msg_id, dd.end_msg_id,
+         left(dd.content, 400) as excerpt
+    from deduped dd
+   where dd.drn = 1
    -- Exponential decay with a 7-day constant: today gets the full
    -- boost, a week ago ~37% of it, a month ago ~1%. Zero boost (the
    -- default) collapses this to a plain similarity sort.
-   order by r.similarity
+   order by dd.similarity
               + p_recency_boost
-              * exp(-extract(epoch from (now() - r.updated_at)) / 86400.0 / 7.0)
+              * exp(-extract(epoch from (now() - dd.updated_at)) / 86400.0 / 7.0)
             desc
    limit match_limit
 $$;

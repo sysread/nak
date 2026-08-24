@@ -14,6 +14,7 @@
 // a transcript window.
 
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
+import { FORK_POINT_MARKER } from '../agents/_fork_framing.ts';
 
 // Mirrors MAX_TRANSCRIPT_CHARS in src/lib/tools/conversation_get.ts.
 // Lower than the wiki cap (16000) because transcripts are
@@ -29,6 +30,7 @@ interface ThreadSummary {
 }
 
 interface MessageRow {
+  thread_id?: string | null;
   role: string;
   content: string | null;
 }
@@ -36,23 +38,65 @@ interface MessageRow {
 interface TranscriptMessage {
   role: 'user' | 'assistant';
   content: string;
+  /**
+   * True when the row is owned by a fork ancestor rather than the
+   * requested thread. Internal windowing metadata: it decides where
+   * the FORK POINT marker splices in, and is stripped before the
+   * transcript leaves the tool.
+   */
+  inherited: boolean;
 }
 
 /**
  * Reduce stored rows to the user/assistant turns worth showing. Tool
  * rows and empty assistant rows would burn window budget without
- * payload.
+ * payload. `ownThreadId` tags each turn with whether it was inherited
+ * from a fork ancestor; rows without a thread_id (older tests) read
+ * as own.
  */
-function readableTurns(rows: MessageRow[]): TranscriptMessage[] {
+function readableTurns(rows: MessageRow[], ownThreadId?: string): TranscriptMessage[] {
   const readable: TranscriptMessage[] = [];
   for (const row of rows) {
     if (row.role !== 'user' && row.role !== 'assistant') continue;
     if (typeof row.content !== 'string') continue;
     const trimmed = row.content.trim();
     if (trimmed.length === 0) continue;
-    readable.push({ role: row.role, content: trimmed });
+    readable.push({
+      role: row.role,
+      content: trimmed,
+      inherited:
+        typeof row.thread_id === 'string' &&
+        typeof ownThreadId === 'string' &&
+        row.thread_id !== ownThreadId,
+    });
   }
   return readable;
+}
+
+/**
+ * Project a windowed transcript to the wire shape: strip the internal
+ * `inherited` flag and splice the FORK POINT marker at the
+ * inherited/own boundary when the window straddles it (or at the tail
+ * of an all-inherited window, where it truthfully says everything
+ * above is shared history). Windows with no inherited rows come back
+ * unchanged - the marker only appears where there is a boundary to
+ * explain.
+ */
+function projectWindowMessages(
+  messages: readonly TranscriptMessage[],
+): Array<{ role: string; content: string }> {
+  const out: Array<{ role: string; content: string }> = messages.map((m) => ({
+    role: m.role,
+    content: m.content,
+  }));
+  const anyInherited = messages.some((m) => m.inherited);
+  if (!anyInherited) return out;
+  const boundary = messages.findIndex((m) => !m.inherited);
+  out.splice(boundary >= 0 ? boundary : out.length, 0, {
+    role: 'system',
+    content: FORK_POINT_MARKER,
+  });
+  return out;
 }
 
 /**
@@ -115,12 +159,13 @@ function bestMatchIndex(turns: readonly TranscriptMessage[], query: string): num
 function windowTranscript(
   rows: MessageRow[],
   anchor: number = -1,
+  ownThreadId?: string,
 ): {
   messages: TranscriptMessage[];
   truncated: boolean;
   window: { start: number; end: number; total: number };
 } {
-  const readable = readableTurns(rows);
+  const readable = readableTurns(rows, ownThreadId);
 
   if (anchor >= 0) {
     // Grow outward from the anchor, alternating back and forward, so
@@ -211,12 +256,12 @@ export const conversationGet: ToolDef = {
     // query when there is no ancestry.
     const { data: rows, error: rowsErr } = await ctx.adminClient
       .rpc('thread_transcript', { p_thread_id: id })
-      .select('role, content');
+      .select('thread_id, role, content');
     if (rowsErr) throw new Error(`listMessages failed: ${rowsErr.message}`);
 
     const messageRows = (rows ?? []) as MessageRow[];
-    const anchor = query ? bestMatchIndex(readableTurns(messageRows), query) : -1;
-    const transcript = windowTranscript(messageRows, anchor);
+    const anchor = query ? bestMatchIndex(readableTurns(messageRows, id), query) : -1;
+    const transcript = windowTranscript(messageRows, anchor, id);
 
     return {
       found: true,
@@ -237,7 +282,10 @@ export const conversationGet: ToolDef = {
         // tail view, which is very different information from "here is
         // your passage" and must not be silently conflated with it.
         matched_query: query ? anchor >= 0 : null,
-        messages: transcript.messages,
+        // The marker splice (see projectWindowMessages) is the fork
+        // framing for this read-only assembler: marker only, no
+        // preamble or task clause.
+        messages: projectWindowMessages(transcript.messages),
       },
     };
   },
@@ -253,5 +301,6 @@ export const __test = {
   bestMatchIndex,
   readableTurns,
   windowTranscript,
+  projectWindowMessages,
   MAX_TRANSCRIPT_CHARS,
 };
