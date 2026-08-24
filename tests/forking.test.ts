@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  FORK_TITLE_SIGIL,
+  forkTitle,
   isValidForkPoint,
   pickForkPoint,
+  PLACEHOLDER_TITLE,
+  stripForkTitlePrefix,
+  subscriptNumber,
   type ForkPointCandidate,
 } from '../src/lib/forking';
 
@@ -14,6 +19,45 @@ function row(over: Partial<ForkPointCandidate>): ForkPointCandidate {
     ...over,
   };
 }
+
+describe('fork titles', () => {
+  it('renders ordinals as subscript digits', () => {
+    expect(subscriptNumber(1)).toBe('₁');
+    expect(subscriptNumber(12)).toBe('₁₂');
+    // Clamped to a positive integer - a drifting count can't render an
+    // empty or negative subscript.
+    expect(subscriptNumber(0)).toBe('₁');
+  });
+
+  it('marks the nth fork of a titled source', () => {
+    expect(forkTitle('Sourdough basics', 1)).toBe(
+      `${FORK_TITLE_SIGIL}₁ Sourdough basics`
+    );
+    expect(forkTitle('Sourdough basics', 3)).toBe(
+      `${FORK_TITLE_SIGIL}₃ Sourdough basics`
+    );
+  });
+
+  it('re-marks the base title when forking a fork (no sigil stacking)', () => {
+    const firstFork = forkTitle('Sourdough basics', 2);
+    expect(forkTitle(firstFork, 1)).toBe(
+      `${FORK_TITLE_SIGIL}₁ Sourdough basics`
+    );
+  });
+
+  it('passes the placeholder through unmarked so auto-title still claims the fork', () => {
+    expect(forkTitle(PLACEHOLDER_TITLE, 1)).toBe(PLACEHOLDER_TITLE);
+  });
+
+  it('stripForkTitlePrefix only strips a well-formed leading marker', () => {
+    expect(stripForkTitlePrefix(`${FORK_TITLE_SIGIL}₁₀ T`)).toBe('T');
+    expect(stripForkTitlePrefix('plain title')).toBe('plain title');
+    // Sigil without a subscript is user content, not a marker.
+    expect(stripForkTitlePrefix(`${FORK_TITLE_SIGIL} T`)).toBe(
+      `${FORK_TITLE_SIGIL} T`
+    );
+  });
+});
 
 describe('isValidForkPoint', () => {
   it('accepts user rows', () => {

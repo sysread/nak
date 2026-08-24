@@ -97,7 +97,12 @@ slice of the Supabase layer (facade method of the same name). It
 resolves a fork point, applies the reparent rule (the new thread's
 parent is whichever thread OWNS the fork-point message), and inserts
 the new thread row. What the fork inherits from the thread the user
-forked: title (verbatim), the manual-title flag, the model /
+forked: title behind a fork marker (the fraktur-f sigil plus a
+subscript ordinal counting forks minted from the same fork-point
+message; forking a fork re-marks the base title rather than
+stacking sigils, and the untitled placeholder passes through
+unmarked so the auto-title worker still claims the fork - see
+forkTitle in src/lib/forking.ts), the manual-title flag, the model /
 reasoning / verbosity pins, and the enabled toolboxes. What it does
 NOT inherit: summary, topics, cached priming payloads (they are
 keyed to message rounds and would mis-prime the fork), archived
@@ -115,8 +120,10 @@ own fork point, minting a sibling.
 
 UI: the drawer row menu's "Fork" item (disabled for drafts) creates
 and opens the fork; forked threads render a muted git-branch glyph
-before the drawer title, which is how the user tells a fork from its
-identically-titled parent.
+before the drawer title alongside the title's own fork marker. The
+fork ordinal is a count-then-insert (no atomicity): concurrent forks
+of the same point can mint duplicate ordinals, a cosmetic title
+collision and nothing structural.
 
 ## Worker fork framing
 
@@ -229,9 +236,10 @@ what a sweep did; run it ad hoc with
   fails the whole statement loudly.
 - The daily digest reports pre-fork rows under the owning (possibly
   hidden) thread's title. Decided in M4: accepted without code. A
-  fork inherits its parent's title verbatim, so the "unreachable"
-  title the digest shows matches the visible fork's title anyway;
-  a rename of the fork can drift them apart, which is cosmetic.
+  fork inherits its parent's title behind a short fork marker, so
+  the "unreachable" title the digest shows stays recognizable next
+  to the visible fork's; a rename of the fork can drift them
+  apart, which is cosmetic.
 - Cross-user fork forgery (a hand-crafted insert pointing
   forked_from at another user's thread) is not schema-enforced.
   It leaks nothing - the resolver is SECURITY INVOKER, so RLS

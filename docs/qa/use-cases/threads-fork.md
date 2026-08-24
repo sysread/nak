@@ -23,7 +23,10 @@ prefix, and search's hidden-hit resolution.
 1. Note the probe thread's id:
    `select id from threads where title ilike '%okapi%';`
 2. In the drawer, open the probe thread's three-dot menu and click
-   **Fork**.
+   **Fork**. Then fork the SAME parent a second time from the same
+   menu (both forks share the tail fork point). Continue the
+   walkthrough in the FIRST fork; the second exists only to verify
+   the ordinal.
 3. Observe the drawer and the open conversation.
 4. In psql:
    `select id, hidden, forked_from_thread_id, forked_from_msg_id, title, model, toolboxes_enabled from threads where forked_from_thread_id = '<parent-id>';`
@@ -50,14 +53,18 @@ prefix, and search's hidden-hit resolution.
 
 ## Expected
 
-- (2-3) The fork opens immediately as the active conversation, with
-  the full prior transcript visible. The drawer shows two rows with
-  the same title; the new one carries a small git-branch glyph
-  before the title. No error toast.
-- (4) Exactly one fork row: `hidden = false`,
-  `forked_from_thread_id = <parent-id>`, `forked_from_msg_id` set;
-  title matches the parent verbatim; model pin and toolboxes match
-  the parent. The fork-point row belongs to the PARENT's segment
+- (2-3) Each fork opens immediately as the active conversation,
+  with the full prior transcript visible. Fork titles are the
+  parent's title behind the fork marker - the fraktur-f sigil with
+  a subscript ordinal: the first fork carries subscript 1, the
+  second fork of the same point carries subscript 2. Both fork
+  rows also carry the small git-branch glyph before the title. No
+  error toast.
+- (4) Exactly two fork rows, both `hidden = false`,
+  `forked_from_thread_id = <parent-id>`, same `forked_from_msg_id`;
+  titles are the parent's behind sigil-subscript-1 and
+  sigil-subscript-2; model pin and toolboxes match the parent. The
+  fork-point row belongs to the PARENT's segment
   (`thread_id = <parent-id>`) and is the parent's last user or
   settled assistant row.
 - (5) The fork owns ZERO message rows (nothing copied), while
@@ -77,15 +84,17 @@ prefix, and search's hidden-hit resolution.
   (the parent is hidden but KEPT - the fork depends on it; only
   rows past the fork point are trimmed). The parent's message count
   drops only by rows past the fork point, never below it.
-- (9) The semantic search hit for the shared content points at the
-  FORK (the only visible carrier of that history), not at the
-  deleted parent, and opening the hit works.
+- (9) The semantic search hit for the shared content points at a
+  visible FORK, not at the deleted parent, and opening the hit
+  works. With two sibling forks at the same depth the tie resolves
+  to the more recently active one - the first fork, which carries
+  its own post-fork exchange.
 
 ## Cleanup
 
-Delete the fork from the drawer; the next sweep destroys the fork
-and the now-unreferenced hidden parent together (leaf first, then
-root).
+Delete both forks from the drawer; the next sweep destroys the
+forks and the now-unreferenced hidden parent together (leaves
+first, then root).
 
 ## Results log
 

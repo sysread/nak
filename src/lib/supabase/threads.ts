@@ -20,7 +20,12 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ThinkingLevel, Verbosity } from '../models';
-import { isValidForkPoint, pickForkPoint, type ForkPointCandidate } from '../forking';
+import {
+  forkTitle,
+  isValidForkPoint,
+  pickForkPoint,
+  type ForkPointCandidate,
+} from '../forking';
 import { SupabaseError } from './error';
 import { getSession } from './session';
 import { listAttachmentPagePaths } from './attachment-pages';
@@ -455,8 +460,9 @@ export async function createThread(
  * parent's own segment" structural rather than checked.
  *
  * The fork inherits the source's identity and composer settings
- * (title verbatim, title_manually_set, model / reasoning / verbosity
- * pins, enabled toolboxes) and nothing else: summary, topics, cached
+ * (title behind a fork marker - see forkTitle in ../forking -
+ * title_manually_set, model / reasoning / verbosity pins, enabled
+ * toolboxes) and nothing else: summary, topics, cached
  * priming payloads, archived state, and worker cursors all start
  * fresh. Null cursors are deliberate - a fresh fork's own segment is
  * empty, so per-thread worker queries never see the inherited prefix
@@ -534,11 +540,25 @@ export async function forkThread(
     }
   }
 
+  // Ordinal of this fork among all forks minted from the same fork
+  // point, for the title marker. Counts every existing row pointing at
+  // the point - hidden ones included, since they still exist until the
+  // GC runs and "how many times was this point forked" is a statement
+  // about history, not visibility. The count-then-insert pair is not
+  // atomic; two devices forking the same point in the same instant can
+  // mint duplicate ordinals, which costs a cosmetic title collision
+  // and nothing structural.
+  const { count, error: countErr } = await client
+    .from('threads')
+    .select('id', { count: 'exact', head: true })
+    .eq('forked_from_msg_id', pointId);
+  if (countErr) throw new SupabaseError(countErr.message);
+
   const { data, error } = await client
     .from('threads')
     .insert({
       user_id: session.user.id,
-      title: source.title,
+      title: forkTitle(source.title, (count ?? 0) + 1),
       title_manually_set: source.title_manually_set,
       model: source.model,
       reasoning_effort: source.reasoning_effort,

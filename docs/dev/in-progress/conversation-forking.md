@@ -800,6 +800,17 @@ Implementation deltas from the plan:
   only a later manual rename of the fork drifts them, cosmetically.
 - Two TS2589 casts (SupabaseClient -> TitleClient structural
   check overflows the compiler); commented at both sites.
+- **Post-QA title change (user request):** fork titles are no
+  longer verbatim - they carry a fork marker, the fraktur-f sigil
+  plus a subscript ordinal counting forks minted from the same
+  fork-point message (count-then-insert over the
+  forked_from_msg_id partial index; hidden forks count; duplicate
+  ordinals possible under concurrent forks, cosmetic only).
+  Forking a fork re-marks the BASE title instead of stacking
+  sigils, and the untitled placeholder passes through unmarked so
+  auto-title still claims the fork. Primitives + tests in
+  src/lib/forking.ts; threads-fork QA case extended with a
+  second-fork ordinal check and re-run.
 
 First user-visible feature. Forks can now exist, so everything
 that must be fork-aware lands in this milestone, not later.

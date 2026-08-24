@@ -13,16 +13,26 @@ Open the three-dot menu on a conversation's row in the drawer and
 choose **Fork**. The fork opens immediately, with the whole
 conversation so far already in it.
 
-The fork starts with the same title as the original, so the two rows
-look alike in the drawer. The fork carries a small branch glyph before
-its title - that glyph is how you tell a fork from its original at a
-glance.
+The fork keeps the original's title behind a short fork marker: a
+fraktur letter f with a small subscript number, so the first fork of
+"Sourdough basics" is titled "f1 Sourdough basics" (with the f in
+fraktur and the 1 as a subscript). The number counts how many forks
+have been made from that same point in the conversation - fork twice
+from the same place and the second one gets a 2. Forking a fork does
+not stack markers; the new fork gets a fresh marker on the base
+title. The fork also carries a small branch glyph before its title
+in the drawer.
+
+You can rename a fork like any other conversation - the marker is
+just part of the title, not something the app maintains afterward.
+A fork of a conversation that has not been named yet stays unnamed
+too, and gets its own automatic title after you start talking in it.
 
 ## What a fork inherits
 
-The fork keeps the original's title, its model and reasoning
-settings, and its enabled tools - it behaves like the same
-conversation from the first message on.
+The fork keeps the original's title (behind the fork marker), its
+model and reasoning settings, and its enabled tools - it behaves
+like the same conversation from the first message on.
 
 It does not inherit anything that describes the *conversation so
 far* in summary form: the background summary, topic tags, and the
