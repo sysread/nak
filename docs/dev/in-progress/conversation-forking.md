@@ -1,6 +1,6 @@
 # Conversation forking
 
-Status: M0 and M1 done; M2 implemented, awaiting QA. Update the milestone
+Status: M0, M1, and M2 done. Update the milestone
 checklist as work lands; graduate durable content into a permanent
 `docs/dev/forking.md` (started in M3) and retire this doc when the
 last milestone ships.
@@ -579,10 +579,13 @@ Pure ordering refactor; transcripts render identically.
 
 ### M2 - fork columns + transcript resolver
 
-Status: implemented (2026-08-24), gate green; the streaming and
-regenerate baseline re-runs are pending QA (stamp DONE when their
-results rows land). Deltas and findings from the spec below, chosen
-at implementation:
+Status: DONE (2026-08-24). Gate green; QA re-ran the streaming
+baseline (PASS 1-5, identical to M1) and the regenerate baseline
+(PASS 1-7, identical to M1's re-run), and spot-checked the DB: fork
+columns all null, and thread_transcript's output full-outer-join
+diffed against the direct per-thread query with zero mismatches -
+same ids, positions, thread_ids, and order. Deltas and findings from
+the spec below, chosen at implementation:
 
 - The resolver is one SECURITY INVOKER plpgsql function returning
   `setof public.messages` - not a separate browser wrapper. The
