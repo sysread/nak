@@ -37,6 +37,28 @@ Deno.test('back-to-back leading blocks all move', () => {
   assertEquals(out.reasoning, 'one\n\ntwo');
 });
 
+Deno.test('a glitched bare opener (missing <) still relocates', () => {
+  // Degraded backends that leak the span also drop characters -
+  // content arriving as `think>...` was observed in QA on
+  // deepseek-v4-flash.
+  const out = splitLeakedThink('think>secret scratch</think>The answer.', '');
+  assertEquals(out.content, 'The answer.');
+  assertEquals(out.reasoning, 'secret scratch');
+});
+
+Deno.test('a span glitched on both ends still relocates', () => {
+  const out = splitLeakedThink('think>scratch/think>The answer.', '');
+  assertEquals(out.content, 'The answer.');
+  assertEquals(out.reasoning, 'scratch');
+});
+
+Deno.test('a bare think tag mid-body is untouched, same as the full tag', () => {
+  const body = 'On glitchy turns the opener arrives as think>this/think> instead.';
+  const out = splitLeakedThink(body, '');
+  assertEquals(out.content, body);
+  assertEquals(out.reasoning, '');
+});
+
 Deno.test('a think tag mid-body is untouched - likely quoted text', () => {
   const body = 'The tag looks like <think>this</think> in the raw stream.';
   const out = splitLeakedThink(body, '');

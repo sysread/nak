@@ -112,8 +112,10 @@ export function isRecoveryMessage(m: Pick<Message, 'content'>): boolean {
  * Build a synthetic assistant Message. `id` is a sentinel string so
  * the chat UI can key on it stably across re-renders within one
  * session; the persistence path replaces the row with the DB-issued
- * id when it writes. `created_at` is "now" - the row will sit at the
- * end of the timeline, which matches what the user sees.
+ * id when it writes. `created_at` is honestly "now" (when the heal
+ * happened); transcript placement comes from `position`, which starts
+ * null here and is assigned by the synthesizer's placement pass once
+ * the row's neighbors are known.
  */
 function makeRecoveryAssistant(threadId: string, idx: number): Message {
   return {
@@ -122,6 +124,7 @@ function makeRecoveryAssistant(threadId: string, idx: number): Message {
     role: 'assistant',
     content: recoveryAssistantContent(),
     created_at: new Date().toISOString(),
+    position: null,
     synthetic: true,
   };
 }
@@ -143,10 +146,50 @@ function makeRecoveryTool(
     role: 'tool',
     content: recoveryToolContent(),
     created_at: new Date().toISOString(),
+    position: null,
     tool_call_id: call.id,
     name: call.function.name,
     synthetic: true,
   };
+}
+
+/**
+ * Give every synthetic row a transcript position: consecutive
+ * synthetics in a gap get evenly-spaced fractions strictly between
+ * the previous real row's position and the next real row's (or the
+ * previous position plus one when the gap is at the end of the
+ * transcript). Fractions keep the healed rows in their gap without
+ * touching any real row, and stay below the next integer so the
+ * insert trigger's tail assignment (floor(max)+1) can never collide
+ * with them.
+ *
+ * A synthetic is never first in the list - every synthesis branch
+ * pushes at least one real row (the tool block being healed) before
+ * it - so the previous-real lookup always lands; the 0 fallback is
+ * pure defense. A null neighbor position (possible only for rows
+ * inserted in a schema apply's backfill-to-trigger window) falls back
+ * the same way rather than producing NaN positions.
+ *
+ * Mutates the synthetic rows in place; only called on freshly-built
+ * synthetics inside this module.
+ */
+function assignSyntheticPositions(rows: Message[]): void {
+  let i = 0;
+  while (i < rows.length) {
+    if (!rows[i].synthetic) {
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < rows.length && rows[j].synthetic) j++;
+    const prev = i > 0 ? (rows[i - 1].position ?? 0) : 0;
+    const next = j < rows.length ? (rows[j].position ?? prev + 1) : prev + 1;
+    const count = j - i;
+    for (let k = 0; k < count; k++) {
+      rows[i + k].position = prev + ((next - prev) * (k + 1)) / (count + 1);
+    }
+    i = j;
+  }
 }
 
 /**
@@ -256,7 +299,9 @@ export function synthesizeRecoveryMessages(messages: Message[]): Message[] {
     i++;
   }
 
-  return modified ? result : messages;
+  if (!modified) return messages;
+  assignSyntheticPositions(result);
+  return result;
 }
 
 /**

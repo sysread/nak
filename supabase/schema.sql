@@ -474,8 +474,10 @@ create table if not exists public.messages (
   created_at timestamptz not null default now()
 );
 
-create index if not exists messages_thread_created_idx
-  on public.messages (thread_id, created_at asc);
+-- Per-thread transcript reads are served by the unique
+-- (thread_id, position) index in the "Explicit per-thread message
+-- ordering" section below, which doubles as the thread_id lookup
+-- index for this table.
 
 alter table public.messages enable row level security;
 
@@ -645,14 +647,164 @@ alter table public.messages
     )
   );
 
--- Partial index for the streaming function's "is there an in-flight stream
--- anchored to this user message?" lookup, which runs on every /stream POST
--- (fresh send and reconnect both probe it). At most ~one row per active
--- thread sits in 'streaming' at any moment, so the partial keeps the index
--- tiny under steady state.
-create index if not exists messages_streaming_idx
-  on public.messages (thread_id, created_at desc)
+-- The streaming-probe partial index lives in the "Explicit per-thread
+-- message ordering" section below (it indexes the position column,
+-- which must exist first).
+
+-- Explicit per-thread message ordering ------------------------------------
+--
+-- Transcript order within a thread is decided by `position`, not
+-- `created_at`. Two different clocks write created_at (the browser for
+-- user rows, the edge function for assistant/tool rows), and the two
+-- code paths that used to forge timestamps to control ordering (the
+-- recovery-row persistence and the streaming row's move-to-tail) now
+-- set position instead. created_at stays as honest display metadata
+-- and for wall-clock comparisons (day-gates, staleness checks) - every
+-- remaining within-thread `order by created_at` in this file carries a
+-- wall-clock comment naming why, enforced by a guardrail test.
+--
+-- Numeric on purpose: the recovery path heals mid-transcript gaps by
+-- inserting at fractional midpoints between neighbors. Never assume
+-- integer positions.
+alter table public.messages
+  add column if not exists position numeric;
+
+-- Backfill NULL positions per thread in (created_at, id) order. This
+-- statement is a PERMANENT sweeper, not a one-shot migration: the file
+-- re-applies start-to-finish on every deploy, and NULL stragglers are
+-- real - within a single apply there is a window between this
+-- statement and the trigger's creation where a concurrent insert lands
+-- with a NULL position (the unique index below admits NULLs), and a
+-- backup restore runs its data apply with triggers disabled (replica
+-- role), landing every restored row as NULL.
+--
+-- The offset MUST come from the max over ALL of a thread's rows,
+-- computed in its own CTE. Folding the max into the NULL-filtered
+-- subquery would aggregate over only the NULL rows, coalesce to 0,
+-- assign positions starting at 1, collide with the unique index, and
+-- fail every schema apply from then on - a deploy-blocking landmine.
+-- Both guards (NULL-only idempotence, per-thread-max offset) are also
+-- what keeps restoring a pre-position backup archive safe; weakening
+-- either silently breaks older-archive restores.
+with thread_max as (
+  select thread_id, coalesce(max(position), 0) as mx
+    from public.messages group by thread_id
+), null_ranked as (
+  select m.id,
+         tm.mx + row_number() over (
+           partition by m.thread_id
+           -- legacy order: rows without positions predate the column
+           -- (or bypassed the trigger); their transcript order IS
+           -- their created_at order, id as the deterministic tiebreak.
+           order by m.created_at, m.id
+         ) as new_pos
+    from public.messages m
+    join thread_max tm on tm.thread_id = m.thread_id
+   where m.position is null
+)
+update public.messages m
+   set position = nr.new_pos
+  from null_ranked nr
+ where m.id = nr.id;
+
+-- Assign the tail position at insert when the caller didn't provide
+-- one. A caller-provided position passes through untouched - the
+-- recovery path depends on this, inserting at fractional midpoints
+-- that a tail assignment would clobber.
+--
+-- The thread-row lock serializes concurrent appenders on the same
+-- thread: without it, two inserts read the same max and collide on the
+-- unique index. This is NEW contention the trigger introduces, not a
+-- lock writers already held (the edge function's round persistence
+-- only touches messages, and the browser updates the thread row in a
+-- separate call after its insert). Two writers on one thread take
+-- turns; different threads never contend; insert transactions are
+-- short.
+--
+-- Runs as the inserting role (not security definer): the browser's
+-- `authenticated` role can take the FOR UPDATE lock because thread
+-- ownership grants it UPDATE via RLS, and its max() scan sees every
+-- row of its own thread through the messages select policy.
+--
+-- floor() so a fractional tail (a recovery row healed at the end of a
+-- transcript) still yields the next whole integer above it.
+create or replace function public.assign_message_position()
+returns trigger
+language plpgsql as $$
+begin
+  if new.position is not null then
+    return new;
+  end if;
+  perform 1 from public.threads t where t.id = new.thread_id for update;
+  select coalesce(floor(max(m.position)), 0) + 1
+    into new.position
+    from public.messages m
+   where m.thread_id = new.thread_id;
+  return new;
+end $$;
+
+drop trigger if exists messages_assign_position on public.messages;
+create trigger messages_assign_position
+  before insert on public.messages
+  for each row execute function public.assign_message_position();
+
+-- Unique per-thread ordering; also the per-thread transcript index
+-- (thread_id prefix + position range scan, forward or backward). NULLs
+-- are admitted, which is what lets the straggler window above exist
+-- without failing inserts.
+create unique index if not exists messages_thread_position_idx
+  on public.messages (thread_id, position);
+
+-- Partial index for the streaming function's "is there an in-flight
+-- stream anchored to this thread?" lookup, which runs on every /stream
+-- POST (fresh send and reconnect both probe it). At most ~one row per
+-- active thread sits in 'streaming' at any moment, so the partial
+-- keeps the index tiny under steady state.
+create index if not exists messages_streaming_pos_idx
+  on public.messages (thread_id, position desc)
   where status = 'streaming';
+
+-- The created_at orderings these two served have all moved to
+-- position; per-thread scans ride messages_thread_position_idx via its
+-- thread_id prefix.
+drop index if exists messages_thread_created_idx;
+drop index if exists messages_streaming_idx;
+
+-- Move a message to the tail of its thread's transcript. The streaming
+-- function calls this at a tool-round boundary: the streaming assistant
+-- row is born (and positioned) at the turn's first content delta, which
+-- can be BEFORE the round's tool rows persist when the model narrates a
+-- preamble before calling tools - an un-moved row would sort the final
+-- response card ahead of the tool cards. An UPDATE never fires the
+-- insert trigger, and the client library cannot express a subquery in
+-- an UPDATE, so this takes the same thread-row lock the trigger takes
+-- and assigns the same floor(max)+1 - immune to racing a concurrent
+-- insert's tail assignment.
+drop function if exists public.move_message_to_tail(uuid, uuid);
+create or replace function public.move_message_to_tail(
+  p_thread_id uuid,
+  p_msg_id uuid
+) returns void
+language plpgsql security definer
+set search_path = public as $$
+begin
+  perform 1 from public.threads t where t.id = p_thread_id for update;
+  update public.messages m
+     set position = (
+       select coalesce(floor(max(position)), 0) + 1
+         from public.messages
+        where thread_id = p_thread_id
+     )
+   where m.id = p_msg_id
+     and m.thread_id = p_thread_id;
+end $$;
+
+-- service-role only: the streaming edge function is the sole caller,
+-- through the admin client.
+revoke all on function public.move_message_to_tail(uuid, uuid)
+  from public, anon, authenticated;
+grant execute on function public.move_message_to_tail(uuid, uuid)
+  to service_role;
 
 -- Second-thoughts self-review verdict for a completed assistant turn.
 -- Written by the second_thoughts reviewer agent
@@ -4845,10 +4997,14 @@ set search_path = public as $$
                 or jsonb_array_length(m.tool_calls) = 0)
            and m.content is not null
            and length(m.content) > 0
-         order by m.created_at desc
+         order by m.position desc
          limit 1
       ) term
       cross join lateral (
+        -- Wall-clock on purpose, not transcript order: this asks "when
+        -- did the thread last see a write" for the day-gate, and a
+        -- recovery row healed today counts as today's activity even
+        -- though its position is mid-transcript.
         select m2.created_at
           from public.messages m2
          where m2.thread_id = t.id
@@ -4931,10 +5087,14 @@ set search_path = public as $$
                 or jsonb_array_length(m.tool_calls) = 0)
            and m.content is not null
            and length(m.content) > 0
-         order by m.created_at desc
+         order by m.position desc
          limit 1
       ) term
       cross join lateral (
+        -- Wall-clock on purpose, not transcript order: this asks "when
+        -- did the thread last see a write" for the day-gate, and a
+        -- recovery row healed today counts as today's activity even
+        -- though its position is mid-transcript.
         select m2.created_at
           from public.messages m2
          where m2.thread_id = t.id
@@ -5045,7 +5205,7 @@ language sql security invoker as $$
                 or jsonb_array_length(m.tool_calls) = 0)
            and m.content is not null
            and length(m.content) > 0
-         order by m.created_at desc
+         order by m.position desc
          limit 1
       ) term
      where t.user_id = coalesce(p_user_id, auth.uid())
@@ -5127,7 +5287,7 @@ set search_path = public as $$
                 or jsonb_array_length(m.tool_calls) = 0)
            and m.content is not null
            and length(m.content) > 0
-         order by m.created_at desc
+         order by m.position desc
          limit 1
       ) term
      where term.msg_id is distinct from t.last_summarised_msg_id
@@ -5189,7 +5349,7 @@ language sql security invoker as $$
            and m.role = 'user'
            and m.content is not null
            and length(m.content) > 0
-         order by m.created_at asc
+         order by m.position asc
          limit 1
       ) first_user
      where t.user_id = coalesce(p_user_id, auth.uid())
@@ -5300,7 +5460,7 @@ set search_path = public as $$
            and m.role = 'user'
            and m.content is not null
            and length(m.content) > 0
-         order by m.created_at asc
+         order by m.position asc
          limit 1
       ) first_user
      where t.title = 'New conversation'
@@ -5370,7 +5530,7 @@ language sql security invoker as $$
                 or jsonb_array_length(m.tool_calls) = 0)
            and m.content is not null
            and length(m.content) > 0
-         order by m.created_at desc
+         order by m.position desc
          limit 1
       ) term
      where t.user_id = coalesce(p_user_id, auth.uid())
@@ -5492,7 +5652,7 @@ set search_path = public as $$
                 or jsonb_array_length(m.tool_calls) = 0)
            and m.content is not null
            and length(m.content) > 0
-         order by m.created_at desc
+         order by m.position desc
          limit 1
       ) term
      where t.title <> 'New conversation'
@@ -6024,7 +6184,7 @@ language sql security invoker as $$
         select m.id as msg_id
           from public.messages m
          where m.thread_id = t.id
-         order by m.created_at desc
+         order by m.position desc
          limit 1
       ) term
      where t.user_id = coalesce(p_user_id, auth.uid())
@@ -6064,7 +6224,7 @@ set search_path = public as $$
         select m.id as msg_id
           from public.messages m
          where m.thread_id = t.id
-         order by m.created_at desc
+         order by m.position desc
          limit 1
       ) term
      where (term.msg_id is distinct from t.last_chunked_msg_id
@@ -9904,7 +10064,7 @@ set search_path = public as $$
                 or jsonb_array_length(m.tool_calls) = 0)
            and m.content is not null
            and length(m.content) > 0
-         order by m.created_at desc
+         order by m.position desc
          limit 1
       ) term
       cross join lateral (
@@ -9912,6 +10072,9 @@ set search_path = public as $$
         -- buckets. Reading it off messages.created_at instead of
         -- threads.updated_at keeps the gate stable against future
         -- bumps to threads.updated_at from unrelated writes.
+        -- Wall-clock on purpose, not transcript order: a recovery row
+        -- healed today counts as today's activity even though its
+        -- position is mid-transcript.
         select m2.created_at
           from public.messages m2
          where m2.thread_id = t.id
@@ -10188,7 +10351,7 @@ language sql security invoker as $$
           or jsonb_array_length(m.tool_calls) = 0)
      and m.content is not null
      and length(m.content) > 0
-   order by m.created_at desc
+   order by m.position desc
    limit 1;
 $$;
 
@@ -11070,10 +11233,14 @@ set search_path = public as $$
                 or jsonb_array_length(m.tool_calls) = 0)
            and m.content is not null
            and length(m.content) > 0
-         order by m.created_at desc
+         order by m.position desc
          limit 1
       ) term
       cross join lateral (
+        -- Wall-clock on purpose, not transcript order: this asks "when
+        -- did the thread last see a write" for the day-gate, and a
+        -- recovery row healed today counts as today's activity even
+        -- though its position is mid-transcript.
         select m2.created_at
           from public.messages m2
          where m2.thread_id = t.id
@@ -13713,10 +13880,14 @@ language sql stable security definer set search_path = public as $$
                 or jsonb_array_length(m.tool_calls) = 0)
            and m.content is not null
            and length(m.content) > 0
-         order by m.created_at desc
+         order by m.position desc
          limit 1
       ) term
       cross join lateral (
+        -- Wall-clock on purpose, not transcript order: this asks "when
+        -- did the thread last see a write" for the day-gate, and a
+        -- recovery row healed today counts as today's activity even
+        -- though its position is mid-transcript.
         select m2.created_at
           from public.messages m2
          where m2.thread_id = t.id

@@ -14,13 +14,14 @@ import { ExchangeStore, mergeMessagesById } from '../src/lib/exchange/exchange-s
 import { ExchangeSlot } from '../src/lib/exchange/exchange-slot.svelte';
 import type { Message } from '../src/lib/supabase';
 
-function msg(id: string, createdAt: string, overrides: Partial<Message> = {}): Message {
+function msg(id: string, position: number | null, overrides: Partial<Message> = {}): Message {
   return {
     id,
     thread_id: 't1',
     role: 'assistant',
     content: id,
-    created_at: createdAt,
+    created_at: '2026-05-20T00:00:00Z',
+    position,
     ...overrides,
   };
 }
@@ -116,38 +117,48 @@ describe('ExchangeStore', () => {
 
 describe('mergeMessagesById', () => {
   it('returns the fetched list unchanged when the buffer is empty', () => {
-    const fetched = [msg('a', '2026-05-20T00:00:00Z'), msg('b', '2026-05-20T00:00:01Z')];
+    const fetched = [msg('a', 1), msg('b', 2)];
     expect(mergeMessagesById(fetched, [])).toEqual(fetched);
   });
 
   it('folds a buffer-only row into the right timeline slot', () => {
-    const fetched = [msg('a', '2026-05-20T00:00:00Z'), msg('c', '2026-05-20T00:00:02Z')];
-    const buffered = [msg('b', '2026-05-20T00:00:01Z')];
+    const fetched = [msg('a', 1), msg('c', 3)];
+    const buffered = [msg('b', 2)];
+    const merged = mergeMessagesById(fetched, buffered);
+    expect(merged.map((m) => m.id)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('orders a fractional recovery-row position into its gap', () => {
+    // Healed recovery rows carry fractional positions between their
+    // integer neighbors - the merge must interleave them, not sort
+    // them to either end.
+    const fetched = [msg('a', 1), msg('c', 2)];
+    const buffered = [msg('b', 1.5)];
     const merged = mergeMessagesById(fetched, buffered);
     expect(merged.map((m) => m.id)).toEqual(['a', 'b', 'c']);
   });
 
   it('prefers the fetched row when the buffer has the same id', () => {
-    const fetched = [msg('a', '2026-05-20T00:00:00Z', { content: 'canonical' })];
-    const buffered = [msg('a', '2026-05-20T00:00:00Z', { content: 'stale' })];
+    const fetched = [msg('a', 1, { content: 'canonical' })];
+    const buffered = [msg('a', 1, { content: 'stale' })];
     const merged = mergeMessagesById(fetched, buffered);
     expect(merged).toHaveLength(1);
     expect(merged[0].content).toBe('canonical');
   });
 
-  it('breaks created_at ties deterministically by id', () => {
-    const fetched = [msg('z', '2026-05-20T00:00:00Z')];
-    const buffered = [msg('a', '2026-05-20T00:00:00Z')];
+  it('sorts a null position to the tail and ties break by id', () => {
+    // A null position (a row inserted in a schema apply's
+    // backfill-to-trigger window) sorts after every positioned row,
+    // matching the tail slot the next backfill sweep assigns it.
+    const fetched = [msg('z', null), msg('m', 5)];
+    const buffered = [msg('a', null)];
     const merged = mergeMessagesById(fetched, buffered);
-    expect(merged.map((m) => m.id)).toEqual(['a', 'z']);
+    expect(merged.map((m) => m.id)).toEqual(['m', 'a', 'z']);
   });
 
   it('handles a buffer that lands strictly after the snapshot', () => {
-    const fetched = [msg('a', '2026-05-20T00:00:00Z')];
-    const buffered = [
-      msg('b', '2026-05-20T00:00:01Z'),
-      msg('c', '2026-05-20T00:00:02Z'),
-    ];
+    const fetched = [msg('a', 1)];
+    const buffered = [msg('b', 2), msg('c', 3)];
     const merged = mergeMessagesById(fetched, buffered);
     expect(merged.map((m) => m.id)).toEqual(['a', 'b', 'c']);
   });

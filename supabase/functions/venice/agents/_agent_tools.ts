@@ -254,7 +254,7 @@ export async function loadThreadSliceUpTo(
     .from('messages')
     .select('id, role, content, tool_calls, tool_call_id, name')
     .eq('thread_id', threadId)
-    .order('created_at', { ascending: true });
+    .order('position', { ascending: true });
   if (error) throw new Error(`listMessages failed: ${error.message}`);
   const all = (data ?? []) as StoredMessage[];
   const idx = all.findIndex((m) => m.id === terminalMsgId);

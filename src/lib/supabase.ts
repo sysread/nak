@@ -1432,7 +1432,7 @@ export class SupabaseService {
       usage?: TokenUsage | null;
       reasoning?: string | null;
       citations?: Citation[] | null;
-      created_at?: string;
+      position?: number;
     } = {}
   ): Promise<Message> {
     return messagesApi.addMessage(this.client, threadId, role, content, opts);

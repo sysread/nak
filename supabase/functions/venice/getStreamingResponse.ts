@@ -930,31 +930,46 @@ export async function getStreamingResponse(
       // round commit the streaming row to 'complete'. The streaming
       // row content stays empty until the next round produces text.
       //
-      // Re-stamp created_at to now() in the same UPDATE. The streaming
-      // row was born on the first response_text of the turn
-      // (ensureAssistantRow); when the model narrates a preamble before
-      // calling tools, that birth is EARLIER than the tool-result rows
-      // this round just persisted. The terminal commit reuses this same
-      // row id and commit_assistant_message never touches created_at, so
-      // an un-restamped row carries that early timestamp and sorts the
-      // final response card AHEAD of the tool cards in any created_at-
-      // ordered view (mergeMessagesById on thread switch, listMessages on
+      // Move the streaming row to the transcript tail. The row was
+      // born (and trigger-positioned) on the first response_text of
+      // the turn (ensureAssistantRow); when the model narrates a
+      // preamble before calling tools, that birth is EARLIER than the
+      // tool-result rows this round just persisted. The terminal
+      // commit reuses this same row id and commit_assistant_message
+      // never touches position, so an un-moved row sorts the final
+      // response card AHEAD of the tool cards in any position-ordered
+      // view (mergeMessagesById on thread switch, listMessages on
       // refetch). The live arrival-order view looks right, then the
       // response jumps to the front of the round on the first re-sort.
-      // Bumping the timestamp at the boundary - after this round's tool
-      // rows are already persisted - keeps the eventual terminal row
-      // chronologically after them. A row that was never carried across a
-      // boundary (model called tools with no preamble text, so
-      // ensureAssistantRow first fired in the terminal round) is born
-      // after the tools and needs no fix; this path only runs when the
-      // row already exists at a boundary.
+      // Moving it at the boundary - after this round's tool rows are
+      // already persisted - keeps the eventual terminal row after
+      // them. A row that was never carried across a boundary (model
+      // called tools with no preamble text, so ensureAssistantRow
+      // first fired in the terminal round) is born after the tools
+      // and needs no fix; this path only runs when the row already
+      // exists at a boundary.
+      //
+      // An UPDATE never fires the insert trigger and the client
+      // library can't express the max-position subquery, so the move
+      // is an RPC that takes the same thread-row lock the trigger
+      // takes (immune to racing a concurrent insert's tail
+      // assignment). created_at is deliberately NOT re-stamped - it
+      // is display metadata recording when the row was born, and
+      // position now owns the ordering.
       lastUpdateContent = '';
       if (assistantRowId !== null) {
         // RLS OFF: filter by id only.
         await opts.adminClient
           .from('messages')
-          .update({ content: '', created_at: new Date().toISOString() })
+          .update({ content: '' })
           .eq('id', assistantRowId);
+        // Best-effort like the content update above: a failed move
+        // leaves the row at its birth position - a cosmetic
+        // mis-order, not worth failing the turn over.
+        await opts.adminClient.rpc('move_message_to_tail', {
+          p_thread_id: opts.threadId,
+          p_msg_id: assistantRowId,
+        });
       }
 
       if (suspendIdx !== -1) {

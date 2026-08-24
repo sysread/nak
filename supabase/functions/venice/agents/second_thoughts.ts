@@ -176,7 +176,7 @@ async function loadTurnContext(
     .from('messages')
     .select('id, role, content, reasoning, tool_calls, tool_call_id, name')
     .eq('thread_id', threadId)
-    .order('created_at', { ascending: true });
+    .order('position', { ascending: true });
   if (error) throw new Error(`loadTurnContext failed: ${error.message}`);
   const all = (data ?? []) as TurnRow[];
   const startIdx = all.findIndex((m) => m.id === userMessageId);

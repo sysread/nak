@@ -130,9 +130,10 @@ One file per use-case under [`use-cases/`](./use-cases/), named
   pre-populated question/options.
 - [chat-message-ordering](./use-cases/chat-message-ordering.md) -
   transcript ordering end to end: display vs DB order, tool-round
-  ordering, and the two forged-timestamp paths (mid-transcript
-  recovery persistence, round-boundary re-stamp). Baseline for the
-  forking work's M1 position switch.
+  ordering, and the two explicit-placement paths (mid-transcript
+  recovery persistence at fractional positions, round-boundary
+  move-to-tail). M0 baseline ran pre-position; post-M1 runs prove
+  the same observable order under the position sort.
 - [chat-delete-from-here](./use-cases/chat-delete-from-here.md) -
   the trash button on user messages: visibility, hover preview,
   delete-through-tail semantics incl. attachment reclamation, and

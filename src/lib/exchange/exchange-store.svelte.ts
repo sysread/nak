@@ -117,9 +117,9 @@ export class ExchangeStore {
  * Merge `fetched` (the canonical snapshot from listMessages) with
  * `buffered` (rows the slot's chat-loop handlers persisted but may
  * not be in the snapshot). De-dupes by id. The merged list is sorted
- * by `created_at` ascending - matching listMessages' own ORDER BY -
+ * by `position` ascending - matching listMessages' own ORDER BY -
  * so a row that landed in the DB after the snapshot still falls into
- * the correct position relative to its neighbours.
+ * the correct place relative to its neighbours.
  *
  * Use case: selecting a thread whose slot is mid-exchange. Between
  * `messages = []` (clear) and `messages = fetched` (snapshot resolve),
@@ -127,9 +127,11 @@ export class ExchangeStore {
  * with new rows. The buffer captures them; the merge folds them back
  * in regardless of where they landed in the timeline.
  *
- * created_at is an ISO-8601 string, lexicographically sortable.
- * Equal timestamps tie-break by id so the order is deterministic.
- * Both inputs are read-only; the result is a fresh array.
+ * position is the per-thread transcript order (fractional on healed
+ * recovery rows; see the Message type doc). A null position sorts to
+ * the tail - matching where the backfill sweep will place the row -
+ * and ties break by id so the order is deterministic. Both inputs are
+ * read-only; the result is a fresh array.
  */
 export function mergeMessagesById(fetched: Message[], buffered: Message[]): Message[] {
   if (buffered.length === 0) return fetched;
@@ -139,9 +141,9 @@ export function mergeMessagesById(fetched: Message[], buffered: Message[]): Mess
     if (!byId.has(m.id)) byId.set(m.id, m);
   }
   return Array.from(byId.values()).sort((a, b) => {
-    if (a.created_at !== b.created_at) {
-      return a.created_at < b.created_at ? -1 : 1;
-    }
+    const pa = a.position ?? Number.POSITIVE_INFINITY;
+    const pb = b.position ?? Number.POSITIVE_INFINITY;
+    if (pa !== pb) return pa < pb ? -1 : 1;
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
 }

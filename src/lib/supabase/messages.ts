@@ -53,7 +53,7 @@ export async function listMessages(
     .from('messages')
     .select('*')
     .eq('thread_id', threadId)
-    .order('created_at', { ascending: true });
+    .order('position', { ascending: true });
   if (error) throw new SupabaseError(error.message);
   const messages = (data ?? []) as Message[];
   // Hydrate attachments in a second query keyed by message id. Keeps
@@ -487,14 +487,15 @@ export async function addMessage(
     /** Venice web-search citations for this turn. */
     citations?: Citation[] | null;
     /**
-     * Override created_at. The column defaults to now() on the
-     * server; almost every caller wants that. The exception is
+     * Explicit transcript position. When omitted, the DB's
+     * before-insert trigger assigns the thread's next tail
+     * position; almost every caller wants that. The exception is
      * the synthetic-recovery persistence path, which heals a
-     * wire-shape gap mid-conversation and needs the new row to
-     * land at the gap's position in created_at order rather than
-     * piling up at the tail.
+     * wire-shape gap mid-conversation and inserts at a fractional
+     * midpoint between the gap's neighbors rather than piling up
+     * at the tail.
      */
-    created_at?: string;
+    position?: number;
   } = {}
 ): Promise<Message> {
   // Trim outer whitespace at the write boundary. LLM responses
@@ -515,7 +516,7 @@ export async function addMessage(
   if (opts.usage !== undefined) row.usage = opts.usage;
   if (opts.reasoning !== undefined) row.reasoning = opts.reasoning;
   if (opts.citations !== undefined) row.citations = opts.citations;
-  if (opts.created_at !== undefined) row.created_at = opts.created_at;
+  if (opts.position !== undefined) row.position = opts.position;
   const { data, error } = await client
     .from('messages')
     .insert(row)

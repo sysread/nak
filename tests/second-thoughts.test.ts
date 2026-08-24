@@ -173,6 +173,7 @@ describe('toVeniceMessage second-thoughts projection', () => {
     role: 'assistant',
     content: 'The answer is 42.',
     created_at: '2026-01-01T00:00:00Z',
+    position: 1,
   };
 
   it('leaves a verdict-less or un-acted answer clean', () => {

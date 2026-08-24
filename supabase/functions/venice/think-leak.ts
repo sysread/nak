@@ -18,6 +18,14 @@
  * An unterminated leading `<think>` (no closing tag) is left alone
  * for the same reason: without the close there is no safe boundary.
  * Returns the inputs unchanged (same references) when nothing leaked.
+ *
+ * Either tag's leading `<` is optional: the same degraded backends
+ * that leak the span also drop characters, and leaks arriving as bare
+ * `think>` (opener missing its `<`) were observed on 3 of 8
+ * deepseek-v4-flash turns in one QA session. The closer gets the same
+ * tolerance so a span glitched on both ends still relocates. The
+ * leading-span-only rule is what keeps this from eating quoted tags
+ * mid-reply.
  */
 export function splitLeakedThink(
   content: string,
@@ -26,7 +34,7 @@ export function splitLeakedThink(
   let rest = content;
   const moved: string[] = [];
   for (;;) {
-    const m = rest.match(/^\s*<think>([\s\S]*?)<\/think>\s*/);
+    const m = rest.match(/^\s*<?think>([\s\S]*?)<?\/think>\s*/);
     if (!m) break;
     moved.push(m[1].trim());
     rest = rest.slice(m[0].length);

@@ -27,12 +27,17 @@ function msg(
   content: string,
   extras: Partial<Message> = {}
 ): Message {
+  // The shared counter doubles as the position: rows built in
+  // sequence get ascending integer positions, mirroring what the
+  // insert trigger assigns to a normally-appended thread.
+  ++nextId;
   return {
-    id: `m-${++nextId}`,
+    id: `m-${nextId}`,
     thread_id: 't-1',
     role,
     content,
     created_at: new Date().toISOString(),
+    position: nextId,
     ...extras,
   };
 }
@@ -172,6 +177,54 @@ describe('synthesizeRecoveryMessages', () => {
     expect(result.length).toBe(2);
     expect(result[1].role).toBe('assistant');
     expect(result[1].synthetic).toBe(true);
+  });
+});
+
+describe('synthetic position placement', () => {
+  it('spaces trailing synthetics strictly between the tail position and the next integer', () => {
+    const thread = [
+      msg('user', 'do a and b'),
+      msg('assistant', '', {
+        tool_calls: [call('tcA', 'tool_a'), call('tcB', 'tool_b')],
+      }),
+      msg('tool', '{"ok":true}', { tool_call_id: 'tcA', name: 'tool_a' }),
+    ];
+    const tail = thread[2].position as number;
+    const result = synthesizeRecoveryMessages(thread);
+    const synth = result.slice(3);
+    expect(synth).toHaveLength(2);
+    // Strictly increasing, and strictly below the next integer so a
+    // concurrent tail append (the insert trigger's floor(max)+1) can
+    // never collide with a healed row.
+    expect(synth[0].position as number).toBeGreaterThan(tail);
+    expect(synth[1].position as number).toBeGreaterThan(synth[0].position as number);
+    expect(synth[1].position as number).toBeLessThan(tail + 1);
+  });
+
+  it('places mid-conversation synthetics strictly inside their gap', () => {
+    // Case 3 shape: an unanswered tool call followed by a later user
+    // turn. The healed rows must land BETWEEN the broken exchange and
+    // the user row that follows it, not at the tail.
+    const thread = [
+      msg('user', 'do it'),
+      msg('assistant', '', { tool_calls: [call('tc1')] }),
+      msg('user', 'hello? are you there?'),
+    ];
+    const gapStart = thread[1].position as number;
+    const gapEnd = thread[2].position as number;
+    const result = synthesizeRecoveryMessages(thread);
+    expect(result).toHaveLength(5);
+    const synth = result.filter((r) => r.synthetic);
+    expect(synth).toHaveLength(2);
+    for (const row of synth) {
+      expect(row.position as number).toBeGreaterThan(gapStart);
+      expect(row.position as number).toBeLessThan(gapEnd);
+    }
+    // The whole healed list reads in strictly ascending position
+    // order - what listMessages' ORDER BY would produce after the
+    // rows persist.
+    const positions = result.map((r) => r.position as number);
+    expect([...positions].sort((a, b) => a - b)).toEqual(positions);
   });
 });
 

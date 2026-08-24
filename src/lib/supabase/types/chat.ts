@@ -288,6 +288,17 @@ export interface Message {
   content: string;
   created_at: string;
   /**
+   * Explicit transcript position within the thread - the ordering
+   * authority (created_at is display metadata written by two
+   * different clocks). Unique per thread; numeric on purpose: the
+   * recovery path inserts healed rows at fractional midpoints
+   * between neighbors, so never assume integers. Null only for a
+   * row inserted in the brief window a schema apply leaves between
+   * its backfill and its trigger creation - sorts treat null as
+   * "tail", matching the position the next backfill sweep assigns.
+   */
+  position: number | null;
+  /**
    * Files the user attached to this message. Only populated on user
    * rows, and only after `listMessages` has co-fetched the attachment
    * table — the base `messages` SELECT doesn't include this. Null

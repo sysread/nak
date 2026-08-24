@@ -539,24 +539,27 @@ A chat turn goes:
   how rounds persist, keep the boundary event paired with the
   non-terminal row insert or the live view silently regresses to
   the concatenation bug.
-- **The terminal row's `created_at` is re-stamped at every round
+- **The terminal row is moved to the transcript tail at every round
   boundary so it sorts after the tool rows.** The function streams
   into one reused assistant row (`assistantRowId`), created lazily on
   the first `response_text` of the WHOLE turn. When the model narrates
   a preamble before calling tools, that row is born early - before the
   round's tool-result rows - and `commit_assistant_message` reuses the
-  same id without touching `created_at`. Since every created_at-ordered
-  view (`mergeMessagesById` on thread switch, `listMessages` on refetch)
-  sorts ascending, an un-restamped terminal row sorts AHEAD of its own
-  tool cards: the live arrival-order view reads `[tool1, tool2, tool3,
-  response]`, then the response jumps to the front of the round on the
-  first re-sort. The fix lives in `getStreamingResponse.ts` at the
-  round-boundary reset (the same UPDATE that wipes the carried row's
-  content to ''): it bumps `created_at` to `now()` after the round's
-  tool rows are persisted, keeping the eventual terminal commit
-  chronologically after them. If you stop reusing the streaming row
-  across rounds, or move the commit off that row id, this re-stamp is
-  the thing that was holding the card order together.
+  same id without touching `position`. Since every position-ordered
+  view (`mergeMessagesById` on thread switch, `listMessages` on
+  refetch) sorts ascending, an un-moved terminal row sorts AHEAD of
+  its own tool cards: the live arrival-order view reads `[tool1,
+  tool2, tool3, response]`, then the response jumps to the front of
+  the round on the first re-sort. The fix lives in
+  `getStreamingResponse.ts` at the round-boundary reset (right after
+  the UPDATE that wipes the carried row's content to ''): the
+  `move_message_to_tail` RPC assigns the thread's next tail position
+  under the same thread-row lock the insert trigger takes, after the
+  round's tool rows are persisted. The row's `created_at` keeps the
+  birth time on purpose - position owns ordering, created_at is
+  display metadata. If you stop reusing the streaming row across
+  rounds, or move the commit off that row id, this move is the thing
+  that was holding the card order together.
 - **Regenerate's replaced rows are deleted by the commit RPC, not
   the browser.** Regenerate-from-here anchors the new stream on the
   turn's original user message while the replace range - the old

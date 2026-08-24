@@ -65,7 +65,21 @@ export function subscribeToMessages(
   // postgres_changes subscription dies silently and the transcript
   // stops receiving echoes for this thread until the user re-selects
   // it. Log and swallow so subsequent echoes still arrive.
-  const dispatch = (msg: Message): void => {
+  //
+  // Normalize `position` before dispatch: REST reads return numeric
+  // columns as JSON numbers, but realtime's change-payload type
+  // conversion has treated numeric like bigint (a precision-preserving
+  // string) in some client versions. A string position would satisfy
+  // the cast below and then poison any later position sort with
+  // string/number comparisons - normalize here so Message.position is
+  // number | null everywhere downstream.
+  const dispatch = (raw: Message): void => {
+    let msg = raw;
+    const pos = (raw as { position?: unknown }).position;
+    if (typeof pos === 'string') {
+      const n = Number(pos);
+      msg = { ...raw, position: Number.isFinite(n) ? n : null };
+    }
     try {
       onMessage(msg);
     } catch (err) {

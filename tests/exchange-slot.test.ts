@@ -19,6 +19,7 @@ function makeMessage(overrides: Partial<Message> = {}): Message {
     role: 'assistant',
     content: 'hi',
     created_at: '2026-05-20T00:00:00Z',
+    position: 1,
     ...overrides,
   };
 }

@@ -195,7 +195,7 @@ export async function loadThreadSlice(
   const { data, error } = await q
     .select('id, role, content, tool_calls, tool_call_id, name')
     .eq('thread_id', threadId)
-    .order('created_at', { ascending: true });
+    .order('position', { ascending: true });
   if (error) throw new Error(`listMessages failed: ${error.message}`);
   return trimToCharBudget(trimToLastUserTurn((data ?? []) as StoredMessage[]));
 }
