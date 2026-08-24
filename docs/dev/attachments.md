@@ -156,12 +156,13 @@ covers the attachment-specific pieces.
   the owner) and best-effort removes the bucket object; the `attachment-gc`
   sweep reclaims the object if that remove misses. This is the only path
   that reclaims an attachment now - there is no timed expiry.
-- **Thread deletion** - `SupabaseService.deleteThread` collects the
-  thread's live attachment keys before the cascade removes their rows, then
-  best-effort removes those bucket objects after the thread is gone. The
-  daily `attachment-gc` sweep is the backstop for whatever that misses (a
-  failed inline remove, or objects from threads deleted before this path
-  existed). See [`./file-storage.md`](./file-storage.md).
+- **Thread deletion** - `SupabaseService.deleteThread` HIDES the thread
+  (delete is deferred; the hourly fork GC destroys what nothing visible
+  depends on - see [`./forking.md`](./forking.md)). When the GC's
+  cascade removes the attachment rows, their bucket objects orphan and
+  the daily `attachment-gc` sweep reclaims them - there is no inline
+  object removal on this path anymore. See
+  [`./file-storage.md`](./file-storage.md).
 
 ## Artifacts tab
 

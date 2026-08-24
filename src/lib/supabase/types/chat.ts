@@ -68,6 +68,15 @@ export interface Thread {
    */
   archived: boolean;
   /**
+   * True on a thread the user deleted (delete = hide; the hourly fork
+   * GC destroys what nothing visible depends on) and, once forks
+   * exist, on threads kept purely as shared-prefix structure. Every
+   * list/search/poll surface filters hidden server-side, so the only
+   * place the browser normally sees the flag is the realtime UPDATE
+   * echo - the handler treats hidden=true as a delete.
+   */
+  hidden: boolean;
+  /**
    * True once the user has explicitly renamed the thread (via the title
    * input, or by materializing a draft with an explicit title). The chat
    * loop reads this to suppress the title-note / `update_title`
@@ -498,6 +507,9 @@ export function coerceThread(row: Record<string, unknown>): Thread {
     verbosity,
     toolboxes_enabled,
     archived: row.archived === true,
+    // Drift-tolerant like archived: a row predating the column reads
+    // as visible, which is what every pre-forking row is.
+    hidden: row.hidden === true,
     title_manually_set: row.title_manually_set === true,
     // Pass jsonb through unchanged. The intuition module owns the
     // parse/coerce - see coerceIntuitionPayload in

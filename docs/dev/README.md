@@ -58,6 +58,10 @@ changing a contract that other features depend on.
   "this device is producing the response" claim
   (`ThreadClaimCoordinator` + the `threads.response_holder_id`
   / `response_claim_expires_at` columns).
+- [Conversation forking](./forking.md) — explicit message
+  positions, the segment/forest data model, the
+  thread_transcript resolver, hidden threads (delete = hide),
+  and the fork GC.
 - [Attachments](./attachments.md) — per-message file
   attachments, Venice text-parser integration, and the
   expiration worker.

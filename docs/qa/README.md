@@ -242,6 +242,10 @@ One file per use-case under [`use-cases/`](./use-cases/), named
 - [threads-management](./use-cases/threads-management.md) - thread title
   generation, manual rename pinning, topic-filter pills, and the
   per-thread multi-device reply lock.
+- [threads-delete-gc](./use-cases/threads-delete-gc.md) - deleting a
+  conversation as hide-then-sweep: instant disappearance from every
+  surface, the deferred DB destruction via the fork GC, sweep
+  idempotence, and the realtime hidden-as-delete echo.
 - [threads-transcript-export](./use-cases/threads-transcript-export.md) -
   downloading a conversation as a Markdown transcript from the
   top-bar button, the mobile overflow menu, and the thread-row

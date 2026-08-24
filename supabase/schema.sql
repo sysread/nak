@@ -916,6 +916,132 @@ begin
    order by c.depth desc, m.position asc;
 end $$;
 
+-- Forking GC: reclaim rows no live conversation can reach. Hiding a
+-- thread is the ONLY way user action removes a conversation (the
+-- browser's delete rewired to it); actual destruction happens here,
+-- deferred by at most one sweep cycle. Per pass:
+--
+--   1. Compute the KEPT set: every visible thread plus every ancestor
+--      of one. A hidden thread outside that set is doomed - nothing
+--      visible depends on any of its rows.
+--   2. Delete doomed thread rows deepest-first. The order is
+--      load-bearing, not style: a doomed child's forked_from_msg_id is
+--      a restrict FK into its parent's segment, so the parent's rows
+--      cannot cascade away until the child thread row is gone. The
+--      restrict FKs turn an ordering bug here into a loud error
+--      instead of a silently broken fork. Each thread-row delete
+--      cascades its messages, and those cascades fan out through the
+--      policies the reference graph already declares (attachment link
+--      rows, chunks, traces cascade; watermarks and evidence pointers
+--      set-null; soft pointers dangle and rebuild).
+--   3. Trim surviving hidden threads: only their segment rows past the
+--      keep watermark (the max fork position among their children, all
+--      of which are kept once step 2 has run) are unreachable. Rows
+--      at-or-before a fork point are some fork's shared prefix and
+--      must survive; grandchildren never reach into this segment (the
+--      reparent rule pins every fork point into its direct parent's
+--      own segment).
+--
+-- With zero forks (every fork column null) this degenerates to
+-- "destroy every hidden thread", which is exactly the old destructive
+-- delete deferred one sweep. Storage objects for cascaded attachment
+-- rows (originals and rendered PDF pages both) orphan here and are
+-- reclaimed by the daily attachment-gc, whose double anti-join
+-- (message_attachments + message_attachment_pages) exists for exactly
+-- this rows-gone-objects-later shape.
+--
+-- Cycle posture: kept-set recursion uses UNION (dedup terminates a
+-- corrupted parent cycle); the depth recursion walks down from roots,
+-- which a cycle is unreachable from - so a corrupted cycle is left
+-- untouched rather than hanging the sweep.
+--
+-- Returns the pass's counts so the QA walkthrough and ad hoc runs can
+-- assert on what a sweep actually did.
+create or replace function public.collect_hidden_threads()
+returns table (deleted_threads int, trimmed_messages int)
+language plpgsql security definer
+set search_path = public as $$
+declare
+  v_deleted int := 0;
+  v_trimmed int := 0;
+  v_count int;
+  r record;
+begin
+  for r in
+    with recursive kept as (
+      select t.id, t.forked_from_thread_id
+        from public.threads t
+       where not t.hidden
+      union
+      select t.id, t.forked_from_thread_id
+        from public.threads t
+        join kept k on t.id = k.forked_from_thread_id
+    ), depths as (
+      select t.id, 0 as depth
+        from public.threads t
+       where t.forked_from_thread_id is null
+      union all
+      select t.id, d.depth + 1
+        from public.threads t
+        join depths d on t.forked_from_thread_id = d.id
+    )
+    select d.id
+      from depths d
+     where d.id not in (select k.id from kept k)
+     order by d.depth desc
+  loop
+    delete from public.threads t where t.id = r.id;
+    v_deleted := v_deleted + 1;
+  end loop;
+
+  -- Every hidden thread that survives step 2 has at least one kept
+  -- child; trim its segment past the highest fork position among them.
+  with watermarks as (
+    select p.id as thread_id, max(fm.position) as keep_upto
+      from public.threads p
+      join public.threads c on c.forked_from_thread_id = p.id
+      join public.messages fm on fm.id = c.forked_from_msg_id
+     where p.hidden
+     group by p.id
+  )
+  delete from public.messages m
+   using watermarks w
+   where m.thread_id = w.thread_id
+     and m.position > w.keep_upto;
+  get diagnostics v_count = row_count;
+  v_trimmed := v_count;
+
+  return query select v_deleted, v_trimmed;
+end $$;
+
+-- service-role only: the cron dispatcher and ad hoc test invocations.
+revoke all on function public.collect_hidden_threads()
+  from public, anon, authenticated;
+grant execute on function public.collect_hidden_threads()
+  to service_role;
+
+-- Hourly at :43 - the gap in the sweep ladder (3 bias, 7 wiki, 13
+-- samskara reap, 17 wiki-records/rem, 23 samskara, 27 reflection, 33
+-- intent employment, 37 wiki librarian, 47 deep sleep, 53 digest, 57
+-- curation).
+do $cron$
+begin
+  if exists (select 1 from pg_available_extensions where name = 'pg_cron') then
+    create extension if not exists pg_cron;
+    if exists (select 1 from cron.job where jobname = 'nak-fork-gc') then
+      perform cron.unschedule('nak-fork-gc');
+    end if;
+    perform cron.schedule(
+      'nak-fork-gc',
+      '43 * * * *',
+      $job$ select * from public.collect_hidden_threads(); $job$
+    );
+  end if;
+exception when others then
+  raise notice 'fork gc cron setup skipped: %', sqlerrm;
+end
+$cron$;
+
 -- Second-thoughts self-review verdict for a completed assistant turn.
 -- Written by the second_thoughts reviewer agent
 -- (supabase/functions/venice/agents/second_thoughts.ts) from the
@@ -5121,7 +5247,14 @@ set search_path = public as $$
          order by m2.created_at desc
          limit 1
       ) newest
-     where term.msg_id is distinct from t.last_reflected_msg_id
+     -- A hidden thread is deleted-awaiting-GC (or, post-forking, pure
+     -- shared structure nobody talks in): no surface ever shows its
+     -- summary/topics/etc. and the old destructive delete would have
+     -- removed it before this sweep saw it - so never spend agent work
+     -- on one. Same one-line filter on every thread claim below; the
+     -- chunker claims are the deliberate exception (see their comment).
+     where not t.hidden
+       and term.msg_id is distinct from t.last_reflected_msg_id
        -- Same attempt cap as the per-user claim; see the column
        -- comment on reflection_attempt_count.
        and (term.msg_id is distinct from t.reflection_attempt_msg_id
@@ -5211,7 +5344,8 @@ set search_path = public as $$
          order by m2.created_at desc
          limit 1
       ) newest
-     where term.msg_id is distinct from t.last_evaluated_msg_id
+     where not t.hidden -- deleted-awaiting-GC; see the reflection sweep
+       and term.msg_id is distinct from t.last_evaluated_msg_id
        and (term.msg_id is distinct from t.evaluation_attempt_msg_id
             or t.evaluation_attempt_count < 3)
        and (t.evaluation_claim_expires_at is null
@@ -5319,6 +5453,7 @@ language sql security invoker as $$
          limit 1
       ) term
      where t.user_id = coalesce(p_user_id, auth.uid())
+       and not t.hidden -- deleted-awaiting-GC; see the reflection sweep
        and term.msg_id is distinct from t.last_summarised_msg_id
        and (t.summary_claim_expires is null
             or t.summary_claim_expires < now())
@@ -5400,7 +5535,8 @@ set search_path = public as $$
          order by m.position desc
          limit 1
       ) term
-     where term.msg_id is distinct from t.last_summarised_msg_id
+     where not t.hidden -- deleted-awaiting-GC; see the reflection sweep
+       and term.msg_id is distinct from t.last_summarised_msg_id
        and (t.summary_claim_expires is null
             or t.summary_claim_expires < now())
      order by t.updated_at asc
@@ -5463,6 +5599,7 @@ language sql security invoker as $$
          limit 1
       ) first_user
      where t.user_id = coalesce(p_user_id, auth.uid())
+       and not t.hidden -- deleted-awaiting-GC; see the reflection sweep
        and t.title = 'New conversation'
        and t.title_manually_set = false
        and (t.auto_title_claim_expires is null
@@ -5573,7 +5710,8 @@ set search_path = public as $$
          order by m.position asc
          limit 1
       ) first_user
-     where t.title = 'New conversation'
+     where not t.hidden -- deleted-awaiting-GC; see the reflection sweep
+       and t.title = 'New conversation'
        and t.title_manually_set = false
        and (t.auto_title_claim_expires is null
             or t.auto_title_claim_expires < now())
@@ -5644,6 +5782,7 @@ language sql security invoker as $$
          limit 1
       ) term
      where t.user_id = coalesce(p_user_id, auth.uid())
+       and not t.hidden -- deleted-awaiting-GC; see the reflection sweep
        and t.title <> 'New conversation'
        and term.msg_id is distinct from t.last_topics_msg_id
        and (t.topics_claim_expires is null
@@ -5661,6 +5800,7 @@ language sql security invoker as $$
     select coalesce(array_agg(distinct topic order by topic), '{}'::text[]) as topics
       from public.threads t, unnest(t.topics) as topic
      where t.user_id = coalesce(p_user_id, auth.uid())
+       and not t.hidden -- a deleted thread's tags shouldn't seed reuse
        and t.topics <> '{}'::text[]
   )
   update public.threads t
@@ -5765,7 +5905,8 @@ set search_path = public as $$
          order by m.position desc
          limit 1
       ) term
-     where t.title <> 'New conversation'
+     where not t.hidden -- deleted-awaiting-GC; see the reflection sweep
+       and t.title <> 'New conversation'
        and term.msg_id is distinct from t.last_topics_msg_id
        and (t.topics_claim_expires is null
             or t.topics_claim_expires < now())
@@ -5827,6 +5968,7 @@ language sql security invoker as $$
             from public.threads t, unnest(t.topics) as topic
            where t.user_id = auth.uid()
              and t.archived = false
+             and not t.hidden -- hidden threads are invisible to every list surface
              and t.topics <> '{}'::text[]
            group by topic
         ) counted
@@ -5836,6 +5978,7 @@ language sql security invoker as $$
         from public.threads t
        where t.user_id = auth.uid()
          and t.archived = false
+         and not t.hidden -- hidden threads are invisible to every list surface
          and t.topics = '{}'::text[]
     )
   );
@@ -6297,6 +6440,14 @@ language sql security invoker as $$
          order by m.position desc
          limit 1
       ) term
+     -- Deliberately NO hidden filter, unlike the other thread claims:
+     -- chunks are recall's index of what was said, and once edit-forks
+     -- exist a hidden thread's trimmed segment is the shared prefix of
+     -- live conversations - rows written just before a hide must still
+     -- get chunked or recall goes blind to them. The cost of the
+     -- exception today is bounded: a plain-deleted thread gets at most
+     -- one wasted chunk pass before the hourly GC destroys it (and its
+     -- chunks cascade away with it).
      where t.user_id = coalesce(p_user_id, auth.uid())
        and (term.msg_id is distinct from t.last_chunked_msg_id
             or t.chunk_render_version is distinct from p_render_version)
@@ -6337,6 +6488,8 @@ set search_path = public as $$
          order by m.position desc
          limit 1
       ) term
+     -- Deliberately NO hidden filter - same rationale as the per-user
+     -- rechunk claim above.
      where (term.msg_id is distinct from t.last_chunked_msg_id
             or t.chunk_render_version is distinct from p_render_version)
        and (t.chunk_claim_expires is null
@@ -6569,7 +6722,17 @@ language sql stable security invoker as $$
            ) as rn
       from public.thread_chunks c
       join public.threads t on t.id = c.thread_id
+     -- Hidden threads are excluded so a deleted conversation's chunks
+     -- stop surfacing in recall/search the moment it is deleted, not a
+     -- GC cycle later. M4 HANDOFF: once forks exist, a hidden
+     -- ancestor's chunks are live content (they belong to visible
+     -- conversations' shared prefixes) - the fork milestone must
+     -- REPLACE this blanket filter with hidden-hit resolution (include
+     -- hidden threads' chunks, resolve each hit to the nearest visible
+     -- descendant, drop hits with none). Leaving it in place would
+     -- silently blind recall to every shared prefix.
      where c.user_id = coalesce(p_user_id, auth.uid())
+       and not t.hidden
        and c.embedding is not null
        and (p_updated_after is null or t.updated_at >= p_updated_after)
   )
@@ -10192,6 +10355,7 @@ set search_path = public as $$
          limit 1
       ) newest
      where (p.settings->>'wikiAutomaticEnabled') is distinct from 'false'
+       and not t.hidden -- deleted-awaiting-GC; see the reflection sweep
        and (t.wiki_claim_expires_at is null
             or t.wiki_claim_expires_at < now())
        and (
@@ -11358,6 +11522,7 @@ set search_path = public as $$
          limit 1
       ) newest
      where (p.settings->>'wikiRecordExtractionEnabled') is distinct from 'false'
+       and not t.hidden -- deleted-awaiting-GC; see the reflection sweep
        and (t.wiki_record_claim_expires_at is null
             or t.wiki_record_claim_expires_at < now())
        -- Records hang off an article; skip users with an empty wiki.
@@ -14004,7 +14169,8 @@ language sql stable security definer set search_path = public as $$
          order by m2.created_at desc
          limit 1
       ) newest
-     where term.msg_id is distinct from t.last_evaluated_msg_id
+     where not t.hidden -- deleted-awaiting-GC; see the reflection sweep
+       and term.msg_id is distinct from t.last_evaluated_msg_id
        and (term.msg_id is distinct from t.evaluation_attempt_msg_id
             or t.evaluation_attempt_count < 3)
        and (t.evaluation_claim_expires_at is null
