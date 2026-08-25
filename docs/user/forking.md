@@ -23,10 +23,14 @@ not stack markers; the new fork gets a fresh marker on the base
 title. The fork also carries a small branch glyph before its title
 in the drawer.
 
-You can rename a fork like any other conversation - the marker is
-just part of the title, not something the app maintains afterward.
-A fork of a conversation that has not been named yet stays unnamed
-too, and gets its own automatic title after you start talking in it.
+The marker also means "this fork has not found its own direction
+yet." While it is there, the assistant knows it is talking in a
+fresh fork, and once your messages make the fork's direction clear
+it renames the conversation to match - the marker disappears and
+the fork gets a title of its own. You can also rename it yourself
+at any time, like any other conversation. A fork of a conversation
+that has not been named yet stays unnamed too, and gets its own
+automatic title after you start talking in it.
 
 ## What a fork inherits
 

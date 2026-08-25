@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   FORK_TITLE_SIGIL,
+  forkBoundaryIndex,
   forkTitle,
+  forkWireMarkerIndex,
+  hasForkTitleMarker,
   isValidForkPoint,
   pickForkPoint,
   PLACEHOLDER_TITLE,
@@ -56,6 +59,37 @@ describe('fork titles', () => {
     expect(stripForkTitlePrefix(`${FORK_TITLE_SIGIL} T`)).toBe(
       `${FORK_TITLE_SIGIL} T`
     );
+  });
+});
+
+describe('fork wire framing', () => {
+  const marked = forkTitle('Sourdough basics', 1);
+
+  it('hasForkTitleMarker detects exactly the machine-built prefix', () => {
+    expect(hasForkTitleMarker(marked)).toBe(true);
+    expect(hasForkTitleMarker('Sourdough basics')).toBe(false);
+    // Sigil without a subscript is user content, not a marker.
+    expect(hasForkTitleMarker(`${FORK_TITLE_SIGIL} basics`)).toBe(false);
+  });
+
+  it('forkBoundaryIndex finds the first own row after inherited rows', () => {
+    const rows = [
+      { thread_id: 'parent' },
+      { thread_id: 'parent' },
+      { thread_id: 'own' },
+    ];
+    expect(forkBoundaryIndex(rows, 'own')).toBe(2);
+    expect(forkBoundaryIndex([{ thread_id: 'own' }], 'own')).toBeNull();
+    expect(forkBoundaryIndex([], 'own')).toBeNull();
+  });
+
+  it('forkWireMarkerIndex only fires while the title is marked', () => {
+    const rows = [{ thread_id: 'parent' }, { thread_id: 'own' }];
+    expect(forkWireMarkerIndex(rows, 'own', marked)).toBe(1);
+    // Renamed fork: settled, no marker even though inherited rows exist.
+    expect(forkWireMarkerIndex(rows, 'own', 'Rye experiments')).toBeNull();
+    // Marked title but no inherited rows loaded: nothing to demarcate.
+    expect(forkWireMarkerIndex([{ thread_id: 'own' }], 'own', marked)).toBeNull();
   });
 });
 

@@ -71,6 +71,7 @@
     type TopicVocabulary,
   } from '$lib/supabase';
   import { runChatLoop, toVeniceMessage } from '$lib/chat/loop';
+  import { FORK_POINT_WIRE_MARKER, forkWireMarkerIndex } from '$lib/forking';
   import { slopNoticeCopy } from '$lib/ui/slop-notice';
   import CopyButton from '../components/CopyButton.svelte';
   import { ExchangeStore, mergeMessagesById } from '$lib/exchange/exchange-store.svelte';
@@ -3968,17 +3969,33 @@
       }
     }
 
-    const buildHistoryOnWire = (): VeniceMessage[] => [
-      ...ctx.systemMessages,
-      ...messages
-        .filter((m) => !pendingDeleteSet.has(m.id))
-        .map((m) =>
-          toVeniceMessage(m, {
-            visionSpec: ctx.modelSpec,
-            imageUrls: attachmentImageUrls,
-          })
-        ),
-    ];
+    const buildHistoryOnWire = (): VeniceMessage[] => {
+      const rows = messages.filter((m) => !pendingDeleteSet.has(m.id));
+      const conversation = rows.map((m) =>
+        toVeniceMessage(m, {
+          visionSpec: ctx.modelSpec,
+          imageUrls: attachmentImageUrls,
+        })
+      );
+      // While a fork's title still carries the fork marker, splice the
+      // FORK POINT line into the wire at the inherited/own boundary so
+      // the model can locate the seam its metadata fork-nudge refers
+      // to. Wire-only - the display list never shows it - and gone the
+      // moment the fork is renamed: a settled fork reads as fully its
+      // own conversation (see docs/dev/forking.md).
+      const liveTitle = findThread(ctx.threadId)?.title;
+      const markerAt =
+        liveTitle !== undefined
+          ? forkWireMarkerIndex(rows, ctx.threadId, liveTitle)
+          : null;
+      if (markerAt !== null) {
+        conversation.splice(markerAt, 0, {
+          role: 'system',
+          content: FORK_POINT_WIRE_MARKER,
+        });
+      }
+      return [...ctx.systemMessages, ...conversation];
+    };
 
     // Anchor for the `<datetime>` tag's since_last_response attribute.
     // Walk the persisted messages from the end and return the

@@ -34,9 +34,11 @@ prefix, and search's hidden-hit resolution.
    `select thread_id, role, position from messages where id = (select forked_from_msg_id from threads where forked_from_thread_id = '<parent-id>');`
 5. In psql: `select count(*) from messages where thread_id = '<fork-id>';`
    then `select count(*) from thread_transcript('<fork-id>');`
-6. Send a new message in the FORK and wait for the reply. Then open
-   the PARENT and send a different message there. Check both
-   transcripts.
+6. Send a new message in the FORK that sets a clearly different
+   direction from the parent (e.g. pivot the topic explicitly) and
+   wait for the reply. Then open the PARENT and send a different
+   message there. Check both transcripts, and check the fork's
+   title after its reply settles.
 7. In psql, after the workers have had a cycle (or run the worker
    crons ad hoc): check the fork's summary/topics cursors were not
    seeded at creation:
@@ -73,6 +75,11 @@ prefix, and search's hidden-hit resolution.
 - (6) The fork's reply lands in the fork only; the parent's new
   exchange lands in the parent only. Neither transcript shows the
   other's post-fork turns; the shared prefix shows in both.
+  Retitle nudge (model behavior - allow a turn or two): with the
+  direction-setting message, the assistant renames the fork via
+  update_title and the fork marker disappears from its title. On
+  an ambiguous message it may legitimately leave the title alone;
+  note which happened in the results row.
 - (7) Every cursor is null at creation (no seeding). Workers claim
   the fork only after its first own terminal reply, and memory /
   wiki extraction from the fork's first cycle produces no duplicates

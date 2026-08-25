@@ -19,6 +19,7 @@ import {
   sanitizeToolCallsForWire,
 } from '../tools/wire';
 import type { Toolbox } from '../tools';
+import { hasForkTitleMarker, stripForkTitlePrefix } from '../forking';
 import { detectTimezone } from '../timezone';
 import {
   buildRefinementThink,
@@ -454,6 +455,33 @@ export function buildMetadataSystemMessage(
     );
   }
 
+  // Fork nudge: while the title still carries the fork marker
+  // (fraktur-f sigil + subscript ordinal - see src/lib/forking.ts),
+  // this conversation is a fresh fork that has not been named for
+  // its own direction. This branch REPLACES the regular title
+  // nudges below and deliberately ignores both of their gates: it
+  // fires from the fork's first turn (the auto-title worker only
+  // claims placeholder-titled threads, so it will never rename a
+  // marked title), and it fires even when title_manually_set was
+  // inherited from a hand-named parent (the marked title was
+  // machine-built at fork time - the marker's presence, not the
+  // inherited pin, is what says "provisional").
+  if (hasForkTitleMarker(opts.threadTitle)) {
+    sections.push(
+      [
+        'This conversation is a fork: it was branched from a conversation',
+        `titled "${stripForkTitlePrefix(opts.threadTitle)}" and shares that`,
+        "conversation's history up to the FORK POINT marker in the",
+        'transcript above. Its title still carries the fork marker',
+        `("${opts.threadTitle}"), meaning the fork has not yet been named`,
+        'for its own direction. Once it becomes clear what direction the',
+        'user wants this fork to take, call `update_title` BEFORE replying',
+        'with a concise 3-6 word title for that direction - plain text, no',
+        'fork marker, no quotes, no trailing punctuation. If the direction',
+        'is not clear yet, leave the title alone and answer normally.',
+      ].join('\n'),
+    );
+  }
   // Title nudges are silent on round 1 - the server-side auto-title
   // agent (supabase/functions/venice/agents/auto_title.ts) polls the
   // threads table for rows still on the placeholder and titles them
@@ -464,7 +492,7 @@ export function buildMetadataSystemMessage(
   // the topic may have drifted, the soft drift hint fires instead.
   // Manually-named threads suppress both nudges - the user
   // committed and we don't clobber that.
-  if (opts.currentUserRound >= 2 && !opts.titleManuallySet) {
+  else if (opts.currentUserRound >= 2 && !opts.titleManuallySet) {
     if (opts.threadTitle === DEFAULT_THREAD_TITLE) {
       sections.push(
         [
