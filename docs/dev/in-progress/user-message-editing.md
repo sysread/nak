@@ -215,6 +215,7 @@ Land the foundation: tests for `forkThread`, the schema change, the draft status
 Land the fork-and-edit flow end to end. This is the simpler path: no supersededIds, no pendingEdit state, no red highlighting. The send is a normal fresh send on the fork.
 
 **forkAndEdit handler in Chat.svelte.** On "Fork and edit" click:
+
 1. Find the preceding anchorable row via `deleteForkAnchor`.
 2. Fork at that row via `app.supabase.forkThread(active.id, anchor.id, { markTitle: false })`. If no anchor (first message), create a fresh thread via `createThread` with the parent's title and pins (same fallback as `deleteFromViaFork`).
 3. Insert a draft row on the fork: `app.supabase.addMessage(fork.id, 'user', oldText)` with `status='draft'`. This needs `addMessage` to accept an optional `status` parameter, or a new `addDraftMessage` method.
@@ -238,6 +239,7 @@ Land the destructive edit flow. This is the more complex path: pendingEdit state
 **Shared-region gate.** Before showing the dropdown, check if the user message is in the shared region. Use the cached `sharedRowSet` for the tooltip-level gate (same as delete-from-here and regenerate). If shared, show only "Fork and edit." If not, show both.
 
 **editFrom handler in Chat.svelte.** On "Edit" click:
+
 1. Compute the range: `computeDeleteFromRangeIds(messages, userMessageId)`.
 2. Set `pendingDeleteIds` to the range (drives the red highlighting).
 3. Set `pendingEdit = { oldMessageId, rangeIds }`.
@@ -245,6 +247,7 @@ Land the destructive edit flow. This is the more complex path: pendingEdit state
 5. Focus the composer.
 
 **Send path: pending edit branch.** In `send()`, check `pendingEdit` before the fresh-send path. If set:
+
 1. Insert a new user message via `persistUserTurn(threadId, composerText, [])`.
 2. Call `runExchange` with `userMessageId = newMsg.id` and `supersededIds = persistedRowIds(messages, pendingEdit.rangeIds)`.
 3. The `buildHistoryOnWire` filter already excludes `pendingDeleteSet` from the wire.
@@ -259,17 +262,20 @@ Land the destructive edit flow. This is the more complex path: pendingEdit state
 Write and execute QA use cases. Baseline discipline: re-execute existing cases first to confirm zero behavior change, then execute the new cases.
 
 **Baselines to re-execute (confirm zero regression):**
+
 - `chat-delete-from-here.md` - destructive delete in the private tail. The edit path reuses the same range. Must not change.
 - `chat-regenerate-from-here.md` - regenerate. The edit path reuses `runExchange` and `supersededIds`. Must not change.
 - `threads-edit-fork.md` - shared-region delete and regenerate fork. The edit dropdown's shared-region gate must not change this behavior.
 - `threads-fork-from-message.md` - per-message fork button. The edit button sits in the same action row. Must not change fork behavior.
 
 **New use case: `chat-edit-user-message.md`**
+
 - Covers: the edit dropdown on user messages, "Edit" in a private tail (composer pre-population, red highlighting of old message + everything after, send replaces the range), shared-region gate (only "Fork and edit" shown), abort/error restore, edit on a message with attachments (attachments dropped in v1).
 - Preconditions: local stack, a thread with at least three completed turns.
 - Key steps: click Edit on a middle user message, observe red highlighting, edit the text, send, verify the old range is gone from DB and the new completion landed. Click Edit on a shared message, verify only "Fork and edit" is offered. Abandon an edit (navigate away), verify red highlighting clears and old messages survive.
 
 **New use case: `chat-fork-and-edit.md`**
+
 - Covers: "Fork and edit" from the dropdown, fork creation at the preceding message, draft row inserted (invisible in transcript), composer pre-populated from draft, send promotes the draft and runs completion, navigate-away-and-return preserves draft text, abandoning leaves an empty fork in the drawer.
 - Preconditions: local stack, a thread with at least two completed turns.
 - Key steps: click "Fork and edit" on a middle user message, verify a new thread appears in the drawer, verify the composer has the old text, verify the transcript shows the inherited prefix only (no draft card). Edit the text and send. Verify the completion runs on the fork. Verify the fork owns one user message (the promoted draft) plus the assistant reply. Navigate away before sending, come back, verify the draft text is still in the composer.
