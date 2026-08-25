@@ -118,12 +118,37 @@ walks back from the segment tail past invalid rows to the newest
 anchor; a fork whose own segment is still empty falls back to its
 own fork point, minting a sibling.
 
-UI: the drawer row menu's "Fork" item (disabled for drafts) creates
-and opens the fork; forked threads render a muted git-branch glyph
-before the drawer title alongside the title's own fork marker. The
-fork ordinal is a count-then-insert (no atomicity): concurrent forks
-of the same point can mint duplicate ordinals, a cosmetic title
-collision and nothing structural.
+UI, two entry points into the same primitive:
+
+- The drawer row menu's "Fork" item (disabled for drafts) forks the
+  whole conversation - fork point resolved server-side at the
+  segment tail - and opens the fork.
+- A per-message fork button (Feather git-branch, in the card's
+  `.msg-actions` strip) forks AT that row: the copied prefix ends
+  there and later rows stay behind, untouched. The button renders
+  on exactly the rows that can anchor a fork - `canForkAtMessage`
+  in src/lib/ui/fork.ts wraps the shared `isValidForkPoint`
+  predicate and additionally hides the button on synthetic recovery
+  rows, whose sentinel ids have no DB row to fork from. User rows
+  get the button directly in Chat.svelte (next to delete-from-here);
+  terminal assistant rows get it via an optional `onFork` prop on
+  the assistant body component, passed only when the row qualifies -
+  a tool-carrying assistant row never offers it (fork at the round's
+  closing assistant row instead).
+
+Hovering the card button outlines every row after the fork point
+through the same preview channel regenerate and delete-from-here
+use (`computeForkRangeIds`, mirror of computeRegenerateRangeIds).
+The outline is deliberately the same red: one preview language for
+"this range is affected", with the tooltip carrying the semantic
+difference - a fork deletes nothing, the outlined rows just stay in
+the current conversation.
+
+Forked threads render a muted git-branch glyph before the drawer
+title alongside the title's own fork marker. The fork ordinal is a
+count-then-insert (no atomicity): concurrent forks of the same
+point can mint duplicate ordinals, a cosmetic title collision and
+nothing structural.
 
 ## The chat turn on a fresh fork
 

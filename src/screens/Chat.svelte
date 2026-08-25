@@ -247,6 +247,7 @@
   } from '$lib/ui/chat-screen';
   import { computeRegenerateRangeIds, persistedRowIds } from '$lib/ui/regenerate';
   import { computeDeleteFromRangeIds } from '$lib/ui/message-delete';
+  import { canForkAtMessage, computeForkRangeIds } from '$lib/ui/fork';
   import {
     orderedSubconsciousRows,
     subconsciousLabel,
@@ -869,6 +870,21 @@
 
   function clearRegeneratePreview(): void {
     if (hoverRegenerateIds.length > 0) hoverRegenerateIds = [];
+  }
+
+  /**
+   * Hover-preview for a message card's Fork button, riding the same
+   * channel (and the same .regen-target outline) as the regenerate
+   * and delete-from previews. The semantic differs - the outlined
+   * rows are the ones the fork LEAVES BEHIND, not rows about to be
+   * deleted - and the button tooltip carries that difference. Skipped
+   * mid-send for the same reason as previewRegenerateFrom: the button
+   * is disabled then, and painting a preview under a disabled button
+   * would be misleading.
+   */
+  function previewForkFrom(messageId: string): void {
+    if (activeSlot?.sending) return;
+    hoverRegenerateIds = computeForkRangeIds(messages, messageId);
   }
   /**
    * Per-message animation-delay for the fade-out that plays after a
@@ -3168,6 +3184,24 @@
     closeRowMenu();
     try {
       const fork = await app.supabase.forkThread(id);
+      rebucketThread(fork);
+      await selectThread(fork.id);
+    } catch (err) {
+      error = { text: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  // Fork via a message card's fork button: fork the active
+  // conversation AT that row (the copied prefix ends there; later
+  // rows stay behind in this thread, untouched), then open the fork.
+  // Same no-optimistic-insert posture as forkFromRow. The hover
+  // preview is cleared up front because selectThread swaps the
+  // messages array out from under the outlined ids.
+  async function forkFromMessage(messageId: string): Promise<void> {
+    if (!app.supabase || !activeThreadId) return;
+    clearRegeneratePreview();
+    try {
+      const fork = await app.supabase.forkThread(activeThreadId, messageId);
       rebucketThread(fork);
       await selectThread(fork.id);
     } catch (err) {
@@ -7736,6 +7770,11 @@
                   onRegenerate={() => { void regenerateFrom(block.message.id); }}
                   onRegeneratePreviewEnter={() => previewRegenerateFrom(block.message.id)}
                   onRegeneratePreviewLeave={clearRegeneratePreview}
+                  onFork={canForkAtMessage(block.message)
+                    ? () => { void forkFromMessage(block.message.id); }
+                    : undefined}
+                  onForkPreviewEnter={() => previewForkFrom(block.message.id)}
+                  onForkPreviewLeave={clearRegeneratePreview}
                 />
               </div>
             {:else}
@@ -7810,6 +7849,41 @@
                              stroke="currentColor" stroke-width="2" stroke-linecap="round"
                              stroke-linejoin="round" aria-hidden="true">
                           <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+                        </svg>
+                      </button>
+                    {/if}
+                    {#if canForkAtMessage(block.message)}
+                      <!-- Fork-from-here. Copies the conversation up to
+                           and including this message into a new
+                           conversation and opens it; later rows stay
+                           behind, untouched. Hover outlines the
+                           stays-behind range via the shared regen
+                           preview channel - the tooltip carries the
+                           "nothing is deleted" difference. Hidden on
+                           synthetic recovery rows (no DB row to fork
+                           from yet). -->
+                      <button
+                        type="button"
+                        class="copy-btn fork-btn"
+                        title="Fork here - later messages stay in this conversation"
+                        aria-label="Fork the conversation at this message"
+                        disabled={activeSlot?.sending ?? false}
+                        onclick={() => { void forkFromMessage(block.message.id); }}
+                        onmouseenter={() => previewForkFrom(block.message.id)}
+                        onmouseleave={clearRegeneratePreview}
+                        onfocus={() => previewForkFrom(block.message.id)}
+                        onblur={clearRegeneratePreview}
+                      >
+                        <!-- Feather "git-branch" - same glyph as the
+                             drawer's fork indicator, in the action
+                             row's 14px / 2px-stroke icon language. -->
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                             stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                             stroke-linejoin="round" aria-hidden="true">
+                          <line x1="6" y1="3" x2="6" y2="15" />
+                          <circle cx="18" cy="6" r="3" />
+                          <circle cx="6" cy="18" r="3" />
+                          <path d="M18 9a9 9 0 0 1-9 9" />
                         </svg>
                       </button>
                     {/if}

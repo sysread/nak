@@ -134,6 +134,23 @@
      */
     onRegeneratePreviewEnter?: () => void;
     onRegeneratePreviewLeave?: () => void;
+    /**
+     * Click handler for the fork button. Hidden when omitted - the
+     * caller passes it only on rows that can anchor a fork (settled
+     * terminal assistant rows; see canForkAtMessage in
+     * src/lib/ui/fork.ts). User rows get their fork button directly
+     * in Chat.svelte, same split as the delete-from-here button.
+     */
+    onFork?: () => void;
+    /**
+     * Hover/focus preview for the fork button. Unlike the regenerate
+     * preview, the outlined rows are not doomed - they simply stay in
+     * this conversation while the fork copies everything above them.
+     * The tooltip copy carries that difference; the outline itself
+     * reuses the shared regen-preview channel.
+     */
+    onForkPreviewEnter?: () => void;
+    onForkPreviewLeave?: () => void;
   }
 
   const {
@@ -152,6 +169,9 @@
     onRegenerate,
     onRegeneratePreviewEnter,
     onRegeneratePreviewLeave,
+    onFork,
+    onForkPreviewEnter,
+    onForkPreviewLeave,
   }: Props = $props();
 
   let citationsOpen = $state(false);
@@ -317,6 +337,44 @@
         contextWindow={contextWindow}
         createdAt={createdAt}
       />
+    {/if}
+    {#if onFork}
+      <!-- Fork-from-here. Copies the conversation up to and including
+           this message into a new conversation and opens it; nothing
+           in this one is touched. Sits left of Regenerate so the
+           destructive control keeps the right edge. -->
+      <button
+        type="button"
+        class="copy-btn fork-btn"
+        {disabled}
+        onclick={onFork}
+        onmouseenter={onForkPreviewEnter}
+        onmouseleave={onForkPreviewLeave}
+        onfocus={onForkPreviewEnter}
+        onblur={onForkPreviewLeave}
+        title="Fork here - later messages stay in this conversation"
+        aria-label="Fork the conversation at this message"
+      >
+        <!-- Feather "git-branch": same glyph as the drawer's fork
+             indicator, in the action row's 14px / 2px-stroke outline
+             language. -->
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <line x1="6" y1="3" x2="6" y2="15" />
+          <circle cx="18" cy="6" r="3" />
+          <circle cx="6" cy="18" r="3" />
+          <path d="M18 9a9 9 0 0 1-9 9" />
+        </svg>
+      </button>
     {/if}
     {#if onRegenerate}
       <!-- Regenerate-from-here. Sits at the right edge of the action
