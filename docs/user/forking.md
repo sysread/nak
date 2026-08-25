@@ -9,9 +9,25 @@ experiment separate from the real plan.
 
 ## How to fork
 
-Open the three-dot menu on a conversation's row in the drawer and
-choose **Fork**. The fork opens immediately, with the whole
-conversation so far already in it.
+There are two ways to fork, differing only in where the shared
+history ends.
+
+**The whole conversation:** open the three-dot menu on a
+conversation's row in the drawer and choose **Fork**. The fork opens
+immediately, with the whole conversation so far already in it.
+
+**From a specific message:** every message card has a small branch
+button in its action row (next to the copy and delete buttons). It
+forks the conversation at that message: the fork gets everything up
+to and including it, and everything after it stays behind in the
+original, untouched. Hovering the button outlines the messages that
+will stay behind, so you can see exactly where the fork ends before
+you click. Use this to rewind to an earlier point and take a
+different direction without giving up the turns you already have.
+
+The button appears on your messages and on the assistant's finished
+replies - not on a reply that is still streaming or mid-tool-call,
+because the fork needs a clean cut point.
 
 The fork keeps the original's title behind a short fork marker: a
 fraktur letter f with a small subscript number, so the first fork of

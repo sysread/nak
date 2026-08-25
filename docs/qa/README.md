@@ -246,6 +246,10 @@ One file per use-case under [`use-cases/`](./use-cases/), named
   conversation as hide-then-sweep: instant disappearance from every
   surface, the deferred DB destruction via the fork GC, sweep
   idempotence, and the realtime hidden-as-delete echo.
+- [threads-fork-from-message](./use-cases/threads-fork-from-message.md) -
+  the per-message fork button: which rows offer it, the hover range
+  preview, the mid-conversation prefix cut, and the reparent rule
+  when forking a fork at an inherited row.
 - [threads-fork](./use-cases/threads-fork.md) - forking a
   conversation from the drawer: open-on-create, the fork indicator,
   segment sharing (nothing copied), independent continuation, null

@@ -857,14 +857,39 @@ that must be fork-aware lands in this milestone, not later.
 
 ### M5 - fork-from-message
 
-Small delta on M4.
+Status: implemented, awaiting QA. Small delta on M4, as planned -
+the primitive already accepted an explicit fork-point id; this
+milestone is the UI that passes one.
 
-- Card button (user + terminal assistant rows) + git-branch SVG +
-  hover range preview via the regen channel.
-- Vitest primitives for the fork-range computation (mirror of
-  computeRegenerateRangeIds; register any DOM-touching test file
-  in environmentMatchGlobs).
-- Docs + QA case.
+- Card button on user rows and settled terminal assistant rows,
+  Feather git-branch outline SVG in the shared `.msg-actions`
+  strip. User rows get it directly in the chat screen (next to
+  delete-from-here); assistant rows via an optional `onFork` prop
+  on the assistant body component, passed only when the row
+  qualifies. Eligibility is `canForkAtMessage` (src/lib/ui/fork.ts):
+  the shared `isValidForkPoint` predicate plus one browser-only
+  exclusion - synthetic recovery rows, whose sentinel ids have no
+  DB row to fork from.
+- Hover range preview rides the shared regen-preview channel
+  (`computeForkRangeIds`, mirror of computeRegenerateRangeIds):
+  every row AFTER the fork point outlines red, the point itself
+  stays clear. Same red on purpose (one preview language); the
+  tooltip carries the difference ("Fork here - later messages stay
+  in this conversation" - nothing is deleted).
+- Click calls the existing fork primitive with the clicked row's
+  id and opens the fork; no optimistic insert, same as the drawer
+  path. The fork button is disabled mid-send, matching its strip
+  siblings.
+- Notable consequence: this is the first UI that can anchor a fork
+  on an INHERITED row (forking a fork above its seam), so the
+  reparent rule - parent is the row's owning thread - becomes
+  user-reachable. Covered in the new QA case.
+- Tests: pure vitest over eligibility + range (node env, no DOM -
+  no environmentMatchGlobs entry needed). Docs: dev forking doc's
+  "Creating a fork" grew the second entry point; user forking page
+  documents the card button; new QA use-case
+  threads-fork-from-message (button placement, preview, prefix
+  cut, reparent check, streaming-disabled state).
 
 ### M6 - edit-forks (fork-on-delete / fork-on-regenerate)
 
