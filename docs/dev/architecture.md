@@ -453,6 +453,35 @@ a schema change. A new per-thread flag lands via `alter table
 threads add column if not exists`. A new background-job table
 follows the claim-RPC pattern.
 
+## Refactoring lessons
+
+Distilled from the cross-runtime architecture audit; kept because
+each one changed how we judge a refactor.
+
+- **`instanceof` checks across a serialization boundary are dead
+  code.** An error class thrown server-side crosses the Broadcast
+  channel as a plain object and is reconstructed browser-side as a
+  generic error instance - class identity does not survive
+  transit. Detect by a structured kind/code in the payload (or a
+  well-known message prefix), never by `instanceof`. Detection
+  signal: `instanceof FooError` where FooError comes from a module
+  this runtime only imports for types.
+- **When execution of a concern moves across the runtime boundary,
+  audit the source runtime for fossils.** The migration can be
+  complete on the destination side while the source keeps parallel
+  copies of types, constants, and guards that silently diverge.
+  Knip cannot catch "used only by dead code" chains - trace them
+  manually. Detection signal: a file whose docstring claims a
+  concern the other runtime now owns, with a single production
+  import.
+- **Not every long block should be extracted.** A block deeply
+  coupled to its enclosing function's state - many closed-over
+  variables, shared closures - is one concern that happens to be
+  long. Extracting it trades a readable flow for a grab-bag
+  parameter interface. Extract when the signature would read as a
+  coherent object; leave it inline when it would read as
+  "everything the block happened to need."
+
 ## Where to go next
 
 - `./frontend-organization.md` — the UI-primitives /

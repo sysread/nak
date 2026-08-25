@@ -1,5 +1,9 @@
 # Plan: exact WordPiece token counting for chunk sizing
 
+> **Status: planned, not started.** No tokenizer module exists yet;
+> the chunker still sizes by the chars-per-token estimate this doc
+> proposes replacing.
+
 ## Problem
 
 The chunker sizes chunks by a chars-per-token estimate
