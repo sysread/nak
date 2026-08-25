@@ -392,6 +392,18 @@ A chat turn goes:
   `runExchange` resolved from `ctx.threadId`. See
   `./exchange.md` for the full lifecycle and the
   `respondingElsewhere` / observer-side wiring.
+- **Forking** - the chat screen owns most of the fork surface: the
+  drawer row menu's Fork item and the git-branch row indicator, the
+  per-message fork buttons with their hover range preview, the
+  shared-region edit-fork paths (delete-from-here and regenerate
+  become fork-and-hide when their range touches history a child
+  fork depends on, swapping the selection to the fork), the
+  child-fork-point cache behind the tooltip switch, and the
+  realtime hidden-as-delete branch that removes a thread another
+  device hid. The contracts these surfaces lean on (fork-point
+  validity, the shared-region rule, verbatim titles on edit-forks)
+  live in [`./forking.md`](./forking.md) - read it before changing
+  any of them.
 - **Tools** - the `/stream` envelope carries two tool payloads
   assembled on the browser side: `tools: buildToolList(
   thread.toolboxes_enabled)` (the first round's pre-filtered wire

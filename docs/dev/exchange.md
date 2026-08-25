@@ -359,6 +359,16 @@ order is deterministic.
   post-claim-release safety-net effect in `Chat.svelte` -
   realtime can drop packets under load, so a foreign-claim
   transition to released triggers a `listMessages` reconcile.
+- **Forking** ([`./forking.md`](./forking.md)) - a fork's
+  transcript concatenates ancestor segments, which touches this
+  module three ways: `mergeMessagesById` keeps inherited prefix
+  rows in resolver order and position-sorts only the own segment
+  (positions restart per segment); the terminal commit accepts an
+  anchor user message owned by an ancestor's segment via
+  transcript membership (a shared-region regenerate streams into
+  a fork whose fork point IS the anchoring user row); and
+  response claims stay per-thread, so a parent and its fork can
+  stream concurrently.
 - **Draft store (`src/lib/draft-store.ts`)** — `runExchange`
   writes through `updateDraftText` every flush so a crash
   mid-stream leaves a recoverable IDB record. `selectThread`
