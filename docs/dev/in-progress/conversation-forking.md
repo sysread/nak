@@ -735,9 +735,9 @@ Externally identical delete behavior via new machinery.
 
 ### M4 - fork primitive + drawer Fork + worker treatment
 
-Status: DONE (2026-08-24), with one caveat: the post-QA fork-title
-marker (last delta below) awaits a threads-fork re-run - the other
-two cases are unaffected by it. QA passed at 02f1dc64: threads-fork 1-9
+Status: DONE (2026-08-24; fork-title marker re-QA'd 2026-08-25 at
+15bb86d4, threads-fork 1-9 PASS incl. the second-fork ordinal).
+QA passed at 02f1dc64: threads-fork 1-9
 (fork shape, independent continuation, delete-parent keeping the
 prefix with a (0, 2) sweep, search resolving to the fork),
 threads-delete-gc re-run with fork coexistence, threads-management
