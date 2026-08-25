@@ -139,3 +139,54 @@ Deno.test('a single oversized turn still comes back', () => {
     assertEquals(out.window.total, 1);
   }
 });
+
+// --- fork framing ---------------------------------------------------------
+
+const { projectWindowMessages } = __test;
+
+Deno.test('projectWindowMessages: no inherited rows -> no marker, flag stripped', () => {
+  const out = projectWindowMessages(
+    readableTurns(
+      [
+        { thread_id: 'own', role: 'user', content: 'a' },
+        { thread_id: 'own', role: 'assistant', content: 'b' },
+      ],
+      'own',
+    ),
+  );
+  assertEquals(out, [
+    { role: 'user', content: 'a' },
+    { role: 'assistant', content: 'b' },
+  ]);
+});
+
+Deno.test('projectWindowMessages: marker splices at the inherited/own boundary', () => {
+  const out = projectWindowMessages(
+    readableTurns(
+      [
+        { thread_id: 'parent', role: 'user', content: 'p1' },
+        { thread_id: 'parent', role: 'assistant', content: 'p2' },
+        { thread_id: 'own', role: 'user', content: 'o1' },
+      ],
+      'own',
+    ),
+  );
+  assertEquals(out.length, 4);
+  assertEquals(out[0], { role: 'user', content: 'p1' });
+  assertEquals(out[2].role, 'system');
+  assert(out[2].content.includes('FORK POINT'));
+  assertEquals(out[3], { role: 'user', content: 'o1' });
+});
+
+Deno.test('projectWindowMessages: all-inherited window gets the marker at the tail', () => {
+  const out = projectWindowMessages(
+    readableTurns([{ thread_id: 'parent', role: 'user', content: 'p1' }], 'own'),
+  );
+  assertEquals(out.length, 2);
+  assertEquals(out[1].role, 'system');
+});
+
+Deno.test('readableTurns without ownThreadId never marks rows inherited', () => {
+  const turns = readableTurns([{ thread_id: 'parent', role: 'user', content: 'p1' }]);
+  assertEquals(turns[0].inherited, false);
+});

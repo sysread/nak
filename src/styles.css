@@ -1837,6 +1837,22 @@ h1 {
   flex-shrink: 0;
 }
 
+/* Fork indicator (git-branch glyph). After an explicit fork, parent
+   and child sit adjacent in the drawer with identical titles - the
+   glyph is what tells them apart. Inline before the title for the
+   same reason as the unread dot: the title's ellipsis clipping would
+   cut off anything placed after it. Muted on purpose - provenance
+   metadata, not a call to attention. */
+.thread-fork-glyph {
+  display: inline-block;
+  width: 0.8rem;
+  height: 0.8rem;
+  margin-right: 0.35rem;
+  color: var(--muted);
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
 /* Per-row dropdown. Anchored to the right edge of the row so it
    expands inward without clipping against the drawer's right border.
    Reuses the composer-menu visual language. */

@@ -3080,6 +3080,8 @@
       toolboxes_enabled: [],
       archived: false,
       hidden: false,
+      forked_from_thread_id: null,
+      forked_from_msg_id: null,
       title_manually_set: false,
       intuition_payload: null,
       context_recall_payload: null,
@@ -3147,6 +3149,26 @@
     rebucketThread({ ...t, archived: false, updated_at: nowIso });
     try {
       await app.supabase.setThreadArchived(id, false);
+    } catch (err) {
+      error = { text: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  // Fork via the row dropdown: whole-conversation fork (fork point =
+  // transcript tail), then open the fork. The new row lands adjacent
+  // to its parent with an identical title - the git-branch glyph in
+  // the row is what tells them apart. No optimistic insert: the fork
+  // row only exists once the server mints it, and the realtime INSERT
+  // echo dedupes against the local add via findThread.
+  async function forkFromRow(id: string): Promise<void> {
+    if (!app.supabase) return;
+    const t = findThread(id);
+    if (!t || t.isDraft) return;
+    closeRowMenu();
+    try {
+      const fork = await app.supabase.forkThread(id);
+      rebucketThread(fork);
+      await selectThread(fork.id);
     } catch (err) {
       error = { text: err instanceof Error ? err.message : String(err) };
     }
@@ -6781,6 +6803,21 @@
                   title="New reply"
                 ></span>
               {/if}
+              {#if t.forked_from_thread_id}
+                <!-- Feather git-branch outline: stroke SVG to match the
+                     app's other card/action icons. -->
+                <svg
+                  class="thread-fork-glyph"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  role="img"
+                  aria-label="Forked conversation"
+                ><line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg>
+              {/if}
               {t.title || 'Untitled'}
             </button>
             <button
@@ -6809,6 +6846,12 @@
                   </button>
                   <button class="thread-menu-item" role="menuitem"
                           onclick={() => renameFromRow(t.id)}>Rename</button>
+                  <button class="thread-menu-item" role="menuitem"
+                          onclick={() => { void forkFromRow(t.id); }}
+                          disabled={t.isDraft}
+                          title={t.isDraft ? "Draft threads have nothing to fork yet." : undefined}>
+                    Fork
+                  </button>
                   <button class="thread-menu-item" role="menuitem"
                           onclick={() => { void exportTranscript(t.id); }}
                           disabled={t.isDraft}

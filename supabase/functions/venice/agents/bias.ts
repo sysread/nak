@@ -37,6 +37,13 @@ import {
   type FeedbackContribution,
 } from '../../_shared/bias-math.ts';
 import { BIAS_MODEL } from '../../_shared/agent-models.ts';
+import {
+  fetchParentTitle,
+  forkBoundaryIndex,
+  forkPreamble,
+  FORK_POINT_MARKER,
+  type TitleClient,
+} from './_fork_framing.ts';
 
 // Per-thread claim TTL, seconds. Generous enough that one LLM call
 // against a long transcript comfortably fits inside it - the same
@@ -206,6 +213,17 @@ interface TranscriptLine {
   content: string;
 }
 
+/**
+ * Fork framing for the observer payload, precomputed by the caller:
+ * the preamble text (with bias's own reading clause) plus the index
+ * in the FILTERED transcript where the marker entry splices in. Null
+ * on unforked threads - the payload shape is then unchanged.
+ */
+interface ForkPayloadFraming {
+  note: string;
+  boundary: number;
+}
+
 interface ObservationItem {
   bias: string;
   confidence: number;
@@ -254,9 +272,19 @@ async function observeThread(
   transcript: readonly TranscriptLine[],
   activeBiases: readonly string[],
   log: EdgeLogger,
+  fork: ForkPayloadFraming | null = null,
 ): Promise<{ observations: ObservationItem[]; reactions: ReactionItem[] } | null> {
+  // The marker entry carries no id on purpose: evidence citations are
+  // by message id, so the observer cannot cite the marker itself.
+  const messages: Array<{ id?: string; role: string; content: string }> = transcript.map(
+    (m) => ({ id: m.id, role: m.role, content: m.content }),
+  );
+  if (fork) {
+    messages.splice(fork.boundary, 0, { role: 'system', content: FORK_POINT_MARKER });
+  }
   const payload = JSON.stringify({
-    messages: transcript.map((m) => ({ id: m.id, role: m.role, content: m.content })),
+    ...(fork ? { fork_note: fork.note } : {}),
+    messages,
     active_biases: Array.from(activeBiases),
   });
 
@@ -464,21 +492,57 @@ async function analyzeClaimedThread(
   // no re-sort - and a thread without ancestry resolves to the plain
   // per-thread query.
   let transcript: TranscriptLine[];
+  let forkFraming: ForkPayloadFraming | null = null;
   try {
     const { data, error } = await adminClient
       .rpc('thread_transcript', { p_thread_id: threadId })
-      .select('id, role, content');
+      .select('id, thread_id, role, content');
     if (error) throw new Error(error.message);
     // The untyped rpc builder types `data` as object-or-array; a
     // set-returning function always yields an array.
-    transcript = ((data ?? []) as Array<{ id: string; role: string; content: string | null }>)
-      .filter(
-        (m): m is { id: string; role: 'user' | 'assistant'; content: string } =>
-          (m.role === 'user' || m.role === 'assistant') &&
-          typeof m.content === 'string' &&
-          m.content.length > 0,
-      )
-      .map((m) => ({ id: m.id, role: m.role, content: m.content }));
+    const lines = ((data ?? []) as Array<{
+      id: string;
+      thread_id?: string | null;
+      role: string;
+      content: string | null;
+    }>).filter(
+      (
+        m,
+      ): m is {
+        id: string;
+        thread_id?: string | null;
+        role: 'user' | 'assistant';
+        content: string;
+      } =>
+        (m.role === 'user' || m.role === 'assistant') &&
+        typeof m.content === 'string' &&
+        m.content.length > 0,
+    );
+    // Fork framing (see ./_fork_framing.ts): computed over the
+    // FILTERED lines so the boundary index matches the payload the
+    // observer receives. The clause matters here more than anywhere:
+    // the inherited rows were already analyzed under the parent
+    // thread, so re-citing them would double-count observations.
+    const boundary = forkBoundaryIndex(lines, threadId);
+    if (boundary !== null) {
+      const parentId = lines[boundary - 1]?.thread_id;
+      // Cast rationale: checking the fully-generic SupabaseClient
+      // against TitleClient's minimal structural shape trips TS2589
+      // (excessively deep instantiation); the runtime chain matches.
+      const parentTitle = typeof parentId === 'string'
+        ? await fetchParentTitle(adminClient as unknown as TitleClient, parentId)
+        : 'an earlier conversation';
+      forkFraming = {
+        note: forkPreamble(
+          parentTitle,
+          'Only cite evidence from messages below the FORK POINT marker - ' +
+            'the inherited messages were already analyzed in the parent ' +
+            'conversation.',
+        ),
+        boundary,
+      };
+    }
+    transcript = lines.map((m) => ({ id: m.id, role: m.role, content: m.content }));
   } catch (err) {
     log.warn(
       `analyze: transcript fetch failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -493,7 +557,7 @@ async function analyzeClaimedThread(
     // moves the denominators in the aggregate math.
     log.debug('analyze: empty transcript, saving zero observations');
   } else {
-    const result = await observeThread(apiKey, transcript, activeBiases, log);
+    const result = await observeThread(apiKey, transcript, activeBiases, log, forkFraming);
     if (result === null) {
       // Parse failure or completion error: leave the claim to its
       // TTL; the thread re-enters the queue next tick.

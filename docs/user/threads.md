@@ -31,6 +31,12 @@ matters to you.
 
 ## Archiving and unarchiving
 
+## Forking a thread
+
+The three-dot menu's **Fork** item branches the conversation into a
+second timeline that shares everything said so far. See
+[Forking a conversation](./forking.md) for how forks behave.
+
 ## Deleting a thread
 
 Open the three-dot menu on a conversation's row in the drawer and

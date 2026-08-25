@@ -20,6 +20,12 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ThinkingLevel, Verbosity } from '../models';
+import {
+  forkTitle,
+  isValidForkPoint,
+  pickForkPoint,
+  type ForkPointCandidate,
+} from '../forking';
 import { SupabaseError } from './error';
 import { getSession } from './session';
 import { listAttachmentPagePaths } from './attachment-pages';
@@ -378,9 +384,14 @@ export async function searchThreads(
         verbosity: null,
         toolboxes_enabled: [],
         archived: row.archived,
-        // The RPC filters hidden threads out of its hits, so every
-        // stubbed row is visible by construction.
+        // The RPC resolves hidden-thread hits to a visible descendant
+        // before returning, so every stubbed row is visible by
+        // construction. Fork ancestry isn't in the RPC projection; the
+        // stub reads as a root, which only costs the row its drawer
+        // fork indicator while rendered from search results.
         hidden: false,
+        forked_from_thread_id: null,
+        forked_from_msg_id: null,
         title_manually_set: false,
         intuition_payload: null,
         context_recall_payload: null,
@@ -428,6 +439,133 @@ export async function createThread(
       // toolboxes before the first send - without this passthrough
       // those flips would silently reset to [] on materialization.
       toolboxes_enabled: toolboxesEnabled,
+    })
+    .select()
+    .single();
+  if (error) throw new SupabaseError(error.message);
+  return coerceThread(data as Record<string, unknown>);
+}
+
+/**
+ * Fork a conversation: mint a new thread whose transcript continues
+ * from `sourceThreadId`'s history at a chosen fork point (see
+ * docs/dev/forking.md). One primitive for every entry point; the
+ * drawer's whole-conversation fork omits `forkMsgId` and forks at the
+ * transcript tail, M5's fork-from-message passes an explicit row.
+ *
+ * The reparent rule is applied here: the new thread's parent is
+ * whichever thread OWNS the fork-point message - for an explicit
+ * `forkMsgId` that may be an ancestor of `sourceThreadId`, not the
+ * source itself - which keeps "a fork point always lands in its
+ * parent's own segment" structural rather than checked.
+ *
+ * The fork inherits the source's identity and composer settings
+ * (title behind a fork marker - see forkTitle in ../forking -
+ * title_manually_set, model / reasoning / verbosity pins, enabled
+ * toolboxes) and nothing else: summary, topics, cached
+ * priming payloads, archived state, and worker cursors all start
+ * fresh. Null cursors are deliberate - a fresh fork's own segment is
+ * empty, so per-thread worker queries never see the inherited prefix
+ * and nothing double-processes (see the fork-semantics section of the
+ * plan for why seeding the fork point as a cursor was rejected).
+ */
+export async function forkThread(
+  client: SupabaseClient,
+  sourceThreadId: string,
+  forkMsgId?: string
+): Promise<Thread> {
+  const session = await getSession(client);
+  if (!session) throw new SupabaseError('Not authenticated.');
+
+  const { data: srcRow, error: srcErr } = await client
+    .from('threads')
+    .select('*')
+    .eq('id', sourceThreadId)
+    .maybeSingle();
+  if (srcErr) throw new SupabaseError(srcErr.message);
+  if (!srcRow) throw new SupabaseError('Conversation not found.');
+  const source = coerceThread(srcRow as Record<string, unknown>);
+
+  // Resolve the fork point and its owning thread (the parent under
+  // the reparent rule).
+  let pointId: string;
+  let parentId: string;
+  if (forkMsgId) {
+    const { data: msgRow, error: msgErr } = await client
+      .from('messages')
+      .select('id, thread_id, role, tool_calls, status')
+      .eq('id', forkMsgId)
+      .maybeSingle();
+    if (msgErr) throw new SupabaseError(msgErr.message);
+    if (!msgRow) throw new SupabaseError('Fork point message not found.');
+    const m = msgRow as {
+      id: string;
+      thread_id: string;
+      role: string;
+      tool_calls: unknown[] | null;
+      status: string | null;
+    };
+    if (!isValidForkPoint(m)) {
+      throw new SupabaseError(
+        'A fork can only start at a user message or a completed assistant reply.'
+      );
+    }
+    pointId = m.id;
+    parentId = m.thread_id;
+  } else {
+    // Whole-conversation fork: walk the source's own-segment tail
+    // back past rows a fork cannot anchor on (an in-flight streaming
+    // row, a dangling tool row from an interrupted turn). Descending
+    // with nullsFirst matches the "null position sorts as tail"
+    // convention for rows inserted in a schema-apply window.
+    const { data: tailRows, error: tailErr } = await client
+      .from('messages')
+      .select('id, role, tool_calls, status')
+      .eq('thread_id', sourceThreadId)
+      .order('position', { ascending: false, nullsFirst: true })
+      .limit(50);
+    if (tailErr) throw new SupabaseError(tailErr.message);
+    const point = pickForkPoint((tailRows ?? []) as ForkPointCandidate[]);
+    if (point) {
+      pointId = point.id;
+      parentId = sourceThreadId;
+    } else if (source.forked_from_msg_id && source.forked_from_thread_id) {
+      // The source's own segment is empty (a fork nobody has spoken
+      // in yet): fork at the source's own fork point, which its
+      // parent owns - the new thread becomes a sibling.
+      pointId = source.forked_from_msg_id;
+      parentId = source.forked_from_thread_id;
+    } else {
+      throw new SupabaseError('This conversation has no messages to fork yet.');
+    }
+  }
+
+  // Ordinal of this fork among all forks minted from the same fork
+  // point, for the title marker. Counts every existing row pointing at
+  // the point - hidden ones included, since they still exist until the
+  // GC runs and "how many times was this point forked" is a statement
+  // about history, not visibility. The count-then-insert pair is not
+  // atomic; two devices forking the same point in the same instant can
+  // mint duplicate ordinals, which costs a cosmetic title collision
+  // and nothing structural.
+  const { count, error: countErr } = await client
+    .from('threads')
+    .select('id', { count: 'exact', head: true })
+    .eq('forked_from_msg_id', pointId);
+  if (countErr) throw new SupabaseError(countErr.message);
+
+  const { data, error } = await client
+    .from('threads')
+    .insert({
+      user_id: session.user.id,
+      title: forkTitle(source.title, (count ?? 0) + 1),
+      title_manually_set: source.title_manually_set,
+      model: source.model,
+      reasoning_effort: source.reasoning_effort,
+      verbosity: source.verbosity,
+      toolboxes_enabled: source.toolboxes_enabled,
+      forked_from_thread_id: parentId,
+      forked_from_msg_id: pointId,
     })
     .select()
     .single();

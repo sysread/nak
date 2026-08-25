@@ -10,6 +10,7 @@ import {
   sanitizeToolCallsForWire,
   sanitizeToolNameForWire,
 } from './_wire.ts';
+import { applyForkFraming, type TitleClient } from './_fork_framing.ts';
 
 export interface StoredMessage {
   id: string;
@@ -18,6 +19,14 @@ export interface StoredMessage {
   tool_calls: unknown[] | null;
   tool_call_id: string | null;
   name: string | null;
+  /**
+   * Owning thread of the row. The transcript loaders select it so
+   * fork framing can find the inherited/own boundary (see
+   * ./_fork_framing.ts); optional because synthesized rows (framing
+   * lines, tool-call fan-in repairs) and older test stubs don't
+   * carry it - absence reads as "own segment".
+   */
+  thread_id?: string | null;
 }
 
 export interface VeniceWireMessage {
@@ -185,7 +194,16 @@ export function logPreview(text: string, max = 120): string {
  * no fork ancestry.
  */
 export async function loadThreadSlice(
-  adminClient: { rpc: (fn: string, args: Record<string, unknown>) => unknown },
+  // Structurally typed, and deliberately SHALLOW: `from` returns
+  // unknown rather than TitleClient's chain because type-checking the
+  // fully-generic SupabaseClient against a nested structural shape
+  // trips TS2589 (excessively deep instantiation) - and does so
+  // nondeterministically across check orders, so a locally-green
+  // graph can still fail in CI. The framing call below casts instead.
+  adminClient: {
+    rpc: (fn: string, args: Record<string, unknown>) => unknown;
+    from: (table: string) => unknown;
+  },
   threadId: string,
 ): Promise<StoredMessage[]> {
   type SupabaseRpc = {
@@ -198,8 +216,14 @@ export async function loadThreadSlice(
     p_thread_id: threadId,
   }) as SupabaseRpc;
   const { data, error } = await q.select(
-    'id, role, content, tool_calls, tool_call_id, name',
+    'id, thread_id, role, content, tool_calls, tool_call_id, name',
   );
   if (error) throw new Error(`listMessages failed: ${error.message}`);
-  return trimToCharBudget(trimToLastUserTurn((data ?? []) as StoredMessage[]));
+  const trimmed = trimToCharBudget(
+    trimToLastUserTurn((data ?? []) as StoredMessage[]),
+  );
+  // Framing runs AFTER the trims so the boundary is computed on the
+  // rows the model will actually see; a slice whose inherited prefix
+  // was fully trimmed away gets no framing, correctly.
+  return applyForkFraming(adminClient as unknown as TitleClient, threadId, trimmed);
 }

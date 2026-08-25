@@ -1,6 +1,6 @@
 # Conversation forking
 
-Status: M0-M3 done. Update the milestone
+Status: M0-M4 done. Update the milestone
 checklist as work lands; graduate durable content into a permanent
 `docs/dev/forking.md` (started in M3) and retire this doc when the
 last milestone ships.
@@ -734,6 +734,85 @@ Externally identical delete behavior via new machinery.
   matches old destructive delete"; threads-management baseline.
 
 ### M4 - fork primitive + drawer Fork + worker treatment
+
+Status: DONE (2026-08-24; fork-title marker re-QA'd 2026-08-25 at
+15bb86d4, threads-fork 1-9 PASS incl. the second-fork ordinal).
+QA passed at 02f1dc64: threads-fork 1-9
+(fork shape, independent continuation, delete-parent keeping the
+prefix with a (0, 2) sweep, search resolving to the fork),
+threads-delete-gc re-run with fork coexistence, threads-management
+baseline unchanged - results rows in each use-case log. Gate green
+(2239 vitest + 535 Deno); the rewritten chunk-search RPC exercised
+on scratch Postgres
+(9-scenario matrix: visible passthrough, hidden-no-descendant drop,
+covered-fork resolution with dedupe, uncovered-fork drop, two-level
+chain through a hidden middle, stale-anchor drop, tie-break to the
+fresher fork, recency filter on the presented thread, idempotent
+re-apply).
+
+Implementation deltas from the plan:
+
+- **Framing rides the two shared transcript loaders**, not
+  per-agent wiring: EVERY replay-style agent (summary, topics,
+  reflection, evaluation, wiki, wiki-records, recall agents,
+  intent employment) gets preamble + marker uniformly; summary and
+  topics pass a task clause via the loader's new opts. Correction
+  to the plan's cursor rationale it surfaced: the cursor workers
+  (reflection, evaluation, wiki) replay the FULL transcript - the
+  cursor gates the CLAIM, not the read - so a fork's inherited
+  prefix does reach them. That is the same shape as ordinary
+  re-reflection over an already-processed thread, which those
+  agents already tolerate by finding their own prior writes; the
+  framing preamble is context, not the dedup mechanism.
+- Recall/conversation_get were planned as "marker alone"; the
+  loaders give recall agents the descriptive preamble too (an
+  unexplained marker is the injection-flag shape the provenance
+  convention exists for). conversation_get is the one true
+  marker-only surface (splice into the windowed transcript).
+- Boundary detection is by ROW OWNERSHIP (first row whose
+  thread_id matches the requested thread), not by fork-point id -
+  it degrades correctly when trims drop part or all of the prefix,
+  and needs no extra fetch on unforked threads (one array scan).
+  StoredMessage gained optional thread_id; both loaders select it.
+- Bias gets a `fork_note` payload field plus an id-less marker
+  entry (evidence is cited by id, so the marker is uncitable).
+- Fork-point selection: pure primitives in `src/lib/forking.ts`
+  (vitest-covered). The drawer fork walks the own-segment tail
+  past streaming/tool/mid-round rows; an empty own segment falls
+  back to the thread's own fork point, minting a SIBLING; a truly
+  empty root refuses with a clear error.
+- Thread (browser type) exposes BOTH fork columns; the semantic
+  search stub reads as a root (costs a search-result row its
+  indicator only). Fork inserts are plain RLS inserts - no new
+  SQL. Cross-user forgery is not schema-enforced (leaks nothing
+  via the invoker resolver; would pin a foreign thread against GC;
+  judged not worth a composite-FK migration - noted in
+  forking.md gotchas).
+- Chunk-search resolution details: the first hop out of the
+  chunk's owner proves containment (child fork position >= chunk
+  end position, with the anchor verified to still be a row of the
+  owner's segment); deeper hops are unconditional (a grandchild
+  inherits its parent's entire inherited prefix); stale anchors
+  drop conservatively until rechunk; dedupe keeps the strongest
+  chunk per presented thread; recency filter AND boost run on the
+  presented thread's updated_at (moved from the owning thread).
+- **Digest hidden-title mitigation: decided, accept without
+  code.** A fork inherits the parent's title verbatim, so the
+  digest's "unreachable" title matches the visible fork's title;
+  only a later manual rename of the fork drifts them, cosmetically.
+- Two TS2589 casts (SupabaseClient -> TitleClient structural
+  check overflows the compiler); commented at both sites.
+- **Post-QA title change (user request):** fork titles are no
+  longer verbatim - they carry a fork marker, the fraktur-f sigil
+  plus a subscript ordinal counting forks minted from the same
+  fork-point message (count-then-insert over the
+  forked_from_msg_id partial index; hidden forks count; duplicate
+  ordinals possible under concurrent forks, cosmetic only).
+  Forking a fork re-marks the BASE title instead of stacking
+  sigils, and the untitled placeholder passes through unmarked so
+  auto-title still claims the fork. Primitives + tests in
+  src/lib/forking.ts; threads-fork QA case extended with a
+  second-fork ordinal check and re-run.
 
 First user-visible feature. Forks can now exist, so everything
 that must be fork-aware lands in this milestone, not later.

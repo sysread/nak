@@ -10,6 +10,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ToolDef } from '../performToolCall.ts';
 import type { AgentTool } from './_run.ts';
 import type { StoredMessage } from './_recall_helpers.ts';
+import { applyForkFraming, type TitleClient } from './_fork_framing.ts';
 
 /**
  * Wrap a registered server-side ToolDef as an AgentTool for an agent
@@ -249,6 +250,16 @@ export async function loadThreadSliceUpTo(
   adminClient: SupabaseClient,
   threadId: string,
   terminalMsgId: string,
+  opts: {
+    /**
+     * One-sentence reading instruction appended to the fork preamble
+     * when the slice opens with inherited rows (see ./_fork_framing.ts).
+     * Only the workers whose task changes meaning across the boundary
+     * pass one (summary and topics must cover the whole conversation);
+     * the rest get the descriptive preamble alone.
+     */
+    forkClause?: string;
+  } = {},
 ): Promise<StoredMessage[]> {
   // thread_transcript resolves across fork boundaries: a forked
   // thread's result opens with rows inherited from ancestor segments,
@@ -260,11 +271,20 @@ export async function loadThreadSliceUpTo(
   // the tail of the resolved transcript.
   const { data, error } = await adminClient
     .rpc('thread_transcript', { p_thread_id: threadId })
-    .select('id, role, content, tool_calls, tool_call_id, name');
+    .select('id, thread_id, role, content, tool_calls, tool_call_id, name');
   if (error) throw new Error(`listMessages failed: ${error.message}`);
   const all = (data ?? []) as StoredMessage[];
   const idx = all.findIndex((m) => m.id === terminalMsgId);
-  return idx >= 0 ? all.slice(0, idx + 1) : all;
+  const slice = idx >= 0 ? all.slice(0, idx + 1) : all;
+  // Framing runs after the terminal slice so the marker lands where
+  // the model actually reads the boundary; a slice with no inherited
+  // rows comes back unchanged. The cast steps around TS2589: checking
+  // the fully-generic SupabaseClient against TitleClient's minimal
+  // structural shape sends the compiler into an excessively-deep
+  // instantiation, even though the runtime chain matches exactly.
+  return applyForkFraming(adminClient as unknown as TitleClient, threadId, slice, {
+    taskClause: opts.forkClause,
+  });
 }
 
 /**
