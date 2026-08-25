@@ -5,10 +5,10 @@ threads, the `thread_transcript` resolver, hidden threads, the fork
 GC, the fork primitive with its entry points (drawer item and
 message-card buttons), edit-forks on delete-from-here / regenerate
 in shared regions, worker fork framing, and hidden-hit search
-resolution. The milestone narrative lives in
-[`./in-progress/conversation-forking.md`](./in-progress/conversation-forking.md)
-until the final milestone's QA closes; this doc owns current
-reality.
+resolution. This doc owns current reality; the milestone-by-
+milestone build narrative lived in
+docs/dev/in-progress/conversation-forking.md and is preserved in
+git history.
 
 ## Data model
 
@@ -366,6 +366,9 @@ what a sweep did; run it ad hoc with
   against GC via the restrict FK. The browser primitive only forks
   rows RLS let it read; a schema-level guard (composite FK on
   user_id) was judged not worth the migration for a personal app.
+- Response claims are per-thread, so a parent and its fork can
+  stream completions concurrently - by design, not an oversight: to
+  the claim system they are simply two conversations.
 - Realtime UPDATEs to inherited rows do not reach a fork's open
   message list (the subscription filters on the fork's own
   thread_id). Display-only staleness on rare paths (a

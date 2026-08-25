@@ -23,10 +23,10 @@ button + hover wiring in `src/screens/Chat.svelte`):
    streaming on the thread.
 
 This case is a BASELINE for the conversation-forking work (see
-`docs/dev/in-progress/conversation-forking.md`): M1 must preserve
-all four behaviors unchanged, and M6 later changes behavior number
-3 ONLY inside a shared region of a forked thread - everywhere else
-this case must keep passing as written.
+[dev: forking](../../dev/forking.md), "Edit-forks"): behavior
+number 3 changes ONLY inside a shared region of a forked thread -
+everywhere else this case must keep passing as written, and every
+post-forking run should match the original baseline rows exactly.
 
 ## Preconditions
 
