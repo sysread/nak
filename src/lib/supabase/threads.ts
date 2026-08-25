@@ -472,8 +472,21 @@ export async function createThread(
 export async function forkThread(
   client: SupabaseClient,
   sourceThreadId: string,
-  forkMsgId?: string
+  forkMsgId?: string,
+  opts?: {
+    /**
+     * False for an edit-fork (shared-region delete-from-here /
+     * regenerate), where the fork REPLACES the edited conversation in
+     * the UI: the title carries over verbatim - no sigil, no ordinal -
+     * so nothing downstream reads the fork as provisional (no retitle
+     * nudge, no chat-turn fork framing; worker framing keys on row
+     * ownership and still applies). Defaults to true: an explicit
+     * fork lives alongside its source and gets the marked title.
+     */
+    markTitle?: boolean;
+  }
 ): Promise<Thread> {
+  const markTitle = opts?.markTitle ?? true;
   const session = await getSession(client);
   if (!session) throw new SupabaseError('Not authenticated.');
 
@@ -547,18 +560,23 @@ export async function forkThread(
   // about history, not visibility. The count-then-insert pair is not
   // atomic; two devices forking the same point in the same instant can
   // mint duplicate ordinals, which costs a cosmetic title collision
-  // and nothing structural.
-  const { count, error: countErr } = await client
-    .from('threads')
-    .select('id', { count: 'exact', head: true })
-    .eq('forked_from_msg_id', pointId);
-  if (countErr) throw new SupabaseError(countErr.message);
+  // and nothing structural. Skipped for edit-forks, whose title is the
+  // source's verbatim (the count only feeds the marker).
+  let title = source.title;
+  if (markTitle) {
+    const { count, error: countErr } = await client
+      .from('threads')
+      .select('id', { count: 'exact', head: true })
+      .eq('forked_from_msg_id', pointId);
+    if (countErr) throw new SupabaseError(countErr.message);
+    title = forkTitle(source.title, (count ?? 0) + 1);
+  }
 
   const { data, error } = await client
     .from('threads')
     .insert({
       user_id: session.user.id,
-      title: forkTitle(source.title, (count ?? 0) + 1),
+      title,
       title_manually_set: source.title_manually_set,
       model: source.model,
       reasoning_effort: source.reasoning_effort,
@@ -571,6 +589,28 @@ export async function forkThread(
     .single();
   if (error) throw new SupabaseError(error.message);
   return coerceThread(data as Record<string, unknown>);
+}
+
+/**
+ * Fork-point message ids of every child thread forked from
+ * `threadId`, hidden children included. Feeds the shared-region test
+ * (see sharedRowIds in src/lib/ui/fork.ts): a hidden child awaiting
+ * GC may still carry live descendants that read this thread's prefix,
+ * and when it doesn't, counting it merely forks where a destructive
+ * edit would have been safe - conservative, never corrupting.
+ */
+export async function listChildForkPointIds(
+  client: SupabaseClient,
+  threadId: string
+): Promise<string[]> {
+  const { data, error } = await client
+    .from('threads')
+    .select('forked_from_msg_id')
+    .eq('forked_from_thread_id', threadId);
+  if (error) throw new SupabaseError(error.message);
+  return (data ?? [])
+    .map((r) => (r as { forked_from_msg_id: string | null }).forked_from_msg_id)
+    .filter((id): id is string => typeof id === 'string');
 }
 
 /**

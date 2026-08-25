@@ -893,19 +893,56 @@ milestone is the UI that passes one.
 
 ### M6 - edit-forks (fork-on-delete / fork-on-regenerate)
 
-The behavior-changing milestone; its baselines were locked in M0.
+Status: implemented, awaiting QA. The behavior-changing milestone;
+its baselines were locked in M0. Deltas chosen at implementation:
 
-- Shared-region test primitive (inherited rows + max live-child
-  fork position).
-- Delete-from-here in a shared region: fork at the predecessor,
-  hide the edited thread, swap selection.
+- Shared-region test is a pure primitive (`sharedRowIds` in
+  src/lib/ui/fork.ts): inherited rows plus own rows at-or-before
+  the latest child fork point. "Live children" resolved as ALL
+  child rows, hidden included - a hidden child awaiting GC may
+  still carry live descendants reading the prefix, and when it
+  does not, counting it costs one unnecessary fork, never a
+  corrupted timeline. Fed by a one-query child-fork-point fetch;
+  the cached copy drives only the tooltip switch, and both click
+  paths re-fetch fresh state before deciding destructive vs
+  edit-fork (a fork minted on another device mid-hover cannot be
+  edited out from under).
+- Edit-forks reuse the M4 primitive with a `markTitle: false`
+  option: title carried verbatim (no sigil/ordinal, no ordinal
+  count query), so nothing reads the fork as provisional - no
+  retitle nudge, no chat-wire fork framing; worker framing keys on
+  row ownership and still applies.
+- Delete-from-here in a shared region: fork at the closest
+  anchorable predecessor (walks past rows a fork cannot cut at,
+  synthetic rows included), hide the edited thread, swap
+  selection. Degenerate no-anchor case = fresh empty thread with
+  the same title and pins, no parent link. Fork is created BEFORE
+  the hide so a mid-flow failure leaves both threads visible, not
+  neither.
 - Regenerate in a shared region: fork at the anchoring user
-  message, hide, run the completion on the fork (no superseded
-  ids).
-- Tooltip copy switch in shared regions.
-- Docs + QA: re-execute the M0 delete/regenerate baselines in
-  private-tail scenarios (must match baseline exactly) plus new
-  shared-region walkthroughs.
+  message, hide, swap, run the completion on the fork with no
+  superseded ids. This required relaxing
+  commit_assistant_message's anchor check from same-thread to
+  thread_transcript membership (same-thread stays the fast path;
+  competing-send detection unchanged - only own-segment user rows
+  compete). Validated on scratch Postgres (six scenarios:
+  inherited anchor commits, fast path, unrelated/vanished anchors
+  rejected, competing-send conflict + superseded exemption). The
+  relaxation also fixes a latent M5 bug: regenerating the first
+  reply of a fork minted at a USER row bounced with
+  anchor_missing.
+- Tooltip copy switch ("- the conversation continues in a new
+  fork") on both buttons in shared regions; outline stays red per
+  the UX spec. The assistant card takes the regenerate tooltip as
+  a prop; copy lives in the ui primitives.
+- Docs: dev forking doc gained the "Edit-forks" section and the
+  current-reality gotcha rewrite; user chat.md (both gestures) and
+  forking.md ("Editing history a fork depends on") updated. QA:
+  new threads-edit-fork walkthrough (tooltips, both flows,
+  inherited-anchor commit, private-tail unchanged, GC endgame)
+  plus mandated re-execution of the chat-delete-from-here and
+  chat-regenerate-from-here baselines, which must match M0 rows
+  exactly.
 
 ## Gotchas to carry into the permanent doc
 

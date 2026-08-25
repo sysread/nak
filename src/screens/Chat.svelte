@@ -247,7 +247,14 @@
   } from '$lib/ui/chat-screen';
   import { computeRegenerateRangeIds, persistedRowIds } from '$lib/ui/regenerate';
   import { computeDeleteFromRangeIds } from '$lib/ui/message-delete';
-  import { canForkAtMessage, computeForkRangeIds } from '$lib/ui/fork';
+  import {
+    canForkAtMessage,
+    computeForkRangeIds,
+    deleteForkAnchor,
+    deleteFromTitle,
+    regenerateTitle,
+    sharedRowIds,
+  } from '$lib/ui/fork';
   import {
     orderedSubconsciousRows,
     subconsciousLabel,
@@ -870,6 +877,35 @@
 
   function clearRegeneratePreview(): void {
     if (hoverRegenerateIds.length > 0) hoverRegenerateIds = [];
+  }
+
+  /**
+   * Fork-point message ids of the ACTIVE thread's child forks (hidden
+   * children included - see listChildForkPointIds). Feeds the
+   * shared-region test that switches delete-from-here and regenerate
+   * tooltips to their "continues in a new fork" copy. The cache is
+   * best-effort: loaded when a thread is opened, extended by realtime
+   * fork INSERTs, and only ever drives tooltip copy - the click paths
+   * re-fetch fresh state before deciding destructive vs edit-fork, so
+   * a stale cache can never cause a wrong edit.
+   */
+  let childForkPointIds = $state<Set<string>>(new Set());
+  const sharedRowSet = $derived(
+    activeThreadId
+      ? sharedRowIds(messages, activeThreadId, childForkPointIds)
+      : new Set<string>()
+  );
+
+  async function refreshChildForkPoints(threadId: string): Promise<void> {
+    if (!app.supabase) return;
+    try {
+      const ids = await app.supabase.listChildForkPointIds(threadId);
+      // The user may have hopped threads during the await.
+      if (activeThreadId === threadId) childForkPointIds = new Set(ids);
+    } catch {
+      // Tooltip-only cache: the click paths re-fetch and surface their
+      // own errors, so a failed prefetch just leaves the default copy.
+    }
   }
 
   /**
@@ -1858,6 +1894,13 @@
     const userId = session.user.id;
     return app.supabase.subscribeToThreads(userId, {
       onInsert: (t) => {
+        // A fork of the ACTIVE thread extends its shared region - keep
+        // the tooltip cache honest. Runs before the local-echo dedupe
+        // below because the fork columns matter even when the row
+        // itself is already in the drawer (idempotent Set add).
+        if (t.forked_from_thread_id === activeThreadId && t.forked_from_msg_id) {
+          childForkPointIds = new Set(childForkPointIds).add(t.forked_from_msg_id);
+        }
         // The device that created the thread already has it locally
         // (createThread / newThread pushed it); skip the echo.
         if (findThread(t.id)) return;
@@ -2487,6 +2530,10 @@
     // both land the user in the transcript, never behind the panel.
     navigate({ cid: id, digest: null });
     messages = [];
+    // Reset the shared-region tooltip cache in lockstep with the
+    // messages it qualifies; the refresh below repopulates it.
+    childForkPointIds = new Set();
+    if (id !== null) void refreshChildForkPoints(id);
     // Drop the prior thread's inline diagnostics in lockstep with
     // its messages. loadMessagesForThread re-populates these once
     // the new thread's listMessages call settles.
@@ -5160,6 +5207,22 @@
     const rangeIds = computeDeleteFromRangeIds(messages, userMessageId);
     if (rangeIds.length === 0) return;
     if (!confirm('Delete this message and everything after it?')) return;
+    // Decide destructive vs edit-fork against FRESH child-fork state -
+    // the cached set only drives tooltips, and a fork minted on
+    // another device since the last refresh must not have its history
+    // edited out from under it.
+    let freshForkPoints: Set<string>;
+    try {
+      freshForkPoints = new Set(await app.supabase.listChildForkPointIds(active.id));
+    } catch (e) {
+      error = { text: e instanceof Error ? e.message : 'Failed to check for forks.' };
+      return;
+    }
+    childForkPointIds = freshForkPoints;
+    if (sharedRowIds(messages, active.id, freshForkPoints).has(userMessageId)) {
+      await deleteFromViaFork(active, userMessageId);
+      return;
+    }
     // Red-outline the doomed range during the await the same way
     // regenerate does, then drop the hover channel so pendingDeleteSet
     // is the sole source of .regen-target through the fade-out.
@@ -5177,6 +5240,46 @@
     }
     await fadeOutAndPruneRows(rangeIds);
     pendingDeleteIds = [];
+  }
+
+  /**
+   * Delete-from-here inside a shared region: the doomed range is
+   * history some other conversation depends on, so nothing is
+   * destroyed. Fork at the closest anchorable row before the range
+   * (the fork inherits exactly what the user keeps), hide the edited
+   * thread, and swap the selection - the drawer shows "the same
+   * conversation, minus the deleted turns", while every other
+   * timeline keeps the unchanged history. With nothing anchorable
+   * before the range this degenerates to a fresh empty thread
+   * carrying the same title and pins (a fork with an empty prefix is
+   * just a new thread; no parent link needed).
+   *
+   * Order matters: the replacement is created BEFORE the old thread
+   * is hidden, so a failure between the two leaves both visible (a
+   * duplicate-looking drawer row, annoying but recoverable) rather
+   * than neither.
+   */
+  async function deleteFromViaFork(active: Thread, userMessageId: string): Promise<void> {
+    if (!app.supabase) return;
+    const anchor = deleteForkAnchor(messages, userMessageId);
+    try {
+      const replacement = anchor
+        ? await app.supabase.forkThread(active.id, anchor.id, { markTitle: false })
+        : await app.supabase.createThread(
+            active.title,
+            active.model,
+            active.reasoning_effort,
+            active.verbosity,
+            active.title_manually_set,
+            active.toolboxes_enabled
+          );
+      rebucketThread(replacement);
+      await selectThread(replacement.id);
+      await app.supabase.deleteThread(active.id);
+      removeThread(active.id);
+    } catch (e) {
+      error = { text: e instanceof Error ? e.message : 'Failed to fork the conversation.' };
+    }
   }
 
   async function regenerateFrom(assistantMessageId: string): Promise<void> {
@@ -5203,11 +5306,60 @@
     }
     if (userIdx === -1) return;
     const userMessage = messages[userIdx];
-    pendingDeleteIds = rangeIds;
-    // Hover preview gets cleared on click so the click-committed
-    // pendingDeleteSet is the only source of the .regen-target class
-    // from here on - no double-source flicker on the way to fade-out.
-    hoverRegenerateIds = [];
+    // Decide destructive vs edit-fork against FRESH child-fork state
+    // (the cached set only drives tooltips). rangeIds[0] is the first
+    // REPLACED row - the one right after the anchor - so testing it
+    // asks exactly "does the replace range touch shared history".
+    let freshForkPoints: Set<string>;
+    try {
+      freshForkPoints = new Set(await app.supabase.listChildForkPointIds(active.id));
+    } catch (e) {
+      error = { text: e instanceof Error ? e.message : 'Failed to check for forks.' };
+      return;
+    }
+    childForkPointIds = freshForkPoints;
+    const shared = sharedRowIds(messages, active.id, freshForkPoints).has(rangeIds[0]);
+
+    let targetThreadId = active.id;
+    if (shared) {
+      // Shared-region regenerate: the replaced rows are history another
+      // conversation depends on, so nothing is superseded. Fork at the
+      // anchoring user message (the fork's transcript ends with the
+      // now-unanswered user turn), hide the edited thread, swap the
+      // selection, and run the completion on the fork. The anchor stays
+      // owned by the hidden thread - commit_assistant_message accepts
+      // an inherited anchor via transcript membership. Fork BEFORE
+      // hide, so a failure in between leaves both threads visible
+      // rather than neither.
+      if (!canForkAtMessage(userMessage)) {
+        // A synthetic recovery anchor has no DB row to fork at, and
+        // the destructive path is off the table in a shared region.
+        error = {
+          text: 'This turn is still being recovered - reload the conversation and try again.',
+        };
+        return;
+      }
+      hoverRegenerateIds = [];
+      try {
+        const fork = await app.supabase.forkThread(active.id, userMessage.id, {
+          markTitle: false,
+        });
+        rebucketThread(fork);
+        await selectThread(fork.id);
+        await app.supabase.deleteThread(active.id);
+        removeThread(active.id);
+        targetThreadId = fork.id;
+      } catch (e) {
+        error = { text: e instanceof Error ? e.message : 'Failed to fork the conversation.' };
+        return;
+      }
+    } else {
+      pendingDeleteIds = rangeIds;
+      // Hover preview gets cleared on click so the click-committed
+      // pendingDeleteSet is the only source of the .regen-target class
+      // from here on - no double-source flicker on the way to fade-out.
+      hoverRegenerateIds = [];
+    }
 
     // Resolve send-time context the same way send() does. The
     // toggles the user has set RIGHT NOW apply to the regenerate -
@@ -5231,7 +5383,7 @@
     followBottom = true;
 
     await runExchange({
-      threadId: active.id,
+      threadId: targetThreadId,
       currentUserId,
       modelId,
       modelSpec: profileModelSpec(profile),
@@ -5244,7 +5396,9 @@
       sendUserLocation: app.userLocation,
       originalText: userMessage.content,
       userMessageId: userMessage.id,
-      supersededIds: persistedRowIds(messages, rangeIds),
+      // The edit-fork path supersedes nothing: the replaced rows live
+      // in the hidden thread's segment, not the fork's.
+      supersededIds: shared ? undefined : persistedRowIds(messages, rangeIds),
     });
   }
 
@@ -7683,6 +7837,7 @@
                   createdAt={block.assistant.created_at}
                   disabled={pendingDeleteSet.has(block.assistant.id) || (activeSlot?.sending ?? false)}
                   onRegenerate={() => { void regenerateFrom(block.assistant.id); }}
+                  regenerateTitle={regenerateTitle(sharedRowSet.has(block.assistant.id))}
                   onRegeneratePreviewEnter={() => previewRegenerateFrom(block.assistant.id)}
                   onRegeneratePreviewLeave={clearRegeneratePreview}
                 >
@@ -7768,6 +7923,7 @@
                   createdAt={block.message.created_at}
                   disabled={pendingDeleteSet.has(block.message.id) || activeSlot?.sending}
                   onRegenerate={() => { void regenerateFrom(block.message.id); }}
+                  regenerateTitle={regenerateTitle(sharedRowSet.has(block.message.id))}
                   onRegeneratePreviewEnter={() => previewRegenerateFrom(block.message.id)}
                   onRegeneratePreviewLeave={clearRegeneratePreview}
                   onFork={canForkAtMessage(block.message)
@@ -7889,16 +8045,19 @@
                     {/if}
                     <!-- Delete-from-here. Removes this user message and
                          every row after it, reverting the thread to its
-                         pre-message state. Disabled mid-send (a delete
-                         racing the streaming turn would prune rows the
-                         loop is still writing). Hovering red-outlines
-                         the doomed range via the shared regen preview
+                         pre-message state - or, when the range touches
+                         history a fork depends on, continues in a new
+                         fork instead (the tooltip switches to say so).
+                         Disabled mid-send (a delete racing the
+                         streaming turn would prune rows the loop is
+                         still writing). Hovering red-outlines the
+                         affected range via the shared regen preview
                          channel. -->
                     <button
                       type="button"
                       class="copy-btn delete-from-btn"
-                      title="Delete this message and everything after it"
-                      aria-label="Delete this message and everything after it"
+                      title={deleteFromTitle(sharedRowSet.has(block.message.id))}
+                      aria-label={deleteFromTitle(sharedRowSet.has(block.message.id))}
                       disabled={activeSlot?.sending ?? false}
                       onclick={() => { void deleteFrom(block.message.id); }}
                       onmouseenter={() => previewDeleteFrom(block.message.id)}

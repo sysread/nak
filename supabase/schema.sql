@@ -12257,12 +12257,24 @@ begin
     return jsonb_build_object('conflict', true, 'reason', 'ownership_mismatch');
   end if;
 
-  -- Anchor user message must still exist on the same thread.
+  -- Anchor user message must still exist in the thread's resolved
+  -- transcript. Same-thread is the common case and the fast path; the
+  -- transcript fallback admits an INHERITED anchor - a completion on a
+  -- fork whose fork point is the anchoring user message itself (any
+  -- fork minted at a user row, and every shared-region regenerate,
+  -- which forks at the anchor and streams into the fork) commits with
+  -- an anchor that lives in an ancestor's segment. Transcript
+  -- membership still proves the anchor belongs to THIS conversation
+  -- and still catches an anchor deleted mid-stream.
   select created_at into v_anchor_ts
     from public.messages
     where id = p_user_message_id
-      and thread_id = v_thread_id
-      and role = 'user';
+      and role = 'user'
+      and (thread_id = v_thread_id
+           or exists (
+             select 1
+               from public.thread_transcript(v_thread_id) tt
+              where tt.id = p_user_message_id));
 
   if not found then
     return jsonb_build_object('conflict', true, 'reason', 'anchor_missing');

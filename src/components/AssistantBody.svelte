@@ -125,6 +125,14 @@
      */
     onRegenerate?: () => void;
     /**
+     * Tooltip for the regenerate button. The caller owns the copy
+     * because it depends on where the replace range lands: inside a
+     * shared region (history a fork depends on) the gesture continues
+     * in a new fork instead of replacing rows, and the tooltip is the
+     * surface that says so. See regenerateTitle in src/lib/ui/fork.ts.
+     */
+    regenerateTitle?: string;
+    /**
      * Fired when the user hovers or focuses the Regenerate button.
      * The caller paints a .regen-target preview on every row that
      * would be replaced if the click landed. Pure UI affordance:
@@ -167,6 +175,7 @@
     children,
     disabled = false,
     onRegenerate,
+    regenerateTitle = 'Regenerate this response (replaces this and any following messages)',
     onRegeneratePreviewEnter,
     onRegeneratePreviewLeave,
     onFork,
@@ -396,7 +405,7 @@
         onmouseleave={onRegeneratePreviewLeave}
         onfocus={onRegeneratePreviewEnter}
         onblur={onRegeneratePreviewLeave}
-        title="Regenerate this response (replaces this and any following messages)"
+        title={regenerateTitle}
         aria-label="Regenerate response"
       >
         <!-- Feather "refresh-cw": same glyph used by the rate-limit
