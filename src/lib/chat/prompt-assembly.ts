@@ -19,7 +19,12 @@ import {
   sanitizeToolCallsForWire,
 } from '../tools/wire';
 import type { Toolbox } from '../tools';
-import { hasForkTitleMarker, stripForkTitlePrefix } from '../forking';
+import {
+  FORK_POINT_WIRE_MARKER,
+  forkWireMarkerIndex,
+  hasForkTitleMarker,
+  stripForkTitlePrefix,
+} from '../forking';
 import { detectTimezone } from '../timezone';
 import {
   buildRefinementThink,
@@ -525,6 +530,32 @@ export function buildMetadataSystemMessage(
   }
 
   return { role: 'system', content: sections.join('\n\n') };
+}
+
+/**
+ * Splice the FORK POINT marker row into a projected conversation
+ * while the fork's title still carries the fork marker. `rows` is
+ * the SAME filtered message list `conversation` was projected from,
+ * in the same order - the boundary is found by row ownership there
+ * and the marker lands at the matching wire index. Wire-only: the
+ * display list never shows the marker, and a renamed (settled) fork
+ * gets its conversation back untouched, same array reference, zero
+ * cost. `title` is optional so callers that could not resolve the
+ * thread row degrade to "no marker" rather than guessing.
+ */
+export function withForkPointMarker(
+  conversation: VeniceMessage[],
+  rows: ReadonlyArray<{ thread_id?: string | null }>,
+  threadId: string,
+  title: string | undefined
+): VeniceMessage[] {
+  const at = title !== undefined ? forkWireMarkerIndex(rows, threadId, title) : null;
+  if (at === null) return conversation;
+  return [
+    ...conversation.slice(0, at),
+    { role: 'system', content: FORK_POINT_WIRE_MARKER },
+    ...conversation.slice(at),
+  ];
 }
 
 /**
