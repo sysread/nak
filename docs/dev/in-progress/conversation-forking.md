@@ -735,7 +735,9 @@ Externally identical delete behavior via new machinery.
 
 ### M4 - fork primitive + drawer Fork + worker treatment
 
-Status: DONE (2026-08-24; fork-title marker re-QA'd 2026-08-25 at
+Status: DONE (2026-08-24; retitle-nudge follow-up PR #520 merged
+2026-08-25, threads-fork re-run PASS at e3a9f418 incl. the retitle
+behavior; fork-title marker re-QA'd 2026-08-25 at
 15bb86d4, threads-fork 1-9 PASS incl. the second-fork ordinal).
 QA passed at 02f1dc64: threads-fork 1-9
 (fork shape, independent continuation, delete-parent keeping the
@@ -813,6 +815,30 @@ Implementation deltas from the plan:
   auto-title still claims the fork. Primitives + tests in
   src/lib/forking.ts; threads-fork QA case extended with a
   second-fork ordinal check and re-run.
+- **Post-merge follow-up, PR #520 (user request): the chat turn
+  frames a fresh fork.** While the title still carries the fork
+  marker, the per-turn metadata system message gains a fork
+  section (branched from "<base title>"; retitle via update_title
+  BEFORE replying once the user's direction for the fork is clear,
+  leave it alone otherwise) and the outgoing wire gets the FORK
+  POINT row spliced at the inherited/own boundary. This exists
+  because nothing else would ever retire a marked title:
+  auto-title only claims placeholder titles, and the drift nudge
+  is gated on round >= 2 plus not-manually-set - so the fork
+  section deliberately replaces both title nudges and ignores
+  both gates while the marker is present. Both additions are
+  wire-only (never persisted, invisible to exports and workers)
+  and disappear the moment the fork is renamed, restoring the
+  "settled fork reads as fully its own conversation" posture.
+  update_title leaves title_manually_set alone, so an inherited
+  manual pin survives settling. Browser-side marker constant and
+  boundary helper twin the Deno ones (islands cannot share
+  modules); the wire splice is a pure prompt-assembly primitive
+  with its own unit tests, since no browser-driving QA can
+  observe the request payload. Permanent home:
+  docs/dev/forking.md, "The chat turn on a fresh fork".
+  threads-fork step 6 now covers the retitle; re-run PASS at
+  e3a9f418.
 
 First user-visible feature. Forks can now exist, so everything
 that must be fork-aware lands in this milestone, not later.
