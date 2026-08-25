@@ -125,13 +125,46 @@ fork ordinal is a count-then-insert (no atomicity): concurrent forks
 of the same point can mint duplicate ordinals, a cosmetic title
 collision and nothing structural.
 
+## The chat turn on a fresh fork
+
+The marked title doubles as a "this fork has not found its own
+direction yet" signal, and the chat turn keys on it: while the
+title still carries the fork marker, every completion gets two
+additions, and the moment the fork is renamed both disappear - a
+settled fork reads as fully its own conversation.
+
+- The per-turn metadata system message gains a fork section: this
+  conversation was branched from "<base title>", the history above
+  the FORK POINT marker is shared, and once the direction the user
+  wants becomes clear the model should rename via update_title
+  BEFORE replying (same double-write guard as the regular title
+  nudges). This section REPLACES the placeholder/drift nudges and
+  ignores their gates on purpose: it fires from the fork's first
+  turn (auto-title only claims placeholder titles, so nothing else
+  will ever rename a marked title), and it fires even when
+  title_manually_set was inherited - the marker, not the inherited
+  pin, is what says "provisional".
+- The wire gets the FORK POINT marker row spliced at the
+  inherited/own boundary (wire-only; the display list never shows
+  it), so the model can locate the seam the metadata section names.
+  Same self-attributing copy as the workers' marker.
+
+The rename lands through the ordinary update_title path, which
+writes the title but leaves title_manually_set alone - a fork that
+inherited a hand-pinned flag keeps it after settling, so later
+topic-drift renames stay suppressed exactly as they were on the
+parent.
+
 ## Worker fork framing
 
 A forked thread's resolved transcript opens with inherited rows. The
-live chat wire deliberately gets NO framing - to the user and the
-responding model, the fork IS the conversation - but background
-agents replaying the transcript get the boundary explained, in a
-provenance-marked voice (see
+live chat wire is unframed once a fork has settled - to the user and
+the responding model, the fork IS the conversation - with one
+transient exception: while the title still carries the fork marker,
+the chat turn splices the FORK POINT row and a retitle nudge (see
+"The chat turn on a fresh fork" above). Background
+agents replaying the transcript always get the boundary explained,
+in a provenance-marked voice (see
 [`./prompt-augmentation.md`](./prompt-augmentation.md), "Provenance
 markers and fourth-wall framing": unexplained instruction-shaped
 insertions get flagged as prompt injection by hardened models).

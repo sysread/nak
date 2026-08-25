@@ -71,6 +71,7 @@
     type TopicVocabulary,
   } from '$lib/supabase';
   import { runChatLoop, toVeniceMessage } from '$lib/chat/loop';
+  import { withForkPointMarker } from '$lib/chat/prompt-assembly';
   import { slopNoticeCopy } from '$lib/ui/slop-notice';
   import CopyButton from '../components/CopyButton.svelte';
   import { ExchangeStore, mergeMessagesById } from '$lib/exchange/exchange-store.svelte';
@@ -3968,17 +3969,27 @@
       }
     }
 
-    const buildHistoryOnWire = (): VeniceMessage[] => [
-      ...ctx.systemMessages,
-      ...messages
-        .filter((m) => !pendingDeleteSet.has(m.id))
-        .map((m) =>
+    const buildHistoryOnWire = (): VeniceMessage[] => {
+      const rows = messages.filter((m) => !pendingDeleteSet.has(m.id));
+      // While a fork's title still carries the fork marker,
+      // withForkPointMarker splices the FORK POINT line into the wire
+      // at the inherited/own boundary so the model can locate the
+      // seam its metadata fork-nudge refers to. Wire-only - the
+      // display list never shows it - and gone the moment the fork is
+      // renamed (see docs/dev/forking.md).
+      const conversation = withForkPointMarker(
+        rows.map((m) =>
           toVeniceMessage(m, {
             visionSpec: ctx.modelSpec,
             imageUrls: attachmentImageUrls,
           })
         ),
-    ];
+        rows,
+        ctx.threadId,
+        findThread(ctx.threadId)?.title
+      );
+      return [...ctx.systemMessages, ...conversation];
+    };
 
     // Anchor for the `<datetime>` tag's since_last_response attribute.
     // Walk the persisted messages from the end and return the

@@ -48,6 +48,71 @@ export function stripForkTitlePrefix(title: string): string {
 }
 
 /**
+ * True while a title still carries the fork marker - the signal that
+ * the fork has not been renamed for its own direction yet. The chat
+ * turn keys its fork framing (the retitle nudge in the metadata
+ * message and the wire FORK POINT marker) off this, so both
+ * disappear the moment the fork gets a real title.
+ */
+export function hasForkTitleMarker(title: string): boolean {
+  return FORK_TITLE_PREFIX_RE.test(title);
+}
+
+/**
+ * The FORK POINT line spliced into the chat wire at the inherited/own
+ * boundary while the fork's title is still marked. Twin of
+ * FORK_POINT_MARKER in supabase/functions/venice/agents/_fork_framing.ts
+ * (the browser and Deno islands cannot share modules) - keep the copy
+ * in step: it is self-attributing on purpose, because an unexplained
+ * instruction-shaped insertion inside conversation content reads as
+ * prompt injection to hardened models (see
+ * docs/dev/prompt-augmentation.md).
+ */
+export const FORK_POINT_WIRE_MARKER =
+  '==== FORK POINT (marker inserted by nak, the chat app): ' +
+  'messages above this line are inherited from the parent conversation; ' +
+  'messages below it belong to this conversation ====';
+
+/**
+ * Index of the first own-segment row in a resolved transcript, or
+ * null when the list carries no inherited rows. Browser twin of the
+ * helper in _fork_framing.ts (same island split as the marker above).
+ * Rows without a thread_id count as own - framing is additive and
+ * must fail toward absence.
+ */
+export function forkBoundaryIndex(
+  rows: ReadonlyArray<{ thread_id?: string | null }>,
+  threadId: string
+): number | null {
+  let sawInherited = false;
+  for (let i = 0; i < rows.length; i++) {
+    const tid = rows[i].thread_id;
+    if (typeof tid === 'string' && tid !== threadId) {
+      sawInherited = true;
+      continue;
+    }
+    return sawInherited ? i : null;
+  }
+  return sawInherited ? rows.length : null;
+}
+
+/**
+ * Where the chat wire should splice the FORK POINT marker for this
+ * turn, or null for "no marker": the title no longer carries the
+ * fork marker (the fork has been named - a settled fork reads as
+ * fully its own conversation), or the message list holds no
+ * inherited rows to demarcate.
+ */
+export function forkWireMarkerIndex(
+  rows: ReadonlyArray<{ thread_id?: string | null }>,
+  threadId: string,
+  title: string
+): number | null {
+  if (!hasForkTitleMarker(title)) return null;
+  return forkBoundaryIndex(rows, threadId);
+}
+
+/**
  * Title for the nth fork minted from one fork point: the source's
  * base title behind the sigil + subscript ordinal. Forking a fork
  * re-marks the BASE title rather than stacking sigils - the marker

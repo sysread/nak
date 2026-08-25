@@ -34,9 +34,11 @@ prefix, and search's hidden-hit resolution.
    `select thread_id, role, position from messages where id = (select forked_from_msg_id from threads where forked_from_thread_id = '<parent-id>');`
 5. In psql: `select count(*) from messages where thread_id = '<fork-id>';`
    then `select count(*) from thread_transcript('<fork-id>');`
-6. Send a new message in the FORK and wait for the reply. Then open
-   the PARENT and send a different message there. Check both
-   transcripts.
+6. Send a new message in the FORK that sets a clearly different
+   direction from the parent (e.g. pivot the topic explicitly) and
+   wait for the reply. Then open the PARENT and send a different
+   message there. Check both transcripts, and check the fork's
+   title after its reply settles.
 7. In psql, after the workers have had a cycle (or run the worker
    crons ad hoc): check the fork's summary/topics cursors were not
    seeded at creation:
@@ -73,6 +75,11 @@ prefix, and search's hidden-hit resolution.
 - (6) The fork's reply lands in the fork only; the parent's new
   exchange lands in the parent only. Neither transcript shows the
   other's post-fork turns; the shared prefix shows in both.
+  Retitle nudge (model behavior - allow a turn or two): with the
+  direction-setting message, the assistant renames the fork via
+  update_title and the fork marker disappears from its title. On
+  an ambiguous message it may legitimately leave the title alone;
+  note which happened in the results row.
 - (7) Every cursor is null at creation (no seeding). Workers claim
   the fork only after its first own terminal reply, and memory /
   wiki extraction from the fork's first cycle produces no duplicates
@@ -102,3 +109,4 @@ first, then root).
 | ---- | ----------- | ------ | ------ | ----- |
 | 2026-08-24 | local (mise run dev-start) | 02f1dc64 | PASS (1-9) | All 9 steps verified. Fork opens immediately with full inherited transcript visible (4 msgs). Drawer shows both threads with same title; fork carries git-branch glyph. DB: fork owns 0 rows, thread_transcript(fork) returns 4 (full inherited prefix). Fork-point row is the parent's last settled assistant (position 4, parent-owned). Independent continuation verified: fork's reply lands in fork only, parent's new exchange lands in parent only, shared prefix shows in both. Worker cursors: checked after fork's first own exchange (timing window missed); cursors point at fork's own rows, not parent's. Delete parent: sweep reports (0, 2) - parent kept (fork depends on it), 2 rows past fork point trimmed. Fork transcript intact (8 rows) after sweep. Semantic search for "flurbnitz" resolves to the fork (only visible carrier), not the deleted parent; opening the hit works. |
 | 2026-08-25 | local (mise run dev-start) | 15bb86d4 | PASS (1-9) | Re-run after the fraktur-f sigil + per-point ordinal title change. All 9 steps still pass. The fork title is now the source's title behind the sigil + subscript ordinal: first fork gets sigil-1, second fork from the same point gets sigil-2. The placeholder title passes through unmarked (auto-title still recognizes it). Drawer renders the sigil-prefixed title correctly. The old git-branch glyph img is replaced by the sigil in the title text itself. Ordinal increments correctly across multiple forks from the same fork point. Independent continuation, delete-parent survival, and semantic search resolution all unchanged - no regressions from the title-prefix change. |
+| 2026-08-25 | local (mise run dev-start) | e3a9f418 | PASS (1-9) | Re-run after the title-nudge + wire-splice-extraction commits. All 9 steps still pass. New behavior verified: a fresh fork's first turn includes a metadata nudge prompting the model to rename via update_title before replying. The model called update_title on the first turn (edge log: "dispatching 1 tool call(s): update_title", outcome: ok), renaming the fork from the sigil-marked placeholder to a descriptive name. On the second turn (marker gone), the nudge disappeared - no update_title call. The FORK POINT wire splice is wire-only (invisible to the browser) and covered by the new fork-wire-marker unit test; the fork's transcript and turn completion are unaffected. Independent continuation, delete-parent survival, and semantic search remain unchanged. |

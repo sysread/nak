@@ -54,3 +54,36 @@ describe('title nudge ordering', () => {
     expect(text).not.toContain('update_title');
   });
 });
+
+describe('fork retitle nudge', () => {
+  // A machine-built fork title: sigil + subscript-1 + base.
+  const forkedTitle = '\u{1D523}\u{2081} Late Night Bread Bake';
+
+  it('fires on a marked title, from round 1, even when manually-set was inherited', () => {
+    const text = body({
+      threadTitle: forkedTitle,
+      titleManuallySet: true,
+      currentUserRound: 1,
+    });
+    expect(text).toContain('This conversation is a fork');
+    expect(text).toContain('update_title');
+    // Names the parent by the base title (marker stripped).
+    expect(text).toContain('"Late Night Bread Bake"');
+    // The same double-write guard the regular nudges carry.
+    expect(text).toMatch(/BEFORE replying/);
+    // Conditional, not unconditional: rename only once the direction
+    // is clear.
+    expect(text).toMatch(/direction/);
+  });
+
+  it('replaces the drift nudge while the marker is present', () => {
+    const text = body({ threadTitle: forkedTitle, currentUserRound: 3 });
+    expect(text).toContain('This conversation is a fork');
+    expect(text).not.toMatch(/topic\s+has meaningfully shifted/);
+  });
+
+  it('stays out of the way on unmarked titles', () => {
+    const text = body({ threadTitle: 'Late Night Bread Bake' });
+    expect(text).not.toContain('This conversation is a fork');
+  });
+});
