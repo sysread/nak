@@ -78,6 +78,26 @@ conversation's shared history, the result points you at the living
 fork that carries that history, never at a conversation you can't
 open.
 
+## Editing history a fork depends on
+
+Delete-from-here and regenerate normally remove messages for real.
+But messages that a fork builds on can't be destroyed without
+rewriting that fork's history too - so when one of those gestures
+would touch history a fork depends on, Nak forks instead of
+deleting.
+
+What you see is almost identical: the conversation rolls back to
+the point you chose, keeps its title and its place in the list, and
+(for regenerate) the new response streams in. Under the hood,
+though, you are now in a new fork that ends at that point, and the
+conversation you edited has retired in its favor. The other fork
+keeps every message it depended on, untouched.
+
+You can tell when this will happen before you click: the button's
+tooltip changes to say the conversation "continues in a new fork".
+Edits to messages nothing else depends on behave exactly as they
+always have - really deleted, really replaced.
+
 ## The assistant's view
 
 Inside a fork, the assistant sees one continuous conversation - it

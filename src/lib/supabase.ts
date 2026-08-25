@@ -453,8 +453,16 @@ export class SupabaseService {
     return threadsApi.renameThread(this.client, threadId, title, opts);
   }
 
-  async forkThread(sourceThreadId: string, forkMsgId?: string): Promise<Thread> {
-    return threadsApi.forkThread(this.client, sourceThreadId, forkMsgId);
+  async forkThread(
+    sourceThreadId: string,
+    forkMsgId?: string,
+    opts?: { markTitle?: boolean }
+  ): Promise<Thread> {
+    return threadsApi.forkThread(this.client, sourceThreadId, forkMsgId, opts);
+  }
+
+  async listChildForkPointIds(threadId: string): Promise<string[]> {
+    return threadsApi.listChildForkPointIds(this.client, threadId);
   }
 
   async setThreadModel(threadId: string, model: string | null): Promise<void> {

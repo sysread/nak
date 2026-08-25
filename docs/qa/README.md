@@ -246,6 +246,10 @@ One file per use-case under [`use-cases/`](./use-cases/), named
   conversation as hide-then-sweep: instant disappearance from every
   surface, the deferred DB destruction via the fork GC, sweep
   idempotence, and the realtime hidden-as-delete echo.
+- [threads-edit-fork](./use-cases/threads-edit-fork.md) - delete
+  and regenerate inside a shared region: the tooltip switch, the
+  fork-and-hide swap, the inherited-anchor completion, and the
+  private-tail path staying destructive.
 - [threads-fork-from-message](./use-cases/threads-fork-from-message.md) -
   the per-message fork button: which rows offer it, the hover range
   preview, the mid-conversation prefix cut, and the reparent rule

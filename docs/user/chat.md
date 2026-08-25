@@ -175,6 +175,14 @@ If the regenerated turn fails partway (network drop, rate limit, you
 hit Stop), the greyed messages restore to normal and nothing is
 deleted. Try again, or carry on as if you hadn't clicked.
 
+One special case: if the range you'd replace includes history that a
+[fork](./forking.md) depends on, nothing is replaced in place.
+Instead the conversation quietly continues in a new fork that ends
+at your prompt, and the new response streams in there - the fork
+keeps the same title and takes the original's place in the list,
+while the fork that depended on the old history keeps it unchanged.
+The button's tooltip tells you when a regenerate will work this way.
+
 The button also appears on replies that consist only of tool calls
 with no text - for example a turn you stopped while a tool call was
 still running. Regenerating from there discards the interrupted tool
@@ -207,6 +215,15 @@ stops, leaving you at a clean prompt to take the thread in a new
 direction (or to delete the whole thread from the conversation list if
 you removed everything). Unlike regenerate, a delete cannot be undone -
 the removed messages are gone from the database, not just hidden.
+
+The same fork special case applies here as for regenerate: if the
+range you'd remove includes history a [fork](./forking.md) depends
+on, the messages aren't destroyed. Your conversation continues in a
+new fork that ends just before the deleted range - same title, same
+place in the list, and to you it looks exactly like the delete
+happened - while the depending fork keeps the shared history it was
+built on. The tooltip says "continues in a new fork" when a delete
+will work this way.
 
 To remove an entire conversation, use **Delete** in the thread list
 rather than deleting from the first message.

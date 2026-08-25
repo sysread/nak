@@ -20,7 +20,7 @@ explicitly instead of appending:
 
 This case was the M0 BASELINE for the conversation-forking work's
 M1 (explicit message positions - see
-`docs/dev/in-progress/conversation-forking.md`), executed against
+[dev: forking](../../dev/forking.md)), executed against
 pre-position code with `created_at` as the sort (first results row).
 Post-M1 runs must produce the SAME observable transcript order from
 the same steps; the queries below read `position` order, which is

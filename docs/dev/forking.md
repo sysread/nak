@@ -2,13 +2,13 @@
 
 Forked conversations: explicit message positions, fork columns on
 threads, the `thread_transcript` resolver, hidden threads, the fork
-GC, the fork primitive with its drawer entry point, worker fork
-framing, and hidden-hit search resolution. The remaining entry
-points (fork-from-message card buttons, edit-forks on
-delete/regenerate) are still in flight - see
-[`./in-progress/conversation-forking.md`](./in-progress/conversation-forking.md)
-for the milestone plan. This doc owns the machinery that has
-landed.
+GC, the fork primitive with its entry points (drawer item and
+message-card buttons), edit-forks on delete-from-here / regenerate
+in shared regions, worker fork framing, and hidden-hit search
+resolution. This doc owns current reality; the milestone-by-
+milestone build narrative lived in
+docs/dev/in-progress/conversation-forking.md and is preserved in
+git history.
 
 ## Data model
 
@@ -150,6 +150,66 @@ count-then-insert (no atomicity): concurrent forks of the same
 point can mint duplicate ordinals, a cosmetic title collision and
 nothing structural.
 
+## Edit-forks: destructive gestures in a shared region
+
+Delete-from-here and regenerate remove rows. Once forks exist, some
+rows are load-bearing for OTHER conversations - the **shared
+region**: inherited rows, plus own rows at-or-before the latest
+fork point any child thread minted from this one. Editing those in
+place would rewrite every dependent timeline, so when the edit
+range touches the shared region the gesture becomes a fork:
+
+- **Delete-from-here** forks at the closest anchorable row before
+  the deleted range (walking past rows a fork cannot cut at - the
+  same validity rules as every other fork), hides the edited
+  thread, and swaps the selection to the fork. The drawer shows
+  "the same conversation, minus the deleted turns"; every other
+  timeline keeps the unchanged history. With nothing anchorable
+  before the range this degenerates to a fresh empty thread
+  carrying the same title and pins (a fork with an empty prefix is
+  just a new thread; no parent link).
+- **Regenerate** forks at the anchoring user message, hides the
+  edited thread, swaps the selection, and runs the completion on
+  the fork with no superseded rows - the fork's transcript ends
+  with the now-unanswered user turn, the same trailing-user shape
+  the incomplete-turn retry path already handles.
+
+Edits strictly inside the private tail stay destructive, exactly
+as before forks existed - the common case is unchanged.
+
+Mechanics and their reasons:
+
+- **Verbatim title.** An edit-fork replaces its source in the UI,
+  so the fork primitive's `markTitle: false` option carries the
+  title over with no sigil or ordinal. Nothing downstream reads
+  the fork as provisional - no retitle nudge, no chat-wire fork
+  framing (both key on the marked title). Worker framing keys on
+  row ownership and still applies, which is what keeps the
+  inherited prefix from being double-processed.
+- **The shared-region test** is `sharedRowIds`
+  (src/lib/ui/fork.ts), fed by `listChildForkPointIds` - the fork
+  points of ALL children, hidden ones included: a hidden child
+  awaiting GC may still carry live descendants that read this
+  prefix, and when it does not, counting it costs one unnecessary
+  fork, never a corrupted timeline. The cached set only drives the
+  tooltip switch ("continues in a new fork" - same red outline;
+  one danger language). Both click paths re-fetch fresh child
+  state before deciding, so a fork minted on another device since
+  the cache loaded cannot have its history edited away.
+- **Fork before hide.** The replacement is created before the old
+  thread is hidden, so a failure between the two leaves both
+  visible (a duplicate-looking drawer row, recoverable) rather
+  than neither.
+- **Inherited commit anchors.** A completion on a fork whose fork
+  point IS the anchoring user message commits with an anchor owned
+  by an ancestor's segment. `commit_assistant_message` accepts the
+  anchor via `thread_transcript` membership (same-thread remains
+  the fast path); competing-send detection is unchanged, because
+  only the fork's OWN user rows can compete - exactly the
+  per-thread claim model. This membership check also fixed a
+  latent M5 bug: regenerating the first reply of a fork minted at
+  a USER row used to bounce off the commit with `anchor_missing`.
+
 ## The chat turn on a fresh fork
 
 The marked title doubles as a "this fork has not found its own
@@ -287,11 +347,12 @@ what a sweep did; run it ad hoc with
 
 - Deleted content in a shared prefix persists as long as any fork
   lives - inherent to structural sharing.
-- The M4-to-M6 window (forks exist, edit-forks don't) is
-  corruption-safe by construction: delete-from-here and regenerate
-  ranges run to the tail, so a range starting in an inherited
-  prefix always includes the fork-point row and the restrict FK
-  fails the whole statement loudly.
+- A delete or regenerate range that touches shared history never
+  issues row deletes at all - it forks (see "Edit-forks" above).
+  The restrict FK on fork points stays as the backstop: a bug that
+  routes a shared-region range into the destructive path fails the
+  whole statement loudly instead of corrupting the forks that
+  depend on it.
 - The daily digest reports pre-fork rows under the owning (possibly
   hidden) thread's title. Decided in M4: accepted without code. A
   fork inherits its parent's title behind a short fork marker, so
@@ -305,6 +366,9 @@ what a sweep did; run it ad hoc with
   against GC via the restrict FK. The browser primitive only forks
   rows RLS let it read; a schema-level guard (composite FK on
   user_id) was judged not worth the migration for a personal app.
+- Response claims are per-thread, so a parent and its fork can
+  stream completions concurrently - by design, not an oversight: to
+  the claim system they are simply two conversations.
 - Realtime UPDATEs to inherited rows do not reach a fork's open
   message list (the subscription filters on the fork's own
   thread_id). Display-only staleness on rare paths (a
