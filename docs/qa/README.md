@@ -154,6 +154,9 @@ One file per use-case under [`use-cases/`](./use-cases/), named
 - [chat-cutoff-retry](./use-cases/chat-cutoff-retry.md) - retrying a
   dead tail (partial-text cutoff or reasoning-only stall) red-outlines
   and replaces it rather than appending a continuation.
+- [chat-cutoff-banner](./use-cases/chat-cutoff-banner.md) - when the
+  "cut off" retry banner should fire (genuine failed completion) vs.
+  when it should not (draft tail, aborted, pending ask_user, settled).
 - [chat-stop-deliberate-abort](./use-cases/chat-stop-deliberate-abort.md) -
   the Stop button persists a `status='aborted'` row (marker-only even
   when nothing streamed), is never offered for retry, and reads the same

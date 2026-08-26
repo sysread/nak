@@ -108,6 +108,14 @@ export function isCutOffPartialText(message: Message): boolean {
  *     round never wrote anything (immediate failure, or refresh
  *     during the very first round before any persistence).
  *
+ * A `user` row with `status='draft'` is NOT a cut-off tail: the
+ * fork-and-edit flow intentionally leaves a draft user message at
+ * the end of a fork for the user to edit and send. The draft is
+ * expected, not a failed completion. Once the user sends, the draft
+ * is promoted (status cleared to null) and the completion runs
+ * normally. Only a non-draft user message at the tail means the
+ * completion worker failed before writing anything.
+ *
  * This is the persisted-shape half of the verdict only. The caller
  * (the `incompleteTurnTail` derived in src/screens/Chat.svelte) also
  * gates on session state - a turn in progress, an already-displayed
@@ -153,6 +161,11 @@ export function classifyIncompleteTurnTail(
     if (isReasoningOnlyStall(last)) return last;
     return null;
   }
+  // A draft user message (status='draft') is the fork-and-edit flow
+  // waiting for the user to edit and send - an expected state, not a
+  // failed completion. Only a non-draft user message at the tail means
+  // the completion worker failed before writing anything.
+  if (last.role === 'user' && last.status === 'draft') return null;
   if (last.role === 'user') return last;
   return null;
 }
