@@ -503,6 +503,14 @@ export async function addMessage(
      * at the tail.
      */
     position?: number;
+    /**
+     * Message status. Omitted (default) leaves the column null,
+     * which is the normal state for user messages and the terminal
+     * state for assistant messages that predate the status column.
+     * The fork-and-edit flow passes 'draft' to seed the composer
+     * with a durable row that promotes to null on send.
+     */
+    status?: Message['status'];
   } = {}
 ): Promise<Message> {
   // Trim outer whitespace at the write boundary. LLM responses
@@ -524,6 +532,7 @@ export async function addMessage(
   if (opts.reasoning !== undefined) row.reasoning = opts.reasoning;
   if (opts.citations !== undefined) row.citations = opts.citations;
   if (opts.position !== undefined) row.position = opts.position;
+  if (opts.status !== undefined) row.status = opts.status;
   const { data, error } = await client
     .from('messages')
     .insert(row)

@@ -1445,6 +1445,7 @@ export class SupabaseService {
       reasoning?: string | null;
       citations?: Citation[] | null;
       position?: number;
+      status?: Message['status'];
     } = {}
   ): Promise<Message> {
     return messagesApi.addMessage(this.client, threadId, role, content, opts);

@@ -247,6 +247,7 @@
   } from '$lib/ui/chat-screen';
   import { computeRegenerateRangeIds, persistedRowIds } from '$lib/ui/regenerate';
   import { computeDeleteFromRangeIds } from '$lib/ui/message-delete';
+  import { findDraftMessage } from '$lib/ui/draft-message';
   import {
     canForkAtMessage,
     computeForkRangeIds,
@@ -837,6 +838,38 @@
    */
   let pendingDeleteIds = $state<string[]>([]);
   const pendingDeleteSet = $derived(new Set(pendingDeleteIds));
+
+  // The fork-and-edit flow creates a fork with a draft user message
+  // (status='draft') and loads the draft text into the composer. On
+  // send, the draft is promoted (status cleared, content updated) and
+  // the completion runs normally. This id tracks which draft row the
+  // composer is editing so send() knows to promote rather than insert.
+  // Null when the composer is in normal (non-draft) mode.
+  let pendingDraftId = $state<string | null>(null);
+
+  // Reconnection: when the user navigates to a thread that has a draft
+  // row (from a previous fork-and-edit that they abandoned), load the
+  // draft text into the composer and set pendingDraftId so the next
+  // send promotes the draft instead of inserting a new message.
+  //
+  // Runs on messages change, not on activeThreadId change directly,
+  // because selectThread clears messages to [] before the async fetch
+  // resolves - the draft only appears once the fetch lands. The guard
+  // on composer length prevents wiping the user's in-progress edits
+  // when the effect re-runs for an unrelated messages update (e.g. a
+  // realtime INSERT).
+  $effect(() => {
+    // Track the dependency on messages.
+    void messages.length;
+    if (pendingDraftId) return;
+    const draft = findDraftMessage(messages);
+    if (!draft) return;
+    // Only pre-populate when the composer is empty - the user may
+    // already be typing.
+    if (composer.length > 0) return;
+    composer = draft.content;
+    pendingDraftId = draft.id;
+  });
 
   // Id of the thread's latest live assistant row - the only one that
   // gets a second-thoughts refinement button, since a refinement
@@ -3256,6 +3289,55 @@
     }
   }
 
+  // Fork and edit: fork from the message BEFORE the user message (not
+  // at the user message itself), insert a draft row carrying the old
+  // text, open the fork, and load the draft into the composer. The
+  // user edits and sends normally - the send path promotes the draft
+  // (status cleared, content updated) and runs the completion.
+  //
+  // Forking before the user message means the old text stays in the
+  // original conversation, untouched. The edited text starts the
+  // fork's own segment. If the user message is the first message (no
+  // anchor before it), create a fresh thread with the parent's pins.
+  async function forkAndEdit(userMessageId: string): Promise<void> {
+    if (!app.supabase || !activeThreadId) return;
+    const active = findThread(activeThreadId);
+    if (!active) return;
+    const userMsg = messages.find((m) => m.id === userMessageId);
+    if (!userMsg || userMsg.role !== 'user') return;
+    clearRegeneratePreview();
+    // Clear any pending edit state - mutually exclusive.
+    pendingDeleteIds = [];
+    try {
+      const anchor = deleteForkAnchor(messages, userMessageId);
+      const fork = anchor
+        ? await app.supabase.forkThread(active.id, anchor.id, { markTitle: false })
+        : await app.supabase.createThread(
+            active.title,
+            active.model,
+            active.reasoning_effort,
+            active.verbosity,
+            active.title_manually_set,
+            active.toolboxes_enabled,
+          );
+      rebucketThread(fork);
+      // Insert a draft row on the fork with the old user message text.
+      // The draft is invisible in the transcript (buildMessageBlocks
+      // filters status='draft') and the composer is the only surface
+      // that shows it.
+      const draft = await app.supabase.addMessage(fork.id, 'user', userMsg.content, {
+        status: 'draft',
+      });
+      await selectThread(fork.id);
+      composer = draft.content;
+      pendingDraftId = draft.id;
+      // Focus the composer so the user can start editing immediately.
+      composerEl?.focus();
+    } catch (err) {
+      error = { text: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
   // Rename via the row dropdown: select the thread first (so the top-bar
   // title input is the one being edited), then flip into rename mode on
   // the next microtask — startRename reads currentThread, which only
@@ -3576,8 +3658,38 @@
 
       let userMessageId: string;
       try {
-        const userMsg = await persistUserTurn(threadId, text, sendAttachments);
-        userMessageId = userMsg.id;
+        if (pendingDraftId) {
+          // Fork-and-edit send: promote the draft row (update content,
+          // clear status) rather than inserting a new user message.
+          // The draft row already exists in the DB from the
+          // forkAndEdit handler; this update turns it into a normal
+          // user message that the completion runs against.
+          const supabase = app.supabase;
+          if (!supabase) throw new Error('Not connected.');
+          const { data, error: updErr } = await supabase.client
+            .from('messages')
+            .update({ content: text.trim(), status: null })
+            .eq('id', pendingDraftId)
+            .select()
+            .single();
+          if (updErr) throw updErr;
+          const promoted = data as Message;
+          // Update the in-memory row so the transcript shows the
+          // edited text immediately (it was previously hidden as a
+          // draft; now it renders as a normal user message).
+          if (threadId === activeThreadId) {
+            messages = messages.map((m) =>
+              m.id === pendingDraftId
+                ? { ...promoted, attachments: m.attachments }
+                : m
+            );
+          }
+          userMessageId = pendingDraftId;
+          pendingDraftId = null;
+        } else {
+          const userMsg = await persistUserTurn(threadId, text, sendAttachments);
+          userMessageId = userMsg.id;
+        }
       } catch (err) {
         // Pre-exchange failure (user message persist). No retry here -
         // the user's row didn't land, so "retry" would mean "try
@@ -6445,7 +6557,11 @@
               retry: () => void retryInterrupted(),
               dismiss: () => {
                 void deleteDraft(interruptedDraft!.threadId).catch(() => {});
-                interruptedDraft = null;
+    interruptedDraft = null;
+    // Clear any pending draft from the prior thread. The reconnection
+    // $effect below will re-populate from a draft row if the new
+    // thread has one.
+    pendingDraftId = null;
               },
             }
           : null,
@@ -8043,6 +8159,30 @@
                         </svg>
                       </button>
                     {/if}
+                    <!-- Fork and edit. Forks from the message before
+                         this user message, inserts a draft row with
+                         the old text, opens the fork, and loads the
+                         draft into the composer. The user edits and
+                         sends normally. The old message stays in this
+                         conversation, untouched. Disabled mid-send. -->
+                    <button
+                      type="button"
+                      class="copy-btn fork-edit-btn"
+                      title="Fork and edit - edit a copy of this message in a new conversation"
+                      aria-label="Fork and edit this message"
+                      disabled={activeSlot?.sending ?? false}
+                      onclick={() => { void forkAndEdit(block.message.id); }}
+                    >
+                      <!-- Feather "edit-2" (pencil) - reads as "edit",
+                           distinct from the git-branch fork icon. 14px,
+                           2px stroke, same outline language. -->
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                           stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                           stroke-linejoin="round" aria-hidden="true">
+                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                      </svg>
+                    </button>
                     <!-- Delete-from-here. Removes this user message and
                          every row after it, reverting the thread to its
                          pre-message state - or, when the range touches
