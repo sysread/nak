@@ -83,6 +83,7 @@ yarn-error.log*
 
 # opencode
 opencode.json
+AGENTS.local.md
 
 # scratch docs
 .scratch/
