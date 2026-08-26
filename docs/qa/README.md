@@ -143,6 +143,14 @@ One file per use-case under [`use-cases/`](./use-cases/), named
   the regenerate button's visibility (every assistant reply,
   including tool-call-only cards from a stopped turn), the hover
   preview, replace-range semantics, and abort restore.
+- [chat-edit-user-message](./use-cases/chat-edit-user-message.md) -
+  the edit dropdown on user messages: destructive edit in the private
+  tail (composer pre-population, red highlighting, supersede on send),
+  shared-region gate (only "Fork and edit" offered), and abandon.
+- [chat-fork-and-edit](./use-cases/chat-fork-and-edit.md) -
+  fork-and-edit with draft messages: fork before the user message,
+  draft row invisibility, composer reconnection on navigation, send
+  promotes the draft, first-message edge case.
 - [chat-cutoff-retry](./use-cases/chat-cutoff-retry.md) - retrying a
   dead tail (partial-text cutoff or reasoning-only stall) red-outlines
   and replaces it rather than appending a continuation.
