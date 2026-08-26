@@ -536,6 +536,30 @@ create policy "messages are self-updatable for tool answers" on public.messages
     )
   );
 
+-- The fork-and-edit flow inserts a draft user row (status='draft')
+-- and later promotes it: updates content to the edited text and
+-- clears status to null. This policy allows the owning user to
+-- UPDATE their own draft rows. Scoped to status='draft' so a client
+-- cannot rewrite a settled user message - only the transient draft
+-- is mutable, and it becomes immutable the moment it is promoted
+-- (status set to null).
+drop policy if exists "messages are self-updatable for draft promotion" on public.messages;
+create policy "messages are self-updatable for draft promotion" on public.messages
+  for update using (
+    role = 'user'
+    and status = 'draft'
+    and exists (
+      select 1 from public.threads t
+      where t.id = messages.thread_id and t.user_id = auth.uid()
+    )
+  ) with check (
+    role = 'user'
+    and exists (
+      select 1 from public.threads t
+      where t.id = messages.thread_id and t.user_id = auth.uid()
+    )
+  );
+
 -- Tool calling -----------------------------------------------------------
 --
 -- Messages gain an OpenAI-shaped tool-call payload so conversations
