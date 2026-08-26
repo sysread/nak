@@ -847,6 +847,19 @@
   // Null when the composer is in normal (non-draft) mode.
   let pendingDraftId = $state<string | null>(null);
 
+  // The destructive edit flow (Edit button on user messages). When
+  // set, the old user message and everything after it are red-
+  // highlighted (via pendingDeleteIds) and the composer is pre-
+  // populated with the old text. On send, a new user message is
+  // inserted and the old range is superseded (deleted atomically by
+  // the commit RPC). Null when no edit is in progress.
+  let pendingEdit = $state<{ oldMessageId: string; rangeIds: string[] } | null>(null);
+
+  // Per-message edit dropdown (the pencil button opens a small menu
+  // with "Edit" and "Fork and edit"). Models the thread-row kebab
+  // menu pattern (openMenuThreadId -> openEditMenuMsgId).
+  let openEditMenuMsgId = $state<string | null>(null);
+
   // Reconnection: when the user navigates to a thread that has a draft
   // row (from a previous fork-and-edit that they abandoned), load the
   // draft text into the composer and set pendingDraftId so the next
@@ -3338,7 +3351,35 @@
     }
   }
 
-  // Rename via the row dropdown: select the thread first (so the top-bar
+  // Destructive edit: reopen the user message text in the composer,
+  // red-highlight the old message and everything after it, and wait
+  // for the user to send. On send, a new user message is inserted and
+  // the old range is superseded (deleted atomically by the commit RPC).
+  // Only available in the private tail - the dropdown hides "Edit"
+  // when the message is in a shared region.
+  function editFrom(userMessageId: string): void {
+    const userMsg = messages.find((m) => m.id === userMessageId);
+    if (!userMsg || userMsg.role !== 'user') return;
+    closeEditMenu();
+    clearRegeneratePreview();
+    // Clear any pending draft state - mutually exclusive.
+    pendingDraftId = null;
+    const rangeIds = computeDeleteFromRangeIds(messages, userMessageId);
+    if (rangeIds.length === 0) return;
+    pendingDeleteIds = rangeIds;
+    hoverRegenerateIds = [];
+    pendingEdit = { oldMessageId: userMessageId, rangeIds };
+    composer = userMsg.content;
+    composerEl?.focus();
+  }
+
+  function toggleEditMenu(msgId: string): void {
+    openEditMenuMsgId = openEditMenuMsgId === msgId ? null : msgId;
+  }
+
+  function closeEditMenu(): void {
+    openEditMenuMsgId = null;
+  }
   // title input is the one being edited), then flip into rename mode on
   // the next microtask — startRename reads currentThread, which only
   // updates after the selectThread state mutation propagates.
@@ -3657,6 +3698,7 @@
       await cancelPendingAskUser(threadId, 'abandoned_on_new_send');
 
       let userMessageId: string;
+      let editSupersededIds: string[] | undefined;
       try {
         if (pendingDraftId) {
           // Fork-and-edit send: promote the draft row (update content,
@@ -3689,6 +3731,15 @@
         } else {
           const userMsg = await persistUserTurn(threadId, text, sendAttachments);
           userMessageId = userMsg.id;
+          // Destructive edit send: the old user message and everything
+          // after it are superseded (deleted atomically by the commit
+          // RPC when the new assistant message lands). The
+          // pendingDeleteIds set by editFrom drives the red
+          // highlighting and the buildHistoryOnWire filter; the
+          // supersededIds here drive the server-side delete.
+          if (pendingEdit) {
+            editSupersededIds = persistedRowIds(messages, pendingEdit.rangeIds);
+          }
         }
       } catch (err) {
         // Pre-exchange failure (user message persist). No retry here -
@@ -3728,7 +3779,12 @@
         sendUserLocation: app.userLocation,
         originalText: text,
         userMessageId,
+        supersededIds: editSupersededIds,
       });
+      // Clear the pending-edit state after the exchange completes.
+      // pendingDeleteIds is cleared inside runExchange (via fade-out-
+      // and-prune or the no-replacement path); pendingEdit is ours.
+      pendingEdit = null;
     } finally {
       sendSetupInFlight = false;
       // Safety net: if a pre-runExchange await threw, the claim is
@@ -6228,6 +6284,15 @@
         (tgt.closest('.thread-menu') || tgt.closest('.thread-actions-btn'));
       if (!inside) closeRowMenu();
     }
+    // Close the per-message edit dropdown on outside click, same
+    // pattern as the thread-row menu above.
+    if (openEditMenuMsgId !== null) {
+      const tgt = e.target;
+      const inside =
+        tgt instanceof Element &&
+        (tgt.closest('.edit-menu') || tgt.closest('.edit-menu-btn'));
+      if (!inside) closeEditMenu();
+    }
     if (
       !promptsMenuOpen &&
       !modelMenuOpen &&
@@ -6558,10 +6623,13 @@
               dismiss: () => {
                 void deleteDraft(interruptedDraft!.threadId).catch(() => {});
     interruptedDraft = null;
-    // Clear any pending draft from the prior thread. The reconnection
-    // $effect below will re-populate from a draft row if the new
-    // thread has one.
+    // Clear any pending draft or edit state from the prior thread.
+    // The reconnection $effect re-populates from a draft row if the
+    // new thread has one; an edit is abandoned (old messages survive).
     pendingDraftId = null;
+    pendingEdit = null;
+    pendingDeleteIds = [];
+    openEditMenuMsgId = null;
               },
             }
           : null,
@@ -8159,23 +8227,22 @@
                         </svg>
                       </button>
                     {/if}
-                    <!-- Fork and edit. Forks from the message before
-                         this user message, inserts a draft row with
-                         the old text, opens the fork, and loads the
-                         draft into the composer. The user edits and
-                         sends normally. The old message stays in this
-                         conversation, untouched. Disabled mid-send. -->
+                    <!-- Edit dropdown. A pencil button that opens a
+                         small menu with "Edit" (destructive, private
+                         tail only) and "Fork and edit" (non-
+                         destructive). When the message is in a shared
+                         region, "Edit" is hidden - only "Fork and
+                         edit" is offered. Disabled mid-send. -->
                     <button
                       type="button"
-                      class="copy-btn fork-edit-btn"
-                      title="Fork and edit - edit a copy of this message in a new conversation"
-                      aria-label="Fork and edit this message"
+                      class="copy-btn edit-menu-btn"
+                      title="Edit this message"
+                      aria-label="Edit this message"
+                      aria-haspopup="menu"
+                      aria-expanded={openEditMenuMsgId === block.message.id}
                       disabled={activeSlot?.sending ?? false}
-                      onclick={() => { void forkAndEdit(block.message.id); }}
+                      onclick={(e) => { e.stopPropagation(); toggleEditMenu(block.message.id); }}
                     >
-                      <!-- Feather "edit-2" (pencil) - reads as "edit",
-                           distinct from the git-branch fork icon. 14px,
-                           2px stroke, same outline language. -->
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
                            stroke="currentColor" stroke-width="2" stroke-linecap="round"
                            stroke-linejoin="round" aria-hidden="true">
@@ -8183,6 +8250,20 @@
                         <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
                       </svg>
                     </button>
+                    {#if openEditMenuMsgId === block.message.id}
+                      <div class="edit-menu" role="menu">
+                        {#if !sharedRowSet.has(block.message.id)}
+                          <button class="thread-menu-item" role="menuitem"
+                                  onclick={() => { editFrom(block.message.id); }}>
+                            Edit
+                          </button>
+                        {/if}
+                        <button class="thread-menu-item" role="menuitem"
+                                onclick={() => { closeEditMenu(); void forkAndEdit(block.message.id); }}>
+                          Fork and edit
+                        </button>
+                      </div>
+                    {/if}
                     <!-- Delete-from-here. Removes this user message and
                          every row after it, reverting the thread to its
                          pre-message state - or, when the range touches
