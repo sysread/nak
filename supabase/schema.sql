@@ -643,7 +643,8 @@ alter table public.messages
       'complete',
       'aborted',
       'error',
-      'suspended_for_ask_user'
+      'suspended_for_ask_user',
+      'draft'
     )
   );
 

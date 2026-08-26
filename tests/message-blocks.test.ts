@@ -153,6 +153,39 @@ describe('buildMessageBlocks - recovery-row hiding', () => {
   });
 });
 
+describe('buildMessageBlocks - draft-row hiding', () => {
+  it('hides a draft user row at the tail', () => {
+    const u = msg({ id: 'u1', role: 'user', content: 'hi' });
+    const a = msg({ id: 'a1', content: 'hello' });
+    const draft = msg({ id: 'd1', role: 'user', content: 'edited text', status: 'draft' });
+    expect(buildMessageBlocks([u, a, draft])).toEqual([
+      { kind: 'plain', message: u },
+      { kind: 'plain', message: a },
+    ]);
+  });
+
+  it('hides a draft row without disturbing the blocks around it', () => {
+    const u = msg({ id: 'u1', role: 'user', content: 'go' });
+    const a = msg({ id: 'a1', content: 'reply' });
+    const draft = msg({ id: 'd1', role: 'user', content: 'pending edit', status: 'draft' });
+    const u2 = msg({ id: 'u2', role: 'user', content: 'after' });
+    // A draft should always be the last row (the invariant), but the
+    // filter should still work if a draft appears mid-conversation.
+    const kinds = buildMessageBlocks([u, a, draft, u2]).map((b) => b.kind);
+    expect(kinds).toEqual(['plain', 'plain', 'plain']);
+  });
+
+  it('keeps a normal user row with status=null', () => {
+    const u = msg({ id: 'u1', role: 'user', content: 'hi', status: null });
+    expect(buildMessageBlocks([u])).toHaveLength(1);
+  });
+
+  it('hides a draft even when the content is empty', () => {
+    const draft = msg({ id: 'd1', role: 'user', content: '', status: 'draft' });
+    expect(buildMessageBlocks([draft])).toEqual([]);
+  });
+});
+
 describe('buildMessageBlocks - hidden tools', () => {
   it('drops an all-hidden turn with no body entirely', () => {
     const a = msg({
