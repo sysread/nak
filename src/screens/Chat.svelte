@@ -1708,7 +1708,7 @@
     // carry a field the other lacked; merge those upgrades onto the
     // existing row rather than dropping the echo (and rather than a
     // wholesale swap, which would clobber a field the existing row holds
-    // and the echo doesn't - e.g. co-fetched attachments). Two cases:
+    // and the echo doesn't - e.g. co-fetched attachments). Three cases:
     //   - attachments: the realtime payload can't join the attachments
     //     table, so a later listAttachmentsByMessageIds fetch upgrades a
     //     row that first arrived attachment-less.
@@ -1716,6 +1716,10 @@
     //     UPDATE a beat after the row committed (see
     //     supabase/functions/venice/agents/second_thoughts.ts), so its
     //     echo carries a verdict the locally-hydrated row didn't have yet.
+    //   - draft promotion: the fork-and-edit flow updates content and
+    //     clears status from 'draft' to null. Without this merge, another
+    //     tab viewing the fork keeps a stale draft row in memory (invisible
+    //     in the transcript, but findDraftMessage keeps matching it).
     const existing = messages[existingIdx];
     const incomingHasAttachments = !!msg.attachments && msg.attachments.length > 0;
     const existingHasAttachments =
@@ -1723,12 +1727,17 @@
     const gainsAttachments = incomingHasAttachments && !existingHasAttachments;
     const gainsSecondThoughts =
       msg.second_thoughts != null && existing.second_thoughts == null;
-    if (!gainsAttachments && !gainsSecondThoughts) return;
+    // Draft promotion: the incoming row has status=null where the
+    // existing row had status='draft', and the content changed.
+    const draftPromoted =
+      existing.status === 'draft' && msg.status == null;
+    if (!gainsAttachments && !gainsSecondThoughts && !draftPromoted) return;
     const updated = [...messages];
     updated[existingIdx] = {
       ...existing,
       ...(gainsAttachments ? { attachments: msg.attachments } : {}),
       ...(gainsSecondThoughts ? { second_thoughts: msg.second_thoughts } : {}),
+      ...(draftPromoted ? { status: msg.status, content: msg.content } : {}),
     };
     messages = updated;
   }
@@ -3723,6 +3732,7 @@
 
       let userMessageId: string;
       let editSupersededIds: string[] | undefined;
+      let replaceUserMessageContent: string | undefined;
       try {
         if (pendingDraftId) {
           // Fork-and-edit send: promote the draft row (update content,
@@ -3745,18 +3755,19 @@
           }
           userMessageId = pendingDraftId;
           pendingDraftId = null;
+        } else if (pendingEdit) {
+          // Destructive edit send (atomic): do NOT insert a new user
+          // message before the exchange. Instead, pass the edited text
+          // to the commit RPC, which inserts it + deletes the old range
+          // + commits the assistant reply in one transaction. On
+          // failure (abort/error), nothing was inserted - the edit is
+          // a clean no-op.
+          userMessageId = pendingEdit.oldMessageId;
+          editSupersededIds = persistedRowIds(messages, pendingEdit.rangeIds);
+          replaceUserMessageContent = text;
         } else {
           const userMsg = await persistUserTurn(threadId, text, sendAttachments);
           userMessageId = userMsg.id;
-          // Destructive edit send: the old user message and everything
-          // after it are superseded (deleted atomically by the commit
-          // RPC when the new assistant message lands). The
-          // pendingDeleteIds set by editFrom drives the red
-          // highlighting and the buildHistoryOnWire filter; the
-          // supersededIds here drive the server-side delete.
-          if (pendingEdit) {
-            editSupersededIds = persistedRowIds(messages, pendingEdit.rangeIds);
-          }
         }
       } catch (err) {
         // Pre-exchange failure (user message persist or draft
@@ -3799,6 +3810,7 @@
         originalText: text,
         userMessageId,
         supersededIds: editSupersededIds,
+        replaceUserMessageContent,
       });
       // Clear the pending-edit state after the exchange completes.
       // pendingDeleteIds is cleared inside runExchange (via fade-out-
@@ -4047,6 +4059,14 @@
      */
     supersededIds?: string[];
     /**
+     * Destructive-edit atomic insert: the edited text that replaces
+     * the old user message. When set, the browser does NOT insert a
+     * new user message before the exchange. Instead, the
+     * commit_assistant_message RPC inserts it + deletes the old range
+     * atomically with the commit. On failure, nothing was inserted.
+     */
+    replaceUserMessageContent?: string;
+    /**
      * True on a second-thoughts refinement turn (Chat.svelte
      * `refineFrom`). Two effects: server-side standard priming is
      * skipped (this is the model reconsidering itself, not a new user
@@ -4089,10 +4109,14 @@
    * firing them would just repeat the failure.
    */
   async function runExchange(ctx: ExchangeContext): Promise<void> {
-    if (!app.venice || !app.supabase) return;
+    if (!app.venice || !app.supabase) {
+      pendingDeleteIds = [];
+      return;
+    }
     const freshThread = findThread(ctx.threadId);
     if (!freshThread) {
       error = { text: 'Thread disappeared before send.' };
+      pendingDeleteIds = [];
       return;
     }
     // The slot for THIS thread's slot. Allocated on first send and
@@ -4132,6 +4156,7 @@
       slot.streamingError = { text: 'Could not check responding-device status. Try again in a moment.' };
       slot.sending = false;
       slot.abortCtl = null;
+      pendingDeleteIds = [];
       return;
     }
     if (!claimAcquired) {
@@ -4144,6 +4169,7 @@
       };
       slot.sending = false;
       slot.abortCtl = null;
+      pendingDeleteIds = [];
       return;
     }
     claim.startHeartbeat(() => {
@@ -4259,6 +4285,17 @@
         findThread(ctx.threadId)?.title
       );
       return [...ctx.systemMessages, ...conversation];
+    };
+
+    // Destructive-edit atomic insert: when the browser did NOT insert
+    // a new user message (the edit path), append the edited text as a
+    // synthetic user turn at the end of the wire so the model sees it.
+    // The commit RPC will insert the real row atomically; this just
+    // puts the text on the wire for the completion.
+    const buildEditHistoryOnWire = (): VeniceMessage[] => {
+      const base = buildHistoryOnWire();
+      if (!ctx.replaceUserMessageContent) return base;
+      return [...base, { role: 'user', content: ctx.replaceUserMessageContent }];
     };
 
     // Anchor for the `<datetime>` tag's since_last_response attribute.
@@ -4411,7 +4448,7 @@
           thread: freshThread,
           userId: ctx.currentUserId,
           modelId: ctx.modelId,
-          history: buildHistoryOnWire(),
+          history: ctx.replaceUserMessageContent ? buildEditHistoryOnWire() : buildHistoryOnWire(),
           signal: slot.abortCtl!.signal,
           userMessageId: ctx.userMessageId,
           supersededIds: ctx.supersededIds,

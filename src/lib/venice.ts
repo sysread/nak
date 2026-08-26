@@ -323,6 +323,13 @@ export interface ChatRequest {
      */
     supersededIds?: readonly string[];
     /**
+     * Destructive-edit atomic insert: the edited text that
+     * replaces the old user message. When set, the browser does NOT
+     * insert a new user message; the commit_assistant_message RPC
+     * inserts it + deletes the old range atomically with the commit.
+     */
+    replaceUserMessageContent?: string;
+    /**
      * Turn-entry priming inputs the server's priming stage needs.
      * Priming runs server-side in getStreamingResponse, so these ride in
      * the /stream POST as the inputs that stage consumes. Omitted leaves

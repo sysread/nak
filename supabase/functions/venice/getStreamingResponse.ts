@@ -186,6 +186,13 @@ export interface OrchestratorOpts {
    */
   supersededIds?: readonly string[];
   /**
+   * Destructive-edit atomic insert: the edited text that replaces
+   * the old user message. When set, the commit RPC inserts it as a
+   * new user message + deletes the old range atomically with the
+   * commit. On failure, nothing was inserted.
+   */
+  replaceUserMessageContent?: string;
+  /**
    * Full Venice wire body for the first round. Already shaped by the
    * browser via buildChatBody; the orchestrator copies it round-to-
    * round, mutating only `messages` between rounds - plus `tools`,
@@ -1168,6 +1175,7 @@ export async function getStreamingResponse(
               opts.supersededIds && opts.supersededIds.length > 0
                 ? opts.supersededIds
                 : null,
+            p_replace_user_message_content: opts.replaceUserMessageContent ?? null,
           },
         );
         if (error) {
