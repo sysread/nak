@@ -62,3 +62,4 @@ Or simply re-run the steps on a fresh thread.
 
 | Date | Env | Commit | Result | Notes |
 | ---- | --- | ------ | ------ | ----- |
+| 2026-08-26 | local (mise run dev-start) | 59ea99c1 | PASS (1-6) | All 6 steps pass. (1) Dropdown shows Edit + Fork and edit on all 4 user messages. (2) Composer pre-populated with old text, 3 messages red-highlighted (old user msg + everything after). (3) Edited text visible, old text gone; DB confirms old range (pos 9-11) superseded, new user msg at pos 12, assistant reply at pos 13 complete. (4) Abandon: red highlights cleared on thread switch, old messages survived (10 rows in DB). (5) Shared-region gate: only "Fork and edit" shown on a forked message, no "Edit" item. (6) Edit buttons disabled during streaming (both true). |
