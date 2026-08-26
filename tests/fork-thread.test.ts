@@ -18,7 +18,6 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { forkThread } from '../src/lib/supabase/threads';
 import { SupabaseError } from '../src/lib/supabase/error';
 
-
 // A minimal thread row that coerceThread accepts.
 function threadRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {

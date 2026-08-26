@@ -201,13 +201,15 @@ detects from your browser and you can override in Settings.
 
 ## Copying, editing, and deleting messages
 
-Your own messages carry a trash button at the right edge of their
-action row. Click it and Nak removes that message and **everything
-after it** - the reply it prompted, any later turns you went on to
-have, all of it - rolling the conversation back to exactly where it
-stood before you sent that message. Hovering the button red-outlines
-the range it will remove so you can see the blast radius before you
-commit; a confirmation prompt guards the click.
+Your own messages carry a trash button and a pencil button at the
+right edge of their action row.
+
+**Delete** (trash button) removes that message and **everything after
+it** - the reply it prompted, any later turns you went on to have, all
+of it - rolling the conversation back to exactly where it stood before
+you sent that message. Hovering the button red-outlines the range it
+will remove so you can see the blast radius before you commit; a
+confirmation prompt guards the click.
 
 This is the harder-edged sibling of regenerate. Regenerate rolls back
 and immediately re-runs the model; delete-from-here rolls back and
@@ -224,6 +226,28 @@ place in the list, and to you it looks exactly like the delete
 happened - while the depending fork keeps the shared history it was
 built on. The tooltip says "continues in a new fork" when a delete
 will work this way.
+
+**Edit** (pencil button) opens a dropdown with two choices:
+
+- **Edit** reopens the message text in the composer and red-outlines
+  the old message and everything after it. When you send, the old
+  range is replaced: a new user message with your edited text is
+  inserted, the old messages are deleted, and the model generates a
+  fresh reply. This is a destructive edit - the old messages are gone
+  from the database. Edit is only available when the message is in
+  the private tail (no fork depends on its history). When a fork
+  depends on the message, only "Fork and edit" is offered.
+- **Fork and edit** forks the conversation at the message *before* the
+  one you're editing, inserts a draft copy of the old text into the
+  fork, and opens the fork with the draft loaded in the composer. The
+  original conversation is untouched. You edit the text and send
+  normally - the draft is promoted to a real message and the model
+  generates a reply in the fork.
+
+If you fork and edit but navigate away before sending, the fork stays
+in the conversation list with the draft text preserved. Come back to
+it later and the composer will re-load the draft so you can pick up
+where you left off.
 
 To remove an entire conversation, use **Delete** in the thread list
 rather than deleting from the first message.

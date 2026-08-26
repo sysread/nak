@@ -56,7 +56,7 @@ The destructive edit permanently deletes the superseded rows. To restore the thr
 delete from messages where thread_id = '<thread>' and position >= <new-user-msg-position>;
 ```
 
-Or simply re-run the steps on a fresh thread.
+Or re-run the steps on a fresh thread.
 
 ## Results log
 

@@ -1031,6 +1031,9 @@
    * Plain let, not $state - no template reads it.
    */
   let sendSetupInFlight = false;
+  // Guards forkAndEdit against double-invoke and send-during-switch
+  // races. Plain let, not $state - no template reads it.
+  let forkAndEditInFlight = false;
   // Tick counter that drives a 1Hz reactive re-read of Date.now() while
   // the active slot is in a rate-limit wait, so the bubble's countdown
   // updates each second without rebinding the assistant render. The
@@ -2588,6 +2591,13 @@
     cohortClusterMap = new Map();
     expandedCohortPanels = new Set();
     interruptedDraft = null;
+    // Clear any pending draft or edit state from the prior thread.
+    // The reconnection $effect re-populates from a draft row if the new
+    // thread has one; an edit is abandoned (old messages survive).
+    pendingDraftId = null;
+    pendingEdit = null;
+    pendingDeleteIds = [];
+    openEditMenuMsgId = null;
     // Streaming state (streamingText, toolTimings, rate-limit wait,
     // sending flag, etc.) is NOT cleared here. Each thread owns its
     // own slot in `exchangeStore`; a thread the user navigated away
@@ -2717,7 +2727,14 @@
       // arriving - which the user reads as a stale/contradictory UI.
       // Slots persist across thread switches in Phase 2, so a peek
       // is enough to detect "we're the device producing this turn."
-      interruptedDraft = null;
+    interruptedDraft = null;
+    // Clear any pending draft or edit state from the prior thread.
+    // The reconnection $effect re-populates from a draft row if the new
+    // thread has one; an edit is abandoned (old messages survive).
+    pendingDraftId = null;
+    pendingEdit = null;
+    pendingDeleteIds = [];
+    openEditMenuMsgId = null;
       // Two in-flight signals: the streaming assistant row (created at
       // the first content delta) and the server-side stream_started_at
       // stamp, which the orchestrator writes at turn entry so the
@@ -3314,6 +3331,7 @@
   // anchor before it), create a fresh thread with the parent's pins.
   async function forkAndEdit(userMessageId: string): Promise<void> {
     if (!app.supabase || !activeThreadId) return;
+    if (forkAndEditInFlight) return;
     const active = findThread(activeThreadId);
     if (!active) return;
     const userMsg = messages.find((m) => m.id === userMessageId);
@@ -3321,6 +3339,8 @@
     clearRegeneratePreview();
     // Clear any pending edit state - mutually exclusive.
     pendingDeleteIds = [];
+    pendingEdit = null;
+    forkAndEditInFlight = true;
     try {
       const anchor = deleteForkAnchor(messages, userMessageId);
       const fork = anchor
@@ -3348,6 +3368,8 @@
       composerEl?.focus();
     } catch (err) {
       error = { text: err instanceof Error ? err.message : String(err) };
+    } finally {
+      forkAndEditInFlight = false;
     }
   }
 
@@ -3380,8 +3402,10 @@
   function closeEditMenu(): void {
     openEditMenuMsgId = null;
   }
+
+  // Rename via the row dropdown: select the thread first (so the top-bar
   // title input is the one being edited), then flip into rename mode on
-  // the next microtask — startRename reads currentThread, which only
+  // the next microtask - startRename reads currentThread, which only
   // updates after the selectThread state mutation propagates.
   function renameFromRow(id: string): void {
     closeRowMenu();
@@ -3708,14 +3732,7 @@
           // user message that the completion runs against.
           const supabase = app.supabase;
           if (!supabase) throw new Error('Not connected.');
-          const { data, error: updErr } = await supabase.client
-            .from('messages')
-            .update({ content: text.trim(), status: null })
-            .eq('id', pendingDraftId)
-            .select()
-            .single();
-          if (updErr) throw updErr;
-          const promoted = data as Message;
+          const promoted = await supabase.promoteDraftMessage(pendingDraftId, text);
           // Update the in-memory row so the transcript shows the
           // edited text immediately (it was previously hidden as a
           // draft; now it renders as a normal user message).
@@ -3742,13 +3759,15 @@
           }
         }
       } catch (err) {
-        // Pre-exchange failure (user message persist). No retry here -
-        // the user's row didn't land, so "retry" would mean "try
-        // persist again," which is a different UX than "retry the LLM
-        // call." Surface on the inline bubble so the failure shows up
-        // in the transcript where the user expected their message to
-        // land.
+        // Pre-exchange failure (user message persist or draft
+        // promotion). Restore the composer text so the user does not
+        // lose their input, and clear pending state so the next send
+        // is a fresh attempt rather than a dead retry.
         log.error('send failed before exchange', err);
+        if (pendingDraftId) {
+          composer = text;
+          pendingDraftId = null;
+        }
         const slot = exchangeStore.slotFor(threadId);
         slot.streamingError = { text: describeError(err) };
         return;
@@ -4219,7 +4238,9 @@
     }
 
     const buildHistoryOnWire = (): VeniceMessage[] => {
-      const rows = messages.filter((m) => !pendingDeleteSet.has(m.id));
+      const rows = messages.filter(
+        (m) => !pendingDeleteSet.has(m.id) && m.status !== 'draft'
+      );
       // While a fork's title still carries the fork marker,
       // withForkPointMarker splices the FORK POINT line into the wire
       // at the inherited/own boundary so the model can locate the
@@ -6331,6 +6352,7 @@
     if (e.key === 'Escape') {
       closeMenus();
       closeRowMenu();
+      closeEditMenu();
     }
   }
 
@@ -6343,7 +6365,8 @@
       toolboxMenuOpen ||
       composerWharfOpen ||
       composerDiagWharfOpen ||
-      openMenuThreadId !== null;
+      openMenuThreadId !== null ||
+      openEditMenuMsgId !== null;
     if (!anyOpen) return;
     document.addEventListener('click', onDocClick);
     document.addEventListener('keydown', onDocKey);
@@ -6622,14 +6645,7 @@
               retry: () => void retryInterrupted(),
               dismiss: () => {
                 void deleteDraft(interruptedDraft!.threadId).catch(() => {});
-    interruptedDraft = null;
-    // Clear any pending draft or edit state from the prior thread.
-    // The reconnection $effect re-populates from a draft row if the
-    // new thread has one; an edit is abandoned (old messages survive).
-    pendingDraftId = null;
-    pendingEdit = null;
-    pendingDeleteIds = [];
-    openEditMenuMsgId = null;
+                interruptedDraft = null;
               },
             }
           : null,
@@ -8923,7 +8939,8 @@
                 aria-label="Attach files"
                 disabled={activeSlot?.sending ||
                   currentThread?.archived ||
-                  pendingAttachments.length >= MAX_ATTACHMENTS_PER_MESSAGE}
+                  pendingAttachments.length >= MAX_ATTACHMENTS_PER_MESSAGE ||
+                  pendingDraftId !== null}
               >
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
                      stroke="currentColor" stroke-width="2" stroke-linecap="round"

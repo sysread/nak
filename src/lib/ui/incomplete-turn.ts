@@ -113,8 +113,7 @@ export function isCutOffPartialText(message: Message): boolean {
  * the end of a fork for the user to edit and send. The draft is
  * expected, not a failed completion. Once the user sends, the draft
  * is promoted (status cleared to null) and the completion runs
- * normally. Only a non-draft user message at the tail means the
- * completion worker failed before writing anything.
+ * normally.
  *
  * This is the persisted-shape half of the verdict only. The caller
  * (the `incompleteTurnTail` derived in src/screens/Chat.svelte) also

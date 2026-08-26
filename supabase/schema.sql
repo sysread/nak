@@ -553,6 +553,12 @@ create policy "messages are self-updatable for draft promotion" on public.messag
       where t.id = messages.thread_id and t.user_id = auth.uid()
     )
   ) with check (
+    -- Deliberately does NOT gate on status='draft': the promoting
+    -- UPDATE clears status to null, so a symmetric check would reject
+    -- the promotion. The USING clause (entry gate) requires 'draft';
+    -- the WITH CHECK (exit gate) only requires role + ownership. This
+    -- is the schema's only asymmetric UPDATE policy - a one-way door
+    -- built in RLS: settled user messages are client-immutable.
     role = 'user'
     and exists (
       select 1 from public.threads t

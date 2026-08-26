@@ -51,6 +51,14 @@ because it has content (so `isReasoningOnlyStall` is false) and no
 tool_calls. The most common cutoff case - stream failed mid-reply -
 is invisible to this classifier.
 
+### H2: `isReasoningOnlyStall` - dead-turn predicate
+
+**File:** `src/lib/ui/incomplete-turn.ts:52`
+
+**Detects:** `role='assistant'` AND `status !== 'aborted'` AND no `tool_calls` AND content is empty AND reasoning is non-empty. The model emitted chain-of-thought but no visible answer.
+
+**Used by:** `classifyIncompleteTurnTail` (H1) to qualify the tail, and `retryIncompleteTurn` (H7) to decide REPLACE vs CONTINUE.
+
 ### H3: `isCutOffPartialText` - dead-turn predicate (DISCONNECTED)
 
 **File:** `src/lib/ui/incomplete-turn.ts:84`
@@ -63,9 +71,9 @@ is invisible to this classifier.
 partial-text cutoff exists, but the classifier that decides whether
 to show the banner does not use it.
 
-### H4: `incompleteTurnTail` $derived - session-gated transcript verdict
+### H4: `incompleteTurnTail` derived - session-gated transcript verdict
 
-**File:** `src/screens/Chat.svelte:6517`
+**File:** `src/screens/Chat.svelte:6517` (the `incompleteTurnTail` derived)
 
 **Detects:** Calls H1 (`classifyIncompleteTurnTail`) but first gates
 on four session-state conditions:
@@ -131,6 +139,24 @@ A separate `retryInterrupted` function (line 5277) handles H6's
 retry path. It always CONTINUEs - no deletion - because the
 interrupted draft path assumes nothing was produced to replace. Two
 retry functions for the same action with different deletion logic.
+
+### H8: `streamingError` - in-session live error (8 catch sites)
+
+**File:** `src/screens/Chat.svelte` - multiple sites in `runExchange`
+
+**Detects:** Eight distinct catch points in the exchange flow: claim acquire failure, another device holds claim, pre-exchange failure, commit conflict, claim preemption, rate-limit, guard exhaustion, generic fallback. Each sets `slot.streamingError` with text and optional retry.
+
+**Feeds:** H5's `displayedError` as the highest-precedence source. Also gates H4 (incompleteTurnTail suppresses when streamingError is set).
+
+### H9: Server-side `terminalKind` assignment
+
+**File:** `supabase/functions/venice/getStreamingResponse.ts`
+
+**Detects:** Sets `terminalKind` at every exit point: `'error'` (wall timeout, stream error, round limit, catch block, commit conflict), `'aborted'` (user cancel), `'complete'` (happy path), `'suspended_for_ask_user'`.
+
+**Produces:** Row status transition + `threads.last_error` write (for `'error'` only) + END event with `terminalKind` published to the Broadcast channel.
+
+**Relationship:** The single server-side source that feeds two parallel browser paths: `last_error` -> `displayedError` (H5, persistent) and END event -> `streamingError` (H8, ephemeral). They can disagree when the END event fires into a dead socket or `last_error` write fails.
 
 ### H12: `synthesizeRecoveryMessages` - wire-shape repair (MASKS H1)
 

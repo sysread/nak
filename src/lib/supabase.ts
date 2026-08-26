@@ -1459,6 +1459,10 @@ export class SupabaseService {
     return messagesApi.updateToolMessageContent(this.client, threadId, toolCallId, content);
   }
 
+  async promoteDraftMessage(messageId: string, content: string): Promise<Message> {
+    return messagesApi.promoteDraftMessage(this.client, messageId, content);
+  }
+
   async markSecondThoughtsActed(messageId: string): Promise<void> {
     return messagesApi.markSecondThoughtsActed(this.client, messageId);
   }

@@ -582,13 +582,43 @@ export async function updateToolMessageContent(
 }
 
 /**
+ * Promote a draft user message (status='draft') to a normal user
+ * message: update the content to the edited text and clear the status
+ * to null. Routes through the client's messages-UPDATE RLS policy for
+ * draft promotion (scoped to role='user' AND status='draft'); the row
+ * becomes immutable the moment status clears. Returns the promoted row
+ * so the caller can update the in-memory message list.
+ *
+ * The `.eq('status', 'draft')` filter means a zero-row result
+ * (PGRST116) fires when the draft was already promoted or deleted -
+ * the caller should treat this as "draft already sent" rather than a
+ * hard error.
+ */
+export async function promoteDraftMessage(
+  client: SupabaseClient,
+  messageId: string,
+  content: string
+): Promise<Message> {
+  const { data, error } = await client
+    .from('messages')
+    .update({ content: content.trim(), status: null })
+    .eq('id', messageId)
+    .eq('status', 'draft')
+    .select()
+    .single();
+  if (error) throw new SupabaseError(error.message);
+  return data as Message;
+}
+
+/**
  * Mark an assistant row's second-thoughts verdict as acted-on (the
  * user clicked the refinement button). Routes through the
  * `mark_second_thoughts_acted` SECURITY DEFINER RPC because the
- * client's messages-UPDATE RLS policy only covers role='tool' rows;
- * the RPC gates on thread ownership and touches only the `acted` key.
- * Callers fire-and-forget - a failure just means the flag won't
- * survive a reload (this turn's wire is driven by the local patch).
+ * client's messages-UPDATE RLS policies cover role='tool' and
+ * draft role='user' rows only; the RPC gates on thread ownership
+ * and touches only the `acted` key. Callers fire-and-forget - a
+ * failure just means the flag won't survive a reload (this turn's
+ * wire is driven by the local patch).
  */
 export async function markSecondThoughtsActed(
   client: SupabaseClient,
