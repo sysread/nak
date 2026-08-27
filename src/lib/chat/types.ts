@@ -259,6 +259,15 @@ export interface ChatLoopOptions {
    */
   supersededIds?: readonly string[];
   /**
+   * Destructive-edit atomic insert: the edited text that replaces
+   * the old user message. When set, the browser does NOT insert a
+   * new user message before the exchange; instead, the
+   * commit_assistant_message RPC inserts it + deletes the old range
+   * + commits the assistant reply in one transaction. On failure
+   * (abort/error), nothing was inserted - the edit is a clean no-op.
+   */
+  replaceUserMessageContent?: string;
+  /**
    * Concrete Venice model id used by the intuition pipeline (perception
    * + 5 drives + synthesis). Caller resolves it via agentModel. Omitted /
    * undefined disables the intuition feature entirely on this turn -

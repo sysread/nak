@@ -1445,6 +1445,7 @@ export class SupabaseService {
       reasoning?: string | null;
       citations?: Citation[] | null;
       position?: number;
+      status?: Message['status'];
     } = {}
   ): Promise<Message> {
     return messagesApi.addMessage(this.client, threadId, role, content, opts);
@@ -1456,6 +1457,10 @@ export class SupabaseService {
     content: string
   ): Promise<Message> {
     return messagesApi.updateToolMessageContent(this.client, threadId, toolCallId, content);
+  }
+
+  async promoteDraftMessage(messageId: string, content: string): Promise<Message> {
+    return messagesApi.promoteDraftMessage(this.client, messageId, content);
   }
 
   async markSecondThoughtsActed(messageId: string): Promise<void> {

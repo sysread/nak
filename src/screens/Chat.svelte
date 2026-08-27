@@ -247,6 +247,7 @@
   } from '$lib/ui/chat-screen';
   import { computeRegenerateRangeIds, persistedRowIds } from '$lib/ui/regenerate';
   import { computeDeleteFromRangeIds } from '$lib/ui/message-delete';
+  import { findDraftMessage } from '$lib/ui/draft-message';
   import {
     canForkAtMessage,
     computeForkRangeIds,
@@ -838,6 +839,51 @@
   let pendingDeleteIds = $state<string[]>([]);
   const pendingDeleteSet = $derived(new Set(pendingDeleteIds));
 
+  // The fork-and-edit flow creates a fork with a draft user message
+  // (status='draft') and loads the draft text into the composer. On
+  // send, the draft is promoted (status cleared, content updated) and
+  // the completion runs normally. This id tracks which draft row the
+  // composer is editing so send() knows to promote rather than insert.
+  // Null when the composer is in normal (non-draft) mode.
+  let pendingDraftId = $state<string | null>(null);
+
+  // The destructive edit flow (Edit button on user messages). When
+  // set, the old user message and everything after it are red-
+  // highlighted (via pendingDeleteIds) and the composer is pre-
+  // populated with the old text. On send, a new user message is
+  // inserted and the old range is superseded (deleted atomically by
+  // the commit RPC). Null when no edit is in progress.
+  let pendingEdit = $state<{ oldMessageId: string; rangeIds: string[] } | null>(null);
+
+  // Per-message edit dropdown (the pencil button opens a small menu
+  // with "Edit" and "Fork and edit"). Models the thread-row kebab
+  // menu pattern (openMenuThreadId -> openEditMenuMsgId).
+  let openEditMenuMsgId = $state<string | null>(null);
+
+  // Reconnection: when the user navigates to a thread that has a draft
+  // row (from a previous fork-and-edit that they abandoned), load the
+  // draft text into the composer and set pendingDraftId so the next
+  // send promotes the draft instead of inserting a new message.
+  //
+  // Runs on messages change, not on activeThreadId change directly,
+  // because selectThread clears messages to [] before the async fetch
+  // resolves - the draft only appears once the fetch lands. The guard
+  // on composer length prevents wiping the user's in-progress edits
+  // when the effect re-runs for an unrelated messages update (e.g. a
+  // realtime INSERT).
+  $effect(() => {
+    // Track the dependency on messages.
+    void messages.length;
+    if (pendingDraftId) return;
+    const draft = findDraftMessage(messages);
+    if (!draft) return;
+    // Only pre-populate when the composer is empty - the user may
+    // already be typing.
+    if (composer.length > 0) return;
+    composer = draft.content;
+    pendingDraftId = draft.id;
+  });
+
   // Id of the thread's latest live assistant row - the only one that
   // gets a second-thoughts refinement button, since a refinement
   // appends at the transcript tail and must reconsider the last answer,
@@ -985,6 +1031,9 @@
    * Plain let, not $state - no template reads it.
    */
   let sendSetupInFlight = false;
+  // Guards forkAndEdit against double-invoke and send-during-switch
+  // races. Plain let, not $state - no template reads it.
+  let forkAndEditInFlight = false;
   // Tick counter that drives a 1Hz reactive re-read of Date.now() while
   // the active slot is in a rate-limit wait, so the bubble's countdown
   // updates each second without rebinding the assistant render. The
@@ -1659,7 +1708,7 @@
     // carry a field the other lacked; merge those upgrades onto the
     // existing row rather than dropping the echo (and rather than a
     // wholesale swap, which would clobber a field the existing row holds
-    // and the echo doesn't - e.g. co-fetched attachments). Two cases:
+    // and the echo doesn't - e.g. co-fetched attachments). Three cases:
     //   - attachments: the realtime payload can't join the attachments
     //     table, so a later listAttachmentsByMessageIds fetch upgrades a
     //     row that first arrived attachment-less.
@@ -1667,6 +1716,10 @@
     //     UPDATE a beat after the row committed (see
     //     supabase/functions/venice/agents/second_thoughts.ts), so its
     //     echo carries a verdict the locally-hydrated row didn't have yet.
+    //   - draft promotion: the fork-and-edit flow updates content and
+    //     clears status from 'draft' to null. Without this merge, another
+    //     tab viewing the fork keeps a stale draft row in memory (invisible
+    //     in the transcript, but findDraftMessage keeps matching it).
     const existing = messages[existingIdx];
     const incomingHasAttachments = !!msg.attachments && msg.attachments.length > 0;
     const existingHasAttachments =
@@ -1674,12 +1727,17 @@
     const gainsAttachments = incomingHasAttachments && !existingHasAttachments;
     const gainsSecondThoughts =
       msg.second_thoughts != null && existing.second_thoughts == null;
-    if (!gainsAttachments && !gainsSecondThoughts) return;
+    // Draft promotion: the incoming row has status=null where the
+    // existing row had status='draft', and the content changed.
+    const draftPromoted =
+      existing.status === 'draft' && msg.status == null;
+    if (!gainsAttachments && !gainsSecondThoughts && !draftPromoted) return;
     const updated = [...messages];
     updated[existingIdx] = {
       ...existing,
       ...(gainsAttachments ? { attachments: msg.attachments } : {}),
       ...(gainsSecondThoughts ? { second_thoughts: msg.second_thoughts } : {}),
+      ...(draftPromoted ? { status: msg.status, content: msg.content } : {}),
     };
     messages = updated;
   }
@@ -2542,6 +2600,13 @@
     cohortClusterMap = new Map();
     expandedCohortPanels = new Set();
     interruptedDraft = null;
+    // Clear any pending draft or edit state from the prior thread.
+    // The reconnection $effect re-populates from a draft row if the new
+    // thread has one; an edit is abandoned (old messages survive).
+    pendingDraftId = null;
+    pendingEdit = null;
+    pendingDeleteIds = [];
+    openEditMenuMsgId = null;
     // Streaming state (streamingText, toolTimings, rate-limit wait,
     // sending flag, etc.) is NOT cleared here. Each thread owns its
     // own slot in `exchangeStore`; a thread the user navigated away
@@ -2671,7 +2736,14 @@
       // arriving - which the user reads as a stale/contradictory UI.
       // Slots persist across thread switches in Phase 2, so a peek
       // is enough to detect "we're the device producing this turn."
-      interruptedDraft = null;
+    interruptedDraft = null;
+    // Clear any pending draft or edit state from the prior thread.
+    // The reconnection $effect re-populates from a draft row if the new
+    // thread has one; an edit is abandoned (old messages survive).
+    pendingDraftId = null;
+    pendingEdit = null;
+    pendingDeleteIds = [];
+    openEditMenuMsgId = null;
       // Two in-flight signals: the streaming assistant row (created at
       // the first content delta) and the server-side stream_started_at
       // stamp, which the orchestrator writes at turn entry so the
@@ -3256,9 +3328,93 @@
     }
   }
 
+  // Fork and edit: fork from the message BEFORE the user message (not
+  // at the user message itself), insert a draft row carrying the old
+  // text, open the fork, and load the draft into the composer. The
+  // user edits and sends normally - the send path promotes the draft
+  // (status cleared, content updated) and runs the completion.
+  //
+  // Forking before the user message means the old text stays in the
+  // original conversation, untouched. The edited text starts the
+  // fork's own segment. If the user message is the first message (no
+  // anchor before it), create a fresh thread with the parent's pins.
+  async function forkAndEdit(userMessageId: string): Promise<void> {
+    if (!app.supabase || !activeThreadId) return;
+    if (forkAndEditInFlight) return;
+    const active = findThread(activeThreadId);
+    if (!active) return;
+    const userMsg = messages.find((m) => m.id === userMessageId);
+    if (!userMsg || userMsg.role !== 'user') return;
+    clearRegeneratePreview();
+    // Clear any pending edit state - mutually exclusive.
+    pendingDeleteIds = [];
+    pendingEdit = null;
+    forkAndEditInFlight = true;
+    try {
+      const anchor = deleteForkAnchor(messages, userMessageId);
+      const fork = anchor
+        ? await app.supabase.forkThread(active.id, anchor.id, { markTitle: false })
+        : await app.supabase.createThread(
+            active.title,
+            active.model,
+            active.reasoning_effort,
+            active.verbosity,
+            active.title_manually_set,
+            active.toolboxes_enabled,
+          );
+      rebucketThread(fork);
+      // Insert a draft row on the fork with the old user message text.
+      // The draft is invisible in the transcript (buildMessageBlocks
+      // filters status='draft') and the composer is the only surface
+      // that shows it.
+      const draft = await app.supabase.addMessage(fork.id, 'user', userMsg.content, {
+        status: 'draft',
+      });
+      await selectThread(fork.id);
+      composer = draft.content;
+      pendingDraftId = draft.id;
+      // Focus the composer so the user can start editing immediately.
+      composerEl?.focus();
+    } catch (err) {
+      error = { text: err instanceof Error ? err.message : String(err) };
+    } finally {
+      forkAndEditInFlight = false;
+    }
+  }
+
+  // Destructive edit: reopen the user message text in the composer,
+  // red-highlight the old message and everything after it, and wait
+  // for the user to send. On send, a new user message is inserted and
+  // the old range is superseded (deleted atomically by the commit RPC).
+  // Only available in the private tail - the dropdown hides "Edit"
+  // when the message is in a shared region.
+  function editFrom(userMessageId: string): void {
+    const userMsg = messages.find((m) => m.id === userMessageId);
+    if (!userMsg || userMsg.role !== 'user') return;
+    closeEditMenu();
+    clearRegeneratePreview();
+    // Clear any pending draft state - mutually exclusive.
+    pendingDraftId = null;
+    const rangeIds = computeDeleteFromRangeIds(messages, userMessageId);
+    if (rangeIds.length === 0) return;
+    pendingDeleteIds = rangeIds;
+    hoverRegenerateIds = [];
+    pendingEdit = { oldMessageId: userMessageId, rangeIds };
+    composer = userMsg.content;
+    composerEl?.focus();
+  }
+
+  function toggleEditMenu(msgId: string): void {
+    openEditMenuMsgId = openEditMenuMsgId === msgId ? null : msgId;
+  }
+
+  function closeEditMenu(): void {
+    openEditMenuMsgId = null;
+  }
+
   // Rename via the row dropdown: select the thread first (so the top-bar
   // title input is the one being edited), then flip into rename mode on
-  // the next microtask — startRename reads currentThread, which only
+  // the next microtask - startRename reads currentThread, which only
   // updates after the selectThread state mutation propagates.
   function renameFromRow(id: string): void {
     closeRowMenu();
@@ -3575,17 +3731,54 @@
       await cancelPendingAskUser(threadId, 'abandoned_on_new_send');
 
       let userMessageId: string;
+      let editSupersededIds: string[] | undefined;
+      let replaceUserMessageContent: string | undefined;
       try {
-        const userMsg = await persistUserTurn(threadId, text, sendAttachments);
-        userMessageId = userMsg.id;
+        if (pendingDraftId) {
+          // Fork-and-edit send: promote the draft row (update content,
+          // clear status) rather than inserting a new user message.
+          // The draft row already exists in the DB from the
+          // forkAndEdit handler; this update turns it into a normal
+          // user message that the completion runs against.
+          const supabase = app.supabase;
+          if (!supabase) throw new Error('Not connected.');
+          const promoted = await supabase.promoteDraftMessage(pendingDraftId, text);
+          // Update the in-memory row so the transcript shows the
+          // edited text immediately (it was previously hidden as a
+          // draft; now it renders as a normal user message).
+          if (threadId === activeThreadId) {
+            messages = messages.map((m) =>
+              m.id === pendingDraftId
+                ? { ...promoted, attachments: m.attachments }
+                : m
+            );
+          }
+          userMessageId = pendingDraftId;
+          pendingDraftId = null;
+        } else if (pendingEdit) {
+          // Destructive edit send (atomic): do NOT insert a new user
+          // message before the exchange. Instead, pass the edited text
+          // to the commit RPC, which inserts it + deletes the old range
+          // + commits the assistant reply in one transaction. On
+          // failure (abort/error), nothing was inserted - the edit is
+          // a clean no-op.
+          userMessageId = pendingEdit.oldMessageId;
+          editSupersededIds = persistedRowIds(messages, pendingEdit.rangeIds);
+          replaceUserMessageContent = text;
+        } else {
+          const userMsg = await persistUserTurn(threadId, text, sendAttachments);
+          userMessageId = userMsg.id;
+        }
       } catch (err) {
-        // Pre-exchange failure (user message persist). No retry here -
-        // the user's row didn't land, so "retry" would mean "try
-        // persist again," which is a different UX than "retry the LLM
-        // call." Surface on the inline bubble so the failure shows up
-        // in the transcript where the user expected their message to
-        // land.
+        // Pre-exchange failure (user message persist or draft
+        // promotion). Restore the composer text so the user does not
+        // lose their input, and clear pending state so the next send
+        // is a fresh attempt rather than a dead retry.
         log.error('send failed before exchange', err);
+        if (pendingDraftId) {
+          composer = text;
+          pendingDraftId = null;
+        }
         const slot = exchangeStore.slotFor(threadId);
         slot.streamingError = { text: describeError(err) };
         return;
@@ -3616,7 +3809,13 @@
         sendUserLocation: app.userLocation,
         originalText: text,
         userMessageId,
+        supersededIds: editSupersededIds,
+        replaceUserMessageContent,
       });
+      // Clear the pending-edit state after the exchange completes.
+      // pendingDeleteIds is cleared inside runExchange (via fade-out-
+      // and-prune or the no-replacement path); pendingEdit is ours.
+      pendingEdit = null;
     } finally {
       sendSetupInFlight = false;
       // Safety net: if a pre-runExchange await threw, the claim is
@@ -3860,6 +4059,14 @@
      */
     supersededIds?: string[];
     /**
+     * Destructive-edit atomic insert: the edited text that replaces
+     * the old user message. When set, the browser does NOT insert a
+     * new user message before the exchange. Instead, the
+     * commit_assistant_message RPC inserts it + deletes the old range
+     * atomically with the commit. On failure, nothing was inserted.
+     */
+    replaceUserMessageContent?: string;
+    /**
      * True on a second-thoughts refinement turn (Chat.svelte
      * `refineFrom`). Two effects: server-side standard priming is
      * skipped (this is the model reconsidering itself, not a new user
@@ -3902,10 +4109,14 @@
    * firing them would just repeat the failure.
    */
   async function runExchange(ctx: ExchangeContext): Promise<void> {
-    if (!app.venice || !app.supabase) return;
+    if (!app.venice || !app.supabase) {
+      pendingDeleteIds = [];
+      return;
+    }
     const freshThread = findThread(ctx.threadId);
     if (!freshThread) {
       error = { text: 'Thread disappeared before send.' };
+      pendingDeleteIds = [];
       return;
     }
     // The slot for THIS thread's slot. Allocated on first send and
@@ -3945,6 +4156,7 @@
       slot.streamingError = { text: 'Could not check responding-device status. Try again in a moment.' };
       slot.sending = false;
       slot.abortCtl = null;
+      pendingDeleteIds = [];
       return;
     }
     if (!claimAcquired) {
@@ -3957,6 +4169,7 @@
       };
       slot.sending = false;
       slot.abortCtl = null;
+      pendingDeleteIds = [];
       return;
     }
     claim.startHeartbeat(() => {
@@ -4051,7 +4264,9 @@
     }
 
     const buildHistoryOnWire = (): VeniceMessage[] => {
-      const rows = messages.filter((m) => !pendingDeleteSet.has(m.id));
+      const rows = messages.filter(
+        (m) => !pendingDeleteSet.has(m.id) && m.status !== 'draft'
+      );
       // While a fork's title still carries the fork marker,
       // withForkPointMarker splices the FORK POINT line into the wire
       // at the inherited/own boundary so the model can locate the
@@ -4070,6 +4285,17 @@
         findThread(ctx.threadId)?.title
       );
       return [...ctx.systemMessages, ...conversation];
+    };
+
+    // Destructive-edit atomic insert: when the browser did NOT insert
+    // a new user message (the edit path), append the edited text as a
+    // synthetic user turn at the end of the wire so the model sees it.
+    // The commit RPC will insert the real row atomically; this just
+    // puts the text on the wire for the completion.
+    const buildEditHistoryOnWire = (): VeniceMessage[] => {
+      const base = buildHistoryOnWire();
+      if (!ctx.replaceUserMessageContent) return base;
+      return [...base, { role: 'user', content: ctx.replaceUserMessageContent }];
     };
 
     // Anchor for the `<datetime>` tag's since_last_response attribute.
@@ -4222,10 +4448,11 @@
           thread: freshThread,
           userId: ctx.currentUserId,
           modelId: ctx.modelId,
-          history: buildHistoryOnWire(),
+          history: ctx.replaceUserMessageContent ? buildEditHistoryOnWire() : buildHistoryOnWire(),
           signal: slot.abortCtl!.signal,
           userMessageId: ctx.userMessageId,
           supersededIds: ctx.supersededIds,
+          replaceUserMessageContent: ctx.replaceUserMessageContent,
           reasoningEffort: ctx.sendReasoning,
           disableThinking: ctx.sendDisableThinking,
           verbosity: ctx.sendVerbosity,
@@ -6116,6 +6343,15 @@
         (tgt.closest('.thread-menu') || tgt.closest('.thread-actions-btn'));
       if (!inside) closeRowMenu();
     }
+    // Close the per-message edit dropdown on outside click, same
+    // pattern as the thread-row menu above.
+    if (openEditMenuMsgId !== null) {
+      const tgt = e.target;
+      const inside =
+        tgt instanceof Element &&
+        (tgt.closest('.edit-menu') || tgt.closest('.edit-menu-btn'));
+      if (!inside) closeEditMenu();
+    }
     if (
       !promptsMenuOpen &&
       !modelMenuOpen &&
@@ -6154,6 +6390,7 @@
     if (e.key === 'Escape') {
       closeMenus();
       closeRowMenu();
+      closeEditMenu();
     }
   }
 
@@ -6166,7 +6403,8 @@
       toolboxMenuOpen ||
       composerWharfOpen ||
       composerDiagWharfOpen ||
-      openMenuThreadId !== null;
+      openMenuThreadId !== null ||
+      openEditMenuMsgId !== null;
     if (!anyOpen) return;
     document.addEventListener('click', onDocClick);
     document.addEventListener('keydown', onDocKey);
@@ -8043,6 +8281,43 @@
                         </svg>
                       </button>
                     {/if}
+                    <!-- Edit dropdown. A pencil button that opens a
+                         small menu with "Edit" (destructive, private
+                         tail only) and "Fork and edit" (non-
+                         destructive). When the message is in a shared
+                         region, "Edit" is hidden - only "Fork and
+                         edit" is offered. Disabled mid-send. -->
+                    <button
+                      type="button"
+                      class="copy-btn edit-menu-btn"
+                      title="Edit this message"
+                      aria-label="Edit this message"
+                      aria-haspopup="menu"
+                      aria-expanded={openEditMenuMsgId === block.message.id}
+                      disabled={activeSlot?.sending ?? false}
+                      onclick={(e) => { e.stopPropagation(); toggleEditMenu(block.message.id); }}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                           stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                           stroke-linejoin="round" aria-hidden="true">
+                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                      </svg>
+                    </button>
+                    {#if openEditMenuMsgId === block.message.id}
+                      <div class="edit-menu" role="menu">
+                        {#if !sharedRowSet.has(block.message.id)}
+                          <button class="thread-menu-item" role="menuitem"
+                                  onclick={() => { editFrom(block.message.id); }}>
+                            Edit
+                          </button>
+                        {/if}
+                        <button class="thread-menu-item" role="menuitem"
+                                onclick={() => { closeEditMenu(); void forkAndEdit(block.message.id); }}>
+                          Fork and edit
+                        </button>
+                      </div>
+                    {/if}
                     <!-- Delete-from-here. Removes this user message and
                          every row after it, reverting the thread to its
                          pre-message state - or, when the range touches
@@ -8702,7 +8977,8 @@
                 aria-label="Attach files"
                 disabled={activeSlot?.sending ||
                   currentThread?.archived ||
-                  pendingAttachments.length >= MAX_ATTACHMENTS_PER_MESSAGE}
+                  pendingAttachments.length >= MAX_ATTACHMENTS_PER_MESSAGE ||
+                  pendingDraftId !== null}
               >
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
                      stroke="currentColor" stroke-width="2" stroke-linecap="round"

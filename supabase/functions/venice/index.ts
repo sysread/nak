@@ -1014,6 +1014,12 @@ interface StreamRequestBody {
    */
   supersededIds?: string[];
   /**
+   * Destructive-edit atomic insert: the edited text that replaces
+   * the old user message. When set, the commit RPC inserts it as a
+   * new user message + deletes the old range in one transaction.
+   */
+  replaceUserMessageContent?: string;
+  /**
    * Turn-entry priming inputs forwarded to getStreamingResponse's
    * priming stage. Priming runs server-side, so the browser sends these
    * inputs in the POST for that stage to consume. Absent leaves each
@@ -1129,6 +1135,10 @@ async function handleStreamFresh(
     userMessageId: body.userMessageId,
     userId: ctx.userId,
     supersededIds,
+    replaceUserMessageContent:
+      typeof body.replaceUserMessageContent === 'string'
+        ? body.replaceUserMessageContent
+        : undefined,
     bodyTemplate: body.body as Record<string, unknown>,
     adminClient: ctx.admin,
     priming: body.priming,

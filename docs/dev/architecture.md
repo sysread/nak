@@ -399,6 +399,9 @@ turn:
 | Row | Writer | Production path |
 | --- | --- | --- |
 | `messages` (role=`user`) | Browser | Composer send |
+| `messages` (role=`user`, status=`draft`) | Browser | Fork-and-edit handler inserts a draft row |
+| `messages` (role=`user`, draft promotion) | Browser | `promoteDraftMessage` UPDATE clears status to null on send |
+| `messages` (role=`user`, edit replacement) | Function | `commit_assistant_message` RPC inserts via `p_replace_user_message_content` |
 | `messages` (role=`assistant`) | Function | Venice stream completion via `commit_assistant_message` |
 | `messages` (role=`tool`) | Function | Tool dispatch in `performToolCall` |
 | `messages` (role=`system`, recovery rows) | Function | Wire-shape repair during a turn |

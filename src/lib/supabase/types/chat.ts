@@ -391,7 +391,9 @@ export interface Message {
    * 'suspended_for_ask_user'`) when the round chain settles. The
    * browser subscriber filters `'streaming'` rows out of `appendMessage`
    * so an in-flight row never paints as an empty bubble alongside the
-   * live streaming buffer.
+   * live streaming buffer. User rows carry `null` except for the
+   * `'draft'` status, used by the fork-and-edit flow to seed the
+   * composer with a durable row that promotes to `null` on send.
    */
   status?:
     | 'streaming'
@@ -399,6 +401,7 @@ export interface Message {
     | 'aborted'
     | 'error'
     | 'suspended_for_ask_user'
+    | 'draft'
     | null;
   /**
    * Second-thoughts self-review verdict, written by the reviewer agent

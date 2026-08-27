@@ -536,6 +536,36 @@ create policy "messages are self-updatable for tool answers" on public.messages
     )
   );
 
+-- The fork-and-edit flow inserts a draft user row (status='draft')
+-- and later promotes it: updates content to the edited text and
+-- clears status to null. This policy allows the owning user to
+-- UPDATE their own draft rows. Scoped to status='draft' so a client
+-- cannot rewrite a settled user message - only the transient draft
+-- is mutable, and it becomes immutable the moment it is promoted
+-- (status set to null).
+drop policy if exists "messages are self-updatable for draft promotion" on public.messages;
+create policy "messages are self-updatable for draft promotion" on public.messages
+  for update using (
+    role = 'user'
+    and status = 'draft'
+    and exists (
+      select 1 from public.threads t
+      where t.id = messages.thread_id and t.user_id = auth.uid()
+    )
+  ) with check (
+    -- Deliberately does NOT gate on status='draft': the promoting
+    -- UPDATE clears status to null, so a symmetric check would reject
+    -- the promotion. The USING clause (entry gate) requires 'draft';
+    -- the WITH CHECK (exit gate) only requires role + ownership. This
+    -- is the schema's only asymmetric UPDATE policy - a one-way door
+    -- built in RLS: settled user messages are client-immutable.
+    role = 'user'
+    and exists (
+      select 1 from public.threads t
+      where t.id = messages.thread_id and t.user_id = auth.uid()
+    )
+  );
+
 -- Tool calling -----------------------------------------------------------
 --
 -- Messages gain an OpenAI-shaped tool-call payload so conversations
@@ -643,7 +673,8 @@ alter table public.messages
       'complete',
       'aborted',
       'error',
-      'suspended_for_ask_user'
+      'suspended_for_ask_user',
+      'draft'
     )
   );
 
@@ -12207,6 +12238,7 @@ $$;
 -- passed explicitly and verified against the thread's owner inside the
 -- function to keep the ownership gate intact.
 drop function if exists public.commit_assistant_message(uuid, uuid, uuid, text, text, jsonb, text, jsonb);
+drop function if exists public.commit_assistant_message(uuid, uuid, uuid, text, text, jsonb, text, jsonb, uuid[]);
 create or replace function public.commit_assistant_message(
   p_assistant_message_id uuid,
   p_user_message_id      uuid,
@@ -12216,7 +12248,8 @@ create or replace function public.commit_assistant_message(
   p_usage                jsonb,
   p_reasoning            text,
   p_citations            jsonb,
-  p_superseded_ids       uuid[] default null
+  p_superseded_ids       uuid[] default null,
+  p_replace_user_message_content text default null
 ) returns jsonb
 language plpgsql
 security definer
@@ -12224,6 +12257,7 @@ set search_path = public
 as $$
 declare
   v_thread_id uuid;
+  v_anchor_id uuid;
   v_anchor_ts timestamptz;
   v_owner_id  uuid;
   v_msg       record;
@@ -12257,6 +12291,20 @@ begin
     return jsonb_build_object('conflict', true, 'reason', 'ownership_mismatch');
   end if;
 
+  -- Destructive-edit atomic insert: when p_replace_user_message_content
+  -- is set, insert the new user message now and use its id as the
+  -- anchor for the rest of the function. The old user message
+  -- (p_user_message_id) is in p_superseded_ids and will be deleted
+  -- below. This keeps the insert + delete + commit in one transaction
+  -- so an abort/error before this RPC fires leaves nothing in the DB.
+  if p_replace_user_message_content is not null then
+    insert into public.messages (thread_id, role, content, status, user_id)
+    values (v_thread_id, 'user', p_replace_user_message_content, null, p_user_id)
+    returning id into v_anchor_id;
+  else
+    v_anchor_id := p_user_message_id;
+  end if;
+
   -- Anchor user message must still exist in the thread's resolved
   -- transcript. Same-thread is the common case and the fast path; the
   -- transcript fallback admits an INHERITED anchor - a completion on a
@@ -12268,13 +12316,13 @@ begin
   -- and still catches an anchor deleted mid-stream.
   select created_at into v_anchor_ts
     from public.messages
-    where id = p_user_message_id
+    where id = v_anchor_id
       and role = 'user'
       and (thread_id = v_thread_id
            or exists (
              select 1
                from public.thread_transcript(v_thread_id) tt
-              where tt.id = p_user_message_id));
+              where tt.id = v_anchor_id));
 
   if not found then
     return jsonb_build_object('conflict', true, 'reason', 'anchor_missing');
@@ -12320,7 +12368,7 @@ begin
     delete from public.messages
       where thread_id = v_thread_id
         and id = any(p_superseded_ids)
-        and id <> p_user_message_id
+        and id <> v_anchor_id
         and id <> p_assistant_message_id;
   end if;
 
@@ -12358,9 +12406,9 @@ $$;
 -- streaming function calls this through the admin client; no
 -- authenticated or anon user should be able to commit terminal state
 -- on an assistant row.
-revoke all on function public.commit_assistant_message(uuid, uuid, uuid, text, text, jsonb, text, jsonb, uuid[])
+revoke all on function public.commit_assistant_message(uuid, uuid, uuid, text, text, jsonb, text, jsonb, uuid[], text)
   from public, anon, authenticated;
-grant execute on function public.commit_assistant_message(uuid, uuid, uuid, text, text, jsonb, text, jsonb, uuid[])
+grant execute on function public.commit_assistant_message(uuid, uuid, uuid, text, text, jsonb, text, jsonb, uuid[], text)
   to service_role;
 
 -- Bias profile ----------------------------------------------------------

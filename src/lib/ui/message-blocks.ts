@@ -178,6 +178,12 @@ export function buildMessageBlocks(messages: readonly Message[]): MessageBlock[]
     // test: synthetic rows (created in memory by the recovery walk)
     // and persisted rows (saved to the DB on the next user send).
     if (isRecoveryMessage(m)) continue;
+    // Draft user rows (fork-and-edit flow) never render as cards.
+    // The composer is the only surface that shows the draft text.
+    // On send, the row is promoted to status=null and becomes a
+    // normal user message, so this filter only applies while the
+    // draft is pending.
+    if (m.status === 'draft') continue;
     if (m.role === 'user') {
       blocks.push({ kind: 'plain', message: m });
       continue;

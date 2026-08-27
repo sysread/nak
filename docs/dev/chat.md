@@ -404,6 +404,16 @@ A chat turn goes:
   validity, the shared-region rule, verbatim titles on edit-forks)
   live in [`./forking.md`](./forking.md) - read it before changing
   any of them.
+- **User message editing**
+  ([`./user-message-editing.md`](./user-message-editing.md)) -
+  the send path branches for `pendingDraftId` (draft promotion)
+  and `pendingEdit` (atomic edit via `replaceUserMessageContent`
+  on the commit RPC); the edit dropdown on user messages; the
+  `buildHistoryOnWire` draft filter and `buildEditHistoryOnWire`
+  for the atomic edit's synthetic user turn; the reconnection
+  `$effect` that loads draft text on thread switch; the
+  thread-switch cleanup of `pendingDraftId` / `pendingEdit` /
+  `pendingDeleteIds` / `openEditMenuMsgId`.
 - **Tools** - the `/stream` envelope carries two tool payloads
   assembled on the browser side: `tools: buildToolList(
   thread.toolboxes_enabled)` (the first round's pre-filtered wire

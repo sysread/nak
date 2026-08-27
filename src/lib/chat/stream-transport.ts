@@ -122,6 +122,12 @@ export async function* streamChatViaFunction(
           ...(ctx.supersededIds && ctx.supersededIds.length > 0
             ? { supersededIds: ctx.supersededIds }
             : {}),
+          // Destructive-edit atomic insert: the edited text rides
+          // to the commit RPC, which inserts it as a new user message
+          // + deletes the old range in one transaction.
+          ...(ctx.replaceUserMessageContent
+            ? { replaceUserMessageContent: ctx.replaceUserMessageContent }
+            : {}),
           // Priming inputs for the server-side priming stage. Sent only
           // when present so a caller that does no priming (sub-completion
           // paths never reach here, but be explicit) keeps the wire lean.

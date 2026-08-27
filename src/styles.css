@@ -1899,6 +1899,25 @@ h1 {
   color: var(--danger);
 }
 
+/* Per-message edit dropdown - mirrors the thread-row .thread-menu
+   pattern but anchors to the message action row. Reuses
+   .thread-menu-item for the items themselves. */
+.edit-menu {
+  position: absolute;
+  bottom: calc(100% + 0.2rem);
+  right: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 0.25rem;
+  min-width: 9rem;
+  box-shadow: var(--shadow-pop);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
 /* Archive section — a collapsible group below the main Chats list.
    The toggle reads as a muted header rather than an interactive button
    to stay out of the way visually; the chevron rotates to signal state. */
@@ -2803,6 +2822,8 @@ h1 {
      below the buttons (via `.ring-detail { flex-basis: 100% }`)
      instead of getting squeezed onto the right-aligned row. */
   flex-wrap: wrap;
+  /* Anchor for the .edit-menu dropdown. */
+  position: relative;
 }
 
 /* Left-aligned message timestamp (yyyy-mm-dd HH:mm) at the head of the

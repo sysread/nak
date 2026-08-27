@@ -62,6 +62,10 @@ changing a contract that other features depend on.
   positions, the segment/forest data model, the
   thread_transcript resolver, hidden threads (delete = hide),
   and the fork GC.
+- [User message editing](./user-message-editing.md) — the
+  edit dropdown on user messages (destructive Edit + Fork and
+  edit), the draft message lifecycle, and the atomic edit via
+  `commit_assistant_message`.
 - [Attachments](./attachments.md) — per-message file
   attachments, Venice text-parser integration, and the
   expiration worker.

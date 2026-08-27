@@ -136,6 +136,18 @@ describe('classifyIncompleteTurnTail', () => {
     expect(classifyIncompleteTurnTail([user])).toBe(user);
   });
 
+  it('suppresses a draft user-message tail (fork-and-edit waiting for send, not a cut-off)', () => {
+    const draft = msg({ id: 'd1', role: 'user', content: 'edited text', status: 'draft' });
+    expect(classifyIncompleteTurnTail([draft])).toBeNull();
+  });
+
+  it('suppresses a draft user-message tail even after an assistant reply (draft at the tail of a fork with inherited prefix)', () => {
+    const u = msg({ id: 'u1', role: 'user', content: 'hi' });
+    const a = msg({ id: 'a1', role: 'assistant', content: 'hello', status: 'complete' });
+    const draft = msg({ id: 'd1', role: 'user', content: 'edited', status: 'draft' });
+    expect(classifyIncompleteTurnTail([u, a, draft])).toBeNull();
+  });
+
   it('flags a tool-row tail (tool round completed, next round never landed)', () => {
     const tail = msg({ id: 'r1', role: 'tool', content: '{"ok":1}' });
     expect(classifyIncompleteTurnTail([msg({ role: 'user' }), tail])).toBe(tail);
