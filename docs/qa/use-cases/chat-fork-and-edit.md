@@ -7,8 +7,8 @@ The fork-and-edit flow ([dev: user-message-editing](../../dev/in-progress/user-m
 1. **Fork and edit click.** Clicking "Fork and edit" from the edit dropdown forks from the message before the user message, inserts a draft row on the fork, opens the fork, and loads the draft text into the composer.
 2. **Draft invisibility.** The draft row (status='draft') is invisible in the transcript - buildMessageBlocks filters it. The composer is the only surface that shows the draft text.
 3. **Non-destructive.** The original thread is untouched. All its messages survive. The fork appears in the drawer under "Recent" with the forked-conversation glyph.
-4. **Edit and send.** The user edits the text in the composer and sends. The draft is promoted (content updated, status cleared) and the completion runs normally on the fork.
-5. **Reconnection.** Navigating away from the fork and back re-populates the composer from the draft row. The draft text persists across navigation.
+4. **Reconnection.** Navigating away from the fork and back re-populates the composer from the draft row. The draft text persists across navigation.
+5. **Edit and send.** The user edits the text in the composer and sends. The draft is promoted (content updated, status cleared) and the completion runs normally on the fork.
 6. **Abandoned fork.** If the user navigates away without sending, the fork stays in the drawer with the draft row. The user can return later and send, or delete the fork.
 7. **First message edge case.** Forking and editing the first user message (no preceding anchor) creates a fresh empty thread with the parent's title and pins.
 

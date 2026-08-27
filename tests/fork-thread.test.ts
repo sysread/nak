@@ -264,6 +264,8 @@ function makeClient(opts: {
         error: null,
       })),
     },
+    /** Captured query state for assertions. */
+    _captured: captured,
   } as unknown as SupabaseClient;
 }
 
@@ -277,10 +279,13 @@ describe('forkThread', () => {
       forkCount: 0,
       insertRow: threadRow({ id: 'F', title: 'marked', forked_from_thread_id: 'P', forked_from_msg_id: 'm1' }),
     });
-    const fork = await forkThread(client, 'P', 'm1');
-    expect(fork.id).toBe('F');
-    expect(fork.forked_from_thread_id).toBe('P');
-    expect(fork.forked_from_msg_id).toBe('m1');
+    const fork = await forkThread(client, "P", "m1");
+    expect(fork.id).toBe("F");
+    expect(fork.forked_from_thread_id).toBe("P");
+    expect(fork.forked_from_msg_id).toBe("m1");
+    const cap = (client as unknown as { _captured: { insertPayload: Record<string, unknown> | null } })._captured;
+    expect(cap.insertPayload?.forked_from_thread_id).toBe('P');
+    expect(cap.insertPayload?.forked_from_msg_id).toBe('m1');
   });
 
   it('applies the reparent rule: parent is the thread that OWNS the fork-point message, not the source thread', async () => {
@@ -296,6 +301,10 @@ describe('forkThread', () => {
     const fork = await forkThread(client, 'E', 'm1');
     expect(fork.forked_from_thread_id).toBe('P');
     expect(fork.forked_from_msg_id).toBe('m1');
+    // The reparent rule: the insert payload's parent is the message
+    // owner's thread (P), not the source thread (E).
+    const cap2 = (client as unknown as { _captured: { insertPayload: Record<string, unknown> | null } })._captured;
+    expect(cap2.insertPayload?.forked_from_thread_id).toBe('P');
   });
 
   it('markTitle: false carries the title verbatim with no sigil or ordinal', async () => {
@@ -307,9 +316,9 @@ describe('forkThread', () => {
     });
     const fork = await forkThread(client, 'P', 'm1', { markTitle: false });
     expect(fork.title).toBe('Original title');
-    // The count query should NOT run when markTitle is false.
-    // (The stub can't easily prove the query was skipped, but the
-    // insert payload's title proves it: no sigil, no ordinal.)
+    // The insert payload's title is verbatim - no sigil, no ordinal.
+    const cap = (client as unknown as { _captured: { insertPayload: Record<string, unknown> | null } })._captured;
+    expect(cap.insertPayload?.title).toBe('Original title');
   });
 
   it('markTitle: true (default) marks the title with the sigil and ordinal', async () => {
@@ -319,18 +328,11 @@ describe('forkThread', () => {
       forkCount: 2, // 2 existing forks -> ordinal 3
       insertRow: threadRow({ id: 'F', title: 'placeholder' }),
     });
-    const fork = await forkThread(client, 'P', 'm1');
-    // The insert payload's title is what forkTitle produced.
-    // forkTitle('Original title', 3) = sigil + subscript-3 + ' Original title'
-    expect(fork.title).toBe('placeholder'); // stub returns insertRow as-is
-    // The real assertion: forkTitle was called. We can check the
-    // insert payload captured by the stub, but the stub stores it
-    // internally. Instead, verify the ordinal math: forkCount 2
-    // means the 3rd fork. The function computes (count ?? 0) + 1 = 3.
-    // The insert payload title should have been forkTitle('Original title', 3).
-    // Since the stub returns a fixed insertRow, we verify the ordinal
-    // via the count query path: the count query runs (markTitle true)
-    // and feeds forkTitle.
+    await forkThread(client, 'P', 'm1');
+    // sigil + subscript-3 + ' Original title'. Not the verbatim title.
+    const cap = (client as unknown as { _captured: { insertPayload: Record<string, unknown> | null } })._captured;
+    expect(cap.insertPayload?.title).not.toBe('Original title');
+    expect(cap.insertPayload?.title).toMatch(/Original title/);
   });
 
   // ---- Whole-conversation fork (no forkMsgId) ----

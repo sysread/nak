@@ -5,10 +5,10 @@
 The incomplete-turn detection ([dev: chat](../../dev/chat.md); classifier in `src/lib/ui/incomplete-turn.ts`, banner wiring in `src/screens/Chat.svelte`):
 
 1. **Genuine cut-off: bare user tail.** A non-draft user message at the tail with no assistant reply means the completion worker failed before writing anything. The banner should fire.
-2. **Genuine cut-off: tool-row tail.** A tool round completed but the next assistant round never landed. The banner should fire.
-3. **Genuine cut-off: reasoning-only stall.** An assistant row with reasoning but no content and no tool calls. The banner should fire.
+2. **Genuine cut-off: tool-row tail.** A tool round completed but the next assistant round never landed. The banner should fire. (Not staged here - requires engineering a mid-turn failure. Covered by unit tests in `tests/incomplete-turn.test.ts`.)
+3. **Genuine cut-off: reasoning-only stall.** An assistant row with reasoning but no content and no tool calls. The banner should fire. (Not staged here - requires a model that emits non-standard tool-call syntax. Covered by unit tests.)
 4. **Deliberate endpoint: aborted.** A user-initiated stop commits as `status='aborted'`. The banner should NOT fire.
-5. **Deliberate endpoint: pending ask_user.** A tool row carrying the ask_user pending sentinel. The banner should NOT fire.
+5. **Deliberate endpoint: pending ask_user.** A tool row carrying the ask_user pending sentinel. The banner should NOT fire. (Not staged here - requires a model that calls ask_user. Covered by unit tests.)
 6. **Expected state: draft tail.** A user message with `status='draft'` at the tail (fork-and-edit flow). The banner should NOT fire.
 7. **Settled transcript.** A thread ending with a completed assistant reply. The banner should NOT fire.
 
