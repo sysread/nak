@@ -297,6 +297,14 @@ unaffected.
 - A mutating tool's response must describe state it actually read
   back, not the shape the caller asked for. See the echoed-row gotcha
   below for the two fields this went wrong on.
+- **The rating is user-only.** `recipe_update` accepts no `rating`
+  argument and always passes `p_set_rating: false`; a call that
+  carries one is rejected with an explanatory error. The rating is a
+  user evaluation of a cooked dish, so it moves only through the UI
+  paths - the star control on the recipe card and the edit form -
+  which reach `updateRecipe` directly. `recipe_save` still takes a
+  rating, since a save can transcribe a rating the user stated while
+  dictating the recipe.
 
 ## Versioning
 

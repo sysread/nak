@@ -136,3 +136,24 @@ Deno.test('recipe_update still rejects a patch with nothing to change', async ()
     'provide at least one of',
   );
 });
+
+Deno.test('recipe_update refuses to touch the star rating', async () => {
+  // The rating is the user's verdict on a recipe they cooked. The model
+  // reaching for it - typically after conversational praise - must fail
+  // loudly; a silent drop would read as a successful write and get
+  // reported to the user as a rating change that never happened.
+  const { ctx, rpcCalls } = fakeCtx({});
+  await assertRejects(
+    () => recipeUpdate.execute({ ...ARGS, rating: 5 }, ctx),
+    Error,
+    'rating is not editable by this tool',
+  );
+  assertEquals(rpcCalls.length, 0);
+});
+
+Deno.test('recipe_update never sets the rating on the RPC', async () => {
+  const { ctx, rpcCalls } = fakeCtx({});
+  await recipeUpdate.execute(ARGS, ctx);
+  assertEquals(rpcCalls[0].p_set_rating, false);
+  assertEquals(rpcCalls[0].p_rating, null);
+});
