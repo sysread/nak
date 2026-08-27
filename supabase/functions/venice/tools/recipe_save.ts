@@ -33,13 +33,16 @@ export const recipeSave: ToolDef = {
         ? args.source_url.trim()
         : null;
     const errs = new ArgErrors();
-    let rating: number | null = null;
-    if (typeof args.rating === 'number') {
-      if (!Number.isInteger(args.rating) || args.rating < 1 || args.rating > 5) {
-        errs.add('rating must be an integer between 1 and 5');
-      } else {
-        rating = args.rating;
-      }
+    // The star rating is the user's evaluation of a dish they cooked, so
+    // no tool writes it - only the star control on the recipe card and
+    // the edit form do. A call carrying one fails loudly rather than
+    // dropping it silently: a silent drop reads to the model as a
+    // successful write, and it then tells the user a rating was saved.
+    if ('rating' in args) {
+      errs.add(
+        'rating is not settable by this tool - the star rating is the ' +
+          "user's own evaluation and only they can set it",
+      );
     }
     if (!title) errs.add('title is required');
     else if (title.length > MAX_RECIPE_TITLE_CHARS) {
@@ -74,7 +77,7 @@ export const recipeSave: ToolDef = {
       p_cooklang: cooklang,
       p_source: source,
       p_source_url: sourceUrl,
-      p_rating: rating,
+      p_rating: null,
       p_image_ids: null,
       p_image_labels: null,
       p_change_message: changeMessage,

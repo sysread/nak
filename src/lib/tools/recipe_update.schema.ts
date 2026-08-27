@@ -7,9 +7,11 @@ export const recipeUpdateSchema = {
   name: 'recipe_update',
   description:
     'Update a recipe by id. Provide at least one of title, cooklang, ' +
-    'source, source_url, or rating; omit a field to leave it unchanged. ' +
+    'source, or source_url; omit a field to leave it unchanged. ' +
     'Pass ' +
-    'null for source / source_url / rating to clear them. cooklang ' +
+    'null for source / source_url to clear them. The star rating is ' +
+    "the user's own verdict and is not editable here - only they can " +
+    'set or clear it, from the recipe card. cooklang ' +
     `capped at ${MAX_RECIPE_COOKLANG_CHARS} chars; section / declaration / ` +
     'continuation rules match recipe_save. Same authoring constraints ' +
     'apply: inline emphasis (`**bold**`, `*italic*`, `_italic_`) ' +
@@ -44,15 +46,6 @@ export const recipeUpdateSchema = {
         type: ['string', 'null'],
         maxLength: 2000,
         description: 'URL provenance, or null to clear.',
-      },
-      rating: {
-        type: ['integer', 'null'],
-        minimum: 1,
-        maximum: 5,
-        description:
-          "User's 1-5 star rating, or null to clear. Set only when " +
-          'the user has explicitly indicated their feelings about the ' +
-          'recipe; do not invent.',
       },
       change_message: {
         type: 'string',

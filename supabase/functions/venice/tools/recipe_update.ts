@@ -85,27 +85,24 @@ export const recipeUpdate: ToolDef = {
       sourceUrlVal = args.source_url.trim();
     }
 
-    let setRating = false;
-    let ratingVal: number | null = null;
+    // The star rating is the user's evaluation of a recipe they cooked,
+    // not recipe content. The model would set it from conversational
+    // praise ("that turned out great") and overwrite a verdict only the
+    // user gets to make, so the tool refuses it outright rather than
+    // ignoring it silently - a silent drop reads to the model as a
+    // successful write and it tells the user the rating changed.
     if ('rating' in args) {
-      if (args.rating === null) {
-        setRating = true;
-        ratingVal = null;
-      } else if (typeof args.rating === 'number') {
-        if (!Number.isInteger(args.rating) || args.rating < 1 || args.rating > 5) {
-          errs.add('rating must be an integer between 1 and 5, or null to clear');
-        } else {
-          setRating = true;
-          ratingVal = args.rating;
-        }
-      }
+      errs.add(
+        'rating is not editable by this tool - the star rating is the ' +
+          "user's own evaluation and only they can set or clear it",
+      );
     }
 
     // Empty-patch is only a real complaint when nothing else is wrong - a
     // malformed field already left its set-flag false, and double-reporting
     // it as "provide at least one of" would mislead.
-    if (!setTitle && !setCooklang && !setSource && !setSourceUrl && !setRating && !errs.any) {
-      errs.add('provide at least one of title, cooklang, source, source_url, or rating');
+    if (!setTitle && !setCooklang && !setSource && !setSourceUrl && !errs.any) {
+      errs.add('provide at least one of title, cooklang, source, or source_url');
     }
 
     const changeMessage =
@@ -123,8 +120,8 @@ export const recipeUpdate: ToolDef = {
       p_source: sourceVal,
       p_set_source_url: setSourceUrl,
       p_source_url: sourceUrlVal,
-      p_set_rating: setRating,
-      p_rating: ratingVal,
+      p_set_rating: false,
+      p_rating: null,
       p_set_image_ids: false,
       p_image_ids: null,
       p_image_labels: null,

@@ -195,11 +195,11 @@ actually cook it.
   and the change-message field. The rating saves with the rest of the
   edit, so a single change-message covers the whole edit including
   the rating change.
-- **Asking the model**: tell Nak how you feel about the recipe ("that
-  ground-pork ragu was a 5", "drop the chickpea curry to 2 stars")
-  and it will call `recipe_update` to set or clear the rating. Nak
-  will not invent a rating on its own; it only writes a rating when
-  you've explicitly told it what to set.
+- **Only you can rate.** The rating is your verdict on a recipe you
+  cooked, so the model cannot write it - not when it edits a recipe,
+  and not when it saves a new one. Ask Nak to set a rating and it will
+  tell you to click the stars yourself. Every other part of a recipe
+  is still fair game for it to edit.
 
 Sort the list by rating with the **Sort** selector at the top of the
 Cookbook list pane. Highest-rated recipes appear first, ties broken
