@@ -196,9 +196,10 @@ actually cook it.
   edit, so a single change-message covers the whole edit including
   the rating change.
 - **Only you can rate.** The rating is your verdict on a recipe you
-  cooked, so the model cannot write it. Ask Nak to set a rating and it
-  will tell you to click the stars yourself. Every other part of a
-  recipe is still fair game for it to edit.
+  cooked, so the model cannot write it - not when it edits a recipe,
+  and not when it saves a new one. Ask Nak to set a rating and it will
+  tell you to click the stars yourself. Every other part of a recipe
+  is still fair game for it to edit.
 
 Sort the list by rating with the **Sort** selector at the top of the
 Cookbook list pane. Highest-rated recipes appear first, ties broken

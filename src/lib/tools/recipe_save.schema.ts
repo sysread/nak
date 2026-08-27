@@ -10,7 +10,7 @@
  * buried among them) reads worse than promoting the cooklang
  * block to a labelled section below the metadata. The override
  * orders the fields the way a reader would scan them - activity,
- * title, source, rating, change_message, then the recipe body
+ * title, source, change_message, then the recipe body
  * itself.
  */
 import { MAX_RECIPE_COOKLANG_CHARS, MAX_RECIPE_TITLE_CHARS } from '../recipe-limits';
@@ -18,7 +18,7 @@ import { MAX_RECIPE_COOKLANG_CHARS, MAX_RECIPE_TITLE_CHARS } from '../recipe-lim
 function formatRecipeSaveArgs(args: Record<string, unknown>): string {
   const lines: string[] = [];
   const scalar: Array<[string, string]> = [];
-  for (const key of ['title', 'source', 'source_url', 'rating', 'change_message'] as const) {
+  for (const key of ['title', 'source', 'source_url', 'change_message'] as const) {
     const v = args[key];
     if (v === undefined || v === null || v === '') continue;
     if (key === 'source_url' && typeof v === 'string') {
@@ -103,15 +103,6 @@ export const recipeSaveSchema = {
         type: 'string',
         maxLength: 2000,
         description: 'Optional URL the recipe was imported from.',
-      },
-      rating: {
-        type: 'integer',
-        minimum: 1,
-        maximum: 5,
-        description:
-          'Optional 1-5 star rating. Set ONLY when the user has ' +
-          'explicitly told you how they feel about the recipe; never ' +
-          'invent one from reviews or your own assessment.',
       },
       change_message: {
         type: 'string',

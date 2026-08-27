@@ -302,9 +302,9 @@ unaffected.
   carries one is rejected with an explanatory error. The rating is a
   user evaluation of a cooked dish, so it moves only through the UI
   paths - the star control on the recipe card and the edit form -
-  which reach `updateRecipe` directly. `recipe_save` still takes a
-  rating, since a save can transcribe a rating the user stated while
-  dictating the recipe.
+  which reach `updateRecipe` directly. `recipe_save` is the same: no
+  `rating` argument, `p_rating: null` on every create, and the same
+  explanatory rejection if one shows up.
 
 ## Versioning
 
