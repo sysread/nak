@@ -2,8 +2,11 @@
 //
 // Reads and writes for the model_feature_rejections table: the
 // persistent memory of optional wire fields a model's backend rejects
-// with strict validation ("Extra inputs are not permitted, field:
-// 'X'"). Discovery happens in getStreamingCompletion's strip-and-retry
+// ("Extra inputs are not permitted, field: 'X'" strict validation,
+// plus the "Reasoning is mandatory" refusal of disable_thinking).
+// The feature value is a wire PATH: a bare top-level key ('text') or
+// one dotted level ('venice_parameters.disable_thinking').
+// Discovery happens in getStreamingCompletion's strip-and-retry
 // fallback; the orchestrator (getStreamingResponse) records each
 // discovery here and, at turn start, strips already-known rejections
 // from the request body so the failing round-trip is paid once ever
@@ -18,7 +21,11 @@
 // worth failing a turn over.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { DROPPABLE_WIRE_FIELDS } from './getStreamingCompletion.ts';
+import {
+  DROPPABLE_WIRE_FIELDS,
+  deleteWireField,
+  hasWireField,
+} from './getStreamingCompletion.ts';
 
 /**
  * Fetch the set of wire fields known to be rejected by `modelId`'s
@@ -89,8 +96,8 @@ export function stripRejectedFeatures(
 ): string[] {
   const stripped: string[] = [];
   for (const field of rejected) {
-    if (DROPPABLE_WIRE_FIELDS.has(field) && field in body) {
-      delete body[field];
+    if (DROPPABLE_WIRE_FIELDS.has(field) && hasWireField(body, field)) {
+      deleteWireField(body, field);
       stripped.push(field);
     }
   }

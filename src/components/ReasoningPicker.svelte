@@ -30,8 +30,15 @@
     onToggle: () => void;
     /** Fired when the user picks a level. Parent closes the menu. */
     onSelect: (level: ThinkingLevel) => void;
+    /**
+     * True when the model's backend refuses to run without a thinking
+     * pass ("Reasoning is mandatory" in model_feature_rejections).
+     * Renders the Off row disabled rather than hiding it, so the menu
+     * shape stays stable across models.
+     */
+    offRejected?: boolean;
   }
-  let { value, defaultLevel, open, onToggle, onSelect }: Props = $props();
+  let { value, defaultLevel, open, onToggle, onSelect, offRejected = false }: Props = $props();
 </script>
 
 <button
@@ -70,6 +77,10 @@
         type="button"
         class="menu-item menu-item-btn"
         class:selected={value === level}
+        disabled={level === 'off' && offRejected}
+        title={level === 'off' && offRejected
+          ? 'This model cannot run without a thinking pass'
+          : undefined}
         onclick={() => onSelect(level)}
         role="menuitemradio"
         aria-checked={value === level}

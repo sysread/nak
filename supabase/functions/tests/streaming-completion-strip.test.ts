@@ -139,3 +139,64 @@ Deno.test('a 400 naming a non-droppable field is terminal', async () => {
   assertEquals(calls, 1);
   assertEquals(events.at(-1)?.type, 'error');
 });
+
+const MANDATORY_REASONING_400 = JSON.stringify({
+  error: 'Reasoning is mandatory for this endpoint and cannot be disabled.',
+  request_id: 'req-test',
+});
+
+Deno.test('maps a mandatory-reasoning 400 to the disable_thinking path and retries', async () => {
+  // z-ai-glm-5-3's backend refuses venice_parameters.disable_thinking
+  // with its own error shape (not the pydantic extra-field message).
+  // The wrapper must strip the nested knob - dropping the emptied
+  // venice_parameters parent too - and re-issue with thinking on.
+  const sentBodies: Array<Record<string, unknown>> = [];
+  const fakeFetch = ((_url: string | URL | Request, init?: RequestInit) => {
+    sentBodies.push(JSON.parse(init!.body as string));
+    if (sentBodies.length === 1) {
+      return Promise.resolve(new Response(MANDATORY_REASONING_400, { status: 400 }));
+    }
+    return Promise.resolve(new Response(HAPPY_SSE, { status: 200 }));
+  }) as typeof fetch;
+
+  const body: Record<string, unknown> = {
+    model: 'z-ai-glm-5-3',
+    messages: [{ role: 'user', content: 'ping' }],
+    venice_parameters: { disable_thinking: true },
+  };
+  const events = await collect(body, fakeFetch);
+
+  assertEquals(sentBodies.length, 2);
+  assert('venice_parameters' in sentBodies[0], 'first attempt carries the knob');
+  assert(
+    !('venice_parameters' in sentBodies[1]),
+    'retry drops the knob and the emptied parent object',
+  );
+  assert(!('venice_parameters' in body), 'caller body is stripped in place');
+
+  const signals = events.filter(
+    (e): e is Extract<StreamSignal, { type: 'wire_feature_rejected' }> =>
+      e.type === 'wire_feature_rejected'
+  );
+  assertEquals(signals.length, 1);
+  assertEquals(signals[0].field, 'venice_parameters.disable_thinking');
+  assertEquals(events.at(-1)?.type, 'DONE');
+});
+
+Deno.test('a mandatory-reasoning 400 with no disable_thinking in the body is terminal', async () => {
+  // If the request never asked to disable thinking, there is nothing
+  // to strip - the 400 must surface rather than loop.
+  let calls = 0;
+  const fakeFetch = ((_url: string | URL | Request) => {
+    calls += 1;
+    return Promise.resolve(new Response(MANDATORY_REASONING_400, { status: 400 }));
+  }) as typeof fetch;
+
+  const events = await collect(
+    { model: 'z-ai-glm-5-3', messages: [{ role: 'user', content: 'ping' }] },
+    fakeFetch,
+  );
+
+  assertEquals(calls, 1);
+  assertEquals(events.at(-1)?.type, 'error');
+});

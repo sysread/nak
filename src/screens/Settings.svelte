@@ -2044,7 +2044,18 @@
                     })}
                 >
                   {#each THINKING_LEVELS as lvl (lvl)}
-                    <option value={lvl}>{THINKING_LEVEL_LABELS[lvl]} thinking</option>
+                    <!-- Off is unavailable on backends that refuse to run
+                         without a thinking pass ("Reasoning is mandatory");
+                         same rejections record that greys the verbosity
+                         dropdown below. -->
+                    <option
+                      value={lvl}
+                      disabled={lvl === 'off' &&
+                        profilesLib.thinkingOffRejectedForModel(
+                          app.modelFeatureRejections,
+                          p.modelId
+                        )}>{THINKING_LEVEL_LABELS[lvl]} thinking</option
+                    >
                   {/each}
                 </select>
                 <label class="sr-only" for={`profile-verbosity-${p.id}`}

@@ -244,9 +244,11 @@ create policy "app_config is readable by authenticated users" on public.app_conf
 -- model+feature, not once per turn. The browser reads the table to
 -- disable the matching controls in Settings -> Model profiles.
 --
--- `feature` holds the wire FIELD name ('text' for the text.verbosity
--- knob), not a product-feature label - the UI owns the field-to-control
--- mapping. Rows are provider facts, not user data, so the table is
+-- `feature` holds the wire field PATH - a top-level key ('text' for
+-- the text.verbosity knob) or one dotted level
+-- ('venice_parameters.disable_thinking' for backends that refuse
+-- "Reasoning is mandatory") - not a product-feature label; the UI
+-- owns the path-to-control mapping. Rows are provider facts, not user data, so the table is
 -- global (no user_id). Staleness is accepted the same way profile
 -- capability snapshots accept it: if a backend later adds support, the
 -- row keeps the feature off until deleted by hand; discovered_at is

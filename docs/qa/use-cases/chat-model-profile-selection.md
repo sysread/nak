@@ -16,9 +16,10 @@ turn. Verified rejection facts (probed live 2026-08-27): GLM 5.2
 rejected `text.verbosity` (recorded in `model_feature_rejections`);
 GLM 5.3 and 5.3 Flash both ACCEPT it. GLM 5.3 non-flash instead
 rejects `venice_parameters.disable_thinking` ("Reasoning is
-mandatory") - a different error shape the strip-and-retry fallback
-does NOT catch, so an Off-thinking pick on that model hard-fails the
-turn rather than degrading. Authoring the profiles
+mandatory") - a distinct error shape the strip-and-retry fallback
+also recognizes: the knob is stripped, the turn re-issues with
+thinking on, and the rejection is recorded so Settings and the
+composer grey out the Off thinking option for that model. Authoring the profiles
 themselves is
 [settings-model-profiles](./settings-model-profiles.md).
 

@@ -92,14 +92,67 @@ const TRUNCATED_BACKOFF_MS = 500;
 // Exported: the orchestrator uses the same set to gate the preemptive
 // strip of features recorded in model_feature_rejections, so a stray
 // DB row can never strip a semantic field.
-export const DROPPABLE_WIRE_FIELDS: ReadonlySet<string> = new Set(['text']);
+// Entries are wire PATHS: a bare key ('text') or one dotted level
+// ('venice_parameters.disable_thinking') - the path grammar
+// hasWireField/deleteWireField implement.
+export const DROPPABLE_WIRE_FIELDS: ReadonlySet<string> = new Set([
+  'text',
+  'venice_parameters.disable_thinking',
+]);
 
 /**
- * Extract the field name from a strict-validation 400, or null when
- * the error is anything else. Matches the pydantic-style message
- * Venice relays: `Extra inputs are not permitted, field: 'text'`.
+ * True when the body carries the wire path - a top-level key, or a
+ * key nested one level down for 'a.b' paths.
  */
-function rejectedExtraField(err: unknown): string | null {
+export function hasWireField(
+  body: Record<string, unknown>,
+  path: string,
+): boolean {
+  const dot = path.indexOf('.');
+  if (dot === -1) return path in body;
+  const parent = body[path.slice(0, dot)];
+  return (
+    typeof parent === 'object' && parent !== null && path.slice(dot + 1) in parent
+  );
+}
+
+/**
+ * Delete the wire path from the body in place. For a dotted path the
+ * nested key is removed and an emptied parent object is dropped too -
+ * an empty `venice_parameters: {}` left behind would itself be an
+ * "extra input" to a strict backend.
+ */
+export function deleteWireField(
+  body: Record<string, unknown>,
+  path: string,
+): void {
+  const dot = path.indexOf('.');
+  if (dot === -1) {
+    delete body[path];
+    return;
+  }
+  const parentKey = path.slice(0, dot);
+  const parent = body[parentKey];
+  if (typeof parent !== 'object' || parent === null) return;
+  delete (parent as Record<string, unknown>)[path.slice(dot + 1)];
+  if (Object.keys(parent).length === 0) delete body[parentKey];
+}
+
+/**
+ * Extract the rejected wire path from a strict-validation 400, or
+ * null when the error is anything else. Two shapes are recognized:
+ *
+ *   - The pydantic-style extra-field message Venice relays:
+ *     `Extra inputs are not permitted, field: 'text'`. The named
+ *     field is the path.
+ *   - `Reasoning is mandatory for this endpoint and cannot be
+ *     disabled.` - a backend refusing the disable_thinking knob
+ *     outright (observed on z-ai-glm-5-3, whose serving offers no
+ *     'none' reasoning-effort option). Maps to the
+ *     venice_parameters.disable_thinking path; stripping it falls
+ *     back to thinking-on, which is what the backend forces anyway.
+ */
+function rejectedWireField(err: unknown): string | null {
   if (
     !(err instanceof VeniceError) ||
     err.kind !== 'http' ||
@@ -110,7 +163,11 @@ function rejectedExtraField(err: unknown): string | null {
   const m = err.message.match(
     /Extra inputs are not permitted, field: '([^']+)'/,
   );
-  return m ? m[1] : null;
+  if (m) return m[1];
+  if (/reasoning is mandatory/i.test(err.message)) {
+    return 'venice_parameters.disable_thinking';
+  }
+  return null;
 }
 
 export interface StreamingCompletionOpts {
@@ -344,17 +401,17 @@ async function* withRateLimitRetry(
       // of spinning. The signal lets the orchestrator persist the
       // discovery (model_feature_rejections), so future turns omit
       // the field before it ever reaches Venice.
-      const extraField = rejectedExtraField(err);
+      const extraField = rejectedWireField(err);
       if (
         extraField !== null &&
         DROPPABLE_WIRE_FIELDS.has(extraField) &&
-        extraField in opts.body &&
+        hasWireField(opts.body, extraField) &&
         !opts.signal.aborted
       ) {
         console.log(
           `[withRateLimitRetry] model backend rejected optional field '${extraField}'; stripping and retrying`,
         );
-        delete opts.body[extraField];
+        deleteWireField(opts.body, extraField);
         yield { type: 'wire_feature_rejected', field: extraField };
         continue;
       }

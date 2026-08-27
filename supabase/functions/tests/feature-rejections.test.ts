@@ -107,3 +107,27 @@ Deno.test('recordRejectedFeature upserts on the composite key and never throws',
   });
   await recordRejectedFeature(failing, 'm', 'text');
 });
+
+Deno.test('stripRejectedFeatures handles the dotted disable_thinking path', () => {
+  const body: Record<string, unknown> = {
+    model: 'z-ai-glm-5-3',
+    venice_parameters: { disable_thinking: true },
+  };
+  const stripped = stripRejectedFeatures(
+    body,
+    new Set(['venice_parameters.disable_thinking']),
+  );
+  assertEquals(stripped, ['venice_parameters.disable_thinking']);
+  // The emptied parent is dropped too - a bare venice_parameters: {}
+  // would itself be an extra input to a strict backend.
+  assertEquals('venice_parameters' in body, false);
+});
+
+Deno.test('stripRejectedFeatures keeps a venice_parameters parent that still carries other knobs', () => {
+  const body: Record<string, unknown> = {
+    model: 'z-ai-glm-5-3',
+    venice_parameters: { disable_thinking: true, enable_web_search: 'auto' },
+  };
+  stripRejectedFeatures(body, new Set(['venice_parameters.disable_thinking']));
+  assertEquals(body.venice_parameters, { enable_web_search: 'auto' });
+});
