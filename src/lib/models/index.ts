@@ -207,36 +207,16 @@ export const MODELS = {
     id: 'z-ai-glm-5-3-flash',
     // Z.ai's flash-tier GLM 5.3: cheap, fast, privately served by
     // Venice, and unusually broad for the price - tool calls, vision,
-    // a 1M window, and an optional reasoning pass. Backs every
-    // background-agent slot (see AGENT_MODELS below).
+    // a 1M window, and an optional reasoning pass. Backs the seed chat
+    // profile, every background-agent slot (see AGENT_MODELS below),
+    // and the analyze_image / analyze_pdf_page vision primary (id held
+    // directly in supabase/functions/venice/tools/_vision.ts).
     contextWindow: 1_048_576,
     // Accepts reasoning_effort, and its serving DEFAULT effort is
     // high - so every consumer must pin the thinking pass explicitly
     // (disable_thinking or a low effort). See the AGENT_MODELS
     // docblock for the per-slot discipline.
     supportsReasoning: true,
-    supportsVision: true,
-    supportsResponseFormat: true,
-  },
-  'qwen3-vl-235b-a22b': {
-    id: 'qwen3-vl-235b-a22b',
-    contextWindow: 128_000,
-    // Not a reasoning model: it has no chain-of-thought pass, so the
-    // analyze_image call must not send `reasoning_effort` (Venice 4xxs
-    // on the field for non-reasoning ids). The call site omits it
-    // anyway - it never sets reasoningEffort - so the wire payload
-    // stays clean. See buildChatBody in venice.ts (reasoning_effort is
-    // only forwarded when the caller opts in).
-    supportsReasoning: false,
-    // Vision-capable. analyze_image's primary vision sub-call uses this
-    // id; that tool runs server-side (supabase/functions/venice/tools/
-    // analyze_image.ts) and falls back to venice-uncensored-1-2 when
-    // this model fails. Listed here as a known Venice model and to back
-    // the supportsVision contract; the edge tool holds the id directly
-    // (it can't import from src/lib). Chosen over Venice's E2EE-served
-    // e2ee-qwen3-vl-30b-a3b-p, which hung or dropped the connection on
-    // every latency probe; see the rationale comment in
-    // supabase/functions/venice/tools/_vision.ts.
     supportsVision: true,
     supportsResponseFormat: true,
   },
