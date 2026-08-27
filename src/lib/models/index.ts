@@ -189,6 +189,11 @@ export const MODELS = {
   },
   'deepseek-v4-flash': {
     id: 'deepseek-v4-flash',
+    // No tier or agent points here anymore, but the entry stays
+    // registered: persisted user profiles created before the GLM
+    // default still resolve to this id, and this curated entry is
+    // what arms the special-token-leak guard for them - the live
+    // catalog cannot know the leak flag.
     contextWindow: 1_000_000,
     supportsReasoning: true,
     supportsVision: false,
@@ -323,13 +328,17 @@ export const SEED_MODEL_PROFILE_ID = 'default';
 
 /**
  * The starter profile list: one profile named "Default" on
- * deepseek-v4-flash with medium reasoning and low verbosity.
+ * z-ai-glm-5-3-flash with medium reasoning and low verbosity.
  * Capabilities come from the curated MODELS entry so the snapshot is
  * born accurate. Returns a fresh array per call - callers hand it to
  * reactive state and to list transforms that treat arrays as mutable.
+ *
+ * The seed only materializes for accounts with NO stored profiles.
+ * Existing accounts keep whatever their persisted Default profile
+ * points at; re-pointing the seed here does not migrate them.
  */
 export function seedModelProfiles(): ModelProfile[] {
-  const spec = MODELS['deepseek-v4-flash'];
+  const spec = MODELS['z-ai-glm-5-3-flash'];
   return [
     {
       id: SEED_MODEL_PROFILE_ID,
@@ -342,7 +351,7 @@ export function seedModelProfiles(): ModelProfile[] {
       supportsReasoning: spec.supportsReasoning,
       supportsVision: spec.supportsVision,
       supportsResponseFormat: spec.supportsResponseFormat,
-      modelLabel: 'DeepSeek V4 Flash',
+      modelLabel: 'GLM 5.3 Flash',
     },
   ];
 }
@@ -537,10 +546,12 @@ export type AgentRole =
  *   - Slots stay distinct constants (not one shared constant) so any
  *     single surface can be retuned independently when it regresses.
  *
- * The background agents no longer share capacity with the foreground
- * tiers (Balanced/Fast front deepseek-v4-flash, Smart fronts
- * qwen-3-7-plus), which un-relaxes the old shared-capacity concern:
- * an overload on one side no longer implicates the other.
+ * The seed chat profile fronts the same id, so foreground chat and
+ * the background fleet share serving capacity. That sharing is a
+ * known, accepted trade (it has been relaxed and re-tightened
+ * before); if overload errors arrive under the shared-capacity
+ * shape, the move is repointing the background slots to a
+ * non-foreground id, not downgrading the chat default.
  *
  * The five curation agents (auto-title, summary, thread topics,
  * memory topics, recipe topics), the bias pipeline, and the samskara

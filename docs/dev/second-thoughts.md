@@ -148,11 +148,11 @@ Three layered defenses:
 
 ### Model
 
-Fast, **non-reasoning** instruct tier - `mistral-small-3-2-24b-instruct`,
-the same id `web_search` / `summary` / `topics` use, chosen because it
-reliably honors `response_format: json_object`. The reflex is dumb and
-fast by design, so intuition's model rationale applies verbatim:
-latency is what matters, reasoning is actively wrong here. A reasoning
+Easy-task tier - `z-ai-glm-5-3-flash` with the thinking pass disabled,
+the same id `web_search` / `summary` / `topics` use. The reflex is dumb
+and fast by design, so intuition's model rationale applies verbatim:
+latency is what matters, reasoning is actively wrong here - the model
+can reason, so the disable pin at the call site is load-bearing. A reasoning
 model leaks chain-of-thought around the JSON, which in production
 dropped ~60% of verdicts and every doubt (the empty-note `conviction`
 survived the parser; longer doubt notes came back messy and failed it).

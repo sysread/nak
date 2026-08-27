@@ -218,7 +218,7 @@ for the derived query; everything downstream is identical.
   carrying ~19k chars into a live-path model call.
 - `supabase/functions/venice/priming/context-recall-smoothing.ts` - the
   recall-time smoothing pass (replaces the old string-concat render).
-  `smoothContextRecall` runs one `mistral-small-3-2-24b-instruct`
+  `smoothContextRecall` runs one `z-ai-glm-5-3-flash`
   completion over the
   gathered index + current exchange and returns `{ note, citations }`;
   the source-numbering / source-block-render / citation-projection /
@@ -229,7 +229,7 @@ for the derived query; everything downstream is identical.
 
 The body is produced by the smoothing pass
 (`context-recall-smoothing.ts`), not assembled by string concat. One
-`mistral-small-3-2-24b-instruct` completion (non-reasoning) reads the
+`z-ai-glm-5-3-flash` completion (thinking pass disabled) reads the
 gathered index plus the current exchange and emits a short first-person
 recollection.
 
@@ -237,12 +237,11 @@ The model id is pinned in that file with the full rationale next to it.
 Three properties are load-bearing rather than incidental, so read that
 comment before repointing it:
 
-- **Non-reasoning.** The task is faithful integration of evidence
-  already in context, so a chain-of-thought pass is pure latency on the
-  live turn's critical path. A model with no reasoning pass cannot
-  regress into one. Corollary: `reasoning_effort` must NOT go on the
-  wire for this id - Venice 4xxs on the field for non-reasoning models,
-  so the call sets only `disableThinking`.
+- **No thinking pass on the wire.** The task is faithful integration
+  of evidence already in context, so a chain-of-thought pass is pure
+  latency on the live turn's critical path. The current id CAN reason,
+  so the call's `disableThinking` flag is load-bearing suppression -
+  keep it when touching the call.
 - **Faithful over fluent.** This is the one that bites. The design's
   safety argument (see "Why deterministic retrieval, cited synthesis")
   holds only because every claim cites a real row, so a model that
@@ -252,8 +251,11 @@ comment before repointing it:
   broke the contract every time - it inverted "you raised the
   hydration" into "I raised", emitted a fabricated "+60g ^1^" against a
   source carrying no such number, and twice returned no citations at
-  all. Sample any candidate on a fixed input before pinning it; the
-  gate cannot catch this.
+  all. That strike does not carry to the current pin: Z.ai changed the
+  training regimen at GLM 5.2, and the 5.2+ line has been accurate in
+  use. Sample any candidate on a fixed input before pinning it; the
+  gate cannot catch this. `mistral-small-3-2-24b-instruct` is the
+  known-clean fallback on that check.
 - **Private serving.** The prompt is the user's own memories, verbatim.
   A model classified `anonymized` proxies it to an upstream provider
   with identifying metadata stripped - acceptable for generic work, a

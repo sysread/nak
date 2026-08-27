@@ -264,8 +264,8 @@ grocery_products / grocery_list_entries":
 
 `src/lib/grocery-section-agent.ts` files just-created, unfiled
 products into the user's own sections via a `grocerySection`
-sub-completion (`AGENT_MODELS` -> `mistral-small-3-2-24b-instruct`;
-non-reasoning classification, rationale on the slot's docblock in
+sub-completion (`AGENT_MODELS` -> `z-ai-glm-5-3-flash`;
+thinking pass disabled - pure classification, rationale on the slot's docblock in
 `src/lib/models/index.ts`). The contract, end to end:
 
 - **Insert first, classify after.** Every add stays instant; the

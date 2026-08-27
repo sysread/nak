@@ -147,7 +147,7 @@ Edge function (`supabase/functions/venice/`):
   `agents/_wiki_profile.ts`), the wiki
   tool wire schemas, `buildWikiToolbox`, the content-filter sentinel
   and fallback constants, and the per-run tunables: model
-  `deepseek-v4-flash` (hardcoded mirror of `agentModel('wiki')` -
+  `z-ai-glm-5-3-flash` (hardcoded mirror of `agentModel('wiki')` -
   `AGENT_MODELS` is a static role->model map, not a per-user tier),
   fallback `venice-uncensored-1-2`, `reasoningEffort:
   'medium'`, output cap 8192 tokens/round, claim TTL 600s, failure
@@ -174,7 +174,7 @@ Edge function (`supabase/functions/venice/`):
   actually showed), and returns the `WikiManualUpdateResult` union
   (`preview` / `noop` / `error`). Non-throwing by contract; writes
   nothing (the browser persists on Accept). Model mirror
-  `WIKI_MANUAL_MODEL` (`deepseek-v4-flash`). Test-only invariants
+  `WIKI_MANUAL_MODEL` (`z-ai-glm-5-3-flash`). Test-only invariants
   (the parser + prompt) exported via `__test`. Logger source
   `wiki-manual`.
 - `agents/_wiki_profile.ts` - the shared "About the user" block:
@@ -235,7 +235,7 @@ Edge function (`supabase/functions/venice/`):
   surface) and one toolbox (`buildLibrarianToolbox`) built from the
   REGISTERED tool ports via `asAgentTool` /
   `asAgentToolNoThread`. Per-run knobs: model
-  `deepseek-v4-flash` (mirror of `agentModel('wikiLibrarian')`),
+  `z-ai-glm-5-3-flash` (mirror of `agentModel('wikiLibrarian')`),
   400-char article excerpts, 500-article fetch cap, 12h cadence,
   600s in-flight TTL. Test-only invariants exported via `__test`.
 - `supabase/functions/_shared/agent-progress.ts` -
@@ -361,7 +361,7 @@ Model registry:
 
 - `src/lib/models/index.ts` - `AgentRole` includes `'wiki'` and
   `'wikiLibrarian'`; `AGENT_MODELS.wiki` and
-  `AGENT_MODELS.wikiLibrarian` both pinned to `deepseek-v4-flash`
+  `AGENT_MODELS.wikiLibrarian` both pinned to `z-ai-glm-5-3-flash`
   (rationale documented inline above the table). This registry is now
   the canonical source the edge mirror constants document; no browser
   code resolves `agentModel('wiki')` at runtime any more (the manual
@@ -1279,7 +1279,7 @@ Two distinct flows, both server-side, but different shapes:
 | Persistence | Tool calls write       | Browser persists article + records on Accept |
 | Prompt      | `buildWikiAutonomousPrompt` | `buildWikiManualPrompt` |
 
-Both run `deepseek-v4-flash` and share the encyclopedic-third-person
+Both run `z-ai-glm-5-3-flash` and share the encyclopedic-third-person
 voice, the "preserve facts unless explicitly contradicted"
 discipline, and - now that both live in the same runtime - the
 literal `renderUserProfileBlock` from `agents/_wiki_profile.ts`. They
@@ -1445,8 +1445,8 @@ separately.
     `<thread_attachments>` note (live image + file filenames) to their
     final prompt turn. Without it the model has no real filename to pass
     and `record_file_attach` is uncallable.
-  - **The agent model is text-tier** (`deepseek-v4-flash`,
-    `supportsVision: false`) - it cannot see image pixels. So both agents
+  - **The agents never see image pixels** - their transcript render is
+    text-only, whatever the backing model reports for vision. So both agents
     also get `analyze_image` (read-only, thread-scoped via
     `requireThreadId`), the same vision-sub-model indirection the chat
     path uses for non-vision tiers. The prompt requires verifying an
@@ -1729,7 +1729,7 @@ separately.
   applies to - but the anti-name-fabrication block is now edited in
   exactly one place. Model pins are edge mirrors of the registry:
   `WIKI_MODEL`, `WIKI_MANUAL_MODEL`, `WIKI_LIBRARIAN_MODEL` (all
-  `deepseek-v4-flash`) mirror `AGENT_MODELS` in
+  `z-ai-glm-5-3-flash`) mirror `AGENT_MODELS` in
   `src/lib/models/index.ts`; the char caps in `src/lib/wiki.ts`
   mirror the function tools. Keep mirrors in sync.
 - **`embedding_claim_expires` (no `_at`).** Schema convention for

@@ -54,7 +54,7 @@ formation pipeline lives in the venice edge function
 (`supabase/functions/venice/agents/samskara.ts`), driven by the
 completed-turn tail and an hourly cron sweep; the evaluation
 judge and the reaper ride their own pg_cron jobs. Every LLM phase uses the hardcoded
-`SAMSKARA_MODEL` (mistral-small). No tab needs to stay open.
+`SAMSKARA_MODEL` (z-ai-glm-5-3-flash). No tab needs to stay open.
 Async-friendly: nak chat is SMS-shaped (the user can wander off
 for an hour and come back), so formation has time to catch up
 between turns without blocking anything.

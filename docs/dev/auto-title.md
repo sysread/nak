@@ -9,7 +9,7 @@ venice edge function; there is no browser-side titling code.
 Every thread is created with `title = 'New conversation'`. The
 auto-title unit claims a placeholder-titled thread (oldest first,
 skipping rows the user manually pinned), asks the small fast model
-(`mistral-small-3-2-24b-instruct`, hardcoded in the agent module) for a
+(`z-ai-glm-5-3-flash`, hardcoded in the agent module) for a
 title against the first user message, and writes the result back via a
 claim-guarded RPC.
 
@@ -172,9 +172,9 @@ metadata-message details.
   claimed. If you ever introduce a "create empty thread" flow, the
   thread won't auto-title until a user message lands.
 - **The model id is hardcoded in the agent module.**
-  `AUTO_TITLE_MODEL = 'mistral-small-3-2-24b-instruct'` - the same
-  cheap, fast, non-reasoning instruct model the other server-side
-  curation agents (summary, topics, bias, samskara) use. There is NO
+  `AUTO_TITLE_MODEL = 'z-ai-glm-5-3-flash'` - the same
+  cheap, fast model the other server-side curation agents (summary,
+  topics, bias, samskara) use, thinking pass disabled at the call. There is NO
   `autoTitle` role in `AGENT_MODELS`; the curation agents run
   server-side and hold their ids directly (the edge function cannot
   import `src/lib`), so this is a bare string, not a mirror of a

@@ -59,10 +59,10 @@ describe('MODELS (active registry)', () => {
     // sub-call primary (qwen3-vl-235b-a22b) and its uncensored
     // fallback (venice-uncensored-1-2), plus qwen-3-7-plus (which
     // inlines image_url parts directly rather than routing through
-    // analyze_image), and z-ai-glm-5-3-flash (intuition's backing id,
-    // vision-capable per the Venice catalog even though the pulse never
-    // sends images). The seed profile's deepseek-v4-flash is text-only
-    // - vision goes through analyze_image.
+    // analyze_image), and z-ai-glm-5-3-flash (the seed chat profile
+    // and the whole background fleet; vision-capable per the Venice
+    // catalog). deepseek-v4-flash stays registered for legacy
+    // profiles and is text-only - vision goes through analyze_image.
     const visionIds = new Set([
       'venice-uncensored-1-2',
       'qwen3-vl-235b-a22b',
@@ -76,20 +76,20 @@ describe('MODELS (active registry)', () => {
 });
 
 describe('seedModelProfiles', () => {
-  it('is a single "Default" profile on deepseek-v4-flash, medium reasoning, low verbosity', () => {
+  it('is a single "Default" profile on z-ai-glm-5-3-flash, medium reasoning, low verbosity', () => {
     const seed = seedModelProfiles();
     expect(seed).toHaveLength(1);
     const p = seed[0];
     expect(p.id).toBe(SEED_MODEL_PROFILE_ID);
     expect(p.name).toBe('Default');
-    expect(p.modelId).toBe('deepseek-v4-flash');
+    expect(p.modelId).toBe('z-ai-glm-5-3-flash');
     expect(p.thinking).toBe('medium');
     expect(p.verbosity).toBe('low');
     expect(p.isDefault).toBe(true);
   });
   it('carries the curated capability snapshot of its backing model', () => {
     const p = seedModelProfiles()[0];
-    const spec = MODELS['deepseek-v4-flash'];
+    const spec = MODELS['z-ai-glm-5-3-flash'];
     expect(p.contextWindow).toBe(spec.contextWindow);
     expect(p.supportsReasoning).toBe(spec.supportsReasoning);
     expect(p.supportsVision).toBe(spec.supportsVision);

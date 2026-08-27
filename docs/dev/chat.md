@@ -205,7 +205,7 @@ A chat turn goes:
   a capability snapshot so resolution never has to wait on the
   lazily-fetched model catalog; accounts with no stored profiles get
   `seedModelProfiles()` in memory (one "Default" profile on
-  deepseek-v4-flash, medium thinking, low verbosity). See
+  z-ai-glm-5-3-flash, medium thinking, low verbosity). See
   [Settings](./settings.md).
 - **Reasoning effort** — the per-thread value is a `ThinkingLevel`
   (`off` | low | medium | high), not a bare `ReasoningEffort`.

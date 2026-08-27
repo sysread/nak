@@ -54,7 +54,7 @@ describe('createProfile / addProfile', () => {
     expect(fresh.id).not.toBe(SEED_MODEL_PROFILE_ID);
     expect(fresh.id).not.toBe('p1');
     expect(fresh.name).toBe('New profile');
-    expect(fresh.modelId).toBe('deepseek-v4-flash');
+    expect(fresh.modelId).toBe('z-ai-glm-5-3-flash');
     expect(fresh.isDefault).toBe(false);
   });
   it('numbers the name past an existing "New profile"', () => {
