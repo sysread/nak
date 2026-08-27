@@ -5433,7 +5433,17 @@
     if (!active || active.isDraft || active.archived) return;
     const rangeIds = computeDeleteFromRangeIds(messages, userMessageId);
     if (rangeIds.length === 0) return;
-    if (!confirm('Delete this message and everything after it?')) return;
+    // Confirm text mirrors the tooltip's specificity: in a shared
+    // region the gesture forks (destroys nothing), so the dialog must
+    // not describe a destructive delete that never happens.
+    if (
+      !confirm(
+        sharedRowSet.has(userMessageId)
+          ? 'Continue this conversation in a new fork? The original stays intact.'
+          : 'Delete this message and everything after it?'
+      )
+    )
+      return;
     // Decide destructive vs edit-fork against FRESH child-fork state -
     // the cached set only drives tooltips, and a fork minted on
     // another device since the last refresh must not have its history

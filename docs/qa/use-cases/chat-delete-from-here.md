@@ -36,9 +36,12 @@ post-forking run should match the original baseline rows exactly.
   (`<thread>`).
 - One image file to attach in step 4.
 - SQL access via `mise run dev-sql` (or psql to 127.0.0.1:54322).
-- Every trash click fires a browser confirm() dialog ("Delete this
-  message and everything after it?") - accept it. An automated
-  executor must handle the dialog or it stalls on every delete.
+- Every trash click fires a browser confirm() dialog - accept it. An
+  automated executor must handle the dialog or it stalls on every
+  delete. The text differs by region: "Delete this message and
+  everything after it?" in the private tail, "Continue this
+  conversation in a new fork? The original stays intact." in a shared
+  region (the gesture forks and destroys nothing there).
 
 ## Steps
 

@@ -225,7 +225,9 @@ new fork that ends just before the deleted range - same title, same
 place in the list, and to you it looks exactly like the delete
 happened - while the depending fork keeps the shared history it was
 built on. The tooltip says "continues in a new fork" when a delete
-will work this way.
+will work this way, and the confirmation prompt matches: it asks
+whether to "Continue this conversation in a new fork" instead of
+describing a delete.
 
 **Edit** (pencil button) opens a dropdown with two choices:
 
