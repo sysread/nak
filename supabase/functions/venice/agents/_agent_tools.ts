@@ -240,10 +240,11 @@ export const MEMORY_UNRELATE_WIRE_SCHEMA: AgentTool['wire'] = {
  * rows, and fits the result to a token budget; the wiki fleet distills
  * over-budget transcripts via ./_accumulator.ts.
  *
- * Do not size against the model registry's contextWindow: the entry
- * for mistral-small claims 256k and the backend serving it enforces
- * 128000 (a thread-topics call died on "your prompt contains 131949
- * input tokens"). The ceiling belongs to the backend and it moves -
+ * Do not size against the model registry's contextWindow: registry
+ * entries have claimed double what the serving backend enforced (a
+ * thread-topics call died on "your prompt contains 131949 input
+ * tokens" against a claimed 256k window). The ceiling belongs to the
+ * backend and it moves -
  * see CLAUDE.md on budgeting against a pinned conservative constant.
  */
 export async function loadThreadSliceUpTo(

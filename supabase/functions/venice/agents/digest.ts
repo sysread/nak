@@ -28,8 +28,8 @@ import { completeJsonObjectWithMeta } from './_curation_helpers.ts';
 import { DIGEST_MODEL } from '../../_shared/agent-models.ts';
 
 // Server-side model id, held here directly (this module cannot import
-// from src/lib; same convention as the curation agents). deepseek's
-// big window matters: the input is a full day of conversation across
+// from src/lib; same convention as the curation agents). The
+// big-window tier matters: the input is a full day of conversation across
 // every thread, which can run long, while the output is a small JSON
 // object.
 
@@ -59,8 +59,8 @@ const MAX_MESSAGES_FETCHED = 2000;
 // across every thread - the largest input any sub-completion in the
 // tree sees) - a budget sized to the output shape dies with
 // finish_reason='length' on exactly the busiest days (see CLAUDE.md,
-// Venice sub-completions on reasoning models). deepseek's reasoning
-// runs chatty regardless of the pinned low effort, and the model is
+// Venice sub-completions on reasoning models). A reasoning pass can
+// run chatty regardless of the pinned low effort, and the model is
 // cheap enough that headroom costs nothing, so this is sized so only
 // a genuine runaway hits it - the fail-closed length check below is
 // the guard for that case, not the budget.

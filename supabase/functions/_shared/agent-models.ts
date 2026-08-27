@@ -17,20 +17,34 @@
  */
 
 // --- Base models -----------------------------------------------------------
-// Two models cover every background agent. Swapping a base constant
-// here retargets every agent that uses it.
+// Two tiers cover every background agent. Swapping a base constant
+// here retargets every agent that uses it. Both tiers currently
+// resolve to the same id - z-ai-glm-5-3-flash: 1M context window,
+// cheap ($0.15/$0.50 per Mtok), reasoning-capable, and served
+// privately by Venice (the prompt bodies, which are the user's own
+// conversations and memories, stay on Venice's infrastructure rather
+// than being proxied to an upstream provider). The tier split stays
+// so the two workload shapes can be re-separated onto different ids
+// without re-auditing every agent.
+//
+// This id CAN reason and its serving default effort is HIGH, so
+// every call site must pin the thinking pass explicitly: agents that
+// benefit from a light pass set reasoningEffort: 'low'; pure
+// classification/extraction agents set disableThinking. An unpinned
+// call rides the high default - latency and output-budget burn (the
+// truncation trap CLAUDE.md's Venice sub-completions section
+// records). When adding an agent, pin one or the other.
 
-// deepseek-v4-flash: 1M context window, good reasoning. Used by
-// agents that read entire threads or articles (reflection, wiki,
-// recall) and agents that need more careful judgment (samskara
-// evaluation, digest).
-export const BIG_WINDOW_MODEL = 'deepseek-v4-flash';
+// Big-window tier: agents that read entire threads or articles
+// (reflection, wiki, recall) and agents that need more careful
+// judgment (samskara evaluation, digest).
+export const BIG_WINDOW_MODEL = 'z-ai-glm-5-3-flash';
 
-// mistral-small-3-2-24b-instruct: fast, cheap, good enough for
-// classification and extraction tasks that don't need a huge
-// context window or deep reasoning (tagging, summarization, intent
-// detection, bias analysis, auto-title).
-export const EASY_TASK_MODEL = 'mistral-small-3-2-24b-instruct';
+// Easy-task tier: classification and extraction over evidence
+// already in context (tagging, summarization, intent detection,
+// bias analysis, auto-title). Callers on this tier disable the
+// thinking pass outright.
+export const EASY_TASK_MODEL = 'z-ai-glm-5-3-flash';
 
 // --- Per-agent assignments -------------------------------------------------
 // Roles mirrored from AGENT_MODELS in src/lib/models/index.ts

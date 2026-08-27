@@ -280,8 +280,8 @@ const TAIL_MESSAGES = 80;
  * ... your prompt contains 131949 input tokens".
  *
  * 64k is deliberately half the smallest ceiling observed in
- * production (128000, on the mistral-small backend serving summary
- * and the three topics units). Two reasons for the wide margin:
+ * production (128000, on the backend then serving summary and the
+ * three topics units). Two reasons for the wide margin:
  * estimateWireTokens assumes 4 chars/token, which is right for
  * English prose and badly optimistic for the JSON and code that fills
  * tool results; and the ceiling belongs to whatever backend is
@@ -462,12 +462,21 @@ type CompleteJsonObjectOpts = {
   messages: readonly VeniceWireMessage[];
   maxTokens: number;
   /**
-   * Optional reasoning_effort knob, forwarded verbatim to Venice. The
-   * topics units omit it (they take the model default); the manual
-   * wiki agent pins 'low' to match its browser-era completion. Left
-   * absent the wire body carries no reasoning_effort field at all.
+   * Optional reasoning_effort knob, forwarded verbatim to Venice. Left
+   * absent the wire body carries no reasoning_effort field at all -
+   * but on a reasoning-capable model that means the MODEL's default
+   * effort, so every caller should pin this or disableThinking.
    */
   reasoningEffort?: 'low' | 'medium' | 'high';
+  /**
+   * Maps to venice_parameters.disable_thinking - kills the thinking
+   * pass entirely rather than shrinking it. The classification-shaped
+   * callers (topics, second thoughts) pin this: their model can
+   * reason, and an unsuppressed CoT pass burns the JSON output budget
+   * (the truncation trap CLAUDE.md's Venice sub-completions section
+   * records). Mutually exclusive with reasoningEffort on the wire.
+   */
+  disableThinking?: boolean;
 };
 
 /**
@@ -490,6 +499,9 @@ export async function completeJsonObjectWithMeta(
   };
   if (opts.reasoningEffort !== undefined) {
     body.reasoning_effort = opts.reasoningEffort;
+  }
+  if (opts.disableThinking === true) {
+    body.venice_parameters = { disable_thinking: true };
   }
   const raw = await veniceComplete({
     apiKey: opts.apiKey,

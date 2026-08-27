@@ -116,7 +116,7 @@ Deno.test('retry: classifier rejection on the primary retries the uncensored fal
     complete: async (opts) => {
       models.push(opts.model);
       efforts.push(opts.reasoningEffort);
-      if (opts.model === 'deepseek-v4-flash') throw FILTER_ERROR;
+      if (opts.model === 'z-ai-glm-5-3-flash') throw FILTER_ERROR;
       return completion({ text: 'Fallback ran, no edits warranted.' });
     },
   });
@@ -131,7 +131,7 @@ Deno.test('retry: classifier rejection on the primary retries the uncensored fal
   }
   // Order matters: primary first, fallback second. A reversed order
   // would mean the agent skipped the configured model entirely.
-  assertEquals(models, ['deepseek-v4-flash', 'venice-uncensored-1-2']);
+  assertEquals(models, ['z-ai-glm-5-3-flash', 'venice-uncensored-1-2']);
   // The fallback is a non-reasoning model: reasoning_effort must stay
   // off its wire body (some providers 400 on the unknown field).
   assertEquals(efforts, ['medium', undefined]);
@@ -165,7 +165,7 @@ Deno.test('retry: a non-classifier error does NOT trigger the fallback and leave
   assertEquals(result.kind, 'error');
   if (result.kind === 'error') assertStringIncludes(result.error, '500');
   // One call: the primary. The fallback path is classifier-only.
-  assertEquals(models, ['deepseek-v4-flash']);
+  assertEquals(models, ['z-ai-glm-5-3-flash']);
   // Critical: the pointer did NOT advance, so the user keeps seeing
   // the row in the Skipped panel.
   assertEquals(
@@ -190,7 +190,7 @@ Deno.test('retry: both attempts failing surfaces the FALLBACK error', async () =
     // deno-lint-ignore require-await
     complete: async (opts) => {
       models.push(opts.model);
-      if (opts.model === 'deepseek-v4-flash') throw FILTER_ERROR;
+      if (opts.model === 'z-ai-glm-5-3-flash') throw FILTER_ERROR;
       throw new Error('fallback timeout');
     },
   });
@@ -199,7 +199,7 @@ Deno.test('retry: both attempts failing surfaces the FALLBACK error', async () =
   // The primary's classifier rejection is no longer the headline once
   // we have moved past it - the fallback's failure is what stopped us.
   if (result.kind === 'error') assertStringIncludes(result.error, 'fallback timeout');
-  assertEquals(models, ['deepseek-v4-flash', 'venice-uncensored-1-2']);
+  assertEquals(models, ['z-ai-glm-5-3-flash', 'venice-uncensored-1-2']);
 });
 
 Deno.test('retry: no terminal assistant message is a no-op that never reaches Venice', async () => {
@@ -311,7 +311,7 @@ Deno.test('retry: a mid-run context-length rejection distills the transcript and
   assertEquals(calls, ['act', 'distill', 'act']);
   // The context-length path stays on the primary model - the
   // uncensored fallback is for classifier rejections only.
-  assertEquals([...models], ['deepseek-v4-flash']);
+  assertEquals([...models], ['z-ai-glm-5-3-flash']);
 });
 
 Deno.test('retry: a context-length rejection that survives distillation surfaces as an error', async () => {

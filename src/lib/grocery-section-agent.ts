@@ -49,8 +49,8 @@ export const SECTION_EXAMPLES_PER_SECTION = 6;
  * tokens per name); thousands of headroom because an absent
  * max_completion_tokens makes the serving backend reserve its own
  * default budget out of the context window (see CLAUDE.md "Venice
- * sub-completions"). mistral-small is non-reasoning, so none of
- * this is spent on a thinking pass.
+ * sub-completions"). The call disables the thinking pass, so none of
+ * this is spent on one.
  */
 const CLASSIFY_MAX_TOKENS = 1024;
 
@@ -207,6 +207,11 @@ export async function classifyGrocerySections(
       }),
       // Deterministic-ish filing; sampling variety has no value here.
       temperature: 0,
+      // Pure classification over evidence already in context - the
+      // model can reason, and its default effort is high, so this
+      // suppression is load-bearing (an unpinned call burns the JSON
+      // budget on a thinking pass).
+      disableThinking: true,
       maxTokens: CLASSIFY_MAX_TOKENS,
       responseFormat: { type: 'json_object' },
     });

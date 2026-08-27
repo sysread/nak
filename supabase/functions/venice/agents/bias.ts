@@ -293,6 +293,10 @@ async function observeThread(
     const result = await toolComplete({
       apiKey,
       model: BIAS_MODEL,
+      // Classification/extraction over evidence already in context - a
+      // thinking pass is pure latency and budget burn. The model can
+      // reason, so this suppression is load-bearing, not a no-op.
+      disableThinking: true,
       // Background curation agent: ride out a transient 429 rather than
       // dropping the observation on one "model overloaded".
       retryRateLimit: true,

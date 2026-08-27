@@ -53,7 +53,7 @@ const EVALUATION_CLAIM_TTL_SECONDS = 600;
 // Per-batch completion budget. max_completion_tokens covers the
 // REASONING pass too on reasoning models, and the judge's reasoning
 // burn scales with transcript length, not verdict-map size - on
-// long-transcript threads deepseek spends thousands of tokens
+// long-transcript threads a reasoning model spends thousands of tokens
 // thinking before the first JSON byte, so a budget calibrated to the
 // tiny id->verdict map (2048) hits finish_reason='length' with zero
 // content on exactly the threads the batching exists to save. 8192

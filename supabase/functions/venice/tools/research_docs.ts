@@ -37,7 +37,7 @@ import {
 // Mirror of src/lib/models/index.ts's agentModel('researchDocs').id.
 // Keep in sync with the browser model registry; the model is the same
 // across paths because the prompt is identical.
-const RESEARCH_DOCS_MODEL = 'deepseek-v4-flash';
+const RESEARCH_DOCS_MODEL = 'z-ai-glm-5-3-flash';
 
 const SYSTEM_PROMPT_HEADER =
   'You are a documentation assistant for Nak, a personal AI assistant ' +
@@ -157,6 +157,10 @@ export const researchDocs: ToolDef = {
     const result = await toolComplete({
       apiKey,
       model: RESEARCH_DOCS_MODEL,
+      // The model's default reasoning effort is high; this task needs a
+      // light pass at most, and an unpinned effort burns latency and
+      // output budget on long inputs (see CLAUDE.md, Venice sub-completions).
+      reasoningEffort: 'low',
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userTurn },

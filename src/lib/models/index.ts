@@ -200,30 +200,17 @@ export const MODELS = {
   },
   'z-ai-glm-5-3-flash': {
     id: 'z-ai-glm-5-3-flash',
-    // Z.ai's flash-tier GLM 5.3: cheap, fast, and unusually broad for
-    // the price - tool calls, vision, and an optional reasoning pass.
-    // Backs the intuition pulse, whose only requirement is low latency
-    // on the pre-turn critical path; the intuition call site pins
-    // disable_thinking so the reasoning pass never runs there.
+    // Z.ai's flash-tier GLM 5.3: cheap, fast, privately served by
+    // Venice, and unusually broad for the price - tool calls, vision,
+    // a 1M window, and an optional reasoning pass. Backs every
+    // background-agent slot (see AGENT_MODELS below).
     contextWindow: 1_048_576,
-    // Accepts reasoning_effort, but every current consumer (intuition)
-    // suppresses the thinking pass via disable_thinking instead -
-    // reasoning is latency the pulse cannot afford.
+    // Accepts reasoning_effort, and its serving DEFAULT effort is
+    // high - so every consumer must pin the thinking pass explicitly
+    // (disable_thinking or a low effort). See the AGENT_MODELS
+    // docblock for the per-slot discipline.
     supportsReasoning: true,
     supportsVision: true,
-    supportsResponseFormat: true,
-  },
-  'mistral-small-3-2-24b-instruct': {
-    id: 'mistral-small-3-2-24b-instruct',
-    contextWindow: 256_000,
-    // Venice's mistral-small does NOT accept reasoning_effort. Sending
-    // the field returns a 4xx, so every agent pinned to this id
-    // (samskara and bias server-side, web_search's synthesis sub-call)
-    // omits it on the wire. A faithful, non-reasoning summarizer - the
-    // right profile for web_search, where hallucination is the risk and
-    // a CoT pass would only burn the answer budget.
-    supportsReasoning: false,
-    supportsVision: false,
     supportsResponseFormat: true,
   },
   'qwen3-vl-235b-a22b': {
@@ -510,155 +497,73 @@ export type AgentRole =
  * MODELS entry is a tsc error rather than a runtime "model not
  * found" 4xx.
  *
- * Per-slot rationale (kept here rather than at call sites so the
- * decision context lives next to the swap):
+ * Every slot currently points at z-ai-glm-5-3-flash. One id fits all
+ * of them because it covers each slot's binding constraint at once:
  *
- *   reflection - deepseek-v4-flash. Read the thread, make some
- *     judgments, call the memory tools. Big-window model is the win -
- *     the entire conversation is the context, and deepseek's 1M window
- *     swallows even long threads (reflection slices a thread with no
- *     char-budget trim). No reasoning knob at the call site - it rides
- *     deepseek's default effort.
+ *   - 1M-token context window - the thread-reading agents
+ *     (reflection, the wiki family, the recall trio) slice whole
+ *     conversations or article sets with no char-budget trim, so the
+ *     window is their hard requirement.
+ *   - PRIVATE serving - Venice hosts the weights itself, so prompt
+ *     bodies (the user's own conversations and memories) never leave
+ *     its infrastructure. This is an upgrade over an 'anonymized' id,
+ *     where the prompt is proxied upstream with metadata stripped.
+ *   - Cheap and fast - the latency-bound slots (intuition, webSearch,
+ *     grocerySection) sit on or near the live turn's critical path.
+ *   - Reasoning-capable but SUPPRESSIBLE - and this is the standing
+ *     obligation the single-id setup carries: the id's serving
+ *     default effort is HIGH, so every call site must pin the
+ *     thinking pass explicitly. Synthesis/judgment agents pin
+ *     reasoningEffort 'low'; classification/extraction and
+ *     latency-bound slots pin disable_thinking outright. An unpinned
+ *     call rides the high default - latency plus the output-budget
+ *     truncation trap CLAUDE.md's Venice sub-completions section
+ *     records. When adding a slot, pin one or the other at the call
+ *     site.
  *
- *     NOTE on capacity: the Balanced and Fast foreground tiers front
- *     deepseek-v4-flash (Smart is on qwen-3-7-plus). Every background
- *     agent here except webSearch (mistral-small-3-2-24b-instruct) and
- *     intuition (z-ai-glm-5-3-flash) shares that id, so
- *     they share capacity with those tiers; the
- *     earlier policy of "background agents must not share capacity with
- *     foreground tiers" has been deliberately relaxed. If overload
- *     errors return under the shared-capacity shape, the next move is
- *     repointing the deepseek-backed background agents (reflection,
- *     wiki, wikiLibrarian, deepSleep, rem, researchDocs, recall,
- *     conversationRecall, wikiRecall) to a non-foreground id, NOT
- *     downgrading the foreground tiers.
+ * Slot-shape notes that survive any future re-split:
  *
- *   wiki - deepseek-v4-flash. Autonomous wiki agent: read a settled
- *     thread the day after, decide which topics warrant a new article
- *     or an update to an existing one, and dispatch wiki_search /
- *     wiki_create / wiki_update / wiki_delete tool calls. The same
- *     model also runs the synchronous "ask agent to update" flow
- *     from the per-article UI (single completion, response_format
- *     pinned to JSON, no tool loop). Same rationale as reflection -
- *     big window swallows the conversation and the JSON pin works
- *     on the manual path. See the reflection entry above for the
- *     shared-capacity-with-foreground note.
+ *   - webSearch and the recall surfaces are FAITHFULNESS-critical: a
+ *     confabulated summary of live results, or a recall note that
+ *     invents a memory, is worse than an empty one. Small MoE models
+ *     under json_object pressure have confabulated plausible-shaped
+ *     recall notes rather than emit the empty signal; if that returns,
+ *     mistral-small-3-2-24b-instruct (webSearch) and a dense
+ *     big-window reasoning id (recall trio) are the known-good
+ *     fallbacks.
+ *   - intuition is awaited on the pre-turn critical path; latency is
+ *     its only constraint, and the pulse is a gut read, not a
+ *     reasoned take.
+ *   - Slots stay distinct constants (not one shared constant) so any
+ *     single surface can be retuned independently when it regresses.
  *
- *   deepSleep - deepseek-v4-flash. Memory librarian's slow-wave
- *     consolidation pass: every ~3h, picks a longest-unvisited
- *     seed memory, fetches its top-k similarity neighbors above the
- *     medium threshold, and decides consolidate-vs-relate-vs-leave
- *     for each pair. Needs the big window so the batch + the
- *     consolidated body fit alongside any conversation_search /
- *     memory_search results the agent pulls for fact-checking.
- *     Pinned to the same id as the other librarian-tier agents so
- *     a future swap flows through all of them.
- *
- *   rem - deepseek-v4-flash. Memory librarian's associative-
- *     integration pass: every ~12h, picks the oldest eligible
- *     conversation from memory_conversation and looks at the batch
- *     of memories the recall agent surfaced on that conversation.
- *     Primary mode is memory_relate (drawing graph edges); rare
- *     consolidation handled via the same RPC. Same model rationale
- *     as deepSleep.
- *
- *   wikiLibrarian - deepseek-v4-flash. The wiki agent's bigger
- *     sibling: every ~12 hours it reads the full alphabetical list
- *     of articles, fact-checks individual claims via
- *     conversation_search, and consolidates duplicates / updates
- *     stale info via wiki_update / wiki_delete. The librarian needs
- *     the same big context window the per-conversation wiki agent
- *     uses (the article list + several full articles can run wide)
- *     and the same response shape (tool-driven, no structured
- *     final output). Pinned to the same id as `wiki` so a future
- *     swap of the wiki family flows through both surfaces.
- *
- *   webSearch - mistral-small-3-2-24b-instruct. The `web_search`
- *     tool's sub-completion summarises Venice-provided results into
- *     2-4 sentences with citation markers. Faithfulness is the
- *     priority here (a confabulated summary of live results is worse
- *     than none), so a non-reasoning instruct model is the right
- *     class: no CoT pass to burn the output budget, and a steady
- *     summariser rather than a model that might reason its way off
- *     the sources. The call site still pins disable_thinking, now a
- *     harmless no-op. Shares the id with the server-side samskara /
- *     bias agents but is a distinct slot, so it can be retuned alone.
- *
- *   researchDocs - deepseek-v4-flash. The `research_docs` tool's
- *     sub-completion reads the bundled docs and answers in 2-5
- *     sentences. Same bounded-synthesis profile as webSearch. No
- *     reasoning knob at the call site - rides deepseek's default
- *     effort, same as the other deepseek slots.
- *
- *   intuition - z-ai-glm-5-3-flash. The pre-turn pulse fires before
- *     every assistant turn AND the turn waits on it (the chat-loop
- *     awaits the pipeline before assembling the wire), so latency is
- *     the ONLY constraint that matters - the pulse is a primal-drive
- *     gut read, not a reasoned take. GLM's flash tier is cheap and
- *     fast while still writing a coherent pulse - the slot needs
- *     enough model to read the room, not just raw speed (a minimal
- *     active-param MoE produces mushy reads). The model CAN reason,
- *     which would be pure latency here, so the call site's
- *     disable_thinking pin is load-bearing on this id, not a
- *     defensive no-op.
- *
- *
- *   recall - deepseek-v4-flash. Memory-recall agent: read the live
- *     conversation, search memories, produce a short JSON note.
- *     Pinned to the same id as reflection / wiki / researchDocs because
- *     grounded recall over a real DB surface (memory_search) is
- *     sensitive to model-side fabrication - small MoE models under
- *     json_object pressure will confabulate plausible-shaped notes
- *     rather than emit the empty signal. A dense reasoning model with
- *     the large window is the cheapest fix; the cost is that recall
- *     shares capacity with the foreground Balanced/Fast tiers. Distinct
- *     constant from conversationRecall so the two recall surfaces can be
- *     retuned independently if one regresses.
- *
- *   conversationRecall - deepseek-v4-flash. Conversation-recall
- *     agent; same shape and rationale as recall.
- *
- *   wikiRecall - deepseek-v4-flash. Wiki-recall agent: read the live
- *     conversation, search the user's wiki articles, produce a short
- *     first-person note. Same bounded-synthesis JSON-out shape and
- *     fabrication-sensitivity profile as recall / conversationRecall;
- *     distinct slot so the three recall surfaces can be retuned
- *     independently if one regresses.
- *
- *   grocerySection - mistral-small-3-2-24b-instruct. The grocery
- *     auto-sectioning sub-completion: given the user's own store
- *     sections (with example items) and one or a handful of new item
- *     names - plus the source recipe's cooklang when the add came
- *     from a recipe checkbox, since "corn" can be fresh, canned, or
- *     frozen and only the recipe disambiguates - pick a section per
- *     name. Pure classification over evidence already in context, so
- *     a non-reasoning instruct model is the right class (see
- *     CLAUDE.md "Venice sub-completions"): no CoT pass to burn the
- *     budget, and the call is fire-and-forget after an instant
- *     insert, so latency only shapes how soon the item hops out of
- *     Other. Shares the id with webSearch but is a distinct slot,
- *     so it can be retuned alone.
+ * The background agents no longer share capacity with the foreground
+ * tiers (Balanced/Fast front deepseek-v4-flash, Smart fronts
+ * qwen-3-7-plus), which un-relaxes the old shared-capacity concern:
+ * an overload on one side no longer implicates the other.
  *
  * The five curation agents (auto-title, summary, thread topics,
  * memory topics, recipe topics), the bias pipeline, and the samskara
  * formation agents have no slots here: they run server-side in the
- * venice edge function (supabase/functions/venice/agents/), which
- * holds their model ids directly - it cannot import from src/lib.
+ * venice edge function, whose ids live in
+ * supabase/functions/_shared/agent-models.ts - it cannot import from
+ * src/lib. That file's base constants point at the same id; keep the
+ * two in sync when swapping.
  */
 export const AGENT_MODELS = {
-  reflection:         'deepseek-v4-flash',
-  wiki:               'deepseek-v4-flash',
-  wikiRecords:        'deepseek-v4-flash',
-  wikiLibrarian:      'deepseek-v4-flash',
-  deepSleep:          'deepseek-v4-flash',
-  rem:                'deepseek-v4-flash',
-  webSearch:          'mistral-small-3-2-24b-instruct',
-  researchDocs:       'deepseek-v4-flash',
+  reflection:         'z-ai-glm-5-3-flash',
+  wiki:               'z-ai-glm-5-3-flash',
+  wikiRecords:        'z-ai-glm-5-3-flash',
+  wikiLibrarian:      'z-ai-glm-5-3-flash',
+  deepSleep:          'z-ai-glm-5-3-flash',
+  rem:                'z-ai-glm-5-3-flash',
+  webSearch:          'z-ai-glm-5-3-flash',
+  researchDocs:       'z-ai-glm-5-3-flash',
   intuition:          'z-ai-glm-5-3-flash',
-  recall:             'deepseek-v4-flash',
-  conversationRecall: 'deepseek-v4-flash',
-  wikiRecall:         'deepseek-v4-flash',
-  grocerySection:     'mistral-small-3-2-24b-instruct',
+  recall:             'z-ai-glm-5-3-flash',
+  conversationRecall: 'z-ai-glm-5-3-flash',
+  wikiRecall:         'z-ai-glm-5-3-flash',
+  grocerySection:     'z-ai-glm-5-3-flash',
 } as const satisfies Record<AgentRole, ModelId>;
 
 /**

@@ -273,6 +273,10 @@ async function tagClaimedRecipe(
     const text = await completeJsonObject({
       apiKey,
       model: RECIPE_TOPICS_MODEL,
+      // Classification/extraction over evidence already in context - a
+      // thinking pass is pure latency and budget burn. The model can
+      // reason, so this suppression is load-bearing, not a no-op.
+      disableThinking: true,
       messages: [
         {
           role: 'user',

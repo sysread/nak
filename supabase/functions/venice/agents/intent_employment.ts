@@ -232,6 +232,10 @@ async function employmentForThread(
     const result = await toolComplete({
       apiKey,
       model: INTENT_EMPLOYMENT_MODEL,
+      // Classification/extraction over evidence already in context - a
+      // thinking pass is pure latency and budget burn. The model can
+      // reason, so this suppression is load-bearing, not a no-op.
+      disableThinking: true,
       retryRateLimit: true,
       messages,
       maxTokens: INTENT_EMPLOYMENT_MAX_TOKENS,
