@@ -6,7 +6,7 @@
  * in the fork-and-edit flow, between the click and the send. The
  * composer reads from it; on send it is promoted to status=null and
  * the completion runs normally. See
- * docs/dev/in-progress/user-message-editing.md for the full design.
+ * docs/dev/user-message-editing.md for the full design.
  */
 import type { Message } from '../supabase';
 

@@ -384,6 +384,13 @@ what a sweep did; run it ad hoc with
 - **Chat** ([`./chat.md`](./chat.md)) - the drawer Fork item +
   fork indicator, the delete gesture, the realtime hidden-as-delete
   handler, message ordering.
+- **User message editing**
+  ([`./user-message-editing.md`](./user-message-editing.md)) -
+  "Fork and edit" uses `forkThread` with `markTitle: false`;
+  the fork point is `deleteForkAnchor` (the message before the
+  user message, not at it). "Edit" (destructive) uses the
+  shared-region test to gate the dropdown - shared rows offer
+  only "Fork and edit."
 - **Exchange** ([`./exchange.md`](./exchange.md)) -
   `mergeMessagesById` is segment-aware: inherited prefix rows keep
   resolver order; only own-segment rows position-sort.

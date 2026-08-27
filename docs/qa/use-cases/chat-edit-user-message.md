@@ -2,7 +2,7 @@
 
 ## Covers
 
-The destructive edit flow ([dev: user-message-editing](../../dev/in-progress/user-message-editing.md); range computation in `src/lib/ui/message-delete.ts`, handler + send branch in `src/screens/Chat.svelte`, supersede via `commit_assistant_message`):
+The destructive edit flow ([dev: user-message-editing](../../dev/user-message-editing.md); range computation in `src/lib/ui/message-delete.ts`, handler + send branch in `src/screens/Chat.svelte`, supersede via `commit_assistant_message`):
 
 1. **Dropdown visibility.** A pencil button on every user message opens a dropdown with "Edit" and "Fork and edit."
 2. **Shared-region gate.** When the user message is in a shared region (other forks depend on it), "Edit" is hidden - only "Fork and edit" appears.

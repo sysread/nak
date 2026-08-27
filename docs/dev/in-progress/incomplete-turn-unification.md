@@ -259,7 +259,8 @@ browser-side. No server changes needed.
 
 ## Related
 
-- The draft-status fix (excluding `status='draft'` in H1) is
-  already on the `user-message-editing` branch.
+- The draft-status fix (excluding `status='draft'` in H1)
+  shipped with the user-message-editing feature. See
+  [`../user-message-editing.md`](../user-message-editing.md).
 - QA use case: `docs/qa/use-cases/chat-cutoff-banner.md` covers
   when the banner should and should not fire.

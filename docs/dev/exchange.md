@@ -369,6 +369,14 @@ order is deterministic.
   a fork whose fork point IS the anchoring user row); and
   response claims stay per-thread, so a parent and its fork can
   stream concurrently.
+- **User message editing**
+  ([`./user-message-editing.md`](./user-message-editing.md)) -
+  `runExchange` is called the same way for edit as for
+  regenerate; `supersededIds` carries the old range.
+  `replaceUserMessageContent` rides through the exchange context
+  to the `commit_assistant_message` RPC, which inserts the new
+  user message + deletes the old range atomically with the
+  commit.
 - **Draft store (`src/lib/draft-store.ts`)** — `runExchange`
   writes through `updateDraftText` every flush so a crash
   mid-stream leaves a recoverable IDB record. `selectThread`

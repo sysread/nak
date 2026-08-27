@@ -2,7 +2,7 @@
 
 ## Covers
 
-The fork-and-edit flow ([dev: user-message-editing](../../dev/in-progress/user-message-editing.md); fork primitive in `src/lib/supabase/threads.ts`, draft message in `src/lib/ui/draft-message.ts`, handler + send branch in `src/screens/Chat.svelte`, draft filter in `src/lib/ui/message-blocks.ts`):
+The fork-and-edit flow ([dev: user-message-editing](../../dev/user-message-editing.md); fork primitive in `src/lib/supabase/threads.ts`, draft message in `src/lib/ui/draft-message.ts`, handler + send branch in `src/screens/Chat.svelte`, draft filter in `src/lib/ui/message-blocks.ts`):
 
 1. **Fork and edit click.** Clicking "Fork and edit" from the edit dropdown forks from the message before the user message, inserts a draft row on the fork, opens the fork, and loads the draft text into the composer.
 2. **Draft invisibility.** The draft row (status='draft') is invisible in the transcript - buildMessageBlocks filters it. The composer is the only surface that shows the draft text.
