@@ -139,7 +139,8 @@ changing a contract that other features depend on.
   ahead of the next completion. Cached per-thread; refreshed
   on title changes, mood-band shifts, and a staleness fuse.
 - [Second thoughts](./second-thoughts.md) — the post-game
-  metacognitive twin of intuition. A fast non-reasoning reviewer
+  metacognitive twin of intuition. A fast reviewer (thinking
+  pass disabled)
   runs in the completed-turn tail, re-reads the answer over a
   narrow turn slice, and writes a per-message doubt verdict;
   a doubt surfaces a panel + a user-triggered refinement that
