@@ -12300,8 +12300,8 @@ begin
   -- below. This keeps the insert + delete + commit in one transaction
   -- so an abort/error before this RPC fires leaves nothing in the DB.
   if p_replace_user_message_content is not null then
-    insert into public.messages (thread_id, role, content, status, user_id)
-    values (v_thread_id, 'user', p_replace_user_message_content, null, p_user_id)
+    insert into public.messages (thread_id, role, content, status)
+    values (v_thread_id, 'user', p_replace_user_message_content, null)
     returning id into v_anchor_id;
   else
     v_anchor_id := p_user_message_id;
