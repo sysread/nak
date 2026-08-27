@@ -41,9 +41,9 @@ export interface VeniceWireMessage {
   }>;
 }
 
-// ~50k tokens at 4 chars/token - well under deepseek-v4-flash's 1M
-// window (the recall models) while covering long threads. Same budget
-// the browser uses.
+// ~50k tokens at 4 chars/token - well under the recall models' 1M
+// registry window while covering long threads. Same budget the
+// browser uses.
 export const MAX_RECALL_CHARS = 200_000;
 
 /**

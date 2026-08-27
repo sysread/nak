@@ -136,7 +136,7 @@ const TIER1_POPULATION_CAP = 150;
  * tick drained the unconsumed-edge backlog at ~4 edges/hour best case
  * - a 2026-08 audit measured 747 reachable edges across 409 eligible
  * hubs against that rate, months of latency for evidence that already
- * exists. Three per tick caps the extra spend at two mistral-small
+ * exists. Three per tick caps the extra spend at two easy-task-tier
  * calls per hour (sweep-only) while cutting the drain to weeks. Each
  * iteration re-checks headroom, and a declined hub does not fill the
  * slot its eviction freed, so one victim can fund several
@@ -463,6 +463,10 @@ async function callOnce(
     const result = await toolComplete({
       apiKey,
       model: SAMSKARA_MODEL,
+      // Classification/extraction over evidence already in context - a
+      // thinking pass is pure latency and budget burn. The model can
+      // reason, so this suppression is load-bearing, not a no-op.
+      disableThinking: true,
       // Background curation agent: ride out a transient 429 rather than
       // failing the assimilation on one "model overloaded".
       retryRateLimit: true,

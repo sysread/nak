@@ -132,7 +132,7 @@ interval lower bound (not the mean) as the surfacing gate.
   message-count guard), the aggregate recompute, and the exported
   `runBiasSweepTick(adminClient)` entry the `bias-sweep` route
   calls. The model is hardcoded
-  `mistral-small-3-2-24b-instruct` - a static role-to-model
+  `z-ai-glm-5-3-flash` - a static role-to-model
   mapping, not a per-user tier. Per-claim edge loggers use
   source `bias`.
 - The chart-glyph pill that opens the diagnostics modal is the

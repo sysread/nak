@@ -14,13 +14,14 @@
 //
 // Wire schema lives in src/lib/tools/web_search.schema.ts.
 //
-// The search model is mistral-small, a non-reasoning instruct model -
-// the right class here because faithfulness is the priority (a
-// confabulated summary of live results is worse than none) and a CoT
-// pass would only burn the answer budget. disable_thinking stays on as
-// a harmless no-op so the call survives a future re-point to a
-// reasoning id. 8196-token cap matches the browser-side ceiling for
-// citation-heavy summaries.
+// Faithfulness is the priority for the search model (a confabulated
+// summary of live results is worse than none) and a CoT pass would
+// only burn the answer budget - so the call pins disable_thinking,
+// which is load-bearing on the current reasoning-capable id, not a
+// defensive no-op. If summaries start drifting from their sources,
+// mistral-small-3-2-24b-instruct is the known-faithful fallback.
+// 8196-token cap matches the browser-side ceiling for citation-heavy
+// summaries.
 //
 // Empty-text-with-citations is treated as an error rather than a
 // silent empty result - mirror of the browser path's discipline.
@@ -48,7 +49,7 @@ const SCRAPE_MAX_CHARS = 32_000;
 
 // Mirror of agentModel('webSearch') in src/lib/models/index.ts. Same
 // same-PR sync discipline as the other browser-mirror constants.
-const WEB_SEARCH_MODEL = 'mistral-small-3-2-24b-instruct';
+const WEB_SEARCH_MODEL = 'z-ai-glm-5-3-flash';
 
 const WEB_SEARCH_SYSTEM_PROMPT = [
   'You are a research-savvy search assistant. Given the query below,',

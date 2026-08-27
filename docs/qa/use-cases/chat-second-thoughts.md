@@ -16,12 +16,12 @@ render path through `AssistantBody.svelte`
 
 - Local stack up (`mise run dev-start`), signed in as the dev user.
 - The reviewer model id is reachable on the configured Venice key. It
-  pins `mistral-small-3-2-24b-instruct` in `second_thoughts.ts` (a fast
-  non-reasoning model that reliably honors json_object); if that id is
-  not available in the test environment, temporarily repoint
-  `SECOND_THOUGHTS_MODEL` to any available fast NON-REASONING chat
-  model. Avoid a reasoning model - it leaks chain-of-thought around the
-  JSON and the parser drops the verdict (the bug this pin fixes).
+  pins `z-ai-glm-5-3-flash` in `second_thoughts.ts` with the thinking
+  pass disabled at the call; if that id is not available in the test
+  environment, temporarily repoint `SECOND_THOUGHTS_MODEL` to any
+  available fast chat model and keep the disable pin. An unsuppressed
+  thinking pass leaks chain-of-thought around the JSON and the parser
+  drops the verdict (the bug the pin fixes).
 - To read a verdict directly:
 
   ```sql

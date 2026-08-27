@@ -188,6 +188,24 @@ export function verbosityRejectedForModel(
 }
 
 /**
+ * True when the model's backend refuses to run without a thinking
+ * pass ("Reasoning is mandatory" - recorded under the
+ * venice_parameters.disable_thinking wire path; observed on
+ * z-ai-glm-5-3). Settings and the composer use it to disable the
+ * "Off" thinking option for that model; the edge function strips the
+ * flag from outgoing requests regardless, so - like the verbosity
+ * twin above - this is a UX affordance, not the enforcement point.
+ */
+export function thinkingOffRejectedForModel(
+  rejections: Readonly<Record<string, readonly string[]>>,
+  modelId: string
+): boolean {
+  return (
+    rejections[modelId]?.includes('venice_parameters.disable_thinking') ?? false
+  );
+}
+
+/**
  * The validation the autosave gates on: every profile needs a non-empty
  * name and names must be unique (case-insensitive, ignoring surrounding
  * whitespace, so "Fast" and "fast " can't coexist as visually-identical

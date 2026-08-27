@@ -48,7 +48,7 @@ fast"), and switch between them per conversation. Threads remember the
 profile, not the raw model id, so renaming a profile or re-pointing it
 at a newer model never strands an old conversation.
 
-Every account starts with one profile named **Default** (DeepSeek V4
+Every account starts with one profile named **Default** (GLM 5.3
 Flash, medium reasoning, low verbosity) so chat works before you've
 configured anything. Manage the list in Settings -> **Model
 profiles**:
@@ -58,7 +58,7 @@ profiles**:
   the labels the composer menu shows.
 - **Pick the model.** Each card has a searchable picker populated live
   from Venice's model catalog. Click it and start typing to filter
-  (fuzzy match, so "v4" finds "DeepSeek V4"); every row lays out the
+  (fuzzy match, so "glm" finds "GLM 5.3"); every row lays out the
   model name with its **capability icons** (reasoning, vision, tools)
   and right-aligned pills for **context window** and **input/output
   price**, so you can compare models at a glance before committing.
@@ -277,7 +277,7 @@ toggle them on or off per conversation.
 
 Some models occasionally emit an internal control token (and a burst
 of unrelated text) at the very start of a reply instead of answering -
-a known quirk of the DeepSeek family that backs the starter profile.
+a known quirk of certain model families (DeepSeek among them).
 Nak detects this, throws the bad attempt away, and regenerates -
 automatically, without you doing anything.
 

@@ -99,9 +99,9 @@ transcript, which is accepted.
   result is dropped), and inserts `on conflict do nothing` so a raced
   duplicate is a no-op.
 - **Completion shape**: one `completeJsonObjectWithMeta` call,
-  `deepseek-v4-flash` (model id held in `digest.ts` directly - edge
-  modules cannot import `src/lib`), `maxTokens: 65536` (deepseek's
-  thinking pass runs chatty and scales with the whole-day input; the
+  `z-ai-glm-5-3-flash` (model id held in `digest.ts` directly - edge
+  modules cannot import `src/lib`), `maxTokens: 65536` (a reasoning
+  pass can run chatty and scales with the whole-day input; the
   model is cheap, so the budget is sized so only a runaway hits it),
   `reasoningEffort: 'low'`, fail-closed on
   `finish_reason === 'length'` (see CLAUDE.md, "Venice

@@ -38,15 +38,13 @@ import {
 // Why this id. The pass sits on the live turn's critical path, and its
 // input is the user's own memories verbatim, so three properties matter:
 //
-//   - NON-REASONING. The task is faithful integration of evidence
-//     already in context, not deliberation, so a chain-of-thought pass
-//     is pure latency (the trap CLAUDE.md records having been hit
-//     twice). A model with no reasoning pass at all cannot regress into
-//     one; on a reasoning id the suppression is a flag that has to keep
-//     working. Note this id reports supportsReasoningEffort: false -
-//     `reasoning_effort` must NOT go on the wire for it (Venice 4xxs on
-//     the field for non-reasoning ids), which is why the call below
-//     sets only disableThinking.
+//   - NO THINKING PASS ON THE WIRE. The task is faithful integration
+//     of evidence already in context, not deliberation, so a
+//     chain-of-thought pass is pure latency (the trap CLAUDE.md
+//     records having been hit twice). This id CAN reason, so the
+//     disableThinking flag on the call below is load-bearing
+//     suppression, not a defensive no-op - keep it when touching the
+//     call.
 //   - FAITHFUL. This is the load-bearing one. The design's safety
 //     argument (see context-recall.md) is that synthesis drift stays
 //     recoverable because every claim cites a real row - so a model
@@ -56,16 +54,22 @@ import {
 //     input, violated the contract every time - inverted "you raised
 //     the hydration" into "I raised", emitted a fabricated "+60g ^1^"
 //     against a source carrying no such number, and twice returned no
-//     citations at all. This id was clean on the same input.
-//   - PRIVATE serving. Venice hosts these weights itself, so the memory
-//     bodies never leave its infrastructure. deepseek-v4-flash, the
-//     previous pick, is classified 'anonymized' - the prompt is proxied
-//     to an upstream provider with identifying metadata stripped, which
-//     is a poor trade for a prompt that is nothing but personal facts.
+//     citations at all. That strike does NOT carry to this id: Z.ai
+//     changed the training regimen at GLM 5.2, and the 5.2+ line has
+//     been accurate and behaviorally sound in use. If recollections
+//     start misattributing speakers, inventing numbers, or dropping
+//     citations, the fixed-input repeat-sampling check that caught
+//     the 4.7 trial is the test to rerun; mistral-small-3-2-24b-
+//     instruct is a known-clean fallback on it.
+//   - PRIVATE serving. Venice classifies this id 'private' - the
+//     weights are hosted on its own infrastructure, so the memory
+//     bodies never leave it. An 'anonymized' id (prompt proxied to an
+//     upstream provider with identifying metadata stripped) is a poor
+//     trade for a prompt that is nothing but personal facts.
 //
-// 256k context against a ~5k-token prompt, and cheaper per recall than
-// the model it replaced.
-const SMOOTHING_MODEL = 'mistral-small-3-2-24b-instruct';
+// 1M context against a ~5k-token prompt, and cheap per recall
+// ($0.15/$0.50 per Mtok in/out).
+const SMOOTHING_MODEL = 'z-ai-glm-5-3-flash';
 
 // The recollection is a short paragraph, not an essay. Cap generously
 // enough that a multi-source recall doesn't get truncated mid-citation.

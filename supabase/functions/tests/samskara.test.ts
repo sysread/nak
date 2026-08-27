@@ -119,7 +119,7 @@ Deno.test('compound summary prompt forbids the leaky failure modes', () => {
 // --- tuning constants -------------------------------------------------------
 
 Deno.test('caps and thresholds hold their designed relationships', () => {
-  assertEquals(SAMSKARA_MODEL, 'mistral-small-3-2-24b-instruct');
+  assertEquals(SAMSKARA_MODEL, 'z-ai-glm-5-3-flash');
   // Tail cap stays small (the chain runs before reflection); the
   // sweep cap matches the fleet's per-tick queue convention.
   assert(TAIL_ASSIMILATE_CAP < SWEEP_ASSIMILATE_CAP);

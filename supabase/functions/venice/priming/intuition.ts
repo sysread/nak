@@ -57,10 +57,10 @@ const MAX_TOKENS = 2048;
  * Drive a single non-streaming Venice completion: a system + user pair,
  * the body text trimmed, reasoning content ignored.
  *
- * disable_thinking is set defensively. The intuition slot resolves to a
- * non-reasoning model today, so the flag is a no-op; it stays on so the
- * call survives a re-point to a reasoning id (an unsuppressed CoT
- * preamble would eat the MAX_TOKENS answer budget). retryRateLimit is on
+ * disable_thinking is load-bearing. The intuition slot resolves to a
+ * reasoning-capable id (z-ai-glm-5-3-flash), and an unsuppressed CoT
+ * preamble would both eat the MAX_TOKENS answer budget and add latency
+ * on the pre-turn critical path. retryRateLimit is on
  * because this is a server-side background call with no browser
  * rate-limit loop behind it - a single "model overloaded" 429 would
  * otherwise fail the sub-call.

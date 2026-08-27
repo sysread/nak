@@ -648,6 +648,10 @@ export async function secondThoughtsOnTurnTail(
     const text = await completeJsonObject({
       apiKey,
       model: SECOND_THOUGHTS_MODEL,
+      // Classification/extraction over evidence already in context - a
+      // thinking pass is pure latency and budget burn. The model can
+      // reason, so this suppression is load-bearing, not a no-op.
+      disableThinking: true,
       messages,
       maxTokens: 512,
     });

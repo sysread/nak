@@ -272,7 +272,10 @@
     reasoningElapsedPill,
     reasoningCharPill,
   } from '$lib/ui/reasoning-panel';
-  import { verbosityRejectedForModel } from '$lib/ui/model-profiles';
+  import {
+    thinkingOffRejectedForModel,
+    verbosityRejectedForModel,
+  } from '$lib/ui/model-profiles';
   import AssistantBody from '../components/AssistantBody.svelte';
   import Markdown from '../components/Markdown.svelte';
   import ReasoningPanel from '../components/ReasoningPanel.svelte';
@@ -3029,6 +3032,14 @@
   // card's verbosity dropdown, so the two surfaces can't disagree.
   const currentVerbosityRejected = $derived<boolean>(
     verbosityRejectedForModel(app.modelFeatureRejections, currentProfile.modelId)
+  );
+  // Whether the current model refuses to run without a thinking pass
+  // ("Reasoning is mandatory" in model_feature_rejections). Disables
+  // the Off row in the composer's reasoning picker - same signal that
+  // disables the Off option in the Settings profile card, so the two
+  // surfaces can't disagree.
+  const currentThinkingOffRejected = $derived<boolean>(
+    thinkingOffRejectedForModel(app.modelFeatureRejections, currentProfile.modelId)
   );
   // Resolved gated-toolbox set for the current thread. The composer
   // toolbox button renders unconditionally (mirroring the model /
@@ -9154,6 +9165,7 @@
                 <ReasoningPicker
                   value={currentReasoning}
                   defaultLevel={currentProfile.thinking}
+                  offRejected={currentThinkingOffRejected}
                   open={reasoningMenuOpen}
                   onToggle={() => {
                     const next = !reasoningMenuOpen;

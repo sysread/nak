@@ -10,7 +10,7 @@ browser-side summarisation code.
 
 When a thread's newest terminal assistant message is past
 `last_summarised_msg_id`, the summary unit claims it, asks the fast
-model (`mistral-small-3-2-24b-instruct`, hardcoded in the agent
+model (`z-ai-glm-5-3-flash`, hardcoded in the agent
 module) for a 2-3 sentence topical summary, and writes the result
 back via a claim-guarded RPC.
 
@@ -191,7 +191,7 @@ sees an empty queue. There is no worker lease for this unit.
   mechanism. Acceptable because summarisation is cheap fast-tier
   text and most threads settle a handful of times total.
 - **The model id is hardcoded in the agent module.**
-  `SUMMARY_MODEL = 'mistral-small-3-2-24b-instruct'` mirrors
+  `SUMMARY_MODEL = 'z-ai-glm-5-3-flash'` mirrors
   `agentModel('summary')` in `src/lib/models/index.ts`. Change both
   together.
 

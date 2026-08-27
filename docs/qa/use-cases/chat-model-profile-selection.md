@@ -11,8 +11,15 @@ reasoning/verbosity pickers badging the profile's defaults (including
 an Off reasoning default), the fallback that maps deleted-profile
 and legacy tier-name pins to the default profile, and the server-side
 strict-validation fallback that keeps a mid-conversation switch to a
-model whose backend rejects optional wire knobs (GLM 5.x rejects
-`text.verbosity`) from erroring the turn. Authoring the profiles
+model whose backend rejects optional wire knobs from erroring the
+turn. Verified rejection facts (probed live 2026-08-27): GLM 5.2
+rejected `text.verbosity` (recorded in `model_feature_rejections`);
+GLM 5.3 and 5.3 Flash both ACCEPT it. GLM 5.3 non-flash instead
+rejects `venice_parameters.disable_thinking` ("Reasoning is
+mandatory") - a distinct error shape the strip-and-retry fallback
+also recognizes: the knob is stripped, the turn re-issues with
+thinking on, and the rejection is recorded so Settings and the
+composer grey out the Off thinking option for that model. Authoring the profiles
 themselves is
 [settings-model-profiles](./settings-model-profiles.md).
 

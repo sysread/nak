@@ -512,6 +512,10 @@ async function reflectClaimedThread(
     const result = await runHeadlessAgent(
       {
         model: REFLECTION_MODEL,
+        // The model's default reasoning effort is high; this task needs a
+        // light pass at most, and an unpinned effort burns latency and
+        // output budget on long inputs (see CLAUDE.md, Venice sub-completions).
+        reasoningEffort: 'low',
         messages: convo,
         toolbox: buildReflectionToolbox(),
         baseCtx,

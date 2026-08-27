@@ -21,7 +21,7 @@ helper. Differences are noted in the subsections.
 
 When a thread accumulates a terminal assistant message past
 `last_topics_msg_id`, the thread-topics unit claims it, asks the
-fast model (`mistral-small-3-2-24b-instruct`, hardcoded in the
+fast model (`z-ai-glm-5-3-flash`, hardcoded in the
 agent module) for 1-4 short topic tags (with the user's existing
 topic vocabulary inlined for normalisation), and writes the result
 back via a claim-guarded RPC. The drawer's `[Topics ▾]` dropdown
@@ -244,7 +244,7 @@ threads tagged with either.
   Acceptable because the vocabulary self-corrects across the
   user's thread set.
 - **The model id is hardcoded in the agent modules.**
-  `mistral-small-3-2-24b-instruct` in all three topics units (and
+  `z-ai-glm-5-3-flash` in all three topics units (and
   summary) mirrors the corresponding `agentModel(...)` entries in
   `src/lib/models/index.ts`. Change both together.
 - **The 120-message cap does not bound request size.** Thread

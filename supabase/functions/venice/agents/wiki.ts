@@ -112,11 +112,11 @@ const CONTENT_FILTER_SENTINEL =
   'Input text data may contain inappropriate content';
 
 /**
- * Uncensored fallback model. The default wiki slot
- * (deepseek-v4-flash) has a strict input classifier that rejects
- * bodies it doesn't like even before the model gets a chance to read
- * them - on a wiki run that means the agent can't process the
- * conversation no matter how many retries we throw at it.
+ * Uncensored fallback model. Mainstream serving backends can run a
+ * strict input classifier that rejects bodies they don't like even
+ * before the model gets a chance to read them - on a wiki run that
+ * means the agent can't process the conversation no matter how many
+ * retries we throw at it.
  * venice-uncensored-1-2 does not run that classifier, so a single
  * retry against it unblocks the conversation. We retry exactly once:
  * if the fallback also fails, the failure path records it and the

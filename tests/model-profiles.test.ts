@@ -12,6 +12,7 @@ import {
   reorderProfiles,
   setDefaultProfile,
   updateProfile,
+  thinkingOffRejectedForModel,
   verbosityRejectedForModel,
 } from '../src/lib/ui/model-profiles';
 
@@ -54,7 +55,7 @@ describe('createProfile / addProfile', () => {
     expect(fresh.id).not.toBe(SEED_MODEL_PROFILE_ID);
     expect(fresh.id).not.toBe('p1');
     expect(fresh.name).toBe('New profile');
-    expect(fresh.modelId).toBe('deepseek-v4-flash');
+    expect(fresh.modelId).toBe('z-ai-glm-5-3-flash');
     expect(fresh.isDefault).toBe(false);
   });
   it('numbers the name past an existing "New profile"', () => {
@@ -215,6 +216,20 @@ describe('profileRowView', () => {
     // The off-catalog current pick surfaces as a synthetic option.
     expect(row.options[0].id).toBe('deepseek-v4-flash');
     expect(row.options[0].label).toContain('current');
+  });
+});
+
+describe('thinkingOffRejectedForModel', () => {
+  const path = 'venice_parameters.disable_thinking';
+  it('flags a model recorded as refusing to disable thinking', () => {
+    expect(thinkingOffRejectedForModel({ 'z-ai-glm-5-3': [path] }, 'z-ai-glm-5-3')).toBe(true);
+  });
+  it('ignores other rejected fields and other models', () => {
+    expect(thinkingOffRejectedForModel({ 'z-ai-glm-5-3': ['text'] }, 'z-ai-glm-5-3')).toBe(false);
+    expect(thinkingOffRejectedForModel({ 'z-ai-glm-5-3': [path] }, 'z-ai-glm-5-3-flash')).toBe(false);
+  });
+  it('is false on an empty snapshot', () => {
+    expect(thinkingOffRejectedForModel({}, 'any')).toBe(false);
   });
 });
 

@@ -205,7 +205,7 @@ A chat turn goes:
   a capability snapshot so resolution never has to wait on the
   lazily-fetched model catalog; accounts with no stored profiles get
   `seedModelProfiles()` in memory (one "Default" profile on
-  deepseek-v4-flash, medium thinking, low verbosity). See
+  z-ai-glm-5-3-flash, medium thinking, low verbosity). See
   [Settings](./settings.md).
 - **Reasoning effort** — the per-thread value is a `ThinkingLevel`
   (`off` | low | medium | high), not a bare `ReasoningEffort`.
@@ -214,7 +214,14 @@ A chat turn goes:
   `thinkingWireForProfile`: `off` ->
   `venice_parameters.disable_thinking`, the rest -> `reasoning_effort`.
   Only forwarded when the profile's `supportsReasoning` is true (some
-  providers 400 on the unknown field).
+  providers 400 on the unknown field). Some reasoning backends refuse
+  the `off` knob outright ("Reasoning is mandatory" - observed on GLM
+  5.3 non-flash); that 400 rides the same two-layer recovery as
+  verbosity below, recorded under the
+  `venice_parameters.disable_thinking` path, and the Settings profile
+  card plus the composer's reasoning picker grey out the Off option
+  for models carrying that record
+  (`thinkingOffRejectedForModel`).
 - **Verbosity** — per-thread `threads.verbosity`, falling back to
   the profile's `verbosity` default at send-time. Forwarded
   unconditionally as `text.verbosity` (OpenAI-shape: nested under
@@ -223,16 +230,18 @@ A chat turn goes:
   it, but some model backends (GLM 5.x was the first observed)
   400 the whole request with "Extra inputs are not permitted,
   field: 'text'". Two-layer recovery, both server-side:
-  - **Runtime fallback:** a strict-validation 400 naming a
-    droppable optional field strips that field from the body in
-    place and re-issues (see `DROPPABLE_WIRE_FIELDS` in
-    `getStreamingCompletion.ts`), and emits a
-    `wire_feature_rejected` signal. Only advisory knobs are in the
+  - **Runtime fallback:** a 400 naming a droppable optional field
+    (the pydantic extra-field shape, or the "Reasoning is mandatory"
+    refusal that maps to `venice_parameters.disable_thinking`)
+    strips that path from the body in place and re-issues (see
+    `DROPPABLE_WIRE_FIELDS` in `getStreamingCompletion.ts`), and
+    emits a `wire_feature_rejected` signal. Only advisory knobs are in the
     droppable set — semantic fields (`tools`, `messages`) always
     surface as errors.
   - **Persistent memory:** the orchestrator records each discovery
     in the global `model_feature_rejections` table (model_id +
-    feature, where feature is the wire FIELD name, `'text'`) and
+    feature, where feature is a wire field PATH - `'text'`, or the
+    dotted `'venice_parameters.disable_thinking'`) and
     strips known-rejected features from the body at turn start
     (`feature-rejections.ts`), so the failing round-trip is paid
     once ever per model+feature, not per turn. Reads/writes are
