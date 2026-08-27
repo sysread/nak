@@ -62,12 +62,15 @@ describe('MODELS (active registry)', () => {
     // sub-call primary (qwen3-vl-235b-a22b) and its uncensored
     // fallback (venice-uncensored-1-2), plus qwen-3-7-plus (which
     // inlines image_url parts directly rather than routing through
-    // analyze_image). The seed profile's deepseek-v4-flash is text-only
+    // analyze_image), and z-ai-glm-5-3-flash (intuition's backing id,
+    // vision-capable per the Venice catalog even though the pulse never
+    // sends images). The seed profile's deepseek-v4-flash is text-only
     // - vision goes through analyze_image.
     const visionIds = new Set([
       'venice-uncensored-1-2',
       'qwen3-vl-235b-a22b',
       'qwen-3-7-plus',
+      'z-ai-glm-5-3-flash',
     ]);
     for (const [id, spec] of Object.entries(MODELS)) {
       expect(spec.supportsVision).toBe(visionIds.has(id));
@@ -240,10 +243,9 @@ describe('AGENT_MODELS (background agents)', () => {
     }
   });
   it('groups roles by model id as expected', () => {
-    // Deepseek backs every slot except the two latency-bound,
-    // non-reasoning sub-calls: web search (mistral-small) and intuition
-    // (nemotron-nano). See the per-slot rationale block in
-    // src/lib/models/index.ts.
+    // Deepseek backs every slot except the two latency-bound sub-calls:
+    // web search (mistral-small) and intuition (glm-5-3-flash). See the
+    // per-slot rationale block in src/lib/models/index.ts.
     expect(AGENT_MODELS.reflection).toBe('deepseek-v4-flash');
     expect(AGENT_MODELS.wiki).toBe('deepseek-v4-flash');
     expect(AGENT_MODELS.wikiLibrarian).toBe('deepseek-v4-flash');
@@ -254,18 +256,19 @@ describe('AGENT_MODELS (background agents)', () => {
     expect(AGENT_MODELS.conversationRecall).toBe('deepseek-v4-flash');
     expect(AGENT_MODELS.wikiRecall).toBe('deepseek-v4-flash');
     // Web search and intuition are both latency-bound sub-calls that
-    // pin disable_thinking, and both want a NON-reasoning model (no CoT
-    // pass to burn the budget). Web search is on mistral-small, a
-    // faithful summariser - faithfulness is the priority where it
-    // synthesises live results. Intuition is on nemotron-nano (30B MoE,
-    // 3B active), the fastest non-reasoning id, since the pre-turn pulse
-    // is a primal-drive gut read awaited on the turn's critical path.
+    // pin disable_thinking so no CoT pass burns the budget. Web search
+    // is on mistral-small, a faithful non-reasoning summariser -
+    // faithfulness is the priority where it synthesises live results.
+    // Intuition is on glm-5-3-flash, a cheap fast id that still writes
+    // a coherent pulse; the pre-turn pulse is a primal-drive gut read
+    // awaited on the turn's critical path, so the disable_thinking pin
+    // is load-bearing there (the id CAN reason).
     // Distinct ids from the deepseek-backed agents so they retune
     // independently. (The bias and samskara agents also run
     // mistral-small, but server-side - see BIAS_MODEL and SAMSKARA_MODEL
     // under supabase/functions/venice/agents/.)
     expect(AGENT_MODELS.webSearch).toBe('mistral-small-3-2-24b-instruct');
-    expect(AGENT_MODELS.intuition).toBe('nvidia-nemotron-3-nano-30b-a3b');
+    expect(AGENT_MODELS.intuition).toBe('z-ai-glm-5-3-flash');
     // No vision slot here: analyze_image's vision sub-call runs
     // server-side in the venice edge function, which holds the primary
     // (qwen3-vl-235b-a22b) and uncensored-fallback

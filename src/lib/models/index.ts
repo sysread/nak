@@ -198,19 +198,19 @@ export const MODELS = {
     // See ModelSpec.leaksSpecialTokens.
     leaksSpecialTokens: true,
   },
-  'nvidia-nemotron-3-nano-30b-a3b': {
-    id: 'nvidia-nemotron-3-nano-30b-a3b',
-    // 30B-total MoE with only 3B ACTIVE params from NVIDIA - the
-    // fastest/cheapest non-reasoning text model on Venice. Backs the
-    // intuition pulse, whose only requirement is low latency on the
-    // pre-turn critical path (a "primal drive", not a reasoned take, so
-    // a low active-param count is a feature, not a compromise).
-    contextWindow: 128_000,
-    // Non-reasoning: no chain-of-thought pass, so disableThinking is a
-    // clean no-op and reasoning_effort must never go on the wire (Venice
-    // 4xxs on the field for non-reasoning ids).
-    supportsReasoning: false,
-    supportsVision: false,
+  'z-ai-glm-5-3-flash': {
+    id: 'z-ai-glm-5-3-flash',
+    // Z.ai's flash-tier GLM 5.3: cheap, fast, and unusually broad for
+    // the price - tool calls, vision, and an optional reasoning pass.
+    // Backs the intuition pulse, whose only requirement is low latency
+    // on the pre-turn critical path; the intuition call site pins
+    // disable_thinking so the reasoning pass never runs there.
+    contextWindow: 1_048_576,
+    // Accepts reasoning_effort, but every current consumer (intuition)
+    // suppresses the thinking pass via disable_thinking instead -
+    // reasoning is latency the pulse cannot afford.
+    supportsReasoning: true,
+    supportsVision: true,
     supportsResponseFormat: true,
   },
   'mistral-small-3-2-24b-instruct': {
@@ -523,7 +523,7 @@ export type AgentRole =
  *     NOTE on capacity: the Balanced and Fast foreground tiers front
  *     deepseek-v4-flash (Smart is on qwen-3-7-plus). Every background
  *     agent here except webSearch (mistral-small-3-2-24b-instruct) and
- *     intuition (nvidia-nemotron-3-nano-30b-a3b) shares that id, so
+ *     intuition (z-ai-glm-5-3-flash) shares that id, so
  *     they share capacity with those tiers; the
  *     earlier policy of "background agents must not share capacity with
  *     foreground tiers" has been deliberately relaxed. If overload
@@ -590,15 +590,17 @@ export type AgentRole =
  *     reasoning knob at the call site - rides deepseek's default
  *     effort, same as the other deepseek slots.
  *
- *   intuition - nvidia-nemotron-3-nano-30b-a3b. The pre-turn pulse
- *     fires before every assistant turn AND the turn waits on it (the
- *     chat-loop awaits the pipeline before assembling the wire), so
- *     latency is the ONLY constraint that matters - the pulse is a
- *     primal-drive gut read, not a reasoned take. Nemotron-nano is the
- *     fastest non-reasoning model on Venice (30B MoE, 3B active), so a
- *     low active-param count is exactly the right trade: cheap, fast,
- *     and reasoning would be wrong here anyway. The call site pins
- *     disable_thinking, a no-op on a non-reasoning id.
+ *   intuition - z-ai-glm-5-3-flash. The pre-turn pulse fires before
+ *     every assistant turn AND the turn waits on it (the chat-loop
+ *     awaits the pipeline before assembling the wire), so latency is
+ *     the ONLY constraint that matters - the pulse is a primal-drive
+ *     gut read, not a reasoned take. GLM's flash tier is cheap and
+ *     fast while still writing a coherent pulse - the slot needs
+ *     enough model to read the room, not just raw speed (a minimal
+ *     active-param MoE produces mushy reads). The model CAN reason,
+ *     which would be pure latency here, so the call site's
+ *     disable_thinking pin is load-bearing on this id, not a
+ *     defensive no-op.
  *
  *
  *   recall - deepseek-v4-flash. Memory-recall agent: read the live
@@ -652,7 +654,7 @@ export const AGENT_MODELS = {
   rem:                'deepseek-v4-flash',
   webSearch:          'mistral-small-3-2-24b-instruct',
   researchDocs:       'deepseek-v4-flash',
-  intuition:          'nvidia-nemotron-3-nano-30b-a3b',
+  intuition:          'z-ai-glm-5-3-flash',
   recall:             'deepseek-v4-flash',
   conversationRecall: 'deepseek-v4-flash',
   wikiRecall:         'deepseek-v4-flash',
