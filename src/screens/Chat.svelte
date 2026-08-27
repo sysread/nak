@@ -4452,6 +4452,7 @@
           signal: slot.abortCtl!.signal,
           userMessageId: ctx.userMessageId,
           supersededIds: ctx.supersededIds,
+          replaceUserMessageContent: ctx.replaceUserMessageContent,
           reasoningEffort: ctx.sendReasoning,
           disableThinking: ctx.sendDisableThinking,
           verbosity: ctx.sendVerbosity,
