@@ -49,7 +49,7 @@ describe('ExchangeSlot', () => {
     slot.streamingReasoning = 'thinking';
     slot.streamingReasoningOpen = true;
     slot.streamingContentStarted = true;
-    slot.streamingError = { text: 'oops' };
+    slot.streamingError = { kind: 'internal', detail: 'oops' };
     slot.rateLimitWaitUntil = 1234;
     slot.rateLimitAttempt = 2;
     slot.abortCtl = ctl;
@@ -60,7 +60,7 @@ describe('ExchangeSlot', () => {
     expect(slot.streamingReasoning).toBe('thinking');
     expect(slot.streamingReasoningOpen).toBe(true);
     expect(slot.streamingContentStarted).toBe(true);
-    expect(slot.streamingError).toEqual({ text: 'oops' });
+    expect(slot.streamingError).toEqual({ kind: 'internal', detail: 'oops' });
     expect(slot.rateLimitWaitUntil).toBe(1234);
     expect(slot.rateLimitAttempt).toBe(2);
     expect(slot.abortCtl).toBe(ctl);
@@ -84,7 +84,7 @@ describe('ExchangeSlot', () => {
     slot.streamingReasoning = 'mid-thought';
     slot.streamingReasoningOpen = true;
     slot.streamingContentStarted = true;
-    slot.streamingError = { text: 'err', retry: () => {} };
+    slot.streamingError = { kind: 'internal', detail: 'err', retry: () => {} };
     slot.rateLimitWaitUntil = 9999;
     slot.rateLimitAttempt = 3;
     slot.abortCtl = new AbortController();

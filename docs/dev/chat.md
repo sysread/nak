@@ -57,8 +57,8 @@ A chat turn goes:
   sibling blocks), the drawer's four-bucket list surgery, and the
   small scoped decisions (platform send-hint copy, rate-limit
   countdown). They sit alongside the per-feature companions the
-  screen already used (`incomplete-turn`, `last-error`,
-  `recovery-banner`, `streaming-bubble`, ...); the split contract
+  screen already used (`completion-status`, `streaming-bubble`,
+  ...); the split contract
   is [frontend-organization.md](./frontend-organization.md).
 - `src/lib/ui/message-queue.ts` - the send-while-streaming queue's
   primitives: the `QueuedMessage` shape, the three-mode
@@ -147,10 +147,10 @@ A chat turn goes:
   browser knows the stop landed; `ChatLoopResult.interrupted` lets
   the UI suppress the "something went wrong" banner. The
   persisted `status='aborted'` is the cross-device signal: the
-  transcript-tail classifiers
-  (`incompleteTurnTail`, `isReasoningOnlyStall`,
-  `isCutOffPartialText`) all treat an aborted tail as a deliberate
-  endpoint and never offer it for retry, so a second device that
+  transcript-tail classifier (`classifyTail` and its dead-turn
+  predicates in `src/lib/ui/completion-status.ts`) treats an aborted
+  tail as a deliberate
+  endpoint and never offers it for retry, so a second device that
   opens the thread reaches the same verdict the stopping device
   did.
 
@@ -682,7 +682,8 @@ A chat turn goes:
   (`streamLikelyInFlight` in `src/lib/ui/stream-inflight.ts`, twin of
   the staleness rule in `resolveStreamContext`). The same freshness
   verdict suppresses the orphan-draft check and the
-  `incompleteTurnTail` cut-off banner - before the stamp existed, a
+  cut-off card in the completion-status derivation - before the stamp
+  existed, a
   refresh during the pregame found no streaming row, concluded the
   turn was dead, and offered "response was interrupted" retry banners
   for a turn still running under `waitUntil`. The `/stream` probe
@@ -696,8 +697,8 @@ A chat turn goes:
   misses the stamp on exactly the reload this path exists for. (2)
   The whole path emits Logs-drawer breadcrumbs at debug: the browser
   logs thread-open signals, reconnect arming/settling, and every
-  recovery-banner transition (with a DOM census that warns if more
-  than one banner node ever renders) under the `chat` source; the
+  completion-status transition (with a DOM census that warns if more
+  than one status-card node ever renders) under the `chat` source; the
   function logs the stamp write/clear and each probe's verdict under
   the `stream` source.
 - **A live stream that drops mid-turn hands off to the same poll.**
@@ -749,9 +750,9 @@ A chat turn goes:
   its card. Without the deferral the throw races ahead of hydration and
   `runExchange`'s catch clears the buffers into a void; without the
   server-side row there's nothing to hydrate. The retry affordance
-  (`displayedError` for a partial-text tail, the cut-off banner for a
-  reasoning-only one) then replaces the card on click - see
-  `retryIncompleteTurn` and `src/lib/ui/incomplete-turn.ts`.
+  (the completion-status card for a partial-text or reasoning-only
+  tail) then replaces the card on click - see
+  `retryCompletion` and `src/lib/ui/completion-status.ts`.
 - **The streaming reasoning panel opens once, then yields - it is
   never re-pinned open.** The first `reasoning_text` delta of a round
   opens the panel (and stamps `slot.reasoningStartedAt`); from there

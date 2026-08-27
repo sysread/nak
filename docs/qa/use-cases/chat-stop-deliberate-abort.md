@@ -13,11 +13,10 @@ preserved as a card, not dropped"):
    (`getStreamingResponse.ts` terminal write,
    `withInterruptedMarker('')`), rather than leaving the thread tail on
    the bare user message.
-2. **Never offered for retry.** The transcript-tail classifiers
-   (`incompleteTurnTail` in `Chat.svelte`, `isReasoningOnlyStall` /
-   `isCutOffPartialText` in `src/lib/ui/incomplete-turn.ts`) all treat a
+2. **Never offered for retry.** The transcript-tail classifier
+   (`classifyTail` in `src/lib/ui/completion-status.ts`) treats an
    `status='aborted'` tail as a deliberate endpoint - no cut-off banner,
-   no recovery banner, no replace-on-retry. Contrast with the `'error'`
+   no status card, no replace-on-retry. Contrast with the `'error'`
    tail in [chat-cutoff-retry](./chat-cutoff-retry.md), which IS offered.
 3. **Cross-device agreement.** Because the verdict keys off the persisted
    `status='aborted'`, a second device that opens the same thread reaches

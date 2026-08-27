@@ -246,15 +246,15 @@ Known edges:
 A signed-out tab's holder identity is irrelevant - `disposeAll()`
 aborts any in-flight exchange before the next sign-in.
 
-### Retry affordances suppressed under `respondingElsewhere`
+### Retry affordances suppressed while a turn is plausibly running
 
-The `incompleteTurnTail` derivation and the orphaned-draft
-(`interruptedDraft`) source both return / render nothing while
-`respondingElsewhere` is true - and also while the thread's
-server-side in-flight stamp (`threads.stream_started_at`, written by
-the /stream orchestrator at turn entry and cleared at terminal) is
-fresh per `streamLikelyInFlight` (`src/lib/ui/stream-inflight.ts`).
-The stamp covers the same-device-reload case the claim cannot: after
+The completion-status derivation returns nothing while the turn is
+plausibly still running somewhere, via one unified `turnPending`
+gate: a local slot sending, `respondingElsewhere` true, a streaming
+row parked at the tail, or the thread's server-side in-flight stamp
+(`threads.stream_started_at`, written by the /stream orchestrator at
+turn entry and cleared at terminal) fresh per `streamLikelyInFlight`
+(`src/lib/ui/stream-inflight.ts`). The stamp covers the same-device-reload case the claim cannot: after
 a refresh the claim is held by OUR OWN holderId (so
 `respondingElsewhere` is false), yet the turn is still running under
 the edge function's waitUntil, and during its priming stage no
@@ -267,28 +267,34 @@ exists to prevent (and whose acquire would just fail with "another
 device is responding"). The observer Scanner bubble covers the wait
 instead.
 
-### One recovery banner, not three (`selectRecoveryBanner`)
+### One completion-status card, not a stack (`selectCompletionStatus`)
 
 The transcript tail can satisfy several "this turn did not finish, want
-to retry?" conditions at once. The most visible overlap: a session that
-died with a persisted user row AND a leftover IndexedDB streaming draft
-trips both `incompleteTurnTail` (generic cut-off tail) and
-`interruptedDraft` (recoverable draft), so the tail rendered two
-near-identical retry boxes stacked. A third, parallel surface -
-`displayedError` (session `streamingError` or persisted
-`thread.last_error`) - is the danger-tinted alert.
+to retry?" conditions at once, and the screen has several parallel
+error surfaces that can render simultaneously (the tail card, the
+composer `.error-bar`, slop notices, the offline banner). Within the
+tail surfaces, `src/lib/ui/completion-status.ts`
+(`selectCompletionStatus`) makes ONE holistic decision from all
+available signals - the tail verdict (`classifyTail`), the live
+in-session error, the persisted `threads.last_error` envelope, and
+the recovered IndexedDB draft - and returns at most one descriptor:
+**live error > persisted error > interrupted draft > tail verdict**.
 
-`src/lib/ui/recovery-banner.ts` (`selectRecoveryBanner`) collapses these
-to a single banner by precedence: **error > interrupted-draft >
-cut-off**. `Chat.svelte` binds each source's retry/dismiss closures
-(gating the recovery sources on `respondingElsewhere` / `sending` as
-above) and renders the one descriptor the selector returns. The `error`
-variant keeps the `.msg-error` styling (icon, optional kind heading,
-pre-wrap body); the `incomplete` variant is the muted `.msg-incomplete`
-note. `dismiss` renders only when the source offers one - error cards and
-the recoverable draft, never the generic cut-off tail. Precedence and the
-banner copy live in the helper because they are framework-agnostic; the
-component owns only the markup and the runes that feed it.
+The same failure renders the same card in-session and after a reload:
+both error paths carry a `kind` and derive title + advice from the
+one copy table (`copyForErrorKind`). Backend raw text goes in a
+by-default-collapsed detail section. The retry intent (REPLACE vs
+CONTINUE) is part of the verdict, and ONE retry dispatcher
+(`retryCompletion`) binds it; the live envelope's context-specific
+closure (e.g. the rate-limit captured-context re-run) takes
+precedence at bind time. The composer `.error-bar` still owns
+non-exchange action errors (thread-load failures, attachment
+validation), but it now has a dismiss button; the turn's own outcome
+(round-limit stop, commit conflict) routes through the slot's live
+error so the tail shows exactly one explanation. See
+`src/lib/ui/completion-status.ts` for the full contract and
+`docs/dev/in-progress/incomplete-turn-unification.md` for the design
+narrative.
 
 ## Contracts
 

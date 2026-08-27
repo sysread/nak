@@ -7,10 +7,9 @@
  * component and only their results flow through here.
  *
  * Sibling modules split the chat surface by feature: message-blocks,
- * thread-buckets, incomplete-turn, last-error, recovery-banner,
- * streaming-bubble, reasoning-panel, and friends each own one
- * concern. This module owns the small screen-level decisions that
- * fit none of them.
+ * thread-buckets, completion-status, streaming-bubble, reasoning-panel,
+ * and friends each own one concern. This module owns the small
+ * screen-level decisions that fit none of them.
  *
  * Named `chat-screen.ts` (not `chat.ts`) because `src/lib/chat/` is
  * the domain home - the chat-loop orchestration lives there.

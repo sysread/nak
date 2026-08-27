@@ -1,11 +1,19 @@
 # Chat: one recovery banner at the transcript tail, never stacked
 
+> **2026-08-27 surface rename:** the recovery banner shipped as the
+> unified completion-status card
+> (`src/components/CompletionStatusCard.svelte`, decision logic in
+> `src/lib/ui/completion-status.ts`). The steps below still describe
+> the same trigger scenarios; where they say "banner", read
+> "status card". Awaiting a re-execution pass against the new
+> component before its results table can gain post-change rows.
+
 ## Covers
 
 The single-surface recovery banner
 ([dev: exchange](../../dev/exchange.md), "One recovery banner, not
 three"). The tail can satisfy several "this turn did not finish,
-retry?" conditions at once; `selectRecoveryBanner`
+retry?" conditions at once; `selectCompletionStatus`
 (`src/lib/ui/recovery-banner.ts`) collapses them to exactly one
 banner by precedence: **error (red) > interrupted-draft > cut-off
 (muted)**.
@@ -14,7 +22,7 @@ The load-bearing overlap this proves: an orphaned IndexedDB draft
 only exists when the thread tail is a `user` row (see
 `selectThread`'s orphan check - it requires `lastMsg.role === 'user'`
 and `draft.userMessageId === lastMsg.id`). That same user-row tail
-also drives `incompleteTurnTail`, so an interrupted draft ALWAYS
+also drives the cut-off tail verdict, so an interrupted draft ALWAYS
 co-occurs with the generic cut-off tail. Rendered independently the
 two stacked as two near-identical retry boxes; the precedence here is
 what guarantees one.
@@ -41,7 +49,7 @@ error path) and [exchange-per-thread-slots](./exchange-per-thread-slots.md)
 ## Steps
 
 1. **Cut-off alone (no draft, no error).** Forge a reasoning-only
-   stall tail - `incompleteTurnTail` fires, `displayedError` is null,
+   stall tail - the tail verdict fires, the live error is null,
    no draft:
 
    ```sql
@@ -129,12 +137,12 @@ error path) and [exchange-per-thread-slots](./exchange-per-thread-slots.md)
 - **(2)** Exactly ONE muted banner: *"Previous response was
   interrupted. Retry to generate a new one."* with a refresh-arrow
   Retry AND an `x` Dismiss. The cut-off note does NOT also appear -
-  even though the user-row tail satisfies `incompleteTurnTail` too,
+  even though the user-row tail satisfies the cut-off verdict too,
   the interrupted-draft source wins precedence. (Before the
   single-surface change this state rendered both banners stacked.)
 - **(3)** Dismissing deletes the IndexedDB draft and clears
   `interruptedDraft`. The user-row tail is unchanged, so
-  `incompleteTurnTail` still holds and the banner does not vanish -
+  the cut-off tail verdict still holds and the banner does not vanish -
   it falls through to the lower-precedence cut-off banner (*"The
   response appears to have been cut off."*, Retry only, no dismiss).
   This is correct: discarding the in-memory partial does not repair

@@ -172,9 +172,9 @@ export function buildMessageBlocks(messages: readonly Message[]): MessageBlock[]
     // valid for the next provider call (tool -> user without an
     // intervening assistant is a provider 400), but they read as
     // noise to the user - the failure is already conveyed by the
-    // failed tool card and the incomplete-turn banner above. Hiding
-    // them here keeps the wire fix while sparing the user the meta-
-    // note. Catches both shapes via the RECOVERY_MARKER substring
+    // failed tool card and the completion-status card at the tail.
+    // Hiding them here keeps the wire fix while sparing the user the
+    // meta-note. Catches both shapes via the RECOVERY_MARKER substring
     // test: synthetic rows (created in memory by the recovery walk)
     // and persisted rows (saved to the DB on the next user send).
     if (isRecoveryMessage(m)) continue;

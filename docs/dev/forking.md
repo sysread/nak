@@ -172,7 +172,7 @@ range touches the shared region the gesture becomes a fork:
   edited thread, swaps the selection, and runs the completion on
   the fork with no superseded rows - the fork's transcript ends
   with the now-unanswered user turn, the same trailing-user shape
-  the incomplete-turn retry path already handles.
+  the completion-status retry path already handles.
 
 Edits strictly inside the private tail stay destructive, exactly
 as before forks existed - the common case is unchanged.

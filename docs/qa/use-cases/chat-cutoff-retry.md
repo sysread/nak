@@ -1,5 +1,12 @@
 # Chat: a cut-off reply is preserved, then replaced on retry
 
+> **2026-08-27 surface rename:** the retry path is now
+> `retryCompletion` (one dispatcher) and the banner is the
+> completion-status card (`src/components/CompletionStatusCard.svelte`,
+> logic in `src/lib/ui/completion-status.ts`). Scenarios unchanged;
+> where this case says "banner", read "status card". Awaiting
+> re-execution against the new component.
+
 ## Covers
 
 Two coupled behaviors ([dev: chat](../../dev/chat.md), gotcha "A
@@ -14,7 +21,7 @@ cut-off reply's partial is preserved as a card, not dropped"):
    keeps the drain open past the `error` broadcast so the terminal END
    carries the row id, and `consumeStreamEvents` (`chat/loop.ts`)
    hydrates that row before throwing.
-2. **Retry replaces.** `retryIncompleteTurn` + the classification
+2. **Retry replaces.** `retryCompletion` + the classification
    predicates in `src/lib/ui/incomplete-turn.ts` (`isReasoningOnlyStall`,
    `isCutOffPartialText`) treat a dead tail as a REPLACE target -
    red-outlining the card while the re-roll runs and atomically deleting

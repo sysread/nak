@@ -21,7 +21,7 @@ hide + swap).
 
 - `src/lib/ui/draft-message.ts` - `findDraftMessage`, the pure
   scan that powers the reconnection `$effect`.
-- `src/lib/ui/incomplete-turn.ts` - `classifyIncompleteTurnTail`
+- `src/lib/ui/completion-status.ts` - `classifyTail`
   excludes `status='draft'` from the cut-off tail check.
 - `src/lib/ui/message-blocks.ts` - `buildMessageBlocks` filters
   `status='draft'` rows from the render plan.
@@ -269,7 +269,7 @@ Three additions to `supabase/schema.sql`:
   the wire. On the edit path, `buildEditHistoryOnWire` appends
   the edited text as a synthetic user turn instead.
 
-- **`classifyIncompleteTurnTail` excludes drafts.** A user row
+- **`classifyTail` excludes drafts.** A user row
   with `status='draft'` at the tail is an expected state (the
   fork-and-edit flow waiting for the user to send), not a failed
   completion. Without this exclusion, every fork-and-edit fork

@@ -214,19 +214,14 @@
   import { formatMessageStamp } from '$lib/ui/message-timestamp';
   import { coerceSecondThoughts } from '$lib/ui/second-thoughts';
   import { buildMcpToolboxes, mcpToolboxMetaItems } from '$lib/ui/mcp';
+  import type { RetryIntent } from '$lib/ui/completion-status';
   import {
-    classifyIncompleteTurnTail,
-    isReasoningOnlyStall,
-    isCutOffPartialText,
-  } from '$lib/ui/incomplete-turn';
-  import { selectRecoveryBanner, recoveryBannerSource } from '$lib/ui/recovery-banner';
-  import { streamLikelyInFlight } from '$lib/ui/stream-inflight';
-  import {
+    selectCompletionStatus,
     describeError,
     formatRateLimitMessage,
-    headingFor,
-    parseLastError,
-  } from '$lib/ui/last-error';
+  } from '$lib/ui/completion-status';
+  import CompletionStatusCard from '../components/CompletionStatusCard.svelte';
+  import { streamLikelyInFlight } from '$lib/ui/stream-inflight';
   import { buildMessageBlocks, findOpeningUserMessageIdForTail } from '$lib/ui/message-blocks';
   import {
     bucketFor,
@@ -3791,7 +3786,7 @@
           pendingDraftId = null;
         }
         const slot = exchangeStore.slotFor(threadId);
-        slot.streamingError = { text: describeError(err) };
+        slot.streamingError = { kind: 'network', detail: describeError(err) };
         return;
       }
 
@@ -3995,7 +3990,7 @@
       // bubble where the queued cards were, so the failure shows up
       // where they were watching.
       log.error('queued send failed', err);
-      slot.streamingError = { text: describeError(err) };
+      slot.streamingError = { kind: 'network', detail: describeError(err) };
     } finally {
       if (ownsSending) slot.sending = false;
     }
@@ -4164,7 +4159,11 @@
       // rather than silently bailing - the user clicked send and
       // deserves to know nothing happened.
       log.warn('thread response claim acquire failed', err);
-      slot.streamingError = { text: 'Could not check responding-device status. Try again in a moment.' };
+      log.warn('thread response claim acquire failed', err);
+      slot.streamingError = {
+        kind: 'network',
+        detail: describeError(err),
+      };
       slot.sending = false;
       slot.abortCtl = null;
       pendingDeleteIds = [];
@@ -4174,10 +4173,11 @@
       // Another device holds a live claim. Don't fire inference -
       // it would race the other device's persisted assistant row
       // and the atomic message-commit RPC would discard whichever
-      // landed second anyway.
-      slot.streamingError = {
-        text: 'Another device is responding to this conversation. Wait for it to finish before sending here.',
-      };
+      // landed second anyway. The observer Scanner (respondingElsewhere)
+      // already tells the same story - this card is the fallback for
+      // the window before that derivation flips.
+      slot.streamingError = { kind: 'commit_conflict' };
+      slot.sending = false;
       slot.sending = false;
       slot.abortCtl = null;
       pendingDeleteIds = [];
@@ -4919,7 +4919,11 @@
         fadeOutDelays = {};
       }
       if (loopResult.stoppedByLimit && !loopResult.finalText) {
-        error = { text: 'Stopped: the tool-call loop hit its round limit.' };
+        // Route through the slot's live error, not the composer .error-bar:
+        // this IS the turn's outcome, and routing it through the arbiter
+        // keeps the tail showing exactly one explanation. The tail verdict
+        // (an interrupted tool round) is what the retry intent reads.
+        slot.streamingError = { kind: 'round_limit' };
       }
       // Conflict: another device inserted a user message while we were
       // streaming. The generated assistant row was discarded server-side
@@ -4930,9 +4934,7 @@
       // retry closure because the right action is to navigate away and
       // back once the other turn lands.
       if (loopResult.conflictDetected) {
-        slot.streamingError = {
-          text: 'This conversation was updated on another device while a response was generating. The response was discarded - refresh this thread to see the latest.',
-        };
+        slot.streamingError = { kind: 'commit_conflict' };
       }
       slot.streamingText = '';
       slot.streamingReasoning = '';
@@ -5090,16 +5092,18 @@
       // and see what the other device produced).
       if (isAbort) {
         if (slot.abortReason === 'claim') {
-          slot.streamingError = {
-            text: 'Another device took over this conversation. Refresh to see the latest.',
-          };
+          // Another device preempted this turn via the claim heartbeat.
+          // The commit_conflict copy covers it: "changed on another
+          // device, refresh to see the latest."
+          slot.streamingError = { kind: 'commit_conflict' };
         } else {
           slot.streamingError = null;
         }
         slot.abortReason = null;
       } else if (err instanceof VeniceError && err.kind === 'rate_limit') {
         slot.streamingError = {
-          text: formatRateLimitMessage(err),
+          kind: 'rate_limit',
+          detail: formatRateLimitMessage(err),
           retry: () => {
             void runExchange(ctx);
           },
@@ -5115,13 +5119,14 @@
         // failure is stochastic, so park a retry closure next to the
         // message, same as the rate-limit path.
         slot.streamingError = {
-          text: 'The model kept returning a malformed response. Try again.',
+          kind: 'guard_exhausted',
+          detail: describeError(err),
           retry: () => {
             void runExchange(ctx);
           },
         };
       } else {
-        slot.streamingError = { text: describeError(err) };
+        slot.streamingError = { kind: 'internal', detail: describeError(err) };
       }
     } finally {
       // Retire any slop-notice cards still showing - on the success
@@ -5344,14 +5349,21 @@
    * captured ones - the same "current settings apply" policy as
    * regenerateFrom.
    */
-  async function retryInterrupted(): Promise<void> {
-    if (activeSlot?.sending || !app.supabase || !app.venice || !interruptedDraft) return;
-    const draft = interruptedDraft;
-    interruptedDraft = null;
-    // Delete the draft now so a subsequent crash doesn't loop the user
-    // into an infinite recovery prompt for the same turn.
-    void deleteDraft(draft.threadId).catch(() => {});
-    const active = findThread(draft.threadId);
+  /**
+   * Re-enter runExchange against `threadId`, resolving every wire knob
+   * from the thread row's CURRENT settings (model, reasoning effort,
+   * verbosity) rather than captured send-time values - the same
+   * "current settings apply" policy as regenerateFrom. Shared by both
+   * retry branches (tail verdicts and the recovered draft), which is
+   * exactly the dedup the old two-handler split never had.
+   */
+  async function runExchangeWithCurrentSettings(
+    threadId: string,
+    userMessageId: string,
+    originalText: string,
+    supersededIds?: string[],
+  ): Promise<void> {
+    const active = findThread(threadId);
     if (!active || active.isDraft || active.archived) return;
     const profile = resolveModelProfile(app.modelProfiles, active.model ?? null);
     // Resolve thinking level -> wire knobs; mirror of the send() path.
@@ -5361,13 +5373,10 @@
     const systemMessages: { role: 'system'; content: string }[] = app.systemPrompts
       .filter((p) => activePromptIds.has(p.id) && p.body.trim().length > 0)
       .map((p) => ({ role: 'system' as const, content: p.body }));
-    const currentUserId = session?.user.id ?? active.user_id;
     followBottom = true;
-    // originalText is not captured in the draft but runExchange only uses
-    // it as a display hint; leaving it empty is safe.
     await runExchange({
-      threadId: draft.threadId,
-      currentUserId,
+      threadId,
+      currentUserId: session?.user.id ?? active.user_id,
       modelId: profile.modelId,
       modelSpec: profileModelSpec(profile),
       systemMessages,
@@ -5377,9 +5386,95 @@
       sendEmphasis: app.emphasisMarkdown,
       sendUserName: app.userName,
       sendUserLocation: app.userLocation,
-      originalText: '',
-      userMessageId: draft.userMessageId,
+      originalText,
+      userMessageId,
+      supersededIds,
     });
+  }
+
+  /**
+   * Retry dispatcher for the completion-status card. ONE handler for
+   * every retry intent the arbiter can emit; the REPLACE-vs-CONTINUE
+   * decision was already made by the verdict (it is part of the
+   * RetryIntent), so this only binds the mechanics.
+   *
+   *   continue  - re-run the completion anchored at the turn's user
+   *               message; every persisted row stays (an orphaned tool
+   *               round or a bare user message is the fuel the model
+   *               picks up from).
+   *   replace   - same, plus mark the dead tail row for replacement
+   *               (red-outline, off-wire, atomic delete at commit - the
+   *               Regenerate machinery) before re-entering.
+   *   draft     - re-run from the recovered IndexedDB draft's user
+   *               message. Nothing was produced to replace (the draft
+   *               path only arms when the tail is a bare user row), so
+   *               no deletion - the draft itself is deleted first so a
+   *               subsequent crash can't loop the user into an
+   *               infinite recovery prompt for the same turn.
+   *               picks up from).
+   *   replace   - same, plus mark the dead tail row for replacement
+   *               (red-outline, off-wire, atomic delete at commit - the
+   *               Regenerate machinery) before re-entering.
+   *   draft     - re-run from the recovered IndexedDB draft's user
+   *               message. Nothing was produced to replace (the draft
+   *               path only arms when the tail is a bare user row), so
+   *               no deletion - the draft itself is deleted first so a
+   *               subsequent crash can't loop the user into an
+   *               infinite recovery prompt for the same turn.
+   */
+  async function retryCompletion(intent: RetryIntent): Promise<void> {
+    if (activeSlot?.sending || !app.supabase || !app.venice) return;
+    if (intent.kind === 'draft') {
+      const draft = interruptedDraft;
+      if (!draft) return;
+      interruptedDraft = null;
+      // Delete the draft now so a subsequent crash doesn't loop the
+      // user into an infinite recovery prompt for the same turn.
+      void deleteDraft(draft.threadId).catch(() => {});
+      // originalText is not captured in the draft but runExchange only
+      // uses it as a display hint; leaving it empty is safe.
+      await runExchangeWithCurrentSettings(draft.threadId, draft.userMessageId, '');
+      return;
+    }
+
+    const active = activeThreadId ? findThread(activeThreadId) ?? null : null;
+    if (!active || active.isDraft || active.archived) return;
+    // Walk back to the user message that opened this turn - the anchor
+    // for the samskara substrate write at end-of-turn. Mirrors the walk
+    // in regenerateFrom.
+    const anchorId = findOpeningUserMessageIdForTail(messages);
+    if (!anchorId) return;
+    const anchor = messages.find((m) => m.id === anchorId);
+    if (!anchor) return;
+
+    // A dead-turn tail carries nothing coherent for the re-roll to
+    // build on, so mark it for replacement the way regenerateFrom marks
+    // its range (stalled / cut-off verdicts carry a deleteId). Without
+    // this the dead card lingers above the fresh answer once the retry
+    // lands: the pendingDeleteSet red-outlines it (.regen-target) and
+    // keeps it off the wire, the commit RPC deletes the row atomically
+    // with the new turn's commit, and the post-loop fade in runExchange
+    // prunes it from the view. The other incomplete-tail shapes
+    // (interrupted tool rounds, a bare user message) ARE genuine
+    // continuation points - their persisted rows are exactly what the
+    // model needs to pick up - so they keep the no-delete behavior.
+    // When the cutoff landed after one or more completed tool rounds,
+    // only the trailing partial-text row is the dead tail; the tool
+    // rows before it stay as fuel and the re-roll synthesizes a new
+    // final answer from them.
+    let supersededIds: string[] | undefined;
+    if (intent.kind === 'replace') {
+      pendingDeleteIds = [intent.deleteId];
+      supersededIds = persistedRowIds(messages, [intent.deleteId]);
+    }
+
+    followBottom = true;
+    await runExchangeWithCurrentSettings(
+      active.id,
+      anchorId,
+      anchor.content,
+      supersededIds,
+    );
   }
 
   /**
@@ -5740,100 +5835,6 @@
       // keys its samskara probe to the reviewer's actual words, and an
       // empty note correctly yields no probe.
       refinementDoubtNote: verdict.note,
-    });
-  }
-
-  /**
-   * Resume an orphaned turn whose tail is an unfinished shape (see
-   * `incompleteTurnTail`). The typical path is: user opened a thread
-   * where the previous session hit an overload error after a tool
-   * round. The in-session rate-limit retry closure lives only in
-   * memory and doesn't survive a refresh, so without this handler
-   * the user's only recourse is to type a new prompt - which loses
-   * the anchoring of the original turn.
-   *
-   * Unlike `regenerateFrom`, nothing gets replaced or greyed out:
-   * the persisted tool rows are exactly what the model needs to
-   * pick up where it left off. We just rebuild the send-time
-   * context against the current settings and re-enter `runExchange`
-   * with no pendingDeletes, so the rebuilt wire history includes
-   * every existing row and the chat loop fires a fresh completion
-   * that continues the turn.
-   */
-  async function retryIncompleteTurn(): Promise<void> {
-    if (activeSlot?.sending || !app.supabase || !app.venice) return;
-    const active = activeThreadId ? findThread(activeThreadId) ?? null : null;
-    if (!active || active.isDraft || active.archived) return;
-    // Walk back to the user message that opened this turn. Mirrors
-    // the walk in regenerateFrom - we need the userMessageId anchor
-    // for the samskara substrate write at end-of-turn.
-    let userIdx = -1;
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === 'user') {
-        userIdx = i;
-        break;
-      }
-    }
-    if (userIdx === -1) return;
-    const userMessage = messages[userIdx];
-
-    // A dead-turn tail carries nothing coherent for the re-roll to
-    // build on, so mark it for replacement the way regenerateFrom marks
-    // its range. Two shapes qualify:
-    //   - reasoning-only stall: the model thought but never answered
-    //     (isReasoningOnlyStall), so the bubble is a bare reasoning
-    //     panel with no reply.
-    //   - partial-text cutoff: the stream failed mid-answer and the
-    //     edge function persisted the half-sentence as a status='error'
-    //     row (isCutOffPartialText). Continuing from a sentence that
-    //     stops mid-thought reads disjointly, so we re-roll instead.
-    // Without this the dead card lingers above the fresh answer once the
-    // retry lands: the pendingDeleteSet red-outlines it (.regen-target)
-    // and keeps it off the wire, the commit RPC deletes the row
-    // atomically with the new turn's commit, and the post-loop fade in
-    // runExchange prunes it from the view. The other incomplete-tail
-    // shapes (orphaned tool rows, a bare user message) ARE genuine
-    // continuation points - their persisted rows are exactly what the
-    // model needs to pick up - so they keep the no-delete behavior. When
-    // the cutoff landed after one or more completed tool rounds, only
-    // the trailing partial-text row is the dead tail; the tool rows
-    // before it stay as fuel and the re-roll synthesizes a new final
-    // answer from them.
-    const tail = messages[messages.length - 1];
-    let supersededIds: string[] | undefined;
-    if (isReasoningOnlyStall(tail) || isCutOffPartialText(tail)) {
-      pendingDeleteIds = [tail.id];
-      supersededIds = persistedRowIds(messages, [tail.id]);
-    }
-
-    const profile = resolveModelProfile(app.modelProfiles, active.model ?? null);
-    const modelId = profile.modelId;
-    // Resolve thinking level -> wire knobs; mirror of the send() path.
-    const { reasoningEffort: sendReasoning, disableThinking: sendDisableThinking } =
-      thinkingWireForProfile(profile, active.reasoning_effort ?? null);
-    const sendVerbosity: Verbosity = active.verbosity ?? profile.verbosity;
-    const systemMessages: { role: 'system'; content: string }[] = app.systemPrompts
-      .filter((p) => activePromptIds.has(p.id) && p.body.trim().length > 0)
-      .map((p) => ({ role: 'system' as const, content: p.body }));
-    const currentUserId = session?.user.id ?? active.user_id;
-
-    followBottom = true;
-
-    await runExchange({
-      threadId: active.id,
-      currentUserId,
-      modelId,
-      modelSpec: profileModelSpec(profile),
-      systemMessages,
-      sendReasoning,
-      sendDisableThinking,
-      sendVerbosity,
-      sendEmphasis: app.emphasisMarkdown,
-      sendUserName: app.userName,
-      sendUserLocation: app.userLocation,
-      originalText: userMessage.content,
-      userMessageId: userMessage.id,
-      supersededIds,
     });
   }
 
@@ -6577,166 +6578,58 @@
   const messageBlocks = $derived(buildMessageBlocks(messages));
 
   /**
-   * The persisted transcript tail when it means the model never got
-   * to produce a final reply for the last user turn (see
-   * classifyIncompleteTurnTail in $lib/ui/incomplete-turn for the
-   * qualifying tail shapes), gated on session state the transcript
-   * can't see:
+   * THE completion-status decision. selectCompletionStatus reads the
+   * transcript tail (via classifyTail), the live in-session error, the
+   * persisted threads.last_error envelope, and the recovered IndexedDB
+   * draft, and returns at most one descriptor - the single "what went
+   * wrong" card the screen renders. Exactly one card is ever visible,
+   * chosen by priority (live error > persisted error > interrupted
+   * draft > tail verdict).
    *
-   * Suppressed while `activeSlot?.sending` is true (a turn in progress has the
-   * same DB tail mid-exchange and we don't want the banner fighting
-   * the live streaming bubble), and while `activeSlot?.streamingError` is set
-   * (its own banner already offers a retry where applicable, and
-   * double-rendering two retry prompts for the same failure is
-   * noisy). Also suppressed while `respondingElsewhere` is true: a
-   * different device holds a live claim and is actively producing the
-   * reply, so the tail only LOOKS incomplete from here - the persisted
-   * assistant row will arrive over realtime. Offering retry in that
-   * window invites a competing turn that the claim is specifically
-   * there to prevent (and whose acquire would just fail with "another
-   * device is responding"), so we show the observer Scanner instead.
+   * The turnPending gate unifies the former per-source activity
+   * checks: a local slot sending, a foreign device holding the claim,
+   * a fresh server in-flight stamp, or a streaming row parked at the
+   * tail all mean the turn is plausibly still running somewhere - the
+   * tail only LOOKS incomplete, the live surface (bubble / Scanner)
+   * speaks, and no card renders. Reads claimNowTick so the stamp's
+   * staleness verdict re-runs even when no realtime clear ever lands
+   * (the function died before its finally).
    */
-  const incompleteTurnTail = $derived.by<Message | null>(() => {
-    if (activeSlot?.sending) return null;
-    if (activeSlot?.streamingError) return null;
-    if (respondingElsewhere) return null;
-    // A live server-side in-flight stamp means the turn is still
-    // running under the edge function's waitUntil even though no local
-    // slot is producing it - the reload-during-priming case, plus the
-    // await window in selectThread before reconnectInflightTurn flips
-    // `sending` on. The tail only LOOKS incomplete; the reply arrives
-    // via the reconnect poll. Reads claimNowTick so the staleness
-    // verdict re-runs even when no realtime clear ever lands (the
-    // function died before its finally).
+  const completionStatus = $derived.by(() => {
+    const tail = messages.at(-1);
+    const turnPending =
+      activeSlot?.sending === true ||
+      respondingElsewhere ||
+      tail?.status === 'streaming' ||
+      streamLikelyInFlight(currentThread?.stream_started_at, Date.now());
     void claimNowTick;
-    if (streamLikelyInFlight(currentThread?.stream_started_at, Date.now())) {
-      return null;
-    }
-    return classifyIncompleteTurnTail(messages);
+    return selectCompletionStatus({
+      messages,
+      turnPending,
+      liveError: activeSlot?.streamingError ?? null,
+      lastError: currentThread?.last_error,
+      draft: interruptedDraft,
+    });
   });
 
-  /**
-   * Single error surface for the bottom of the message list. Combines
-   * three sources, in precedence:
-   *
-   *   1. `activeSlot.streamingError` - session-local, set by the
-   *      live-turn catch sites. Freshest signal; the user just hit it.
-   *   2. `currentThread.last_error` - persistent, written by the
-   *      streaming function on any terminalKind='error' path and
-   *      cleared by commit_assistant_message on the happy path.
-   *      Survives reload, so the user sees it on next visit.
-   *   3. nothing - card stays hidden.
-   *
-   * The `incompleteTurnTail` cut-off banner only fires when
-   * displayedError is null, so an orphan tail with no explained cause
-   * (typically: user closed the tab mid-stream before END could fire)
-   * still gets a generic retry affordance, but an orphan tail WITH a
-   * thread.last_error explanation collapses to the single error card
-   * (the explanation + retry button live together, see option-A
-   * design decision from the 2026-06-05 session).
-   *
-   * `dismiss` clears the source state. For session errors that's just
-   * the slot field; for persisted errors that's an UPDATE on the
-   * thread row (best-effort - the realtime echo re-syncs whichever
-   * way the write went). `retry` is wired only when the underlying
-   * error is recoverable (rate_limit, network, 5xx, timeout, etc.);
-   * non-retryable kinds (auth, certain commit conflicts) render the
-   * card without a Retry button so the user is steered toward the
-   * actual fix instead of re-hitting the same wall.
-   */
-  const displayedError = $derived.by<{
-    heading?: string;
-    text: string;
-    retry?: () => void;
-    dismiss: () => void;
-  } | null>(() => {
-    if (activeSlot?.streamingError) {
-      const slot = activeSlot;
-      return {
-        text: slot.streamingError!.text,
-        retry: slot.streamingError!.retry,
-        dismiss: () => {
-          slot.streamingError = null;
-        },
-      };
-    }
-    const persisted = parseLastError(currentThread?.last_error);
-    if (persisted) {
-      return {
-        heading: headingFor(persisted.kind),
-        text: persisted.message,
-        retry: persisted.retryable
-          ? () => {
-              void retryIncompleteTurn();
-            }
-          : undefined,
-        dismiss: () => {
-          void clearThreadLastError();
-        },
-      };
-    }
-    return null;
-  });
-
-  /**
-   * Single recovery surface for the transcript tail. The tail can satisfy
-   * several "this turn did not finish" conditions at once - most visibly a
-   * session that died with a persisted user row AND a leftover IndexedDB
-   * streaming draft trips both `incompleteTurnTail` and `interruptedDraft`,
-   * which used to render as two stacked, near-identical retry boxes.
-   * `selectRecoveryBanner` collapses error / interrupted-draft / cut-off
-   * into one banner by precedence (error > interrupted-draft > cut-off);
-   * here we only bind each source's retry/dismiss closures and gate them.
-   *
-   * Gating mirrors the prior per-banner conditions: the interrupted-draft
-   * source is suppressed while a foreign device holds a live claim
-   * (`respondingElsewhere`) or a local turn is sending, and `displayedError`
-   * already wins precedence so the cut-off / draft variants never compete
-   * with an explained error. `incompleteTurnTail` self-suppresses on
-   * sending / streamingError / respondingElsewhere (see its derivation).
-   */
-  const recoveryBanner = $derived(
-    selectRecoveryBanner({
-      error: displayedError,
-      interruptedDraft:
-        interruptedDraft && !respondingElsewhere && !activeSlot?.sending
-          ? {
-              retry: () => void retryInterrupted(),
-              dismiss: () => {
-                void deleteDraft(interruptedDraft!.threadId).catch(() => {});
-                interruptedDraft = null;
-              },
-            }
-          : null,
-      cutOff: incompleteTurnTail
-        ? {
-            retry: () => {
-              void retryIncompleteTurn();
-            },
-          }
-        : null,
-    }),
-  );
-
-  // Recovery-banner diagnostics. One debug line whenever the rendered
-  // banner changes (including to none), attributing it to its source
-  // and snapshotting the gates that let it through - so the Logs
-  // drawer can answer "why is this banner showing" after the fact.
-  // The post-tick DOM census exists for a reported-but-not-yet-
-  // reproduced sighting of TWO banners overlapping: the template has a
-  // single render site fed by one selector, so more than one banner
-  // node should be impossible - if it ever happens, the warn line
-  // (with the nodes' texts) is the evidence that pins down where the
-  // second element comes from.
-  let lastBannerLogKey = '';
+  // Completion-status diagnostics. One debug line whenever the
+  // selected status changes (including to none), attributing it to
+  // its source and snapshotting the gates that let it through - so
+  // the Logs drawer can answer "why is this card showing" after the
+  // fact. The post-tick DOM census exists for the reported stacking
+  // sightings that motivated the unification: the template has a
+  // single render site fed by one arbiter, so more than one status
+  // card node should be impossible - if it ever happens, the warn
+  // line (with the nodes' texts) pins down where the extra element
+  // comes from.
+  let lastStatusLogKey = '';
   $effect(() => {
-    const b = recoveryBanner;
-    const source = recoveryBannerSource(b);
-    const key = `${activeThreadId}|${source}|${b?.text ?? ''}`;
-    if (key === lastBannerLogKey) return;
-    lastBannerLogKey = key;
+    const sel = completionStatus;
+    const key = `${activeThreadId}|${sel?.source ?? 'none'}|${sel?.status.title ?? ''}`;
+    if (key === lastStatusLogKey) return;
+    lastStatusLogKey = key;
     log.debug(
-      `recovery banner -> ${source} thread=${activeThreadId}` +
+      `completion status -> ${sel?.source ?? 'none'} thread=${activeThreadId}` +
         ` sending=${activeSlot?.sending === true}` +
         ` reconnecting=${activeSlot?.reconnecting === true}` +
         ` respondingElsewhere=${respondingElsewhere}` +
@@ -6745,10 +6638,10 @@
         ` tail=${messages.at(-1)?.role ?? 'empty'}/${messages.at(-1)?.status ?? 'none'}`,
     );
     void tick().then(() => {
-      const nodes = document.querySelectorAll('.msg-incomplete, .msg-error');
+      const nodes = document.querySelectorAll('.status-card');
       if (nodes.length > 1) {
         log.warn(
-          `recovery banner DOM census found ${nodes.length} banner nodes: ` +
+          `completion status DOM census found ${nodes.length} card nodes: ` +
             Array.from(nodes)
               .map((n) => JSON.stringify(n.textContent?.trim().slice(0, 80) ?? ''))
               .join(' | '),
@@ -8386,85 +8279,47 @@
               </div>
             {/if}
           {/each}
-          {#if recoveryBanner}
-            {@const isError = recoveryBanner.variant === 'error'}
-            <!-- Unified recovery surface for the transcript tail. ONE
-                 banner for every "this turn did not finish" state, chosen
-                 by precedence in selectRecoveryBanner (error > recovered
-                 interrupted-draft > generic cut-off tail). These used to
-                 render as up to three independent stacked banners: a
-                 session that died with a persisted user row AND a leftover
-                 IndexedDB streaming draft satisfied two at once and showed
-                 two near-identical retry boxes (the cut-off note plus the
-                 interrupted-draft note). Collapsing to a single descriptor
-                 guarantees exactly one banner - one message, one retry
-                 path - on desktop and mobile alike.
-
-                 The 'error' variant keeps the danger-tinted .msg-error
-                 styling: leading "!" icon, an optional kind heading, and a
-                 pre-wrap body so multi-line server errors (stack traces,
-                 JSON) keep their structure. Fed by `displayedError`
-                 (session streamingError or persisted thread.last_error);
-                 the .error-bar above the composer still owns non-exchange
-                 errors with no transcript anchor. The 'incomplete' variant
-                 is the muted, italic note. Retry is disabled while a local
-                 turn is sending; dismiss renders only when the source
-                 offers one (error cards and the recoverable draft, never
-                 the generic cut-off tail). See docs/dev/exchange.md for the
-                 respondingElsewhere suppression that keeps the recovery
-                 variants from offering a competing retry while a foreign
-                 device holds a live claim. -->
-            <div
-              class="msg assistant"
-              class:msg-error={isError}
-              class:msg-incomplete={!isError}
-              role={isError ? 'alert' : 'note'}
-            >
-              <div class:msg-error-body={isError} class:msg-incomplete-body={!isError}>
-                {#if isError}
-                  <span class="msg-error-icon" aria-hidden="true">!</span>
-                {/if}
-                <div class:msg-error-text={isError} class:msg-incomplete-text={!isError}>
-                  {#if recoveryBanner.heading}
-                    <strong class="msg-error-heading">{recoveryBanner.heading}</strong>
-                  {/if}
-                  {recoveryBanner.text}
-                </div>
-                {#if recoveryBanner.retry}
-                  <button
-                    type="button"
-                    class="secondary icon-btn"
-                    class:msg-error-retry={isError}
-                    class:msg-incomplete-retry={!isError}
-                    onclick={recoveryBanner.retry}
-                    disabled={activeSlot?.sending}
-                    aria-label="Retry"
-                    title="Retry"
-                  >
-                    <!-- Refresh / circular-arrow icon (Feather "refresh-cw"),
-                         matching the regenerate and rate-limit retry buttons. -->
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
-                         stroke="currentColor" stroke-width="2" stroke-linecap="round"
-                         stroke-linejoin="round" aria-hidden="true">
-                      <polyline points="23 4 23 10 17 10" />
-                      <polyline points="1 20 1 14 7 14" />
-                      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10" />
-                      <path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14" />
-                    </svg>
-                  </button>
-                {/if}
-                {#if recoveryBanner.dismiss}
-                  <button
-                    type="button"
-                    class="secondary icon-btn"
-                    class:msg-error-dismiss={isError}
-                    onclick={recoveryBanner.dismiss}
-                    aria-label={isError ? 'Dismiss error' : 'Dismiss'}
-                    title="Dismiss"
-                  >×</button>
-                {/if}
-              </div>
-            </div>
+          {#if completionStatus}
+            <!-- The ONE "what went wrong" card for the transcript tail.
+                 selectCompletionStatus arbitrates every failure surface
+                 (live error, persisted last_error, interrupted draft,
+                 tail verdict) into at most one descriptor; this render
+                 site is the single place it materializes. Dismiss clears
+                 whichever surface won: the slot field for live errors,
+                 the threads.last_error column for persisted ones, the
+                 IndexedDB draft for the interrupted-draft card. Retry
+                 prefers the live envelope's context-specific closure
+                 (e.g. rate-limit re-fires the captured exchange) and
+                 falls back to the unified dispatcher for verdict- and
+                 persisted-sourced intents. -->
+            <CompletionStatusCard
+              status={completionStatus.status}
+              busy={activeSlot?.sending === true}
+              onretry={(intent) => {
+                if (!intent) return;
+                const liveRetry =
+                  completionStatus.source === 'live-error'
+                    ? activeSlot?.streamingError?.retry
+                    : undefined;
+                if (liveRetry) {
+                  liveRetry();
+                } else {
+                  void retryCompletion(intent);
+                }
+              }}
+              ondismiss={() => {
+                const sel = completionStatus;
+                if (!sel) return;
+                if (sel.source === 'live-error') {
+                  if (activeSlot) activeSlot.streamingError = null;
+                } else if (sel.source === 'persisted-error') {
+                  void clearThreadLastError();
+                } else if (interruptedDraft) {
+                  void deleteDraft(interruptedDraft.threadId).catch(() => {});
+                  interruptedDraft = null;
+                }
+              }}
+            />
           {/if}
           <!-- Discarded "oops, all slop!" notice cards. One per streaming
                attempt an output guard rejected this turn (e.g. a leaked
@@ -8798,6 +8653,13 @@
               </svg>
             </button>
           {/if}
+          <button
+            type="button"
+            class="secondary icon-btn error-retry"
+            onclick={() => (error = null)}
+            aria-label="Dismiss error"
+            title="Dismiss"
+          >×</button>
         </div>
       {/if}
       <div class="composer">

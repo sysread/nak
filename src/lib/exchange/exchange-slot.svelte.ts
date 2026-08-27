@@ -95,11 +95,19 @@ import type { Message } from '../supabase';
 import type { SubconsciousOp } from '../chat/types';
 import type { SubconsciousStatus } from '../ui/subconscious-status';
 import type { QueuedMessage } from '../ui/message-queue';
+import type { LiveError } from '../ui/completion-status';
 
-interface StreamingError {
-  text: string;
-  retry?: () => void;
-}
+/**
+ * The live in-session error envelope. The kind drives the card's title
+ * and advice from the same copy table the persisted threads.last_error
+ * path uses (one error-text path for both surfaces); `detail` carries
+ * provider-specific raw text for the card's collapsed detail section;
+ * `retry` is the site's context-specific retry closure when re-firing
+ * the same request is the right fix. Structurally a LiveError from
+ * $lib/ui/completion-status - kept as a local alias because the slot
+ * state is $state-wrapped.
+ */
+type StreamingError = LiveError;
 
 /**
  * A discarded streaming attempt, surfaced as a transient "oops, all
