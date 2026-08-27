@@ -11,35 +11,38 @@ import { toolComplete } from './_venice_complete.ts';
 // Vision queries run against the primary model first and retry once against
 // the uncensored fallback on any failure.
 //
-// Primary - qwen3-vl-235b-a22b: 128k context, native vision, no reasoning,
-// multi-image, Venice privacy tier "private" (Venice-hosted, not proxied to
-// a third party). The stricter content posture, used for the common case.
-// The earlier e2ee-qwen3-vl-30b-a3b-p (Venice's only E2EE-served vision id)
-// is deliberately NOT used: measured 2026-08-07 it failed every probe
-// (87s connection drop, then repeated 180s+ hangs) while this id answered
-// the same query in 5-20s. E2EE serving is not a requirement here - the
-// fallback below was never E2EE either.
+// Primary - z-ai-glm-5-3-flash: native vision (multi-image), 1M context,
+// Venice privacy tier "private" (Venice-hosted, not proxied to a third
+// party), and the same id the chat default and the background fleet run
+// on. The stricter content posture, used for the common case. The model
+// CAN reason and its serving default effort is high, so the call below
+// pins disable_thinking - description is extraction from pixels already
+// in context, and an unsuppressed CoT pass would burn the answer budget
+// and the latency ceiling. E2EE-served vision (e2ee-qwen3-vl-30b-a3b-p,
+// Venice's only such id) is deliberately NOT used: measured 2026-08-07 it
+// failed every probe (87s connection drop, then repeated 180s+ hangs).
+// E2EE serving is not a requirement here - the fallback below was never
+// E2EE either.
 //
 // Fallback - venice-uncensored-1-2: same vision wire contract, but
 // permissive. The motivating case is Venice's content-safety filter
 // spuriously rejecting an innocuous photo (a loaf of home-baked bread
-// tripped it); the uncensored model describes it without the block. Also
-// much the faster of the pair (~50 tok/s vs ~14), so a primary timeout
-// degrades to a quick answer rather than a second slow one.
+// tripped it); the uncensored model describes it without the block. It is
+// non-reasoning, so the disable_thinking pin is a no-op on this leg.
 //
-// These ids mirror MODELS entries in src/lib/models/index.ts but are
-// duplicated here because the edge function is a Deno island and can't
-// import from src/lib (see supabase/functions/README.md).
-const PRIMARY_VISION_MODEL = 'qwen3-vl-235b-a22b';
+// These ids are held directly because the edge function is a Deno island
+// and can't import from src/lib (see supabase/functions/README.md).
+const PRIMARY_VISION_MODEL = 'z-ai-glm-5-3-flash';
 const FALLBACK_VISION_MODEL = 'venice-uncensored-1-2';
 
 // Per-attempt latency ceiling. Without one, a hung vision upstream runs
 // until the turn's 380s wall deadline (WALL_DEADLINE_MS in
 // getStreamingResponse.ts) and the user sees the whole turn die with
 // "wall timeout" instead of the tool degrading to the fallback model.
-// 90s covers the slowest legitimate answer observed on the primary
-// (~65s for a ~900-token exhaustive description at ~14 tok/s) with
-// headroom, while still leaving most of the wall budget for the
+// 90s covers the slowest legitimate answer observed in production
+// (~65s for a ~900-token exhaustive description at ~14 tok/s, on a
+// slower earlier primary) with headroom, while still leaving most of
+// the wall budget for the
 // fallback attempt and the rest of the turn.
 const VISION_ATTEMPT_TIMEOUT_MS = 90_000;
 
@@ -115,6 +118,9 @@ async function runOne(
         },
       ],
       maxTokens: 8196,
+      // Load-bearing on the reasoning-capable primary (see the model
+      // rationale above); harmless no-op on the non-reasoning fallback.
+      disableThinking: true,
       signal: ctl.signal,
     });
   } finally {

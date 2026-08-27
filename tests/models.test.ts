@@ -55,17 +55,15 @@ describe('MODELS (active registry)', () => {
     }
   });
   it('marks the vision-capable ids as supportsVision=true', () => {
-    // Vision-capable entries today: analyze_image's server-side vision
-    // sub-call primary (qwen3-vl-235b-a22b) and its uncensored
-    // fallback (venice-uncensored-1-2), plus qwen-3-7-plus (which
-    // inlines image_url parts directly rather than routing through
-    // analyze_image), and z-ai-glm-5-3-flash (the seed chat profile
-    // and the whole background fleet; vision-capable per the Venice
-    // catalog). deepseek-v4-flash stays registered for legacy
+    // Vision-capable entries today: z-ai-glm-5-3-flash (the seed chat
+    // profile, the background fleet, and the analyze_image /
+    // analyze_pdf_page vision primary), its uncensored vision fallback
+    // (venice-uncensored-1-2), and qwen-3-7-plus (which inlines
+    // image_url parts directly rather than routing through
+    // analyze_image). deepseek-v4-flash stays registered for legacy
     // profiles and is text-only - vision goes through analyze_image.
     const visionIds = new Set([
       'venice-uncensored-1-2',
-      'qwen3-vl-235b-a22b',
       'qwen-3-7-plus',
       'z-ai-glm-5-3-flash',
     ]);
@@ -253,7 +251,7 @@ describe('AGENT_MODELS (background agents)', () => {
     }
     // No vision slot here: analyze_image's vision sub-call runs
     // server-side in the venice edge function, which holds the primary
-    // (qwen3-vl-235b-a22b) and uncensored-fallback
+    // (z-ai-glm-5-3-flash) and uncensored-fallback
     // (venice-uncensored-1-2) ids directly - AGENT_MODELS is the
     // browser-side agent registry and doesn't drive it. The five
     // curation agents (auto-title, summary, thread/memory/recipe
