@@ -5123,7 +5123,12 @@ begin
       'The previous response was lost mid-stream (the function ended before it could finalise the reply). Try again.',
     'retryable', true,
     'occurred_at', to_jsonb(now())
-  )
+  ),
+    -- The in-flight stamp must die with the turn: the /stream probe
+    -- reads it as "still running", so leaving it set keeps reconnecting
+    -- browsers polling for the stamp's remaining freshness window even
+    -- though the row is terminal here.
+    stream_started_at = null
   from updated_msgs um
   where t.id = um.thread_id
     and t.last_error is null;

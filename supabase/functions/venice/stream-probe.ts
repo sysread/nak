@@ -161,6 +161,13 @@ export async function resolveStreamContext(
               retryable: true,
               occurred_at: new Date().toISOString(),
             },
+            // The in-flight stamp must die with the turn: it is the
+            // probe's "still running" signal, and leaving it set keeps
+            // the reconnect poll reporting in-flight for the stamp's
+            // remaining freshness window (~12 min) even though the row
+            // is terminal - the browser sits on "Reconnecting" for a
+            // turn the janitor already buried.
+            stream_started_at: null,
           })
           .eq('id', threadId);
       } catch {
