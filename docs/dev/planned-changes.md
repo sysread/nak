@@ -17,6 +17,22 @@ finds any removed entry by its heading.
 
 ## Open items
 
+### Toast treatment for action errors (scoped out)
+
+**Status:** scoped out during the completion-status unification
+(2026-08-27); pick up only if surface stacking resurfaces.
+
+The Chat screen's completion-status unification collapsed the
+transcript-tail surfaces to one card and gave the composer
+`.error-bar` a dismiss button, but stopped short of restyling the
+`.error-bar` as a dismissible toast. The full treatment would move
+action feedback (thread-load failures, attachment validation,
+delete/fork failures) out of a persistent bar into a transient toast
+that auto-expires. Deferred because the bar now has an explicit
+escape hatch and no stacking was reproduced after the unification;
+the investigation context lives in `docs/dev/exchange.md`
+("The screen's error surfaces and what owns what").
+
 ### Samskara tier-2 confirm bar (observation)
 
 **Status:** downgraded from planned change to observation

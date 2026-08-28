@@ -188,6 +188,20 @@ describe('selectCompletionStatus', () => {
     expect(sel?.source).toBe('persisted-error');
     expect(sel?.status.title).toBe('Rate limited');
     expect(sel?.status.retry?.kind).toBe('replace');
+    // Error cards are dismissible.
+    expect(sel?.status.discard).toBe(true);
+  });
+
+  it('keeps a non-retryable error dismissible but buttonless', () => {
+    const sel = selectCompletionStatus({
+      messages: [userMsg(), msg({ id: 'ok', content: 'done' })],
+      turnPending: false,
+      liveError: null,
+      lastError: { kind: 'auth', message: 'bad key', retryable: false },
+      draft: null,
+    });
+    expect(sel?.status.retry).toBeUndefined();
+    expect(sel?.status.discard).toBe(true);
   });
 
   it('omits the retry button when the tail is settled', () => {

@@ -15,7 +15,7 @@ preserved as a card, not dropped"):
    the bare user message.
 2. **Never offered for retry.** The transcript-tail classifier
    (`classifyTail` in `src/lib/ui/completion-status.ts`) treats an
-   `status='aborted'` tail as a deliberate endpoint - no cut-off banner,
+   `status='aborted'` tail as a deliberate endpoint - no status card,
    no status card, no replace-on-retry. Contrast with the `'error'`
    tail in [chat-cutoff-retry](./chat-cutoff-retry.md), which IS offered.
 3. **Cross-device agreement.** Because the verdict keys off the persisted
@@ -74,16 +74,16 @@ preserved as a card, not dropped"):
   channel cancel never reached the server - a real bug, not a pass.)
 - (2) The tail row is `status='aborted'`; its content ends with
   `--- user interrupted response`. The card renders as a normal
-  assistant bubble. **No** "response appears to have been cut off"
-  banner and **no** Retry affordance beneath it.
+  assistant bubble. **No** completion-status card of any kind and
+  **no** Retry affordance beneath it.
 - (3) Even with nothing streamed, a row exists: `role='assistant'`,
   `status='aborted'`, content is exactly `--- user interrupted response`.
   The thread tail is this row, NOT the bare user message.
 - (4) After reload the marker row is still the tail and still carries no
-  retry banner (the verdict survives a page load because it keys off the
+  retry status card (the verdict survives a page load because it keys off the
   persisted status).
 - (5) The second device shows the same aborted tail with no retry/cut-off
-  banner - it does not offer to regenerate a turn the first device
+  status card - it does not offer to regenerate a turn the first device
   deliberately stopped.
 - (6) The new message sends and a fresh reply streams in beneath the
   aborted row; no provider 400 on the wire shape.
@@ -103,3 +103,5 @@ delete from messages
 
 | Date | Env | Commit | Result | Notes |
 | ---- | --- | ------ | ------ | ----- |
+| 2026-08-27 | local dev stack | 3d719e8d | PASS (steps 1-4) | Real mid-stream Stop clicked via an in-page watcher: reply halted, `status='aborted'` row persisted with the marker, no status card in-session, verdict survives reload. |
+| 2026-08-28 | local dev stack | 3d719e8d | PASS (steps 5-6) | Cross-device: a second tab (distinct holder) rendered the aborted tail with no card. Continue: a fresh send against the aborted tail ran to completion, no wire-shape 400 (the model even renamed the thread mid-turn). |

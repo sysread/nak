@@ -555,6 +555,11 @@ function errorCard(
     detail: detail || undefined,
     advice: adviceFor(kind),
     retry,
+    // Error cards are dismissible: the user may want to clear a stale
+    // explanation rather than act on it. The template routes the
+    // dismiss to whichever surface won (slot field, last_error column,
+    // or the IndexedDB draft).
+    discard: true,
   };
 }
 

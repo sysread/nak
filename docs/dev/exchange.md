@@ -292,9 +292,39 @@ non-exchange action errors (thread-load failures, attachment
 validation), but it now has a dismiss button; the turn's own outcome
 (round-limit stop, commit conflict) routes through the slot's live
 error so the tail shows exactly one explanation. See
-`src/lib/ui/completion-status.ts` for the full contract and
-`docs/dev/in-progress/incomplete-turn-unification.md` for the design
-narrative.
+`src/lib/ui/completion-status.ts` for the full contract.
+
+### The screen's error surfaces and what owns what
+
+The completion-status card is one of several "something is happening
+/ something went wrong" surfaces on the Chat screen. The division:
+
+- **Completion-status card** (transcript tail) - the turn's outcome:
+  failed, interrupted, stalled, cut off. One card, chosen by the
+  arbiter above.
+- **Composer `.error-bar`** - action feedback for non-exchange
+  failures: thread-load failures, attachment validation, delete/fork
+  failures, pre-send guards. Has retry (when meaningful) and a
+  dismiss button. Turn outcomes must NOT route here - they belong on
+  the tail card.
+- **Slop notices** - per-rejected-attempt cards between the tail and
+  the throbber; transient by design (CRT animation, then unmount).
+  They deliberately coexist with the tail card during the window
+  before a terminal error lands: they are storytelling about the
+  failed ATTEMPTS, while the card explains the OUTCOME.
+- **Offline banner** - fixed-position, mounted whenever the device
+  is offline. Orthogonal content (connectivity, not turn state).
+- **Scanner states** - reconnecting / responding-elsewhere /
+  thinking. Informational, not errors.
+
+The design invariant: at most one "what went wrong" card renders at
+the transcript tail (the arbiter guarantees this), and a DOM census
+in the chat logs warns if more than one status-card node ever
+materializes. The other surfaces can legitimately coexist with it -
+they answer different questions - but a failure must never produce
+two competing explanations of the same thing. If surface stacking
+resurfaces in practice, the remaining piece is a toast treatment for
+action errors (see `docs/dev/planned-changes.md`).
 
 ## Contracts
 

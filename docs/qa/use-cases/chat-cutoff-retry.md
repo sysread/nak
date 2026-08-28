@@ -1,12 +1,5 @@
 # Chat: a cut-off reply is preserved, then replaced on retry
 
-> **2026-08-27 surface rename:** the retry path is now
-> `retryCompletion` (one dispatcher) and the banner is the
-> completion-status card (`src/components/CompletionStatusCard.svelte`,
-> logic in `src/lib/ui/completion-status.ts`). Scenarios unchanged;
-> where this case says "banner", read "status card". Awaiting
-> re-execution against the new component.
-
 ## Covers
 
 Two coupled behaviors ([dev: chat](../../dev/chat.md), gotcha "A
@@ -14,7 +7,7 @@ cut-off reply's partial is preserved as a card, not dropped"):
 
 1. **Live retention.** A stream that fails mid-reply leaves its partial
    (reasoning + any text) on screen as a `status='error'` card with the
-   error banner beneath it, instead of vanishing with the live bubble.
+   error card beneath it, instead of vanishing with the live bubble.
    Server side, `getStreamingResponse.ts` creates the row at terminal
    write even when only reasoning streamed (`ensureAssistantRow`
    normally fires on first `response_text`). Browser side, `venice.ts`
@@ -22,7 +15,8 @@ cut-off reply's partial is preserved as a card, not dropped"):
    carries the row id, and `consumeStreamEvents` (`chat/loop.ts`)
    hydrates that row before throwing.
 2. **Retry replaces.** `retryCompletion` + the classification
-   predicates in `src/lib/ui/incomplete-turn.ts` (`isReasoningOnlyStall`,
+   predicates in `src/lib/ui/completion-status.ts`
+   (`isReasoningOnlyStall`,
    `isCutOffPartialText`) treat a dead tail as a REPLACE target -
    red-outlining the card while the re-roll runs and atomically deleting
    it on commit (the Regenerate machinery: `pendingDeleteIds` ->
@@ -42,7 +36,7 @@ cut-off reply's partial is preserved as a card, not dropped"):
 
 1. Partial-text cutoff. Forge a tool-less assistant row the stream
    "cut off" mid-answer (status='error', visible content present) as
-   the thread tail, and set the thread's error banner so the retry
+   the thread tail, and set the thread's persisted error so the retry
    affordance shows:
 
    ```sql
@@ -58,8 +52,8 @@ cut-off reply's partial is preserved as a card, not dropped"):
    ```
 
 2. Reload the thread. Confirm the partial card renders as a normal
-   assistant bubble with the error banner (and its refresh-arrow Retry
-   button) beneath it.
+   assistant bubble with the completion-status error card (and its
+   Retry button) beneath it.
 3. Click Retry. Watch the partial card's outline while the re-roll
    streams.
 4. Let the new reply settle. Observe what happens to the old partial
@@ -74,20 +68,27 @@ cut-off reply's partial is preserved as a card, not dropped"):
            'Let me think about this...', now());
    ```
 
-   Reload, click the "The response appears to have been cut off"
-   banner's Retry, and watch the bare reasoning card.
-6. Live retention (the actual failure path, no forging). Send a message
-   that makes the model think before answering, and the instant
-   reasoning starts streaming, kill the network (DevTools Network ->
-   Offline) so the upstream stream errors mid-reply. Restore the
-   network after the error banner appears. Watch whether the reasoning
-   that streamed remains on screen.
+   Reload, click the *"Response stalled"* card's Retry, and watch the
+   bare reasoning card.
+6. Live retention (the actual failure path). NOTE: this step cannot be
+   produced by killing the browser's network - the upstream stream is
+   server-side (the edge function calls Venice), so a browser offline
+   window only drops the realtime Broadcast subscription while the
+   function keeps running and commits normally; the reconnect probe
+   heals the missed END and the completed reply renders (verified
+   2026-08-28). A genuine mid-reply `status='error'` row is only
+   reachable when the SERVER-side stream fails (a Venice error, a
+   guard terminal). The forged rows in steps 1 and 5 exercise the
+   identical read/persistence path, so they stand in for this step;
+   a manual version requires a real Venice-side failure to observe
+   live.
 
 ## Expected
 
 - (2) The partial text is visible - it was NOT discarded. A normal
-  assistant card carrying the half-sentence, error banner beneath it
-  with a Retry (refresh-arrow) button.
+  assistant card carrying the half-sentence, the danger-tinted
+  *"Network error"* status card beneath it with a Retry button and
+  the raw error text under a Details toggle.
 - (3) On clicking Retry the partial card gains the red regen-target
   outline (same as hovering Regenerate) and stays outlined while the
   fresh answer streams into a new bubble below the in-flight indicator.
@@ -99,18 +100,17 @@ cut-off reply's partial is preserved as a card, not dropped"):
 - (5) Same replace behavior for the reasoning-only stall: the bare
   reasoning card red-outlines during the re-roll, then fades out as the
   fresh answer replaces it. No second card stacked beneath.
-- (6) The reasoning that streamed STAYS on screen as a card after the
-  failure - it does not flash away when the live bubble unmounts. The
-  error banner shows beneath it with a Retry button. (Before this fix
-  the card vanished the moment the failure landed, because the
-  reasoning-only partial was never persisted and the live buffer
-  cleared on the error path.) A `messages` row with `status='error'`
-  and the reasoning populated exists for the thread tail.
+- (6) A browser-offline window does NOT produce an error row: the
+  server-side stream completes and the reconnect probe delivers the
+  committed reply once the network returns (the missed-END heal).
+  The live-retention behavior on a genuine upstream failure is
+  covered by the forged scenarios above, which use the same row
+  shape and read path the terminal write produces.
 
 ## Cleanup
 
 Delete any forged rows that a retry did not already bury, and clear a
-stranded banner:
+stranded error card:
 
 ```sql
 delete from messages
@@ -124,3 +124,5 @@ update threads set last_error = null where id = '<thread>';
 
 | Date | Env | Commit | Result | Notes |
 | ---- | --- | ------ | ------ | ----- |
+| 2026-08-27 | local dev stack | 3d719e8d | PASS (steps 1-5) | Forged partial-text cutoff + persisted error: card + Retry; REPLACE retry red-outlined the partial, fresh reply landed, partial row deleted atomically. Same for the reasoning-only stall. |
+| 2026-08-28 | local dev stack | 3d719e8d | PARTIAL (step 6) | Browser-offline window does not produce an error row: the stream is server-side and completed normally; the reconnect probe healed the missed END. Step 6 rewritten as an architecture note - genuine mid-reply error rows require a server-side (Venice) failure and stand in via the forged scenarios. |
