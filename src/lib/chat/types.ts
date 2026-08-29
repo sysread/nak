@@ -268,15 +268,27 @@ export interface ChatLoopOptions {
    */
   replaceUserMessageContent?: string;
   /**
-   * Concrete Venice model id used by the intuition pipeline (perception
-   * + 5 drives + synthesis). Caller resolves it via agentModel. Omitted /
-   * undefined disables the intuition feature entirely on this turn -
-   * older callers (older test fixtures) keep working without knowing
-   * the field exists. The cache is left untouched when this is absent,
-   * so a turn without an intuition model doesn't invalidate prior
-   * payloads.
+   * Concrete Venice model id used by the intuition pipeline's drive
+   * reactions (stage 2) and synthesis (stage 3). The perception stage
+   * (stage 1) uses `intuitionPerceptionModelId` instead, because it
+   * reads the entire transcript and needs a larger context window.
+   * Caller resolves both via agentModel. Omitted / undefined disables
+   * the intuition feature entirely on this turn - older callers (older
+   * test fixtures) keep working without knowing the field exists. The
+   * cache is left untouched when this is absent, so a turn without an
+   * intuition model doesn't invalidate prior payloads.
    */
   intuitionModelId?: string;
+  /**
+   * Venice model id for the intuition PERCEPTION stage only - the one
+   * stage that reads the entire untrimmed thread transcript. Routed to
+   * a 1M-window id (deepseek-v4-flash-0731-fast) so a long thread does
+   * not overflow context. The drive reactions and synthesis stages
+   * ride `intuitionModelId` (mistral, 256k) because their inputs are
+   * short. Falls back to `intuitionModelId` when absent, preserving
+   * backward compat for callers that predate the split.
+   */
+  intuitionPerceptionModelId?: string;
   /**
    * Mood snapshot at turn-entry. The chat-loop compares it against the
    * cached payload's mood snapshot to decide whether the band /

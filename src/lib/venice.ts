@@ -339,6 +339,9 @@ export interface ChatRequest {
       /** Fast-tier model id the intuition pipeline runs on. Absent
        *  skips intuition entirely. */
       intuitionModelId?: string;
+      /** Model id for the perception stage only (big-window). Falls
+       *  back to `intuitionModelId` when absent. */
+      intuitionPerceptionModelId?: string;
       /** Live mood snapshot for the trigger evaluator + payload stamp. */
       intuitionMood?: {
         band: number;

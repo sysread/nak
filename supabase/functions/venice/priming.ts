@@ -360,6 +360,13 @@ async function clearBiasThread(
 /** Turn-entry priming inputs forwarded from the /stream request body. */
 export interface PrimingInputs {
   intuitionModelId?: string;
+  /**
+   * Model id for the perception stage only - the one stage that reads
+   * the entire transcript. Falls back to `intuitionModelId` when
+   * absent. See ChatLoopOptions.intuitionPerceptionModelId for the
+   * full rationale.
+   */
+  intuitionPerceptionModelId?: string;
   intuitionMood?: { band: number; column: 'confident' | 'tentative' } | null;
   contextRecallEnabled?: boolean;
   /**
@@ -627,6 +634,7 @@ async function runThinkChain(opts: ThinkChainOpts): Promise<void> {
   const nowMs = Date.now();
   const mood = priming.intuitionMood ?? null;
   const intuitionModelId = priming.intuitionModelId;
+  const intuitionPerceptionModelId = priming.intuitionPerceptionModelId ?? intuitionModelId;
   const contextRecallEnabled = priming.contextRecallEnabled ?? false;
 
   let { intuition: intuitionCache, contextRecall: contextRecallCache } =
@@ -707,6 +715,7 @@ async function runThinkChain(opts: ThinkChainOpts): Promise<void> {
           apiKey,
           threadId,
           modelId: intuitionModelId,
+          perceptionModelId: intuitionPerceptionModelId,
           history,
           round: currentUserRound,
           mood,

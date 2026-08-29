@@ -57,13 +57,15 @@ const MAX_TOKENS = 2048;
  * Drive a single non-streaming Venice completion: a system + user pair,
  * the body text trimmed, reasoning content ignored.
  *
- * disable_thinking is load-bearing. The intuition slot resolves to a
- * reasoning-capable id (z-ai-glm-5-3-flash), and an unsuppressed CoT
- * preamble would both eat the MAX_TOKENS answer budget and add latency
- * on the pre-turn critical path. retryRateLimit is on
- * because this is a server-side background call with no browser
- * rate-limit loop behind it - a single "model overloaded" 429 would
- * otherwise fail the sub-call.
+ * disable_thinking stays on the body for whichever id the caller
+ * passes. The drive/synthesis stages ride mistral (non-reasoning,
+ * ignores it); the perception stage rides deepseek-v4-flash-0731-fast
+ * (reasoning-capable, high default effort - the flag is load-bearing
+ * there, pinning the thinking pass off so it does not eat the
+ * MAX_TOKENS answer budget or add latency on the pre-turn critical
+ * path). retryRateLimit is on because this is a server-side background
+ * call with no browser rate-limit loop behind it - a single "model
+ * overloaded" 429 would otherwise fail the sub-call.
  */
 async function callOnce(
   apiKey: string,
@@ -136,6 +138,13 @@ export async function runIntuitionPipeline(opts: {
   apiKey: string;
   threadId: string;
   modelId: string;
+  /**
+   * Model id for the perception stage only. The perception call reads
+   * the entire untrimmed transcript and may need a larger context
+   * window than the drive/synthesis calls (whose inputs are short).
+   * Falls back to `modelId` when absent.
+   */
+  perceptionModelId?: string;
   history: Array<{ role: string; content?: string | null }>;
   round: number;
   mood: { band: number; column: 'confident' | 'tentative' } | null;
@@ -144,7 +153,8 @@ export async function runIntuitionPipeline(opts: {
   signal?: AbortSignal;
   log: EdgeLogger;
 }): Promise<IntuitionPayload | null> {
-  const { apiKey, modelId, history, round, mood, nowMs, trigger, signal, log } = opts;
+  const { apiKey, modelId, perceptionModelId, history, round, mood, nowMs, trigger, signal, log } = opts;
+  const perceptionModel = perceptionModelId ?? modelId;
   // admin / userId / threadId belong to the orchestrator's persistence
   // contract, not the pipeline body; keep them on the API (see the
   // signature comment above) without tripping the unused-parameter lint.
@@ -168,7 +178,7 @@ export async function runIntuitionPipeline(opts: {
   // Stage 1: perception.
   let perceptionRaw: string;
   try {
-    perceptionRaw = await callOnce(apiKey, modelId, PERCEPTION_PROMPT, transcript, signal);
+    perceptionRaw = await callOnce(apiKey, perceptionModel, PERCEPTION_PROMPT, transcript, signal);
   } catch (err) {
     if (err instanceof VeniceError && err.kind === 'rate_limit') {
       log.warn('intuition perception rate-limited; leaving prior cache in place');

@@ -4484,6 +4484,7 @@
           // full-context deliberation can weigh the reviewer's twinge
           // against learned cross-thread patterns.
           intuitionModelId: ctx.isRefinement ? undefined : agentModel('intuition').id,
+          intuitionPerceptionModelId: ctx.isRefinement ? undefined : agentModel('intuitionPerception').id,
           intuitionMood: ctx.isRefinement ? null : intuitionMoodArg,
           skipPriming: ctx.isRefinement ? true : undefined,
           refinementDoubtNote: ctx.isRefinement ? ctx.refinementDoubtNote : undefined,

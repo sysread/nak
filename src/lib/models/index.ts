@@ -220,6 +220,39 @@ export const MODELS = {
     supportsVision: true,
     supportsResponseFormat: true,
   },
+  'deepseek-v4-flash-0731-fast': {
+    id: 'deepseek-v4-flash-0731-fast',
+    // DeepSeek V4 Flash 0731 on Venice's fast serving path. 1M context
+    // window, reasoning-capable (default effort HIGH - callers must pin
+    // the thinking pass). Registered for the intuition perception stage,
+    // which reads the entire untrimmed thread transcript and needs the
+    // full window a long thread can fill. The rest of the intuition
+    // pipeline (drives + synthesis) rides the smaller mistral slot.
+    // Same model family as deepseek-v4-flash, which leaked
+    // `<｜begin▁of▁sentence｜>` at the head of replies - the flag stays
+    // on as a precaution, though the streaming guard it arms does not
+    // run on the non-streaming calls the intuition pipeline makes.
+    contextWindow: 1_000_000,
+    supportsReasoning: true,
+    supportsVision: false,
+    supportsResponseFormat: true,
+    leaksSpecialTokens: true,
+  },
+  'mistral-small-3-2-24b-instruct': {
+    id: 'mistral-small-3-2-24b-instruct',
+    // Dense 24B non-reasoning instruct, privately served by Venice.
+    // Registered for the intuition background-agent slot (the only one
+    // pointing here): the pulse is a gut read, not a reasoned take, so
+    // a non-reasoning model is the right shape - same rationale that
+    // moved the second-thoughts reviewer off a reasoning id. Also the
+    // cheapest private per-token id on the list, and 256k of context
+    // covers the perception stage's full-transcript read for any
+    // realistic thread.
+    contextWindow: 256_000,
+    supportsReasoning: false,
+    supportsVision: false,
+    supportsResponseFormat: true,
+  },
   'venice-uncensored-1-2': {
     id: 'venice-uncensored-1-2',
     contextWindow: 128_000,
@@ -474,6 +507,7 @@ export type AgentRole =
   | 'webSearch'
   | 'researchDocs'
   | 'intuition'
+  | 'intuitionPerception'
   | 'recall'
   | 'conversationRecall'
   | 'wikiRecall'
@@ -486,8 +520,9 @@ export type AgentRole =
  * MODELS entry is a tsc error rather than a runtime "model not
  * found" 4xx.
  *
- * Every slot currently points at z-ai-glm-5-3-flash. One id fits all
- * of them because it covers each slot's binding constraint at once:
+ * Every slot except intuition points at z-ai-glm-5-3-flash. One id
+ * fits all of them because it covers each slot's binding constraint at
+ * once:
  *
  *   - 1M-token context window - the thread-reading agents
  *     (reflection, the wiki family, the recall trio) slice whole
@@ -497,7 +532,7 @@ export type AgentRole =
  *     bodies (the user's own conversations and memories) never leave
  *     its infrastructure. This is an upgrade over an 'anonymized' id,
  *     where the prompt is proxied upstream with metadata stripped.
- *   - Cheap and fast - the latency-bound slots (intuition, webSearch,
+ *   - Cheap and fast - the latency-bound slots (webSearch,
  *     grocerySection) sit on or near the live turn's critical path.
  *   - Reasoning-capable but SUPPRESSIBLE - and this is the standing
  *     obligation the single-id setup carries: the id's serving
@@ -510,6 +545,28 @@ export type AgentRole =
  *     records. When adding a slot, pin one or the other at the call
  *     site.
  *
+ * intuition is the first exception: it points at
+ * mistral-small-3-2-24b-instruct. It is awaited on the pre-turn
+ * critical path, so latency is its only constraint, and the pulse is a
+ * gut read, not a reasoned take - a dense non-reasoning id skips the
+ * thinking-pass discipline entirely (the intuition pipeline's
+ * disable_thinking flag is accepted but moot on it) and is the
+ * cheapest private id per token. The mistral id backs the drive
+ * reactions (stage 2) and synthesis (stage 3), whose inputs are the
+ * short perception text plus five short reactions - well under
+ * mistral's 256k window.
+ *
+ * intuitionPerception is the second exception: it points at
+ * deepseek-v4-flash-0731-fast (1M window, fast serving path,
+ * reasoning-capable so the thinking pin is load-bearing again). Stage
+ * 1 of the intuition pipeline - perception - reads the ENTIRE
+ * untrimmed thread transcript, and a long thread on the 1M-window chat
+ * model can fill a context mistral cannot hold. The split keeps the
+ * cheap non-reasoning id on the small-input stages and reserves the
+ * big-window id for the one stage that needs it. If perception
+ * regresses on deepseek, mistral-small is the fallback (accepting the
+ * 256k ceiling on very long threads).
+ *
  * Slot-shape notes that survive any future re-split:
  *
  *   - webSearch and the recall surfaces are FAITHFULNESS-critical: a
@@ -520,12 +577,8 @@ export type AgentRole =
  *     mistral-small-3-2-24b-instruct (webSearch) and a dense
  *     big-window reasoning id (recall trio) are the known-good
  *     fallbacks.
- *   - intuition is awaited on the pre-turn critical path; latency is
- *     its only constraint, and the pulse is a gut read, not a
- *     reasoned take.
  *   - Slots stay distinct constants (not one shared constant) so any
  *     single surface can be retuned independently when it regresses.
- *
  * The seed chat profile fronts the same id, so foreground chat and
  * the background fleet share serving capacity. That sharing is a
  * known, accepted trade (it has been relaxed and re-tightened
@@ -550,7 +603,8 @@ export const AGENT_MODELS = {
   rem:                'z-ai-glm-5-3-flash',
   webSearch:          'z-ai-glm-5-3-flash',
   researchDocs:       'z-ai-glm-5-3-flash',
-  intuition:          'z-ai-glm-5-3-flash',
+  intuition:          'mistral-small-3-2-24b-instruct',
+  intuitionPerception:'deepseek-v4-flash-0731-fast',
   recall:             'z-ai-glm-5-3-flash',
   conversationRecall: 'z-ai-glm-5-3-flash',
   wikiRecall:         'z-ai-glm-5-3-flash',

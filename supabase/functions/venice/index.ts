@@ -1027,6 +1027,7 @@ interface StreamRequestBody {
    */
   priming?: {
     intuitionModelId?: string;
+    intuitionPerceptionModelId?: string;
     intuitionMood?: { band: number; column: 'confident' | 'tentative' } | null;
     contextRecallEnabled?: boolean;
     /** Skip the standard priming stage - set by the second-thoughts
