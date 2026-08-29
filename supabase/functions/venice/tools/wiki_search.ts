@@ -23,6 +23,7 @@ interface WikiHit {
   id: string;
   title: string;
   content: string;
+  favorite: boolean;
   created_at: string;
   updated_at: string;
   similarity: number;
@@ -61,6 +62,7 @@ export const wikiSearch: ToolDef = {
       id: a.id,
       title: a.title,
       content: a.content,
+      favorite: a.favorite === true,
       updated_at: a.updated_at,
       similarity: a.similarity,
     }));

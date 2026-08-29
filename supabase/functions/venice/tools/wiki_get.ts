@@ -17,7 +17,7 @@ export const wikiGet: ToolDef = {
     // caller - matches RLS behavior on the browser path.
     const { data, error } = await ctx.adminClient
       .from('wiki_articles')
-      .select('id, title, content, created_at, updated_at')
+      .select('id, title, content, favorite, created_at, updated_at')
       .eq('user_id', ctx.userId)
       .eq('id', id)
       .maybeSingle();
@@ -30,6 +30,7 @@ export const wikiGet: ToolDef = {
         id: data.id as string,
         title: data.title as string,
         content: data.content as string,
+        favorite: (data as { favorite?: boolean }).favorite === true,
         created_at: data.created_at as string,
         updated_at: data.updated_at as string,
       },

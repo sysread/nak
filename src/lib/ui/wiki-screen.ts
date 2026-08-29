@@ -168,36 +168,41 @@ export function editSaveNotice(
 // ---------------------------------------------------------------
 
 /**
- * Hover-title for the favorite (save-offline) star. Marking an
- * article favorite is what saves it offline, so the copy names both
- * halves of the operation - the star alone would read as a plain
- * bookmark. The toggle itself is a server write, hence the offline
- * variant.
+ * Hover-title for the lock button. Locking an article saves it
+ * offline AND protects it from agent edits, so the copy names all
+ * three things the lock does. The toggle itself is a server write,
+ * hence the offline variant.
  */
 export function favoriteButtonTitle(online: boolean, favorite: boolean): string {
-  if (!online) return 'Reconnect to change favorites';
+  if (!online) return 'Reconnect to change locks';
   return favorite
-    ? 'Saved offline (remove from favorites)'
-    : 'Save offline (mark as favorite)';
+    ? 'Saved offline & locked from agent edits (unlock)'
+    : 'Save offline & lock from agent edits (lock)';
 }
 
-/** Screen-reader label for the favorite star - the action the click
+/** Screen-reader label for the lock button - the action the click
  *  performs, without the offline framing the sighted-user title
  *  carries (aria-pressed already conveys the current state). */
 export function favoriteAriaLabel(favorite: boolean): string {
-  return favorite ? 'Remove from favorites' : 'Mark as favorite';
+  return favorite ? 'Unlock article' : 'Lock article';
 }
 
 /**
  * Hover-title for the article-header action buttons, or undefined
- * when no tooltip is needed. Edit, the agent update, and delete all
- * write to Supabase, so they disable offline - the title explains
- * the greyed-out button instead of letting the click fail on submit.
+ * when no tooltip is needed. Edit and delete write to Supabase, so
+ * they disable offline - the title explains the greyed-out button
+ * instead of letting the click fail on submit. The "ask-agent" action
+ * also disables when the article is locked, so the title names the
+ * lock rather than the offline state in that case.
  */
 export function offlineActionTitle(
   online: boolean,
   action: 'edit' | 'ask-agent' | 'delete',
+  favorite?: boolean,
 ): string | undefined {
+  if (action === 'ask-agent' && favorite) {
+    return 'Article is locked - unlock it to enable agent edits';
+  }
   if (online) return undefined;
   if (action === 'edit') return 'Reconnect to edit';
   if (action === 'ask-agent') return 'Reconnect to run the agent';

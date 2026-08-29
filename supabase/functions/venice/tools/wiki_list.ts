@@ -31,7 +31,7 @@ export const wikiList: ToolDef = {
     // every user's wiki.
     const { data, error } = await ctx.adminClient
       .from('wiki_articles')
-      .select('id, title, content')
+      .select('id, title, content, favorite')
       .eq('user_id', ctx.userId)
       .order('title', { ascending: true })
       .limit(limit);
@@ -41,6 +41,7 @@ export const wikiList: ToolDef = {
       id: a.id as string,
       title: a.title as string,
       excerpt: typeof a.content === 'string' ? a.content.slice(0, WIKI_LIST_EXCERPT_CHARS) : '',
+      favorite: (a as { favorite?: boolean }).favorite === true,
     }));
   },
 };

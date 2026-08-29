@@ -49,7 +49,11 @@ export const wikiCreate: ToolDef = {
     errs.throwIfAny();
 
     // RLS OFF: user_id stamped on insert - service-role would
-    // otherwise let a row land under any owner.
+    // otherwise let a row land under any owner. The insert carries
+    // only user_id, title, and content - never `favorite`. The
+    // favorite flag is a user-controlled bookmark and agent-edit lock;
+    // agents must not be able to set or clear it. The column defaults
+    // to false at the DB level, so omitting it here is the enforcement.
     const { data: row, error } = await ctx.adminClient
       .from('wiki_articles')
       .insert({ user_id: ctx.userId, title, content })

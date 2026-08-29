@@ -1839,28 +1839,50 @@
                 aria-label={favoriteAriaLabel(a.favorite)}
                 aria-pressed={a.favorite}
               >
-                <!-- Star: filled when favorited (saved offline), outline
-                     otherwise. Same fill-vs-stroke active convention as
-                     the Cookbook bookmark glyphs. -->
-                <svg
-                  width="16"
-                  height="16"
-                  viewBox="0 0 24 24"
-                  fill={a.favorite ? 'currentColor' : 'none'}
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  aria-hidden="true"
-                >
-                  <path
-                    d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"
-                  />
-                </svg>
+                <!-- Lock glyph: closed padlock with a filled body when
+                     locked (saved offline & locked from agent edits),
+                     open-shackle outline when unlocked. Monochrome SVG
+                     via currentColor to match the icon set - a color
+                     emoji here would clash with the flat single-color
+                     buttons beside it. Same fill-vs-stroke active
+                     convention as the Cookbook bookmark glyphs. -->
+                {#if a.favorite}
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                  >
+                    <rect x="5" y="11" width="14" height="10" rx="2" fill="currentColor" />
+                    <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+                  </svg>
+                {:else}
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                  >
+                    <rect x="5" y="11" width="14" height="10" rx="2" />
+                    <path d="M8 11V7a4 4 0 0 1 7.9-.8" />
+                  </svg>
+                {/if}
               </button>
-              <!-- Edits, the agent update, and delete all write to
-                   Supabase, so they need connectivity - disabled offline
-                   with a tooltip rather than failing on submit. -->
+              <!-- Edits and delete write to Supabase, so they need
+                   connectivity - disabled offline with a tooltip
+                   rather than failing on submit. The agent update
+                   also disables when the article is favorited
+                   (locked from agent edits). -->
               <button
                 type="button"
                 onclick={() => startEdit(a)}
@@ -1872,8 +1894,8 @@
               <button
                 type="button"
                 onclick={() => startManualUpdate(a)}
-                disabled={!offlineStatus.online}
-                title={offlineActionTitle(offlineStatus.online, 'ask-agent')}
+                disabled={!offlineStatus.online || a.favorite}
+                title={offlineActionTitle(offlineStatus.online, 'ask-agent', a.favorite)}
               >
                 Ask agent to update
               </button>
@@ -2089,16 +2111,13 @@
     flex-wrap: wrap;
     align-items: center;
   }
-  /* Favorite (save-offline) toggle. A `secondary` icon button, so its
-     background is transparent and the star is drawn in the button's
-     text colour (outline when off). When active the accent fills the
-     star - the same "active = accent" read the Cookbook bookmark
-     buttons use. The two-class selector is deliberate: it has to
-     out-specify `button.secondary`'s own `color`, or the accent never
-     wins and the active star stays the plain text colour. (The earlier
-     single-class rule lost to `button.secondary`, AND the missing
-     `secondary` class left the button on the default accent
-     background - an accent star on an accent fill, i.e. invisible.) */
+  /* Lock toggle. A `secondary` icon button, so its background is
+     transparent and the glyph renders in the button's text colour.
+     When active (locked) the accent colours the glyph - the same
+     "active = accent" read the Cookbook bookmark buttons use. The
+     two-class selector is deliberate: it has to out-specify
+     `button.secondary`'s own `color`, or the accent never wins and
+     the active glyph stays the plain text colour. */
   .wiki-favorite-btn.active {
     color: var(--accent);
   }

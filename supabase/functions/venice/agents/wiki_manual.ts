@@ -407,12 +407,26 @@ export async function runWikiManualUpdate(
 
     const { data: article, error: articleErr } = await adminClient
       .from('wiki_articles')
-      .select('id, title, content')
+      .select('id, title, content, favorite')
       .eq('user_id', userId)
       .eq('id', articleId)
-      .maybeSingle<{ id: string; title: string; content: string }>();
+      .maybeSingle<{ id: string; title: string; content: string; favorite?: boolean }>();
     if (articleErr) throw new Error(articleErr.message);
     if (!article) return { kind: 'error', error: 'Article not found.' };
+
+    // Favorited articles are locked from agent edits. The user starred
+    // the article to protect it - the manual update flow is agent-
+    // driven even though the user triggers it, so the lock applies
+    // here too. The user can still edit the article directly through
+    // the UI (that path bypasses this agent and goes through RLS).
+    if (article.favorite === true) {
+      return {
+        kind: 'error',
+        error:
+          'This article is favorited (locked) and cannot be edited by the agent. ' +
+          'Remove the favorite star to enable agent edits, or edit the article directly.',
+      };
+    }
 
     const { data: recordRows, error: recordsErr } = await adminClient
       .from('wiki_records')

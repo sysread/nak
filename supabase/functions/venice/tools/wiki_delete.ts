@@ -34,13 +34,23 @@ export const wikiDelete: ToolDef = {
     // AND the title. A missing article (the model called delete on a
     // stale id) skips the changelog write; the delete itself is
     // already a no-op against a non-existent row.
+    // Also checks the agent-edit lock: a favorited article cannot be
+    // deleted by the agent. The user's own direct delete through the
+    // UI (RLS, not this tool) is unaffected.
     const { data: existing, error: readErr } = await ctx.adminClient
       .from('wiki_articles')
-      .select('id, title, content')
+      .select('id, title, content, favorite')
       .eq('id', id)
       .eq('user_id', ctx.userId)
       .maybeSingle();
     if (readErr) throw new Error(`getWikiArticleById failed: ${readErr.message}`);
+
+    if (existing && (existing as { favorite?: boolean }).favorite === true) {
+      throw new Error(
+        'This article is favorited (locked) and cannot be deleted by the agent. ' +
+          'The user must remove the favorite star before agent deletes are allowed.',
+      );
+    }
 
     const { error: delErr } = await ctx.adminClient
       .from('wiki_articles')

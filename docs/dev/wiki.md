@@ -1780,6 +1780,21 @@ separately.
   is acceptable, so don't build anything on its completeness -
   pointer state on `threads` remains the source of truth for
   what was processed.
+- **Favorited articles are locked from agent edits.** The
+  `wiki_articles.favorite` flag (which also drives offline caching)
+  doubles as an agent-edit lock. When `favorite` is true, the
+  `wiki_update` and `wiki_delete` tools refuse the call with a
+  clear error, and `runWikiManualUpdate` returns `kind:'error'`
+  before the agent even runs. This blocks all three agent paths
+  (autonomous sweep, librarian, manual per-article update) from
+  overwriting or deleting starred content. The user's own direct
+  edits through the UI bypass the tools (they go through RLS), so
+  the user can still edit a favorited article themselves. The
+  autonomous and librarian prompts tell the model to skip locked
+  articles; the librarian's article list annotates them with
+  `[locked]`. The read tools (`wiki_search`, `wiki_list`,
+  `wiki_get`) all surface `favorite` so the agents can see the lock
+  status before attempting an edit.
 
 ## Verification
 

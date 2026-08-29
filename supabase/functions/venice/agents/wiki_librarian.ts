@@ -586,6 +586,14 @@ const WIKI_LIBRARIAN_DISCIPLINE_BLOCK = `**Discipline**:
 - Be conservative. If you are not sure two articles overlap
   enough to merge, leave them alone. False merges destroy
   information; missed merges just leave a small redundancy.
+- Favorited articles are locked. Articles annotated \`[locked]\` in
+  the list above have been favorited by the user and cannot be
+  edited or deleted by the agent - wiki_update and wiki_delete
+  will refuse the call. Skip locked articles entirely; do not
+  attempt to update, merge, or delete them. If a locked article
+  overlaps with a duplicate, consolidate INTO the non-locked
+  article and leave the locked one alone. The user can remove the
+  star to re-enable agent edits, or edit the article themselves.
 - Preserve facts. When you wiki_update an article to absorb
   another, every concrete fact from the absorbed article must
   appear in the merged result unless you are confident it is
@@ -1167,6 +1175,7 @@ interface WikiArticleRow {
   id: string;
   title: string;
   content: string;
+  favorite?: boolean;
 }
 
 /** Per-article record signal rendered into the article list. */
@@ -1191,12 +1200,17 @@ function renderArticleList(
       // without it the model would have to record_list every article
       // to find the active ones.
       const activity = recordActivity?.get(r.id);
-      const annotation =
+      const activityAnnotation =
         activity && activity.count > 0
           ? ` (${activity.count} record${activity.count === 1 ? '' : 's'}` +
             `${activity.latestDate ? `, latest ${activity.latestDate}` : ''})`
           : '';
-      return `- \`${r.title}\`${annotation} - ${excerpt || '(empty body)'}`;
+      // Favorited articles are locked from agent edits - annotate
+      // them so the librarian knows not to attempt wiki_update or
+      // wiki_delete on them. The tools enforce the lock regardless,
+      // but the annotation saves a wasted tool round.
+      const lockAnnotation = r.favorite === true ? ' [locked]' : '';
+      return `- \`${r.title}\`${lockAnnotation}${activityAnnotation} - ${excerpt || '(empty body)'}`;
     })
     .join('\n');
 }
@@ -1242,7 +1256,7 @@ async function loadArticles(
 ): Promise<WikiArticleRow[]> {
   const { data, error } = await adminClient
     .from('wiki_articles')
-    .select('id, title, content')
+    .select('id, title, content, favorite')
     .eq('user_id', userId)
     .order('title', { ascending: true })
     .limit(LIBRARIAN_ARTICLE_LIMIT);

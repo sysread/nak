@@ -166,22 +166,22 @@ describe('editSaveNotice', () => {
 
 describe('favorite button copy', () => {
   it('explains the offline lockout first', () => {
-    expect(favoriteButtonTitle(false, false)).toBe('Reconnect to change favorites');
-    expect(favoriteButtonTitle(false, true)).toBe('Reconnect to change favorites');
+    expect(favoriteButtonTitle(false, false)).toBe('Reconnect to change locks');
+    expect(favoriteButtonTitle(false, true)).toBe('Reconnect to change locks');
   });
 
-  it('names both halves of the favorite/save-offline pairing', () => {
+  it('names the save-offline and agent-edit-lock pairing', () => {
     expect(favoriteButtonTitle(true, true)).toBe(
-      'Saved offline (remove from favorites)',
+      'Saved offline & locked from agent edits (unlock)',
     );
     expect(favoriteButtonTitle(true, false)).toBe(
-      'Save offline (mark as favorite)',
+      'Save offline & lock from agent edits (lock)',
     );
   });
 
   it('labels the action the click performs for screen readers', () => {
-    expect(favoriteAriaLabel(true)).toBe('Remove from favorites');
-    expect(favoriteAriaLabel(false)).toBe('Mark as favorite');
+    expect(favoriteAriaLabel(true)).toBe('Unlock article');
+    expect(favoriteAriaLabel(false)).toBe('Lock article');
   });
 });
 
@@ -196,6 +196,19 @@ describe('offlineActionTitle', () => {
     expect(offlineActionTitle(false, 'edit')).toBe('Reconnect to edit');
     expect(offlineActionTitle(false, 'ask-agent')).toBe('Reconnect to run the agent');
     expect(offlineActionTitle(false, 'delete')).toBe('Reconnect to delete');
+  });
+
+  it('names the agent-edit lock when the article is locked', () => {
+    expect(offlineActionTitle(true, 'ask-agent', true)).toBe(
+      'Article is locked - unlock it to enable agent edits',
+    );
+    // The lock takes priority over the offline check - a locked
+    // article shows the lock message even when offline.
+    expect(offlineActionTitle(false, 'ask-agent', true)).toBe(
+      'Article is locked - unlock it to enable agent edits',
+    );
+    // Unlocked articles are unaffected by the new parameter.
+    expect(offlineActionTitle(true, 'ask-agent', false)).toBeUndefined();
   });
 });
 

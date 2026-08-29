@@ -127,16 +127,17 @@
     </p>
   {:else}
     {#if showFavorites}
-      <!-- Favorites bucket: the complete favorite set (title ASC),
-           fetched whole by loadWikiFirstPage. A favorite is what saves
-           an article offline, so this section doubles as "available on
-           this device with no network" - and offline it is the ONLY
-           section (the browse list below needs the server). Favorited
-           articles also keep their natural alphabetical spot in the
-           full list below when online - the duplication is intentional,
-           mirroring the cookbook sidebar. -->
+      <!-- Locked bucket: the complete locked set (title ASC),
+           fetched whole by loadWikiFirstPage. Locking an article
+           saves it offline AND protects it from agent edits, so this
+           section doubles as "available on this device with no
+           network" - and offline it is the ONLY section (the browse
+           list below needs the server). Locked articles also keep
+           their natural alphabetical spot in the full list below
+           when online - the duplication is intentional, mirroring
+           the cookbook sidebar. -->
       <div class="wiki-list-section-label" aria-hidden="true">
-        Favorites &middot; saved offline
+        Locked &middot; saved offline
       </div>
       {#each wikiStore.favorites as a (a.id)}
         {@render articleRow(a.id, a.title)}

@@ -154,31 +154,38 @@ example, an AI coding agent with database access. The same button
 exists for [conversations](./threads.md#copying-the-conversation-id)
 and [recipes](./cookbook.md#copying-a-recipes-id).
 
-## Favorites and offline access
+## Locking articles: offline access and agent-edit protection
 
-Each open article has a **star** button in its header. Click it to
-**favorite** the article - the star fills in. Favoriting does two
-things:
+Each open article has a **lock** button in its header (an outline
+padlock with an open shackle). Click it to **lock** the article - the
+padlock closes and fills in. Locking does three things:
 
-- It pins the article to a **Favorites** section at the top of the
+- It pins the article to a **Locked** section at the top of the
   Wiki sidebar, so the articles you return to most are one click away.
 - It **saves the article for offline reading.** While you're online,
-  favorited articles are mirrored onto your device; after that you can
+  locked articles are mirrored onto your device; after that you can
   open them with no connection - on a phone with no signal, on a plane,
-  anywhere. The sidebar labels the section "Favorites - saved offline"
+  anywhere. The sidebar labels the section "Locked - saved offline"
   to make the link explicit.
+- It **locks the article from agent edits.** The background wiki agent
+  and the librarian cannot update or delete a locked article. This
+  protects content you've locked from being silently overwritten. You
+  can still edit or delete the article yourself through the UI - the
+  lock only blocks agent-driven writes. The "Ask agent to update"
+  button is disabled with a tooltip explaining why.
 
 This is the feature to reach for when you have an article you must be
 able to read no matter what - an evacuation checklist, emergency
-contacts, medical notes. Favorite it once while you have a connection
-and it's there when you don't.
+contacts, medical notes. Lock it once while you have a connection
+and it's there when you don't - and no background agent will touch it.
 
-Click the star again to remove the favorite; the article drops out of
-the Favorites section and is no longer kept offline. Changing
-favorites needs a connection (the star is disabled while you're
-offline), and so do editing and deleting - offline, the article view
-is read-only. See [Install as a PWA -> What works
-offline](./install-pwa.md) for the full picture, including recipes.
+Click the lock again to unlock the article; it drops out of the
+Locked section, is no longer kept offline, and the agent-edit lock is
+lifted. Changing locks needs a connection (the lock button is
+disabled while you're offline), and so do editing and deleting -
+offline, the article view is read-only. See [Install as a PWA -> What
+works offline](./install-pwa.md) for the full picture, including
+recipes.
 
 ## Deleting
 

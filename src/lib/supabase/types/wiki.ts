@@ -19,12 +19,18 @@ export interface WikiArticle {
   title: string;
   content: string;
   /**
-   * Long-lived bookmark. Marking an article favorite is what saves it
-   * offline (the favorite set is mirrored into IndexedDB by
-   * `offline-sync`). Independent of article content - toggling it does
-   * not bump `updated_at`, so the offline cache's freshness comparator
-   * treats a bookmark flip as "no content change". Mirrors
-   * `Recipe.favorite`.
+   * Long-lived bookmark AND agent-edit lock. Marking an article
+   * favorite is what saves it offline (the favorite set is mirrored
+   * into IndexedDB by `offline-sync`). It also locks the article from
+   * agent edits: the server-side `wiki_update` and `wiki_delete` tools
+   * check this flag and refuse to modify a favorited article, so the
+   * autonomous wiki agent and the librarian cannot overwrite or delete
+   * content the user has starred. The user's own direct edits through
+   * the UI bypass the tools (they go through RLS), so the lock only
+   * blocks agent-driven writes. Independent of article content -
+   * toggling it does not bump `updated_at`, so the offline cache's
+   * freshness comparator treats a bookmark flip as "no content change".
+   * Mirrors `Recipe.favorite`.
    */
   favorite: boolean;
   created_at: string;

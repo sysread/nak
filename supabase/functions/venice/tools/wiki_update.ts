@@ -36,26 +36,31 @@ import {
 } from '../../_shared/wiki-limits.ts';
 
 /**
- * Read the article's current content length for the changelog's
- * before-size. Returns null when the article doesn't exist or isn't
- * owned - the changelog then records an unknown before-size rather
- * than implying a zero-length body.
+ * Read the article's current content length (for the changelog's
+ * before-size) and favorite flag (for the agent-edit lock) before the
+ * update lands. Returns null for the length when the article doesn't
+ * exist or isn't owned - the changelog then records an unknown
+ * before-size rather than implying a zero-length body. The favorite
+ * flag defaults to false so a missing article falls through to the
+ * normal "no rows updated" path rather than being mistaken for locked.
  */
-async function readArticleContentLength(
+async function readArticleState(
   adminClient: import('@supabase/supabase-js').SupabaseClient,
   userId: string,
   articleId: string,
-): Promise<number | null> {
+): Promise<{ contentLength: number | null; favorite: boolean }> {
   const { data, error } = await adminClient
     .from('wiki_articles')
-    .select('content')
+    .select('content, favorite')
     .eq('id', articleId)
     .eq('user_id', userId)
     .maybeSingle();
-  if (error) return null;
-  if (!data) return null;
-  const content = (data as { content?: unknown }).content;
-  return typeof content === 'string' ? content.length : null;
+  if (error || !data) return { contentLength: null, favorite: false };
+  const row = data as { content?: unknown; favorite?: unknown };
+  const contentLength =
+    typeof row.content === 'string' ? row.content.length : null;
+  const favorite = row.favorite === true;
+  return { contentLength, favorite };
 }
 
 /**
@@ -116,18 +121,30 @@ export const wikiUpdate: ToolDef = {
     }
     errs.throwIfAny();
 
-    // Read the prior content length before the update so the changelog
-    // can stamp chars_before. One read serving one consumer here (the
-    // memory_update pattern also feeds a budget check; here it's just
-    // the before-size). An unreadable row degrades to an unknown
-    // before-size, which the panel renders as "no size info".
-    const priorContentLength = id
-      ? await readArticleContentLength(ctx.adminClient, ctx.userId, id)
-      : null;
+    // Read the prior content length and favorite flag before the
+    // update so the changelog can stamp chars_before and the lock guard
+    // can refuse the write. A favorited article is locked from agent
+    // edits - the user starred it to protect it from exactly this kind
+    // of background overwrite. The browser's own direct edit path (RLS,
+    // not this tool) is unaffected, so the user can still edit it
+    // themselves.
+    const prior = id
+      ? await readArticleState(ctx.adminClient, ctx.userId, id)
+      : { contentLength: null, favorite: false };
+    if (prior.favorite) {
+      throw new Error(
+        'This article is favorited (locked) and cannot be edited by the agent. ' +
+          'The user must remove the favorite star before agent edits are allowed.',
+      );
+    }
 
     // RLS OFF: the user_id filter scopes the patch to the owner. A
     // foreign or unknown id matches zero rows and .single() surfaces
-    // that as an error the agent can read.
+    // that as an error the agent can read. The patch carries only
+    // title and content - never `favorite`. The favorite flag is a
+    // user-controlled bookmark and agent-edit lock; agents must not
+    // be able to flip it. The patch object is typed to reject other
+    // keys, so a model-supplied `favorite` in args is never read.
     const { data: row, error } = await ctx.adminClient
       .from('wiki_articles')
       .update({ ...patch, updated_at: new Date().toISOString() })
@@ -175,7 +192,7 @@ export const wikiUpdate: ToolDef = {
         message,
         // Undefined (-> NULL, "unknown") when the prior read failed; a
         // title-only edit leaves both equal, which reads as a 0 delta.
-        chars_before: priorContentLength ?? undefined,
+        chars_before: prior.contentLength ?? undefined,
         chars_after: (row as { content?: string }).content?.length,
       });
     } catch {

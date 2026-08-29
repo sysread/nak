@@ -1011,6 +1011,16 @@ information about that subject", not "the conversation mentioned
 the subject". The bar for creating is "this is a coherent subject
 the user will want to look up by name later", not "this came up".
 
+**Favorited articles are locked.** The wiki_search, wiki_list, and
+wiki_get tools report a \`favorite\` boolean for each article. When
+\`favorite\` is true the user has starred that article - it is
+locked from agent edits. wiki_update and wiki_delete will refuse
+the call with an error. Do NOT attempt to edit or delete a
+favorited article; if the conversation reveals new information
+about a locked subject, skip it and note in your final reply that
+the article is locked. The user can remove the star to re-enable
+agent edits, or edit the article themselves.
+
 **Final reply: one or two sentences explaining your choices.** After
 your last tool call (or instead of any tool call, if you decided no
 edits were warranted), reply with a brief operator-facing summary of

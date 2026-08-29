@@ -10328,14 +10328,19 @@ drop policy if exists "wiki_articles are self-deletable" on public.wiki_articles
 create policy "wiki_articles are self-deletable" on public.wiki_articles
   for delete using (auth.uid() = user_id);
 
--- Long-lived bookmark. Marking an article favorite is what flags it for
--- offline caching (the browser mirrors the favorite set into IndexedDB
--- so it reads with no network). Mirrors recipes.favorite: a personal
--- bookmark, not article content, so toggling it must NOT bump
--- updated_at - the offline cache's freshness comparator keys on
--- updated_at, and a bookmark flip is not a content change. The
--- clear_wiki_embedding_on_change trigger above only guards title /
--- content, so a favorite toggle also leaves the embedding intact.
+-- Long-lived bookmark AND agent-edit lock. Marking an article favorite
+-- is what flags it for offline caching (the browser mirrors the favorite
+-- set into IndexedDB so it reads with no network). It also LOCKS the
+-- article from agent edits: the wiki_update and wiki_delete tools check
+-- this flag and refuse to modify a favorited article, so the autonomous
+-- wiki agent and the librarian cannot overwrite or delete content the
+-- user has starred. The user's own direct edits through the UI are
+-- unaffected (they go through RLS, not the tools). Mirrors
+-- recipes.favorite: a personal bookmark, not article content, so
+-- toggling it must NOT bump updated_at - the offline cache's freshness
+-- comparator keys on updated_at, and a bookmark flip is not a content
+-- change. The clear_wiki_embedding_on_change trigger above only guards
+-- title / content, so a favorite toggle also leaves the embedding intact.
 alter table public.wiki_articles
   add column if not exists favorite boolean not null default false;
 
@@ -10919,12 +10924,13 @@ create or replace function public.search_wiki_articles_by_embedding(
   id uuid,
   title text,
   content text,
+  favorite boolean,
   created_at timestamptz,
   updated_at timestamptz,
   similarity real
 )
 language sql stable security invoker as $$
-  select id, title, content, created_at, updated_at,
+  select id, title, content, favorite, created_at, updated_at,
          (1 - (embedding <=> query_embedding))::real as similarity
     from public.wiki_articles
    where user_id = coalesce(p_user_id, auth.uid())

@@ -157,6 +157,29 @@ Deno.test('renderArticleList annotates record activity; zero-record articles sta
   assertStringIncludes(list, '- `Quiet` - body c');
 });
 
+Deno.test('renderArticleList marks favorited articles as locked', () => {
+  const list = __test.renderArticleList([
+    { id: 'a', title: 'Locked', content: 'body', favorite: true },
+    { id: 'b', title: 'Open', content: 'body', favorite: false },
+  ]);
+  assertStringIncludes(list, '- `Locked` [locked] - body');
+  assertStringIncludes(list, '- `Open` - body');
+  // Absent favorite (legacy rows) should not produce a [locked] tag.
+  const bare = __test.renderArticleList([
+    { id: 'c', title: 'Bare', content: 'body' },
+  ]);
+  assertStringIncludes(bare, '- `Bare` - body');
+});
+
+Deno.test('prompt tells the librarian that favorited articles are locked', () => {
+  const prompt = __test.buildWikiLibrarianPrompt({
+    articleList: '- `Nak` [locked] - an app',
+  });
+  assertStringIncludes(prompt, 'Favorited articles are locked');
+  assertStringIncludes(prompt, 'will refuse the call');
+  assertStringIncludes(prompt, 'consolidate INTO the non-locked');
+});
+
 Deno.test('standard sweep body carries the same-event record-dedup discipline', () => {
   const prompt = __test.buildWikiLibrarianPrompt({
     articleList: '- `Nak` - an app',

@@ -172,3 +172,10 @@ Deno.test('prompt carries no inline-citation guidance', () => {
   assertEquals(prompt.includes('[label](?cid'), false);
   assertEquals(prompt.includes('source-conversation link'), false);
 });
+
+Deno.test('prompt tells the agent that favorited articles are locked', () => {
+  const prompt = __test.buildWikiAutonomousPrompt({ userProfile: null });
+  assertStringIncludes(prompt, 'Favorited articles are locked');
+  assertStringIncludes(prompt, 'will refuse');
+  assertStringIncludes(prompt, 'skip it and note in your final reply');
+});

@@ -43,6 +43,13 @@ per-article `Ask agent to update` workflow ([dev: wiki](../../dev/wiki.md)).
 14. Open the article's `Delete` flow, enter `qa cleanup`, then click
     `Cancel`.
 15. Re-open `Delete`, enter `qa cleanup`, and confirm the delete.
+16. **Favorite-lock.** Create a second article `QA Lock Article`,
+    lock it (click the lock button), and confirm the **Ask agent to
+    update** button is disabled with a lock tooltip. Click **Edit**
+    and confirm the user's own direct edit still works on a locked
+    article. Unlock the article and confirm the button
+    re-enables. Delete `QA Lock Article`. (Full coverage in
+    [wiki-favorite-lock](./wiki-favorite-lock.md).)
 
 ## Expected
 
@@ -68,10 +75,14 @@ per-article `Ask agent to update` workflow ([dev: wiki](../../dev/wiki.md)).
 - (14-15) Delete uses an inline confirmation strip; `Cancel` dismisses it,
   and the confirmed delete removes the article from the drawer while
   leaving the app usable.
+- (16) Locking an article disables the "Ask agent to update" button
+  with a lock tooltip, but the user's own Edit still works. Unlocking
+  re-enables the agent button.
 
 ## Cleanup
 
 - If `QA Wiki Article` still exists, delete it from the Wiki tab.
+- If `QA Lock Article` still exists, delete it from the Wiki tab.
 
 ## Results log
 
