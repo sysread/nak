@@ -271,3 +271,4 @@ mise run dev-sql "delete from grocery_products; delete from grocery_sections"
 
 | Date | Env | Commit | Result | Notes |
 | ---- | --- | ------ | ------ | ----- |
+| 2026-08-29 | local stack | 0acaf4ca | PARTIAL (step 22) | Regression pass limited to the shopping-trip step (22) after the trip moved onto the shared `activeSessions` map (cooking-mode change): Start/Finish through the map, In-cart purchase stamp, midnight expiry, and the legacy `groceryShoppingStartedAt` read-side migration all verified; the legacy field is cleared on the next trip write. Steps 1-21, 23-26 not re-executed this run - untouched surfaces (checkbox bridge itself exercised via cooking-mode QA + step 9 of cookbook-cooking-mode). |

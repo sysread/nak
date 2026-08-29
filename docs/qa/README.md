@@ -299,6 +299,11 @@ One file per use-case under [`use-cases/`](./use-cases/), named
   the recipe-edit invalidation wipe, the needed / acquired shopping
   flow, add-input history suggestions, section management, and item
   photos.
+- [cookbook-cooking-mode](./use-cases/cookbook-cooking-mode.md) -
+  the recipe detail pane's cooking mode (Make this now): used-mark
+  checkboxes, the N-of-M counter, per-recipe sessions in the shared
+  settings map, reload persistence, expiry, and the grocery bridge
+  staying intact outside cooking mode.
 - [settings-account-and-updates](./use-cases/settings-account-and-updates.md) -
   Settings pane independence, update-check/reload flow, background-job
   toggles, usage refresh, and credential/export actions.
