@@ -2,26 +2,32 @@
 // implementation, run inside the venice edge function (extracted from the
 // browser during the priming relocation). Three stages:
 //
-//   1. Perception - one fast-model call. Reads the transcript,
-//      classifies the prompt, and produces an objective-observer
-//      summary.
-//   2. Drive reactions - five fast-model calls in parallel. Each takes
-//      the perception as input and produces a first-person reaction in
-//      the voice of its drive.
-//   3. Synthesis - one fast-model call. Aggregates the drive reactions
-//      into a single internal monologue that primes the conscious
-//      agent's response.
+//   1. Perception - one call on the perception model (deepseek, 1M
+//      window). Reads the transcript, classifies the prompt, and
+//      produces an objective-observer summary.
+//   2. Drive reactions - one structured-JSON call on the drive/synthesis
+//      model (mistral). Produces all five drive reactions in a single
+//      JSON object with one key per drive. Formerly five parallel calls;
+//      collapsed to one to cut the drive stage from max(5 latencies) to
+//      1. The context-pollution trade (later keys conditioned on earlier
+//      ones within the same generation) is mitigated by prompt-level
+//      independence instruction; see DRIVES_COLLAPSED_PROMPT.
+//   3. Synthesis - one call on the drive/synthesis model. Aggregates
+//      the drive reactions into a single internal monologue that primes
+//      the conscious agent's response.
 //
-// Total calls: 7 (1 + 5 + 1) on the fast tier, with the 5 drives running
-// concurrently. The pipeline is non-streaming - each stage hits Venice's
-// one-shot completion endpoint and reads the single text result.
+// Total calls: 3 (1 + 1 + 1). The pipeline is non-streaming - each
+// stage hits Venice's one-shot completion endpoint and reads the single
+// text result.
 //
 // Failure model:
 //   - Perception failure aborts the pipeline. Returns null so the
 //     orchestrator leaves the prior cache in place.
-//   - Per-drive failures are tolerated: a drive that errors or returns
-//     empty is omitted from the payload's `drives` map. Synthesis still
-//     runs against whatever drives did respond.
+//   - Drive-call failure (network error, rate limit, empty response)
+//     aborts. A successful call whose JSON is missing a drive key or has
+//     an empty value for it degrades gracefully: that drive is omitted
+//     from the payload's `drives` map, and synthesis runs against
+//     whatever drives did respond. A JSON parse failure aborts.
 //   - Synthesis failure aborts. Returns null.
 //
 // The orchestrator owns trigger evaluation, cache read, and persistence;
@@ -32,10 +38,9 @@ import { type EdgeLogger } from '../../_shared/edge-log.ts';
 import { type IntuitionTrigger } from '../../_shared/priming-triggers.ts';
 import { veniceComplete, VeniceError } from '../../_shared/venice.ts';
 import {
-  DRIVE_BASE_PROMPT,
   DRIVE_NAMES,
   type DriveName,
-  DRIVE_PROMPTS,
+  DRIVES_COLLAPSED_PROMPT,
   PERCEPTION_PROMPT,
   SYNTHESIS_PROMPT,
 } from './intuition-prompts.ts';
@@ -58,12 +63,12 @@ const MAX_TOKENS = 2048;
  * the body text trimmed, reasoning content ignored.
  *
  * disable_thinking stays on the body for whichever id the caller
- * passes. The drive/synthesis stages ride mistral (non-reasoning,
- * ignores it); the perception stage rides deepseek-v4-flash-0731-fast
- * (reasoning-capable, high default effort - the flag is load-bearing
- * there, pinning the thinking pass off so it does not eat the
- * MAX_TOKENS answer budget or add latency on the pre-turn critical
- * path). retryRateLimit is on because this is a server-side background
+ * passes. This function is used only for the perception stage, which
+ * rides deepseek-v4-flash-0731-fast (reasoning-capable, high default
+ * effort - the flag is load-bearing, pinning the thinking pass off so
+ * it does not eat the MAX_TOKENS answer budget or add latency on the
+ * pre-turn critical path). The drive and synthesis stages call
+ * veniceComplete directly. retryRateLimit is on because this is a server-side background
  * call with no browser rate-limit loop behind it - a single "model
  * overloaded" 429 would otherwise fail the sub-call.
  */
@@ -194,40 +199,74 @@ export async function runIntuitionPipeline(opts: {
   const perception = ensureClassificationPrefix(perceptionRaw);
   log.debug('intuition perception', { perception });
 
-  // Stage 2: drive reactions in parallel. Each drive sees the perception
-  // (not the raw transcript) so all five react to the same digest.
-  const drivePromises = DRIVE_NAMES.map(
-    async (name): Promise<[DriveName, string | null]> => {
-      const systemPrompt = `${DRIVE_BASE_PROMPT}\n\n${DRIVE_PROMPTS[name]}`;
-      try {
-        const text = await callOnce(
-          apiKey,
-          modelId,
-          systemPrompt,
-          `# My perception of the discussion:\n${perception}`,
-          signal,
-        );
-        if (text.length === 0) return [name, null];
-        log.debug(`intuition drive:${name}`, { reaction: text });
-        return [name, text];
-      } catch (err) {
-        log.warn(`intuition drive:${name} failed`, err);
-        return [name, null];
-      }
-    },
-  );
-  const driveResults = await Promise.all(drivePromises);
+  // Stage 2: drive reactions in a single structured-JSON call. All five
+  // drives react to the same perception; the model returns a JSON object
+  // with one key per drive. Formerly five parallel calls; collapsed to
+  // one to cut the drive stage from max(5 latencies) to 1.
+  let drivesRaw: string;
+  try {
+    const raw = await veniceComplete({
+      apiKey,
+      body: {
+        model: modelId,
+        messages: [
+          { role: 'system', content: DRIVES_COLLAPSED_PROMPT },
+          {
+            role: 'user',
+            content: `# My perception of the discussion:\n${perception}`,
+          },
+        ],
+        max_completion_tokens: MAX_TOKENS,
+        response_format: { type: 'json_object' },
+        venice_parameters: { disable_thinking: true },
+      },
+      retryRateLimit: true,
+      signal,
+    });
+    const content = (raw as { choices?: Array<{ message?: { content?: unknown } }> })
+      .choices?.[0]?.message?.content;
+    drivesRaw = typeof content === 'string' ? content.trim() : '';
+  } catch (err) {
+    if (err instanceof VeniceError && err.kind === 'rate_limit') {
+      log.warn('intuition drives rate-limited; leaving prior cache in place');
+    } else {
+      log.warn('intuition drives failed', err);
+    }
+    return null;
+  }
+  if (drivesRaw.length === 0) {
+    log.warn('intuition drives returned empty text');
+    return null;
+  }
 
   if (signal?.aborted) return null;
 
+  // Parse the JSON response. Each drive key that is present and non-empty
+  // joins the drives map; missing or empty keys are treated as failed
+  // drives (same tolerance as the former per-drive error handling).
   const drives: Partial<Record<DriveName, string>> = {};
-  for (const [name, text] of driveResults) {
-    if (text !== null) drives[name] = text;
+  try {
+    const parsed = JSON.parse(drivesRaw) as Record<string, unknown>;
+    for (const name of DRIVE_NAMES) {
+      const val = parsed[name];
+      if (typeof val === 'string' && val.trim().length > 0) {
+        drives[name] = val.trim();
+        log.debug(`intuition drive:${name}`, { reaction: val.trim() });
+      }
+    }
+  } catch (err) {
+    log.warn('intuition drives JSON parse failed', {
+      raw: drivesRaw.slice(0, 200),
+      err,
+    });
+    return null;
   }
-  // If every drive failed, synthesis has no input. Bail rather than
-  // synthesize against an empty set - the result would be vacuous.
+
+  // If every drive was missing or empty, synthesis has no input. Bail
+  // rather than synthesize against an empty set - the result would be
+  // vacuous.
   if (Object.keys(drives).length === 0) {
-    log.warn('all intuition drive reactions failed; skipping synthesis');
+    log.warn('all intuition drive reactions empty or missing; skipping synthesis');
     return null;
   }
 

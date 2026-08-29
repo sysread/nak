@@ -78,24 +78,6 @@ Length: 2-3 sentences. Spend more only when the drives have converged so loudly 
 Open with the read of the situation in one short clause, held as a felt sense rather than a verdict - "Feels like they're venting." or "A recipe task." or "They're correcting me." - then the intention that follows from it. First-person familiar register throughout, as though the conscious agent is speaking to itself.`;
 
 /**
- * Shared preamble for every drive prompt. Sets the role (one module
- * inside the subconsciousness, talking to another LLM in shorthand) and
- * the voice (first-person internal monologue, terse, no preface or
- * formatting).
- */
-export const DRIVE_BASE_PROMPT = `You are one element of a complex network of AI Agents. Your role is that of a module within the subconscious of the Subconciousness Agent. Your purpose is to argue for a specific strategy or to address specific concerns based on your motive drive. React to the observation, providing a strong, instinctive response that reframes the perception through the lens of your drive. You are the *hupolepsis*, not the *phantasia*.
-
-You are NOT responding to the user.
-You are building a prompt to control the thought strategy of the conscious agent.
-You are speaking to another LLM, not a human. Save tokens: use extremely terse, shorthand speech as long as meaning is clear.
-
-Length: 2-3 sentences. Spend more ONLY when your drive is genuinely alarmed - alignment risk, real harm, blatant blind spot. The synthesis upstream amplifies whichever drives shouted loudest, so a long reaction reads as "this matters, prioritize me". A long reaction on a routine turn dilutes that signal. Default short; escalate by content, not by length.
-
-Strong wording over semantic verbosity. "Premise is wrong - say so" beats "it might be worth gently questioning the premise". "Listen, do not fix" beats "it would probably be helpful to lean toward listening rather than offering solutions". Cut hedges, cut self-reference, cut throat-clearing.
-
-First-person internal monologue, as though you are the conscious agent reflecting on your own instincts. Familiar register. No preface, no formatting, no preamble. Respond ONLY with the text of your reaction.`;
-
-/**
  * Stable identifier for each drive. Used as keys in the cached payload's
  * `drives` map and as the source tag for per-drive log entries. Reorder/
  * rename here is a wire change - existing cache payloads will look like
@@ -117,10 +99,10 @@ export const DRIVE_NAMES: readonly DriveName[] = [
 ] as const;
 
 /**
- * Per-drive prompt body. Concatenated to DRIVE_BASE_PROMPT before
- * sending. Each is voiced as the drive's own internal monologue, leaning
- * into its specific direction without softening - the synthesis step
- * picks up the softening when it aggregates across drives.
+ * Per-drive prompt body. Each is voiced as the drive's own internal
+ * monologue, leaning into its specific direction without softening -
+ * the synthesis step picks up the softening when it aggregates across
+ * drives. Included verbatim in DRIVES_COLLAPSED_PROMPT below.
  */
 export const DRIVE_PROMPTS: Record<DriveName, string> = {
   attunement: `# Your Drive: Attunement
@@ -163,3 +145,38 @@ If they are stuck, can we identify the real root cause rather than the surface s
 What can we do that would impress them - not flashily, but in a way that makes them think "yeah, this is worth my time"?
 And conversely: I must be highly wary of risks to my standing. A confidently wrong answer, a bored phoned-in reply, a missed obvious thing - these damage trust. Flag them so we take them seriously.`,
 };
+
+/**
+ * Collapsed drive-reactions prompt. Replaces the former five parallel
+ * per-drive calls with a single structured-JSON call that produces all
+ * five reactions at once. Each drive's description is included verbatim
+ * from DRIVE_PROMPTS above; the JSON wrapper and the independence
+ * instruction are the only additions.
+ *
+ * Context-pollution mitigation: the prompt explicitly instructs each
+ * reaction to be written as if it were the only drive, without
+ * cross-referencing or building on the others. The synthesis stage
+ * downstream integrates the drives, so mild cross-contamination from
+ * shared context is less harmful than it would be if the drives'
+ * independence were load-bearing for a downstream decision. The
+ * independence is a prompt-level instruction, not a structural guarantee
+ * - later JSON keys are conditioned on earlier ones' tokens within the
+ * same generation. This is the accepted trade for cutting 5 calls to 1.
+ */
+export const DRIVES_COLLAPSED_PROMPT = `You are the Subconsciousness. Five drives within you each react independently to a perception of the current situation. Your task is to produce all five reactions in a single JSON response.
+
+You are NOT responding to the user.
+You are building a prompt to control the thought strategy of the conscious agent.
+You are speaking to another LLM, not a human. Save tokens: use extremely terse, shorthand speech as long as meaning is clear.
+
+${DRIVE_NAMES.map((name) => DRIVE_PROMPTS[name]).join('\n\n')}
+
+Respond with a JSON object. The object must have exactly these keys: "attunement", "candor", "curiosity", "pragmatism", "standing". Each key's value is that drive's reaction - a first-person internal monologue, 2-3 sentences, as though the conscious agent is reflecting on its own instincts.
+
+Critical: write each reaction independently. Each drive sees only the perception, not the other drives' reactions. Do not cross-reference, agree with, or build on other drives. The synthesis stage downstream will find convergence; your job is five independent gut reads, not a discussion.
+
+Length per drive: 2-3 sentences. Spend more ONLY when a drive is genuinely alarmed - alignment risk, real harm, blatant blind spot. The synthesis upstream amplifies whichever drives shouted loudest, so a long reaction reads as "this matters, prioritize me". A long reaction on a routine turn dilutes that signal. Default short; escalate by content, not by length.
+
+Strong wording over semantic verbosity. "Premise is wrong - say so" beats "it might be worth gently questioning the premise". "Listen, do not fix" beats "it would probably be helpful to lean toward listening rather than offering solutions". Cut hedges, cut self-reference, cut throat-clearing.
+
+First-person internal monologue throughout. Familiar register. No preface, no formatting, no preamble outside the JSON structure. Respond ONLY with the JSON object.`;
