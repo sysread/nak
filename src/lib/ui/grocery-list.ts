@@ -14,6 +14,8 @@
  */
 import type { Ingredient } from '../cooklang';
 import type { GroceryProductView, GrocerySection } from '../supabase';
+import { SHOPPING_SESSION_KEY } from '../supabase';
+import { isSessionKeyActive } from './active-sessions';
 
 /**
  * Debounce for the add-to-list suggestion search. Matches the sibling
@@ -251,24 +253,15 @@ export const CART_IDLE_MESSAGE =
 /**
  * Whether a shopping trip is active: a trip started at `startedAt`
  * lives until local midnight - it is active only while `now` falls on
- * the SAME local calendar day. Comparing calendar days (rather than a
- * 24h window) is what makes the trip expire at midnight in the user's
- * timezone with no cleanup write: the stale timestamp simply reads as
- * inactive the next morning.
+ * the SAME local calendar day. Delegates to the shared session
+ * policy (the trip has no age bound, unlike cooking sessions) so
+ * both live activities expire by one mechanism.
  */
 export function isShoppingTripActive(
   startedAt: string | undefined,
   now: Date
 ): boolean {
-  if (!startedAt) return false;
-  const started = new Date(startedAt);
-  if (Number.isNaN(started.getTime())) return false;
-  if (started > now) return false;
-  return (
-    started.getFullYear() === now.getFullYear() &&
-    started.getMonth() === now.getMonth() &&
-    started.getDate() === now.getDate()
-  );
+  return isSessionKeyActive(SHOPPING_SESSION_KEY, startedAt, now);
 }
 
 /**

@@ -38,6 +38,7 @@
   import { getRecipeCached, offlineStatus } from '$lib/offline-sync.svelte';
   import {
     cooklangToHtml,
+    groceryCheckboxAriaLabel,
     parseCooklang,
     recipeToHtml,
     recipeToc,
@@ -79,7 +80,7 @@
     versionRowState,
     type DraftPhoto,
   } from '$lib/ui/cookbook-screen';
-  import type { GroceryProductView, Recipe, RecipeVersion } from '$lib/supabase';
+  import type { ActiveSession, GroceryProductView, Recipe, RecipeVersion } from '$lib/supabase';
   import { onGroceryChange, emitGroceryChange } from '$lib/grocery-events';
   import { autoFileProducts } from '$lib/grocery-section-agent';
   import {
@@ -88,6 +89,15 @@
     partitionIngredientsForAdd,
     recipeCheckboxItemIds,
   } from '$lib/ui/grocery-list';
+  import {
+    cookingProgressLabel,
+    cookingToggleLabel,
+    isSessionKeyActive,
+    usedIngredientAriaLabel,
+    withCookingSession,
+    withUsedIngredient,
+  } from '$lib/ui/active-sessions';
+  import { cookingSessionKey } from '$lib/supabase';
   import {
     arrayBufferToBase64,
     dataUrlFor,
@@ -1012,24 +1022,41 @@
     });
   }
 
-  // Sync the rendered checkboxes' checked state from the grocery rows.
-  // The render is an {@html} string, so state can't ride the markup -
-  // this effect walks the mounted inputs after every render/data
-  // change. Keyed by normalized ingredient name because ingredients
-  // have no stable id (they are parsed out of the cooklang source).
+  // Sync the rendered checkboxes' checked state from their backing
+  // state - the render is an {@html} string, so state can't ride the
+  // markup; this effect walks the mounted inputs after every
+  // render/data change. Keyed by normalized ingredient name because
+  // ingredients have no stable id (they are parsed out of the
+  // cooklang source). In cooking mode the boxes mirror the session's
+  // used set instead of the grocery rows, the rows get a used
+  // strikethrough, and the aria label describes the cooking verb.
   $effect(() => {
     const el = detailRenderEl;
     void detailHtml;
     const items = recipeGroceryItems;
     const busy = classifyingNames;
+    const cooking = cookingActive;
+    const used = usedNames;
     if (!el || !parsedDetail) return;
     const entries = recipeCheckboxItemIds(parsedDetail.ingredients, items);
     for (const input of el.querySelectorAll<HTMLInputElement>('input.cook-buy')) {
-      const key = normalizeGroceryName(input.dataset.ing ?? '');
+      const rawName = input.dataset.ing ?? '';
+      const key = normalizeGroceryName(rawName);
+      const li = input.closest('li');
+      if (cooking) {
+        input.checked = used.has(key);
+        input.disabled = false;
+        input.classList.remove('cook-buy-busy');
+        input.ariaLabel = usedIngredientAriaLabel(rawName);
+        li?.classList.toggle('cook-used', used.has(key));
+        continue;
+      }
       // Checked = the matched product is on the current list. One
       // that was bought or removed on the list side reads unchecked
       // here; re-checking revives it (see onRenderChange).
       input.checked = entries.get(key)?.onList === true;
+      input.ariaLabel = groceryCheckboxAriaLabel(rawName);
+      li?.classList.remove('cook-used');
       // While the section classifier runs for this ingredient, the
       // box renders as a spinner (CSS on .cook-buy-busy) and stops
       // accepting clicks - a toggle mid-classification would race
@@ -1093,11 +1120,16 @@
   // survives for the next time this recipe gets cooked. Either way
   // the products refetch and the checked-state effect reconciles the
   // DOM - on a failed write that reconcile is also what rolls the
-  // checkbox back.
+  // checkbox back. In cooking mode the same boxes mean "used in this
+  // session" instead, and the grocery bridge is bypassed entirely.
   function onRenderChange(e: Event): void {
     const target = e.target;
     if (!(target instanceof HTMLInputElement)) return;
     if (!target.classList.contains('cook-buy')) return;
+    if (cookingActive) {
+      onCookingIngredientToggle(target);
+      return;
+    }
     const recipe = activeRecipe;
     const parsed = parsedDetail;
     if (!recipe || !parsed || !app.supabase) return;
@@ -1140,6 +1172,131 @@
         // Nudge an open Groceries tab in this same client immediately -
         // the realtime echo also arrives, but round-trips noticeably.
         emitGroceryChange();
+      }
+    })();
+  }
+
+  // --- cooking mode ("Make this now") ---
+
+  // While a cooking session is active for this recipe, the ingredient
+  // checkboxes change meaning: checked = "used in this cooking
+  // session" (a local progress mark), NOT "on the grocery list" - no
+  // grocery rows are touched and no grocery events fire. The session
+  // lives in profiles.settings.activeSessions (key cooking:<id>) so it
+  // survives a reload or a PWA eviction mid-cook - the realistic
+  // failure is wandering off to another app while cooking and the OS
+  // evicting the tab. Several recipes can cook at once (main + side);
+  // each holds its own session under its own key. A session expires
+  // at local midnight or after COOKING_SESSION_MAX_AGE_HOURS,
+  // whichever comes first - the stale entry just reads as inactive.
+  let cookingStartedAt = $state<string | undefined>(undefined);
+  // Normalized ingredient names marked used this session. Reassigned
+  // (never mutated) so the sync effect reacts. Keyed by normalized
+  // name, same identity rule as the grocery bridge.
+  let usedNames = $state<ReadonlySet<string>>(new Set());
+  let cookingBusy = $state(false);
+  let cookingError = $state<string | null>(null);
+  let cookingClockTick = $state(Date.now());
+
+  $effect(() => {
+    const timer = setInterval(() => (cookingClockTick = Date.now()), 60_000);
+    return () => clearInterval(timer);
+  });
+
+  const cookingActive = $derived(
+    isSessionKeyActive(
+      cookingSessionKey(activeId ?? ''),
+      cookingStartedAt,
+      new Date(cookingClockTick)
+    )
+  );
+
+  // Adopt a session map into local state for the open recipe.
+  function applyCookingSessions(
+    sessions: Record<string, ActiveSession> | undefined,
+    id: string | null
+  ): void {
+    const entry = id ? sessions?.[cookingSessionKey(id)] : undefined;
+    cookingStartedAt = entry?.startedAt;
+    usedNames = new Set(entry?.used ?? []);
+  }
+
+  // Load this recipe's session (if any) whenever the detail pane
+  // switches recipes. A failed read keeps the prior state - the next
+  // toggle or mark writes fresh state anyway.
+  $effect(() => {
+    const id = activeId;
+    if (!id || !app.supabase) {
+      cookingStartedAt = undefined;
+      usedNames = new Set();
+      return;
+    }
+    void (async () => {
+      try {
+        const settings = await app.supabase!.getSettings();
+        applyCookingSessions(settings.activeSessions, id);
+      } catch {
+        // Non-fatal - see comment above.
+      }
+    })();
+  });
+
+  // Toggle the session. Starting always begins fresh (empty used
+  // list); ending clears the marks entirely - the session is over.
+  // Writes go through updateActiveSessions' fresh read so a session
+  // another surface wrote meanwhile survives the map replacement.
+  function toggleCooking(): void {
+    const supabase = app.supabase;
+    const id = activeId;
+    if (!supabase || !id || cookingBusy) return;
+    cookingBusy = true;
+    const starting = !cookingActive;
+    void (async () => {
+      try {
+        const settings = await supabase.updateActiveSessions((sessions) =>
+          withCookingSession(
+            sessions,
+            id,
+            starting ? new Date().toISOString() : undefined,
+            new Date()
+          )
+        );
+        applyCookingSessions(settings.activeSessions, id);
+        cookingClockTick = Date.now();
+        cookingError = null;
+      } catch (err) {
+        cookingError = errMsg(err);
+      } finally {
+        cookingBusy = false;
+      }
+    })();
+  }
+
+  // One ingredient checkbox in cooking mode: toggle "used" for that
+  // name and persist. No grocery writes, no grocery events - the
+  // grocery bridge is fully bypassed while cooking. On failure the
+  // refetch re-derives state from what actually landed, rolling the
+  // checkbox back (same discipline as the grocery handler).
+  function onCookingIngredientToggle(input: HTMLInputElement): void {
+    const supabase = app.supabase;
+    const id = activeId;
+    if (!supabase || !id || cookingBusy) return;
+    const key = normalizeGroceryName(input.dataset.ing ?? '');
+    if (!key) return;
+    void (async () => {
+      try {
+        const settings = await supabase.updateActiveSessions((sessions) =>
+          withUsedIngredient(sessions, id, key)
+        );
+        applyCookingSessions(settings.activeSessions, id);
+        cookingError = null;
+      } catch (err) {
+        cookingError = errMsg(err);
+        try {
+          applyCookingSessions((await supabase.getSettings()).activeSessions, id);
+        } catch {
+          // Refetch failed too - the next successful write reconciles.
+        }
       }
     })();
   }
@@ -1585,22 +1742,44 @@
                  The same container is bound to `detailRenderEl` so a TOC
                  click can resolve its target id within this render. -->
             {#if parsedDetail && parsedDetail.ingredients.length > 0}
-              <!-- Batch shortcut for the per-row checkboxes below.
-                   Rendered by the template (not the {@html} body)
-                   because it needs Svelte state for the busy gate. -->
+              <!-- Batch shortcut for the per-row checkboxes below, plus
+                   the cooking-mode toggle. Rendered by the template (not
+                   the {@html} body) because both need Svelte state for
+                   their busy gates. While cooking, "Add all" is hidden -
+                   the mode exists so checkbox taps do NOT touch the
+                   grocery list, and a batch-add button would contradict
+                   that. -->
               <div class="cookbook-add-all-row">
+                {#if cookingActive}
+                  <span class="cookbook-cooking-progress" aria-live="polite">
+                    {cookingProgressLabel(usedNames.size, parsedDetail.ingredients.length)}
+                  </span>
+                {/if}
+                {#if !cookingActive}
+                  <button
+                    type="button"
+                    class="cookbook-add-all"
+                    disabled={addAllBusy}
+                    onclick={onAddAllIngredients}
+                  >{addAllBusy ? 'Adding...' : 'Add all to grocery list'}</button>
+                {/if}
                 <button
                   type="button"
-                  class="cookbook-add-all"
-                  disabled={addAllBusy}
-                  onclick={onAddAllIngredients}
-                >{addAllBusy ? 'Adding...' : 'Add all to grocery list'}</button>
+                  class="cookbook-add-all cookbook-cooking-toggle"
+                  class:active={cookingActive}
+                  disabled={cookingBusy}
+                  onclick={toggleCooking}
+                >{cookingBusy ? '...' : cookingToggleLabel(cookingActive)}</button>
               </div>
+              {#if cookingError}
+                <p class="cookbook-cooking-error">{cookingError}</p>
+              {/if}
             {/if}
             <!-- svelte-ignore a11y_click_events_have_key_events -->
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div
               class="cookbook-render"
+              class:cooking={cookingActive}
               bind:this={detailRenderEl}
               onclick={onRenderClick}
               onchange={onRenderChange}
@@ -2385,10 +2564,14 @@
 
   /* Batch add-all shortcut above the rendered recipe, tucked toward
      the reading column's right edge so it reads as an action on the
-     content below rather than part of the action bar above. */
+     content below rather than part of the action bar above. Shares
+     the row with the cooking-mode toggle (two verbs over the same
+     checkbox set). */
   .cookbook-add-all-row {
     display: flex;
     justify-content: flex-end;
+    align-items: center;
+    gap: 0.5rem;
     margin: 0.25rem 0;
   }
   .cookbook-add-all {
@@ -2404,6 +2587,32 @@
   .cookbook-add-all:disabled {
     opacity: 0.6;
     cursor: default;
+  }
+  /* Cooking-mode toggle. .active mirrors the grocery screen's
+     Start/Finish-shopping toggle treatment. */
+  .cookbook-cooking-toggle.active {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  /* Progress line beside the toggle while cooking - informational
+     only, and aria-live so marking an ingredient announces the
+     remaining count to a screen reader. */
+  .cookbook-cooking-progress {
+    color: var(--muted);
+    font-size: 0.8rem;
+  }
+  .cookbook-cooking-error {
+    text-align: right;
+    margin: 0.25rem 0 0;
+    font-size: 0.8rem;
+  }
+  /* In cooking mode a checked ingredient row reads as "used up":
+     strikethrough + muted name. The checkbox chrome itself is left
+     alone so the muscle memory from the grocery bridge still
+     applies. */
+  .cookbook-render.cooking :global(li.cook-used .cook-name) {
+    text-decoration: line-through;
+    color: var(--muted);
   }
 
   /* Instruction steps — replace the browser-default "1." marker with

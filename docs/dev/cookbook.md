@@ -93,6 +93,19 @@ unaffected.
   worth showing" threshold, kept out of the renderer because it's a
   presentation threshold, not part of the document structure).
   Unit-tested at `tests/recipe-detail.test.ts`.
+- `src/lib/ui/active-sessions.ts` — pure primitives for the two
+  live activities that persist in `UserSettings.activeSessions`:
+  cooking sessions (this screen) and the grocery shopping trip (see
+  [`./grocery-list.md`](./grocery-list.md)). Owns the expiry policy
+  (`isSessionKeyActive`: same local calendar day, cooking sessions
+  additionally capped at `COOKING_SESSION_MAX_AGE_HOURS` = 6), the
+  expired-entry prune, the map mutators (`withShoppingTrip`,
+  `withCookingSession`, `withUsedIngredient`), and the
+  cooking-mode copy. The wire shape + coercer live in the settings
+  boundary (`supabase/types/settings.ts` `ActiveSession` /
+  `coerceActiveSessions`); the read-modify-write IO is
+  `updateActiveSessions` in `supabase/settings.ts`. Unit-tested at
+  `tests/active-sessions.test.ts`.
 - `src/lib/ui/cookbook-screen.ts` — the screen-scoped UI primitives
   for Cookbook.svelte (named `-screen` because the cookbook domain
   already owns the nearby names - `cookbook-store.svelte.ts`,
@@ -370,6 +383,49 @@ sync` is a no-op.
 user opted in to keeping every revision so the History panel reads
 as a complete diary.
 
+## Cooking mode
+
+"Make this now" on the detail pane starts a per-recipe **cooking
+session**; while it is active, the ingredient checkboxes change
+meaning - checked = "used in this session", NOT "on the grocery
+list" - and the grocery bridge is fully bypassed (no product
+revive/create/delete, no grocery events). An "N of M used" counter
+renders beside the toggle and the **Add all to grocery list** button
+hides (the mode exists so checkbox taps stop touching the list;
+a batch-add button would contradict that). "Done cooking" ends the
+session and clears the marks; starting always begins fresh.
+
+- **Persistence**: the session lives in
+  `profiles.settings.activeSessions` under the key
+  `cooking:<recipe id>` (`{ startedAt, used[] }`), so progress
+  survives a reload or a PWA eviction mid-cook - the realistic
+  failure the sessionStorage alternative died in. Several recipes
+  cook at once, one map entry each (main + side).
+- **Expiry is read-side only**: midnight, or after 6 hours,
+  whichever first - an abandoned entry just reads as inactive and
+  the next session-map write prunes it (`pruneExpiredSessions`
+  folded into every mutator). No cron, no cleanup write.
+- **The shared map**: the shopping trip shares the settings key, so
+  every write goes through `updateActiveSessions` (fresh read ->
+  mutate -> merge-RPC write). Writing a map read earlier would
+  clobber a session another surface added in between - the map is
+  one settings key and the merge RPC is shallow (top-level keys
+  only). Two devices marking ingredients concurrently can still
+  last-write-wins within the map; accepted (single user, rare,
+  recoverable by re-tapping).
+- **Renderer stays unaware**: cooking mode reuses the exact
+  `ingredientCheckboxes` markup; the sync effect branches on
+  `cookingActive` (checked state from the used set, `.cook-used`
+  strikethrough class on the row, `usedIngredientAriaLabel` swap)
+  and the delegated change handler routes to
+  `onCookingIngredientToggle`. The renderer stamps the grocery aria
+  label via the shared `groceryCheckboxAriaLabel` (also used to
+  RESTORE labels when cooking ends); the render container gains a
+  `.cooking` class for the strikethrough CSS.
+- The checkbox count in the progress line is
+  `parsedDetail.ingredients.length` - the same list the rows render
+  from - so counter and rows agree by construction.
+
 ## Embeddings
 
 The drawer's recipe search runs through the same embed-then-merge
@@ -413,9 +469,11 @@ keystrokes; the LLM tool path keeps using `listRecipes`.
   its `onMount`, and runs the recipes-table realtime relay that
   fires the event, so a model-driven save refreshes the Recipes tab
   live.
-- **Settings** (`./settings.md`) — no settings yet; cookbook-wide
-  preferences (default servings, preferred unit system) would land
-  on `profiles.settings` if and when we grow them.
+- **Settings** (`./settings.md`) — the cooking session persists on
+  `profiles.settings` via the shared `activeSessions` map (see
+  "Cooking mode" below). Cookbook-wide content preferences (default
+  servings, preferred unit system) would land on the same blob if
+  and when we grow them.
 - **Memory** (`./memory.md`) — scope contrast. A memory is "something
   about the user"; a recipe is "an item the user owns". Share the
   RLS posture and the tool-registry pattern; don't share data.
@@ -429,7 +487,10 @@ keystrokes; the LLM tool path keeps using `listRecipes`.
   against `parseCooklang`). Any new write path that touches
   `cooklang` inherits that side effect by construction; a write
   path that changes ingredients WITHOUT touching `cooklang` would
-  silently skip it (none exists today).
+  silently skip it (none exists today). Cooking mode (above) shares
+  the checkboxes with this bridge and shares the `activeSessions`
+  settings map with the shopping trip - the two features' session
+  writes must go through `updateActiveSessions`.
 - **Offline cache** (`./offline-cache.md`) — a recipe's `favorite` or
   `upcoming` flag is what saves it offline: the offline-sync reconcile
   mirrors the union of both buckets into IndexedDB. The Cookbook

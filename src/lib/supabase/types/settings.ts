@@ -63,16 +63,18 @@ export interface UserSettings {
    */
   imageModel?: string;
   /**
-   * ISO timestamp of when the user hit "Start shopping" on the
-   * grocery list, or absent when no trip is underway. A trip is
-   * ACTIVE only while the local calendar day still matches this
-   * timestamp (see isShoppingTripActive in ../../ui/grocery-list) -
-   * crossing midnight ends it implicitly, no cron or cleanup write
-   * needed; the stale value just reads as inactive and the next
-   * "Start shopping" overwrites it. Items unchecked while a trip is
-   * active (updated_at >= this) render in the "In cart" section.
+   * The user's live one-at-a-time activities, keyed by session kind:
+   * the grocery shopping trip (`shopping`) and any in-progress
+   * recipe cooking sessions (`cooking:<recipe id>`, several may be
+   * open at once - a main and a side). Expiry is READ-side only:
+   * entries past their policy (see isSessionKeyActive in
+   * ../../ui/active-sessions) simply read as inactive, and the next
+   * write through updateActiveSessions prunes them. The map is one
+   * settings key, so each write replaces the whole map - mutators
+   * must go through the read-modify-write helper (updateActiveSessions),
+   * never patch a copy read earlier.
    */
-  groceryShoppingStartedAt?: string;
+  activeSessions?: Record<string, ActiveSession>;
   colorMode?: ColorMode;
   accent?: Accent;
   /** UI shape style: rounded 'soft' (default when absent) or square 'terminal'. */
@@ -193,6 +195,66 @@ export interface UserSettings {
   userLocation?: string;
 }
 
+/**
+ * One entry in `UserSettings.activeSessions`. `startedAt` is the ISO
+ * timestamp the session began (the shopping trip's In-cart split
+ * keys on it); `used` carries the cooking session's marked-used
+ * ingredient names (normalized), always empty for the shopping trip.
+ */
+export interface ActiveSession {
+  startedAt: string;
+  used: string[];
+}
+
+/** Session-map key of the (single) grocery shopping trip. */
+export const SHOPPING_SESSION_KEY = 'shopping';
+
+/** Session-map key of a recipe's cooking session. */
+export function cookingSessionKey(recipeId: string): string {
+  return `cooking:${recipeId}`;
+}
+
+/** Whether a session-map key is a cooking session (vs the shopping trip). */
+export function isCookingSessionKey(key: string): boolean {
+  return key.startsWith('cooking:');
+}
+
+/**
+ * Cap on the used-name list of one cooking session. Recipes are
+ * capped well below this; the ceiling exists so a corrupt blob can't
+ * balloon the settings blob. USER_PROFILE_FIELD_MAX bounds each name.
+ */
+const ACTIVE_SESSION_USED_MAX = 128;
+
+/**
+ * Scrub the raw activeSessions map into a well-typed one, dropping
+ * malformed entries silently like every other settings field.
+ */
+export function coerceActiveSessions(
+  raw: unknown
+): Record<string, ActiveSession> | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const r = raw as Record<string, unknown>;
+  const out: Record<string, ActiveSession> = {};
+  for (const [key, value] of Object.entries(r)) {
+    if (key.length === 0 || typeof value !== 'object' || value === null) continue;
+    const v = value as Record<string, unknown>;
+    if (typeof v.startedAt !== 'string' || Number.isNaN(Date.parse(v.startedAt))) {
+      continue;
+    }
+    const used = Array.isArray(v.used)
+      ? v.used
+          .filter(
+            (n): n is string =>
+              typeof n === 'string' && n.length > 0 && n.length <= USER_PROFILE_FIELD_MAX
+            )
+          .slice(0, ACTIVE_SESSION_USED_MAX)
+      : [];
+    out[key] = { startedAt: v.startedAt, used };
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 export function coerceSystemPrompt(raw: unknown): SystemPrompt | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const r = raw as Record<string, unknown>;
@@ -222,11 +284,24 @@ export function coerceSettings(raw: unknown): UserSettings {
   if (typeof r.imageModel === 'string' && r.imageModel.length > 0) {
     out.imageModel = r.imageModel;
   }
-  if (
+  // activeSessions is the canonical session-map key. A legacy
+  // `groceryShoppingStartedAt` (pre-map blob) seeds the shopping
+  // entry on first read so an in-flight trip survives the upgrade;
+  // the next activeSessions write clears the legacy key (same
+  // read-side-migration pattern as journalTimezone below).
+  const activeSessions = coerceActiveSessions(r.activeSessions);
+  const legacyTripAt =
     typeof r.groceryShoppingStartedAt === 'string' &&
     !Number.isNaN(Date.parse(r.groceryShoppingStartedAt))
-  ) {
-    out.groceryShoppingStartedAt = r.groceryShoppingStartedAt;
+      ? r.groceryShoppingStartedAt
+      : undefined;
+  if (legacyTripAt && !(activeSessions && SHOPPING_SESSION_KEY in activeSessions)) {
+    out.activeSessions = {
+      ...(activeSessions ?? {}),
+      [SHOPPING_SESSION_KEY]: { startedAt: legacyTripAt, used: [] },
+    };
+  } else if (activeSessions) {
+    out.activeSessions = activeSessions;
   }
   if (isColorMode(r.colorMode)) out.colorMode = r.colorMode;
   if (isAccent(r.accent)) out.accent = r.accent;

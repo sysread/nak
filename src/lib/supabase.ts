@@ -134,6 +134,7 @@ import type {
   GroceryEntryPatch,
   Document,
   UserSettings,
+  ActiveSession,
   TopicVocabulary,
   OffsetPage,
   AgentRunProgressEvent,
@@ -365,6 +366,12 @@ export class SupabaseService {
 
   async updateSettings(patch: Partial<UserSettings>): Promise<UserSettings> {
     return settingsApi.updateSettings(this.client, patch);
+  }
+
+  async updateActiveSessions(
+    mutate: (sessions: Record<string, ActiveSession>) => Record<string, ActiveSession>
+  ): Promise<UserSettings> {
+    return settingsApi.updateActiveSessions(this.client, mutate);
   }
 
   // --- Threads ---------------------------------------------------------

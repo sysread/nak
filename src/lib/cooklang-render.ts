@@ -250,6 +250,17 @@ function dedupeFromSteps(steps: Step[]): Ingredient[] {
 }
 
 /**
+ * Accessible label for a grocery checkbox ingredient row. Shared with
+ * the Cookbook detail pane's sync effect, which RESTORES this label
+ * when cooking mode (which swaps it for the used-ingredient verb)
+ * ends - keeping the wording in one place stops the renderer and the
+ * sync effect from drifting apart.
+ */
+export function groceryCheckboxAriaLabel(name: string): string {
+  return `Add ${name} to grocery list`;
+}
+
+/**
  * Render an ingredient list as `<li>` markup - no surrounding `<ul>`,
  * so the caller controls whether this sits under a heading or inside
  * a sub-section block.
@@ -277,7 +288,7 @@ function ingredientsListItems(ings: Ingredient[], checkboxes: boolean): string {
       ? ` <span class="cook-note">${esc(ing.note)}</span>`
       : '';
     if (checkboxes) {
-      const checkboxHtml = `<input type="checkbox" class="cook-buy" data-ing="${esc(ing.name)}" aria-label="Add ${esc(ing.name)} to grocery list"> `;
+      const checkboxHtml = `<input type="checkbox" class="cook-buy" data-ing="${esc(ing.name)}" aria-label="${esc(groceryCheckboxAriaLabel(ing.name))}"> `;
       out.push(
         `<li><label class="cook-buy-label">${checkboxHtml}${qtyHtml}<span class="cook-name">${esc(ing.name)}</span>${optHtml}${noteHtml}</label></li>`
       );

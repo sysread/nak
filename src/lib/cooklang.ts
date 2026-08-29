@@ -692,7 +692,7 @@ function dedupeTimers(items: Timer[]): Timer[] {
 // import from either module - the parser types (Recipe, Step, etc.)
 // stay here, the renderers and their option types live there.
 
-export { recipeToHtml, cooklangToHtml, recipeToc, recipeToPlainText, recipeToMarkdown } from './cooklang-render';
+export { recipeToHtml, cooklangToHtml, recipeToc, recipeToPlainText, recipeToMarkdown, groceryCheckboxAriaLabel } from './cooklang-render';
 export type { RecipeHtmlOptions, RecipeTocSection, RecipeTocEntry } from './cooklang-render';
 
 // ---------------------------------------------------------------------------

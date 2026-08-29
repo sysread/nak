@@ -92,8 +92,9 @@ owns current reality.
   (`canCreateGroceryItem`), the acquired disclosure copy, the DnD
   next-state helpers (`sectionOrderAfterDrag` + the `sectionDropEdge`
   insertion-line decision), the shopping-trip helpers
-  (`isShoppingTripActive`, `splitAcquiredForTrip`,
-  `CART_IDLE_MESSAGE`, `shoppingToggleLabel`), the sidebar browse
+  (`isShoppingTripActive` - a delegate of the shared session policy,
+  `splitAcquiredForTrip`, `CART_IDLE_MESSAGE`, `shoppingToggleLabel`),
+  the sidebar browse
   helpers (status/section filter mapping, `splitBrowseRows`
   provenance grouping, the `computeBrowseView` render decision),
   name normalization, and the recipe-bridge helpers
@@ -316,10 +317,13 @@ Prompt assembly and answer parsing are pure functions tested at
 ## Shopping trips
 
 The "Start shopping" / "Finish shopping" button on the panel toggles
-`profiles.settings.groceryShoppingStartedAt` (an ISO timestamp; see
-`UserSettings`). While a trip is active, items unchecked from the
-list surface in the **In cart** card between the section cards and
-the acquired disclosure - membership is derived, not stored:
+the `shopping` entry of `profiles.settings.activeSessions` (an ISO
+`startedAt` timestamp; see `ActiveSession` in `types/settings.ts` -
+one session map shared with the Cookbook's cooking sessions, written
+through the `updateActiveSessions` read-modify-write so a concurrent
+cooking session on another surface can't be clobbered). While a trip
+is active, items unchecked from the list surface in the **In cart**
+card between the section cards and the acquired disclosure - membership is derived, not stored:
 off-list AND `acquired_at >= trip start` (the panel's uncheck
 stamps the open entry's `acquired_at`), split client-side by
 `splitAcquiredForTrip`. Because the split keys on the purchase
@@ -328,11 +332,20 @@ longer fake it into the cart (a real gotcha of the pre-split
 model). The acquired-history disclosure excludes the cart rows
 while a trip is active. A trip is active only while the local
 calendar day still matches the start timestamp
-(`isShoppingTripActive`), so it expires at midnight in the user's
-timezone with no cron or cleanup write - the stale timestamp just
-reads as inactive; a minute-tick in the panel re-evaluates so an
+(`isShoppingTripActive`, a delegate of the shared `isSessionKeyActive`
+policy in `src/lib/ui/active-sessions.ts` - the trip has no age
+bound, unlike cooking sessions), so it expires at midnight in the
+user's timezone with no cron or cleanup write - the stale timestamp
+just reads as inactive; a minute-tick in the panel re-evaluates so an
 open tab crosses midnight too. Idle, the In-cart card shows
 `CART_IDLE_MESSAGE`.
+
+**Legacy migration**: blobs written before the session map carried
+the trip on `settings.groceryShoppingStartedAt`. `coerceSettings`
+seeds the map's `shopping` entry from it on first read (the map wins
+when it already carries one); the next `activeSessions` write clears
+the legacy key - the same read-side migration pattern as
+`journalTimezone`.
 
 ## Refresh model
 
@@ -366,16 +379,20 @@ Deployed via its own line in `deploy.yml`.
 - **Cookbook** (`./cookbook.md`) - the bridge above; the
   invalidation trigger couples to every `recipes.cooklang` writer
   (`recipe_update_with_version` and any direct update). The
-  cookbook's "no shopping-list logic" scoping is retired.
+  cookbook is also where cooking mode lives - the other consumer of
+  the shared `activeSessions` map; the trip and the cooking
+  sessions must not clobber each other's settings writes.
 - **Chat** (`./chat.md`) - hosts the drawer tab, the lazy component
   load, and the realtime relay.
 - **File storage** (`./file-storage.md`) - the fourth private
   bucket + its GC sweep.
-- **Settings** (`./settings.md`) - the shopping-trip flag
-  (`groceryShoppingStartedAt`) rides `profiles.settings` through
-  the standard coercer + merge-RPC path; adding trip fields means
-  touching `UserSettings`, `coerceSettings`, and the
-  `updateSettings` whitelist together.
+- **Settings** (`./settings.md`) - the shopping trip rides the
+  shared `activeSessions` map on `profiles.settings` through the
+  standard coercer + merge-RPC path; session-map changes mean
+  touching `ActiveSession`/`coerceActiveSessions` in
+  `types/settings.ts`, the `activeSessions` whitelist branch in
+  `updateSettings`, and the mutators in
+  `src/lib/ui/active-sessions.ts` together.
 - **Routing** - `drawer=groceries` joins the DrawerTab union in
   `routing.svelte.ts`.
 - **Models** (`src/lib/models/index.ts`) - the `grocerySection`

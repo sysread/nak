@@ -494,6 +494,13 @@ every update) so it's covered here rather than in its own file.
   profile string) deletes that field; a present-but-invalid value
   is ignored so it neither writes garbage nor clears the existing
   value. Returns the coerced post-merge blob.
+- `updateActiveSessions(mutate): Promise<UserSettings>` — the ONLY
+  way to write the `activeSessions` map (shopping trip, cooking
+  sessions): fresh `getSettings` read, caller's mutator folds in its
+  change, `updateSettings` write. The fresh read is load-bearing -
+  the whole map is one settings key and the merge RPC is shallow
+  (top-level keys only), so writing a map read earlier would clobber
+  a session another surface wrote in between.
 - `updateSystemPrompts(prompts: SystemPrompt[]): Promise<void>`
   — replaces the `systemPrompts` array wholesale (system-prompt
   editing is a full-form save, not per-prompt). Array order is
@@ -551,12 +558,15 @@ every update) so it's covered here rather than in its own file.
   (`state.svelte.ts`) is the bridge: Settings writes setters,
   other features read the corresponding `app.*` field. See
   `./architecture.md`.
-- **Grocery list** (`./grocery-list.md`) - the shopping-trip flag
-  (`groceryShoppingStartedAt`) lives on the settings blob but is
-  written by the Groceries panel, not the Settings screen: a
-  timestamped "trip is underway" marker whose midnight expiry is
-  computed client-side. It rides the same coercer + merge-RPC
-  contract as every other field.
+- **Grocery list** (`./grocery-list.md`) - the shopping trip lives
+  on the settings blob but is written by the Groceries panel, not
+  the Settings screen: a "trip is underway" marker whose midnight
+  expiry is computed client-side. It shares the `activeSessions`
+  map with the Cookbook's cooking sessions (`./cookbook.md`);
+  see `src/lib/ui/active-sessions.ts` for the expiry policy and
+  `updateActiveSessions` in `supabase/settings.ts` for the
+  read-modify-write every session-map writer must use. Rides the
+  same coercer + merge-RPC contract as every other field.
 - **Build & deploy** — the About pane surfaces the commit SHA +
   build time that `vite.config.ts` inlines via `define`, and
   drives the same `applyUpdate()` that UpdateBanner calls. See

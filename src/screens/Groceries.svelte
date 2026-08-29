@@ -42,6 +42,8 @@
   } from '$lib/grocery-store.svelte';
   import { onGroceryChange } from '$lib/grocery-events';
   import type { GroceryProductView } from '$lib/supabase';
+  import { SHOPPING_SESSION_KEY } from '$lib/supabase';
+  import { withShoppingTrip } from '$lib/ui/active-sessions';
   import {
     ACQUIRED_PAGE_SIZE,
     sectionDropEdge,
@@ -101,13 +103,16 @@
   let showEmptySections = $state(false);
 
   // --- Shopping trip state ---
-  // Persisted on profiles.settings.groceryShoppingStartedAt so a trip
-  // survives reloads and follows the account. While a trip is active,
-  // items unchecked from the list surface in the In-cart section
-  // (updated_at >= trip start); the trip expires implicitly at local
-  // midnight (isShoppingTripActive compares calendar days), so no
-  // cleanup write is needed. `clockTick` re-evaluates activity once a
-  // minute so a tab left open crosses midnight without interaction.
+  // Persisted on profiles.settings.activeSessions (key 'shopping') so a
+  // trip survives reloads and follows the account; the read-modify-write
+  // goes through updateActiveSessions so a concurrent cooking session
+  // (Cookbook, another tab) can't be clobbered by a stale map. While a
+  // trip is active, items unchecked from the list surface in the
+  // In-cart section (purchased since trip start); the trip expires
+  // implicitly at local midnight (isShoppingTripActive compares
+  // calendar days), so no cleanup write is needed. `clockTick`
+  // re-evaluates activity once a minute so a tab left open crosses
+  // midnight without interaction.
   let shoppingStartedAt = $state<string | undefined>(undefined);
   let shoppingBusy = $state(false);
   let clockTick = $state(Date.now());
@@ -122,7 +127,8 @@
       if (!app.supabase) return;
       try {
         const settings = await app.supabase.getSettings();
-        shoppingStartedAt = settings.groceryShoppingStartedAt;
+        shoppingStartedAt =
+          settings.activeSessions?.[SHOPPING_SESSION_KEY]?.startedAt;
       } catch {
         // Non-fatal: the trip button still works (the next toggle
         // writes fresh state); the cart just reads idle until then.
@@ -141,10 +147,11 @@
     const next = shoppingActive ? undefined : new Date().toISOString();
     void (async () => {
       try {
-        const settings = await supabase.updateSettings({
-          groceryShoppingStartedAt: next,
-        });
-        shoppingStartedAt = settings.groceryShoppingStartedAt;
+        const settings = await supabase.updateActiveSessions((sessions) =>
+          withShoppingTrip(sessions, next, new Date())
+        );
+        shoppingStartedAt =
+          settings.activeSessions?.[SHOPPING_SESSION_KEY]?.startedAt;
         clockTick = Date.now();
         actionError = null;
       } catch (err) {

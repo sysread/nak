@@ -180,6 +180,32 @@ highlight; clicking the highlighted step again clears it. The
 highlight is local to your current view; switching to another recipe
 clears it automatically, and nothing is saved to the server.
 
+## Cooking mode
+
+When you're actually cooking, click **Make this now** above the
+rendered recipe. The ingredient checkboxes change meaning for that
+recipe: checking one marks it as **used** (the row gets a
+strikethrough) instead of adding it to your
+[grocery list](./grocery-list.md), and a small "N of M used" counter
+tracks your progress. The **Add all to grocery list** button hides
+while cooking - the whole point is that checkbox taps stop touching
+the list. Click **Done cooking** (the same button) to end the
+session: the used marks clear and the checkboxes go back to
+grocery-list duty.
+
+- **Progress survives interruptions.** The session follows your
+  account, so a reload or your phone evicting the tab mid-cook picks
+  back up where you left off.
+- **Several recipes can cook at once** - a main and a side each hold
+  their own session, so you can work through both and each keeps its
+  own progress.
+- **Sessions end themselves.** A session expires at midnight, or
+  after 6 hours - whichever comes first. An abandoned session just
+  reads as inactive the next morning; nothing needs cleaning up.
+
+The instruction-step highlight above works the same while cooking -
+tap a step to mark where you are.
+
 ## Rating recipes
 
 Each recipe carries an optional 1-5 star rating. New recipes start

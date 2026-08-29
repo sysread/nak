@@ -20,11 +20,12 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { SupabaseError } from './error';
 import { getSession } from './session';
 import {
+  coerceActiveSessions,
   coerceSettings,
   coerceSystemPrompt,
   USER_PROFILE_FIELD_MAX,
 } from './types';
-import type { UserSettings, SystemPrompt } from './types';
+import type { UserSettings, SystemPrompt, ActiveSession } from './types';
 import { coerceModelProfiles } from '../models';
 import {
   coercePriceCaps,
@@ -154,18 +155,20 @@ export async function updateSettings(
       toRemove.push('imageModel');
     }
   }
-  if ('groceryShoppingStartedAt' in patch) {
-    // Undefined clears the trip ("Finish shopping"); a parseable
-    // timestamp starts one. Invalid strings are ignored, like every
-    // other field.
-    if (patch.groceryShoppingStartedAt === undefined) {
-      toRemove.push('groceryShoppingStartedAt');
-    } else if (
-      typeof patch.groceryShoppingStartedAt === 'string' &&
-      !Number.isNaN(Date.parse(patch.groceryShoppingStartedAt))
-    ) {
-      toSet.groceryShoppingStartedAt = patch.groceryShoppingStartedAt;
+  if ('activeSessions' in patch) {
+    if (patch.activeSessions === undefined) {
+      toRemove.push('activeSessions');
+    } else {
+      // Re-run the coercer so a sloppy caller can't persist a
+      // malformed map; an empty result clears the key entirely.
+      const cleaned = coerceActiveSessions(patch.activeSessions);
+      if (cleaned) toSet.activeSessions = cleaned;
+      else toRemove.push('activeSessions');
     }
+    // The shopping trip lives in the session map now; clear the
+    // legacy key in the same merge so a profile written before the
+    // migration doesn't keep ghosting it alongside the map.
+    toRemove.push('groceryShoppingStartedAt');
   }
   if ('colorMode' in patch) {
     if (patch.colorMode === undefined) toRemove.push('colorMode');
@@ -297,4 +300,26 @@ export async function updateSettings(
   // canonical shape (e.g. an all-empty tierModels collapsing to absence)
   // exactly as a fresh getSettings would have.
   return coerceSettings(data);
+}
+
+/**
+ * Read-modify-write the activeSessions map (shopping trip, cooking
+ * sessions). `mutate` receives the CURRENT map from a fresh read and
+ * returns the next map. The fresh read is load-bearing: the whole
+ * map is one settings key, so writing a copy read earlier would
+ * clobber a session another surface (the other tab, the other
+ * feature's screen) added in between - the same lost-update window
+ * that pushed updateSettings onto the merge RPC. Every caller goes
+ * through this helper; nobody composes the map from a stale read.
+ *
+ * Returns the post-write settings so the caller can re-derive its
+ * local state from what actually landed (a failed write rolls the
+ * caller's UI back by reading this).
+ */
+export async function updateActiveSessions(
+  client: SupabaseClient,
+  mutate: (sessions: Record<string, ActiveSession>) => Record<string, ActiveSession>
+): Promise<UserSettings> {
+  const current = await getSettings(client);
+  return updateSettings(client, { activeSessions: mutate(current.activeSessions ?? {}) });
 }
