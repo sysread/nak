@@ -57,6 +57,22 @@ Nak can also flip toolboxes itself mid-conversation when it realises
 it needs a capability. When that happens, the toolbox button briefly
 pulses so you can see the change.
 
+### Quick send
+
+Next to the send button is a second one with a lightning bolt. It
+sends your message the same way, but skips the automatic "pre-flight"
+context Nak normally attaches to every turn - the intuition read,
+conversation recall, the samskara summary, and the bias compensation
+notes. Tools, your configured system prompts, and everything else
+work exactly as usual.
+
+Use it when you want the answer fast and don't care about the extra
+context - standing in the baking aisle and just need a substitution.
+The reply starts sooner because Nak spends no time gathering that
+context. The trade-off is a turn with a narrower view: the model
+answers from the conversation alone. It's a per-message choice - the
+next regular send goes back to the full treatment.
+
 ## Streaming responses
 
 Replies stream token-by-token. Under the hood, Nak keeps the markdown

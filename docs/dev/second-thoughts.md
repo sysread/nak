@@ -212,7 +212,10 @@ cohort and bury the refinement's own `<think>` doubt.
 `streamCtx.priming.skipPriming` (`venice.ts`) -> the `/stream` body
 (`index.ts`) -> `PrimingInputs.skipPriming` -> `runServerPriming`,
 which routes the turn to `runRefinementPriming` instead of the
-standard stage.
+standard stage. The refinement is no longer the flag's only caller -
+the quick-send button shares it, without a doubt note, so its turn
+runs nothing at all (see [`prompt-augmentation.md`](./prompt-augmentation.md),
+"Deliberate full skips").
 
 What the refinement DOES get is the deliberation's share of context:
 the design asymmetry is "the doubt does not need the context; the

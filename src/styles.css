@@ -3656,6 +3656,22 @@ button.composer-wharf-trigger {
   filter: brightness(1.1);
 }
 
+/* Right-edge group holding the send + quick-send pair. The composer
+   bar is justify-content: space-between; left the buttons as siblings,
+   it would distribute them across the bar (send stranded mid-bar,
+   quick at the edge). The wrapper makes the pair one flex item so
+   space-between sees two children again: the picker row and this
+   group. */
+.composer-bar-send {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+/* Quick-send styling rides the shared `secondary` button class
+   (transparent + border) so the accent-filled paper plane stays the
+   obvious primary action; only the geometry comes from .send-btn. */
+
 @media (prefers-reduced-motion: reduce) {
   .composer-shell {
     transition: none;

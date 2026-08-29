@@ -974,6 +974,48 @@ describe('streamChat (streaming-root transport)', () => {
     // Plain send: the regenerate-only field stays off the wire
     // entirely (not an empty array).
     expect('supersededIds' in body).toBe(false);
+    // Same for the priming inputs: absent when the caller passes none,
+    // so the server's priming stage sees "all pipelines at their
+    // disabled default" rather than an explicit object of undefineds.
+    expect('priming' in body).toBe(false);
+  });
+
+  it('ships streamCtx.priming on the envelope so skip flags reach the server', async () => {
+    // Pins the wire hop the quick-send and refinement turns depend on:
+    // if a refactor drops the priming field from the POST body, those
+    // turns silently regain full priming and nothing else fails.
+    const channel = makeChannel('thread:T1:stream');
+    const channels = new Map([[channel.name, channel]]);
+    const { client, invokeCalls } = makeSupabase({
+      envelope: {
+        channelName: channel.name,
+        assistantRowId: null,
+        completedSoFar: '',
+      },
+      channels,
+    });
+    const venice = new VeniceClient({ supabase: client });
+    const consumer = venice.streamChat({
+      model: 'kimi-k2-5',
+      messages: [{ role: 'user', content: 'hi' }],
+      streamCtx: {
+        threadId: 'T1',
+        userMessageId: 'U1',
+        priming: { skipPriming: true },
+      },
+    });
+    const drained = collectFirst(consumer);
+    await Promise.resolve();
+    await Promise.resolve();
+    channel.emit('END', {
+      persistedAssistantId: 'A1',
+      terminalKind: 'completed',
+    });
+    await drained;
+
+    expect(invokeCalls).toHaveLength(1);
+    const body = invokeCalls[0].body as { priming?: { skipPriming?: boolean } };
+    expect(body.priming).toEqual({ skipPriming: true });
   });
 
   it('ships streamCtx.supersededIds on the envelope for regenerate turns', async () => {

@@ -6,6 +6,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
+  quickSendButtonState,
   queuedAttachmentSummary,
   queuedHeadline,
   sendButtonState,
@@ -92,6 +93,47 @@ describe('sendButtonState', () => {
     // turn that ended on an error. The button must go back to meaning
     // "send what is in the composer" there, not offer to stop nothing.
     expect(sendButtonState({ ...IDLE, queuedCount: 2 }).mode).toBe('send');
+  });
+});
+
+describe('quickSendButtonState', () => {
+  const QUICK_IDLE = {
+    sending: false,
+    composerEmpty: false,
+    archived: false,
+    respondingElsewhere: false,
+  };
+
+  it('offers a quick send when idle with something to send', () => {
+    const state = quickSendButtonState(QUICK_IDLE);
+    expect(state.disabled).toBe(false);
+    expect(state.title).toContain('skips preflight priming');
+    expect(state.ariaLabel).toBe('Quick send');
+  });
+
+  it('disables on the same conditions as the idle send button', () => {
+    expect(quickSendButtonState({ ...QUICK_IDLE, composerEmpty: true }).disabled).toBe(true);
+    expect(quickSendButtonState({ ...QUICK_IDLE, archived: true }).disabled).toBe(true);
+    expect(
+      quickSendButtonState({ ...QUICK_IDLE, respondingElsewhere: true }).disabled
+    ).toBe(true);
+    // Unlike the send button, which becomes the clickable stop, a
+    // streaming turn takes quick send out of play entirely - it has no
+    // second meaning to fall back to.
+    expect(quickSendButtonState({ ...QUICK_IDLE, sending: true }).disabled).toBe(true);
+  });
+
+  it('explains the disable reason in the tooltip, foreign claim first', () => {
+    expect(quickSendButtonState({ ...QUICK_IDLE, archived: true }).title).toBe(
+      'Archived - restore to continue'
+    );
+    expect(
+      quickSendButtonState({ ...QUICK_IDLE, archived: true, respondingElsewhere: true })
+        .title
+    ).toBe('Another device is responding to this conversation');
+    expect(quickSendButtonState({ ...QUICK_IDLE, sending: true }).title).toBe(
+      'Finish or stop the current response first'
+    );
   });
 });
 

@@ -320,15 +320,26 @@ export interface ChatLoopOptions {
   /**
    * Skip the STANDARD server-side priming stage for this turn - the
    * bias appendix AND the samskara / intuition / context-recall
-   * `<think>` chain. Set by the second-thoughts refinement turn
-   * (Chat.svelte `refineFrom`): a refinement is the model reconsidering
-   * its own prior answer, NOT a new user round, so re-running the
-   * user-round-keyed priming would double-fire the samskara situational
-   * cohort for one round (pipeline pollution) and bury the refinement's
-   * own `<think>` doubt behind the samskara chain. The refinement
-   * carries the doubt block itself, plus the targeted samskara probe
-   * driven by `refinementDoubtNote` below. Omitted / false leaves
-   * priming running as normal.
+   * `<think>` chain. Two callers set it:
+   *
+   * - The second-thoughts refinement turn (Chat.svelte `refineFrom`):
+   *   a refinement is the model reconsidering its own prior answer,
+   *   NOT a new user round, so re-running the user-round-keyed priming
+   *   would double-fire the samskara situational cohort for one round
+   *   (pipeline pollution) and bury the refinement's own `<think>`
+   *   doubt behind the samskara chain. The refinement carries the
+   *   doubt block itself, plus the targeted samskara probe driven by
+   *   `refinementDoubtNote` below.
+   * - The user-requested quick send (Chat.svelte lightning bolt): a
+   *   normal user round whose pre-flight injection is skipped so the
+   *   first token lands sooner. Unlike a refinement it omits the
+   *   doubt note and the targeted probe - NOTHING is injected.
+   *
+   * Either way, callers must also omit the intuition/recall inputs
+   * (intuitionModelId, contextRecallEnabled) - `skipPriming` alone
+   * gates only the samskara chain + bias; those two pipelines gate on
+   * their own inputs. Omitted / false leaves priming running as
+   * normal.
    */
   skipPriming?: boolean;
   /**

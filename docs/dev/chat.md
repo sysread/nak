@@ -118,6 +118,22 @@ A chat turn goes:
   (`readComposerPayload`) and the user-row persist
   (`persistUserTurn`) are factored out of `send()` because the
   queued-message drain below produces identical rows through them.
+- **Quick send button** — the lightning bolt to the right of the send
+  button. A normal turn with `quick: true` on `ExchangeContext`: the
+  chat-loop packs `skipPriming: true` and omits the intuition/recall
+  inputs, so the server's priming stage runs nothing (same skip path
+  the second-thoughts refinement uses, minus the doubt probe - see
+  [`prompt-augmentation.md`](./prompt-augmentation.md) and
+  [`second-thoughts.md`](./second-thoughts.md)). Tools, the tool
+  catalog, user-configured system prompts, and the metadata block
+  all ride as usual; the turn tail (title, samskara mint, substrate
+  stub) is unaffected. Per-send by design - no sticky toggle, because
+  priming's value is invisible and so would its absence be. The
+  button disables while a turn streams (only the send button may
+  stop) and reuses the idle send's disable rules otherwise
+  (`quickSendButtonState` in `src/lib/ui/message-queue.ts`). Retry
+  banners and the queued-message drain build fresh contexts and run
+  as NORMAL turns - the same policy `isRefinement` follows.
 - **Queued messages** - the submit-modifier Enter's second mode.
   While a turn is in flight, Cmd/Ctrl/Shift+Enter routes to
   `queueMessage()` instead of `send()` or stop: the composer's

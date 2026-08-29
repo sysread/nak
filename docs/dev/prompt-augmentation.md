@@ -170,6 +170,27 @@ Every injector is best-effort and MUST NOT block or fail a turn:
 The invariant: a priming failure degrades to "less context this turn,"
 never to a broken or delayed turn.
 
+### Deliberate full skips
+
+Two browser-side callers suppress the whole stage for a turn by
+setting `skipPriming` and omitting the intuition/recall inputs (the
+two pipelines gate on their own inputs, not on `skipPriming`):
+
+- **The second-thoughts refinement turn** - the model reconsiders its
+  own answer rather than opening a new user round, so round-keyed
+  priming would double-fire samskara; it injects its own doubt block
+  plus a targeted probe instead (see [`second-thoughts.md`](./second-thoughts.md)).
+- **The user-requested quick send** (Chat.svelte lightning bolt) - a
+  normal user round shipped unprimed so the first token lands sooner.
+  Nothing is injected in priming's place; tools and the metadata block
+  are unaffected. Per-send, never sticky - the need for speed belongs
+  to the message, and a toggle whose absence is invisible would
+  silently degrade every turn left set.
+
+See the "Quick send button" entry point in [`chat.md`](./chat.md)
+and the "Skip-priming" section of
+[`second-thoughts.md`](./second-thoughts.md) for the wire path.
+
 ## Observability
 
 Priming runs server-side, so its feedback rides the stream Broadcast

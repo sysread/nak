@@ -132,6 +132,50 @@ export function sendButtonState(inputs: SendButtonInputs): SendButtonState {
   };
 }
 
+/**
+ * The composer's second submit affordance: a quick send that fires the
+ * normal turn with the server's priming stage suppressed (bias appendix,
+ * samskara chain, context recall, intuition). Tools, the tool catalog,
+ * the user's configured system prompts, and the per-turn metadata block
+ * all ride as usual - only the pre-flight injection is skipped, so the
+ * first token lands sooner.
+ *
+ * Deliberately a per-send button, not a toggle: the need for speed is a
+ * property of the message, not the conversation, and a toggle whose
+ * effect is invisible (priming's value is invisible, so is its absence)
+ * would silently degrade every turn left set.
+ *
+ * While a turn is in flight the send button has become the stop button;
+ * the quick button cannot stop anything, so it disables for the same
+ * duration instead of implying a second cancel path.
+ */
+interface QuickSendButtonInputs {
+  sending: boolean;
+  /** Composer has neither text nor a ready attachment. */
+  composerEmpty: boolean;
+  archived: boolean;
+  respondingElsewhere: boolean;
+}
+
+interface QuickSendButtonState {
+  disabled: boolean;
+  title: string;
+  ariaLabel: string;
+}
+
+export function quickSendButtonState(inputs: QuickSendButtonInputs): QuickSendButtonState {
+  const { sending, composerEmpty, archived, respondingElsewhere } = inputs;
+  const disabled = sending || composerEmpty || archived || respondingElsewhere;
+  const title = respondingElsewhere
+    ? 'Another device is responding to this conversation'
+    : archived
+      ? 'Archived - restore to continue'
+      : sending
+        ? 'Finish or stop the current response first'
+        : 'Quick send - skips preflight priming (intuition, recall, samskara) for a faster first token';
+  return { disabled, title, ariaLabel: 'Quick send' };
+}
+
 /** "1 queued message" / "N queued messages" - the noun the button titles interpolate. */
 function queuedLabel(count: number): string {
   return count === 1 ? '1 queued message' : `${count} queued messages`;

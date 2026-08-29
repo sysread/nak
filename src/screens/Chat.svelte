@@ -258,6 +258,7 @@
   import { streamingCardHasContent } from '$lib/ui/streaming-bubble';
   import {
     sendButtonState,
+    quickSendButtonState,
     shouldDrainQueue,
     queuedHeadline,
     queuedAttachmentSummary,
@@ -3618,8 +3619,9 @@
     return userMsg;
   }
 
-  async function send(): Promise<void> {
+  async function send(opts: { quick?: boolean } = {}): Promise<void> {
     if (!app.supabase || !app.venice) return;
+    const quick = opts.quick === true;
 
     const active = activeThreadId ? findThread(activeThreadId) ?? null : null;
     // Capture the profile BEFORE materializing, since materialize mutates
@@ -3817,6 +3819,7 @@
         userMessageId,
         supersededIds: editSupersededIds,
         replaceUserMessageContent,
+        quick,
       });
       // Clear the pending-edit state after the exchange completes.
       // pendingDeleteIds is cleared inside runExchange (via fade-out-
@@ -4090,6 +4093,20 @@
      * holds). Set by `refineFrom` alongside `isRefinement`.
      */
     refinementDoubtNote?: string;
+    /**
+     * True on a user-requested quick send (the lightning-bolt button).
+     * Skips the server priming stage for this one turn so the first
+     * token lands sooner: no samskara chain, no bias appendix, no
+     * intents, no intuition, no context recall. Tools, the tool
+     * catalog, the user's configured system prompts, and the metadata
+     * block all ride as usual. Unlike `isRefinement` nothing is
+     * injected in priming's place. Per-send by design - the need for
+     * speed belongs to the message, not the conversation, so there is
+     * deliberately no sticky toggle. Retry banners and the message
+     * queue re-run as NORMAL turns (they build fresh contexts), the
+     * same policy `isRefinement` already follows.
+     */
+    quick?: boolean;
   }
 
   /**
@@ -4452,6 +4469,15 @@
             column: columnFor(moodSnapshot.confidence),
           }
         : null;
+      // Refinements and quick sends both suppress the standard priming
+      // stage. A refinement reconsiders its own answer (not a new user
+      // round), so re-running the round-keyed pipelines would double-
+      // fire samskara; a quick send is a fresh user round the user
+      // asked to ship unprimed - they want the first token fast, and
+      // unlike a refinement NOTHING is injected in priming's place.
+      // Omitting the intuition/recall inputs below is what disables
+      // those two pipelines; skipPriming alone gates samskara + bias.
+      const skipPrimingTurn = ctx.isRefinement || ctx.quick === true;
       const oneAttempt = () =>
         runChatLoop({
           venice: app.venice!,
@@ -4483,10 +4509,10 @@
           // doubt-keyed samskara probe (`refinementDoubtNote`), so the
           // full-context deliberation can weigh the reviewer's twinge
           // against learned cross-thread patterns.
-          intuitionModelId: ctx.isRefinement ? undefined : agentModel('intuition').id,
-          intuitionPerceptionModelId: ctx.isRefinement ? undefined : agentModel('intuitionPerception').id,
-          intuitionMood: ctx.isRefinement ? null : intuitionMoodArg,
-          skipPriming: ctx.isRefinement ? true : undefined,
+          intuitionModelId: skipPrimingTurn ? undefined : agentModel('intuition').id,
+          intuitionPerceptionModelId: skipPrimingTurn ? undefined : agentModel('intuitionPerception').id,
+          intuitionMood: skipPrimingTurn ? null : intuitionMoodArg,
+          skipPriming: skipPrimingTurn ? true : undefined,
           refinementDoubtNote: ctx.isRefinement ? ctx.refinementDoubtNote : undefined,
           currentTurnHasAttachments,
           // Same spec that routed the images above: on a vision tier
@@ -4508,8 +4534,8 @@
           // chat-loop's parallel fan-out keeps the wall-clock cost
           // bounded by max(intuition, context-recall) and the cache
           // turns later turns into no-ops on the same trigger fire.
-          // Off on a refinement turn (see the priming note above).
-          contextRecallEnabled: ctx.isRefinement ? false : true,
+          // Off on a refinement or quick turn (see the priming note above).
+          contextRecallEnabled: skipPrimingTurn ? false : true,
           handlers: {
             onTextUpdate: (t) => {
               pendingText = t;
@@ -5912,6 +5938,17 @@
       sending: activeSlot?.sending === true,
       queuedCount: activeSlot?.queued.length ?? 0,
       stopSettled: activeSlot?.abortCtl === null,
+      composerEmpty: composer.trim().length === 0 && pendingAttachments.length === 0,
+      archived: currentThread?.archived === true,
+      respondingElsewhere,
+    })
+  );
+
+  // Labels + disabled state for the quick-send button (see
+  // quickSendButtonState in $lib/ui/message-queue for the semantics).
+  const quickButton = $derived(
+    quickSendButtonState({
+      sending: activeSlot?.sending === true,
       composerEmpty: composer.trim().length === 0 && pendingAttachments.length === 0,
       archived: currentThread?.archived === true,
       respondingElsewhere,
@@ -9084,10 +9121,13 @@
                  on any settled turn, aborted or not), so a third icon
                  would imply a third code path that doesn't exist. The
                  count badge is what marks the difference. -->
+            <div class="composer-bar-send">
             <button
               class="send-btn"
               class:is-stopping={sendButton.mode !== 'send'}
-              onclick={sendButton.mode === 'send' ? send : stopStreaming}
+              onclick={
+                sendButton.mode === 'send' ? () => void send() : stopStreaming
+              }
               disabled={sendButton.disabled}
               title={sendButton.title}
               aria-label={sendButton.ariaLabel}
@@ -9109,6 +9149,31 @@
                 >
               {/if}
             </button>
+
+            <!-- Quick send: fires the same turn with the server's
+                 priming stage suppressed (intuition, context recall,
+                 samskara, bias) so the first token lands sooner. Tools
+                 and the user's configured system prompts ride as
+                 normal. Deliberately a per-send button, not a toggle -
+                 the need for speed belongs to the message, not the
+                 conversation, and a toggle whose effect is invisible
+                 would silently degrade every turn left set. While a
+                 turn streams it disables (only the send button may
+                 stop); staying visible keeps the bar from shifting
+                 when send flips to its stop shape. -->
+            <button
+              class="send-btn send-btn-quick secondary"
+              onclick={() => void send({ quick: true })}
+              disabled={quickButton.disabled}
+              title={quickButton.title}
+              aria-label={quickButton.ariaLabel}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"
+                   aria-hidden="true">
+                <path d="M7 2v11h3v9l7-12h-4l4-8z" />
+              </svg>
+            </button>
+            </div>
 
             {#if toolboxMenuOpen}
               <div class="composer-menu composer-menu-left" role="menu">
