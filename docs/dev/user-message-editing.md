@@ -95,11 +95,20 @@ message before the exchange. Instead, the edited text rides the
 `replaceUserMessageContent` field through the chat loop, the
 stream transport, and the `/stream` POST body into the venice
 edge function's orchestrator. At terminal commit, the
-`commit_assistant_message` RPC inserts the new user message +
-deletes the old range + commits the assistant reply in one
+`commit_assistant_message` RPC deletes the old range + inserts
+the new user message + commits the assistant reply in one
 transaction. On failure (abort, error, guard exhaustion),
 nothing was inserted - the edit is a clean no-op. The old
 messages survive untouched.
+
+The new user message takes the OLD user message's `position`.
+The streaming assistant row was inserted when the stream
+started, so an append-at-max insert would land the replacement
+after the reply it prompted - and transcript order is by
+position, so on every reload the reply would sort above the
+edited message and read as the previous turn's answer. Deleting
+the old row first frees its slot; the unique
+`(thread_id, position)` index keeps the reuse honest.
 
 The wire needs the edited text on it so the model sees the new
 prompt. `buildEditHistoryOnWire` appends the edited text as a
@@ -248,12 +257,18 @@ Three additions to `supabase/schema.sql`:
 
 3. **`commit_assistant_message` gains
    `p_replace_user_message_content`** (text, default null). When
-   set, the RPC inserts the new user message before doing
-   anything else and uses its id as the anchor for the rest of
-   the function. The old user message (in `p_superseded_ids`)
-   is deleted below. This keeps the insert + delete + commit in
-   one transaction so an abort/error before the RPC fires leaves
-   nothing in the DB.
+   set, `p_user_message_id` is the OLD user message: it anchors
+   the competing-send check, and it must live in the thread's
+   own segment (an inherited anchor returns the
+   `edit_anchor_inherited` conflict). The RPC deletes the
+   superseded range (old user message included), inserts the new
+   user message at the old one's position, and commits the reply
+   anchored on the new row. Delete + insert + commit in one
+   transaction, so an abort/error before the RPC fires leaves
+   nothing in the DB. A completion with empty content keeps the
+   old rows and skips the insert, matching the regenerate rule -
+   the reply commits against the old user message and the edited
+   text is not applied.
 
 ## Contracts
 
@@ -313,6 +328,16 @@ Three additions to `supabase/schema.sql`:
   handling needed.
 
 ## Gotchas
+
+- **The replacement row must reuse the old row's position.** The
+  position trigger appends at max, and the streaming assistant
+  row already holds max by commit time. Letting the trigger
+  place the replacement produces `[reply, edited message]` in
+  the DB while the live view (which appends rows as their
+  realtime echoes arrive) shows `[edited message, reply]`. The
+  mismatch surfaces on the next reload or position-sorted
+  merge: the reply jumps above the edited message and the
+  transcript reads as two user messages in a row.
 
 - **Name collision with draft threads.** Nak already has "draft
   threads" (URL-only, not in the DB). "Draft messages" are a

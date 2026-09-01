@@ -248,18 +248,24 @@ describe('schema DML column guardrail', () => {
   it('still sees the regressed site (scanner sanity)', () => {
     // Pin the exact insert the guardrail exists for: the destructive-
     // edit atomic insert inside commit_assistant_message. Located by
-    // its unique `p_replace_user_message_content` branch so the pin
-    // survives line drift; if the insert moves or the parser goes
-    // blind, this fails loudly instead of silently losing coverage of
-    // the one site that shipped the outage.
-    const marker = 'p_replace_user_message_content is not null then';
+    // the insert's own `returning id into v_anchor_id` clause (the
+    // only messages INSERT that returns into that variable; comments
+    // are stripped from `sql`, so the anchor has to be code) and
+    // walked back to the nearest preceding INSERT so the pin survives
+    // line drift; if the insert moves or the parser goes blind, this
+    // fails loudly instead of silently losing coverage of the one site
+    // that shipped the outage.
+    const marker = 'returning id into v_anchor_id';
     const markerIdx = sql.indexOf(marker);
-    expect(markerIdx, 'commit_assistant_message destructive-edit branch not found').toBeGreaterThan(0);
-    const ins = sql.slice(markerIdx).match(/insert\s+into\s+public\.messages\s*\(/i);
+    expect(markerIdx, 'commit_assistant_message destructive-edit insert not found').toBeGreaterThan(0);
+    const before = sql.slice(0, markerIdx);
+    const insRe = /insert\s+into\s+public\.messages\s*\(/gi;
+    let ins: RegExpExecArray | null = null;
+    for (let m = insRe.exec(before); m !== null; m = insRe.exec(before)) ins = m;
     expect(ins, 'destructive-edit branch no longer contains its messages INSERT').not.toBeNull();
-    const open = markerIdx + ins!.index! + ins![0].length - 1;
+    const open = ins!.index + ins![0].length - 1;
     const close = matchingParen(sql, open);
     const cols = splitTopLevelCommas(sql.slice(open + 1, close));
-    expect(cols.sort()).toEqual(['content', 'role', 'status', 'thread_id']);
+    expect(cols.sort()).toEqual(['content', 'position', 'role', 'status', 'thread_id']);
   });
 });

@@ -12272,6 +12272,8 @@ declare
   v_thread_id uuid;
   v_anchor_id uuid;
   v_anchor_ts timestamptz;
+  v_anchor_pos numeric;
+  v_anchor_thread uuid;
   v_owner_id  uuid;
   v_msg       record;
 begin
@@ -12304,20 +12306,6 @@ begin
     return jsonb_build_object('conflict', true, 'reason', 'ownership_mismatch');
   end if;
 
-  -- Destructive-edit atomic insert: when p_replace_user_message_content
-  -- is set, insert the new user message now and use its id as the
-  -- anchor for the rest of the function. The old user message
-  -- (p_user_message_id) is in p_superseded_ids and will be deleted
-  -- below. This keeps the insert + delete + commit in one transaction
-  -- so an abort/error before this RPC fires leaves nothing in the DB.
-  if p_replace_user_message_content is not null then
-    insert into public.messages (thread_id, role, content, status)
-    values (v_thread_id, 'user', p_replace_user_message_content, null)
-    returning id into v_anchor_id;
-  else
-    v_anchor_id := p_user_message_id;
-  end if;
-
   -- Anchor user message must still exist in the thread's resolved
   -- transcript. Same-thread is the common case and the fast path; the
   -- transcript fallback admits an INHERITED anchor - a completion on a
@@ -12327,15 +12315,21 @@ begin
   -- an anchor that lives in an ancestor's segment. Transcript
   -- membership still proves the anchor belongs to THIS conversation
   -- and still catches an anchor deleted mid-stream.
-  select created_at into v_anchor_ts
+  --
+  -- On the destructive-edit path p_user_message_id is the OLD user
+  -- message (the one being replaced); its timestamp still anchors the
+  -- competing-send check below, and its position is where the
+  -- replacement row goes.
+  select created_at, position, thread_id
+    into v_anchor_ts, v_anchor_pos, v_anchor_thread
     from public.messages
-    where id = v_anchor_id
+    where id = p_user_message_id
       and role = 'user'
       and (thread_id = v_thread_id
            or exists (
              select 1
                from public.thread_transcript(v_thread_id) tt
-              where tt.id = v_anchor_id));
+              where tt.id = p_user_message_id));
 
   if not found then
     return jsonb_build_object('conflict', true, 'reason', 'anchor_missing');
@@ -12364,6 +12358,16 @@ begin
     return jsonb_build_object('conflict', true, 'reason', 'newer_user_message');
   end if;
 
+  -- The destructive edit replaces a row in the thread's own segment
+  -- only (the browser hides "Edit" inside a shared region). An
+  -- inherited old row cannot be deleted from here and its position
+  -- belongs to another thread's coordinate space, so refuse rather
+  -- than leave the old text alive next to the new one.
+  if p_replace_user_message_content is not null
+     and v_anchor_thread <> v_thread_id then
+    return jsonb_build_object('conflict', true, 'reason', 'edit_anchor_inherited');
+  end if;
+
   -- Regenerate-from-here: drop the replaced rows atomically with the
   -- commit (see the function preamble for why server-side). The
   -- empty-content guard mirrors the browser's own rule: a completion
@@ -12375,14 +12379,46 @@ begin
   -- FK's ON DELETE CASCADE; samskara_substrate does NOT cascade by
   -- design - an orphan substrate row still carries training signal
   -- for the formation pipeline, so it stays.
+  --
+  -- The one exception to "the anchor survives" is the destructive
+  -- edit: there the old user message IS a superseded row, and the
+  -- replacement inserted just below becomes the anchor instead.
+  v_anchor_id := p_user_message_id;
   if p_superseded_ids is not null
      and array_length(p_superseded_ids, 1) > 0
      and trim(p_content) <> '' then
     delete from public.messages
       where thread_id = v_thread_id
         and id = any(p_superseded_ids)
-        and id <> v_anchor_id
-        and id <> p_assistant_message_id;
+        and id <> p_assistant_message_id
+        and (id <> v_anchor_id or p_replace_user_message_content is not null);
+  end if;
+
+  -- Destructive-edit atomic insert: when p_replace_user_message_content
+  -- is set, insert the replacement user message now, at the OLD user
+  -- message's position, and make it the anchor for the commit below.
+  -- Keeping the insert in the same transaction as the delete + commit
+  -- means an abort/error before this RPC fires leaves nothing in the
+  -- DB.
+  --
+  -- The explicit position is load-bearing. The streaming assistant row
+  -- was inserted when the stream started, so the position trigger's
+  -- append-at-max would land the replacement AFTER the reply it
+  -- prompts. Transcript order is by position, so the reply would then
+  -- read as belonging to the previous turn on every reload, and the
+  -- edited message would sit at the tail with no reply under it. The
+  -- old row's slot is free by now (deleted just above), and the unique
+  -- (thread_id, position) index keeps a reuse honest.
+  --
+  -- Empty-content completions keep the old rows (guard above), so
+  -- there is no free slot and no replacement: the reasoning-only turn
+  -- commits against the old user message, same as a regenerate that
+  -- produced nothing.
+  if p_replace_user_message_content is not null
+     and trim(p_content) <> '' then
+    insert into public.messages (thread_id, role, content, status, position)
+    values (v_thread_id, 'user', p_replace_user_message_content, null, v_anchor_pos)
+    returning id into v_anchor_id;
   end if;
 
   update public.messages
