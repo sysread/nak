@@ -59,6 +59,18 @@ decline-criterion question only if the mint rate climbs back above
 low-single-digits/week WHILE the tier-2 held-rate edge over tier-1
 falls.
 
+**Sept 1 re-check:** mint rate stayed low (65 total, +5 over three
+weeks; still 1 lifetime decline), so the re-open condition is NOT
+met - but the held-rate edge FLIPPED: 30-day tier-2 held rate 0.687
+vs tier-1 0.764 (August had 0.819 vs 0.785). Confound: the
+background fleet moved to a new judge model (~08-20), which can
+shift verdict standards for both tiers; the flip may be judge
+drift rather than tier-2 decay. Keep observing; if the negative
+edge persists across another multi-week window WITH a stable judge
+model, that - not mint volume - becomes the evidence that
+compounds are over-general, and the decline-criterion prompt
+change re-opens.
+
 ## Ledger
 
 ### Completed
