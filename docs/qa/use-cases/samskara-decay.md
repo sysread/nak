@@ -14,7 +14,11 @@ empirical-Bayes posterior, not an accumulator:
   `+= w_soft` (0.25, the soft miss)), then recompute
   `health = confidence = (confirm + k*p0)/(confirm + disconfirm + k)`
   (k = 5). Not-engaged fires are NOT passed at all - no evidence
-  change, no discount; the discount is per GENUINE test.
+  change, no discount; the discount is per GENUINE test. The judge
+  also narrows what it passes to samskaras carrying an UNJUDGED
+  fire row in that thread, so evidence lands once per FIRE rather
+  than once per judging run (a thread re-judged after the user
+  returns to it must not re-count the fires it already ruled on).
 - `samskara_population_p0(user)` - the prior: the user's aggregate
   hit rate, weak `0.66` fallback under 20 evidence.
 - The one-shot health reconcile (runs on every schema apply) - the
@@ -23,6 +27,13 @@ empirical-Bayes posterior, not an accumulator:
   contradicted, long-quiet rows whose health sits below
   `floor_ratio * p0` (per user; default ratio 0.5); the
   `nak-samskara-reap` pure-SQL cron (`13 * * * *`).
+- `samskara_expire_unjudgeable_fires()` - runs FIRST in that same
+  cron statement: stamps a terminal `not-engaged` on verdict-null
+  fires no verdict can ever reach (one-round threads the user moved
+  on from, fires the judge's cursor already passed, threads parked
+  at the attempt gate). Carries no health evidence; its job is to
+  stop the reapers' and eviction's pending-fire guards from reading
+  dead fires as tests in flight.
 
 The live LLM judge (the sweep reading a settled conversation and
 producing the verdicts) is the **[hosted]** tail below.
@@ -90,10 +101,30 @@ producing the verdicts) is the **[hosted]** tail below.
    rollback;
    ```
 
+4. Unjudgeable-fire expiry. Confirm each clause fires on its own
+   state and that a genuinely-pending fire is spared:
+
+   ```sql
+   begin;
+   -- clause 2: cursor already past this fire
+   select count(*) from samskara_fires f
+     join threads t on t.id = f.thread_id
+     join messages m on m.id = t.last_evaluated_msg_id
+    where f.verdict is null and f.fired_at < m.created_at;
+   select public.samskara_expire_unjudgeable_fires();
+   -- re-run the same count: expect 0, and today's fires untouched
+   select count(*) from samskara_fires
+    where verdict is null and fired_at > now() - interval '12 hours';
+   rollback;
+   ```
+
 ## Expected
 
-- (1) one row: schedule `13 * * * *`, command
-  `select public.samskara_reap_dead();`.
+- (1) one row: schedule `13 * * * *`, command listing
+  `samskara_expire_unjudgeable_fires`, `samskara_reap_dead` and
+  `samskara_reap_untested` in that order (expiry first, so the
+  reapers' pending-fire guards see the cleared state in the same
+  tick).
 - (2) `health` and `confidence` are EQUAL at every step (the merge).
   After `held`: `confirm_count = 1`, `health = (1 + 5*p0)/(1 + 5)`
   (e.g. `0.7167` at `p0 = 0.66`). After `contradicted`: confirm
@@ -110,6 +141,18 @@ producing the verdicts) is the **[hosted]** tail below.
   anything fired within `quiet_days`. (At the sparse-corpus fallback
   `p0 = 0.66` the effective floor is `0.33`, so the forged `0.05`
   qualifies.)
+- (4) the cursor-passed count goes to zero and the function's return
+  value matches how many it cleared; fires from the last few hours
+  (no cursor past them, thread not parked, thread has 2+ user
+  rounds) keep `verdict is null` - expiry must never pre-empt a
+  judgement that is still coming.
+- **[hosted]** evidence lands once per fire. Judge a settled thread,
+  note a samskara's `confirm_count`, then continue that same thread
+  and let it be judged again. The second pass re-stamps verdicts on
+  every fire row (the record stays current) but the log line's
+  `evidence applied to N` counts ONLY samskaras that fired again
+  since - a samskara that fired solely in the earlier rounds must
+  show no further tally movement from the re-judge.
 - **[hosted]** the live judge. Against a settled conversation (newest
   message on a prior calendar day, `>= 2` user rounds) that fired
   samskaras, the `nak-samskara-evaluation-sweep` tick claims it, judges

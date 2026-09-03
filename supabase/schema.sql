@@ -8712,84 +8712,120 @@ end $$;
 revoke all on function public.samskara_reap_untested(int) from public, anon, authenticated;
 grant execute on function public.samskara_reap_untested(int) to service_role;
 
--- Junk-thread fire expiry: stamp a terminal 'not-engaged' on fires
--- whose owning thread the judge will never evaluate.
+-- Unjudgeable-fire expiry: stamp a terminal 'not-engaged' on fires no
+-- verdict will ever reach.
 --
--- Fires are recorded on EVERY user message, including the first
--- message of a thread. The evaluation sweep's junk-data gate skips
--- threads with fewer than two user messages forever (a one-round
--- lookup is not evidence about the user), so fires on abandoned
--- one-round threads stay verdict-null permanently. Left alone, that
--- sediment poisons two other readings: the "awaiting judgment" count
--- grows without bound (measured 2026-08-10: 1,840 of 2,084 pending
--- fires were sediment, the oldest from April), and - much worse - the
--- spare-the-pending-test guard in samskara_reap_untested and
--- samskara_evict_for_mint reads each sediment fire as "test in
--- flight" and permanently shields its samskara: 132 of 150 tier-1
--- rows were exempt from every guarded release path.
+-- Fires are recorded on EVERY user message, and three shapes leave one
+-- permanently verdict-null. Left alone they poison two readings: the
+-- "awaiting judgment" count grows without bound, and - much worse -
+-- the spare-the-pending-test guard in samskara_reap_untested and
+-- samskara_evict_for_mint reads each stuck fire as "test in flight"
+-- and permanently shields its samskara from every guarded release
+-- path. Both audits that found this measured the same damage:
+-- 132 of 150 tier-1 rows shielded (2026-08-10, shape 1), then
+-- 65 of 131 still shielded (2026-09-01, shape 2).
+--
+-- The shapes, each identified by a STATE the system itself records,
+-- never by wall-clock age (an account idle for a month must expire
+-- nothing):
+--
+--   1. One-round threads. The evaluation sweep's junk-data gate skips
+--      threads with fewer than two user messages forever - a one-round
+--      lookup is not evidence about the user. Expire only once the
+--      user demonstrably moved on: a user message in a DIFFERENT
+--      thread at least 24h after this thread's newest message. Absence
+--      alone can never satisfy that.
+--   2. Fires the judge's cursor has already passed. The judge rules
+--      per prediction; one dropped from an otherwise-successful answer
+--      (a failed batch among successful ones, or an id the model
+--      simply omitted) gets no verdict, and markEvaluated advances
+--      last_evaluated_msg_id regardless - so nothing re-asks unless
+--      the thread later settles on a NEW terminal message, which an
+--      abandoned thread never does. A fire older than the message the
+--      cursor sits on has had its judgement and lost it.
+--   3. Threads parked at the attempt gate. The claim RPC stops
+--      re-offering a thread after evaluation_attempt_count reaches 3
+--      on one terminal message; the judge has given up, so its fires
+--      up to that message are terminal too. (July 2026: a run of
+--      parked threads needed manual SQL to clear - this clause is
+--      that intervention, automated.)
 --
 -- 'not-engaged' is the honest terminal verdict: the predicted
--- situation never genuinely arose in that thread. It carries no
--- health evidence (the sweep never passes not-engaged fires to
--- samskara_apply_evaluation), so expiry only unblocks bookkeeping -
--- it cannot move any posterior.
+-- situation never genuinely arose in that thread. It carries no health
+-- evidence (the sweep never passes not-engaged fires to
+-- samskara_apply_evaluation), so expiry only unblocks bookkeeping - it
+-- cannot move any posterior.
 --
--- The abandonment test is ACTIVITY-relative, not wall-clock: a
--- thread's fires expire only once the user has written a message in
--- a DIFFERENT thread at least 24h after this thread's newest
--- message - "came back and moved on". A user idle for a week or a
--- month produces no later activity, so nothing expires while they
--- are away, and the gap can never be caused by absence alone.
---
--- If an expired thread later gains its second user round, the judge
--- evaluates the thread normally; the pre-stamped round-1 fires keep
--- their terminal verdict (a small, accepted evidence loss - the
--- alternative is sediment that never clears).
-create or replace function public.samskara_expire_junk_thread_fires()
+-- If an expired thread later comes back to life (a second user round,
+-- or a new terminal message that re-qualifies it), the judge evaluates
+-- it normally and re-stamps whatever fires it rules on; already-expired
+-- fires keep their terminal verdict. A small, accepted evidence loss -
+-- the alternative is sediment that never clears.
+drop function if exists public.samskara_expire_junk_thread_fires();
+create or replace function public.samskara_expire_unjudgeable_fires()
 returns int
 language plpgsql security definer set search_path = public as $$
 declare
   affected int;
 begin
-  with junk_threads as (
-    select t.id, t.user_id, newest.at as newest_at
-      from public.threads t
-      cross join lateral (
-        select max(m.created_at) as at
-          from public.messages m where m.thread_id = t.id
-      ) newest
-     where exists (
-             select 1 from public.samskara_fires f
-              where f.thread_id = t.id and f.verdict is null
-           )
-       and (
-             select count(*) from public.messages m
-              where m.thread_id = t.id and m.role = 'user'
-           ) < 2
+  with pending as (
+    select distinct f.thread_id
+      from public.samskara_fires f
+     where f.verdict is null
   ),
-  abandoned as (
-    select jt.id
-      from junk_threads jt
-     where exists (
-             select 1
-               from public.messages m2
-               join public.threads t2 on t2.id = m2.thread_id
-              where t2.user_id = jt.user_id
-                and m2.thread_id <> jt.id
-                and m2.role = 'user'
-                and m2.created_at >= jt.newest_at + interval '24 hours'
-           )
+  -- Scalar subqueries, NOT lateral joins: a thread the judge has
+  -- never claimed has a null cursor and a null attempt message, and a
+  -- lateral over `messages where id = <null>` yields no rows, which
+  -- would drop the whole thread from this CTE - silently disabling
+  -- clause (1) for exactly the never-claimed one-round threads it
+  -- exists to clear. A scalar subquery yields NULL and keeps the row.
+  info as (
+    select t.id as thread_id,
+           t.user_id,
+           (select max(m.created_at) from public.messages m
+             where m.thread_id = t.id) as newest_at,
+           (select count(*) from public.messages m
+             where m.thread_id = t.id and m.role = 'user') as user_msgs,
+           (select m.created_at from public.messages m
+             where m.id = t.last_evaluated_msg_id) as judged_through_at,
+           case when t.evaluation_attempt_count >= 3
+                then (select m.created_at from public.messages m
+                       where m.id = t.evaluation_attempt_msg_id)
+           end as gave_up_through_at
+      from pending p
+      join public.threads t on t.id = p.thread_id
+  ),
+  expiring as (
+    select f.id
+      from public.samskara_fires f
+      join info i on i.thread_id = f.thread_id
+     where f.verdict is null
+       and (
+         -- (1) one-round thread the user has moved on from
+         (i.user_msgs < 2 and exists (
+            select 1
+              from public.messages m2
+              join public.threads t2 on t2.id = m2.thread_id
+             where t2.user_id = i.user_id
+               and m2.thread_id <> i.thread_id
+               and m2.role = 'user'
+               and m2.created_at >= i.newest_at + interval '24 hours'
+          ))
+         -- (2) the judge already ruled on this thread past this fire
+         or (i.judged_through_at is not null and f.fired_at < i.judged_through_at)
+         -- (3) the judge gave up on this thread at the attempt gate
+         or (i.gave_up_through_at is not null and f.fired_at < i.gave_up_through_at)
+       )
   )
   update public.samskara_fires f
      set verdict = 'not-engaged'
-    from abandoned a
-   where f.thread_id = a.id
-     and f.verdict is null;
+    from expiring e
+   where f.id = e.id;
   get diagnostics affected = row_count;
   return affected;
 end $$;
-revoke all on function public.samskara_expire_junk_thread_fires() from public, anon, authenticated;
-grant execute on function public.samskara_expire_junk_thread_fires() to service_role;
+revoke all on function public.samskara_expire_unjudgeable_fires() from public, anon, authenticated;
+grant execute on function public.samskara_expire_unjudgeable_fires() to service_role;
 
 -- Cap-pressure eviction: free one tier-1 slot for a pending mint by
 -- deleting the corpus's most-disproven untested row. Called by the
@@ -8845,8 +8881,8 @@ grant execute on function public.samskara_expire_junk_thread_fires() to service_
 -- pool sharply on any active day - every row that fired since the
 -- last judge pass carries a pending fire (measured 2026-08: the guard
 -- left 1 eligible victim out of 11 below the ratio; most of that
--- pending-set was junk-thread sediment, since cleared by
--- samskara_expire_junk_thread_fires, but same-day pendings alone
+-- pending-set was stuck sediment, since cleared by
+-- samskara_expire_unjudgeable_fires, but same-day pendings alone
 -- still cover much of an active corpus). Ranked lowest-health
 -- first, larger evidence tally as the tiebreak (the better-measured
 -- failure goes before the marginal one).
@@ -14717,11 +14753,12 @@ $cron$;
 -- and the samskara_decay_sweep function itself is dropped above.
 --
 -- The freed minute-13 slot now drives the REAPERS: pure-SQL passes (no
--- pg_net, same shape the old decay used). samskara_expire_junk_thread_fires
+-- pg_net, same shape the old decay used). samskara_expire_unjudgeable_fires
 -- runs FIRST so the guards in the two reapers see its terminal verdicts
--- in the same tick: it clears the permanently-unjudgeable fires on
--- abandoned one-round threads that would otherwise read as "test in
--- flight" and shield their samskaras from every release path.
+-- in the same tick: it clears the fires no verdict will ever reach
+-- (abandoned one-round threads, fires the judge's cursor passed,
+-- threads parked at the attempt gate) that would otherwise read as
+-- "test in flight" and shield their samskaras from every release path.
 -- samskara_reap_dead deletes repeatedly-contradicted, long-quiet
 -- samskaras; samskara_reap_untested deletes never-genuinely-tested rows
 -- past the 45-day probation window (the one-off-lookup mints that would
@@ -14742,7 +14779,7 @@ begin
     perform cron.schedule(
       'nak-samskara-reap',
       '13 * * * *',
-      $job$ select public.samskara_expire_junk_thread_fires(), public.samskara_reap_dead(), public.samskara_reap_untested(); $job$
+      $job$ select public.samskara_expire_unjudgeable_fires(), public.samskara_reap_dead(), public.samskara_reap_untested(); $job$
     );
   end if;
 exception when others then

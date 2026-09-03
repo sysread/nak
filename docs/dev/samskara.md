@@ -890,6 +890,23 @@ recompute the posterior (written to BOTH health and confidence):
   health = confidence = (confirm_count + k*p0) / (confirm_count + disconfirm_count + k)
 ```
 
+**Evidence applies once per FIRE, not once per judging run.** A
+thread is re-judged every time it settles again, and the judge
+re-rules on every samskara that ever fired in it - so the caller
+narrows the arrays it passes to the samskaras carrying an UNJUDGED
+fire row in that thread (captured before the run's verdict stamps
+land). Re-reading the same early exchange is not a second test of
+the prediction it already tested; without the narrowing, a
+conversation the user returns to counts its early fires once per
+settling. Measured before the fix (2026-09-03): 76 of 451 threads
+spanned 2+ days and carried 49% of all genuine verdicts, accruing
+at roughly 2x, which inflated instincts that happen to fire inside
+long conversations relative to identical ones firing in one-offs.
+Verdict STAMPS still cover every fire row, so the record stays
+complete and the judge may still revise an earlier ruling; only the
+posterior input is gated. The `evidence applied to N` count on the
+judge's log line is the observable.
+
 `not-engaged` fires are NOT passed to the RPC at all - the verdict is
 stamped on the fire rows for the diagnostics surfaces, but the
 samskara's evidence is untouched. An earlier version passed them for a
@@ -1810,22 +1827,38 @@ the verdict tally beside it is the raw lifetime count, so not-borne-out
 reads as its own bucket instead of folding silently into disconfirm.
 These are diagnostic summary reads, not user-facing controls.
 
-**"Awaiting judgment" counts only genuinely-pending fires - junk-thread
-sediment expires.** Fires land on every user message, including round
-one of a thread that never gets a round two; the judge's junk-data
-gate skips such threads forever, so their fires would stay
-verdict-null permanently. Unexpired, that sediment inflated the
-awaiting-judgment readout (2026-08-10 audit: 1,840 of 2,084 pending
-fires, oldest from April) and - the real damage - permanently
-shielded 132 of 150 tier-1 rows from probation and guarded eviction,
-because the spare-the-pending-test guards read any verdict-null fire
-as a test in flight. `samskara_expire_junk_thread_fires` (on the :13
-reaper cron) stamps those fires with a terminal `not-engaged` once
-the user has demonstrably moved on (a user message in a DIFFERENT
-thread 24h+ after the junk thread's newest message - activity-
-relative on purpose, so an idle account never expires anything). A
-persistently large or growing awaiting-judgment count is therefore a
-real judge problem again, not sediment.
+**"Awaiting judgment" counts only genuinely-pending fires - stuck
+fires expire.** A verdict-null fire is not automatically a fire the
+judge still owes. Three shapes leave one stuck forever, and the
+spare-the-pending-test guards in `samskara_reap_untested` and
+`samskara_evict_for_mint` read every one of them as a test in
+flight - which is how sediment shields rows from release. Both
+audits measured the same damage from different shapes: 132 of 150
+tier-1 rows shielded (2026-08-10), then 65 of 131 (2026-09-01).
+`samskara_expire_unjudgeable_fires` (first on the :13 reaper cron,
+so the same tick's reapers see cleared guards) stamps them
+`not-engaged` - terminal, and carrying no health evidence. The
+shapes, each keyed on a state the system itself records rather than
+on wall-clock age (an idle account must expire nothing):
+
+- **One-round threads.** The judge's junk-data gate skips
+  sub-two-round threads forever. Expiry waits for demonstrated
+  abandonment: a user message in a DIFFERENT thread 24h+ after this
+  thread's newest message.
+- **Fires the cursor passed.** The judge rules per prediction, and
+  one dropped from an otherwise-successful answer never gets
+  re-asked, because `markEvaluated` advances the cursor regardless
+  and only a NEW terminal message re-qualifies the thread. This
+  produced the 2026-09-01 residue: 1,319 fires on 34 ordinary,
+  already-judged threads, peaking in the week of 07-27 and gone by
+  late August.
+- **Threads parked at the attempt gate.** After
+  `evaluation_attempt_count` hits 3 on one terminal message the
+  claim RPC stops offering the thread; the judge has given up, so
+  its fires up to that message are terminal too.
+
+With expiry in place, a persistently large or growing
+awaiting-judgment count is a real judge problem again, not sediment.
 
 **The associations "awaiting mint" count never reaches zero.** A large
 share of unconsumed edges are singletons - pairs whose endpoints have
