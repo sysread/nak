@@ -51,6 +51,58 @@ the second objection (a retry no longer re-applies evidence), but
 the first stands on its own. Revisit only if whole-batch failures
 return, which the judge's `judged N/M` log line makes visible.
 
+### Retrieval calibration and health metrics (samskara)
+
+**Status:** scoped 2026-09-03 after the retrieval outage, informed by
+an outside review. Not started; the first two are the valuable half.
+
+**A labeled probe set, not self-calibrating thresholds.** Four
+similarity bars are hard-coded in the samskara path - the
+near-duplicate merge bar, the topical cluster floor, and two tier-2
+gates - all tuned when typical cosine ran ~0.38 under a superseded
+embedding model. The tempting fix is to express them as percentiles
+of the live distribution. Reject that: right after a model rotation
+the live distribution IS the pathology (during the 2026-08 outage,
+five claims produced 92% of fires), so auto-calibrating against it
+locks the pathology in, and in steady state it is circular - the
+thresholds decide what merges and fires, which shapes the corpus,
+which shapes the distribution that re-tunes the thresholds.
+
+What is model-invariant is the SEMANTIC boundary, not a score. Keep
+60-100 hand-labeled claim pairs sorted into duplicate / same-topic /
+related / unrelated; on rotation, re-embed the probe set and re-solve
+the four bars against it, storing them keyed by model id rather than
+in code. The same probe set answers the question production traffic
+cannot: separability between the unrelated and related classes IS the
+encoder's usable dynamic range for this corpus. If that gap collapses,
+no threshold arithmetic helps and the model is wrong for the job.
+Note the fire decision is already rank-based (top-k), so only the four
+absolute bars need this.
+
+**Score-outcome correlation as a standing metric.** Among fired claims
+the judge later ruled on, do higher-scoring fires hold more often?
+When similarity means something the correlation is positive; when it
+goes to zero, retrieval is decorative. This is the single most direct
+"is retrieval still working" signal, it reuses verdicts the judge
+already produces, and it would have caught the 2026-08 outage on day
+one - the system measured claim health for three weeks while never
+measuring retrieval health. Pair it with firing concentration (share
+of fires from the top five claims): rising concentration plus falling
+held rate is the broken-retrieval signature, whereas a falling held
+rate at stable concentration means the claims themselves went stale.
+
+**Rerank instead of embedding purity (option, cost named).** The
+corpus is ~190 short strings. Vector search over that is a speed
+optimization with nothing to speed up, so the cosine tier only needs
+to nominate candidates; an LLM rerank over the top ~30 would sidestep
+encoder quality at the ranking tier entirely. The cost is a model call
+on the chat hot path, where latency is user-visible - measure before
+assuming it is affordable. A cheaper variant of the same idea:
+rewrite the user's message into the claim register ("in situations
+like this, the user tends to...") before embedding it, since the
+mismatch is concrete queries against abstract claims. Both are
+testable against the probe set above before touching production.
+
 ### Samskara tier-2 confirm bar (observation)
 
 **Status:** downgraded from planned change to observation
@@ -89,8 +141,20 @@ lost-track-of-event-order failures in long threads, which were
 regular before). If the more trustworthy judge is the one scoring
 compounds below tier-1, the flip is more likely signal than drift.
 
-So the watch condition is now the held-rate edge ALONE, not the
-conjunction with mint volume: if tier-2 still trails tier-1 over a
+**Sept 3 correction - the flip was an artifact, and so was most of
+this item's recent evidence.** Retrieval was broken from 2026-08-13
+to 2026-09-03: prediction vectors were stranded in a superseded
+embedding model's space, so a handful of reachable claims fired on
+~97% of turns regardless of topic and the judge correctly ruled them
+not borne out. Every held-rate figure measured across that window
+describes broken retrieval, not claim quality. Measured strictly
+inside the post-outage window the two tiers are EQUAL (tier-1 37.0%,
+tier-2 35.2%) - there is no tier-2-specific deficit. Re-measure from
+scratch once the repaired corpus has a few weeks of clean verdicts;
+until then this item has no usable evidence in either direction.
+
+Subject to that reset, the watch condition is the held-rate edge
+ALONE, not the conjunction with mint volume: if tier-2 still trails tier-1 over a
 full window judged entirely by the current model, that is the
 evidence that compounds are over-general, and the
 decline-criterion prompt change re-opens on it. Re-measure with a
