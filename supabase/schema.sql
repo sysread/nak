@@ -9105,6 +9105,63 @@ end $$;
 revoke all on function public.samskara_evict_for_mint(uuid) from public, anon, authenticated;
 grant execute on function public.samskara_evict_for_mint(uuid) to service_role;
 
+-- Evidence repair for the 2026-08 retrieval outage.
+--
+-- While samskara prediction vectors were stranded in a superseded
+-- model's coordinate space (see the prediction-embedding repair block
+-- above), the handful of reachable claims fired on nearly every turn
+-- regardless of topic. The next-day judge ruled on those fires
+-- correctly - a claim about cooking really was not borne out by a
+-- message about a meeting - so three weeks of legitimate-looking
+-- verdicts accrued against claims that had never actually been tested.
+-- Rebuilding the vectors fixed retrieval; it does not touch evidence
+-- already folded into the posteriors.
+--
+-- Scope, measured on the live corpus before writing this: 36 claims
+-- carry outage-era evidence, but 30 of them also carry pre-outage
+-- history that dominates, and the 10-test half-life washes the rest
+-- out on its own. The 6 that need repair were MINTED during the
+-- outage, so every test they have ever had was against an irrelevant
+-- message - and 3 of those had already been driven below the
+-- cap-pressure eviction bar, i.e. were queued for permanent deletion
+-- on evidence that was never fair. Clearing the tallies returns them
+-- to the never-tested baseline (the reconcile immediately below
+-- recomputes health = p0 from the zeroed counts) so they get a real
+-- trial now that retrieval works.
+--
+-- Deliberately narrow: only claims whose ENTIRE genuine-verdict
+-- history falls inside the window are touched. A claim with even one
+-- pre-outage or post-repair test keeps everything - partial evidence
+-- is still evidence, and the discount handles the rest.
+--
+-- Idempotent, and self-retiring: once a repaired claim earns a
+-- genuine verdict outside the window the predicate stops matching it
+-- forever. Until then re-running only re-zeroes a zero. The window
+-- closes at 2026-09-04 because fires up to that point were still
+-- scored against stranded vectors - the re-embed drain runs on the
+-- deploy that carries this block.
+do $evidence_repair$
+begin
+  update public.samskaras s
+     set confirm_count = 0,
+         disconfirm_count = 0
+   where exists (
+           select 1 from public.samskara_fires f
+            where f.samskara_id = s.id
+              and f.verdict in ('held', 'contradicted', 'not-borne-out')
+         )
+     and not exists (
+           select 1 from public.samskara_fires f
+            where f.samskara_id = s.id
+              and f.verdict in ('held', 'contradicted', 'not-borne-out')
+              and (f.fired_at < timestamptz '2026-08-13 00:00+00'
+                   or f.fired_at >= timestamptz '2026-09-04 00:00+00')
+         );
+exception when others then
+  raise notice 'samskara outage evidence repair skipped: %', sqlerrm;
+end
+$evidence_repair$;
+
 -- One-shot health reconcile. Recompute health = confidence = the derived
 -- posterior of each samskara's CURRENT tallies (k=5 mirrors
 -- samskara_apply_evaluation - keep the two in sync). On the first apply
