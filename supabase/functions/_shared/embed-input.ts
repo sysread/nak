@@ -192,6 +192,19 @@ export const EMBED_SOURCES: EmbedSource[] = [
     buildInput: (row) => buildSubstrateEmbedInput(str(row.situation), strOrNull(row.outcome)),
   },
   {
+    name: 'samskara-predictions',
+    claimRpc: 'samskara_claim_next_prediction_embed', // returns (id, prediction, user_id)
+    saveRpc: 'samskara_save_prediction_embedding_if_claimed',
+    // Verbatim, like thread-chunks and for the same reason: the mint
+    // probe embeds the bare prediction text, so any composition here
+    // would produce vectors that mean something different from the ones
+    // minting writes - and the two must share a space to be comparable.
+    // This source exists because leaving predictions out of the registry
+    // let a model rotation strand the whole corpus in a dead coordinate
+    // space (see the prediction-embedding repair block in schema.sql).
+    buildInput: (row) => str(row.prediction),
+  },
+  {
     name: 'followups',
     claimRpc: 'claim_next_pending_followup', // returns (id, question, context, user_id)
     saveRpc: 'save_followup_embedding_if_claimed',
