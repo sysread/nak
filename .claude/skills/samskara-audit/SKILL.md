@@ -123,8 +123,34 @@ tier-2 minter actually filters (declines exist).
 
 ### 7. Corpus -> firing (priming)
 
-Contract: fires per cohort match the configured k; recorded cohort =
-rendered set (post-2026-08 contract).
+Contract: the corpus is REACHABLE (every row's vector shares a
+coordinate space with the query, and firing spreads across the
+corpus rather than concentrating on a few rows); fires per cohort
+match the configured k; recorded cohort = rendered set (post-2026-08
+contract).
+
+**Check reachability FIRST - before any ranking-quality reasoning.**
+A stranded corpus looks exactly like a quality problem from every
+downstream metric, and three ranking hypotheses were proposed and
+disproved in 2026-09 before anyone measured the vectors:
+
+```sql
+-- Non-zero tail dimensions = a vector from a superseded model.
+select embedding_model, count(*),
+       count(*) filter (where subvector(prediction_embedding, 385, 1664)
+             <> array_fill(0::real, array[1664])::vector) as stale_space
+from samskaras where prediction_embedding is not null group by 1;
+```
+
+**Concentration** is the other half, and the number that would have
+caught the outage on day one - track its TREND, a level alone means
+little:
+
+```sql
+-- What share of fires come from the top 5 rows, and how many
+-- distinct rows fire at all? (2026-08 healthy: 18% / 146 rows.
+-- Stranded: 92% / 55 rows, top row in 97% of cohorts.)
+```
 
 ```sql
 select count(*)::float / count(distinct cohort_id) as fires_per_cohort,

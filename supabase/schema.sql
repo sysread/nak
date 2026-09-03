@@ -8465,6 +8465,146 @@ revoke all on function public.samskara_save_substrate_embedding_if_claimed(uuid,
 grant execute on function public.samskara_claim_next_substrate_embed(text, int) to service_role;
 grant execute on function public.samskara_save_substrate_embedding_if_claimed(uuid, text, vector, text) to service_role;
 
+-- ---------------------------------------------------------------------------
+-- Prediction embeddings: provenance, repair, and backfill participation.
+--
+-- A samskara's prediction_embedding is what makes it fireable. Until
+-- 2026-09-03 it was written in exactly one place - inline at mint time -
+-- and `samskaras` was the ONLY embeddable table absent from the embed
+-- backfill's source registry (_shared/embed-input.ts). That gap is not
+-- theoretical: when the embedding model rotated to gte-small, the
+-- backfill re-embedded every table it owned and silently left this one
+-- behind. The corpus split into two incompatible coordinate spaces -
+-- 180 rows still carrying 1024-dim vectors from the previous model
+-- against 384-dim queries from the new one - and cosine between them is
+-- noise, not similarity. Only the 8 samskaras minted after the rotation
+-- could match a query at all, so those 8 fired on ~97% of turns while
+-- 96% of the corpus went dark for three weeks. Nothing errored; the
+-- judge simply started marking the irrelevant fires not-borne-out and
+-- the corpus-wide held rate halved.
+--
+-- Two changes prevent a recurrence. The row records WHICH model
+-- produced its vector (every sibling embeddable table already does
+-- this - samskaras was the sole exception, which is why the split was
+-- invisible in the data), and the table joins the backfill registry so
+-- a rotation drains it like everything else.
+alter table public.samskaras
+  add column if not exists embedding_model text;
+alter table public.samskaras
+  add column if not exists embedding_claim_holder text;
+alter table public.samskaras
+  add column if not exists embedding_claim_expires timestamptz;
+
+-- Stamp provenance on rows that predate the column, by measuring the
+-- vector instead of guessing. padEmbeddingForStorage zero-extends to
+-- the 2048-wide column, so a current (384-dim) vector has all-zero
+-- tail dimensions and anything wider does not. Rows that fail the test
+-- carry a vector from a superseded model: null it so the backfill
+-- below re-embeds them. They are unfireable either way - the fire RPC
+-- skips null embeddings, and a mismatched vector only ever scored
+-- noise - so nulling costs nothing and makes the repair automatic.
+--
+-- Idempotent: after one pass every surviving embedding is current and
+-- stamped, so both statements match nothing. Keep 'gte-small' in sync
+-- with EMBEDDING_MODEL in _shared/backfill.ts (the Deno suite pins the
+-- pair) - it is the provenance label only; see the shape note below
+-- for why the destructive half deliberately does not use it.
+do $repair$
+begin
+  update public.samskaras
+     set embedding_model = 'gte-small'
+   where prediction_embedding is not null
+     and embedding_model is null
+     and subvector(prediction_embedding, 385, 1664)
+         = array_fill(0::real, array[1664])::vector;
+
+  -- The destructive half keys on vector SHAPE, never on the model
+  -- name. A name test would loop: rotate the model in TS, forget this
+  -- file, and every deploy nulls the vectors the backfill just wrote,
+  -- forever. A current vector always has an all-zero tail, so the
+  -- shape test can never match one. Its blind spot is a future model
+  -- with the same width - that rotation needs the operator to null
+  -- the column explicitly, which is the documented migration anyway.
+  update public.samskaras
+     set prediction_embedding = null,
+         embedding_model = null
+   where prediction_embedding is not null
+     and subvector(prediction_embedding, 385, 1664)
+         <> array_fill(0::real, array[1664])::vector;
+exception when others then
+  -- subvector() needs pgvector >= 0.7; on an older extension the
+  -- repair is skipped rather than failing the whole schema apply.
+  raise notice 'samskara prediction-embedding repair skipped: %', sqlerrm;
+end
+$repair$;
+
+-- Claim/save pair mirroring samskara_claim_next_substrate_embed above,
+-- so the backfill drains predictions on the same round-robin as every
+-- other embeddable table. Oldest-first: a rotation's re-embed backlog
+-- drains in mint order, and the corpus recovers its earliest (most
+-- established) claims first.
+drop function if exists public.samskara_claim_next_prediction_embed(text, int);
+create or replace function public.samskara_claim_next_prediction_embed(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns table (id uuid, prediction text, user_id uuid)
+language sql security definer
+set search_path = public as $$
+  with candidate as (
+    select s.id
+      from public.samskaras s
+     where s.prediction_embedding is null
+       and s.prediction is not null
+       and (s.embedding_claim_expires is null
+            or s.embedding_claim_expires < now())
+     order by s.created_at asc
+     limit 1
+     for update skip locked
+  )
+  update public.samskaras s
+     set embedding_claim_holder = p_holder_id,
+         embedding_claim_expires = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c
+   where s.id = c.id
+  returning s.id, s.prediction, s.user_id;
+$$;
+revoke all on function public.samskara_claim_next_prediction_embed(text, int)
+  from public, anon, authenticated;
+grant execute on function public.samskara_claim_next_prediction_embed(text, int)
+  to service_role;
+
+drop function if exists public.samskara_save_prediction_embedding_if_claimed(
+  uuid, text, vector, text
+);
+create or replace function public.samskara_save_prediction_embedding_if_claimed(
+  p_id uuid,
+  p_holder_id text,
+  p_embedding vector(2048),
+  p_embedding_model text
+) returns boolean
+language plpgsql security definer
+set search_path = public as $$
+declare
+  updated int;
+begin
+  update public.samskaras
+     set prediction_embedding = p_embedding,
+         embedding_model = p_embedding_model,
+         embedding_claim_holder = null,
+         embedding_claim_expires = null
+   where id = p_id
+     and embedding_claim_holder = p_holder_id
+     and embedding_claim_expires > now();
+  get diagnostics updated = row_count;
+  return updated > 0;
+end $$;
+revoke all on function public.samskara_save_prediction_embedding_if_claimed(
+  uuid, text, vector, text
+) from public, anon, authenticated;
+grant execute on function public.samskara_save_prediction_embedding_if_claimed(
+  uuid, text, vector, text
+) to service_role;
+
 -- samskara_decay_sweep (wall-clock decay) is RETIRED - health is now the
 -- relevance-gated posterior maintained by samskara_apply_evaluation (see
 -- the self-calibrating block below); the nak-samskara-decay cron is

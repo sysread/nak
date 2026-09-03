@@ -1827,6 +1827,33 @@ the verdict tally beside it is the raw lifetime count, so not-borne-out
 reads as its own bucket instead of folding silently into disconfirm.
 These are diagnostic summary reads, not user-facing controls.
 
+**A samskara can only fire if its vector shares a coordinate space
+with the query.** Prediction embeddings are written at mint time AND
+by the embed backfill (source `samskara-predictions`); every row
+records the model that produced its vector in `embedding_model`,
+like every sibling embeddable table. Both facts exist because of a
+three-week outage in 2026-08: predictions were the ONLY embeddable
+table missing from the backfill registry, so when the embedding
+model rotated to gte-small the backfill re-embedded everything else
+and left 180 prediction vectors behind in the previous model's
+1024-dim space. Cosine between those and a 384-dim query is noise,
+not similarity, so the only rows that could match were the 8 minted
+after the rotation - they fired on ~97% of turns while 96% of the
+corpus went dark. Nothing errored anywhere: the fire RPC returned
+its top-k as always, and the next-day judge correctly ruled the
+irrelevant fires not-borne-out, which read as "the user's instincts
+got worse" (corpus-wide held rate 78% -> 34%) rather than as a
+retrieval failure.
+
+The diagnostic lesson is worth more than the fix: **check that
+vectors are comparable before theorising about ranking quality.**
+Three plausible ranking explanations were proposed and disproved
+(a harsher judge, health crowding out relevance, small-model
+anisotropy - centering was implemented and measured to do nothing)
+before anyone measured the vectors' actual shape. The schema's
+repair block detects a stale vector by its non-zero tail
+dimensions, which is also the fastest manual check.
+
 **"Awaiting judgment" counts only genuinely-pending fires - stuck
 fires expire.** A verdict-null fire is not automatically a fire the
 judge still owes. Three shapes leave one stuck forever, and the
