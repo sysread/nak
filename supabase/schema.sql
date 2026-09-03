@@ -8495,6 +8495,19 @@ alter table public.samskaras
 alter table public.samskaras
   add column if not exists embedding_claim_expires timestamptz;
 
+-- Nullable, like every sibling embeddable column. The NOT NULL here was
+-- the other half of the same "embed only at mint time" assumption that
+-- kept this table out of the backfill registry: mint refuses to insert a
+-- row whose embedding failed, so the column could never be null and the
+-- constraint looked free. It is not - "needs embedding" is exactly the
+-- claimable state the backfill drains on, so the constraint made this
+-- table unreachable by the repair below AND by the claim RPC further
+-- down. A null vector is inert, not dangerous: the fire RPC already
+-- skips nulls, and every other similarity path yields a null distance
+-- that sorts out of the result rather than erroring.
+alter table public.samskaras
+  alter column prediction_embedding drop not null;
+
 -- Stamp provenance on rows that predate the column, by measuring the
 -- vector instead of guessing. padEmbeddingForStorage zero-extends to
 -- the 2048-wide column, so a current (384-dim) vector has all-zero
@@ -8509,8 +8522,21 @@ alter table public.samskaras
 -- with EMBEDDING_MODEL in _shared/backfill.ts (the Deno suite pins the
 -- pair) - it is the provenance label only; see the shape note below
 -- for why the destructive half deliberately does not use it.
+-- No blanket exception handler. The first version of this block wrapped
+-- both statements in `exception when others then raise notice`, meaning
+-- to tolerate an old pgvector without subvector(). What it actually did
+-- was hide a NOT NULL violation on the second statement - and because
+-- entering a plpgsql exception handler rolls the whole block back, the
+-- first statement's work was discarded too. The deploy reported success
+-- and repaired nothing. The capability guard below is explicit, so a
+-- real failure fails the deploy the way CI wants it to.
 do $repair$
 begin
+  if to_regprocedure('public.subvector(vector,integer,integer)') is null then
+    raise notice 'samskara prediction-embedding repair skipped: pgvector lacks subvector()';
+    return;
+  end if;
+
   update public.samskaras
      set embedding_model = 'gte-small'
    where prediction_embedding is not null
@@ -8531,10 +8557,6 @@ begin
    where prediction_embedding is not null
      and subvector(prediction_embedding, 385, 1664)
          <> array_fill(0::real, array[1664])::vector;
-exception when others then
-  -- subvector() needs pgvector >= 0.7; on an older extension the
-  -- repair is skipped rather than failing the whole schema apply.
-  raise notice 'samskara prediction-embedding repair skipped: %', sqlerrm;
 end
 $repair$;
 
@@ -9157,8 +9179,6 @@ begin
               and (f.fired_at < timestamptz '2026-08-13 00:00+00'
                    or f.fired_at >= timestamptz '2026-09-04 00:00+00')
          );
-exception when others then
-  raise notice 'samskara outage evidence repair skipped: %', sqlerrm;
 end
 $evidence_repair$;
 
