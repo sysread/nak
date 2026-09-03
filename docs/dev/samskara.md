@@ -890,6 +890,23 @@ recompute the posterior (written to BOTH health and confidence):
   health = confidence = (confirm_count + k*p0) / (confirm_count + disconfirm_count + k)
 ```
 
+**Evidence applies once per FIRE, not once per judging run.** A
+thread is re-judged every time it settles again, and the judge
+re-rules on every samskara that ever fired in it - so the caller
+narrows the arrays it passes to the samskaras carrying an UNJUDGED
+fire row in that thread (captured before the run's verdict stamps
+land). Re-reading the same early exchange is not a second test of
+the prediction it already tested; without the narrowing, a
+conversation the user returns to counts its early fires once per
+settling. Measured before the fix (2026-09-03): 76 of 451 threads
+spanned 2+ days and carried 49% of all genuine verdicts, accruing
+at roughly 2x, which inflated instincts that happen to fire inside
+long conversations relative to identical ones firing in one-offs.
+Verdict STAMPS still cover every fire row, so the record stays
+complete and the judge may still revise an earlier ruling; only the
+posterior input is gated. The `evidence applied to N` count on the
+judge's log line is the observable.
+
 `not-engaged` fires are NOT passed to the RPC at all - the verdict is
 stamped on the fire rows for the diagnostics surfaces, but the
 samskara's evidence is untouched. An earlier version passed them for a

@@ -33,56 +33,23 @@ escape hatch and no stacking was reproduced after the unification;
 the investigation context lives in `docs/dev/exchange.md`
 ("The screen's error surfaces and what owns what").
 
-### Judge evidence application is per-thread-run, not per-fire
+### Judge cursor policy on partial batch failure (rejected)
 
-**Status:** identified 2026-09-01 while fixing the unjudgeable-fire
-leak; deliberately NOT built, because the obvious fix has a
-measurable side effect and the leak's damage is already contained.
+**Status:** rejected 2026-09-03 after the per-fire evidence fix
+shipped. Kept as a short note because the idea reads as obviously
+correct and will be re-proposed otherwise.
 
-The Sept 1 audit proposed a second, source-side fix: hold the
-evaluation cursor when ANY judge batch fails, not only when all of
-them do, so dropped predictions get re-asked. Building it surfaced
-why it is not free. On a retry the judge re-reads EVERY fire in the
-thread, re-rules on all of them, and calls
-`samskara_apply_evaluation` with the full verdict set - so the
-batches that succeeded the first time apply their evidence AGAIN,
-up to the 3-attempt gate. The threads that would retry are exactly
-the hard-to-judge ones, so the amplification lands where the
-evidence is already shakiest.
-
-The same amplification exists today in a milder form: a thread
-active across several days is judged once per settling, and each
-pass re-applies evidence for the fires already judged, so one
-conversation counts two or three times.
-
-Measured 2026-09-03: 451 threads, 76 of them active on 2+ days
-(max 3), and **49.2% of all genuine verdicts sit on those
-multi-day threads** - so roughly half the corpus's evidence is
-accruing at about 2x. Two things keep this from being an
-emergency: it is systematic rather than drifting, and every
-decision downstream compares a row's health against `p0`, which is
-computed from the same inflated tallies - so the amplification
-largely cancels in the comparisons that drive eviction and
-reaping. What it genuinely distorts is RELATIVE standing: a
-samskara that happens to fire inside long threads accrues evidence
-faster than one that fires in one-offs, regardless of which is
-actually more accurate.
-
-The clean fix is to apply evidence per FIRE ROW - only fires that
-were verdict-null when the run started contribute to the
-posterior, while verdict stamps stay idempotent. It is a small
-edit (the judge already reads the thread's fire rows; it just
-needs their verdict column too) and it is forward-only - existing
-tallies are untouched, the accrual rate changes. That is exactly
-why it wants its own window: halving the accrual rate on half the
-evidence slows how fast rows reach the eviction bar, and the
-release machinery only started working in September. Ship it with
-a recorded baseline and verify at the next audit, not alongside
-another change being verified.
-
-Not urgent: `samskara_expire_unjudgeable_fires` already removes the
-leak's harm (stuck fires no longer shield rows from release), and
-the dropout itself has been quiescent since late August.
+The Sept 1 audit proposed holding the evaluation cursor when ANY
+judge batch fails, not only when all of them do, so dropped
+predictions get re-asked. Two reasons not to: it addresses only
+whole-batch failures, which stopped occurring after the fleet moved
+to a more reliable model (~2026-08-20), leaving the model-omits-an-
+id shape untouched; and a retry re-judges the WHOLE thread, so the
+threads that retry - the hardest ones to judge - would be the ones
+re-scored up to three times. The per-fire evidence gate now blunts
+the second objection (a retry no longer re-applies evidence), but
+the first stands on its own. Revisit only if whole-batch failures
+return, which the judge's `judged N/M` log line makes visible.
 
 ### Samskara tier-2 confirm bar (observation)
 
@@ -145,6 +112,17 @@ window starting no earlier than 2026-08-20.
   relative score cut was rejected on structural grounds - a cohort
   truncated at k BY SCORE is definitionally the closest-scored k
   rows, so no knee can appear inside it for a cutoff to find.
+- **Judge evidence applied once per fire** (2026-09-03): re-judging
+  a thread no longer re-applies evidence for fires it already ruled
+  on, so a conversation the user returns to stops counting its
+  early fires once per settling. Before the change, 76 of 451
+  threads spanned 2+ days and carried 49% of all genuine verdicts
+  at roughly 2x weight. Forward-only (existing tallies untouched),
+  so what changes is the accrual RATE. Baseline at ship, for the
+  next audit's before/after: p0 0.858, tier-1 129 rows, median
+  health 0.859, min 0.749, mean evidence tally 2.21, max 15.03.
+  Watch for slower turnover - rows now take longer to reach the
+  eviction bar - and for p0 drifting as the inflation washes out.
 
 ### Rejected
 

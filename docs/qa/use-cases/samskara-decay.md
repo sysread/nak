@@ -14,7 +14,11 @@ empirical-Bayes posterior, not an accumulator:
   `+= w_soft` (0.25, the soft miss)), then recompute
   `health = confidence = (confirm + k*p0)/(confirm + disconfirm + k)`
   (k = 5). Not-engaged fires are NOT passed at all - no evidence
-  change, no discount; the discount is per GENUINE test.
+  change, no discount; the discount is per GENUINE test. The judge
+  also narrows what it passes to samskaras carrying an UNJUDGED
+  fire row in that thread, so evidence lands once per FIRE rather
+  than once per judging run (a thread re-judged after the user
+  returns to it must not re-count the fires it already ruled on).
 - `samskara_population_p0(user)` - the prior: the user's aggregate
   hit rate, weak `0.66` fallback under 20 evidence.
 - The one-shot health reconcile (runs on every schema apply) - the
@@ -142,6 +146,13 @@ producing the verdicts) is the **[hosted]** tail below.
   (no cursor past them, thread not parked, thread has 2+ user
   rounds) keep `verdict is null` - expiry must never pre-empt a
   judgement that is still coming.
+- **[hosted]** evidence lands once per fire. Judge a settled thread,
+  note a samskara's `confirm_count`, then continue that same thread
+  and let it be judged again. The second pass re-stamps verdicts on
+  every fire row (the record stays current) but the log line's
+  `evidence applied to N` counts ONLY samskaras that fired again
+  since - a samskara that fired solely in the earlier rounds must
+  show no further tally movement from the re-judge.
 - **[hosted]** the live judge. Against a settled conversation (newest
   message on a prior calendar day, `>= 2` user rounds) that fired
   samskaras, the `nak-samskara-evaluation-sweep` tick claims it, judges

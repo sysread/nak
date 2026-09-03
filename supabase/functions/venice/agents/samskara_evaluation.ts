@@ -332,11 +332,30 @@ async function evaluateClaimedThread(
   // came up, and the only ones eligible for a verdict.
   const { data: fireRows, error: firesErr } = await adminClient
     .from('samskara_fires')
-    .select('samskara_id')
+    .select('samskara_id, verdict')
     .eq('thread_id', threadId)
     .eq('user_id', userId);
   if (firesErr) throw new Error(`reading samskara_fires failed: ${firesErr.message}`);
   const firedIds = [...new Set((fireRows ?? []).map((r) => r.samskara_id as string))];
+
+  // Evidence is applied ONCE PER FIRE, not once per judging run.
+  // A thread is re-judged every time it settles again, and the judge
+  // re-rules on EVERY samskara that ever fired in it - but re-reading
+  // the same early exchange is not a second test of the prediction it
+  // already tested. Without this gate a conversation the user returns
+  // to counts its early fires two or three times (measured 2026-09-03:
+  // 76 of 451 threads span 2+ days, and 49% of all genuine verdicts
+  // sit on them, accruing at roughly 2x). Only samskaras carrying an
+  // UNJUDGED fire row in this thread may move a posterior; the verdict
+  // stamps below still cover every fire row, so the record stays
+  // complete and the judge may still revise a ruling. Captured before
+  // the stamping update, which is what makes "unjudged" mean "unjudged
+  // when this run started".
+  const awaitingEvidence = new Set(
+    (fireRows ?? [])
+      .filter((r) => r.verdict === null)
+      .map((r) => r.samskara_id as string),
+  );
 
   if (firedIds.length === 0) {
     // No prediction was tested by this conversation. Mark it evaluated
@@ -506,15 +525,27 @@ async function evaluateClaimedThread(
     // ~80% of judged fires land not-engaged and every posterior sat
     // pinned at p0). Their fire rows keep the verdict stamp above; their
     // evidence tallies stay untouched.
+    // Narrowed to the samskaras with an unjudged fire in this thread -
+    // see awaitingEvidence. On a thread's first judging this is every
+    // fired samskara; on a re-judge it is only the ones that fired
+    // again since.
+    const evidence = {
+      held: byVerdict.held.filter((id) => awaitingEvidence.has(id)),
+      contradicted: byVerdict.contradicted.filter((id) => awaitingEvidence.has(id)),
+      notBorneOut: byVerdict['not-borne-out'].filter((id) => awaitingEvidence.has(id)),
+    };
     const { error: applyErr } = await adminClient.rpc('samskara_apply_evaluation', {
       p_user_id: userId,
-      p_held: byVerdict.held,
-      p_contradicted: byVerdict.contradicted,
-      p_not_borne_out: byVerdict['not-borne-out'],
+      p_held: evidence.held,
+      p_contradicted: evidence.contradicted,
+      p_not_borne_out: evidence.notBorneOut,
     });
     if (applyErr) throw new Error(`samskara_apply_evaluation failed: ${applyErr.message}`);
+    const evidenceCount = evidence.held.length + evidence.contradicted.length +
+      evidence.notBorneOut.length;
     log.info(
-      `judged thread ${threadId}: ${judged}/${predictions.length} predictions; ${verdictSummary}`,
+      `judged thread ${threadId}: ${judged}/${predictions.length} predictions; ` +
+        `${verdictSummary}; evidence applied to ${evidenceCount}`,
     );
   }
 
