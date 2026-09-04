@@ -2,13 +2,19 @@
 //
 // resolveStreamContext does three things:
 //   1. Thread ownership gate (userId match against the thread row).
-//   2. In-flight row probe: is there a 'streaming' status message
-//      on this thread? If so, return its envelope so the caller can
-//      short-circuit a duplicate completion or answer a reconnect.
-//   3. Stale-row janitor: a 'streaming' row or stream_started_at
-//      stamp well past the wall-deadline ceiling is an orphan from
-//      a function that died ungracefully. Transition it to 'error'
-//      and write a user-facing explanation onto threads.last_error.
+//   2. Liveness verdict: is the thread's stream_heartbeat_at fresh?
+//      The orchestrator refreshes it every few seconds while a turn
+//      runs, so a fresh heartbeat means "alive" whether or not a
+//      streaming row exists yet (the row is only created at the
+//      first content delta; the heartbeat covers priming and long
+//      reasoning-only stretches).
+//   3. In-flight row probe: with a live heartbeat, return the
+//      streaming row's envelope (or a pre-row envelope) so the caller
+//      can short-circuit a duplicate completion or answer a reconnect.
+//   4. Dead-turn janitor: a 'streaming' row whose heartbeat went
+//      quiet is an orphan from a function that died ungracefully.
+//      Transition it to 'error', write a user-facing explanation onto
+//      threads.last_error, and clear the heartbeat residue.
 //
 // The router helpers (json, userIdFromJwt, requireAdmin) are passed
 // in via StreamProbeCtx so this module does not reach back into the
@@ -56,19 +62,50 @@ export type StreamContextResult =
     };
 
 /**
+ * How long the orchestrator's heartbeat may go unrefreshed before the
+ * turn is read as dead. The orchestrator beats every 15s
+ * (HEARTBEAT_INTERVAL_MS in getStreamingResponse.ts), so this is four
+ * missed beats - slack for a slow write or a briefly blocked event
+ * loop, short enough that a hard-killed turn (the runtime's CPU-time
+ * budget, a container loss - neither runs the finally) is buried
+ * within about a minute. Mirrored by streamLikelyInFlight in
+ * src/lib/ui/stream-inflight.ts and by nak_sweep_stale_streams in
+ * supabase/schema.sql; change all three together.
+ */
+export const STALE_HEARTBEAT_MS = 60_000;
+
+/**
+ * True when a heartbeat stamp says the turn is plausibly still alive.
+ * A slightly-future stamp (clock skew between isolates) still counts
+ * as fresh; only a stamp past the ceiling - or no stamp at all - reads
+ * as dead.
+ */
+export function heartbeatIsFresh(
+  heartbeatAt: string | null | undefined,
+  nowMs: number,
+): boolean {
+  if (typeof heartbeatAt !== 'string') return false;
+  const ageMs = nowMs - new Date(heartbeatAt).getTime();
+  return Number.isFinite(ageMs) && ageMs <= STALE_HEARTBEAT_MS;
+}
+
+/**
  * Shared front half of both stream handlers: thread ownership, the
- * channel name, and the in-flight probe (with its stale-row
+ * channel name, and the in-flight probe (with its dead-turn
  * janitor). Returns a Response on any early exit; otherwise the
  * resolved context plus `inFlight` - the envelope of an existing
  * stream when one is running, null when the thread is quiet. Both
  * callers branch on `inFlight` rather than re-probing, so the
  * duplicate-completion guard and the reconnect answer stay one
  * code path.
+ *
+ * `nowMs` is injectable for tests; production passes nothing.
  */
 export async function resolveStreamContext(
   req: Request,
   threadId: string,
   ctx: StreamProbeCtx,
+  nowMs: number = Date.now(),
 ): Promise<StreamContextResult> {
   const userId = ctx.userIdFromJwt(req);
   if (!userId) {
@@ -84,7 +121,7 @@ export async function resolveStreamContext(
   // someone else's thread.
   const { data: thread, error: threadErr } = await admin
     .from('threads')
-    .select('user_id, stream_started_at')
+    .select('user_id, stream_heartbeat_at')
     .eq('id', threadId)
     .maybeSingle();
   if (threadErr) {
@@ -98,13 +135,17 @@ export async function resolveStreamContext(
 
   const channelName = streamChannelName(threadId);
 
+  const heartbeatAt = (thread as { stream_heartbeat_at?: string | null })
+    .stream_heartbeat_at ?? null;
+  const alive = heartbeatIsFresh(heartbeatAt, nowMs);
+
   // In-flight probe: is there a streaming row on this thread? The
   // same answer drives same-device-reload, cross-device ape-mode,
   // and the explicit reconnect route. Surfacing the existing
   // envelope short-circuits a duplicate completion.
   const { data: streamingRow } = await admin
     .from('messages')
-    .select('id, content, created_at')
+    .select('id, content')
     .eq('thread_id', threadId)
     .eq('status', 'streaming')
     .order('position', { ascending: false })
@@ -113,42 +154,39 @@ export async function resolveStreamContext(
 
   let inFlight: StreamEnvelope | null = null;
   if (streamingRow) {
-    const row = streamingRow as {
-      id: string;
-      content?: string | null;
-      created_at: string;
-    };
-    // Stale-row janitor. The orchestrator's WALL_DEADLINE_MS is 380s
-    // and its finally block transitions the row to 'error' on
-    // wall-timeout, so a healthy stream lives at most ~7 minutes. A
-    // row still in 'streaming' status well past that ceiling is
-    // orphaned: the function died ungracefully (container kill,
-    // EdgeRuntime.waitUntil terminated by tab close before terminal
-    // commit, hard crash) without finalising the row. Returning its
-    // channel envelope would have the browser subscribe to a topic
-    // no publisher feeds - the throbber stays up forever, the Stop
-    // button shows on a stream that isn't running. Transition the
-    // row to 'error', write a user-facing explanation onto
-    // threads.last_error, and return noStreamInFlight so the
-    // browser's reconnect path treats it as "nothing to observe."
-    // STALE_THRESHOLD is twice the wall deadline to leave headroom
-    // for a long generation that legitimately stretches past the
-    // soft ceiling - false positives waste a turn; false negatives
-    // hang the UI, and we'd rather take the wasted turn.
-    const STALE_THRESHOLD_MS = 2 * 380_000; // 760 seconds (~12.7 min)
-    const ageMs = Date.now() - new Date(row.created_at).getTime();
-    if (ageMs > STALE_THRESHOLD_MS) {
+    const row = streamingRow as { id: string; content?: string | null };
+    if (alive) {
+      inFlight = {
+        channelName,
+        assistantRowId: row.id,
+        completedSoFar: row.content ?? '',
+      };
+    } else {
+      // Dead-turn janitor. The orchestrator's finally transitions the
+      // row to a terminal status and clears the heartbeat on every
+      // path it survives to run - so a streaming row next to a stale
+      // (or missing) heartbeat means the function died before its
+      // finally: the edge runtime's CPU-time budget, a container
+      // kill, waitUntil terminated by a hard crash. Returning its
+      // channel envelope would have the browser subscribe to a topic
+      // no publisher feeds - the throbber stays up forever, Stop
+      // publishes a cancel nobody hears, and Regenerate attaches to
+      // the corpse via the duplicate-send guard. Transition the row
+      // to 'error', write a user-facing explanation onto
+      // threads.last_error, clear the heartbeat, and report no stream
+      // in flight so the browser renders terminal state from the row.
+      //
       // Best-effort cleanup. If either UPDATE fails we still report
       // no stream in flight - leaving the row in 'streaming' is the
-      // worst case but the next reconnect will retry the same
-      // janitor pass.
+      // worst case, and the next probe (or the cron sweep) retries
+      // the same janitor pass.
       try {
         await admin
           .from('messages')
           .update({ status: 'error' })
           .eq('id', row.id);
       } catch {
-        // Swallowed by design - see jsdoc.
+        // Swallowed by design - see above.
       }
       try {
         await admin
@@ -159,83 +197,56 @@ export async function resolveStreamContext(
               message:
                 "The previous response was lost mid-stream (the function ended before it could finalise the reply). Try again.",
               retryable: true,
-              occurred_at: new Date().toISOString(),
+              occurred_at: new Date(nowMs).toISOString(),
             },
-            // The in-flight stamp must die with the turn: it is the
-            // probe's "still running" signal, and leaving it set keeps
-            // the reconnect poll reporting in-flight for the stamp's
-            // remaining freshness window (~12 min) even though the row
-            // is terminal - the browser sits on "Reconnecting" for a
-            // turn the janitor already buried.
-            stream_started_at: null,
+            stream_heartbeat_at: null,
           })
           .eq('id', threadId);
       } catch {
-        // Swallowed by design - see jsdoc.
+        // Swallowed by design - see above.
       }
-      // inFlight stays null: the janitored row no longer counts as a
-      // running stream.
-    } else {
+    }
+  } else if (heartbeatAt !== null) {
+    // Pre-row in-flight signal. The orchestrator stamps the heartbeat
+    // at turn entry - BEFORE the priming stage and before any
+    // assistant row exists (the streaming row is only created at the
+    // first content delta). Without this branch a probe that lands
+    // during priming, or during a long reasoning-only stretch,
+    // reports noStreamInFlight and a reconnecting browser gives up on
+    // a turn that is still running. A stale heartbeat with no row is
+    // residue from a function that died between rounds; clear it so
+    // fresh sends stop short-circuiting into a channel no publisher
+    // feeds.
+    if (alive) {
       inFlight = {
         channelName,
-        assistantRowId: row.id,
-        completedSoFar: row.content ?? '',
+        assistantRowId: null,
+        completedSoFar: '',
       };
+    } else {
+      try {
+        await admin
+          .from('threads')
+          .update({ stream_heartbeat_at: null })
+          .eq('id', threadId);
+      } catch {
+        // Best-effort - the next probe retries the same sweep.
+      }
     }
   }
 
   const probeLog = createEdgeLogger(userId, 'stream');
 
-  // Pre-row in-flight signal. The orchestrator stamps
-  // threads.stream_started_at at turn entry - BEFORE the priming stage
-  // and before any assistant row exists (the streaming row is only
-  // created at the first content delta). Without this branch a probe
-  // that lands during priming, or during a long reasoning-only stretch,
-  // reports noStreamInFlight and a reconnecting browser gives up on a
-  // turn that is still running. Same staleness posture as the row
-  // janitor above: a stamp well past the wall-deadline ceiling means
-  // the function died before its finally could clear it, so treat it
-  // as quiet and best-effort clear the residue (otherwise fresh sends
-  // would keep short-circuiting into a channel no publisher feeds).
-  if (!inFlight) {
-    const startedAtRaw = (thread as { stream_started_at?: string | null })
-      .stream_started_at;
-    if (typeof startedAtRaw === 'string') {
-      const STALE_THRESHOLD_MS = 2 * 380_000; // mirrors the row janitor
-      const ageMs = Date.now() - new Date(startedAtRaw).getTime();
-      // A slightly-negative age (clock skew between isolates) still
-      // counts as fresh; only a stamp past the ceiling is residue.
-      if (Number.isFinite(ageMs) && ageMs <= STALE_THRESHOLD_MS) {
-        inFlight = {
-          channelName,
-          assistantRowId: null,
-          completedSoFar: '',
-        };
-      } else {
-        try {
-          await admin
-            .from('threads')
-            .update({ stream_started_at: null })
-            .eq('id', threadId);
-        } catch {
-          // Best-effort - the next probe retries the same sweep.
-        }
-      }
-    }
-  }
-
   // Probe-verdict breadcrumb for the Logs drawer (source: stream).
   // Fires on every /stream call - fresh sends and the reconnect
   // poll's ~2.5s probes alike - so a refresh-during-pregame session
   // can be reconstructed after the fact: what the probe saw
-  // (streaming row / stamp / neither) and what it answered. Debug
+  // (streaming row / heartbeat / neither) and what it answered. Debug
   // tier: drawer-only, never mirrors to the console.
   probeLog.debug(
     `in-flight probe thread=${threadId}` +
       ` streamingRow=${streamingRow ? (streamingRow as { id: string }).id : 'none'}` +
-      ` stamp=${
-        (thread as { stream_started_at?: string | null }).stream_started_at ?? 'null'
-      }` +
+      ` heartbeat=${heartbeatAt ?? 'null'}` +
       ` verdict=${inFlight ? (inFlight.assistantRowId ? 'in-flight(row)' : 'in-flight(pregame)') : 'quiet'}`,
   );
 

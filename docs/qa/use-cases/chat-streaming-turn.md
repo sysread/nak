@@ -5,7 +5,7 @@
 The `/stream` route pair (fresh + reconnect,
 [dev: chat](../../dev/chat.md)), the orchestrator's operational
 drawer logging ([dev: logging](../../dev/logging.md), source
-`stream`), the in-flight probe and stale-row janitor, and the
+`stream`), the in-flight probe and dead-turn janitor, and the
 subconscious priming pipelines' fire policy
 ([dev: intuition](../../dev/intuition.md),
 [dev: context-recall](../../dev/context-recall.md)).
@@ -40,13 +40,16 @@ subconscious priming pipelines' fire policy
      -d '{"threadId":"<thread>","reconnectOnly":true}'
    ```
 
-5. Stale-row janitor: forge an orphaned streaming row older than
-   the janitor threshold, then send a fresh message in the thread:
+5. Dead-turn janitor: forge an orphaned streaming row on a thread
+   whose heartbeat is stale (the janitor keys on
+   `threads.stream_heartbeat_at`, not on the row's age), then send a
+   fresh message in the thread:
 
    ```sql
-   insert into messages (thread_id, role, status, content, created_at)
-   values ('<thread>', 'assistant', 'streaming', 'orphan',
-           now() - interval '15 minutes');
+   insert into messages (thread_id, role, status, content)
+   values ('<thread>', 'assistant', 'streaming', 'orphan');
+   update threads set stream_heartbeat_at = now() - interval '2 minutes'
+    where id = '<thread>';
    ```
 
 ## Expected
@@ -54,8 +57,8 @@ subconscious priming pipelines' fire policy
 - (2-3) The reply streams into the bubble; the drawer's `stream`
   source shows, keyed by one runId: a `start` line (debug), an
   in-flight probe verdict line (debug), a
-  `stream_started_at stamped` line (debug), a `round 0` line
-  (debug), an event tally (debug), a `stream_started_at cleared`
+  `stream_heartbeat_at stamped` line (debug), a `round 0` line
+  (debug), an event tally (debug), a `stream_heartbeat_at cleared`
   line (debug), and `end terminalKind=completed` (info) - seven
   lines for a no-tool turn. Turns that dispatch tools additionally
   show `dispatching N tool call(s)` and an `outcomes:` line at

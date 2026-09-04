@@ -1,41 +1,44 @@
 /**
- * Freshness rule for the server-side in-flight stamp
- * (threads.stream_started_at). The venice /stream orchestrator writes
- * the stamp at turn entry - before the priming stage, and before the
- * streaming assistant row exists - and clears it at terminal. The chat
- * screen reads it to arm the reconnect poll and to suppress the
- * "response was interrupted / cut off" recovery banners while a turn
- * is still alive server-side, closing the window where a page refresh
- * during the pre-response "pregame" (predicting / recalling / etc.)
- * found no streaming row and wrongly offered a retry.
+ * Freshness rule for the server-side liveness heartbeat
+ * (threads.stream_heartbeat_at). The venice /stream orchestrator stamps
+ * it at turn entry - before the priming stage, and before the streaming
+ * assistant row exists - refreshes it every 15s while the turn runs,
+ * and clears it at terminal. The chat screen reads it to arm the
+ * reconnect poll and to suppress the "response was interrupted / cut
+ * off" recovery banners while a turn is still alive server-side, and -
+ * because a hard-killed function never clears it - to notice within a
+ * minute that a turn died: the heartbeat simply stops refreshing, the
+ * freshness verdict flips, and the recovery banners come back on.
  *
  * Interacts with: src/screens/Chat.svelte (selectThread's reconnect
  * arming + the incompleteTurnTail gate), resolveStreamContext in
- * supabase/functions/venice/index.ts (the server-side twin of this
- * staleness rule).
+ * supabase/functions/venice/stream-probe.ts (the server-side twin of
+ * this staleness rule), and nak_sweep_stale_streams in
+ * supabase/schema.sql (the cron twin).
  */
 
 /**
- * A stamp older than this is residue from a function that died before
- * its finally could clear it (container kill, hard crash). Mirrors the
- * server probe's stale-row janitor threshold: twice the orchestrator's
- * 380s wall deadline, so a legitimately long turn never trips it.
+ * A heartbeat older than this is a dead turn: the function stopped
+ * refreshing it (container kill, CPU-time budget exceeded, hard crash)
+ * before its finally could clear it. Four missed 15s beats - the same
+ * ceiling the server probe and the cron sweep use, so every reader
+ * flips its verdict within the same minute.
  */
-const STALE_THRESHOLD_MS = 2 * 380_000;
+const STALE_HEARTBEAT_MS = 60_000;
 
 /**
- * True when `streamStartedAt` says a server-side turn is plausibly
- * still running. Null / unparseable stamps read as "no turn" (the old
- * behavior for rows predating the column). A slightly-future stamp
- * (clock skew between the edge runtime and this device) still counts
- * as fresh; only a stamp past the staleness ceiling reads as dead.
+ * True when `heartbeatAt` says a server-side turn is plausibly still
+ * running. Null / unparseable stamps read as "no turn". A
+ * slightly-future stamp (clock skew between the edge runtime and this
+ * device) still counts as fresh; only a stamp past the staleness
+ * ceiling reads as dead.
  */
 export function streamLikelyInFlight(
-  streamStartedAt: string | null | undefined,
+  heartbeatAt: string | null | undefined,
   nowMs: number,
 ): boolean {
-  if (typeof streamStartedAt !== 'string') return false;
-  const startedMs = Date.parse(streamStartedAt);
-  if (Number.isNaN(startedMs)) return false;
-  return nowMs - startedMs <= STALE_THRESHOLD_MS;
+  if (typeof heartbeatAt !== 'string') return false;
+  const beatMs = Date.parse(heartbeatAt);
+  if (Number.isNaN(beatMs)) return false;
+  return nowMs - beatMs <= STALE_HEARTBEAT_MS;
 }

@@ -251,15 +251,19 @@ aborts any in-flight exchange before the next sign-in.
 The completion-status derivation returns nothing while the turn is
 plausibly still running somewhere, via one unified `turnPending`
 gate: a local slot sending, `respondingElsewhere` true, a streaming
-row parked at the tail, or the thread's server-side in-flight stamp
-(`threads.stream_started_at`, written by the /stream orchestrator at
-turn entry and cleared at terminal) fresh per `streamLikelyInFlight`
-(`src/lib/ui/stream-inflight.ts`). The stamp covers the same-device-reload case the claim cannot: after
-a refresh the claim is held by OUR OWN holderId (so
-`respondingElsewhere` is false), yet the turn is still running under
-the edge function's waitUntil, and during its priming stage no
-streaming assistant row exists for the reconnect to key on. Without
-the stamp gate that window rendered retry banners for a live turn. A foreign device holding a live claim is
+row parked at the tail, or the thread's server-side liveness heartbeat
+(`threads.stream_heartbeat_at`, stamped by the /stream orchestrator at
+turn entry, refreshed every 15s, and cleared at terminal) fresh per
+`streamLikelyInFlight` (`src/lib/ui/stream-inflight.ts`). The heartbeat
+covers the same-device-reload case the claim cannot: after a refresh
+the claim is held by OUR OWN holderId (so `respondingElsewhere` is
+false), yet the turn is still running under the edge function's
+waitUntil, and during its priming stage no streaming assistant row
+exists for the reconnect to key on. Without the heartbeat gate that
+window rendered retry banners for a live turn. The same gate is how a
+hard-killed function's death reaches the screen: the heartbeat stops
+refreshing, the 60s freshness verdict flips, and the retry banner
+returns on its own. A foreign device holding a live claim is
 actively producing the reply, so a transcript that ends on a user row
 only LOOKS incomplete from the observer side - the assistant row arrives
 over realtime. Offering retry there invites a competing turn the claim

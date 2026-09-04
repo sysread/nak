@@ -71,6 +71,10 @@ export interface StreamEnvelope {
   noStreamInFlight?: boolean;
 }
 
+// Drain-internal marker for "the silence watchdog fired before any
+// event arrived". Never yielded to consumers.
+const SILENCE = Symbol('silence');
+
 export async function* streamChatViaFunction(
   supabase: SupabaseClient,
   req: ChatRequest,
@@ -102,7 +106,9 @@ export async function* streamChatViaFunction(
   // landed before we subscribed is already in the row, and the
   // envelope returns it.
   const channelName = streamChannelName(ctx.threadId);
-  const subscription = setupStreamSubscription(supabase, channelName);
+  const subscription = setupStreamSubscription(supabase, channelName, {
+    probeInFlight: () => probeStreamInFlight(supabase, ctx.threadId),
+  });
   await subscription.subscribed;
 
   try {
@@ -156,19 +162,65 @@ export async function* streamChatViaFunction(
   }
 }
 
+/**
+ * One reconnect-only probe of /stream: "is a turn still running on
+ * this thread?" The server answers from the orchestrator's liveness
+ * heartbeat (and buries a dead turn's row as a side effect), so the
+ * verdict is trustworthy even when the function was hard-killed.
+ * 'unknown' is a transport failure (offline, edge cold start); callers
+ * keep waiting and ask again.
+ */
+async function probeStreamInFlight(
+  supabase: SupabaseClient,
+  threadId: string,
+): Promise<StreamProbeVerdict> {
+  try {
+    const { data, error } = await supabase.functions.invoke<StreamEnvelope>(
+      'venice/stream',
+      { body: { threadId, reconnectOnly: true } },
+    );
+    if (error || !data) return { kind: 'unknown' };
+    return data.noStreamInFlight
+      ? { kind: 'settled' }
+      : { kind: 'in-flight', completedSoFar: data.completedSoFar };
+  } catch {
+    // Transient invoke failure (mobile radio waking on foreground,
+    // edge cold start). The caller retries on its own cadence.
+    return { kind: 'unknown' };
+  }
+}
+
+type StreamProbeVerdict =
+  | { kind: 'in-flight'; completedSoFar: string }
+  | { kind: 'settled' }
+  | { kind: 'unknown' };
+
+// Live-drain silence watchdog. A publisher that dies mid-turn (the
+// edge runtime hard-kills the function for exceeding its CPU-time
+// budget) closes nothing: the Broadcast socket stays healthy, no END
+// arrives, and the drain would await forever. After this much silence
+// the drain asks the server whether the turn is still alive rather
+// than guessing - silence alone is not a verdict, because a long tool
+// call or a slow model's prefill is legitimately quiet. Generous
+// relative to the server's 60s heartbeat ceiling: a dead turn is
+// confirmed on the first or second probe (~30-90s after the death),
+// and a live one costs one cheap probe per half-minute of quiet.
+const SILENCE_PROBE_MS = 30_000;
+
 // Reconnect poll cadence. We re-probe /stream reconnectOnly on this
 // interval while a turn we re-attached to is still in flight. Snappy
 // enough that a turn finishing feels responsive; slow enough that a
 // long generation costs only a handful of probes.
 const RECONNECT_POLL_INTERVAL_MS = 2_500;
 
-// Hard ceiling on the reconnect poll. The server-side stale-row janitor
+// Hard ceiling on the reconnect poll. The server-side dead-turn janitor
 // (in the /stream handler) flips an orphaned streaming row to 'error'
-// once it ages past ~760s, after which the probe reports
-// noStreamInFlight, so the poll terminates on its own in every normal
-// case. This ceiling is the backstop for the pathological case where
-// the probe ITSELF keeps failing (persistent offline): past it we stop
-// polling and let the caller render whatever the row currently holds.
+// once the orchestrator's heartbeat is more than a minute old, after
+// which the probe reports noStreamInFlight, so the poll terminates on
+// its own in every normal case. This ceiling is the backstop for the
+// pathological case where the probe ITSELF keeps failing (persistent
+// offline): past it we stop polling and let the caller render whatever
+// the row currently holds.
 const RECONNECT_POLL_MAX_WAIT_MS = 800_000;
 
 export interface AwaitStreamSettledOpts {
@@ -223,21 +275,12 @@ export async function awaitStreamSettled(
 
   for (;;) {
     if (signal?.aborted) return;
-    let envelope: StreamEnvelope | null = null;
-    try {
-      const { data, error } = await supabase.functions.invoke<StreamEnvelope>(
-        'venice/stream',
-        { body: { threadId: ctx.threadId, reconnectOnly: true } },
-      );
-      if (!error && data) envelope = data;
-    } catch {
-      // Transient invoke failure (mobile radio waking on foreground,
-      // edge cold start). Swallow and retry on the next tick; the
-      // deadline below guarantees we don't spin forever.
-    }
+    // An 'unknown' verdict (transient invoke failure) is retried on the
+    // next tick; the deadline below guarantees we don't spin forever.
+    const verdict = await probeStreamInFlight(supabase, ctx.threadId);
     if (signal?.aborted) return;
-    if (envelope?.noStreamInFlight) return;
-    if (envelope) onProgress?.(envelope.completedSoFar);
+    if (verdict.kind === 'settled') return;
+    if (verdict.kind === 'in-flight') onProgress?.(verdict.completedSoFar);
     if (Date.now() >= deadline) return;
 
     const aborted = await new Promise<boolean>((resolve) => {
@@ -283,9 +326,23 @@ interface StreamSubscription {
   unsubscribe(): Promise<void>;
 }
 
+interface StreamSubscriptionOpts {
+  /**
+   * Asked by the drain after SILENCE_PROBE_MS without an event. A
+   * 'settled' answer means the publisher is gone (the server buried
+   * the turn); the drain closes and throws StreamDisconnectedError so
+   * the caller reconciles against the row. Any other answer keeps the
+   * drain waiting.
+   */
+  probeInFlight: () => Promise<StreamProbeVerdict>;
+  /** Silence threshold override (tests). Defaults to SILENCE_PROBE_MS. */
+  silenceMs?: number;
+}
+
 function setupStreamSubscription(
   supabase: SupabaseClient,
   channelName: string,
+  opts: StreamSubscriptionOpts,
 ): StreamSubscription {
   // Channel subscribe. private:true engages the realtime.messages RLS
   // policies in supabase/schema.sql that gate this topic to the
@@ -325,6 +382,23 @@ function setupStreamSubscription(
       resolveNext = null;
       r(null);
     }
+  }
+
+  // Await the next event, or SILENCE once `ms` pass without one. The
+  // timer and the resolver disarm each other so a late push after the
+  // timeout queues normally (resolveNext is already null) instead of
+  // resolving a settled promise.
+  function waitForNext(ms: number): Promise<StreamEvent | null | typeof SILENCE> {
+    return new Promise((r) => {
+      const timer = setTimeout(() => {
+        resolveNext = null;
+        r(SILENCE);
+      }, ms);
+      resolveNext = (ev) => {
+        clearTimeout(timer);
+        r(ev);
+      };
+    });
   }
 
   // Map each Broadcast event name onto the legacy StreamEvent shape
@@ -584,6 +658,7 @@ function setupStreamSubscription(
     const onAbort = (): void => close();
     signal?.addEventListener('abort', onAbort, { once: true });
 
+    const silenceMs = opts.silenceMs ?? SILENCE_PROBE_MS;
     try {
       while (true) {
         if (queue.length > 0) {
@@ -592,9 +667,27 @@ function setupStreamSubscription(
           continue;
         }
         if (closed) break;
-        const next = await new Promise<StreamEvent | null>((r) => {
-          resolveNext = r;
-        });
+        const next = await waitForNext(silenceMs);
+        if (next === SILENCE) {
+          // Silence watchdog. The publisher may simply be quiet (a long
+          // tool call, a slow prefill) or it may be dead - a function
+          // the runtime hard-killed publishes no END and drops no
+          // socket, so from here the two are indistinguishable. Ask
+          // the server, which reads the orchestrator's heartbeat. An
+          // event (or END) that lands while we wait for the answer
+          // outranks it: the loop re-checks the queue and `closed`
+          // before trusting a 'settled' verdict.
+          const verdict = await opts.probeInFlight();
+          if (
+            verdict.kind === 'settled' &&
+            queue.length === 0 &&
+            !closed
+          ) {
+            disconnected = true;
+            close();
+          }
+          continue;
+        }
         if (next === null) break;
         yield next;
       }

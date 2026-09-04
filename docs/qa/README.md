@@ -68,7 +68,12 @@ One file per use-case under [`use-cases/`](./use-cases/), named
 
 - [chat-streaming-turn](./use-cases/chat-streaming-turn.md) - a
   full streaming chat turn: fresh stream, operational drawer lines,
-  reconnect, stale-row janitor.
+  reconnect, dead-turn janitor.
+- [chat-dead-publisher-recovery](./use-cases/chat-dead-publisher-recovery.md) -
+  a turn whose function is hard-killed mid-stream (no END, no socket
+  drop) is buried within about a minute by the heartbeat rule: the
+  live tab's silence watchdog, a refresh's reconnect poll, and the
+  cron sweep all converge on the same cut-off card.
 - [chat-reasoning-collapse](./use-cases/chat-reasoning-collapse.md) -
   the live reasoning panel's open / auto-collapse / manual-latch
   behavior, its elapsed-ms + char-count header pills, and the
@@ -172,7 +177,7 @@ One file per use-case under [`use-cases/`](./use-cases/), named
   means the detached run is still finishing.
 - [chat-pregame-refresh-reconnect](./use-cases/chat-pregame-refresh-reconnect.md) -
   refreshing during the pre-response pregame (priming) reconnects to
-  the still-running server turn via the `stream_started_at` stamp
+  the still-running server turn via the `stream_heartbeat_at` stamp
   instead of surfacing interrupted/cut-off retry banners.
 - [exchange-per-thread-slots](./use-cases/exchange-per-thread-slots.md) -
   per-thread streaming slot isolation: navigate away mid-stream and

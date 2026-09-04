@@ -33,6 +33,13 @@
 //     400s; we set our own deadline a generous margin earlier so we
 //     have time to flush, persist 'error', and publish END before
 //     Deno cuts us off.
+//   - Liveness heartbeat. threads.stream_heartbeat_at is stamped at
+//     turn entry and refreshed every HEARTBEAT_INTERVAL_MS until the
+//     terminal write. It is what lets the reconnect probe, the cron
+//     janitor, and the browser tell a running turn from one the
+//     runtime hard-killed (CPU-time budget exceeded) - a kill runs no
+//     finally, so the row and the channel look identical either way
+//     and only the heartbeat going quiet gives the death away.
 //
 // Never throws to its caller. Failures are surfaced as END events
 // with terminalKind='error' so the /stream handler's
@@ -117,6 +124,16 @@ const ROW_UPDATE_MS = 500;
 // 400s; we trip our own abort ~20s before that so we have time to
 // flush the publisher, persist 'error' status, and emit END.
 const WALL_DEADLINE_MS = 380_000;
+
+// Liveness heartbeat cadence. Every readers' staleness ceiling is 60s
+// (STALE_HEARTBEAT_MS in stream-probe.ts, its browser twin in
+// src/lib/ui/stream-inflight.ts, and the interval in
+// nak_sweep_stale_streams), so a dead turn is detected after four
+// missed beats - enough slack for a slow DB write or a briefly blocked
+// event loop, short enough that a killed turn's Stop/Regenerate and
+// throbber recover within about a minute instead of the ~12 minutes an
+// age-based fuse needed.
+const HEARTBEAT_INTERVAL_MS = 15_000;
 
 // Bound the tool-result summary that rides on Broadcast tool_call_response
 // events. The full payload lives on the tool-result row; the summary is
@@ -223,6 +240,11 @@ export interface OrchestratorOpts {
    * Defaults to WALL_DEADLINE_MS.
    */
   wallDeadlineMs?: number;
+  /**
+   * Override the heartbeat cadence for tests. Defaults to
+   * HEARTBEAT_INTERVAL_MS.
+   */
+  heartbeatIntervalMs?: number;
 }
 
 /**
@@ -306,6 +328,42 @@ export async function getStreamingResponse(
   const runRowIds: string[] = [];
   let rowUpdateTimer: ReturnType<typeof setTimeout> | null = null;
   let lastUpdateContent = '';
+
+  // Heartbeat refresh. Each beat is a conditional UPDATE - it only
+  // touches a row whose heartbeat is still set - so a beat that was
+  // already in flight when the finally cleared the column cannot
+  // resurrect it and leave a terminal turn reading as alive. The
+  // pending promise is awaited before the clear for the same reason:
+  // the clear must be the last heartbeat write of the turn.
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  let heartbeatPending: PromiseLike<void> = Promise.resolve();
+  function startHeartbeat(): void {
+    heartbeatTimer = setInterval(() => {
+      heartbeatPending = opts.adminClient
+        .from('threads')
+        .update({ stream_heartbeat_at: new Date().toISOString() })
+        .eq('id', opts.threadId)
+        .not('stream_heartbeat_at', 'is', null)
+        .then(
+          ({ error }) => {
+            if (error) log.warn(`${runId} heartbeat write failed: ${error.message}`);
+          },
+          // A transport throw (not a returned error) must not become an
+          // unhandled rejection, and must not surface through the
+          // finally's await: a missed beat is tolerated by every
+          // reader's 60s ceiling, whereas a throw there would skip the
+          // terminal clear and the error card.
+          (err: unknown) => {
+            log.warn(`${runId} heartbeat write threw:`, err);
+          },
+        );
+    }, opts.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS);
+  }
+  async function stopHeartbeat(): Promise<void> {
+    if (heartbeatTimer !== null) clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+    await heartbeatPending;
+  }
 
   const accum = {
     content: '',
@@ -430,7 +488,7 @@ export async function getStreamingResponse(
         );
       }
     }
-    // In-flight stamp, before anything else. The streaming assistant
+    // Liveness heartbeat, before anything else. The streaming assistant
     // row (the reconnect probe's other signal) is only created at the
     // first content delta, so the priming stage below - plus any long
     // reasoning-only stretch before the model emits text - would
@@ -438,21 +496,22 @@ export async function getStreamingResponse(
     // during that window found no streaming row, concluded no turn was
     // running, and surfaced the "response was interrupted" retry
     // banners for a turn that was still alive under waitUntil. The
-    // stamp is cleared in the finally after the terminal write;
-    // resolveStreamContext treats a fresh stamp as in-flight when no
-    // streaming row exists yet. Best-effort: a failed write degrades
-    // to the old blind window, it must not break the turn.
+    // first write is unconditional; the interval below keeps it fresh
+    // and the finally clears it after the terminal write. Best-effort:
+    // a failed write degrades to the old blind window, it must not
+    // break the turn.
     try {
       // RLS OFF: filter by threadId (ownership was verified by the
       // /stream handler before the orchestrator started).
       await opts.adminClient
         .from('threads')
-        .update({ stream_started_at: new Date().toISOString() })
+        .update({ stream_heartbeat_at: new Date().toISOString() })
         .eq('id', opts.threadId);
-      log.debug(`${runId} stream_started_at stamped (pregame visible to probes)`);
+      log.debug(`${runId} stream_heartbeat_at stamped (pregame visible to probes)`);
     } catch (err) {
-      log.error(`${runId} failed to stamp stream_started_at:`, err);
+      log.error(`${runId} failed to stamp stream_heartbeat_at:`, err);
     }
+    startHeartbeat();
 
     // Turn-entry priming, before the first round. Runs server-side so
     // it survives browser disconnect under the same waitUntil as the
@@ -1237,19 +1296,22 @@ export async function getStreamingResponse(
       }
     }
 
-    // Clear the in-flight stamp now that the row (if any) carries a
-    // terminal status. Ordered after the terminal write so the
-    // reconnect probe never observes "no signal at all" while the
-    // streaming row is still mid-transition. Best-effort: a failed
-    // clear is swept by the probe's staleness janitor.
+    // Clear the heartbeat now that the row (if any) carries a terminal
+    // status. Ordered after the terminal write so the reconnect probe
+    // never observes "no signal at all" while the streaming row is
+    // still mid-transition. The interval is stopped (and its last beat
+    // awaited) first so nothing can re-stamp behind the clear.
+    // Best-effort: a failed clear ages out under every reader's
+    // staleness rule within a minute.
+    await stopHeartbeat();
     try {
       await opts.adminClient
         .from('threads')
-        .update({ stream_started_at: null })
+        .update({ stream_heartbeat_at: null })
         .eq('id', opts.threadId);
-      log.debug(`${runId} stream_started_at cleared`);
+      log.debug(`${runId} stream_heartbeat_at cleared`);
     } catch (err) {
-      log.error(`${runId} failed to clear stream_started_at:`, err);
+      log.error(`${runId} failed to clear stream_heartbeat_at:`, err);
     }
 
     // Persistent error surface. threads.last_error is the column the
