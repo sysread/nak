@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   VeniceClient,
   VeniceError,
@@ -882,6 +882,12 @@ function makeChannel(
 
 interface MockSupabaseOpts {
   envelope?: unknown;
+  /**
+   * Envelope returned to reconnectOnly probes (the silence watchdog and
+   * the reconnect poll). Defaults to `envelope` so tests that never
+   * probe need not care.
+   */
+  reconnectEnvelope?: unknown;
   invokeError?: Error;
   channels?: Map<string, MockChannel>;
 }
@@ -901,6 +907,11 @@ function makeSupabase(opts: MockSupabaseOpts = {}): MockSupabase {
         invokeCalls.push({ name, body: args.body });
         if (opts.invokeError) {
           return { data: null, error: opts.invokeError };
+        }
+        const isProbe =
+          (args.body as { reconnectOnly?: boolean } | null)?.reconnectOnly === true;
+        if (isProbe && opts.reconnectEnvelope !== undefined) {
+          return { data: opts.reconnectEnvelope, error: null };
         }
         return { data: opts.envelope ?? null, error: null };
       }),
@@ -1501,6 +1512,154 @@ describe('streamChat (streaming-root transport)', () => {
     expect(collected).toEqual([
       { type: 'end', persistedAssistantId: 'A1', terminalKind: 'completed', roundsRun: 0 },
     ]);
+  });
+
+  // Silence watchdog: a publisher the runtime hard-killed (CPU-time
+  // budget) closes nothing - no END, no socket drop - so the drain
+  // must ask the server rather than hang. These drive the watchdog with
+  // fake timers; the probe answer comes from `reconnectEnvelope`.
+  describe('silence watchdog', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('throws StreamDisconnectedError when a silent turn probes as settled', async () => {
+      const channel = makeChannel('thread:T1:stream');
+      const channels = new Map([[channel.name, channel]]);
+      const { client, invokeCalls } = makeSupabase({
+        envelope: { channelName: channel.name, assistantRowId: null, completedSoFar: '' },
+        // The server buried the dead turn: nothing in flight.
+        reconnectEnvelope: {
+          channelName: channel.name,
+          assistantRowId: null,
+          completedSoFar: '',
+          noStreamInFlight: true,
+        },
+        channels,
+      });
+      const venice = new VeniceClient({ supabase: client });
+      const gen = venice.streamChat({
+        model: 'm',
+        messages: [],
+        streamCtx: { threadId: 'T1', userMessageId: 'U1' },
+      });
+      const collected: StreamEvent[] = [];
+      let thrown: unknown = null;
+      const drained = (async () => {
+        try {
+          for await (const ev of gen) collected.push(ev);
+        } catch (err) {
+          thrown = err;
+        }
+      })();
+      await vi.advanceTimersByTimeAsync(0);
+      channel.emit('response_text', { content: 'partial' });
+      // 30s of silence: the watchdog probes, the server says settled.
+      await vi.advanceTimersByTimeAsync(30_000);
+      await drained;
+      expect(collected).toEqual([{ type: 'text', delta: 'partial' }]);
+      expect(thrown).toBeInstanceOf(StreamDisconnectedError);
+      const probes = invokeCalls.filter(
+        (c) => (c.body as { reconnectOnly?: boolean }).reconnectOnly === true,
+      );
+      expect(probes).toHaveLength(1);
+    });
+
+    it('keeps draining while a silent turn probes as in flight, then ends normally', async () => {
+      const channel = makeChannel('thread:T1:stream');
+      const channels = new Map([[channel.name, channel]]);
+      const { client, invokeCalls } = makeSupabase({
+        envelope: { channelName: channel.name, assistantRowId: null, completedSoFar: '' },
+        // A long tool call: quiet, but the heartbeat is fresh.
+        reconnectEnvelope: { channelName: channel.name, assistantRowId: 'A1', completedSoFar: '' },
+        channels,
+      });
+      const venice = new VeniceClient({ supabase: client });
+      const gen = venice.streamChat({
+        model: 'm',
+        messages: [],
+        streamCtx: { threadId: 'T1', userMessageId: 'U1' },
+      });
+      const collected: StreamEvent[] = [];
+      let thrown: unknown = null;
+      const drained = (async () => {
+        try {
+          for await (const ev of gen) collected.push(ev);
+        } catch (err) {
+          thrown = err;
+        }
+      })();
+      await vi.advanceTimersByTimeAsync(0);
+      // Two silent windows, two "still alive" probes, then the turn ends.
+      await vi.advanceTimersByTimeAsync(60_000);
+      channel.emit('response_text', { content: 'late' });
+      channel.emit('END', { persistedAssistantId: 'A1', terminalKind: 'completed' });
+      await drained;
+      expect(thrown).toBeNull();
+      expect(collected).toEqual([
+        { type: 'text', delta: 'late' },
+        { type: 'end', persistedAssistantId: 'A1', terminalKind: 'completed', roundsRun: 0 },
+      ]);
+      const probes = invokeCalls.filter(
+        (c) => (c.body as { reconnectOnly?: boolean }).reconnectOnly === true,
+      );
+      expect(probes).toHaveLength(2);
+    });
+
+    it('an event that lands during the probe outranks a settled verdict', async () => {
+      const channel = makeChannel('thread:T1:stream');
+      const channels = new Map([[channel.name, channel]]);
+      const { client } = makeSupabase({
+        envelope: { channelName: channel.name, assistantRowId: null, completedSoFar: '' },
+        reconnectEnvelope: {
+          channelName: channel.name,
+          assistantRowId: null,
+          completedSoFar: '',
+          noStreamInFlight: true,
+        },
+        channels,
+      });
+      // Hold the probe open so END can race it.
+      let releaseProbe: () => void = () => {};
+      const invoke = client.functions.invoke as unknown as ReturnType<typeof vi.fn>;
+      const original = invoke.getMockImplementation()!;
+      invoke.mockImplementation(async (name: string, args: { body: unknown }) => {
+        const result = await original(name, args);
+        if ((args.body as { reconnectOnly?: boolean }).reconnectOnly === true) {
+          await new Promise<void>((r) => {
+            releaseProbe = r;
+          });
+        }
+        return result;
+      });
+      const venice = new VeniceClient({ supabase: client });
+      const gen = venice.streamChat({
+        model: 'm',
+        messages: [],
+        streamCtx: { threadId: 'T1', userMessageId: 'U1' },
+      });
+      const collected: StreamEvent[] = [];
+      let thrown: unknown = null;
+      const drained = (async () => {
+        try {
+          for await (const ev of gen) collected.push(ev);
+        } catch (err) {
+          thrown = err;
+        }
+      })();
+      await vi.advanceTimersByTimeAsync(30_000);
+      // The turn finishes while the probe is still in flight.
+      channel.emit('END', { persistedAssistantId: 'A1', terminalKind: 'completed' });
+      releaseProbe();
+      await drained;
+      expect(thrown).toBeNull();
+      expect(collected).toEqual([
+        { type: 'end', persistedAssistantId: 'A1', terminalKind: 'completed', roundsRun: 0 },
+      ]);
+    });
   });
 });
 

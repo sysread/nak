@@ -2648,7 +2648,7 @@
       // with the message list. On a cold page load the route effect
       // opens the URL's thread BEFORE the sidebar's thread buckets have
       // fetched, so `findThread(id)` is empty and the local copy of
-      // stream_started_at doesn't exist yet - which made the
+      // stream_heartbeat_at doesn't exist yet - which made the
       // refresh-during-pregame reconnect silently fail to arm on
       // exactly the reload it was built for. The DB row is the
       // authority; the bucket copy is only a fallback when the point
@@ -2744,24 +2744,24 @@
     pendingDeleteIds = [];
     openEditMenuMsgId = null;
       // Two in-flight signals: the streaming assistant row (created at
-      // the first content delta) and the server-side stream_started_at
+      // the first content delta) and the server-side stream_heartbeat_at
       // stamp, which the orchestrator writes at turn entry so the
       // priming window BEFORE any row exists is also visible. Without
       // the stamp, a refresh during the pre-response "pregame"
       // (predicting / recalling) found nothing to reconnect to and
       // fell through to the interrupted-draft / cut-off retry banners
       // for a turn that was still running server-side.
-      const streamStartedAt =
-        streamState?.streamStartedAt ?? findThread(id)?.stream_started_at ?? null;
+      const streamHeartbeatAt =
+        streamState?.streamHeartbeatAt ?? findThread(id)?.stream_heartbeat_at ?? null;
       const serverTurnInFlight =
         streamingTail != null ||
-        streamLikelyInFlight(streamStartedAt, Date.now());
+        streamLikelyInFlight(streamHeartbeatAt, Date.now());
       // Mirror the authoritative stamp into the loaded bucket copy (a
       // no-op when the buckets haven't fetched yet) so the
       // incompleteTurnTail suppression, which reads currentThread,
       // agrees with the decision made here.
       if (streamState) {
-        patchThread(id, { stream_started_at: streamState.streamStartedAt });
+        patchThread(id, { stream_heartbeat_at: streamState.streamHeartbeatAt });
       }
       const lastMsg = fetched.at(-1);
       // Diagnostics for the refresh-during-pregame recovery path: one
@@ -2771,8 +2771,8 @@
       log.debug(
         `thread-open signals thread=${id} tail=${lastMsg?.role ?? 'empty'}` +
           ` streamingRow=${streamingTail != null}` +
-          ` stampDb=${streamState?.streamStartedAt ?? 'null'}` +
-          ` stampLocal=${findThread(id)?.stream_started_at ?? 'null'}` +
+          ` stampDb=${streamState?.streamHeartbeatAt ?? 'null'}` +
+          ` stampLocal=${findThread(id)?.stream_heartbeat_at ?? 'null'}` +
           ` inFlight=${serverTurnInFlight}` +
           ` claimHolder=${streamState?.responseHolderId ?? 'null'}` +
           ` claimExpires=${streamState?.responseClaimExpiresAt ?? 'null'}` +
@@ -2860,7 +2860,7 @@
     // ever arrives to re-run their deriveds.
     const foreignClaim =
       t?.response_holder_id != null && t.response_holder_id !== holderId;
-    if (!foreignClaim && !t?.stream_started_at) return;
+    if (!foreignClaim && !t?.stream_heartbeat_at) return;
     const id = window.setInterval(() => {
       claimNowTick = claimNowTick + 1;
     }, 5000);
@@ -3231,7 +3231,7 @@
       topics: [],
       response_holder_id: null,
       response_claim_expires_at: null,
-      stream_started_at: null,
+      stream_heartbeat_at: null,
       last_error: null,
       created_at: now,
       updated_at: now,
@@ -5235,7 +5235,7 @@
    * and re-subscribing only ever caught events from that point on. That
    * is exactly what produced the two failure cards: a re-subscribe that
    * timed out on a not-yet-recovered mobile socket (the "disconnected"
-   * banner), or a wait for an END that already fired / a stale-row
+   * banner), or a wait for an END that already fired / a dead-turn
    * janitor write (the persistent red error).
    *
    * Instead we POLL the row to a terminal state via awaitStreamSettled
@@ -5288,7 +5288,7 @@
         },
       );
       // Settled: the row reached a terminal status (or the server's
-      // stale-row janitor swept it). Re-fetch the thread and render the
+      // dead-turn janitor swept it). Re-fetch the thread and render the
       // canonical rows - the committed assistant row, any tool rows, and
       // any threads.last_error the function wrote all live in the DB now.
       // Guarded on the active thread: a background reconnect (user
@@ -6639,7 +6639,7 @@
       activeSlot?.sending === true ||
       respondingElsewhere ||
       tail?.status === 'streaming' ||
-      streamLikelyInFlight(currentThread?.stream_started_at, Date.now());
+      streamLikelyInFlight(currentThread?.stream_heartbeat_at, Date.now());
     void claimNowTick;
     return selectCompletionStatus({
       messages,
@@ -6671,7 +6671,7 @@
         ` sending=${activeSlot?.sending === true}` +
         ` reconnecting=${activeSlot?.reconnecting === true}` +
         ` respondingElsewhere=${respondingElsewhere}` +
-        ` stamp=${currentThread?.stream_started_at ?? 'null'}` +
+        ` stamp=${currentThread?.stream_heartbeat_at ?? 'null'}` +
         ` lastError=${currentThread?.last_error != null}` +
         ` tail=${messages.at(-1)?.role ?? 'empty'}/${messages.at(-1)?.status ?? 'none'}`,
     );

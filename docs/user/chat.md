@@ -345,6 +345,18 @@ messages** when you re-open the conversation:
   interrupted - no result available)* so the conversation history
   stays consistent.
 
+Sometimes the failure is on Nak's side: the server process
+producing the reply is shut down mid-answer (it can run out of its
+CPU budget on a very long turn). Nothing tells your tab directly,
+so it keeps listening. Nak notices on its own within about a
+minute: the throbber gives way to the partial reply with the usual
+error banner beneath it, and retry works as normal. If you hit Stop
+or Regenerate before that minute is up, they may appear to do
+nothing - the reply they are stopping or replacing is already dead,
+and they take effect once Nak has confirmed that. Refreshing the
+page during that minute shows a "Reconnecting" throbber that
+resolves the same way.
+
 These messages stand in for what should have been there. Your
 next message proceeds normally - the model sees the recovery
 notes, knows what happened, and usually acknowledges or re-runs

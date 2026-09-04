@@ -417,7 +417,7 @@ export class SupabaseService {
   }
 
   async getThreadStreamState(threadId: string): Promise<{
-    streamStartedAt: string | null;
+    streamHeartbeatAt: string | null;
     responseHolderId: string | null;
     responseClaimExpiresAt: string | null;
   } | null> {

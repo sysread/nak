@@ -685,38 +685,63 @@ A chat turn goes:
   reconnect surfaced a spurious "disconnected" banner (re-subscribe
   timing out on a not-yet-recovered mobile socket) or a wait for an END
   that already fired. The DB row's terminal status is the canonical
-  "done" signal; the server-side stale-row janitor guarantees the poll
+  "done" signal; the server-side dead-turn janitor guarantees the poll
   always terminates even for a function that died ungracefully.
-- **Two in-flight signals arm the reconnect, not one.** The
-  `status='streaming'` assistant row only exists from the first
-  content delta, so it cannot represent the priming stage
-  (samskara / intuition / context recall) or a long reasoning-only
-  stretch. The orchestrator therefore stamps
-  `threads.stream_started_at` at turn entry (before priming) and
-  clears it at terminal; `selectThread` arms the reconnect when
-  EITHER a streaming row exists OR the stamp is fresh
-  (`streamLikelyInFlight` in `src/lib/ui/stream-inflight.ts`, twin of
-  the staleness rule in `resolveStreamContext`). The same freshness
-  verdict suppresses the orphan-draft check and the
-  cut-off card in the completion-status derivation - before the stamp
-  existed, a
-  refresh during the pregame found no streaming row, concluded the
-  turn was dead, and offered "response was interrupted" retry banners
-  for a turn still running under `waitUntil`. The `/stream` probe
-  honors the stamp too (returning an in-flight envelope with
-  `assistantRowId: null`), which also extends the duplicate-send
-  guard across the priming window. Two operational notes. (1)
-  `selectThread` reads the stamp via a `getThreadStreamState` point
-  read, NOT via `findThread` - on a cold page load the route effect
-  opens the URL's thread before the sidebar buckets have fetched, so
-  the local thread copy doesn't exist yet and a bucket-based read
-  misses the stamp on exactly the reload this path exists for. (2)
-  The whole path emits Logs-drawer breadcrumbs at debug: the browser
-  logs thread-open signals, reconnect arming/settling, and every
-  completion-status transition (with a DOM census that warns if more
-  than one status-card node ever renders) under the `chat` source; the
-  function logs the stamp write/clear and each probe's verdict under
-  the `stream` source.
+- **Liveness is the heartbeat, not the row.** A `status='streaming'`
+  row and an open Broadcast channel look identical whether the
+  function is running or was hard-killed - the Supabase edge runtime
+  enforces a per-worker CPU-time budget (the same one that caps the
+  embeddings backfill batch), and a streaming turn that exhausts it
+  dies with `CPU Time exceeded` and NO finally: no terminal row
+  write, no END, no socket drop. The one signal that separates the
+  two is `threads.stream_heartbeat_at`: the orchestrator stamps it at
+  turn entry (before priming), refreshes it every 15s, and clears it
+  after the terminal write. Every reader applies the same 60s
+  ceiling - `resolveStreamContext` (server probe),
+  `streamLikelyInFlight` in `src/lib/ui/stream-inflight.ts`
+  (browser), and `nak_sweep_stale_streams` (cron) - so a dead turn
+  is buried within about a minute wherever it is first noticed.
+  Before the heartbeat, the signal was a one-shot entry stamp aged
+  against twice the wall deadline (~12.7 min): a killed turn's
+  throbber spun for that long, Stop published a cancel nobody heard,
+  and Regenerate attached to the corpse through the duplicate-send
+  guard.
+- **The heartbeat also covers the pre-row window.** The streaming
+  row only exists from the first content delta, so it cannot
+  represent the priming stage (samskara / intuition / context recall)
+  or a long reasoning-only stretch. `selectThread` arms the reconnect
+  when EITHER a streaming row exists OR the heartbeat is fresh; the
+  same freshness verdict suppresses the orphan-draft check and the
+  cut-off card in the completion-status derivation - before the
+  stamp existed, a refresh during the pregame found no streaming
+  row, concluded the turn was dead, and offered "response was
+  interrupted" retry banners for a turn still running under
+  `waitUntil`. The `/stream` probe honors it too (returning an
+  in-flight envelope with `assistantRowId: null`), which also extends
+  the duplicate-send guard across the priming window. Two
+  operational notes. (1) `selectThread` reads the heartbeat via a
+  `getThreadStreamState` point read, NOT via `findThread` - on a cold
+  page load the route effect opens the URL's thread before the
+  sidebar buckets have fetched, so the local thread copy doesn't
+  exist yet and a bucket-based read misses it on exactly the reload
+  this path exists for. (2) The whole path emits Logs-drawer
+  breadcrumbs at debug: the browser logs thread-open signals,
+  reconnect arming/settling, and every completion-status transition
+  (with a DOM census that warns if more than one status-card node
+  ever renders) under the `chat` source; the function logs the
+  heartbeat stamp/clear and each probe's verdict under the `stream`
+  source.
+- **The live drain has a silence watchdog, and silence is a question,
+  not a verdict.** A dead publisher closes nothing, so the drain in
+  `stream-transport.ts` cannot wait for a disconnect that never comes.
+  After 30s without an event it asks the server (`/stream
+  reconnectOnly`, the same probe the reconnect poll uses) whether the
+  turn is alive; a `noStreamInFlight` answer flips the drain into the
+  `StreamDisconnectedError` path below, which hands off to the
+  reconnect poll and renders the buried row. Any other answer keeps
+  draining - a long tool call or a slow prefill is legitimately quiet,
+  and treating silence itself as death would abort healthy turns. An
+  event that lands while the probe is in flight outranks its verdict.
 - **A live stream that drops mid-turn hands off to the same poll.**
   The case the `selectThread` reconnect could NOT cover: a tab whose JS
   context SURVIVED a background cycle (or hit a transient network blip)

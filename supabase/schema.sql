@@ -4958,22 +4958,46 @@ alter table public.threads
   add column if not exists response_holder_id text,
   add column if not exists response_claim_expires_at timestamptz;
 
--- Server-side "a streaming turn is running against this thread" stamp.
--- Written by the venice /stream orchestrator at turn entry (before the
--- priming stage runs) and cleared in its terminal finally. Exists
--- because the streaming assistant row - the other in-flight signal -
--- is only created at the first content delta, which leaves the whole
--- priming window (and any long reasoning-only stretch) invisible to
--- the reconnect probe: a page refresh during that window found nothing
--- to re-attach to and fell through to the "response was interrupted"
--- retry banners even though the turn was still running server-side.
--- The reconnect probe (resolveStreamContext in
--- supabase/functions/venice/index.ts) treats a fresh stamp as
--- in-flight when no streaming row exists yet; the browser reads it
--- through the regular threads realtime subscription, same as the
+-- Server-side liveness heartbeat for the streaming turn. The venice
+-- /stream orchestrator stamps it at turn entry (before the priming
+-- stage runs), refreshes it every few seconds while the turn is alive,
+-- and clears it in its terminal finally. It is the ONLY signal that
+-- separates "still running" from "died without cleaning up": the
+-- streaming assistant row looks identical in both cases, and a
+-- function the edge runtime hard-kills (CPU-time budget exceeded,
+-- container loss) never reaches its finally. A heartbeat older than
+-- the staleness ceiling (60s, mirrored by resolveStreamContext in
+-- supabase/functions/venice/stream-probe.ts and streamLikelyInFlight
+-- in src/lib/ui/stream-inflight.ts) means the turn is dead. It also
+-- covers the pre-row window: the streaming row is only created at the
+-- first content delta, so without the heartbeat a page refresh during
+-- priming (or a long reasoning-only stretch) found nothing to
+-- re-attach to and offered "response was interrupted" retry banners
+-- for a turn still running server-side. The browser reads it through
+-- the regular threads realtime subscription, same as the
 -- response-claim columns above.
+--
+-- Deployed databases may still carry the column under its earlier
+-- name, stream_started_at (a one-shot entry stamp). The rename carries
+-- any in-flight stamp across the schema apply; the add-column line is
+-- the fresh-database path.
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'threads'
+      and column_name = 'stream_started_at'
+  ) and not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'threads'
+      and column_name = 'stream_heartbeat_at'
+  ) then
+    alter table public.threads
+      rename column stream_started_at to stream_heartbeat_at;
+  end if;
+end $$;
 alter table public.threads
-  add column if not exists stream_started_at timestamptz;
+  add column if not exists stream_heartbeat_at timestamptz;
 
 -- Claim-lookup index. Partial on `response_holder_id is not null` so
 -- the index only carries live claims - the steady state has 0 rows
@@ -5060,35 +5084,39 @@ end $$;
 --
 -- The function's normal terminal paths (commit_assistant_message on
 -- success; the catch/finally block on error/abort/wall-timeout) flip
--- the streaming row's status away from 'streaming'. A row left in
--- status='streaming' past the wall-deadline ceiling means the function
--- was killed externally - Edge Runtime CPU/memory cap, gateway 502
--- mid-round, EdgeRuntime.waitUntil yanked before the finally block
--- could run - and no terminal path executed to write last_error.
+-- the streaming row's status away from 'streaming' and clear the
+-- thread's stream_heartbeat_at. A function killed externally - the
+-- Edge Runtime's CPU-time budget, a container loss, EdgeRuntime.waitUntil
+-- yanked before the finally block could run - executes no terminal
+-- path: the row stays 'streaming', the heartbeat stops refreshing, and
+-- no last_error is written.
 --
--- The /stream reconnect probe in supabase/functions/venice/index.ts
+-- The /stream reconnect probe in supabase/functions/venice/stream-probe.ts
 -- catches this on the NEXT user-driven /stream call. This cron sweep
 -- catches the same shape unconditionally, so a thread the user never
 -- reopens still gets its error surfaced.
 --
--- IMPORTANT: keys off the messages row's `status='streaming'`, NOT
--- threads.response_holder_id. The thread-level claim
--- (response_holder_id + response_claim_expires_at) is browser-managed:
--- the chat-loop acquires it at turn start and heartbeats it from the
--- producer device. A backgrounded tab, a refresh, or a Chrome pause
--- stops the browser's heartbeat without affecting the function's own
--- streaming work (the function lives in waitUntil and keeps going).
--- An earlier shape of this sweep keyed off the thread claim and would
--- write last_error on healthy long-running streams whose browser
--- happened to be paused - the reconnecting browser would then see the
--- error card instead of the live stream resuming. The messages-row
--- status is the right signal because it's function-owned end to end:
--- ensureAssistantRow inserts with status='streaming',
--- commit_assistant_message and transitionRowTo flip it on terminal.
+-- Liveness is the heartbeat, not the row's age. The orchestrator
+-- refreshes threads.stream_heartbeat_at every 15s while alive, so a
+-- heartbeat older than 60s (four missed beats) is a dead turn no
+-- matter how young the row is - the earlier age-based rule needed a
+-- ceiling above the longest legitimate turn (~12.7 min), which is how
+-- long a killed function's throbber used to spin. A null heartbeat
+-- next to a streaming row is also dead: the orchestrator stamps before
+-- it ever creates a row.
 --
--- Threshold: 2 * WALL_DEADLINE_MS (760 seconds). A healthy stream
--- can't exceed WALL_DEADLINE_MS (the orchestrator's own ceiling); the
--- 2x buffer is the same one the in-function reconnect probe uses.
+-- IMPORTANT: keys off the messages row's `status='streaming'` and the
+-- function-owned heartbeat, NOT threads.response_holder_id. The
+-- thread-level claim (response_holder_id + response_claim_expires_at)
+-- is browser-managed: the chat-loop acquires it at turn start and
+-- heartbeats it from the producer device. A backgrounded tab, a
+-- refresh, or a Chrome pause stops the browser's heartbeat without
+-- affecting the function's own streaming work (the function lives in
+-- waitUntil and keeps going). An earlier shape of this sweep keyed off
+-- the thread claim and would write last_error on healthy long-running
+-- streams whose browser happened to be paused - the reconnecting
+-- browser would then see the error card instead of the live stream
+-- resuming.
 --
 -- SECURITY DEFINER + revoke-from-non-service: this sweep crosses user
 -- boundaries (a service role sweeping all threads), which makes the
@@ -5104,9 +5132,11 @@ begin
   with stale as (
     select m.id, m.thread_id
     from public.messages m
+    join public.threads t on t.id = m.thread_id
     where m.role = 'assistant'
       and m.status = 'streaming'
-      and m.created_at < now() - interval '760 seconds'
+      and (t.stream_heartbeat_at is null
+           or t.stream_heartbeat_at < now() - interval '60 seconds')
     for update of m skip locked
   ),
   updated_msgs as (
@@ -5124,15 +5154,26 @@ begin
     'retryable', true,
     'occurred_at', to_jsonb(now())
   ),
-    -- The in-flight stamp must die with the turn: the /stream probe
-    -- reads it as "still running", so leaving it set keeps reconnecting
-    -- browsers polling for the stamp's remaining freshness window even
-    -- though the row is terminal here.
-    stream_started_at = null
+    -- The heartbeat must die with the turn: the /stream probe and the
+    -- browser both read it as "still running" until it ages past the
+    -- ceiling, and a terminal row with a heartbeat still set would keep
+    -- the duplicate-send guard attaching new sends to it for that
+    -- remaining window.
+    stream_heartbeat_at = null
   from updated_msgs um
   where t.id = um.thread_id
     and t.last_error is null;
   get diagnostics affected = row_count;
+
+  -- A turn that died between rounds (after one round committed, before
+  -- the next content delta created a fresh streaming row) leaves only
+  -- the stale heartbeat behind. Nothing to flip and no error to write -
+  -- the transcript tail already reads as an unfinished turn once the
+  -- browser's freshness rule expires - but clear the residue so the
+  -- pre-row in-flight branch of the probe stops seeing it.
+  update public.threads
+  set stream_heartbeat_at = null
+  where stream_heartbeat_at < now() - interval '60 seconds';
   return affected;
 end $$;
 
@@ -14927,14 +14968,12 @@ $cron$;
 -- ---------------------------------------------------------------------------
 -- Scheduled stream-claim janitor (pg_cron -> SQL)
 --
--- Every minute, call nak_sweep_stale_streams() to terminate threads whose
--- streaming claim has been expired more than 60s without being released
--- by the function's own terminal path. Catches function deaths the
--- /stream reconnect probe misses - the probe only runs on user-driven
--- /stream calls and only inspects the message row's status, so a
--- function death on a tool-call round (which leaves a thread orphan-
--- claimed with no streaming-status message row) sits stuck until this
--- sweep catches it.
+-- Every minute, call nak_sweep_stale_streams() to bury streaming rows
+-- whose thread heartbeat stopped refreshing more than 60s ago without
+-- the function's own terminal path running. Catches function deaths
+-- the /stream reconnect probe misses - the probe only runs on
+-- user-driven /stream calls, so a thread the user never reopens sits
+-- with a dead 'streaming' row until this sweep catches it.
 --
 -- Pure SQL (no pg_net): the sweep only touches the threads table, so
 -- there's no network call to make. Gated on pg_cron availability the

@@ -11,7 +11,8 @@ that window therefore found nothing to reconnect to and surfaced the
 been cut off" retry banners for a turn that was still running.
 
 This case proves the fix: the orchestrator stamps
-`threads.stream_started_at` at turn entry and clears it at terminal;
+`threads.stream_heartbeat_at` at turn entry (and keeps it fresh until
+it clears it at terminal);
 `selectThread` arms `reconnectInflightTurn` off the stamp (not just a
 streaming row), the orphan-draft check and the cut-off banner are
 suppressed while the stamp is fresh, and the reconnect poll renders the
@@ -52,7 +53,7 @@ case covers refreshing and watching the SAME turn finish live.
   renders in place of the throbber. No retry banner appears under it
   (the reconnect settle clears the orphaned IndexedDB draft).
 - **(4)** The post-completion refresh renders a settled transcript:
-  no banner, no throbber, `threads.stream_started_at` is null (verify
+  no banner, no throbber, `threads.stream_heartbeat_at` is null (verify
   with `mise run dev-sql` if in doubt).
 - Sending from a second tab while the first is mid-pregame does not
   start a duplicate completion (the `/stream` probe reports the turn

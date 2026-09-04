@@ -166,7 +166,7 @@ export interface Thread {
    * turn is still alive server-side. See streamLikelyInFlight in
    * src/lib/ui/stream-inflight.ts for the freshness rule.
    */
-  stream_started_at: string | null;
+  stream_heartbeat_at: string | null;
   /**
    * Most recent unrecoverable error against this thread. Written by
    * the streaming function on any terminalKind='error' path; cleared
@@ -565,8 +565,8 @@ export function coerceThread(row: Record<string, unknown>): Thread {
     // Drift-tolerant: a row predating the column (or a non-string
     // value) reads as "no turn in flight", which just means the
     // reconnect poll doesn't arm - the old behavior.
-    stream_started_at:
-      typeof row.stream_started_at === 'string' ? row.stream_started_at : null,
+    stream_heartbeat_at:
+      typeof row.stream_heartbeat_at === 'string' ? row.stream_heartbeat_at : null,
     // Pass jsonb through unchanged. The error-card renderer owns the
     // parse - a row predating the column reads as null, and a drifted
     // shape that doesn't match the expected `{kind, message, ...}`
