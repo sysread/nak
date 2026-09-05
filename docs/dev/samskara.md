@@ -204,10 +204,11 @@ toast is just a glance cue that the bias model is forming.
   passes `2`, the three compound-regen coordinators, and the
   diagnostics-only
   `samskara_cluster_thread_fires(thread, threshold)` that
-  greedy-clusters a thread's fires by cosine similarity on
+  greedy-clusters a thread's fires by CENTERED cosine similarity on
   their samskaras' prediction embeddings (per-cohort, in score
-  order; default threshold 0.7 sits in gte-small's "topically
-  similar" band, with a slider in the modal for live tuning -
+  order; default threshold 0.3 sits at the labeled
+  related/same-topic boundary - "same idea said differently" -
+  with a slider in the modal for live tuning -
   higher reads as "near-duplicate sentence", lower reads as
   "loosely related"). A private
   `_samskara_merge_pair(winner, loser, user)` helper backs the
@@ -683,9 +684,11 @@ logs and yields to the next phase.
   so on its own it produces near-duplicate twins of older
   claims as the sample drifts. A second dedup guard runs after
   the prediction is embedded: `samskara_nearest_by_prediction`
-  returns the closest existing samskara by cosine on
-  `prediction_embedding`; when the similarity exceeds
-  `MINT_DEDUP_COSINE` (0.85), the loop calls
+  returns the closest existing samskara by CENTERED cosine on
+  `prediction_embedding` (both vectors have the user's corpus
+  mean subtracted first - see "Similarity calibration" below);
+  when the similarity exceeds
+  `MINT_DEDUP_COSINE` (0.50 centered), the loop calls
   `samskara_reinforce_existing` - nudging health up by
   `MINT_DEDUP_HEALTH_BUMP` (0.02, capped at 1.0), and NOT
   touching provenance - instead of inserting a twin. Only
@@ -762,7 +765,7 @@ logs and yields to the next phase.
   embedded the loop checks the nearest existing tier-2 by cosine
   (`samskara_nearest_by_prediction` with `p_tier=2`), reinforcing it
   via `samskara_reinforce_existing` (health bump only, no provenance)
-  when cosine >= `MINT_DEDUP_COSINE` (0.85) instead of minting a twin
+  when cosine >= `MINT_DEDUP_COSINE` (0.50 centered) instead of minting a twin
   (the different-children-same-claim case). Cron-only: compound
   patterns form over days and the detection self-join is the
   heaviest query in the feature, so the probe runs once per
@@ -838,32 +841,115 @@ logs and yields to the next phase.
 `samskara_fire_top_k` ranks by three multiplicands:
 
 ```text
-score = power(max(1 - cosine_distance, 0), 1.3)
-      * sqrt(max(health * confidence, 0))
-      * (1 + 0.1 * ln(1 + confirm_count + disconfirm_count))
+relevance = clamp(centered_cosine / 0.30, 0, 1)
+score     = relevance
+          * sqrt(max(health * confidence, 0))
+          * (1 + 0.1 * ln(1 + confirm_count + disconfirm_count))
 ```
 
-The first term is cosine similarity raised to a mild power
-(1.3). Linear cosine let well-tested off-topic samskaras
-(cos=0.20, sqrt term ~1.0) outrank mid-quality on-topic ones
-(cos=0.55, sqrt term ~0.5) because the multiplicative
-health/confidence/N terms could close the gap; powering the
-cosine factor cuts a 0.20 match by ~45% and a 0.70 match by
-only ~9%, so the long tail stays present (no SQL threshold)
-but topical samskaras stop crashing into unrelated turns. The
-greatest(..., 0) clamp guards against the (rare) negative
-cosine case where power() would otherwise raise on a
-fractional exponent. The 1.3 exponent is the conservative end
-of the dial; if it under-corrects in practice, 1.5 is the next
-step up.
+The first term is the CENTERED cosine (both the message embed and
+the claim's stored vector have the user's corpus mean subtracted -
+see "Similarity calibration") ramped linearly to saturation over
+[0, 0.30]. Under gte-small the raw cosine between any two of a
+user's texts occupies [0.67, 1.0] regardless of meaning, so the
+old raw `cos^1.3` factor carried almost no ranking signal while
+the sqrt(health x confidence) term - a 0.2-wide range - weighed as
+much as relevance, and one claim fired on 100% of post-repair
+cohorts. Centering restores the spread, and the linear ramp makes
+the intended invariant actually true: claims above the ramp's knee
+(all centered cosine >= 0.30) score on health alone - relevance
+first, health as tiebreaker among the genuinely relevant - while
+claims in the ramp's body are ordered by relevance with health
+unable to close a 2x gap. A negative centered cosine (opposite of
+the corpus mean) clamps to zero score, so a fully off-topic
+message produces near-zero fires instead of a rank-normalized
+system always firing a top-1 at full relevance. The old cos^1.3
+exponent is retired: it existed to sharpen an absolute-cosine
+ordering that no longer exists.
 
 The sqrt term softens both the confidence and health axes so a
 strong-but-distant samskara can't crush a weak-but-relevant
 one. The ln term is a sample-size bonus: two samskaras with
 identical confidence but different sample sizes (4/5 vs 80/100
-confirms) rank by sample size when cosine and health are
+confirms) rank by sample size when relevance and health are
 close. Caps at ~1.46x for N=100; a brand-new samskara at N=0
 still ranks normally so it can fire and accumulate signal.
+
+### Similarity calibration: centered cosine + the probe set
+
+Every samskara similarity comparison - fire ranking, mint dedup,
+topical clustering, pair-relate, co-fire collapse, tier-2
+detection, and the diagnostics clustering/search - runs on
+**centered cosine**: both vectors have the user's corpus mean
+subtracted before the cosine is taken. This is not a style
+preference, it is a correctness requirement of the encoder.
+
+gte-small (like most BERT-family sentence encoders) is
+anisotropic: every vector carries a large shared component, so
+raw cosine between ANY two of one user's texts lands in a narrow
+high band no matter what the texts mean. Measured 2026-09-05 on
+the prod corpus: claims [0.764, 0.949], substrate [0.673, 1.0].
+The four absolute thresholds inherited from the bge-m3 era
+(tuned around a ~0.575 pairwise mean) all fell below that band's
+floor, which produced the September 2026 collapse: co-fire
+collapse merged every qualifying pair unboundedly (tier-1 went
+129 -> 39 in two days), mint dedup absorbed 98% of new claims,
+and tier-2 detection found zero pairs in its band.
+
+Subtracting the corpus mean restores a ~1.0-wide dynamic range
+(centered claims: [-0.43, 0.63]). The mean lives in
+`samskara_centering` (one row per user, computed over substrate
+situation embeddings by `samskara_refresh_centering`, refreshed
+by the hourly sweep; below 32 substrate rows the row is deleted
+and the RPCs fall back to raw cosine - harmless, because the
+corpus is too small for thresholds to bind). Comparison-time
+centering (not stored-centered vectors) means a recomputed mean
+is immediately consistent with every stored vector. The
+transform is scoped to the samskara pipeline on purpose: memory,
+wiki, and document retrieval compare raw vectors and must not
+change semantics.
+
+The five bars are calibrated against a hand-labeled probe set,
+not against the live distribution - re-tuning against the live
+distribution is circular (the thresholds shape the corpus, the
+corpus shapes the distribution) and self-calibrating right after
+a rotation locks the pathology in. The 2026-09-05 probe set: 80
+claim pairs sampled across the centered range and sorted into
+duplicate / same-topic / related / unrelated. Measured
+separability (rank AUC):
+
+| boundary | AUC | centered position |
+| --- | --- | --- |
+| duplicate+same-topic vs unrelated | 1.00 | - |
+| related vs unrelated | 0.91 | ~0.09 |
+| dup+same-topic vs related | 0.92 | ~0.35-0.40 |
+| duplicate vs same-topic | 0.53 | NOT separable |
+
+The last row is the design driver: the embedding cannot tell a
+rewording from a closely-related sibling. It does not have to -
+duplicate-vs-sibling is the BEHAVIOURAL layer's job (co-fire
+collapse catches twins; the minter's cluster gives the LLM
+context). The bars derived from the probe set:
+
+| bar | value | notes |
+| --- | --- | --- |
+| mint dedup (`MINT_DEDUP_COSINE`) | 0.50 | top of the dup/sibling overlap zone; prefers letting a twin through (collapse reaps it) over absorbing a sibling (irreversible) |
+| co-fire collapse floor | 0.30 | below dedup on purpose; co-fire criteria are the real evidence |
+| overflow-pass cap floor | 0.40 | no behavioural evidence, keeps the same-idea-family boundary |
+| tier-2 band | [0.10, 0.35) | related-but-distinct; lift is the real filter |
+| mint cluster floor | 0.05 | substrate space has no labels; offset-mapped from the bge-m3 ratio to the distribution median |
+| pair-relate floor | -0.20 | deliberately loose; the relator LLM judges |
+
+On an embedding-model rotation, re-run the probe exercise (label
+~80 pairs sampled across the new model's CENTERED claim-pair
+range, re-solve the bars, update the constants in
+`supabase/functions/venice/agents/samskara.ts` + the SQL defaults in
+`schema.sql` together) and let the sweep's
+`samskara_refresh_centering` rebuild the mean. The mean row keys
+`model_id`, so a rotation's backfill makes the next refresh
+stamp the new id; the bars themselves are checked in code
+review, not stored per-model - that remains open work (see
+`docs/dev/planned-changes.md`).
 
 ### Health: the verdict posterior
 
@@ -1096,25 +1182,32 @@ merges when all three hold:
 cofires(A, B) >= p_min_cofires            -- default 3
 cofires(A, B) / min(fires_A, fires_B)
                 >= p_min_cofire_ratio     -- default 0.5
-cosine(embed_A, embed_B)
-                >= p_cosine_floor         -- default 0.70
+centered cosine(embed_A, embed_B)
+                >= p_cosine_floor         -- default 0.30
 ```
 
 Co-fires are counted by self-joining `samskara_fires` on
 `cohort_id`. The ratio normalization matters: two samskaras that
 *always* fire together when either fires are duplicates; two that
 often co-fire but also fire independently are adjacent-but-
-distinct. The cosine floor is a sanity check against situational
-overlap (e.g. "tech tester" and "barley science" both firing on a
-debug-panel-about-baking turn without being the same habit). Pairs
+distinct. The centered-cosine floor sits deliberately BELOW the
+mint-dedup bar (0.50): the co-fire criteria are the real
+duplicate evidence, so the floor only has to exclude pairs the
+embedding calls unrelated - a true twin the mint bar let through
+re-fires in lockstep with its original and is reaped here
+behaviourally. Pairs
 are merged in descending (ratio, cosine) order so the strongest
 redundancies consolidate first.
 
 **Safety cap: population overflow.** If the tier-1 count still
 exceeds `p_target_count` (default 150) after the primary pass,
 fall through to pure embedding-cosine greedy merge in ascending
-cosine-distance order, refusing to merge pairs with cosine below
-`p_cap_cosine_floor` (default 0.60). This guards against a
+cosine-distance order, refusing to merge pairs with centered
+cosine below
+`p_cap_cosine_floor` (default 0.40). This pass has NO behavioural
+evidence behind it, so its floor keeps the conservative
+same-idea-family boundary (the labeled probe set's ~0.92-AUC
+split - see "Similarity calibration"). It guards against a
 diverse-but-overflowing pool where no pair meets the co-firing
 bar but the count is still growing without bound. With the mint
 probes' `TIER1_POPULATION_CAP` gate in place this pass is a
@@ -1148,8 +1241,8 @@ co-fire self-join, filtered:
 eligible(A, B) when:
   cofires(A, B) >= p_min_cofires             -- default 10
   lift(A, B)    >= p_min_lift                 -- default 2.0
-  p_cosine_lo <= cosine(embed_A, embed_B)    -- default 0.30
-  cosine(embed_A, embed_B) < p_cosine_hi     -- default 0.68 (< dedup floor 0.70)
+  p_cosine_lo <= centered cosine(A, B)       -- default 0.10
+  centered cosine(A, B) < p_cosine_hi        -- default 0.35 (< dedup floor 0.50)
 
   where lift(A, B) = cofires(A, B) * cohorts / (fires_A * fires_B)
 ```
@@ -1171,16 +1264,19 @@ scores a huge lift on 4 points). Lift is a rate ratio, so the
 threshold holds as the corpus grows.
 
 The half-open cosine top end is a separate guard: tier-2 only ever
-groups pairs whose embedding similarity sits *below* dedup's merge
-floor, so it claims the "related but distinct" band dedup
-deliberately leaves alone (see the dedup-coupling Gotcha). The
-`p_cosine_lo` floor is effectively inert - the shared prediction
-template floors any pairwise prediction-cosine around 0.38 (audit:
-`min_cos` 0.381, zero co-firing pairs below 0.30) - and is left
-that way on purpose: prediction-cosine is template similarity, not
-topical similarity, so raising the floor would filter noise, not
-gate coherence. Coherence rides on lift plus the minter's
-judgement, not the cosine band.
+groups pairs whose centered embedding similarity sits *below* the
+same-idea-family zone, so it claims the "related but distinct"
+band dedup deliberately leaves alone (see the dedup-coupling
+Gotcha). On the centered scale (see "Similarity calibration") the
+labeled probe set puts the unrelated/related boundary at ~0.09
+and the same-idea-family zone at ~0.35+, hence the
+`[0.10, 0.35)` defaults. The
+`p_cosine_lo` floor is a loose pre-filter - lift is the real
+coherence gate, and the minter's judgment is the second one -
+and is left loose on purpose: prediction-cosine is template
+similarity, not topical similarity, so tightening the floor
+would filter noise, not gate coherence. Coherence rides on lift
+plus the minter's judgement, not the cosine band.
 
 The group is the strongest-LIFT eligible edge plus every node
 sharing an eligible edge with BOTH seed members (not either -
@@ -1531,7 +1627,7 @@ summarizer reads samskaras to feed the agent.
   (repeated real failure), the Hebbian dedup pass (true duplicates),
   and eviction of provably-useless rows. Without the gate,
   every mint at cap forced the collapse RPC's overflow pass to
-  greedy-merge two DISTINCT claims at its 0.60 cosine floor - the
+  greedy-merge two DISTINCT claims at its 0.40 centered-cosine floor - the
   same "related but distinct" band tier-2 detection owns - and a
   2026-07 prod audit measured 49 mints/week churning through that
   treadmill: Venice spend to mint a claim, then a merge that blurs
@@ -1546,13 +1642,14 @@ summarizer reads samskaras to feed the agent.
   and must not overlap.** `samskara_tier2_candidate` and
   `samskara_collapse_by_cofiring` both self-join `samskara_fires`
   on `cohort_id`, but they are opposites: dedup MERGES pairs that
-  are the same claim (high co-fire AND embedding cosine >= its
-  `p_cosine_floor` 0.70, loser deleted); tier-2 GROUPS claims that
-  co-activate but stay distinct (high co-fire, cosine strictly
-  below that floor, parent added). The tier-2 cosine band
-  `[p_cosine_lo, p_cosine_hi)` defaults to `[0.30, 0.68)` - its
-  top end sits below dedup's floor on purpose. If you raise
-  `p_cosine_hi` to or past 0.70 the two phases fight over the same
+  are the same claim (high co-fire AND centered cosine >= its
+  `p_cosine_floor` 0.30, loser deleted); tier-2 GROUPS claims that
+  co-activate but stay distinct (high co-fire, centered cosine
+  strictly below that floor, parent added). The tier-2 cosine band
+  `[p_cosine_lo, p_cosine_hi)` defaults to `[0.10, 0.35)` - its
+  top end sits below the same-idea-family zone on purpose. If you raise
+  `p_cosine_hi` to or past 0.50 (the mint-dedup bar) the two phases
+  fight over the same
   pairs (dedup deleting what tier-2 just grouped); the symptom is
   tier-2 rows that keep vanishing a tick after they mint. Keep
   the band below the floor.

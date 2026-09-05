@@ -59,9 +59,12 @@ shim's tick), never a chat turn.
     join samskaras sa on sa.id=pc.a and sa.tier=1
     join samskaras sb on sb.id=pc.b and sb.tier=1
    where pc.cof*n.c/greatest(sa.fire_count::real*sb.fire_count,1) >= 2.0
-     and (1-(sa.prediction_embedding<=>sb.prediction_embedding)) >= 0.30
-     and (1-(sa.prediction_embedding<=>sb.prediction_embedding)) <  0.68;
+     and (1-((sa.prediction_embedding-(select mean_embedding from samskara_centering c where c.user_id='<user>'))<=>(sb.prediction_embedding-(select mean_embedding from samskara_centering c where c.user_id='<user>')))) >= 0.10
+     and (1-((sa.prediction_embedding-(select mean_embedding from samskara_centering c where c.user_id='<user>'))<=>(sb.prediction_embedding-(select mean_embedding from samskara_centering c where c.user_id='<user>')))) <  0.35;
   -- expect: >= 1
+  -- 2026-09-05: similarities are CENTERED (corpus mean subtracted, see
+  -- samskara_centering in schema.sql) and the band moved from the old
+  -- raw-scale [0.30, 0.68) to [0.10, 0.35).
   ```
 
 ## Steps
@@ -98,8 +101,8 @@ shim's tick), never a chat turn.
      from pc cross join n
      join samskaras sa on sa.id=pc.a and sa.tier=1
      join samskaras sb on sb.id=pc.b and sb.tier=1
-    where (1-(sa.prediction_embedding<=>sb.prediction_embedding)) >= 0.30
-      and (1-(sa.prediction_embedding<=>sb.prediction_embedding)) <  0.68
+    where (1-((sa.prediction_embedding-(select mean_embedding from samskara_centering c where c.user_id='<user>'))<=>(sb.prediction_embedding-(select mean_embedding from samskara_centering c where c.user_id='<user>')))) >= 0.10
+      and (1-((sa.prediction_embedding-(select mean_embedding from samskara_centering c where c.user_id='<user>'))<=>(sb.prediction_embedding-(select mean_embedding from samskara_centering c where c.user_id='<user>')))) <  0.35
     order by pc.cof desc limit 6;
    -- then re-run with `order by lift desc limit 6` and compare.
    -- expect: top-by-cof rows have lift ~1 (or below); top-by-lift
@@ -206,3 +209,4 @@ Append-only; one row per execution. Date, environment, commit.
 | Date | Env | Commit | Result | Notes |
 |------|-----|--------|--------|-------|
 | 2026-06-16 | hosted read-only (offline sim) | 5cdc34a | partial (SQL/detection layer only; no live sweep) | No browser/edge runtime here, so the mint half (sweep route, minter call, provenance insert, toast) is unexecuted. Detection validated by replaying the rewritten seed + grow + coverage in code against a hosted data dump (4727 in-band co-fire pairs, 150 tier-1, 1786 cohorts, the existing tier-2's 6 children): raw-co-fire seeds rank the grab-bag (emoji + pork chops + Thai, all lift < 1.5) to the top; lift seeds rank genuine constellations (2x-25x) instead. At the shipped defaults (p_min_lift 2.0, p_min_cofires 10) the default call emits on probe 1 a 6-member group with Jaccard 0.00 vs the existing tier-2 (uncovered) - so a second tier-2 can mint. NOT covered: the actual sweep firing the probe, the minter confirm, the `'samskara'` provenance landing, the seed-iteration-after-mint step (needs a real mint to cover the first constellation). |
+| 2026-09-05 | local stack (SQL + browser) | samskara-recalibration WIP | partial (SQL/detection + browse UI; no live sweep) | Embedding-rotation recalibration pass. Centered-cosine plumbing verified end to end on the local stack: schema applies fresh and idempotently (including the pre-existing messages.status fresh-apply breakage, fixed here), `samskara_refresh_centering` materializes the mean, and `samskara_tier2_candidate` executes against synthetic 2-cluster geometry (centered A-vs-A 0.98, A-vs-B -0.99). The `samskara_cluster_corpus(0.45)` greedy pass returns the expected 3 clusters (3 + 2 + singleton) under the authenticated role, and the browse drawer's Hide-similar slider (re-ranged to [-0.1, 0.65], default 0.45) folds the 6 synthetic rows to exactly 3 representatives in the browser. NOT covered: a live tier-2 mint (needs LLM sweep), the fire-path ramp under a real turn. Probe-set context: 80 hand-labeled claim pairs put the unrelated/related boundary at ~0.09 and same-idea-family vs related at ~0.35-0.40 centered; duplicate-vs-same-topic is NOT separable (AUC 0.53), so the band's upper bound stays conservative and behavioral evidence (lift) remains the real filter. |

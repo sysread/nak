@@ -53,8 +53,14 @@ return, which the judge's `judged N/M` log line makes visible.
 
 ### Retrieval calibration and health metrics (samskara)
 
-**Status:** scoped 2026-09-03 after the retrieval outage, informed by
-an outside review. Not started; the first two are the valuable half.
+**Status:** partially shipped 2026-09-05 (centering + re-solved
+bars + fire-score rank fix, after the threshold-collapse incident;
+see `docs/dev/samskara.md` "Similarity calibration"). Still open:
+the score-outcome correlation metric, firing-concentration metric,
+storing the bars keyed by model id (currently in code review
+comments + the Deno pins), and the rerank option (deprioritized -
+the probe set showed AUC 0.92+ for every boundary the system
+needs, so a rerank is not currently justified).
 
 **A labeled probe set, not self-calibrating thresholds.** Four
 similarity bars are hard-coded in the samskara path - the

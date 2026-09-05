@@ -42,11 +42,16 @@ export const SORT_OPTIONS: readonly { value: SamskaraBrowseSort; label: string }
 ];
 
 /**
- * Default cosine threshold for the "hide similar" slider, matching the
- * cohort dropdown's cluster default and the MINT dedup band. Higher
- * reads as "near-duplicate sentence", lower as "loosely related".
+ * Default CENTERED-cosine threshold for the "hide similar" slider
+ * (both vectors have the user's corpus mean subtracted before the
+ * cosine - see the samskara_centering table in schema.sql; every
+ * samskara similarity dial shares this scale). 0.45 sits at the top
+ * of the labeled duplicate/same-topic overlap zone (2026-09-05 probe
+ * set), matching the mint dedup bar's neighbourhood: higher reads as
+ * "near-duplicate sentence", lower folds same-topic siblings
+ * together.
  */
-export const DEFAULT_HIDE_SIMILAR_THRESHOLD = 0.85;
+export const DEFAULT_HIDE_SIMILAR_THRESHOLD = 0.45;
 
 /** Empty-list message: distinguishes "search found nothing" from "cold corpus". */
 export function emptyMessage(query: string): string {

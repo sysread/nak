@@ -16,11 +16,11 @@
 
   Clustering: each panel receives the thread-wide cluster map from
   its parent (one RPC per thread load, not per panel). Cluster
-  threshold is fixed at the documented 0.7 default - the modal's
-  live slider went away with the modal section. A "Show all" toggle
-  per panel bypasses clustering for the diagnostic case (paraphrase
-  inspection); the cluster siblings expand inline via the chevron
-  chip just like in the old modal.
+  threshold is fixed at the documented 0.3 centered-cosine default -
+  the modal's live slider went away with the modal section. A "Show
+  all" toggle per panel bypasses clustering for the diagnostic case
+  (paraphrase inspection); the cluster siblings expand inline via the
+  chevron chip just like in the old modal.
 -->
 <script lang="ts">
   import type {
