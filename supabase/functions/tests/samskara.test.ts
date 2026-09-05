@@ -27,6 +27,7 @@ const {
   buildAssociationCluster,
   cosine,
   doubtForAssimilation,
+  isCleanSummaryParagraph,
   parseVector,
   stripJsonFence,
 } = __test;
@@ -114,6 +115,35 @@ Deno.test('compound summary prompt forbids the leaky failure modes', () => {
   assert(COMPOUND_SUMMARY_PROMPT.includes('Do not mention the word\n"samskara"'));
   assert(COMPOUND_SUMMARY_PROMPT.includes('third person'));
   assert(COMPOUND_SUMMARY_PROMPT.includes('Do not enumerate or list'));
+});
+
+Deno.test('summary shape guard accepts a clean single third-person paragraph', () => {
+  const clean =
+    'This user digs beneath surfaces and probes underlying mechanisms, blending ' +
+    'scientific curiosity with hard-won personal experience. They want depth as a ' +
+    'means to clarity and respond best when complexity lands through a sharp analogy.';
+  assert(isCleanSummaryParagraph(clean));
+  assert(isCleanSummaryParagraph('  This user plans around weather windows.  '));
+});
+
+Deno.test('summary shape guard rejects reasoning-channel leak shapes', () => {
+  // 2026-09-04 prod leak: deliberation blocks separated by blank lines.
+  const blockLeak =
+    'Let me analyze the samskaras to compose a paragraph about this user.\n\n' +
+    'Key signals (strongest first):\n\n' +
+    'Tensions to surface: depth vs clarity.\n\n' +
+    'This user digs beneath surfaces.';
+  assert(!isCleanSummaryParagraph(blockLeak));
+  // Thinking preamble glued to the answer with no blank line.
+  assert(!isCleanSummaryParagraph("Let me draft: This user digs beneath surfaces."));
+  assert(!isCleanSummaryParagraph("I'll compose a paragraph. This user digs deep."));
+  // Numbered/dashed list lines inside a single block.
+  assert(!isCleanSummaryParagraph(
+    'Signals:\n1. Weather and dog planning\n2. Deep analysis',
+  ));
+  assert(!isCleanSummaryParagraph('Plan:\n- probe mechanisms\n- distill'));
+  // Empty input never validates.
+  assert(!isCleanSummaryParagraph('   '));
 });
 
 // --- tuning constants -------------------------------------------------------

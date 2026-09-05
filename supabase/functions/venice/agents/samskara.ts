@@ -579,6 +579,33 @@ async function agentMint(
   };
 }
 
+/**
+ * Shape guard for the compound summary - the one agent output stored
+ * verbatim as free prose. Every other phase parses JSON, so channel
+ * contamination there fails the parse and the claim TTL retries; here
+ * the raw content IS the artifact. Venice's GLM serving intermittently
+ * routes the model's thinking transcript into the content channel even
+ * when disable_thinking is set (observed 2026-09-04: a stored summary
+ * arrived as full deliberation followed by the final paragraph). A
+ * clean summary is exactly one prose paragraph in the third person;
+ * anything else is a leak the caller should retry away, never store.
+ */
+export function isCleanSummaryParagraph(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return false;
+  // Multiple blank-line-separated blocks = deliberation steps
+  // interleaved with drafts (the shape the 2026-09-04 leak took).
+  if (/\n\s*\n/.test(trimmed)) return false;
+  // A thinking preamble glued to the answer with no blank line. The
+  // prompt demands third person, so a first-person opener is never a
+  // legitimate summary start.
+  if (/^(?:let me|i'll|i will|okay|sure|first,)\b/i.test(trimmed)) return false;
+  // Numbered or dashed list lines inside a single block: prose
+  // paragraphs don't contain them; planning transcripts do.
+  if (/^\s*(?:\d+[.)]\s|-\s)/m.test(trimmed)) return false;
+  return true;
+}
+
 async function agentSummarizeCompound(
   apiKey: string,
   samskaras: {
@@ -588,11 +615,28 @@ async function agentSummarizeCompound(
     confidence: number;
     health: number;
   }[],
+  log: EdgeLogger,
 ): Promise<string | null> {
-  const raw = await callOnce(apiKey, COMPOUND_SUMMARY_PROMPT, JSON.stringify({ samskaras }));
-  if (raw === null) return null;
-  const trimmed = raw.trim().replace(/^["'`]+|["'`]+$/g, '').trim();
-  return trimmed.length > 0 ? trimmed : null;
+  // Two attempts: a channel-leak response is a serving-backend fault,
+  // not a prompt problem, but the backend routes across replicas
+  // per-request, so an immediate retry lands somewhere honest roughly
+  // half the time. A second failure yields null and the regen probe's
+  // claim TTL retries on a later sweep tick, as with any other agent
+  // failure.
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const raw = await callOnce(apiKey, COMPOUND_SUMMARY_PROMPT, JSON.stringify({ samskaras }));
+    if (raw === null) return null;
+    const trimmed = raw.trim().replace(/^["'`]+|["'`]+$/g, '').trim();
+    if (trimmed.length > 0 && isCleanSummaryParagraph(trimmed)) return trimmed;
+    // Loud on purpose: the silent-null path is what let the 2026-09-04
+    // leak sit in prod for ~24h with no trace outside the stored row.
+    log.warn('compound-regen: summary failed shape guard (likely reasoning-channel leak)', {
+      attempt,
+      chars: trimmed.length,
+      head: trimmed.slice(0, 200),
+    });
+  }
+  return null;
 }
 
 // --- Math helpers (ported from the browser loop) --------------------------
@@ -1593,7 +1637,7 @@ async function compoundRegenProbe(
   if (rows.length === 0) return;
   log.info(`compound-regen: synthesizing summary from ${rows.length} sample row(s) (cap ${cap})`);
 
-  const summary = await agentSummarizeCompound(apiKey, rows);
+  const summary = await agentSummarizeCompound(apiKey, rows, log);
   if (!summary) {
     log.debug('compound-regen: agent returned null');
     return;
@@ -1848,6 +1892,7 @@ export const __test = {
   buildAssociationCluster,
   cosine,
   doubtForAssimilation,
+  isCleanSummaryParagraph,
   parseVector,
   stripJsonFence,
 };
