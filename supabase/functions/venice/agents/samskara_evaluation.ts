@@ -325,7 +325,7 @@ async function evaluateClaimedThread(
   terminalMsgId: string,
   holderId: string,
 ): Promise<EvaluationCycleResult> {
-  log.info(`picked up thread ${threadId} @ msg ${terminalMsgId}`);
+  log.debug(`picked up thread ${threadId} @ msg ${terminalMsgId}`);
 
   // Distinct samskaras that fired anywhere in this thread. Firing is
   // the relevance gate - these are exactly the predictions whose topic
