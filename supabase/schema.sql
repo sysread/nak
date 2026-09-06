@@ -7538,6 +7538,9 @@ declare
   v_seed_embedding vector(2048);
   v_mean           vector(2048);
 begin
+  -- SUBSTRATE mean: this probe compares observation-register texts
+  -- (situation embeddings) against each other, so it centers with the
+  -- substrate mean, not the claim mean - see samskara_centering.
   v_mean := public._samskara_centering_mean(p_user_id);
   -- Longest-unseeded embedded row wins the seed.
   select s.id, s.situation, s.outcome, s.situation_embedding
@@ -7950,35 +7953,52 @@ create policy "samskara compound summary self-deletable"
 
 -- samskara_centering -------------------------------------------------------
 --
--- Per-user corpus mean vector for the samskara similarity space.
+-- Per-user corpus mean vectors for the samskara similarity spaces.
 --
 -- gte-small (like most BERT-family sentence encoders) is anisotropic:
 -- every vector carries a large shared component, so raw cosine between
 -- any two of this user's texts lands in a narrow high band (measured
 -- 2026-09-05: claims [0.764, 0.949], substrate [0.673, 1.0]) and every
 -- absolute threshold tuned under the previous embedder becomes
--- meaningless. Subtracting the corpus mean and renormalizing restores
--- a ~1.0-wide dynamic range (centered claims: [-0.43, 0.63]) - the
--- four labeled-class boundaries then fit inside it with room.
+-- meaningless. Subtracting a corpus mean and renormalizing restores a
+-- ~1.0-wide dynamic range.
 --
--- The mean is computed over the user's substrate situation embeddings
--- (the largest, most stable sample of the corpus's language) and
--- stored here rather than computed per comparison, so the hot fire
--- path pays one row read, not an aggregate over thousands of vectors.
--- Every samskara comparison centers BOTH sides with this stored mean;
--- comparison-time centering (not stored-centered vectors) means a
--- recomputed mean is immediately consistent with every stored vector.
+-- TWO means, one per register. Claims share a prompt template ("in
+-- situations involving X, this user tends to Y") that observations do
+-- not, so each register carries a DIFFERENT shared component:
+-- centering claims by the substrate mean leaves a large residual
+-- (measured: nearest-neighbor median 0.648 vs 0.404 under the claim
+-- mean - the dedup bar would absorb 85% of the corpus either way).
+-- Every claim-vs-claim comparison therefore centers with the CLAIM
+-- mean; every observation-vs-observation comparison centers with the
+-- SUBSTRATE mean. The fire path compares a message (observation
+-- register) against a claim, so it uses the substrate mean on both
+-- sides - measured working (relevance dominates health in cohort
+-- ranking). The bars in venice/agents/samskara.ts were solved on the
+-- claim-mean scale (see the labeled probe set fixture); changing the
+-- register a comparison uses invalidates its bar.
 --
--- The mean is refreshed by the hourly samskara sweep via
--- samskara_refresh_centering. Absent row (fresh user, substrate below
--- the minimum) -> _samskara_centering_mean returns the zero vector, so
--- comparisons degrade to raw cosine - harmless while the corpus is
--- too small to have claims.
+-- Means are stored rather than computed per comparison so the hot
+-- fire path pays one row read; comparison-time centering (not
+-- stored-centered vectors) means a recomputed mean is immediately
+-- consistent with every stored vector. The claim mean additionally
+-- gates COLD START: below CLAIM_MIN_ROWS claims the claim-space
+-- RPCs skip their similarity work entirely (raw-cosine fallback
+-- would read the 0.50 dedup bar as "everything is a duplicate",
+-- because raw gte-small claim-claim similarity never drops below
+-- ~0.76). The substrate-side RPCs behave the same way via their own
+-- floor. Claims mint from 3 observations, so the cold-start skip is
+-- what keeps a new user's first claims from stalling.
+--
+-- Both means are refreshed by the hourly samskara sweep via
+-- samskara_refresh_centering.
 create table if not exists public.samskara_centering (
   user_id uuid primary key references auth.users(id) on delete cascade,
   model_id text not null default 'gte-small',
   mean_embedding vector(2048),
   substrate_count int not null default 0,
+  claim_mean_embedding vector(2048),
+  claim_count int not null default 0,
   updated_at timestamptz not null default now()
 );
 
@@ -8008,9 +8028,11 @@ create policy "samskara centering self-deletable"
   on public.samskara_centering
   for delete using (auth.uid() = user_id);
 
--- The mean row the comparison RPCs read. Zero vector when absent so
+-- The substrate mean the observation-space comparison RPCs read (the
+-- fire path and the substrate pair probes). Zero vector when absent so
 -- callers can subtract unconditionally and get raw-cosine behaviour
--- (the documented fresh-user fallback) instead of a null comparison.
+-- instead of a null comparison; claim-space RPCs additionally gate on
+-- _samskara_claim_centering_ready so "not ready" means SKIP, not raw.
 -- The zero literal is built by text - pgvector has no 2048-wide
 -- zero-valued constructor.
 create or replace function public._samskara_centering_mean(
@@ -8023,42 +8045,102 @@ language sql stable as $$
   );
 $$;
 
--- Recompute the user's corpus mean from substrate situation
--- embeddings. Called once per user per hourly sweep tick; the aggregate
--- is a sequential pass over a few thousand vectors, which is why it
--- lives here and not on the fire hot path. Below MIN_SUBSTRATE_ROWS
--- the row is deleted rather than kept stale: a mean over a handful of
--- vectors is noise, and the zero-vector fallback (raw cosine) is the
--- honest answer while the corpus is still forming.
+-- Minimum claims before the claim mean is trusted. Below it the mean
+-- is noise over a handful of rows, and the claim-space similarity work
+-- (dedup, collapse, tier-2) must SKIP rather than run on raw cosine -
+-- see the table comment for why raw is worse than skipping.
+create or replace function public._samskara_claim_centering_min()
+returns int
+language sql immutable as $$
+  select 8;
+$$;
+
+-- The claim mean for claim-vs-claim comparisons. Zero vector when the
+-- row is absent OR the claim count is below the floor; callers that
+-- must not run on raw cosine (dedup, collapse, tier-2) check
+-- _samskara_claim_centering_ready first.
+create or replace function public._samskara_claim_centering_mean(
+  p_user_id uuid
+) returns vector(2048)
+language sql stable as $$
+  select coalesce(
+    (select claim_mean_embedding from public.samskara_centering
+      where user_id = p_user_id
+        and claim_count >= public._samskara_claim_centering_min()),
+    ('[' || array_to_string(array_fill(0::float4, array[2048]), ',') || ']')::vector
+  );
+$$;
+
+-- Readiness gate for the claim-space similarity work. False below the
+-- claim floor: samskara_nearest_by_prediction returns no rows (the
+-- minter proceeds without dedup - correct cold start), the collapse
+-- and tier-2 RPCs return empty (merging or grouping on raw cosine
+-- would be destructive noise).
+create or replace function public._samskara_claim_centering_ready(
+  p_user_id uuid
+) returns boolean
+language sql stable as $$
+  select exists (
+    select 1 from public.samskara_centering
+     where user_id = p_user_id
+       and claim_count >= public._samskara_claim_centering_min()
+  );
+$$;
+
+-- Recompute the user's corpus means from substrate situation
+-- embeddings and claim prediction embeddings. Called once per user per
+-- hourly sweep tick; the aggregates are sequential passes over a few
+-- thousand vectors, which is why they live here and not on the fire
+-- hot path. Each mean has its own floor: below MIN_SUBSTRATE_ROWS the
+-- substrate mean (and with it the whole row) is dropped; below the
+-- claim floor the claim columns are nulled rather than kept stale - a
+-- mean over a handful of vectors is noise, and the readiness gate (not
+-- a raw-cosine fallback) is the honest answer while the corpus is
+-- still forming.
 create or replace function public.samskara_refresh_centering(
   p_user_id uuid default null
 ) returns void
 language plpgsql security invoker as $$
 declare
   v_uid uuid := coalesce(p_user_id, auth.uid());
-  v_count int;
-  v_mean vector(2048);
+  v_sub_count int;
+  v_sub_mean vector(2048);
+  v_claim_count int;
+  v_claim_mean vector(2048);
   v_model text;
 begin
   if v_uid is null then
     return;
   end if;
   select count(*), avg(situation_embedding), max(embedding_model)
-    into v_count, v_mean, v_model
+    into v_sub_count, v_sub_mean, v_model
     from public.samskara_substrate
    where user_id = v_uid
      and situation_embedding is not null;
-  if v_count < 32 then
+  if v_sub_count < 32 then
     delete from public.samskara_centering where user_id = v_uid;
     return;
   end if;
+  select count(*), avg(prediction_embedding)
+    into v_claim_count, v_claim_mean
+    from public.samskaras
+   where user_id = v_uid
+     and prediction_embedding is not null;
+  if v_claim_count < public._samskara_claim_centering_min() then
+    v_claim_count := 0;
+    v_claim_mean := null;
+  end if;
   insert into public.samskara_centering
-    (user_id, model_id, mean_embedding, substrate_count, updated_at)
-  values (v_uid, coalesce(v_model, 'gte-small'), v_mean, v_count, now())
+    (user_id, model_id, mean_embedding, substrate_count,
+     claim_mean_embedding, claim_count, updated_at)
+  values (v_uid, coalesce(v_model, 'gte-small'), v_sub_mean, v_sub_count,
+          v_claim_mean, v_claim_count, now())
   on conflict (user_id) do update
      set model_id = excluded.model_id,
          mean_embedding = excluded.mean_embedding,
          substrate_count = excluded.substrate_count,
+         claim_mean_embedding = excluded.claim_mean_embedding,
+         claim_count = excluded.claim_count,
          updated_at = now();
 end $$;
 
@@ -8073,24 +8155,39 @@ end $$;
 -- * sample-size bonus, where relevance is the CENTERED cosine ramped
 -- linearly to saturation over [0, 0.30].
 --
+-- Register note: this compares a MESSAGE (observation register)
+-- against a claim, so both sides center with the SUBSTRATE mean - the
+-- claim mean would leave the message's own register offset in place.
+-- Measured on prod (2026-09-05, 800 recent messages): message-vs-claim
+-- centered cosine runs ~0.08 for the 11th-ranked claim to ~0.19 for
+-- the best match (top observed 0.299), a 2.4x relevance spread inside
+-- each cohort under this formula vs 1.3x under the old one - relevance
+-- now dominates health in cohort ranking, which is the goal. The 0.30
+-- saturation point therefore sits at the very top of the observed
+-- range and is effectively never reached: cohort ordering is
+-- relevance-dominated throughout, with health as a modifier, not a
+-- tier above it. If a future register shift pushes message-vs-claim
+-- centered cosine past the knee, re-check the ramp constant.
+--
 -- Why centered and ramped: raw gte-small cosine between this user's
 -- texts occupies [0.67, 1.0] regardless of meaning (see
 -- samskara_centering), so the old raw cos^1.3 factor carried almost
 -- no ranking signal while sqrt(health*confidence) - a 0.2-wide range -
 -- weighed as much as relevance, and one claim fired on 100% of
 -- post-repair cohorts. Centering restores the spread; the labeled
--- probe set (2026-09-05, 80 pairs) puts the unrelated/related boundary
--- at ~0.09 and the related/same-idea-family boundary at ~0.35-0.40.
--- Relevance therefore ramps linearly from 0 at centered cosine 0
+-- probe set (2026-09-05, 80 pairs) puts the claim-space
+-- unrelated/related boundary at ~0.09 and the related/same-idea-family
+-- boundary at ~0.35-0.40 (claim-mean scale). Relevance therefore ramps
+-- linearly from 0 at centered cosine 0
 -- (corpus-average relatedness = unrelated) to 1.0 at 0.30 (clearly
 -- same-family), so:
 --   - an unrelated message yields near-zero scores for everything
 --     (negative centered cosine -> 0), unlike a rank-normalized score
 --     which would always fire a top-1 at full relevance;
---   - among claims above the ramp's knee, health/confidence decide -
---     the intended "relevance first, health as tiebreaker" invariant,
---     now actually true because relevance spans [0, 1] instead of
---     [0.70, 0.94];
+--   - claims in the ramp's body are ordered by relevance with health
+--     unable to close a 2x gap - the "relevance first, health as
+--     tiebreaker" invariant, now actually true because relevance
+--     spans [0, 1] instead of [0.70, 0.94];
 --   - the ranking is invariant to the encoder's absolute scale, so a
 --     future rotation changes only the stored mean, not the dial.
 -- The old cos^1.3 exponent is retired: it existed to sharpen an
@@ -8297,9 +8394,11 @@ declare
   rec record;
 begin
   -- Centered cosine (see samskara_centering): the modal's threshold
-  -- slider lives on the centered scale, like every other samskara
-  -- similarity dial.
-  v_mean := public._samskara_centering_mean(v_uid);
+  -- slider lives on the centered CLAIM scale, like every other
+  -- claim-space similarity dial. Diagnostics-only: falls back to raw
+  -- cosine when the claim mean is not ready (tiny corpus), where the
+  -- slider reads a compressed scale - acceptable for a browse aid.
+  v_mean := public._samskara_claim_centering_mean(v_uid);
   -- Thread-ownership guard. Mirrors samskara_record_fires above:
   -- silent return on a non-owned thread keeps RLS-style "nothing
   -- happened" semantics rather than raising.
@@ -9542,15 +9641,20 @@ create or replace function public.samskara_nearest_by_prediction(
 )
 language sql stable security invoker as $$
   -- Returns the k nearest samskaras by CENTERED cosine similarity
-  -- against the supplied prediction embedding. Both sides are centered
-  -- with the user's stored corpus mean (see samskara_centering): raw
-  -- gte-small cosine occupies [0.67, 1.0] for any two of this user's
-  -- texts, so the caller's MINT_DEDUP_COSINE threshold (0.50, on the
-  -- centered scale, from the 2026-09-05 labeled probe set) is only
-  -- meaningful after centering. No row (or below-minimum substrate)
-  -- means the zero-vector fallback inside _samskara_centering_mean
-  -- degrades to raw cosine - the fresh-user case, where the threshold
-  -- is not yet binding because the corpus is empty.
+  -- against the supplied prediction embedding. Both sides are claim-
+  -- register texts sharing the claim template, so they center with the
+  -- CLAIM mean (see samskara_centering): raw gte-small cosine occupies
+  -- [0.76, 0.95] for any two of this user's claims, so the caller's
+  -- MINT_DEDUP_COSINE threshold (0.50, claim-mean scale, from the
+  -- 2026-09-05 labeled probe set) is only meaningful after centering.
+  --
+  -- Cold-start contract: gated on claim-mean readiness via a WHERE
+  -- branch (language sql has no IF). Not ready -> returns no rows,
+  -- which the mint callers read as "no near-duplicate" and proceed
+  -- with the insert. The raw-cosine fallback would read the dedup bar
+  -- as "everything is a duplicate" (raw claim-claim similarity never
+  -- drops below ~0.76) and stall minting from a new user's very first
+  -- claims.
   --
   -- Ordered by centered cosine distance ascending so the most-similar
   -- row comes first; the caller reads `cosine` (1 - distance) for a
@@ -9561,17 +9665,18 @@ language sql stable security invoker as $$
   -- behaviour, used by the tier-1 mint dedup guard where a tier-2
   -- compound duplicating a tier-1 prediction is still worth catching.
   -- p_tier = N restricts to that tier, which the tier-2 mint dedup
-  -- guard needs: "is there an existing COMPOUND this close?" can't be
+  -- guard needs: "is there an existing COMPOUND this close?" can.t be
   -- answered by post-filtering a global-k list, because nearer tier-1
   -- rows would crowd a genuine tier-2 twin out of the top k.
   with v_mean as (
-    select public._samskara_centering_mean(coalesce(p_user_id, auth.uid())) as v
+    select public._samskara_claim_centering_mean(coalesce(p_user_id, auth.uid())) as v
   )
   select s.id,
          (1 - ((s.prediction_embedding - m.v) <=> (p_query_embedding - m.v)))::real as cosine,
          s.tier
     from public.samskaras s cross join v_mean m
-   where s.user_id = coalesce(p_user_id, auth.uid())
+   where public._samskara_claim_centering_ready(coalesce(p_user_id, auth.uid()))
+     and s.user_id = coalesce(p_user_id, auth.uid())
      and s.prediction_embedding is not null
      and (p_tier is null or s.tier = p_tier)
    order by (s.prediction_embedding - m.v) <=> (p_query_embedding - m.v) asc
@@ -9786,7 +9891,15 @@ declare
   v_current_count int;
   v_mean vector(2048);
 begin
-  v_mean := public._samskara_centering_mean(v_uid);
+  -- Cold-start gate: merging is destructive and irreversible, so below
+  -- the claim-mean floor it must SKIP, not fall back to raw cosine
+  -- (raw claim-claim similarity never drops below ~0.76, so every
+  -- co-firing pair would be cosine-eligible - the exact unbounded-merge
+  -- condition this RPC existed to prevent). The sweep retries next tick.
+  if not public._samskara_claim_centering_ready(v_uid) then
+    return 0;
+  end if;
+  v_mean := public._samskara_claim_centering_mean(v_uid);
   -- PRIMARY PASS: behavioural redundancy via co-firing.
   --
   -- Candidate pair enumeration self-joins samskara_fires on
@@ -10035,7 +10148,13 @@ declare
   -- samskara_tier2_declines.
   v_decline_ttl constant interval := interval '7 days';
 begin
-  v_mean := public._samskara_centering_mean(v_uid);
+  -- Cold-start gate: the cosine band is meaningless on raw scale (raw
+  -- claim-claim similarity never enters the band), so below the
+  -- claim-mean floor this probe must SKIP, not fall back to raw.
+  if not public._samskara_claim_centering_ready(v_uid) then
+    return;
+  end if;
+  v_mean := public._samskara_claim_centering_mean(v_uid);
   -- Cheap precondition before the costly self-join: tier-2 is
   -- meaningless until a substantial tier-1 corpus has actually fired.
   -- Floor at min-group-size + 1 so a group can even form.
@@ -10289,7 +10408,7 @@ create or replace function public.samskara_search_by_prediction(
 )
 language sql stable security invoker as $$
   with v_mean as (
-    select public._samskara_centering_mean(auth.uid()) as v
+    select public._samskara_claim_centering_mean(auth.uid()) as v
   )
   select s.id, s.tier, s.prediction, s.inner_voice, s.valence,
          s.confidence, s.health, s.fire_count, s.confirm_count,
@@ -10342,9 +10461,11 @@ declare
   rec record;
 begin
   -- Centered cosine (see samskara_centering): the browser slider's
-  -- threshold lives on the centered scale, like every other samskara
-  -- similarity dial.
-  v_mean := public._samskara_centering_mean(v_uid);
+  -- threshold lives on the centered CLAIM scale, like every other
+  -- claim-space similarity dial. Diagnostics-only: falls back to raw
+  -- cosine when the claim mean is not ready (tiny corpus) - the slider
+  -- reads a compressed scale there, acceptable for a browse aid.
+  v_mean := public._samskara_claim_centering_mean(v_uid);
   for rec in
     select s.id, s.prediction_embedding as embedding
       from public.samskaras s

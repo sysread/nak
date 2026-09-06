@@ -880,9 +880,9 @@ still ranks normally so it can fire and accumulate signal.
 Every samskara similarity comparison - fire ranking, mint dedup,
 topical clustering, pair-relate, co-fire collapse, tier-2
 detection, and the diagnostics clustering/search - runs on
-**centered cosine**: both vectors have the user's corpus mean
-subtracted before the cosine is taken. This is not a style
-preference, it is a correctness requirement of the encoder.
+**centered cosine**: both vectors have a corpus mean subtracted
+before the cosine is taken. This is not a style preference, it
+is a correctness requirement of the encoder.
 
 gte-small (like most BERT-family sentence encoders) is
 anisotropic: every vector carries a large shared component, so
@@ -896,18 +896,48 @@ collapse merged every qualifying pair unboundedly (tier-1 went
 129 -> 39 in two days), mint dedup absorbed 98% of new claims,
 and tier-2 detection found zero pairs in its band.
 
-Subtracting the corpus mean restores a ~1.0-wide dynamic range
-(centered claims: [-0.43, 0.63]). The mean lives in
-`samskara_centering` (one row per user, computed over substrate
-situation embeddings by `samskara_refresh_centering`, refreshed
-by the hourly sweep; below 32 substrate rows the row is deleted
-and the RPCs fall back to raw cosine - harmless, because the
-corpus is too small for thresholds to bind). Comparison-time
-centering (not stored-centered vectors) means a recomputed mean
-is immediately consistent with every stored vector. The
-transform is scoped to the samskara pipeline on purpose: memory,
-wiki, and document retrieval compare raw vectors and must not
-change semantics.
+**Two means, one per register.** Claims share a prompt template
+("in situations involving X, this user tends to Y") that
+observations do not, so each register carries a different shared
+component. Centering claims with the SUBSTRATE mean leaves a
+large template residual: measured on prod, claim-vs-claim
+nearest-neighbor median is 0.648 under the substrate mean vs
+0.404 under the claim mean - the dedup bar would read 85% of the
+corpus as duplicates on the wrong scale (this exact bug shipped
+in the first draft of the recalibration and was caught by
+re-scoring the probe set under the implemented scale). The split:
+
+- **claim mean** - claim-vs-claim comparisons: mint dedup
+  (`samskara_nearest_by_prediction`), co-fire collapse, tier-2
+  detection, and the corpus/thread diagnostics clustering and
+  search.
+- **substrate mean** - observation-vs-observation comparisons
+  (mint topical clustering, pair-relate probes) and the fire
+  path's message-vs-claim comparison (the message is in the
+  observation register).
+
+Both live in `samskara_centering` (one row per user, computed by
+`samskara_refresh_centering` over substrate situation embeddings
+and claim prediction embeddings, refreshed by the hourly sweep).
+Comparison-time centering (not stored-centered vectors) means a
+recomputed mean is immediately consistent with every stored
+vector. The transform is scoped to the samskara pipeline on
+purpose: memory, wiki, and document retrieval compare raw
+vectors and must not change semantics.
+
+**Cold start: similarity work SKIPS below the floors.** Below 32
+substrate rows there is no substrate mean; below 8 claims there
+is no claim mean. Raw-cosine fallback is NOT the answer here -
+raw claim-claim similarity never drops below ~0.76, so the 0.50
+dedup bar would read every mint as a duplicate and stall a new
+user's corpus from its very first claims (mints start from 3
+observations). Instead: `samskara_nearest_by_prediction` returns
+no rows (the minter proceeds without dedup), and the collapse
+and tier-2 RPCs return empty (their similarity work is
+destructive or band-based, and raw scale makes both meaningless).
+The fire path and substrate probes keep a raw fallback because
+they are non-destructive and judged downstream. The first sweep
+tick after the floors clear turns everything on.
 
 The five bars are calibrated against a hand-labeled probe set,
 not against the live distribution - re-tuning against the live
@@ -915,8 +945,12 @@ distribution is circular (the thresholds shape the corpus, the
 corpus shapes the distribution) and self-calibrating right after
 a rotation locks the pathology in. The 2026-09-05 probe set: 80
 claim pairs sampled across the centered range and sorted into
-duplicate / same-topic / related / unrelated. Measured
-separability (rank AUC):
+duplicate / same-topic / related / unrelated. **The fixture
+lives in the repo** (`supabase/functions/tests/fixtures/samskara-probe-set.json`,
+pinned by a Deno test) with the labeling method, the scale it
+was scored under, and the per-pair labels - on rotation, re-score
+it instead of re-labeling from scratch. Measured separability
+(rank AUC, claim-mean scale):
 
 | boundary | AUC | centered position |
 | --- | --- | --- |
@@ -929,24 +963,30 @@ The last row is the design driver: the embedding cannot tell a
 rewording from a closely-related sibling. It does not have to -
 duplicate-vs-sibling is the BEHAVIOURAL layer's job (co-fire
 collapse catches twins; the minter's cluster gives the LLM
-context). The bars derived from the probe set:
+context). The bars derived from the probe set (all on the scale
+their comparison runs at - claim-space bars on the claim mean,
+substrate-space bars on the substrate mean):
 
-| bar | value | notes |
-| --- | --- | --- |
-| mint dedup (`MINT_DEDUP_COSINE`) | 0.50 | top of the dup/sibling overlap zone; prefers letting a twin through (collapse reaps it) over absorbing a sibling (irreversible) |
-| co-fire collapse floor | 0.30 | below dedup on purpose; co-fire criteria are the real evidence |
-| overflow-pass cap floor | 0.40 | no behavioural evidence, keeps the same-idea-family boundary |
-| tier-2 band | [0.10, 0.35) | related-but-distinct; lift is the real filter |
-| mint cluster floor | 0.05 | substrate space has no labels; offset-mapped from the bge-m3 ratio to the distribution median |
-| pair-relate floor | -0.20 | deliberately loose; the relator LLM judges |
+| bar | value | space | notes |
+| --- | --- | --- | --- |
+| mint dedup (`MINT_DEDUP_COSINE`) | 0.50 | claim | top of the dup/sibling overlap zone; prefers letting a twin through (collapse reaps it) over absorbing a sibling (irreversible) |
+| co-fire collapse floor | 0.30 | claim | below dedup on purpose; co-fire criteria are the real evidence |
+| overflow-pass cap floor | 0.40 | claim | no behavioural evidence, keeps the same-idea-family boundary |
+| tier-2 band | [0.10, 0.35) | claim | related-but-distinct; lift is the real filter |
+| mint cluster floor | 0.05 | substrate | no labels in this space; offset-mapped to just above the distribution median |
+| pair-relate floor | -0.20 | substrate | deliberately loose; the relator LLM judges |
 
-On an embedding-model rotation, re-run the probe exercise (label
-~80 pairs sampled across the new model's CENTERED claim-pair
-range, re-solve the bars, update the constants in
-`supabase/functions/venice/agents/samskara.ts` + the SQL defaults in
-`schema.sql` together) and let the sweep's
-`samskara_refresh_centering` rebuild the mean. The mean row keys
-`model_id`, so a rotation's backfill makes the next refresh
+The fire path's ramp constant (0.30) sits at the top of the
+measured message-vs-claim range (~0.19 best match, 0.299 max
+observed) and is effectively never reached - cohort ranking is
+relevance-dominated throughout, with health as a modifier.
+
+On an embedding-model rotation, re-score the committed probe set
+under the new claim mean, re-solve the bars, update the constants
+in `supabase/functions/venice/agents/samskara.ts` + the SQL
+defaults in `schema.sql` together, and let the sweep's
+`samskara_refresh_centering` rebuild the means. The centering row
+keys `model_id`, so a rotation's backfill makes the next refresh
 stamp the new id; the bars themselves are checked in code
 review, not stored per-model - that remains open work (see
 `docs/dev/planned-changes.md`).

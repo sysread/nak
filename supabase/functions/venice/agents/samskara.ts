@@ -87,14 +87,18 @@ const SWEEP_ASSIMILATE_CAP = 10;
  * raw-scale 0.85 bar read as "everything is a duplicate" and shut
  * minting off entirely.
  *
- * 0.50 comes from the 2026-09-05 labeled probe set (80 pairs): true
- * rewordings measure 0.21-0.60 centered, same-topic siblings
+ * 0.50 comes from the 2026-09-05 labeled probe set (80 pairs, scored
+ * under CLAIM-mean centering - the scale
+ * `samskara_nearest_by_prediction` applies, see its cold-start gate):
+ * true rewordings measure 0.21-0.60 centered, same-topic siblings
  * 0.11-0.53, and the embedding cannot separate those two classes
  * (AUC 0.53). The bar therefore sits at the top of the overlap zone
  * to catch clear rewordings while tolerating an occasional twin -
  * the co-fire collapse pass reaps those behaviourally. Absorbing a
  * same-topic sibling is the costlier error (irreversible), so the
  * bar prefers letting a twin through over absorbing a sibling.
+ * Below 8 claims the RPC returns no rows (cold-start skip) and every
+ * mint proceeds undeduplicated until the claim mean is ready.
  */
 const MINT_DEDUP_COSINE = 0.5;
 
@@ -716,33 +720,46 @@ function subtractVector(a: number[], b: number[]): number[] {
 }
 
 /**
- * Read the user's stored centering mean (samskara_centering table in
- * schema.sql - the corpus mean that puts every samskara cosine on the
- * centered scale the thresholds are calibrated for). Null when absent:
- * substrate below the refresh minimum, or no sweep tick since the user
- * appeared. Callers fall back to raw cosine, which is only wrong
- * while the corpus is too small for thresholds to bind.
+ * Read one of the user's stored centering means (samskara_centering
+ * table in schema.sql). Two registers, and they are NOT
+ * interchangeable: claims share a prompt template that observations
+ * don't, so each register carries a different shared component -
+ * centering claims with the substrate mean leaves a residual that
+ * puts 85% of the corpus above the dedup bar (measured 2026-09-05).
+ * 'claim' = claim-vs-claim comparisons (mint dedup, collapse, tier-2);
+ * 'substrate' = observation-vs-observation (mint clustering, pair
+ * probes) and message-vs-claim (fire).
+ *
+ * Null when absent or below its floor: substrate below 32 rows, or
+ * fewer than 8 claims. The mint-dedup caller treats a null claim mean
+ * as "skip the dedup guard" (correct cold start - the raw-cosine
+ * fallback would read the dedup bar as "everything is a duplicate");
+ * the cluster builder falls back to raw for the recency window and
+ * lets the minter judge coherence.
  */
 async function fetchCenteringMean(
   admin: SupabaseClient,
   userId: string,
+  register: 'substrate' | 'claim',
 ): Promise<number[] | null> {
+  const column = register === 'claim' ? 'claim_mean_embedding' : 'mean_embedding';
   const { data, error } = await admin
     .from('samskara_centering')
-    .select('mean_embedding')
+    .select(column)
     .eq('user_id', userId)
     .maybeSingle();
   if (error) return null;
-  const raw = (data as { mean_embedding?: unknown } | null)?.mean_embedding;
+  const raw = (data as Record<string, unknown> | null)?.[column];
   if (raw == null) return null;
   const parsed = parseVector(raw);
   return parsed.length > 0 ? parsed : null;
 }
 
 /**
- * Recompute the user's centering mean from substrate. One aggregate
- * query per user per hourly tick - deliberately not on the fire hot
- * path. Failure is non-fatal: the stored mean (if any) keeps serving.
+ * Recompute the user's register means (substrate + claim) via the
+ * samskara_refresh_centering RPC. One call per user per hourly tick -
+ * deliberately not on the fire hot path. Failure is non-fatal: the
+ * stored means (if any) keep serving.
  */
 async function refreshCentering(
   admin: SupabaseClient,
@@ -1195,6 +1212,12 @@ async function ensureTier1Headroom(
  * ask the minter, embed, dedup-guard against the existing corpus,
  * insert with provenance. The INSERT doubles as the toast signal via
  * the realtime relay.
+ *
+ * Register split inside this probe: the cluster builder compares
+ * OBSERVATIONS (substrate mean), the dedup guard compares a minted
+ * CLAIM against existing claims (claim mean, centered server-side by
+ * samskara_nearest_by_prediction). The two registers carry different
+ * shared components; see fetchCenteringMean.
  */
 async function mintTier1Probe(
   admin: SupabaseClient,
@@ -1205,7 +1228,7 @@ async function mintTier1Probe(
   if (!(await ensureTier1Headroom(admin, userId, log, 'mint-tier1'))) return;
   const recent = await recentEmbeddedSubstrate(admin, userId, MINT_WINDOW);
   if (recent.length < MINT_CLUSTER_MIN) return;
-  const mean = await fetchCenteringMean(admin, userId);
+  const mean = await fetchCenteringMean(admin, userId, 'substrate');
   const clusterRows = buildTopicalCluster(recent, mean);
   if (clusterRows.length < MINT_CLUSTER_MIN) {
     log.trace('mint-tier1: no coherent cluster', {

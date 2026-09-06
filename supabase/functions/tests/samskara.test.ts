@@ -6,6 +6,7 @@
 // cluster/vector helpers get direct behavioural coverage - they shape
 // what the minter sees and what provenance records.
 import { assert, assertEquals } from 'jsr:@std/assert';
+import probeSet from './fixtures/samskara-probe-set.json' with { type: 'json' };
 import { __test } from '../venice/agents/samskara.ts';
 
 const {
@@ -178,6 +179,24 @@ Deno.test('caps and thresholds hold their designed relationships', () => {
   assertEquals(MINT_DEDUP_COSINE, 0.5);
   assertEquals(MINT_CLUSTER_COSINE_FLOOR, 0.05);
   assertEquals(PAIR_RELATE_COSINE_FLOOR, -0.2);
+});
+
+Deno.test('probe-set fixture holds the labeled calibration data', () => {
+  // The bars above were solved against this hand-labeled set; it lives
+  // in the repo so the AUC claims stay verifiable and the next
+  // embedding rotation re-scores instead of re-labeling from scratch.
+  // Scored under CLAIM-mean centering - the scale
+  // samskara_nearest_by_prediction applies. See the file's _meta block
+  // and docs/dev/samskara.md "Similarity calibration".
+  const fixture = probeSet as {
+    _meta: { scored_under: string };
+    pairs: { label: string; sim_claim_mean: number }[];
+  };
+  assertEquals(fixture.pairs.length, 80);
+  assert(fixture._meta.scored_under.includes('CLAIM-mean'));
+  const counts: Record<string, number> = {};
+  for (const p of fixture.pairs) counts[p.label] = (counts[p.label] ?? 0) + 1;
+  assertEquals(counts, { duplicate: 12, 'same-topic': 19, related: 28, unrelated: 21 });
 });
 
 // --- helpers ----------------------------------------------------------------
