@@ -563,7 +563,14 @@ function setupStreamSubscription(
       terminalKind?: TerminalKind;
       roundsRun?: number;
       conflict?: string;
+      prunedIds?: unknown;
     };
+    // Only string ids survive: the list drives a local row filter and a
+    // junk entry would just never match, but a non-array payload from a
+    // mismatched server build must not throw out of the channel handler.
+    const prunedIds = Array.isArray(p.prunedIds)
+      ? p.prunedIds.filter((id): id is string => typeof id === 'string')
+      : [];
     push({
       type: 'end',
       persistedAssistantId:
@@ -574,6 +581,7 @@ function setupStreamSubscription(
       // "did anything run" heuristic in that case.
       roundsRun: typeof p.roundsRun === 'number' ? p.roundsRun : 0,
       ...(p.conflict ? { conflict: p.conflict } : {}),
+      ...(prunedIds.length > 0 ? { prunedIds } : {}),
     });
     close();
   });

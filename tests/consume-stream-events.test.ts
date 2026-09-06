@@ -97,6 +97,46 @@ describe('consumeStreamEvents', () => {
     expect(onAssistantPersisted.mock.calls[0][0].content).toBe('hello world');
   });
 
+  it('fires onRowsPruned with END.prunedIds after the terminal row hydrates', async () => {
+    const { supabase } = makeSupabase(async () => row('A1', 'reply'));
+    const order: string[] = [];
+    const onAssistantPersisted = vi.fn(() => {
+      order.push('persisted');
+    });
+    const onRowsPruned = vi.fn(() => {
+      order.push('pruned');
+    });
+    await run(
+      [
+        { type: 'text', delta: 'reply' },
+        {
+          type: 'end',
+          persistedAssistantId: 'A1',
+          terminalKind: 'completed',
+          roundsRun: 1,
+          prunedIds: ['E1', 'E2'],
+        },
+      ],
+      supabase,
+      { onAssistantPersisted, onRowsPruned },
+    );
+    expect(onRowsPruned).toHaveBeenCalledWith(['E1', 'E2']);
+    // The handler must see the new row already in place, so the
+    // transcript settles in one pass (new row in, stale empties out).
+    expect(order).toEqual(['persisted', 'pruned']);
+  });
+
+  it('does not fire onRowsPruned when END carries no prunedIds', async () => {
+    const { supabase } = makeSupabase(async () => row('A1', 'reply'));
+    const onRowsPruned = vi.fn();
+    await run(
+      [{ type: 'end', persistedAssistantId: 'A1', terminalKind: 'completed', roundsRun: 1 }],
+      supabase,
+      { onRowsPruned },
+    );
+    expect(onRowsPruned).not.toHaveBeenCalled();
+  });
+
   it('routes END(aborted) into interrupted=true', async () => {
     const { supabase } = makeSupabase(async () => null);
     const result = await run(

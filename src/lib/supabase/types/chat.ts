@@ -387,8 +387,12 @@ export interface Message {
    * edge function. Null on user/system/tool rows and on assistant rows
    * written before the column existed. The streaming function INSERTs
    * the row with `'streaming'` at first content delta and UPDATEs the
-   * status to a terminal value (`'complete' | 'aborted' | 'error' |
-   * 'suspended_for_ask_user'`) when the round chain settles. The
+   * status to a terminal value (`'complete' | 'aborted' | 'error'`)
+   * when the round chain settles. `'suspended_for_ask_user'` is a
+   * fallback the ask_user suspend path writes only when it fails to
+   * delete the placeholder; older threads still carry such rows
+   * (empty content, no tool calls) until the end-of-turn empty-row
+   * sweep removes them. The
    * browser subscriber filters `'streaming'` rows out of `appendMessage`
    * so an in-flight row never paints as an empty bubble alongside the
    * live streaming buffer. User rows carry `null` except for the

@@ -51,6 +51,13 @@ export interface ChatLoopHandlers {
   /** A tool-result row has been written (fires once per tool). */
   onToolResultPersisted?(message: Message): void;
   /**
+   * The server's end-of-turn sweep deleted empty assistant rows from
+   * this thread (ids carried on the END event). Fires once, after the
+   * terminal row hydrates, so the UI can drop the rows from its local
+   * transcript - no realtime DELETE reaches the browser for messages.
+   */
+  onRowsPruned?(ids: string[]): void;
+  /**
    * The thread title changed mid-turn (triggered by an `update_title`
    * call from the model). Fires with the sanitised title the handler
    * actually wrote. The UI uses this to patch the thread row and

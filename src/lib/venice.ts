@@ -492,6 +492,13 @@ export type StreamEvent =
        */
       roundsRun: number;
       conflict?: string;
+      /**
+       * Assistant rows the server's end-of-turn empty-row sweep
+       * deleted. The consumer drops them from the local transcript;
+       * nothing else delivers the deletion (no DELETE realtime handler
+       * on messages). Absent when the sweep removed nothing.
+       */
+      prunedIds?: string[];
     };
 
 /**

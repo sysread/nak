@@ -265,6 +265,16 @@ export type OrchestratorEvent =
        * terminalKind === 'error'; absent on the happy commit.
        */
       conflict?: string;
+      /**
+       * Ids of assistant rows the end-of-turn empty-row sweep deleted
+       * (see venice/empty-rows.ts). Present only when the sweep
+       * removed something. The browser drops these from its local
+       * transcript on END: the messages realtime subscription has no
+       * DELETE handler and the table has no replica identity index,
+       * so this event is the only way the deletion reaches an open
+       * transcript without a refetch.
+       */
+      prunedIds?: string[];
     };
 
 /**

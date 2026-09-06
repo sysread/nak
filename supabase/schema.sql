@@ -493,10 +493,14 @@ create table if not exists public.messages (
 --                            on the thread:<id>:control channel
 --   'error'                  terminal: the function gave up on an
 --                            unrecoverable error and persisted what it had
---   'suspended_for_ask_user' terminal-for-now: the ask_user tool returned
---                            its pending sentinel. A fresh /stream
---                            invocation creates a new assistant row when
---                            the user submits an answer.
+--   'suspended_for_ask_user' fallback only: the ask_user tool returned its
+--                            pending sentinel and the function could not
+--                            delete the streaming placeholder (the normal
+--                            suspend path deletes it - the resumed /stream
+--                            invocation creates its own row, so a parked
+--                            one is an empty transcript card). Older
+--                            threads still carry parked rows; the
+--                            end-of-turn empty-row sweep removes them.
 --
 -- Render queries default to showing all statuses. Clients reading a
 -- status='streaming' row treat its content column as the completed-so-far
