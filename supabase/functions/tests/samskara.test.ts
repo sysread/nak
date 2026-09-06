@@ -8,6 +8,7 @@
 import { assert, assertEquals } from 'jsr:@std/assert';
 import probeSet from './fixtures/samskara-probe-set.json' with { type: 'json' };
 import { __test } from '../venice/agents/samskara.ts';
+import { EMBEDDING_MODEL } from '../_shared/backfill.ts';
 
 const {
   ASSIMILATOR_PROMPT,
@@ -31,6 +32,7 @@ const {
   subtractVector,
   doubtForAssimilation,
   isCleanSummaryParagraph,
+  insertMint,
   parseVector,
   stripJsonFence,
 } = __test;
@@ -197,6 +199,57 @@ Deno.test('probe-set fixture holds the labeled calibration data', () => {
   const counts: Record<string, number> = {};
   for (const p of fixture.pairs) counts[p.label] = (counts[p.label] ?? 0) + 1;
   assertEquals(counts, { duplicate: 12, 'same-topic': 19, related: 28, unrelated: 21 });
+});
+
+Deno.test('insertMint stamps the embedding model on every mint row', async () => {
+  // A mint is the one write path that lands a vector OUTSIDE the
+  // backfill (inline at write time). An unstamped row is invisible to
+  // the rotation audit's per-model grouping and only gets stamped by
+  // the deploy-time repair block - a per-deploy bandage for a
+  // write-time fact. This pins the stamp to the SAME EMBEDDING_MODEL
+  // constant the embedder runs, so a rotation updates both in one
+  // edit.
+  const inserted: Record<string, unknown>[] = [];
+  const fakeAdmin = {
+    from: (table: string) => {
+      // samskara_provenance follows the samskaras insert; its upsert
+      // is best-effort in insertMint, so an empty success suffices.
+      const c: Record<string, unknown> = {};
+      c.insert = (row: Record<string, unknown>) => {
+        if (table === 'samskaras') inserted.push(row);
+        return c;
+      };
+      c.select = () => c;
+      c.single = () =>
+        Promise.resolve({ data: { id: 'mint-1' }, error: null });
+      c.upsert = () => Promise.resolve({ data: null, error: null });
+      return c;
+    },
+  } as unknown as Parameters<typeof insertMint>[0];
+
+  // No Supabase env in tests: publishSamskaraMint probes
+  // SUPABASE_URL/SERVICE_ROLE and returns early (no broadcast) - the
+  // permission probe itself is granted by the test task's env access.
+  const id = await insertMint(
+    fakeAdmin,
+    'user-1',
+    // Logger: no env in tests -> broadcast skips; console mirror only.
+    {
+      trace: () => {},
+      debug: () => {},
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+      flush: () => Promise.resolve(),
+    },
+    1,
+    { prediction: 'p', innerVoice: '', valence: 0.1, confidence: 0.9 },
+    new Array(2048).fill(0),
+    [],
+  );
+  assertEquals(id, 'mint-1');
+  assertEquals(inserted.length, 1);
+  assertEquals(inserted[0].embedding_model, EMBEDDING_MODEL);
 });
 
 // --- helpers ----------------------------------------------------------------

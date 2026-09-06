@@ -47,6 +47,7 @@ import { readVeniceKey } from '../tools/_venice_key.ts';
 import { toolComplete } from '../tools/_venice_complete.ts';
 import { VeniceError } from '../../_shared/venice.ts';
 import { localEmbed } from '../../_shared/local-embed.ts';
+import { EMBEDDING_MODEL } from '../../_shared/backfill.ts';
 import {
   padEmbeddingForStorage,
 } from '../../_shared/backfill.ts';
@@ -844,6 +845,13 @@ async function recentEmbeddedSubstrate(
  * Insert a minted samskara plus its provenance batch. user_id is
  * explicit on every row: the column default is auth.uid(), which is
  * NULL under the service role. Returns the new id, or null on error.
+ *
+ * `predEmbedding` is stamped with the writing model's id: the deploy-
+ * time repair block in schema.sql keys its null-stamp half on
+ * `embedding_model is null`, and the rotation audit groups by this
+ * column - an unstamped mint is invisible to both until its vector
+ * happens to be re-embedded. Must stay in sync with the model the
+ * caller actually embedded with (EMBEDDING_MODEL).
  */
 async function insertMint(
   admin: SupabaseClient,
@@ -861,6 +869,7 @@ async function insertMint(
       tier,
       prediction: minted.prediction,
       prediction_embedding: predEmbedding,
+      embedding_model: EMBEDDING_MODEL,
       inner_voice: minted.innerVoice.length > 0 ? minted.innerVoice : null,
       valence: minted.valence,
       confidence: minted.confidence,
@@ -1997,4 +2006,5 @@ export const __test = {
   isCleanSummaryParagraph,
   parseVector,
   stripJsonFence,
+  insertMint,
 };

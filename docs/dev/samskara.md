@@ -1968,7 +1968,10 @@ These are diagnostic summary reads, not user-facing controls.
 with the query.** Prediction embeddings are written at mint time AND
 by the embed backfill (source `samskara-predictions`); every row
 records the model that produced its vector in `embedding_model`,
-like every sibling embeddable table. Both facts exist because of a
+like every sibling embeddable table - the mint write path stamps it
+directly from the `EMBEDDING_MODEL` constant the embedder runs
+(pinned by a Deno test), and a deploy-time repair block re-stamps
+any row the write path missed. Both facts exist because of a
 three-week outage in 2026-08: predictions were the ONLY embeddable
 table missing from the backfill registry, so when the embedding
 model rotated to gte-small the backfill re-embedded everything else
