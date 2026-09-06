@@ -65,6 +65,7 @@ import {
 } from '../_shared/error-translate.ts';
 import { createBroadcastPublisher } from './broadcast.ts';
 import { getStreamingCompletion } from './getStreamingCompletion.ts';
+import { pruneEmptyAssistantRows } from './empty-rows.ts';
 import {
   fetchRejectedFeatures,
   recordRejectedFeature,
@@ -1023,6 +1024,44 @@ export async function getStreamingResponse(
       // is display metadata recording when the row was born, and
       // position now owns the ordering.
       lastUpdateContent = '';
+
+      // ask_user suspend: this invocation ends here and the resumed
+      // one (a fresh /stream call after the user answers) creates its
+      // own streaming row. The placeholder therefore has no future -
+      // its preamble text already lives on the archived round row
+      // above - and keeping it would persist an assistant row with
+      // no content, no tool calls, and no reasoning: a bare empty
+      // card in the transcript and an empty assistant turn on the
+      // wire. Delete it instead of parking it.
+      //
+      // Best-effort with a deliberate fallback: if the delete fails
+      // the row stays under assistantRowId so the terminal write
+      // below parks it as 'suspended_for_ask_user' - the reconnect
+      // probe's dead-turn janitor keys on 'streaming', so an
+      // un-transitioned row would read as a crashed turn. The parked
+      // row is then swept on the thread's next completed turn (see
+      // empty-rows.ts).
+      if (suspendIdx !== -1) {
+        if (assistantRowId !== null) {
+          const { error: delError } = await opts.adminClient
+            .from('messages')
+            .delete()
+            .eq('id', assistantRowId);
+          if (delError) {
+            log.error(
+              `${runId} could not delete the streaming placeholder on ask_user suspend; parking it instead: ${delError.message}`,
+            );
+          } else {
+            log.info(
+              `${runId} deleted streaming placeholder ${assistantRowId} on ask_user suspend`,
+            );
+            assistantRowId = null;
+          }
+        }
+        terminalKind = 'suspended_for_ask_user';
+        break;
+      }
+
       if (assistantRowId !== null) {
         // RLS OFF: filter by id only.
         await opts.adminClient
@@ -1036,11 +1075,6 @@ export async function getStreamingResponse(
           p_thread_id: opts.threadId,
           p_msg_id: assistantRowId,
         });
-      }
-
-      if (suspendIdx !== -1) {
-        terminalKind = 'suspended_for_ask_user';
-        break;
       }
     }
 
@@ -1278,6 +1312,12 @@ export async function getStreamingResponse(
         // handles the empty-content case by emitting the marker
         // alone. 'error' and 'suspended_for_ask_user' rows render
         // through other affordances and don't carry the marker.
+        //
+        // 'suspended_for_ask_user' only reaches here when the round
+        // boundary failed to delete the placeholder (it nulls
+        // assistantRowId on success). Parking the row keeps the
+        // reconnect probe from mistaking it for a crashed turn; the
+        // empty-row sweep removes it on the next completed turn.
         const terminalContent =
           terminalKind === 'aborted'
             ? withInterruptedMarker(settled.content)
@@ -1293,6 +1333,29 @@ export async function getStreamingResponse(
             citations: finalCitations,
           },
         );
+      }
+    }
+
+    // Empty-row sweep. Runs after the terminal write so the turn's own
+    // row is settled and excluded by id, and before END so the pruned
+    // ids ride the END event to the browser. 'completed' only: it is
+    // the one terminal where the transcript is in a known-good shape
+    // to tidy, and it means an older thread carrying a stale empty
+    // row heals on its next successful turn. Each hit logs at warn -
+    // the sweep is a safety net, not a licence for a write path to
+    // leave empties behind.
+    let prunedIds: string[] = [];
+    if (terminalKind === 'completed') {
+      try {
+        prunedIds = await pruneEmptyAssistantRows(
+          opts.adminClient,
+          opts.threadId,
+          assistantRowId,
+          log,
+          runId,
+        );
+      } catch (err) {
+        log.error(`${runId} empty-row sweep failed:`, err);
       }
     }
 
@@ -1356,6 +1419,7 @@ export async function getStreamingResponse(
       terminalKind,
       roundsRun,
       ...(conflict ? { conflict } : {}),
+      ...(prunedIds.length > 0 ? { prunedIds } : {}),
     };
     // Publish END directly; flush already drained pending text.
     try {

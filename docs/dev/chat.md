@@ -397,6 +397,15 @@ A chat turn goes:
   envelope, then re-invokes `runChatLoop` against the post-answer
   history. The substrate stub is skipped on suspend - it fires
   on whichever resumed run actually terminates the turn. The
+  turn's streaming placeholder row (born on the first visible text
+  delta, blanked at every round boundary) is DELETED at the suspend
+  boundary rather than parked: the resumed invocation creates its
+  own row, so a parked one persists as an assistant row with no
+  content, no tool calls, and no reasoning - a footer-only empty
+  card under the answered AskUserCard. Only if that delete fails
+  does the row park under `status='suspended_for_ask_user'` (so the
+  reconnect probe's dead-turn janitor, which keys on `'streaming'`,
+  does not mistake it for a crashed turn). The
   `cancelPendingAskUser` helper in `Chat.svelte` writes an
   `abandoned_on_*` answer envelope when the user reloads (mount-
   time scan in `selectThread`) or sends a new message instead of
@@ -405,6 +414,24 @@ A chat turn goes:
   and `src/lib/notifications.svelte.ts` for the foreground OS
   notification that fires when the suspension lands while the
   tab is backgrounded.
+- **Empty-row sweep** (`venice/empty-rows.ts`) - after the
+  `'completed'` terminal commit and before END, the function
+  deletes every assistant row on the thread that carries no
+  content, no tool calls, and no reasoning (the turn's own row is
+  excluded by id; `'streaming'` rows, tool-round rows, and
+  reasoning-only error partials are excluded by shape). No write
+  path is supposed to leave such a row, so each hit logs at
+  **warn** to the drawer - the sweep is a safety net that must
+  stay visible, not a silent filter that would hide a regression.
+  The deleted ids ride the END event as `prunedIds`; the browser
+  consumer fires `onRowsPruned` after the terminal-row hydration
+  and `Chat.svelte` drops the rows from the open transcript. That
+  event is the only delivery path: `subscribeToMessages` has no
+  DELETE handler and `messages` has no replica identity index, so
+  a DELETE never reaches the browser via realtime. Older threads
+  carrying a parked placeholder from before the suspend-delete
+  heal on their next completed turn; a second device viewing the
+  same thread sees the removal on its next thread load.
 
 ## Interactions with other features
 

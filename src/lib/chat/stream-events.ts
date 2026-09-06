@@ -105,6 +105,9 @@ export async function consumeStreamEvents(opts: {
   let endTerminalKind: ConsumedStreamResult['terminalKind'] = null;
   let endConflict: string | undefined;
   let endRoundsRun: number | null = null;
+  // Rows the server's empty-row sweep deleted this turn; handed to
+  // onRowsPruned after the terminal hydration below.
+  let endPrunedIds: string[] = [];
   // A terminal stream error, captured but NOT thrown until after the
   // post-loop persisted-row hydration. Throwing the instant the 'error'
   // event arrives would skip the hydration below, so the cut-off
@@ -339,6 +342,7 @@ export async function consumeStreamEvents(opts: {
           endTerminalKind = ev.terminalKind;
           endConflict = ev.conflict;
           endRoundsRun = typeof ev.roundsRun === 'number' ? ev.roundsRun : null;
+          endPrunedIds = ev.prunedIds ?? [];
           break;
       }
     }
@@ -419,6 +423,11 @@ export async function consumeStreamEvents(opts: {
       );
     }
   }
+
+  // Empty rows the server swept at commit time. Ordered after the
+  // terminal hydration so the handler sees the final transcript shape
+  // (new row in, stale empties out) in one settled pass.
+  if (endPrunedIds.length > 0) handlers?.onRowsPruned?.(endPrunedIds);
 
   // Terminal error: throw AFTER hydrating the persisted partial above,
   // so the cut-off card (reasoning + whatever text streamed) is already

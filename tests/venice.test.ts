@@ -1104,6 +1104,49 @@ describe('streamChat (streaming-root transport)', () => {
     ]);
   });
 
+  it('carries END.prunedIds through as string ids only', async () => {
+    // The sweep's id list drives a local row filter, so junk entries
+    // are dropped at decode and a missing/non-array field yields no
+    // key at all (older server builds never send it).
+    const channel = makeChannel('thread:T1:stream');
+    const channels = new Map([[channel.name, channel]]);
+    const { client } = makeSupabase({
+      envelope: {
+        channelName: channel.name,
+        assistantRowId: null,
+        completedSoFar: '',
+      },
+      channels,
+    });
+    const venice = new VeniceClient({ supabase: client });
+    const gen = venice.streamChat({
+      model: 'm',
+      messages: [],
+      streamCtx: { threadId: 'T1', userMessageId: 'U1' },
+    });
+    const collected: StreamEvent[] = [];
+    const drained = (async () => {
+      for await (const ev of gen) collected.push(ev);
+    })();
+    await Promise.resolve();
+    await Promise.resolve();
+    channel.emit('END', {
+      persistedAssistantId: 'A1',
+      terminalKind: 'completed',
+      prunedIds: ['E1', 42, 'E2'],
+    });
+    await drained;
+    expect(collected).toEqual([
+      {
+        type: 'end',
+        persistedAssistantId: 'A1',
+        terminalKind: 'completed',
+        roundsRun: 0,
+        prunedIds: ['E1', 'E2'],
+      },
+    ]);
+  });
+
   it('keeps the drain open after an error broadcast so the terminal END still flows', async () => {
     // The function publishes 'error' mid-round, then runs its terminal
     // write and publishes END carrying the persisted partial's id. The

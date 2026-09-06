@@ -4695,6 +4695,16 @@
                 appendMessage(msg);
               }
             },
+            onRowsPruned: (ids) => {
+              // The server deleted empty assistant rows (the bare
+              // footer-only cards). Drop them from the open transcript
+              // right away; a background thread's next listMessages
+              // simply won't return them. No fade: the rows have no
+              // body to animate and this is tidy-up, not a regenerate.
+              if (ctx.threadId !== activeThreadId) return;
+              const drop = new Set(ids);
+              messages = messages.filter((m) => !drop.has(m.id));
+            },
             onToolStart: (call) => {
               // performance.now() rather than Date.now() so the
               // elapsed math is monotonic — the user's clock jumping

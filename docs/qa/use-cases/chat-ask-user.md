@@ -24,6 +24,13 @@ the in-flight tool_call event via `extractAskUserPrompt` in
 3. Answer by clicking an option.
 4. Let the resumed turn complete.
 5. Repeat once answering via free text instead of an option.
+6. Send a message that makes the model narrate BEFORE asking, e.g.
+   "First tell me in one sentence what you know about my paratha
+   recipe, then use the ask_user tool to ask which change I want."
+   Answer, let the turn complete, then reload the tab.
+7. (Legacy heal) On a thread that already shows a footer-only empty
+   card under an answered AskUserCard, send any message and let the
+   turn complete.
 
 ## Expected
 
@@ -41,6 +48,14 @@ the in-flight tool_call event via `extractAskUserPrompt` in
   carries the answered content shape (`__ask_user_answered__`,
   `via: 'option'`, the option index).
 - (5) Same, with `via: 'free_form'` and the typed answer.
+- (6) No footer-only empty card appears between the answered card
+  and the resumed reply, live or after the reload. The drawer's
+  `stream` source shows a `deleted streaming placeholder ... on
+  ask_user suspend` info line for the suspending run. The
+  narration itself renders as a plain card above the question.
+- (7) The empty card disappears when the new turn completes,
+  without a reload. The drawer shows a warn-level `pruned empty
+  assistant row` line from the completing run.
 
 ## Cleanup
 
@@ -52,3 +67,5 @@ None.
 | ---- | --- | ------ | ------ | ----- |
 | 2026-06-10 | local | 31c36d0 | pass (1-4) | post-A8 backfill run: card rendered question + both options w/ descriptions + free-form affordance (extractAskUserPrompt path); option answer resumed the turn; answered row carried `{"__ask_user_answered__":true,"answer":"Cast iron","via":"option","option_index":0}`; follow-up referenced the choice |
 | 2026-06-10 | local | 31c36d0 | not run (5) | free-form variant left for a future pass - the via='free_form' shape is unit-covered in ask-user tests |
+| 2026-09-06 | cloud (pre-change) | 26073eb | fail (6) | baseline from the hosted DB, not a walkthrough: thread "Red wheat paratha" carries an assistant row with status='suspended_for_ask_user', empty content, no tool_calls, no reasoning, between the answered ask_user row and the resumed reply - the footer-only empty card |
+| 2026-09-06 | cloud | (this change) | not run (6-7) | cloud session has no browser; the predicate and the END prunedIds plumbing are unit-covered (empty-rows.test.ts, venice.test.ts, consume-stream-events.test.ts). Wants a local pass |
