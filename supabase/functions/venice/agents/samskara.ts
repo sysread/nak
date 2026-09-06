@@ -2006,4 +2006,5 @@ export const __test = {
   isCleanSummaryParagraph,
   parseVector,
   stripJsonFence,
+  insertMint,
 };

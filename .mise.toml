@@ -261,7 +261,10 @@ raw = true
 description = "Deno unit tests for the edge functions (offline - fake fetch, no network or Supabase). Pure logic in _shared; the handler glue is exercised via dev-start's functions serve."
 # --config points deno at the functions' import map; the tests/ dir holds only
 # the pure offline tests, so this stays network-free after deno caches std.
-run = "deno test --config supabase/functions/deno.json supabase/functions/tests/"
+# --allow-env: publishSamskaraMint probes SUPABASE_URL/SERVICE_ROLE and
+# returns early without them (offline by construction), but the probe
+# itself needs env read permission.
+run = "deno test --allow-env --config supabase/functions/deno.json supabase/functions/tests/"
 
 [tasks.functions-check]
 description = "Type-check every edge-function entrypoint with deno check"
