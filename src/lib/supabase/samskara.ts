@@ -313,17 +313,20 @@ export async function samskaraListFiresForThread(
  * cohort) and cluster_size each fire belongs to; the renderer joins
  * back against the existing fires array by fire id.
  *
- * Threshold default 0.7 sits in BGE-M3's "topically similar" band -
- * paraphrases of the same idea typically land between 0.65 and 0.78.
- * MINT dedup uses 0.85 because that's "near-duplicate sentence";
- * for human-readable theme grouping a lower bar reads as "same idea
- * said differently." Modal exposes the threshold as a slider so the
- * caller can tune it live without a redeploy.
+ * Threshold default 0.3 on the CENTERED cosine scale (both vectors
+ * have the user's corpus mean subtracted first - see the
+ * samskara_centering table in schema.sql; every samskara similarity
+ * dial shares this scale). It sits at the labeled related/same-topic
+ * boundary (2026-09-05 probe set): for human-readable theme grouping
+ * that reads as "same idea said differently". Raw-scale grouping is
+ * unusable under gte-small - every pair measures 0.67+ regardless of
+ * meaning. Modal exposes the threshold as a slider so the caller can
+ * tune it live without a redeploy.
  */
 export async function samskaraClusterThreadFires(
   client: SupabaseClient,
   threadId: string,
-  threshold = 0.7
+  threshold = 0.3
 ): Promise<Map<string, { clusterSeq: number; clusterSize: number }>> {
   const { data, error } = await client.rpc(
     'samskara_cluster_thread_fires',

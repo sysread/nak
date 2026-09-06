@@ -6,6 +6,7 @@
 // cluster/vector helpers get direct behavioural coverage - they shape
 // what the minter sees and what provenance records.
 import { assert, assertEquals } from 'jsr:@std/assert';
+import probeSet from './fixtures/samskara-probe-set.json' with { type: 'json' };
 import { __test } from '../venice/agents/samskara.ts';
 
 const {
@@ -19,6 +20,7 @@ const {
   SWEEP_ASSIMILATE_CAP,
   MINT_DEDUP_COSINE,
   MINT_CLUSTER_COSINE_FLOOR,
+  PAIR_RELATE_COSINE_FLOOR,
   MINT_CLUSTER_MAX,
   MINT_CLUSTER_MIN,
   TIER1_POPULATION_CAP,
@@ -26,6 +28,7 @@ const {
   buildTopicalCluster,
   buildAssociationCluster,
   cosine,
+  subtractVector,
   doubtForAssimilation,
   isCleanSummaryParagraph,
   parseVector,
@@ -167,6 +170,33 @@ Deno.test('caps and thresholds hold their designed relationships', () => {
   // Bounded small on purpose: each hub is one minter call and the
   // probe runs every sweep tick - the cap IS the spend ceiling.
   assert(ASSOC_HUBS_PER_TICK >= 1 && ASSOC_HUBS_PER_TICK <= 5);
+  // Centered-scale bars from the 2026-09-05 labeled probe set (80
+  // pairs). Pinned exactly: drift here is recalibration drift. The
+  // collapse RPC's p_cosine_floor (0.30 in schema.sql) must stay BELOW
+  // MINT_DEDUP_COSINE so behaviourally-confirmed twins the mint bar
+  // let through still get reaped; schema.sql moves in the same PR if
+  // these move.
+  assertEquals(MINT_DEDUP_COSINE, 0.5);
+  assertEquals(MINT_CLUSTER_COSINE_FLOOR, 0.05);
+  assertEquals(PAIR_RELATE_COSINE_FLOOR, -0.2);
+});
+
+Deno.test('probe-set fixture holds the labeled calibration data', () => {
+  // The bars above were solved against this hand-labeled set; it lives
+  // in the repo so the AUC claims stay verifiable and the next
+  // embedding rotation re-scores instead of re-labeling from scratch.
+  // Scored under CLAIM-mean centering - the scale
+  // samskara_nearest_by_prediction applies. See the file's _meta block
+  // and docs/dev/samskara.md "Similarity calibration".
+  const fixture = probeSet as {
+    _meta: { scored_under: string };
+    pairs: { label: string; sim_claim_mean: number }[];
+  };
+  assertEquals(fixture.pairs.length, 80);
+  assert(fixture._meta.scored_under.includes('CLAIM-mean'));
+  const counts: Record<string, number> = {};
+  for (const p of fixture.pairs) counts[p.label] = (counts[p.label] ?? 0) + 1;
+  assertEquals(counts, { duplicate: 12, 'same-topic': 19, related: 28, unrelated: 21 });
 });
 
 // --- helpers ----------------------------------------------------------------
@@ -185,7 +215,7 @@ Deno.test('cosine: orthogonal, identical, and zero-norm inputs', () => {
   assertEquals(cosine([0, 0], [1, 2]), -1);
 });
 
-Deno.test('buildTopicalCluster keeps same-topic rows and drops strays', () => {
+Deno.test('buildTopicalCluster keeps same-topic rows and drops strays (raw fallback)', () => {
   const seedEmb = unit(1, 0, 0);
   const near = unit(0.9, 0.1, 0); // cosine ~0.99 vs seed
   const far = unit(0, 1, 0); // cosine 0 vs seed
@@ -195,7 +225,8 @@ Deno.test('buildTopicalCluster keeps same-topic rows and drops strays', () => {
     { id: 'far', situation: 's', outcome: 'o', embedding: far },
     { id: 'broken', situation: 's', outcome: 'o', embedding: [] },
   ];
-  const cluster = buildTopicalCluster(rows);
+  // Null mean = the fresh-user fallback: raw cosine, no centering.
+  const cluster = buildTopicalCluster(rows, null);
   assertEquals(
     cluster.map((r) => r.id),
     ['seed', 'near'],
@@ -210,7 +241,30 @@ Deno.test('buildTopicalCluster caps the cluster at MINT_CLUSTER_MAX', () => {
     outcome: 'o',
     embedding: emb,
   }));
-  assertEquals(buildTopicalCluster(rows).length, MINT_CLUSTER_MAX);
+  assertEquals(buildTopicalCluster(rows, null).length, MINT_CLUSTER_MAX);
+});
+
+Deno.test('buildTopicalCluster centers before the cosine when a mean is present', () => {
+  // Both rows share a large common component (the anisotropy stand-in):
+  // raw cosine says "near-duplicate", but the shared component IS the
+  // corpus mean, so the centered vectors are orthogonal - the cluster
+  // must drop the second row.
+  const mean = [1, 0, 0];
+  const a = [1, 0.3, 0];
+  const b = [1, 0, 0.3];
+  assert(cosine(a, b) > MINT_CLUSTER_COSINE_FLOOR, 'raw cosine must clear the floor for this test to bite');
+  const rows = [
+    { id: 'seed', situation: 's', outcome: 'o', embedding: a },
+    { id: 'twin', situation: 's', outcome: 'o', embedding: b },
+  ];
+  const cluster = buildTopicalCluster(rows, mean);
+  assertEquals(cluster.map((r) => r.id), ['seed']);
+});
+
+Deno.test('subtractVector subtracts element-wise and tolerates length mismatch', () => {
+  assertEquals(subtractVector([2, 3, 4], [1, 1, 1]), [1, 2, 3]);
+  assertEquals(subtractVector([1, 2], []), [1, 2]);
+  assertEquals(subtractVector([1, 2], [1, 2, 3]), [1, 2]);
 });
 
 Deno.test('buildAssociationCluster: hub first, distinct partners, all labels, summed reinforcement', () => {

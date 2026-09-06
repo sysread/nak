@@ -136,12 +136,12 @@
       <div class="samskara-threshold-row">
         <input
           type="range"
-          min="0.5"
-          max="0.95"
+          min="-0.1"
+          max="0.65"
           step="0.01"
           bind:value={samskaraBrowseStore.hideSimilarThreshold}
           aria-label="Similarity threshold"
-          title="Higher hides only near-duplicates; lower folds loosely-related claims together"
+          title="Higher hides only near-duplicates; lower folds same-topic claims together"
         />
         <span class="samskara-threshold-readout">{samskaraBrowseStore.hideSimilarThreshold.toFixed(2)}</span>
       </div>

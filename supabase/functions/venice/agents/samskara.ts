@@ -79,16 +79,28 @@ const TAIL_ASSIMILATE_CAP = 3;
 const SWEEP_ASSIMILATE_CAP = 10;
 
 /**
- * Cosine-similarity threshold above which a proposed mint is treated
- * as a near-duplicate of an existing samskara. Tuned on observed
- * corpus behaviour (April 2026): genuine paraphrases of the same
- * underlying claim clustered well above 0.9 on Venice's large
- * embedder, so 0.85 leaves a margin while still collapsing
- * near-clones a real conversation surfaces within minutes. MINT-only
- * on purpose - the fire path has no similarity filter, so
- * weak-but-related samskaras still reach the priming block.
+ * Centered-cosine threshold above which a proposed mint is treated as
+ * a near-duplicate of an existing samskara. "Centered" = both vectors
+ * have the user's corpus mean subtracted before the cosine (see the
+ * samskara_centering table in schema.sql): raw gte-small cosine
+ * occupies [0.67, 1.0] for any two of this user's texts, so the old
+ * raw-scale 0.85 bar read as "everything is a duplicate" and shut
+ * minting off entirely.
+ *
+ * 0.50 comes from the 2026-09-05 labeled probe set (80 pairs, scored
+ * under CLAIM-mean centering - the scale
+ * `samskara_nearest_by_prediction` applies, see its cold-start gate):
+ * true rewordings measure 0.21-0.60 centered, same-topic siblings
+ * 0.11-0.53, and the embedding cannot separate those two classes
+ * (AUC 0.53). The bar therefore sits at the top of the overlap zone
+ * to catch clear rewordings while tolerating an occasional twin -
+ * the co-fire collapse pass reaps those behaviourally. Absorbing a
+ * same-topic sibling is the costlier error (irreversible), so the
+ * bar prefers letting a twin through over absorbing a sibling.
+ * Below 8 claims the RPC returns no rows (cold-start skip) and every
+ * mint proceeds undeduplicated until the claim mean is ready.
  */
-const MINT_DEDUP_COSINE = 0.85;
+const MINT_DEDUP_COSINE = 0.5;
 
 /**
  * Health nudge applied to a reinforced samskara on a dedup hit. Small
@@ -105,14 +117,18 @@ const MINT_DEDUP_HEALTH_BUMP = 0.02;
  * coherent topic rather than a recency window fused across unrelated
  * turns.
  *
- * MINT_CLUSTER_COSINE_FLOOR is empirical: random substrate pairs in
- * this corpus already average ~0.50 cosine (one user's chat turns is
- * a compressed space) while same-topic runs measure ~0.6-0.75; 0.6
- * sits at the random p90. MINT_CLUSTER_MAX caps the minter sample
+ * MINT_CLUSTER_COSINE_FLOOR is on the CENTERED scale (see
+ * MINT_DEDUP_COSINE): centered substrate pairs span [-0.39, 1.0] with
+ * median ~0.0, so 0.05 reads "more related than the typical pair" -
+ * the rank position the old raw 0.60 occupied under bge-m3 (mean 0.575
+ * + a margin). Substrate space has no labeled pairs, so this is
+ * offset-mapped rather than probe-solved; the minter's decline path
+ * is the safety net for incoherent clusters.
+ * MINT_CLUSTER_MAX caps the minter sample
  * and provenance batch; MINT_CLUSTER_MIN requires a real cluster
  * before a one-off exchange can crystallize into an instinct.
  */
-const MINT_CLUSTER_COSINE_FLOOR = 0.6;
+const MINT_CLUSTER_COSINE_FLOOR = 0.05;
 const MINT_CLUSTER_MAX = 5;
 const MINT_CLUSTER_MIN = 3;
 
@@ -673,18 +689,89 @@ interface SubstrateRow {
  * MINT_CLUSTER_COSINE_FLOOR of it, capped at MINT_CLUSTER_MAX,
  * preserving recency order. A seed with no usable embedding yields a
  * lone-seed cluster the caller rejects against MINT_CLUSTER_MIN.
+ *
+ * `mean` is the user's stored corpus mean (samskara_centering table):
+ * both sides are centered before the cosine so the floor's centered
+ * scale applies. Null mean (fresh user) compares raw - the documented
+ * fallback that only exists while the corpus is too small to have
+ * claims.
  */
-function buildTopicalCluster(recent: SubstrateRow[]): SubstrateRow[] {
+function buildTopicalCluster(
+  recent: SubstrateRow[],
+  mean: number[] | null,
+): SubstrateRow[] {
   const seed = recent[0];
   const cluster: SubstrateRow[] = [seed];
+  const seedC = mean ? subtractVector(seed.embedding, mean) : seed.embedding;
   for (let i = 1; i < recent.length && cluster.length < MINT_CLUSTER_MAX; i++) {
-    const emb = recent[i].embedding;
+    const emb = mean ? subtractVector(recent[i].embedding, mean) : recent[i].embedding;
     if (emb.length === 0) continue;
-    if (cosine(seed.embedding, emb) >= MINT_CLUSTER_COSINE_FLOOR) {
+    if (cosine(seedC, emb) >= MINT_CLUSTER_COSINE_FLOOR) {
       cluster.push(recent[i]);
     }
   }
   return cluster;
+}
+
+/** Element-wise vector subtraction; returns `a` unchanged on length mismatch. */
+function subtractVector(a: number[], b: number[]): number[] {
+  if (b.length === 0 || a.length !== b.length) return a;
+  return a.map((x, i) => x - b[i]);
+}
+
+/**
+ * Read one of the user's stored centering means (samskara_centering
+ * table in schema.sql). Two registers, and they are NOT
+ * interchangeable: claims share a prompt template that observations
+ * don't, so each register carries a different shared component -
+ * centering claims with the substrate mean leaves a residual that
+ * puts 85% of the corpus above the dedup bar (measured 2026-09-05).
+ * 'claim' = claim-vs-claim comparisons (mint dedup, collapse, tier-2);
+ * 'substrate' = observation-vs-observation (mint clustering, pair
+ * probes) and message-vs-claim (fire).
+ *
+ * Null when absent or below its floor: substrate below 32 rows, or
+ * fewer than 8 claims. The mint-dedup caller treats a null claim mean
+ * as "skip the dedup guard" (correct cold start - the raw-cosine
+ * fallback would read the dedup bar as "everything is a duplicate");
+ * the cluster builder falls back to raw for the recency window and
+ * lets the minter judge coherence.
+ */
+async function fetchCenteringMean(
+  admin: SupabaseClient,
+  userId: string,
+  register: 'substrate' | 'claim',
+): Promise<number[] | null> {
+  const column = register === 'claim' ? 'claim_mean_embedding' : 'mean_embedding';
+  const { data, error } = await admin
+    .from('samskara_centering')
+    .select(column)
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (error) return null;
+  const raw = (data as Record<string, unknown> | null)?.[column];
+  if (raw == null) return null;
+  const parsed = parseVector(raw);
+  return parsed.length > 0 ? parsed : null;
+}
+
+/**
+ * Recompute the user's register means (substrate + claim) via the
+ * samskara_refresh_centering RPC. One call per user per hourly tick -
+ * deliberately not on the fire hot path. Failure is non-fatal: the
+ * stored means (if any) keep serving.
+ */
+async function refreshCentering(
+  admin: SupabaseClient,
+  userId: string,
+  log: EdgeLogger,
+): Promise<void> {
+  const { error } = await admin.rpc('samskara_refresh_centering', {
+    p_user_id: userId,
+  });
+  if (error) {
+    log.warn('centering: refresh failed', { error: error.message });
+  }
 }
 
 /**
@@ -952,11 +1039,14 @@ async function assimilateDrainForUser(
 }
 
 /**
- * Cosine floor for pair-relate candidates. Same floor the browser
- * loop used: below 0.3 the "closest pair" is noise in this compressed
- * embedding space, not a relation.
+ * CENTERED-cosine floor for pair-relate candidates (see
+ * MINT_DEDUP_COSINE for the centering contract). Deliberately loose,
+ * below the corpus median: the floor only bounds which substrate
+ * pairs reach the relator LLM, which makes the real accept/decline
+ * judgment. The old raw 0.30 sat ~0.28 below the bge-m3 pairwise
+ * mean; the centered floor keeps the same looseness.
  */
-const PAIR_RELATE_COSINE_FLOOR = 0.3;
+const PAIR_RELATE_COSINE_FLOOR = -0.2;
 
 /**
  * Pair-relate probe: seed on the longest-unseeded embedded observation
@@ -1122,6 +1212,12 @@ async function ensureTier1Headroom(
  * ask the minter, embed, dedup-guard against the existing corpus,
  * insert with provenance. The INSERT doubles as the toast signal via
  * the realtime relay.
+ *
+ * Register split inside this probe: the cluster builder compares
+ * OBSERVATIONS (substrate mean), the dedup guard compares a minted
+ * CLAIM against existing claims (claim mean, centered server-side by
+ * samskara_nearest_by_prediction). The two registers carry different
+ * shared components; see fetchCenteringMean.
  */
 async function mintTier1Probe(
   admin: SupabaseClient,
@@ -1132,7 +1228,8 @@ async function mintTier1Probe(
   if (!(await ensureTier1Headroom(admin, userId, log, 'mint-tier1'))) return;
   const recent = await recentEmbeddedSubstrate(admin, userId, MINT_WINDOW);
   if (recent.length < MINT_CLUSTER_MIN) return;
-  const clusterRows = buildTopicalCluster(recent);
+  const mean = await fetchCenteringMean(admin, userId, 'substrate');
+  const clusterRows = buildTopicalCluster(recent, mean);
   if (clusterRows.length < MINT_CLUSTER_MIN) {
     log.trace('mint-tier1: no coherent cluster', {
       fetched: recent.length,
@@ -1835,6 +1932,10 @@ export async function runSamskaraSweepTick(
   for (const userId of users) {
     const log = createEdgeLogger(userId, 'samskara');
     try {
+      // Keep the corpus mean current before anything compares vectors:
+      // every similarity dial in the pipeline is calibrated on the
+      // centered scale this row defines (see samskara_centering).
+      await refreshCentering(adminClient, userId, log);
       await runPhase(log, 'pair-relate', () =>
         pairRelateProbe(adminClient, userId, log, apiKey),
       );
@@ -1883,14 +1984,15 @@ export const __test = {
   SWEEP_ASSIMILATE_CAP,
   MINT_DEDUP_COSINE,
   MINT_CLUSTER_COSINE_FLOOR,
+  PAIR_RELATE_COSINE_FLOOR,
   MINT_CLUSTER_MAX,
   MINT_CLUSTER_MIN,
   TIER1_POPULATION_CAP,
   ASSOC_HUBS_PER_TICK,
-  PAIR_RELATE_COSINE_FLOOR,
   buildTopicalCluster,
   buildAssociationCluster,
   cosine,
+  subtractVector,
   doubtForAssimilation,
   isCleanSummaryParagraph,
   parseVector,

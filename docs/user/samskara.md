@@ -100,7 +100,10 @@ Browse, search, filter, and sort every instinct Nak has formed:
 - **Sort** by newest, strongest, most-fired, or recently-fired.
 - **Hide similar** folds near-duplicate instincts under one
   representative; the slider controls how aggressively, and a line under
-  it shows how many remain after folding.
+  it shows how many remain after folding. The slider can dip below
+  zero: 1.0 means "identical", 0 means "unrelated as different
+  topics", and negative values fold claims the corpus sits between -
+  useful when you want only the truly distinct instincts to show.
 
 Click any row to see its detail - confidence, health, how often it has
 fired, how often those fires genuinely engaged (the **engagement** stat),

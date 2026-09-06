@@ -1,0 +1,500 @@
+{
+ "_meta": {
+  "what": "Hand-labeled samskara similarity probe set: 80 claim pairs sampled stratified across the centered claim-pair similarity range, each labeled into one of four classes.",
+  "sampled": "2026-09-05 from the prod corpus (104 survivor claims, post threshold-collapse; survivorship-biased toward low similarity - re-sample on rotation)",
+  "embedded_with": "gte-small (384-dim, Supabase.ai.Session), padded to 2048 storage dims",
+  "scored_under": "CLAIM-mean centering: both prediction vectors normalized, the mean of all 104 claim vectors subtracted, renormalized; sim = centered cosine. The claim-space bars (MINT_DEDUP_COSINE 0.50, collapse 0.30/0.40, tier-2 band [0.10, 0.35)) are solved on THIS scale. Centering claims with the substrate mean instead is a different scale - measured NN median 0.648 vs 0.404 here.",
+  "sampling": "Stratified random (seed 42) over centered-similarity bands [0.40,1.01)x25, [0.15,0.40)x25, [-0.05,0.15)x15, [-1.01,-0.05)x15",
+  "labeler": "operator (Jeff), reading both claim texts per pair",
+  "labels": "duplicate = same predictive claim, a rewording; same-topic = shared domain and strongly overlapping behavior, not interchangeable; related = shared theme/register, distinct behavior; unrelated = neither",
+  "measured_auc": {
+   "duplicate_vs_everything_else": 0.837,
+   "related_vs_unrelated": 0.912,
+   "dup_plus_same_topic_vs_unrelated": 1.0,
+   "duplicate_vs_same_topic": 0.531
+  },
+  "on_rotation": "re-embed the pair texts, re-center with the new claim mean, re-score, re-derive the bars (see docs/dev/samskara.md \"Similarity calibration\")"
+ },
+ "pairs": [
+  {
+   "label": "same-topic",
+   "sim_claim_mean": 0.4099,
+   "pred_a": "In culinary situations, this user tends to prioritize traditional, high-quality ingredients and techniques, often with a focus on practicality and self-sufficiency, while expressing concern about modern shortcuts and their impact on food quality.",
+   "pred_b": "In culinary situations, this user tends to focus on practical problem-solving and technical mastery, often seeking ways to optimize processes and maintain equipment."
+  },
+  {
+   "label": "same-topic",
+   "sim_claim_mean": 0.4641,
+   "pred_a": "In culinary discussions, this user tends to prioritize traditional, artisanal, or health-conscious food preparation methods, often with a focus on texture, fermentation, and the use of specific grains, while also valuing practical kitchenware maintenance.",
+   "pred_b": "In situations involving food or cooking, this user tends to ask detailed, technical questions about ingredients and their properties, often with a focus on grains and their historical or functional roles."
+  },
+  {
+   "label": "same-topic",
+   "sim_claim_mean": 0.4284,
+   "pred_a": "In culinary and baking contexts, this user tends to focus on the scientific and historical aspects of fermentation, grain selection, and dough chemistry, with a strong preference for precision and depth in discussions.",
+   "pred_b": "In culinary discussions, this user tends to prioritize traditional, artisanal, or health-conscious food preparation methods, often with a focus on texture, fermentation, and the use of specific grains, while also valuing practical kitchenware maintenance."
+  },
+  {
+   "label": "same-topic",
+   "sim_claim_mean": 0.4568,
+   "pred_a": "In culinary contexts, this user tends to approach food preparation with a blend of practicality and scientific curiosity, seeking both efficiency and nuanced flavor enhancements.",
+   "pred_b": "In culinary and baking contexts, this user tends to approach food with a scientific and health-conscious mindset, focusing on the nutritional and fermentation properties of grains, and often experimenting with unique combinations and techniques to optimize taste and health benefits."
+  },
+  {
+   "label": "related",
+   "sim_claim_mean": 0.4018,
+   "pred_a": "In situations involving food, dining, or job opportunities, this user tends to prioritize practicality, specificity, and personal relevance, often seeking detailed and accurate information that aligns with their health needs and preferences.",
+   "pred_b": "In culinary situations, this user tends to prioritize personal and family preferences, practicality, and subtle flavor nuances."
+  },
+  {
+   "label": "same-topic",
+   "sim_claim_mean": 0.4973,
+   "pred_a": "In situations involving parenting and relationship dynamics, this user tends to seek validation and practical strategies for navigating conflicts and fostering responsibility in their children.",
+   "pred_b": "In situations involving parenting challenges, this user tends to seek empathetic guidance and understanding, particularly around emotional pain and behavioral issues with their daughter."
+  },
+  {
+   "label": "duplicate",
+   "sim_claim_mean": 0.4282,
+   "pred_a": "In diverse situations, this user tends to seek authenticity and personal relevance, often gravitating towards niche interests and detailed, specific information that aligns with their unique experiences and values.",
+   "pred_b": "In situations requiring self-expression or engagement, this user tends to seek authenticity and personal relevance, often challenging norms or conventions that feel disconnected from their experiences or values."
+  },
+  {
+   "label": "same-topic",
+   "sim_claim_mean": 0.5214,
+   "pred_a": "In culinary discussions, this user tends to prioritize historical and nutritional aspects, particularly when it comes to ancient grains and their traditional uses.",
+   "pred_b": "In culinary discussions, this user tends to advocate for traditional, nutrient-dense, and often fermented whole-grain alternatives, with a focus on health benefits and a playful, sometimes critical, tone."
+  },
+  {
+   "label": "duplicate",
+   "sim_claim_mean": 0.5296,
+   "pred_a": "In culinary discussions, this user tends to prioritize historical and nutritional aspects, particularly when it comes to ancient grains and their traditional uses.",
+   "pred_b": "In culinary and baking contexts, this user tends to focus on the scientific and historical aspects of fermentation, grain selection, and dough chemistry, with a strong preference for precision and depth in discussions."
+  },
+  {
+   "label": "same-topic",
+   "sim_claim_mean": 0.53,
+   "pred_a": "In culinary discussions, this user tends to prioritize traditional, artisanal, or health-conscious food preparation methods, often with a focus on texture, fermentation, and the use of specific grains, while also valuing practical kitchenware maintenance.",
+   "pred_b": "In culinary and baking contexts, this user tends to approach food with a scientific and health-conscious mindset, focusing on the nutritional and fermentation properties of grains, and often experimenting with unique combinations and techniques to optimize taste and health benefits."
+  },
+  {
+   "label": "same-topic",
+   "sim_claim_mean": 0.4515,
+   "pred_a": "In situations involving food or cooking, this user tends to ask detailed, technical questions about ingredients and their properties, often with a focus on grains and their historical or functional roles.",
+   "pred_b": "In culinary and baking contexts, this user tends to approach food with a scientific and health-conscious mindset, focusing on the nutritional and fermentation properties of grains, and often experimenting with unique combinations and techniques to optimize taste and health benefits."
+  },
+  {
+   "label": "related",
+   "sim_claim_mean": 0.4134,
+   "pred_a": "In complex or technical discussions, this user tends to anchor their understanding in specific, detailed references and seeks to dissect underlying mechanisms, while being wary of overly verbose or convoluted explanations.",
+   "pred_b": "In complex or technical discussions, this user tends to seek clarity and precision, often using humor or pop culture references to navigate overwhelming details or tense topics."
+  },
+  {
+   "label": "duplicate",
+   "sim_claim_mean": 0.5184,
+   "pred_a": "In situations requiring immediate engagement or tangible outcomes, this user tends to prioritize efficiency and directness, often expressing frustration with delays or indirect approaches.",
+   "pred_b": "In situations requiring patience or delayed gratification, this user tends to feel frustrated and seeks immediate solutions or validation."
+  },
+  {
+   "label": "same-topic",
+   "sim_claim_mean": 0.4211,
+   "pred_a": "In culinary discussions, this user tends to prioritize historical and nutritional aspects, particularly when it comes to ancient grains and their traditional uses.",
+   "pred_b": "In culinary and baking contexts, this user tends to approach food with a scientific and health-conscious mindset, focusing on the nutritional and fermentation properties of grains, and often experimenting with unique combinations and techniques to optimize taste and health benefits."
+  },
+  {
+   "label": "same-topic",
+   "sim_claim_mean": 0.5082,
+   "pred_a": "In culinary and baking contexts, this user tends to focus on the scientific and historical aspects of fermentation, grain selection, and dough chemistry, with a strong preference for precision and depth in discussions.",
+   "pred_b": "In situations involving food or cooking, this user tends to ask detailed, technical questions about ingredients and their properties, often with a focus on grains and their historical or functional roles."
+  },
+  {
+   "label": "same-topic",
+   "sim_claim_mean": 0.4574,
+   "pred_a": "In interactions with AI systems, this user tends to prioritize technical robustness, practical utility, and cultural sensitivity, while being skeptical of overly reassuring or biased responses.",
+   "pred_b": "In situations requiring information processing, this user tends to favor precision and skepticism, seeking clarity and technical depth while being wary of superficial or overly reassuring responses."
+  },
+  {
+   "label": "duplicate",
+   "sim_claim_mean": 0.5993,
+   "pred_a": "In culinary and baking contexts, this user tends to focus on the scientific and historical aspects of fermentation, grain selection, and dough chemistry, with a strong preference for precision and depth in discussions.",
+   "pred_b": "In baking and bread-making contexts, this user tends to engage deeply with the technical and traditional aspects, often contrasting modern practices with superior artisanal or historical methods, while seeking detailed scientific insights and corrections."
+  },
+  {
+   "label": "related",
+   "sim_claim_mean": 0.4298,
+   "pred_a": "In situations involving pork preparation, this user tends to seek detailed, practical advice tailored to their specific ingredients and cooking setup, with a focus on maximizing flavor and texture.",
+   "pred_b": "In culinary contexts, this user tends to approach food preparation with a blend of practicality and scientific curiosity, seeking both efficiency and nuanced flavor enhancements."
+  },
+  {
+   "label": "duplicate",
+   "sim_claim_mean": 0.4278,
+   "pred_a": "In complex or technical discussions, this user tends to anchor their understanding in specific, detailed references and seeks to dissect underlying mechanisms, while being wary of overly verbose or convoluted explanations.",
+   "pred_b": "In complex or ambiguous situations, this user tends to dissect and analyze underlying structures and mechanisms, often with a critical eye toward potential biases or inefficiencies, while also being introspective about their own reactions and preferences."
+  },
+  {
+   "label": "duplicate",
+   "sim_claim_mean": 0.4031,
+   "pred_a": "In creative and cultural discussions, this user tends to engage deeply with the themes, personal connections, and craftsmanship, often referencing specific works and sharing their unique perspective.",
+   "pred_b": "In situations involving hobbies or interests, this user tends to share specific, detailed preferences and references to deep-cut media or products."
+  },
+  {
+   "label": "same-topic",
+   "sim_claim_mean": 0.4624,
+   "pred_a": "In situations involving food, dining, or job opportunities, this user tends to prioritize practicality, specificity, and personal relevance, often seeking detailed and accurate information that aligns with their health needs and preferences.",
+   "pred_b": "In job-seeking situations, this user tends to prioritize opportunities that align with their personal constraints and immediate needs, particularly favoring local, part-time roles with clear and current information."
+  },
+  {
+   "label": "duplicate",
+   "sim_claim_mean": 0.5921,
+   "pred_a": "In culinary discussions, this user tends to prioritize historical and nutritional aspects, particularly when it comes to ancient grains and their traditional uses.",
+   "pred_b": "In situations involving food or cooking, this user tends to ask detailed, technical questions about ingredients and their properties, often with a focus on grains and their historical or functional roles."
+  },
+  {
+   "label": "same-topic",
+   "sim_claim_mean": 0.4567,
+   "pred_a": "In situations involving parenting and relationship dynamics, this user tends to seek validation and practical strategies for navigating conflicts and fostering responsibility in their children.",
+   "pred_b": "In situations involving family conflicts or personal dilemmas, this user tends to seek advice and weigh emotional and practical considerations carefully."
+  },
+  {
+   "label": "duplicate",
+   "sim_claim_mean": 0.4085,
+   "pred_a": "In situations involving baking or food discussions, this user tends to approach the topic with a blend of technical curiosity, a preference for traditional or high-quality ingredients, and a playful or expressive communication style.",
+   "pred_b": "In culinary and baking contexts, this user tends to advocate for traditional, nutrient-dense, and technically precise approaches, often emphasizing health benefits and critiquing modern industrial practices with humor and detailed analysis."
+  },
+  {
+   "label": "duplicate",
+   "sim_claim_mean": 0.4758,
+   "pred_a": "In casual interactions, this user tends to test the AI's responsiveness and seeks friendly, engaging exchanges.",
+   "pred_b": "In initial interactions with AI assistants, this user tends to send short test messages like 'Mic check' or '?' and probe tools like web search to verify setup and functionality."
+  },
+  {
+   "label": "related",
+   "sim_claim_mean": 0.1719,
+   "pred_a": "In situations requiring immediate engagement or tangible outcomes, this user tends to prioritize efficiency and directness, often expressing frustration with delays or indirect approaches.",
+   "pred_b": "In situations requiring self-expression or engagement, this user tends to seek authenticity and personal relevance, often challenging norms or conventions that feel disconnected from their experiences or values."
+  },
+  {
+   "label": "duplicate",
+   "sim_claim_mean": 0.2972,
+   "pred_a": "In baking and kitchen-related situations, this user tends to approach topics with a scientific and practical mindset, seeking to understand underlying principles and effective solutions.",
+   "pred_b": "In culinary contexts, this user tends to approach food preparation with a blend of practicality and scientific curiosity, seeking both efficiency and nuanced flavor enhancements."
+  },
+  {
+   "label": "same-topic",
+   "sim_claim_mean": 0.396,
+   "pred_a": "In discussions about food, this user tends to analyze and advocate for traditional, health-conscious, and ADHD-friendly ingredients and methods, often with humor and a focus on precision and sufficiency.",
+   "pred_b": "In culinary and baking contexts, this user tends to approach food with a scientific and health-conscious mindset, focusing on the nutritional and fermentation properties of grains, and often experimenting with unique combinations and techniques to optimize taste and health benefits."
+  },
+  {
+   "label": "duplicate",
+   "sim_claim_mean": 0.2549,
+   "pred_a": "In situations involving practical or intellectual pursuits, this user tends to focus on specific, actionable details and seeks to understand or clarify the underlying principles, often with a mix of gratitude and mild frustration when things are not straightforward.",
+   "pred_b": "In situations requiring information or problem-solving, this user tends to seek precise, up-to-date details and express gratitude when solutions are found, while also being open to correcting assumptions and exploring deeper connections in topics of interest."
+  },
+  {
+   "label": "same-topic",
+   "sim_claim_mean": 0.3585,
+   "pred_a": "In situations involving baking or food discussions, this user tends to approach the topic with a blend of technical curiosity, a preference for traditional or high-quality ingredients, and a playful or expressive communication style.",
+   "pred_b": "In culinary and baking contexts, this user tends to approach food with a scientific and health-conscious mindset, focusing on the nutritional and fermentation properties of grains, and often experimenting with unique combinations and techniques to optimize taste and health benefits."
+  },
+  {
+   "label": "related",
+   "sim_claim_mean": 0.2489,
+   "pred_a": "In complex or technical discussions, this user tends to rely on analogies from science fiction to simplify or critique the topic, while also being wary of overly simplistic or biased explanations.",
+   "pred_b": "In complex or ambiguous situations, this user tends to dissect and analyze underlying structures and mechanisms, often with a critical eye toward potential biases or inefficiencies, while also being introspective about their own reactions and preferences."
+  },
+  {
+   "label": "related",
+   "sim_claim_mean": 0.2198,
+   "pred_a": "In baking and bread-making contexts, this user tends to engage deeply with the technical and traditional aspects, often contrasting modern practices with superior artisanal or historical methods, while seeking detailed scientific insights and corrections.",
+   "pred_b": "In culinary contexts, this user tends to approach food preparation with a blend of practicality and scientific curiosity, seeking both efficiency and nuanced flavor enhancements."
+  },
+  {
+   "label": "same-topic",
+   "sim_claim_mean": 0.2386,
+   "pred_a": "In technical and development scenarios, this user tends to prioritize practical, efficient solutions with a focus on advanced integration, self-hosted control, and mature technologies, often exploring workarounds to achieve their goals.",
+   "pred_b": "In complex or technical situations, this user tends to approach problems with a combination of strategic analogy, persistent troubleshooting, and a preference for hands-on exploration of unconventional solutions."
+  },
+  {
+   "label": "related",
+   "sim_claim_mean": 0.1657,
+   "pred_a": "In situations involving technical, historical, or culinary topics, this user tends to seek detailed, precise information and challenge assumptions to deepen their understanding.",
+   "pred_b": "In situations requiring information or problem-solving, this user tends to seek precise, up-to-date details and express gratitude when solutions are found, while also being open to correcting assumptions and exploring deeper connections in topics of interest."
+  },
+  {
+   "label": "related",
+   "sim_claim_mean": 0.1726,
+   "pred_a": "In situations requiring analysis or decision-making, this user tends to blend practical, scientific, and strategic perspectives, often drawing on specific references and questioning conventional wisdom.",
+   "pred_b": "In complex or ambiguous situations, this user tends to dissect and analyze underlying structures and mechanisms, often with a critical eye toward potential biases or inefficiencies, while also being introspective about their own reactions and preferences."
+  },
+  {
+   "label": "related",
+   "sim_claim_mean": 0.2719,
+   "pred_a": "In situations where the user discusses AI models, they tend to focus on specific capabilities like coding, baking, and research, and compare models based on reliability and factual accuracy.",
+   "pred_b": "In initial interactions with AI assistants, this user tends to send short test messages like 'Mic check' or '?' and probe tools like web search to verify setup and functionality."
+  },
+  {
+   "label": "related",
+   "sim_claim_mean": 0.2832,
+   "pred_a": "In situations involving personal and professional transitions, this user tends to seek clarity and stability, often expressing both concerns and personal experiences to navigate uncertainty.",
+   "pred_b": "In situations requiring self-expression or engagement, this user tends to seek authenticity and personal relevance, often challenging norms or conventions that feel disconnected from their experiences or values."
+  },
+  {
+   "label": "same-topic",
+   "sim_claim_mean": 0.3797,
+   "pred_a": "In recipe adjustments, this user tends to focus on precise hydration details, often involving water addition or reservation.",
+   "pred_b": "In situations involving recipe adjustments, this user tends to seek guidance and positively reinforces successful changes."
+  },
+  {
+   "label": "related",
+   "sim_claim_mean": 0.1953,
+   "pred_a": "In situations involving practical or intellectual pursuits, this user tends to focus on specific, actionable details and seeks to understand or clarify the underlying principles, often with a mix of gratitude and mild frustration when things are not straightforward.",
+   "pred_b": "In situations where the user encounters obstacles or uncertainties, they tend to seek immediate, practical solutions and express frustration when faced with delays or lack of clarity, while also questioning underlying motives or biases."
+  },
+  {
+   "label": "related",
+   "sim_claim_mean": 0.2635,
+   "pred_a": "In situations where the user shares their culinary achievements, they tend to express enthusiasm and seek acknowledgment of their effort and satisfaction.",
+   "pred_b": "In discussions about food, this user tends to analyze and advocate for traditional, health-conscious, and ADHD-friendly ingredients and methods, often with humor and a focus on precision and sufficiency."
+  },
+  {
+   "label": "related",
+   "sim_claim_mean": 0.1543,
+   "pred_a": "In interactions with systems or people, this user tends to probe for authenticity, practical utility, and alignment with their subjective experience, often expressing frustration when expectations are not met.",
+   "pred_b": "In casual interactions, this user tends to test the AI's responsiveness and seeks friendly, engaging exchanges."
+  },
+  {
+   "label": "related",
+   "sim_claim_mean": 0.2264,
+   "pred_a": "In situations requiring decision-making or understanding, this user tends to approach with a blend of curiosity, practicality, and self-awareness, seeking to balance personal comfort, factual accuracy, and the needs of those around them.",
+   "pred_b": "In situations requiring information processing, this user tends to favor precision and skepticism, seeking clarity and technical depth while being wary of superficial or overly reassuring responses."
+  },
+  {
+   "label": "duplicate",
+   "sim_claim_mean": 0.213,
+   "pred_a": "In technical and development scenarios, this user tends to prioritize practical, efficient solutions with a focus on advanced integration, self-hosted control, and mature technologies, often exploring workarounds to achieve their goals.",
+   "pred_b": "In technical and strategic discussions, this user tends to blend speculative fiction analogies with rigorous, experience-driven validation, favoring practical, self-hosted solutions and mature technologies, while exploring unconventional integrations and workarounds."
+  },
+  {
+   "label": "related",
+   "sim_claim_mean": 0.1723,
+   "pred_a": "In situations involving pork preparation, this user tends to seek detailed, practical advice tailored to their specific ingredients and cooking setup, with a focus on maximizing flavor and texture.",
+   "pred_b": "In culinary discussions, this user tends to advocate for traditional, nutrient-dense, and often fermented whole-grain alternatives, with a focus on health benefits and a playful, sometimes critical, tone."
+  },
+  {
+   "label": "related",
+   "sim_claim_mean": 0.1506,
+   "pred_a": "In situations where the user needs to set up or authenticate a Slack MCP server, they tend to seek detailed, step-by-step guidance without specific constraints, and may require support to perform actions they lack access to.",
+   "pred_b": "In hands-on technical and everyday exchanges alike, this user is a pragmatic, control-minded builder who wants direct, specific, fluff-free answers, prefers proven self-hosted tools, and will probe unofficial workarounds to make things actually work."
+  },
+  {
+   "label": "related",
+   "sim_claim_mean": 0.2188,
+   "pred_a": "In situations where the user needs to set up or authenticate a Slack MCP server, they tend to seek detailed, step-by-step guidance without specific constraints, and may require support to perform actions they lack access to.",
+   "pred_b": "In situations where the user encounters obstacles or uncertainties, they tend to seek immediate, practical solutions and express frustration when faced with delays or lack of clarity, while also questioning underlying motives or biases."
+  },
+  {
+   "label": "related",
+   "sim_claim_mean": 0.248,
+   "pred_a": "In situations involving family conflicts or personal dilemmas, this user tends to seek advice and weigh emotional and practical considerations carefully.",
+   "pred_b": "In situations requiring problem-solving or decision-making, this user tends to approach tasks with a methodical and detail-oriented mindset, balancing technical precision with personal and practical considerations."
+  },
+  {
+   "label": "related",
+   "sim_claim_mean": 0.1983,
+   "pred_a": "In situations involving recipe adjustments, this user tends to seek guidance and positively reinforces successful changes.",
+   "pred_b": "In culinary and baking contexts, this user tends to approach food with a scientific and health-conscious mindset, focusing on the nutritional and fermentation properties of grains, and often experimenting with unique combinations and techniques to optimize taste and health benefits."
+  },
+  {
+   "label": "same-topic",
+   "sim_claim_mean": 0.2973,
+   "pred_a": "In baking discussions, this user tends to correct and refine techniques, particularly around tangzhong and scald methods, with a focus on achieving specific textures and moisture levels.",
+   "pred_b": "In situations involving baking and fermentation, this user tends to share detailed, nuanced observations and seeks precise, context-aware feedback or modifications."
+  },
+  {
+   "label": "related",
+   "sim_claim_mean": 0.1877,
+   "pred_a": "In diverse situations, this user tends to approach challenges with a blend of analytical rigor and practical problem-solving, often seeking to understand and address root causes while maintaining a focus on personal growth and specific preferences.",
+   "pred_b": "In situations requiring decision-making or personal reflection, this user tends to blend critical thinking, practical experimentation, and personal or cultural context to arrive at well-considered outcomes."
+  },
+  {
+   "label": "unrelated",
+   "sim_claim_mean": -0.0147,
+   "pred_a": "In interactions with AI systems, this user tends to prioritize technical robustness, practical utility, and cultural sensitivity, while being skeptical of overly reassuring or biased responses.",
+   "pred_b": "In situations involving practical or intellectual pursuits, this user tends to focus on specific, actionable details and seeks to understand or clarify the underlying principles, often with a mix of gratitude and mild frustration when things are not straightforward."
+  },
+  {
+   "label": "unrelated",
+   "sim_claim_mean": 0.0577,
+   "pred_a": "In situations requiring decision-making or personal reflection, this user tends to blend critical thinking, practical experimentation, and personal or cultural context to arrive at well-considered outcomes.",
+   "pred_b": "In situations requiring analysis or decision-making, this user tends to prefer concise, practical information and becomes frustrated with overly detailed or irrelevant content, often drawing on specific literary references to illustrate their points."
+  },
+  {
+   "label": "related",
+   "sim_claim_mean": 0.1233,
+   "pred_a": "In situations involving traditional or historical remedies, this user tends to seek detailed, practical explanations and examples.",
+   "pred_b": "In situations involving food or cooking, this user tends to ask detailed, technical questions about ingredients and their properties, often with a focus on grains and their historical or functional roles."
+  },
+  {
+   "label": "related",
+   "sim_claim_mean": 0.1406,
+   "pred_a": "In situations involving wildfires, this user tends to seek detailed, scientific explanations for the physical and chemical processes involved.",
+   "pred_b": "In situations requiring analysis, this user tends to focus on underlying mechanisms, biases, and technical details, seeking nuanced explanations that go beyond surface-level observations."
+  },
+  {
+   "label": "unrelated",
+   "sim_claim_mean": 0.0522,
+   "pred_a": "In discussions about speculative fiction, this user tends to focus on the importance of rules and constraints in magical systems to maintain narrative integrity.",
+   "pred_b": "In situations requiring analysis or decision-making, this user tends to prefer concise, practical information and becomes frustrated with overly detailed or irrelevant content, often drawing on specific literary references to illustrate their points."
+  },
+  {
+   "label": "unrelated",
+   "sim_claim_mean": -0.0288,
+   "pred_a": "In recipe adjustments, this user tends to focus on precise hydration details, often involving water addition or reservation.",
+   "pred_b": "In initial interactions with AI assistants, this user tends to send short test messages like 'Mic check' or '?' and probe tools like web search to verify setup and functionality."
+  },
+  {
+   "label": "related",
+   "sim_claim_mean": -0.0156,
+   "pred_a": "In situations requiring information or problem-solving, this user tends to seek precise, up-to-date details and express gratitude when solutions are found, while also being open to correcting assumptions and exploring deeper connections in topics of interest.",
+   "pred_b": "In baking and kitchen-related situations, this user tends to approach topics with a scientific and practical mindset, seeking to understand underlying principles and effective solutions."
+  },
+  {
+   "label": "related",
+   "sim_claim_mean": 0.0197,
+   "pred_a": "In baking discussions, this user tends to correct and refine techniques, particularly around tangzhong and scald methods, with a focus on achieving specific textures and moisture levels.",
+   "pred_b": "In culinary situations, this user tends to prioritize personal and family preferences, practicality, and subtle flavor nuances."
+  },
+  {
+   "label": "unrelated",
+   "sim_claim_mean": -0.0488,
+   "pred_a": "In interactions with AI, this user tends to balance technical scrutiny with philosophical reflection, probing both the mechanics and the ethical implications of the system's behavior.",
+   "pred_b": "In situations involving hobbies or interests, this user tends to share specific, detailed preferences and references to deep-cut media or products."
+  },
+  {
+   "label": "related",
+   "sim_claim_mean": 0.0122,
+   "pred_a": "In situations requiring synthesis of knowledge, this user tends to blend scientific curiosity with personal experience, seeking to reconcile new information with their own evolving understanding.",
+   "pred_b": "In situations requiring analysis, this user tends to focus on underlying mechanisms, biases, and technical details, seeking nuanced explanations that go beyond surface-level observations."
+  },
+  {
+   "label": "same-topic",
+   "sim_claim_mean": 0.1134,
+   "pred_a": "In technical and strategic contexts, this user tends to favor practical, well-established solutions and seeks to deeply understand and optimize systems, often drawing on specific references and step-by-step guidance.",
+   "pred_b": "In situations requiring problem-solving or decision-making, this user tends to approach tasks with a methodical and detail-oriented mindset, balancing technical precision with personal and practical considerations."
+  },
+  {
+   "label": "unrelated",
+   "sim_claim_mean": 0.0896,
+   "pred_a": "In baking and kitchen-related situations, this user tends to approach topics with a scientific and practical mindset, seeking to understand underlying principles and effective solutions.",
+   "pred_b": "In situations where the user seeks AI assistance, they tend to prioritize critical feedback and practical guidance over emotional validation, especially in domains like cooking, baking, and social interactions."
+  },
+  {
+   "label": "unrelated",
+   "sim_claim_mean": 0.009,
+   "pred_a": "In discussions about manga, this user tends to seek clarification on genres and terms, and often follows up with deeper critiques of gender roles and content representation.",
+   "pred_b": "In situations involving food or cooking, this user tends to ask detailed, technical questions about ingredients and their properties, often with a focus on grains and their historical or functional roles."
+  },
+  {
+   "label": "unrelated",
+   "sim_claim_mean": 0.0751,
+   "pred_a": "In casual interactions, this user tends to test the AI's responsiveness and seeks friendly, engaging exchanges.",
+   "pred_b": "In diverse situations, this user tends to seek authentic, personalized, and nuanced approaches that align with their unique perspectives and values, often blending introspection, specificity, and humor."
+  },
+  {
+   "label": "unrelated",
+   "sim_claim_mean": -0.0345,
+   "pred_a": "In situations involving parenting challenges, this user tends to seek empathetic guidance and understanding, particularly around emotional pain and behavioral issues with their daughter.",
+   "pred_b": "In casual interactions, this user tends to test the AI's responsiveness and seeks friendly, engaging exchanges."
+  },
+  {
+   "label": "unrelated",
+   "sim_claim_mean": -0.1468,
+   "pred_a": "In situations involving traditional or historical remedies, this user tends to seek detailed, practical explanations and examples.",
+   "pred_b": "In situations involving baking and fermentation, this user tends to share detailed, nuanced observations and seeks precise, context-aware feedback or modifications."
+  },
+  {
+   "label": "unrelated",
+   "sim_claim_mean": -0.052,
+   "pred_a": "In situations involving recipe adjustments, this user tends to seek guidance and positively reinforces successful changes.",
+   "pred_b": "In diverse situations, this user tends to seek authentic, personalized, and nuanced approaches that align with their unique perspectives and values, often blending introspection, specificity, and humor."
+  },
+  {
+   "label": "unrelated",
+   "sim_claim_mean": -0.1375,
+   "pred_a": "In situations involving tech purchases or builds, this user tends to seek detailed product specifications and verification, especially for batteries and compatibility.",
+   "pred_b": "In culinary and baking contexts, this user tends to approach food with a scientific and health-conscious mindset, focusing on the nutritional and fermentation properties of grains, and often experimenting with unique combinations and techniques to optimize taste and health benefits."
+  },
+  {
+   "label": "unrelated",
+   "sim_claim_mean": -0.0822,
+   "pred_a": "In production incidents under time pressure (Fridays, pre-holidays), this user tends to ship pragmatic HACK workarounds and batched scripts to unblock fast rather than wait for clean fixes. Mid-mitigation, they also offload state to the assistant and tooling, expecting scripts and incident timelines to be retained on their behalf.",
+   "pred_b": "In discussions about cognitive processes, this user tends to link their personal experiences, especially from childhood, to their unique mental models and seeks validation for these perspectives."
+  },
+  {
+   "label": "unrelated",
+   "sim_claim_mean": -0.0583,
+   "pred_a": "In situations requiring decision-making or understanding, this user tends to approach with a blend of curiosity, practicality, and self-awareness, seeking to balance personal comfort, factual accuracy, and the needs of those around them.",
+   "pred_b": "In situations involving recipe adjustments, this user tends to seek guidance and positively reinforces successful changes."
+  },
+  {
+   "label": "related",
+   "sim_claim_mean": -0.058,
+   "pred_a": "In situations where the user discusses AI models, they tend to focus on specific capabilities like coding, baking, and research, and compare models based on reliability and factual accuracy.",
+   "pred_b": "In complex or technical discussions, this user tends to seek clarity and precision, often using humor or pop culture references to navigate overwhelming details or tense topics."
+  },
+  {
+   "label": "unrelated",
+   "sim_claim_mean": -0.0954,
+   "pred_a": "In situations involving sous vide cooking, this user tends to focus on practical challenges like sticking and seeks detailed, corrective advice.",
+   "pred_b": "In situations requiring information processing, this user tends to favor precision and skepticism, seeking clarity and technical depth while being wary of superficial or overly reassuring responses."
+  },
+  {
+   "label": "related",
+   "sim_claim_mean": -0.0995,
+   "pred_a": "In situations requiring synthesis of knowledge, this user tends to blend scientific curiosity with personal experience, seeking to reconcile new information with their own evolving understanding.",
+   "pred_b": "In diverse situations, this user tends to seek precision, whether in language, historical facts, or practical solutions, and values proactive, well-considered approaches that align with their specific tastes and safety concerns."
+  },
+  {
+   "label": "unrelated",
+   "sim_claim_mean": -0.1584,
+   "pred_a": "In technical situations, this user tends to seek detailed explanations and solutions, especially when dealing with version mismatches or configuration files.",
+   "pred_b": "In situations involving food or dining, this user tends to appreciate detailed and specific information about restaurants and recipes."
+  },
+  {
+   "label": "unrelated",
+   "sim_claim_mean": -0.1162,
+   "pred_a": "In situations involving social interactions or health decisions, this user tends to seek validation and reassurance to alleviate anxiety and ensure they are adhering to norms or safety guidelines.",
+   "pred_b": "In situations requiring analysis or decision-making, this user tends to prefer concise, practical information and becomes frustrated with overly detailed or irrelevant content, often drawing on specific literary references to illustrate their points."
+  },
+  {
+   "label": "unrelated",
+   "sim_claim_mean": -0.2206,
+   "pred_a": "In culinary discussions, this user tends to advocate for traditional, nutrient-dense, and often fermented whole-grain alternatives, with a focus on health benefits and a playful, sometimes critical, tone.",
+   "pred_b": "In initial interactions with AI assistants, this user tends to send short test messages like 'Mic check' or '?' and probe tools like web search to verify setup and functionality."
+  },
+  {
+   "label": "unrelated",
+   "sim_claim_mean": -0.1459,
+   "pred_a": "In technical situations, this user tends to seek detailed explanations and solutions, especially when dealing with version mismatches or configuration files.",
+   "pred_b": "In situations requiring self-expression or engagement, this user tends to seek authenticity and personal relevance, often challenging norms or conventions that feel disconnected from their experiences or values."
+  },
+  {
+   "label": "related",
+   "sim_claim_mean": -0.1211,
+   "pred_a": "In situations requiring decision-making or understanding, this user tends to approach with a blend of curiosity, practicality, and self-awareness, seeking to balance personal comfort, factual accuracy, and the needs of those around them.",
+   "pred_b": "In situations involving hardware upgrades or purchases, this user tends to focus on cost-effectiveness and future-proofing, often comparing the costs of upgrades versus new systems."
+  },
+  {
+   "label": "unrelated",
+   "sim_claim_mean": -0.1905,
+   "pred_a": "In situations involving food or cooking, this user tends to ask detailed, technical questions about ingredients and their properties, often with a focus on grains and their historical or functional roles.",
+   "pred_b": "In complex or detailed situations, this user tends to seek clarity and simplicity, often drawing on specific analogies or experiences to express their preferences and concerns."
+  },
+  {
+   "label": "unrelated",
+   "sim_claim_mean": -0.1121,
+   "pred_a": "In recipe adjustments, this user tends to focus on precise hydration details, often involving water addition or reservation.",
+   "pred_b": "In technical or strategic discussions, this user tends to blend serious analysis with pop culture references and reminders to maintain context, seeking both depth and engagement."
+  }
+ ]
+}
