@@ -921,7 +921,7 @@ async function assimilateClaimed(
     assistantMessageId: string | null;
   },
 ): Promise<void> {
-  log.info(`assimilate: claimed substrate ${claim.id} (thread ${claim.threadId})`);
+  log.trace(`assimilate: claimed substrate ${claim.id} (thread ${claim.threadId})`);
 
   const wantedIds = [claim.userMessageId, claim.assistantMessageId].filter(
     (id): id is string => typeof id === 'string',
@@ -996,7 +996,7 @@ async function assimilateClaimed(
   );
   if (saveErr) throw new Error(`assimilate: save failed: ${saveErr.message}`);
   if (saved === true) {
-    log.info(`assimilate: saved substrate ${claim.id}`);
+    log.trace(`assimilate: saved substrate ${claim.id}`);
   } else {
     log.debug('assimilate: save rejected (claim expired?)', { substrateId: claim.id });
   }
@@ -1141,7 +1141,7 @@ async function pairRelateProbe(
     return;
   }
   const reinforcement = typeof data === 'number' ? data : 1;
-  log.info(
+  log.debug(
     `pair-relate: associated ${aId} <> ${bId} (${result.kind}: ${shorten(result.label)}, reinforcement ${reinforcement})`,
   );
 }
@@ -1568,7 +1568,7 @@ async function mintTier2Probe(
     cofire_weight: number;
   }[];
   if (candidate.length < 3) return;
-  log.info(`mint-tier2: candidate group of ${candidate.length} tier-1 samskaras`);
+  log.debug(`mint-tier2: candidate group of ${candidate.length} tier-1 samskaras`);
 
   const minted = await agentMint(
     apiKey,
