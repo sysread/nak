@@ -8,6 +8,15 @@ describe('slopNoticeCopy', () => {
     expect(copy.detail).toMatch(/glitch token/i);
   });
 
+  it('returns the no-answer copy for the empty-completion re-roll', () => {
+    // Name mirrors EMPTY_COMPLETION_GUARD in the function's
+    // stream-guards.ts; the orchestrator sends it on the guard_retry
+    // signal when a round ends with reasoning but no answer.
+    const copy = slopNoticeCopy('empty-completion');
+    expect(copy.headline).toBe('oops, all thinking!');
+    expect(copy.detail).toMatch(/without answering/i);
+  });
+
   it('falls back to generic copy for an unregistered guard', () => {
     const copy = slopNoticeCopy('some-future-guard');
     expect(copy.headline).toBe('oops, all slop!');

@@ -22,6 +22,13 @@ const GUARD_COPY: Record<string, SlopNoticeCopy> = {
     headline: 'oops, all slop!',
     detail: 'The model leaked a glitch token instead of answering. Regenerating...',
   },
+  // Name mirrors EMPTY_COMPLETION_GUARD in
+  // supabase/functions/venice/stream-guards.ts: the orchestrator sends
+  // it when a round ends with reasoning but no answer and no tool call.
+  'empty-completion': {
+    headline: 'oops, all thinking!',
+    detail: 'The model thought it over and stopped without answering. Regenerating...',
+  },
 };
 
 const FALLBACK_COPY: SlopNoticeCopy = {

@@ -67,6 +67,12 @@ import { createBroadcastPublisher } from './broadcast.ts';
 import { getStreamingCompletion } from './getStreamingCompletion.ts';
 import { pruneEmptyAssistantRows } from './empty-rows.ts';
 import {
+  EMPTY_COMPLETION_GUARD,
+  isEmptyCompletion,
+  MAX_EMPTY_COMPLETION_REROLLS,
+  retryTemperatureBody,
+} from './stream-guards.ts';
+import {
   fetchRejectedFeatures,
   recordRejectedFeature,
   stripRejectedFeatures,
@@ -393,6 +399,10 @@ export async function getStreamingResponse(
   // but consumers also use the count for
   // exchange-level metrics).
   let roundsRun = 0;
+  // Empty-completion re-rolls spent this turn (see the check after the
+  // round's stream returns). Per turn, not per round: a model stuck on
+  // a prompt gets MAX_EMPTY_COMPLETION_REROLLS extra tries in total.
+  let emptyRerolls = 0;
   // Distinguishes "natural for-loop exhaustion" (round_limit hit)
   // from "broke out via tools-done / suspend / abort / error" (every
   // other exit). The for-loop's counter is hoisted to function scope
@@ -753,6 +763,52 @@ export async function getStreamingResponse(
         } else {
           terminalKind = 'aborted';
         }
+        break;
+      }
+
+      // Empty completion: the stream ended with no visible text and no
+      // tool call. The observed producer is a reasoning model that
+      // writes its answer inside the thinking channel and then stops
+      // (GLM 5.3 Flash: reasoning present, finish_reason=stop, content
+      // empty, three times in a row on one prompt). Nothing here is
+      // usable. Letting it fall through as 'completed' persists no row
+      // at all: the transcript's tail stays a bare user message, the
+      // browser paints a "cut off" card with nothing behind it, and a
+      // reload shows the same thing.
+      //
+      // Re-roll the same round with the guards' temperature bump. The
+      // browser gets the same guard_retry signal an output guard sends,
+      // so it clears its live bubble and drops the notice card. `round`
+      // is stepped back so the for-loop's increment re-enters this
+      // round: roundsRun and the MAX_ROUNDS budget are untouched. The
+      // bumped temperature stays on the body for the rest of the turn -
+      // once the model has stalled on this prompt the turn is in
+      // salvage mode anyway. Past the budget, fail the turn: the finally
+      // block preserves the last attempt's reasoning as a status='error'
+      // row, which the browser classifies as a reasoning-only stall and
+      // offers to retry.
+      if (isEmptyCompletion(accum.content, roundHadToolCalls)) {
+        if (emptyRerolls < MAX_EMPTY_COMPLETION_REROLLS) {
+          emptyRerolls += 1;
+          log.warn(
+            `${runId} round ${round} empty completion (finishReason=${roundFinishReason ?? 'null'} reasoningLen=${accum.reasoning.length}); re-rolling, attempt ${emptyRerolls}/${MAX_EMPTY_COMPLETION_REROLLS}`,
+          );
+          await publisher.publish({
+            type: 'guard_retry',
+            reason: EMPTY_COMPLETION_GUARD,
+          });
+          body = retryTemperatureBody(body, emptyRerolls);
+          accum.content = '';
+          accum.reasoning = '';
+          round -= 1;
+          continue roundLoop;
+        }
+        terminalKind = 'error';
+        terminalDetail = `empty completion after ${emptyRerolls + 1} attempts`;
+        lastErrorInput = { kind: 'guard_exhausted' };
+        log.error(
+          `${runId} round ${round} empty completion after ${emptyRerolls + 1} attempts (finishReason=${roundFinishReason ?? 'null'} reasoningLen=${accum.reasoning.length}); failing the turn`,
+        );
         break;
       }
 

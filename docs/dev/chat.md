@@ -377,6 +377,33 @@ A chat turn goes:
   (`ExchangeSlot.slopNotices`, copy from
   `src/lib/ui/slop-notice.ts`) that CRT-powers-off once the
   replacement persists.
+- **Empty-completion re-roll** - a round whose stream ends with
+  no visible text and no tool call is unusable whatever its
+  finish reason. The observed producer is a reasoning model that
+  writes its answer inside the thinking channel and stops (GLM
+  5.3 Flash: reasoning present, `finish_reason=stop`, content
+  empty, three times in a row on one prompt). This is NOT a
+  StreamGuard: the guard wrapper decides on the opening of an
+  attempt and buffers until it does, and emptiness is only known
+  once the stream ends - holding every reasoning delta back until
+  then would kill the live reasoning panel. So the orchestrator's
+  round loop makes the call after the stream returns
+  (`isEmptyCompletion` in `stream-guards.ts`): it publishes the
+  same `guard_retry` signal with reason `empty-completion` (the
+  browser clears its bubble and drops the "oops, all thinking!"
+  notice), bumps the temperature via the shared
+  `retryTemperatureBody` schedule, and re-enters the same round
+  (`round` is stepped back so `roundsRun` and the `MAX_ROUNDS`
+  budget are untouched; the bump stays on the body for the rest
+  of the turn). Budget is `MAX_EMPTY_COMPLETION_REROLLS` (2) per
+  turn; past it the turn fails with `kind: 'guard_exhausted'` and
+  the finally block preserves the last attempt's reasoning as a
+  `status='error'` row, which `classifyTail` reads as a
+  reasoning-only stall and offers to retry. Without this, an
+  empty completion fell through as `'completed'` with no row at
+  all: the transcript's tail stayed a bare user message and the
+  browser painted a "cut off" card with nothing behind it, on
+  reload too.
 - `MAX_ROUNDS = 24` - guardrail on runaway tool loops, enforced
   function-side in `getStreamingResponse`. When the round loop
   exhausts the budget without the model ever producing a terminal

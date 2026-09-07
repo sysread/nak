@@ -112,10 +112,61 @@ export function specialTokenLeakGuard(): StreamGuard {
       body: Record<string, unknown>,
       attempt: number,
     ): Record<string, unknown> {
-      const idx = Math.min(attempt - 1, RETRY_TEMPERATURE_SCHEDULE.length - 1);
-      return { ...body, temperature: RETRY_TEMPERATURE_SCHEDULE[idx] };
+      return retryTemperatureBody(body, attempt);
     },
   };
+}
+
+/**
+ * The wire body for re-roll `attempt` (1-based): the input with its
+ * temperature forced to the schedule entry for that attempt. Shared by
+ * the guards' prepareRetry hooks and the orchestrator's empty-completion
+ * re-roll so every salvage path walks the same schedule. Never mutates
+ * the input.
+ */
+export function retryTemperatureBody(
+  body: Record<string, unknown>,
+  attempt: number,
+): Record<string, unknown> {
+  const idx = Math.min(attempt - 1, RETRY_TEMPERATURE_SCHEDULE.length - 1);
+  return { ...body, temperature: RETRY_TEMPERATURE_SCHEDULE[idx] };
+}
+
+/**
+ * Name carried on the `guard_retry` signal when the orchestrator
+ * re-rolls an empty completion. Not a StreamGuard: the guard wrapper
+ * decides on the opening of an attempt and buffers events until it
+ * does, but emptiness is only known once the stream ENDS, and holding
+ * every reasoning delta back until then would kill the live reasoning
+ * panel. So the orchestrator's round loop makes this call after the
+ * stream returns and reuses the guard signal so the browser treats it
+ * like any other re-roll (clears its bubble, shows the notice card -
+ * see src/lib/ui/slop-notice.ts, which keys copy on this name).
+ */
+export const EMPTY_COMPLETION_GUARD = 'empty-completion';
+
+/**
+ * Re-rolls per TURN before an empty completion fails the turn. Two:
+ * the observed shape (GLM 5.3 Flash writing its answer inside the
+ * reasoning channel and stopping) recurred three times in a row on
+ * one prompt at the caller's temperature, so one bump is not enough
+ * evidence either way, while more than two on a model that is stuck
+ * on a prompt just burns reasoning budget the user watches spin.
+ */
+export const MAX_EMPTY_COMPLETION_REROLLS = 2;
+
+/**
+ * True when a completion ended with nothing the turn can use: no
+ * visible text and no tool call. Reasoning alone does not count as
+ * output - it is the thinking channel, not the answer, and a turn
+ * that persists only reasoning renders as a stall the user has to
+ * retry by hand. Whitespace-only text is empty too.
+ */
+export function isEmptyCompletion(
+  visibleText: string,
+  sawToolCall: boolean,
+): boolean {
+  return !sawToolCall && visibleText.trim().length === 0;
 }
 
 /**
