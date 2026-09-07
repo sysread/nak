@@ -64,6 +64,49 @@ what Nak remembered. Writes still need a deliberate user-or-model
 gate so an autonomous tool turn can't scribble over user data
 without intent.
 
+### TRIAL (2026-09-07): toolbox gating is OFF
+
+`TOOLBOX_GATING = false` in `src/lib/tools/index.ts`. Everything
+under "Toolbox model" above still describes the code, but the wire
+no longer gates: `buildToolList` declares every static toolbox and
+every connected MCP toolbox on every request and withdraws
+`toggle_toolbox`; `buildSystemPrompt` frames the catalog as plainly
+available (no toggle rule, no "enable the X toolbox" sentences, no
+per-turn `(on)`/`(off)` state block); the composer's toolbox button
+and popover are hidden. Nothing was deleted: `threads.toolboxes_enabled`,
+the server-side `toggle_tools.ts`, the mid-turn rearm in
+`getStreamingResponse.ts`, `buildToolsFromCatalog`, and the popover
+all stay in the tree, inert, so the revert is flipping the constant
+back to `true`. The tests pin BOTH modes (the builders take `gating`
+as a trailing parameter defaulting to the constant).
+
+Why: the gate keeps ambient tokens down, but the serving backend
+(GLM 5.3 Flash via Venice) holds the model to the declared tool
+list and silently DROPS a call to a tool the request did not
+declare. The forensics line from `streamFromVenice` showed it
+plainly: ~950 completion tokens spent, zero reasoning tokens, an
+empty role frame + an empty `finish_reason=stop` frame, three
+attempts in a row, on a turn whose surviving reasoning said "Do
+recipe_update with full cooklang" while the cooking toolbox was
+off. The system prompt lists every tool by name (deliberately, for
+the prefix cache), so the model knows the write exists and
+sometimes calls it without toggling first. Under the gate that is a
+failure the model cannot see and a temperature re-roll cannot fix.
+The empty-completion re-roll in `./chat.md` is the safety net; this
+trial removes the cause.
+
+Cost, measured 2026-09-07: before the trial the always-on set the
+gate shipped was ~40.5k chars (~10k tokens) and the 33 gated specs
+would have added ~49.5k (~12k). The activity-parameter description
+that rides on every tool was ~400 chars x 61 tools (~6k tokens) and
+is now ~100 chars. Net: the full declared set on the wire is ~72k
+chars (~18k tokens) for 60 tools, about +8k tokens per request over
+what the gate used to send. Prompt caching (Venice reports
+`cached_tokens`) absorbs the repeat within a conversation. Watch
+`prompt_tokens` on the usage epilogue; if the trial holds and the
+cost is acceptable, a follow-up session removes the gating code
+for real. If it does not, flip the constant.
+
 ### The always-on toolbox
 
 Notable members (the full ordered list is `alwaysOnToolbox` in

@@ -214,14 +214,13 @@ function recoverEscapesInString(s: string): string {
  */
 const ACTIVITY_PARAM_SCHEMA = {
   type: 'string',
+  // Terse on purpose: this string rides on EVERY tool the request
+  // declares (61 today), so each character here costs 61x per request.
+  // The examples and the UI rationale live once, in the system prompt's
+  // activity block (src/lib/chat/system-prompt.ts ACTIVITY_BLOCK).
   description:
-    'REQUIRED. One short present-tense sentence, addressed to the user, ' +
-    'narrating what you are doing with this specific call - e.g. ' +
-    '"Searching your memories for notes about the dishwasher", ' +
-    '"Saving that pancake recipe to your cookbook". Keep it under ' +
-    '100 characters. Surfaced prominently in the UI above the tool ' +
-    "name so the user can see what's happening without opening the " +
-    'call details.',
+    'One short present-tense sentence, addressed to the user, saying ' +
+    'what this call does. Under 100 characters.',
 } as const;
 
 /**

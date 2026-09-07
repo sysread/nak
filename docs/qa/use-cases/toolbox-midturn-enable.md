@@ -89,3 +89,4 @@ threads from the drawer.
 | Date | Env | Commit | Result | Notes |
 |---|---|---|---|---|
 | - | - | - | - | Fix landed with this case; no runs yet. |
+| 2026-09-07 | cloud | (gating trial) | n/a | superseded while `TOOLBOX_GATING=false` (dev: tools.md, "TRIAL"): every tool is declared on every request and `toggle_toolbox` is off the wire, so there is no mid-turn enable to exercise. Re-run only if the trial is reverted |
