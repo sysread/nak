@@ -244,7 +244,7 @@ export function titleFor(kind: CompletionErrorKind): string {
     case 'commit_conflict':
       return 'Response discarded';
     case 'guard_exhausted':
-      return 'Malformed response';
+      return 'Unusable response';
   }
 }
 
@@ -278,7 +278,7 @@ export function adviceFor(kind: CompletionErrorKind): string {
     case 'commit_conflict':
       return 'The conversation changed on another device while Nak was responding, so the reply was discarded. Refresh this thread to see the latest.';
     case 'guard_exhausted':
-      return 'The model kept producing garbled output. It\u2019s not your fault - retrying usually clears it.';
+      return 'The model kept producing garbled output or no answer at all. It\u2019s not your fault - retrying usually clears it.';
   }
 }
 

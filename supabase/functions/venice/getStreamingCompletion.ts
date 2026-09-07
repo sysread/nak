@@ -557,6 +557,21 @@ async function* streamFromVenice(
   let usage: TokenUsage | null = null;
   let citationsEmitted = false;
   let finishReason: string | null = null;
+  // Empty-stream forensics. A stream that ends having yielded no text,
+  // no reasoning, and no tool call is either a model that sent zero
+  // tokens or a delta shape this parser does not read (observed on
+  // GLM 5.3 Flash: two such streams in one turn, finish_reason=stop).
+  // The two cases need different fixes and the parsed events cannot
+  // tell them apart, so keep a bounded sample of the RAW frames and
+  // log it at the end when the stream turns out empty. Bounded on
+  // both count and length so a healthy stream pays only the few
+  // string slices.
+  let sawText = false;
+  let sawReasoning = false;
+  let frameCount = 0;
+  const rawSample: string[] = [];
+  const RAW_SAMPLE_FRAMES = 4;
+  const RAW_SAMPLE_CHARS = 400;
 
   try {
     outer: for (;;) {
@@ -569,6 +584,10 @@ async function* streamFromVenice(
         buffer = buffer.slice(idx + 2);
         const parsed = parseSseFrame(frame);
         await dumpFrame(frame, parsed);
+        frameCount += 1;
+        if (rawSample.length < RAW_SAMPLE_FRAMES) {
+          rawSample.push(frame.slice(0, RAW_SAMPLE_CHARS));
+        }
         if (parsed === null) continue;
         if (parsed === '[DONE]') {
           sawDoneSentinel = true;
@@ -576,9 +595,11 @@ async function* streamFromVenice(
         }
 
         if (parsed.text !== undefined && parsed.text.length > 0) {
+          sawText = true;
           yield { type: 'response_text', content: parsed.text };
         }
         if (parsed.reasoning !== undefined && parsed.reasoning.length > 0) {
+          sawReasoning = true;
           yield { type: 'reasoning_text', content: parsed.reasoning };
         }
         if (
@@ -622,6 +643,14 @@ async function* streamFromVenice(
   if (dropped.length > 0 || (finishReason === 'tool_calls' && requests.length === 0)) {
     console.log(
       `[streamFromVenice] flush: requests=${requests.length} dropped=${JSON.stringify(dropped)} finishReason=${finishReason}`,
+    );
+  }
+  if (!sawText && !sawReasoning && requests.length === 0 && sawDoneSentinel) {
+    // See the rawSample comment above. completion_tokens is the
+    // discriminator: a non-zero count with nothing parsed means the
+    // model DID emit tokens and the frames show in what shape.
+    console.warn(
+      `[streamFromVenice] empty stream: frames=${frameCount} finishReason=${finishReason} completion_tokens=${usage?.completion_tokens ?? 'n/a'} sample=${JSON.stringify(rawSample)}`,
     );
   }
 
