@@ -49,6 +49,7 @@
 import { type SupabaseClient } from '@supabase/supabase-js';
 import {
   controlChannelName,
+  GuardExhaustedError,
   type OrchestratorEvent,
   streamChannelName,
   type TerminalKind,
@@ -748,7 +749,7 @@ export async function getStreamingResponse(
           ? ` reasoningHead=${JSON.stringify(accum.reasoning.slice(0, 200))}`
           : '';
       log.debug(
-        `${runId} round ${round} events: ${Object.entries(eventTally).map(([k, v]) => `${k}=${v}`).join(' ')} contentLen=${accum.content.length} reasoningLen=${accum.reasoning.length} finishReason=${roundFinishReason ?? 'null'}${reasoningPreview}`,
+        `${runId} round ${round} events: ${Object.entries(eventTally).map(([k, v]) => `${k}=${v}`).join(' ')} contentLen=${accum.content.length} reasoningLen=${accum.reasoning.length} completionTokens=${accum.usage?.completion_tokens ?? 'n/a'} finishReason=${roundFinishReason ?? 'null'}${reasoningPreview}`,
       );
 
       if (ctl.signal.aborted) {
@@ -803,9 +804,26 @@ export async function getStreamingResponse(
           round -= 1;
           continue roundLoop;
         }
+        // Same shape the guard wrapper's GuardExhaustedError takes on
+        // the wire (errorEventFor in getStreamingCompletion.ts): a
+        // kind='internal' error signal whose message opens with
+        // 'Stream guard "'. The browser keys its retry-exhausted card
+        // (headline, advice, a retry closure) on that prefix, and END
+        // alone would land it in the generic "something went wrong
+        // inside Nak" bucket with no retry affordance.
+        const exhausted = new GuardExhaustedError(
+          EMPTY_COMPLETION_GUARD,
+          emptyRerolls + 1,
+        );
+        await publisher.publish({
+          type: 'error',
+          kind: 'internal',
+          message: exhausted.message,
+          retryable: false,
+        });
         terminalKind = 'error';
-        terminalDetail = `empty completion after ${emptyRerolls + 1} attempts`;
-        lastErrorInput = { kind: 'guard_exhausted' };
+        terminalDetail = exhausted.message;
+        lastErrorInput = { kind: 'guard_exhausted', rawMessage: exhausted.message };
         log.error(
           `${runId} round ${round} empty completion after ${emptyRerolls + 1} attempts (finishReason=${roundFinishReason ?? 'null'} reasoningLen=${accum.reasoning.length}); failing the turn`,
         );

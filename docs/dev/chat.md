@@ -396,14 +396,30 @@ A chat turn goes:
   (`round` is stepped back so `roundsRun` and the `MAX_ROUNDS`
   budget are untouched; the bump stays on the body for the rest
   of the turn). Budget is `MAX_EMPTY_COMPLETION_REROLLS` (2) per
-  turn; past it the turn fails with `kind: 'guard_exhausted'` and
-  the finally block preserves the last attempt's reasoning as a
+  turn; past it the orchestrator publishes the same
+  kind='internal' `error` signal the guard wrapper's
+  `GuardExhaustedError` takes on the wire (message opens with
+  `Stream guard "`) - the browser keys its retry-exhausted card
+  and retry closure on that prefix, and END alone would land in
+  the generic "something went wrong inside Nak" bucket - then
+  fails the turn with `kind: 'guard_exhausted'`. The finally
+  block preserves the last attempt's reasoning as a
   `status='error'` row, which `classifyTail` reads as a
-  reasoning-only stall and offers to retry. Without this, an
-  empty completion fell through as `'completed'` with no row at
-  all: the transcript's tail stayed a bare user message and the
-  browser painted a "cut off" card with nothing behind it, on
-  reload too.
+  reasoning-only stall and offers to retry; an attempt with no
+  reasoning either persists nothing and the error surfaces via
+  `threads.last_error`. Without this, an empty completion fell
+  through as `'completed'` with no row at all: the transcript's
+  tail stayed a bare user message and the browser painted a "cut
+  off" card with nothing behind it, on reload too.
+  Forensics: `streamFromVenice` logs
+  `[streamFromVenice] empty stream: frames=N finishReason=...
+  completion_tokens=... sample=[...]` (function logs, not the
+  drawer) with a bounded sample of the RAW frames whenever a
+  stream yields nothing, and the orchestrator's per-round
+  `events:` line carries `completionTokens=`. Together they
+  separate "the model sent zero tokens" from "the model sent a
+  delta shape the parser does not read" - the two need different
+  fixes and the parsed events cannot tell them apart.
 - `MAX_ROUNDS = 24` - guardrail on runaway tool loops, enforced
   function-side in `getStreamingResponse`. When the round loop
   exhausts the budget without the model ever producing a terminal
