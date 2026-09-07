@@ -28,6 +28,12 @@ onto the composer. Full details in [Attachments](./attachments.md).
 
 ### Toolboxes
 
+> **Currently on trial:** every toolbox is on for every conversation
+> and the toolbox button is hidden. You do not need to enable
+> anything, and Nak will not ask you to. Anywhere else in this guide
+> that says to enable a toolbox, skip that step. The rest of this
+> section describes how toolboxes work when the switch is on.
+
 The **toolbox popover** sits in the composer toolbar, just after the
 attach and prompts buttons.
 Nak's capabilities beyond plain chat are grouped into named toolboxes

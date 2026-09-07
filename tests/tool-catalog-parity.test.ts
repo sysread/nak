@@ -89,8 +89,12 @@ describe('server rebuild parity with buildToolList', () => {
   for (const enabled of enabledSets) {
     it(`rebuild equals buildToolList for [${enabled.join(', ')}]`, () => {
       const catalog = buildToolCatalog([mcpBox]);
+      // gating=true: the rearm is the GATED wire contract. Under the
+      // toolbox-gating trial (TOOLBOX_GATING=false) buildToolList
+      // declares everything and the rearm never fires; the parity
+      // here is what the revert restores.
       expect(buildToolsFromCatalog(catalog, enabled)).toEqual(
-        buildToolList(enabled, [mcpBox]),
+        buildToolList(enabled, [mcpBox], true),
       );
     });
   }

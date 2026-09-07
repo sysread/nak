@@ -19,10 +19,20 @@ import {
   memoriesToolbox,
   wikiToolbox,
   buildToolList,
+  TOOLBOX_GATING,
   toOpenAIToolDef,
   toggleToolbox,
   type ToolDef,
 } from '../src/lib/tools';
+
+// The wire builder defaults to the toolbox-gating TRIAL (TOOLBOX_GATING
+// = false in src/lib/tools/index.ts: every tool declared, no toggle).
+// The gated behaviour below is pinned explicitly so the revert path
+// stays tested; the trial's own shape has its own describe at the end.
+const gatedToolList = (
+  enabled: readonly string[],
+  mcp: Parameters<typeof buildToolList>[1] = [],
+) => buildToolList(enabled, mcp, true);
 describe('tool registry', () => {
   it('exposes toggle_toolbox plus every memory + conversation tool', () => {
     const names = TOOLS.map((t: ToolDef) => t.name);
@@ -48,7 +58,7 @@ describe('tool registry', () => {
     // meta-tool itself. This test is the tripwire for someone accidentally
     // moving a write tool into the always-on set or dropping a read
     // tool out of it.
-    const list = buildToolList([]);
+    const list = gatedToolList([]);
     expect(list.map((t) => t.function.name).sort()).toEqual(
       [
         'analyze_image',
@@ -87,7 +97,7 @@ describe('tool registry', () => {
     // Writes still gate. Reads are always-on. Name every tool that
     // MUST be gated here so an accidental promotion to always-on
     // trips the test.
-    const disabled = buildToolList([]).map((t) => t.function.name);
+    const disabled = gatedToolList([]).map((t) => t.function.name);
     for (const gated of [
       'memory_create',
       'memory_update',
@@ -126,8 +136,8 @@ describe('tool registry', () => {
     }
   });
 
-  it('buildToolList(["cooking"]) exposes cooking writes and no memory writes', () => {
-    const names = buildToolList(['cooking']).map((t) => t.function.name);
+  it('gatedToolList(["cooking"]) exposes cooking writes and no memory writes', () => {
+    const names = gatedToolList(['cooking']).map((t) => t.function.name);
     expect(names).toContain('recipe_save');
     expect(names).toContain('recipe_update');
     expect(names).toContain('recipe_delete');
@@ -142,8 +152,8 @@ describe('tool registry', () => {
     expect(names).toContain('memory_recall');
   });
 
-  it('buildToolList(["memories"]) exposes memory writes; reads stay always-on', () => {
-    const names = buildToolList(['memories']).map((t) => t.function.name);
+  it('gatedToolList(["memories"]) exposes memory writes; reads stay always-on', () => {
+    const names = gatedToolList(['memories']).map((t) => t.function.name);
     expect(names).toContain('memory_create');
     expect(names).toContain('memory_update');
     expect(names).toContain('memory_delete');
@@ -154,7 +164,7 @@ describe('tool registry', () => {
   });
 
   it('buildToolList with every gated toolbox enabled returns the full catalog', () => {
-    const list = buildToolList(GATED_TOOLBOX_NAMES);
+    const list = gatedToolList(GATED_TOOLBOX_NAMES);
     expect(list.map((t) => t.function.name).sort()).toEqual(
       TOOLS.map((t: ToolDef) => t.name).sort()
     );
@@ -164,7 +174,7 @@ describe('tool registry', () => {
     // A renamed or deleted toolbox should not break mid-flight. The
     // wire builder drops unknowns and returns whatever else it
     // recognised.
-    const names = buildToolList(['nonsense', 'cooking']).map((t) => t.function.name);
+    const names = gatedToolList(['nonsense', 'cooking']).map((t) => t.function.name);
     expect(names).toContain('recipe_save');
     // memory_create is the load-bearing "would only be present if
     // 'memories' were enabled" tripwire - it stays absent when only
@@ -177,7 +187,7 @@ describe('tool registry', () => {
     // `always_on` is implicit - listing it in the enabled array does
     // nothing (we already include it) and does not enable any gated
     // toolbox.
-    const names = buildToolList(['always_on']).map((t) => t.function.name);
+    const names = gatedToolList(['always_on']).map((t) => t.function.name);
     expect(names).toContain('toggle_toolbox');
     expect(names).toContain('web_search');
     // Read paths now always-on regardless of toolbox state.
@@ -279,12 +289,12 @@ describe('tool registry', () => {
     ]);
   });
 
-  it('buildToolList(["wiki"]) exposes every wiki write; reads stay always-on', () => {
+  it('gatedToolList(["wiki"]) exposes every wiki write; reads stay always-on', () => {
     // The wiki toolbox gates the whole chat-driven wiki write surface in
     // one toggle: direct article CRUD, the librarian delegation, and the
     // record writes (records + files + links). The matching reads stay
     // always-on like every other read surface.
-    const names = buildToolList(['wiki']).map((t) => t.function.name);
+    const names = gatedToolList(['wiki']).map((t) => t.function.name);
     // Article CRUD - direct, no longer librarian-only.
     expect(names).toContain('wiki_create');
     expect(names).toContain('wiki_update');
@@ -315,7 +325,7 @@ describe('tool registry', () => {
   it('wiki writes stay hidden until the wiki toolbox is enabled', () => {
     // The whole wiki write surface gates - a chat turn with no toolbox
     // on can read the wiki but never mutate it.
-    const off = buildToolList([]).map((t) => t.function.name);
+    const off = gatedToolList([]).map((t) => t.function.name);
     for (const write of [
       'wiki_create',
       'wiki_update',
@@ -332,18 +342,18 @@ describe('tool registry', () => {
     }
     // The dropped `wiki_records` name no longer enables anything: it is
     // an unknown toolbox now, silently ignored.
-    const stale = buildToolList(['wiki_records']).map((t) => t.function.name);
+    const stale = gatedToolList(['wiki_records']).map((t) => t.function.name);
     expect(stale).not.toContain('record_create');
     expect(stale).not.toContain('wiki_create');
   });
 
-  it('buildToolList(["images"]) exposes generate_image only when enabled', () => {
+  it('gatedToolList(["images"]) exposes generate_image only when enabled', () => {
     // generate_image is gated, not always-on: it spends Venice credits
     // and writes a persistent attachment, so it must not appear in the
     // wire list until the images toolbox is on.
-    const offNames = buildToolList([]).map((t) => t.function.name);
+    const offNames = gatedToolList([]).map((t) => t.function.name);
     expect(offNames).not.toContain('generate_image');
-    const onNames = buildToolList(['images']).map((t) => t.function.name);
+    const onNames = gatedToolList(['images']).map((t) => t.function.name);
     expect(onNames).toContain('generate_image');
   });
 
@@ -437,3 +447,50 @@ describe('tool registry', () => {
 // enforced server-side - see supabase/functions/tests/
 // {reflection,memory_librarian,memory_consolidate}.test.ts. The
 // browser registry is schema-only; nothing dispatches here.
+
+describe('toolbox gating trial (TOOLBOX_GATING=false)', () => {
+  // See the TOOLBOX_GATING comment in src/lib/tools/index.ts: the
+  // serving backend drops a call to an undeclared tool, so the trial
+  // declares everything and withdraws the toggle. These pin the
+  // default (no third argument) shape the chat-loop actually ships.
+  it('is off for the trial', () => {
+    expect(TOOLBOX_GATING).toBe(false);
+  });
+
+  it('declares every tool regardless of the enabled set, minus toggle_toolbox', () => {
+    const names = buildToolList([]).map((t) => t.function.name).sort();
+    const expected = TOOLS.map((t: ToolDef) => t.name)
+      .filter((n) => n !== toggleToolbox.name)
+      .sort();
+    expect(names).toEqual(expected);
+    expect(names).toContain('recipe_update');
+    expect(names).toContain('memory_create');
+    expect(names).not.toContain('toggle_toolbox');
+  });
+
+  it('declares every MCP toolbox too, enabled or not', () => {
+    const mcp: Parameters<typeof buildToolList>[1] = [
+      {
+        name: 'mcp:fake',
+        description: 'Fake',
+        tools: [
+          {
+            name: 'mcp:fake:ping',
+            description: 'Ping',
+            shortDescription: 'ping',
+            parameters: { type: 'object', properties: {}, additionalProperties: false },
+            execute: async () => ({}),
+          },
+        ],
+      },
+    ];
+    const names = buildToolList([], mcp).map((t) => t.function.name);
+    expect(names).toContain('mcp:fake:ping');
+  });
+
+  it('the enabled set is what gating=true still honours', () => {
+    const names = gatedToolList([]).map((t) => t.function.name);
+    expect(names).not.toContain('recipe_update');
+    expect(names).toContain('toggle_toolbox');
+  });
+});

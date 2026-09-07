@@ -601,6 +601,39 @@ function byName(name: string): ToolDef | undefined {
 import { toOpenAIToolDef } from './wire';
 
 /**
+ * TRIAL SWITCH: toolbox gating on the wire.
+ *
+ * `false` (the trial) declares EVERY tool - always-on, every gated
+ * box, every connected MCP integration - on every request, and
+ * withdraws `toggle_toolbox` from the wire and the system prompt. The
+ * per-thread `toolboxes_enabled` state, the toggle tool's server
+ * implementation, the mid-turn rearm in the orchestrator, and the
+ * composer popover all stay in the tree, inert, so flipping this back
+ * to `true` restores the gate in one line.
+ *
+ * Why: the gate exists to keep ambient tokens down - a toolbox that is
+ * off ships no schemas. But the serving backend (GLM 5.3 Flash via
+ * Venice) holds the model to the declared tool list and DROPS a call
+ * to a tool it was not told about, returning an empty completion
+ * (~950 completion tokens spent, zero delivered, finish_reason=stop).
+ * The system prompt lists every tool by name so the model knows they
+ * exist, and it sometimes calls a write without toggling first - three
+ * times in a row on one thread. Under the gate that is a silent
+ * failure the model cannot see and a temperature re-roll cannot fix.
+ * Declaring everything removes the failure; the cost is the ambient
+ * tokens the gate was saving (measured 2026-09-07: the 33 gated tool
+ * specs add ~49k chars / ~12k tokens before the activity-parameter
+ * trim in wire.ts, ~9k after; prompt caching absorbs the repeat).
+ *
+ * Consumers that branch on this: `buildToolList` (below),
+ * `buildSystemPrompt` / `buildCatalog` / `buildToolboxStateBlock`
+ * (src/lib/chat/system-prompt.ts), and the composer toolbox button
+ * (src/screens/Chat.svelte). Each takes the value as a parameter
+ * defaulting to this constant so tests can pin both modes.
+ */
+export const TOOLBOX_GATING = false;
+
+/**
  * The tools array we send with a request, built from the thread's
  * currently-enabled toolbox names. The always-on toolbox is always
  * included. Unknown names in the input are ignored (a toolbox that
@@ -618,21 +651,26 @@ import { toOpenAIToolDef } from './wire';
  */
 export function buildToolList(
   enabledToolboxes: readonly string[],
-  mcpToolboxes: readonly Toolbox[] = []
+  mcpToolboxes: readonly Toolbox[] = [],
+  gating: boolean = TOOLBOX_GATING
 ): OpenAIToolDef[] {
   const enabled = new Set(enabledToolboxes);
   const seen = new Set<string>();
   const out: OpenAIToolDef[] = [];
   for (const tb of TOOLBOXES) {
-    if (tb.name !== alwaysOnToolbox.name && !enabled.has(tb.name)) continue;
+    if (gating && tb.name !== alwaysOnToolbox.name && !enabled.has(tb.name)) continue;
     for (const tool of tb.tools) {
+      // Under the trial there is nothing to toggle, and a declared
+      // toggle_toolbox would invite the model to call it anyway
+      // (see TOOLBOX_GATING).
+      if (!gating && tool.name === toggleToolbox.name) continue;
       if (seen.has(tool.name)) continue;
       seen.add(tool.name);
       out.push(toOpenAIToolDef(tool));
     }
   }
   for (const tb of mcpToolboxes) {
-    if (!enabled.has(tb.name)) continue;
+    if (gating && !enabled.has(tb.name)) continue;
     for (const tool of tb.tools) {
       if (seen.has(tool.name)) continue;
       seen.add(tool.name);

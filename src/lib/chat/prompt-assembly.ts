@@ -404,7 +404,10 @@ export function buildMetadataSystemMessage(
   // the current enabled set. Kept out of the baseline so a
   // toggle_toolbox flip mid-conversation only re-encodes this trailing
   // block, not the whole cached prefix.
-  sections.push(buildToolboxStateBlock(opts.enabledToolboxes, opts.mcpToolboxes ?? []));
+  // Empty under the toolbox-gating trial (TOOLBOX_GATING=false): no
+  // gate, nothing to report, no stray blank section.
+  const toolboxState = buildToolboxStateBlock(opts.enabledToolboxes, opts.mcpToolboxes ?? []);
+  if (toolboxState.length > 0) sections.push(toolboxState);
 
   const attachments = buildThreadAttachmentsBlock(
     opts.attachmentSummaries,

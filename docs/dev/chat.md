@@ -379,10 +379,14 @@ A chat turn goes:
   replacement persists.
 - **Empty-completion re-roll** - a round whose stream ends with
   no visible text and no tool call is unusable whatever its
-  finish reason. The observed producer is a reasoning model that
-  writes its answer inside the thinking channel and stops (GLM
-  5.3 Flash: reasoning present, `finish_reason=stop`, content
-  empty, three times in a row on one prompt). This is NOT a
+  finish reason. The root cause, established from the forensics
+  line: the serving backend (GLM 5.3 Flash via Venice) DROPS a
+  call to a tool the request did not declare - the model spends
+  ~950 completion tokens on a write call to a gated-off toolbox
+  and the stream delivers nothing. That is why toolbox gating is
+  on trial (see `./tools.md`, "TRIAL: toolbox gating is OFF");
+  the re-roll stays as the safety net for any other empty
+  completion. This is NOT a
   StreamGuard: the guard wrapper decides on the opening of an
   attempt and buffers until it does, and emptiness is only known
   once the stream ends - holding every reasoning delta back until

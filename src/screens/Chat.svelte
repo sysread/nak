@@ -85,7 +85,7 @@
     loadDraft,
     type StreamingDraft,
   } from '$lib/draft-store';
-  import { GATED_TOOLBOX_META } from '$lib/tools';
+  import { GATED_TOOLBOX_META, TOOLBOX_GATING } from '$lib/tools';
   import { drainSharesForComposer } from '$lib/share-intake';
   import {
     arrayBufferToBase64,
@@ -8977,6 +8977,10 @@
                    hid the button on any fresh session or new
                    conversation, leaving no entry point to the toolbox
                    surface on desktop. -->
+              <!-- Hidden under the toolbox-gating trial (TOOLBOX_GATING=false,
+                   src/lib/tools/index.ts): every toolbox is on for every
+                   turn, so a picker would be a switch wired to nothing. -->
+              {#if TOOLBOX_GATING}
               <button
                 type="button"
                 class="secondary toolbox-btn"
@@ -9009,6 +9013,7 @@
                   >
                 {/if}
               </button>
+              {/if}
 
               <!-- Model-profile picker: per-thread pin, stored on
                    threads.model as a profile id. Renders unconditionally —
@@ -9185,7 +9190,7 @@
             </button>
             </div>
 
-            {#if toolboxMenuOpen}
+            {#if TOOLBOX_GATING && toolboxMenuOpen}
               <div class="composer-menu composer-menu-left" role="menu">
                 <div class="menu-header">Toolboxes for this conversation</div>
                 {#each allToolboxMeta as tb (tb.name)}
