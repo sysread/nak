@@ -192,6 +192,34 @@ toast is just a glance cue that the bias model is forming.
   are pinned by the Deno suite at
   `supabase/functions/tests/samskara.test.ts` via the `__test`
   namespace export.
+
+  **The candor contract.** Both minter prompts and the summary
+  prompt state their audience explicitly: a future assistant,
+  privately; the user never sees the output. Without that framing
+  the models drift toward user-facing phrasing - flattering
+  framings, side-taking in the user's interpersonal disputes, and
+  no claims at all about the assistant's own misfires (the 2026-09
+  reset corpus measured 72% warm-valence claims and zero
+  assistant-failure claims across 54 rows). The minter prompt asks
+  for tendencies that work against the user and for the
+  assistant's failure modes with this user as first-class claims,
+  forbids taking sides or grading, and anchors the confidence
+  scale (0.5 coin flip / 0.7 most observations / 0.9 all of them
+  across contexts) so confidence stops pinning at 0.95. The
+  summary prompt is deliberately softer - honest, friction in
+  proportion to the evidence, but "a colleague's briefing, not a
+  warning label" - because it opens every conversation and an
+  overcorrection there would set a hostile tone on turn one. The
+  same contract is why both tier-1 mint paths feed the minter
+  whole observations (`sample_observations` with situation,
+  outcome, valence) rather than situations alone: the outcome is
+  where corrections, flagged misgivings, and assistant misfires
+  are recorded, so a minter that only saw situations could never
+  form a friction claim. The chat-side counterpart is the pair of
+  `SAMSKARA_*_THINK_MARKER` comments plus the subconscious section
+  of the baseline system prompt, which tell the serving model that
+  an unflattering profile is information to hold, not something
+  to compensate for by being warmer.
 - `supabase/schema.sql` (samskara section) - six tables with
   RLS and the RPC surface covering fire, cohort log, evaluation
   apply, substrate record, assimilate claim/save, substrate-embed
@@ -659,7 +687,7 @@ logs and yields to the next phase.
   `parseVector` turning PostgREST's pgvector text form into a
   real array; see the embeddings gotcha below.
 - **Mint-tier1** - `agentMint(apiKey, MINTER_PROMPT,
-  {sample_labels, sample_situations, reinforcement}) ->
+  {sample_labels, sample_observations, reinforcement}) ->
   {prediction, inner_voice, valence, confidence} | null` (null
   covers both parse failure and an explicit `confirm: false`
   refusal). The probe is population-gated via the shared
@@ -736,8 +764,9 @@ logs and yields to the next phase.
   most-relabeled pair, not the best-connected observation (QA caught
   one hub with 28 edges across 2 partners). `buildAssociationCluster`
   folds those into the minter payload - hub + distinct-partner
-  situations as `sample_situations`, the edge labels in the
-  otherwise-empty `sample_labels` slot, summed reinforcement as
+  observations (situation, outcome, valence; the RPC snapshots all
+  three per endpoint) as `sample_observations`, the edge labels in
+  the otherwise-empty `sample_labels` slot, summed reinforcement as
   the strength hint. Same `agentMint`, embed, and dedup guard as
   Mint-tier1, then provenance = member substrate rows (`weight`
   1.0) PLUS the consumed edges as `'association'` (`weight` =

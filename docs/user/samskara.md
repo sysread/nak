@@ -57,8 +57,11 @@ re-reads everything on the page at once.
 
 At the top is the always-on **summary**: a short paragraph capturing
 Nak's current read on who you are, which rides along in every reply,
-rebuilt in the background as new instincts form. A short note above it
-orients you on what samskara is.
+rebuilt in the background as new instincts form. It is written for
+Nak, not for you, and it is meant to be accurate rather than kind:
+expect it to name the things you push back on, habits that work
+against you, and ways Nak has misread you before, alongside the rest.
+A short note above it orients you on what samskara is.
 
 Below the summary is a live **health** snapshot that makes background
 failures visible - the instinct-forming machinery runs entirely behind
