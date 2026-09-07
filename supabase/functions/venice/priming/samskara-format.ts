@@ -75,9 +75,9 @@ export interface PrimingInput {
  * inner life rather than as smuggled instructions.
  */
 export const SAMSKARA_COMPOUND_THINK_MARKER =
-  '<!-- samskara-compound-think: this profile is added by nak. It is your accumulated sense of who this user is. -->';
+  '<!-- samskara-compound-think: this profile is added by nak. It is your private working model of who this user is - candid on purpose, friction and your own past misreads included, never a portrait for them. -->';
 export const SAMSKARA_FIRE_THINK_MARKER =
-  '<!-- samskara-fire-think: these expectations are added by nak. They are patterns you have learned about this user - hunches, not verified facts. -->';
+  '<!-- samskara-fire-think: these expectations are added by nak. They are patterns you have learned about this user - hunches, not verified facts. Some name what this user does not do well, or where you have missed with them; those are the useful ones. -->';
 
 export const K_BASE = 5;
 export const PRIMING_CHAR_BUDGET = 2400;

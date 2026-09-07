@@ -7332,8 +7332,11 @@ grant execute on function public.samskara_associate(uuid, uuid, uuid, text, text
 --
 -- Returns the top (cluster-max minus one) partners by summed
 -- reinforcement, one edge each. Zero rows when no hub qualifies: that's
--- the probe's quench condition (no LLM call). Snapshots situation text
--- for both endpoints so the caller needs no follow-up reads.
+-- the probe's quench condition (no LLM call). Snapshots the whole
+-- observation (situation, outcome, valence) for both endpoints so the
+-- caller needs no follow-up reads - the minter is fed outcomes as well
+-- as situations, because the outcome is where a round's friction
+-- (corrections, assistant misfires, flagged misgivings) is recorded.
 --
 -- security definer + service_role-only, same as samskara_associate -
 -- the probe runs under the admin client with no auth.uid().
@@ -7346,8 +7349,12 @@ returns table (
   reinforcement int,
   hub_id uuid,
   hub_situation text,
+  hub_outcome text,
+  hub_valence real,
   partner_id uuid,
-  partner_situation text
+  partner_situation text,
+  partner_outcome text,
+  partner_valence real
 )
 language sql security definer
 set search_path = public as $$
@@ -7397,8 +7404,12 @@ set search_path = public as $$
          e.reinforcement,
          hr.hub as hub_id,
          hsub.situation as hub_situation,
+         hsub.outcome as hub_outcome,
+         hsub.valence as hub_valence,
          e.partner as partner_id,
-         psub.situation as partner_situation
+         psub.situation as partner_situation,
+         psub.outcome as partner_outcome,
+         psub.valence as partner_valence
     from endpoints e
     join hub_rank hr on e.hub = hr.hub
     join ranked_partners rp on rp.partner = e.partner

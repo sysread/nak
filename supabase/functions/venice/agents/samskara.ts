@@ -264,6 +264,23 @@ user, derived from a cluster of past observations. The samskara
 should be the kind of thing a future you could read at the start
 of a conversation and act on instinctively.
 
+Who reads this: a future assistant, privately, at the start of a
+conversation. The user never sees it. Its only job is to help that
+assistant serve this person accurately, which means describing the
+tendency as it actually is, whether or not it is flattering:
+- tendencies that work against the user (overgeneralizing,
+  deflecting, rationalizing, repeating a mistake, asking for the
+  wrong thing) are exactly as valuable as tendencies that serve them;
+- when the observations show the assistant misreading, misfiring,
+  or failing this user, a claim about THAT is a first-class samskara
+  ("in situations like X, the assistant tends to Y with this user");
+- when the user welcomes correction or pushback, say so plainly - a
+  future assistant should know it is safe and useful to tell this
+  user they are wrong;
+- in the user's disputes with other people, record the user's
+  tendency, not the merits of their case. Do not take sides and do
+  not grade the user. Describe; never praise, console, or scold.
+
 Reply with a single JSON object, no prose, no markdown fence:
 
 {
@@ -271,8 +288,16 @@ Reply with a single JSON object, no prose, no markdown fence:
   "prediction": "one or two sentences in the form: in situations like X, this user tends to Y",
   "inner_voice": "optional silent self-talk, <= 80 chars, like an internal post-it note. Empty string if not useful.",
   "valence": <-1.0 to 1.0, the emotional flavour of the tendency>,
-  "confidence": <0.0 to 1.0, your initial confidence in the claim>
+  "confidence": <0.0 to 1.0, on the scale below>
 }
+
+Confidence is a bet, not a courtesy. 0.5 means the cluster could
+support the opposite claim about as well. 0.7 means most of the
+observations show the tendency and none contradict it. 0.9 means
+every observation shows it, more than one context is represented,
+and you would be surprised to see the opposite. Reserve anything
+above 0.9 for that last case; most honest claims land between 0.5
+and 0.8.
 
 Set confirm:false when:
 - the cluster is too noisy to support a single prediction,
@@ -295,13 +320,21 @@ Predictions about the assistant's behaviour are also valid:
 reads as a samskara just as cleanly as "this user prefers terse
 replies." Lean into whichever framing the cluster actually supports.
 
+The input carries "sample_observations": one entry per round, each
+with a "situation" (what the user asked and the surrounding
+context), an "outcome" (what the assistant did and how it landed,
+including any misgiving the assistant flagged about its own reply),
+and a "valence" (-1 tense or corrective, +1 warm or satisfied).
+Read the outcomes as carefully as the situations - a pattern in how
+rounds LAND is often the more useful claim.
+
 You may also receive "sample_labels": short relations a prior
 analysis already articulated between pairs of the observations
 (e.g. "both show the user seeking the mechanism behind a
 behaviour"). When present, treat them as pre-digested hints about
 what ties the cluster together - stronger signal than the raw
-situations alone. When "sample_labels" is empty, work from the
-situations directly.`;
+observations alone. When "sample_labels" is empty, work from the
+observations directly.`;
 
 /**
  * Tier-2 (compound) minter prompt. Reads a set of EXISTING tier-1
@@ -328,7 +361,7 @@ Reply with a single JSON object, no prose, no markdown fence:
   "prediction": "one or two sentences in the form: in situations like X, this user tends to Y",
   "inner_voice": "optional silent self-talk, <= 80 chars. Empty string if not useful.",
   "valence": <-1.0 to 1.0, the emotional flavour of the compound>,
-  "confidence": <0.0 to 1.0, your initial confidence in the compound>
+  "confidence": <0.0 to 1.0, a bet: 0.5 = coin flip, 0.7 = most children support it and none contradict it, 0.9 = every child does>
 }
 
 Set confirm:false when:
@@ -348,7 +381,12 @@ preamble", and "corrects over-explanation", the compound is something
 like "in technical exchanges this user runs on an efficiency instinct
 and treats anything beyond the answer as friction" - one disposition,
 not three bullets. Keep it in the same "in situations like X, this
-user tends to Y" shape so it embeds and fires like any other claim.`;
+user tends to Y" shape so it embeds and fires like any other claim.
+
+The same candor rule as the first-order minter applies: the user
+never sees this, so name the disposition as it is, flattering or
+not, and a disposition about how the assistant tends to miss with
+this user is as valid a compound as one about the user.`;
 
 /**
  * Compound-summary prompt. Reads the top live samskaras and produces
@@ -367,6 +405,17 @@ Compose a single prose paragraph (4-8 sentences) that reads as the
 them." The paragraph will be appended to a future assistant's
 system prompt as always-on context, so write in the third person
 about the user (not in the second person addressing them).
+
+This is a private working model for the assistant, not a portrait
+for the user, who never sees it. Its value is accuracy. Where the
+claims carry friction - things the user pushes back on, tendencies
+that cost them, ways the assistant has misread or failed them - fold
+it in with the same matter-of-fact weight as everything else, in
+proportion to how strongly the claims support it. Do not invent
+friction the claims do not show, do not lead with it, and do not
+soften it into a compliment either. The paragraph should leave the
+assistant clear-eyed, not wary: the tone is a colleague's honest
+briefing, not a warning label.
 
 Lean into the signal from the strongest samskaras; let weaker ones
 colour the paragraph rather than name themselves. Where samskaras
@@ -681,7 +730,24 @@ interface SubstrateRow {
   id: string;
   situation: string | null;
   outcome: string | null;
+  valence: number | null;
   embedding: number[];
+}
+
+/**
+ * One observation as the minter sees it. Both tier-1 mint paths hand
+ * the minter the FULL round - situation, outcome, valence - not the
+ * situation alone. The outcome is where assistant misfires, flagged
+ * misgivings, and corrective landings live; a minter that only ever
+ * saw situations could not form a claim about how rounds land with
+ * this user, which is exactly the class of claim (friction, the
+ * assistant's own failure modes) the candor contract in
+ * MINTER_PROMPT asks for.
+ */
+interface MintObservation {
+  situation: string | null;
+  outcome: string | null;
+  valence: number | null;
 }
 
 /**
@@ -827,7 +893,7 @@ async function recentEmbeddedSubstrate(
 ): Promise<SubstrateRow[]> {
   const { data, error } = await admin
     .from('samskara_substrate')
-    .select('id, situation, outcome, situation_embedding')
+    .select('id, situation, outcome, valence, situation_embedding')
     .eq('user_id', userId)
     .not('situation_embedding', 'is', null)
     .order('created_at', { ascending: false })
@@ -837,6 +903,7 @@ async function recentEmbeddedSubstrate(
     id: r.id as string,
     situation: (r.situation as string | null) ?? null,
     outcome: (r.outcome as string | null) ?? null,
+    valence: typeof r.valence === 'number' ? r.valence : null,
     embedding: parseVector(r.situation_embedding),
   }));
 }
@@ -1252,7 +1319,9 @@ async function mintTier1Probe(
     MINTER_PROMPT,
     JSON.stringify({
       sample_labels: [],
-      sample_situations: clusterRows.map((r) => r.situation),
+      sample_observations: clusterRows.map(
+        (r): MintObservation => ({ situation: r.situation, outcome: r.outcome, valence: r.valence }),
+      ),
       reinforcement: clusterRows.length,
     }),
   );
@@ -1325,14 +1394,18 @@ interface AssociationEdgeRow {
   reinforcement: number;
   hub_id: string;
   hub_situation: string;
+  hub_outcome: string | null;
+  hub_valence: number | null;
   partner_id: string;
   partner_situation: string;
+  partner_outcome: string | null;
+  partner_valence: number | null;
 }
 
 /** The assembled association cluster fed to the minter + provenance. */
 interface AssociationCluster {
-  /** Hub situation first, then each distinct partner's situation. */
-  situations: string[];
+  /** Hub observation first, then each distinct partner's. */
+  observations: MintObservation[];
   /** Every edge label (one per edge, partner-duplicates kept). */
   labels: string[];
   /** Summed reinforcement across the edges - the minter's strength hint. */
@@ -1353,16 +1426,22 @@ interface AssociationCluster {
 function buildAssociationCluster(edges: AssociationEdgeRow[]): AssociationCluster {
   const hub = edges[0];
   const memberIds = [hub.hub_id];
-  const situations = [hub.hub_situation];
+  const observations: MintObservation[] = [
+    { situation: hub.hub_situation, outcome: hub.hub_outcome, valence: hub.hub_valence },
+  ];
   const seen = new Set<string>([hub.hub_id]);
   for (const e of edges) {
     if (seen.has(e.partner_id)) continue;
     seen.add(e.partner_id);
     memberIds.push(e.partner_id);
-    situations.push(e.partner_situation);
+    observations.push({
+      situation: e.partner_situation,
+      outcome: e.partner_outcome,
+      valence: e.partner_valence,
+    });
   }
   return {
-    situations,
+    observations,
     labels: edges.map((e) => e.label),
     reinforcementSum: edges.reduce((sum, e) => sum + e.reinforcement, 0),
     memberIds,
@@ -1464,7 +1543,7 @@ async function assocHubOnce(
     MINTER_PROMPT,
     JSON.stringify({
       sample_labels: cluster.labels,
-      sample_situations: cluster.situations,
+      sample_observations: cluster.observations,
       reinforcement: cluster.reinforcementSum,
     }),
   );

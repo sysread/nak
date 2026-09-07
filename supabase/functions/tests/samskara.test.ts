@@ -116,10 +116,52 @@ Deno.test('both minter prompts share the confirm-gated output shape', () => {
   assert(TIER2_MINTER_PROMPT.includes('children'));
 });
 
+// The candor contract. Without it the minter drifts toward flattering,
+// user-facing phrasing (the 2026-09 reset corpus: 72% warm-valence
+// claims, zero about the assistant's own misfires, side-taking in the
+// user's interpersonal disputes) because nothing told it the claim is
+// private and exists to make a future assistant accurate.
+Deno.test('minter prompts state the private audience and the candor rule', () => {
+  assert(MINTER_PROMPT.includes('The user never sees it'));
+  assert(MINTER_PROMPT.includes('the assistant tends to Y with this user'));
+  assert(MINTER_PROMPT.includes('Do not take sides'));
+  assert(MINTER_PROMPT.includes('welcomes correction or pushback'));
+  assert(TIER2_MINTER_PROMPT.includes('flattering or\nnot'));
+});
+
+// The minter reads whole rounds. Outcomes are where corrections and
+// assistant misfires are recorded; a prompt that only described
+// situations would leave the model ignoring the half of the payload
+// that carries friction.
+Deno.test('minter prompt describes the observation payload with outcomes', () => {
+  assert(MINTER_PROMPT.includes('"sample_observations"'));
+  assert(MINTER_PROMPT.includes('"outcome"'));
+  assert(MINTER_PROMPT.includes('"valence"'));
+  assert(MINTER_PROMPT.includes('"sample_labels"'));
+});
+
+// Confidence used to be uninformative (50 of 54 fresh claims at 0.94
+// to 0.97) because the prompt gave no scale.
+Deno.test('minter prompt anchors the confidence scale', () => {
+  assert(MINTER_PROMPT.includes('Confidence is a bet, not a courtesy'));
+  assert(MINTER_PROMPT.includes('0.5 means'));
+  assert(MINTER_PROMPT.includes('0.9 means'));
+});
+
 Deno.test('compound summary prompt forbids the leaky failure modes', () => {
   assert(COMPOUND_SUMMARY_PROMPT.includes('Do not mention the word\n"samskara"'));
   assert(COMPOUND_SUMMARY_PROMPT.includes('third person'));
   assert(COMPOUND_SUMMARY_PROMPT.includes('Do not enumerate or list'));
+});
+
+// The summary is honest but deliberately softer than the minter: it
+// must carry the friction the claims show without turning the start of
+// every conversation into a warning label.
+Deno.test('compound summary prompt asks for candor without hostility', () => {
+  assert(COMPOUND_SUMMARY_PROMPT.includes('private working model'));
+  assert(COMPOUND_SUMMARY_PROMPT.includes('Do not invent\nfriction'));
+  assert(COMPOUND_SUMMARY_PROMPT.includes('do not lead with it'));
+  assert(COMPOUND_SUMMARY_PROMPT.includes('clear-eyed, not wary'));
 });
 
 Deno.test('summary shape guard accepts a clean single third-person paragraph', () => {
@@ -273,10 +315,10 @@ Deno.test('buildTopicalCluster keeps same-topic rows and drops strays (raw fallb
   const near = unit(0.9, 0.1, 0); // cosine ~0.99 vs seed
   const far = unit(0, 1, 0); // cosine 0 vs seed
   const rows = [
-    { id: 'seed', situation: 's', outcome: 'o', embedding: seedEmb },
-    { id: 'near', situation: 's', outcome: 'o', embedding: near },
-    { id: 'far', situation: 's', outcome: 'o', embedding: far },
-    { id: 'broken', situation: 's', outcome: 'o', embedding: [] },
+    { id: 'seed', situation: 's', outcome: 'o', valence: 0, embedding: seedEmb },
+    { id: 'near', situation: 's', outcome: 'o', valence: 0, embedding: near },
+    { id: 'far', situation: 's', outcome: 'o', valence: 0, embedding: far },
+    { id: 'broken', situation: 's', outcome: 'o', valence: 0, embedding: [] },
   ];
   // Null mean = the fresh-user fallback: raw cosine, no centering.
   const cluster = buildTopicalCluster(rows, null);
@@ -292,6 +334,7 @@ Deno.test('buildTopicalCluster caps the cluster at MINT_CLUSTER_MAX', () => {
     id: `r${i}`,
     situation: 's',
     outcome: 'o',
+    valence: 0,
     embedding: emb,
   }));
   assertEquals(buildTopicalCluster(rows, null).length, MINT_CLUSTER_MAX);
@@ -307,8 +350,8 @@ Deno.test('buildTopicalCluster centers before the cosine when a mean is present'
   const b = [1, 0, 0.3];
   assert(cosine(a, b) > MINT_CLUSTER_COSINE_FLOOR, 'raw cosine must clear the floor for this test to bite');
   const rows = [
-    { id: 'seed', situation: 's', outcome: 'o', embedding: a },
-    { id: 'twin', situation: 's', outcome: 'o', embedding: b },
+    { id: 'seed', situation: 's', outcome: 'o', valence: 0, embedding: a },
+    { id: 'twin', situation: 's', outcome: 'o', valence: 0, embedding: b },
   ];
   const cluster = buildTopicalCluster(rows, mean);
   assertEquals(cluster.map((r) => r.id), ['seed']);
@@ -333,8 +376,12 @@ Deno.test('buildAssociationCluster: hub first, distinct partners, all labels, su
     reinforcement,
     hub_id: 'hub',
     hub_situation: 'hub-sit',
+    hub_outcome: 'hub-out',
+    hub_valence: 0.4,
     partner_id,
     partner_situation: `sit-${partner_id}`,
+    partner_outcome: `out-${partner_id}`,
+    partner_valence: -0.5,
   });
   // Two edges to partner A (different labels) + one to partner B.
   const edges = [
@@ -343,9 +390,16 @@ Deno.test('buildAssociationCluster: hub first, distinct partners, all labels, su
     edge('e3', 'B', 'both reference cost', 1),
   ];
   const cluster = buildAssociationCluster(edges);
-  // Members dedup on partner: hub + A + B = 3 member rows / situations.
+  // Members dedup on partner: hub + A + B = 3 member rows / observations.
+  // Each observation carries the whole round (situation, outcome,
+  // valence) - the minter must see how rounds landed, not just what was
+  // asked.
   assertEquals(cluster.memberIds, ['hub', 'A', 'B']);
-  assertEquals(cluster.situations, ['hub-sit', 'sit-A', 'sit-B']);
+  assertEquals(cluster.observations, [
+    { situation: 'hub-sit', outcome: 'hub-out', valence: 0.4 },
+    { situation: 'sit-A', outcome: 'out-A', valence: -0.5 },
+    { situation: 'sit-B', outcome: 'out-B', valence: -0.5 },
+  ]);
   // Labels are per-edge, partner-duplicates kept (A contributes two).
   assertEquals(cluster.labels, [
     'both seek mechanisms',
