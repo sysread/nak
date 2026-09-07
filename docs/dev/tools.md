@@ -105,10 +105,7 @@ what the gate used to send. Prompt caching (Venice reports
 `cached_tokens`) absorbs the repeat within a conversation. Watch
 `prompt_tokens` on the usage epilogue; if the trial holds and the
 cost is acceptable, a follow-up session removes the gating code
-for real. If it does not, flip the constant. The tracker - the
-symptom chain that led here, the evidence, exit criteria, and the
-cleanup checklist - is
-[in-progress/toolbox-gating-trial.md](./in-progress/toolbox-gating-trial.md).
+for real. If it does not, flip the constant.
 
 ### The always-on toolbox
 
