@@ -184,16 +184,18 @@ export function translateError(input: TranslateInput): TranslatedError {
       };
     }
     case 'guard_exhausted':
-      // The stream guard (special-token leak detector, etc.) re-rolled
-      // its retry budget without ever getting a clean response from
-      // the model. Tactical advice for the user: try again. The cause
-      // is stochastic at the provider end - a fresh request usually
-      // recovers. We deliberately don't name the guard or the attempt
-      // count - those are internal diagnostics.
+      // A salvage re-roll (the special-token leak guard, or the
+      // orchestrator's empty-completion re-roll) spent its budget
+      // without ever getting a usable response from the model - junk
+      // tokens, or reasoning with no answer behind it. Tactical advice
+      // for the user: try again. The cause is stochastic at the
+      // provider end - a fresh request usually recovers. We
+      // deliberately don't name the guard or the attempt count - those
+      // are internal diagnostics.
       return {
         kind: 'guard_exhausted',
         message:
-          'The model kept emitting malformed output. A fresh attempt usually clears it - try again.',
+          'The model kept returning unusable output - malformed, or no answer at all. A fresh attempt usually clears it - try again.',
         retryable: true,
       };
     case 'commit_conflict': {
