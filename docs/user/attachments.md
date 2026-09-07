@@ -78,25 +78,19 @@ Other files show up under your message as a download chip:
 
 ## Generating images
 
-Nak can also create images for you. Enable the **Images** toolbox in
-the [toolbox popover](./chat.md#toolboxes), then ask for a picture -
+Nak can also create images for you. Just ask for a picture -
 "draw me a watercolor fox in a snowy forest." Nak writes a detailed
 prompt and sends it to Venice's image model. The picture appears as a
 large preview in its own card just below the generation step, with a
 brief loading placeholder while the image downloads - then it renders
 exactly like an image you uploaded yourself.
 
-- Nak often turns the Images toolbox on by itself when you clearly
-  ask for a picture, the same way it reaches for other capabilities
-  mid-conversation. If nothing happens, check the toolbox is enabled.
 - Generated images are **stored exactly like your uploads** - kept in
   your Nak storage and managed from the same Artifacts tab (below).
 - Because a generated image is a normal attachment, you can ask Nak
   to look at it again later ("what's in the background of that image?")
   and it will inspect the picture it made, just like re-asking about
   an uploaded image.
-- Generating an image spends Venice credits, which is why it sits
-  behind a toolbox rather than firing on every message.
 - Nak asks Venice to omit its watermark on generated images. Some
   Venice plans force the watermark regardless, so it may still
   appear depending on your account.

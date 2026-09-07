@@ -35,7 +35,7 @@ gate in `src/components/AssistantBody.svelte`, commit path
   Note the thread id.
 - For the tool-call-only step: a prompt that reliably starts a
   slow tool call, so Stop can land while the call is still
-  pending. Enable the images toolbox and ask for a generated
+  pending. Ask for a generated
   picture (`generate_image` runs long enough); attach-an-image
   analysis finishes too fast to catch.
 

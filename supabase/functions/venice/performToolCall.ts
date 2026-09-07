@@ -15,11 +15,11 @@
 //     dispatch (streamed chat turns AND the background agents'
 //     headless loops in agents/_run.ts) happens HERE; the browser's
 //     role is composing the wire `tools` array the request carries.
-//   - The model arming / toolbox catalog. Which tools a turn can
-//     reach is decided at request-shape time (browser composes the
-//     `tools` array against thread.toolboxes_enabled) and the chosen
-//     set lands on Venice's `tools` request field. This dispatcher
-//     just runs whatever the model called; the catalog gate is upstream.
+//   - The model arming / tool catalog. Which tools a turn can reach
+//     is decided at request-shape time (the browser declares every
+//     tool on every request - see buildToolList in src/lib/tools -
+//     and the full set lands on Venice's `tools` request field). This
+//     dispatcher just runs whatever the model called.
 //
 // Why no shared ToolContext / ToolDef with the browser side: the
 // browser's ToolContext carries `supabase: SupabaseService` (the

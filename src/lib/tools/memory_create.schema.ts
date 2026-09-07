@@ -14,16 +14,10 @@ export const memoryCreateSchema = {
   // observed dumping the full body into `message` and then round-tripping
   // its 200-char cap.
   description:
-    'Save a new memory. Two required fields: label (short handle, ' +
-    `1-80 chars) and data (the full content, max ${MAX_MEMORY_DATA_CHARS} ` +
-    'chars - split if longer). Optional message is a one-line, commit-style ' +
-    'summary of what you saved and why, which lands in the memory changelog ' +
-    'the user reviews; omit it to auto-derive one from the label. Optional ' +
-    'confidence is a decimal on a 1-10 scale (>= 1.0 and <= 10.0, e.g. ' +
-    '2.5; default 1.0), NOT a 0-1 probability - values below 1.0 are ' +
-    'rejected. It marks a memory as already-' +
-    'corroborated; raise above default only with converging evidence in the ' +
-    'current exchange. Returns the created memory row.',
+    'Save a new memory. Required: label (short handle) and data (the ' +
+    'full content - split across multiple memories rather than ' +
+    'truncating). Optional message and confidence carry their own ' +
+    'conventions; see their descriptions. Returns the created memory row.',
   shortDescription: 'save a new note',
   // Property order: the two required fields lead, optional fields trail.
   parameters: {

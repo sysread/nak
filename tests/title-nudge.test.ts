@@ -15,7 +15,6 @@ import { buildMetadataSystemMessage } from '../src/lib/chat/prompt-assembly';
 type Opts = Parameters<typeof buildMetadataSystemMessage>[0];
 
 const BASE: Opts = {
-  enabledToolboxes: [],
   attachmentSummaries: [],
   currentTurnHasAttachments: false,
   threadTitle: 'New conversation',

@@ -138,10 +138,6 @@ export async function* streamChatViaFunction(
           // when present so a caller that does no priming (sub-completion
           // paths never reach here, but be explicit) keeps the wire lean.
           ...(ctx.priming ? { priming: ctx.priming } : {}),
-          // Full tool catalog for mid-turn toolbox rearming (see
-          // ChatRequest.toolCatalog). Only the chat loop sets it;
-          // omitted otherwise so the envelope stays lean.
-          ...(req.toolCatalog ? { toolCatalog: req.toolCatalog } : {}),
           body,
         },
       },

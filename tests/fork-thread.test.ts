@@ -27,7 +27,6 @@ function threadRow(overrides: Record<string, unknown> = {}): Record<string, unkn
     model: null,
     reasoning_effort: null,
     verbosity: null,
-    toolboxes_enabled: [],
     archived: false,
     hidden: false,
     title_manually_set: false,
@@ -457,7 +456,7 @@ describe('forkThread', () => {
 
   // ---- Inherited pins ----
 
-  it('inherits model, reasoning, verbosity, and toolboxes from the source', async () => {
+  it('inherits model, reasoning, and verbosity from the source', async () => {
     const client = makeClient({
       threadRow: threadRow({
         id: 'P',
@@ -465,7 +464,6 @@ describe('forkThread', () => {
         model: 'venice/llama-3.3-70b',
         reasoning_effort: 'high',
         verbosity: 'low',
-        toolboxes_enabled: ['cooking', 'mcp-fastmail'],
         title_manually_set: true,
       }),
       msgRow: msgRow({ id: 'm1', thread_id: 'P' }),
@@ -475,7 +473,6 @@ describe('forkThread', () => {
         model: 'venice/llama-3.3-70b',
         reasoning_effort: 'high',
         verbosity: 'low',
-        toolboxes_enabled: ['cooking', 'mcp-fastmail'],
         title_manually_set: true,
       }),
     });
@@ -483,7 +480,6 @@ describe('forkThread', () => {
     expect(fork.model).toBe('venice/llama-3.3-70b');
     expect(fork.reasoning_effort).toBe('high');
     expect(fork.verbosity).toBe('low');
-    expect(fork.toolboxes_enabled).toEqual(['cooking', 'mcp-fastmail']);
     expect(fork.title_manually_set).toBe(true);
   });
 });

@@ -197,7 +197,7 @@ A chat turn goes:
 
 - **Threads** — `threads` table; `Thread` TS interface in
   `supabase.ts`. Fields the chat loop reads: `id`, `model`,
-  `reasoning_effort`, `verbosity`, `toolboxes_enabled`, `archived`.
+  `reasoning_effort`, `verbosity`, `archived`.
   `created_at`/`updated_at` drive sidebar ordering. Drafts are
   never written to Supabase; the `isDraft?: boolean` app-local
   flag keeps them in memory only.
@@ -339,9 +339,7 @@ A chat turn goes:
   updates, tool start/done/error, persistence events,
   `onGuardRetry` (a function-side output guard discarded a junk
   attempt and is re-rolling). Every handler is optional; the loop
-  runs cleanly with none of them. (A model-driven `toggle_toolbox`
-  flip has NO handler: the composer toolbox flash keys off the
-  `threads` realtime UPDATE echo in the drawer-refresh path.) (Generated images are NOT delivered through
+  runs cleanly with none of them. (Generated images are NOT delivered through
   a handler: the function attaches them server-side per round and
   `GeneratedImageCard` resolves them by filename - see
   [./attachments.md](./attachments.md).)
@@ -379,14 +377,13 @@ A chat turn goes:
   replacement persists.
 - **Empty-completion re-roll** - a round whose stream ends with
   no visible text and no tool call is unusable whatever its
-  finish reason. The root cause, established from the forensics
-  line: the serving backend (GLM 5.3 Flash via Venice) DROPS a
-  call to a tool the request did not declare - the model spends
-  ~950 completion tokens on a write call to a gated-off toolbox
-  and the stream delivers nothing. That is why toolbox gating is
-  on trial (see `./tools.md`, "TRIAL: toolbox gating is OFF");
-  the re-roll stays as the safety net for any other empty
-  completion. This is NOT a
+  finish reason. The historical root cause, established from the
+  forensics line: the serving backend (GLM 5.3 Flash via Venice)
+  DROPS a call to a tool the request did not declare, so a write
+  call to a gated-off toolbox consumed ~950 completion tokens and
+  delivered nothing. Toolbox gating is gone for good (see
+  `./tools.md`, "Toolbox model"); the re-roll stays as the safety
+  net for any other empty completion. This is NOT a
   StreamGuard: the guard wrapper decides on the opening of an
   attempt and buffers until it does, and emptiness is only known
   once the stream ends - holding every reasoning delta back until
@@ -513,12 +510,9 @@ A chat turn goes:
   `$effect` that loads draft text on thread switch; the
   thread-switch cleanup of `pendingDraftId` / `pendingEdit` /
   `pendingDeleteIds` / `openEditMenuMsgId`.
-- **Tools** - the `/stream` envelope carries two tool payloads
-  assembled on the browser side: `tools: buildToolList(
-  thread.toolboxes_enabled)` (the first round's pre-filtered wire
-  array) and `toolCatalog: buildToolCatalog(...)` (the full
-  always-on + gated catalog the orchestrator rebuilds `tools` from
-  after a mid-turn `toggle_toolbox`). The function-side
+- **Tools** - the `/stream` envelope carries one tool payload
+  assembled on the browser side: `tools: buildToolList(mcpToolboxes)`
+  (every tool declared on every request). The function-side
   `performToolCall` dispatches each call against its own (ported)
   tool registry, persists results as `role='tool'` rows, and echoes
   them back into the next round's request. See `./tools.md`.
@@ -640,21 +634,6 @@ A chat turn goes:
   titles the conversation's original topic rather than
   whatever follow-up triggered the retry. See
   [./auto-title.md](./auto-title.md).
-- **`toggle_toolbox` is the only tool that mutates the round
-  loop's gated-toolbox set in-flight.** The function-side round
-  loop inspects each round's outcomes and, when a `toggle_toolbox`
-  call succeeded, rebuilds the wire `tools` array in memory from the
-  envelope's `toolCatalog` (no DB re-read; see
-  `venice/tool_catalog.ts`), so a toolbox the model enables is
-  callable in the SAME turn. Without the rebuild the array stays
-  frozen at its envelope-POST shape, and a model backend that holds
-  the model to the declared tool list coerces the intended write
-  call onto the nearest declared name. The browser has no in-process
-  signal for the flip - it notices via the `threads` realtime UPDATE
-  echo and flashes the composer toolbox button off the row delta
-  (see the drawer-refresh handler in `Chat.svelte`). If you add
-  another tool that also flips thread state, it needs similar
-  special-casing or a refetch.
 - **The round boundary needs an explicit signal; the browser
   can't derive it.** The round loop runs inside the edge function
   now, so the browser sees only a flat stream of deltas. The live
@@ -969,14 +948,9 @@ A chat turn goes:
      protocol (admit the gap or close it with tools before
      answering; never invent citations or specifics to sound
      authoritative), recall framing, journal/wiki framing,
-     toolbox framing, activity-narration rule, dynamic
-     catalog. Fully stable across rounds *and across toolbox
-     toggles* - the catalog is state-free (it lists what
-     toolboxes exist, not which are enabled). The volatile
-     `(on)`/`(off)` state moved into the trailing metadata
-     message (layer 4) so a `toggle_toolbox` flip doesn't
-     re-encode the whole prefix; nothing in this layer varies
-     per turn.
+     every-tool-available framing, activity-narration rule,
+     dynamic catalog. Fully stable across rounds - nothing in
+     this layer varies per turn.
   2. **User-configured system prompts** - whatever's enabled
      in Settings -> Prompts for this thread, in order.
      `Chat.svelte` ships them at the head of `history`; the
@@ -997,10 +971,9 @@ A chat turn goes:
      identity facts (user name + location when set), a
      wall-clock prose paragraph (local ISO 8601 + IANA zone +
      UTC + a "since your last reply" sentence on mid-thread
-     turns), the gated-toolbox `(on)`/`(off)` state block
-     (right after the datetime; `buildToolboxStateBlock`), the
-     thread-attachments inventory, the emphasis-markdown nudge
-     when the toggle is on, and the title nudge (loud nag when
+     turns), the thread-attachments inventory, the
+     emphasis-markdown nudge when the toggle is on, and the title
+     nudge (loud nag when
      the title is still the schema placeholder, soft drift hint
      when a model-set title might need refreshing). The opening
      turn is silent on the title - the auto-title worker owns
@@ -1022,16 +995,6 @@ A chat turn goes:
   the cache. The tradeoff: the model reads ambient context after its
   `<think>` chain rather than just before the user turn, and the final
   wire row is `role:system` rather than the intuition `<think>`.
-
-  The gated-toolbox `(on)`/`(off)` state rides in this trailing block
-  for the same reason. It used to live in the baseline catalog, where a
-  mid-conversation `toggle_toolbox` flip shifted the first-differing
-  byte back to the top of the baseline and busted the whole prefix -
-  the same failure the datetime move fixed, re-introduced by a
-  different volatile field. Moving it to the trailing metadata block
-  (right after the datetime) and leaving the baseline catalog
-  state-free keeps the baseline byte-identical across toggles, so a
-  toggle re-encodes only this small block.
 
   `buildDatetimeParagraph` formats the wall-clock paragraph in
   ISO 8601 at **minute granularity** (local with offset, UTC Z form,

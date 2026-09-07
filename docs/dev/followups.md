@@ -27,7 +27,7 @@ Three moving parts:
 
 - **Capture** - two writers, mirroring memory's volitional /
   subconscious split. The chat model saves a follow-up mid-turn via
-  the gated `followups` toolbox when the user shares a plan worth
+  the `followup_*` tools when the user shares a plan worth
   asking about later; the reflection agent records unresolved plans
   it finds in settled threads, so capture doesn't depend on mid-turn
   volition.

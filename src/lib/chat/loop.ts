@@ -60,7 +60,7 @@
  */
 
 import type { VeniceMessage } from '../venice';
-import { buildToolList, buildToolCatalog } from '../tools';
+import { buildToolList } from '../tools';
 import { buildSystemPrompt } from './system-prompt';
 import { recordSubstrateStub } from '../samskara';
 import { createLogger } from '../logger.svelte';
@@ -110,13 +110,6 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   } = opts;
   // Copy so we can extend locally each round without mutating the caller.
   const history: VeniceMessage[] = [...opts.history];
-  // Turn-entry snapshot of the thread's toolbox set. Shapes the first
-  // round's wire `tools` array and the metadata state block. A mid-turn
-  // toggle_toolbox lands server-side: the orchestrator rearms its own
-  // tools array from the envelope's toolCatalog, and the browser's
-  // thread row catches up via the realtime echo - nothing mutates this
-  // snapshot.
-  const toolboxesEnabled: readonly string[] = thread.toolboxes_enabled;
   // Snapshot the user's connected MCP integrations as dynamic
   // toolboxes for this turn. Built once at turn entry from the
   // caller-supplied list (Chat.svelte computes it from app state via
@@ -181,18 +174,8 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   // buildDatetimeParagraph) so multiple tool rounds inside the same
   // minute keep even this trailing block byte-stable.
   //
-  // The gated-toolbox on/off state rides in this trailing metadata
-  // block too (right after the datetime), NOT in the baseline catalog.
-  // The catalog is state-free - it lists what toolboxes exist, not
-  // which are enabled - so a toggle_toolbox flip mid-conversation
-  // leaves the baseline byte-identical and only churns this trailing
-  // block. Carried in the catalog (where it used to live) a toggle
-  // shifted the first-differing byte back to the top of the baseline
-  // and busted the whole prefix, the same failure the datetime move
-  // fixed.
-  //
   // Tradeoff accepted deliberately: the model reads ambient context
-  // (datetime, toolbox state, attachments inventory, title and
+  // (datetime, attachments inventory, title and
   // emphasis nudges) AFTER its <think> priming chain rather than just
   // before the user turn, and the final wire row is role:system rather
   // than the intuition <think>. The user message still rides bare - no
@@ -214,14 +197,6 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     userLocation,
     displayTimezone,
     lastAssistantTimestamp,
-    // Turn-entry snapshot of the gated-toolbox set. Rendered as the
-    // on/off state block in the trailing metadata message rather than
-    // in the baseline catalog, so a mid-conversation toggle_toolbox
-    // flip only churns this block. Server-side tools may flip the set
-    // mid-turn; the realtime echo updates the thread row asynchronously,
-    // so this is the turn-entry value.
-    enabledToolboxes: toolboxesEnabled,
-    mcpToolboxes,
     attachmentSummaries,
     currentTurnHasAttachments: currentTurnHasAttachments ?? false,
     modelSupportsVision,
@@ -266,11 +241,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       model: modelId,
       messages: requestMessages,
       signal,
-      tools: buildToolList(toolboxesEnabled, mcpToolboxes),
-      // Full catalog for the server-side round chain: lets it rearm
-      // `tools` mid-turn when the model enables a toolbox, instead of
-      // the new box's schemas staying undeclared until the next turn.
-      toolCatalog: buildToolCatalog(mcpToolboxes),
+      tools: buildToolList(mcpToolboxes),
       reasoningEffort,
       disableThinking,
       verbosity,

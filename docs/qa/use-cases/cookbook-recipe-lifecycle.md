@@ -24,9 +24,6 @@ open panel.
 
 - Local stack up (`mise run dev-start`), signed in as the dev user
   (`dev@nak.local` / `devpass123`).
-- The `cooking` toolbox exists in the registry; the model enables it
-  itself via `toggle_toolbox` before reaching for a write tool, so no
-  manual toggle is needed for the LLM-path step.
 - Two small image files on disk to use as recipe photos (any
   `image/*` under the attachment size cap; a downscale pass runs on
   add).

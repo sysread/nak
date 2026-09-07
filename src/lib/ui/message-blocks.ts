@@ -89,17 +89,6 @@ export type MessageBlock =
 // underlying tool_calls and tool-result rows still live in the
 // message store and go out on the wire on replay; this is purely a
 // display filter.
-// `toggle_toolbox` is NOT hidden: it used to be, because the
-// persisted tool-result row's realtime INSERT could land after END
-// and the missing result then rendered as a red X via statusFor's
-// post-END logic. Under streaming-root the toggle almost always
-// happens in a non-terminal round (model toggles, then calls the
-// gated write tool, then writes a terminal response), so the
-// tool-result row has multiple rounds of realtime propagation budget
-// before END fires - the timing-race window closed in practice.
-// Rendering as a tool card gives the user a persistent chat-thread
-// artifact of the toggle, which the 600ms composer-toolbox flash
-// alone doesn't.
 const HIDDEN_TOOL_NAMES = new Set(['update_title', 'ask_user']);
 
 /**

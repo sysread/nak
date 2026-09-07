@@ -5,6 +5,12 @@ import { MAX_RECIPE_COOKLANG_CHARS, MAX_RECIPE_TITLE_CHARS } from '../recipe-lim
 
 export const recipeUpdateSchema = {
   name: 'recipe_update',
+  // The cooklang authoring rules live once, in recipe_save's
+  // description (cooklang is poorly represented in model training
+  // data, so the full spec stays verbatim there). Under
+  // every-tool-declared-every-request both schemas ride the same
+  // request, so a cross-reference is safe and saves ~600 chars per
+  // request.
   description:
     'Update a recipe by id. Provide at least one of title, cooklang, ' +
     'source, or source_url; omit a field to leave it unchanged. ' +
@@ -12,14 +18,8 @@ export const recipeUpdateSchema = {
     'null for source / source_url to clear them. The star rating is ' +
     "the user's own verdict and is not editable here - only they can " +
     'set or clear it, from the recipe card. cooklang ' +
-    `capped at ${MAX_RECIPE_COOKLANG_CHARS} chars; section / declaration / ` +
-    'continuation rules match recipe_save. Same authoring constraints ' +
-    'apply: inline emphasis (`**bold**`, `*italic*`, `_italic_`) ' +
-    'renders in step text but backtick code spans do not; use ' +
-    '`~{N%unit}` for durations; write modifier+ingredient as one ' +
-    'multi-word braced name (`@pre-minced garlic{1%tbsp}`), not two ' +
-    '`@` tokens; mark optional ingredients with `@?` ' +
-    '(`@?cilantro{2%tbsp}`). change_message is REQUIRED and lands in the recipe ' +
+    `capped at ${MAX_RECIPE_COOKLANG_CHARS} chars; use the same Cooklang ` +
+    'authoring rules recipe_save describes. change_message is REQUIRED and lands in the recipe ' +
     "history. Returns the updated row plus the recipe's current photo " +
     'list, which this tool never changes - use the recipe_photos_* ' +
     'tools to edit photos.',

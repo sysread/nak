@@ -42,7 +42,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ReasoningEffort, Verbosity } from './models';
-import type { OpenAIToolDef, OpenAIToolCall, ToolCatalog } from './tools/types';
+import type { OpenAIToolDef, OpenAIToolCall } from './tools/types';
 // Priming payload types. The server publishes the fresh intuition /
 // context-recall caches over the stream channel as the priming stage
 // runs; the StreamEvent union carries these types so a drifting /
@@ -204,15 +204,6 @@ export interface ChatRequest {
    * may emit `tool_calls` events instead of (or in addition to) text.
    */
   tools?: OpenAIToolDef[];
-  /**
-   * The full tool catalog (always-on + every gated toolbox), for the
-   * streaming-root path only. Rides the /stream envelope beside the
-   * wire body so the server-side round chain can rebuild `tools` when
-   * the model toggles a toolbox mid-turn; `tools` above stays the
-   * pre-filtered array the first round runs with. Ignored on the
-   * direct-Venice fallback path, which has no round chain to rearm.
-   */
-  toolCatalog?: ToolCatalog;
   /**
    * When set, populates `venice_parameters.enable_web_search` on the
    * request body. Omitted → field is not sent (Venice's server-side

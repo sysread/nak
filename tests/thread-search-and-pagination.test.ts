@@ -28,7 +28,6 @@ function makeRow(overrides: Partial<Thread> & Pick<Thread, 'id' | 'updated_at'>)
     model: null,
     reasoning_effort: null,
     verbosity: null,
-    toolboxes_enabled: [],
     archived: false,
     created_at: overrides.updated_at,
     ...overrides,

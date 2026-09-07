@@ -51,9 +51,9 @@ Two distinct injection surfaces:
   persisted - they exist only in the in-memory `history` baton for this
   request.
 - **The per-turn metadata block (row 8)** carries turn-volatile ambient
-  state: wall-clock, the gated-toolbox on/off set, the thread
-  attachments inventory, the emphasis-markdown nudge, and the title
-  nudge. It rides LAST for prompt-cache economics (see Gotchas).
+  state: wall-clock, the thread attachments inventory, the
+  emphasis-markdown nudge, and the title nudge. It rides LAST for
+  prompt-cache economics (see Gotchas).
 
 ## The contributors
 
@@ -65,7 +65,7 @@ Two distinct injection surfaces:
 | Samskara compound | `<think>` (row 5) | `getCompoundSummary` (`venice/priming/samskara.ts`) | cached prose row | always-on; no fuse |
 | Samskara fire | `<think>` (row 6) | `fireSamskaras` (`venice/priming/samskara.ts`) | computed per turn | raced against `SAMSKARA_PRIMING_TIMEOUT_MS` |
 | Intuition | `<think>` (row 7) | `runIntuitionPipeline` (`venice/priming/intuition.ts`) | `threads.intuition_payload` | `isPayloadFreshForInjection` (STALE_FUSE_MS) |
-| Tool catalog | system (row 1) | `buildSystemPrompt` / `buildToolList` (`src/lib/tools`) | n/a (derived from enabled toolboxes) | per-turn snapshot of `toolboxes_enabled`; the wire `tools` array additionally rearms mid-turn after a `toggle_toolbox` (see `tools.md`) |
+| Tool catalog | system (row 1) | `buildSystemPrompt` / `buildToolList` (`src/lib/tools`) | n/a | static + connected MCP toolboxes; byte-stable turn-to-turn (see `tools.md`) |
 | Metadata block | system (row 8) | `buildMetadataSystemMessage` (`src/lib/chat/prompt-assembly`) | n/a | rebuilt every turn |
 
 ## Ordering
@@ -234,8 +234,8 @@ browser surface is unchanged:
   [`samskara.md`](./samskara.md),
   [`bias-profile.md`](./bias-profile.md) - the contributor features;
   each owns its own pipeline, cache, and trigger policy.
-- [`tools.md`](./tools.md) - the tool catalog + toolbox-state halves of
-  the system prompt.
+- [`tools.md`](./tools.md) - the tool catalog half of the system
+  prompt.
 - The baseline prompt + catalog are browser-side
   (`src/lib/chat/system-prompt.ts`); the bias appendix + `<think>`-chain
   assembly + ordering are server-side

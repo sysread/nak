@@ -34,15 +34,10 @@ function formatWikiUpdateArgs(args: Record<string, unknown>): string {
 export const wikiUpdateSchema = {
   name: 'wiki_update',
   description:
-    'Update a wiki article by id. Provide at least one of title or ' +
-    'content; omit the other to leave it unchanged.' +
-    `  title capped at ${MAX_WIKI_TITLE_CHARS} chars ` +
-    `(must remain unique per user); content capped at ${MAX_WIKI_CONTENT_CHARS} chars. ` +
-    'Use wiki_search to find the id. Returns the updated row. Preserve ' +
-    'existing facts unless the user has explicitly contradicted them. ' +
-    'message is a one-line commit-message-style summary of WHY you are ' +
-    `editing this article (max ${MAX_WIKI_CHANGELOG_MESSAGE_CHARS} chars); ` +
-    'it lands in the wiki changelog.',
+    'Update a wiki article by id (use wiki_search to find the id). ' +
+    'Provide at least one of title or content; omit the other to leave ' +
+    'it unchanged. Preserve existing facts unless the user has ' +
+    'explicitly contradicted them. Returns the updated row.',
   shortDescription: 'edit a wiki article',
   formatArgs: formatWikiUpdateArgs,
   parameters: {

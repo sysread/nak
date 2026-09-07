@@ -3125,7 +3125,7 @@ button.composer-wharf-trigger {
      Targeting `> button` rather than the container itself leaves the
      popover divs (rendered as siblings of the buttons inside
      ReasoningPicker / VerbosityPicker, and as direct children of
-     `.composer-bar-left` for toolbox/prompts/model) free to appear
+     `.composer-bar-left` for prompts/model) free to appear
      when their open state is true. In practice this doesn't come up:
      opening a picker closes the wharf in the same handler, so the
      popover only renders when the row itself has been briefly shown
@@ -3318,9 +3318,9 @@ button.composer-wharf-trigger {
 }
 
 /* Uniform square sizing for every trigger in the desktop picker row so
-   toolbox, attachments, prompts, model, reasoning, and verbosity read as
+   attachments, prompts, model, reasoning, and verbosity read as
    one set. Without it each button fell back to its own intrinsic size -
-   the toolbox tile at 2.4rem, the icon buttons 2.2rem wide but only
+   the icon buttons 2.2rem wide but only
    content-tall, the model/reasoning/verbosity triggers sized by padding -
    so the row stair-stepped at different heights. 2.2rem squares match the
    send button on the right edge of the same bar, so the whole composer bar
@@ -3334,8 +3334,8 @@ button.composer-wharf-trigger {
    but `.model-picker-btn` (model, reasoning, verbosity) sets no
    justify-content, so it defaults to flex-start. Pinning a fixed 2.2rem
    width with zero padding leaves spare horizontal room, and without this
-   the lone icon hugs the left edge instead of centering - the toolbox and
-   `.icon-btn` escape it only because they set justify-content themselves.
+   the lone icon hugs the left edge instead of centering - `.icon-btn`
+   escapes it only because it sets justify-content itself.
    `display` stays unset so the mobile closed-wharf `display: none` wins. */
 .composer-bar-left > button {
   width: 2.2rem;
@@ -4372,57 +4372,6 @@ button.top-bar-pinned {
 .tool-detail-view-toggle:hover {
   background: var(--bg-2);
   color: var(--text);
-}
-
-/* Composer toggle buttons - the tools master switch and the inline-
-   citations override. Grey when off; --ok green (color + border) when
-   on. The tools button also uses `.toolbox-btn.flash` to pulse when
-   the LLM flips state via toggle_tools; user clicks don't flash, the
-   state swap is feedback enough. The citations button never flashes
-   because only the user can change it - no LLM path. */
-
-.toolbox-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  width: 2.4rem;
-  height: 2.4rem;
-  padding: 0;
-  border-radius: var(--radius);
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--muted);
-  cursor: pointer;
-  /* Required so the badge (position: absolute) anchors to this
-     button, not to .composer-bar which is the nearest positioned
-     ancestor otherwise - causing the badge to appear on the send
-     button in the top-right corner of the bar. */
-  position: relative;
-}
-
-.toolbox-btn:hover {
-  background: var(--bg-2);
-  color: var(--text);
-}
-
-.toolbox-btn.on {
-  color: var(--ok);
-  border-color: var(--ok);
-}
-
-.toolbox-btn.flash {
-  animation: toolbox-flash 600ms ease-out;
-}
-
-@keyframes toolbox-flash {
-  0%   { box-shadow: 0 0 0 0 var(--ok); }
-  50%  { box-shadow: 0 0 0 6px color-mix(in oklab, var(--ok) 30%, transparent); }
-  100% { box-shadow: 0 0 0 0 transparent; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .toolbox-btn.flash { animation: none; }
 }
 
 /* Scanner sitting alone in an assistant card. Now only the cross-device

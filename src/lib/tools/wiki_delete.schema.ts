@@ -22,10 +22,7 @@ export const wikiDeleteSchema = {
     'Delete a wiki article by id. Use only for consolidation - when one ' +
     'article is now strictly subsumed by another article you just updated. ' +
     'Never delete on the basis of "the user said something contradictory ' +
-    'today" alone; in that case, update the article to reflect the new view. ' +
-    'message is a one-line commit-message-style summary of WHY you are ' +
-    `removing this article (max ${MAX_WIKI_CHANGELOG_MESSAGE_CHARS} chars); ` +
-    'it lands in the wiki changelog so the user can audit the deletion.',
+    'today" alone; in that case, update the article to reflect the new view.',
   shortDescription: 'delete a wiki article',
   formatArgs: formatWikiDeleteArgs,
   parameters: {

@@ -554,10 +554,8 @@ or "delete the kettle stub and tidy any references to it." The
 assistant has read access to your wiki (`wiki_list`, `wiki_get`,
 `wiki_search`) for surveying the shape of what is there, and it can
 delegate maintenance tasks to the librarian through a `wiki_librarian`
-tool. The tool is **gated** behind the **Wiki** toolbox in the
-composer's toolbox popover - Nak will enable it on the fly when the
-conversation makes maintenance the obvious next step, or you can flip
-it on yourself before asking.
+tool, on the fly when the conversation makes maintenance the obvious
+next step.
 
 The chat-driven path runs the same librarian sub-agent the sparkles
 button does, with the same in-flight guard - a chat-triggered run
@@ -569,8 +567,7 @@ The librarian is the right tool when the job spans several articles -
 merging duplicates, splitting a conflated topic, a from-scratch
 reorganization. For a single targeted edit, the assistant can also
 write the article directly (see [How the assistant uses the
-wiki](#how-the-assistant-uses-the-wiki) below); both paths gate behind
-the same **Wiki** toolbox.
+wiki](#how-the-assistant-uses-the-wiki) below).
 
 ## Changelog
 
@@ -633,10 +630,7 @@ topic (or the title) directly - that's the cue for `wiki_search`.
 
 ### Letting the assistant edit the wiki
 
-Reading is always on; **writing** is gated behind the **Wiki**
-toolbox in the composer's toolbox popover. Turn it on (or let Nak flip
-it on when the conversation makes a wiki edit the obvious next step)
-and the assistant can, right there in the chat:
+The assistant can, right there in the chat:
 
 - **create, edit, and delete articles** - "start an article about my
   marathon training", "add a paragraph to the Maya article", "delete
@@ -650,9 +644,7 @@ and the assistant can, right there in the chat:
 Every chat-driven article create/edit/delete still writes a
 [changelog](#changelog) entry with the reason Nak gives, so the audit
 trail is identical whether you typed the change yourself or asked the
-assistant to. When the Wiki toolbox is off, none of these write tools
-are on the wire - the assistant can read your wiki but cannot change
-it.
+assistant to.
 
 ## Settings controls
 

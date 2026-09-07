@@ -151,9 +151,9 @@ to my cookbook" followed by the URL, or just paste the recipe text —
 the model will call the `recipe_save` tool and store the result in
 Cooklang form.
 
-The Cookbook tools live inside the `cooking` toolbox. If Nak tells
-you it can't save a recipe, open the composer's toolbox popover and
-enable Cooking, then try again.
+If Nak tells you it can't save a recipe, check that the recipe text
+actually made it into the chat - the tool needs the ingredients and
+steps to come from somewhere.
 
 ## Jumping around a recipe
 

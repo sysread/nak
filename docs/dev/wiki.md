@@ -336,7 +336,7 @@ Browser tools:
 - `src/lib/tools/wiki_librarian.schema.ts` + the `wikiToolbox`
   entry in `src/lib/tools/index.ts` - the main-chat wiki write
   surface: the article CRUD above, this librarian delegation, and the
-  record writes all gate behind the one `wiki` toolbox (see "Tool
+  record writes, grouped under the one `wiki` toolbox (see "Tool
   toolbox split" below).
 
 Browser preview UI (no browser agent code):
@@ -1297,8 +1297,8 @@ browser persists, the autonomous flow's tool calls ARE the writes).
   synthesises a topic note). All four ride every chat request; reads
   are idempotent and cheap, and the wiki blurb in the system prompt
   tells the model which one to reach for in which case.
-- `wikiToolbox` (browser, main-chat registry) is the single gated
-  toolbox the chat model toggles for every wiki write. It carries the
+- `wikiToolbox` (browser, main-chat registry) groups every wiki
+  write. It carries the
   direct article CRUD (`wiki_create` / `wiki_update` / `wiki_delete`),
   the `wiki_librarian` delegation (the server-side sub-agent for
   multi-article consolidations - merge / split / rewrite across the
@@ -1347,22 +1347,19 @@ browser persists, the autonomous flow's tool calls ARE the writes).
 ### Record toolbox split
 
 Record writes live in the SAME `wiki` toolbox as the article writes -
-one toggle gates the whole chat-driven wiki write surface. They were
+one grouping covers the whole chat-driven wiki write surface. They were
 once their own `wiki_records` box; folding them in matches the user's
-mental model (enabling "wiki" turns on wiki editing, articles and
-records alike) and removes a toolbox the user otherwise had to discover
-separately.
+mental model (wiki editing covers articles and records alike).
 
 - `alwaysOnToolbox` carries the record READS - `record_list` (one
   article's timeline), `record_get` (by id), `record_search`
   (semantic across every article's records). They ride every request
   like the wiki reads.
-- `wikiToolbox` (gated, `name: 'wiki'`) carries the record WRITES -
+- `wikiToolbox` (`name: 'wiki'`) carries the record WRITES -
   `record_create` / `record_update` / `record_delete` plus the
   file + link writes `record_file_attach` / `record_file_remove` /
   `record_link_create` / `record_link_delete` - alongside the article
-  writes. Gated via the composer popover / `toggle_toolbox` like the
-  cooking and memory write boxes. The membership tripwire lives in
+  writes. The membership tripwire lives in
   `tests/tools.test.ts`.
 - The extraction agent's toolbox (`buildWikiRecordsToolbox` in
   `agents/wiki_records.ts`) is read-heavy with three writes,

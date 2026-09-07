@@ -381,11 +381,10 @@ export interface ChatLoopOptions {
    * The dynamic MCP-integration toolboxes the user has authorized,
    * built by the caller (Chat.svelte) via buildMcpToolboxes from
    * `app.mcpIntegrations` + `app.mcpToolSchemas`. Forwarded to
-   * buildSystemPrompt, buildToolList, and the per-turn metadata
-   * toolbox-state block so a `mcp:<id>` toolbox composes with the
-   * static catalog under one dedup-by-name pass. Absent / empty on
-   * accounts with no connected integrations - the static catalog
-   * alone ships, byte-identical to pre-MCP behaviour.
+   * buildSystemPrompt and buildToolList so a `mcp:<id>` toolbox
+   * composes with the static catalog under one dedup-by-name pass.
+   * Absent / empty on accounts with no connected integrations - the
+   * static catalog alone ships, byte-identical to pre-MCP behaviour.
    */
   mcpToolboxes?: readonly Toolbox[];
 }

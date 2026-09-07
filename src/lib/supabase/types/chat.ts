@@ -51,16 +51,6 @@ export interface Thread {
    */
   verbosity: Verbosity | null;
   /**
-   * Names of gated toolboxes active on this thread. Flipped by the
-   * `toggle_toolbox` meta-tool (LLM-driven) or the composer toolbox
-   * popover (user-driven). The always_on toolbox is implicit and is
-   * never represented here. Unknown names are dropped by both
-   * writers; an empty array means "only the always_on set." See
-   * `GATED_TOOLBOX_NAMES` in src/lib/tools/index.ts for the
-   * canonical name list.
-   */
-  toolboxes_enabled: string[];
-  /**
    * Soft-hide flag. Archived threads still load — they just render under
    * the drawer's collapsed "Archive" section and lock out the composer.
    * Flipped by the archive / restore row actions; restore also bumps
@@ -495,10 +485,6 @@ export const RECENT_THREAD_CUTOFF_MS = 3 * 24 * 60 * 60 * 1000;
  * CHECK constraint holding a model-profile id; any non-empty string passes
  * through (resolution maps unknown ids - deleted profiles, legacy tier
  * names - to the default profile), non-strings scrub to null.
- * `toolboxes_enabled` defaults to an empty array if the column is missing
- * (older row before the migration, or a coerce on a freshly-minted draft)
- * and non-string elements inside the array are filtered out so a drifting
- * row can never poison the UI's `.includes()` checks.
  */
 export function coerceThread(row: Record<string, unknown>): Thread {
   const model = typeof row.model === 'string' && row.model.length > 0 ? row.model : null;
@@ -506,9 +492,6 @@ export function coerceThread(row: Record<string, unknown>): Thread {
     ? row.reasoning_effort
     : null;
   const verbosity = isVerbosity(row.verbosity) ? row.verbosity : null;
-  const toolboxes_enabled = Array.isArray(row.toolboxes_enabled)
-    ? row.toolboxes_enabled.filter((v): v is string => typeof v === 'string')
-    : [];
   // Drift-tolerant: a row predating the topics column (or one a drift-
   // injected non-array got into) shows up as "untagged" rather than
   // crashing the drawer. The save path is parameterised through the
@@ -524,7 +507,6 @@ export function coerceThread(row: Record<string, unknown>): Thread {
     model,
     reasoning_effort,
     verbosity,
-    toolboxes_enabled,
     archived: row.archived === true,
     // Drift-tolerant like archived: a row predating the column reads
     // as visible, which is what every pre-forking row is.

@@ -11,18 +11,13 @@ export const memoryUpdateSchema = {
   // models were observed skipping it (or inventing a param to carry it)
   // and round-tripping the rejection when it was required.
   description:
-    'Update a memory by id (use memory_search to find the id). Only id is ' +
-    'required. Provide at least one of label or data to change; any field ' +
-    'you omit is left unchanged ' +
-    `(data capped at ${MAX_MEMORY_DATA_CHARS} chars, and never longer than ` +
-    'the body you are replacing - a refine tightens or holds steady, it does ' +
-    'not accrete). Optional message is a one-line, commit-style summary of ' +
-    'what changed and why, which lands in the memory changelog the user ' +
-    'reviews; omit it to auto-derive one from the label. Optional ' +
-    'confidence sets the stored confidence directly (a decimal >= 1.0 and ' +
-    '<= 10.0, NOT a 0-1 probability); prefer memory_reaffirm / ' +
-    'memory_doubt for incremental evidence-based nudges. ' +
-    'Returns the updated row.',
+    'Update a memory by id (use memory_search to find the id). Only id ' +
+    'is required; provide at least one of label or data to change, and ' +
+    'omit everything else. A refine tightens or holds steady - the new ' +
+    'data is never longer than the body it replaces. For confidence, ' +
+    'prefer memory_reaffirm / memory_doubt for incremental ' +
+    'evidence-based nudges; memory_update sets it only to correct a ' +
+    'value that is outright wrong. Returns the updated row.',
   shortDescription: 'edit a saved note',
   parameters: {
     type: 'object',

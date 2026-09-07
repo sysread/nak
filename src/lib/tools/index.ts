@@ -21,23 +21,18 @@
  *     over the stream. The last browser-side dispatchers (the memory
  *     librarian fleets) migrated to the venice function.
  *
- * Toolbox model: the always_on toolbox rides with every request and
- * carries every read-only surface (the recall pair, web search,
- * search/list/read tools across memories / conversations / cookbook /
- * wiki / app docs, the update_title convenience, the analyze_image
- * vision sub-call, and the toggle_toolbox meta-tool itself). Gated
- * toolboxes carry only writes (memory_create through memory_unrelate,
- * recipe_save through recipe_photo_label_set) and are included only
- * when their name is listed in the thread's `toolboxes_enabled`
- * array. The LLM flips gating via
- * the `toggle_toolbox` meta-tool; the user flips gating via the
- * composer toolbox popover. Both paths write through to the same
- * column. Rationale: read tools were getting passed over because the
- * model judged a toolbox toggle to be too expensive for a one-off
- * lookup, then answered from training data instead. Reads are
- * idempotent and cheap, so they ride for free; writes still need a
- * deliberate user-or-model gate so an autonomous turn can't scribble
- * over user data without intent.
+ * Every tool rides on every request (see `buildToolList` for why the
+ * write tools are never withheld): the always_on toolbox carries the
+ * read-only surfaces, the other toolboxes carry the writes. There is
+ * no per-thread gate any more: the serving backend holds the model to
+ * the declared tool list and silently drops a call to an undeclared
+ * tool, and with a state-free system-prompt catalog naming every tool
+ * the model knows the writes exist and sometimes calls one without
+ * first flipping a gate - three times in a row on one thread, each
+ * failure an empty completion the re-roll could not fix. Declaring
+ * everything removes the failure class; prompt caching absorbs the
+ * repeat cost of the larger tools array (Venice reports ~95% of the
+ * prompt cached on the second request of a turn).
  *
  * Note on the user-facing `memoriesToolbox` defined here vs. the
  * agent-only memory toolboxes (both server-side now: the reflection
@@ -49,14 +44,13 @@
  * decay confidence. The user-facing surface keeps hard-delete because
  * "forget X" is user-directed and unambiguous. Don't collapse the two.
  */
-import type { ToolDef, OpenAIToolDef, Toolbox, ToolCatalog } from './types';
+import type { ToolDef, OpenAIToolDef, Toolbox } from './types';
 
 // --- Always-on tool schemas ------------------------------------------
 // Schema-only registrations: every browser `execute()` is dead - tool
 // dispatch happens in the venice edge function (see `./server_side.ts`).
 // The schemas ride eagerly because the first-message critical path
 // renders the catalog and ships the wire `tools` array.
-import { toggleToolboxSchema } from './toggle_tools.schema';
 import { memoryRecallSchema } from './memory_recall.schema';
 import { conversationRecallSchema } from './conversation_recall.schema';
 import { wikiRecallSchema } from './wiki_recall.schema';
@@ -134,10 +128,7 @@ import { serverSideTool } from './server_side';
 // The eager always-on surfaces whose dispatch is server-side. Each is
 // a serverSideTool: catalog metadata for the wire payload, a throwing
 // execute() that fires only if a regression re-routes dispatch
-// browser-side. `toggleToolbox` is read by chat/system-prompt.ts for its
-// `.name` (to filter it out of the rendered catalog) and re-exported
-// below; the rest are referenced only by `alwaysOnToolbox`.
-const toggleToolbox = serverSideTool(toggleToolboxSchema);
+// browser-side. The rest are referenced only by `alwaysOnToolbox`.
 const memoryRecall = serverSideTool(memoryRecallSchema);
 const conversationRecall = serverSideTool(conversationRecallSchema);
 const wikiRecall = serverSideTool(wikiRecallSchema);
@@ -202,21 +193,16 @@ const docDelete = serverSideTool(docDeleteSchema);
 const generateImage = serverSideTool(generateImageSchema);
 
 /**
- * Always-on toolbox. Rides with every request regardless of the
- * thread's `toolboxes_enabled` array.
+ * Always-on toolbox. The read-only surfaces every request carries.
  *
  * The principle: every read-only surface lives here. Reads are
- * idempotent and cheap; gating them was forcing the model to weigh
- * "do I need this badly enough to flip a toolbox?" and frequently
- * answering wrong - in particular passing over memory_search in
- * favour of answering from training data, even when the user had
- * explicitly asked what Nak remembered. Writes still gate (see
- * `cookingToolbox`, `memoriesToolbox` below) because an autonomous
- * tool turn can scribble over user data and the user-or-model gate
- * is the structural backstop.
+ * idempotent and cheap; when they shared the gate with the writes,
+ * the model judged a toolbox toggle too expensive for a one-off
+ * lookup and answered from training data instead - in particular
+ * passing over memory_search even when the user had explicitly asked
+ * what Nak remembered.
  *
  * Members in catalog order:
- *   - `toggle_toolbox` - the gating mechanism for the write boxes.
  *   - `context` - the umbrella recall tool that searches all three
  *     persistent layers (memories, prior conversations, wiki) in
  *     parallel and returns a works-cited index: memory facts verbatim
@@ -279,16 +265,13 @@ const generateImage = serverSideTool(generateImageSchema);
 export const alwaysOnToolbox: Toolbox = {
   name: 'always_on',
   description:
-    'Reflex-level tools that ride every request without being ' +
-    'toggled. The umbrella `context` recall, the three per-layer ' +
+    'The umbrella `context` recall, the three per-layer ' +
     'recall tools, and read-only surfaces (search across ' +
     'memories / conversations / wiki / cookbook / app docs; ' +
     'plus get for memories, conversations, and wiki, and list/get for cookbook) ' +
     'plus web search, ' +
-    'update_title, analyze_image, analyze_pdf_page, ask_user, and the ' +
-    'toggle_toolbox meta-tool.',
+    'update_title, analyze_image, analyze_pdf_page, and ask_user.',
   tools: [
-    toggleToolbox,
     contextTool,
     memoryRecall,
     conversationRecall,
@@ -321,13 +304,10 @@ export const alwaysOnToolbox: Toolbox = {
 
 /**
  * Cookbook write tools. Read paths (`recipe_list`, `recipe_get`)
- * live in the always-on set; this toolbox carries only the tools
- * that mutate cookbook state (saving a new recipe, editing an
- * existing one, deleting one, attaching / removing / reordering
- * photos, captioning photos). The user enables it from the composer
- * popover when they want to record a recipe; the model can also
- * flip it on via `toggle_toolbox` once the conversation makes a
- * cookbook write the obvious next move.
+ * live in the always-on set; this toolbox carries the tools that
+ * mutate cookbook state (saving a new recipe, editing an existing
+ * one, deleting one, attaching / removing / reordering photos,
+ * captioning photos).
  */
 export const cookingToolbox: Toolbox = {
   name: 'cooking',
@@ -348,7 +328,7 @@ export const cookingToolbox: Toolbox = {
 
 /**
  * Memory write tools. `memory_search` lives in the always-on set so
- * the model can find ids without a toggle round-trip; this toolbox
+ * the model can find ids without a round-trip; this toolbox
  * carries the writes (create, update, delete) plus the volitional-
  * memory levers (reaffirm/doubt for graded confidence, relate/
  * unrelate for the memory-graph layer).
@@ -378,14 +358,11 @@ export const memoriesToolbox: Toolbox = {
 };
 
 /**
- * Wiki toolbox - one gate for every chat-driven wiki write, articles
- * and records alike. Wiki reads (wiki_search, wiki_list, wiki_get,
+ * Wiki toolbox - every chat-driven wiki write, articles and records
+ * alike. Wiki reads (wiki_search, wiki_list, wiki_get,
  * wiki_recall) and record reads (record_list, record_get,
  * record_search) live in the always-on set; this toolbox carries only
- * the writes. The user enables it from the composer popover when they
- * want Nak to maintain their wiki; the model flips it on via
- * `toggle_toolbox` once the conversation makes a wiki write the obvious
- * next move.
+ * the writes.
  *
  * Members, in catalog order:
  *   - `wiki_create` / `wiki_update` / `wiki_delete` - direct article
@@ -444,11 +421,11 @@ export const wikiToolbox: Toolbox = {
  * one; surfacing rides the context-recall gather (semantic + date-due).
  * The read path (`followup_list`) is always-on like every other read;
  * this toolbox carries the four lifecycle writes (save / reschedule /
- * close / dismiss). Gated like the other write boxes: the model flips
- * it on via `toggle_toolbox` when the user shares a plan worth
- * following up on, or when their answer resolves an open question.
- * Note the reflection agent writes follow-ups server-side regardless
- * of this gate - the box gates only the chat model's volitional path.
+ * close / dismiss). The model reaches for them when the user shares a
+ * plan worth following up on, or when their answer resolves an open
+ * question.
+ * Note the reflection agent writes follow-ups server-side too - this
+ * toolbox governs only the chat model's volitional path.
  */
 export const followupsToolbox: Toolbox = {
   name: 'followups',
@@ -462,14 +439,10 @@ export const followupsToolbox: Toolbox = {
 };
 
 /**
- * Image-generation toolbox. Gated rather than always-on: generating an
- * image spends Venice credits and writes a persistent attachment row,
- * so it gets the same deliberate user-or-model gate the cookbook /
- * memory writes use. The user enables it from the composer popover; the
- * model can flip it on via `toggle_toolbox` once a "draw me X" makes
- * generation the obvious next move. The generated image is attached to
- * the assistant's reply and rides the same 30-day retention as user
- * uploads.
+ * Image-generation toolbox. Generating an image spends Venice credits
+ * and writes a persistent attachment row. The generated image is
+ * attached to the assistant's reply and rides the same 30-day
+ * retention as user uploads.
  */
 export const imagesToolbox: Toolbox = {
   name: 'images',
@@ -485,9 +458,7 @@ export const imagesToolbox: Toolbox = {
  * live in the always-on set; this toolbox carries the writes that mutate the
  * user's persistent document Library: promoting a pasted file into a permanent
  * doc, editing a doc's title/description, and deleting a doc (with its stored
- * original). Gated like the cookbook / memory writes - the user enables it from
- * the composer popover, or the model flips it on via toggle_toolbox once saving
- * or removing a document is the obvious next move. The model has no file of its
+ * original). The model has no file of its
  * own, so doc_create only promotes a file the user already attached to the
  * conversation.
  */
@@ -504,12 +475,12 @@ export const libraryToolbox: Toolbox = {
 
 /**
  * The canonical ordered list of toolboxes exposed to the main chat.
- * Order is visible to the model (system-prompt catalog) and to the
- * user (popover list). Always-on goes first so the model reads the
- * reflex-level surfaces before the gated catalog. The conversations
- * and research toolboxes were dropped: their only members were
- * read-only (`conversation_search`, `research_docs`) and now ride in
- * always-on, so an empty gated toolbox would have no tools to gate.
+ * Order is visible to the model (system-prompt catalog). Always-on
+ * goes first so the model reads the read-only surfaces before the
+ * write catalog. The conversations and research toolboxes were
+ * dropped: their only members were read-only
+ * (`conversation_search`, `research_docs`) and ride in always-on,
+ * so an empty toolbox would have had no tools to carry.
  */
 export const TOOLBOXES: readonly Toolbox[] = [
   alwaysOnToolbox,
@@ -522,57 +493,12 @@ export const TOOLBOXES: readonly Toolbox[] = [
 ];
 
 /**
- * Gated toolboxes - the set a thread can enable or disable. Derived by
- * subtracting `alwaysOnToolbox` from `TOOLBOXES` so adding a new
- * toolbox automatically extends the gated list (unless it's added to
- * the always-on set, in which case it must be declared there).
- */
-const GATED_TOOLBOXES: readonly Toolbox[] = TOOLBOXES.filter(
-  (tb) => tb.name !== alwaysOnToolbox.name
-);
-
-/**
- * Toolbox names that the UI + schema recognise as valid values in the
- * thread's `toolboxes_enabled` array. Exported for the UI popover and
- * for the toggle meta-tool to validate incoming names against.
- *
- * SOURCE OF TRUTH. The server-side toggle handler
- * (supabase/functions/venice/tools/toggle_tools.ts) can't import this
- * file (Deno can't load the browser barrel), so it keeps a
- * hand-maintained mirror of these names. A toolbox added here but not
- * there can't be enabled by the model (the toggle silently drops the
- * unknown name and returns `enabled: []`). tests/toggle-toolbox-mirror.test.ts
- * cross-checks the two so the drift fails the gate - add a toolbox in
- * BOTH places.
- */
-export const GATED_TOOLBOX_NAMES: readonly string[] = GATED_TOOLBOXES.map(
-  (tb) => tb.name
-);
-
-/**
- * Metadata for the UI popover - just what the renderer needs to draw
- * the checkbox list. Kept as a plain projection so Chat.svelte
- * doesn't pull in tool definitions, tool code, or the full Toolbox
- * type just to render a list.
- */
-export interface ToolboxMeta {
-  readonly name: string;
-  readonly description: string;
-}
-
-export const GATED_TOOLBOX_META: readonly ToolboxMeta[] = GATED_TOOLBOXES.map(
-  (tb) => ({ name: tb.name, description: tb.description })
-);
-
-/**
  * Flat, deduped view of every tool reachable from the main chat
  * model - i.e. every tool across `TOOLBOXES`. Does NOT include
  * agent-only toolboxes (`memoryLibrarianToolbox`,
  * `wikiLibrarianToolbox`) - those are addressed by toolbox
  * directly. Exposed for test assertions and any future UI that
- * wants to inventory the full catalog; the wire builder
- * (`buildToolList`) still composes from `TOOLBOXES` so a tool's
- * toolbox membership drives enablement.
+ * wants to inventory the full catalog.
  */
 export const TOOLS: readonly ToolDef[] = (() => {
   const seen = new Set<string>();
@@ -601,76 +527,43 @@ function byName(name: string): ToolDef | undefined {
 import { toOpenAIToolDef } from './wire';
 
 /**
- * TRIAL SWITCH: toolbox gating on the wire.
- *
- * `false` (the trial) declares EVERY tool - always-on, every gated
- * box, every connected MCP integration - on every request, and
- * withdraws `toggle_toolbox` from the wire and the system prompt. The
- * per-thread `toolboxes_enabled` state, the toggle tool's server
- * implementation, the mid-turn rearm in the orchestrator, and the
- * composer popover all stay in the tree, inert, so flipping this back
- * to `true` restores the gate in one line.
- *
- * Why: the gate exists to keep ambient tokens down - a toolbox that is
- * off ships no schemas. But the serving backend (GLM 5.3 Flash via
- * Venice) holds the model to the declared tool list and DROPS a call
- * to a tool it was not told about, returning an empty completion
- * (~950 completion tokens spent, zero delivered, finish_reason=stop).
- * The system prompt lists every tool by name so the model knows they
- * exist, and it sometimes calls a write without toggling first - three
- * times in a row on one thread. Under the gate that is a silent
- * failure the model cannot see and a temperature re-roll cannot fix.
- * Declaring everything removes the failure; the cost is the ambient
- * tokens the gate was saving (measured 2026-09-07: the 33 gated tool
- * specs add ~49k chars / ~12k tokens before the activity-parameter
- * trim in wire.ts, ~9k after; prompt caching absorbs the repeat).
- *
- * Consumers that branch on this: `buildToolList` (below),
- * `buildSystemPrompt` / `buildCatalog` / `buildToolboxStateBlock`
- * (src/lib/chat/system-prompt.ts), and the composer toolbox button
- * (src/screens/Chat.svelte). Each takes the value as a parameter
- * defaulting to this constant so tests can pin both modes.
- */
-export const TOOLBOX_GATING = false;
-
-/**
- * The tools array we send with a request, built from the thread's
- * currently-enabled toolbox names. The always-on toolbox is always
- * included. Unknown names in the input are ignored (a toolbox that
- * was deleted or renamed should not break mid-flight). Duplicate
- * tool names across toolboxes are deduped on first-seen.
+ * The tools array we send with a request: every static tool plus every
+ * connected MCP integration's tools. Every tool is declared on every
+ * request - there is no per-thread gate. The serving backend (GLM 5.3
+ * Flash via Venice) holds the model to the declared tool list and
+ * silently drops a call to an undeclared tool, returning an empty
+ * completion (~950 completion tokens spent, zero delivered,
+ * finish_reason=stop). The state-free system-prompt catalog lists
+ * every tool by name so the model knows the writes exist, and it
+ * sometimes calls a write the gate had withheld - three times in a
+ * row on one thread. Withholding tools cannot be made safe by
+ * re-rolling; declaring everything removes the failure class, and
+ * prompt caching absorbs the larger array (Venice reports ~95% of the
+ * prompt cached on the second request of a turn). Never reintroduce a
+ * wire-level gate; if a tool must be refused at runtime, refuse at
+ * dispatch with a tool-result naming why.
  *
  * `mcpToolboxes` carries the per-user, runtime-discovered MCP
- * integration toolboxes (see buildMcpToolboxes in ../ui/mcp.ts). They
- * gate the same way as the static boxes - only an integration whose
- * `mcp:<id>` toolbox is in `enabledToolboxes` ships its schemas - but
- * can't live in the static `TOOLBOXES` list because the ids are
- * per-user. The static + dynamic composition shares one dedup-by-name
+ * integration toolboxes (see buildMcpToolboxes in ../ui/mcp.ts).
+ * They can't live in the static `TOOLBOXES` list because the ids are
+ * per-user; every connected integration's toolbox is declared.
+ * The static + dynamic composition shares one dedup-by-name
  * pass so a name appearing in both (shouldn't, but defense in depth)
  * is taken from the static side first.
  */
 export function buildToolList(
-  enabledToolboxes: readonly string[],
-  mcpToolboxes: readonly Toolbox[] = [],
-  gating: boolean = TOOLBOX_GATING
+  mcpToolboxes: readonly Toolbox[] = []
 ): OpenAIToolDef[] {
-  const enabled = new Set(enabledToolboxes);
   const seen = new Set<string>();
   const out: OpenAIToolDef[] = [];
   for (const tb of TOOLBOXES) {
-    if (gating && tb.name !== alwaysOnToolbox.name && !enabled.has(tb.name)) continue;
     for (const tool of tb.tools) {
-      // Under the trial there is nothing to toggle, and a declared
-      // toggle_toolbox would invite the model to call it anyway
-      // (see TOOLBOX_GATING).
-      if (!gating && tool.name === toggleToolbox.name) continue;
       if (seen.has(tool.name)) continue;
       seen.add(tool.name);
       out.push(toOpenAIToolDef(tool));
     }
   }
   for (const tb of mcpToolboxes) {
-    if (gating && !enabled.has(tb.name)) continue;
     for (const tool of tb.tools) {
       if (seen.has(tool.name)) continue;
       seen.add(tool.name);
@@ -678,37 +571,6 @@ export function buildToolList(
     }
   }
   return out;
-}
-
-/**
- * The full catalog for the /stream envelope: always-on defs plus every
- * gated toolbox's defs keyed by name (static boxes in TOOLBOXES order,
- * then MCP boxes). The venice orchestrator rebuilds the wire `tools`
- * array from this after a mid-turn toggle_toolbox call - without it, a
- * toolbox the model enables mid-turn ships no schemas until the next
- * envelope POST, and a backend that holds the model to the declared
- * tool list turns the enable-then-write flow into a wrong-tool call.
- *
- * Key order is load-bearing: the server iterates `gated` in insertion
- * order, so emitting boxes here in the same order buildToolList walks
- * them keeps a rebuilt array identical to what buildToolList would
- * produce for the same enabled set
- * (tests/tool-catalog-parity.test.ts pins this).
- */
-export function buildToolCatalog(
-  mcpToolboxes: readonly Toolbox[] = []
-): ToolCatalog {
-  const gated: Record<string, OpenAIToolDef[]> = {};
-  for (const tb of GATED_TOOLBOXES) {
-    gated[tb.name] = tb.tools.map(toOpenAIToolDef);
-  }
-  for (const tb of mcpToolboxes) {
-    gated[tb.name] = tb.tools.map(toOpenAIToolDef);
-  }
-  return {
-    alwaysOn: alwaysOnToolbox.tools.map(toOpenAIToolDef),
-    gated,
-  };
 }
 
 /**
@@ -734,8 +596,5 @@ export function getToolFormatters(name: string): ToolFormatters | undefined {
 }
 
 export { toOpenAIToolDef };
-// `toggleToolbox` is read by chat/system-prompt.ts for its `.name`; re-exported
-// for that one consumer.
-export { toggleToolbox };
-export type { ToolDef, OpenAIToolDef, ToolContext, ToolResult, Toolbox, ToolCatalog } from './types';
+export type { ToolDef, OpenAIToolDef, ToolContext, ToolResult, Toolbox } from './types';
 export type { OpenAIToolCall } from './types';

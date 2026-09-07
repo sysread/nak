@@ -223,8 +223,11 @@ describe('buildMessageBlocks - hidden tools', () => {
     ]);
   });
 
-  it('does NOT hide toggle_toolbox - it renders as a normal tool card', () => {
-    const a = msg({ id: 'a1', tool_calls: [call('c1', 'toggle_toolbox')] });
+  it('renders a tool call to a retired/unknown tool as a normal tool card', () => {
+    // Persisted rows referencing a tool that no longer exists (e.g.
+    // the retired toggle_toolbox) must still render as the generic
+    // tool-group card, not crash or vanish.
+    const a = msg({ id: 'a1', tool_calls: [call('c1', 'some_retired_tool')] });
     expect(buildMessageBlocks([a]).map((b) => b.kind)).toEqual(['tool-group']);
   });
 });

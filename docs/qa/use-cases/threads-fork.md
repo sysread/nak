@@ -29,7 +29,7 @@ prefix, and search's hidden-hit resolution.
    the ordinal.
 3. Observe the drawer and the open conversation.
 4. In psql:
-   `select id, hidden, forked_from_thread_id, forked_from_msg_id, title, model, toolboxes_enabled from threads where forked_from_thread_id = '<parent-id>';`
+   `select id, hidden, forked_from_thread_id, forked_from_msg_id, title, model from threads where forked_from_thread_id = '<parent-id>';`
    and confirm the fork-point row:
    `select thread_id, role, position from messages where id = (select forked_from_msg_id from threads where forked_from_thread_id = '<parent-id>');`
 5. In psql: `select count(*) from messages where thread_id = '<fork-id>';`
@@ -65,7 +65,7 @@ prefix, and search's hidden-hit resolution.
 - (4) Exactly two fork rows, both `hidden = false`,
   `forked_from_thread_id = <parent-id>`, same `forked_from_msg_id`;
   titles are the parent's behind sigil-subscript-1 and
-  sigil-subscript-2; model pin and toolboxes match the parent. The
+  sigil-subscript-2; model pin matches the parent. The
   fork-point row belongs to the PARENT's segment
   (`thread_id = <parent-id>`) and is the parent's last user or
   settled assistant row.

@@ -38,8 +38,6 @@ them ([dev: followups](../../dev/followups.md)):
 
 - Local stack up (`mise run dev-start`), signed in as the dev
   user (`dev@nak.local` / `devpass123`).
-- The `followups` write toolbox enabled on the test thread (via
-  the composer toolbox popover).
 - Logs drawer open at Debug, source filter on the tool dispatch
   and `reflection` sources.
 - Dev user id for the SQL checks:
@@ -70,7 +68,7 @@ them ([dev: followups](../../dev/followups.md)):
 5. Move the plan: "Change of plans - we're eating out Saturday,
    I'll make the lasagna Sunday instead." Send, then re-run the
    step-2 query.
-6. In a SECOND fresh thread (follow-ups toolbox left OFF),
+6. In a SECOND fresh thread,
    describe a different plan with no date: "I'm thinking about
    asking my manager for a scope change, not sure when." End the
    conversation.
@@ -78,7 +76,7 @@ them ([dev: followups](../../dev/followups.md)):
    [reflection-drain](./reflection-drain.md): reset
    `threads.last_reflected_msg_id` and trigger a turn tail or
    the hourly sweep route), then re-run the step-2 query.
-8. In a THIRD fresh thread (follow-ups toolbox OFF), volunteer
+8. In a THIRD fresh thread, volunteer
    the lasagna outcome unprompted: "By the way, I made the
    lasagna Sunday - the family loved it." Let the thread end.
 9. Force the reflection pass on that thread, then re-run the

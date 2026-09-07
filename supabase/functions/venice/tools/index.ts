@@ -58,7 +58,6 @@ import './recipe_photos.ts';
 import './recipe_save.ts';
 import './recipe_update.ts';
 import './research_docs.ts';
-import './toggle_tools.ts';
 import './update_title.ts';
 import './web_search.ts';
 import './wiki_create.ts';
