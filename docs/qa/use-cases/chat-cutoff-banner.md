@@ -11,6 +11,7 @@ The incomplete-turn detection ([dev: chat](../../dev/chat.md); classifier in `sr
 5. **Deliberate endpoint: pending ask_user.** A tool row carrying the ask_user pending sentinel. The banner should NOT fire. (Not staged here - requires a model that calls ask_user. Covered by unit tests.)
 6. **Expected state: draft tail.** A user message with `status='draft'` at the tail (fork-and-edit flow). The banner should NOT fire.
 7. **Settled transcript.** A thread ending with a completed assistant reply. The banner should NOT fire.
+8. **Empty completion re-roll.** A round whose stream ends with reasoning but no answer text and no tool call (observed on GLM 5.3 Flash: the model writes its answer inside the thinking channel and stops). The function must re-roll the round (up to `MAX_EMPTY_COMPLETION_REROLLS`, 2) before failing, and a failed turn must leave a reasoning-only `status='error'` row so case 3's stalled banner fires - never a bare user tail with nothing to retry against. (Cannot be staged on demand - the shape is a model glitch. Verify opportunistically when the "oops, all thinking!" notice appears in the wild. The predicate and temperature schedule are unit-covered in `supabase/functions/tests/stream-guards.test.ts`.)
 
 ## Preconditions
 
@@ -39,6 +40,8 @@ The incomplete-turn detection ([dev: chat](../../dev/chat.md); classifier in `sr
 
 5. Draft tail after inherited prefix. On a fork created by fork-and-edit (step 2), navigate away and back. Observe the bottom.
 
+6. Empty completion (opportunistic). When a turn on a reasoning model shows the "oops, all thinking!" notice card mid-stream, watch it through to the end. Then open the log drawer and filter the `stream` source.
+
 ## Expected
 
 - (1) No banner. The transcript ends with a completed assistant reply. Nothing below it.
@@ -46,6 +49,7 @@ The incomplete-turn detection ([dev: chat](../../dev/chat.md); classifier in `sr
 - (3) No banner. The aborted marker ("--- user interrupted response") is the last visible content. The status is 'aborted'. The classifier suppresses the banner for deliberate stops.
 - (4) Banner appears. The user message is at the tail with no assistant reply (the completion failed). The banner reads "The response appears to have been cut off. Click to retry." A Retry button is present.
 - (5) No banner. The draft is still at the tail, still `status='draft'`. The composer is re-populated from the draft. The classifier treats draft tails as expected.
+- (6) Either a normal reply lands after the notice (the re-roll worked), or after the third empty attempt a reasoning-only error card lands with the stalled banner and a Retry button. Never a bare user tail. The drawer shows one warn line per re-roll (`empty completion (finishReason=stop reasoningLen=N); re-rolling, attempt k/2`) and, on the failure path, an error line `empty completion after 3 attempts` plus `end terminalKind=error`. Before this behaviour the drawer showed `end terminalKind=completed persistedId=none` and the transcript tail stayed a bare user message across reloads.
 
 ## Cleanup
 
@@ -63,3 +67,5 @@ Delete any test forks from step 2.
 
 | Date | Env | Commit | Result | Notes |
 | ---- | --- | ------ | ------ | ----- |
+| 2026-09-07 | cloud (pre-change) | 5075186 | fail (8) | from the hosted logs, not a walkthrough: thread 675efc75 hit three empty completions in a row (reasoning present, contentLen=0, finishReason=stop, no tool call); each ended `terminalKind=completed persistedId=none`, tail stayed a bare user message, banner read as a cut-off with nothing to retry against |
+| 2026-09-07 | cloud | (this change) | not run (6/8) | cloud session has no browser and the shape cannot be forced; predicate + schedule unit-covered in stream-guards.test.ts, notice copy in slop-notice.test.ts. Verify opportunistically |
