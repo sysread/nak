@@ -33,7 +33,7 @@ describe('tool registry', () => {
     expect(names).toContain('conversation_search');
   });
 
-  it('declares every tool on every request, minus toggle_toolbox', () => {
+  it('declares every tool on every request', () => {
     // No gating: buildToolList([]) is the full catalog the chat-loop
     // ships. The serving backend holds the model to the declared list
     // and silently drops a call to an undeclared tool, so withholding

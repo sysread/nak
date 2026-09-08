@@ -39,7 +39,7 @@ delegation living alongside the direct tools is exercised by
 
 3. **Update.** Ask: `Add a sentence to the QA Sandbox article noting it
    was created during a QA run.` Confirm `wiki_update` fires and the
-   body grew (re-run the step-2 query), and a `update`-kind changelog
+   body grew (re-run the step-1 query), and a `update`-kind changelog
    row landed.
 
 4. **Source attribution.** Confirm the current chat thread was attached

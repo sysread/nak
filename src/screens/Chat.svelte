@@ -1941,7 +1941,7 @@
   });
 
   // Realtime: follow the current user's thread list. Covers the
-  // sidebar across devices — creates, renames, model/tools toggles,
+  // sidebar across devices — creates, renames, settings-pin changes,
   // auto-titles, deletes, and `updated_at` bumps on each send all
   // propagate without the user refreshing. RLS enforces the
   // user_id scoping; the filter here just narrows wire traffic.
@@ -1983,8 +1983,8 @@
         //      recent/older.
         //   2. updated_at bumped past the Recent/Older cutoff →
         //      migrate between those two buckets.
-        //   3. Plain in-bucket update (rename, model change, tools
-        //      toggle) → remove + re-insert in the same bucket so the
+        //   3. Plain in-bucket update (rename, model change) →
+        //      remove + re-insert in the same bucket so the
         //      updated_at ordering reflects the bump.
         // `isDraft` is main-thread-only and never round-trips through
         // the server, so the incoming row can't clobber it — but

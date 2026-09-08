@@ -225,7 +225,8 @@ function schemaMapFromBodyTools(
   return map;
 }
 
-export interface OrchestratorOpts {  /** Venice API key (resolved from app_config by the /stream handler). */
+export interface OrchestratorOpts {
+  /** Venice API key (resolved from app_config by the /stream handler). */
   apiKey: string;
   threadId: string;
   /** Anchor user-message id this turn is responding to. */

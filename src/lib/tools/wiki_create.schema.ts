@@ -3,12 +3,14 @@
  * function (supabase/functions/venice/tools/wiki_create.ts), which also
  * self-registers the tool for dispatch.
  *
- * Kept byte-aligned with the agent-side wire schema in
+ * Parameter shape kept identical to the agent-side wire schema in
  * supabase/functions/venice/agents/wiki.ts (WIKI_CREATE_WIRE_SCHEMA) so
- * the main chat and the autonomous/librarian agents present the model
- * one contract - the only deliberate drift is that the chat schema omits
- * the librarian-only `source_thread_ids` (a chat turn's current thread
- * is attached as the source automatically by the tool).
+ * the main chat and the autonomous/librarian agents accept the same
+ * arguments - the chat schema omits the librarian-only
+ * `source_thread_ids` (a chat turn's current thread is attached as the
+ * source automatically by the tool), and descriptions deliberately
+ * drift: agents run without the chat system prompt, so the agent-side
+ * description carries the full contract there.
  *
  * The `message` field is required (unlike memory_create's optional
  * changelog line): a new article has no sensible label-derived default,

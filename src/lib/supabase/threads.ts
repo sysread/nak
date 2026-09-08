@@ -698,7 +698,7 @@ export async function setThreadVerbosity(
  * to clear (used by tests; the chat-loop only ever writes a fresh
  * payload). Doesn't bump updated_at - intuition is internal state
  * that shouldn't promote the thread to the top of the sidebar, same
- * discipline as the toolbox / verbosity / reasoning-effort setters.
+ * discipline as the verbosity / reasoning-effort setters.
  *
  * Loose typing on `payload`: the column is jsonb and the intuition
  * module owns the canonical shape (see

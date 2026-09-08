@@ -3,9 +3,11 @@
  * function (supabase/functions/venice/tools/wiki_delete.ts), which also
  * self-registers the tool for dispatch.
  *
- * Kept byte-aligned with the agent-side wire schema in
- * supabase/functions/venice/agents/wiki.ts (WIKI_DELETE_WIRE_SCHEMA) so
- * the main chat and the agents present the model one contract.
+ * Parameter shape kept identical to the agent-side wire schema in
+ * supabase/functions/venice/agents/wiki.ts (WIKI_DELETE_WIRE_SCHEMA);
+ * descriptions deliberately drift - agents run without the chat
+ * system prompt, so the agent-side description carries the full
+ * contract there.
  */
 import { MAX_WIKI_CHANGELOG_MESSAGE_CHARS } from '../wiki';
 

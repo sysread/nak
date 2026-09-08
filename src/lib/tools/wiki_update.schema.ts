@@ -36,8 +36,9 @@ export const wikiUpdateSchema = {
   description:
     'Update a wiki article by id (use wiki_search to find the id). ' +
     'Provide at least one of title or content; omit the other to leave ' +
-    'it unchanged. Preserve existing facts unless the user has ' +
-    'explicitly contradicted them. Returns the updated row.',
+    'it unchanged. Titles must stay unique per user. Preserve existing ' +
+    'facts unless the user has explicitly contradicted them. Returns ' +
+    'the updated row.',
   shortDescription: 'edit a wiki article',
   formatArgs: formatWikiUpdateArgs,
   parameters: {

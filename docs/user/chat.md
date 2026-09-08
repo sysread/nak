@@ -34,6 +34,7 @@ is nothing to enable. Nak's capabilities beyond plain chat include:
 - **Cookbook** — save, read, and edit recipes in the Cookbook.
 - **Memories** — search, create, update, and delete long-term
   memories about you.
+- **Conversations** — search prior conversations for context.
 - **Wiki** — read and edit the wiki articles it maintains about you.
 - **Library** — read the documents you've stored there and promote
   an attached file into one.

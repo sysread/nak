@@ -8,7 +8,7 @@
  *   - description   : the full description shipped in the `tools` array
  *   - shortDescription : <50-char line for the in-prompt catalog (system
  *                        message lists every tool by name + this blurb so
- *                        the model knows what's behind the toggle without
+ *                        the model knows what each tool does without
  *                        needing the full schema)
  *   - parameters    : JSON Schema for the args, shipped verbatim
  *   - execute       : nominally a browser-side handler. In practice

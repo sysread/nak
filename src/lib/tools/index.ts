@@ -24,7 +24,7 @@
  * Every tool rides on every request (see `buildToolList` for why the
  * write tools are never withheld): the always_on toolbox carries the
  * read-only surfaces, the other toolboxes carry the writes. There is
- * no per-thread gate any more: the serving backend holds the model to
+ * no per-thread gate: the serving backend holds the model to
  * the declared tool list and silently drops a call to an undeclared
  * tool, and with a state-free system-prompt catalog naming every tool
  * the model knows the writes exist and sometimes calls one without
@@ -61,10 +61,10 @@ import { analyzeImageSchema } from './analyze_image.schema';
 import { analyzePdfPageSchema } from './analyze_pdf_page.schema';
 import { askUserSchema } from './ask_user.schema';
 
-// --- Gated + remaining always-on tool schemas ------------------------
+// --- Write-toolbox + remaining always-on tool schemas ----------------
 // Same schema-only story as above. Tools split across always-on (read
-// paths) and the gated write boxes; gating is a wire-payload concern,
-// not a dispatch one.
+// paths) and the write boxes; toolbox membership is a prompt-catalog
+// grouping, not a dispatch or wire concern.
 import { memorySearchSchema } from './memory_search.schema';
 import { memoryCreateSchema } from './memory_create.schema';
 import { memoryUpdateSchema } from './memory_update.schema';
@@ -139,7 +139,7 @@ const analyzeImage = serverSideTool(analyzeImageSchema);
 const analyzePdfPage = serverSideTool(analyzePdfPageSchema);
 const askUser = serverSideTool(askUserSchema);
 
-// --- Gated tool wrappers --------------------------------------------
+// --- Write-toolbox wrappers ------------------------------------------
 const memorySearch = serverSideTool(memorySearchSchema);
 const memoryCreate = serverSideTool(memoryCreateSchema);
 const memoryUpdate = serverSideTool(memoryUpdateSchema);
@@ -217,7 +217,7 @@ const generateImage = serverSideTool(generateImageSchema);
  *     layer it wants a considered read of.
  *   - `memory_search` - direct semantic search over the user's
  *     long-term memories. Returns rows with ids so the model can
- *     hand them to the gated write tools.
+ *     hand them to the write tools.
  *   - `conversation_search` - direct semantic search over prior
  *     conversation titles + summaries.
  *   - `conversation_get` - primary-key fetch of one prior thread
@@ -239,8 +239,8 @@ const generateImage = serverSideTool(generateImageSchema);
  *     `record_list` walks one article's timeline, `record_get`
  *     fetches one by id, `record_search` runs semantic search
  *     across every article's records. Reads ride always-on like
- *     the wiki reads; the record writes gate behind the
- *     `wiki` toolbox alongside the article writes.
+ *     the wiki reads; the record writes ride the `wiki` toolbox
+ *     alongside the article writes.
  *   - `recipe_list` / `recipe_get` - browse and fetch the user's
  *     saved recipes.
  *   - `research_docs` - bounded sub-agent that answers
@@ -248,8 +248,8 @@ const generateImage = serverSideTool(generateImageSchema);
  *     in-app help corpus.
  *   - `web_search` - sub-completion against Venice's live web
  *     search; the only path search results reach the main model.
- *   - `update_title` - rename the conversation; has to fire on the
- *     very first turn before any gated toolbox is on.
+ *   - `update_title` - rename the conversation; fires from the
+ *     very first turn so a fresh thread gets a real title.
  *   - `analyze_image` - vision sub-completion against an image
  *     attached anywhere in the thread.
  *   - `analyze_pdf_page` - the same, against one rasterized page of
@@ -259,8 +259,8 @@ const generateImage = serverSideTool(generateImageSchema);
  *     user instead of guessing intent. The chat-loop suspends after
  *     this call lands; the next round starts when the user submits an
  *     answer via the AskUserCard UI. Always-on because the model
- *     should be able to reach for it as a clarification reflex on the
- *     first turn, not after toggling a write box.
+ *     should be able to reach for it as a clarification reflex on
+ *     the very first turn.
  */
 export const alwaysOnToolbox: Toolbox = {
   name: 'always_on',

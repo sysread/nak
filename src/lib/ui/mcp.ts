@@ -159,8 +159,6 @@ export function buildMcpToolboxes(
   return out;
 }
 
-/**
- * Lightweight extraction of the {name, description} pairs from
 // --- OAuth round-trip sessionStorage keys ----------------------------
 //
 // The OAuth flow is a full-page redirect away from this tab and back,

@@ -13,11 +13,12 @@ export const memoryUpdateSchema = {
   description:
     'Update a memory by id (use memory_search to find the id). Only id ' +
     'is required; provide at least one of label or data to change, and ' +
-    'omit everything else. A refine tightens or holds steady - the new ' +
-    'data is never longer than the body it replaces. For confidence, ' +
-    'prefer memory_reaffirm / memory_doubt for incremental ' +
-    'evidence-based nudges; memory_update sets it only to correct a ' +
-    'value that is outright wrong. Returns the updated row.',
+    'omit every field you are not changing. A refine tightens or holds ' +
+    'steady - the new data is never longer than the body it replaces. ' +
+    'For confidence, prefer memory_reaffirm / memory_doubt for ' +
+    'incremental evidence-based nudges; memory_update sets it only to ' +
+    'correct a value that is outright wrong (a confidence-only patch is ' +
+    'fine). Returns the updated row.',
   shortDescription: 'edit a saved note',
   parameters: {
     type: 'object',

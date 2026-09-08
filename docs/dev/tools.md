@@ -73,7 +73,7 @@ stays as the safety net for any other empty completion.)
 Cost, measured 2026-09-07: the full declared set is ~72k chars
 (~18k tokens) for 60 tools after the activity-parameter trim. The
 gate's always-on set shipped ~32.6k chars (~8k), so the delta is
-about +8k tokens per request - and prompt caching (Venice reports
+about +10k tokens per request - and prompt caching (Venice reports
 `cached_tokens`, ~95% on the second request of a turn) absorbs the
 repeat within a conversation, since the array is byte-stable
 turn-to-turn now that no toggle can reshape it.
@@ -558,10 +558,9 @@ Edge dispatch (`supabase/functions/venice/`):
 - **Dispatch does not re-check a gate.** `performToolCall` runs
   whatever registered name the model emits - under the
   declare-everything model there is no gate to re-check. A model
-  that hallucinates a registered-but-undeclared write call (or a
-  name that does not exist at all) gets the dispatcher's
-  unknown-tool error as its tool result, which it can see and
-  recover from.
+  that hallucinates a name (or replays a call to a tool retired
+  since the row was written) gets the dispatcher's unknown-tool
+  error as its tool result, which it can see and recover from.
 - **Always-on membership requires read-only behavior.** The
   always-on set is "reads plus reflexes" by design; any new tool
   that wants always-on placement needs the same no-writes property

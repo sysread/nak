@@ -13,9 +13,7 @@
 > module has Deno test coverage (22 tests). Tool namespacing uses
 > `mcp:<integrationId>:<serverToolName>` (Q5, resolved). An
 > authorized integration's tools ride the wire on every request,
-> same as every built-in tool (the per-thread toolbox gate that
-> used to apply was retired with toolbox gating itself; see
-> `tools.md`).
+> same as every built-in tool (see `tools.md`).
 > All open questions from the design phase are resolved or
 > mooted by the implementation; see "Open questions" below.
 
@@ -229,10 +227,11 @@ through them.
   server-side name; the handler fetches the token, POSTs the
   JSON-RPC envelope to the integration's server URL, returns
   the result. Lives alongside the static registry.
-- **Edge priming / chrome -** the priming stage in
-  `supabase/functions/venice/priming.ts` reads the user's
-  connected MCP integrations' (cached) tool catalog for
-  envelope-side needs.
+- **Browser wire composition -** `buildMcpToolboxes`
+  (src/lib/ui/mcp.ts) turns the authorized integrations into
+  dynamic `Toolbox` entries that `buildToolList` and
+  `buildSystemPrompt` compose into the request's wire `tools`
+  array and system-prompt catalog on every turn.
 - **Edge OAuth routes -** seven routes in the venice
   function handle metadata discovery, DCR registration,
   token exchange, token refresh, tool-list fetch,

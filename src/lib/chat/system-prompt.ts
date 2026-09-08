@@ -11,11 +11,11 @@
  * sub-agents) live next to their callers; the "chat" in the name is
  * literal - this is the prompt for the user-facing chat loop only.
  *
- * Two exports, both called from `src/lib/chat/loop.ts` once per turn
- * and from the test suite: `buildSystemPrompt` builds the stable
- * baseline (including the tool catalog). The toolbox catalog is built
- * live from `TOOLBOXES` + `alwaysOnToolbox` so adding a tool or
- * toolbox extends the prompt with no second list to keep in sync.
+ * One export, called from `src/lib/chat/loop.ts` once per turn and
+ * from the test suite: `buildSystemPrompt` builds the stable baseline
+ * (including the tool catalog). The catalog is built live from
+ * `TOOLBOXES` + `alwaysOnToolbox` so adding a tool or toolbox extends
+ * the prompt with no second list to keep in sync.
  *
  * The static prose blocks below are pulled out as module-level
  * template literals so each one reads as a single chunk in the
