@@ -51,6 +51,7 @@ import type { ToolDef, OpenAIToolDef, Toolbox } from './types';
 // dispatch happens in the venice edge function (see `./server_side.ts`).
 // The schemas ride eagerly because the first-message critical path
 // renders the catalog and ships the wire `tools` array.
+import { memorySaveSchema } from './memory_save.schema';
 import { memoryRecallSchema } from './memory_recall.schema';
 import { conversationRecallSchema } from './conversation_recall.schema';
 import { wikiRecallSchema } from './wiki_recall.schema';
@@ -66,8 +67,6 @@ import { askUserSchema } from './ask_user.schema';
 // paths) and the write boxes; toolbox membership is a prompt-catalog
 // grouping, not a dispatch or wire concern.
 import { memorySearchSchema } from './memory_search.schema';
-import { memoryCreateSchema } from './memory_create.schema';
-import { memoryUpdateSchema } from './memory_update.schema';
 import { memoryDeleteSchema } from './memory_delete.schema';
 import { memoryReaffirmSchema } from './memory_reaffirm.schema';
 import { memoryDoubtSchema } from './memory_doubt.schema';
@@ -89,8 +88,8 @@ import { researchDocsSchema } from './research_docs.schema';
 import { wikiSearchSchema } from './wiki_search.schema';
 import { wikiListSchema } from './wiki_list.schema';
 import { wikiGetSchema } from './wiki_get.schema';
-import { wikiCreateSchema } from './wiki_create.schema';
-import { wikiUpdateSchema } from './wiki_update.schema';
+
+import { wikiSaveSchema } from './wiki_save.schema';
 import { wikiDeleteSchema } from './wiki_delete.schema';
 import { wikiLibrarianSchema } from './wiki_librarian.schema';
 import { recordListSchema } from './record_list.schema';
@@ -103,17 +102,15 @@ import { recordFileAttachSchema } from './record_file_attach.schema';
 import { recordFileRemoveSchema } from './record_file_remove.schema';
 import { recordLinkCreateSchema } from './record_link_create.schema';
 import { recordLinkDeleteSchema } from './record_link_delete.schema';
-import { followupCreateSchema } from './followup_create.schema';
-import { followupUpdateSchema } from './followup_update.schema';
 import { followupCloseSchema } from './followup_close.schema';
 import { followupDismissSchema } from './followup_dismiss.schema';
+import { followupSaveSchema } from './followup_save.schema';
 import { followupListSchema } from './followup_list.schema';
+import { docSaveSchema } from './doc_save.schema';
 import { docListSchema } from './doc_list.schema';
 import { docGetSchema } from './doc_get.schema';
 import { docGrepSchema } from './doc_grep.schema';
 import { docReadSchema } from './doc_read.schema';
-import { docCreateSchema } from './doc_create.schema';
-import { docUpdateSchema } from './doc_update.schema';
 import { docDeleteSchema } from './doc_delete.schema';
 import { generateImageSchema } from './generate_image.schema';
 
@@ -141,8 +138,7 @@ const askUser = serverSideTool(askUserSchema);
 
 // --- Write-toolbox wrappers ------------------------------------------
 const memorySearch = serverSideTool(memorySearchSchema);
-const memoryCreate = serverSideTool(memoryCreateSchema);
-const memoryUpdate = serverSideTool(memoryUpdateSchema);
+const memorySave = serverSideTool(memorySaveSchema);
 const memoryDelete = serverSideTool(memoryDeleteSchema);
 const memoryReaffirm = serverSideTool(memoryReaffirmSchema);
 const memoryDoubt = serverSideTool(memoryDoubtSchema);
@@ -164,8 +160,7 @@ const researchDocs = serverSideTool(researchDocsSchema);
 const wikiSearch = serverSideTool(wikiSearchSchema);
 const wikiList = serverSideTool(wikiListSchema);
 const wikiGet = serverSideTool(wikiGetSchema);
-const wikiCreate = serverSideTool(wikiCreateSchema);
-const wikiUpdate = serverSideTool(wikiUpdateSchema);
+const wikiSave = serverSideTool(wikiSaveSchema);
 const wikiDelete = serverSideTool(wikiDeleteSchema);
 const wikiLibrarian = serverSideTool(wikiLibrarianSchema);
 const recordList = serverSideTool(recordListSchema);
@@ -178,8 +173,7 @@ const recordFileAttach = serverSideTool(recordFileAttachSchema);
 const recordFileRemove = serverSideTool(recordFileRemoveSchema);
 const recordLinkCreate = serverSideTool(recordLinkCreateSchema);
 const recordLinkDelete = serverSideTool(recordLinkDeleteSchema);
-const followupCreate = serverSideTool(followupCreateSchema);
-const followupUpdate = serverSideTool(followupUpdateSchema);
+const followupSave = serverSideTool(followupSaveSchema);
 const followupClose = serverSideTool(followupCloseSchema);
 const followupDismiss = serverSideTool(followupDismissSchema);
 const followupList = serverSideTool(followupListSchema);
@@ -187,8 +181,7 @@ const docList = serverSideTool(docListSchema);
 const docGet = serverSideTool(docGetSchema);
 const docGrep = serverSideTool(docGrepSchema);
 const docRead = serverSideTool(docReadSchema);
-const docCreate = serverSideTool(docCreateSchema);
-const docUpdate = serverSideTool(docUpdateSchema);
+const docSave = serverSideTool(docSaveSchema);
 const docDelete = serverSideTool(docDeleteSchema);
 const generateImage = serverSideTool(generateImageSchema);
 
@@ -347,8 +340,7 @@ export const memoriesToolbox: Toolbox = {
     'long-term memories. Read paths (memory_search, memory_recall) ' +
     'are always-on; this toolbox carries the writes.',
   tools: [
-    memoryCreate,
-    memoryUpdate,
+    memorySave,
     memoryDelete,
     memoryReaffirm,
     memoryDoubt,
@@ -365,14 +357,14 @@ export const memoriesToolbox: Toolbox = {
  * the writes.
  *
  * Members, in catalog order:
- *   - `wiki_create` / `wiki_update` / `wiki_delete` - direct article
+ *   - `wiki_save` / `wiki_delete` - direct article
  *     CRUD. A chat turn's current thread is attached as the article's
  *     source automatically, so these omit the librarian-only
  *     `source_thread_ids` param.
  *   - `wiki_librarian` - delegate a multi-article maintenance task
  *     (merge duplicates, split or rewrite across several articles) to a
  *     read-then-plan sub-agent. Kept alongside the direct tools: a
- *     one-shot edit goes through wiki_update, a consolidation that has
+ *     one-shot edit goes through wiki_save, a consolidation that has
  *     to reason over the whole wiki goes through the librarian.
  *   - `record_create` / `record_update` / `record_delete` - direct CRUD
  *     for the dated records linked to an article (the topic's journey,
@@ -392,7 +384,7 @@ export const wikiToolbox: Toolbox = {
   name: 'wiki',
   description:
     "Maintain the user's wiki: create, edit, and delete encyclopedic " +
-    'articles (wiki_create / wiki_update / wiki_delete); delegate a ' +
+    'articles (wiki_save / wiki_delete); delegate a ' +
     'multi-article consolidation to the librarian sub-agent ' +
     '(wiki_librarian); create, edit, and delete the dated records that ' +
     "track an article's journey, attach conversation files to a record, " +
@@ -400,8 +392,7 @@ export const wikiToolbox: Toolbox = {
     'wiki_get, wiki_recall, record_list, record_get, record_search) are ' +
     'always-on; this toolbox carries the writes.',
   tools: [
-    wikiCreate,
-    wikiUpdate,
+    wikiSave,
     wikiDelete,
     wikiLibrarian,
     recordCreate,
@@ -435,7 +426,7 @@ export const followupsToolbox: Toolbox = {
     'Save one when the user shares a plan or dated event worth asking ' +
     'about later; close it when they report the outcome. The read path ' +
     '(followup_list) is always-on; this toolbox carries the writes.',
-  tools: [followupCreate, followupUpdate, followupClose, followupDismiss],
+  tools: [followupSave, followupClose, followupDismiss],
 };
 
 /**
@@ -459,18 +450,18 @@ export const imagesToolbox: Toolbox = {
  * user's persistent document Library: promoting a pasted file into a permanent
  * doc, editing a doc's title/description, and deleting a doc (with its stored
  * original). The model has no file of its
- * own, so doc_create only promotes a file the user already attached to the
+ * own, so doc_save only promotes a file the user already attached to the
  * conversation.
  */
 export const libraryToolbox: Toolbox = {
   name: 'library',
   description:
     "Manage the user's document Library: save a file they attached to the " +
-    'conversation as a permanent searchable document (doc_create), edit a ' +
+    'conversation as a permanent searchable document (doc_save), edit a ' +
     "document's title or description (doc_update), or delete a document " +
     '(doc_delete). Read paths (doc_list, doc_get, doc_grep, doc_read) are ' +
     'always-on; this toolbox carries the writes.',
-  tools: [docCreate, docUpdate, docDelete],
+  tools: [docSave, docDelete],
 };
 
 /**

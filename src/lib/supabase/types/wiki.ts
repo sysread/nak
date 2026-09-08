@@ -9,7 +9,7 @@
 /**
  * One topical article in the user's wiki. Flat list (no nesting), one
  * article per `(user_id, title)` (the schema enforces uniqueness so the
- * autonomous agent's `wiki_create` can fall through to `wiki_update` on
+ * autonomous agent's create can fall through to the update form on
  * conflict). Articles are written in encyclopedic third-person prose
  * and are never auto-injected into the chat - the main LLM reaches
  * them only through the always-on `wiki_search` tool.
@@ -22,7 +22,7 @@ export interface WikiArticle {
    * Long-lived bookmark AND agent-edit lock. Marking an article
    * favorite is what saves it offline (the favorite set is mirrored
    * into IndexedDB by `offline-sync`). It also locks the article from
-   * agent edits: the server-side `wiki_update` and `wiki_delete` tools
+   * agent edits: the server-side `wiki_save` and `wiki_delete` tools
    * check this flag and refuse to modify a favorited article, so the
    * autonomous wiki agent and the librarian cannot overwrite or delete
    * content the user has starred. The user's own direct edits through

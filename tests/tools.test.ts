@@ -26,8 +26,7 @@ describe('tool registry', () => {
     const names = TOOLS.map((t: ToolDef) => t.name);
     expect(names).toContain('memory_recall');
     expect(names).toContain('memory_search');
-    expect(names).toContain('memory_create');
-    expect(names).toContain('memory_update');
+    expect(names).toContain('memory_save');
     expect(names).toContain('memory_delete');
     expect(names).toContain('conversation_recall');
     expect(names).toContain('conversation_search');
@@ -41,7 +40,7 @@ describe('tool registry', () => {
     const names = buildToolList([]).map((t) => t.function.name).sort();
     expect(names).toEqual(TOOLS.map((t: ToolDef) => t.name).sort());
     expect(names).toContain('recipe_update');
-    expect(names).toContain('memory_create');
+    expect(names).toContain('memory_save');
   });
 
   it('declares every MCP toolbox too', () => {
@@ -98,8 +97,7 @@ describe('tool registry', () => {
       'recipe_photo_label_set',
     ]);
     expect(memoriesToolbox.tools.map((t: ToolDef) => t.name)).toEqual([
-      'memory_create',
-      'memory_update',
+      'memory_save',
       'memory_delete',
       'memory_reaffirm',
       'memory_doubt',
@@ -111,8 +109,7 @@ describe('tool registry', () => {
     // record writes (records + files + links). Reads stay in
     // always-on.
     expect(wikiToolbox.tools.map((t: ToolDef) => t.name)).toEqual([
-      'wiki_create',
-      'wiki_update',
+      'wiki_save',
       'wiki_delete',
       'wiki_librarian',
       'record_create',
@@ -150,7 +147,7 @@ describe('tool registry', () => {
     }
     // And no writes leak into always-on.
     for (const write of [
-      'memory_create',
+      'memory_save',
       'memory_delete',
       'recipe_save',
       'recipe_update',

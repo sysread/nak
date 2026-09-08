@@ -18,7 +18,7 @@ Two paths, both automatic:
 
 - **In the moment.** When you share a plan or an upcoming event that
   has a natural "how did it go?" horizon, Nak can save a follow-up
-  right there in the conversation (you'll see the `followup_create`
+  right there in the conversation (you'll see the `followup_save`
   tool call in the reply).
 - **Afterwards.** The same background pass that writes long-term
   memories after a conversation settles also records unresolved

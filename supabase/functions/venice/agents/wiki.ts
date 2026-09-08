@@ -55,8 +55,7 @@ import {
 } from './_agent_tools.ts';
 import { memorySearch } from '../tools/memory_search.ts';
 import { wikiSearch } from '../tools/wiki_search.ts';
-import { wikiCreate } from '../tools/wiki_create.ts';
-import { wikiUpdate } from '../tools/wiki_update.ts';
+import { wikiSave } from '../tools/wiki_save.ts';
 import { wikiDelete } from '../tools/wiki_delete.ts';
 import { recordList } from '../tools/record_list.ts';
 import { recordCreate } from '../tools/record_create.ts';
@@ -223,21 +222,33 @@ const WIKI_SEARCH_WIRE_SCHEMA: AgentTool['wire'] = {
   },
 };
 
-const WIKI_CREATE_WIRE_SCHEMA: AgentTool['wire'] = {
+const WIKI_SAVE_WIRE_SCHEMA: AgentTool['wire'] = {
   type: 'function',
   function: {
-    name: 'wiki_create',
+    name: 'wiki_save',
     description:
-      "Create a new article in the user's wiki. title is the topic name " +
-      `(1-${MAX_WIKI_TITLE_CHARS} chars, must be unique per user); content is ` +
-      `the article body in encyclopedic third-person prose (max ${MAX_WIKI_CONTENT_CHARS} chars). ` +
-      'message is a one-line commit-message-style summary of WHY you are creating this article (max ' +
-      `${MAX_WIKI_CHANGELOG_MESSAGE_CHARS} chars); it lands in the wiki changelog so the user can ` +
-      'audit who/what added the article and why. ' +
-      'Throws on a title collision; on error, run wiki_search and call wiki_update on the existing id.',
+      "Save a wiki article: create a new one, or update an existing one " +
+      'by id. Omit id to create (title + content required); pass id ' +
+      '(from wiki_search) to update, providing only the fields that ' +
+      'change. Titles must stay unique per user; creating with a title ' +
+      'that exactly matches an existing article updates that article ' +
+      'instead (the row carries matched_existing), and a near-match is ' +
+      'refused with the candidates named. Preserve existing facts ' +
+      'unless the user has explicitly contradicted them. Returns the ' +
+      'saved row. When invoked by the librarian, `source_thread_ids` ' +
+      'carries the thread ids whose content informed this update so ' +
+      "they land in the article's bibliography; the autonomous wiki " +
+      'agent leaves it unset (its current thread is attached ' +
+      'automatically).',
     parameters: {
       type: 'object',
       properties: {
+        id: {
+          type: 'string',
+          description:
+            'UUID of the article to update (from wiki_search). Omit to ' +
+            'create a new article.',
+        },
         title: {
           type: 'string',
           minLength: 1,
@@ -255,77 +266,26 @@ const WIKI_CREATE_WIRE_SCHEMA: AgentTool['wire'] = {
           minLength: 1,
           maxLength: MAX_WIKI_CHANGELOG_MESSAGE_CHARS,
           description:
-            'One-line summary of why this article is being added. Written ' +
-            'in the imperative voice ("Add Jeff\'s sister Maya, recently ' +
-            'moved to Seattle") so the changelog reads as a log of ' +
-            'discrete decisions. Lands in the wiki changelog the user can ' +
-            'browse from the Wiki top bar.',
-        },
-      },
-      required: ['title', 'content', 'message'],
-      additionalProperties: false,
-    },
-  },
-};
-
-const WIKI_UPDATE_WIRE_SCHEMA: AgentTool['wire'] = {
-  type: 'function',
-  function: {
-    name: 'wiki_update',
-    description:
-      'Update a wiki article by id. Omit title or content to leave that ' +
-      `field unchanged. title capped at ${MAX_WIKI_TITLE_CHARS} chars ` +
-      `(must remain unique per user); content capped at ${MAX_WIKI_CONTENT_CHARS} chars. ` +
-      'Use wiki_search to find the id. Returns the updated row. Preserve ' +
-      'existing facts unless the user has explicitly contradicted them. ' +
-      'message is a one-line commit-message-style summary of WHY you are ' +
-      `editing this article (max ${MAX_WIKI_CHANGELOG_MESSAGE_CHARS} chars); ` +
-      'it lands in the wiki changelog. When invoked by the librarian ' +
-      'after consulting conversation_search, pass `source_thread_ids` with the ' +
-      'thread ids whose content actually informed this update so they land in ' +
-      "the article's bibliography. The autonomous wiki agent leaves " +
-      '`source_thread_ids` unset; its current thread is attached automatically.',
-    parameters: {
-      type: 'object',
-      properties: {
-        id: {
-          type: 'string',
-          description: 'UUID of the article (from wiki_search).',
-        },
-        title: {
-          type: 'string',
-          minLength: 1,
-          maxLength: MAX_WIKI_TITLE_CHARS,
-        },
-        content: {
-          type: 'string',
-          minLength: 1,
-          maxLength: MAX_WIKI_CONTENT_CHARS,
-        },
-        message: {
-          type: 'string',
-          minLength: 1,
-          maxLength: MAX_WIKI_CHANGELOG_MESSAGE_CHARS,
-          description:
-            'One-line summary of why this article is being edited. Written ' +
-            'in the imperative voice ("Correct Maya\'s employer to Bar (from ' +
-            'November 2026 chat)") so the changelog reads as a log of ' +
-            'discrete decisions. Lands in the wiki changelog the user can ' +
-            'browse from the Wiki top bar.',
+            'Required. One-line summary of why this article is being ' +
+            'saved. Written in the imperative voice ("Add Jeff\'s sister ' +
+            'Maya, recently moved to Seattle" / "Correct Maya\'s employer ' +
+            'to Bar (from November 2026 chat)") so the changelog reads ' +
+            'as a log of discrete decisions. Lands in the wiki changelog ' +
+            'the user can browse from the Wiki top bar.',
         },
         source_thread_ids: {
           type: 'array',
           items: { type: 'string' },
           maxItems: 20,
           description:
-            'Thread ids whose content informed this update. The librarian ' +
+            'Thread ids whose content informed this save. The librarian ' +
             'populates this with ids from conversation_search results; ' +
             'unknown ids are silently dropped (validated against the ' +
             'threads table). Leave unset on the autonomous path - the ' +
             'current thread is attached automatically by the tool.',
         },
       },
-      required: ['id', 'message'],
+      required: ['message'],
       additionalProperties: false,
     },
   },
@@ -674,8 +634,8 @@ Concrete worked example - the case to learn from:
   signal used in older file-transfer protocols such as
   [Kermit](https://en.wikipedia.org/wiki/Kermit_(protocol))." That
   is the entire correct output for this conversation: one wiki_
-  search for "Nak" / "the app", then either wiki_update on an
-  existing Nak article or wiki_create a new one with the brainstorm
+  search for "Nak" / "the app", then either wiki_save (with the existing
+  article's id) or a fresh wiki_save with the brainstorm
   details and a Markdown link out for Kermit.
 
 Most conversations have ONE user-centric subject (or zero, if it
@@ -704,7 +664,7 @@ date - NOT to append another dated line to a growing log in the
 prose.
 
 Concrete iteration signals to listen for - each usually calls for
-a wiki_update that refreshes the existing article's current state.
+a wiki_save (with the id) that refreshes the existing article's current state.
 The individual dated event itself is captured as a RECORD by the
 separate extraction agent; you do not re-log it. You update where
 the subject stands now:
@@ -732,7 +692,7 @@ the subject stands now:
   streak", "starter is finally lively", "down to 1 coffee a day").
 
 Each of these warrants a wiki_search for the relevant existing
-article followed by wiki_update that brings the body's current
+article followed by a wiki_save (with the id) that brings the body's current
 state up to date. Anchor the current state in time with a single
 date marker ("As of November 2026, the recipe uses 75% hydration")
 so the librarian keeps a freshness signal - but do NOT append the
@@ -743,7 +703,7 @@ If the latest conversation advances a subject the wiki does not
 yet have an article for, and the subject is one the user is
 genuinely likely to look up by name later (a project they keep
 returning to, a recurring person, a hobby they're investing
-time in), wiki_create is appropriate - but write the article as a
+time in), a new wiki_save is appropriate - but write the article as a
 current-state description of the subject, not a one-off summary of
 this conversation.
 
@@ -869,7 +829,7 @@ conversation went deep on them):
 - Tutorials, debug sessions, or one-off help interactions where the
   user was just looking up information.
 
-**A useful sterility test before wiki_create:** "If I delete every
+**A useful sterility test before creating:** "If I delete every
 reference to the user from this draft article, what is left?" If
 what is left is a self-contained Wikipedia-style entry on a generic
 topic, the article is sterile of user information and should NOT
@@ -898,8 +858,8 @@ edits. That is a correct outcome.
 
 **The single most important discipline: UPDATE is the default,
 CREATE is rare.** A new article should be the exception, not the
-rule. Most conversations should result in zero or one wiki_update
-calls and zero wiki_create calls. Conversations that are mostly
+rule. Most conversations should result in zero or one wiki_save
+calls and zero new-article saves. Conversations that are mostly
 chitchat, tactical (a one-off question with a one-off answer), or
 about something the user is unlikely to look up by name later
 should produce no wiki edits at all. That is a correct outcome,
@@ -947,8 +907,9 @@ edit on**:
    as "fermented drinks", a person named "Maya" might be filed
    under "household" or by surname. Search for the topic, search
    for adjacent topics, search for the specific facts. Do not
-   skip straight to wiki_create.
-2. **If anything related exists, prefer wiki_update.** Even a
+   skip straight to creating.
+2. **If anything related exists, prefer wiki_save on that
+   article's id.** Even a
    loosely-related existing article is usually the right home
    for new information - extend it rather than fragment the wiki.
    A "Maya" article gains a line about her job change; a
@@ -959,21 +920,22 @@ edit on**:
    carries an inline dated log, migrate it to records first (see
    "Article body vs records" above) so the body you leave behind is
    current-state prose, not a stack of dated snapshots.
-3. **wiki_create is the last resort.** Only call wiki_create
+3. **A create (wiki_save without an id) is the last resort.** Only
+   omit the id
    when you have run wiki_search at least twice with different
    angles AND none of the results could plausibly be extended to
    cover this topic AND the user is genuinely likely to look
    this up by name later. A new article should be a new SUBJECT,
-   not a new conversation summary. If wiki_create raises a
-   unique-violation, that means a search angle missed - call
-   wiki_search with the exact title and fall through to
-   wiki_update.
+   not a new conversation summary. The tool itself backstops a
+   missed search angle: a create whose title exactly matches an
+   existing article lands as an update of that article, and a
+   near-match is refused with the candidates named.
 4. wiki_delete is only for consolidation: when an article you
    just updated now strictly subsumes another one. Never delete
    on the basis of "the user said something different today"
    alone - in that case, update.
 
-**Every wiki_create / wiki_update / wiki_delete call requires a
+**Every wiki_save / wiki_delete call requires a
 \`message\` parameter.** Treat it like a git commit summary: one
 imperative-voice line under ~200 chars naming WHAT this edit does
 and WHY ("Add Maya's new job at Bar (Nov 2026 chat)", "Fold the
@@ -1014,7 +976,7 @@ the user will want to look up by name later", not "this came up".
 **Favorited articles are locked.** The wiki_search, wiki_list, and
 wiki_get tools report a \`favorite\` boolean for each article. When
 \`favorite\` is true the user has starred that article - it is
-locked from agent edits. wiki_update and wiki_delete will refuse
+locked from agent edits. wiki_save and wiki_delete will refuse
 the call with an error. Do NOT attempt to edit or delete a
 favorited article; if the conversation reveals new information
 about a locked subject, skip it and note in your final reply that
@@ -1058,8 +1020,7 @@ function buildWikiToolbox(): Toolbox {
     name: 'wiki',
     tools: [
       asAgentTool(wikiSearch, WIKI_SEARCH_WIRE_SCHEMA),
-      asAgentTool(wikiCreate, WIKI_CREATE_WIRE_SCHEMA),
-      asAgentTool(wikiUpdate, WIKI_UPDATE_WIRE_SCHEMA),
+      asAgentTool(wikiSave, WIKI_SAVE_WIRE_SCHEMA),
       asAgentTool(wikiDelete, WIKI_DELETE_WIRE_SCHEMA),
       asAgentTool(recordList, RECORD_LIST_WIRE_SCHEMA),
       asAgentTool(recordCreate, RECORD_CREATE_WIRE_SCHEMA),

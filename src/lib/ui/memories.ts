@@ -21,7 +21,7 @@ import {
   MAX_MEMORY_DATA_CHARS,
 } from '$lib/memories';
 
-// Label length is capped at 80 by the memory_create/update tool
+// Label length is capped at 80 by the memory_save tool
 // schemas; mirror it here so the UI rejects early instead of
 // bouncing off a Supabase error. Data length is capped at
 // MAX_MEMORY_DATA_CHARS (in $lib/memories).
@@ -251,7 +251,7 @@ export function saveStateNotice(
 /**
  * Validate the required one-line changelog note that both the edit
  * and delete flows demand - the user's manual equivalent of the
- * `message` param the memory_update / memory_delete tools require
+ * `message` param the memory_save / memory_delete tools require
  * of the assistant. `context` picks the verb in the "add a message
  * first" nudge so the copy names the action the user is mid-way
  * through. Expects a pre-trimmed message (the caller trims because

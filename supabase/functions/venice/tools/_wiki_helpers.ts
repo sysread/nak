@@ -1,5 +1,5 @@
-// Shared write-path helpers for the wiki tools (wiki_create /
-// wiki_update / wiki_delete). Mirrors the SupabaseService methods the
+// Shared write-path helpers for the wiki tools (wiki_save /
+// wiki_delete). Mirrors the SupabaseService methods the
 // browser impls called: same input shapes, same silent-no-op-on-empty
 // contracts, same throw-on-DB-error behavior. The tools call the
 // changelog/attach helpers in a try/catch and swallow the error so a

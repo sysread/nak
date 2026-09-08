@@ -35,7 +35,7 @@ import { VENICE_EMBEDDING_MODEL, padEmbeddingForStorage } from './models';
  * Memories.svelte's UI badge, and tests all agree on the boundaries.
  *
  * Defaults and dynamics (see supabase/schema.sql for the RPCs):
- *   - memory_create default: 1.0 (-> no tag)
+ *   - fresh-save default: 1.0 (-> no tag)
  *   - memory_reaffirm: +0.5 cap 10.0
  *   - memory_doubt:   x0.7 no floor
  *   - memory_invalidate (reflection only): x0.5 no floor
@@ -59,7 +59,7 @@ export const MAX_MEMORY_CHANGELOG_MESSAGE_CHARS = 200;
 
 /**
  * Hard cap on memory `data` length, enforced at every memory write
- * boundary (memory_create / memory_update / memory_consolidate /
+ * boundary (memory_save / memory_consolidate /
  * memory_reshape, plus the Memories.svelte edit flow). The server-side
  * embedding backfill applies the same cap defensively when composing
  * Venice input (supabase/functions/_shared/embed-input.ts).

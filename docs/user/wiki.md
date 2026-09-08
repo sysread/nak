@@ -195,7 +195,7 @@ destructive action, **Cancel** dismisses the prompt.
 
 Deletes are hard - the article doesn't move to a trash bin. If you
 delete by mistake the easy recovery is to ask the assistant to
-reconstruct it from the relevant conversations and call `wiki_create`,
+reconstruct it from the relevant conversations and call `wiki_save`,
 or to recreate it manually. The deletion stays visible in the
 [changelog](#changelog) with the title snapshot and the reason you
 typed, so the audit trail survives even when the article doesn't.
@@ -534,7 +534,7 @@ on.
   will NOT also perform the broader periodic sweep - it stays
   inside the scope you specified.
 
-A manual run is irreversible - the librarian's `wiki_update` and
+A manual run is irreversible - the librarian's `wiki_save` and
 `wiki_delete` tools write to your wiki directly, with no preview
 step. The confirmation strip surfaces this before you commit.
 

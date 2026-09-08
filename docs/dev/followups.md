@@ -133,7 +133,7 @@ One table, `followups`:
   AFTER the smoothing pass ships a non-empty note - a surfacing
   counts when it is delivered, not when it is gathered (see
   Gotchas). Semantic surfacing is not an ask-prompt, so it neither
-  stamps the ledger nor counts toward expiry. `followup_update`
+  stamps the ledger nor counts toward expiry. `followup_save`
   resets the ledger when it changes `relevant_after` - a rescheduled
   plan has a fresh ask horizon.
 - `embedding` + model + claim columns - rides the standard backfill
@@ -141,14 +141,14 @@ One table, `followups`:
 
 ## Lifecycle contracts
 
-- `followup_create({question, context?, relevant_after?})` -
+- `followup_save({question, context?, relevant_after?})` - create form (no id):
   callers check `followup_list` first; a question already open OR
   already answered/dismissed must not be created again. The
   answered/dismissed half is the **stale re-creation guard**:
   reflection may process an old planning thread AFTER the outcome
   landed in a different conversation, and must not mint a fresh
   loop for a resolved plan.
-- `followup_update({id, question?, context?, relevant_after?})` -
+- `followup_save({id, question?, context?, relevant_after?})` - revise form:
   the reschedule/revise verb for a plan that MOVED rather than
   resolved. `relevant_after: null` clears the date. Open rows only.
 - `followup_close({id, resolution})` - open rows only, so a
@@ -170,7 +170,7 @@ wiki agents write articles, samskara formation reads the same
 evidence. None of them need to know follow-ups exist. `resolution`
 is the loop's own audit stamp, NOT the persistence channel;
 reflection is the guaranteed path for the durable outcome memory,
-and a volitional `memory_create` at close time is optional judgment.
+and a volitional memory write at close time is optional judgment.
 
 Two hazards this split creates, both guarded:
 

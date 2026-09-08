@@ -9,8 +9,8 @@ export const followupListSchema = {
     'later (with their relevant_after dates and how often each has been ' +
     'raised), plus recently closed ones with their resolutions. Use it ' +
     'to answer "what were you going to ask me?", to find an id for ' +
-    'followup_update / followup_close / followup_dismiss, and ALWAYS ' +
-    'before followup_create - a question already open, answered, or ' +
+    'followup_save (revise form) / followup_close / followup_dismiss, and ALWAYS ' +
+    'before a follow-up save without an id - a question already open, answered, or ' +
     'dismissed must not be created again.',
   shortDescription: 'list saved follow-up questions',
   parameters: {

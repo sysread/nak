@@ -10,7 +10,7 @@ export const followupCloseSchema = {
     'a one-line record of what the answer was ("made it Saturday; too ' +
     'salty"). Closing stops the question from ever surfacing again; if ' +
     'the outcome itself is worth remembering long-term, also save it as ' +
-    'a memory (memory_create) - the resolution line is an audit stamp, ' +
+    'a memory (a fresh save) - the resolution line is an audit stamp, ' +
     'not a memory.',
   shortDescription: 'mark a follow-up answered',
   parameters: {

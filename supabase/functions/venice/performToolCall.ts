@@ -68,7 +68,7 @@ export interface ToolContext {
    * id. Background librarian agents pass null - they operate across
    * threads with no current one. Tools that genuinely need a thread
    * call requireThreadId(); tools with optional thread behavior
-   * (wiki_update's source attribution, conversation_search's
+   * (wiki_save's source attribution, conversation_search's
    * self-exclusion) branch on the null.
    */
   threadId: string | null;

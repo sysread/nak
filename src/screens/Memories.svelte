@@ -158,7 +158,7 @@
   let editOriginalDataLength = $state(0);
   // Required one-line "what changed and why" note that lands in the
   // memory changelog for this edit - the user's manual equivalent of the
-  // `message` param the memory_update tool requires of the assistant.
+  // `message` param the memory_save tool requires of the assistant.
   let editMessage = $state('');
   // Save indicator for the edit form; the state vocabulary and the
   // rendered notice live in $lib/ui/memories (MemorySaveState /
@@ -1067,7 +1067,7 @@
                   </span>
                 </div>
                 <!-- Required changelog note for this edit. Mirrors the
-                     memory_update tool's `message` param so a human edit
+                     memory_save tool's `message` param so a human edit
                      and an assistant edit leave the same kind of trail. -->
                 <div class="form-row">
                   <label for="mem-message-{m.id}">Change message</label>

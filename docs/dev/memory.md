@@ -182,9 +182,9 @@ in `docs/user/memory.md`. The dev side has five moving parts:
   librarian's framing-only content rewrite: change a row's label/data
   to strip encoding-time poison ("this conversation", write-date
   narration, first-person AI self-logging) WITHOUT changing facts or
-  confidence. Mechanically memory_update minus the contract: a distinct
+  confidence. Mechanically the save tool's edit form minus the contract: a distinct
   tool so the librarian's "reframe, don't generate" boundary stays
-  legible (the toolbox excludes memory_update by name). Logs an
+  legible (the librarian toolbox never carries the save tool). Logs an
   `update` changelog row; the embedding-clear trigger re-embeds the
   cleaned text. The rem / deep-sleep prompts scope it to de-poisoning,
   so memories heal over time rather than relying on read-time laundering
@@ -431,7 +431,7 @@ in `docs/user/memory.md`. The dev side has five moving parts:
   passes.
 - **User memory CRUD through the assistant** — user asks "what
   do you remember about me?" or "forget that I liked X"; the
-  main model calls `memory_search` / `memory_update` /
+  main model calls `memory_search` / `memory_save` /
   `memory_delete` through the normal tool flow.
 - **Memories browser** — the **Memories** drawer tab next to
   chats / recipes / journal. Tab pick navigates to
@@ -459,10 +459,10 @@ in `docs/user/memory.md`. The dev side has five moving parts:
   - `embedding_claim_holder`, `embedding_claim_expires` — per-row
     claim for the embeddings backfill
   - `confidence real default 1.0` — starts at 1.0 on create
-    (`memory_create` accepts an optional initial value in [1.0, 10.0]);
+    (a fresh save accepts an optional initial value in [1.0, 10.0]);
     `memory_invalidate` halves it (reflection-only, ×0.5);
     `memory_reshape` rewrites content only and does NOT change
-    confidence; chat-side `memory_update` accepts an optional direct
+    confidence; chat-side `memory_save` accepts an optional direct
     confidence set in [1.0, 10.0] (for correcting a value that is
     outright wrong - reflection's mirrored schema deliberately omits
     it so background agents move confidence only through the graded
@@ -590,11 +590,11 @@ Every tool `execute` below runs function-side (the venice
 function's `performToolCall` registry, or an agent toolbox built
 from the same ports); the browser carries only the wire schemas.
 
-- `memory_create.execute({ label, data, message })` — inserts.
+- `memory_save.execute({ label, data, message })` - create form (no id): inserts.
   The trigger nulls the embedding; the backfill embeds it on its
   next pass. `message` is required (commit-style) and appends a
   `create` changelog row.
-- `memory_update.execute({ id, label?, data?, message?, confidence? })`
+- `memory_save.execute({ id, label?, data?, message?, confidence? })` - edit form: patches by id.
   — writes the changed fields and relies on the trigger to null the
   embedding if either text changed. Optional `confidence` sets the
   stored value directly ([1.0, 10.0]; exposed in the chat schema only,
@@ -677,7 +677,7 @@ rule that every content-write path shares:
 > body longer than it already is.
 
 Formally the budget is `max(MAX_MEMORY_DATA_CHARS, current
-length)` - keyed off the row being rewritten for `memory_update` /
+length)` - keyed off the row being rewritten for the save tool's edit form /
 `memory_reshape`, and off the longer of the two inputs for
 `memory_consolidate`.
 
@@ -857,7 +857,7 @@ renders the delta as a chip (`memorySizeDelta` in
 
 ## Gotchas
 
-- **A write tool must not echo `topics`.** `memory_update` and
+- **A write tool must not echo `topics`.** The save tool's edit form and
   `memory_reshape` select the row back with `RETURNING`, which runs
   AFTER `clear_memory_topics_on_change` has emptied the column to
   re-queue the row for the memory-topics curation unit. Echoing the
@@ -867,11 +867,11 @@ renders the delta as a chip (`memorySizeDelta` in
   (see `./cookbook.md`). Both tools leave `topics` out of the select
   entirely; `tests/memory_write_shape.test.ts` asserts on the column
   list, not just the response, so re-adding it to the select fails the
-  gate. Selecting it only on `memory_update`'s confidence-only path
+  gate. Selecting it only on the edit form's confidence-only path
   (where the trigger does not fire and the tags do survive) would be
   worse than omitting it: the model would have no way to tell an
   accurate empty list from a re-queued one. `memory_search` and
-  `memory_get` are the read-back paths. `memory_create` keeps its
+  `memory_get` are the read-back paths. The create form keeps its
   `topics` because an insert never fires the trigger - a new memory
   genuinely has no tags yet.
 - **DELETE events need the (id, user_id) replica identity.** The
@@ -921,7 +921,7 @@ renders the delta as a chip (`memorySizeDelta` in
   but it means "why is this memory not showing up in search"
   can have two answers (unembedded, or invalidated-below-
   threshold).
-- **A `memory_update` rewrite does not bump confidence.** Content
+- **A memory rewrite does not bump confidence.** Content
   edits and confidence moves are independent: the graded levers
   (reaffirm/doubt/invalidate) and the chat-side direct set are the
   only confidence writers, so a no-op rewrite cannot inflate the
