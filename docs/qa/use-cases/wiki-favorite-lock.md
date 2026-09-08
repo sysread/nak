@@ -17,8 +17,6 @@ themselves.
 - Local stack up (`mise run dev-start`), signed in as the dev user.
 - A Venice key seeded in `app_config` (the chat turn and the wiki
   tools call Venice).
-- Know how to open the composer **toolbox popover** to toggle the
-  **Wiki** box.
 - `SR` = service-role key, `JWT` = the dev user's access token
   (password grant against `/auth/v1/token`), for DB verification.
 - If no safe test article exists, create `QA Lock Article` from the

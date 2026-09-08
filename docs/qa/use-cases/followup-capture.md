@@ -25,8 +25,8 @@ them ([dev: followups](../../dev/followups.md)):
   save didn't happen.
 - **Subconscious close** - reflection is the resolution backstop:
   a settled transcript that resolved a loop the chat model never
-  closed (outcome volunteered unprompted, write toolbox off)
-  gets closed by reflection. Reflection is the ONLY background
+  closed (outcome volunteered unprompted) gets closed by
+  reflection. Reflection is the ONLY background
   agent with follow-up tools - see the dev note's single-
   background-writer rule.
 - **Dedup** - the same plan discussed twice produces ONE open

@@ -85,8 +85,7 @@ open panel.
 10. Expand `History`, click the oldest version row (the initial
     create), inspect the read-only banner, then click
     `Revert to this version` and accept the prompted change message.
-11. In a chat thread, enable the cooking tools if the composer
-    surfaces a toolbox control, then ask the assistant: "Save a
+11. In a chat thread, ask the assistant: "Save a
     recipe called QA Agent Soup with a couple of ingredients and two
     steps." Leave the `Recipes` drawer tab open (or open it after).
 12. Return to the detail pane for `QA Skillet Cornbread` and click
@@ -144,8 +143,8 @@ open panel.
   `Revert to this version` requires a change message and writes a NEW
   `History` row carrying the restored (photo-less) content - the
   revert is itself a version, so it is recoverable.
-- (11) The assistant flips the `cooking` toolbox on (visible in the
-  tool-call trace) and calls `recipe_save`; the saved `QA Agent Soup`
+- (11) The assistant calls `recipe_save` directly (no toggle step -
+  every tool is declared on every request); the saved `QA Agent Soup`
   row appears in the open `Recipes` drawer tab WITHOUT a manual
   refresh, via the realtime relay. Its `History` shows one row -
   `Initial version` if the model omitted a change message, otherwise
