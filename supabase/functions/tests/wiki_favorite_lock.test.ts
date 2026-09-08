@@ -33,8 +33,9 @@ function fakeCtx(
 ): FakeCtx {
   let reachedWrite = false;
   let insertedCols: string | null = null;
-  // `key` mirrors the natural-key probe's select alias (`title as key`);
-  // the dedup heuristic reads it to detect an exact-title match.
+  // `key` mirrors what the natural-key probe re-shapes each row into
+  // ({id, key}); the dedup heuristic reads it to detect an exact-title
+  // match.
   const row = favorite === null
     ? null
     : { id: 'a-1', title: 'Test', key: 'Test', content: rowContent, favorite };

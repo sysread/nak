@@ -57,19 +57,25 @@ interface DocumentRow {
 /**
  * The dedup heuristic's lookup against the documents table.
  * RLS OFF: filters by user_id explicitly - service-role bypasses RLS.
+ * PostgREST select strings cannot carry `AS` aliases (42703), so the
+ * probe selects the bare column and re-shapes to {id, key}.
  */
 function probeDocuments(ctx: ToolContext) {
   return async (
     probeValue: string,
-  ): Promise<{ data: { id: string; key: string }[] | null }> => {
+  ): Promise<{ data: { id: string; key: string }[] }> => {
     const { data, error } = await ctx.adminClient
       .from('documents')
-      .select('id, filename as key')
+      .select('id, filename')
       .eq('user_id', ctx.userId)
-      .ilike('filename', probeValue)
+      // % wildcards: see the matching comment in wiki_save.ts - a bare
+      // ilike pattern only matches the exact string, hiding near-matches
+      // from the fuzzy branch.
+      .ilike('filename', `%${probeValue}%`)
       .limit(3);
     if (error) throw new Error(`naturalKeyProbe failed: ${error.message}`);
-    return { data: (data ?? null) as unknown as { id: string; key: string }[] | null };
+    const rows = (data ?? []) as { id: string; filename: string }[];
+    return { data: rows.map((r) => ({ id: r.id, key: r.filename })) };
   };
 }
 
@@ -173,7 +179,7 @@ export const docSave = {
     // find-it-later purpose the schema description insists on.
     if (!description) throw new Error('description is required');
 
-    return promoteAttachment(args, ctx, filename, description, args.title as string | undefined);
+    return doCreate(args, ctx);
   },
 };
 

@@ -27,15 +27,13 @@
  *   merge nor silently duplicate.
  * - No match: returns null, proceed with the create.
  *
- * `query` runs the single lookup: select the key column for the
- * user's rows, case-insensitively matching the probe value. Splitting
- * the query out keeps this module free of table knowledge - the
- * caller owns the table/column identity and the cast.
+ * `query` runs the single lookup: case-insensitively match the probe
+ * value against the key column for the user's rows, returning
+ * `{id, key}` pairs. Splitting the query out keeps this module free
+ * of table knowledge - the caller owns the table/column identity.
  */
 export async function resolveNaturalKeyMatch(opts: {
-  query: (
-    pattern: string,
-  ) => Promise<{ data: { id: string; key: string }[] | null }>;
+  query: (pattern: string) => Promise<{ data: { id: string; key: string }[] }>;
   keyValue: string;
   fuzzy: boolean;
 }): Promise<{ id: string; key: string } | null> {

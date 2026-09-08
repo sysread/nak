@@ -240,18 +240,26 @@ async function doCreate(
   // edit; the natural-key heuristic routes an exact-title match to
   // that article's update path instead of bouncing with 23505.
   // RLS OFF: the query filters by user_id explicitly - service-role
-  // bypasses RLS.
+  // bypasses RLS. PostgREST select strings cannot carry `AS` aliases
+  // (42703 "column does not exist"), so the probe selects the bare
+  // column and the caller re-shapes it into {id, key}.
   const match = await resolveNaturalKeyMatch({
     query: async (probeValue: string) => {
+      // The probe pattern is wrapped in % so the SQL side pre-filters
+      // by containment; without the wildcards a bare ilike only
+      // matches the exact string, and a near-match ("QA Kombucha"
+      // vs "QA Kombucha Brewing") would be invisible to the probe -
+      // the fuzzy branch would never see it.
       const { data, error } = await ctx.adminClient
         .from('wiki_articles')
-        .select('id, title as key')
+        .select('id, title')
         .eq('user_id', ctx.userId)
-        .ilike('title', probeValue)
+        .ilike('title', `%${probeValue}%`)
         .limit(3);
       if (error) throw new Error(`naturalKeyProbe failed: ${error.message}`);
+      const rows = (data ?? []) as { id: string; title: string }[];
       return {
-        data: (data ?? null) as unknown as { id: string; key: string }[] | null,
+        data: rows.map((r) => ({ id: r.id, key: r.title })),
       };
     },
     keyValue: title,
