@@ -7,7 +7,7 @@
  *
  * Parallel to `cookbook-store.svelte.ts` and `wiki-store.svelte.ts`,
  * minus the change-event channel - the volitional memory tools
- * (`memory_create`, `memory_update`, etc.) already invalidate via the
+ * (`memory_save`, `memory_reaffirm`, etc.) already invalidate via the
  * UI-side write paths that go through this store. If a future tool
  * path lands writes server-side without going through here, we'll add
  * a memory-events channel mirroring cookbook-events.

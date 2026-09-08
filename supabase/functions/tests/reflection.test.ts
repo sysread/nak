@@ -45,16 +45,14 @@ Deno.test('reflection toolbox is the soft-decay memory set plus follow-up verbs,
     toolbox.tools.map((t) => t.name),
     [
       'memory_search',
-      'memory_create',
-      'memory_update',
+      'memory_save',
       'memory_invalidate',
       'memory_reaffirm',
       'memory_doubt',
       'memory_relate',
       'memory_unrelate',
       'followup_list',
-      'followup_create',
-      'followup_update',
+      'followup_save',
       'followup_close',
     ],
   );
@@ -77,7 +75,9 @@ Deno.test('reflection prompt reconciles follow-ups with the answered-check guard
   assertStringIncludes(p, 'followup_list');
   assertStringIncludes(p, 'followup_close');
   assertStringIncludes(p, 'already answered/dismissed');
-  assertStringIncludes(p, 'A moved plan is not a new follow-up');
+  // The prompt wraps at ~76 chars, so the sentence may break across
+  // lines - assert on the stable fragment.
+  assertStringIncludes(p, 'A moved plan is not a');
 });
 
 Deno.test('every reflection tool carries a wire schema whose name matches', () => {

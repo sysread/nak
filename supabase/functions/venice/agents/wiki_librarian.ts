@@ -33,8 +33,8 @@
 // runs never edit the wiki concurrently. The TTL releases a guard a
 // crashed run left behind.
 //
-// The write tools are the REGISTERED wiki_update / wiki_delete ports
-// (tools/wiki_update.ts, tools/wiki_delete.ts) - not private copies.
+// The write tools are the REGISTERED wiki_save / wiki_delete ports
+// (tools/wiki_save.ts, tools/wiki_delete.ts) - not private copies.
 // An earlier shape inlined its own implementations here and their
 // validation caps silently drifted from the real limits; sharing the
 // registered execute()s is what keeps librarian writes byte-identical
@@ -51,7 +51,7 @@ import { wikiSearch } from '../tools/wiki_search.ts';
 import { conversationSearch } from '../tools/conversation_search.ts';
 import { conversationGet } from '../tools/conversation_get.ts';
 import { memorySearch } from '../tools/memory_search.ts';
-import { wikiUpdate } from '../tools/wiki_update.ts';
+import { wikiSave } from '../tools/wiki_save.ts';
 import { wikiDelete } from '../tools/wiki_delete.ts';
 import { recordList } from '../tools/record_list.ts';
 import { recordCreate } from '../tools/record_create.ts';
@@ -92,7 +92,7 @@ const LIBRARIAN_ARTICLE_LIMIT = 500;
 // ---------------------------------------------------------------------------
 // Wire schemas. The librarian's tool descriptions differ from the
 // autonomous wiki agent's (same executes, different usage guidance -
-// e.g. wiki_update here leads with consolidation and fact-correction,
+// e.g. wiki_save here leads with consolidation and fact-correction,
 // and conversation_search is framed as the corroboration tool), so
 // they live here rather than in _agent_tools.ts.
 // ---------------------------------------------------------------------------
@@ -185,10 +185,11 @@ const MEMORY_SEARCH_WIRE_SCHEMA: AgentTool['wire'] = {
 const WIKI_UPDATE_WIRE_SCHEMA: AgentTool['wire'] = {
   type: 'function',
   function: {
-    name: 'wiki_update',
+    name: 'wiki_save',
     description:
-      'Rewrite an existing wiki article in place. Either `title` or ' +
-      '`content` (or both) must be supplied. Every call requires a ' +
+      'Rewrite an existing wiki article in place. Pass the article id ' +
+      'plus either `title` or `content` (or both) - you NEVER create ' +
+      'articles, so id is always required here. Every call requires a ' +
       '`message` (changelog summary, max 200 chars). Optionally pass ' +
       '`source_thread_ids` (an array of thread ids from your most ' +
       'recent conversation_search results) to attribute the update.',
@@ -422,6 +423,34 @@ function asAgentToolNoThread(tool: ToolDef, wire: AgentTool['wire']): AgentTool 
   };
 }
 
+/**
+ * No-create wrapper for the merged wiki_save tool. The librarian
+ * never creates articles - new subjects flow from the autonomous
+ * per-thread agent - and before the upsert merge that rule was
+ * enforced structurally: wiki_create simply was not in this toolbox.
+ * Merging create/update into wiki_save removes the structural guard,
+ * so this wrapper restores it at the same layer: an id-absent call
+ * (the create form) is rejected before the impl runs.
+ */
+function asAgentToolNoCreate(tool: ToolDef, wire: AgentTool['wire']): AgentTool {
+  const inner = asAgentToolNoThread(tool, wire);
+  return {
+    name: inner.name,
+    wire,
+    execute: async (args, agentCtx) => {
+      if (
+        !(typeof args.id === 'string' && args.id.trim().length > 0)
+      ) {
+        throw new Error(
+          'wiki_save without an id would create a new article, but the librarian never creates - ' +
+            'find the article id with wiki_search and pass it.',
+        );
+      }
+      return inner.execute(args, agentCtx);
+    },
+  };
+}
+
 function buildLibrarianToolbox(): Toolbox {
   return {
     name: 'wikiLibrarian',
@@ -431,7 +460,7 @@ function buildLibrarianToolbox(): Toolbox {
       asAgentTool(conversationGet, CONVERSATION_GET_WIRE_SCHEMA),
       asAgentTool(memorySearch, MEMORY_SEARCH_WIRE_SCHEMA),
       asAgentTool(recordList, RECORD_LIST_WIRE_SCHEMA),
-      asAgentToolNoThread(wikiUpdate, WIKI_UPDATE_WIRE_SCHEMA),
+      asAgentToolNoCreate(wikiSave, WIKI_UPDATE_WIRE_SCHEMA),
       asAgentToolNoThread(wikiDelete, WIKI_DELETE_WIRE_SCHEMA),
       asAgentToolNoThread(recordCreate, RECORD_CREATE_WIRE_SCHEMA),
       asAgentToolNoThread(recordUpdate, RECORD_UPDATE_WIRE_SCHEMA),
@@ -478,7 +507,7 @@ function renderUserProfileBlock(
         `If you find an existing article that defaults to "the user" ` +
         `where the name would fit naturally (e.g. "the user is ` +
         `building Nak" instead of "${name} is building Nak"), ` +
-        `wiki_update to replace the generic phrasing with the name. ` +
+        `wiki_save (with the id) to replace the generic phrasing with the name. ` +
         `A natural pronoun ("they", "their") is also fine where the ` +
         `prose flows better than repeating the name.`,
     );
@@ -489,7 +518,7 @@ function renderUserProfileBlock(
         `to other people the user knows. If you find an article that ` +
         `appears to be about the user but uses a name OTHER than ` +
         `${name} (a per-conversation agent hallucination is the ` +
-        `usual cause), wiki_update it to replace the wrong name with ` +
+        `usual cause), wiki_save (with the id) to replace the wrong name with ` +
         `${name} or a natural pronoun.`,
     );
   } else {
@@ -498,7 +527,7 @@ function renderUserProfileBlock(
         'refers to the user themselves, the right rendering is a ' +
         'natural pronoun ("they") or the phrase "the user". ' +
         'If you find an article that appears to be about the user ' +
-        'but uses an invented name, wiki_update to replace the ' +
+        'but uses an invented name, wiki_save (with the id) to replace the ' +
         'name with a pronoun.',
     );
   }
@@ -532,7 +561,9 @@ const WIKI_LIBRARIAN_TOOLS_BLOCK = `**Tools you can use**:
   memory "Maya works at Bar", that's a contradiction worth
   resolving. Read-only here; the librarian does not write to
   memory.
-- \`wiki_update\` - rewrite an article in place. Preserve facts
+- \`wiki_save\` - rewrite an existing article in place (always
+  pass the article id; a call without one is rejected - you
+  never create). Preserve facts
   that are still accurate; integrate facts from a duplicate
   article you intend to delete; correct stale information you
   verified is contradicted by recent conversations.
@@ -546,7 +577,7 @@ const WIKI_LIBRARIAN_TOOLS_BLOCK = `**Tools you can use**:
   Never delete a user-centric article whose content has not been
   merged into another user-centric article.
 
-**Every \`wiki_update\` and \`wiki_delete\` call requires a
+**Every \`wiki_save\` and \`wiki_delete\` call requires a
 \`message\` parameter.** Treat it like a git commit summary: one
 imperative-voice line under ~200 chars naming WHAT this edit does
 and WHY ("Merge sister-Maya article into household; absorbed her
@@ -557,7 +588,7 @@ audit surface they use to understand what the librarian has been
 doing - one line per individual edit, complementing the run-level
 final reply below.
 
-**Source attribution.** When you wiki_update an article after
+**Source attribution.** When you wiki_save an article after
 consulting \`conversation_search\` results, pass the relevant
 thread ids in the \`source_thread_ids\` parameter. Each id you
 pass shows up in the article's bibliography (the "Sources"
@@ -574,7 +605,10 @@ on any conversation (a pure scope-cleanup, name-fix, or
 consolidation where the merged article already carries the
 facts).
 
-**You DO NOT have wiki_create.** New articles flow from the per-
+**You cannot create articles.** wiki_save always requires an
+  existing article's id and rejects calls without one. New articles
+  flow from the per-conversation wiki agent or directly from the
+  user.
 conversation wiki agent or directly from the user. Your job is
 to organise what exists; if you think a topic deserves an
 article that is not currently there, leave it alone - the per-
@@ -588,19 +622,19 @@ const WIKI_LIBRARIAN_DISCIPLINE_BLOCK = `**Discipline**:
   information; missed merges just leave a small redundancy.
 - Favorited articles are locked. Articles annotated \`[locked]\` in
   the list above have been favorited by the user and cannot be
-  edited or deleted by the agent - wiki_update and wiki_delete
+  edited or deleted by the agent - wiki_save and wiki_delete
   will refuse the call. Skip locked articles entirely; do not
   attempt to update, merge, or delete them. If a locked article
   overlaps with a duplicate, consolidate INTO the non-locked
   article and leave the locked one alone. The user can remove the
   star to re-enable agent edits, or edit the article themselves.
-- Preserve facts. When you wiki_update an article to absorb
+- Preserve facts. When you wiki_save an article to absorb
   another, every concrete fact from the absorbed article must
   appear in the merged result unless you are confident it is
   wrong (and conversation_search corroborates the contradiction).
 - Preserve dates - don't discard them, relocate them. Articles
   carry month + year date markers ("as of March 2026", "in late
-  2025") that anchor when each fact was added. When you wiki_update
+  2025") that anchor when each fact was added. When you wiki_save
   for any reason - consolidation, fact-correction, name-fix,
   scope-cleanup link-in - do not drop a dated line from the body.
   If you are reducing a body to current-state prose, the dated
@@ -696,7 +730,7 @@ ${WIKI_LIBRARIAN_TOOLS_BLOCK}
    When you delete an out-of-scope article that has a related
    user-centric article (e.g. you are deleting "Kermit (protocol)"
    and there IS an article about the app the user is building,
-   whose name references Kermit), wiki_update the user-centric
+   whose name references Kermit), wiki_save the user-centric
    article first to add a short Markdown link to a public
    reference (Wikipedia conventionally) so the connection is
    preserved. If no related user-centric article exists, just
@@ -714,7 +748,7 @@ ${WIKI_LIBRARIAN_TOOLS_BLOCK}
    articles whose titles or excerpts strongly overlap are the
    next-highest-value consolidation targets. Use wiki_search to
    read full bodies before deciding. If you confirm overlap:
-   wiki_update the article that is the better home (longer,
+   wiki_save the article that is the better home (longer,
    broader, or more accurate) to absorb the unique facts from
    the duplicate, then wiki_delete the duplicate.
 3. **Fix references to the user.** Three failure patterns to clean
@@ -726,14 +760,14 @@ ${WIKI_LIBRARIAN_TOOLS_BLOCK}
        is the per-conversation agent grabbing a friend's name
        from conversation context and applying it to the user.
        Read the full body to confirm the article is in fact
-       about the user, then wiki_update to replace the wrong
+       about the user, then wiki_save to replace the wrong
        name with the configured one. Use memory_search and
        conversation_search to disambiguate - if a name like
        "Elliot" appears in memories as someone the user knows,
        the article that calls the user "Elliot" is wrong; the
        separate Elliot article (about the actual friend) is
-       out of your scope to create (no wiki_create), but you
-       CAN wiki_update the misnamed article to use the right
+       out of your scope to create, but you
+       CAN wiki_save (with the id) to fix the misnamed article to use the right
        name and leave the per-conversation agent to land the
        Elliot article on its own next cycle.
 
@@ -741,7 +775,7 @@ ${WIKI_LIBRARIAN_TOOLS_BLOCK}
        set, scan for articles that say "the user" where the
        name would fit naturally ("the user is building Nak",
        "the user lives in...", "the user has been learning..."),
-       and wiki_update to substitute the configured name. The
+       and wiki_save to substitute the configured name. The
        wiki should read like a personal encyclopedia about the
        person, not a generic third-party report. Skip cases
        where "the user" is genuinely the better wording (rare,
@@ -762,7 +796,7 @@ ${WIKI_LIBRARIAN_TOOLS_BLOCK}
        search summary alone will not tell you, only the turns
        will. Correct by what you find. If the user only received
        the information and never confirmed, acted on, or claimed
-       it, wiki_update to re-attribute it accurately or drop it.
+       it, wiki_save to re-attribute it accurately or drop it.
        If the user DID take it up - adopted the approach, acted
        on it, asked to save it - keep it, but frame the
        provenance ("Jeff saved a recommended reading list", not
@@ -783,14 +817,14 @@ ${WIKI_LIBRARIAN_TOOLS_BLOCK}
      conversation_search to find more recent threads, then
      conversation_get to read what was actually said. If you
      find a clear contradiction in newer conversations,
-     wiki_update the body to the NEW current state ("As of
+     wiki_save the body to the NEW current state ("As of
      November 2026, Maya is at Bar"). The superseded value is
      not lost: the prior state lives in the records (and the
      change itself may already be a record), so the body holds
      where things stand now, not a running "was X, now Y" log.
    - When an excerpt makes a specific claim with NO date marker,
      use conversation_search to find when the fact was last
-     mentioned and consider wiki_update to retrofit a date
+     mentioned and consider wiki_save to retrofit a date
      marker so future librarian passes have a freshness anchor.
    - When you find no contradiction and no recent mention,
      leave the article alone - undated or old-dated facts
@@ -802,7 +836,7 @@ ${WIKI_LIBRARIAN_TOOLS_BLOCK}
    adjacent topics that confusingly bleed into each other (a
    "Maya" article and a "household" article that both cover
    the same person), decide which article is the right home
-   for which facts and wiki_update both to clarify the split.
+   for which facts and wiki_save both to clarify the split.
    Do not delete in this case - both articles still have a
    reason to exist; you just made the boundary cleaner.
 6. **Step back and ask the from-scratch question.** The
@@ -863,7 +897,7 @@ ${WIKI_LIBRARIAN_TOOLS_BLOCK}
    - **Rename** an article whose title is overly specific to
      the conversation that birthed it, when the body has
      broadened past that original framing. Use
-     wiki_update with the new title; content unchanged. The
+     wiki_save with the new title; content unchanged. The
      changelog message names the rename and the reason
      ("Rename 'Jeff's first sourdough loaf' -> 'Jeff's
      sourdough project'; content broadened to cover starter
@@ -885,13 +919,13 @@ ${WIKI_LIBRARIAN_TOOLS_BLOCK}
    - **Move** a section out of one article and into
      another when the from-scratch view files it under a
      different subject than it currently sits under. Both
-     wiki_updates carry the same fact through - never lose
+     wiki_saves carry the same fact through - never lose
      content in transit.
    - **Split** an article when the from-scratch view treats
      two of its sections as separate subjects with separate
-     findability needs. The librarian has no wiki_create, so
+     findability needs. The librarian cannot create articles, so
      you cannot literally split an article in half - what
-     you CAN do is wiki_update the existing article to focus
+     you CAN do is wiki_save the existing article to focus
      on subject A and leave subject B intact and ready for
      the per-conversation agent to land as its own article
      on the next relevant cycle (note this in your final
@@ -916,7 +950,7 @@ ${WIKI_LIBRARIAN_TOOLS_BLOCK}
      Pick the higher-confidence change, land it, and let
      the next cycle catch the rest.
 
-   Watch for collisions. wiki_update enforces title
+   Watch for collisions. wiki_save enforces title
    uniqueness per user; if the from-scratch title you would
    pick is already taken by another article, that is itself
    a signal the two articles overlap and step 2 (consolidate
@@ -926,7 +960,7 @@ ${WIKI_LIBRARIAN_TOOLS_BLOCK}
    Watch for outbound references. If another article
    references the renamed one by its old title (a Markdown
    link, a "see X for details" line in the prose),
-   wiki_update the referring article to point at the new
+   wiki_save the referring article to point at the new
    title. The wiki has no automatic backref - a stale title
    reference becomes dangling text that no later cycle will
    fix on its own.
@@ -960,7 +994,7 @@ ${WIKI_LIBRARIAN_TOOLS_BLOCK}
    (a) **Promote durable learnings into the body - without duplicating
        the records.** When the records have established a settled
        outcome or a pattern - the recipe converged on a hydration, an
-       experiment reached a conclusion, a habit stuck - wiki_update the
+       experiment reached a conclusion, a habit stuck - wiki_save the
        article body to state that current-state learning (with a date
        marker, same as any other fact). Summarise; do not transcribe
        each record into the body. The body and the records must not say
@@ -1073,7 +1107,7 @@ required to keep the wiki coherent after carrying out the user's
 instructions.** Concrete examples of allowed follow-on edits:
 
 - If the user asks you to delete article A and another article B
-  references A by title or as a See Also-style sibling, wiki_update
+  references A by title or as a See Also-style sibling, wiki_save
   B to remove the dangling reference.
 - If the user asks you to merge two articles, the absorbing
   article's body must actually carry the absorbed facts, dates,
@@ -1206,7 +1240,7 @@ function renderArticleList(
             `${activity.latestDate ? `, latest ${activity.latestDate}` : ''})`
           : '';
       // Favorited articles are locked from agent edits - annotate
-      // them so the librarian knows not to attempt wiki_update or
+      // them so the librarian knows not to attempt wiki_save or
       // wiki_delete on them. The tools enforce the lock regardless,
       // but the annotation saves a wasted tool round.
       const lockAnnotation = r.favorite === true ? ' [locked]' : '';
@@ -1637,7 +1671,7 @@ export const wikiLibrarian: ToolDef = {
 
 registerTool(wikiLibrarian);
 
-// Test-only surface. The toolbox composition (no wiki_create, no
+// Test-only surface. The toolbox composition (no create form of
 // memory writes, no ask_user) and the prompt's variant selection are
 // safety/behavior invariants asserted in
 // supabase/functions/tests/wiki_librarian.test.ts.

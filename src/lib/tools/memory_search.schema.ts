@@ -12,7 +12,7 @@ export const memorySearchSchema = {
     'relations}[]. confidence_tag is corroborated/hedged/shaky or ' +
     'null. relations carries outbound graph edges with the target ' +
     "memory's label/data inlined. Empty query lists everything. " +
-    'Pass ids from this tool to memory_update / memory_delete.',
+    'Pass ids from this tool to memory_save (revise form) / memory_delete.',
   shortDescription: "search the user's saved notes",
   parameters: {
     type: 'object',

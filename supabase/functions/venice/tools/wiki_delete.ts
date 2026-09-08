@@ -75,7 +75,7 @@ export const wikiDelete: ToolDef = {
           chars_after: 0,
         });
       } catch {
-        // best-effort; see the matching comment in wiki_create.ts.
+        // best-effort; see the matching comment in wiki_save.ts.
       }
     }
 

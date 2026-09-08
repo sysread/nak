@@ -16,7 +16,7 @@
 import { assert, assertEquals } from '@std/assert';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ToolContext } from '../venice/performToolCall.ts';
-import { memoryUpdate } from '../venice/tools/memory_update.ts';
+import { memorySave } from '../venice/tools/memory_save.ts';
 import { memoryReshape } from '../venice/tools/memory_reshape.ts';
 
 function fakeCtx(): { ctx: ToolContext; selects: string[] } {
@@ -65,9 +65,9 @@ function writeSelect(selects: string[]): string {
   return cols;
 }
 
-Deno.test('memory_update does not echo the re-queued topics column', async () => {
+Deno.test('memory_save (edit form) does not echo the re-queued topics column', async () => {
   const { ctx, selects } = fakeCtx();
-  const out = (await memoryUpdate.execute(
+  const out = (await memorySave.execute(
     { id: 'm-1', data: 'Prefers rye bread.', message: 'tightened' },
     ctx,
   )) as Record<string, unknown>;

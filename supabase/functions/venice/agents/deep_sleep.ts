@@ -180,8 +180,8 @@ const TOOLS_BLOCK = `**Tools you can use**:
   and fact-bearing date exactly. The row's created_at already records
   when it was learned.
 
-You do NOT have \`memory_create\` (the librarian does not invent
-facts) or \`memory_update\` (reflection's verb for refining a fact,
+You do NOT have \`memory_save\` (the librarian does not invent
+facts or rewrite them - reflection's verb for refining a fact,
 not yours). The one content rewrite you ARE allowed is
 \`memory_reshape\` (above): cleaning a row's framing, never its
 facts.`;

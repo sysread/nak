@@ -7,7 +7,7 @@ export const memoryDoubtSchema = {
     'Multiply a memory\'s confidence by 0.7 when the current exchange ' +
     'weakens it without fully contradicting it (no floor; below 0.05 ' +
     'the memory hides from search but is recoverable). For outright ' +
-    'contradictions prefer memory_update with corrected text or ' +
+    'contradictions prefer memory_save with corrected text or ' +
     'memory_delete on user request. Returns {id, confidence} ' +
     'post-doubt.',
   shortDescription: 'doubt: multiply confidence x0.7',

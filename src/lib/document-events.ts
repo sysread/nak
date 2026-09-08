@@ -2,7 +2,7 @@
  * Window-level event bus for cross-surface notification of Library document
  * writes. Parallel to `wiki-events.ts`. Fired whenever a document is created,
  * updated, or deleted - by the user via Library.svelte or by the LLM via the
- * doc_create / doc_update / doc_delete tools. The drawer listing and the open
+ * doc_save / doc_delete tools. The drawer listing and the open
  * document panel both listen and refetch.
  *
  * Single-tab consistency only - Supabase realtime is not subscribed for

@@ -124,7 +124,7 @@ export const MEMORY_INVALIDATE_WIRE_SCHEMA: AgentTool['wire'] = {
       'Mark a memory as contradicted/outdated, halving its confidence ' +
       'so it stops surfacing in search. Repeated invalidation hides it ' +
       "entirely; the row isn't hard-deleted, so memory_reaffirm / " +
-      'memory_create can restore confidence later. Returns ' +
+      'a fresh save can restore confidence later. Returns ' +
       '{id, confidence} post-decay.',
     parameters: {
       type: 'object',
@@ -145,7 +145,7 @@ export const MEMORY_DOUBT_WIRE_SCHEMA: AgentTool['wire'] = {
       "Multiply a memory's confidence by 0.7 when the current exchange " +
       'weakens it without fully contradicting it (no floor; below 0.05 ' +
       'the memory hides from search but is recoverable). For outright ' +
-      'contradictions prefer memory_update with corrected text or ' +
+      'contradictions prefer memory_save with corrected text or ' +
       'memory_invalidate. Returns {id, confidence} post-doubt.',
     parameters: {
       type: 'object',

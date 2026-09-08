@@ -41,8 +41,7 @@ Deno.test('wiki toolbox is wiki CRUD + full record management + memory_search, i
     toolbox.tools.map((t) => t.name),
     [
       'wiki_search',
-      'wiki_create',
-      'wiki_update',
+      'wiki_save',
       'wiki_delete',
       'record_list',
       'record_create',

@@ -108,7 +108,7 @@ const TOOLS_BLOCK = `**Tools you can use**:
   and fact-bearing date exactly. The row's created_at already records
   when it was learned.
 
-You do NOT have \`memory_create\` or \`memory_update\` - same
+You do NOT have \`memory_save\` - same
 discipline as deep-sleep: librarian collapses, reflection
 generates. The one rewrite you ARE allowed is \`memory_reshape\`
 (above): cleaning a memory's framing, never its facts.`;

@@ -673,7 +673,7 @@ export async function runWikiRecordsSweepTick(
 // analyze_image) and three write tools (record_create + record_link_create
 // + record_file_attach: it creates a record from a live event, so it can
 // verify a photo the user posted in the same conversation and hang it on
-// the record). It never gets wiki_create / wiki_update / memory writes -
+// the record). It never gets wiki_save / memory writes -
 // article bodies and memory stay off-limits.
 export const __test = {
   buildWikiRecordsToolbox,

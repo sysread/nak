@@ -299,11 +299,11 @@ can ask:
   though you can.
 - **"You keep assuming I want long responses. I don't. Remember
   that."** — a direct instruction to record a preference. The model
-  will usually call `memory_create` and confirm.
+  will usually save the memory and confirm.
 - **"Forget that I was ever interested in X."** — see "Forgetting"
   below.
 
-The assistant has `memory_search`, `memory_create`, `memory_update`,
+The assistant has `memory_search` and `memory_save` (which creates a new memory or edits an existing one),
 `memory_reaffirm`, `memory_doubt`, `memory_relate`, `memory_unrelate`,
 `memory_invalidate`, and `memory_delete` as tools. Most requests
 map to a combination of those; you don't need to know the tool

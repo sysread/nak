@@ -65,7 +65,7 @@ export function resolveSelectedArticle(
 /**
  * Validate the required one-line changelog message every direct
  * mutation demands - the user's manual equivalent of the `message`
- * arg the wiki_update / wiki_delete tools require of the agents.
+ * arg the wiki_save / wiki_delete tools require of the agents.
  * `context` picks the verb in the "add a message first" nudge so the
  * copy names the action the user is mid-way through. Expects a
  * pre-trimmed message (the caller trims because it also sends the

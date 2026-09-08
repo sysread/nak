@@ -210,7 +210,7 @@ Edge function (`supabase/functions/venice/`):
   `budgetMs` wall-clock bound - opt-in per agent, currently only
   deep-sleep. See `./tools.md` for why rounds alone are the wrong
   bound; the wiki librarian has not needed one.
-- `tools/wiki_create.ts`, `tools/wiki_update.ts`,
+- `tools/wiki_save.ts`,
   `tools/wiki_delete.ts` - the write tools (char caps, best-effort
   changelog + source attribution, unique-violation rephrasing).
   b-strict throughout: the service-role client bypasses RLS, so every
@@ -326,7 +326,7 @@ Browser tools:
   `conversation_search` / `memory_search` impls that remain in
   `src/lib/tools/` belong to the memory-librarian fleet
   (deep-sleep / rem), not to any wiki feature.
-- `src/lib/tools/wiki_create.schema.ts`, `wiki_update.schema.ts`,
+- `src/lib/tools/wiki_save.schema.ts`,
   `wiki_delete.schema.ts` - the direct article-write schemas the chat
   model sees, schema-only like the reads (the impls + registration
   live in the venice function). Kept aligned with the agent-side wire
@@ -613,7 +613,7 @@ Tests:
   (anti-name-fabrication, profile-block rendering rules).
 - `supabase/functions/tests/wiki_librarian.test.ts` - the
   librarian's composition guards: toolbox membership (the four
-  reads plus wiki_update / wiki_delete; no `wiki_create`, no memory
+  reads plus wiki_save / wiki_delete; no create form, no memory
   writes, no `ask_user`), the prompt's variant selection (custom
   instructions swap in the bounded body; whitespace falls back to
   the standard five-step sweep), and the corrective profile-block
@@ -725,10 +725,10 @@ conversation.
   columns as memories and journal entries (note: `_expires` not
   `_expires_at`, matching the existing convention).
 - `created_at`, `updated_at timestamptz default now()`
-- `unique (user_id, title)` - the agent's `wiki_create` tool
+- `unique (user_id, title)` - the agent's save tool
   surfaces a unique-violation as actionable text so the autonomous
   agent reads the conflict and falls through to `wiki_search` +
-  `wiki_update`.
+  a save by id.
 - Index `(user_id, lower(title))` for the alphabetical drawer
   listing.
 - Trigger `clear_wiki_embedding_on_change` nulls the embedding and
@@ -1099,7 +1099,7 @@ This differs from the journal flow, which uses an atomic
 `upsert_journal_entry_and_mark_thread` RPC because the entry write
 and the pointer advance must happen in lockstep. The wiki agent's
 writes are independent tool calls landing through the registered
-`wiki_create` / `wiki_update` / `wiki_delete` tools - those rows are
+wiki tools - those rows are
 owned by the user, not the claim, so a claim-lost during the cycle
 leaves any already-landed writes intact and just drops the
 pointer-advance for that cycle. The next claim will reprocess the
@@ -1299,11 +1299,11 @@ browser persists, the autonomous flow's tool calls ARE the writes).
   tells the model which one to reach for in which case.
 - `wikiToolbox` (browser, main-chat registry) groups every wiki
   write. It carries the
-  direct article CRUD (`wiki_create` / `wiki_update` / `wiki_delete`),
+  article save + delete (`wiki_save` / `wiki_delete`),
   the `wiki_librarian` delegation (the server-side sub-agent for
   multi-article consolidations - merge / split / rewrite across the
   whole wiki), AND the record writes (see "Record toolbox split"
-  below). The chat model reaches for a one-shot `wiki_update` when a
+  below). The chat model reaches for a one-shot `wiki_save` when a
   targeted edit is enough and delegates to the librarian when the job
   needs a read-everything-then-plan pass over many articles. The
   direct article writes wrap the same registered tool impls the
@@ -1326,7 +1326,7 @@ browser persists, the autonomous flow's tool calls ARE the writes).
 - The librarian's toolbox (`buildLibrarianToolbox` in
   `agents/wiki_librarian.ts`) bundles four reads (wiki_search,
   conversation_search, conversation_get, memory_search) plus
-  wiki_update + wiki_delete - **no wiki_create** (the librarian
+  wiki_save + wiki_delete - **the save tool cannot create** (the librarian
   consolidates what exists, it never invents) and no memory writes.
   `conversation_search` returns only title + topic summary, so the
   attribution pass (workflow step 3c) and the stale-fact pass (step
@@ -1507,8 +1507,8 @@ mental model (wiki editing covers articles and records alike).
   `wiki_search` and the other read tools (plus the record reads
   `record_list` / `record_get` / `record_search`) are always-on in
   every chat request. The gated `wikiToolbox` is the single toggle for
-  every chat-driven write: direct article CRUD (`wiki_create` /
-  `wiki_update` / `wiki_delete`), the `wiki_librarian` delegation for
+  every chat-driven write: article save + delete (`wiki_save` /
+  `wiki_delete`), the `wiki_librarian` delegation for
   multi-article consolidations, and the record writes
   (`record_create` / `record_update` / `record_delete` plus the file +
   link tools).
@@ -1603,7 +1603,7 @@ mental model (wiki editing covers articles and records alike).
   `wikiLibrarianEnabled` with the identical shape, for the identical
   reason.
 - **Wiki write tools are registered but not chat-reachable.**
-  `wiki_create` / `wiki_update` / `wiki_delete` live in
+  `wiki_save` / `wiki_delete` live in
   performToolCall's global registry (the barrel imports in
   `supabase/functions/venice/tools/index.ts`) so `asAgentTool` can
   wrap the registered impls, but they are deliberately absent from
@@ -1625,7 +1625,7 @@ mental model (wiki editing covers articles and records alike).
   should land with seam-driven coverage, not live verification.
 - **Build agent toolboxes from the registered tool ports; never
   inline private copies.** The librarian's write tools are the
-  registered `wiki_update` / `wiki_delete` executes wrapped via
+  registered `wiki_save` / `wiki_delete` executes wrapped via
   `asAgentToolNoThread`. An inlined copy drifts silently: an earlier
   inlined pair carried validation caps of 300 title / 50000 content
   chars while the real tools enforce 200 / 16000, so the same write
@@ -1686,11 +1686,11 @@ mental model (wiki editing covers articles and records alike).
   but a near-duplicate title can still slip through (the search
   returned an unrelated article, or caching missed). The unique
   constraint surfaces the collision as a tool error the agent reads
-  as "fall through to wiki_search + wiki_update". The raw Postgres
+  as "fall through to wiki_search + a save by id". The raw Postgres
   `duplicate key value violates unique constraint` message is opaque
-  to the model, so the function-side `wiki_create` rephrases it as
+  to the model, so the function-side `wiki_save` rephrases it as
   "An article titled X already exists. Run wiki_search to find its
-  id, then call wiki_update." Removing the constraint would silently
+  id, then call wiki_save with that id." Removing the constraint would silently
   allow duplicate articles.
 - **Manual agent must NOT discard facts unless told to.** The
   "rewrite for tone" / "fix paragraph 2" / "add a sentence" patterns
@@ -1780,7 +1780,7 @@ mental model (wiki editing covers articles and records alike).
 - **Favorited articles are locked from agent edits.** The
   `wiki_articles.favorite` flag (which also drives offline caching)
   doubles as an agent-edit lock. When `favorite` is true, the
-  `wiki_update` and `wiki_delete` tools refuse the call with a
+  `wiki_save` and `wiki_delete` tools refuse the call with a
   clear error, and `runWikiManualUpdate` returns `kind:'error'`
   before the agent even runs. This blocks all three agent paths
   (autonomous sweep, librarian, manual per-article update) from

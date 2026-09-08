@@ -165,28 +165,26 @@ surface lives in the always-on set above.
   `recipe_delete` plus the photo tools (`recipe_photos_attach` /
   `_remove` / `_reorder`, `recipe_photo_label_set`). See
   `./cookbook.md`.
-- **`memories`** - memory writes: `memory_create` / `memory_update`
-  / `memory_delete` plus the volitional levers (`memory_reaffirm` /
-  `memory_doubt` for graded confidence, `memory_relate` /
+- **`memories`** - memory writes: `memory_save` (create, or edit by
+  id) / `memory_delete` plus the volitional levers (`memory_reaffirm`
+  / `memory_doubt` for graded confidence, `memory_relate` /
   `memory_unrelate` for the memory graph). See `./memory.md`.
 - **`wiki`** - the whole chat-driven wiki write surface.
-  Direct article CRUD (`wiki_create` / `wiki_update` /
-  `wiki_delete`), the `wiki_librarian` delegation (a multi-round
-  sub-agent for multi-article consolidations), and the full record
-  write surface (`record_create` / `record_update` /
+  Article save + delete (`wiki_save` - create without an id, or
+  rewrite by id; `wiki_delete`), the `wiki_librarian` delegation (a
+  multi-round sub-agent for multi-article consolidations), and the
+  full record write surface (`record_create` / `record_update` /
   `record_delete`, the file tools `record_file_attach` /
   `record_file_remove`, and the cross-link tools
-  `record_link_create` / `record_link_delete`). The chat model picks
-  a one-shot `wiki_update` for a targeted edit or delegates to the
-  librarian for a consolidation that has to reason across the whole
-  wiki. See `./wiki.md`.
-- **`followups`** - follow-up writes: `followup_create` /
-  `followup_update` / `followup_close` / `followup_dismiss`, the
+  `record_link_create` / `record_link_delete`). See `./wiki.md`.
+- **`followups`** - follow-up writes: `followup_save` (create, or
+  reschedule by id) / `followup_close` / `followup_dismiss`, the
   lifecycle of the pending questions the model saves for itself.
   The read (`followup_list`) stays always-on. See `./followups.md`.
-- **`library`** - document writes: `doc_create` (promote a file the
-  user attached into a permanent searchable document), `doc_update`,
-  `doc_delete`. See `./library.md`.
+- **`library`** - document writes: `doc_save` (promote a file the
+  user attached into a permanent searchable document, or update an
+  existing document's metadata by id), `doc_delete`. See
+  `./library.md`.
 - **`images`** - `generate_image`. A generation
   spends Venice credits and writes a persistent attachment.
   Unusually for a tool, its real output does NOT come back in the
@@ -579,17 +577,18 @@ Edge dispatch (`supabase/functions/venice/`):
   `throwIfAny()`, rather than throwing on the first bad field. The
   reason: a model supplying several malformed args against a fail-fast
   check learns one problem per round trip and tends to fix one field
-  while dropping another - a single memory_create save was observed
+  while dropping another - a single memory_save was observed
   taking five attempts this way. The combined throw preserves each
   problem string verbatim (substring test assertions still pass) and
   joins multiple with "; ". Dependent checks guard on their
   prerequisite (a self-loop/"differ" check only fires once both ids
   are present; an empty-patch "provide at least one of" only fires
   when nothing else is wrong) so one root cause never doubles up as
-  two errors.
-- **`memory_create` / `memory_update` `message` is optional; the
-  changelog line is derived when omitted.** memory_create defaults
-  `message` to `Created: <label>` and memory_update to
+  two errors. (A single memory_save was the observed five-attempt
+  case.)
+- **`memory_save` `message` is optional; the
+  changelog line is derived when omitted.** The create form defaults
+  `message` to `Created: <label>` and the edit form to
   `Updated: <label>` server-side. Models kept dumping the full memory
   body into `message` and round-tripping its 200-char cap, or
   omitting it (and inventing param names to carry it) and

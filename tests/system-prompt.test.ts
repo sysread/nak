@@ -115,8 +115,7 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('memory_recall');
     expect(prompt).toContain('conversation_recall');
     expect(prompt).toContain('memory_search');
-    expect(prompt).toContain('memory_create');
-    expect(prompt).toContain('memory_update');
+    expect(prompt).toContain('memory_save');
     expect(prompt).toContain('memory_delete');
     expect(prompt).toContain('conversation_search');
   });
@@ -158,7 +157,7 @@ describe('buildSystemPrompt', () => {
     expect(alwaysSection).not.toMatch(/- memory_create /);
     expect(alwaysSection).not.toMatch(/- recipe_save /);
     // Write sections carry the writes.
-    expect(gatedSection).toMatch(/- memory_create /);
+    expect(gatedSection).toMatch(/- memory_save /);
     expect(gatedSection).toMatch(/- recipe_save /);
     expect(gatedSection).not.toMatch(/- memory_search /);
     expect(gatedSection).not.toMatch(/- recipe_list /);
@@ -416,6 +415,6 @@ describe('every tool available every turn', () => {
   it('keeps the wiki and library guidance, minus the enable step', () => {
     const prompt = buildSystemPrompt();
     expect(prompt).toMatch(/call wiki_librarian with concrete instructions/);
-    expect(prompt).toMatch(/call doc_create \(identify the file/);
+    expect(prompt).toMatch(/call doc_save without an id \(identify the file/);
   });
 });

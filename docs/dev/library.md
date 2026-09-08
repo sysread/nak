@@ -66,7 +66,7 @@ Data layer:
   grep/read pair `grepDocument` / `readDocumentLines`, the
   `getDocumentStat` overview, the Storage helpers `uploadDocumentFile` /
   `createDocumentDownloadUrl`, and `findAttachmentByFilenameInThread`
-  (the any-mime attachment lookup `doc_create` promotes from).
+  (the any-mime attachment lookup `doc_save` promotes from).
 - `src/lib/documents.ts` - `ingestDocument` (the browser upload
   pipeline: create row -> upload binary -> extract text -> store) and
   the length / size ceilings. No chunking; the extracted text is stored
@@ -87,8 +87,8 @@ Tools:
   document; `doc_grep` + `doc_read` are the grep-then-read pair;
   `doc_get` is the text-free overview (metadata + total line count) that
   tells the model how many lines it can address.
-- `src/lib/tools/doc_create.{schema.,}ts`,
-  `doc_update.{schema.,}ts`, `doc_delete.{schema.,}ts` - the gated
+- `src/lib/tools/doc_save.{schema.,}ts`,
+  `doc_delete.{schema.,}ts` - the gated
   write tools, bundled in the `library` toolbox in
   `src/lib/tools/index.ts`.
 
@@ -128,7 +128,7 @@ Docs:
   (-> `read_document_lines`) pulls the surrounding range, capped at
   `DOC_READ_MAX_SPAN` lines per call so it pages rather than dumping the
   whole doc. `doc_get` (-> `document_stat`) gives the total line count.
-- **Assistant saves a pasted file** - `doc_create` finds the named
+- **Assistant saves a pasted file** - `doc_save` finds the named
   attachment in the current thread
   (`findAttachmentByFilenameInThread`), reuses its already-parsed
   `extracted_text`, and copies the binary into the bucket when still
@@ -173,7 +173,7 @@ per-row `user_id` scoping.
   number from `doc_grep` indexes the same line in `doc_read`.
   `doc_read` clamps its span to `DOC_READ_MAX_SPAN`; `doc_grep` caps
   matches and rephrases an invalid-regex error as `{error}` guidance.
-- **doc_create requires extractable text.** A promoted attachment with
+- **doc_save requires extractable text.** A promoted attachment with
   empty `extracted_text` is rejected with actionable text rather than
   creating an unsearchable document. An expired attachment (binary
   reclaimed) can still be promoted from its surviving text - the doc is
@@ -185,7 +185,7 @@ per-row `user_id` scoping.
 
 ## Interactions
 
-- **Attachments** (`docs/dev/attachments.md`) - `doc_create` promotes
+- **Attachments** (`docs/dev/attachments.md`) - `doc_save` promotes
   an attachment into a document, reusing its `extracted_text` and
   binary. Both ride the shared bucket model in
   [`./file-storage.md`](./file-storage.md): a live attachment's bytes
@@ -249,5 +249,5 @@ End-to-end manual smoke test:
 5. Edit the description, download the original, then delete -> the row
    and the bucket object are gone.
 6. Attach a text file to a chat and ask Nak to "save this to my
-   library" -> `doc_create` promotes it; it appears in the tab.
+   library" -> `doc_save` promotes it; it appears in the tab.
 7. `mise run check` green; no `(!)` build warnings.

@@ -27,8 +27,9 @@ Deno.test('librarian toolbox is reads + wiki/record writes, in declared order', 
   // scoped to MIGRATION (relocating inline dated body history into
   // records); record_update / record_delete clean up duplicate/outdated
   // records; record_link_create / record_link_delete wire up and prune
-  // continuation chains during the wiki-wide pass. It still has NO
-  // wiki_create - it never originates ARTICLES, only consolidates them.
+  // continuation chains during the wiki-wide pass. The save tool is
+  // the no-create wrapper - it never originates ARTICLES, only
+  // consolidates them (an id-absent call is rejected before the impl).
   assertEquals(
     toolbox.tools.map((t) => t.name),
     [
@@ -37,7 +38,7 @@ Deno.test('librarian toolbox is reads + wiki/record writes, in declared order', 
       'conversation_get',
       'memory_search',
       'record_list',
-      'wiki_update',
+      'wiki_save',
       'wiki_delete',
       'record_create',
       'record_update',
@@ -51,8 +52,13 @@ Deno.test('librarian toolbox is reads + wiki/record writes, in declared order', 
 Deno.test('librarian toolbox excludes creation, memory writes, and the UI tool', () => {
   const names = __test.buildLibrarianToolbox().tools.map((t) => t.name);
   for (const forbidden of [
-    'wiki_create',
+    // The librarian's wiki_save is the no-create wrapper; there is no
+    // create-form reachability at all (asAgentToolNoCreate rejects it).
+    'wiki_save_without_id_rejection_not_bypassed',
     // File attach needs a conversation to pull the file from; the librarian
+    // runs wiki-wide with no thread (asAgentToolNoThread blanks it), so the
+    // file tools are unreachable here - they live on the per-thread worker
+    // and extraction agents instead. to pull the file from; the librarian
     // runs wiki-wide with no thread (asAgentToolNoThread blanks it), so the
     // file tools are unreachable here - they live on the per-thread worker
     // and extraction agents instead.
@@ -117,7 +123,7 @@ Deno.test('profile block carries the corrective name rules; suppressed when unse
   });
   assertStringIncludes(named, 'The name is **Jeff** and ONLY Jeff.');
   // The librarian's distinguishing rule: FIX wrong names already on disk.
-  assertStringIncludes(named, 'wiki_update it to replace the wrong name');
+  assertStringIncludes(named, 'wiki_save (with the id) to replace the wrong name');
 
   const bare = __test.buildWikiLibrarianPrompt({ articleList: '- `Nak` - an app' });
   assertEquals(bare.includes('**About the user:**'), false);

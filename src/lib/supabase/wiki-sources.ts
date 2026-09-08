@@ -152,7 +152,7 @@ export async function findRelatedWikiArticles(
 
 /**
  * Append a wiki-changelog row. Called by every wiki write path: the
- * three tools (`wiki_create`/`wiki_update`/`wiki_delete`), the
+ * wiki tools (`wiki_save`/`wiki_delete`), the
  * librarian's same three tools, and the user's direct edits in
  * Wiki.svelte. Throws on a failed insert so callers can decide
  * whether to surface the error or swallow it - the tool path

@@ -397,7 +397,7 @@
       // Append the changelog row after the update lands. Best-effort -
       // the article already updated, and a failed log write should
       // not roll back a successful edit. Errors here are silent for
-      // the same reason as the tool path (see wiki_update.ts).
+      // the same reason as the tool path (see wiki_save.ts).
       try {
         await app.supabase.createWikiChangelogEntry({
           article_id: id,
@@ -1180,7 +1180,7 @@
         // finalize or refresh.
         librarianError = LIBRARIAN_BUSY_MESSAGE;
       } else if (result.kind === 'error') {
-        // Run errored server-side mid-loop; earlier wiki_update calls may
+        // Run errored server-side mid-loop; earlier wiki_save calls may
         // already be committed. Settle the spinner, refresh to surface them.
         librarianError = `${result.error ?? 'Librarian run failed.'} ${LIBRARIAN_PARTIAL_SAVE_NOTE}`;
         librarianSteps = finalizeLibrarianSteps(librarianSteps, 'error');

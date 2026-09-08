@@ -44,16 +44,14 @@ import {
 } from './_agent_tools.ts';
 import { memorySearch } from '../tools/memory_search.ts';
 import { MAX_MEMORY_DATA_CHARS } from '../tools/_memory_data_budget.ts';
-import { memoryCreate } from '../tools/memory_create.ts';
-import { memoryUpdate } from '../tools/memory_update.ts';
+import { memorySave } from '../tools/memory_save.ts';
 import { memoryInvalidate } from '../tools/memory_invalidate.ts';
 import { memoryReaffirm } from '../tools/memory_reaffirm.ts';
 import { memoryDoubt } from '../tools/memory_doubt.ts';
 import { memoryRelate } from '../tools/memory_relate.ts';
 import { memoryUnrelate } from '../tools/memory_unrelate.ts';
 import { followupList } from '../tools/followup_list.ts';
-import { followupCreate } from '../tools/followup_create.ts';
-import { followupUpdate } from '../tools/followup_update.ts';
+import { followupSave } from '../tools/followup_save.ts';
 import { followupClose } from '../tools/followup_close.ts';
 import {
   runHeadlessAgent,
@@ -97,78 +95,22 @@ const MAX_MEMORY_LABEL_CHARS = 80;
 // never destroy a memory row on its own authority.
 // ---------------------------------------------------------------------------
 
-const MEMORY_CREATE_WIRE_SCHEMA: AgentTool['wire'] = {
-  type: 'function',
-  function: {
-    name: 'memory_create',
-    description:
-      'Save a new memory. Two required fields: label (short handle, ' +
-      `1-${MAX_MEMORY_LABEL_CHARS} chars) and data (the full content, max ` +
-      `${MAX_MEMORY_DATA_CHARS} chars - split if longer). Optional message ` +
-      'is a one-line, commit-style summary of what you saved and why, ' +
-      'which lands in the memory changelog the user reviews; omit it to ' +
-      'auto-derive one from the label. Optional ' +
-      'confidence is a decimal on a 1-10 scale (>= 1.0 and <= 10.0, ' +
-      'e.g. 2.5; default 1.0), NOT a 0-1 probability - values below ' +
-      '1.0 are rejected. It marks a memory ' +
-      'as already-corroborated; raise above default only with ' +
-      'converging evidence in the current exchange. Returns the ' +
-      'created memory row.',
-    parameters: {
-      type: 'object',
-      properties: {
-        label: {
-          type: 'string',
-          minLength: 1,
-          maxLength: MAX_MEMORY_LABEL_CHARS,
-          description: 'Required. Short name for the memory.',
-        },
-        data: {
-          type: 'string',
-          minLength: 1,
-          maxLength: MAX_MEMORY_DATA_CHARS,
-          description: `Required. Full content (max ${MAX_MEMORY_DATA_CHARS} chars).`,
-        },
-        message: {
-          type: 'string',
-          minLength: 1,
-          maxLength: MAX_MEMORY_CHANGELOG_MESSAGE_CHARS,
-          description:
-            'Optional. One-line, commit-style summary of what this memory ' +
-            'captures and why you saved it; lands in the memory changelog. ' +
-            'Omit to auto-derive from the label. Not a place for the ' +
-            'content - that goes in data.',
-        },
-        confidence: {
-          type: 'number',
-          minimum: 1.0,
-          maximum: 10.0,
-          description:
-            'Optional initial confidence: a decimal >= 1.0 and <= 10.0 ' +
-            '(e.g. 2.5; default 1.0). ' +
-            'NOT a 0-1 probability - values below 1.0 are rejected. ' +
-            'Raise only with converging evidence in the current exchange.',
-        },
-      },
-      required: ['label', 'data'],
-      additionalProperties: false,
-    },
-  },
-};
-
 // Deliberately narrower than the chat canonical
-// (src/lib/tools/memory_update.schema.ts): the chat toolbox exposes a
-// direct confidence set on this tool, the reflection toolbox does not.
-// A background agent moving confidence only through the graded levers
+// (src/lib/tools/memory_save.schema.ts): the reflection toolbox does
+// not expose the direct confidence set. A background agent moving
+// confidence only through the graded levers
 // (reaffirm/doubt/invalidate) cannot systematically inflate the store;
 // the direct set is reserved for the chat model acting on an explicit
-// user instruction.
-const MEMORY_UPDATE_WIRE_SCHEMA: AgentTool['wire'] = {
+// user instruction. id is always required here - reflection edits
+// existing memories; wholesale invention is the librarian's job, and
+// fresh saves of near-duplicates are guarded by the workflow text
+// below.
+const MEMORY_SAVE_WIRE_SCHEMA: AgentTool['wire'] = {
   type: 'function',
   function: {
-    name: 'memory_update',
+    name: 'memory_save',
     description:
-      'Update a memory by id (use memory_search to find the id). Only id ' +
+      'Save a memory: update an existing one by id. Only id ' +
       'is required. Provide at least one of label or data to change; any ' +
       'field you omit is left unchanged ' +
       `(data capped at ${MAX_MEMORY_DATA_CHARS} chars, and never ` +
@@ -202,7 +144,6 @@ const MEMORY_UPDATE_WIRE_SCHEMA: AgentTool['wire'] = {
     },
   },
 };
-
 
 const MEMORY_REAFFIRM_WIRE_SCHEMA: AgentTool['wire'] = {
   type: 'function',
@@ -247,30 +188,40 @@ const FOLLOWUP_LIST_WIRE_SCHEMA: AgentTool['wire'] = {
     description:
       'List saved follow-ups: open questions to ask the user later ' +
       '(with ids and relevant_after dates) plus recently closed ones ' +
-      'with their resolutions. ALWAYS call this before followup_create ' +
+      'with their resolutions. ALWAYS call this before a follow-up save ' +
       '- a question already open, answered, or dismissed must not be ' +
       'created again.',
     parameters: { type: 'object', properties: {}, additionalProperties: false },
   },
 };
 
-const FOLLOWUP_CREATE_WIRE_SCHEMA: AgentTool['wire'] = {
+const FOLLOWUP_SAVE_WIRE_SCHEMA: AgentTool['wire'] = {
   type: 'function',
   function: {
-    name: 'followup_create',
+    name: 'followup_save',
     description:
       'Save a follow-up: a question whose outcome is unknown and worth ' +
       'asking the user in a future conversation ("Ask how the lasagna ' +
-      'turned out"). Set relevant_after to just after the event when a ' +
-      'date is known; omit it when there is no date.',
+      'turned out"). Omit id to create one; pass id (from followup_list) ' +
+      'to revise or reschedule an open follow-up when the conversation ' +
+      'shows the plan MOVED rather than resolved - a string relevant_after ' +
+      'reschedules, null clears the date. Provide at least one of ' +
+      'question, context, or relevant_when revising. Only open ' +
+      'follow-ups can be revised.',
     parameters: {
       type: 'object',
       properties: {
+        id: {
+          type: 'string',
+          description:
+            'Required when revising. From followup_list. Omit to create.',
+        },
         question: {
           type: 'string',
           minLength: 1,
           maxLength: MAX_FOLLOWUP_QUESTION_CHARS,
-          description: 'Required. First-person prompt to the future self.',
+          description:
+            'Required on create. First-person prompt to the future self.',
         },
         context: {
           type: 'string',
@@ -278,43 +229,14 @@ const FOLLOWUP_CREATE_WIRE_SCHEMA: AgentTool['wire'] = {
           description: 'One or two lines of seeding context.',
         },
         relevant_after: {
-          type: 'string',
+          type: ['string', 'null'],
           description:
             'Optional ISO date/timestamp just AFTER the event; omit when ' +
-            'no date is known.',
+            'no date is known. On revise: a string reschedules, null ' +
+            'clears the date.',
         },
       },
       required: ['question'],
-      additionalProperties: false,
-    },
-  },
-};
-
-const FOLLOWUP_UPDATE_WIRE_SCHEMA: AgentTool['wire'] = {
-  type: 'function',
-  function: {
-    name: 'followup_update',
-    description:
-      'Revise or reschedule an open follow-up when the conversation ' +
-      'shows the plan MOVED rather than resolved. Pass relevant_after ' +
-      'as null to clear the date. Provide at least one of question, ' +
-      'context, or relevant_after. Only open follow-ups can be updated.',
-    parameters: {
-      type: 'object',
-      properties: {
-        id: { type: 'string', description: 'Required. From followup_list.' },
-        question: {
-          type: 'string',
-          minLength: 1,
-          maxLength: MAX_FOLLOWUP_QUESTION_CHARS,
-        },
-        context: { type: 'string', maxLength: MAX_FOLLOWUP_CONTEXT_CHARS },
-        relevant_after: {
-          type: ['string', 'null'],
-          description: 'New ISO date/timestamp, or null to clear.',
-        },
-      },
-      required: ['id'],
       additionalProperties: false,
     },
   },
@@ -401,16 +323,17 @@ Workflow for each memory you consider writing:
 1. Call memory_search with a related query FIRST. Check whether a
    similar memory already exists.
 2. If one exists and your new insight is a refinement, call
-   memory_update on it rather than creating a near-duplicate.
-   memory_update only rewrites the wording - it does NOT change
-   confidence. If the exchange genuinely corroborates the memory,
-   call memory_reaffirm to nudge its confidence up.
+   memory_save on it (with its id) rather than creating a
+   near-duplicate. The edit form only rewrites the wording - it does
+   NOT change confidence. If the exchange genuinely corroborates the
+   memory, call memory_reaffirm to nudge its confidence up.
 3. If a new insight contradicts an existing memory, call
    memory_invalidate on the stale one. This doesn't delete it, it
    halves its confidence so search stops surfacing it. Repeated
    invalidation hides it entirely. Recoverable if you re-learn the
    fact later.
-4. Only call memory_create when nothing close exists.
+4. Only create (memory_save without an id) when nothing close
+   exists.
 
 Be conservative. Fewer high-signal memories beat many low-signal
 ones. Don't record the obvious ("the user asked a question"),
@@ -429,12 +352,13 @@ conversation:
   workflow above - the resolution line is an audit stamp, not a
   memory.
 - If a plan behind an open follow-up MOVED (postponed, rescheduled,
-  reshaped), call followup_update - new relevant_after, reworded
-  question if needed. A moved plan is not a new follow-up.
+  reshaped), call followup_save with that follow-up's id - new
+  relevant_after, reworded question if needed. A moved plan is not a
+  new follow-up.
 - If the user shared a NEW plan or upcoming event with a real "how
   did it go" horizon they clearly care about, and no matching
   follow-up is open OR already answered/dismissed in the list, call
-  followup_create. When a date is known, set relevant_after just
+  followup_save without an id. When a date is known, set relevant_after just
   after it; with no date, omit it. The already-answered check
   matters: you may be reading an old conversation whose plan was
   resolved elsewhere since - a resolved plan must not get a fresh
@@ -450,16 +374,14 @@ function buildReflectionToolbox(): Toolbox {
     name: 'reflection',
     tools: [
       asAgentTool(memorySearch, MEMORY_SEARCH_WIRE_SCHEMA),
-      asAgentTool(memoryCreate, MEMORY_CREATE_WIRE_SCHEMA),
-      asAgentTool(memoryUpdate, MEMORY_UPDATE_WIRE_SCHEMA),
+      asAgentTool(memorySave, MEMORY_SAVE_WIRE_SCHEMA),
       asAgentTool(memoryInvalidate, MEMORY_INVALIDATE_WIRE_SCHEMA),
       asAgentTool(memoryReaffirm, MEMORY_REAFFIRM_WIRE_SCHEMA),
       asAgentTool(memoryDoubt, MEMORY_DOUBT_WIRE_SCHEMA),
       asAgentTool(memoryRelate, MEMORY_RELATE_WIRE_SCHEMA),
       asAgentTool(memoryUnrelate, MEMORY_UNRELATE_WIRE_SCHEMA),
       asAgentTool(followupList, FOLLOWUP_LIST_WIRE_SCHEMA),
-      asAgentTool(followupCreate, FOLLOWUP_CREATE_WIRE_SCHEMA),
-      asAgentTool(followupUpdate, FOLLOWUP_UPDATE_WIRE_SCHEMA),
+      asAgentTool(followupSave, FOLLOWUP_SAVE_WIRE_SCHEMA),
       asAgentTool(followupClose, FOLLOWUP_CLOSE_WIRE_SCHEMA),
     ],
   };

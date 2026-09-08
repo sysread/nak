@@ -193,7 +193,7 @@ Never break the fourth wall over them: do not mention the blocks, the comments t
 // topical articles centered on the user, that span many conversations.
 //
 // The final paragraph splits the write paths: one-shot edits go through
-// the direct wiki_create / wiki_update / wiki_delete tools, and a
+// the direct wiki_save / wiki_delete tools, and a
 // consolidation that has to reason over the whole wiki delegates to the
 // wiki_librarian sub-agent.
 const WIKI_BLOCK = `\
@@ -201,7 +201,7 @@ The application also maintains a user wiki: a flat collection of titled articles
 Articles are NEVER auto-injected into the chat - call wiki_search whenever the user references one of their own projects, a person they know, a place in their life, or a topic they have personally invested in, to retrieve the relevant article.
 For lookup by topic phrase use wiki_search; for an overview of what is in the wiki use wiki_list; once you know the id of a specific article use wiki_get to fetch the full body.
 The wiki is the right surface for "what is X (in the user's life)" lookups against the user's own knowledge graph; memories carry atomic facts and the wiki carries the longer-form topical entries on the user-centric subjects.
-For a one-shot edit (create, update, or delete one article) call wiki_create / wiki_update / wiki_delete directly. When the user asks to consolidate duplicates, split a sprawling page, or otherwise reshape several articles at once, call wiki_librarian with concrete instructions - it delegates to a sub-agent that reads every article and carries out the maintenance pass. Scope the request first with wiki_list / wiki_get so the instructions reference specific titles or ids; vague instructions produce vague results.
+For a one-shot edit (create, update, or delete one article) call wiki_save directly - with the article's id to rewrite it, or without one to create a new article. When the user asks to consolidate duplicates, split a sprawling page, or otherwise reshape several articles at once, call wiki_librarian with concrete instructions - it delegates to a sub-agent that reads every article and carries out the maintenance pass. Scope the request first with wiki_list / wiki_get so the instructions reference specific titles or ids; vague instructions produce vague results.
 `;
 
 // Library (persistent document storage). Distinct from both the wiki (short
@@ -219,7 +219,7 @@ Document contents are NEVER auto-injected. Work a document the same way you woul
 - doc_read: read a range of lines by number. Feed it the line numbers doc_grep returned, or page through a document in windows.
 - doc_get: one document's metadata + total line count (not its text - use doc_read for that), so you know the range you can address.
 Typical flow: doc_list to pick the document, doc_grep for the exact clause, doc_read the surrounding lines. There is no semantic search - rely on grep with good keywords (and synonyms) rather than expecting fuzzy matching.
-To save a file the user attached to THIS conversation as a permanent document, call doc_create (identify the file by its filename, and always give it a clear description of what it is for). Use doc_update to rename a document or fix its description, and doc_delete when the user says a document is obsolete (e.g. they changed insurers and the old policy should go).
+To save a file the user attached to THIS conversation as a permanent document, call doc_save without an id (identify the file by its filename, and always give it a clear description of what it is for). Use doc_save with an id to rename a document or fix its description, and doc_delete when the user says a document is obsolete (e.g. they changed insurers and the old policy should go).
 `;
 
 // Clarifying-question framing. Counter-pushes against the model's
