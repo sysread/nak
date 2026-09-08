@@ -208,8 +208,11 @@ Load-bearing patterns the schema uses repeatedly:
   summary claim columns - no migrations, just idempotent column
   adds. (Thread-level embeddings moved to `thread_chunks`; the old
   `threads.embedding` columns were dropped. The retired
-  `tools_enabled` / `toolboxes_enabled` gating columns were
-  dropped the same way.)
+  `tools_enabled` / `toolboxes_enabled` gating columns are queued
+  for the same treatment - the drop is deferred one release so the
+  previously-deployed frontend, which still writes
+  `toolboxes_enabled`, survives the mixed-version window; see
+  `supabase/schema.sql`.)
 - **Claim-RPC pattern.** Any row a background job might process
   carries `<kind>_claim_holder text` + `<kind>_claim_expires
   timestamptz`. The RPC `claim_next_pending_<kind>` picks the oldest
