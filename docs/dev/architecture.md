@@ -204,10 +204,15 @@ Load-bearing patterns the schema uses repeatedly:
 
 - **Columns over migrations.** New per-row state is an
   `add column if not exists`, not a new table. E.g. `threads` has
-  grown `toolboxes_enabled`, `archived`, `summary`, plus reflection/
+  grown `archived`, `summary`, plus reflection/
   summary claim columns - no migrations, just idempotent column
   adds. (Thread-level embeddings moved to `thread_chunks`; the old
-  `threads.embedding` columns were dropped.)
+  `threads.embedding` columns were dropped. The retired
+  `tools_enabled` / `toolboxes_enabled` gating columns are queued
+  for the same treatment - the drop is deferred one release so the
+  previously-deployed frontend, which still writes
+  `toolboxes_enabled`, survives the mixed-version window; see
+  `supabase/schema.sql`.)
 - **Claim-RPC pattern.** Any row a background job might process
   carries `<kind>_claim_holder text` + `<kind>_claim_expires
   timestamptz`. The RPC `claim_next_pending_<kind>` picks the oldest

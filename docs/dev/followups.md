@@ -27,7 +27,7 @@ Three moving parts:
 
 - **Capture** - two writers, mirroring memory's volitional /
   subconscious split. The chat model saves a follow-up mid-turn via
-  the gated `followups` toolbox when the user shares a plan worth
+  the `followup_*` tools when the user shares a plan worth
   asking about later; the reflection agent records unresolved plans
   it finds in settled threads, so capture doesn't depend on mid-turn
   volition.
@@ -80,8 +80,7 @@ gather (never inferred by the smoothing model):
   the closed window is the create-side dedup evidence.
 - `src/lib/tools/followup_*.schema.ts` - the browser wire schemas;
   `followupsToolbox` + the always-on `followup_list` registration in
-  `src/lib/tools/index.ts`; the hand-maintained name mirror in
-  `supabase/functions/venice/tools/toggle_tools.ts`.
+  `src/lib/tools/index.ts`.
 - `supabase/functions/venice/priming/context-recall.ts` -
   `gatherFollowups` (the fourth arm: due pull + semantic union +
   lazy expiry) and `stampFollowupLedger` (the post-smoothing ask

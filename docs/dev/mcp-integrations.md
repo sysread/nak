@@ -10,11 +10,10 @@
 > cached tool catalogs current without user interaction, and
 > the Settings Integrations pane shows a badge + re-authorize
 > button for expired or revoked integrations (Q8). The OAuth
-> module has Deno test coverage (22 tests). Tool schemas are
-> gated per-thread by `enabledToolboxes` - the model toggles
-> an MCP integration on with `toggle_toolbox` the same way it
-> toggles any built-in (Q4, resolved). Tool namespacing uses
-> `mcp:<integrationId>:<serverToolName>` (Q5, resolved).
+> module has Deno test coverage (22 tests). Tool namespacing uses
+> `mcp:<integrationId>:<serverToolName>` (Q5, resolved). An
+> authorized integration's tools ride the wire on every request,
+> same as every built-in tool (see `tools.md`).
 > All open questions from the design phase are resolved or
 > mooted by the implementation; see "Open questions" below.
 
@@ -26,11 +25,10 @@ plus a label (e.g. "Fastmail" -> `https://api.fastmail.com/mcp`).
 nak runs the spec's auth discovery chain, drives the OAuth
 consent flow in the browser, persists the resulting tokens
 server-side, and exposes the registered server's tool catalog
-to the main chat model as a gated "toolbox" alongside the
+to the main chat model as a dynamic "toolbox" alongside the
 existing static ones (`cooking`, `memories`, `wiki`, `library`,
-`images`). The model toggles it on for a thread the same way it
-toggles any gated toolbox today, and the edge function's
-`performToolCall` dispatches calls against it.
+`images`); the edge function's `performToolCall` dispatches
+calls against it.
 
 This is the "integrate the webapp INTO the AI" model Fastmail's
 MCP blog articulates - one AI reaching across many services the
@@ -198,14 +196,12 @@ The architectural pieces already exist; this feature threads
 through them.
 
 - **Catalog (browser) -** dynamic toolboxes extend the
-  `TOOLBOXES` / `GATED_TOOLBOX_NAMES` model in
+  `TOOLBOXES` model in
   [`src/lib/tools/index.ts`](../../src/lib/tools/index.ts).
   A per-user "MCP-routed toolbox" category is populated from
-  the user's `mcp_integrations` rows at startup. The
-  `toggle_toolbox` mirror in
-  `supabase/functions/venice/tools/toggle_tools.ts` accepts
-  `mcp:`-prefixed names as runtime-discovered toolboxes (see
-  the comment block on `MCP_TOOLBOX_PREFIX` there).
+  the user's `mcp_integrations` rows at startup and passed to
+  `buildToolList` / `buildSystemPrompt` as the dynamic
+  `mcpToolboxes` arg.
 - **System-prompt catalog (browser) -** `buildCatalog` in
   [`src/lib/chat/system-prompt.ts`](../../src/lib/chat/system-prompt.ts)
   renders `- <name> : <shortDescription>` lines from
@@ -216,15 +212,11 @@ through them.
   JSON schema. See Gotchas - wire vs prompt surfaces are
   different.
 - **Wire `tools` array (browser) -** the bigger inflation
-  surface. The full JSON Schema for every enabled tool rides
-  on `buildToolList`. MCP server catalogs can be large
-  (Fastmail's 10 tools). Per-toolbox enablement gates which
-  schemas are armed; gated MCP toolboxes follow the same
-  shape as built-in toolboxes. (The /stream envelope separately
-  carries the FULL catalog - disabled MCP boxes included - via
-  `buildToolCatalog` for mid-turn toolbox rearming; that is
-  browser-to-function POST weight only, never Venice-wire or
-  model-context cost. See `tools.md`.)
+  surface. The full JSON Schema for every tool rides on
+  `buildToolList`. MCP server catalogs can be large
+  (Fastmail's 10 tools) and all of an authorized integration's
+  schemas ship on every request, same as built-in tools.
+  Prompt caching absorbs the repeat; see `tools.md`.
 - **Edge dispatch -** `performToolCall` in
   `supabase/functions/venice/performToolCall.ts` has a
   module-load registry populated by
@@ -235,10 +227,11 @@ through them.
   server-side name; the handler fetches the token, POSTs the
   JSON-RPC envelope to the integration's server URL, returns
   the result. Lives alongside the static registry.
-- **Edge priming / chrome -** the priming stage in
-  `supabase/functions/venice/priming.ts` fetches the user's
-  enabled MCP toolboxes and injects their (cached) tool
-  catalog into the wire `tools` array built for that turn.
+- **Browser wire composition -** `buildMcpToolboxes`
+  (src/lib/ui/mcp.ts) turns the authorized integrations into
+  dynamic `Toolbox` entries that `buildToolList` and
+  `buildSystemPrompt` compose into the request's wire `tools`
+  array and system-prompt catalog on every turn.
 - **Edge OAuth routes -** seven routes in the venice
   function handle metadata discovery, DCR registration,
   token exchange, token refresh, tool-list fetch,
@@ -353,10 +346,11 @@ nak's own system prompt. Two distinct risks:
    URL. The routing layer catches `?code=...&state=...` on
    return and hands them to the Settings Integrations pane.
 4. **Lazy vs always-armed wire schemas.** **Resolved:
-   always-armed, gated per-thread.** MCP tool schemas ride
-   the wire `tools` array only when the integration's
-   `mcp:<id>` toolbox is in the thread's
-   `enabledToolboxes`. Same gate as built-in toolboxes.
+   always-armed.** An authorized integration's MCP tool
+   schemas ride the wire `tools` array on every request,
+   same as built-in tools. (Originally gated per-thread by
+   `enabledToolboxes`; that gate retired with toolbox
+   gating itself.)
 5. **Tool-name namespacing.** **Resolved:**
    `mcp:<integrationId>:<serverToolName>`. The dispatcher
    splits on the first colon after the `mcp:` prefix.
@@ -390,13 +384,11 @@ nak's own system prompt. Two distinct risks:
 ## Interactions
 
 - **Tools ([`./tools.md`](./tools.md)) -** the heaviest
-  coupling. Dynamic-toolbox category alongside the
-  static `TOOLBOXES`. MCP-routed dispatch branch in
-  `performToolCall` alongside the static module-load
-  registry. The mirror (the hand-maintained copy of
-  `GATED_TOOLBOX_NAMES` in the edge `toggle_tools.ts`) gets a
-  "MCP-routed toolboxes are dynamic" rule via the
-  `MCP_TOOLBOX_PREFIX` prefix check.
+  coupling. Dynamic-toolbox category composed with the
+  static `TOOLBOXES` under one dedup-by-name pass
+  (`buildToolList` / `buildSystemPrompt`). MCP-routed
+  dispatch branch in `performToolCall` alongside the
+  static module-load registry.
 - **Settings ([`./settings.md`](./settings.md)) -** the
   Settings modal "Integrations" pane. No new
   `profiles.settings` flag required (the per-user

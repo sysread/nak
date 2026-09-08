@@ -63,7 +63,7 @@ The fork-and-edit flow ([dev: user-message-editing](../../dev/user-message-editi
 - (4) The composer is re-populated with the draft text. The draft row is still in the DB with `status=draft`.
 - (5) The draft is promoted: the DB query shows the row with `status=null` (was 'draft') and `content` updated to the edited text. A new assistant reply follows. The completion ran on the fork. The transcript shows the edited user message and the response.
 - (6) The fork is still in the drawer. Navigating back shows the draft text in the composer. The draft row is still `status=draft` in the DB. No completion ran.
-- (7) The fork has `forked_from_thread_id = null` and `forked_from_msg_id = null` (a fresh thread, no parent - there was no anchor before the first message). The composer is pre-populated with the first user message's text. The thread carries the parent's title and pins (model, reasoning, verbosity, toolboxes).
+- (7) The fork has `forked_from_thread_id = null` and `forked_from_msg_id = null` (a fresh thread, no parent - there was no anchor before the first message). The composer is pre-populated with the first user message's text. The thread carries the parent's title and pins (model, reasoning, verbosity).
 
 ## Cleanup
 

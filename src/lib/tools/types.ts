@@ -8,7 +8,7 @@
  *   - description   : the full description shipped in the `tools` array
  *   - shortDescription : <50-char line for the in-prompt catalog (system
  *                        message lists every tool by name + this blurb so
- *                        the model knows what's behind the toggle without
+ *                        the model knows what each tool does without
  *                        needing the full schema)
  *   - parameters    : JSON Schema for the args, shipped verbatim
  *   - execute       : nominally a browser-side handler. In practice
@@ -90,24 +90,6 @@ export interface OpenAIToolDef {
 }
 
 /**
- * The full tool catalog the chat envelope ships alongside the
- * pre-filtered wire `tools` array: always-on defs plus every gated
- * toolbox's defs keyed by toolbox name (static boxes in TOOLBOXES
- * order, then MCP integration boxes - key order is the order the
- * server rebuilds in). The venice edge function rebuilds `tools`
- * from this after a mid-turn toggle_toolbox, so a toolbox the model
- * enables becomes callable in the same turn. Built by
- * `buildToolCatalog` in `./index.ts`; the server-side consumer keeps
- * its own structural mirror of this shape
- * (supabase/functions/venice/tool_catalog.ts) - same two-interfaces
- * posture as ToolContext.
- */
-export interface ToolCatalog {
-  alwaysOn: OpenAIToolDef[];
-  gated: Record<string, OpenAIToolDef[]>;
-}
-
-/**
  * OpenAI / Venice wire shape for one item in `choices[0].message.tool_calls`.
  * `arguments` is a JSON-encoded string (not a parsed object) — the model
  * may emit fragments across SSE deltas, so we accumulate then parse once.
@@ -126,12 +108,9 @@ export interface OpenAIToolCall {
  * chat loop both compose requests against a toolbox; the toolbox is
  * the unit of "here is the capability set this model can reach for".
  *
- * Deliberately spare: no toggle semantics, no prompt-catalog helper,
- * no per-tool enable flags. The main chat loop wraps its toolbox with
- * a gate (`toggle_tools`) and a prompt-catalog fragment because that's
- * chat-specific UX — an agent that always runs with its full kit
- * doesn't need either. Callers layer those concerns on top of the
- * primitive rather than fighting to unset them.
+ * Deliberately spare: no prompt-catalog helper, no per-tool enable
+ * flags. Callers layer those concerns on top of the primitive rather
+ * than fighting to unset them.
  *
  * `name` identifies the toolbox for error messages and debug logs;
  * `description` is human-readable prose an agent can stitch into its

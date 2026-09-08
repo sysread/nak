@@ -30,12 +30,9 @@ export const recordCreateSchema = {
     'Create a dated record linked to a wiki article. Records document ' +
     'discrete events, experiments, observations, or milestones for a ' +
     'topic (the journey), distinct from the article body (the current ' +
-    'state). Provide article_id (from wiki_search / wiki_list), date ' +
-    '(ISO 8601, e.g. "2026-06-17", the day the event occurred), content ' +
-    `(Markdown, max ${MAX_WIKI_RECORD_CONTENT_CHARS} chars), and optional ` +
-    'tags for filtering. Also appends a history entry derived from the ' +
-    'content to the article changelog the user reviews. Returns the ' +
-    'created record row.',
+    'state). Also appends a history entry derived from the content to ' +
+    'the article changelog the user reviews. Returns the created ' +
+    'record row.',
   shortDescription: 'log a dated record on an article',
   formatArgs: formatRecordWriteArgs,
   parameters: {

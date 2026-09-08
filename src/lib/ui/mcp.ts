@@ -9,12 +9,10 @@
  * here is a pure function over its arguments.
  *
  * Toolbox-name convention: each authorized integration becomes a
- * gated toolbox named `mcp:<id>`, and each tool inside it is wired as
+ * toolbox named `mcp:<label>`, and each tool inside it is wired as
  * `mcp:<integrationId>:<serverToolName>`. The `mcp:` prefix is the
- * contract the server-side toggle handler
- * (supabase/functions/venice/tools/toggle_tools.ts) accepts as a
- * runtime-discovered toolbox - it can't sit in the static
- * GATED_TOOLBOX_NAMES mirror because the ids are per-user.
+ * contract the server-side dispatcher (performToolCall) accepts as a
+ * runtime-discovered integration tool.
  */
 import type { McpIntegration, McpToolSchema } from '../supabase';
 import type { Toolbox, ToolDef } from '../tools';
@@ -86,12 +84,9 @@ export function mcpStatusHint(status: McpIntegration['authStatus']): string | nu
 }
 
 /**
- * The gated-toolbox name for one integration - the string that lives
- * in `threads.toolboxes_enabled` and that toggle_toolbox validates.
- * The `mcp:` prefix is the contract the server-side toggle handler
- * accepts as a runtime-discovered toolbox (see toggle_tools.ts); the
- * label is a per-user unique slug chosen at integration time, so
- * the model reads `mcp:Fastmail` rather than a uuid.
+ * The toolbox name for one integration. The label is a per-user
+ * unique slug chosen at integration time, so the model reads
+ * `mcp:Fastmail` rather than a uuid.
  */
 export function mcpIntegrationToolboxName(
   integration: Pick<McpIntegration, 'label'>
@@ -115,21 +110,20 @@ export function mcpToolWireName(
 /**
  * Build the dynamic `Toolbox` entries for the chat-loop from the
  * authorized integrations + their cached tool catalog. Each
-  * `authorized` integration becomes one gated toolbox named
-  * `mcp:<label>` (the label is a per-user unique slug); every cached
-  * tool becomes a schema-only ToolDef whose wire name is
- * `mcp:<integrationId>:<serverToolName>`. The toolbox toggle gates
- * on the label, dispatch resolves the immutable uuid - so renaming
- * a label doesn't break existing `toolboxes_enabled` entries.
+ * `authorized` integration becomes one toolbox named
+ * `mcp:<label>` (the label is a per-user unique slug); every cached
+ * tool becomes a schema-only ToolDef whose wire name is
+ * `mcp:<integrationId>:<serverToolName>`. The toolbox name gates
+ * nothing - dispatch resolves the immutable uuid, so renaming a
+ * label doesn't break existing tool wiring.
  *
  * `pending` / `revoked` integrations are dropped: only `authorized`
  * integrations expose tools to the model. The chat-loop passes the
- * result as the optional `mcpToolboxes` arg to buildToolList,
- * buildCatalog, and buildToolboxStateBlock so the static + dynamic
- * catalogs compose under one dedup-by-name pass. Integrations with no
- * cached tools still produce an (empty) toolbox so the toggle state
- * block reports them - the model sees the integration exists even
- * before the catalog finishes populating.
+ * result as the optional `mcpToolboxes` arg to buildToolList and
+ * buildCatalog so the static + dynamic catalogs compose under one
+ * dedup-by-name pass. Integrations with no cached tools still
+ * produce an (empty) toolbox - the model sees the integration exists
+ * even before the catalog finishes populating.
  */
 export function buildMcpToolboxes(
   integrations: readonly McpIntegration[],
@@ -163,23 +157,6 @@ export function buildMcpToolboxes(
     });
   }
   return out;
-}
-
-/**
- * Lightweight extraction of the {name, description} pairs from
- * authorized MCP integrations for the toolbox popup. The popup only
- * needs name + description to render a checkbox; `buildMcpToolboxes`
- * carries the full ToolDef[] payload that the chat-loop needs.
- */
-export function mcpToolboxMetaItems(
-  integrations: readonly McpIntegration[]
-): readonly { name: string; description: string }[] {
-  return integrations
-    .filter((i) => i.authStatus === 'authorized')
-    .map((i) => ({
-      name: mcpIntegrationToolboxName(i),
-      description: i.label,
-    }));
 }
 
 // --- OAuth round-trip sessionStorage keys ----------------------------

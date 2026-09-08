@@ -21,8 +21,7 @@ echoes over the messages realtime channel.
 
 ## Steps
 
-1. In the thread, enable the **Images** toolbox via the composer
-   toolbox popover (or let the model enable it in step 2).
+1. Open a thread.
 2. Send: `Please create an image of a watercolor fox in a snowy
    forest.`
 3. Watch the turn WITHOUT reloading. Observe the `generate_image`

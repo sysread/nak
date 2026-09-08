@@ -3,9 +3,11 @@
  * function (supabase/functions/venice/tools/wiki_delete.ts), which also
  * self-registers the tool for dispatch.
  *
- * Kept byte-aligned with the agent-side wire schema in
- * supabase/functions/venice/agents/wiki.ts (WIKI_DELETE_WIRE_SCHEMA) so
- * the main chat and the agents present the model one contract.
+ * Parameter shape kept identical to the agent-side wire schema in
+ * supabase/functions/venice/agents/wiki.ts (WIKI_DELETE_WIRE_SCHEMA);
+ * descriptions deliberately drift - agents run without the chat
+ * system prompt, so the agent-side description carries the full
+ * contract there.
  */
 import { MAX_WIKI_CHANGELOG_MESSAGE_CHARS } from '../wiki';
 
@@ -22,10 +24,7 @@ export const wikiDeleteSchema = {
     'Delete a wiki article by id. Use only for consolidation - when one ' +
     'article is now strictly subsumed by another article you just updated. ' +
     'Never delete on the basis of "the user said something contradictory ' +
-    'today" alone; in that case, update the article to reflect the new view. ' +
-    'message is a one-line commit-message-style summary of WHY you are ' +
-    `removing this article (max ${MAX_WIKI_CHANGELOG_MESSAGE_CHARS} chars); ` +
-    'it lands in the wiki changelog so the user can audit the deletion.',
+    'today" alone; in that case, update the article to reflect the new view.',
   shortDescription: 'delete a wiki article',
   formatArgs: formatWikiDeleteArgs,
   parameters: {

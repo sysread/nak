@@ -96,12 +96,6 @@ import { secondThoughtsOnTurnTail } from './agents/second_thoughts.ts';
 import { createEdgeLogger } from '../_shared/edge-log.ts';
 import { splitLeakedThink } from './think-leak.ts';
 import { runServerPriming, type PrimingInputs } from './priming.ts';
-import {
-  buildToolsFromCatalog,
-  enabledSetFromToggleResult,
-  type ToolCatalog,
-  schemaMapFromCatalog,
-} from './tool_catalog.ts';
 
 // Magic flag the ask_user tool returns to suspend the round chain
 // pending a user answer. Mirrors src/lib/tools/ask_user.ts'
@@ -195,6 +189,42 @@ interface VeniceMessage {
   }>;
 }
 
+// The wire name of an OpenAI-shaped tool def, when it has one.
+function wireName(def: unknown): string | null {
+  if (!def || typeof def !== 'object') return null;
+  const fn = (def as Record<string, unknown>).function;
+  if (!fn || typeof fn !== 'object') return null;
+  const name = (fn as Record<string, unknown>).name;
+  return typeof name === 'string' ? name : null;
+}
+
+/**
+ * Build a name -> parameters lookup from the request's own `tools`
+ * array. Under the no-gating model the browser declares every tool on
+ * every request, so this array IS the full catalog - the validator
+ * sees the same schemas the model was shown. Returns null when the
+ * turn shipped no tools (plain completions); an empty map means defs
+ * arrived without readable names, which makes the validator a no-op.
+ */
+function schemaMapFromBodyTools(
+  tools: unknown,
+): Map<string, Record<string, unknown>> | null {
+  if (!Array.isArray(tools)) return null;
+  const map = new Map<string, Record<string, unknown>>();
+  for (const def of tools) {
+    const name = wireName(def);
+    if (!name) continue;
+    const fn = (def as Record<string, unknown>).function as
+      | Record<string, unknown>
+      | undefined;
+    const params = fn?.parameters;
+    if (params && typeof params === 'object') {
+      map.set(name, params as Record<string, unknown>);
+    }
+  }
+  return map;
+}
+
 export interface OrchestratorOpts {
   /** Venice API key (resolved from app_config by the /stream handler). */
   apiKey: string;
@@ -220,20 +250,11 @@ export interface OrchestratorOpts {
   /**
    * Full Venice wire body for the first round. Already shaped by the
    * browser via buildChatBody; the orchestrator copies it round-to-
-   * round, mutating only `messages` between rounds - plus `tools`,
-   * rebuilt from `toolCatalog` after a successful toggle_toolbox.
+   * round, mutating only `messages` between rounds. Every tool is
+   * declared on every request (see buildToolList in the browser
+   * registry), so the array never changes between rounds.
    */
   bodyTemplate: VeniceWireBody;
-  /**
-   * The full tool catalog (always-on defs + every gated toolbox's
-   * defs), shipped by the browser alongside the pre-filtered
-   * bodyTemplate.tools. Lets the round chain rearm `body.tools` the
-   * moment the model enables a toolbox mid-turn, instead of the new
-   * box's tools staying undeclared until the next envelope POST.
-   * Absent (older browser build, malformed field) degrades to the
-   * frozen-array behavior.
-   */
-  toolCatalog?: ToolCatalog;
   /** Admin Supabase client (service role) for DB writes and Realtime. */
   adminClient: SupabaseClient;
   /**
@@ -281,11 +302,13 @@ export async function getStreamingResponse(
   // correlator.
   const log = createEdgeLogger(opts.userId, 'stream');
 
-  // Build a name -> JSON Schema lookup from the tool catalog once
-  // per turn. Passed to runOneToolCall for central schema validation
-  // before dispatch. Null when no catalog shipped (older browser or
-  // test); the validator is a no-op in that case.
-  const schemaMap = schemaMapFromCatalog(opts.toolCatalog ?? null);
+  // Build a name -> JSON Schema lookup from the request's own tools
+  // array once per turn. Under the no-gating model every tool is
+  // declared on every request, so bodyTemplate.tools IS the full
+  // catalog. Passed to runOneToolCall for central schema validation
+  // before dispatch. Null when the turn shipped no tools; the
+  // validator is a no-op in that case.
+  const schemaMap = schemaMapFromBodyTools(opts.bodyTemplate.tools);
 
   log.debug(
     `${runId} start model=${opts.bodyTemplate.model ?? 'unknown'} toolsLen=${Array.isArray(opts.bodyTemplate.tools) ? opts.bodyTemplate.tools.length : 0}`,
@@ -895,36 +918,6 @@ export async function getStreamingResponse(
       for (const o of outcomes) {
         if (!o.ok) {
           log.error(`${runId} round ${round} ${o.request.name} failed: ${o.errorMessage}`);
-        }
-      }
-
-      // Rearm the wire tools array after a successful toggle_toolbox.
-      // The browser filtered bodyTemplate.tools against the toolbox
-      // state at envelope-POST time; without this rebuild, a toolbox
-      // the model enables mid-turn ships no tool schemas for the rest
-      // of the turn, and a backend that holds the model to the
-      // declared list coerces the intended write call onto the nearest
-      // declared name (observed as followup_create coming out as
-      // followup_list, repeatedly, right after a successful toggle).
-      // Last successful toggle wins - the tool replaces the whole set.
-      // Guarded on Array.isArray(body.tools): a turn that shipped no
-      // tools cannot have dispatched a toggle, so a missing array here
-      // means the field was deliberately stripped and must stay off
-      // the wire.
-      if (opts.toolCatalog && Array.isArray(body.tools)) {
-        for (let i = outcomes.length - 1; i >= 0; i -= 1) {
-          const o = outcomes[i];
-          if (!o.ok || o.request.name !== 'toggle_toolbox') continue;
-          const enabled = enabledSetFromToggleResult(o.result);
-          if (enabled === null) break;
-          body = {
-            ...body,
-            tools: buildToolsFromCatalog(opts.toolCatalog, enabled),
-          };
-          log.info(
-            `${runId} round ${round} rearmed tools for [${enabled.join(', ')}]: ${(body.tools as unknown[]).length} defs`,
-          );
-          break;
         }
       }
 

@@ -85,7 +85,6 @@
     loadDraft,
     type StreamingDraft,
   } from '$lib/draft-store';
-  import { GATED_TOOLBOX_META, TOOLBOX_GATING } from '$lib/tools';
   import { drainSharesForComposer } from '$lib/share-intake';
   import {
     arrayBufferToBase64,
@@ -213,7 +212,7 @@
   } from '$lib/ui/recall';
   import { formatMessageStamp } from '$lib/ui/message-timestamp';
   import { coerceSecondThoughts } from '$lib/ui/second-thoughts';
-  import { buildMcpToolboxes, mcpToolboxMetaItems } from '$lib/ui/mcp';
+  import { buildMcpToolboxes } from '$lib/ui/mcp';
   import type { RetryIntent } from '$lib/ui/completion-status';
   import {
     selectCompletionStatus,
@@ -1942,7 +1941,7 @@
   });
 
   // Realtime: follow the current user's thread list. Covers the
-  // sidebar across devices — creates, renames, model/tools toggles,
+  // sidebar across devices — creates, renames, settings-pin changes,
   // auto-titles, deletes, and `updated_at` bumps on each send all
   // propagate without the user refreshing. RLS enforces the
   // user_id scoping; the filter here just narrows wire traffic.
@@ -1984,8 +1983,8 @@
         //      recent/older.
         //   2. updated_at bumped past the Recent/Older cutoff →
         //      migrate between those two buckets.
-        //   3. Plain in-bucket update (rename, model change, tools
-        //      toggle) → remove + re-insert in the same bucket so the
+        //   3. Plain in-bucket update (rename, model change) →
+        //      remove + re-insert in the same bucket so the
         //      updated_at ordering reflects the bump.
         // `isDraft` is main-thread-only and never round-trips through
         // the server, so the incoming row can't clobber it — but
@@ -2004,33 +2003,8 @@
         const topicsChanged =
           prevTopics.length !== nextTopics.length ||
           prevTopics.some((p, i) => p !== nextTopics[i]);
-        // If the toolboxes_enabled column changed on the active
-        // thread, drive the composer's brief flash so a human eye
-        // notices the LLM-initiated state flip. toggle_toolbox
-        // executes server-side, so the realtime UPDATE echo is
-        // the only signal we have here. User-initiated flips path
-        // through setToolboxEnabled, which patches the local thread
-        // row optimistically before the realtime UPDATE arrives - so
-        // by the time this handler fires, existing.toolboxes_enabled
-        // already matches t.toolboxes_enabled and the set comparison
-        // skips the flash (the click itself was the feedback). Only
-        // LLM-driven flips - where local state never patched - reach
-        // here with a real delta to surface. ~200ms later than the
-        // old in-process patch, but a perceptible flash beats none.
-        const prevToolboxes = existing?.toolboxes_enabled ?? [];
-        const nextToolboxes = t.toolboxes_enabled;
-        const toolboxesChangedOnActive =
-          t.id === activeThreadId &&
-          (prevToolboxes.length !== nextToolboxes.length ||
-            prevToolboxes.some((p, i) => p !== nextToolboxes[i]));
         rebucketThread(t);
         if (topicsChanged) void refreshTopicsVocabulary();
-        if (toolboxesChangedOnActive) {
-          toolboxFlash = true;
-          setTimeout(() => {
-            toolboxFlash = false;
-          }, 600);
-        }
       },
       onDelete: (id) => {
         removeThread(id);
@@ -2528,12 +2502,7 @@
       draft.model,
       draft.reasoning_effort,
       draft.verbosity,
-      titleManuallySet,
-      // Pass the draft's toolbox selections through. The composer
-      // toolbox button is live on drafts (see toggleToolboxManually),
-      // so a user may have enabled one or more toolboxes before the
-      // first send - they need to survive the draft-to-row swap.
-      draft.toolboxes_enabled
+      titleManuallySet
     );
     // Swap the draft for the real thread: remove from drafts, insert
     // into Recent (a freshly-created thread always lands inside the
@@ -3037,21 +3006,6 @@
   const currentThinkingOffRejected = $derived<boolean>(
     thinkingOffRejectedForModel(app.modelFeatureRejections, currentProfile.modelId)
   );
-  // Resolved gated-toolbox set for the current thread. The composer
-  // toolbox button renders unconditionally (mirroring the model /
-  // reasoning / verbosity pickers), so it needs a sensible default
-  // when no thread is active or the thread is a draft - empty array,
-  // since there's no user-level "default toolboxes" concept.
-  const currentToolboxesEnabled = $derived<string[]>(
-    currentThread?.toolboxes_enabled ?? []
-  );
-
-  const allToolboxMeta = $derived(
-    GATED_TOOLBOX_META.concat(
-      mcpToolboxMetaItems(app.mcpIntegrations)
-    )
-  );
-
   const mcpProblemCount = $derived(
     app.mcpIntegrations.filter((i) => i.authStatus === 'expired' || i.authStatus === 'revoked').length,
   );
@@ -3220,7 +3174,6 @@
       model: null,
       reasoning_effort: null,
       verbosity: null,
-      toolboxes_enabled: [],
       archived: false,
       hidden: false,
       forked_from_thread_id: null,
@@ -3366,8 +3319,7 @@
             active.model,
             active.reasoning_effort,
             active.verbosity,
-            active.title_manually_set,
-            active.toolboxes_enabled,
+            active.title_manually_set
           );
       rebucketThread(fork);
       // Insert a draft row on the fork with the old user message text.
@@ -4521,12 +4473,12 @@
           // sees.
           modelSupportsVision: ctx.modelSpec.supportsVision,
           // Dynamic MCP-integration toolboxes, built at turn entry
-          // from app state. Each authorized integration becomes a
-          // gated `mcp:<id>` toolbox the model can toggle on; the
-          // chat-loop composes them with the static catalog under one
-          // dedup-by-name pass. Built here (not in loop.ts) so the
-          // loop stays free of a global `app` dependency and stays
-          // unit-testable with an explicit mcpToolboxes arg.
+          // from app state. Each authorized integration becomes an
+          // `mcp:<label>` toolbox; the chat-loop composes them with
+          // the static catalog under one dedup-by-name pass. Built
+          // here (not in loop.ts) so the loop stays free of a global
+          // `app` dependency and stays unit-testable with an explicit
+          // mcpToolboxes arg.
           mcpToolboxes: buildMcpToolboxes(app.mcpIntegrations, app.mcpToolSchemas),
           // Topic-boundary recall rides the same trigger machinery as
           // intuition (cold-start, mid-turn title shift, mood shift,
@@ -5650,8 +5602,7 @@
             active.model,
             active.reasoning_effort,
             active.verbosity,
-            active.title_manually_set,
-            active.toolboxes_enabled
+            active.title_manually_set
           );
       rebucketThread(replacement);
       await selectThread(replacement.id);
@@ -6347,7 +6298,6 @@
   let modelMenuOpen = $state(false);
   let reasoningMenuOpen = $state(false);
   let verbosityMenuOpen = $state(false);
-  let toolboxMenuOpen = $state(false);
   // Mobile-only "wharf": on narrow viewports the whole composer-button
   // row collapses behind a single tap target. When this is true, the
   // row slides up as a vertical icon column above the bar. Opening any
@@ -6396,7 +6346,6 @@
     modelMenuOpen = false;
     reasoningMenuOpen = false;
     verbosityMenuOpen = false;
-    toolboxMenuOpen = false;
     composerWharfOpen = false;
     composerDiagWharfOpen = false;
   }
@@ -6427,14 +6376,13 @@
       !modelMenuOpen &&
       !reasoningMenuOpen &&
       !verbosityMenuOpen &&
-      !toolboxMenuOpen &&
       !composerWharfOpen &&
       !composerDiagWharfOpen
     )
       return;
     // "Inside" is scoped to the open popover and its trigger — not the
     // whole composer bar. Clicks on the bar's empty filler, the send
-    // button, or the toolbox toggle all count as outside so the popover
+    // button all count as outside so the popover
     // yields the moment the user's attention moves anywhere else.
     // `aria-haspopup="true"` is already set on every menu trigger for
     // a11y, so we reuse it here instead of listing CSS classes. The
@@ -6470,7 +6418,6 @@
       modelMenuOpen ||
       reasoningMenuOpen ||
       verbosityMenuOpen ||
-      toolboxMenuOpen ||
       composerWharfOpen ||
       composerDiagWharfOpen ||
       openMenuThreadId !== null ||
@@ -6483,12 +6430,6 @@
       document.removeEventListener('keydown', onDocKey);
     };
   });
-
-  // Brief pulse on the composer toolbox button when the LLM changes
-  // the thread's gated-toolbox set via `toggle_toolbox`. Set true on
-  // change, unset after the animation finishes - ~600ms is enough for
-  // the keyframe to complete.
-  let toolboxFlash = $state(false);
 
   /**
    * Write an abandonment payload over the pending sentinel and patch
@@ -6719,47 +6660,6 @@
         .eq('id', threadId);
     } catch {
       // Swallowed by design; see jsdoc above.
-    }
-  }
-
-  /**
-   * User-driven toolbox toggle - parallel to the `toggle_toolbox`
-   * meta-tool's LLM path. Flips the named gated toolbox on or off in
-   * the current thread's `toolboxes_enabled` array, writes through
-   * to Supabase, and reverts on failure so the UI can't lie about
-   * server state.
-   *
-   * Same fresh-session / draft pattern as setProfile: with no active
-   * thread, auto-create a draft so the choice has somewhere to land.
-   * On a draft, the toggle rides along in memory and gets persisted
-   * when the draft materializes (see `materializeIfDraft`, which
-   * passes `toolboxes_enabled` through to the inserted row). Without
-   * the auto-create + draft-local path, the toolbox button had no
-   * useful behaviour on fresh sessions or new conversations.
-   */
-  async function toggleToolboxManually(toolboxName: string): Promise<void> {
-    if (!app.supabase) return;
-    if (!currentThread) {
-      await newThread();
-      if (!currentThread) return;
-    }
-    const threadId = currentThread.id;
-    const current = currentThread.toolboxes_enabled;
-    const next = current.includes(toolboxName)
-      ? current.filter((n) => n !== toolboxName)
-      : [...current, toolboxName];
-    // Optimistic: update locally first so the checkbox feels instant.
-    patchThread(threadId, { toolboxes_enabled: next });
-    // For drafts, the choice rides in memory and gets persisted on
-    // materialization. Don't create a Supabase row just to record a
-    // toolbox flip.
-    if (currentThread.isDraft) return;
-    try {
-      await app.supabase.setThreadToolboxesEnabled(threadId, next);
-    } catch (err) {
-      // Revert on failure so the UI doesn't lie about server state.
-      patchThread(threadId, { toolboxes_enabled: current });
-      error = { text: err instanceof Error ? err.message : String(err) };
     }
   }
 
@@ -8955,65 +8855,6 @@
                 {/if}
               </button>
 
-              <!-- Toolbox popover: each gated toolbox is an independent
-                   on/off. Badge shows how many are on for this thread.
-                   Pulses on LLM-initiated flips via .flash (see CSS).
-                   Leads the picker cluster (ahead of model / reasoning /
-                   verbosity) because toolbox choice is the most load-
-                   bearing decision on this toolbar - cost and capability
-                   pivot on it. The attach and prompts buttons sit ahead
-                   of it: attach is a one-shot action and prompts is a
-                   selector over user-configured options, neither a per-
-                   conversation picker. Renders unconditionally - even
-                   with no active thread, or on a draft, the user can
-                   pre-enable toolboxes for the conversation they're
-                   about to start. `toggleToolboxManually` auto-creates
-                   a draft on first toggle so the choice has somewhere
-                   to land; the draft carries `toolboxes_enabled` through
-                   `materializeIfDraft` to the persisted row on first
-                   send. Same pattern as the model / reasoning /
-                   verbosity pickers below. Gating on
-                   `currentThread && !currentThread.isDraft` previously
-                   hid the button on any fresh session or new
-                   conversation, leaving no entry point to the toolbox
-                   surface on desktop. -->
-              <!-- Hidden under the toolbox-gating trial (TOOLBOX_GATING=false,
-                   src/lib/tools/index.ts): every toolbox is on for every
-                   turn, so a picker would be a switch wired to nothing. -->
-              {#if TOOLBOX_GATING}
-              <button
-                type="button"
-                class="secondary toolbox-btn"
-                class:on={currentToolboxesEnabled.length > 0}
-                class:flash={toolboxFlash}
-                onclick={() => {
-                  const next = !toolboxMenuOpen;
-                  closeMenus();
-                  toolboxMenuOpen = next;
-                }}
-                title={currentToolboxesEnabled.length > 0
-                  ? `Toolboxes: ${currentToolboxesEnabled.join(', ')}`
-                  : 'No toolboxes enabled - click to enable one'}
-                aria-label="Toolboxes"
-                aria-haspopup="true"
-                aria-expanded={toolboxMenuOpen}
-              >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
-                     stroke="currentColor" stroke-width="2"
-                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M3 7h18v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
-                  <path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                  <line x1="3" y1="12" x2="21" y2="12" />
-                  <line x1="10" y1="12" x2="10" y2="14" />
-                  <line x1="14" y1="12" x2="14" y2="14" />
-                </svg>
-                {#if currentToolboxesEnabled.length > 0}
-                  <span class="badge" aria-hidden="true"
-                    >{currentToolboxesEnabled.length}</span
-                  >
-                {/if}
-              </button>
-              {/if}
 
               <!-- Model-profile picker: per-thread pin, stored on
                    threads.model as a profile id. Renders unconditionally —
@@ -9190,28 +9031,6 @@
             </button>
             </div>
 
-            {#if TOOLBOX_GATING && toolboxMenuOpen}
-              <div class="composer-menu composer-menu-left" role="menu">
-                <div class="menu-header">Toolboxes for this conversation</div>
-                {#each allToolboxMeta as tb (tb.name)}
-                  <label class="menu-item">
-                    <input
-                      type="checkbox"
-                      checked={(currentThread?.toolboxes_enabled ?? []).includes(tb.name)}
-                      onchange={() => void toggleToolboxManually(tb.name)}
-                    />
-                    <span class="menu-item-label">
-                      <strong>
-                        {tb.name.startsWith('mcp:') ? tb.name.slice(4) : tb.name}
-                      </strong>
-                      <span class="subtle" style="display:block;font-size:0.75rem"
-                        >{tb.description}</span
-                      >
-                    </span>
-                  </label>
-                {/each}
-              </div>
-            {/if}
 
             {#if promptsMenuOpen}
               <div class="composer-menu composer-menu-left" role="menu">

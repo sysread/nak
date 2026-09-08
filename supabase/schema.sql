@@ -1146,45 +1146,26 @@ $$;
 grant execute on function public.mark_second_thoughts_acted(uuid)
   to authenticated;
 
--- Per-thread set of enabled gated toolboxes. Stored as text[] so the
--- toolbox dimension sits in the thread row without a second table.
--- The always_on toolbox is implicit and is NOT represented here - its
--- tools ride every request regardless. Names are validated client-
--- side against `GATED_TOOLBOX_NAMES` in src/lib/tools/index.ts;
--- unknown names are silently dropped on both the model path
--- (`toggle_toolbox`) and the UI path (composer popover), so a renamed
--- or deleted toolbox does not break mid-flight.
+-- Retired tool-gating columns. Every tool is declared on every
+-- request (see buildToolList in src/lib/tools/index.ts); the
+-- per-thread enabled-set was only meaningful while a wire-level
+-- gate existed. `toolboxes_enabled` held that set (written by the
+-- retired toggle_toolbox meta-tool and composer popover);
+-- `tools_enabled` was its boolean predecessor. No code reads
+-- either any more.
 --
--- The LLM can flip this via the `toggle_toolbox` meta-tool; the user
--- can flip it via the composer toolbox popover. Both paths write
--- through the same column.
-alter table public.threads
-  add column if not exists toolboxes_enabled text[] not null default '{}';
-
--- Backfill from the legacy boolean `tools_enabled` column, then drop
--- it. Runs in a guarded block so it's safe on projects that have
--- already migrated (the information_schema probe short-circuits) and
--- on projects that never had the boolean column (same). The array we
--- backfill with is the full set of gated toolboxes at migration time
--- (`cooking`, `memories`, `conversations`) - any thread that had
--- tools_enabled=true gets the same capability set it had before. The
--- list is hard-coded rather than derived because "everything that
--- existed when we migrated" is a one-shot decision that must not
--- drift when we add a new toolbox in a later release.
-do $$
-begin
-  if exists (
-    select 1 from information_schema.columns
-    where table_schema = 'public' and table_name = 'threads'
-      and column_name = 'tools_enabled'
-  ) then
-    update public.threads
-      set toolboxes_enabled = array['cooking', 'memories', 'conversations']::text[]
-      where tools_enabled = true
-        and toolboxes_enabled = '{}'::text[];
-    alter table public.threads drop column tools_enabled;
-  end if;
-end $$;
+-- The drop is DEFERRED one release on purpose. The deploy pipeline
+-- applies this file BEFORE the new frontend reaches GitHub Pages,
+-- and the previously-deployed frontend still writes
+-- `toolboxes_enabled` in its createThread / forkThread inserts and
+-- its toolbox-popover UPDATE - dropping the column now makes the
+-- old bundle's first-send INSERT fail with PGRST204 for the
+-- minutes-wide window until Pages finishes publishing. A dropped
+-- column harms nothing while the new code (which never selects or
+-- writes it) is live, so the drop lands in a follow-up PR once no
+-- cached old bundle can still be in service.
+-- alter table public.threads drop column if exists toolboxes_enabled;
+-- alter table public.threads drop column if exists tools_enabled;
 
 -- Soft-hide flag for the "Archive" drawer section. Archived threads still
 -- load into the sidebar and remain viewable, but the composer is disabled

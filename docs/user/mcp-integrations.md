@@ -11,9 +11,8 @@ search, cookbook, wiki, etc.).
 An MCP integration is a remote server URL you paste into
 **Settings - Integrations**. Nak discovers what the server can
 do, runs the OAuth consent flow, and stores the connection. The
-server's tools then appear as a gated "toolbox" the assistant
-can toggle on for any thread - same shape as the cookbook or
-wiki toolboxes.
+server's tools then appear to the assistant alongside its built-in
+capabilities.
 
 Common integrations:
 
@@ -28,7 +27,7 @@ OAuth can be connected the same way.
 
 1. Open **Settings - Integrations**.
 2. Enter a **label** (any name you want; shows in the settings
-   list and the toolbox popover) and the **server URL** the
+   list) and the **server URL** the
    provider gave you (e.g. `https://api.fastmail.com/mcp`).
 3. If the provider gave you a manual OAuth **Client ID**, paste it
    into **Client ID (optional)**. Leave it blank to let nak try
@@ -50,11 +49,9 @@ and paste the resulting Client ID into the optional field.
 
 ## Using an integration's tools
 
-Once authorized, the integration appears as a gated toolbox
-named `mcp:<label>` in the composer popover (the same menu where
-you toggle cookbook, memories, wiki, etc.). Toggle it on for a
-thread and the assistant can call that integration's tools in
-that conversation.
+Once authorized, the integration's tools are available to the
+assistant in every conversation. Nothing to switch on - Nak calls
+them when a request needs one.
 
 The tools work the same as every built-in tool:
 

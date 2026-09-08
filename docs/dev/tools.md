@@ -10,19 +10,19 @@ model can invoke in any surface is declared here.
 ## Role in the app
 
 Tools give the model a way to actually do things - store a memory,
-search prior threads, save a recipe, flip which toolboxes are
-active. The main chat loop exposes them to the primary model via
-named toolboxes; background agents expose their own scoped subsets
-to their own models.
+search prior threads, save a recipe. The main chat loop exposes the
+full catalog to the primary model, grouped into named toolboxes;
+background agents expose their own scoped subsets to their own
+models.
 
 The catalog and the dispatch live on opposite sides of the wire:
 
 - **The browser owns the catalog.** `buildToolList` composes the
-  wire `tools` array from the thread's enabled toolboxes, and
-  `src/lib/chat/system-prompt.ts` renders the same registry into the
-  system-prompt catalog. Every browser `ToolDef` is a
-  `serverSideTool(schema)` - catalog metadata plus an `execute()`
-  that throws. Nothing dispatches tools in the browser.
+  wire `tools` array (every static tool plus every connected MCP
+  integration's tools), and `src/lib/chat/system-prompt.ts` renders
+  the same registry into the system-prompt catalog. Every browser
+  `ToolDef` is a `serverSideTool(schema)` - catalog metadata plus an
+  `execute()` that throws. Nothing dispatches tools in the browser.
 - **The edge function owns every execution.** A streamed chat turn's
   tool calls dispatch through `performToolCall`
   (`supabase/functions/venice/performToolCall.ts`) against a
@@ -36,84 +36,53 @@ The catalog and the dispatch live on opposite sides of the wire:
 See [`./architecture.md`](./architecture.md) "Production-path
 ownership" for the full browser-vs-function frame.
 
-### Toolbox model: reads ride free, writes gate
+### Toolbox model: every tool is declared on every request
 
-The main chat model sees toolboxes as the unit of enablement:
+`buildToolList` declares every static tool plus every connected MCP
+integration's tools on every request. There is no per-thread gate,
+no toggle meta-tool, and no composer picker. The toolboxes are
+grouping devices for the system-prompt catalog (reads listed first,
+writes grouped by area), not enablement switches.
 
-- **`always_on`** - rides every request regardless of the thread's
-  `toolboxes_enabled` array. Carries every read-only surface plus a
-  few reflexes (below).
-- **`cooking`**, **`memories`**, **`wiki`**, **`followups`**,
-  **`library`**, **`images`** - gated toolboxes carrying only writes.
-  Included in the wire catalog only when their name appears in
-  `threads.toolboxes_enabled`. `wiki` is the single gate for every
-  chat-driven wiki write: article CRUD (`wiki_create` / `wiki_update` /
-  `wiki_delete`), the `wiki_librarian` delegation, the record writes
-  (`record_create` / `record_update` / `record_delete`), and the file +
-  link writes (`record_file_attach` / `record_file_remove` /
-  `record_link_create` / `record_link_delete`). The matching reads
-  (`wiki_search` / `wiki_list` / `wiki_get`, `record_list` /
-  `record_get` / `record_search`) stay always-on. See
-  `docs/dev/wiki.md` for the record files + cross-links design.
+Why there is no wire-level gate: the serving backend (GLM 5.3 Flash
+via Venice) holds the model to the declared tool list and silently
+DROPS a call to a tool the request did not declare. The forensics
+line from `streamFromVenice` showed it plainly: ~950 completion
+tokens spent, zero reasoning tokens, an empty role frame + an empty
+`finish_reason=stop` frame, three attempts in a row, on a turn
+whose surviving reasoning said "Do recipe_update with full cooklang"
+while the cooking toolbox was off the wire. The system prompt lists
+every tool by name (deliberately, for the prefix cache), so the
+model knows the write exists and sometimes calls it without
+toggling first - and a gate turns that into a failure the model
+cannot see and a temperature re-roll cannot fix. An earlier shape
+gated only the writes and the model passed over read tools rather
+than pay a toggle round-trip, answering from training data even
+when the user asked what Nak remembered. Both failure modes come
+from the same place: the system prompt's state-free catalog names
+every tool, so the model believes what it reads. Declaring
+everything makes the wire match the catalog and removes the failure
+class.
 
-The principle: reads are idempotent and cheap, so gating them was
-forcing the model to weigh "do I need this badly enough to flip a
-toolbox?" and frequently answering wrong - passing over
-`memory_search` in favour of training data even when the user asked
-what Nak remembered. Writes still need a deliberate user-or-model
-gate so an autonomous tool turn can't scribble over user data
-without intent.
+**Never reintroduce a wire-level gate.** If a tool must be refused
+at runtime, refuse at dispatch: declare it, then return a tool
+result naming why the call was refused. That failure the model can
+see and recover from. (The empty-completion re-roll in `./chat.md`
+stays as the safety net for any other empty completion.)
 
-### TRIAL (2026-09-07): toolbox gating is OFF
-
-`TOOLBOX_GATING = false` in `src/lib/tools/index.ts`. Everything
-under "Toolbox model" above still describes the code, but the wire
-no longer gates: `buildToolList` declares every static toolbox and
-every connected MCP toolbox on every request and withdraws
-`toggle_toolbox`; `buildSystemPrompt` frames the catalog as plainly
-available (no toggle rule, no "enable the X toolbox" sentences, no
-per-turn `(on)`/`(off)` state block); the composer's toolbox button
-and popover are hidden. Nothing was deleted: `threads.toolboxes_enabled`,
-the server-side `toggle_tools.ts`, the mid-turn rearm in
-`getStreamingResponse.ts`, `buildToolsFromCatalog`, and the popover
-all stay in the tree, inert, so the revert is flipping the constant
-back to `true`. The tests pin BOTH modes (the builders take `gating`
-as a trailing parameter defaulting to the constant).
-
-Why: the gate keeps ambient tokens down, but the serving backend
-(GLM 5.3 Flash via Venice) holds the model to the declared tool
-list and silently DROPS a call to a tool the request did not
-declare. The forensics line from `streamFromVenice` showed it
-plainly: ~950 completion tokens spent, zero reasoning tokens, an
-empty role frame + an empty `finish_reason=stop` frame, three
-attempts in a row, on a turn whose surviving reasoning said "Do
-recipe_update with full cooklang" while the cooking toolbox was
-off. The system prompt lists every tool by name (deliberately, for
-the prefix cache), so the model knows the write exists and
-sometimes calls it without toggling first. Under the gate that is a
-failure the model cannot see and a temperature re-roll cannot fix.
-The empty-completion re-roll in `./chat.md` is the safety net; this
-trial removes the cause.
-
-Cost, measured 2026-09-07: before the trial the always-on set the
-gate shipped was ~40.5k chars (~10k tokens) and the 33 gated specs
-would have added ~49.5k (~12k). The activity-parameter description
-that rides on every tool was ~400 chars x 61 tools (~6k tokens) and
-is now ~100 chars. Net: the full declared set on the wire is ~72k
-chars (~18k tokens) for 60 tools, about +8k tokens per request over
-what the gate used to send. Prompt caching (Venice reports
-`cached_tokens`) absorbs the repeat within a conversation. Watch
-`prompt_tokens` on the usage epilogue; if the trial holds and the
-cost is acceptable, a follow-up session removes the gating code
-for real. If it does not, flip the constant.
+Cost, measured 2026-09-07: the full declared set is ~72k chars
+(~18k tokens) for 60 tools after the activity-parameter trim. The
+gate's always-on set shipped ~32.6k chars (~8k), so the delta is
+about +10k tokens per request - and prompt caching (Venice reports
+`cached_tokens`, ~95% on the second request of a turn) absorbs the
+repeat within a conversation, since the array is byte-stable
+turn-to-turn now that no toggle can reshape it.
 
 ### The always-on toolbox
 
 Notable members (the full ordered list is `alwaysOnToolbox` in
 `src/lib/tools/index.ts`):
 
-- `toggle_toolbox` - the gating mechanism itself. Without it in the
-  always-on set, the model cannot enable any gated toolbox.
 - `context` - umbrella recall over the three persistent layers
   (memories, prior conversations, wiki). One round-trip returns a
   works-cited index: memory facts verbatim plus related
@@ -146,18 +115,14 @@ Notable members (the full ordered list is `alwaysOnToolbox` in
   single self-citation so the page shows in the reply's sources
   panel. The split exists because the search pipeline is built
   around queries and searches FOR a bare URL instead of reading
-  it. Always-on because time-sensitive questions (news, prices,
-  today's weather) are the canonical case for search and we don't
-  want the model to refuse or hedge while waiting for a toolbox
-  flip. Read-only (no DB writes).
+  it. Read-only (no DB writes).
   Deliberately absent from every agent toolbox - background agents
   have no reason to reach for live web data, and giving them the
   tool would burn search quota and pollute memories with scraped
   noise. Both modes tag their result with the untrusted-content
   notice (see Contracts, "Untrusted tool results").
-- `update_title` - has to fire on the very first turn of a fresh
-  thread when `toolboxes_enabled=[]` by default; gating it would
-  mean a toolbox flip before the model could name the conversation.
+- `update_title` - renames the conversation; fires from the very
+  first turn so a fresh thread gets a real title.
 - `analyze_image` - fires a vision sub-completion for an image
   attachment identified by filename and a caller-supplied query.
   Runs against a primary vision model first and falls back once to
@@ -191,7 +156,10 @@ Notable members (the full ordered list is `alwaysOnToolbox` in
   in `src/lib/ask-user.ts`; see `./chat.md` for the suspend/resume
   contract.
 
-### The gated write boxes
+### The write toolboxes
+
+Each of these groups only tools that mutate user data; every read
+surface lives in the always-on set above.
 
 - **`cooking`** - recipe writes: `recipe_save` / `recipe_update` /
   `recipe_delete` plus the photo tools (`recipe_photos_attach` /
@@ -201,7 +169,7 @@ Notable members (the full ordered list is `alwaysOnToolbox` in
   / `memory_delete` plus the volitional levers (`memory_reaffirm` /
   `memory_doubt` for graded confidence, `memory_relate` /
   `memory_unrelate` for the memory graph). See `./memory.md`.
-- **`wiki`** - the single gate for every chat-driven wiki write.
+- **`wiki`** - the whole chat-driven wiki write surface.
   Direct article CRUD (`wiki_create` / `wiki_update` /
   `wiki_delete`), the `wiki_librarian` delegation (a multi-round
   sub-agent for multi-article consolidations), and the full record
@@ -219,7 +187,7 @@ Notable members (the full ordered list is `alwaysOnToolbox` in
 - **`library`** - document writes: `doc_create` (promote a file the
   user attached into a permanent searchable document), `doc_update`,
   `doc_delete`. See `./library.md`.
-- **`images`** - `generate_image`. Gated because a generation
+- **`images`** - `generate_image`. A generation
   spends Venice credits and writes a persistent attachment.
   Unusually for a tool, its real output does NOT come back in the
   tool-result content: the edge orchestrator harvests the generated
@@ -251,8 +219,7 @@ Browser catalog (`src/lib/tools/`):
 - `index.ts` - the toolbox definitions (`alwaysOnToolbox`,
   `cookingToolbox`, `memoriesToolbox`, `wikiToolbox`,
   `libraryToolbox`, `imagesToolbox`), the ordered `TOOLBOXES` list,
-  the derived `GATED_TOOLBOX_NAMES` / `GATED_TOOLBOX_META`, the
-  flat `TOOLS` view used by tests, the wire builder
+  the flat `TOOLS` view used by tests, the wire builder
   (`buildToolList`), and `getToolFormatters` for the tool-call
   detail panel. Every `ToolDef` here is a `serverSideTool(schema)`.
 - `<tool>.schema.ts` (one per tool) - the tool's name, description,
@@ -277,8 +244,7 @@ Browser catalog (`src/lib/tools/`):
 Adjacent browser modules:
 
 - `src/lib/chat/system-prompt.ts` - `buildSystemPrompt` renders the
-  registry into the system-prompt catalog; `buildToolboxStateBlock`
-  renders the volatile `(on)`/`(off)` state.
+  registry into the system-prompt catalog.
 - `src/lib/ask-user.ts` - the ask_user suspend/resume envelope
   helpers shared by `Chat.svelte` and the chat loop.
 
@@ -323,74 +289,40 @@ Edge dispatch (`supabase/functions/venice/`):
 
 ## Entry points
 
-- **Chat loop** - `chat/loop.ts` calls
-  `buildToolList(thread.toolboxes_enabled)` to ship the wire
-  `tools` array plus `buildToolCatalog(...)` to ship the full
-  catalog in the /stream envelope, then observes the streamed
+- **Chat loop** - `chat/loop.ts` calls `buildToolList()` to ship
+  the wire `tools` array, then observes the streamed
   `tool_call_request` / `tool_call_response` events. The edge
   function is writer-of-record for the whole turn: it dispatches
-  each call via `performToolCall`, persists the
+  each call via `performToolCall` and persists the
   assistant-with-tool-calls row and the per-call `role='tool'`
-  rows, and rebuilds its in-memory `tools` array from the catalog
-  when a round's `toggle_toolbox` succeeds. See `./chat.md`.
+  rows. See `./chat.md`.
 - **Background agents** - server-side only. Each agent composes its
   own prompt and toolbox and calls `runHeadlessAgent`, which drives
   model -> tool -> model rounds entirely in memory (no DB writes,
   no streaming) until the model settles into a text-only response.
   Triggers and per-agent stories live with the owning features
   (`./memory.md`, `./wiki.md`).
-- **System prompt assembly** - `buildSystemPrompt({ biasProfile })`
-  in `src/lib/chat/system-prompt.ts` composes the baseline system message.
-  The catalog section lists always-on tools first, then each gated
-  toolbox and its tools. The catalog is state-free: it lists what
-  toolboxes exist, not which are enabled, so the baseline stays
-  byte-identical across a `toggle_toolbox` flip and the
-  prompt-prefix cache survives it. The volatile `(on)`/`(off)`
-  state is rendered by `buildToolboxStateBlock` and folded into the
-  per-turn metadata system message (right after the datetime), so
-  the model still sees the same enabled picture the user does in
-  the composer popover - just from the trailing block, not the
-  catalog.
+- **System prompt assembly** - `buildSystemPrompt(mcpToolboxes?)`
+  in `src/lib/chat/system-prompt.ts` composes the baseline system
+  message. The catalog section lists read tools first, then each
+  write toolbox and its tools. The catalog is state-free and lists
+  every tool, matching the wire `tools` array exactly - nothing in
+  the baseline varies per turn, which is what lets it anchor the
+  prompt-prefix cache.
 
 ## Data model
 
 - **Toolbox definitions** (`alwaysOnToolbox`, `cookingToolbox`,
   `memoriesToolbox`, `wikiToolbox`, `libraryToolbox`,
   `imagesToolbox`) - each is a `Toolbox` with a stable name, a
-  human-readable description (surfaced in the UI popover and in
-  the system-prompt catalog), and an ordered `tools: ToolDef[]`
-  array.
-- **`TOOLBOXES`** - ordered list: always-on first, then the gated
-  write boxes. Order is visible to the model (system-prompt
-  catalog) and to the user (popover).
-- **`GATED_TOOLBOX_NAMES`** - `TOOLBOXES` minus `alwaysOnToolbox`.
-  The canonical name list for both writers (the `toggle_toolbox`
-  tool and the composer popover) to validate against. **Mirror
-  alert:** `toggle_toolbox` actually dispatches server-side
-  (`supabase/functions/venice/tools/toggle_tools.ts`), which can't
-  import this browser barrel and so keeps a HAND-MAINTAINED copy of
-  these names. A toolbox added here but not there can't be enabled
-  by the model - the toggle silently drops the unknown name and
-  returns `enabled: []` (the shape of a past regression where a
-  shipped toolbox was missing from this mirror).
-  `tests/toggle-toolbox-mirror.test.ts` cross-checks the two lists,
-  so adding a gated toolbox means editing BOTH places (and the
-  guard fails the gate if you forget).
-- **`GATED_TOOLBOX_META`** - `{name, description}[]` projection
-  that the UI popover reads; kept narrow so Chat.svelte does not
-  pull in tool definitions just to render a list.
+  human-readable description (surfaced in the system-prompt
+  catalog), and an ordered `tools: ToolDef[]` array.
+- **`TOOLBOXES`** - ordered list: always-on first, then the write
+  boxes. Order is visible to the model (system-prompt catalog).
 - **`TOOLS`** - flat, deduped view of every tool across
-  `TOOLBOXES`. Exported for test assertions; the wire builder
-  composes from `TOOLBOXES` so a tool's toolbox membership drives
-  enablement. Does NOT include agent-only toolboxes - those are
-  composed server-side and addressed by toolbox directly.
-- **`threads.toolboxes_enabled text[]`** - the per-thread set of
-  enabled gated toolbox names. Written by `toggle_toolbox` (model-
-  driven) and by the composer popover (user-driven). Empty array
-  means "only the always-on set on the wire." The `always_on`
-  name is implicit and is never stored here; writers drop it
-  silently, as they drop any unknown name, so a renamed or
-  deleted toolbox does not break mid-flight.
+  `TOOLBOXES`. Exported for test assertions. Does NOT include
+  agent-only toolboxes - those are composed server-side and
+  addressed by toolbox directly.
 - **Context shapes** - three, deliberately not unified:
   - The browser `ToolContext` (`src/lib/tools/types.ts`) survives
     as part of the `ToolDef.execute` signature and its shape tests;
@@ -410,8 +342,8 @@ Edge dispatch (`supabase/functions/venice/`):
 - `ToolDef` (browser) - `{ name, description, shortDescription,
   parameters, execute, formatArgs?, formatResult? }`. `description`
   ships on the wire; `shortDescription` is a <50-char line used in
-  the system-prompt catalog so the model knows what's behind the
-  toggle without needing the full JSON schema. `execute()` throws
+  the system-prompt catalog so the model knows what the tool does
+  without needing the full JSON schema. `execute()` throws
   on every chat tool (see `serverSideTool`). The optional
   formatters live on the schema half so the tool-call detail panel
   can render domain-specific args/results; `getToolFormatters(name)`
@@ -432,32 +364,14 @@ Edge dispatch (`supabase/functions/venice/`):
   injects the same parameter for progress-observed agent runs (see
   below); the two schemas must stay mirrored so the model sees one
   contract whichever side composed the wire.
-- `buildToolList(enabledToolboxes: readonly string[]):
-  OpenAIToolDef[]` - canonical way to build the request's `tools`
-  array. Always includes the always-on toolbox; then each gated
-  toolbox whose name appears in the input. Unknown names are
-  ignored; duplicates across toolboxes are deduped by tool name
-  (first-seen wins). Callers should never construct this array
-  by hand.
-- `buildToolCatalog(mcpToolboxes?): ToolCatalog` - the full catalog
-  for the /stream envelope: always-on defs plus every gated
-  toolbox's wire defs keyed by toolbox name (static boxes in
-  `TOOLBOXES` order, then MCP boxes). The venice orchestrator
-  rebuilds the request's `tools` array from it after a successful
-  mid-turn `toggle_toolbox` (`buildToolsFromCatalog` in
-  `supabase/functions/venice/tool_catalog.ts`), so a toolbox the
-  model enables is callable in the same turn. Key order is
-  load-bearing (the server iterates insertion order);
-  `tests/tool-catalog-parity.test.ts` pins that a rebuild equals
-  `buildToolList` for the same enabled set. The server module is
-  deliberately dependency-free so the vitest parity suite can
-  import it directly.
-- `buildSystemPrompt(opts?)` / `buildToolboxStateBlock(enabled)` -
-  live in `src/lib/chat/system-prompt.ts`, importing the registry from
-  here. The baseline is state-free; the state block renders the
-  gated toolboxes as `(on)`/`(off)` lines and rides the per-turn
-  metadata message. Unknown names in `enabled` are ignored;
-  toolboxes absent from `enabled` render `(off)`.
+- `buildToolList(mcpToolboxes?): OpenAIToolDef[]` - canonical way
+  to build the request's `tools` array. Every static tool plus
+  every connected MCP integration's tools; duplicates across
+  toolboxes are deduped by tool name (first-seen wins). Callers
+  should never construct this array by hand.
+- `buildSystemPrompt(mcpToolboxes?)` - lives in
+  `src/lib/chat/system-prompt.ts`, importing the registry from
+  here. The catalog it renders mirrors this array exactly.
 - `serverSideTool(schema): ToolDef` - wraps a schema into a chat
   `ToolDef` whose `execute()` throws, naming the tool and its edge
   home. The chat catalog (`TOOLS`, `buildToolList`) carries it by
@@ -551,22 +465,11 @@ Edge dispatch (`supabase/functions/venice/`):
   `supabase/functions/tests/untrusted-content.test.ts` pins the
   ordering and the escaping property;
   `tests/system-prompt.test.ts` pins the prompt half.
-- **Toggle semantics.** The `toggle_toolbox` tool takes
-  `{enabled: string[]}` and replaces the thread's set. Passing
-  `{enabled: []}` disables every gated toolbox. The tool returns
-  `{enabled: <accepted-set>}` - the accepted set filters out
-  unknown names and the implicit `always_on` name. On the UI side
-  the composer popover writes through the same column via
-  `setThreadToolboxesEnabled(threadId, names)`.
 
 ## Interactions with other features
 
-- **Chat** - `buildToolList(thread.toolboxes_enabled)` shapes the
-  first round's wire array and `buildToolCatalog` rides the same
-  envelope for the mid-turn rebuild; the edge function dispatches
-  and persists. The browser notices a model-driven toolbox flip via
-  the `threads` realtime UPDATE echo (the composer button flash
-  keys off the row delta). See `./chat.md`.
+- **Chat** - `buildToolList()` shapes the turn's wire array; the
+  edge function dispatches and persists. See `./chat.md`.
 - **Attachments** - `generate_image` (gated `images` toolbox) is
   the one tool whose output bypasses the tool-result content
   entirely: the edge orchestrator harvests its generated bytes and
@@ -652,43 +555,16 @@ Edge dispatch (`supabase/functions/venice/`):
   identical in both so the model sees one contract. A change to
   one without the other silently degrades the narration on the
   un-updated side.
-- **`toggle_toolbox` is in `always_on` but not in the catalog.**
-  It's the gating mechanism, not a capability to describe
-  alongside recall. `buildSystemPrompt` filters it out of the
-  always-on catalog block by `toggleToolbox.name`; the toggle rule
-  is explained in its own prompt paragraph with the exact call
-  shape (`toggle_toolbox({enabled: [...]})`).
-- **Enablement is request-shape only; dispatch does not re-check the
-  gate.** `performToolCall` runs whatever registered name the model
-  emits - the catalog filter (`buildToolList` + the mid-turn rebuild
-  from `toolCatalog`) is the whole gate. Two consequences. First,
-  the mid-turn rebuild is load-bearing: before it existed, a
-  toolbox enabled by `toggle_toolbox` shipped no schemas for the
-  rest of the turn, and whether the flow still worked depended on
-  the serving backend - most accept calls to undeclared tool names,
-  but a backend that holds the model to the declared list coerces
-  the intended write onto the nearest declared name (observed as
-  `followup_create` coming out as `followup_list` eight rounds in a
-  row while the activity text said "Creating a follow-up...").
-  Second, a model that hallucinates an undeclared-but-registered
-  write call will still execute it; the gate assumes models call
-  only declared tools, and history shows most do not - treat that
-  leniency as load-bearing legacy, not a guarantee.
-- **Unknown toolbox names are dropped silently.** Both writers
-  (`toggle_toolbox` and the composer popover) filter against
-  `GATED_TOOLBOX_NAMES`, so a renamed or deleted toolbox doesn't
-  break mid-flight. On the read side, `coerceThread` filters
-  non-string array elements out of `toolboxes_enabled` so a
-  drifting row can never poison the UI's `.includes()` checks.
-  Validation is at the edges; internal code trusts the shape.
-- **The `always_on` name is implicit.** Listing it in the
-  `enabled` array does nothing (we already include it) and
-  writers drop it. The stored array should never contain
-  `always_on`.
+- **Dispatch does not re-check a gate.** `performToolCall` runs
+  whatever registered name the model emits - under the
+  declare-everything model there is no gate to re-check. A model
+  that hallucinates a name (or replays a call to a tool retired
+  since the row was written) gets the dispatcher's unknown-tool
+  error as its tool result, which it can see and recover from.
 - **Always-on membership requires read-only behavior.** The
   always-on set is "reads plus reflexes" by design; any new tool
   that wants always-on placement needs the same no-writes property
-  or it belongs in a gated write box.
+  or it belongs in a write toolbox.
 - **Wire-schema constraints are advisory, not enforced.** The
   `required`, `minLength`, `maxLength`, and enum bounds in a
   `.schema.ts` are prompt text the model reads, not a contract the

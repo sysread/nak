@@ -438,8 +438,7 @@ export class SupabaseService {
     model: string | null = null,
     reasoningEffort: ThinkingLevel | null = null,
     verbosity: Verbosity | null = null,
-    titleManuallySet = false,
-    toolboxesEnabled: string[] = []
+    titleManuallySet = false
   ): Promise<Thread> {
     return threadsApi.createThread(
       this.client,
@@ -447,8 +446,7 @@ export class SupabaseService {
       model,
       reasoningEffort,
       verbosity,
-      titleManuallySet,
-      toolboxesEnabled
+      titleManuallySet
     );
   }
 
@@ -502,13 +500,6 @@ export class SupabaseService {
     payload: unknown
   ): Promise<void> {
     return threadsApi.setThreadContextRecallPayload(this.client, threadId, payload);
-  }
-
-  async setThreadToolboxesEnabled(
-    threadId: string,
-    enabled: readonly string[]
-  ): Promise<void> {
-    return threadsApi.setThreadToolboxesEnabled(this.client, threadId, enabled);
   }
 
   async setThreadArchived(threadId: string, archived: boolean): Promise<void> {

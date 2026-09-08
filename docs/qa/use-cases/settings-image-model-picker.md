@@ -16,7 +16,7 @@ generation time and falls back to the built-in default
 - A Venice key seeded in `app_config` (the picker fetches the live
   Venice image catalog through the edge function; image generation
   calls the live model).
-- A thread with no pending reply, with the **Images** toolbox available.
+- A thread with no pending reply.
 
 ## Steps
 
@@ -33,7 +33,7 @@ generation time and falls back to the built-in default
     where user_id = auth.uid();
    ```
 
-5. In a thread with the **Images** toolbox enabled, send: `Please
+5. In a thread, send: `Please
    create an image of a watercolor fox in a snowy forest.`
 6. After the image renders, confirm which model served it - check the
    venice function logs for the `image/generate` request body's `model`

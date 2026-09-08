@@ -450,8 +450,7 @@
 
   /* Active state on the citations toggle mirrors the hover treatment
      so the opened panel's button reads as "pressed" without a
-     separate color — consistent with the toolbox-btn conventions
-     elsewhere. */
+     separate color. */
   .citations-toggle.active {
     color: var(--text);
     background: var(--surface);

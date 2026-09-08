@@ -2,46 +2,22 @@
  * Coverage for the main-chat system prompt assembly.
  *
  * The prompt's load-bearing beats (identity, recall framing,
- * anti-sycophancy voice block, toggle-toolbox gating rule, dynamic
+ * anti-sycophancy voice block, every-tool-available framing, dynamic
  * tool catalog, user_message boundary, datetime tag, system_reminder
  * channel, URL scraping) are asserted via grep-style matchers so
  * phrasing tweaks don't churn the suite, while a regression on a
  * load-bearing idea still trips a clear failure.
  *
- * The toolbox catalog the baseline renders is state-free (it lists
- * what exists, not what is enabled); the volatile (on)/(off) state
- * lives in `buildToolboxStateBlock`, which the chat-loop folds into
- * the per-turn metadata system message. The state block has its own
- * describe section below.
- *
  * The catalog-derivation test pairs with the registry: every tool
- * other than toggle_toolbox itself appears as a catalog line built
- * live from `TOOLBOXES`, so adding a tool extends the prompt without
- * touching anything in this file.
+ * appears as a catalog line built live from `TOOLBOXES`, so adding a
+ * tool extends the prompt without touching anything in this file.
  */
 import { describe, it, expect } from 'vitest';
-import {
-  TOOLS,
-  GATED_TOOLBOX_NAMES,
-  buildToolList,
-  toggleToolbox,
-  type ToolDef,
-} from '../src/lib/tools';
-import {
-  buildSystemPrompt,
-  buildToolboxStateBlock,
-} from '../src/lib/chat/system-prompt';
+import { TOOLS, buildToolList, type ToolDef } from '../src/lib/tools';
+import { buildSystemPrompt } from '../src/lib/chat/system-prompt';
 
-// Both builders default to the toolbox-gating TRIAL (TOOLBOX_GATING =
-// false in src/lib/tools/index.ts). The suites below pin the GATED
-// prompt explicitly so the revert path stays tested; the trial's own
-// shape is pinned in the last describe.
 const gatedPrompt = (mcp: Parameters<typeof buildSystemPrompt>[0] = []) =>
-  buildSystemPrompt(mcp, true);
-const gatedStateBlock = (
-  enabled: readonly string[],
-  mcp: Parameters<typeof buildToolboxStateBlock>[1] = [],
-) => buildToolboxStateBlock(enabled, mcp, true);
+  buildSystemPrompt(mcp);
 
 describe('buildSystemPrompt', () => {
   it('primes the model to write an activity sentence per call', () => {
@@ -134,7 +110,7 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toMatch(/close it before answering|narrow the problem|before answering/i);
   });
 
-  it('lists every tool (always-on + gated) but omits toggle_toolbox itself', () => {
+  it('lists every tool in the catalog', () => {
     const prompt = gatedPrompt();
     expect(prompt).toContain('memory_recall');
     expect(prompt).toContain('conversation_recall');
@@ -143,39 +119,34 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('memory_update');
     expect(prompt).toContain('memory_delete');
     expect(prompt).toContain('conversation_search');
-    // toggle_toolbox is the switch itself, not something to advertise
-    // in either catalog section - the prompt block that explains the
-    // toggle rule already names it.
-    expect(prompt).not.toMatch(/^- toggle_toolbox/m);
   });
 
   it('catalog lines are dynamically derived from the registry', () => {
-    // Every tool other than `toggle_toolbox` appears as a catalog line
-    // with its name + shortDescription, across the always-on section
-    // and per-toolbox blocks. If a tool is added to a toolbox but
-    // forgotten in the prompt code, this test catches the drift - the
-    // prompt is always the live view.
+    // Every tool appears as a catalog line with its name +
+    // shortDescription, across the read section and the per-toolbox
+    // write blocks. If a tool is added to a toolbox but forgotten in
+    // the prompt code, this test catches the drift - the prompt is
+    // always the live view.
     const prompt = gatedPrompt();
-    const cataloged = TOOLS.filter((t: ToolDef) => t.name !== toggleToolbox.name);
-    for (const tool of cataloged) {
+    for (const tool of TOOLS) {
       expect(prompt).toContain(`- ${tool.name} : ${tool.shortDescription}`);
     }
   });
 
-  it('groups gated tools under their toolbox, carrying no on/off marks', () => {
-    // `always_on` header should not appear as a toolbox row; it has
-    // its own "Always available" section above.
+  it('groups tools into a read section and write-toolbox sections', () => {
+    // Read tools live under "Read tools (always available)"; each
+    // write toolbox gets its own grouped block below.
     const prompt = gatedPrompt();
-    const alwaysIdx = prompt.indexOf('Always available');
+    const alwaysIdx = prompt.indexOf('Read tools (always available):');
     // Anchor on the catalog header specifically. The framing block
-    // above the catalog now uses the word "toolbox(es)" too, so a
-    // bare indexOf('Toolboxes') would land in the framing prose.
-    const gatedIdx = prompt.indexOf('Toolboxes you can enable');
+    // above the catalog also uses the word "available", so a bare
+    // indexOf would land in the framing prose.
+    const gatedIdx = prompt.indexOf('Write tools, grouped by area');
     expect(alwaysIdx).toBeGreaterThanOrEqual(0);
     expect(gatedIdx).toBeGreaterThan(alwaysIdx);
 
-    // Read paths and the recall pair live under Always available;
-    // gated toolboxes carry only writes.
+    // Read paths and the recall pair live under Read tools; the write
+    // sections carry only writes.
     const alwaysSection = prompt.slice(alwaysIdx, gatedIdx);
     const gatedSection = prompt.slice(gatedIdx);
     expect(alwaysSection).toMatch(/- memory_recall /);
@@ -186,25 +157,19 @@ describe('buildSystemPrompt', () => {
     // Writes do not leak into the always-on listing.
     expect(alwaysSection).not.toMatch(/- memory_create /);
     expect(alwaysSection).not.toMatch(/- recipe_save /);
-    // Gated section carries the writes.
+    // Write sections carry the writes.
     expect(gatedSection).toMatch(/- memory_create /);
     expect(gatedSection).toMatch(/- recipe_save /);
     expect(gatedSection).not.toMatch(/- memory_search /);
     expect(gatedSection).not.toMatch(/- recipe_list /);
 
-    // Every gated toolbox gets a "name : description" line with its
+    // Every write toolbox gets a "name : description" line with its
     // tools indented below. The conversations and research toolboxes
     // were dropped (their only tools are now always-on).
     expect(gatedSection).toMatch(/ cooking : /);
     expect(gatedSection).toMatch(/ memories : /);
     expect(gatedSection).not.toMatch(/ conversations : /);
     expect(gatedSection).not.toMatch(/ research : /);
-
-    // The catalog is state-free: the (on)/(off) marks moved to the
-    // per-turn metadata system message (buildToolboxStateBlock) so a
-    // toggle doesn't bust the baseline prefix cache. A mark leaking
-    // back into the catalog is the regression this guards.
-    expect(gatedSection).not.toMatch(/\(on\)|\(off\)/);
   });
 
   it('carries the recall framing: long-term memory across three layers, priming is a projection not a full inventory, tools used when stale or for explicit lookups', () => {
@@ -278,18 +243,6 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toMatch(/nak-marked <think> blocks/);
   });
 
-  it('explains the toggle_toolbox gating rule', () => {
-    // The policy used to live on the toggle tool's own description;
-    // it now belongs here so the model sees it before any gated
-    // schemas are on the wire (empty toolboxes_enabled => only the
-    // always-on set is sent). A drop here would let a model that
-    // doesn't already know about toggle_toolbox try to call
-    // memory_search directly.
-    const prompt = gatedPrompt();
-    expect(prompt).toMatch(/toggle_toolbox\(/);
-    expect(prompt).toMatch(/enabled:\s*\[/);
-  });
-
   it('no longer advertises the user_message fence, datetime tag, or system_reminder channels', () => {
     // The wire-shape refactor retired all three: the user message now
     // rides bare (role:user is the boundary), datetime moved into a
@@ -318,23 +271,19 @@ describe('buildSystemPrompt', () => {
     expect(prompt).not.toMatch(/scraped\s+page/i);
   });
 
-  it('web_search is always-on - rides with every request, listed in the always-available catalog', () => {
+  it('web_search is always-on - rides with every request, listed in the read catalog', () => {
     // Web search is a reflex-level capability, same rationale as the
     // *_recall tools: the model should be able to reach for it on any
-    // time-sensitive question without needing a toolbox toggle first.
-    // This test is the tripwire for anyone moving it into a gated
-    // toolbox.
-    expect(buildToolList([]).map((t) => t.function.name)).toContain('web_search');
-    expect(buildToolList(GATED_TOOLBOX_NAMES).map((t) => t.function.name)).toContain(
-      'web_search'
-    );
-    // Catalog advertisement - the system prompt's "Always available"
+    // time-sensitive question. This test is the tripwire for anyone
+    // moving it into a write toolbox.
+    expect(buildToolList().map((t) => t.function.name)).toContain('web_search');
+    // Catalog advertisement - the system prompt's "Read tools"
     // section must mention web_search by name + shortDescription so
-    // the model knows the tool exists. A gated placement would put
-    // it inside one of the toolbox blocks further down.
+    // the model knows the tool exists. A write-toolbox placement
+    // would put it inside one of the blocks further down.
     const prompt = gatedPrompt();
     expect(prompt).toMatch(
-      /Always available \(no toggle needed\):[\s\S]*- web_search : search the live web/
+      /Read tools \(always available\):[\s\S]*- web_search : search the live web/
     );
   });
 
@@ -359,7 +308,7 @@ describe('buildSystemPrompt', () => {
     // before it meets the tool list, not after.
     const prompt = gatedPrompt();
     expect(prompt.indexOf('untrusted_content_notice')).toBeLessThan(
-      prompt.indexOf('Always available (no toggle needed):')
+      prompt.indexOf('Read tools (always available):')
     );
   });
 
@@ -432,53 +381,12 @@ describe('buildSystemPrompt', () => {
   });
 });
 
-describe('buildToolboxStateBlock', () => {
-  // The (on)/(off) state moved out of the baseline catalog and into the
-  // per-turn metadata system message so a toggle_toolbox flip doesn't
-  // bust the baseline prompt-prefix cache. This block is what carries
-  // the volatile state; the chat-loop pins it right after the datetime
-  // paragraph in the metadata message.
-
-  it('marks every gated toolbox (off) when nothing is enabled', () => {
-    const block = gatedStateBlock([]);
-    expect(block).toMatch(/\(off\) cooking/);
-    expect(block).toMatch(/\(off\) memories/);
-    expect(block).not.toMatch(/\(on\)/);
-  });
-
-  it('marks enabled toolboxes (on) and the rest (off)', () => {
-    // A model reading "(on) cooking" knows it can invoke the cooking
-    // write tools this turn without a toolbox flip. Plain English state
-    // words instead of [x]/[ ] checkboxes - the checkbox shape was
-    // misread as "unchecked = unavailable" and the model skipped over
-    // gated tools rather than enabling their toolboxes.
-    const block = gatedStateBlock(['cooking']);
-    expect(block).toMatch(/\(on\) cooking/);
-    expect(block).toMatch(/\(off\) memories/);
-  });
-
-  it('lists every gated toolbox, derived live from the registry', () => {
-    // Adding a gated toolbox extends the state block automatically -
-    // same registry-driven guarantee the catalog has. If a toolbox is
-    // added but forgotten here, this catches the drift.
-    const block = gatedStateBlock([]);
-    for (const name of GATED_TOOLBOX_NAMES) {
-      expect(block).toContain(name);
-    }
-  });
-
-  it('names toggle_toolbox so the model knows how to flip the state', () => {
-    // The block is the model's only per-turn view of the enabled set;
-    // it has to point at the switch that changes it.
-    expect(gatedStateBlock([])).toMatch(/toggle_toolbox/);
-  });
-});
-
-describe('toolbox gating trial (TOOLBOX_GATING=false)', () => {
-  // The backend drops calls to undeclared tools, so the trial declares
-  // every tool and withdraws the toggle. The prompt must therefore
-  // never tell the model to enable anything: a toggle_toolbox call
-  // would itself be an undeclared-tool call and vanish the same way.
+describe('every tool available every turn', () => {
+  // The serving backend holds the model to the declared tool list and
+  // silently drops a call to an undeclared tool, so the prompt must
+  // never tell the model to enable anything - there is nothing to
+  // enable, and an enable-shaped instruction would push the model
+  // toward calls that never land.
   it('never mentions toggle_toolbox or enabling a toolbox', () => {
     const prompt = buildSystemPrompt();
     expect(prompt).not.toContain('toggle_toolbox');
@@ -489,9 +397,16 @@ describe('toolbox gating trial (TOOLBOX_GATING=false)', () => {
 
   it('still lists every tool, grouped, as plainly available', () => {
     const prompt = buildSystemPrompt();
-    expect(prompt).toContain('Core tools:');
+    expect(prompt).toContain('Read tools (always available):');
     expect(prompt).toContain('all available every turn');
-    for (const name of GATED_TOOLBOX_NAMES) {
+    for (const name of [
+      'cooking',
+      'memories',
+      'wiki',
+      'followups',
+      'library',
+      'images',
+    ]) {
       expect(prompt).toMatch(new RegExp(`^  ${name} : `, 'm'));
     }
     expect(prompt).toMatch(/^      - recipe_update : /m);
@@ -502,9 +417,5 @@ describe('toolbox gating trial (TOOLBOX_GATING=false)', () => {
     const prompt = buildSystemPrompt();
     expect(prompt).toMatch(/call wiki_librarian with concrete instructions/);
     expect(prompt).toMatch(/call doc_create \(identify the file/);
-  });
-
-  it('renders no toolbox state block', () => {
-    expect(buildToolboxStateBlock(['cooking'])).toBe('');
   });
 });

@@ -170,10 +170,8 @@ unaffected.
   row opens the Cookbook modal on the detail pane for that id via
   the `initialRecipeId` prop.
 - **LLM tool calls** - `recipe_save / list / get / update / delete`,
-  grouped into the `cooking` toolbox. The model flips the toolbox
-  on with `toggle_toolbox({enabled: ["cooking", ...]})` before
-  reaching for any of the recipe tools; the user can do the same
-  from the composer toolbox popover.
+  grouped into the `cooking` toolbox. Every tool is declared on
+  every request (no gating); the model calls them directly.
 
 ## Data model
 

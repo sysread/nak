@@ -3,7 +3,7 @@
  * list/paging reads (recent / older / archived plus the window fetch
  * behind search-result jumps), merged exact+semantic thread search,
  * thread CRUD, the per-thread setters (model, reasoning effort,
- * verbosity, toolboxes, archived flag, cached priming payloads), and
+ * verbosity, archived flag, cached priming payloads), and
  * the cross-device response claims (grouped under their own banner
  * below - the claims are thread-scoped, so they live here rather than
  * in a slice of their own).
@@ -382,7 +382,6 @@ export async function searchThreads(
         model: null,
         reasoning_effort: null,
         verbosity: null,
-        toolboxes_enabled: [],
         archived: row.archived,
         // The RPC resolves hidden-thread hits to a visible descendant
         // before returning, so every stubbed row is visible by
@@ -419,8 +418,7 @@ export async function createThread(
   model: string | null = null,
   reasoningEffort: ThinkingLevel | null = null,
   verbosity: Verbosity | null = null,
-  titleManuallySet = false,
-  toolboxesEnabled: string[] = []
+  titleManuallySet = false
 ): Promise<Thread> {
   const session = await getSession(client);
   if (!session) throw new SupabaseError('Not authenticated.');
@@ -433,12 +431,6 @@ export async function createThread(
       reasoning_effort: reasoningEffort,
       verbosity,
       title_manually_set: titleManuallySet,
-      // Carries the draft's toolbox selections through to the
-      // persisted row. The composer toolbox button is available
-      // before a draft materializes, so a user may have enabled
-      // toolboxes before the first send - without this passthrough
-      // those flips would silently reset to [] on materialization.
-      toolboxes_enabled: toolboxesEnabled,
     })
     .select()
     .single();
@@ -461,8 +453,8 @@ export async function createThread(
  *
  * The fork inherits the source's identity and composer settings
  * (title behind a fork marker - see forkTitle in ../forking -
- * title_manually_set, model / reasoning / verbosity pins, enabled
- * toolboxes) and nothing else: summary, topics, cached
+ * title_manually_set, model / reasoning / verbosity pins) and
+ * nothing else: summary, topics, cached
  * priming payloads, archived state, and worker cursors all start
  * fresh. Null cursors are deliberate - a fresh fork's own segment is
  * empty, so per-thread worker queries never see the inherited prefix
@@ -581,7 +573,6 @@ export async function forkThread(
       model: source.model,
       reasoning_effort: source.reasoning_effort,
       verbosity: source.verbosity,
-      toolboxes_enabled: source.toolboxes_enabled,
       forked_from_thread_id: parentId,
       forked_from_msg_id: pointId,
     })
@@ -670,7 +661,7 @@ export async function setThreadModel(
  * Pin the reasoning-effort level for this thread, or clear the override
  * (null) so the thread tracks the user default. Doesn't touch
  * updated_at - flipping reasoning shouldn't promote the thread to the
- * top of the sidebar, same rationale as setThreadToolboxesEnabled.
+ * top of the sidebar.
  */
 export async function setThreadReasoningEffort(
   client: SupabaseClient,
@@ -707,7 +698,7 @@ export async function setThreadVerbosity(
  * to clear (used by tests; the chat-loop only ever writes a fresh
  * payload). Doesn't bump updated_at - intuition is internal state
  * that shouldn't promote the thread to the top of the sidebar, same
- * discipline as the toolbox / verbosity / reasoning-effort setters.
+ * discipline as the verbosity / reasoning-effort setters.
  *
  * Loose typing on `payload`: the column is jsonb and the intuition
  * module owns the canonical shape (see
@@ -747,30 +738,8 @@ export async function setThreadContextRecallPayload(
 }
 
 /**
- * Replace the thread's set of enabled gated toolboxes. Called from
- * the `toggle_toolbox` meta-tool (LLM path) and from the composer
- * toolbox popover (user path). The array is the new set; any
- * toolbox not listed is disabled. Doesn't touch updated_at - a
- * toolbox flip shouldn't promote the thread to the top of the
- * sidebar. Caller is responsible for pre-filtering to the known
- * toolbox names (this method writes whatever it's given - the
- * validation lives with the callers who know the valid name list).
- */
-export async function setThreadToolboxesEnabled(
-  client: SupabaseClient,
-  threadId: string,
-  enabled: readonly string[]
-): Promise<void> {
-  const { error } = await client
-    .from('threads')
-    .update({ toolboxes_enabled: enabled })
-    .eq('id', threadId);
-  if (error) throw new SupabaseError(error.message);
-}
-
-/**
- * Flip the thread's archived flag. Unlike setThreadToolboxesEnabled /
- * setThreadReasoningEffort, this one DOES bump updated_at - both
+ * Flip the thread's archived flag. Unlike setThreadReasoningEffort,
+ * this one DOES bump updated_at - both
  * directions want the thread promoted to the top of whichever section
  * (Chats or Archive) it lands in, so the user immediately sees where
  * it went.

@@ -11,7 +11,7 @@ aren't immediately obvious.
 On narrow screens the composer toolbar collapses behind a single
 button — a 3x3 grid of dots sitting to the left of the textarea.
 Tap it and a thin vertical column slides up, one icon per row:
-attachments, prompts, toolbox, model, reasoning, verbosity. Tap
+attachments, prompts, model, reasoning, verbosity. Tap
 one to act on it (the column closes; the corresponding popover
 takes over if the button has one). The send button stays in its
 usual bottom-right spot.
@@ -26,42 +26,25 @@ The paperclip button in the composer toolbar queues files for the
 next message — click the paperclip, paste an image, or drag-drop
 onto the composer. Full details in [Attachments](./attachments.md).
 
-### Toolboxes
+### What Nak can do in a conversation
 
-> **Currently on trial:** every toolbox is on for every conversation
-> and the toolbox button is hidden. You do not need to enable
-> anything, and Nak will not ask you to. Anywhere else in this guide
-> that says to enable a toolbox, skip that step. The rest of this
-> section describes how toolboxes work when the switch is on.
+Every one of Nak's tools is available in every conversation - there
+is nothing to enable. Nak's capabilities beyond plain chat include:
 
-The **toolbox popover** sits in the composer toolbar, just after the
-attach and prompts buttons.
-Nak's capabilities beyond plain chat are grouped into named toolboxes
-that you can enable per conversation:
-
-- **Cooking** — save, read, and edit recipes in the Cookbook.
+- **Cookbook** — save, read, and edit recipes in the Cookbook.
 - **Memories** — search, create, update, and delete long-term
   memories about you.
 - **Conversations** — search prior conversations for context.
+- **Wiki** — read and edit the wiki articles it maintains about you.
+- **Library** — read the documents you've stored there and promote
+  an attached file into one.
 - **Images** — generate a picture from a text description and attach
   it to the reply. See [Attachments](./attachments.md#generating-images).
+- **Integrations** — tools from any MCP server you've connected in
+  Settings. See [MCP integrations](./mcp-integrations.md).
 
-Click the toolbox icon to open the popover and check off the
-toolboxes you want active for this conversation. Each toolbox is
-independent — turn on just Cooking if you're meal-planning; turn on
-Memories + Conversations when you want Nak to reach into your
-history.
-
-The badge on the button counts how many toolboxes are currently on.
-When a toolbox is off, its tools aren't on the wire — the model
-can't accidentally write a recipe when you only asked for chat.
-Reflex-level tools (memory recall, conversation recall, web search)
-always ride along without needing a toolbox — you never have to
-enable a toolbox just to get the model to look something up.
-
-Nak can also flip toolboxes itself mid-conversation when it realises
-it needs a capability. When that happens, the toolbox button briefly
-pulses so you can see the change.
+Write tools are exercised only when a request calls for one; asking
+Nak about the weather doesn't invite it to edit your cookbook.
 
 ### Quick send
 
