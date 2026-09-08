@@ -28,6 +28,7 @@
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { readRecipePhotoMeta } from './_recipe_helpers.ts';
 import { ArgErrors } from './_validate.ts';
+import { resolveNaturalKeyMatch } from './_upsert_heuristics.ts';
 
 // Mirror of src/lib/recipe-limits.ts - the caps the wire schema
 // advertises. Divergent copies here rejected schema-legal bodies.
@@ -86,11 +87,56 @@ async function doCreate(
     }
   }
   errs.throwIfAny();
+
+  // Natural-key dedup: titles are unique per user (recipes_user_title_unique).
+  // The model may be updating a recipe whose title it knows but whose id it
+  // forgot; an exact-title match routes to that recipe's update path instead
+  // of bouncing with the unique-violation, and a near-match is refused with
+  // the candidates named. No fuzzy-merge risk here beyond the refusal: an
+  // update only patches named fields, so a wrong guess surfaces as the model
+  // reading the returned row and correcting itself.
+  const match = await resolveNaturalKeyMatch({
+    query: async (probeValue: string) => {
+      // % wildcards for containment (see wiki_save.ts); bare column
+      // select (PostgREST cannot carry AS aliases). RLS OFF: user_id
+      // filtered explicitly - service-role bypasses RLS.
+      const { data, error } = await ctx.adminClient
+        .from('recipes')
+        .select('id, title')
+        .eq('user_id', ctx.userId)
+        .ilike('title', `%${probeValue}%`)
+        .limit(3);
+      if (error) throw new Error(`naturalKeyProbe failed: ${error.message}`);
+      const rows = (data ?? []) as { id: string; title: string }[];
+      return { data: rows.map((r) => ({ id: r.id, key: r.title })) };
+    },
+    keyValue: title,
+    fuzzy: true,
+  });
+  if (match) {
+    // The model's create-intent landed on an existing recipe. The edit
+    // form's change_message requirement would now reject the call for
+    // a field the model had no reason to provide (the schema calls it
+    // optional on create), so default it here - the matched-update
+    // changelog line stays informative.
+    if (
+      typeof args.change_message !== 'string' ||
+      args.change_message.trim().length === 0
+    ) {
+      args = { ...args, change_message: `Matched existing "${match.key}"` };
+    }
+    const updated = (await doUpdate(match.id, args, ctx)) as {
+      matched_existing?: boolean;
+    };
+    return { ...updated, matched_existing: true };
+  }
   // A save is always a recipe's first version, so an omitted
   // change_message defaults rather than erroring - there is no prior
   // state to describe a delta against, and the model routinely forgets
-  // the field on a brand-new recipe. Matches the backfill seed naming
-  // and the client-side recipe_save executor.
+  // the field on a brand-new recipe. The edit form requires it (a
+  // delta with nothing to describe against is the point of the
+  // history). Matches the backfill seed naming and the client-side
+  // recipe_save executor.
   const changeMessage =
     typeof args.change_message === 'string' && args.change_message.trim().length > 0
       ? args.change_message.trim()

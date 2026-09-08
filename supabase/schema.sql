@@ -2552,8 +2552,7 @@ create table if not exists public.recipes (
   title text not null,
   source text,
   source_url text,
-  cooklang text not null,
-  -- User rating, 1-5 stars. Null means "unrated"; clearing the stars in
+  cooklang text not null,  -- User rating, 1-5 stars. Null means "unrated"; clearing the stars in
   -- the UI writes null rather than 0 so the unrated case is
   -- distinguishable from "actively rated zero" (which we don't allow).
   rating smallint,
@@ -2582,6 +2581,22 @@ do $$ begin
       check (rating is null or (rating between 1 and 5));
   end if;
 end $$;
+
+-- (user_id, lower(trim(title))) is unique: recipe titles are the
+-- Cookbook's display and lookup key, and duplicates read as bugs - two
+-- "Weeknight Chili" cards that drift apart as one gets edited. The
+-- lower(trim(..)) shape matches how the recipe_save tool's dedup
+-- heuristic probes, so an exact-title create lands as a visible
+-- constraint error only when the probe raced; the heuristic is the
+-- primary guard. Enforced as a unique INDEX rather than a table
+-- constraint: Postgres only accepts expressions in index form
+-- (`unique (col, (expr))` in a table constraint is a syntax error).
+-- Prod was verified collision-free (50 rows, 0 ci-collisions, 0
+-- untrimmed) before this landed; a violating table would need a
+-- manual rename pass first, which the deploy-time failure would
+-- surface loudly.
+create unique index if not exists recipes_user_title_unique
+  on public.recipes (user_id, lower(btrim(title)));
 
 create index if not exists recipes_user_updated_idx
   on public.recipes (user_id, updated_at desc);
@@ -3157,11 +3172,28 @@ begin
     raise exception 'image_labels length must match image_ids length';
   end if;
 
-  insert into public.recipes (user_id, title, source, source_url, cooklang,
-                              rating, created_at, updated_at)
-    values (v_uid, p_title, p_source, p_source_url, p_cooklang,
-            p_rating, v_now, v_now)
-    returning recipes.id into v_recipe_id;
+  -- The (user_id, lower(trim(title))) unique constraint is the
+  -- load-bearing dedup guard. Catch the 23505 here so the agent-facing
+  -- error names the remedy (search then save by id) instead of the
+  -- raw "duplicate key" text, which reads as a transient failure.
+  -- The recipe_save tool's natural-key heuristic catches the common
+  -- case first; this is the race fallback. Attached to a nested
+  -- BEGIN..END block: plpgsql only honors an exception clause at the
+  -- end of a block, and a bare `exception` mid-body would silently
+  -- swallow every statement after it (empirically verified - the
+  -- version insert never ran with the handler sitting mid-block).
+  begin
+    insert into public.recipes (user_id, title, source, source_url, cooklang,
+                                rating, created_at, updated_at)
+      values (v_uid, p_title, p_source, p_source_url, p_cooklang,
+              p_rating, v_now, v_now)
+      returning recipes.id into v_recipe_id;
+  exception
+    when unique_violation then
+      raise exception
+        'a recipe titled "%" already exists - run recipe_list to find its id, then call recipe_save with that id to update it',
+        p_title;
+  end;
 
   insert into public.recipe_versions
     (recipe_id, user_id, title, source, source_url, cooklang, rating,
@@ -3318,12 +3350,23 @@ begin
   -- absent leaves it alone; explicit null clears (back to "unrated").
   if p_set_rating then v_rating := p_rating; end if;
 
-  update public.recipes
-     set title = v_title, cooklang = v_cooklang,
-         source = v_source, source_url = v_source_url,
-         rating = v_rating,
-         updated_at = v_now
-   where recipes.id = p_id;
+  -- A rename can collide with another recipe's title (see the
+  -- recipes_user_title_unique constraint). Catch the 23505 so the
+  -- error names the situation instead of raw "duplicate key" text.
+  -- Nested BEGIN..END for the same reason as the create RPC's handler.
+  begin
+    update public.recipes
+       set title = v_title, cooklang = v_cooklang,
+           source = v_source, source_url = v_source_url,
+           rating = v_rating,
+           updated_at = v_now
+     where recipes.id = p_id;
+  exception
+    when unique_violation then
+      raise exception
+        'another recipe is already titled "%" - pick a different name, or update that recipe instead',
+        v_title;
+  end;
 
   insert into public.recipe_versions
     (recipe_id, user_id, title, source, source_url, cooklang, rating,

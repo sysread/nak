@@ -187,7 +187,14 @@ unaffected.
     partial `recipes_user_upcoming_idx (user_id) where upcoming` and
     `recipes_user_favorite_idx (user_id) where favorite` to keep the
     "list upcoming" / "list favorites" paths cheap while most rows
-    aren't bookmarked.
+    aren't bookmarked. `recipes_user_title_unique` - a unique index
+    on `(user_id, lower(btrim(title)))`: duplicate titles read as
+    bugs (two cards that drift apart as one gets edited), and the
+    uniqueness key is what the `recipe_save` tool's natural-key
+    dedup probes against - an exact-title create routes to that
+    recipe's update, a near-match is refused with candidates named.
+    Enforced as an index because Postgres only accepts expressions in
+    index form.
   - RLS: four self-* policies (select / insert / update / delete),
     same shape as `memories`.
   - **Bookmark flags** (`upcoming`, `favorite`): not in
