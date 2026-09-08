@@ -346,7 +346,7 @@ export async function createRecipe(
 
 /**
  * Partial update. Caller guarantees at least one field in `patch`
- * is set - enforced by the recipe_update tool and the Cookbook
+ * is set - enforced by the recipe_save tool and the Cookbook
  * Edit pane before this method runs. Goes through
  * `recipe_update_with_version` so the prior state is snapshotted
  * into `recipe_versions` in the same transaction. `changeMessage`

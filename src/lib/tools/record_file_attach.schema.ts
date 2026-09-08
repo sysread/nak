@@ -11,12 +11,10 @@ export const recordFileAttachSchema = {
   name: 'record_file_attach',
   description:
     'Attach a file from THIS conversation to a wiki record, by its ' +
-    'filename. Works for any file the conversation holds - a file the ' +
-    'user uploaded or an image you generated. The bytes are copied into ' +
-    'permanent record storage, so the file stays on the record even after ' +
-    'the chat attachment expires. Use this to put crumb photos, scanned ' +
-    'cards, or generated images onto the record that documents them. The ' +
-    'file must still be live in the thread (an expired attachment errors).',
+    'filename - a user upload or a generated image. The bytes are copied ' +
+    'into permanent record storage, so the file stays on the record even ' +
+    'after the chat attachment expires. The file must still be live in ' +
+    'the thread (an expired attachment errors).',
   shortDescription: 'attach a conversation file to a record',
   parameters: {
     type: 'object',

@@ -50,11 +50,11 @@ unaffected.
   schemas (name, description, JSON Schema parameters). Schema only;
   the browser never executes a recipe tool.
 - `supabase/functions/venice/tools/recipe_save.ts`, `recipe_list.ts`,
-  `recipe_get.ts`, `recipe_update.ts`, `recipe_delete.ts`, and
+  `recipe_get.ts`, `recipe_delete.ts`, and
   `recipe_photos.ts` (which carries all four photo verbs) — the
   implementations, dispatched function-side against the admin client.
   `_recipe_helpers.ts` holds `readRecipePhotoMeta`, the "newest
-  version's link set" read that `recipe_get` and `recipe_update`
+  version's link set" read that `recipe_get` and the save tool's edit form
   both answer photo questions with. Mutating tools reach the UI
   through the realtime relay, not `notifyCookbookChanged` - see the
   relay gotcha below.
@@ -169,7 +169,7 @@ unaffected.
   fetches from Supabase; subsequent switches are free). Clicking a
   row opens the Cookbook modal on the detail pane for that id via
   the `initialRecipeId` prop.
-- **LLM tool calls** - `recipe_save / list / get / update / delete`,
+- **LLM tool calls** - `recipe_save (create or edit) / list / get / delete`,
   grouped into the `cooking` toolbox. Every tool is declared on
   every request (no gating); the model calls them directly.
 
@@ -308,7 +308,7 @@ unaffected.
 - A mutating tool's response must describe state it actually read
   back, not the shape the caller asked for. See the echoed-row gotcha
   below for the two fields this went wrong on.
-- **The rating is user-only.** `recipe_update` accepts no `rating`
+- **The rating is user-only.** `recipe_save` accepts no `rating`
   argument and always passes `p_set_rating: false`; a call that
   carries one is rejected with an explanatory error. The rating is a
   user evaluation of a cooked dish, so it moves only through the UI
@@ -326,7 +326,7 @@ Two writes per mutation, one transaction: both
 plpgsql RPCs, so either both rows land or neither does.
 
 `change_message` is required at the `SupabaseService.createRecipe` /
-`updateRecipe` layer (and on `recipe_update`, where a meaningful delta
+`updateRecipe` layer (and on the save tool's edit form, where a meaningful delta
 description exists). The `recipe_save` tool is the one exception: a
 save is always a recipe's first version, so an omitted message has no
 delta to describe and the tool defaults it to `"Initial version"`
@@ -353,7 +353,7 @@ under a megabyte).
 **Atomicity**: `recipe_update_with_version` takes a `for update`
 lock on the parent row before snapshotting, so concurrent writers
 (the user editing in the modal while the model also calls
-`recipe_update`) serialize. The first writer commits its snapshot;
+the save tool's edit form) serialize. The first writer commits its snapshot;
 the second sees the post-first-commit state and snapshots that. No
 gaps in the history chain, no surprise overwrites.
 
@@ -366,10 +366,10 @@ recoverable.
 
 **No history LLM tools** (deliberately): the model has no
 `recipe_versions_list` or `recipe_revert` tool, only the existing
-`recipe_save` / `recipe_update` / etc. History viewing and revert
+`recipe_save` / etc. History viewing and revert
 are user-directed UX flows; letting the model revert without an
 explicit user prompt is a footgun without a clear win. The model
-can already author whatever content it wants via `recipe_update`,
+can already author whatever content it wants via the save tool's edit form,
 and the user has revert in the modal. Revisit if a need surfaces.
 
 **Backfill**: existing recipes that predate the rollout get one
@@ -578,7 +578,7 @@ keystrokes; the LLM tool path keeps using `listRecipes`.
   their own form-row between the change-message field and the
   cooklang+preview panes.
 - **A tool's echoed row is a claim about live state - read it back.**
-  `recipe_update` answered with a hardcoded `photos: []` and echoed the
+  the edit form answered with a hardcoded `photos: []` and echoed the
   `topics` column, and both read as data loss to the model, which
   relayed "your photos and tags are gone" to the user after an edit
   that had preserved every one of them. Photos: the RPC inherits the
@@ -593,7 +593,7 @@ keystrokes; the LLM tool path keeps using `listRecipes`.
   only ever means "re-queued." `recipe_save`'s `photos: []` is a
   different case and stays: a create passes `p_image_ids: null`, so
   the recipe genuinely has no photos yet.
-  `tests/recipe_update.test.ts` guards both.
+  `tests/recipe_save_edit_form.test.ts` guards both.
 - **Photo IDs are stable across versions.** A photo upserted into
   `recipe_images` keeps the same id forever for that user;
   reordering or appending changes the link rows, not the image
@@ -652,7 +652,7 @@ keystrokes; the LLM tool path keeps using `listRecipes`.
   markdown exports append " (optional)" to the bullet, and step
   prose shows just the name. Ingredients only - cooklang-rs also
   allows `#?cookware`, but nak's flat cookware aside has nothing to
-  hang optionality off. The `recipe_save` / `recipe_update` tool
+  hang optionality off. The `recipe_save` tool
   descriptions teach the model the syntax; keep them in sync if the
   rendering changes.
 - **Dash-only section reset.** A line whose non-whitespace content is

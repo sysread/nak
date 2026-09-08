@@ -1,6 +1,6 @@
 /**
  * Recipe length limits. Lifted out of `cooklang.ts` so the always-on
- * `recipe_save` / `recipe_update` tool schemas can reach them without
+ * `recipe_save` tool schema can reach them without
  * pulling the 14 kB Cooklang parser into the main chunk - the parser
  * is needed only on the Cookbook screen (lazy) and at recipe-save
  * time (also reached via lazy tool impls).

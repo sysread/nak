@@ -47,7 +47,7 @@ Deno.test('recipe_save refuses to set the star rating', async () => {
   await assertRejects(
     () => recipeSave.execute({ ...ARGS, rating: 5 }, ctx),
     Error,
-    'rating is not settable by this tool',
+    'rating is not editable by this tool',
   );
   assertEquals(rpcCalls.length, 0);
 });

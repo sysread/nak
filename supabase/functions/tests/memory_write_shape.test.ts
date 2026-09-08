@@ -1,6 +1,6 @@
 // Return-shape guards for the memory write tools.
 //
-// Same regression as tests/recipe_update.test.ts, found by auditing the
+// Same regression as tests/recipe_save_edit_form.test.ts, found by auditing the
 // other tools for it: a write echoed the row's `topics` column, but the
 // label/data edit that triggered the write also fires
 // clear_memory_topics_on_change, which empties that column so the

@@ -2,7 +2,7 @@
 //
 // The newest `recipe_versions` row carries the recipe's live photo
 // links, so "which photos does this recipe have right now" is a join
-// against that one row. Both recipe_get and recipe_update need the
+// against that one row. Both recipe_get and the save tool's edit form need the
 // answer: get because the model asked for it, update because every
 // scalar edit inherits the previous version's links and has to report
 // what it carried forward.

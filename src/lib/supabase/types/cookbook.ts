@@ -73,7 +73,7 @@ export interface Recipe {
  * the trail of past states the user can browse and revert to.
  *
  * `change_message` is required - the UI Edit form and the LLM
- * `recipe_save` / `recipe_update` tools all force a non-empty value
+ * `recipe_save` tool (both forms) all force a non-empty value
  * before the RPC is called.
  */
 export interface RecipeVersion {

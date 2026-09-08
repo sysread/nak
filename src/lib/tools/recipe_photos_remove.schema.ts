@@ -5,12 +5,10 @@
 export const recipePhotosRemoveSchema = {
   name: 'recipe_photos_remove',
   description:
-    'Remove one or more photos from a recipe by photo id (the id ' +
-    "field on each entry of recipe_get's photos array). Every id " +
-    'must be on the recipe; an unknown id fails the call rather than ' +
-    'silently skipping. change_message REQUIRED. Returns ' +
-    '{recipe_id, photos: [{id, position, label}, ...]} - the ' +
-    'post-removal full ordered set with surviving captions preserved.',
+    'Remove one or more photos from a recipe by photo id (from ' +
+    "recipe_get's photos array). Every id must be on the recipe; an " +
+    'unknown id fails the call rather than silently skipping. Returns ' +
+    'the post-removal full ordered photo set.',
   shortDescription: 'remove photos from a recipe by id',
   parameters: {
     type: 'object',
@@ -31,8 +29,7 @@ export const recipePhotosRemoveSchema = {
         minLength: 1,
         maxLength: 500,
         description:
-          'One-line history note; lands in the recipe changelog the user reviews. Examples: "Removed the blurry first ' +
-          'attempt", "Dropped the redundant overhead shot".',
+          'One-line history note; lands in the recipe changelog the user reviews.',
       },
     },
     required: ['recipe_id', 'photo_ids', 'change_message'],

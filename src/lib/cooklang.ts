@@ -711,7 +711,7 @@ export type { RecipeHtmlOptions, RecipeTocSection, RecipeTocEntry } from './cook
 
 /**
  * Catch the LLM-authoring quirks the parser tolerates but the renderer
- * can't make readable. Called from `recipe_save` and `recipe_update`
+ * can't make readable. Called from the recipe_save tool (both forms)
  * BEFORE the write hits the DB, so a malformed save fails at the tool
  * surface and the LLM gets a corrective error it can act on — far
  * cheaper than silently storing source that renders wrong and waiting
