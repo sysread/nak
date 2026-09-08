@@ -30,7 +30,7 @@ export const recipeGet: ToolDef = {
     if (!recipe) return { found: false };
 
     // Newest recipe_version row carries the current photo set; the
-    // shared helper owns that join (recipe_update reads it back the
+    // shared helper owns that join (recipe_save's edit form reads it back the
     // same way). Ownership was validated by the select above.
     const photos = await readRecipePhotoMeta(ctx.adminClient, id);
 

@@ -153,7 +153,9 @@ Cooklang form.
 
 If Nak tells you it can't save a recipe, check that the recipe text
 actually made it into the chat - the tool needs the ingredients and
-steps to come from somewhere.
+steps to come from somewhere. Recipe titles are unique - asking Nak
+to save "the same recipe" twice updates the existing card rather
+than creating a second one.
 
 ## Jumping around a recipe
 

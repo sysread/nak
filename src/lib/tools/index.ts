@@ -78,7 +78,6 @@ import { conversationGetSchema } from './conversation_get.schema';
 import { recipeListSchema } from './recipe_list.schema';
 import { recipeGetSchema } from './recipe_get.schema';
 import { recipeSaveSchema } from './recipe_save.schema';
-import { recipeUpdateSchema } from './recipe_update.schema';
 import { recipeDeleteSchema } from './recipe_delete.schema';
 import { recipePhotosAttachSchema } from './recipe_photos_attach.schema';
 import { recipePhotosRemoveSchema } from './recipe_photos_remove.schema';
@@ -150,7 +149,6 @@ const conversationGet = serverSideTool(conversationGetSchema);
 const recipeList = serverSideTool(recipeListSchema);
 const recipeGet = serverSideTool(recipeGetSchema);
 const recipeSave = serverSideTool(recipeSaveSchema);
-const recipeUpdate = serverSideTool(recipeUpdateSchema);
 const recipeDelete = serverSideTool(recipeDeleteSchema);
 const recipePhotosAttach = serverSideTool(recipePhotosAttachSchema);
 const recipePhotosRemove = serverSideTool(recipePhotosRemoveSchema);
@@ -310,7 +308,6 @@ export const cookingToolbox: Toolbox = {
     'recipe_get) are always-on; this toolbox carries the writes.',
   tools: [
     recipeSave,
-    recipeUpdate,
     recipeDelete,
     recipePhotosAttach,
     recipePhotosRemove,

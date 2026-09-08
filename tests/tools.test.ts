@@ -39,7 +39,6 @@ describe('tool registry', () => {
     // a tool here would be a silent failure the model cannot see.
     const names = buildToolList([]).map((t) => t.function.name).sort();
     expect(names).toEqual(TOOLS.map((t: ToolDef) => t.name).sort());
-    expect(names).toContain('recipe_update');
     expect(names).toContain('memory_save');
   });
 
@@ -89,7 +88,6 @@ describe('tool registry', () => {
     // carry only the tools that mutate user data.
     expect(cookingToolbox.tools.map((t: ToolDef) => t.name)).toEqual([
       'recipe_save',
-      'recipe_update',
       'recipe_delete',
       'recipe_photos_attach',
       'recipe_photos_remove',

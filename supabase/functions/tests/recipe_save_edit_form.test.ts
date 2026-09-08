@@ -1,4 +1,4 @@
-// Return-shape guards for venice/tools/recipe_update.ts.
+// Return-shape guards for the edit form of venice/tools/recipe_save.ts.
 //
 // The regression these exist for: a scalar edit (title / cooklang /
 // source / rating) inherits the recipe's photo links onto the new
@@ -10,7 +10,7 @@
 import { assertEquals, assertRejects } from '@std/assert';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ToolContext } from '../venice/performToolCall.ts';
-import { recipeUpdate } from '../venice/tools/recipe_update.ts';
+import { recipeSave } from '../venice/tools/recipe_save.ts';
 
 interface PhotoLink {
   position: number;
@@ -79,7 +79,7 @@ Deno.test('recipe_update reports the photos it carried forward', async () => {
       { position: 2, image_id: 'img-c', label: null },
     ],
   });
-  const out = (await recipeUpdate.execute(ARGS, ctx)) as {
+  const out = (await recipeSave.execute(ARGS, ctx)) as {
     photos: Array<{ id: string; position: number; label: string | null }>;
   };
   // Sorted by position, not by the order the join happened to return.
@@ -98,20 +98,20 @@ Deno.test('recipe_update omits the re-queued topics column', async () => {
   const { ctx } = fakeCtx({
     rpcRow: { id: 'r-1', title: 'Meatballs', rating: 4, topics: [] },
   });
-  const out = (await recipeUpdate.execute(ARGS, ctx)) as Record<string, unknown>;
+  const out = (await recipeSave.execute(ARGS, ctx)) as Record<string, unknown>;
   assertEquals('topics' in out, false);
   assertEquals(out.rating, 4);
 });
 
 Deno.test('recipe_update reports no photos when the recipe has none', async () => {
   const { ctx } = fakeCtx({ links: [] });
-  const out = (await recipeUpdate.execute(ARGS, ctx)) as { photos: unknown[] };
+  const out = (await recipeSave.execute(ARGS, ctx)) as { photos: unknown[] };
   assertEquals(out.photos, []);
 });
 
 Deno.test('recipe_update survives a recipe with no version row', async () => {
   const { ctx } = fakeCtx({ noVersionRow: true });
-  const out = (await recipeUpdate.execute(ARGS, ctx)) as { photos: unknown[] };
+  const out = (await recipeSave.execute(ARGS, ctx)) as { photos: unknown[] };
   assertEquals(out.photos, []);
 });
 
@@ -122,7 +122,7 @@ Deno.test('recipe_update leaves the photo set alone', async () => {
   const { ctx, rpcCalls } = fakeCtx({
     links: [{ position: 0, image_id: 'img-a', label: null }],
   });
-  await recipeUpdate.execute(ARGS, ctx);
+  await recipeSave.execute(ARGS, ctx);
   assertEquals(rpcCalls.length, 1);
   assertEquals(rpcCalls[0].p_set_image_ids, false);
   assertEquals(rpcCalls[0].p_image_ids, null);
@@ -131,7 +131,7 @@ Deno.test('recipe_update leaves the photo set alone', async () => {
 Deno.test('recipe_update still rejects a patch with nothing to change', async () => {
   const { ctx } = fakeCtx({});
   await assertRejects(
-    () => recipeUpdate.execute({ id: 'r-1', change_message: 'noop' }, ctx),
+    () => recipeSave.execute({ id: 'r-1', change_message: 'noop' }, ctx),
     Error,
     'provide at least one of',
   );
@@ -144,7 +144,7 @@ Deno.test('recipe_update refuses to touch the star rating', async () => {
   // reported to the user as a rating change that never happened.
   const { ctx, rpcCalls } = fakeCtx({});
   await assertRejects(
-    () => recipeUpdate.execute({ ...ARGS, rating: 5 }, ctx),
+    () => recipeSave.execute({ ...ARGS, rating: 5 }, ctx),
     Error,
     'rating is not editable by this tool',
   );
@@ -153,7 +153,7 @@ Deno.test('recipe_update refuses to touch the star rating', async () => {
 
 Deno.test('recipe_update never sets the rating on the RPC', async () => {
   const { ctx, rpcCalls } = fakeCtx({});
-  await recipeUpdate.execute(ARGS, ctx);
+  await recipeSave.execute(ARGS, ctx);
   assertEquals(rpcCalls[0].p_set_rating, false);
   assertEquals(rpcCalls[0].p_rating, null);
 });

@@ -408,7 +408,7 @@ describe('every tool available every turn', () => {
     ]) {
       expect(prompt).toMatch(new RegExp(`^  ${name} : `, 'm'));
     }
-    expect(prompt).toMatch(/^      - recipe_update : /m);
+    expect(prompt).toMatch(/^      - recipe_save : /m);
     expect(prompt).toMatch(/^  - memory_search : /m);
   });
 

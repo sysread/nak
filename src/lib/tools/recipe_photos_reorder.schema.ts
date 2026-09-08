@@ -5,14 +5,11 @@
 export const recipePhotosReorderSchema = {
   name: 'recipe_photos_reorder',
   description:
-    "Set a recipe's photo display order. photo_ids MUST be a " +
+    "Set a recipe's photo display order. photo_ids must be a " +
     "permutation of the recipe's current photo set (every id present, " +
-    'no missing, no extras, no duplicates). Call recipe_get first to ' +
-    'read the current order. To add or remove use ' +
-    'recipe_photos_attach or recipe_photos_remove; to recaption use ' +
-    'recipe_photo_label_set. Captions travel with their photos. ' +
-    'change_message REQUIRED. Returns {recipe_id, photos: [{id, ' +
-    'position, label}, ...]} with positions renumbered from 0.',
+    'no extras, no duplicates; call recipe_get to read the current ' +
+    'order). Captions travel with their photos. Returns the reordered ' +
+    'set with positions renumbered from 0.',
   shortDescription: 'reorder a recipe\'s photos',
   parameters: {
     type: 'object',
@@ -34,8 +31,7 @@ export const recipePhotosReorderSchema = {
         minLength: 1,
         maxLength: 500,
         description:
-          'One-line history note; lands in the recipe changelog the user reviews. Examples: "Moved the finished plate ' +
-          'first", "Grouped prep shots before the served photo".',
+          'One-line history note; lands in the recipe changelog the user reviews.',
       },
     },
     required: ['recipe_id', 'photo_ids', 'change_message'],
