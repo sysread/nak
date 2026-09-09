@@ -818,6 +818,26 @@ A chat turn goes:
   risks a missed END. A caller abort (user Stop) is exempt - the server
   publishes its own END(aborted) and the abort signal suppresses the
   disconnect throw.
+- **The initial stream-channel join is bounded and retries once with a
+  fresh socket.** The join's 10s phoenix push timeout only runs once the
+  join push is SENT; a join queued on a disconnected socket never gets
+  sent, so the subscribe would wait forever for a reconnect that may
+  never arrive (the reconnect loop can itself die mid-attempt: an
+  upgrade that neither opens nor errors leaves it unserved). Both
+  shapes were reproduced 2026-09-09 against the local stack. The retry
+  wrapper in `streamChatViaFunction` (`stream-transport.ts`) races each
+  attempt against a 15s bound (just past the built-in timeout), tears
+  the failed attempt down (swallowing its late status rejection), and
+  forces a fresh websocket between attempts
+  (`realtime.disconnect()` + `connect()`) - which also recovers the
+  silently-dead reconnect loop. The dominant live failure (first send
+  after the tab idles: stale-but-thinks-open socket, join times out)
+  clears on the retry. Exhausted attempts throw a kind-'network'
+  `VeniceError`, which the exchange catch renders as the Network error
+  card; its retry intent derives from the unanswered-tail verdict and
+  re-enters the same exchange context. A full-outage failure therefore
+  ends as "press Retry in a few seconds", not a raw "Channel
+  TIMED_OUT" card.
 - **A cut-off reply's partial is preserved as a card, not dropped.**
   Two coupled pieces make this work, and they break as a pair if you
   touch one without the other. (1) Server: `ensureAssistantRow` fires

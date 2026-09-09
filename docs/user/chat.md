@@ -655,6 +655,25 @@ preview the regenerate button uses. (If the cutoff happened after a
 tool round had already finished, those tool results are kept and the
 new answer builds on them; only the half-finished reply is replaced.)
 
+## When the send can't connect
+
+Every message travels over two connections: a live event channel that
+carries the streaming reply, and the request that starts the turn. On
+the first send after your device has been idle for a while (a
+backgrounded tab, a phone that suspended the app), that live channel
+sometimes needs a moment to re-establish itself.
+
+Nak retries that connection automatically - it tears the dead
+connection down and rejoins on a fresh one, once. If the retry also
+fails, you see a "Network error" card with the advice "Check your
+network, then retry" instead of a raw connection error.
+
+The Retry button on that card re-sends the same turn: your message was
+never answered (the turn never started), so the retry picks it up and
+generates the reply it was owed - no duplicate message appears. When
+the outage outlasts the automatic attempts, waiting a few seconds and
+pressing Retry is all it takes.
+
 ## Where to go next
 
 - [Threads](./threads.md) — managing the conversation list.

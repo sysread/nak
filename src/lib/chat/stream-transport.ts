@@ -36,6 +36,7 @@ import {
 } from '$shared/venice-stream';
 import { coerceIntuitionPayload } from '../intuition/types';
 import { coerceContextRecallPayload } from '../context-recall/types';
+import { describeError } from '../ui/completion-status';
 import { createLogger } from '../logger.svelte';
 
 const log = createLogger('venice');
@@ -106,10 +107,9 @@ export async function* streamChatViaFunction(
   // landed before we subscribed is already in the row, and the
   // envelope returns it.
   const channelName = streamChannelName(ctx.threadId);
-  const subscription = setupStreamSubscription(supabase, channelName, {
+  const subscription = await subscribeStreamWithRetry(supabase, channelName, {
     probeInFlight: () => probeStreamInFlight(supabase, ctx.threadId),
   });
-  await subscription.subscribed;
 
   try {
     // Envelope POST. functions.invoke wraps the bearer token from
@@ -720,6 +720,78 @@ function setupStreamSubscription(
   return { subscribed, drain, unsubscribe };
 }
 
+// Join-window bound per attempt, and how many subscribe attempts one
+// exchange may spend. The bound is NOT redundant with realtime-js's
+// built-in 10s push timeout: that timer only runs once the join push is
+// actually SENT, but a join queued on a disconnected socket never gets
+// sent, so the subscribe would wait indefinitely for a reconnect that
+// may never land (observed 2026-09-09: an exchange sat "Thinking" for
+// 20+ minutes because the browser socket's reconnect loop died mid-
+// attempt). The bound is what makes the retry loop possible at all.
+const JOIN_ATTEMPT_BOUND_MS = 15_000;
+
+// One automatic retry. The dominant live failure (first send after the
+// tab idles: the socket is stale-but-thinks-open, the join times out)
+// clears within seconds, and prod evidence showed every manual retry
+// minutes later succeeded - so a single teardown + fresh-socket nudge +
+// rejoin rescues most of them. A longer outage gives up into the error
+// card's retry button, which re-fires the same exchange context.
+const JOIN_ATTEMPTS = 2;
+
+function nudgeRealtimeSocket(supabase: SupabaseClient): void {
+  // Force a fresh websocket between attempts. Two silent-death modes
+  // make this load-bearing, both observed on 2026-09-09: (1) the socket
+  // believes it is connected but the connection is dead, so pushes go
+  // into a void; (2) the reconnect loop hangs - an upgrade request that
+  // neither opens nor errors leaves phoenix's reconnect timer unserved
+  // forever. Tearing the socket down guarantees attempt 2 runs against
+  // a connection that is actively being re-established. The user's
+  // other channels (message echo, sidebar relays) rejoin automatically
+  // on socket open - a sub-second blip.
+  void supabase.realtime.disconnect().catch(() => {});
+  supabase.realtime.connect();
+}
+
+/**
+ * Set up the stream subscription, retrying the initial join once if it
+ * fails or hangs. Each attempt uses a FRESH channel on a fresh socket
+ * (the nudge); the bound above turns the "queued join never fires" hang
+ * into a retryable failure. Throws a kind-'network' VeniceError after
+ * the final attempt so the exchange catch renders the Network error
+ * card (whose retry re-enters this whole path).
+ */
+async function subscribeStreamWithRetry(
+  supabase: SupabaseClient,
+  channelName: string,
+  opts: StreamSubscriptionOpts,
+  boundMs: number = JOIN_ATTEMPT_BOUND_MS,
+): Promise<StreamSubscription> {
+  let lastDetail = 'join never confirmed';
+  for (let attempt = 1; attempt <= JOIN_ATTEMPTS; attempt++) {
+    if (attempt > 1) nudgeRealtimeSocket(supabase);
+    const subscription = setupStreamSubscription(supabase, channelName, opts);
+    const outcome = await Promise.race([
+      subscription.subscribed.then(() => 'joined' as const),
+      new Promise((resolve) => setTimeout(() => resolve('bound'), boundMs)),
+    ] as Promise<'joined' | 'bound'>[]).catch(
+      (err): 'joined' | 'bound' => {
+        lastDetail = describeError(err);
+        return 'bound';
+      },
+    );
+    if (outcome === 'joined') return subscription;
+    // Swallow this attempt's late status-callback rejection BEFORE
+    // tearing down: unsubscribe() fires the callback with CLOSED, and
+    // on a pre-join failure that rejects the promise no one awaits.
+    subscription.subscribed.catch(() => {});
+    await subscription.unsubscribe();
+  }
+  throw new VeniceError(
+    `Realtime join failed (${lastDetail}). Retrying re-enters the exchange.`,
+    'network',
+  );
+}
+
 /**
  * Publish a user-initiated cancel on the thread's control channel.
  * The streaming function (which subscribes to this same channel)
@@ -774,3 +846,7 @@ export async function cancelStream(
     }
   }
 }
+
+// Test seam: the retry loop is module-internal; tests drive it through
+// this namespace (see tests/stream-transport-join.test.ts).
+export const __test = { subscribeStreamWithRetry };

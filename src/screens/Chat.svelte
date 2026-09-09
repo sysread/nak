@@ -5097,6 +5097,14 @@
             void runExchange(ctx);
           },
         };
+      } else if (err instanceof VeniceError && err.kind === 'network') {
+        // Realtime stream-channel join that never confirmed even after
+        // the transport's teardown + nudge + rejoin retry. The turn
+        // never started server-side, so the transcript tail is an
+        // unanswered user row; the card's retry (derived from that
+        // verdict) re-fires the same exchange context. No inline retry
+        // closure - the arbiter's continue intent is exactly this.
+        slot.streamingError = { kind: 'network', detail: describeError(err) };
       } else if (err instanceof Error && err.message.startsWith('Stream guard "')) {
         // Guard exhaustion: the model kept emitting a junk completion
         // (e.g. a leaked special token) past the output guard's re-roll
