@@ -65,37 +65,34 @@ export const recipeSaveSchema = {
     'Omit id to create (title + cooklang required); pass id (from ' +
     'recipe_list) to update, providing only the fields that change - ' +
     'pass null for source / source_url to clear them. cooklang is the ' +
-    'raw Cooklang source (https://cooklang.org/docs/spec/): ' +
-    '@ingredient{qty%unit}, #cookware{}, ~timer{d%unit}, ' +
-    `>> metadata: value (max ${MAX_RECIPE_COOKLANG_CHARS} chars). Group ` +
-    'long recipes with `== Section ==` or `# Section` headers. Two ' +
-    'authoring styles supported and mixable: (a) pure Cooklang (each ' +
-    'line is an instruction with inline ingredients); (b) cookbook-style ' +
-    "(a line whose first non-whitespace char is `@` is an ingredient " +
-    'DECLARATION, not numbered as an instruction; a dash-only line like ' +
-    '`--` ends the declaration block so prose instructions below render ' +
-    'as a flat numbered list). Wrap a long instruction across lines by ' +
-    'prefixing continuations with `> `. Inline emphasis is supported in ' +
-    'step text: `**bold**`, `*italic*`, and `_italic_` render as styled ' +
-    'spans. Backtick code spans are NOT rendered - they show as literal ' +
-    "backticks, so don't use them. For durations, prefer the Cooklang " +
-    'timer syntax `~{N%unit}` (e.g. `~{4-5%hours}`) so the duration ' +
-    'also contributes to the timers list; wrapping it in `**...**` for ' +
-    'emphasis is fine but the `~` is what makes it a timer. For an ' +
-    'ingredient with a modifier, write the whole phrase as a single ' +
-    'multi-word braced name: `@pre-minced garlic{1%tbsp}`, NEVER ' +
-    '`@pre-minced @garlic{1%tbsp}` (which creates two separate ' +
-    'ingredient entries). Mark an OPTIONAL ingredient with `?` right ' +
-    'after the `@` (`@?cilantro{2%tbsp}`, bare `@?cilantro`) - it ' +
-    'renders with an "(optional)" tag in the ingredient list. For ' +
-    "alternatives (\"use X or Y\"), only the primary ingredient gets " +
-    '`@`; write the substitute as plain prose. The star rating is the ' +
-    "user's own verdict and is not editable here - only they can set " +
-    'or clear it, from the recipe card. change_message: optional on ' +
-    'create (defaults to "Initial version"), required on update - it ' +
-    'lands in the recipe history the user reviews. Returns the saved ' +
-    'row plus the current photo list, which this tool never changes - ' +
-    'use the recipe_photos_* tools to edit photos.',
+    `raw recipe source (max ${MAX_RECIPE_COOKLANG_CHARS} chars). ` +
+    'Grammar per line: ' +
+    'step | ingredient-declaration | section | metadata | comment; ' +
+    'ingredient := "@" "?"? name ("{" qty "%" unit? "}")?; ' +
+    'cookware := "#" name "{}"; ' +
+    'timer := "~" name? "{" qty "%" unit "}" ' +
+    `(e.g. ~{4%hours}); metadata := ">>" key ":" value. ` +
+    'Two authoring styles, mixable. Pure style puts references inline ' +
+    'in step prose ("Season the @pork{}, add @soy sauce{2%tbsp} to the ' +
+    '#wok{}, cook ~{3%minutes}"). Cookbook style: `@`-first lines are ' +
+    'not numbered as steps); a dash-only line ends the declaration block so ' +
+    'prose below renders as a flat numbered list. Guards: ' +
+    'a modifier+ingredient is ONE multi-word braced name - ' +
+    '`@pre-minced garlic{1%tbsp}`, NEVER `@pre-minced @garlic{...}`; ' +
+    'prep hints are a note AFTER the reference, not inside the name - ' +
+    '`@basil{1%tbsp} (finely chopped)`, never `@finely chopped basil{...}`; ' +
+    'optional ingredients take `?` after the `@` (`@?cilantro{2%tbsp}`); ' +
+    'alternatives get one `@` with the substitute as prose; ' +
+    'prefer timer syntax `~{N%unit}` over prose durations (it feeds the timers list); ' +
+    "wrap long steps with a `> ` continuation line; " +
+    '`== Soup ==` / `# Soup` start sections; ' +
+    'emphasis `**bold**` / `*italic*` renders, backticks do NOT. ' +
+    "The star rating is the user's verdict and is not editable here - " +
+    'only they can set or clear it, from the recipe card. ' +
+    'change_message: optional on create (defaults to "Initial version"), ' +
+    'required on update - it lands in the recipe history the user reviews. ' +
+    'Returns the saved row plus the current photo list, which this tool ' +
+    'never changes - use the recipe_photos_* tools to edit photos.',
   shortDescription: 'save a recipe to the cookbook',
   parameters: {
     type: 'object',
