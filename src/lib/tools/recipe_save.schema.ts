@@ -79,6 +79,8 @@ export const recipeSaveSchema = {
     'prose below renders as a flat numbered list. Guards: ' +
     'a modifier+ingredient is ONE multi-word braced name - ' +
     '`@pre-minced garlic{1%tbsp}`, NEVER `@pre-minced @garlic{...}`; ' +
+    'prep hints are a note AFTER the reference, not inside the name - ' +
+    '`@basil{1%tbsp} (finely chopped)`, never `@finely chopped basil{...}`; ' +
     'optional ingredients take `?` after the `@` (`@?cilantro{2%tbsp}`); ' +
     'alternatives get one `@` with the substitute as prose; ' +
     'prefer timer syntax `~{N%unit}` over prose durations (it feeds the timers list); ' +
