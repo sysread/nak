@@ -1152,20 +1152,12 @@ grant execute on function public.mark_second_thoughts_acted(uuid)
 -- gate existed. `toolboxes_enabled` held that set (written by the
 -- retired toggle_toolbox meta-tool and composer popover);
 -- `tools_enabled` was its boolean predecessor. No code reads
--- either any more.
---
--- The drop is DEFERRED one release on purpose. The deploy pipeline
--- applies this file BEFORE the new frontend reaches GitHub Pages,
--- and the previously-deployed frontend still writes
--- `toolboxes_enabled` in its createThread / forkThread inserts and
--- its toolbox-popover UPDATE - dropping the column now makes the
--- old bundle's first-send INSERT fail with PGRST204 for the
--- minutes-wide window until Pages finishes publishing. A dropped
--- column harms nothing while the new code (which never selects or
--- writes it) is live, so the drop lands in a follow-up PR once no
--- cached old bundle can still be in service.
--- alter table public.threads drop column if exists toolboxes_enabled;
--- alter table public.threads drop column if exists tools_enabled;
+-- either any more. The drop was deferred one release so the
+-- pre-gating-retirement frontend (which wrote toolboxes_enabled in
+-- its createThread / forkThread inserts) survived the mixed-version
+-- window; two releases have since deployed, so the drop is live.
+alter table public.threads drop column if exists toolboxes_enabled;
+alter table public.threads drop column if exists tools_enabled;
 
 -- Soft-hide flag for the "Archive" drawer section. Archived threads still
 -- load into the sidebar and remain viewable, but the composer is disabled
