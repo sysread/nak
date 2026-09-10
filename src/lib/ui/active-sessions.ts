@@ -123,27 +123,44 @@ export function withCookingSession(
 }
 
 /**
- * Copy of `map` with `name` toggled in a recipe's cooking session's
- * used list (checking an ingredient = "used", unchecking = not used
- * yet). No-op when the recipe has no session entry - the caller only
- * renders used-toggles while the session is active, so a missing
- * entry means the session expired between render and click; the
- * caller re-derives its state from the returned settings and the
- * checkbox rolls back.
+ * The used-list entry for one rendered ingredient row: the row's
+ * ordinal in the render (the checkbox's `data-row`) plus its
+ * normalized name. Keyed by row rather than name because a recipe
+ * can list the same ingredient in several sections ("black pepper"
+ * in a spice-mix section and again in the soup) and each is its own
+ * thing to mark used; a name-only key ticks every box that shares
+ * the name. The name rides along as a guard: if the recipe is
+ * edited mid-session and the rows shift, a stale mark stops
+ * matching instead of migrating onto whatever ingredient now sits at
+ * that ordinal. Losing a mark is visible and re-tappable; a mark on
+ * the wrong ingredient is not.
+ */
+export function usedIngredientKey(row: number, normalizedName: string): string {
+  return `${row}:${normalizedName}`;
+}
+
+/**
+ * Copy of `map` with `key` (a `usedIngredientKey`) toggled in a
+ * recipe's cooking session's used list (checking an ingredient =
+ * "used", unchecking = not used yet). No-op when the recipe has no
+ * session entry - the caller only renders used-toggles while the
+ * session is active, so a missing entry means the session expired
+ * between render and click; the caller re-derives its state from the
+ * returned settings and the checkbox rolls back.
  */
 export function withUsedIngredient(
   map: Record<string, ActiveSession>,
   recipeId: string,
-  name: string
+  key: string
 ): Record<string, ActiveSession> {
   const next = { ...map };
-  const key = cookingSessionKey(recipeId);
-  const entry = next[key];
+  const sessionKey = cookingSessionKey(recipeId);
+  const entry = next[sessionKey];
   if (!entry) return map;
-  const used = entry.used.includes(name)
-    ? entry.used.filter((n) => n !== name)
-    : [...entry.used, name];
-  next[key] = { ...entry, used };
+  const used = entry.used.includes(key)
+    ? entry.used.filter((n) => n !== key)
+    : [...entry.used, key];
+  next[sessionKey] = { ...entry, used };
   return next;
 }
 

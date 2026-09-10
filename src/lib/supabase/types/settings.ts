@@ -199,7 +199,9 @@ export interface UserSettings {
  * One entry in `UserSettings.activeSessions`. `startedAt` is the ISO
  * timestamp the session began (the shopping trip's In-cart split
  * keys on it); `used` carries the cooking session's marked-used
- * ingredient names (normalized), always empty for the shopping trip.
+ * ingredient rows as `<row ordinal>:<normalized name>` keys (see
+ * `usedIngredientKey` in `ui/active-sessions.ts`), always empty for
+ * the shopping trip.
  */
 export interface ActiveSession {
   startedAt: string;
@@ -220,9 +222,9 @@ export function isCookingSessionKey(key: string): boolean {
 }
 
 /**
- * Cap on the used-name list of one cooking session. Recipes are
+ * Cap on the used-row list of one cooking session. Recipes are
  * capped well below this; the ceiling exists so a corrupt blob can't
- * balloon the settings blob. USER_PROFILE_FIELD_MAX bounds each name.
+ * balloon the settings blob. USER_PROFILE_FIELD_MAX bounds each key.
  */
 const ACTIVE_SESSION_USED_MAX = 128;
 

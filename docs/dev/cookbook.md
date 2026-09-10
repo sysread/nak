@@ -427,9 +427,23 @@ session and clears the marks; starting always begins fresh.
   label via the shared `groceryCheckboxAriaLabel` (also used to
   RESTORE labels when cooking ends); the render container gains a
   `.cooking` class for the strikethrough CSS.
+- **Used marks are keyed by row, not name.** Grocery mode keys every
+  checkbox by normalized ingredient name because same-name rows
+  mirror one product. Cooking mode cannot share that rule: "black
+  pepper" in a spice-mix section and again in the soup are two
+  things to mark used, and a name key ticks both at once. The
+  renderer stamps `data-row` (ordinal across ALL checkbox rows in
+  the render, numbering straight through section sub-lists) and
+  the used list stores `usedIngredientKey(row, name)` =
+  `<row>:<normalized name>`. The name rides along so a mid-session
+  edit that shifts rows drops stale marks instead of moving them
+  onto a different ingredient.
 - The checkbox count in the progress line is
-  `parsedDetail.ingredients.length` - the same list the rows render
-  from - so counter and rows agree by construction.
+  `ingredientRowsForRecipe(parsedDetail).length` - built from the
+  same bucket list `recipeToHtml` renders - so counter and rows
+  agree by construction. `parsedDetail.ingredients.length` is wrong
+  for a sectioned recipe: the flat parse dedupes across sections
+  while the render dedupes within each.
 
 ## Embeddings
 

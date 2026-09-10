@@ -6,6 +6,7 @@ import {
   isSessionKeyActive,
   pruneExpiredSessions,
   usedIngredientAriaLabel,
+  usedIngredientKey,
   withCookingSession,
   withShoppingTrip,
   withUsedIngredient,
@@ -149,8 +150,16 @@ describe('withCookingSession', () => {
   });
 });
 
+describe('usedIngredientKey', () => {
+  it('keeps the same name on different rows distinct', () => {
+    // Two "black pepper" rows in different sections must be two marks.
+    expect(usedIngredientKey(1, 'black pepper')).not.toBe(usedIngredientKey(3, 'black pepper'));
+    expect(usedIngredientKey(1, 'black pepper')).toBe('1:black pepper');
+  });
+});
+
 describe('withUsedIngredient', () => {
-  it('toggles a name on and off', () => {
+  it('toggles a key on and off', () => {
     let map: Record<string, { startedAt: string; used: string[] }> = {
       [cookingSessionKey('r1')]: { startedAt: MORNING_ISO, used: [] },
     };

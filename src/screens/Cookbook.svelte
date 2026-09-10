@@ -40,6 +40,7 @@
     cooklangToHtml,
     groceryCheckboxAriaLabel,
     parseCooklang,
+    ingredientRowsForRecipe,
     recipeToHtml,
     recipeToc,
     recipeToMarkdown,
@@ -94,6 +95,7 @@
     cookingToggleLabel,
     isSessionKeyActive,
     usedIngredientAriaLabel,
+    usedIngredientKey,
     withCookingSession,
     withUsedIngredient,
   } from '$lib/ui/active-sessions';
@@ -1025,9 +1027,12 @@
   // Sync the rendered checkboxes' checked state from their backing
   // state - the render is an {@html} string, so state can't ride the
   // markup; this effect walks the mounted inputs after every
-  // render/data change. Keyed by normalized ingredient name because
-  // ingredients have no stable id (they are parsed out of the
-  // cooklang source). In cooking mode the boxes mirror the session's
+  // render/data change. Ingredients have no stable id (they are
+  // parsed out of the cooklang source), so grocery mode keys by
+  // normalized name - every row sharing a name mirrors the one
+  // product - while cooking mode keys by rendered row (see
+  // `usedIngredientKey`) so the same name in two sections marks used
+  // independently. In cooking mode the boxes mirror the session's
   // used set instead of the grocery rows, the rows get a used
   // strikethrough, and the aria label describes the cooking verb.
   $effect(() => {
@@ -1036,7 +1041,7 @@
     const items = recipeGroceryItems;
     const busy = classifyingNames;
     const cooking = cookingActive;
-    const used = usedNames;
+    const used = usedRows;
     if (!el || !parsedDetail) return;
     const entries = recipeCheckboxItemIds(parsedDetail.ingredients, items);
     for (const input of el.querySelectorAll<HTMLInputElement>('input.cook-buy')) {
@@ -1044,11 +1049,12 @@
       const key = normalizeGroceryName(rawName);
       const li = input.closest('li');
       if (cooking) {
-        input.checked = used.has(key);
+        const isUsed = used.has(usedIngredientKey(Number(input.dataset.row), key));
+        input.checked = isUsed;
         input.disabled = false;
         input.classList.remove('cook-buy-busy');
         input.ariaLabel = usedIngredientAriaLabel(rawName);
-        li?.classList.toggle('cook-used', used.has(key));
+        li?.classList.toggle('cook-used', isUsed);
         continue;
       }
       // Checked = the matched product is on the current list. One
@@ -1190,10 +1196,16 @@
   // at local midnight or after COOKING_SESSION_MAX_AGE_HOURS,
   // whichever comes first - the stale entry just reads as inactive.
   let cookingStartedAt = $state<string | undefined>(undefined);
-  // Normalized ingredient names marked used this session. Reassigned
-  // (never mutated) so the sync effect reacts. Keyed by normalized
-  // name, same identity rule as the grocery bridge.
-  let usedNames = $state<ReadonlySet<string>>(new Set());
+  // Rendered ingredient rows marked used this session, as
+  // `usedIngredientKey` strings. Reassigned (never mutated) so the
+  // sync effect reacts.
+  let usedRows = $state<ReadonlySet<string>>(new Set());
+  // Total for the "N of M used" counter: the rows actually rendered
+  // with checkboxes, which for a sectioned recipe is NOT the flat
+  // parse's ingredient count (that dedupes across sections).
+  const cookingRowTotal = $derived(
+    parsedDetail ? ingredientRowsForRecipe(parsedDetail).length : 0
+  );
   let cookingBusy = $state(false);
   let cookingError = $state<string | null>(null);
   let cookingClockTick = $state(Date.now());
@@ -1218,7 +1230,7 @@
   ): void {
     const entry = id ? sessions?.[cookingSessionKey(id)] : undefined;
     cookingStartedAt = entry?.startedAt;
-    usedNames = new Set(entry?.used ?? []);
+    usedRows = new Set(entry?.used ?? []);
   }
 
   // Load this recipe's session (if any) whenever the detail pane
@@ -1228,7 +1240,7 @@
     const id = activeId;
     if (!id || !app.supabase) {
       cookingStartedAt = undefined;
-      usedNames = new Set();
+      usedRows = new Set();
       return;
     }
     void (async () => {
@@ -1273,7 +1285,7 @@
   }
 
   // One ingredient checkbox in cooking mode: toggle "used" for that
-  // name and persist. No grocery writes, no grocery events - the
+  // row and persist. No grocery writes, no grocery events - the
   // grocery bridge is fully bypassed while cooking. On failure the
   // refetch re-derives state from what actually landed, rolling the
   // checkbox back (same discipline as the grocery handler).
@@ -1281,8 +1293,10 @@
     const supabase = app.supabase;
     const id = activeId;
     if (!supabase || !id || cookingBusy) return;
-    const key = normalizeGroceryName(input.dataset.ing ?? '');
-    if (!key) return;
+    const name = normalizeGroceryName(input.dataset.ing ?? '');
+    const row = Number(input.dataset.row);
+    if (!name || !Number.isInteger(row)) return;
+    const key = usedIngredientKey(row, name);
     void (async () => {
       try {
         const settings = await supabase.updateActiveSessions((sessions) =>
@@ -1752,7 +1766,7 @@
               <div class="cookbook-add-all-row">
                 {#if cookingActive}
                   <span class="cookbook-cooking-progress" aria-live="polite">
-                    {cookingProgressLabel(usedNames.size, parsedDetail.ingredients.length)}
+                    {cookingProgressLabel(usedRows.size, cookingRowTotal)}
                   </span>
                 {/if}
                 {#if !cookingActive}

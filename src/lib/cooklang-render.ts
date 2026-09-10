@@ -275,12 +275,18 @@ export function groceryCheckboxAriaLabel(name: string): string {
  * host (the Cookbook detail pane) owns matching names against
  * grocery rows, syncing `checked` after mount, and handling changes
  * via delegation. The same ingredient name appearing in several
- * rows gets the same data-ing value; the host treats those as one
- * toggle.
+ * rows gets the same data-ing value; in grocery mode the host treats
+ * those as one toggle (one product on the list). Each checkbox also
+ * carries `data-row`, its ordinal among ALL checkbox rows in the
+ * render (`rowStart` is the ordinal of this list's first row, so
+ * numbering runs on across section sub-lists). Cooking mode keys its
+ * used marks on the row, not the name: "black pepper" in a seasoning
+ * mix section and "black pepper" in the soup section are two things
+ * to mark used, and name-keyed marks would tick both boxes at once.
  */
-function ingredientsListItems(ings: Ingredient[], checkboxes: boolean): string {
+function ingredientsListItems(ings: Ingredient[], checkboxes: boolean, rowStart: number): string {
   const out: string[] = [];
-  for (const ing of ings) {
+  for (const [i, ing] of ings.entries()) {
     const qty = formatQtyUnit(ing.qty, ing.unit);
     const qtyHtml = qty.length > 0 ? `<span class="cook-qty">${esc(qty)}</span> ` : '';
     const optHtml = ing.optional ? ' <span class="cook-optional">(optional)</span>' : '';
@@ -288,7 +294,7 @@ function ingredientsListItems(ings: Ingredient[], checkboxes: boolean): string {
       ? ` <span class="cook-note">${esc(ing.note)}</span>`
       : '';
     if (checkboxes) {
-      const checkboxHtml = `<input type="checkbox" class="cook-buy" data-ing="${esc(ing.name)}" aria-label="${esc(groceryCheckboxAriaLabel(ing.name))}"> `;
+      const checkboxHtml = `<input type="checkbox" class="cook-buy" data-ing="${esc(ing.name)}" data-row="${rowStart + i}" aria-label="${esc(groceryCheckboxAriaLabel(ing.name))}"> `;
       out.push(
         `<li><label class="cook-buy-label">${checkboxHtml}${qtyHtml}<span class="cook-name">${esc(ing.name)}</span>${optHtml}${noteHtml}</label></li>`
       );
@@ -354,6 +360,58 @@ function ingredientBucketRenders(steps: Step[], hasDeclarations: boolean): boole
   const bucketHasDeclarations = steps.some((s) => s.kind === 'declaration');
   if (hasDeclarations && !bucketHasDeclarations) return false;
   return dedupeFromSteps(steps).length > 0;
+}
+
+/**
+ * One ingredient list the HTML renderer emits under the Ingredients
+ * heading: the flat list for an unsectioned recipe, or one entry per
+ * rendering section bucket (`name: null` is the implicit head
+ * bucket, which gets no sub-heading).
+ */
+interface IngredientRenderBucket {
+  name: string | null;
+  steps: Step[];
+  ings: Ingredient[];
+}
+
+/**
+ * The ingredient lists `recipeToHtml` renders, in render order, with
+ * each bucket's rows already deduped. Single source for both the
+ * markup and `ingredientRowsForRecipe`, so the rows the host counts
+ * and keys are the rows on screen by construction.
+ */
+function ingredientRenderBuckets(recipe: Recipe): IngredientRenderBucket[] {
+  if (recipe.ingredients.length === 0) return [];
+  if (recipe.sections.length === 0) {
+    return [{ name: null, steps: recipe.steps, ings: recipe.ingredients }];
+  }
+  // When declarations exist anywhere in the source, the ingredient
+  // render is authored from declarations only. An instruction-only
+  // bucket (e.g. the implicit head bucket after a dash-only reset that
+  // holds the post-declaration prose) must NOT emit its own ingredient
+  // sub-list - doing so would duplicate the declared names under a
+  // leading un-named group.
+  const hasDeclarations = recipe.steps.some((s) => s.kind === 'declaration');
+  return groupStepsBySection(recipe)
+    .filter((bucket) => ingredientBucketRenders(bucket.steps, hasDeclarations))
+    .map((bucket) => ({
+      name: bucket.name,
+      steps: bucket.steps,
+      ings: dedupeFromSteps(bucket.steps),
+    }));
+}
+
+/**
+ * Every ingredient row the HTML render shows, flattened across
+ * sections in render order. Index `n` here is the row stamped
+ * `data-row="n"` on the corresponding checkbox. The Cookbook detail
+ * pane uses the length for the cooking-mode "N of M used" counter;
+ * `recipe.ingredients.length` is the wrong total for a sectioned
+ * recipe because the flat parse dedupes across sections while the
+ * render dedupes within each.
+ */
+export function ingredientRowsForRecipe(recipe: Recipe): Ingredient[] {
+  return ingredientRenderBuckets(recipe).flatMap((bucket) => bucket.ings);
 }
 
 /**
@@ -434,33 +492,23 @@ export function recipeToHtml(recipe: Recipe, opts: RecipeHtmlOptions = {}): stri
 
   const buckets = groupStepsBySection(recipe);
   const hasSections = recipe.sections.length > 0;
-  // When declarations exist anywhere in the source, the ingredient
-  // render is authored from declarations only. An instruction-only
-  // bucket (e.g. the implicit head bucket after a dash-only reset that
-  // holds the post-declaration prose) must NOT emit its own ingredient
-  // sub-list - doing so would duplicate the declared names under a
-  // leading un-named group.
-  const hasDeclarations = recipe.steps.some((s) => s.kind === 'declaration');
 
   if (recipe.ingredients.length > 0) {
     out.push(`<h3 id="${tocHeadingId('ingredients', null)}">Ingredients</h3>`);
-    if (!hasSections) {
-      out.push('<ul class="cook-ingredients">');
-      out.push(ingredientsListItems(recipe.ingredients, checkboxes));
-      out.push('</ul>');
-    } else {
-      for (const bucket of buckets) {
-        if (!ingredientBucketRenders(bucket.steps, hasDeclarations)) continue;
-        const ings = dedupeFromSteps(bucket.steps);
-        if (bucket.name !== null) {
-          const id = tocHeadingId('ingredients', recipe.sections.indexOf(bucket.name));
-          const tag = sectionHtmlTag(bucket.steps);
-          out.push(`<${tag} class="cook-section" id="${id}">${esc(bucket.name)}</${tag}>`);
-        }
-        out.push('<ul class="cook-ingredients">');
-        out.push(ingredientsListItems(ings, checkboxes));
-        out.push('</ul>');
+    // Checkbox rows are numbered straight through every sub-list so
+    // data-row is unique across the whole render (see
+    // `ingredientsListItems`).
+    let row = 0;
+    for (const bucket of ingredientRenderBuckets(recipe)) {
+      if (bucket.name !== null) {
+        const id = tocHeadingId('ingredients', recipe.sections.indexOf(bucket.name));
+        const tag = sectionHtmlTag(bucket.steps);
+        out.push(`<${tag} class="cook-section" id="${id}">${esc(bucket.name)}</${tag}>`);
       }
+      out.push('<ul class="cook-ingredients">');
+      out.push(ingredientsListItems(bucket.ings, checkboxes, row));
+      out.push('</ul>');
+      row += bucket.ings.length;
     }
   }
 
