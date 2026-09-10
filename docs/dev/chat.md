@@ -837,7 +837,7 @@ A chat turn goes:
   card; its retry intent derives from the unanswered-tail verdict and
   re-enters the same exchange context. A full-outage failure therefore
   ends as "press Retry in a few seconds", not a raw "Channel
-  TIMED_OUT" card.
+  TIMED_OUT" card. QA walkthrough: [QA: chat-stream-join-recovery](../qa/use-cases/chat-stream-join-recovery.md).
 - **A cut-off reply's partial is preserved as a card, not dropped.**
   Two coupled pieces make this work, and they break as a pair if you
   touch one without the other. (1) Server: `ensureAssistantRow` fires
