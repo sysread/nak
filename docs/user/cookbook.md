@@ -195,6 +195,10 @@ the list. Click **Done cooking** (the same button) to end the
 session: the used marks clear and the checkboxes go back to
 grocery-list duty.
 
+- **Each row is its own mark.** If the same ingredient appears in
+  two sections (black pepper in a spice mix and again in the soup),
+  checking one leaves the other alone. Outside cooking mode those
+  rows still act as one grocery item, since you only buy it once.
 - **Progress survives interruptions.** The session follows your
   account, so a reload or your phone evicting the tab mid-cook picks
   back up where you left off.

@@ -10,6 +10,7 @@ import {
   parseCooklang,
   recipeToHtml,
   recipeToc,
+  ingredientRowsForRecipe,
   cooklangToHtml,
   recipeToMarkdown,
   recipeToPlainText,
@@ -239,6 +240,35 @@ describe('recipeToHtml', () => {
       ingredientCheckboxes: true,
     });
     expect(html).not.toContain('data-ing=""fancy"');
+  });
+
+  it('numbers checkbox rows straight through section sub-lists', () => {
+    // The same ingredient in two sections is two rows with two
+    // distinct data-row ordinals; cooking mode keys used marks on the
+    // row so ticking one does not tick the other. Numbering continues
+    // across the section boundary rather than restarting per list.
+    const src = `== Seasoning mix ==
+Mix @paprika{1%tsp} and @black pepper{1%tsp}.
+== Soup ==
+Simmer @onion{1} with @black pepper{1%tsp}.`;
+    const recipe = parseCooklang(src);
+    const html = recipeToHtml(recipe, { ingredientCheckboxes: true });
+    expect(html).toContain('data-ing="paprika" data-row="0"');
+    expect(html).toContain('data-ing="black pepper" data-row="1"');
+    expect(html).toContain('data-ing="onion" data-row="2"');
+    expect(html).toContain('data-ing="black pepper" data-row="3"');
+    // The row list the host counts is the row list the render emits.
+    const rows = ingredientRowsForRecipe(recipe);
+    expect(rows.map((r) => r.name)).toEqual(['paprika', 'black pepper', 'onion', 'black pepper']);
+    expect((html.match(/data-row="/g) ?? []).length).toBe(rows.length);
+    // The flat parse dedupes across sections, so it is the wrong total
+    // for a per-row counter.
+    expect(recipe.ingredients.length).toBe(3);
+  });
+
+  it('ingredientRowsForRecipe follows the flat list when there are no sections', () => {
+    const recipe = parseCooklang('Stir @flour{200%g} into @milk{1%cup}.');
+    expect(ingredientRowsForRecipe(recipe)).toEqual(recipe.ingredients);
   });
 });
 
