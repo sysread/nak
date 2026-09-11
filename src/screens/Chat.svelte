@@ -1753,6 +1753,9 @@
   // production) with margin, since this fires only when the realtime
   // echo dropped - a rare path where a slightly longer wait costs
   // nothing, and covering the slow tail matters more than being quick.
+  // The delay is the point: unlike reconcileTranscript, whose callers
+  // run it after their rows are committed, the verdict does not exist
+  // yet when the turn commits, so an immediate re-fetch would miss it.
   const VERDICT_BACKFILL_DELAY_MS = 20000;
   const verdictBackfillTimers = new Set<ReturnType<typeof setTimeout>>();
 
@@ -1902,9 +1905,10 @@
   // subscribe() a silent no-op, so the thread ends up with no live
   // echo stream. The normal send path hides that (user row appended
   // locally, reply on the stream); the destructive-edit replacement
-  // row's live delivery is the realtime INSERT echo, with only the
-  // post-commit transcript re-fetch in runExchange behind it, so a
-  // dead channel left it missing until a reload. subscribeToMessages
+  // row's live delivery is the realtime INSERT echo, and the
+  // post-commit transcript re-fetch in runExchange is the only thing
+  // behind it, so a dead channel holds the edited message back until
+  // that re-fetch instead of landing it live. subscribeToMessages
   // also suffixes its topic per subscription so a fast resubscribe on
   // the same thread can never collide.
   $effect(() => {
@@ -2185,9 +2189,11 @@
   // time the device comes back online so a cache that drifted while
   // offline catches up. The realtime relays above cover the
   // online-steady-state case. initOfflineStatus owns the
-  // navigator.onLine flag the offline UI reads.
+  // navigator.onLine flag the offline UI reads. Keyed on the memoized
+  // user id like the relays above, so a token refresh does not tear
+  // the wiring down and fire a redundant reconcile.
   $effect(() => {
-    if (!app.supabase || !session) return;
+    if (!app.supabase || !sessionUserId) return;
     const supabase = app.supabase;
     const teardownStatus = initOfflineStatus();
     void syncOfflineCache(supabase);
@@ -2951,6 +2957,20 @@
    * selectThread fetches on entry. Best-effort: a failed fetch leaves
    * the realtime-delivered state in place and logs; the user can still
    * navigate away and back to force a full reload.
+   *
+   * Immediate, not delayed: every caller runs it after the rows it
+   * wants are already committed (contrast scheduleVerdictBackfill,
+   * which waits for a write that lands seconds after the turn).
+   *
+   * The swap has a window. A row that commits between the fetch's
+   * server-side snapshot and the assignment (the user hits Enter on
+   * the claim-release path inside the fetch round-trip) is not in the
+   * snapshot and drops out of the view until the next reconcile or
+   * thread switch; its reply still streams. Merging the live array in
+   * is not the fix - the messages channel has no DELETE subscription,
+   * so the live array can hold rows a foreign edit deleted. The
+   * post-edit caller is outside the window: everything it needs is
+   * committed before its fetch starts.
    */
   async function reconcileTranscript(threadId: string, why: string): Promise<void> {
     const supabase = app.supabase;
@@ -4944,9 +4964,9 @@
         }
         pendingDeleteIds = [];
         // Destructive edit: the replacement user row was inserted by
-        // the commit RPC and reaches the live view only through its
-        // realtime INSERT echo - nothing on the stream or the send
-        // path appends it. Re-fetch the transcript now that the old
+        // the commit RPC, and nothing on the stream or the send path
+        // appends it - its live delivery is the realtime INSERT echo
+        // alone. Re-fetch the transcript now that the old
         // range is gone so a dropped echo still lands the row, and so
         // the edited row sits above the reply by position instead of
         // racing the reply's END hydration to the tail of `messages`.
@@ -5328,7 +5348,13 @@
       // selectThread re-fetches when they return.
       if (threadId === activeThreadId) {
         const fresh = await supabase.listMessages(threadId);
-        messages = mergeMessagesById(fresh, slot.persistedRows, threadId);
+        // Re-check after the await: a thread switch mid-fetch must not
+        // paint this thread's rows under the one now on screen. The
+        // draft clearing below is per-thread state, not view state,
+        // so it still runs.
+        if (threadId === activeThreadId) {
+          messages = mergeMessagesById(fresh, slot.persistedRows, threadId);
+        }
         log.debug(
           `reconnect settled thread=${threadId} tail=${fresh.at(-1)?.role ?? 'empty'}` +
             ` tailStatus=${fresh.at(-1)?.status ?? 'none'} rows=${fresh.length}`,

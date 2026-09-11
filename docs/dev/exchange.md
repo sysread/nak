@@ -395,10 +395,13 @@ order is deterministic.
   `subscribeToThreads(userId)` updates the threads row used by the
   `respondingElsewhere` derivation when another device acquires or
   heartbeats a claim.
-- **`mergeMessagesById`** is also used by the
-  post-claim-release safety-net effect in `Chat.svelte` -
-  realtime can drop packets under load, so a foreign-claim
-  transition to released triggers a `listMessages` reconcile.
+- **`mergeMessagesById`** is also used by `reconcileTranscript` in
+  `Chat.svelte`, the shared `listMessages` re-fetch behind two
+  callers: the post-claim-release safety-net effect (realtime can
+  drop packets under load, so a foreign-claim transition to released
+  triggers a reconcile) and `runExchange`'s destructive-edit branch
+  (the replacement user row arrives only by realtime echo, so the
+  re-fetch lands it if the echo drops and sorts it above its reply).
 - **Forking** ([`./forking.md`](./forking.md)) - a fork's
   transcript concatenates ancestor segments, which touches this
   module three ways: `mergeMessagesById` keeps inherited prefix

@@ -378,7 +378,10 @@ in `docs/user/memory.md`. The dev side has five moving parts:
   the gateway 504; `librarianRun.start` awaits the outcome through
   `awaitDetachedRun` (subscribe-before-POST on the per-user
   `agent-runs:<userId>` channel, resolve on the terminal `result`
-  event). `start`'s `finally` TERMINAL-FINALIZES the step list -
+  event; the channel is refcounted per user inside
+  `subscribeToAgentRunProgress`, so a rem run overlapping a wiki
+  librarian run in the same tab keeps receiving events after the
+  other run's teardown). `start`'s `finally` TERMINAL-FINALIZES the step list -
   `settleTrailingPending(steps, error ? 'error' : 'ok')` - which is
   load-bearing whenever the `result` event never arrives (the
   inactivity backstop firing, a dropped channel, the edge function
