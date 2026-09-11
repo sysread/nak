@@ -18,7 +18,8 @@
  * that detaches its channel fire-and-forget.
  *
  * Plain functions taking the shared SupabaseClient as their first
- * argument - no class, no state - so each can be unit-tested against
+ * argument - no class; the only module state is the channel-topic
+ * counter behind uniqueTopic - so each can be unit-tested against
  * a stubbed client without constructing SupabaseService. The
  * SupabaseService facade (../supabase.ts) delegates its realtime
  * methods here one-for-one under the same names; UI code calls
@@ -43,6 +44,31 @@ import { coerceManualRunOutcome } from './types';
 
 const log = createLogger('supabase');
 
+let channelSeq = 0;
+
+/**
+ * A channel topic that is unique per subscription. realtime-js returns
+ * the EXISTING channel when one with the same topic is still
+ * registered, and a channel stays registered until the server acks its
+ * leave. A resubscribe that lands inside that window (a caller's
+ * effect tearing down and re-running in one tick) gets the leaving
+ * channel back, and subscribe() on a channel that is not closed
+ * returns without joining - the new bindings ride a channel that
+ * closes a beat later, and the caller has no live stream until its
+ * next re-run. A fresh topic guarantees a fresh channel.
+ *
+ * postgres_changes channels only. Their server-side filter, not the
+ * topic, scopes the stream, so the suffix is inert. Broadcast channels
+ * are addressed BY topic - the edge functions publish to
+ * `logs:<userId>`, `samskaras:<userId>`, `agent-runs:<userId>` - so a
+ * suffix would silently detach them from their publisher. They keep
+ * stable names and depend on their callers keying on values that do
+ * not churn (see the sessionUserId note in Chat.svelte).
+ */
+function uniqueTopic(base: string): string {
+  return `${base}:${++channelSeq}`;
+}
+
 /**
  * Realtime: stream INSERTs for a single thread's messages. Keeps a
  * thread open on two devices in sync — when device A's chat-loop
@@ -56,8 +82,6 @@ const log = createLogger('supabase');
  * echo ahead of the promise resolution for `addMessage`. Dedupe by
  * `Message.id` at the append site handles both orderings.
  */
-let messageChannelSeq = 0;
-
 export function subscribeToMessages(
   client: SupabaseClient,
   threadId: string,
@@ -88,20 +112,8 @@ export function subscribeToMessages(
       log.error('subscribeToMessages handler threw', err);
     }
   };
-  // The topic carries a per-subscription sequence number, not just
-  // the thread id. realtime-js returns the EXISTING channel when one
-  // with the same topic is still registered, and a channel stays
-  // registered until the server acks its leave. A resubscribe that
-  // lands inside that window (a caller's effect tearing down and
-  // re-running in one tick) gets the leaving channel back, and
-  // subscribe() on a channel that is not closed returns without
-  // joining - the new bindings ride a channel that closes a beat
-  // later, and the thread has no live echo stream until the next
-  // thread switch. A unique topic guarantees a fresh channel every
-  // time; the server-side filter, not the topic, scopes the stream
-  // to the thread.
   const channel = client
-    .channel(`messages:${threadId}:${++messageChannelSeq}`)
+    .channel(uniqueTopic(`messages:${threadId}`))
     .on(
       // `postgres_changes` is the realtime-js event shape for
       // replication-stream rows. Typed loose here — the supabase-js
@@ -195,7 +207,7 @@ export function subscribeToThreads(
   }
 ): () => void {
   const channel = client
-    .channel(`threads:${userId}`)
+    .channel(uniqueTopic(`threads:${userId}`))
     .on(
       'postgres_changes' as never,
       {
@@ -316,7 +328,7 @@ export function subscribeToInflightLease(
   onChange: (expiry: string | null) => void
 ): () => void {
   const channel = client
-    .channel(`inflight_lease:${column}:${userId}`)
+    .channel(uniqueTopic(`inflight_lease:${column}:${userId}`))
     .on(
       'postgres_changes' as never,
       {
@@ -380,7 +392,7 @@ export function subscribeToLastRunOutcome(
   onOutcome: (outcome: ManualRunOutcome | null) => void
 ): () => void {
   const channel = client
-    .channel(`last_run_outcome:${column}:${userId}`)
+    .channel(uniqueTopic(`last_run_outcome:${column}:${userId}`))
     .on(
       'postgres_changes' as never,
       {
@@ -419,7 +431,7 @@ export function subscribeToWikiArticleChanges(
   onChange: () => void
 ): () => void {
   const channel = client
-    .channel(`wiki_articles:${userId}`)
+    .channel(uniqueTopic(`wiki_articles:${userId}`))
     .on(
       'postgres_changes' as never,
       {
@@ -456,7 +468,7 @@ export function subscribeToWikiRecordChanges(
   // "something changed" notification, and an open article view refetches
   // its records / files / links. Each table's DELETE delivery rides its
   // (id, user_id) replica-identity index (see schema.sql).
-  const channel = client.channel(`wiki_records:${userId}`);
+  const channel = client.channel(uniqueTopic(`wiki_records:${userId}`));
   for (const table of ['wiki_records', 'wiki_record_files', 'wiki_record_links']) {
     channel.on(
       'postgres_changes' as never,
@@ -495,7 +507,7 @@ export function subscribeToGroceryChanges(
   userId: string,
   onChange: () => void
 ): () => void {
-  const channel = client.channel(`grocery:${userId}`);
+  const channel = client.channel(uniqueTopic(`grocery:${userId}`));
   for (const table of [
     'grocery_products',
     'grocery_list_entries',
@@ -535,7 +547,7 @@ export function subscribeToMemoryChanges(
   onChange: () => void
 ): () => void {
   const channel = client
-    .channel(`memories:${userId}`)
+    .channel(uniqueTopic(`memories:${userId}`))
     .on(
       'postgres_changes' as never,
       {
@@ -569,7 +581,7 @@ export function subscribeToRecipeChanges(
   onChange: () => void
 ): () => void {
   const channel = client
-    .channel(`recipes:${userId}`)
+    .channel(uniqueTopic(`recipes:${userId}`))
     .on(
       'postgres_changes' as never,
       {

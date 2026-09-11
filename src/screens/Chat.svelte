@@ -1889,17 +1889,22 @@
   // the draft materializes, at which point activeThreadId flips to
   // the real id and the effect re-subscribes.
   //
-  // The draft check MUST go through `activeThreadIsDraft`, never a
-  // direct `findThread(...)` read. Reading the thread list here makes
-  // the effect re-run on every thread-row change (the commit RPC's
-  // updated_at bump, auto-title, topics tagging, priming-payload
-  // writes), and each re-run tears the channel down and re-creates
-  // it. realtime-js hands back the still-leaving channel for a
-  // repeated topic and subscribe() on it is a silent no-op, so the
-  // thread ends up with no live echo stream. The normal send path
-  // hides that (user row appended locally, reply on the stream); the
-  // destructive-edit replacement row arrives ONLY via the realtime
-  // INSERT echo, so it vanished until a reload. subscribeToMessages
+  // The draft check MUST go through `activeThreadIsDraft`. Neither a
+  // direct `findThread(...)` read nor `currentThread?.isDraft` is
+  // safe here: both make the effect re-run on every thread-row change
+  // (the commit RPC's updated_at bump, auto-title, topics tagging,
+  // priming-payload writes). `currentThread` looks like a harmless
+  // simplification but is object-valued, deriveds compare with strict
+  // equality, and every patchThread / rebucketThread replacement is a
+  // new reference, so it churns exactly like the raw list read. Each
+  // re-run tears the channel down and re-creates it, and realtime-js
+  // hands back the still-leaving channel for a repeated topic with
+  // subscribe() a silent no-op, so the thread ends up with no live
+  // echo stream. The normal send path hides that (user row appended
+  // locally, reply on the stream); the destructive-edit replacement
+  // row's live delivery is the realtime INSERT echo, with only the
+  // post-commit transcript re-fetch in runExchange behind it, so a
+  // dead channel left it missing until a reload. subscribeToMessages
   // also suffixes its topic per subscription so a fast resubscribe on
   // the same thread can never collide.
   $effect(() => {
@@ -1962,14 +1967,28 @@
     });
   });
 
+  // The signed-in user's id as a memoized string. The per-user
+  // realtime effects below key on this, never on `session`: the
+  // Session object is reassigned on every auth event (INITIAL_SESSION,
+  // TOKEN_REFRESHED, the mount-time getSession resolve, sign-in/out)
+  // and each reassignment is a new reference, so an effect that reads
+  // `session` re-runs on each one and re-creates its channel. Two of
+  // those inside the leave-ack window hit the realtime-js same-topic
+  // collision described above the messages effect, and the Broadcast
+  // channels (logs, samskara mints, agent runs) cannot take the
+  // unique-topic escape because the topic is the address the edge
+  // functions publish to. A string only changes when the user
+  // changes, so each channel is created once per signed-in user.
+  const sessionUserId = $derived(session?.user.id ?? null);
+
   // Realtime: follow the current user's thread list. Covers the
   // sidebar across devices — creates, renames, settings-pin changes,
   // auto-titles, deletes, and `updated_at` bumps on each send all
   // propagate without the user refreshing. RLS enforces the
   // user_id scoping; the filter here just narrows wire traffic.
   $effect(() => {
-    if (!app.supabase || !session) return;
-    const userId = session.user.id;
+    if (!app.supabase || !sessionUserId) return;
+    const userId = sessionUserId;
     return app.supabase.subscribeToThreads(userId, {
       onInsert: (t) => {
         // A fork of the ACTIVE thread extends its shared region - keep
@@ -2050,8 +2069,8 @@
   // broadcasts structured entries to `logs:<userId>` instead; this is
   // the browser end of that pipe. RLS scopes the channel to the owner.
   $effect(() => {
-    if (!app.supabase || !session) return;
-    return app.supabase.subscribeToUserLogs(session.user.id, appendFromEdge);
+    if (!app.supabase || !sessionUserId) return;
+    return app.supabase.subscribeToUserLogs(sessionUserId, appendFromEdge);
   });
 
   // Realtime: relay server-side wiki writes into the window-level
@@ -2063,9 +2082,9 @@
   // own DB writes ALSO echo back through this subscription, which is
   // harmless - consumers refetch idempotently.
   $effect(() => {
-    if (!app.supabase || !session) return;
+    if (!app.supabase || !sessionUserId) return;
     const supabase = app.supabase;
-    return supabase.subscribeToWikiArticleChanges(session.user.id, () => {
+    return supabase.subscribeToWikiArticleChanges(sessionUserId, () => {
       emitWikiChange();
       // A server-side article write (this device or another) may have
       // changed a favorited article's body or its favorite flag - re-
@@ -2082,8 +2101,8 @@
   // where emitWikiRecordChange is unreachable, so an open article's
   // Records section learns about background writes through this relay.
   $effect(() => {
-    if (!app.supabase || !session) return;
-    return app.supabase.subscribeToWikiRecordChanges(session.user.id, emitWikiRecordChange);
+    if (!app.supabase || !sessionUserId) return;
+    return app.supabase.subscribeToWikiRecordChanges(sessionUserId, emitWikiRecordChange);
   });
 
   // Watch the wiki-librarian in-flight lease so every client knows when a
@@ -2093,8 +2112,8 @@
   // "a run is in progress" spinner. Start/stop with the session; the
   // watcher does its own realtime subscribe + initial read.
   $effect(() => {
-    if (!app.supabase || !session) return;
-    wikiLibrarianLease.start({ supabase: app.supabase, userId: session.user.id });
+    if (!app.supabase || !sessionUserId) return;
+    wikiLibrarianLease.start({ supabase: app.supabase, userId: sessionUserId });
     return () => wikiLibrarianLease.stop();
   });
 
@@ -2103,8 +2122,8 @@
   // disable state on both top-bar buttons and reflects scheduled
   // background memory-librarian runs too.
   $effect(() => {
-    if (!app.supabase || !session) return;
-    memoryLibrarianLease.start({ supabase: app.supabase, userId: session.user.id });
+    if (!app.supabase || !sessionUserId) return;
+    memoryLibrarianLease.start({ supabase: app.supabase, userId: sessionUserId });
     return () => memoryLibrarianLease.stop();
   });
 
@@ -2115,13 +2134,13 @@
   // directly; the memory one is bridged into the librarianRun store in
   // Memories.svelte. Start/stop with the session, same as the leases.
   $effect(() => {
-    if (!app.supabase || !session) return;
-    wikiLibrarianOutcome.start({ supabase: app.supabase, userId: session.user.id });
+    if (!app.supabase || !sessionUserId) return;
+    wikiLibrarianOutcome.start({ supabase: app.supabase, userId: sessionUserId });
     return () => wikiLibrarianOutcome.stop();
   });
   $effect(() => {
-    if (!app.supabase || !session) return;
-    memoryLibrarianOutcome.start({ supabase: app.supabase, userId: session.user.id });
+    if (!app.supabase || !sessionUserId) return;
+    memoryLibrarianOutcome.start({ supabase: app.supabase, userId: sessionUserId });
     return () => memoryLibrarianOutcome.stop();
   });
 
@@ -2130,8 +2149,8 @@
   // rem / deep-sleep librarian sweeps), so this subscription is how an
   // open Memories panel learns a background write landed.
   $effect(() => {
-    if (!app.supabase || !session) return;
-    return app.supabase.subscribeToMemoryChanges(session.user.id, emitMemoryChange);
+    if (!app.supabase || !sessionUserId) return;
+    return app.supabase.subscribeToMemoryChanges(sessionUserId, emitMemoryChange);
   });
 
   // Realtime: the recipes leg of the same family. The recipe_* tools
@@ -2139,9 +2158,9 @@
   // reaches the Cookbook modal and the drawer's Recipes tab through
   // this relay into the cookbook event bus.
   $effect(() => {
-    if (!app.supabase || !session) return;
+    if (!app.supabase || !sessionUserId) return;
     const supabase = app.supabase;
-    return supabase.subscribeToRecipeChanges(session.user.id, () => {
+    return supabase.subscribeToRecipeChanges(sessionUserId, () => {
       emitCookbookChange();
       // Twin of the wiki relay: a server-side recipe write may have
       // changed a favorited / upcoming recipe or its bookmark flags,
@@ -2156,8 +2175,8 @@
   // device at the store - reach the open list through this relay
   // into the grocery event bus.
   $effect(() => {
-    if (!app.supabase || !session) return;
-    return app.supabase.subscribeToGroceryChanges(session.user.id, emitGroceryChange);
+    if (!app.supabase || !sessionUserId) return;
+    return app.supabase.subscribeToGroceryChanges(sessionUserId, emitGroceryChange);
   });
 
   // Offline cache: track connectivity and keep the IndexedDB mirror of
@@ -2188,8 +2207,8 @@
   // into the same window event the old in-tab worker dispatched.
   // SamskaraToasts.svelte is the unchanged consumer.
   $effect(() => {
-    if (!app.supabase || !session) return;
-    return app.supabase.subscribeToSamskaraInserts(session.user.id, notifySamskaraMint);
+    if (!app.supabase || !sessionUserId) return;
+    return app.supabase.subscribeToSamskaraInserts(sessionUserId, notifySamskaraMint);
   });
 
   // Inline title rename state.
@@ -2918,24 +2937,33 @@
       : null;
     if (!wasForeignOnSameThread || isForeign) return;
     // Foreign claim on THIS thread just cleared. Reconcile against
-    // the canonical state. Guarded against thread switch mid-fetch
-    // (activeThreadId changes can race the await).
-    const threadId = t.id;
-    const supabase = app.supabase;
-    void (async () => {
-      try {
-        const fetched = await supabase.listMessages(threadId);
-        if (activeThreadId !== threadId) return;
-        const bufferedRows = exchangeStore.peek(threadId)?.persistedRows ?? [];
-        messages = mergeMessagesById(fetched, bufferedRows, threadId);
-      } catch (err) {
-        // Best-effort: a failed reconciliation just leaves the
-        // realtime-delivered state in place. The user can still
-        // navigate away and back to force a full reload.
-        log.warn('post-claim-release reconcile failed', err);
-      }
-    })();
+    // the canonical state.
+    void reconcileTranscript(t.id, 'post-claim-release');
   });
+
+  /**
+   * Re-fetch the active thread's transcript and swap it in, merged
+   * with any rows the slot's chat-loop buffered mid-fetch. This is the
+   * backstop for realtime delivery: it lands a row whose echo was
+   * dropped and puts rows that arrived out of order back into position
+   * order. Guarded on the active thread before and after the await -
+   * a thread switch mid-fetch just discards the result, since
+   * selectThread fetches on entry. Best-effort: a failed fetch leaves
+   * the realtime-delivered state in place and logs; the user can still
+   * navigate away and back to force a full reload.
+   */
+  async function reconcileTranscript(threadId: string, why: string): Promise<void> {
+    const supabase = app.supabase;
+    if (!supabase || activeThreadId !== threadId) return;
+    try {
+      const fetched = await supabase.listMessages(threadId);
+      if (activeThreadId !== threadId) return;
+      const bufferedRows = exchangeStore.peek(threadId)?.persistedRows ?? [];
+      messages = mergeMessagesById(fetched, bufferedRows, threadId);
+    } catch (err) {
+      log.warn(`${why} reconcile failed`, err);
+    }
+  }
 
   // Active thread's cached intuition payload, coerced from the
   // jsonb column. Null on cold threads or shape drift; the modal
@@ -4915,6 +4943,18 @@
           await fadeOutAndPruneRows(idsToDelete);
         }
         pendingDeleteIds = [];
+        // Destructive edit: the replacement user row was inserted by
+        // the commit RPC and reaches the live view only through its
+        // realtime INSERT echo - nothing on the stream or the send
+        // path appends it. Re-fetch the transcript now that the old
+        // range is gone so a dropped echo still lands the row, and so
+        // the edited row sits above the reply by position instead of
+        // racing the reply's END hydration to the tail of `messages`.
+        // After the prune, not before: the fetch omits the deleted
+        // rows, and swapping it in early would skip their fade-out.
+        if (ctx.replaceUserMessageContent) {
+          await reconcileTranscript(ctx.threadId, 'post-edit-commit');
+        }
       } else if (pendingDeleteIds.length > 0) {
         // No replacement landed: the re-roll produced no replaceable
         // text (a reasoning-only completion, or a turn that suspended

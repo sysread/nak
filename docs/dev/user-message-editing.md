@@ -339,14 +339,18 @@ Three additions to `supabase/schema.sql`:
   merge: the reply jumps above the edited message and the
   transcript reads as two user messages in a row.
 
-- **The replacement row's only delivery path is the realtime INSERT
+- **The replacement row's live delivery is the realtime INSERT
   echo.** The commit RPC inserts the edited user message server-side
   and returns only the assistant row, so neither the stream callbacks
-  nor the send path appends it locally. If the thread's
-  `subscribeToMessages` channel is dead, the old range fades out and
-  the edited message is missing until a reload or a thread switch.
-  See chat.md, "The messages subscription must not read the thread
-  list," for what keeps that channel alive.
+  nor the send path appends it locally. The echo also races the
+  reply's END hydration to the tail of `messages`, so on its own the
+  live order is not guaranteed. `runExchange` backstops both: after
+  the old range fades out it calls `reconcileTranscript`, which
+  re-fetches the thread and merges through the position sort, so a
+  dropped echo still lands the row and the edited message sits above
+  its reply without a reload. See [chat.md](./chat.md), "The
+  messages subscription must not read the thread list," for what
+  keeps the channel itself alive.
 
 - **Name collision with draft threads.** Nak already has "draft
   threads" (URL-only, not in the DB). "Draft messages" are a
