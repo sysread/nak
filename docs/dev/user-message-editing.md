@@ -339,6 +339,15 @@ Three additions to `supabase/schema.sql`:
   merge: the reply jumps above the edited message and the
   transcript reads as two user messages in a row.
 
+- **The replacement row's only delivery path is the realtime INSERT
+  echo.** The commit RPC inserts the edited user message server-side
+  and returns only the assistant row, so neither the stream callbacks
+  nor the send path appends it locally. If the thread's
+  `subscribeToMessages` channel is dead, the old range fades out and
+  the edited message is missing until a reload or a thread switch.
+  See chat.md, "The messages subscription must not read the thread
+  list," for what keeps that channel alive.
+
 - **Name collision with draft threads.** Nak already has "draft
   threads" (URL-only, not in the DB). "Draft messages" are a
   different concept (a `status='draft'` row in the `messages`

@@ -1873,16 +1873,38 @@
   // `insertByUpdatedAtDesc` in $lib/ui/thread-buckets; no caller
   // needs the full re-sort variant, so it's not exposed.
 
+  // Memoized so the messages-subscription effect below depends on the
+  // draft/materialized flip alone, not on every thread-list mutation.
+  // A $derived only notifies dependents when its value changes, so
+  // rebucketing, renames and payload patches recompute this boolean
+  // without re-running the effect.
+  const activeThreadIsDraft = $derived(
+    activeThreadId !== null && findThread(activeThreadId)?.isDraft === true
+  );
+
   // Realtime: follow the active thread's messages. Re-runs whenever
   // `activeThreadId` changes, so switching threads tears down the
   // previous channel and opens a new one. Drafts are skipped because
-  // they don't exist in Supabase yet — there's nothing to sync until
+  // they don't exist in Supabase yet - there's nothing to sync until
   // the draft materializes, at which point activeThreadId flips to
   // the real id and the effect re-subscribes.
+  //
+  // The draft check MUST go through `activeThreadIsDraft`, never a
+  // direct `findThread(...)` read. Reading the thread list here makes
+  // the effect re-run on every thread-row change (the commit RPC's
+  // updated_at bump, auto-title, topics tagging, priming-payload
+  // writes), and each re-run tears the channel down and re-creates
+  // it. realtime-js hands back the still-leaving channel for a
+  // repeated topic and subscribe() on it is a silent no-op, so the
+  // thread ends up with no live echo stream. The normal send path
+  // hides that (user row appended locally, reply on the stream); the
+  // destructive-edit replacement row arrives ONLY via the realtime
+  // INSERT echo, so it vanished until a reload. subscribeToMessages
+  // also suffixes its topic per subscription so a fast resubscribe on
+  // the same thread can never collide.
   $effect(() => {
     if (!app.supabase || !activeThreadId) return;
-    const active = findThread(activeThreadId);
-    if (active?.isDraft) return;
+    if (activeThreadIsDraft) return;
     const threadId = activeThreadId;
     return app.supabase.subscribeToMessages(threadId, (msg) => {
       // Ignore echoes for threads we've since left — the effect's

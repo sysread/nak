@@ -56,6 +56,8 @@ const log = createLogger('supabase');
  * echo ahead of the promise resolution for `addMessage`. Dedupe by
  * `Message.id` at the append site handles both orderings.
  */
+let messageChannelSeq = 0;
+
 export function subscribeToMessages(
   client: SupabaseClient,
   threadId: string,
@@ -86,8 +88,20 @@ export function subscribeToMessages(
       log.error('subscribeToMessages handler threw', err);
     }
   };
+  // The topic carries a per-subscription sequence number, not just
+  // the thread id. realtime-js returns the EXISTING channel when one
+  // with the same topic is still registered, and a channel stays
+  // registered until the server acks its leave. A resubscribe that
+  // lands inside that window (a caller's effect tearing down and
+  // re-running in one tick) gets the leaving channel back, and
+  // subscribe() on a channel that is not closed returns without
+  // joining - the new bindings ride a channel that closes a beat
+  // later, and the thread has no live echo stream until the next
+  // thread switch. A unique topic guarantees a fresh channel every
+  // time; the server-side filter, not the topic, scopes the stream
+  // to the thread.
   const channel = client
-    .channel(`messages:${threadId}`)
+    .channel(`messages:${threadId}:${++messageChannelSeq}`)
     .on(
       // `postgres_changes` is the realtime-js event shape for
       // replication-stream rows. Typed loose here — the supabase-js

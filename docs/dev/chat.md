@@ -620,6 +620,21 @@ A chat turn goes:
   realtime echo lands). If you add a second write path that
   doesn't pipe through the same `Message.id`, you get a
   duplicate render.
+- **The messages subscription must not read the thread list.** The
+  `subscribeToMessages` effect keys on `activeThreadId` plus the
+  memoized `activeThreadIsDraft` boolean. A direct `findThread(...)`
+  read inside the effect subscribes it to every thread-row change
+  (the commit RPC's `updated_at` bump, auto-title, topics tagging,
+  priming-payload writes), and each re-run tears the channel down
+  and re-creates it. realtime-js returns the still-leaving channel
+  for a repeated topic and `subscribe()` on it is a no-op, so the
+  thread silently loses its echo stream. The normal send path hides
+  this (the user row is appended locally, the reply arrives on the
+  stream); the destructive-edit replacement row and the
+  second-thoughts verdict are the writes that arrive only via
+  realtime. `subscribeToMessages` also suffixes its topic with a
+  per-subscription sequence number so a same-thread resubscribe can
+  never collide with a channel that is still leaving.
 - **Auto-titling runs server-side, not from `Chat.svelte`.**
   The curation tail in the venice function
   (`supabase/functions/venice/agents/auto_title.ts`) claims
