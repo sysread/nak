@@ -620,6 +620,30 @@ A chat turn goes:
   realtime echo lands). If you add a second write path that
   doesn't pipe through the same `Message.id`, you get a
   duplicate render.
+- **The messages subscription must not read the thread list.** The
+  `subscribeToMessages` effect keys on `activeThreadId` plus the
+  memoized `activeThreadIsDraft` boolean. A direct `findThread(...)`
+  read inside the effect subscribes it to every thread-row change
+  (the commit RPC's `updated_at` bump, auto-title, topics tagging,
+  priming-payload writes), and each re-run tears the channel down
+  and re-creates it. realtime-js returns the still-leaving channel
+  for a repeated topic and `subscribe()` on it is a no-op, so the
+  thread silently loses its echo stream. The normal send path hides
+  this (the user row is appended locally, the reply arrives on the
+  stream). The destructive-edit replacement row is the write whose
+  live delivery is only the echo; its backstop is the post-commit
+  `reconcileTranscript` re-fetch in `runExchange`. The
+  second-thoughts verdict also rides an UPDATE echo, but
+  `scheduleVerdictBackfill` re-fetches the row about 20s later, so
+  a missing verdict is not by itself evidence of a dead channel. The
+  same rule covers the per-user relays: they key on the memoized
+  `sessionUserId` string, not the `session` object, which is
+  reassigned on every auth event. Every postgres_changes helper in
+  `src/lib/supabase/realtime.ts` also suffixes its topic with a
+  per-subscription sequence number so a fast resubscribe can never
+  collide with a channel that is still leaving; the Broadcast helpers
+  cannot (the topic is the publisher's address) and rely on the
+  memoized keys alone.
 - **Auto-titling runs server-side, not from `Chat.svelte`.**
   The curation tail in the venice function
   (`supabase/functions/venice/agents/auto_title.ts`) claims

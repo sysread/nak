@@ -289,7 +289,11 @@ Browser data layer:
   `WikiLibrarianRunResult` union - `ok` / `busy` / `error`),
   `subscribeToAgentRunProgress` (private `agent-runs:<userId>`
   Broadcast subscription delivering `AgentRunProgressEvent`s; callers
-  filter on runId), and the changelog pair `createWikiChangelogEntry`
+  filter on runId. One channel per user is shared by every live
+  consumer and closed only when the last one leaves, so a wiki run
+  and a memory run overlapping in one tab do not tear each other's
+  channel down - the topic is the publisher's address and cannot be
+  made unique per consumer), and the changelog pair `createWikiChangelogEntry`
   / `listWikiChangelog`. The `UserSettings` interface carries
   `wikiAutomaticEnabled?: boolean` and
   `wikiLibrarianEnabled?: boolean`.

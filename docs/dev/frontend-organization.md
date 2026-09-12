@@ -97,6 +97,23 @@ Concrete shape — the topic-filter component at
 The component knows how to be a Svelte component. It
 delegates every UI-behavior decision to a primitive call.
 
+### Effects that own a resource key on primitive projections
+
+An `$effect` whose teardown releases something real - a realtime
+channel, a lease watcher, a window listener - must read only
+primitive keys: a string id, a boolean. Never the object those
+keys came from. Deriveds compare with strict equality, so an
+object-valued dependency (`currentThread`, `session`) counts as
+changed on every row patch or auth event even when nothing the
+effect cares about moved, and each spurious re-run tears the
+resource down and re-creates it. For realtime channels that
+re-create is not free: a same-topic re-subscribe inside the
+leave window silently produces a dead channel. The fix is a
+`$derived` that projects the object to the key the effect
+actually keys on (`activeThreadIsDraft`, `sessionUserId` in
+`src/screens/Chat.svelte`); the derived only notifies when the
+primitive changes.
+
 ## When to extract
 
 Not every component needs a sibling in `src/lib/ui/`. The

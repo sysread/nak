@@ -14,18 +14,23 @@
  * replication stream with a server-side filter layered on top of RLS;
  * Broadcast channels (`private: true`) ride realtime.messages
  * policies and carry events the edge functions publish under
- * service_role. Every subscription returns an unsubscribe closure
- * that detaches its channel fire-and-forget.
+ * service_role. The flavor decides what a channel's topic means: a
+ * Broadcast topic is the publisher's address and must stay stable,
+ * while a postgres_changes topic is arbitrary because the server-side
+ * filter scopes the stream (see uniqueTopic). Every subscription
+ * returns an unsubscribe closure that detaches its channel
+ * fire-and-forget.
  *
  * Plain functions taking the shared SupabaseClient as their first
- * argument - no class, no state - so each can be unit-tested against
+ * argument - no class; the only module state is the channel-topic
+ * counter behind uniqueTopic - so each can be unit-tested against
  * a stubbed client without constructing SupabaseService. The
  * SupabaseService facade (../supabase.ts) delegates its realtime
  * methods here one-for-one under the same names; UI code calls
  * `app.supabase.<method>()` and should not import this module
  * directly. Row types and coercers live in ./types.
  */
-import type { SupabaseClient } from '@supabase/supabase-js';
+import type { RealtimeChannel, SupabaseClient } from '@supabase/supabase-js';
 import {
   createLogger,
   type SerializableLogEntry,
@@ -42,6 +47,33 @@ import type {
 import { coerceManualRunOutcome } from './types';
 
 const log = createLogger('supabase');
+
+let channelSeq = 0;
+
+/**
+ * A channel topic that is unique per subscription. realtime-js returns
+ * the EXISTING channel when one with the same topic is still
+ * registered, and a channel stays registered until the server acks its
+ * leave. A resubscribe that lands inside that window (a caller's
+ * effect tearing down and re-running in one tick) gets the leaving
+ * channel back, and subscribe() on a channel that is not closed
+ * returns without joining - the new bindings ride a channel that
+ * closes a beat later, and the caller has no live stream until its
+ * next re-run. A fresh topic guarantees a fresh channel.
+ *
+ * postgres_changes channels only. Their server-side filter, not the
+ * topic, scopes the stream, so the suffix is inert. Broadcast channels
+ * are addressed BY topic - the edge functions publish to
+ * `logs:<userId>`, `samskaras:<userId>`, `agent-runs:<userId>` - so a
+ * suffix would silently detach them from their publisher. They keep
+ * stable names and depend on their callers keying on values that do
+ * not churn (see the sessionUserId note in Chat.svelte); where more
+ * than one consumer can be live at once, they share one refcounted
+ * channel instead (see subscribeToAgentRunProgress).
+ */
+function uniqueTopic(base: string): string {
+  return `${base}:${++channelSeq}`;
+}
 
 /**
  * Realtime: stream INSERTs for a single thread's messages. Keeps a
@@ -87,7 +119,7 @@ export function subscribeToMessages(
     }
   };
   const channel = client
-    .channel(`messages:${threadId}`)
+    .channel(uniqueTopic(`messages:${threadId}`))
     .on(
       // `postgres_changes` is the realtime-js event shape for
       // replication-stream rows. Typed loose here — the supabase-js
@@ -181,7 +213,7 @@ export function subscribeToThreads(
   }
 ): () => void {
   const channel = client
-    .channel(`threads:${userId}`)
+    .channel(uniqueTopic(`threads:${userId}`))
     .on(
       'postgres_changes' as never,
       {
@@ -302,7 +334,7 @@ export function subscribeToInflightLease(
   onChange: (expiry: string | null) => void
 ): () => void {
   const channel = client
-    .channel(`inflight_lease:${column}:${userId}`)
+    .channel(uniqueTopic(`inflight_lease:${column}:${userId}`))
     .on(
       'postgres_changes' as never,
       {
@@ -366,7 +398,7 @@ export function subscribeToLastRunOutcome(
   onOutcome: (outcome: ManualRunOutcome | null) => void
 ): () => void {
   const channel = client
-    .channel(`last_run_outcome:${column}:${userId}`)
+    .channel(uniqueTopic(`last_run_outcome:${column}:${userId}`))
     .on(
       'postgres_changes' as never,
       {
@@ -405,7 +437,7 @@ export function subscribeToWikiArticleChanges(
   onChange: () => void
 ): () => void {
   const channel = client
-    .channel(`wiki_articles:${userId}`)
+    .channel(uniqueTopic(`wiki_articles:${userId}`))
     .on(
       'postgres_changes' as never,
       {
@@ -442,7 +474,7 @@ export function subscribeToWikiRecordChanges(
   // "something changed" notification, and an open article view refetches
   // its records / files / links. Each table's DELETE delivery rides its
   // (id, user_id) replica-identity index (see schema.sql).
-  const channel = client.channel(`wiki_records:${userId}`);
+  const channel = client.channel(uniqueTopic(`wiki_records:${userId}`));
   for (const table of ['wiki_records', 'wiki_record_files', 'wiki_record_links']) {
     channel.on(
       'postgres_changes' as never,
@@ -481,7 +513,7 @@ export function subscribeToGroceryChanges(
   userId: string,
   onChange: () => void
 ): () => void {
-  const channel = client.channel(`grocery:${userId}`);
+  const channel = client.channel(uniqueTopic(`grocery:${userId}`));
   for (const table of [
     'grocery_products',
     'grocery_list_entries',
@@ -521,7 +553,7 @@ export function subscribeToMemoryChanges(
   onChange: () => void
 ): () => void {
   const channel = client
-    .channel(`memories:${userId}`)
+    .channel(uniqueTopic(`memories:${userId}`))
     .on(
       'postgres_changes' as never,
       {
@@ -555,7 +587,7 @@ export function subscribeToRecipeChanges(
   onChange: () => void
 ): () => void {
   const channel = client
-    .channel(`recipes:${userId}`)
+    .channel(uniqueTopic(`recipes:${userId}`))
     .on(
       'postgres_changes' as never,
       {
@@ -640,17 +672,95 @@ export function subscribeToSamskaraInserts(
 export function subscribeToAgentRunProgress(
   client: SupabaseClient,
   userId: string,
-  onEvent: (event: AgentRunProgressEvent) => void
+  onEvent: AgentRunConsumer
 ): () => void {
+  let active = true;
+  let entry: AgentRunEntry | null = null;
+  const attach = (): void => {
+    if (!active) return;
+    entry = acquireAgentRunEntry(client, userId);
+    entry.consumers.add(onEvent);
+  };
+  // A previous consumer may have just left and started the channel's
+  // leave. Joining while it is still registered would hand us that
+  // leaving channel (see uniqueTopic), so wait for the leave to
+  // complete and open a fresh one. The consumer set is what the
+  // subscribe-before-kick contract needs; the run's first events can
+  // only arrive after the POST, which the caller issues after we
+  // return, and a leave round-trip is well inside that gap.
+  const closing = agentRunRegistry(client).get(userId)?.closing;
+  if (closing) void closing.then(attach);
+  else attach();
+  return () => {
+    active = false;
+    if (!entry) return;
+    releaseAgentRunEntry(client, userId, entry, onEvent);
+    entry = null;
+  };
+}
+
+type AgentRunConsumer = (event: AgentRunProgressEvent) => void;
+
+interface AgentRunEntry {
+  channel: RealtimeChannel;
+  consumers: Set<AgentRunConsumer>;
+  /** Set once the last consumer leaves; resolves when the leave is acked. */
+  closing: Promise<void> | null;
+}
+
+// One agent-runs channel per user, shared by every live consumer.
+// The topic is the publisher's address, so consumers cannot take a
+// unique topic each - but two subscribers asking for the same topic
+// while the first is live get the same channel back from realtime-js,
+// and the first consumer's teardown then removes the channel out from
+// under the survivor. Two overlapping manual runs (the Wiki librarian
+// strip and a Memories strip have independent busy guards) hit
+// exactly that: the survivor goes deaf and rejects on its inactivity
+// backstop while the server-side run completes. A consumer set behind
+// one channel fans every event out and closes the channel only when
+// the last consumer leaves. Keyed weakly by client so a rebuilt
+// SupabaseService never inherits a dead client's channel.
+const agentRunRegistries = new WeakMap<SupabaseClient, Map<string, AgentRunEntry>>();
+
+function agentRunRegistry(client: SupabaseClient): Map<string, AgentRunEntry> {
+  let registry = agentRunRegistries.get(client);
+  if (!registry) {
+    registry = new Map();
+    agentRunRegistries.set(client, registry);
+  }
+  return registry;
+}
+
+function acquireAgentRunEntry(client: SupabaseClient, userId: string): AgentRunEntry {
+  const registry = agentRunRegistry(client);
+  const existing = registry.get(userId);
+  if (existing && !existing.closing) return existing;
+  const consumers = new Set<AgentRunConsumer>();
   const channel = client
     .channel(`agent-runs:${userId}`, { config: { private: true } })
     .on('broadcast', { event: 'agent-progress' }, ({ payload }) => {
-      onEvent(payload as AgentRunProgressEvent);
+      for (const consumer of consumers) consumer(payload as AgentRunProgressEvent);
     })
     .subscribe((status, err) => {
       log.debug(`agent-runs channel subscribe status: ${status}`, err ?? '');
     });
-  return () => {
-    void client.removeChannel(channel);
-  };
+  const entry: AgentRunEntry = { channel, consumers, closing: null };
+  registry.set(userId, entry);
+  return entry;
+}
+
+function releaseAgentRunEntry(
+  client: SupabaseClient,
+  userId: string,
+  entry: AgentRunEntry,
+  consumer: AgentRunConsumer
+): void {
+  entry.consumers.delete(consumer);
+  if (entry.consumers.size > 0 || entry.closing) return;
+  const registry = agentRunRegistry(client);
+  entry.closing = client.removeChannel(entry.channel).then(() => {
+    // Only drop our own entry: a consumer that arrived after the
+    // leave resolved may already have registered a fresh one.
+    if (registry.get(userId) === entry) registry.delete(userId);
+  });
 }
