@@ -16,12 +16,13 @@
 // targets the linked project via the Management API.
 //
 // Lifecycle: dev-start owns the stack for the session. On exit - Ctrl-C, a
-// Vite crash, or a kill signal - it runs `supabase stop`, so the setup does
-// not outlive the command. If a stack is already running (e.g. a previous
-// dev-start crashed without cleaning up) it is reused, then stopped on this
-// run's exit. `supabase stop` preserves the database between sessions, so
-// dev data survives a restart; only the containers go down. `mise run
-// dev-stop` is the manual cleanup for a crash that skipped teardown.
+// Vite crash, a kill signal, the supervisor (mise / shell) dying, or the
+// local stack vanishing under a running session - it runs `supabase stop`,
+// so the setup does not outlive the command. If a stack is already running
+// (e.g. a previous dev-start crashed without cleaning up) it is reused, then
+// stopped on this run's exit. `supabase stop` preserves the database between
+// sessions, so dev data survives a restart; only the containers go down.
+// `mise run dev-stop` is the manual cleanup for a crash that skipped teardown.
 //
 // Single source of truth: the schema is applied straight from
 // supabase/schema.sql via psql, exactly as the cloud path applies the same
@@ -494,9 +495,75 @@ async function shutdown(code) {
   process.exit(code);
 }
 
+// Orphan watch. Ctrl-C and SIGTERM reach the handlers below, but a SIGKILL to
+// the mise wrapper bypasses them: mise does not forward signals, so the killed
+// wrapper orphans this whole tree and it serves forever with no teardown
+// (verified live - a kill round left vite up and `supabase stop` never ran).
+// Raw mise tasks run the script as a direct child of mise, and Node keeps
+// process.ppid current when the parent dies, so poll it: a changed ppid means
+// the supervisor is gone and the teardown contract has to fire itself.
+// unref'd so it never holds the event loop open on its own.
+const SUPERVISOR_PID = process.ppid;
+function watchForOrphaning() {
+  let fired = false;
+  const timer = setInterval(() => {
+    if (process.ppid === SUPERVISOR_PID || fired) return;
+    fired = true; // the interval keeps ticking until exit completes; warn once
+    warn('Parent process (mise / shell) is gone - running teardown so the stack does not outlive the command.');
+    void shutdown(0);
+  }, 5000);
+  timer.unref();
+}
+
+// Backend liveness. The stack can vanish underneath a running session: a
+// Docker Desktop quit+restart wipes the containers if `docker container
+// prune` runs, and then vite keeps serving a frontend against a dead API
+// while every shim tick logs "fetch failed" - one such zombie sat unnoticed
+// for four days. Poll the GoTrue health route; three consecutive misses
+// (a 30s tolerance that rides out Docker restart blips) means the stack is
+// conclusively gone and the whole dev session tears down. unref'd for the
+// same reason as the orphan watch.
+const HEALTH_INTERVAL_MS = 10_000;
+const HEALTH_MAX_STRIKES = 3;
+function watchBackendHealth(apiUrl) {
+  let strikes = 0;
+  const timer = setInterval(async () => {
+    // Teardown is already running (user-initiated, orphan watch, or a
+    // previous strike): stay quiet and let it finish without
+    // interleaved strike warnings.
+    if (shuttingDown) return;
+    let healthy = false;
+    try {
+      const res = await fetch(`${apiUrl}/auth/v1/health`, { signal: AbortSignal.timeout(5000) });
+      healthy = res.ok;
+    } catch {
+      // Transport failure (connection refused, timeout) - counts as a strike.
+      // Deliberately silent: the strike messages below do the talking.
+    }
+    if (healthy) {
+      if (strikes >= HEALTH_MAX_STRIKES) info('local stack reachable again');
+      strikes = 0;
+      return;
+    }
+    strikes += 1;
+    if (strikes === 1) {
+      warn('Local Supabase API unreachable - retrying (blips recover; three misses stop the session).');
+    } else if (strikes >= HEALTH_MAX_STRIKES) {
+      warn(
+        `Local Supabase API still unreachable after ${HEALTH_MAX_STRIKES} checks - ` +
+          'the containers may be gone (docker restart / container prune). Stopping the dev session.'
+      );
+      hint('Run `mise run dev-start` again to bring the stack back up.');
+      void shutdown(1);
+    }
+  }, HEALTH_INTERVAL_MS);
+  timer.unref();
+}
+
 function runVite() {
   process.on('SIGINT', () => void shutdown(0));
   process.on('SIGTERM', () => void shutdown(0));
+  watchForOrphaning();
   console.log(`  ${style.green('Starting Vite.')} The dev server log follows; ${style.bold('Ctrl-C')} stops the server and the stack.\n`);
   viteChild = spawn('pnpm', ['dev'], { stdio: 'inherit' });
   viteChild.on('error', (err) => bail(`Failed to start Vite: ${err.message}`));
@@ -517,6 +584,7 @@ async function main() {
   await serveFunctions();
   serveBackfillShim();
   watchSchema(dbUrl);
+  watchBackendHealth(apiUrl);
   printGettingStarted();
   runVite();
 }
