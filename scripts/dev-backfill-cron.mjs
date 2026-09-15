@@ -67,6 +67,27 @@ function parseInterval() {
   return n;
 }
 
+// Orphan watch. This shim is only ever spawned as a supervised child (by
+// scripts/dev-local.mjs, or by a raw mise task), and those parents own its
+// teardown. But a SIGKILL to the parent - or a killed terminal pane - bypasses
+// every signal handler: the shim reparents and would tick forever against a
+// stack nobody is supervising (ten such orphans accumulated over two weeks
+// before this watch existed). Node keeps process.ppid current when the parent
+// dies, so poll it and exit on any change. unref'd so it never holds the
+// event loop open on its own.
+const SUPERVISOR_PID = process.ppid;
+function watchForOrphaning() {
+  let fired = false;
+  const timer = setInterval(() => {
+    if (process.ppid === SUPERVISOR_PID || fired) return;
+    fired = true; // the interval keeps ticking until exit completes; warn once
+    clearInterval(timer);
+    warn('Parent process is gone - orphaned cron shim exiting (unsupervised it would tick forever).');
+    process.exit(0);
+  }, 5000);
+  timer.unref();
+}
+
 // Refuse anything but a loopback target. Mirrors the guard in
 // scripts/dev-local.mjs - this shim must never reach the hosted project even if
 // the ambient environment carries prod credentials.
@@ -188,7 +209,7 @@ async function tickDigestSweep(apiUrl, serviceRoleKey) {
   await postRoute(apiUrl, serviceRoleKey, 'digest-sweep', stamp);
 }
 
-// One cron tick each for the three newest sweeps.// One cron tick each for the slow-group sweeps (see
+// One cron tick each for the slow-group sweeps (see
 // SLOW_TICK_MULTIPLE below).
 async function tickCurationSweep(apiUrl, serviceRoleKey) {
   const stamp = new Date().toISOString().slice(11, 19);
@@ -267,6 +288,7 @@ async function main() {
   };
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
+  watchForOrphaning();
 }
 
 main();
