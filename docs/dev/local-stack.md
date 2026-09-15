@@ -48,13 +48,31 @@ First run pulls several GB of Docker images and is slow once.
 ### Lifecycle
 
 `dev-start` owns the stack for the session. On exit - Ctrl-C, a
-Vite crash, or a kill signal - it runs `supabase stop`, so the
-setup never outlives the command. `supabase stop` preserves the
-database between sessions (only the containers go down), so dev
-data survives a restart. The Vite server runs as a child with
-inherited stdio; Ctrl-C reaches both it and the script, and a
-once-only guard makes teardown run exactly once whether the
-signal or the child's exit triggers it.
+Vite crash, a kill signal, the supervisor (mise / shell) dying,
+or the local stack vanishing under a running session - it runs
+`supabase stop`, so the setup never outlives the command.
+`supabase stop` preserves the database between sessions (only
+the containers go down), so dev data survives a restart. The
+Vite server runs as a child with inherited stdio; Ctrl-C reaches
+both it and the script, and a once-only guard makes teardown run
+exactly once whether the signal or the child's exit triggers it.
+
+Two watches backstop the signal handlers, because signals have
+known blind spots:
+
+- **Orphan watch.** mise does not forward signals to the task it
+  runs, so a SIGKILL to the mise wrapper orphans the whole tree
+  (vite keeps serving, teardown never fires). The script polls
+  its own parent pid - a changed ppid means the supervisor is
+  gone and teardown fires itself. The cron shim
+  (`scripts/dev-backfill-cron.mjs`) carries the same watch: an
+  orphaned shim would otherwise tick forever, and ten such
+  orphans were found during the 2026-09-15 disk-full incident.
+- **Backend health watch.** If the local containers vanish
+  (Docker restart plus `docker container prune`), the script
+  polls the GoTrue health route and stops the session after three
+  consecutive misses (~30s), instead of serving a dead API
+  forever.
 
 ### The import handoff
 
@@ -119,6 +137,23 @@ layer to the same immediacy.
 
 ## Gotchas
 
+- **mise does not forward signals.** `kill -TERM` on the mise
+  wrapper of a running `dev-start` kills mise but never reaches
+  `scripts/dev-local.mjs` - the tree orphans and only the orphan
+  watch (above) saves it, ~5s later. The immediate, reliable stop
+  is SIGTERM/SIGINT to the `node scripts/dev-local.mjs` process
+  itself (or Ctrl-C in its terminal). The orphan watch makes the
+  wrapper kill safe, just not instant.
+- **Bound any redirected dev-start log.** The QA/agent launch
+  pattern `mise run dev-start > /tmp/nak-dev-start.log 2>&1`
+  truncates at launch and then grows without limit for the life
+  of the session - vite's logging plus the cron shim's tick
+  output. One such log reached 140GB in four days and filled the
+  disk (2026-09-15 incident; it was the primary cause, alongside
+  the orphaned-stack zombies). Use `>>` into a rotated or
+  scratch-purged location, kill the session when the QA pass
+  ends, and never point an unbounded redirect at a path that only
+  clears at boot (`/private/tmp` on macOS does not).
 - **Docker is the hard prerequisite.** The stack is a Docker
   Compose bundle. mise cannot provision a daemon, so this is
   local-CLI only - the cloud agent has no Docker and gets no
