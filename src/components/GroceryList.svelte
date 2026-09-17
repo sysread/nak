@@ -375,6 +375,17 @@
     flex-direction: column;
     min-height: 0;
   }
+  /* Short-viewport drawer mode: the sidebar scrolls as one region and
+     this list flows at its natural height. Mirrors the global rule for
+     .thread-list / .recipe-drawer-list in styles.css;
+     it lives here because this class is component-scoped. */
+  @media (max-width: 720px) and (max-height: 600px) {
+    .grocery-browse-list {
+      flex: none;
+      overflow: visible;
+      min-height: auto;
+    }
+  }
   .grocery-browse-controls {
     display: flex;
     padding: 0.4rem 0.6rem 0;

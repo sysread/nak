@@ -24,8 +24,11 @@
  * this module is the likely spot.
  *
  * Interacts with: styles.css (the html height rule consuming
- * --keyboard-inset), index.html (the viewport meta tag),
- * src/lib/ui/keyboard-inset.ts (the pure inset computation).
+ * --keyboard-inset, and the mobile .sidebar rule that lifts the
+ * drawer's bottom edge by the same amount - a fixed element is sized
+ * against the viewport, so the root rule alone does not shrink it),
+ * index.html (the viewport meta tag), src/lib/ui/keyboard-inset.ts
+ * (the pure inset computation).
  */
 
 import { keyboardInsetPx } from '$lib/ui/keyboard-inset';

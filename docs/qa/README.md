@@ -338,6 +338,10 @@ One file per use-case under [`use-cases/`](./use-cases/), named
 - [auth-session-lifecycle](./use-cases/auth-session-lifecycle.md) - the
   Supabase auth gate, sign in/up toggle, sign out reset, and session
   restore on reload.
+- [drawer-mobile-keyboard-search](./use-cases/drawer-mobile-keyboard-search.md) -
+  the drawer's tab search boxes on a phone: the box stays visible
+  above the on-screen keyboard (short-viewport single-scroll mode on
+  Android, the inset rule on iOS) and typed text arrives in order.
 - [appearance-terminal-style](./use-cases/appearance-terminal-style.md) -
   the terminal UI style: the Style picker's live apply, `data-style`
   on `<html>`, square/flat/borderless rendering with side-border chat

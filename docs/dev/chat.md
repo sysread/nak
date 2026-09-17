@@ -587,6 +587,26 @@ A chat turn goes:
   iOS hardware (the author has no iOS device): a keyboard drawn
   over the app without the app reacting means this seam is the
   likely culprit.
+- **The drawer needs its own keyboard treatment; the root rule does
+  not reach it.** On mobile the sidebar is `position: fixed`, so it
+  is sized against the viewport rather than the root: on iOS the
+  mobile `.sidebar` rule in `styles.css` lifts its bottom edge by
+  `--keyboard-inset` itself. On Android the resized viewport shrinks
+  the drawer, which exposes a layout problem instead: the drawer
+  stacks a fixed lid (the eight tab rows, ~300px on a phone) above a
+  list that scrolls on its own, and every tab's search box is the
+  first row of that list. With the keyboard up the list has little
+  or no height left, the search box is clipped or under the keyboard,
+  and the browser's focus-reveal cannot fix it because the box is
+  already at the top of its scroller and the lid above it never
+  scrolls. Below a 600px-tall viewport the drawer therefore becomes
+  one scroll region (the `max-height` block inside the mobile media
+  query in `styles.css`; `GroceryList.svelte` mirrors it for its
+  component-scoped list) so the browser can scroll the tabs out of
+  the way. Symptom when this regresses, from the original report:
+  tapping a drawer search box on a phone brings up the keyboard with
+  the box nowhere in sight. QA walkthrough:
+  `docs/qa/use-cases/drawer-mobile-keyboard-search.md`.
 - **System prompts are re-assembled every round, browser-side.**
   The baseline tool-framing system message is NOT persisted - it's
   built from the tool registry at request-time by

@@ -8,6 +8,14 @@ how to organize, rename, and clean up threads.
 
 ## The drawer layout
 
+On a phone the drawer slides over the conversation. Its tab list
+sits above the search box and the thread list, and normally only
+the list below the tabs scrolls. When the on-screen keyboard is up
+there is not enough room for that, so the whole drawer scrolls as
+one piece instead: tapping a search box lets the tabs scroll up out
+of the way so the box stays visible above the keyboard. Once the
+keyboard closes, the tabs settle back at the top.
+
 ## Pinning a thread
 
 ## Renaming a thread

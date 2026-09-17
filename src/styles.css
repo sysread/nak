@@ -1573,7 +1573,13 @@ h1 {
   .sidebar {
     position: fixed;
     top: 0;
-    bottom: 0;
+    /* iOS Safari: the keyboard overlays the page and only the root's
+       height rule subtracts --keyboard-inset (see the html rule near
+       the top of this sheet). A fixed element is sized against the
+       viewport, not the root, so without this the drawer keeps its
+       full height and its lower half sits under the keyboard. On
+       Android the variable stays 0px and this is plain bottom: 0. */
+    bottom: var(--keyboard-inset, 0px);
     left: 0;
     width: min(85vw, 320px);
     /* Sits above the SamskaraToasts mood pill (z-index 25) so the
@@ -1680,6 +1686,43 @@ h1 {
     padding: 0.25rem 0.45rem;
     font-size: 0.9rem;
     min-width: 1.8rem;
+  }
+}
+
+/* Short viewports: the drawer is one scroll region.
+
+   The drawer normally stacks a fixed lid (the eight tab rows) above
+   a list that scrolls on its own, and every tab's search box is the
+   first row of that list. The lid is ~300px tall on a phone. When
+   the on-screen keyboard opens, Android Chrome shrinks the layout
+   viewport (interactive-widget=resizes-content in index.html), the
+   drawer shrinks with it, and the list is left with little or no
+   height: the search box the user just tapped ends up clipped or
+   hidden under the keyboard, and the browser's focus-reveal cannot
+   help because the box is already at the top of its scroller and
+   the lid above it does not scroll.
+
+   Below this height the lid stops being fixed: the sidebar itself
+   scrolls and the tab list flows at its natural height, so the
+   browser's own scroll-into-view on keyboard show can push the tabs
+   up out of the way and land the focused search box on screen.
+   600px covers the keyboard-up viewport of every phone tried on
+   paper (a large phone loses ~300px to the keyboard and ends near
+   520px) and landscape phones; a normal portrait viewport is
+   700px+ and keeps the lid. Small phones under 600px tall run in
+   this mode all the time, which they can afford better than a
+   half-screen lid. Sits outside the mobile block above only because
+   this sheet does not nest media queries. See docs/dev/chat.md,
+   drawer keyboard gotcha. */
+@media (max-width: 720px) and (max-height: 600px) {
+  .sidebar {
+    overflow-y: auto;
+  }
+  .thread-list,
+  .recipe-drawer-list {
+    flex: none;
+    overflow: visible;
+    min-height: auto;
   }
 }
 
