@@ -29,6 +29,11 @@
 --     `alter publication ... add table`) go inside a guarded
 --     `do $$ begin if not exists (...) then ... end if; end $$;`
 --     block that checks the relevant catalog first.
+--   - Table-level Data API grants live in one idempotent block at
+--     the bottom of this file (Supabase stopped granting these
+--     automatically for new tables in public on 2026-10-30). A new
+--     table needs no grant statements of its own unless it must
+--     stay unreachable through the Data API.
 --
 -- If you add a statement that can't be made idempotent, stop and
 -- fix that before merging — the next `mise run sync` on a
@@ -48,7 +53,9 @@
 --
 -- All tables have Row Level Security enabled so an authenticated user
 -- can only access rows they own. The publishable key the browser uses
--- is safe to expose provided RLS policies stay in place.
+-- is safe to expose provided RLS policies stay in place. RLS is the
+-- security boundary; the DML grants at the bottom of this file only
+-- decide whether the Data API can reach a table at all.
 
 create extension if not exists pgcrypto;
 -- pgvector backs every embedding column (vector(2048)) further down. It
@@ -17056,4 +17063,34 @@ exception when others then
   raise notice 'mcp catalog refresh cron setup skipped: %', sqlerrm;
 end
 $cron$;
+
+-- ---------------------------------------------------------------------------
+-- Data API reachability grants
+-- ---------------------------------------------------------------------------
+--
+-- Supabase stopped auto-granting Data API access to new tables in the
+-- public schema on 2026-10-30. This block restores the pre-change
+-- default explicitly: full DML on every table and view for the API
+-- roles, plus sequence usage so identity-column inserts keep working.
+--
+-- Runs last so tables created anywhere above are covered in the same
+-- apply, including on a fresh project. Grant statements are idempotent,
+-- so re-running sync is safe. RLS remains the actual security boundary:
+-- every table above enables it, and a table without a permissive
+-- policy is unreachable no matter what this block grants.
+--
+-- Note the one deliberate divergence from the old default: these are
+-- project-maintained grants rather than platform-managed ones, so a
+-- table that must NOT be reachable through the Data API (none today)
+-- would need to be excluded here, not just left un-granted.
+
+grant select, insert, update, delete
+  on all tables in schema public
+  to anon, authenticated, service_role;
+
+-- No sequence-backed columns exist today (primary keys are uuid
+-- defaults); this keeps the block self-sufficient if one is added.
+grant usage, select
+  on all sequences in schema public
+  to anon, authenticated, service_role;
 
