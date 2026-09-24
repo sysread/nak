@@ -78,6 +78,14 @@ per-row claim columns; drawer sources are `auto-title`, `topics`,
 
 - (2) The new thread appears in the sidebar titled
   "New conversation" (the placeholder auto-title keys on).
+- (2/4) Answer-trap probe: the step-2 opener is a question a small
+  title model could try to answer ("what does that mean?"). The
+  saved title must be a topic ("Sourdough starter acetone smell"),
+  never the model's reply to the message - refusal-shaped output
+  ("I don't have access to...", "Sorry, ...", "As an AI, ...") is
+  folded into `no-title` (claim released, later cycle retries) and
+  never ships as the thread's name. See the dev auto-title gotcha
+  on framing the opening message as data.
 - (3) Drawer shows, in unit order (auto-title -> topics -> summary
   -> memory-topics -> recipe-topics, the tail's sequential chain),
   within ~30s of the turn's `end terminalKind=completed` line: `[auto-title]` picked-up + `titled thread <id>: <title>`;

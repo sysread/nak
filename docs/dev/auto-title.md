@@ -190,6 +190,16 @@ metadata-message details.
   instruction; a tight wire cap truncated titles mid-word. The
   prompt controls answer length; `sanitizeTitle`'s first-line
   split and 80-char slice enforce it on the storage side.
+- **The opening message is framed as data, not sent as a user
+  turn.** The first version sent the raw message as the literal
+  user turn, and the model sometimes answered it instead of
+  naming it - threads came back titled with refusals like "I
+  don't have access to live weather data, ...". The user turn is
+  now `<first_message>`-delimited with the task restated after
+  the close tag, and `looksLikeAssistantReply` folds
+  refusal/apology/disclaimer-shaped output into `no-title`
+  (claim released, row retries) so a refusal never ships as the
+  thread's name.
 
 ## Where to go next
 

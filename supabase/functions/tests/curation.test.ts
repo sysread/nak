@@ -75,6 +75,36 @@ Deno.test('sanitizeTitle returns empty string on whitespace-only input', () => {
   assertEquals(autoTitle.sanitizeTitle('\n\n   \r\n  '), '');
 });
 
+// --- auto_title: reply-shaped output guard --------------------------------
+
+Deno.test('looksLikeAssistantReply catches the model answering instead of titling', () => {
+  // The exact failure class that shipped titled threads with refusals.
+  assertEquals(
+    autoTitle.looksLikeAssistantReply(
+      "I don't have access to live weather data, so I can't pull the forecast",
+    ),
+    true,
+  );
+  assertEquals(autoTitle.looksLikeAssistantReply("I can't browse the web"), true);
+  assertEquals(autoTitle.looksLikeAssistantReply('I cannot help with that'), true);
+  assertEquals(autoTitle.looksLikeAssistantReply("I'm sorry, I don't know"), true);
+  assertEquals(autoTitle.looksLikeAssistantReply('Sorry, I cannot answer that'), true);
+  assertEquals(autoTitle.looksLikeAssistantReply('As an AI, I cannot access the internet'), true);
+});
+
+Deno.test('looksLikeAssistantReply leaves legitimate titles alone', () => {
+  assertEquals(autoTitle.looksLikeAssistantReply('Weather forecast for tomorrow'), false);
+  assertEquals(autoTitle.looksLikeAssistantReply('iOS upgrade walkthrough'), false);
+  assertEquals(autoTitle.looksLikeAssistantReply('Iowa trip planning'), false);
+  assertEquals(autoTitle.looksLikeAssistantReply('Troubleshooting the refrigerator'), false);
+});
+
+Deno.test('buildTitleUserTurn frames the message as tagged data with the task restated', () => {
+  const turn = autoTitle.buildTitleUserTurn('what is the weather tomorrow?');
+  assert(turn.startsWith('<first_message>\nwhat is the weather tomorrow?\n</first_message>'));
+  assert(turn.endsWith('Reply with only the 3-6 word title for the conversation this message opens.'));
+});
+
 // --- summary: trimSummary -------------------------------------------------
 
 Deno.test('trimSummary strips wrapping quotes and caps at 600 chars', () => {
