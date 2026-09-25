@@ -24,7 +24,9 @@
  * this module is the likely spot.
  *
  * Interacts with: styles.css (the html height rule consuming
- * --keyboard-inset), index.html (the viewport meta tag),
+ * --keyboard-inset, plus the mobile .sidebar / .logs-drawer bottom
+ * edges - fixed-position panels ignore the root shrink and must
+ * subtract the inset themselves), index.html (the viewport meta tag),
  * src/lib/ui/keyboard-inset.ts (the pure inset computation).
  */
 

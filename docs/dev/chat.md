@@ -587,6 +587,16 @@ A chat turn goes:
   iOS hardware (the author has no iOS device): a keyboard drawn
   over the app without the app reacting means this seam is the
   likely culprit.
+  - **Fixed-position panels opt in separately.** The root height
+    shrink does not reach `position: fixed` elements - they anchor
+    to the viewport, not to `<html>`. The mobile sidebar and logs
+    drawer set `bottom: var(--keyboard-inset, 0px)` themselves; any
+    new full-height fixed panel with a text field needs the same,
+    or iOS draws the keyboard over its lower half.
+  - **Text fields under 16px make iOS zoom on focus**, which pans
+    the view away as the keyboard opens. The phone root font size
+    is 15.5px, so even `1rem` trips it. The sidebar search inputs
+    pin a literal `16px` on phones for this reason.
 - **System prompts are re-assembled every round, browser-side.**
   The baseline tool-framing system message is NOT persisted - it's
   built from the tool registry at request-time by

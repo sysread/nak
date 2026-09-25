@@ -1573,7 +1573,13 @@ h1 {
   .sidebar {
     position: fixed;
     top: 0;
-    bottom: 0;
+    /* Fixed positioning anchors to the viewport, not to <html>, so the
+       --keyboard-inset shrink on the root (see the html rule) never
+       reaches this drawer. Without lifting the bottom edge here, iOS
+       paints the keyboard over the lower half of the open drawer and
+       hides the search results under the search box. The variable is
+       0px wherever the keyboard resizes the page itself (Android). */
+    bottom: var(--keyboard-inset, 0px);
     left: 0;
     width: min(85vw, 320px);
     /* Sits above the SamskaraToasts mood pill (z-index 25) so the
@@ -1603,7 +1609,8 @@ h1 {
   .logs-drawer {
     position: fixed;
     top: 0;
-    bottom: 0;
+    /* Same keyboard lift as .sidebar - see the comment there. */
+    bottom: var(--keyboard-inset, 0px);
     right: 0;
     width: min(85vw, 480px);
     /* Mirror of .sidebar's z-index - above the SamskaraToasts mood
@@ -2046,6 +2053,17 @@ h1 {
    Escape instead, and the built-in glyph clashes with the surrounding
    type style. */
 .sidebar-search-input::-webkit-search-cancel-button { display: none; }
+
+@media (max-width: 720px) {
+  /* iOS Safari zooms the page in on focus for any text field whose
+     computed font size is under 16px, which pans the view away from
+     the drawer just as the keyboard opens. 0.88rem on the 15.5px
+     phone root is about 13.6px, so it trips. A literal 16px (not rem -
+     the phone root is below 16) keeps the zoom from firing. */
+  .sidebar-search-input {
+    font-size: 16px;
+  }
+}
 
 /* Section headers above the drawer's bucketed listings (chats:
    Recent / Older; recipes: Upcoming / Favorites / All recipes).
