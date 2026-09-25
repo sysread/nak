@@ -26,7 +26,9 @@ different jobs:
 ## Uploading a document
 
 1. Open the **Library** tab in the left drawer.
-2. In the main panel, choose a file.
+2. In the main panel, choose a file. If a document is open, click the
+   **Upload document** button (the upload-arrow icon in the top bar)
+   to get back to the upload form.
 3. Give it a **title** (defaults to the filename) and a short
    description of **what it is for** - e.g. "2024 Aetna health
    insurance policy" or "HOA covenants and restrictions". The

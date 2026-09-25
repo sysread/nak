@@ -30,7 +30,9 @@ assistant answers ([dev: library](../../dev/library.md),
 7. In chat, ask a question whose answer depends on the uploaded document,
    then expand the assistant's `doc_grep` tool call and look for the
    matched document's title in its result.
-8. Return to the document page and delete `Library QA Doc`.
+8. With `Library QA Doc` still open, click the top-bar **Upload
+   document** button, then reopen `Library QA Doc` from the list.
+9. Delete `Library QA Doc`.
 
 ## Expected
 
@@ -47,7 +49,10 @@ assistant answers ([dev: library](../../dev/library.md),
   doc's title (`Library QA Doc`) appears inside the `doc_grep` tool-call
   result. There is no separate source/citation chip for library docs -
   CitationsPanel renders web-search citations only.
-- (8) Delete removes the document from the Library list/search results and
+- (8) The upload button swaps the document page for the empty upload
+  form (the list row loses its highlight); reopening the row brings the
+  document page back.
+- (9) Delete removes the document from the Library list/search results and
   permanently removes its management surface.
 
 ## Cleanup

@@ -108,7 +108,10 @@ UI:
   download, extracted text, and delete.
 - `src/lib/routing.svelte.ts` - `DrawerTab` gains `'library'`; `Route`
   gains `document_id`.
-- `src/screens/Chat.svelte` - the tab button, lazy-load wiring, the
+- `src/screens/Chat.svelte` - the tab button, lazy-load wiring, the top-bar
+  **Upload document** action (clears `route.document_id` so the panel
+  drops back to the upload form - the only way back to it once a
+  document is open), the
   drawer / panel / top-bar branches, and the change-event listener.
 
 Docs:

@@ -7564,6 +7564,16 @@
             <line x1="10" y1="9" x2="8" y2="9" />
           </svg>
         {/snippet}
+        {#snippet uploadDocumentIcon()}
+          <!-- Feather "upload" - tray with an up arrow, reads as "add a
+               file to the Library". -->
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="17 8 12 3 7 8" />
+            <line x1="12" y1="3" x2="12" y2="15" />
+          </svg>
+        {/snippet}
         {#snippet deepSleepIcon()}
           <!-- Feather "moon" - reads as "slow-wave sleep / deep
                consolidation". -->
@@ -7890,10 +7900,22 @@
             <span class="title-btn panel-section-label">Samskara</span>
           </div>
         {:else}
-          <!-- Library top-bar. The upload affordance lives inline in
-               Library.svelte's panel (mirroring how Memories / Wiki put
-               their create affordance inline), so the chrome here is just
-               the static section label. -->
+          <!-- Library top-bar. The upload form lives in Library.svelte's
+               panel, but it only renders when no document is selected.
+               Opening a document hides it, so this button clears the
+               selection to bring the form back - without it the user has
+               no way to upload a second document after opening one. -->
+          {@const actions = [
+            {
+              id: 'upload-document',
+              label: 'Upload document',
+              title: 'Upload document',
+              class: 'new-thread-mini',
+              onclick: () => navigate({ document_id: null }),
+              icon: uploadDocumentIcon,
+            },
+          ]}
+          <TopBarActions {actions} menuLabel="Library actions" />
           <div class="title-wrap">
             <span class="title-btn panel-section-label">Library</span>
           </div>
