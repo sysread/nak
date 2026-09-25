@@ -599,8 +599,10 @@ keystrokes; the LLM tool path keeps using `listRecipes`.
   their own form-row above the cooklang+preview panes.
 - **The edit split is CSS-driven, with one JS escape hatch.** Wide
   viewports show source and preview side by side in two
-  `minmax(0, 1fr)` tracks (bare `1fr` lets wide preview content
-  squeeze the textarea). At the app's 720px mobile breakpoint a tab
+  `minmax(0, 1fr)` tracks. Bare `1fr` can't shrink below content
+  min-width, and the timer list's nowrap context line reports its
+  full sentence length as min-width even though it renders clipped -
+  one long timer step crushed the textarea to a sliver. At the app's 720px mobile breakpoint a tab
   strip appears and a CSS rule hides the unselected pane; the tab
   state is ignored on desktop. The catch: the cooklang textarea is
   `required`, and a browser silently refuses to submit when the

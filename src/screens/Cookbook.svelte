@@ -2729,10 +2729,13 @@
   }
   /* Source and preview split the panel width evenly. minmax(0, 1fr)
      rather than bare 1fr: a bare 1fr track can't shrink below its
-     content's min width, so wide preview content (the two-column
-     ingredient list, a long unbroken word or URL) grows the preview
-     column and squeezes the textarea. Both panes share one height so
-     the two halves line up. */
+     content's min-content width. The timer list's context line is
+     white-space: nowrap (it fades out instead of wrapping), and a
+     clipped nowrap line still reports its full unwrapped length as
+     min-content. One long timer sentence was enough to grow the
+     preview column past the panel edge and crush the textarea to a
+     ~120px sliver. Both panes share one height so the halves line
+     up. */
   .cookbook-edit-panes {
     --cookbook-edit-pane-height: max(260px, 60vh);
     display: grid;
