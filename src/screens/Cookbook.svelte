@@ -27,6 +27,7 @@
    * for `COOKBOOK_CHANGE_EVENT` so an LLM `recipe_save` call mid-
    * session refreshes the detail automatically.
    */
+  import { flushSync } from 'svelte';
   import { app } from '$lib/state.svelte';
   import { route, navigate } from '$lib/routing.svelte';
   import {
@@ -198,6 +199,11 @@
   // `recipe_versions` so the user (and the LLM) can scan past edits
   // by intent in the History panel. Validated non-empty before save.
   let draftChangeMessage = $state('');
+  // Which half of the source/preview split is showing on narrow
+  // viewports. Desktop shows both side by side and ignores this; the
+  // tab strip and the hide rule only exist under the mobile media
+  // query. Reset to 'source' each time the edit pane opens.
+  let editTab = $state<'source' | 'preview'>('source');
   let editError = $state<string | null>(null);
   let saving = $state(false);
   let copyFeedback = $state<string | null>(null);
@@ -364,6 +370,7 @@
     editError = null;
     draftPhotos = [];
     photoErrors = [];
+    editTab = 'source';
     pane = 'edit';
   }
 
@@ -392,6 +399,7 @@
     }
     const loaded = cookbook.photos[r.id] ?? [];
     draftPhotos = seedDraftPhotos(loaded);
+    editTab = 'source';
     pane = 'edit';
   }
 
@@ -1982,9 +1990,41 @@
               History panel like any other change.
             </p>
           </div>
+          <!-- Mobile-only tab strip. Hidden by CSS on wide viewports,
+               where both panes sit side by side. -->
+          <div class="cookbook-edit-tabs" role="tablist" aria-label="Recipe editor view">
+            <button
+              type="button"
+              role="tab"
+              id="cb-tab-source"
+              aria-controls="cb-pane-source"
+              aria-selected={editTab === 'source'}
+              class:is-active={editTab === 'source'}
+              onclick={() => (editTab = 'source')}
+            >Edit</button>
+            <button
+              type="button"
+              role="tab"
+              id="cb-tab-preview"
+              aria-controls="cb-pane-preview"
+              aria-selected={editTab === 'preview'}
+              class:is-active={editTab === 'preview'}
+              onclick={() => (editTab = 'preview')}
+            >Preview</button>
+          </div>
           <div class="cookbook-edit-panes">
-            <div class="form-row cookbook-edit-source-col">
+            <div
+              class="form-row cookbook-edit-source-col"
+              id="cb-pane-source"
+              class:is-tab-hidden={editTab !== 'source'}
+            >
               <label for="cb-cooklang">Cooklang source</label>
+              <!-- The textarea is required, and on mobile it can be
+                   display:none while the Preview tab is up. Browsers
+                   block submit on an invalid control they cannot
+                   focus, with no visible message. Switching tabs
+                   (flushed synchronously so the pane is visible before
+                   the browser tries to focus it) surfaces the error. -->
               <textarea
                 id="cb-cooklang"
                 class="cookbook-edit-textarea"
@@ -1992,6 +2032,7 @@
                 maxlength={MAX_RECIPE_COOKLANG_CHARS}
                 spellcheck="false"
                 required
+                oninvalid={() => flushSync(() => (editTab = 'source'))}
               ></textarea>
               <p class="subtle cookbook-syntax-hint">
                 Syntax: <code>@ingredient{'{'}1%cup{'}'}</code>,
@@ -2000,7 +2041,11 @@
                 <code>&gt;&gt; servings: 4</code>.
               </p>
             </div>
-            <div class="cookbook-edit-preview-col">
+            <div
+              class="cookbook-edit-preview-col"
+              id="cb-pane-preview"
+              class:is-tab-hidden={editTab !== 'preview'}
+            >
               <div class="form-label">Preview</div>
               <div class="cookbook-render cookbook-edit-preview">
                 {@html editPreviewHtml}
@@ -2682,18 +2727,61 @@
   .cookbook-render :global(ol.cook-steps li.is-active::before) {
     left: 0.4rem;
   }
+  /* Source and preview split the panel width evenly. minmax(0, 1fr)
+     rather than bare 1fr: a bare 1fr track can't shrink below its
+     content's min-content width. The timer list's context line is
+     white-space: nowrap (it fades out instead of wrapping), and a
+     clipped nowrap line still reports its full unwrapped length as
+     min-content. One long timer sentence was enough to grow the
+     preview column past the panel edge and crush the textarea to a
+     ~120px sliver. Both panes share one height so the halves line
+     up. */
   .cookbook-edit-panes {
+    --cookbook-edit-pane-height: max(260px, 60vh);
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     gap: 1rem;
   }
-  @media (max-width: 800px) {
+  .cookbook-edit-tabs {
+    display: none;
+  }
+  /* 720px matches the app-wide mobile breakpoint (Chat.svelte's drawer
+     layout). Below it the panes stack into one column and the tab
+     strip picks which one is visible, so each gets the full width. */
+  @media (max-width: 720px) {
     .cookbook-edit-panes {
-      grid-template-columns: 1fr;
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .cookbook-edit-tabs {
+      display: flex;
+      gap: 0.25rem;
+      margin-bottom: 0.5rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .cookbook-edit-tabs button {
+      flex: 1;
+      background: none;
+      border: none;
+      border-bottom: 2px solid transparent;
+      border-radius: 0;
+      margin-bottom: -1px;
+      padding: 0.5rem;
+      color: var(--muted);
+      font-size: 0.9rem;
+      cursor: pointer;
+    }
+    .cookbook-edit-tabs button.is-active {
+      color: var(--text);
+      border-bottom-color: var(--accent);
+      font-weight: 600;
+    }
+    .is-tab-hidden {
+      display: none;
     }
   }
   .cookbook-edit-textarea {
     width: 100%;
+    height: var(--cookbook-edit-pane-height);
     min-height: 260px;
     font-size: 0.85rem;
     padding: 0.5rem;
@@ -2717,9 +2805,9 @@
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     padding: 0.5rem 0.75rem;
-    min-height: 260px;
-    max-height: 600px;
+    height: var(--cookbook-edit-pane-height);
     overflow: auto;
+    overflow-wrap: anywhere;
     background: var(--bg);
   }
   .cookbook-change-message-hint {

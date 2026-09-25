@@ -63,7 +63,9 @@ open panel.
    Bake for ~{25%min} until golden.
    ```
 
-3. Watch the `Preview` pane while typing, then clear the `What
+3. Watch the `Preview` pane while typing. Narrow the window below
+   720px wide (or use a phone), flip between the `Edit` and `Preview`
+   tabs, then widen it again. Clear the `What
    changed?` field and click `Save`. Re-enter a message
    (`create qa cornbread`) and click `Save` again.
 4. On the resulting detail pane, expand `History`.
@@ -102,6 +104,10 @@ open panel.
   dash line ending the declaration block so the instructions don't
   inherit the Ingredients heading). The `@?honey` row carries a
   muted *(optional)* tag after its name in the ingredient list.
+  On a wide window the source and preview panes split the panel
+  width evenly and share one height; no tab strip shows. Below 720px
+  an `Edit` / `Preview` tab strip appears and only the selected pane
+  shows, full width. A typed edit shows up on the `Preview` tab.
   `Save` is blocked with an inline
   error until `What changed?` is non-empty; with a message it
   persists and the panel flips to the detail pane. The saved row
