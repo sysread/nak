@@ -51,6 +51,18 @@ to the alphabetical browse view.
 The Recipe list hides its sort picker while you're searching - the
 similarity ranking is the sort during a search.
 
+## Searching on a phone
+
+On a phone, tapping a search box hides the section buttons (Chats,
+Recipes, and the rest) so the box moves to the top of the drawer,
+clear of the keyboard. The buttons come back a moment after you
+leave the search box - tap a result, tap elsewhere in the drawer,
+or close the keyboard with "done".
+
+On Android, closing the keyboard with the back gesture leaves the
+search box focused, so the buttons stay hidden until you tap
+somewhere else in the drawer.
+
 ## Why a search might miss something
 
 - The item was just added and the scheduled embedding pass hasn't

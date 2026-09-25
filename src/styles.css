@@ -1603,6 +1603,15 @@ h1 {
     transform: translateX(0);
   }
 
+  /* The section nav stack is taller than the room left above the
+     on-screen keyboard, which buried the search input under it. While
+     a drawer search box has focus the nav steps aside so the input
+     sits at the top of the drawer. Phones only - desktop has no
+     keyboard to clear. Toggled by src/lib/ui/sidebar-search-focus.ts. */
+  .sidebar.search-focused .sidebar-nav {
+    display: none;
+  }
+
   /* Mirror of the sidebar's mobile rules on the right edge. Logs slides
      in from the right; the same 220ms easing keeps the two panels
      visually consistent when a user opens both. */

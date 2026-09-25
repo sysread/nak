@@ -597,6 +597,15 @@ A chat turn goes:
     the view away as the keyboard opens. The phone root font size
     is 15.5px, so even `1rem` trips it. The sidebar search inputs
     pin a literal `16px` on phones for this reason.
+  - **The drawer nav collapses while a search box has focus.** The
+    stacked section buttons leave less room above the keyboard than
+    the search input needs. A focusin/focusout pair on the sidebar
+    (`src/lib/ui/sidebar-search-focus.ts`) sets `.search-focused`,
+    and a phone-only rule hides `.sidebar-nav`. The restore is
+    delayed on purpose: blur fires before the click on a tapped
+    result, and an instant restore would slide the list under the
+    finger. Any new drawer tab gets this for free if its search
+    input carries `.sidebar-search-input`.
 - **System prompts are re-assembled every round, browser-side.**
   The baseline tool-framing system message is NOT persisted - it's
   built from the tool registry at request-time by
