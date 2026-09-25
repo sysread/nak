@@ -141,7 +141,10 @@ Two entry points:
 
 **By hand**: click **+ New recipe**. Fill in a title, optionally a
 source (URL or provenance note), and the Cooklang source. A live
-preview renders as you type so you can check the structure. On the
+preview renders as you type so you can check the structure. On a
+wide screen the source and the preview sit side by side, each taking
+half the panel. On a phone they share the space through **Edit** and
+**Preview** tabs above the editor. On the
 detail pane the source shows as a short labeled link - the source
 name if you gave one, otherwise just "Source" - so a long URL no
 longer stretches the line across the whole width.

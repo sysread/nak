@@ -596,8 +596,17 @@ keystrokes; the LLM tool path keeps using `listRecipes`.
   `.cookbook-render` div, not by injecting into the parsed cooklang
   HTML. Cooklang stays unaware of photos so the parser/renderer
   doesn't grow a new concern. Edit-pane photo controls live in
-  their own form-row between the change-message field and the
-  cooklang+preview panes.
+  their own form-row above the cooklang+preview panes.
+- **The edit split is CSS-driven, with one JS escape hatch.** Wide
+  viewports show source and preview side by side in two
+  `minmax(0, 1fr)` tracks (bare `1fr` lets wide preview content
+  squeeze the textarea). At the app's 720px mobile breakpoint a tab
+  strip appears and a CSS rule hides the unselected pane; the tab
+  state is ignored on desktop. The catch: the cooklang textarea is
+  `required`, and a browser silently refuses to submit when the
+  invalid control is `display: none`. The textarea's `invalid`
+  handler flips back to the Edit tab under `flushSync` so the pane
+  is visible before the browser tries to focus it.
 - **A tool's echoed row is a claim about live state - read it back.**
   the edit form answered with a hardcoded `photos: []` and echoed the
   `topics` column, and both read as data loss to the model, which
