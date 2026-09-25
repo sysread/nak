@@ -40,7 +40,8 @@
    *     pin (writes null) so the thread keeps tracking default
    *     changes — see setProfile().
    */
-  import { onMount, tick } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
+  import { createSidebarSearchFocus } from '$lib/ui/sidebar-search-focus';
   import { fade } from 'svelte/transition';
   import type { Session } from '@supabase/supabase-js';
   import {
@@ -6776,6 +6777,13 @@
   // because the user's mental index doesn't respect the archive flag —
   // "where's that thread about X?" is the question we're answering.
 
+  // True while any drawer tab's search box has focus. On phones the
+  // section nav collapses so the input clears the on-screen keyboard;
+  // see src/lib/ui/sidebar-search-focus.ts for the delayed restore.
+  let sidebarSearchFocused = $state(false);
+  const sidebarSearchFocus = createSidebarSearchFocus((f) => (sidebarSearchFocused = f));
+  onDestroy(sidebarSearchFocus.dispose);
+
   let searchQuery = $state('');
   let searchResults = $state<ThreadSearchHit[]>([]);
   let searchBusy = $state(false);
@@ -7035,7 +7043,12 @@
       aria-label="Close thread drawer"
       aria-hidden={!drawerOpen}
     ></div>
-    <aside class="sidebar">
+    <aside
+      class="sidebar"
+      class:search-focused={sidebarSearchFocused}
+      onfocusin={sidebarSearchFocus.onFocusIn}
+      onfocusout={sidebarSearchFocus.onFocusOut}
+    >
       <header class="sidebar-header">
         <!-- Tab switcher between conversation threads and the
              cookbook. Rendered as a vertical pair of thread-row-
