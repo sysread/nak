@@ -143,8 +143,26 @@ shim's tick), never a chat turn.
   the genuinely coupled pairs - the regression this fix closes.
 
 - **Candidate is uncovered** (Step 3): every Jaccard against an
-  existing tier-2 is below 0.60, so detection is offering a NEW
-  constellation, not re-surfacing a minted one.
+  existing tier-2 is below 0.50, so detection is offering a NEW
+  constellation, not re-surfacing a minted one - and not a sibling of
+  one either: two three-child groups sharing two children score
+  exactly 0.50 and are skipped.
+
+- **A compound stands in for its children at fire time.** On a turn
+  where a tier-2 makes the top-k, none of its `'samskara'`-provenance
+  children appear in the same cohort:
+
+  ```sql
+  select f.cohort_id, count(*) filter (where s.tier = 2) compounds,
+         count(*) filter (where s.tier = 1 and exists (
+           select 1 from samskara_provenance p join samskara_fires fp
+             on fp.cohort_id = f.cohort_id and fp.samskara_id = p.samskara_id
+            where p.kind = 'samskara' and p.ref_id = s.id)) children_alongside
+    from samskara_fires f join samskaras s on s.id = f.samskara_id
+   where f.user_id = '<user>' and f.fired_at > '<deploy time>'
+   group by 1 having count(*) filter (where s.tier = 2) > 0;
+  -- expect: children_alongside = 0 on every row
+  ```
 
 - **First tick mints (or dedup-hits).** A `mint-tier2: candidate
   group of N tier-1 samskaras` log line, then either
@@ -211,3 +229,4 @@ Append-only; one row per execution. Date, environment, commit.
 | 2026-06-16 | hosted read-only (offline sim) | 5cdc34a | partial (SQL/detection layer only; no live sweep) | No browser/edge runtime here, so the mint half (sweep route, minter call, provenance insert, toast) is unexecuted. Detection validated by replaying the rewritten seed + grow + coverage in code against a hosted data dump (4727 in-band co-fire pairs, 150 tier-1, 1786 cohorts, the existing tier-2's 6 children): raw-co-fire seeds rank the grab-bag (emoji + pork chops + Thai, all lift < 1.5) to the top; lift seeds rank genuine constellations (2x-25x) instead. At the shipped defaults (p_min_lift 2.0, p_min_cofires 10) the default call emits on probe 1 a 6-member group with Jaccard 0.00 vs the existing tier-2 (uncovered) - so a second tier-2 can mint. NOT covered: the actual sweep firing the probe, the minter confirm, the `'samskara'` provenance landing, the seed-iteration-after-mint step (needs a real mint to cover the first constellation). |
 | 2026-09-05 | local stack (SQL + browser) | samskara-recalibration WIP | partial (SQL/detection + browse UI; no live sweep) | Embedding-rotation recalibration pass. Centered-cosine plumbing verified end to end on the local stack: schema applies fresh and idempotently (including the pre-existing messages.status fresh-apply breakage, fixed here), `samskara_refresh_centering` materializes the mean, and `samskara_tier2_candidate` executes against synthetic 2-cluster geometry (centered A-vs-A 0.98, A-vs-B -0.99). The `samskara_cluster_corpus(0.45)` greedy pass returns the expected 3 clusters (3 + 2 + singleton) under the authenticated role, and the browse drawer's Hide-similar slider (re-ranged to [-0.1, 0.65], default 0.45) folds the 6 synthetic rows to exactly 3 representatives in the browser. NOT covered: a live tier-2 mint (needs LLM sweep), the fire-path ramp under a real turn. Probe-set context: 80 hand-labeled claim pairs put the unrelated/related boundary at ~0.09 and same-idea-family vs related at ~0.35-0.40 centered; duplicate-vs-same-topic is NOT separable (AUC 0.53), so the band's upper bound stays conservative and behavioral evidence (lift) remains the real filter. |
 | 2026-10-01 | hosted read-only | a156285 (t0+25d) | partial | [hosted] First live tier-2 window under the centered band [0.10, 0.35): detection and minting both RUN - 26 compounds minted (1 / 10 / 14 / 1 per week) from 35 distinct tier-1 children; 0 declines in 26 (the minter confirms everything it is offered, as before the reset). OUTCOME: tier-2 genuine held rate 70.7% (n=99) vs tier-1 71.0% (n=1,040) - EQUAL, so the planned-changes watch condition (held-rate edge) is NOT triggered; tier-2 takes 14% of fires on 15% of the corpus. REDUNDANCY (new, structural): 82 child slots over 35 distinct children; 22 of 26 compounds share 2+ children with another compound; compound-to-nearest-compound claim-centered cosine median 0.438, max 0.498 (0 at or above the 0.50 dedup bar, 17 above 0.40); six near-identical 'food as an ongoing practice' compounds minted 09-19 to 09-27. MECHANISM: the candidate finder skips a group only when its child set overlaps an existing compound's at Jaccard >= 0.60, and two 3-child groups sharing 2 children score 0.50, so sibling compounds are admitted by design; compounds are excluded from the co-fire collapse (tier-1 filter), so nothing merges them later; and the tier-2 dedup bar (0.50) sits just above where the siblings land. Band supply is not the limit: 2,078 tier-1 pairs in band, 111 with 10+ co-fires. Proposal (not implemented): lower the coverage-skip Jaccard to 0.50 (one SQL default), or count a group covered when any 2 of its children already share a compound; re-open the decline criterion on redundancy evidence rather than on held rate. |
+| 2026-10-01 | hosted read-only (pre-deploy measurement) | audit branch | partial (SQL measured; live behavior pending deploy) | Both proposals from the row above shipped the same day: `p_overlap_skip` 0.60 -> 0.50, and the fire RPC's parent-wins rule. Baseline measured before the change, for the post-deploy re-run of the new Expected bullet: of 272 tier-2 fires since the reset, 272 arrived with 2+ of their children in the same cohort (mean 3.01 children alongside); in the 140 cohorts containing a compound, children took 33.9% of the slots; 171 of 3,081 fires overall were a child firing beside its parent. The new RPC body was dry-run read-only against prod with a tier-1 child's vector as the message: the unfiltered top-11 held the parent plus its siblings, the filtered top-11 held the parent and none of its children, and the freed slots filled from the next-ranked rows. Post-deploy expectation: the new-cohort query returns children_alongside = 0; the compound-sibling count (22 of 26 sharing 2+ children) stops growing; frozen-child share becomes a watched number. |

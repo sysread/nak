@@ -74,6 +74,21 @@ const EVALUATION_MAX_TOKENS = 8192;
 // near ~400 output tokens.
 const EVALUATION_BATCH_SIZE = 20;
 
+// Control arm. Alongside the fired predictions, each judged thread
+// also carries this many claims that did NOT fire in it, drawn at
+// random from the same fire-eligible pool and tagged exactly like the
+// fired ones so the model cannot tell them apart. Their verdicts go to
+// samskara_control_verdicts and nowhere else: no fire row, no
+// evidence, no health. They exist to answer the one question fired
+// claims cannot - whether retrieval's SELECTION does anything. Every
+// fired claim already passed the ranker, so comparing fired claims
+// with each other only measures ordering inside the top-k (flat on
+// 2026-10-01: engagement 40/37/39/40% by rank band); only an unfired
+// baseline says whether the top-k engages more often than chance.
+// Three keeps the extra prompt lines negligible against a 20-item
+// batch while accruing a usable sample within a few weeks.
+const CONTROL_SAMPLE_SIZE = 3;
+
 // Kill switch. While true the judge records verdicts but never writes
 // health (the slice-1 shadow phase). False routes each verdict through
 // samskara_apply_evaluation, which recomputes health as the
@@ -258,6 +273,115 @@ function chunkPredictions<T>(items: readonly T[], size: number): T[][] {
   return out;
 }
 
+/** One line in the judge's prediction list. */
+interface JudgeEntry {
+  tag: string;
+  id: string;
+  text: string;
+  /** True for a control-arm claim (did not fire in this thread). */
+  control: boolean;
+}
+
+/**
+ * Assemble the judge's list: fired claims first, then the control
+ * claims, with ONE continuous p-tag sequence across both. The tags
+ * are the model's only handle on the entries, so a shared scheme
+ * keeps the control arm blind - a distinct prefix would invite the
+ * model to treat the controls differently, which would defeat the
+ * comparison.
+ */
+function withControlEntries(
+  fired: readonly { id: string; text: string }[],
+  controls: readonly { id: string; text: string }[],
+): JudgeEntry[] {
+  const all = [
+    ...fired.map((p) => ({ ...p, control: false })),
+    ...controls.map((p) => ({ ...p, control: true })),
+  ];
+  return all.map((p, i) => ({ tag: `p${i + 1}`, id: p.id, text: p.text, control: p.control }));
+}
+
+/**
+ * Route the judge's verdict map back to its two destinations: fired
+ * claims grouped by verdict (fire-row stamps and evidence), control
+ * claims as (id, verdict) pairs (the control ledger only). Entries the
+ * judge omitted or mis-typed appear in neither - same best-effort
+ * contract as before the control arm existed. Pure so the test suite
+ * can pin that a control id never reaches a fired bucket.
+ */
+function splitVerdicts(
+  entries: readonly JudgeEntry[],
+  verdicts: ReadonlyMap<string, VerdictKind>,
+): {
+  fired: Record<VerdictKind, string[]>;
+  control: { id: string; verdict: VerdictKind }[];
+} {
+  const fired: Record<VerdictKind, string[]> = {
+    held: [],
+    contradicted: [],
+    'not-borne-out': [],
+    'not-engaged': [],
+  };
+  const control: { id: string; verdict: VerdictKind }[] = [];
+  for (const e of entries) {
+    const v = verdicts.get(e.tag);
+    if (!v) continue;
+    if (e.control) control.push({ id: e.id, verdict: v });
+    else fired[v].push(e.id);
+  }
+  return { fired, control };
+}
+
+/**
+ * Draw up to `n` distinct items from `pool` uniformly, without
+ * replacement (partial Fisher-Yates over a copy). `rng` is injectable
+ * so the test suite can pin the draw; production passes Math.random.
+ */
+function sampleWithout<T>(pool: readonly T[], n: number, rng: () => number): T[] {
+  const copy = [...pool];
+  const take = Math.min(n, copy.length);
+  for (let i = 0; i < take; i++) {
+    const j = i + Math.floor(rng() * (copy.length - i));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy.slice(0, take);
+}
+
+/**
+ * Pick the control claims for one judged thread: random members of
+ * the user's fire-eligible pool (embedded, with prediction text) that
+ * did not fire in this thread. Best-effort - a read failure logs and
+ * yields no controls, never a failed judge run.
+ */
+async function sampleControlClaims(
+  adminClient: SupabaseClient,
+  userId: string,
+  firedIds: ReadonlySet<string>,
+  n: number,
+  log: ReturnType<typeof createEdgeLogger>,
+): Promise<{ id: string; text: string }[]> {
+  try {
+    const { data, error } = await adminClient
+      .from('samskaras')
+      .select('id, prediction')
+      .eq('user_id', userId)
+      .not('prediction_embedding', 'is', null);
+    if (error) throw new Error(error.message);
+    const pool = (data ?? [])
+      .filter((r) =>
+        typeof r.id === 'string' && !firedIds.has(r.id) &&
+        typeof r.prediction === 'string' && r.prediction.length > 0
+      )
+      .map((r) => ({ id: r.id as string, text: r.prediction as string }));
+    return sampleWithout(pool, n, Math.random);
+  } catch (err) {
+    log.warn(
+      `control sample skipped: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return [];
+  }
+}
+
 /**
  * One sweep tick: claim the most-overdue evaluation-eligible thread
  * across ALL users and judge it. Cron-driven (nak-samskara-evaluation-
@@ -392,6 +516,18 @@ async function evaluateClaimedThread(
   const apiKey = await readVeniceKey(adminClient);
   if (!apiKey) throw new Error('no Venice key configured (app_config unseeded)');
 
+  // Control arm (see CONTROL_SAMPLE_SIZE): a few unfired claims ride
+  // along in the same list, indistinguishable to the model. Sampled
+  // after the fired list is known so the exclusion is exact.
+  const controls = await sampleControlClaims(
+    adminClient,
+    userId,
+    new Set(firedIds),
+    CONTROL_SAMPLE_SIZE,
+    log,
+  );
+  const entries = withControlEntries(predictions, controls);
+
   // Same "switch modes" idiom as reflection: the model sees the whole
   // conversation in its native shape, then a final user turn that
   // reframes the task as judgement. The transcript is resent per batch
@@ -401,7 +537,7 @@ async function evaluateClaimedThread(
   const convo: VeniceWireMessage[] = slice.map(messageToVenice);
   const verdicts = new Map<string, VerdictKind>();
   let failedBatches = 0;
-  const batches = chunkPredictions(predictions, EVALUATION_BATCH_SIZE);
+  const batches = chunkPredictions(entries, EVALUATION_BATCH_SIZE);
   for (const batch of batches) {
     const messages: VeniceWireMessage[] = [
       { role: 'system', content: JUDGE_SYSTEM_PROMPT },
@@ -465,20 +601,12 @@ async function evaluateClaimedThread(
     log.warn(`${failedBatches}/${batches.length} judge batches failed on thread ${threadId}`);
   }
 
-  // Group fired samskaras by the verdict the judge gave them. A
-  // prediction the judge omitted or mis-typed gets no verdict (and no
-  // health update) this cycle - best-effort; it re-evaluates next time
-  // its thread becomes eligible.
-  const byVerdict: Record<VerdictKind, string[]> = {
-    held: [],
-    contradicted: [],
-    'not-borne-out': [],
-    'not-engaged': [],
-  };
-  for (const p of predictions) {
-    const v = verdicts.get(p.tag);
-    if (v) byVerdict[v].push(p.id);
-  }
+  // Group fired samskaras by the verdict the judge gave them, and peel
+  // the control verdicts off to their own ledger. A prediction the
+  // judge omitted or mis-typed gets no verdict (and no health update)
+  // this cycle - best-effort; it re-evaluates next time its thread
+  // becomes eligible.
+  const { fired: byVerdict, control: controlVerdicts } = splitVerdicts(entries, verdicts);
 
   // Record the verdicts on the fire rows. One update per verdict group,
   // stamping every fire row of each samskara in this thread. was_confirmed
@@ -505,8 +633,26 @@ async function evaluateClaimedThread(
     if (updErr) throw new Error(`recording verdict '${kind}' failed: ${updErr.message}`);
   }
 
+  // Control ledger. Insert-only and best-effort: these rows feed an
+  // audit comparison, never a posterior, so a failed write must not
+  // cost the thread its real verdicts (already stamped above).
+  if (controlVerdicts.length > 0) {
+    const { error: ctlErr } = await adminClient
+      .from('samskara_control_verdicts')
+      .insert(controlVerdicts.map((c) => ({
+        user_id: userId,
+        thread_id: threadId,
+        samskara_id: c.id,
+        verdict: c.verdict,
+      })));
+    if (ctlErr) {
+      log.warn(`control verdicts not recorded on thread ${threadId}: ${ctlErr.message}`);
+    }
+  }
+
   const judged = VERDICT_KINDS.reduce((n, k) => n + byVerdict[k].length, 0);
   const verdictSummary = VERDICT_KINDS.map((k) => `${k}=${byVerdict[k].length}`).join(' ');
+  const controlSummary = `controls=${controlVerdicts.length}/${controls.length}`;
 
   if (SHADOW_MODE) {
     // Shadow: verdicts are recorded above; health is untouched. The line
@@ -545,7 +691,7 @@ async function evaluateClaimedThread(
       evidence.notBorneOut.length;
     log.info(
       `judged thread ${threadId}: ${judged}/${predictions.length} predictions; ` +
-        `${verdictSummary}; evidence applied to ${evidenceCount}`,
+        `${verdictSummary}; evidence applied to ${evidenceCount}; ${controlSummary}`,
     );
   }
 
@@ -580,6 +726,14 @@ async function markEvaluated(
 }
 
 // Test-only surface: the verdict parser's defensive drops, the prompt
-// contract, and the batch split are behaviour worth pinning without a
+// contract, the batch split, and the control-arm plumbing (tagging,
+// verdict routing, sampling) are behaviour worth pinning without a
 // live Venice call.
-export const __test = { parseVerdicts, buildVerdictRequest, chunkPredictions };
+export const __test = {
+  parseVerdicts,
+  buildVerdictRequest,
+  chunkPredictions,
+  withControlEntries,
+  splitVerdicts,
+  sampleWithout,
+};

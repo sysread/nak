@@ -94,6 +94,14 @@ message-vs-claim centered range is narrow - best matches ~0.19, max
 cosine is recorded: engagement-by-rank plus concentration are the
 two numbers that would have caught the 2026-08 outage on day one.
 
+**Oct 1, later the same day - the control arm shipped.** The judge
+now rules on three random unfired claims per thread, blind, and
+records them in `samskara_control_verdicts` (no evidence, no fire
+rows). The next audit compares the engagement rate of fired claims
+against controls on the same threads; that comparison is what
+decides whether the rerank / query-rewrite option moves up. The
+fire-time cosine column is still not recorded.
+
 **A labeled probe set, not self-calibrating thresholds.** Four
 similarity bars are hard-coded in the samskara path - the
 near-duplicate merge bar, the topical cluster floor, and two tier-2
@@ -220,6 +228,20 @@ coverage-skip Jaccard to 0.50 (one SQL default) or count a group
 covered when any two of its children already share a compound.
 The decline-criterion question re-opens on this redundancy
 evidence, not on held rate.
+
+**Oct 1, later the same day - two changes shipped.** The coverage
+guard's Jaccard dropped to 0.50 (sibling three-child groups now
+read as one region), and the fire path gained a parent-wins rule: a
+compound in the top-k stands in for its children, who are dropped
+from that cohort. The second came from measuring the owner's
+question "when a compound fires, do its parts fire too?": all 272
+compound fires since the reset arrived with every child alongside,
+children taking a third of the slots in those cohorts. Watch items
+for the next audit: the frozen-child share of tier-1 (suppressed
+children keep their slots and cannot leave through the health
+tier), the compound-sibling count (should stop growing), and
+whether tier-2 held rate moves now that compounds carry the
+evidence their children used to split.
 
 ## Ledger
 

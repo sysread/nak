@@ -17,6 +17,9 @@ Two kinds:
 - **Tier 2 (compounds)** - when several tier-1 instincts reliably fire
   together, Nak occasionally distills them into a single higher-order
   instinct. A compound says something broader than any one of its parts.
+  In a conversation, a compound stands in for its parts: when it fires,
+  the tier-1 instincts it was built from sit that turn out, so one idea
+  does not crowd the others.
 
 Everything here is **read-only**. You can see what Nak believes, but not
 edit or delete it. A wrong instinct isn't permanent - it loses "health"

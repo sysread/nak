@@ -9,7 +9,14 @@
 import { assert, assertEquals } from 'jsr:@std/assert';
 import { __test } from '../venice/agents/samskara_evaluation.ts';
 
-const { parseVerdicts, buildVerdictRequest, chunkPredictions } = __test;
+const {
+  parseVerdicts,
+  buildVerdictRequest,
+  chunkPredictions,
+  withControlEntries,
+  splitVerdicts,
+  sampleWithout,
+} = __test;
 
 Deno.test('parseVerdicts keeps well-formed enum verdicts', () => {
   const m = parseVerdicts(
@@ -110,4 +117,59 @@ Deno.test('chunkPredictions splits into ordered batches with a short tail', () =
   // A list inside one batch stays a single completion.
   assertEquals(chunkPredictions(items, 20), [items]);
   assertEquals(chunkPredictions([], 20), []);
+});
+
+// The control arm must be blind: controls share the fired claims' tag
+// scheme in one continuous sequence, so nothing in the prompt marks
+// them as different.
+Deno.test('withControlEntries tags fired then control claims in one continuous p-sequence', () => {
+  const entries = withControlEntries(
+    [{ id: 'f1', text: 'fired one' }, { id: 'f2', text: 'fired two' }],
+    [{ id: 'c1', text: 'control one' }],
+  );
+  assertEquals(entries.map((e) => e.tag), ['p1', 'p2', 'p3']);
+  assertEquals(entries.map((e) => e.control), [false, false, true]);
+  assertEquals(entries[2].id, 'c1');
+  // No controls: the list is exactly the fired claims, unchanged in order.
+  const bare = withControlEntries([{ id: 'f1', text: 'x' }], []);
+  assertEquals(bare.length, 1);
+  assertEquals(bare[0].control, false);
+});
+
+// A control verdict must never reach a fired bucket - that is the line
+// between "an audit comparison" and "unfired claims moving health".
+Deno.test('splitVerdicts routes control verdicts away from the fired buckets', () => {
+  const entries = withControlEntries(
+    [{ id: 'f1', text: 'a' }, { id: 'f2', text: 'b' }],
+    [{ id: 'c1', text: 'c' }, { id: 'c2', text: 'd' }],
+  );
+  const verdicts = new Map<string, 'held' | 'contradicted' | 'not-borne-out' | 'not-engaged'>([
+    ['p1', 'held'],
+    ['p2', 'not-engaged'],
+    ['p3', 'held'],
+    // p4 omitted by the judge: dropped from both destinations.
+  ]);
+  const { fired, control } = splitVerdicts(entries, verdicts);
+  assertEquals(fired.held, ['f1']);
+  assertEquals(fired['not-engaged'], ['f2']);
+  assertEquals(fired.contradicted, []);
+  assertEquals(fired['not-borne-out'], []);
+  assertEquals(control, [{ id: 'c1', verdict: 'held' }]);
+  const everyFired = Object.values(fired).flat();
+  assert(!everyFired.includes('c1') && !everyFired.includes('c2'), 'control id leaked');
+});
+
+Deno.test('sampleWithout draws n distinct members, bounded by the pool, deterministic under a fixed rng', () => {
+  const pool = ['a', 'b', 'c', 'd', 'e'];
+  const rng = () => 0.5;
+  const drawn = sampleWithout(pool, 3, rng);
+  assertEquals(drawn.length, 3);
+  assertEquals(new Set(drawn).size, 3);
+  for (const d of drawn) assert(pool.includes(d));
+  assertEquals(sampleWithout(pool, 3, rng), drawn);
+  // Asking for more than the pool holds returns the whole pool, once each.
+  assertEquals(new Set(sampleWithout(pool, 9, rng)).size, 5);
+  assertEquals(sampleWithout([], 3, rng), []);
+  // The input is not mutated.
+  assertEquals(pool, ['a', 'b', 'c', 'd', 'e']);
 });
