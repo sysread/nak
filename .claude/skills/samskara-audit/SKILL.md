@@ -120,6 +120,12 @@ tier-2 minter actually filters (declines exist).
   (`samskara_tier2_declines`); tier-2 share of corpus. All-confirm
   with steady growth = rubber-stamp suspicion (open calibration item
   in `docs/dev/planned-changes.md`).
+- Child overlap: how many compounds share 2+ children with another
+  compound, and the compound-to-nearest-compound claim-centered
+  cosine. The candidate finder's coverage guard skips a group only
+  at Jaccard >= 0.60, so two 3-child groups sharing 2 children
+  (Jaccard 0.50) both mint; compounds never enter the collapse pass,
+  so nothing merges them later. 2026-10-01: 22 of 26 shared 2+.
 
 ### 7. Corpus -> firing (priming)
 
@@ -160,6 +166,18 @@ from samskara_fires where user_id = :u and fired_at > now() - interval '7 days';
 
 Healthy: at or below the current kMax (score floor trims); way above
 it means the recording contract regressed.
+
+**Rank vs outcome** is the retrieval-health read the verdicts make
+free. Bucket judged fires by within-cohort rank (row_number over
+score desc) and report, per bucket, the engagement rate (verdict in
+held / contradicted / not-borne-out, i.e. the situation arose) on
+threads with 2+ user rounds, and the held rate among those. A
+positive engagement slope means the ranker is doing work inside
+the cohort; flat means position is uninformative (2026-10-01: 40% /
+37% / 39% / 40% - flat). Note the limit: this cannot see whether
+SELECTION works, since no unfired claim is ever judged. Pair it
+with concentration, and read the two together as the skill's
+synthesis step describes.
 
 ### 8. Firing -> judging
 

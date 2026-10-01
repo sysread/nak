@@ -56,8 +56,9 @@ return, which the judge's `judged N/M` log line makes visible.
 **Status:** partially shipped 2026-09-05 (centering + re-solved
 bars + fire-score rank fix, after the threshold-collapse incident;
 see `docs/dev/samskara.md` "Similarity calibration"). Still open:
-the score-outcome correlation metric, firing-concentration metric,
-storing the bars keyed by model id (currently in code review
+the score-outcome correlation metric (measured once by hand on
+2026-10-01, below - not yet a standing metric), firing-concentration
+metric, storing the bars keyed by model id (currently in code review
 comments + the Deno pins), and the rerank option (deprioritized -
 the probe set shows AUC 0.92+ for every boundary EXCEPT
 duplicate-vs-same-topic (0.53), which is the one the dedup bar
@@ -65,6 +66,33 @@ needs; that boundary is delegated to the behavioural layer (co-fire
 collapse) instead, so a rerank would only pay off if rewording-vs-
 sibling confusion measurably hurts the corpus - re-evaluate on
 rotation).
+
+**Oct 1 measurement - the correlation is flat.** First clean window
+after the reset (25 days, 1,139 genuine tests, concentration healthy
+at 16% top-5 share on 176 rows). Held rate by fire-score quartile:
+72% / 71% / 67% / 73%. Engagement rate (the judge found the claim's
+situation actually arose) by within-turn rank on multi-round
+threads: 40% / 37% / 39% / 40% for ranks 1-2 / 3-5 / 6-8 / 9-11. The
+first says health does not predict holding, which is unsurprising
+while health sits in a 0.76-1.0 band. The second is the retrieval
+signal, and it says that WITHIN the fired set, position carries no
+information about relevance: the top-ranked claim's situation is no
+more likely to arise than the eleventh's. What this does NOT say is
+whether selection (top-11 of 150) carries signal - every fired claim
+already passed the ranker, so the fired set has no unfired
+comparison. Two cheap next steps, neither built: (1) record the
+fire-time centered cosine on the fire row (score mixes relevance
+with health and a sample bonus; the raw relevance term is what the
+metric needs, and the ranker already computes it); (2) a control
+arm - on a sample of judged turns, have the judge also rule on three
+randomly drawn UNFIRED claims. If unfired claims engage at ~39% too,
+retrieval is decorative and the query-rewrite / rerank option above
+moves to the front; if they engage far less, selection works and
+the flat rank curve is just compression inside the top-11 (the
+message-vs-claim centered range is narrow - best matches ~0.19, max
+~0.30). The measurement itself belongs in the Health snapshot once
+cosine is recorded: engagement-by-rank plus concentration are the
+two numbers that would have caught the 2026-08 outage on day one.
 
 **A labeled probe set, not self-calibrating thresholds.** Four
 similarity bars are hard-coded in the samskara path - the
@@ -169,6 +197,29 @@ full window judged entirely by the current model, that is the
 evidence that compounds are over-general, and the
 decline-criterion prompt change re-opens on it. Re-measure with a
 window starting no earlier than 2026-08-20.
+
+**Oct 1 re-check - held rate is equal, but the compounds are
+redundant.** First clean window (reset 2026-09-06, 25 days): 26
+compounds minted from 35 distinct tier-1 children, 0 declines in
+26. Genuine held rate tier-2 70.7% (n=99) vs tier-1 71.0%
+(n=1,040) - equal, so the held-rate watch condition does NOT fire
+and there is still no evidence compounds are over-general. The new
+evidence is structural: 82 child slots over 35 children, 22 of 26
+compounds share two or more children with another compound, and
+the median compound sits at 0.44 claim-centered cosine from its
+nearest sibling compound (dedup bar 0.50; 0 absorbed). Six
+near-identical "food as an ongoing practice" compounds minted in
+one week. The mechanism is the candidate finder's coverage guard:
+a group is skipped only when its child set overlaps an existing
+compound's at Jaccard >= 0.60, and two three-child groups sharing
+two children score exactly 0.50, so sibling compounds are admitted
+by design. Nothing merges them afterward - compounds are excluded
+from the co-fire collapse. The cost is fire-slot redundancy (tier-2
+takes 14% of fires), not accuracy. Proposal, not built: lower the
+coverage-skip Jaccard to 0.50 (one SQL default) or count a group
+covered when any two of its children already share a compound.
+The decline-criterion question re-opens on this redundancy
+evidence, not on held rate.
 
 ## Ledger
 
