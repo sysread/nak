@@ -535,6 +535,21 @@ reinforcement and cohort detection.
   user_round is not null` targets the inline CohortPanel
   lookup ("which cohort fired at user-round N in this thread").
 
+### `samskara_control_verdicts`
+
+The judge's control arm (see "Health: the verdict posterior"). One
+row per unfired claim the judge ruled on alongside a thread's fired
+claims.
+
+- `id`, `user_id`, `thread_id`, `samskara_id` (FK on cascade, same
+  lifecycle as a fire row), `verdict text` (the same four values as
+  `samskara_fires.verdict`, never NULL - a control is only recorded
+  once judged), `judged_at`.
+- Insert-only from the evaluation sweep's service-role client;
+  self-selectable for the owner. Nothing reads it on a hot path -
+  it is an audit ledger for the fired-vs-unfired engagement
+  comparison.
+
 ### `samskara_compound_summary`
 
 Cached prose, one row per user. The always-on block that rides
@@ -904,6 +919,28 @@ confirms) rank by sample size when relevance and health are
 close. Caps at ~1.46x for N=100; a brand-new samskara at N=0
 still ranks normally so it can fire and accumulate signal.
 
+**Parent wins.** After scoring, a compound (tier 2) that sits in the
+unfiltered top-k stands in for its children: the tier-1 claims in
+its `'samskara'` provenance are dropped from the cohort and the
+freed slots fill from the next-ranked rows. A compound's vector is
+a blend of its children's, so whatever matches it matches them -
+measured 2026-10-01, all 272 compound fires since the reset arrived
+with every child in the same cohort, and children took a third of
+the slots in those cohorts: four slots on one idea, stated four
+ways, which is the narrowing a compound exists to prevent. The
+leading set is the unfiltered top-k on purpose: a compound there is
+certainly in the final set (dropping children can only move it up),
+while a compound ranked below the cut keeps its children in play.
+What happens to a suppressed child, by mechanism: its posterior
+freezes (health has no wall clock), so it neither weakens nor gets
+reaped on evidence; it still fires in any turn where its parent
+does not make the cut; and if the parent later proves wrong and
+`samskara_reap_dead` removes it (no tier filter), the children
+simply resume firing. A suppressed child does keep its tier-1 slot
+while its posterior is frozen; the graduation tier of cap-pressure
+eviction (see "Release of never-tested claims") is what returns
+those slots once the compound is established.
+
 ### Similarity calibration: centered cosine + the probe set
 
 Every samskara similarity comparison - fire ranking, mint dedup,
@@ -1062,6 +1099,23 @@ complete and the judge may still revise an earlier ruling; only the
 posterior input is gated. The `evidence applied to N` count on the
 judge's log line is the observable.
 
+**Control arm.** Each judged thread also carries a few claims that
+did NOT fire in it (`CONTROL_SAMPLE_SIZE`, 3), drawn at random from
+the same fire-eligible pool and tagged in the same continuous p-
+sequence so the model cannot tell them apart. Their verdicts land
+in `samskara_control_verdicts` and nowhere else - no fire row, no
+evidence, no health. They exist because fired claims cannot answer
+whether retrieval's selection does anything: every fired claim
+already passed the ranker, so comparing fired claims with each
+other measures ordering inside the top-k (flat, 2026-10-01), never
+selection. The comparison the audit makes is the engagement rate
+(situation arose) of fired claims against that of controls on the
+same threads; fired well above control means the top-k is earning
+its place, parity means retrieval is decorative and the
+query-rewrite / rerank option in `planned-changes.md` moves up.
+The `controls=N/M` count on the judge's log line is the observable
+(recorded over sampled).
+
 `not-engaged` fires are NOT passed to the RPC at all - the verdict is
 stamped on the fire rows for the diagnostics surfaces, but the
 samskara's evidence is untouched. An earlier version passed them for a
@@ -1189,7 +1243,22 @@ be the first genuine test, and the next-day judge hasn't ruled).
   in-flight fire may be its FIRST test, but a row this far under
   water cannot be exonerated by one more verdict, and on an active
   day the guard empties the pool (2026-08 measurement: 115 of 150
-  tier-1 rows carried a fire awaiting next-day judgment). If no tier
+  tier-1 rows carried a fire awaiting next-day judgment). When none of
+  those qualifies, a **fourth tier graduates the parts of an
+  established compound**: a tier-1 claim in the `'samskara'`
+  provenance of a tier-2 whose health is at or above the user's `p0`,
+  whose evidence tally is at least 3.0 (its own record now outweighs
+  the k=5 prior), and which is at least 14 days old. Parent-wins at
+  fire time means such a part no longer fires when its compound does,
+  so its posterior is frozen and the slot it holds does nothing the
+  compound is not already doing; once the compound has earned its
+  standing the part retires, least-evidenced part first. Provenance
+  has no FK on `ref_id`, so the compound keeps standing on its own
+  record, and if the compound later dies the part re-forms from
+  substrate like any claim. This tier is deliberately last - wrong
+  claims leave before merely redundant ones - and keeps the
+  pending-fire guard, since a part can still fire on a turn its
+  compound misses. If no tier
   qualifies the probe skips at cap exactly as it did before eviction
   existed.
 
@@ -1355,10 +1424,14 @@ constellation), strongest combined lift first, capped at
 `p_min_group_size` (default 3) is rejected - a 2-member group is a
 dedup candidate, not a compound. The coverage skip then *advances*:
 a *covered region* overlaps the candidate by Jaccard >=
-`p_overlap_skip` (default 0.60), that seed is skipped and detection
+`p_overlap_skip` (default 0.50), that seed is skipped and detection
 walks to the next-strongest *uncovered* edge rather than returning
 empty, so one tier-2 on a dense region no longer masks every other
-constellation. A covered region is either an existing tier-2's
+constellation. The 0.50 is set so two three-child groups sharing two
+children (Jaccard exactly 2/4) read as one region: at 0.60 they did
+not, and the first clean month after the 2026-09 reset produced 26
+compounds over 35 distinct children, 22 sharing two or more children
+with another compound. A covered region is either an existing tier-2's
 child-set OR a recent minter decline (below). The probe budget
 (`64 + 16 * (existing_tier2_count + recent_decline_count)`) bounds the
 walk while keeping the first uncovered, non-declined seed reachable. A
@@ -1732,10 +1805,12 @@ summarizer reads samskaras to feed the agent.
   `MINT_DEDUP_COSINE`). The first catches the same-children case,
   the second a different child set the agent synthesized into the
   same claim. Neither is optional.
-- **Tier-2 rides the unchanged hot path; orphans are fine.**
-  `samskara_fire_top_k` and `samskara_apply_evaluation` have no tier
-  filter, so a tier-2 fires, gets judged, and updates its posterior
-  exactly like a tier-1 the
+- **Tier-2 rides the hot path with one rule of its own; orphans are
+  fine.** `samskara_apply_evaluation` has no tier filter, and
+  `samskara_fire_top_k` scores both tiers alike - its only tier-aware
+  step is parent-wins (see "Fire ranking formula"): a compound in the
+  top-k drops its own children from that cohort. So a tier-2 fires,
+  gets judged, and updates its posterior exactly like a tier-1 the
   moment it exists - no chat-loop or UI change was needed to ship
   it. Because provenance has no FK on `ref_id`, a tier-2 whose
   children dedup later merges or deletes simply keeps standing on

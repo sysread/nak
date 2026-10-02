@@ -94,6 +94,14 @@ message-vs-claim centered range is narrow - best matches ~0.19, max
 cosine is recorded: engagement-by-rank plus concentration are the
 two numbers that would have caught the 2026-08 outage on day one.
 
+**Oct 1, later the same day - the control arm shipped.** The judge
+now rules on three random unfired claims per thread, blind, and
+records them in `samskara_control_verdicts` (no evidence, no fire
+rows). The next audit compares the engagement rate of fired claims
+against controls on the same threads; that comparison is what
+decides whether the rerank / query-rewrite option moves up. The
+fire-time cosine column is still not recorded.
+
 **A labeled probe set, not self-calibrating thresholds.** Four
 similarity bars are hard-coded in the samskara path - the
 near-duplicate merge bar, the topical cluster floor, and two tier-2
@@ -220,6 +228,36 @@ coverage-skip Jaccard to 0.50 (one SQL default) or count a group
 covered when any two of its children already share a compound.
 The decline-criterion question re-opens on this redundancy
 evidence, not on held rate.
+
+**Oct 1, later the same day - two changes shipped.** The coverage
+guard's Jaccard dropped to 0.50 (sibling three-child groups now
+read as one region), and the fire path gained a parent-wins rule: a
+compound in the top-k stands in for its children, who are dropped
+from that cohort. The second came from measuring the owner's
+question "when a compound fires, do its parts fire too?": all 272
+compound fires since the reset arrived with every child alongside,
+children taking a third of the slots in those cohorts. Watch items
+for the next audit: the compound-sibling count (should stop
+growing), whether tier-2 held rate moves now that compounds carry
+the evidence their children used to split, and the graduation tier
+(below) actually draining.
+
+**Oct 2 - graduation tier.** Suppressed children kept their tier-1
+slots with frozen posteriors and no way out through the health
+tier. Rather than redefine what counts toward the cap (three places
+count it - the mint gate, the overflow collapse, the health panel -
+and they would all have to agree), cap-pressure eviction gained a
+fourth, last-resort tier: a part of an ESTABLISHED compound
+(compound health >= p0, >= 3.0 evidence, >= 14 days) retires,
+least-evidenced part first. The compound keeps standing on its own
+record; a retired part re-forms from substrate if its compound
+later dies. Topic-partitioned caps ("lenses") were considered and
+rejected: topics drift with the embedding and its centering, and a
+new topic would have no lens; compounds already are a lens, found
+from co-firing rather than geometry. Watch: the graduated count on
+the health panel, and whether a compound whose parts have all
+retired stops suppressing anything and lets a sibling constellation
+re-form around it (the slow loop; the sibling count is the signal).
 
 ## Ledger
 

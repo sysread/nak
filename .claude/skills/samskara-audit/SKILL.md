@@ -122,10 +122,19 @@ tier-2 minter actually filters (declines exist).
   in `docs/dev/planned-changes.md`).
 - Child overlap: how many compounds share 2+ children with another
   compound, and the compound-to-nearest-compound claim-centered
-  cosine. The candidate finder's coverage guard skips a group only
-  at Jaccard >= 0.60, so two 3-child groups sharing 2 children
-  (Jaccard 0.50) both mint; compounds never enter the collapse pass,
-  so nothing merges them later. 2026-10-01: 22 of 26 shared 2+.
+  cosine. The candidate finder's coverage guard skips a group at
+  Jaccard >= 0.50 (lowered from 0.60 on 2026-10-01, when 22 of 26
+  compounds shared 2+ children); compounds never enter the collapse
+  pass, so nothing merges siblings that already exist. Expect the
+  sibling count to stop growing, not to shrink.
+- Parent-wins at fire time (2026-10-01): a compound in the top-k
+  drops its children from that cohort. Suppressed children sit with
+  frozen posteriors until the graduation eviction tier (2026-10-02;
+  compound health >= p0, >= 3.0 evidence, >= 14d) retires them.
+  Check: `evictable_graduated` on the snapshot vs. the hand-run
+  predicate, and whether graduations are actually happening under
+  cap pressure (children of established compounds should be
+  shrinking, not accumulating).
 
 ### 7. Corpus -> firing (priming)
 
@@ -178,6 +187,25 @@ the cohort; flat means position is uninformative (2026-10-01: 40% /
 SELECTION works, since no unfired claim is ever judged. Pair it
 with concentration, and read the two together as the skill's
 synthesis step describes.
+
+**Fired vs control** is the selection test the rank read cannot
+make. Since 2026-10-01 the judge also rules on three random UNFIRED
+claims per thread (`samskara_control_verdicts`). Compare engagement
+rates on the same threads:
+
+```sql
+select 'fired' as arm, count(*) n,
+       round(avg((verdict in ('held','contradicted','not-borne-out'))::int)::numeric, 3) engaged
+  from samskara_fires where user_id = :u and verdict is not null
+   and thread_id in (select distinct thread_id from samskara_control_verdicts where user_id = :u)
+union all
+select 'control', count(*), round(avg((verdict in ('held','contradicted','not-borne-out'))::int)::numeric, 3)
+  from samskara_control_verdicts where user_id = :u;
+```
+
+Fired well above control = selection works. Parity = retrieval is
+decorative; the rerank / query-rewrite option in planned-changes
+moves to the front. Needs ~100 control rows before calling it.
 
 ### 8. Firing -> judging
 

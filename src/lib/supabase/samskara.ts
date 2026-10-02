@@ -532,6 +532,7 @@ export async function samskaraHealthSnapshot(
     evictable: r?.evictable ?? 0,
     evictableStale: r?.evictable_stale ?? 0,
     evictableUnhealthy: r?.evictable_unhealthy ?? 0,
+    evictableGraduated: r?.evictable_graduated ?? 0,
     associations: r?.associations ?? 0,
     associationsUnconsumed: r?.associations_unconsumed ?? 0,
     substrateTotal: r?.substrate_total ?? 0,

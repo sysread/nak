@@ -34,6 +34,12 @@ empirical-Bayes posterior, not an accumulator:
   at the attempt gate). Carries no health evidence; its job is to
   stop the reapers' and eviction's pending-fire guards from reading
   dead fires as tests in flight.
+- The judge's **control arm** - three random UNFIRED claims ride in
+  each judged thread's prediction list, tagged like the fired ones so
+  the model cannot tell them apart; their verdicts land in
+  `samskara_control_verdicts` only (no fire row, no evidence, no
+  health). The fired-vs-control engagement comparison is the test of
+  whether retrieval's selection does anything.
 
 The live LLM judge (the sweep reading a settled conversation and
 producing the verdicts) is the **[hosted]** tail below.
@@ -191,4 +197,5 @@ or just let the next evaluation re-derive them.
 | --- | --- | --- | --- | relevance-gated model (this rewrite) below |
 | 2026-07-03 | hosted | a1c3424 | fail | [hosted] judge tail, post backlog-reset: batched judge returned zero verdicts on long-transcript threads (finish_reason=length at 2048 max_completion_tokens - reasoning burn scales w/ transcript, not verdict-map size); threads correctly retried then parked at the 3-attempt gate, cursor never falsely advanced. |
 | 2026-07-03 | hosted | 09a25f3 | pass | [hosted] judge tail, post budget fix (8192 + reasoning_effort low): first tick judged a long thread, ~479 fires verdicted in one pass, reset backlog draining ~1 thread/10min. not-borne-out still 0 at observation time - verdict-mix watch continues. |
+| 2026-10-01 | - (unit-level; cloud session, no live judge run) | audit branch | partial | Control arm added to the judge. Deno pins the three pure parts: controls share the fired claims' continuous p-tag sequence (blind), `splitVerdicts` never routes a control id into a fired bucket (the line between an audit ledger and unfired claims moving health), and the sampler draws n distinct members from the fire-eligible pool. NOT covered here: a live judged thread producing `controls=3/3` on its log line and three rows in `samskara_control_verdicts`; verify on the hosted project after the first evaluation sweep post-deploy, then read the fired-vs-control engagement comparison at the next audit (needs ~100 control rows). |
 | --- | --- | --- | --- | evidence model recalibrated 2026-07-06 (not-engaged no longer discounts - decay is per genuine test; reaper floor became a per-user ratio `0.5 * p0`): steps above updated; executions below run the new semantics |

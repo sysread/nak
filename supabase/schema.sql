@@ -7903,6 +7903,44 @@ drop policy if exists "samskara fires self-deletable" on public.samskara_fires;
 create policy "samskara fires self-deletable" on public.samskara_fires
   for delete using (auth.uid() = user_id);
 
+-- Control verdicts --
+--
+-- The evaluation judge's control arm. Each judged thread's prediction
+-- list also carries a few claims that did NOT fire in it, drawn at
+-- random from the same fire-eligible pool and tagged like the fired
+-- ones so the model cannot tell them apart. Their verdicts land here
+-- and nowhere else: no fire row, no evidence, no health. The table
+-- exists to answer the one question fired claims cannot - whether
+-- retrieval's SELECTION does anything. Every fired claim already
+-- passed the ranker, so fired-vs-fired comparisons only measure
+-- ordering inside the top-k; fired-vs-control engagement on the same
+-- threads is the selection test (see docs/dev/samskara.md, "Health:
+-- the verdict posterior"). Insert-only from the sweep's service-role
+-- client; read by audits, never by a hot path. samskara_id cascades
+-- like a fire row's so the two arms share one lifecycle.
+create table if not exists public.samskara_control_verdicts (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  thread_id uuid not null references public.threads(id) on delete cascade,
+  samskara_id uuid not null references public.samskaras(id) on delete cascade,
+  verdict text not null
+    check (verdict in ('held', 'contradicted', 'not-borne-out', 'not-engaged')),
+  judged_at timestamptz not null default now()
+);
+
+create index if not exists samskara_control_verdicts_user_idx
+  on public.samskara_control_verdicts (user_id, judged_at desc);
+
+alter table public.samskara_control_verdicts enable row level security;
+
+-- Select-only for the owner; writes come exclusively from the venice
+-- function's service-role client, same as samskara_tier2_declines.
+drop policy if exists "samskara control verdicts self-selectable"
+  on public.samskara_control_verdicts;
+create policy "samskara control verdicts self-selectable"
+  on public.samskara_control_verdicts
+  for select using (auth.uid() = user_id);
+
 -- One-shot cleanup of (user_id, cohort_id, samskara_id) duplicates
 -- left over from a pre-fix _samskara_merge_pair that retargeted
 -- loser-fires onto a winner without first dropping fires the winner
@@ -8254,28 +8292,66 @@ create or replace function public.samskara_fire_top_k(
 language sql stable security invoker as $$
   with v_mean as (
     select public._samskara_centering_mean(coalesce(p_user_id, auth.uid())) as v
+  ),
+  scored as (
+    select s.id,
+           s.tier,
+           s.prediction,
+           s.inner_voice,
+           s.valence,
+           s.confidence,
+           s.health,
+           (
+             (least(greatest(
+                1 - ((s.prediction_embedding - m.v) <=> (p_query_embedding - m.v)),
+                0.0)::double precision / 0.30, 1.0)
+             * sqrt(greatest(s.health * s.confidence, 0.0))
+             * (1 + 0.1 * ln(1 + s.confirm_count + s.disconfirm_count)))
+           )::real as score
+      from public.samskaras s cross join v_mean m
+     -- p_user_id: priming runs server-side now, where the service-role
+     -- client has no auth.uid(); the orchestrator passes the JWT user id
+     -- explicitly. Authenticated callers omit it and fall back to
+     -- auth.uid() (the b-strict overload pattern, as on the bias RPCs).
+     where s.user_id = coalesce(p_user_id, auth.uid())
+       and s.prediction_embedding is not null
+  ),
+  -- Parent wins: a compound (tier 2) that makes the cut stands in for
+  -- the tier-1 claims it was built from. A compound's vector is a
+  -- blend of its children's, so any message that matches it matches
+  -- them too - measured 2026-10-01 on prod, every one of 272 compound
+  -- fires arrived with ALL of its children in the same cohort, and
+  -- children took a third of the slots in those cohorts. Without this
+  -- rule the cohort narrows to one idea family stated four ways and
+  -- the compound adds a slot instead of saving three. The leading set
+  -- is the unfiltered top-k: a compound there is certainly in the
+  -- final set (dropping its children can only move it up), and a
+  -- compound ranked below the cut keeps its children in play.
+  -- Consequences, by mechanism: a suppressed child's posterior
+  -- freezes (health has no wall clock), so it neither weakens nor is
+  -- reaped on evidence; if the compound later proves wrong and
+  -- samskara_reap_dead removes it, the children simply resume firing.
+  leading_compounds as (
+    select l.id
+      from (select sc.id, sc.tier from scored sc order by sc.score desc limit p_k_max) l
+     where l.tier = 2
+  ),
+  covered_children as (
+    select p.ref_id
+      from public.samskara_provenance p
+      join leading_compounds lc on lc.id = p.samskara_id
+     where p.kind = 'samskara'
   )
-  select s.id,
-         s.prediction,
-         s.inner_voice,
-         s.valence,
-         s.confidence,
-         s.health,
-         (
-           (least(greatest(
-              1 - ((s.prediction_embedding - m.v) <=> (p_query_embedding - m.v)),
-              0.0)::double precision / 0.30, 1.0)
-           * sqrt(greatest(s.health * s.confidence, 0.0))
-           * (1 + 0.1 * ln(1 + s.confirm_count + s.disconfirm_count)))
-         )::real as score
-    from public.samskaras s cross join v_mean m
-   -- p_user_id: priming runs server-side now, where the service-role
-   -- client has no auth.uid(); the orchestrator passes the JWT user id
-   -- explicitly. Authenticated callers omit it and fall back to
-   -- auth.uid() (the b-strict overload pattern, as on the bias RPCs).
-   where s.user_id = coalesce(p_user_id, auth.uid())
-     and s.prediction_embedding is not null
-   order by score desc
+  select sc.id,
+         sc.prediction,
+         sc.inner_voice,
+         sc.valence,
+         sc.confidence,
+         sc.health,
+         sc.score
+    from scored sc
+   where sc.id not in (select cc.ref_id from covered_children cc)
+   order by sc.score desc
    limit p_k_max
 $$;
 
@@ -9428,6 +9504,42 @@ begin
      limit 1;
   end if;
   if victim is null then
+    -- Graduation tier: a tier-1 claim whose compound has become
+    -- established. Parent-wins at fire time (samskara_fire_top_k)
+    -- means such a claim no longer fires when its compound does, so
+    -- its posterior is frozen and it holds a capped slot while doing
+    -- no work the compound is not already doing. Once the compound
+    -- has earned its own standing - health at or above the user's
+    -- prior, at least three genuine tests' worth of evidence (the
+    -- k=5 prior strength means its own record now carries real
+    -- weight), and two weeks old - the part retires. Provenance has
+    -- no FK on ref_id, so the compound keeps standing on its own
+    -- record; if the compound later dies, the part re-forms from
+    -- substrate like any claim. Ordered last on purpose: wrong claims
+    -- (the tiers above) leave before merely redundant ones. The
+    -- pending-fire guard stays - a part can still fire on a turn its
+    -- compound misses, and that fire may be a genuine test.
+    select s.id into victim
+      from public.samskaras s
+      join public.samskara_provenance p
+        on p.ref_id = s.id and p.kind = 'samskara' and p.user_id = s.user_id
+      join public.samskaras t
+        on t.id = p.samskara_id and t.tier = 2 and t.user_id = s.user_id
+     where s.user_id = p_user_id
+       and s.tier = 1
+       and t.health >= public.samskara_population_p0(p_user_id)
+       and t.confirm_count + t.disconfirm_count >= 3.0
+       and t.created_at < now() - interval '14 days'
+       and not exists (
+         select 1 from public.samskara_fires f
+          where f.samskara_id = s.id and f.verdict is null
+       )
+     order by s.confirm_count + s.disconfirm_count asc,
+       t.confirm_count + t.disconfirm_count desc,
+       s.created_at asc
+     limit 1;
+  end if;
+  if victim is null then
     return null;
   end if;
   delete from public.samskaras where id = victim;
@@ -10123,7 +10235,13 @@ end $$;
 -- Seed iteration (coverage): a candidate group whose child-set overlaps
 -- a COVERED region by Jaccard >= p_overlap_skip is SKIPPED, and
 -- detection advances to the next-strongest uncovered seed rather than
--- giving up. A covered region is either an existing tier-2's child-set
+-- giving up. The threshold is 0.50 so that two three-child groups
+-- sharing two children (Jaccard exactly 2/4) count as the same region:
+-- at the earlier 0.60 they did not, and the first clean month after the
+-- 2026-09 reset minted 26 compounds over 35 distinct children, 22 of
+-- them sharing two or more children with another compound - sibling
+-- compounds restating one constellation, which nothing downstream
+-- merges (compounds never enter the co-fire collapse). A covered region is either an existing tier-2's child-set
 -- (already compounded) OR a recent tier-2-minter decline (the minter
 -- just rejected that group and would reject it again - see
 -- samskara_tier2_declines, TTL'd so a strengthening group re-qualifies
@@ -10159,7 +10277,7 @@ create or replace function public.samskara_tier2_candidate(
   p_cosine_hi        real default 0.35,
   p_min_group_size   int  default 3,
   p_max_group_size   int  default 6,
-  p_overlap_skip     real default 0.60,
+  p_overlap_skip     real default 0.50,
   p_user_id          uuid default null
 ) returns table (
   samskara_id uuid,
@@ -10678,6 +10796,7 @@ returns table (
   evictable int,
   evictable_stale int,
   evictable_unhealthy int,
+  evictable_graduated int,
   associations int,
   associations_unconsumed int,
   substrate_total int,
@@ -10744,6 +10863,31 @@ language sql stable security invoker as $$
         -- would let any signed-in caller probe another user's prior),
         -- and this snapshot runs security invoker.
         and s.health < 0.85 * (
+          select case
+            when coalesce(sum(p.confirm_count + p.disconfirm_count), 0) < 20.0 then 0.66
+            else sum(p.confirm_count) / nullif(sum(p.confirm_count + p.disconfirm_count), 0)
+          end
+          from public.samskaras p
+          where p.user_id = auth.uid()
+        ))::int,
+    -- Graduation tier mirror: a tier-1 part of an established compound
+    -- (compound health >= p0, >= 3.0 evidence, >= 14 days old), with no
+    -- fire awaiting judgment. Same inlined, auth.uid()-scoped p0 as
+    -- the tier above, for the same reason.
+    (select count(distinct s.id) from public.samskaras s
+      join public.samskara_provenance pv
+        on pv.ref_id = s.id and pv.kind = 'samskara' and pv.user_id = s.user_id
+      join public.samskaras t
+        on t.id = pv.samskara_id and t.tier = 2 and t.user_id = s.user_id
+      where s.user_id = auth.uid()
+        and s.tier = 1
+        and t.confirm_count + t.disconfirm_count >= 3.0
+        and t.created_at < now() - interval '14 days'
+        and not exists (
+          select 1 from public.samskara_fires f
+           where f.samskara_id = s.id and f.verdict is null
+        )
+        and t.health >= (
           select case
             when coalesce(sum(p.confirm_count + p.disconfirm_count), 0) < 20.0 then 0.66
             else sum(p.confirm_count) / nullif(sum(p.confirm_count + p.disconfirm_count), 0)
