@@ -285,9 +285,9 @@
         <span class="health-value">{snap.probationEligible}</span>
       </div>
       <div class="health-row">
-        <span class="health-label">Evictable (untested / stale / unhealthy)</span>
+        <span class="health-label">Evictable (untested / stale / unhealthy / graduated)</span>
         <span class="health-value">
-          {snap.evictable} / {snap.evictableStale} / {snap.evictableUnhealthy}
+          {snap.evictable} / {snap.evictableStale} / {snap.evictableUnhealthy} / {snap.evictableGraduated}
         </span>
       </div>
       <div class="health-row">

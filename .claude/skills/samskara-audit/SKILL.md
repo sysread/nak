@@ -128,10 +128,13 @@ tier-2 minter actually filters (declines exist).
   pass, so nothing merges siblings that already exist. Expect the
   sibling count to stop growing, not to shrink.
 - Parent-wins at fire time (2026-10-01): a compound in the top-k
-  drops its children from that cohort. Check the frozen-child share
-  of tier-1 (children of live compounds whose last fire predates the
-  rule) - suppressed children keep their slots and cannot leave via
-  the health tier, so a large share is the next design item.
+  drops its children from that cohort. Suppressed children sit with
+  frozen posteriors until the graduation eviction tier (2026-10-02;
+  compound health >= p0, >= 3.0 evidence, >= 14d) retires them.
+  Check: `evictable_graduated` on the snapshot vs. the hand-run
+  predicate, and whether graduations are actually happening under
+  cap pressure (children of established compounds should be
+  shrinking, not accumulating).
 
 ### 7. Corpus -> firing (priming)
 

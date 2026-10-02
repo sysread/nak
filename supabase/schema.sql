@@ -9504,6 +9504,42 @@ begin
      limit 1;
   end if;
   if victim is null then
+    -- Graduation tier: a tier-1 claim whose compound has become
+    -- established. Parent-wins at fire time (samskara_fire_top_k)
+    -- means such a claim no longer fires when its compound does, so
+    -- its posterior is frozen and it holds a capped slot while doing
+    -- no work the compound is not already doing. Once the compound
+    -- has earned its own standing - health at or above the user's
+    -- prior, at least three genuine tests' worth of evidence (the
+    -- k=5 prior strength means its own record now carries real
+    -- weight), and two weeks old - the part retires. Provenance has
+    -- no FK on ref_id, so the compound keeps standing on its own
+    -- record; if the compound later dies, the part re-forms from
+    -- substrate like any claim. Ordered last on purpose: wrong claims
+    -- (the tiers above) leave before merely redundant ones. The
+    -- pending-fire guard stays - a part can still fire on a turn its
+    -- compound misses, and that fire may be a genuine test.
+    select s.id into victim
+      from public.samskaras s
+      join public.samskara_provenance p
+        on p.ref_id = s.id and p.kind = 'samskara' and p.user_id = s.user_id
+      join public.samskaras t
+        on t.id = p.samskara_id and t.tier = 2 and t.user_id = s.user_id
+     where s.user_id = p_user_id
+       and s.tier = 1
+       and t.health >= public.samskara_population_p0(p_user_id)
+       and t.confirm_count + t.disconfirm_count >= 3.0
+       and t.created_at < now() - interval '14 days'
+       and not exists (
+         select 1 from public.samskara_fires f
+          where f.samskara_id = s.id and f.verdict is null
+       )
+     order by s.confirm_count + s.disconfirm_count asc,
+       t.confirm_count + t.disconfirm_count desc,
+       s.created_at asc
+     limit 1;
+  end if;
+  if victim is null then
     return null;
   end if;
   delete from public.samskaras where id = victim;
@@ -10760,6 +10796,7 @@ returns table (
   evictable int,
   evictable_stale int,
   evictable_unhealthy int,
+  evictable_graduated int,
   associations int,
   associations_unconsumed int,
   substrate_total int,
@@ -10826,6 +10863,31 @@ language sql stable security invoker as $$
         -- would let any signed-in caller probe another user's prior),
         -- and this snapshot runs security invoker.
         and s.health < 0.85 * (
+          select case
+            when coalesce(sum(p.confirm_count + p.disconfirm_count), 0) < 20.0 then 0.66
+            else sum(p.confirm_count) / nullif(sum(p.confirm_count + p.disconfirm_count), 0)
+          end
+          from public.samskaras p
+          where p.user_id = auth.uid()
+        ))::int,
+    -- Graduation tier mirror: a tier-1 part of an established compound
+    -- (compound health >= p0, >= 3.0 evidence, >= 14 days old), with no
+    -- fire awaiting judgment. Same inlined, auth.uid()-scoped p0 as
+    -- the tier above, for the same reason.
+    (select count(distinct s.id) from public.samskaras s
+      join public.samskara_provenance pv
+        on pv.ref_id = s.id and pv.kind = 'samskara' and pv.user_id = s.user_id
+      join public.samskaras t
+        on t.id = pv.samskara_id and t.tier = 2 and t.user_id = s.user_id
+      where s.user_id = auth.uid()
+        and s.tier = 1
+        and t.confirm_count + t.disconfirm_count >= 3.0
+        and t.created_at < now() - interval '14 days'
+        and not exists (
+          select 1 from public.samskara_fires f
+           where f.samskara_id = s.id and f.verdict is null
+        )
+        and t.health >= (
           select case
             when coalesce(sum(p.confirm_count + p.disconfirm_count), 0) < 20.0 then 0.66
             else sum(p.confirm_count) / nullif(sum(p.confirm_count + p.disconfirm_count), 0)

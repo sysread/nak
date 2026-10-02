@@ -237,11 +237,27 @@ from that cohort. The second came from measuring the owner's
 question "when a compound fires, do its parts fire too?": all 272
 compound fires since the reset arrived with every child alongside,
 children taking a third of the slots in those cohorts. Watch items
-for the next audit: the frozen-child share of tier-1 (suppressed
-children keep their slots and cannot leave through the health
-tier), the compound-sibling count (should stop growing), and
-whether tier-2 held rate moves now that compounds carry the
-evidence their children used to split.
+for the next audit: the compound-sibling count (should stop
+growing), whether tier-2 held rate moves now that compounds carry
+the evidence their children used to split, and the graduation tier
+(below) actually draining.
+
+**Oct 2 - graduation tier.** Suppressed children kept their tier-1
+slots with frozen posteriors and no way out through the health
+tier. Rather than redefine what counts toward the cap (three places
+count it - the mint gate, the overflow collapse, the health panel -
+and they would all have to agree), cap-pressure eviction gained a
+fourth, last-resort tier: a part of an ESTABLISHED compound
+(compound health >= p0, >= 3.0 evidence, >= 14 days) retires,
+least-evidenced part first. The compound keeps standing on its own
+record; a retired part re-forms from substrate if its compound
+later dies. Topic-partitioned caps ("lenses") were considered and
+rejected: topics drift with the embedding and its centering, and a
+new topic would have no lens; compounds already are a lens, found
+from co-firing rather than geometry. Watch: the graduated count on
+the health panel, and whether a compound whose parts have all
+retired stops suppressing anything and lets a sibling constellation
+re-form around it (the slow loop; the sibling count is the signal).
 
 ## Ledger
 

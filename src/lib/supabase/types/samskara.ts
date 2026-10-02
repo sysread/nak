@@ -64,6 +64,13 @@ export interface SamskaraHealthSnapshot {
    *  population prior - repeatedly disproven claims, the last-resort
    *  eviction tier when neither of the above qualifies. */
   evictableUnhealthy: number;
+  /** Tier-1 parts of an ESTABLISHED compound (compound health >= the
+   *  population prior, >= 3.0 evidence, >= 14 days old) with no fire
+   *  awaiting judgment - the graduation tier, last resort after the
+   *  three above. Parent-wins at fire time leaves these frozen; the
+   *  compound stands in for them, so the slot goes back into
+   *  circulation. */
+  evictableGraduated: number;
   associations: number;
   /** Association edges not yet fed to the association-mint pass. Drains across sweeps. */
   associationsUnconsumed: number;

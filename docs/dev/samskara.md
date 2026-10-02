@@ -936,10 +936,10 @@ freezes (health has no wall clock), so it neither weakens nor gets
 reaped on evidence; it still fires in any turn where its parent
 does not make the cut; and if the parent later proves wrong and
 `samskara_reap_dead` removes it (no tier filter), the children
-simply resume firing. The one cost worth watching: frozen children
-still hold tier-1 slots, and a healthy child can never leave through
-the health tier - if the frozen share of tier-1 grows large, a
-release path for covered children becomes the next design item.
+simply resume firing. A suppressed child does keep its tier-1 slot
+while its posterior is frozen; the graduation tier of cap-pressure
+eviction (see "Release of never-tested claims") is what returns
+those slots once the compound is established.
 
 ### Similarity calibration: centered cosine + the probe set
 
@@ -1243,7 +1243,22 @@ be the first genuine test, and the next-day judge hasn't ruled).
   in-flight fire may be its FIRST test, but a row this far under
   water cannot be exonerated by one more verdict, and on an active
   day the guard empties the pool (2026-08 measurement: 115 of 150
-  tier-1 rows carried a fire awaiting next-day judgment). If no tier
+  tier-1 rows carried a fire awaiting next-day judgment). When none of
+  those qualifies, a **fourth tier graduates the parts of an
+  established compound**: a tier-1 claim in the `'samskara'`
+  provenance of a tier-2 whose health is at or above the user's `p0`,
+  whose evidence tally is at least 3.0 (its own record now outweighs
+  the k=5 prior), and which is at least 14 days old. Parent-wins at
+  fire time means such a part no longer fires when its compound does,
+  so its posterior is frozen and the slot it holds does nothing the
+  compound is not already doing; once the compound has earned its
+  standing the part retires, least-evidenced part first. Provenance
+  has no FK on `ref_id`, so the compound keeps standing on its own
+  record, and if the compound later dies the part re-forms from
+  substrate like any claim. This tier is deliberately last - wrong
+  claims leave before merely redundant ones - and keeps the
+  pending-fire guard, since a part can still fire on a turn its
+  compound misses. If no tier
   qualifies the probe skips at cap exactly as it did before eviction
   existed.
 
