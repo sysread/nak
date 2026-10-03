@@ -2505,12 +2505,19 @@
   }
 
   /* Timers list - same list-style as ingredients/cookware (accent dot
-     marker). Anonymous timers get a fade-out context line beneath the
+     marker). When the durations can be summed, the list holds one
+     "Total" row and the individual timers nest under it as a
+     breakdown. Anonymous timers get a muted context line beneath the
      duration showing the step text, so a cook scanning the list knows
      what each timer is for without reading the full instructions. */
   .cookbook-render :global(ul.cook-timers) {
     list-style: none;
     margin: 0.25rem 0 0.75rem;
+    padding: 0;
+  }
+  .cookbook-render :global(ul.cook-timers ul.cook-timer-items) {
+    list-style: none;
+    margin: 0.15rem 0 0;
     padding: 0;
   }
   .cookbook-render :global(ul.cook-timers li) {
@@ -2532,210 +2539,23 @@
     font-variant-numeric: tabular-nums;
     font-weight: 600;
   }
+  /* Wraps rather than clipping, so a long step reads in full. */
   .cookbook-render :global(.cook-timer-context) {
     display: block;
     color: var(--muted);
     font-style: italic;
     font-size: 0.85em;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: clip;
-    /* Fade-out at the end of the line instead of an ellipsis. A
-       mask-image gradient fades the last ~4rem into transparency.
-       -webkit prefix for Safari; standard mask for everything else. */
-    -webkit-mask-image: linear-gradient(to right, black calc(100% - 4rem), transparent);
-    mask-image: linear-gradient(to right, black calc(100% - 4rem), transparent);
-  }
-
-  /* Quantity chip — tiny inline pill that picks up the accent tint.
-     Lets a skimming eye lock onto the numbers first ("1 cup… 2 tsp…")
-     before resolving the ingredient name. `tabular-nums` keeps mixed
-     quantities like "1½" and "6-8" visually even. */
-  .cookbook-render :global(.cook-qty) {
-    display: inline-block;
-    padding: 0.05rem 0.45rem;
-    margin-right: 0.25rem;
-    background: var(--accent-weak);
-    color: var(--text);
-    border-radius: var(--radius-pill);
-    font-weight: 600;
-    font-variant-numeric: tabular-nums;
-  }
-
-  /* "(optional)" tag emitted by recipeToHtml for `@?ingredient`
-     references - muted and small so required items read first when
-     the eye scans the list. */
-  .cookbook-render :global(.cook-optional) {
-    color: var(--muted);
-    font-size: 0.85em;
-    font-style: italic;
-  }
-
-  /* Author notes on declaration-line ingredients: the free text
-     after `@name{qty%unit}` (e.g. "or neutral oil", "add 1 tbsp
-     extra water"). Same muted treatment as (optional) so the
-     primary ingredient reads first. */
-  .cookbook-render :global(.cook-note) {
-    color: var(--muted);
-    font-size: 0.85em;
-  }
-
-  /* Grocery checkbox on bookmarked recipes' ingredient rows. Sized as
-     a thumb target (matching the grocery list's own checkboxes) and
-     vertically centered against the qty pill so a tall row reads as
-     one line. */
-  .cookbook-render :global(.cook-buy) {
-    width: 1.05rem;
-    height: 1.05rem;
-    margin-right: 0.35rem;
-    vertical-align: -0.15rem;
-    accent-color: var(--accent);
-    cursor: pointer;
-  }
-
-  /* The whole row is the toggle target (native label semantics) -
-     the pointer cursor advertises that the text is tappable too,
-     which matters for thumbs that would otherwise aim at the tiny
-     box. */
-  .cookbook-render :global(.cook-buy-label) {
-    cursor: pointer;
-  }
-
-  /* While the section classifier runs for an ingredient, its box
-     becomes a spinner: appearance:none clears the native checkbox
-     paint so the element is a bare square we can restyle as an
-     accent-topped ring. The input is disabled for the duration (a
-     toggle would race the background save), hence the wait cursor. */
-  .cookbook-render :global(.cook-buy.cook-buy-busy) {
-    appearance: none;
-    border: 2px solid var(--border);
-    border-top-color: var(--accent);
-    border-radius: 50%;
-    animation: cook-buy-spin 700ms linear infinite;
-    cursor: wait;
-  }
-
-  @keyframes cook-buy-spin {
-    to {
-      transform: rotate(360deg);
-    }
-  }
-
-  /* Batch add-all shortcut above the rendered recipe, tucked toward
-     the reading column's right edge so it reads as an action on the
-     content below rather than part of the action bar above. Shares
-     the row with the cooking-mode toggle (two verbs over the same
-     checkbox set). */
-  .cookbook-add-all-row {
-    display: flex;
-    justify-content: flex-end;
-    align-items: center;
-    gap: 0.5rem;
-    margin: 0.25rem 0;
-  }
-  .cookbook-add-all {
-    padding: 0.3rem 0.6rem;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    background: var(--bg);
-    color: var(--accent);
-    font: inherit;
-    font-size: 0.8rem;
-    cursor: pointer;
-  }
-  .cookbook-add-all:disabled {
-    opacity: 0.6;
-    cursor: default;
-  }
-  /* Cooking-mode toggle. .active mirrors the grocery screen's
-     Start/Finish-shopping toggle treatment. */
-  .cookbook-cooking-toggle.active {
-    border-color: var(--accent);
-    color: var(--accent);
-  }
-  /* Progress line beside the toggle while cooking - informational
-     only, and aria-live so marking an ingredient announces the
-     remaining count to a screen reader. */
-  .cookbook-cooking-progress {
-    color: var(--muted);
-    font-size: 0.8rem;
-  }
-  .cookbook-cooking-error {
-    text-align: right;
-    margin: 0.25rem 0 0;
-    font-size: 0.8rem;
-  }
-  /* In cooking mode a checked ingredient row reads as "used up":
-     strikethrough + muted name. The checkbox chrome itself is left
-     alone so the muscle memory from the grocery bridge still
-     applies. */
-  .cookbook-render.cooking :global(li.cook-used .cook-name) {
-    text-decoration: line-through;
-    color: var(--muted);
-  }
-
-  /* Instruction steps — replace the browser-default "1." marker with
-     a circular accent-weak badge via CSS counters. The hanging indent
-     keeps multi-line step text flowing under itself instead of
-     crashing into the badge. */
-  .cookbook-render :global(ol.cook-steps) {
-    list-style: none;
-    counter-reset: cook-step;
-    margin: 0.35rem 0 0.75rem;
-    padding: 0;
-  }
-  .cookbook-render :global(ol.cook-steps li) {
-    counter-increment: cook-step;
-    position: relative;
-    padding: 0.15rem 0 0.6rem 2.1rem;
-    line-height: 1.45;
-    /* Hint that the step is tappable — click toggles `.is-active`. The
-       `onRenderClick` handler in this component only reacts to clicks
-       inside `ol.cook-steps`, so the cursor stays accurate. */
-    cursor: pointer;
-  }
-  .cookbook-render :global(ol.cook-steps li::before) {
-    content: counter(cook-step);
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: 1.5rem;
-    height: 1.5rem;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--accent-weak);
-    color: var(--text);
-    font-size: 0.8rem;
-    font-weight: 700;
-    border-radius: var(--radius-round);
-  }
-  /* Highlighted step — a soft accent-weak wash that tells the reader
-     "this is the step I'm on" while cooking. Full-bleed padding so the
-     tint extends to the badge edge on the left and the pane edge on
-     the right, making the active step the obvious focal point at a
-     glance. Inherits the theme accent, so a blue theme gets a blue
-     wash and a red theme gets a red wash — no per-theme overrides
-     needed. */
-  .cookbook-render :global(ol.cook-steps li.is-active) {
-    background: var(--accent-weak);
-    border-radius: var(--radius-md);
-    margin: 0 -0.4rem;
-    padding-right: 0.4rem;
-    padding-left: 2.5rem;
+    overflow-wrap: anywhere;
   }
   .cookbook-render :global(ol.cook-steps li.is-active::before) {
     left: 0.4rem;
   }
   /* Source and preview split the panel width evenly. minmax(0, 1fr)
      rather than bare 1fr: a bare 1fr track can't shrink below its
-     content's min-content width. The timer list's context line is
-     white-space: nowrap (it fades out instead of wrapping), and a
-     clipped nowrap line still reports its full unwrapped length as
-     min-content. One long timer sentence was enough to grow the
-     preview column past the panel edge and crush the textarea to a
-     ~120px sliver. Both panes share one height so the halves line
-     up. */
+     content's min-content width, so any long unbreakable run in the
+     preview (a URL, a nowrap line) grows that column past the panel
+     edge and crushes the textarea to a sliver. Both panes share one
+     height so the halves line up. */
   .cookbook-edit-panes {
     --cookbook-edit-pane-height: max(260px, 60vh);
     display: grid;

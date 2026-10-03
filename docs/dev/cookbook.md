@@ -540,6 +540,13 @@ keystrokes; the LLM tool path keeps using `listRecipes`.
   upstream release. If the parser ever needs to handle recipe
   references or shopping-list blocks, revisit — but today every
   line of `src/lib/cooklang.ts` is straightforward.
+- **The Timers total is all-or-nothing.** The HTML renderer sums
+  the deduped timer list into a "Total" row and nests the timers
+  under it. If any one duration is unreadable (not a number,
+  decimal, fraction, or two-value range), the total is dropped and
+  the list renders flat. A partial sum would understate the time
+  while looking authoritative. The plain-text and Markdown exports
+  carry no total.
 - **The realtime relay is the tools → UI bridge.** The `recipe_*`
   tools dispatch in the venice function, so the browser learns
   about model-driven writes through a user-scoped
@@ -600,9 +607,8 @@ keystrokes; the LLM tool path keeps using `listRecipes`.
 - **The edit split is CSS-driven, with one JS escape hatch.** Wide
   viewports show source and preview side by side in two
   `minmax(0, 1fr)` tracks. Bare `1fr` can't shrink below content
-  min-width, and the timer list's nowrap context line reports its
-  full sentence length as min-width even though it renders clipped -
-  one long timer step crushed the textarea to a sliver. At the app's 720px mobile breakpoint a tab
+  min-width, so one long unbreakable run in the preview (a URL, a
+  nowrap line) would crush the textarea to a sliver. At the app's 720px mobile breakpoint a tab
   strip appears and a CSS rule hides the unselected pane; the tab
   state is ignored on desktop. The catch: the cooklang textarea is
   `required`, and a browser silently refuses to submit when the

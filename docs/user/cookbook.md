@@ -37,6 +37,15 @@ Three kinds of reference:
 - `#cookware{}` — a piece of cookware (pot, bowl, pan).
 - `~timer{30%minutes}` — a timer step.
 
+Every timer also shows up in the recipe's **Timers** list. The list
+opens with a **Total** that adds up all the timers, with each timer
+listed under it as part of the breakdown. If any timer is a range
+(`~{4-5%hours}`), the total is a range too. It is a plain sum, so
+timers that run at the same time still count separately. If a timer's
+length can't be read as a number, the total is left off and the
+timers show as a plain list. Unnamed timers show the step they came
+from beneath them, in full.
+
 Plus `>> key: value` metadata lines for things like servings, source,
 and prep time.
 
