@@ -36,6 +36,12 @@ interface TimerWithContext {
   timer: Timer;
   /** Step text for anonymous timers; null for named timers (the name IS the context). */
   stepText: string | null;
+  /**
+   * Anchor id of the instruction step the timer first appeared in, for
+   * the HTML Timers list's jump link. Null when that step is a
+   * declaration, which renders no instruction row to jump to.
+   */
+  stepId: string | null;
 }
 
 /**
@@ -51,7 +57,7 @@ interface TimerWithContext {
 function collectTimersWithContext(recipe: Recipe): TimerWithContext[] {
   const seen = new Set<string>();
   const out: TimerWithContext[] = [];
-  for (const step of recipe.steps) {
+  for (const [i, step] of recipe.steps.entries()) {
     for (const timer of step.timers) {
       if (!isTimeTimer(timer)) continue;
       const key = `${timer.name ?? ''}|${timer.duration}|${timer.unit ?? ''}`;
@@ -60,10 +66,21 @@ function collectTimersWithContext(recipe: Recipe): TimerWithContext[] {
       out.push({
         timer,
         stepText: timer.name ? null : step.text,
+        stepId: step.kind === 'instruction' ? stepAnchorId(i) : null,
       });
     }
   }
   return out;
+}
+
+/**
+ * Anchor id for an instruction step's `<li>`, keyed by the step's index
+ * in `recipe.steps`. The index is unique across the whole recipe, so
+ * ids stay distinct even though sectioned recipes restart the visible
+ * step numbering in each section.
+ */
+function stepAnchorId(stepIndex: number): string {
+  return `cook-step-${stepIndex}`;
 }
 
 /**
@@ -381,9 +398,12 @@ function ingredientsListItems(ings: Ingredient[], checkboxes: boolean, rowStart:
       ? ` <span class="cook-note">${esc(ing.note)}</span>`
       : '';
     if (checkboxes) {
-      const checkboxHtml = `<input type="checkbox" class="cook-buy" data-ing="${esc(ing.name)}" data-row="${rowStart + i}" aria-label="${esc(groceryCheckboxAriaLabel(ing.name))}"> `;
+      const checkboxHtml = `<input type="checkbox" class="cook-buy" data-ing="${esc(ing.name)}" data-row="${rowStart + i}" aria-label="${esc(groceryCheckboxAriaLabel(ing.name))}">`;
+      // The text is wrapped in one span so the label's flex layout has
+      // exactly two items (box, text) - bare inline spans would each
+      // become their own flex item and break the row apart.
       out.push(
-        `<li><label class="cook-buy-label">${checkboxHtml}${qtyHtml}<span class="cook-name">${esc(ing.name)}</span>${optHtml}${noteHtml}</label></li>`
+        `<li class="cook-buy-row"><label class="cook-buy-label">${checkboxHtml}<span class="cook-buy-text">${qtyHtml}<span class="cook-name">${esc(ing.name)}</span>${optHtml}${noteHtml}</span></label></li>`
       );
     } else {
       out.push(
@@ -559,6 +579,12 @@ export interface RecipeHtmlOptions {
   ingredientCheckboxes?: boolean;
 }
 
+/** One instruction `<li>`, carrying the anchor id the Timers links target. */
+function stepListItem(step: Step, recipe: Recipe): string {
+  const id = stepAnchorId(recipe.steps.indexOf(step));
+  return `<li id="${id}">${renderInlineEmphasis(esc(step.text))}</li>`;
+}
+
 export function recipeToHtml(recipe: Recipe, opts: RecipeHtmlOptions = {}): string {
   const checkboxes = opts.ingredientCheckboxes === true;
   const out: string[] = [];
@@ -623,8 +649,12 @@ export function recipeToHtml(recipe: Recipe, opts: RecipeHtmlOptions = {}): stri
       );
       out.push('<ul class="cook-timer-items">');
     }
-    for (const { timer, stepText } of timersWithContext) {
-      const du = esc(formatTimer(timer));
+    for (const { timer, stepText, stepId } of timersWithContext) {
+      // The label links to the step it came from. The host component
+      // intercepts the click and scrolls within its own render, since
+      // the edit preview and past-version views repeat the same ids.
+      const label = esc(formatTimer(timer));
+      const du = stepId ? `<a class="cook-timer-link" href="#${stepId}">${label}</a>` : label;
       if (stepText) {
         // Anonymous timer: show the duration, then the step text as a
         // muted line beneath so the cook knows what it's for. The step
@@ -653,7 +683,7 @@ export function recipeToHtml(recipe: Recipe, opts: RecipeHtmlOptions = {}): stri
     if (!hasSections) {
       out.push('<ol class="cook-steps">');
       for (const step of instructionSteps) {
-        out.push(`<li>${renderInlineEmphasis(esc(step.text))}</li>`);
+        out.push(stepListItem(step, recipe));
       }
       out.push('</ol>');
     } else {
@@ -670,7 +700,7 @@ export function recipeToHtml(recipe: Recipe, opts: RecipeHtmlOptions = {}): stri
         // recipes and what the reader expects when sections exist.
         out.push('<ol class="cook-steps">');
         for (const step of bucketInstructions) {
-          out.push(`<li>${renderInlineEmphasis(esc(step.text))}</li>`);
+          out.push(stepListItem(step, recipe));
         }
         out.push('</ol>');
       }

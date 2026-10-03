@@ -228,7 +228,10 @@ describe('recipeToHtml', () => {
     expect(html).toContain('<input type="checkbox" class="cook-buy" data-ing="flour"');
     // The whole row is a <label> so tapping the ingredient text
     // toggles the checkbox via native label semantics.
-    expect(html).toContain('<li><label class="cook-buy-label"><input type="checkbox" class="cook-buy"');
+    expect(html).toContain('<li class="cook-buy-row"><label class="cook-buy-label"><input type="checkbox" class="cook-buy"');
+    // Box and text are the label's only two children, so the flex row
+    // keeps a wrapped ingredient beside the box.
+    expect(html).toContain('class="cook-buy-text"><span class="cook-qty">200 g</span>');
     // Checkboxes are an ingredient-list affordance only - never in
     // the instruction steps' inline references.
     const stepsHtml = html.slice(html.indexOf('cook-steps'));
@@ -681,7 +684,7 @@ Warm the @French bread{1%loaf} before serving.`;
     // Step 1 merged its continuation.
     expect(instructionsBlock).toMatch(/Add chicken thighs[^<]*Cook on low/);
     // All four prose sentences made it into the list.
-    const liCount = (instructionsBlock.match(/<li>/g) ?? []).length;
+    const liCount = (instructionsBlock.match(/<li[ >]/g) ?? []).length;
     expect(liCount).toBe(3);
   });
 
@@ -1130,6 +1133,24 @@ describe('recipeToHtml — Timers block', () => {
     expect(block).toContain('<strong>gently</strong>');
     expect(block).toContain('<em>uncovered</em>');
     expect(block).not.toContain('**');
+  });
+
+  it('links each timer label to the step it came from', () => {
+    const html = cooklangToHtml('Simmer ~{30%minutes}.\nLet ~rest{10%minutes} at room temp.');
+    expect(html).toContain('<a class="cook-timer-link" href="#cook-step-0">30 minutes</a>');
+    expect(html).toContain('<a class="cook-timer-link" href="#cook-step-1">rest: 10 minutes</a>');
+    expect(html).toContain('<li id="cook-step-0">Simmer');
+    expect(html).toContain('<li id="cook-step-1">Let');
+  });
+
+  it('keeps step anchor ids unique across sections', () => {
+    const html = cooklangToHtml('== A ==\nBoil ~{5%min}.\n== B ==\nBake ~{20%min}.');
+    // Each section restarts its visible numbering at 1, but the ids
+    // keep counting so the two first-steps don't collide.
+    expect(html).toContain('href="#cook-step-0"');
+    expect(html).toContain('href="#cook-step-1"');
+    expect(html).toContain('<li id="cook-step-0">Boil');
+    expect(html).toContain('<li id="cook-step-1">Bake');
   });
 
   it('places the Timers block after Cookware and before Instructions', () => {

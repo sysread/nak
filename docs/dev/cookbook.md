@@ -547,6 +547,14 @@ keystrokes; the LLM tool path keeps using `listRecipes`.
   the list renders flat. A partial sum would understate the time
   while looking authoritative. The plain-text and Markdown exports
   carry no total.
+- **Timer links are click-intercepted, not native anchors.** Each
+  timer label is an `<a href="#cook-step-N">` pointing at its step's
+  `<li>` (N is the step's index in `recipe.steps`, so ids stay unique
+  across sections). The detail pane, edit preview, and past-version
+  view all render the same ids, so a native fragment jump could land
+  in the wrong pane and would write the fragment into the URL. Every
+  render container therefore has a click handler that resolves the
+  id inside itself; a new render surface needs the same handler.
 - **The realtime relay is the tools → UI bridge.** The `recipe_*`
   tools dispatch in the venice function, so the browser learns
   about model-driven writes through a user-scoped
