@@ -165,6 +165,93 @@ function isTimeTimer(timer: Timer): boolean {
 }
 
 /**
+ * Seconds per unit for every entry in {@link TIME_UNITS}. Month and
+ * year use calendar averages (30 and 365 days) - nobody times a
+ * cure to the leap day, and the total is a planning figure.
+ */
+const UNIT_SECONDS: Record<string, number> = {
+  sec: 1, secs: 1, second: 1, seconds: 1, s: 1,
+  min: 60, mins: 60, minute: 60, minutes: 60, m: 60,
+  hr: 3600, hrs: 3600, hour: 3600, hours: 3600, h: 3600,
+  day: 86400, days: 86400, d: 86400,
+  week: 604800, weeks: 604800, w: 604800,
+  month: 2592000, months: 2592000,
+  year: 31536000, years: 31536000,
+};
+
+/**
+ * Parse one duration number as written: `30`, `1.5`, `1/2`, or a
+ * mixed number `1 1/2`. Null for anything else so the caller can
+ * refuse to total a list it can't fully read.
+ */
+function parseDurationNumber(s: string): number | null {
+  const t = s.trim();
+  if (/^\d+(\.\d+)?$/.test(t)) return Number(t);
+  const frac = /^(?:(\d+)\s+)?(\d+)\/(\d+)$/.exec(t);
+  if (frac && Number(frac[3]) !== 0) {
+    return Number(frac[1] ?? 0) + Number(frac[2]) / Number(frac[3]);
+  }
+  return null;
+}
+
+/**
+ * A timer's duration as a [low, high] span in seconds. A range like
+ * `4-5` (hyphen, en dash, or "to") gives distinct bounds; a single
+ * value gives low === high. Null when the duration is unreadable.
+ */
+function timerSpanSeconds(timer: Timer): [number, number] | null {
+  const perUnit = UNIT_SECONDS[(timer.unit ?? '').toLowerCase()];
+  if (perUnit === undefined) return null;
+  const parts = timer.duration.split(/\s*(?:-|\u2013|\bto\b)\s*/);
+  if (parts.length > 2) return null;
+  const nums = parts.map(parseDurationNumber);
+  if (nums.some((n) => n === null)) return null;
+  const lo = nums[0]! * perUnit;
+  const hi = nums[nums.length - 1]! * perUnit;
+  return [Math.min(lo, hi), Math.max(lo, hi)];
+}
+
+/**
+ * Format a second count as `1 day 2 hr 5 min`, dropping zero parts.
+ * Rounds to the nearest second so fractional inputs (`1/3 hour`)
+ * don't print float noise.
+ */
+function formatSeconds(total: number): string {
+  let rest = Math.round(total);
+  const parts: string[] = [];
+  for (const [size, label] of [[86400, 'day'], [3600, 'hr'], [60, 'min'], [1, 'sec']] as const) {
+    const n = Math.floor(rest / size);
+    rest -= n * size;
+    if (n > 0) parts.push(label === 'day' && n !== 1 ? `${n} days` : `${n} ${label}`);
+  }
+  return parts.length > 0 ? parts.join(' ') : '0 min';
+}
+
+/**
+ * Sum of every listed timer, formatted for the Timers block header.
+ * A range anywhere makes the total a range (`2 hr - 3 hr`).
+ *
+ * This is the sum of the deduped list the cook sees, not a wall-clock
+ * estimate - timers that run in parallel still add up, and a repeated
+ * identical timer counts once because it appears once in the list.
+ *
+ * Null when any timer's duration can't be read. A total that silently
+ * skipped an unreadable timer would understate the time and look
+ * authoritative, so the block falls back to the plain list instead.
+ */
+function timersTotal(timers: Timer[]): string | null {
+  let lo = 0;
+  let hi = 0;
+  for (const timer of timers) {
+    const span = timerSpanSeconds(timer);
+    if (span === null) return null;
+    lo += span[0];
+    hi += span[1];
+  }
+  return lo === hi ? formatSeconds(lo) : `${formatSeconds(lo)} - ${formatSeconds(hi)}`;
+}
+
+/**
  * Walk `steps` and bucket them by section, preserving the order
  * sections first appeared. The returned array always leads with the
  * implicit head bucket (`name: null`) when any unsectioned steps exist,
@@ -440,7 +527,8 @@ function instructionBucketRenders(steps: Step[]): boolean {
  *   <h3>Cookware</h3>
  *   <ul class="cook-cookware">...</ul>
  *   <h3>Timers</h3>
- *   <ul class="cook-timers">...</ul>
+ *   <ul class="cook-timers"><li class="cook-timer-total">Total
+ *     <ul class="cook-timer-items">...</ul></li></ul>
  *   <h3 id="cook-instructions">Instructions</h3>
  *   [ <h4/h5/h6 id="cook-instructions-sN">Section</h4> ]?
  *   <ol class="cook-steps">...</ol>
@@ -524,21 +612,34 @@ export function recipeToHtml(recipe: Recipe, opts: RecipeHtmlOptions = {}): stri
   const timersWithContext = collectTimersWithContext(recipe);
   if (timersWithContext.length > 0) {
     out.push(`<h3 id="${tocHeadingId('timers', null)}">Timers</h3>`);
+    // The total heads the block as the one top-level row, and the
+    // individual timers nest under it as its itemized breakdown. When
+    // no total can be computed, the timers are the top-level list.
+    const total = timersTotal(timersWithContext.map((t) => t.timer));
     out.push('<ul class="cook-timers">');
+    if (total !== null) {
+      out.push(
+        `<li class="cook-timer-total"><span class="cook-timer-duration">Total: ${esc(total)}</span>`,
+      );
+      out.push('<ul class="cook-timer-items">');
+    }
     for (const { timer, stepText } of timersWithContext) {
       const du = esc(formatTimer(timer));
       if (stepText) {
-        // Anonymous timer: show the duration, then the step text
-        // as a muted fade-out line so the cook knows what it's for.
+        // Anonymous timer: show the duration, then the step text as a
+        // muted line beneath so the cook knows what it's for. The step
+        // text gets the same emphasis pass as the Instructions block,
+        // so `**bold**` reads as bold rather than literal asterisks.
         out.push(
           `<li><span class="cook-timer-duration">${du}</span>` +
-            `<span class="cook-timer-context">${esc(stepText)}</span></li>`,
+            `<span class="cook-timer-context">${renderInlineEmphasis(esc(stepText))}</span></li>`,
         );
       } else {
         // Named timer: the name is the context.
         out.push(`<li>${du}</li>`);
       }
     }
+    if (total !== null) out.push('</ul></li>');
     out.push('</ul>');
   }
 

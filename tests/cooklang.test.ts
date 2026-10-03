@@ -1094,6 +1094,44 @@ describe('recipeToHtml — Timers block', () => {
     expect(timersBlock).toContain('rest: 10 minutes');
   });
 
+  it('heads the Timers block with a summed total and nests the timers under it', () => {
+    const html = cooklangToHtml('Simmer ~{30%minutes}.\nLet ~rest{1%hour} at room temp.');
+    const block = html.slice(html.indexOf('Timers</h3>'), html.indexOf('Instructions</h3>'));
+    expect(block).toContain('<li class="cook-timer-total">');
+    expect(block).toContain('Total: 1 hr 30 min');
+    const totalIdx = block.indexOf('Total:');
+    const itemsIdx = block.indexOf('<ul class="cook-timer-items">');
+    expect(itemsIdx).toBeGreaterThan(totalIdx);
+    expect(block.indexOf('30 minutes')).toBeGreaterThan(itemsIdx);
+    expect(block.indexOf('rest: 1 hour')).toBeGreaterThan(itemsIdx);
+  });
+
+  it('renders a range total when any timer is a range', () => {
+    const html = cooklangToHtml('Braise ~{2-3%hours}.\nRest ~{30%min}.');
+    expect(html).toContain('Total: 2 hr 30 min - 3 hr 30 min');
+  });
+
+  it('sums fractions, decimals, and days', () => {
+    const html = cooklangToHtml('Cure ~{2%days}.\nDry ~{1 1/2%hours}.\nSear ~{0.5%min}.');
+    expect(html).toContain('Total: 2 days 1 hr 30 min 30 sec');
+  });
+
+  it('drops the total and renders a flat list when a duration is unreadable', () => {
+    const html = cooklangToHtml('Simmer ~{30%minutes}.\nRest ~{a while%minutes}.');
+    const block = html.slice(html.indexOf('Timers</h3>'), html.indexOf('Instructions</h3>'));
+    expect(block).not.toContain('Total:');
+    expect(block).not.toContain('cook-timer-items');
+    expect(block).toContain('30 minutes');
+  });
+
+  it('renders inline emphasis in an anonymous timer context line', () => {
+    const html = cooklangToHtml('Simmer **gently** for ~{30%minutes}, _uncovered_.');
+    const block = html.slice(html.indexOf('Timers</h3>'), html.indexOf('Instructions</h3>'));
+    expect(block).toContain('<strong>gently</strong>');
+    expect(block).toContain('<em>uncovered</em>');
+    expect(block).not.toContain('**');
+  });
+
   it('places the Timers block after Cookware and before Instructions', () => {
     const html = cooklangToHtml('Stir in a #bowl{}.\nSimmer ~{30%minutes}.');
     const cookwareIdx = html.indexOf('Cookware</h3>');

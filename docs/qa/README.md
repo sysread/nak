@@ -308,6 +308,10 @@ One file per use-case under [`use-cases/`](./use-cases/), named
   checkboxes, the N-of-M counter, per-recipe sessions in the shared
   settings map, reload persistence, expiry, and the grocery bridge
   staying intact outside cooking mode.
+- [cookbook-timers-list](./use-cases/cookbook-timers-list.md) -
+  the recipe detail pane's Timers block: the summed total with the
+  timers nested beneath it, range totals, the flat fallback, and
+  wrapped step text with inline emphasis.
 - [settings-account-and-updates](./use-cases/settings-account-and-updates.md) -
   Settings pane independence, update-check/reload flow, background-job
   toggles, usage refresh, and credential/export actions.
