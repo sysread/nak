@@ -43,8 +43,9 @@ listed under it as part of the breakdown. If any timer is a range
 (`~{4-5%hours}`), the total is a range too. It is a plain sum, so
 timers that run at the same time still count separately. If a timer's
 length can't be read as a number, the total is left off and the
-timers show as a plain list. Unnamed timers show the step they came
-from beneath them, in full.
+timers show as a plain list. Each timer is a link: tap it to jump to
+the step it belongs to, which gets highlighted. Unnamed timers also
+show the first couple of lines of that step beneath them.
 
 Plus `>> key: value` metadata lines for things like servings, source,
 and prep time.

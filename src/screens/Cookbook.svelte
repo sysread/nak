@@ -967,6 +967,26 @@
     el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
+  // Timers-list links (`a.cook-timer-link`) point at a step's id. The
+  // browser's own fragment jump would scroll to the FIRST element with
+  // that id anywhere in the document - possibly a different render
+  // (detail, edit preview, past version all share the id scheme) - and
+  // would write the fragment into the URL. So the click is taken over
+  // and the target resolved inside the clicked render only. Returns the
+  // step it scrolled to, or null when the click wasn't on a timer link.
+  function followTimerLink(e: MouseEvent): HTMLElement | null {
+    const target = e.target;
+    const container = e.currentTarget;
+    if (!(target instanceof Element) || !(container instanceof Element)) return null;
+    const link = target.closest('a.cook-timer-link');
+    if (!link) return null;
+    e.preventDefault();
+    const id = (link.getAttribute('href') ?? '').slice(1);
+    const step = id ? container.querySelector<HTMLElement>(`#${CSS.escape(id)}`) : null;
+    step?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    return step;
+  }
+
   // --- grocery-bridge state (the ingredient checkboxes) ---
 
   // Catalog products linked to the open recipe. A checkbox mirrors
@@ -1389,14 +1409,24 @@
   // the DOM via a class; no reactive state, no persistence —
   // switching recipes replaces the HTML and wipes the highlight.
   function onRenderClick(e: MouseEvent): void {
+    const container = e.currentTarget;
+    if (!(container instanceof Element)) return;
+    // A Timers-list link jumps to its step and marks it as the current
+    // one, so the eye lands on the right row after the scroll.
+    const jumped = followTimerLink(e);
+    if (jumped) {
+      for (const prev of container.querySelectorAll('ol.cook-steps li.is-active')) {
+        prev.classList.remove('is-active');
+      }
+      jumped.classList.add('is-active');
+      return;
+    }
     const target = e.target;
     if (!(target instanceof Element)) return;
     const li = target.closest('li');
     if (!li) return;
     const ol = li.parentElement;
     if (!ol || !ol.classList.contains('cook-steps')) return;
-    const container = e.currentTarget;
-    if (!(container instanceof Element)) return;
     // Capture before clearing so "click the active step to clear it"
     // still works — otherwise the clear would remove the class and we
     // couldn't tell the re-toggle case apart from a fresh click.
@@ -1493,7 +1523,11 @@
                   onclick={() => onRevert(v)}
                 >Revert to this version</button>
               </div>
-              <div class="cookbook-render">
+              <!-- Click handler only takes over Timers-list links; see
+                   followTimerLink. -->
+              <!-- svelte-ignore a11y_click_events_have_key_events -->
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
+              <div class="cookbook-render" onclick={followTimerLink}>
                 {@html viewedHtml}
               </div>
             {:else}
@@ -2047,7 +2081,9 @@
               class:is-tab-hidden={editTab !== 'preview'}
             >
               <div class="form-label">Preview</div>
-              <div class="cookbook-render cookbook-edit-preview">
+              <!-- svelte-ignore a11y_click_events_have_key_events -->
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
+              <div class="cookbook-render cookbook-edit-preview" onclick={followTimerLink}>
                 {@html editPreviewHtml}
               </div>
             </div>
@@ -2507,9 +2543,9 @@
   /* Timers list - same list-style as ingredients/cookware (accent dot
      marker). When the durations can be summed, the list holds one
      "Total" row and the individual timers nest under it as a
-     breakdown. Anonymous timers get a muted context line beneath the
-     duration showing the step text, so a cook scanning the list knows
-     what each timer is for without reading the full instructions. */
+     breakdown. Each timer's label links to the step it came from;
+     anonymous timers also get a muted context line beneath showing
+     the start of that step's text. */
   .cookbook-render :global(ul.cook-timers) {
     list-style: none;
     margin: 0.25rem 0 0.75rem;
@@ -2539,13 +2575,222 @@
     font-variant-numeric: tabular-nums;
     font-weight: 600;
   }
-  /* Wraps rather than clipping, so a long step reads in full. */
+  .cookbook-render :global(a.cook-timer-link) {
+    color: var(--accent);
+    text-decoration: underline;
+    text-underline-offset: 0.15em;
+  }
+  /* Wraps to at most two lines, then clips with an ellipsis - enough
+     to say what the timer is for; the label link jumps to the full
+     step. Wrapping (not nowrap) also keeps the line's min-content
+     width small, so it can't widen the edit-pane preview column. */
   .cookbook-render :global(.cook-timer-context) {
-    display: block;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
+    overflow-wrap: anywhere;
     color: var(--muted);
     font-style: italic;
     font-size: 0.85em;
+  }
+
+  /* Quantity chip — tiny inline pill that picks up the accent tint.
+     Lets a skimming eye lock onto the numbers first ("1 cup… 2 tsp…")
+     before resolving the ingredient name. `tabular-nums` keeps mixed
+     quantities like "1½" and "6-8" visually even. */
+  .cookbook-render :global(.cook-qty) {
+    display: inline-block;
+    padding: 0.05rem 0.45rem;
+    margin-right: 0.25rem;
+    background: var(--accent-weak);
+    color: var(--text);
+    border-radius: var(--radius-pill);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* "(optional)" tag emitted by recipeToHtml for `@?ingredient`
+     references - muted and small so required items read first when
+     the eye scans the list. */
+  .cookbook-render :global(.cook-optional) {
+    color: var(--muted);
+    font-size: 0.85em;
+    font-style: italic;
+  }
+
+  /* Author notes on declaration-line ingredients: the free text
+     after `@name{qty%unit}` (e.g. "or neutral oil", "add 1 tbsp
+     extra water"). Same muted treatment as (optional) so the
+     primary ingredient reads first. */
+  .cookbook-render :global(.cook-note) {
+    color: var(--muted);
+    font-size: 0.85em;
+  }
+
+  /* Checkbox rows: the box replaces the accent dot as the row's
+     marker, so the dot and its hanging indent are dropped. */
+  .cookbook-render :global(ul.cook-ingredients li.cook-buy-row) {
+    padding-left: 0;
+  }
+  .cookbook-render :global(ul.cook-ingredients li.cook-buy-row::before) {
+    display: none;
+  }
+
+  /* Grocery checkbox on bookmarked recipes' ingredient rows. Sized as
+     a thumb target (matching the grocery list's own checkboxes). The
+     explicit width also overrides the global `input { width: 100% }`
+     rule - without it the box stretches to its own full-width line
+     above the ingredient text. flex: none keeps a long, wrapping
+     ingredient from squeezing the box. */
+  .cookbook-render :global(.cook-buy) {
+    flex: none;
+    width: 1.05rem;
+    height: 1.05rem;
+    margin: 0.2rem 0 0;
+    accent-color: var(--accent);
+    cursor: pointer;
+  }
+
+  /* The whole row is the toggle target (native label semantics) -
+     the pointer cursor advertises that the text is tappable too,
+     which matters for thumbs that would otherwise aim at the tiny
+     box. Flex puts the box and text side by side, and a wrapped
+     ingredient's second line stays under the text, not the box. */
+  .cookbook-render :global(.cook-buy-label) {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.4rem;
+    cursor: pointer;
+  }
+  .cookbook-render :global(.cook-buy-text) {
+    min-width: 0;
     overflow-wrap: anywhere;
+  }
+
+  /* While the section classifier runs for an ingredient, its box
+     becomes a spinner: appearance:none clears the native checkbox
+     paint so the element is a bare square we can restyle as an
+     accent-topped ring. The input is disabled for the duration (a
+     toggle would race the background save), hence the wait cursor. */
+  .cookbook-render :global(.cook-buy.cook-buy-busy) {
+    appearance: none;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: cook-buy-spin 700ms linear infinite;
+    cursor: wait;
+  }
+
+  @keyframes cook-buy-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  /* Batch add-all shortcut above the rendered recipe, tucked toward
+     the reading column's right edge so it reads as an action on the
+     content below rather than part of the action bar above. Shares
+     the row with the cooking-mode toggle (two verbs over the same
+     checkbox set). */
+  .cookbook-add-all-row {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0.25rem 0;
+  }
+  .cookbook-add-all {
+    padding: 0.3rem 0.6rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg);
+    color: var(--accent);
+    font: inherit;
+    font-size: 0.8rem;
+    cursor: pointer;
+  }
+  .cookbook-add-all:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+  /* Cooking-mode toggle. .active mirrors the grocery screen's
+     Start/Finish-shopping toggle treatment. */
+  .cookbook-cooking-toggle.active {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  /* Progress line beside the toggle while cooking - informational
+     only, and aria-live so marking an ingredient announces the
+     remaining count to a screen reader. */
+  .cookbook-cooking-progress {
+    color: var(--muted);
+    font-size: 0.8rem;
+  }
+  .cookbook-cooking-error {
+    text-align: right;
+    margin: 0.25rem 0 0;
+    font-size: 0.8rem;
+  }
+  /* In cooking mode a checked ingredient row reads as "used up":
+     strikethrough + muted name. The checkbox chrome itself is left
+     alone so the muscle memory from the grocery bridge still
+     applies. */
+  .cookbook-render.cooking :global(li.cook-used .cook-name) {
+    text-decoration: line-through;
+    color: var(--muted);
+  }
+
+  /* Instruction steps — replace the browser-default "1." marker with
+     a circular accent-weak badge via CSS counters. The hanging indent
+     keeps multi-line step text flowing under itself instead of
+     crashing into the badge. */
+  .cookbook-render :global(ol.cook-steps) {
+    list-style: none;
+    counter-reset: cook-step;
+    margin: 0.35rem 0 0.75rem;
+    padding: 0;
+  }
+  .cookbook-render :global(ol.cook-steps li) {
+    counter-increment: cook-step;
+    position: relative;
+    padding: 0.15rem 0 0.6rem 2.1rem;
+    line-height: 1.45;
+    /* Hint that the step is tappable — click toggles `.is-active`. The
+       `onRenderClick` handler in this component only reacts to clicks
+       inside `ol.cook-steps`, so the cursor stays accurate. */
+    cursor: pointer;
+  }
+  .cookbook-render :global(ol.cook-steps li::before) {
+    content: counter(cook-step);
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 1.5rem;
+    height: 1.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--accent-weak);
+    color: var(--text);
+    font-size: 0.8rem;
+    font-weight: 700;
+    border-radius: var(--radius-round);
+  }
+  /* Highlighted step — a soft accent-weak wash that tells the reader
+     "this is the step I'm on" while cooking. Full-bleed padding so the
+     tint extends to the badge edge on the left and the pane edge on
+     the right, making the active step the obvious focal point at a
+     glance. Inherits the theme accent, so a blue theme gets a blue
+     wash and a red theme gets a red wash — no per-theme overrides
+     needed. */
+  .cookbook-render :global(ol.cook-steps li.is-active) {
+    background: var(--accent-weak);
+    border-radius: var(--radius-md);
+    margin: 0 -0.4rem;
+    padding-right: 0.4rem;
+    padding-left: 2.5rem;
   }
   .cookbook-render :global(ol.cook-steps li.is-active::before) {
     left: 0.4rem;
