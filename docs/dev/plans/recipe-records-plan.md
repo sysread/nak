@@ -214,7 +214,9 @@ unreliable.
   siblings already listed; date-relative because the wiki
   gotcha's second duplicate shape is a later
   conversation re-describing yesterday's event, which same-date
-  siblings cannot catch). The model sees the likely duplicate in
+  siblings cannot catch; the payload carries date + id + a short
+  content preview (~120 chars, the changelog-preview cap), not
+  full bodies - it rides every create call). The model sees the likely duplicate in
   the same turn without a second call. The plan accepts a higher duplicate rate
   than the wiki's (no sweep, no librarian) as the price of no
   sweep.
@@ -287,12 +289,13 @@ inheriting it.)
 
 - **Add form**: date, content (Markdown), comma-separated tags,
   outcome selector. The compose/edit draft AND the expanded-row
-  state RESET when the open recipe id changes (a kept draft
-  would silently retarget to the newly opened recipe and save a
-  record against the wrong recipe
+  state RESET when the open recipe id changes - the draft on
+  EVERY path (a kept draft would silently retarget to the newly
+  opened recipe and save a record against the wrong recipe
   - the one-keystroke retype is the cheap loss; the
-  misattribution is not; the expanded row the twin cleared for
-  free via its keyed remount).
+  misattribution is not); the expanded row only for browse rows,
+  whose carve-out the Rows bullet owns (the twin cleared both
+  for free via its keyed remount).
 - **Rows**: date ("Mon D, YYYY"), outcome chip, tag chips, truncated
   preview; a row expands to the full content with Edit / Export /
   Delete (the twin's expanded-row shape). A search-hit click
@@ -409,8 +412,10 @@ inheriting it.)
   `missingRecordMessage({ fetching, online, noun: 'recipe' })`
   (`src/lib/ui/offline-status.ts`, already consumed by the wiki
   pane): a loading state while the by-id fetch resolves, an
-  offline-cache-miss state, and "Recipe not found." only on a
-  resolved null. None of the three moves the
+  offline-cache-miss state, and a not-found line only on a
+  resolved null (the primitive's actual copy: "That recipe
+  couldn't be found. It may have been deleted." - quoted here as
+  descriptive, not verbatim). None of the three moves the
   section, so the round-8 unmount bug stays fixed. The known
   live-search losses are accepted and match the twin: entering
   the edit pane, deselecting back to the list pane, and leaving
@@ -451,18 +456,25 @@ several bullets:
   twin's filename-collision dedup (it appends a numeric suffix,
   starting at `-2`, for same-date records).
 - **Offline**: records stay online-only, but reads degrade soft:
-  offline, the section keeps rendering its last fetch FOR THE SAME
-  recipe. The rows are keyed by the recipe id they were fetched
-  for, and that keying governs navigation everywhere: online, an
+  offline, the section keeps rendering already-fetched rows FOR
+  THE SAME recipe: retention is a per-recipe-id map kept for the
+  session (not just the single last fetch), so revisiting a
+  recipe whose log was fetched earlier still shows it offline.
+  The keying governs navigation everywhere: online, an
   id with no cached fetch renders the loading state - never
-  another recipe's rows. Offline, navigating to another recipe
-  shows the offline-no-data line, not the previous recipe's log
+  another recipe's rows. Offline, navigating to a recipe whose
+  log was not fetched this session shows the offline-no-data
+  line, not the previous recipe's log
   under a new title. A mid-cook "what did I note last time" on
-  the open recipe still works. The
+  an already-read recipe still works. The
   add/edit/delete controls disable with copy, the way the
   bookmark controls degrade. The filter and search controls
   disable too - both are server queries, and a failed refetch
-  must not look like an empty log. Export stays enabled (it
+  must not look like an empty log. Already-fetched search
+  results stay rendered when the network drops - the disabled
+  controls gate new queries, they do not clear results. An
+  online log fetch that FAILS (transient) renders the twin's
+  load-error banner, not the empty state. Export stays enabled (it
   reads already-fetched rows) and exports the last fetch; Export
   all hides at zero fetched rows (the twin's rule). A fresh load with nothing yet
   fetched (no cached rows) shows that same offline-no-data line,
@@ -563,7 +575,10 @@ away from it.
   gotcha documents), embedding RPCs, `EMBED_SOURCES` entry,
   `_shared/recipe-record-limits.ts`, types, SupabaseService slice,
   and `subscribeToRecipeRecordChanges` in `realtime.ts` (data-layer
-  work, so M2's wiring has something to call), plus the head-count
+  work, so M2's wiring has something to call). KNIP NOTE: those
+  M1 exports have no consumers until M2/M3, so `mise run knip`
+  flags them mid-milestone - accepted local-gate red within the
+  one PR (CI sees only the final state); plus the head-count
   query the delete confirm needs (`countRecipeRecords(recipe_id)`
   in the data layer), the batched title lookup the cross-recipe
   hit labels need (`fetchRecipeTitles(ids)` - M2's search UI
@@ -661,9 +676,11 @@ away from it.
   loaded drawer window; query, results, and highlight must
   survive the by-id fallback fetch), the delete confirm's
   "N records" count, export, embedding backfill, and the offline
-  degradation (stale rows visible on the same recipe, writes and
+  degradation (per-id retained rows visible on the same recipe,
+  writes and
   filter/search controls disabled, offline-no-data line on a
-  fresh load AND on an offline recipe switch, and the
+  fresh load AND on an offline switch to a recipe whose log was
+  not fetched this session, and the
   offline-uncached-recipe placeholder on the deep-link path). Index
   it in `docs/qa/README.md`'s use-case list.
 - Docs: `../cookbook.md` gains a Records section (and fixes its
@@ -694,7 +711,8 @@ away from it.
   `recipe-records`; `docs/dev/embeddings.md`'s EMBED_SOURCES registry
   description gains the `recipe-records` source (and its source
   count stops being a hardcoded number); `docs/dev/tools.md`'s
-  always-on section names the three record reads;
+  always-on section names the three record reads (and its
+  catalog-size figure stops being a hardcoded number);
   `docs/dev/README.md`'s "Cookbook modal" mention joins the
   inline-viewer wording fix;
   `docs/qa/use-cases/realtime-relays.md`'s Covers line and
