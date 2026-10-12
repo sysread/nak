@@ -308,10 +308,11 @@ inheriting it.)
 - **Add form**: date, content (Markdown), comma-separated tags,
   outcome selector. The compose/edit draft AND the expanded-row
   state RESET when the open recipe id changes - the draft on
-  EVERY path (a kept draft would silently retarget to the newly
-  opened recipe and save a record against the wrong recipe
-  - the one-keystroke retype is the cheap loss; the
-  misattribution is not); the expanded row only for browse rows,
+  EVERY path, which includes CLOSING an open edit form (an edit
+  form targets a specific record of the previous recipe; kept
+  open with a blanked draft it would write the old record from
+  the new pane - the same misattribution shape through another
+  door); the expanded row only for browse rows,
   whose carve-out the Rows bullet owns (the twin cleared both
   for free via its keyed remount).
 - **Rows**: date ("Mon D, YYYY"), outcome chip, tag chips, truncated
@@ -324,7 +325,10 @@ inheriting it.)
   expanded-row reset on recipe-id change applies to BROWSE rows
   only - a search-result row stays expanded until the search
   clears (otherwise the navigation collapse would fight the
-  scroll-highlight that is supposed to mark it). Foreign rows
+  scroll-highlight that is supposed to mark it; if a kept-expanded
+  row's recipe stops matching the open recipe, its Edit/Delete
+  hide and only Export renders - affordances follow the open
+  recipe). Foreign rows
   render Export only - Edit/Delete belong to the open recipe's
   records (the retention-map rows), and the retention-map
   reducer (fetch lands vs open-id-changed) is a pure function in
@@ -401,12 +405,12 @@ inheriting it.)
   turn). Sidebar navigation with a live search keeps the results
   replacing the newly opened recipe's log (the same
   query-survival rule, named as accepted: the exit is clearing
-  the search; the QA use-case pins it). A hit whose recipe was deleted after the search saved
-  resolves at CLICK time: a hit on an offline-cached recipe
-  still opens (the read-through decides - clicks always
-  navigate); a resolved null while online re-renders the hit row
-  "(deleted recipe)" with a no-op click, and the title batch is
-  not re-run for the whole set. Offline-uncached hits open onto
+  the search; the QA use-case pins it). Clicks ALWAYS navigate -
+  the pane's resolution state is the deletion signal, and row
+  labels are batch-sourced and sticky (a resolved null at click
+  never rewrites a row label; the batch miss is the only
+  "(deleted recipe)" path). Offline-cached hits still open (the
+  read-through serves them); offline-uncached hits open onto
   the pane's offline-no-data state. Hit labels come from the
   title batch, NEVER from `getRecipeCached` (which collapses
   offline-uncached, fetch errors, and truly-gone into one null,
@@ -419,10 +423,9 @@ inheriting it.)
   ALWAYS renders the results list (the offline-no-data line
   governs the log area, add form, and Export all, never the
   results); the render-nothing mount-void applies only when
-  online and resolution is `missing`. Click-time read-through
-  stays as-is: a blip at
-  click can land the pane on its not-found line while the recipe
-  exists (the pane misreports a blip as not-found; the row
+  online and resolution is `missing`. The pane CAN misreport a
+  blip as not-found while the recipe exists (the pane misreports
+  a blip as not-found; the row
   labels don't, and the asymmetry is accepted because the label
   is sticky while the pane recovers on re-navigation).
   Clicking a hit on the OPEN recipe (navigation is a no-op)
@@ -516,8 +519,10 @@ several bullets:
   The keying governs navigation everywhere: the per-recipe log
   view renders FROM THE RETENTION MAP (`map[activeId]`), online
   included, and a log fetch whose response lands after the open
-  id changed is discarded - the same late-response race the
-  search's abort-controller kills, killed here by construction.
+  id changed lands in the map under ITS OWN recipe id (retained,
+  not dropped - the retention promise holds in the race corner
+  too) while the view keeps reading `map[openId]` - the
+  late-response race dies by construction.
   Online, an
   id with no cached fetch renders the loading state - never
   another recipe's rows. Offline, navigating to a recipe whose
@@ -654,8 +659,9 @@ away from it.
   in the data layer), the batched title lookup the cross-recipe
   hit labels need (`fetchRecipeTitles(ids)` - M2's search UI
   consumes it), its three doc updates (offline-cache.md,
-  embeddings.md, architecture.md - the relay documentation
-  lives in the QA use-case, handled there), the RPC
+  embeddings.md, architecture.md) plus the realtime-relays QA
+  use-case catch-up (the fourth relay + replident index in its
+  audit), the RPC
   grants the trio needs (the claim/save pair carries the
   service_role revoke/grant pair; the search RPC keeps
   `p_user_id` for the edge caller), and a pointer comment in
@@ -735,7 +741,10 @@ away from it.
   dedup + cap behavior, the ILIKE pattern shape that guards the
   logic-tree misuse, the standalone leg's `.eq('user_id',
   ctx.userId)` b-strict filter, and the limit clamp named after
-  the twin's 1..30).
+  the twin's 1..30), plus a prompt-invariant assertion that the
+  capture trigger and the check-list-first dedup guard survive
+  in create's description (the `wiki_records.test.ts` style;
+  both files are the pointed-at templates).
 - `tests/schema-dml-columns.test.ts`: the floor assertions are
   `>=` comparisons, so adding a table cannot trip them upward -
   the suite should simply stay green over the new DML. A floor
@@ -777,7 +786,8 @@ away from it.
   it in `docs/qa/README.md`'s use-case list.
 - Docs: `../cookbook.md` gains a Records section (and fixes its
   stale inventory in passing: "nine LLM tools" and "five
-  recipe tools registered" predate the photo tools, the
+  recipe tools registered" are both wrong today (8 real tools),
+  the
   `recipe_search` ghost appears twice (:24 and :601), the
   backfill line's "alongside the other six sources" is a
   hardcoded count that is already wrong, the same paragraph's
