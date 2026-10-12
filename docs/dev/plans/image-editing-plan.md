@@ -421,8 +421,8 @@ same pass.
 
 ## Scoped out (deliberately)
 
-- `/image/multi-edit` (compose several images) - needs UI thinking
-  about image ordering; revisit later.
+- `/image/multi-edit` (compose several images) - retired by decision
+  (2026-10-12): not needed. Revisit only if a real use appears.
 - `enhance_prompt` (+$0.04, ~30s) - leave off; latency- and
   cost-sensitive path.
 - Pixel dimensions in edit-family result descriptors (square
