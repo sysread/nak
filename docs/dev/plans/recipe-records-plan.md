@@ -131,10 +131,11 @@ Limits: `MAX_RECIPE_RECORD_CONTENT_CHARS = 8000`,
 (wiki's caps). New constants live in a new
 `supabase/functions/_shared/recipe-record-limits.ts`, imported
 browser-side via the `$shared` alias. This extends the existing
-`_shared` limits pattern (`supabase/functions/_shared/wiki-limits.ts`,
-the edge-side consolidation of wiki's caps), which currently carries
-only the content cap; the recipe file carries all three so the tag
-caps never re-duplicate.
+`_shared` limits pattern (`supabase/functions/_shared/wiki-limits.ts`):
+of the wiki record caps, only the content cap is consolidated
+there today - the tag caps live in `_record_helpers.ts` and the
+extraction agent - so the recipe file carries all three from the
+start and the tag caps never re-duplicate.
 
 ### What records are NOT
 
@@ -158,6 +159,10 @@ caps never re-duplicate.
   maintained by the server-side topics unit, which reads only
   title/cooklang and never looks at child tables. Records keep
   freeform tags; the drawer's topic filter does not reach them.
+- **Not versioned.** While the user views a past version in the
+  History panel, the Records section below keeps showing the
+  current log - records hang off the recipe, not any version
+  row. Stated so the mixed view does not read as a bug later.
 
 ### Chat tools (six new)
 
@@ -333,12 +338,16 @@ inheriting it.)
   renders "(deleted recipe)" with a no-op click. Searching the
   whole cooking log from any recipe is the point; per-recipe
   narrowing is the filters' job. During the resolution window the
-  pane's own "Recipe not found." placeholder renders above the
-  mounted section - leave it; moving the section inside the
-  content gate would reintroduce the round-8 unmount bug. The
-  two other known live-search losses are accepted and match the
-  twin: entering the edit pane and leaving the Cookbook view both
-  unmount the section and clear the query.
+  pane's own "Recipe not found." placeholder would render above
+  the mounted section - and on this hot path (a hit on a recipe
+  outside the loaded drawer window) that is a recurring lie, so
+  the by-id fetch gets a distinguishing in-flight state: the pane
+  renders "Loading recipe..." while the fetch resolves and
+  "Recipe not found." only on a resolved null. Neither moves the
+  section, so the round-8 unmount bug stays fixed. The known
+  live-search losses are accepted and match the twin: entering
+  the edit pane, deselecting back to the list pane, and leaving
+  the Cookbook view all unmount the section and clear the query.
 - **Export**: single record to `yyyy-mm-dd-<slug>.md` with
   date/tags/outcome front matter, and Export all to a zip holding
   `recipe.md` plus one `records/` entry per record (wiki's Export
@@ -421,7 +430,13 @@ Supporting moves:
   refetches, so agent-side record writes land live.
 - Screen primitives: `src/lib/ui/recipe-records.ts`, pure helpers
   (filter predicates, outcome chip labels and colors, export
-  filename slugs), unit-tested next door.
+  filename slugs), unit-tested next door. The search chain's
+  query-embedding step gets a named home too -
+  `searchRecipeRecordsSemantic({ query, queryEmbedding, limit })`
+  in a `$lib` sibling module (the `src/lib/wiki.ts` analog of
+  `searchWikiRecordsSemantic`: it calls the embedder, then the
+  facade, then the data-layer merge) - so the embed call never
+  lands inside the .svelte file.
 
 ## Milestones
 
@@ -446,9 +461,10 @@ away from it.
   a seeded record, unit tests pass.
 - **M2 - UI.** The Records section in the detail pane (mounted by
   Cookbook.svelte): add / edit / delete, filters, cross-recipe
-  search with navigation + scroll-highlight of the clicked hit,
-  export module, offline degradation, realtime refresh wired
-  through `Chat.svelte` + `cookbook-events.ts`.
+  search with navigation + scroll-highlight of the clicked hit
+  (including the `searchRecipeRecordsSemantic` wrapper), export
+  module, offline degradation, realtime refresh wired through
+  `Chat.svelte` + `cookbook-events.ts`.
 - **M3 - Chat tools.** Six tools wired into the two toolboxes and
   registered in the edge tool barrel
   (`supabase/functions/venice/tools/index.ts`), shared edge helpers
@@ -456,7 +472,9 @@ away from it.
   `_record_helpers.ts` clone: column list, date/tag normalizers,
   ownership pre-check, plus outcome normalizing), formatArgs, the
   capture trigger + dedup/merge guards in the descriptions, the
-  two toolbox description strings (they enumerate members), the
+  two toolbox description strings (both catalog-visible:
+  `cookingToolbox` gains the capture trigger, `alwaysOnToolbox`'s
+  read-surface enumeration gains the three record reads), the
   edge tools' b-strict specifics carried from the twin (explicit
   `user_id` on insert, and a parent-ownership pre-check so a
   record can only be written to a recipe the calling user owns),
@@ -481,7 +499,9 @@ away from it.
 - `tests/tools.test.ts`: three loops updated for the six new
   tools - the cookingToolbox membership array (writes), the
   always-on read list (`toContain`), and the no-writes-leak loop
-  (records writes must not appear outside the cooking toolbox).
+  (records writes must not appear outside the cooking toolbox;
+  while in that loop, drop its pre-existing `recipe_update`
+  ghost - no such tool exists).
 - Edge handler tests modeled on
   `supabase/functions/tests/recipe_save.test.ts` (the existing
   recipe-tool handler template; note wiki's record handlers have
@@ -501,7 +521,8 @@ away from it.
   never had - the chat tools are the primary capture path now, so
   the walkthrough covers: the chat-capture journey (tell the model
   a bake happened; the reply names the new record; opening the
-  modal shows it, which doubles as the realtime-relay proof; a
+  detail pane shows it, which doubles as the realtime-relay
+  proof; a
   second report of the same event exercises the dedup guard; a
   detail correction exercises the get-then-merge update), the
   outcome filter end to end (set via tool and via the dropdown,
