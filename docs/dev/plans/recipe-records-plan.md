@@ -209,10 +209,12 @@ unreliable.
   (two records on one date are legitimate - a semantic-dedup
   refusal would contradict that), but the create result carries
   the recipe's same-date sibling records alongside the new row -
-  AND the recipe's most recent prior record (date + preview),
-  because the wiki gotcha's second duplicate shape is a later
+  AND the recipe's most recent PRIOR record (greatest date
+  strictly before the new record's date, excluding the same-date
+  siblings already listed; date-relative because the wiki
+  gotcha's second duplicate shape is a later
   conversation re-describing yesterday's event, which same-date
-  siblings cannot catch. The model sees the likely duplicate in
+  siblings cannot catch). The model sees the likely duplicate in
   the same turn without a second call. The plan accepts a higher duplicate rate
   than the wiki's (no sweep, no librarian) as the price of no
   sweep.
@@ -311,7 +313,8 @@ inheriting it.)
   twin's hide-filters-while-searching block gets SPLIT: date/tag
   controls hide during a live search (the twin's mechanism; the
   search box's clear-on-empty is the only exit needed, matching
-  RecipeList), and clearing the search also resets the outcome
+  RecipeList - clearing restores them, reset), and clearing the
+  search also resets the outcome
   dropdown (otherwise browse would open on the searched outcome,
   the exact "recipe B has almost no history" misread the
   reset rules exist to prevent), the
@@ -380,7 +383,10 @@ inheriting it.)
   instead - the batched title query either succeeds (a miss is
   then genuinely "(deleted recipe)") or fails as a whole (every
   row renders "couldn't load"; a network blip must not read as
-  deletion). Click-time read-through stays as-is: a blip at
+  deletion). Offline, the offline-no-data treatment wins over
+  everything: the render-nothing mount-void applies only when
+  online and resolution is `missing`. Click-time read-through
+  stays as-is: a blip at
   click navigates honestly onto the offline-no-data pane.
   Clicking a hit on the OPEN recipe (navigation is a no-op)
   still fires the scroll-into-view + highlight. The scroll pins
@@ -416,7 +422,8 @@ several bullets:
 |---|---|---|---|
 | date/tag filters | reset (every path) | hidden | restored, reset |
 | outcome dropdown | reset (browse) | stays set, filters the search | reset |
-| draft + expanded row | reset (browse rows) | kept | kept; search-result expansion survives until here |
+| compose/edit draft | reset (every path) | kept | kept |
+| expanded row | reset (browse rows) | kept | kept; search-result expansion survives until here |
 | query + results | kept | - | cleared |
 
 - **Export**: single record to `yyyy-mm-dd-<slug>.md` with
@@ -455,7 +462,9 @@ several bullets:
   add/edit/delete controls disable with copy, the way the
   bookmark controls degrade. The filter and search controls
   disable too - both are server queries, and a failed refetch
-  must not look like an empty log. A fresh load with nothing yet
+  must not look like an empty log. Export stays enabled (it
+  reads already-fetched rows) and exports the last fetch; Export
+  all hides at zero fetched rows (the twin's rule). A fresh load with nothing yet
   fetched (no cached rows) shows that same offline-no-data line,
   keyed off the offline status Cookbook.svelte already computes -
   never the "no records yet" empty state, which would lie about
@@ -589,9 +598,12 @@ away from it.
   preamble names the distinction from the easily-confused
   `_recipe_helpers.ts` - photo meta, a different thing), formatArgs, the
   capture trigger + dedup/merge guards in the descriptions, the
-  two toolbox description strings (both catalog-visible:
-  `cookingToolbox` gains the capture trigger, `alwaysOnToolbox`'s
-  read-surface enumeration gains the three record reads), the
+  two toolbox description strings (asymmetric visibility:
+  `cookingToolbox`'s description IS catalog-rendered and carries
+  the capture trigger; `alwaysOnToolbox`'s description is never
+  rendered anywhere - the three reads' catalog presence is their
+  shortDescriptions - so its read-surface enumeration update is
+  registry hygiene, not a prompt surface), the
   edge tools' b-strict specifics carried from the twin (explicit
   `user_id` on insert, and a parent-ownership pre-check so a
   record can only be written to a recipe the calling user owns),
