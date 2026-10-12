@@ -323,7 +323,11 @@ inheriting it.)
   expanded-row reset on recipe-id change applies to BROWSE rows
   only - a search-result row stays expanded until the search
   clears (otherwise the navigation collapse would fight the
-  scroll-highlight that is supposed to mark it).
+  scroll-highlight that is supposed to mark it). Foreign rows
+  render Export only - Edit/Delete belong to the open recipe's
+  records (the retention-map rows), and the retention-map
+  reducer (fetch lands vs open-id-changed) is a pure function in
+  `src/lib/ui/recipe-records.ts`, unit-tested DOM-free.
 - **Filters**: from/to date range, tag dropdown, outcome dropdown,
   and a semantic search box (debounce + abort-controller supersede
   wired like RecipeList's search; the merge itself is
@@ -402,14 +406,15 @@ inheriting it.)
   navigate); a resolved null while online re-renders the hit row
   "(deleted recipe)" with a no-op click, and the title batch is
   not re-run for the whole set. Offline-uncached hits open onto
-  the pane's offline-no-data state. The label consults offline
-  status first. Hit labels come from the title batch, NEVER from
-  `getRecipeCached` (which collapses offline-uncached, fetch
-  errors, and truly-gone into one null): the batched title query
-  either succeeds (a miss is then genuinely "(deleted recipe)")
-  or fails as a whole (every
-  row renders "couldn't load"; a network blip must not read as
-  deletion). Render precedence when offline: a live search
+  the pane's offline-no-data state. Hit labels come from the
+  title batch, NEVER from `getRecipeCached` (which collapses
+  offline-uncached, fetch errors, and truly-gone into one null,
+  and no click-time re-render is specified because no observable
+  distinguishes them): the batched title query either succeeds
+  (a miss is then genuinely "(deleted recipe)") or fails as a
+  whole (every row renders "couldn't load"; a network blip must
+  not read as deletion). Render precedence when offline: a live
+  search
   ALWAYS renders the results list (the offline-no-data line
   governs the log area, add form, and Export all, never the
   results); the render-nothing mount-void applies only when
@@ -426,8 +431,10 @@ inheriting it.)
   search's results list REPLACES the log area (the twin's
   `visible = searchResults ?? records` anatomy) - the log's
   loading/empty/offline states apply only in browse mode; an
-  open compose form stays mounted but hidden with its draft
-  kept, and reappears when the search clears. Outcome survives
+  open compose/edit form stays VISIBLE above the results (the
+  twin's shape - hidden-form edit would mutate state the user
+  cannot see, so the twin's compose-conditional carries over
+  unchanged and the draft-kept rule costs nothing). Outcome survives
   navigation
   ONLY while a search is live (resetting it then would desync
   the dropdown from the displayed results); in browse mode it
@@ -513,8 +520,12 @@ several bullets:
   an already-read recipe still works. The
   add/edit/delete controls disable with copy, the way the
   bookmark controls degrade. The filter and search controls
-  disable too - both are server queries, and a failed refetch
-  must not look like an empty log. Already-fetched search
+  disable too - SUBMISSION does (both are server queries, and a
+  failed refetch must not look like an empty log), but the
+  search box stays editable and clearable offline: clearing is
+  a retention-map read, not a server call, and without that
+  carve-out a mid-search network drop traps the user in the
+  results until reconnect. Already-fetched search
   results stay rendered when the network drops - the disabled
   controls gate new queries, they do not clear results. An
   online log fetch that FAILS (transient) renders the twin's
@@ -635,8 +646,9 @@ away from it.
   query the delete confirm needs (`countRecipeRecords(recipe_id)`
   in the data layer), the batched title lookup the cross-recipe
   hit labels need (`fetchRecipeTitles(ids)` - M2's search UI
-  consumes it), its four doc updates (realtime-relays.md,
-  offline-cache.md, embeddings.md, architecture.md), the RPC
+  consumes it), its three doc updates (offline-cache.md,
+  embeddings.md, architecture.md - the relay documentation
+  lives in the QA use-case, handled there), the RPC
   grants the trio needs (the claim/save pair carries the
   service_role revoke/grant pair; the search RPC keeps
   `p_user_id` for the edge caller), and a pointer comment in
