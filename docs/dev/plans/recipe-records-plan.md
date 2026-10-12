@@ -262,12 +262,15 @@ tripwire).
 
 ### UI: Records section in the Cookbook detail pane
 
-The Cookbook modal's detail pane gains a Records section (the
+The Cookbook view's detail pane gains a Records section (the
 article view's Records section is the anatomy), rendered by a new
 `src/components/RecipeRecords.svelte`. Placement: at the bottom of
 the detail pane, below the History panel - the article view renders
 Records at the bottom too, and the reading order "recipe, then its
-history, then its log" is the narrative.
+history, then its log" is the narrative. (Older docs call the
+surface a "modal"; the component renders inline in the chat shell
+today - the plan fixes that wording in cookbook.md rather than
+inheriting it.)
 
 - **Add form**: date, content (Markdown), comma-separated tags,
   outcome selector. The compose/edit draft RESETS when the open
@@ -290,11 +293,13 @@ history, then its log" is the narrative.
   every recipe's records (mirroring `recipe_record_search`), not
   just the open recipe's log; a hit on another recipe is annotated
   with that recipe's title (resolved with one batched
-  `.in('id', hitRecipeIds)` title query per result set, falling
-  back to the by-id fetch for misses - not one read-through call
-  per hit; the twin's bare "(other article)" label is not enough
-  once hits are clickable) and clicking it navigates
-  the detail pane to that recipe through the modal's routed-recipe
+  `.in('id', hitRecipeIds)` title query per result set - not one
+  read-through call per hit; a miss means the recipe is gone,
+  rendering "(deleted recipe)" with a no-op click, since a saved
+  result set can outlive a recipe; the twin's bare "(other
+  article)" label is not enough once hits are clickable) and
+  clicking it navigates
+  the detail pane to that recipe through the view's routed-recipe
   resolution (`route.recipe` from `src/lib/routing.svelte.ts`).
   Navigation KEEPS the query and its results (a cross-recipe
   search lives to survive its first click - "failed rye bakes
@@ -327,7 +332,13 @@ history, then its log" is the narrative.
   turn). A hit whose recipe was deleted after the search saved
   renders "(deleted recipe)" with a no-op click. Searching the
   whole cooking log from any recipe is the point; per-recipe
-  narrowing is the filters' job.
+  narrowing is the filters' job. During the resolution window the
+  pane's own "Recipe not found." placeholder renders above the
+  mounted section - leave it; moving the section inside the
+  content gate would reintroduce the round-8 unmount bug. The
+  two other known live-search losses are accepted and match the
+  twin: entering the edit pane and leaving the Cookbook view both
+  unmount the section and clear the query.
 - **Export**: single record to `yyyy-mm-dd-<slug>.md` with
   date/tags/outcome front matter, and Export all to a zip holding
   `recipe.md` plus one `records/` entry per record (wiki's Export
@@ -337,7 +348,11 @@ history, then its log" is the narrative.
   full log - a DIVERGENCE from the twin, which exports the
   date/tag-filtered set and ignores only the search; stated per
   the non-conforming rule, because a log is a diary and export is
-  its backup path while filters are transient views.
+  its backup path while filters are transient views. The section
+  receives the resolved `Recipe | null` (nullable exactly during
+  the resolution windows above, not a bare title - `recipeToMarkdown`
+  needs title + cooklang + source), and Export all disables while
+  it is null.
   The export helpers live in a new recipe-typed
   `src/lib/recipe-records-export.ts` (a sibling of
   `src/lib/wiki-export.ts`, which is article-typed), reusing the
@@ -346,8 +361,11 @@ history, then its log" is the narrative.
 - **Offline**: records stay online-only, but reads degrade soft:
   offline, the section keeps rendering its last fetch FOR THE SAME
   recipe (the retained rows are keyed by the recipe id they were
-  fetched for; a mid-cook "what did I note last time" still works
-  on the open recipe, but navigating to another recipe while
+  fetched for - and that keying governs online navigation too:
+  an id with no cached fetch renders the loading state, never
+  another recipe's rows; a mid-cook "what did I note last time"
+  still works on the open recipe, but navigating to another
+  recipe while
   offline must NOT render the previous recipe's log under the new
   title - it shows the offline-no-data line instead). The
   add/edit/delete controls disable with copy, the way the
@@ -385,7 +403,11 @@ Supporting moves:
 - Data layer: `src/lib/supabase/recipe-records.ts`, plain async
   functions taking the shared client (the `wiki-records.ts` shape:
   no class, no state), one-for-one delegation from the
-  SupabaseService facade. Row types + coercer (`RecipeRecord`,
+  SupabaseService facade; the list call's filter set is date
+  range, tags (AND), outcome, limit - outcome is the one the
+  twin's list lacks, and it exists because browse-mode outcome
+  filtering is a promised surface, not just a search param. Row
+  types + coercer (`RecipeRecord`,
   `coerceRecipeRecord`) in `src/lib/supabase/types/cookbook.ts`
   (the module's first coercer - recipes are cast raw today; wiki's
   coercers live in `types/wiki.ts`), re-exported through the
@@ -495,8 +517,11 @@ away from it.
   `docs/qa/README.md`'s use-case list.
 - Docs: `../cookbook.md` gains a Records section (and fixes its
   stale tool inventory in passing: "nine LLM tools" and "five
-  recipe tools registered" predate the photo tools, and its
-  `recipe_search` mention names a tool that does not exist);
+  recipe tools registered" predate the photo tools, its
+  `recipe_search` mention names a tool that does not exist, the
+  same paragraph's `GATED_TOOLS` reference is a removed
+  mechanism, and the "modal" wording - the component renders
+  inline now);
   the user-facing
   doc `docs/user/cookbook.md` gains the "why records vs History
   panel" story (the `docs/user/` update is mandatory in the same
@@ -509,7 +534,9 @@ away from it.
   no such tool exists in the registry);
   `docs/dev/components.md`'s inventory gains the RecipeRecords
   entry; `docs/dev/embeddings.md`'s EMBED_SOURCES registry
-  description gains the `recipe-records` source;
+  description gains the `recipe-records` source (and its source
+  count stops being a hardcoded number); `docs/dev/tools.md`'s
+  always-on section names the three record reads;
   `docs/qa/use-cases/realtime-relays.md`'s Covers line and
   pg_class audit query gain the fourth relay and its
   replica-identity index (the doc already lags - `wiki_records`
@@ -558,6 +585,11 @@ away from it.
   spotty.
 - **No history tools** for recipes, unchanged from the existing
   position (revert and History are user-directed UX).
+- **No recall-pipeline or `context` coverage.** Wiki records join
+  neither the `context` umbrella tool nor the recall pipeline,
+  and recipe records join neither either - records are surfaced
+  through their own tools and the Records section. Stated so a
+  future session does not relitigate it.
 
 ## Decisions (resolved 2026-10-12)
 
