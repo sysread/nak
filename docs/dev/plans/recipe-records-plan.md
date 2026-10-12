@@ -293,7 +293,12 @@ inheriting it.)
   free via its keyed remount).
 - **Rows**: date ("Mon D, YYYY"), outcome chip, tag chips, truncated
   preview; a row expands to the full content with Edit / Export /
-  Delete (the twin's expanded-row shape).
+  Delete (the twin's expanded-row shape). A search-hit click
+  navigates AND expands AND highlights the clicked row; the
+  expanded-row reset on recipe-id change applies to BROWSE rows
+  only - a search-result row stays expanded until the search
+  clears (otherwise the navigation collapse would fight the
+  scroll-highlight that is supposed to mark it).
 - **Filters**: from/to date range, tag dropdown, outcome dropdown,
   and a semantic search box (debounce + abort-controller supersede
   wired like RecipeList's search; the merge itself is
@@ -306,7 +311,10 @@ inheriting it.)
   twin's hide-filters-while-searching block gets SPLIT: date/tag
   controls hide during a live search (the twin's mechanism; the
   search box's clear-on-empty is the only exit needed, matching
-  RecipeList), the
+  RecipeList), and clearing the search also resets the outcome
+  dropdown (otherwise browse would open on the searched outcome,
+  the exact "recipe B has almost no history" misread the
+  reset rules exist to prevent), the
   outcome dropdown renders and stays live in BOTH modes. An empty
   search box clears results back to browse (RecipeList's
   clear-on-empty); the search result cap is a named tunable next
@@ -367,9 +375,11 @@ inheriting it.)
   not re-run for the whole set. Offline-uncached hits open onto
   the pane's offline-no-data state. The label consults offline
   status first (`getRecipeCached` returns null for
-  offline-uncached and fetch errors too): offline
-  or errored shows the offline/no-data treatment, and
-  "(deleted recipe)" only for a resolved null while online.
+  offline-uncached, fetch errors, and truly-gone): offline
+  or errored shows the offline/no-data treatment, errored shows
+  a "couldn't load" label (a network blip must not read as
+  deletion), and "(deleted recipe)" only for a resolved null
+  while online.
   Clicking a hit on the OPEN recipe (navigation is a no-op)
   still fires the scroll-into-view + highlight. The scroll pins
   to after the pane's resolution settles and the log refetch
@@ -472,7 +482,9 @@ Supporting moves:
   the count and then opens the dialog - an async confirm is fine
   at this scale, but the count is never cached at section-load
   (stale) and a failed count shows the confirm without the count
-  clause rather than blocking the delete. With no changelog (decision 2), the cascade delete
+  clause rather than blocking the delete, and the Delete button
+  disables while the count is in flight (kills the double-click
+  window). With no changelog (decision 2), the cascade delete
   of the log is silent everywhere else - this is the one place it
   is announced.
 - Data layer: `src/lib/supabase/recipe-records.ts`, plain async
@@ -647,9 +659,12 @@ away from it.
   ledger must update it); `docs/dev/tools.md`'s write-toolbox
   section re-enumerates the cooking toolbox (and fixes its
   pre-existing `recipe_update` ghost mention on that same line -
-  no such tool exists in the registry);
+  no such tool exists in the registry; `docs/dev/grocery-list.md`
+  carries the same ghost and gets the same fix);
   `docs/dev/components.md`'s inventory gains the RecipeRecords
-  entry; `docs/dev/architecture.md`'s facade-slice list gains
+  entry (and fixes the WikiRecords entry's wrong consumer while
+  there: mounted by Wiki.svelte, not WikiList.svelte);
+  `docs/dev/architecture.md`'s facade-slice list gains
   `recipe-records`; `docs/dev/embeddings.md`'s EMBED_SOURCES registry
   description gains the `recipe-records` source (and its source
   count stops being a hardcoded number); `docs/dev/tools.md`'s
