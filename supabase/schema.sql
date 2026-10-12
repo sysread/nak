@@ -3080,6 +3080,224 @@ end $$;
 -- is in the bucket. Drop the RPC so a sync clears it.
 drop function if exists public.recipe_image_set_storage_path(uuid, text);
 
+-- Recipe records ---------------------------------------------------------
+--
+-- Dated log entries attached to a recipe: the cooking journey (a bake's
+-- outcome, what went wrong, variation ideas) as opposed to the cooklang
+-- source's "current state". A deliberate port of wiki_records (see that
+-- table's block): same no-uniqueness stance (many records per recipe,
+-- and two cooks on one date, are the point), same set-null provenance
+-- column, same embedding quartet and claim protocol. The one deliberate
+-- divergence is the `outcome` enum: "show me my failures" is a filter,
+-- not prose parsing.
+create table if not exists public.recipe_records (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  recipe_id uuid not null references public.recipes(id) on delete cascade,
+  -- Calendar date the cook happened (user-specified or extracted from
+  -- the conversation), distinct from created_at (when the row was
+  -- written). The records list sorts by this column descending, with
+  -- created_at as the same-day tie-break.
+  date date not null,
+  content text not null,
+  tags jsonb not null default '[]'::jsonb,
+  -- Optional classification of how the cook went. Null means
+  -- "unclassified", not "failure" - clearing the UI selector writes
+  -- null. Check-constrained to the three values the UI offers.
+  outcome text,
+  -- Provenance for chat-tool writes (which discussion produced the
+  -- record); null for manually-added records. set null (not cascade) so
+  -- deleting the source thread leaves the record intact - the event
+  -- still happened.
+  source_conversation_id uuid references public.threads(id) on delete set null,
+  embedding vector(2048),
+  embedding_model text,
+  -- No _at suffix to match the convention from memories / recipes.
+  embedding_claim_holder text,
+  embedding_claim_expires timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+do $$ begin
+  if not exists (
+    select 1 from pg_constraint
+     where conname = 'recipe_records_outcome_check'
+       and conrelid = 'public.recipe_records'::regclass
+  ) then
+    alter table public.recipe_records
+      add constraint recipe_records_outcome_check
+      check (outcome is null or outcome in ('success', 'mixed', 'failure'));
+  end if;
+end $$;
+
+-- Reverse-chronological list by recipe (the detail-pane Records
+-- section). date desc matches the rendered order.
+create index if not exists recipe_records_recipe_date_idx
+  on public.recipe_records (recipe_id, date desc);
+-- Cross-recipe chronological queries for one user.
+create index if not exists recipe_records_user_date_idx
+  on public.recipe_records (user_id, date desc);
+-- Tag filtering. GIN over the JSONB array supports `tags ? 'x'` /
+-- `tags @> '["x"]'` containment without scanning every row.
+create index if not exists recipe_records_tags_idx
+  on public.recipe_records using gin (tags);
+
+-- Stamp updated_at on every UPDATE. Records are written from two
+-- surfaces (the browser and the chat tools) and neither can be trusted
+-- to set it, so a trigger is the single source of truth.
+create or replace function public.touch_recipe_record_updated_at()
+  returns trigger language plpgsql as $$
+begin
+  new.updated_at := now();
+  return new;
+end $$;
+
+drop trigger if exists touch_recipe_record_updated_at on public.recipe_records;
+create trigger touch_recipe_record_updated_at
+  before update on public.recipe_records
+  for each row execute function public.touch_recipe_record_updated_at();
+
+-- Same invariant as recipes: when the text that produced the embedding
+-- changes, null the embedding so the backfill worker re-embeds on its
+-- next poll. The embed input is date + content (see
+-- buildRecipeRecordEmbedInput), so both fields gate invalidation. Null
+-- the claim columns too so an in-flight worker save (which guards on
+-- holder + expires > now()) cannot land a stale vector against the new
+-- text.
+create or replace function public.clear_recipe_record_embedding_on_change()
+  returns trigger language plpgsql as $$
+begin
+  if new.content is distinct from old.content
+     or new.date is distinct from old.date then
+    new.embedding := null;
+    new.embedding_model := null;
+    new.embedding_claim_holder := null;
+    new.embedding_claim_expires := null;
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists clear_recipe_record_embedding_on_change on public.recipe_records;
+create trigger clear_recipe_record_embedding_on_change
+  before update on public.recipe_records
+  for each row execute function public.clear_recipe_record_embedding_on_change();
+
+alter table public.recipe_records enable row level security;
+
+drop policy if exists "recipe_records are self-selectable" on public.recipe_records;
+create policy "recipe_records are self-selectable" on public.recipe_records
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "recipe_records are self-insertable" on public.recipe_records;
+create policy "recipe_records are self-insertable" on public.recipe_records
+  for insert with check (auth.uid() = user_id);
+
+drop policy if exists "recipe_records are self-updatable" on public.recipe_records;
+create policy "recipe_records are self-updatable" on public.recipe_records
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "recipe_records are self-deletable" on public.recipe_records;
+create policy "recipe_records are self-deletable" on public.recipe_records
+  for delete using (auth.uid() = user_id);
+
+-- Embeddings pipeline RPCs for recipe records. Same claim/save/search
+-- shape as the wiki record trio (see that block), same security
+-- posture: definer global sweep for claim/save (cron-driven service
+-- role, no auth.uid()), invoker for search (RLS + explicit user_id
+-- guard). One delta from the wiki search: optional p_recipe_id /
+-- p_outcome filters INSIDE the RPC, so a filtered search prunes before
+-- the limit instead of post-filtering a capped result.
+drop function if exists public.claim_next_pending_recipe_record(text, int);
+create or replace function public.claim_next_pending_recipe_record(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns table (id uuid, date date, content text, tags jsonb, user_id uuid)
+language sql security definer
+set search_path = public as $$
+  with candidate as (
+    select r.id
+      from public.recipe_records r
+     where r.embedding is null
+       and (r.embedding_claim_expires is null
+            or r.embedding_claim_expires < now())
+     order by r.updated_at desc
+     limit 1
+     for update skip locked
+  )
+  update public.recipe_records r
+     set embedding_claim_holder = p_holder_id,
+         embedding_claim_expires = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c
+   where r.id = c.id
+  returning r.id, r.date, r.content, r.tags, r.user_id;
+$$;
+
+drop function if exists public.save_recipe_record_embedding_if_claimed(uuid, text, vector, text);
+create or replace function public.save_recipe_record_embedding_if_claimed(
+  p_id uuid,
+  p_holder_id text,
+  p_embedding vector(2048),
+  p_embedding_model text
+) returns boolean
+language plpgsql security definer
+set search_path = public as $$
+declare
+  updated int;
+begin
+  update public.recipe_records
+     set embedding = p_embedding,
+         embedding_model = p_embedding_model,
+         embedding_claim_holder = null,
+         embedding_claim_expires = null
+   where id = p_id
+     and embedding_claim_holder = p_holder_id
+     and embedding_claim_expires > now();
+  get diagnostics updated = row_count;
+  return updated > 0;
+end $$;
+
+revoke all on function public.claim_next_pending_recipe_record(text, int) from public, anon, authenticated;
+revoke all on function public.save_recipe_record_embedding_if_claimed(uuid, text, vector, text) from public, anon, authenticated;
+grant execute on function public.claim_next_pending_recipe_record(text, int) to service_role;
+grant execute on function public.save_recipe_record_embedding_if_claimed(uuid, text, vector, text) to service_role;
+
+-- Cosine similarity search over recipe records, with the two filter
+-- params the wiki twin lacks (recipe_id scope, outcome). Plain cosine
+-- ranking; the caller merges with an ILIKE pass on the client side.
+-- Scoped by RLS plus an explicit user_id guard (b-strict escape hatch;
+-- see search_wiki_records_by_embedding).
+drop function if exists public.search_recipe_records_by_embedding(vector, int, uuid, uuid, text);
+create or replace function public.search_recipe_records_by_embedding(
+  query_embedding vector(2048),
+  match_limit int,
+  p_user_id uuid default null,
+  p_recipe_id uuid default null,
+  p_outcome text default null
+) returns table (
+  id uuid,
+  recipe_id uuid,
+  date date,
+  content text,
+  tags jsonb,
+  outcome text,
+  created_at timestamptz,
+  updated_at timestamptz,
+  similarity real
+)
+language sql stable security invoker as $$
+  select id, recipe_id, date, content, tags, outcome, created_at,
+         updated_at,
+         (1 - (embedding <=> query_embedding))::real as similarity
+    from public.recipe_records
+   where user_id = coalesce(p_user_id, auth.uid())
+     and embedding is not null
+     and (p_recipe_id is null or recipe_id = p_recipe_id)
+     and (p_outcome is null or outcome = p_outcome)
+   order by embedding <=> query_embedding asc
+   limit match_limit
+$$;
+
 -- Recipe versioning RPCs -------------------------------------------------
 --
 -- `security invoker` so RLS still applies; the function bodies also
@@ -13930,6 +14148,19 @@ begin
   ) then
     alter publication supabase_realtime add table public.wiki_records;
   end if;
+  -- recipe_records: an open recipe detail pane learns about record
+  -- create/update/delete (from the chat tools server-side) through a
+  -- user-scoped postgres_changes subscription (see
+  -- subscribeToRecipeRecordChanges). Same DELETE-delivery need as
+  -- wiki_records.
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'recipe_records'
+  ) then
+    alter publication supabase_realtime add table public.recipe_records;
+  end if;
   -- wiki_record_files / wiki_record_links: an open article view learns about
   -- file attach/remove and link create/delete (from the chat tools and the
   -- extraction/librarian agents, all server-side) through the same user-scoped
@@ -14048,6 +14279,9 @@ alter table public.memories replica identity using index memories_replident_idx;
 create unique index if not exists wiki_records_replident_idx
   on public.wiki_records (id, user_id);
 alter table public.wiki_records replica identity using index wiki_records_replident_idx;
+create unique index if not exists recipe_records_replident_idx
+  on public.recipe_records (id, user_id);
+alter table public.recipe_records replica identity using index recipe_records_replident_idx;
 create unique index if not exists wiki_record_files_replident_idx
   on public.wiki_record_files (id, user_id);
 alter table public.wiki_record_files replica identity using index wiki_record_files_replident_idx;

@@ -28,6 +28,7 @@ import {
   subscribeToMemoryChanges,
   subscribeToMessages,
   subscribeToRecipeChanges,
+  subscribeToRecipeRecordChanges,
   subscribeToThreads,
   subscribeToUserLogs,
   subscribeToWikiArticleChanges,
@@ -91,6 +92,7 @@ const POSTGRES_HELPERS: { name: string; prefix: string; subscribe: (c: SupabaseC
   { name: 'subscribeToGroceryChanges', prefix: 'grocery:user-1:', subscribe: (c) => subscribeToGroceryChanges(c, 'user-1', noop) },
   { name: 'subscribeToMemoryChanges', prefix: 'memories:user-1:', subscribe: (c) => subscribeToMemoryChanges(c, 'user-1', noop) },
   { name: 'subscribeToRecipeChanges', prefix: 'recipes:user-1:', subscribe: (c) => subscribeToRecipeChanges(c, 'user-1', noop) },
+  { name: 'subscribeToRecipeRecordChanges', prefix: 'recipe_records:user-1:', subscribe: (c) => subscribeToRecipeRecordChanges(c, 'user-1', noop) },
 ];
 
 describe('postgres_changes helpers', () => {

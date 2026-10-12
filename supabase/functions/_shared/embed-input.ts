@@ -32,6 +32,7 @@ const MAX_MEMORY_EMBED_CHARS = 8000;
 const MAX_RECIPE_EMBED_CHARS = 16000;
 
 import { MAX_WIKI_CONTENT_CHARS, MAX_WIKI_RECORD_CONTENT_CHARS } from './wiki-limits.ts';
+import { MAX_RECIPE_RECORD_CONTENT_CHARS } from './recipe-record-limits.ts';
 
 // Substrate situation/outcome have no schema-level cap yet; these match the
 // memory-side order of magnitude and leave headroom for tokenizer inflation.
@@ -97,6 +98,22 @@ export function buildWikiRecordEmbedInput(date: string, content: string): string
   const body =
     content.length > MAX_WIKI_RECORD_CONTENT_CHARS
       ? content.slice(0, MAX_WIKI_RECORD_CONTENT_CHARS)
+      : content;
+  return `${date}\n\n${body}`;
+}
+
+/**
+ * Compose the text Venice embeds for a recipe record. Same shape as the
+ * wiki-record builder above: the ISO date leads verbatim with a
+ * double-newline before the body. Tags and the outcome are deliberately
+ * excluded - they are filtering facets, not semantic content, and
+ * folding them in would let a noisy tag or a one-word outcome dominate
+ * the vector.
+ */
+export function buildRecipeRecordEmbedInput(date: string, content: string): string {
+  const body =
+    content.length > MAX_RECIPE_RECORD_CONTENT_CHARS
+      ? content.slice(0, MAX_RECIPE_RECORD_CONTENT_CHARS)
       : content;
   return `${date}\n\n${body}`;
 }
@@ -184,6 +201,13 @@ export const EMBED_SOURCES: EmbedSource[] = [
     saveRpc: 'save_wiki_record_embedding_if_claimed',
     // date arrives as an ISO 'YYYY-MM-DD' string over the RPC boundary.
     buildInput: (row) => buildWikiRecordEmbedInput(str(row.date), str(row.content)),
+  },
+  {
+    name: 'recipe-records',
+    claimRpc: 'claim_next_pending_recipe_record', // returns (id, date, content, tags, user_id)
+    saveRpc: 'save_recipe_record_embedding_if_claimed',
+    // date arrives as an ISO 'YYYY-MM-DD' string over the RPC boundary.
+    buildInput: (row) => buildRecipeRecordEmbedInput(str(row.date), str(row.content)),
   },
   {
     name: 'samskara-substrate',

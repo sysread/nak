@@ -137,3 +137,77 @@ export interface RecipePhotoInput {
   label: string | null;
 }
 
+/**
+ * One dated record in a recipe's cooking log. The recipe's cooklang is
+ * the distilled current state; records preserve the journey - what
+ * happened when the user cooked it, how it went, what to try next.
+ * `date` is the calendar day the cook happened (distinct from
+ * `created_at`, when the row was written); `tags` is a freeform
+ * keyword array used for filtering; `outcome` is the optional
+ * classification (`success | mixed | failure`, null = unclassified);
+ * `source_conversation_id` carries chat-capture provenance and is null
+ * for manually-added records. The embedding quartet stays behind the
+ * scenes (claimed + written server-side by the backfill, never read
+ * here). See the matching table + RLS in
+ * `supabase/schema.sql:recipe_records`.
+ */
+export interface RecipeRecord {
+  id: string;
+  user_id: string;
+  recipe_id: string;
+  /** ISO `YYYY-MM-DD` - the day the cook happened. */
+  date: string;
+  content: string;
+  tags: string[];
+  outcome: string | null;
+  source_conversation_id: string | null;
+  created_at: string;
+  updated_at: string;
+  /** Populated only by `search_recipe_records_by_embedding`. */
+  similarity?: number;
+}
+
+/**
+ * Defensive coercion of a recipe_records row (or a search hit). `tags`
+ * may arrive as a JSONB array or be absent on a search-RPC row (the
+ * RPC projects it but a jsonb payload could round-trip as a string);
+ * normalize to a string array. `outcome`, `source_conversation_id`,
+ * and `similarity` are optional; `user_id` is absent on search-RPC
+ * rows, which don't project that column.
+ */
+export function coerceRecipeRecord(raw: Record<string, unknown>): RecipeRecord {
+  let tags: string[] = [];
+  const rawTags = raw.tags;
+  if (Array.isArray(rawTags)) {
+    tags = rawTags.filter((t): t is string => typeof t === 'string');
+  } else if (typeof rawTags === 'string' && rawTags.length > 0) {
+    try {
+      const parsed = JSON.parse(rawTags);
+      if (Array.isArray(parsed)) {
+        tags = parsed.filter((t): t is string => typeof t === 'string');
+      }
+    } catch {
+      // Malformed tag payload - treat as untagged rather than throwing
+      // in a read path.
+    }
+  }
+  const outcomeRaw = raw.outcome;
+  const srcRaw = raw.source_conversation_id;
+  return {
+    id: String(raw.id),
+    user_id: typeof raw.user_id === 'string' ? raw.user_id : '',
+    recipe_id: String(raw.recipe_id ?? ''),
+    date: typeof raw.date === 'string' ? raw.date : '',
+    content: typeof raw.content === 'string' ? raw.content : '',
+    tags,
+    // Empty strings normalize to null so "unclassified" has one shape.
+    outcome: typeof outcomeRaw === 'string' && outcomeRaw.length > 0 ? outcomeRaw : null,
+    source_conversation_id:
+      typeof srcRaw === 'string' && srcRaw.length > 0 ? srcRaw : null,
+    created_at: String(raw.created_at ?? raw.updated_at ?? ''),
+    updated_at: String(raw.updated_at ?? raw.created_at ?? ''),
+    similarity:
+      typeof raw.similarity === 'number' ? (raw.similarity as number) : undefined,
+  };
+}
+

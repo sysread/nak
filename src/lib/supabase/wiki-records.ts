@@ -27,7 +27,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { SupabaseError } from './error';
 import { getSession } from './session';
-import { base64ToBytes, ilikeLogicTreePattern } from './query-utils';
+import { base64ToBytes, ilikeFilterPattern } from './query-utils';
 import type {
   WikiRecord,
   WikiRecordFile,
@@ -315,7 +315,11 @@ export async function searchWikiRecords(
     return (data ?? []).map((row) => coerceWikiRecord(row as Record<string, unknown>));
   }
 
-  const pattern = ilikeLogicTreePattern(query);
+  // ilikeFilterPattern, not ilikeLogicTreePattern: this is a standalone
+  // .ilike() filter, where PostgREST strips no surrounding quotes - the
+  // logic-tree builder's quoted pattern would hunt for literal quote
+  // characters and the leg would never match (see query-utils.ts).
+  const pattern = ilikeFilterPattern(query);
   const ilikePromise = client
     .from('wiki_records')
     .select(
