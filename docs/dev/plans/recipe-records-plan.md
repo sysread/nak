@@ -73,7 +73,9 @@ journey layer)"), with `recipe_id` in place of `article_id`:
   recipe, and two records on one date (morning bake, evening bake),
   are the point.
 - `date date not null` - the day the cook happened, distinct from
-  `created_at` (when the row was written). Lists sort `date desc`.
+  `created_at` (when the row was written). Lists sort `date desc,
+  created_at desc` (the created_at tie-break matters; two cooks on
+  one date are a normal case).
 - `content text not null` (Markdown) - what happened: the iteration,
   observations, what went right and wrong.
 - `outcome text null` - optional enum `success | mixed | failure`
@@ -108,7 +110,12 @@ journey layer)"), with `recipe_id` in place of `article_id`:
 - Embedding RPCs `claim_next_pending_recipe_record` /
   `save_recipe_record_embedding_if_claimed` /
   `search_recipe_records_by_embedding`, clones of the wiki record
-  trio with the same `for update skip locked` claim discipline.
+  trio with the same `for update skip locked` claim discipline -
+  with one delta: the search RPC takes optional `recipe_id` and
+  `outcome` params so filtering happens inside the RPC before the
+  limit (the wiki twin's search has no filter params, and
+  post-filtering a capped result mangles the counts). The ILIKE leg
+  applies the same filters.
   `recipe-records` joins `EMBED_SOURCES`
   (`supabase/functions/_shared/embed-input.ts`) so the existing
   generic backfill loop drains it. No new cron.
@@ -120,9 +127,11 @@ Limits: `MAX_RECIPE_RECORD_CONTENT_CHARS = 8000`,
 `MAX_RECIPE_RECORD_TAGS = 24`, `MAX_RECIPE_RECORD_TAG_CHARS = 40`
 (wiki's caps). New constants live in a new
 `supabase/functions/_shared/recipe-record-limits.ts`, imported
-browser-side via the `$shared` alias, per the shared-module dedup
-pattern (wiki predates that pattern and duplicates its constants;
-this feature starts on the good side of it).
+browser-side via the `$shared` alias. This extends the existing
+`_shared` limits pattern (`supabase/functions/_shared/wiki-limits.ts`,
+the edge-side consolidation of wiki's caps), which currently carries
+only the content cap; the recipe file carries all three so the tag
+caps never re-duplicate.
 
 ### What records are NOT
 
@@ -148,11 +157,24 @@ Capture is manual by design: the model logs records during cooking
 discussions (the tool call IS the capture path - there is no
 background sweep), and the user can add records by hand in the UI.
 That moves the discipline the wiki puts in its sweep prompts into
-the write tools' descriptions:
+the write tools' descriptions - including the trigger the sweep
+used to own. `recipe_record_create`'s description tells the model
+WHEN to log, not just how: when the user reports having cooked the
+recipe and how it went, log the record and say so in the reply
+(use the day it happened, not today); when it is unclear which
+recipe is meant or whether a real cook happened, ask instead of
+guessing. After logging, fold any resulting recipe change (a tweak
+to the cooklang) into a separate `recipe_save` edit so the History
+panel keeps the two apart. There is deliberately no UI nudge for
+this yet ("Done cooking" offering to log is a natural follow-on;
+see Scoped out).
 
 - **Dedup guard on create**: before `recipe_record_create`, check
-  `recipe_record_list` on the recipe - if the event is already
-  logged, `recipe_record_update` it instead of stacking a duplicate.
+  `recipe_record_list` on the recipe for the same EVENT, not the
+  same date - if the event is already logged, `recipe_record_update`
+  it instead of stacking a duplicate; two cooks on one day are
+  separate records (the wiki twin learned this distinction in
+  production).
 - **Merge, don't duplicate, on update**: details arrive piecemeal
   ("the crumb was actually fine on day two"). `recipe_record_get`
   the record first and pass the merged body; `content` is a
@@ -163,11 +185,18 @@ Reads - join `alwaysOnToolbox`, mirroring how wiki's record reads
 ride always-on:
 
 - `recipe_record_list` - one recipe's log. Params: `recipe_id`
-  (required), optional `date_from` / `date_to`, `tag`, `limit`.
+  (required), optional `from_date` / `to_date` (the `record_list`
+  param naming), `tags` (array, AND semantics - the `record_list`
+  shape), `outcome` (`success | mixed | failure`), `limit`.
 - `recipe_record_get` - one record by id.
 - `recipe_record_search` - semantic search across every recipe's
-  records, optional `recipe_id` scope. Embed + ILIKE-on-content
-  merge, same shape as `searchRecipes`.
+  records, optional `recipe_id` scope, optional `outcome` filter.
+  Embed + ILIKE-on-content merge, same shape as `searchRecipes`.
+  The `recipe_id` scope and `outcome` filter are deliberate deltas
+  from the wiki twin (whose `record_search` takes only `query` +
+  `limit`): the outcome param is what makes "show me my failed
+  bakes across everything" a filter and not prose parsing - the
+  cross-recipe journey the outcome column exists for.
 
 Writes - join `cookingToolbox`:
 
@@ -192,31 +221,71 @@ tripwire).
 
 The Cookbook modal's detail pane gains a Records section (the
 article view's Records section is the anatomy), rendered by a new
-`src/components/RecipeRecords.svelte`:
+`src/components/RecipeRecords.svelte`. Placement: at the bottom of
+the detail pane, below the History panel - the article view renders
+Records at the bottom too, and the reading order "recipe, then its
+history, then its log" is the narrative.
 
 - **Add form**: date, content (Markdown), comma-separated tags,
   outcome selector.
 - **Rows**: date ("Mon D, YYYY"), outcome chip, tag chips, truncated
   preview; a row expands to the full content with Edit / Delete.
-- **Filters**: from/to date range, tag dropdown, and a semantic
-  search box (debounced embed-then-merge with abort-controller
-  supersede, the same shape as RecipeList's search).
+- **Filters**: from/to date range, tag dropdown, outcome dropdown,
+  and a semantic search box (debounced embed-then-merge with
+  abort-controller supersede, the same shape as RecipeList's
+  search). Search results bypass the filters by design (the twin's
+  behavior); the outcome dropdown participates in filtering only.
+- **Search scope: cross-recipe, decided.** The search box searches
+  every recipe's records (mirroring `recipe_record_search`), not
+  just the open recipe's log; a hit on another recipe is annotated
+  (the "(other article)" pattern in `WikiRecords.svelte`) and
+  clicking it navigates the detail pane to that recipe through the
+  modal's routed-recipe resolution (`route.recipe` from
+  `src/lib/routing.svelte.ts`). Navigation resets the search and
+  filters (the twin's remount-on-switch pattern), landing at the
+  top of that recipe's log; a scroll-highlight of the hit row is a
+  cheap follow-on if the landing feels blind. Searching the whole
+  cooking log from any recipe is the point; per-recipe narrowing is
+  the filters' job.
 - **Export**: single record to `yyyy-mm-dd-<slug>.md` with
   date/tags/outcome front matter, and Export all to a zip holding
   `recipe.md` plus one `records/` entry per record (wiki's Export
   all shape; the recipe itself has only single-file exports today).
+  The export helpers live in a new recipe-typed
+  `src/lib/recipe-records-export.ts` (a sibling of
+  `src/lib/wiki-export.ts`, which is article-typed), reusing the
+  twin's filename-collision dedup (it appends `-1` for same-date
+  records).
+- **Offline**: records stay online-only, but reads degrade soft:
+  offline, the section keeps rendering its last fetch (a mid-cook
+  "what did I note last time" still works on the open recipe) and
+  disables only the add/edit/delete controls with copy, the way
+  the bookmark controls degrade.
 
 Supporting moves:
 
+- Mount point: `src/screens/Cookbook.svelte` renders the section in
+  the detail pane (it already computes the offline state the
+  bookmark controls use, and already hosts the History panel
+  Records sits below).
+- Recipe delete confirm names the log cost: "This deletes the
+  recipe and its N records." With no changelog (decision 2), the
+  cascade delete of the log is silent everywhere else - the confirm
+  strip is the one place it is announced.
 - Data layer: `src/lib/supabase/recipe-records.ts`, plain async
   functions taking the shared client (the `wiki-records.ts` shape:
   no class, no state), one-for-one delegation from the
   SupabaseService facade. Row types + coercer (`RecipeRecord`,
-  `coerceRecipeRecord`) in `src/lib/supabase/types/cookbook.ts`.
+  `coerceRecipeRecord`) in `src/lib/supabase/types/cookbook.ts`
+  (the module's first coercer - recipes are cast raw today; wiki's
+  coercers live in `types/wiki.ts`).
 - Realtime: `subscribeToRecipeRecordChanges` in `realtime.ts` (a
-  clone of `subscribeToWikiRecordChanges` over `recipe_records`);
-  Cookbook.svelte refetches the section when it fires, so agent-side
-  record writes land live.
+  clone of `subscribeToWikiRecordChanges` over `recipe_records`),
+  wired in `Chat.svelte` alongside the existing relays, publishing
+  a `nak:recipe-records:changed` window event through
+  `src/lib/cookbook-events.ts` (the same emit/on pair shape the
+  cookbook already uses); RecipeRecords.svelte listens and
+  refetches, so agent-side record writes land live.
 - Screen primitives: `src/lib/ui/recipe-records.ts`, pure helpers
   (filter predicates, outcome chip labels and colors, export
   filename slugs), unit-tested next door.
@@ -224,14 +293,18 @@ Supporting moves:
 ## Milestones
 
 - **M1 - Schema + data layer.** Table, triggers, RLS, embedding
-  RPCs, `EMBED_SOURCES` entry, types, SupabaseService slice. Gate:
-  `mise run sync` green, the backfill embeds a seeded record, unit
-  tests pass.
-- **M2 - UI.** The Records section in the detail pane: add / edit /
-  delete, filters, search, export, realtime refresh.
-- **M3 - Chat tools.** Six tools wired into the two toolboxes,
-  formatArgs, the dedup/merge guards in the descriptions, docs, QA
-  use-case run end to end.
+  RPCs, `EMBED_SOURCES` entry, `_shared/recipe-record-limits.ts`,
+  types, SupabaseService slice. Gate: `mise run sync` green, the
+  backfill embeds a seeded record, unit tests pass.
+- **M2 - UI.** The Records section in the detail pane (mounted by
+  Cookbook.svelte): add / edit / delete, filters, cross-recipe
+  search with navigation, export module, realtime refresh.
+- **M3 - Chat tools.** Six tools wired into the two toolboxes and
+  registered in the edge tool barrel
+  (`supabase/functions/venice/tools/index.ts`), formatArgs, the
+  capture trigger + dedup/merge guards in the descriptions, the
+  two toolbox description strings (they enumerate members), docs,
+  QA use-case run end to end.
 
 ## Testing
 
@@ -240,8 +313,11 @@ Supporting moves:
   wiki-records tests).
 - `tests/tools.test.ts`: toolbox membership assertions updated for
   the six new tools.
-- Edge tests mirroring where wiki's record tools are covered
-  (`supabase/functions/tests/wiki.test.ts`): create/update/delete
+- Edge handler tests modeled on
+  `supabase/functions/tests/recipe_save.test.ts` (the existing
+  recipe-tool handler template; note wiki's record handlers have
+  no edge test file to mirror - `wiki.test.ts` covers toolbox
+  composition and prompt invariants only): create/update/delete
   handlers, argument validation, `source_conversation_id` stamping.
 - `tests/schema-dml-columns.test.ts` floors: adding a table may trip
   the floor assertions (>= 40 tables). Bumping a floor is expected
@@ -276,8 +352,16 @@ Supporting moves:
   columns, no claim RPCs beyond the embedding ones, no cron, no
   settings toggle. If capture-by-discussion proves unreliable
   (records forgotten or misdated), revisit then.
-- **Offline cache.** Records stay online-only in v1; the
-  favorite/upcoming offline reconcile is untouched.
+- **Offline cache.** Records stay online-only in v1; the section
+  degrades visibly offline (disabled + copy, like the bookmark
+  controls). The favorite/upcoming offline reconcile is untouched.
+- **A capture nudge from cooking mode.** Ending a cooking session
+  ("Done cooking") is the app's most reliable "a bake just
+  happened" moment, and the section could offer to log a record
+  there. Deliberately not in v1: the model-side trigger (in
+  `recipe_record_create`'s description) plus the manual form carry
+  capture first. Add the nudge if capture-by-discussion proves
+  spotty.
 - **No history tools** for recipes, unchanged from the existing
   position (revert and History are user-directed UX).
 
@@ -302,3 +386,15 @@ Jeff; recorded so a future session does not re-litigate them.
 4. **Tool naming: `recipe_record_*`.** Explicit, matches the wiki
    vocabulary the model already knows, zero collision with the wiki
    `record_*` tools.
+5. **UI record search is cross-recipe** (surfaced by the round-1
+   review): the Records section's search box searches every
+   recipe's log, annotates hits from other recipes, and navigates
+   the detail pane on click. The per-recipe narrowing job belongs
+   to the date/tag/outcome filters.
+6. **Refinement resolutions (round 2):** capture logs directly and
+   says so in the reply (no confirmation round-trip; ask only when
+   the cook report is ambiguous), matching how Jeff described
+   using it; a cross-recipe hit click navigates and resets
+   search/filters (the twin's remount pattern); offline keeps reads
+   on the last fetch and disables only writes (cooking is the most
+   offline-prone context in the app).

@@ -167,8 +167,9 @@ unaffected.
   the list pane.
 - **Recipes tab** in the drawer → lazy-loads the list (first click
   fetches from Supabase; subsequent switches are free). Clicking a
-  row opens the Cookbook modal on the detail pane for that id via
-  the `initialRecipeId` prop.
+  row opens the Cookbook modal on the detail pane for that recipe
+  via the routed-recipe resolution (`route.recipe` from
+  `src/lib/routing.svelte.ts`).
 - **LLM tool calls** - `recipe_save (create or edit) / list / get / delete`,
   grouped into the `cooking` toolbox. Every tool is declared on
   every request (no gating); the model calls them directly.
