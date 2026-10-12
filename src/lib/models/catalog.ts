@@ -23,6 +23,8 @@
  * response body.
  */
 
+import { isBlockedModelId } from './blocked-models';
+
 /**
  * Venice's serving-privacy classification for a model. 'private' means
  * Venice hosts the weights itself; 'anonymized' means the request is
@@ -98,9 +100,10 @@ function coercePrivacy(v: unknown): ModelPrivacy | null {
 
 /**
  * Coerce one raw `/models` entry into a CatalogModel, or null when the
- * entry is unusable (missing id / context window, or offline). Defensive
- * on every field: Venice marks the endpoint's shape loosely and free
- * models drop the pricing block entirely.
+ * entry is unusable (missing id / context window, or offline, or
+ * blocked - see ./blocked-models.ts). Defensive on every field: Venice
+ * marks the endpoint's shape loosely and free models drop the pricing
+ * block entirely.
  */
 function coerceModel(raw: unknown): CatalogModel | null {
   const entry = asRecord(raw);
@@ -124,6 +127,10 @@ function coerceModel(raw: unknown): CatalogModel | null {
   const pricing = asRecord(spec.pricing);
 
   const name = typeof spec.name === 'string' && spec.name.length > 0 ? spec.name : id;
+
+  // Blocked-model policy (./blocked-models.ts): a Grok row never
+  // reaches the picker, on either the id or the display name.
+  if (isBlockedModelId(id, name)) return null;
 
   return {
     id,
@@ -153,9 +160,10 @@ function coerceModel(raw: unknown): CatalogModel | null {
  * Coerce Venice's `GET /models` response body into a sorted CatalogModel
  * list. Accepts the `{ object, type, data: [...] }` envelope or a bare
  * array. Drops unusable entries silently (the picker shows what is
- * usable; a malformed row is not worth surfacing an error over). Sorted
- * by name so the dropdown reads alphabetically regardless of Venice's
- * catalog order.
+ * usable; a malformed row is not worth surfacing an error over), and
+ * blocked models (./blocked-models.ts) go the same way. Sorted by name
+ * so the dropdown reads alphabetically regardless of Venice's catalog
+ * order.
  */
 export function coerceCatalog(raw: unknown): CatalogModel[] {
   const envelope = asRecord(raw);

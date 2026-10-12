@@ -84,6 +84,21 @@ describe('coerceCatalog', () => {
     expect(coerceCatalog([{ id: '', model_spec: {} }])).toEqual([]);
     expect(coerceCatalog([rawEntry({ availableContextTokens: 0 })])).toEqual([]);
   });
+  it('drops blocked models (Grok) on id or display name', () => {
+    // Hard owner directive - see src/lib/models/blocked-models.ts. The
+    // id alone is enough; so is the name alone, so a Venice-side
+    // rename cannot smuggle the model into the picker.
+    expect(coerceCatalog([rawEntry({ name: 'Grok 4.1 Fast' })])).toEqual([]);
+    expect(coerceCatalog([{ ...(rawEntry() as Record<string, unknown>), id: 'grok-41-fast' }])).toEqual([]);
+    expect(
+      coerceCatalog([
+        {
+          id: 'innocuous-id',
+          model_spec: { name: 'Grok Something', availableContextTokens: 200_000 },
+        },
+      ]),
+    ).toEqual([]);
+  });
   it('reads privacy from model_spec, falling back to the entry level', () => {
     // Live API shape: privacy rides on model_spec.
     expect(coerceCatalog([rawEntry({ privacy: 'anonymized' })])[0].privacy).toBe(

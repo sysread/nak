@@ -83,6 +83,14 @@ describe('coerceSettings', () => {
     expect(coerceSettings({ imageModel: 123 })).toEqual({});
   });
 
+  it('reads a blocked imageModel / editImageModel (Grok) as unset', () => {
+    // Hard owner directive - see src/lib/models/blocked-models.ts. The
+    // stale key sits inert in the blob; the edge falls back to the
+    // default image/edit model.
+    expect(coerceSettings({ imageModel: 'grok-imagine' })).toEqual({});
+    expect(coerceSettings({ editImageModel: 'grok-imagine-edit' })).toEqual({});
+  });
+
   it('passes through a non-empty editImageModel string and drops bad values', () => {
     expect(coerceSettings({ editImageModel: 'nano-banana-2-edit' })).toEqual({
       editImageModel: 'nano-banana-2-edit',

@@ -38,6 +38,25 @@ const ENVELOPE = {
       id: 'free-edit',
       model_spec: { privacy: 'private', pricing: {} },
     },
+    // Blocked-model policy (src/lib/models/blocked-models.ts): Grok
+    // rows never reach the picker, on the id...
+    {
+      id: 'grok-imagine-edit',
+      model_spec: {
+        name: 'Grok Imagine Edit',
+        privacy: 'anonymized',
+        pricing: { inpaint: { usd: 0.03 } },
+      },
+    },
+    // ...or the display name alone.
+    {
+      id: 'innocuous-edit',
+      model_spec: {
+        name: 'Grok Edit Pro',
+        privacy: 'private',
+        pricing: { inpaint: { usd: 0.02 } },
+      },
+    },
     // Missing spec entirely - dropped.
     { id: 'bare-edit' },
   ],
@@ -68,6 +87,13 @@ describe('coerceEditCatalog', () => {
   it('accepts a bare array and drops garbage entries', () => {
     const models = coerceEditCatalog([...ENVELOPE.data, null, 'junk', 42] as unknown[]);
     expect(models).toHaveLength(2);
+  });
+
+  it('drops blocked models (Grok) on id or display name', () => {
+    // The ENVELOPE carries both blocked rows (grok-imagine-edit and a
+    // grok-named innocuous-edit); neither survives coercion.
+    const models = coerceEditCatalog(ENVELOPE);
+    expect(models.map((m) => m.id)).toEqual(['firered-image-edit', 'nano-banana-2-edit']);
   });
 
   it('classifies anything but anonymized as private (defensive default)', () => {

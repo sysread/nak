@@ -45,6 +45,16 @@ describe('coerceImageCatalog', () => {
     expect(coerceImageCatalog([rawEntry({ offline: true })])).toEqual([]);
   });
 
+  it('drops blocked models (Grok) on id or display name', () => {
+    // Hard owner directive - see src/lib/models/blocked-models.ts.
+    expect(
+      coerceImageCatalog([{ ...(rawEntry() as Record<string, unknown>), id: 'grok-imagine' }]),
+    ).toEqual([]);
+    expect(
+      coerceImageCatalog([rawEntry({ name: 'Grok Imagine' })]),
+    ).toEqual([]);
+  });
+
   it('drops entries missing an id or model_spec', () => {
     expect(coerceImageCatalog([{ model_spec: { name: 'x' } }])).toEqual([]);
     expect(coerceImageCatalog([{ id: 'x' }])).toEqual([]);

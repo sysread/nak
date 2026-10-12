@@ -8,7 +8,8 @@
  * privacy tier the generation picker never surfaced: `private` models are
  * served on Venice infrastructure, `anonymized` ones are proxied to third
  * parties with the prompt body - worth a chip on a tool that ships the
- * user's own photos.
+ * user's own photos. Blocked models (./blocked-models.ts) are dropped
+ * like any other unusable row.
  *
  * Unlike the generation slice, every live inpaint model carries a flat
  * per-edit USD rate (verified 2026-10-12), so the "drop resolution-tiered
@@ -16,6 +17,8 @@
  * coercion still drops unpriced rows for the same reason: the picker
  * never shows a price-less row.
  */
+
+import { isBlockedModelId } from './blocked-models';
 
 export interface EditCatalogModel {
   readonly id: string;
@@ -69,6 +72,10 @@ function coerceEditModel(raw: unknown): EditCatalogModel | null {
 
   const name = typeof spec.name === 'string' && spec.name.length > 0 ? spec.name : id;
   const privacy = spec.privacy === 'anonymized' ? 'anonymized' : 'private';
+
+  // Blocked-model policy (./blocked-models.ts): a Grok row never
+  // reaches the picker, on either the id or the display name.
+  if (isBlockedModelId(id, name)) return null;
 
   return {
     id,

@@ -15,6 +15,7 @@
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { readPriceCaps, readVeniceKey } from './_venice_key.ts';
 import { assertEditModelWithinCap } from '../../_shared/price-cap.ts';
+import { isBlockedModelId } from '../../_shared/blocked-models.ts';
 import { veniceEditImage } from '../../_shared/venice.ts';
 import {
   assertResultStorable,
@@ -33,7 +34,9 @@ const DEFAULT_EDIT_IMAGE_MODEL = 'firered-image-edit';
  * and defensive - any read failure or malformed value degrades to the
  * default rather than failing the edit, since a missing preference should
  * never block an image op. The Settings picker only writes ids the live
- * Venice inpaint catalog advertised.
+ * Venice inpaint catalog advertised. A stored id the blocked-model
+ * policy forbids (../../_shared/blocked-models.ts) reads as unset and
+ * the default serves.
  */
 async function resolveEditImageModel(ctx: ToolContext): Promise<string> {
   try {
@@ -43,7 +46,13 @@ async function resolveEditImageModel(ctx: ToolContext): Promise<string> {
       .eq('user_id', ctx.userId)
       .maybeSingle();
     const configured = (data?.settings as { editImageModel?: unknown } | null)?.editImageModel;
-    if (typeof configured === 'string' && configured.length > 0) return configured;
+    if (
+      typeof configured === 'string' &&
+      configured.length > 0 &&
+      !isBlockedModelId(configured)
+    ) {
+      return configured;
+    }
   } catch {
     // Settings read failed (transient DB error, etc.) - fall back to the
     // default model rather than aborting the user's edit.

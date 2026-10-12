@@ -14,6 +14,7 @@ import {
   upscalePreFlightMessage,
 } from '../venice/tools/_image_ops.ts';
 import { editImage } from '../venice/tools/edit_image.ts';
+import { generateImage } from '../venice/tools/generate_image.ts';
 import { upscaleImage } from '../venice/tools/upscale_image.ts';
 import { removeBackground } from '../venice/tools/remove_background.ts';
 import { GENERATED_IMAGE_RESULT_KEY } from '../venice/tools/_generated_image.ts';
@@ -145,6 +146,7 @@ const photo = (over: Partial<AttachmentScenarioRow> = {}): AttachmentScenarioRow
 function stubFetch(opts: {
   inpaintCatalog?: unknown;
   upscaleCatalog?: unknown;
+  imageCatalog?: unknown;
   imageOpBody: (url: string, body: Record<string, unknown>) => Response;
 }): { calls: Array<{ url: string; body: Record<string, unknown> }>; restore: () => void } {
   const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
@@ -163,6 +165,11 @@ function stubFetch(opts: {
         new Response(JSON.stringify(opts.upscaleCatalog ?? { data: [] }), { status: 200 })
       );
     }
+    if (u.includes('/models?type=image')) {
+      return Promise.resolve(
+        new Response(JSON.stringify(opts.imageCatalog ?? { data: [] }), { status: 200 })
+      );
+    }
     return Promise.resolve(opts.imageOpBody(u, body));
   }) as typeof fetch;
   return { calls, restore: () => { globalThis.fetch = real; } };
@@ -178,11 +185,11 @@ Deno.test('edit_image resolves the configured model, posts the data URI, returns
   capTest.resetCache();
   const ctx = fakeCtx({
     attachments: [photo()],
-    settings: { editImageModel: 'grok-imagine-edit' },
+    settings: { editImageModel: 'photon-edit-1' },
   });
   const { calls, restore } = stubFetch({
     inpaintCatalog: {
-      data: [{ id: 'grok-imagine-edit', model_spec: { pricing: { inpaint: { usd: 0.03 } } } }],
+      data: [{ id: 'photon-edit-1', model_spec: { pricing: { inpaint: { usd: 0.03 } } } }],
     },
     imageOpBody: () => pngOpResponse(),
   });
@@ -192,7 +199,7 @@ Deno.test('edit_image resolves the configured model, posts the data URI, returns
       ctx,
     )) as Record<string, unknown>;
     const editCall = calls.find((c) => c.url.includes('/image/edit'));
-    assertEquals(editCall?.body.model, 'grok-imagine-edit');
+    assertEquals(editCall?.body.model, 'photon-edit-1');
     assertEquals(editCall?.body.prompt, 'make the sky a sunset');
     assertEquals(
       (editCall?.body.image as string).startsWith('data:image/jpeg;base64,'),
@@ -214,6 +221,29 @@ Deno.test('edit_image resolves the configured model, posts the data URI, returns
 Deno.test('edit_image falls back to the default model when settings carry none', async () => {
   capTest.resetCache();
   const ctx = fakeCtx({ attachments: [photo()] });
+  const { calls, restore } = stubFetch({
+    inpaintCatalog: {
+      data: [{ id: 'firered-image-edit', model_spec: { pricing: { inpaint: { usd: 0.04 } } } }],
+    },
+    imageOpBody: () => pngOpResponse(),
+  });
+  try {
+    await editImage.execute({ filename: 'photo.jpg', prompt: 'x' }, ctx);
+    assertEquals(calls.find((c) => c.url.includes('/image/edit'))?.body.model, 'firered-image-edit');
+  } finally {
+    restore();
+    capTest.resetCache();
+  }
+});
+
+Deno.test('edit_image falls back to the default model when settings carry a blocked (Grok) id', async () => {
+  // Blocked-model policy (_shared/blocked-models.ts): a stored Grok id
+  // reads as unset - the tool never forwards it to Venice.
+  capTest.resetCache();
+  const ctx = fakeCtx({
+    attachments: [photo()],
+    settings: { editImageModel: 'grok-imagine-edit' },
+  });
   const { calls, restore } = stubFetch({
     inpaintCatalog: {
       data: [{ id: 'firered-image-edit', model_spec: { pricing: { inpaint: { usd: 0.04 } } } }],
@@ -336,6 +366,52 @@ Deno.test('remove_background posts a data URI and returns a no-bg envelope', asy
     assertEquals((bgCall?.body.image as string).startsWith('data:image/jpeg;base64,'), true);
     assertEquals((out.filename as string).startsWith('no-bg-'), true);
     assertEquals(out.format, 'png');
+  } finally {
+    restore();
+    capTest.resetCache();
+  }
+});
+
+// --- generate_image ---------------------------------------------------------
+
+// JSON body for the /image/generate route (return_binary=false shape).
+const generateJsonResponse = (): Response =>
+  new Response(JSON.stringify({ id: 'g1', images: ['QUJD'] }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
+
+Deno.test('generate_image resolves the configured model and returns the envelope', async () => {
+  capTest.resetCache();
+  const ctx = fakeCtx({ settings: { imageModel: 'flux-dev' } });
+  const { calls, restore } = stubFetch({
+    imageOpBody: (u) =>
+      u.includes('/image/generate') ? generateJsonResponse() : pngOpResponse(),
+  });
+  try {
+    const out = (await generateImage.execute({ prompt: 'a lighthouse' }, ctx)) as Record<string, unknown>;
+    const genCall = calls.find((c) => c.url.includes('/image/generate'));
+    assertEquals(genCall?.body.model, 'flux-dev');
+    assertEquals((out.filename as string).startsWith('generated-'), true);
+  } finally {
+    restore();
+    capTest.resetCache();
+  }
+});
+
+Deno.test('generate_image falls back to the default model when settings carry a blocked (Grok) id', async () => {
+  // Blocked-model policy (_shared/blocked-models.ts): a stored Grok id
+  // reads as unset - the tool never forwards it to Venice.
+  capTest.resetCache();
+  const ctx = fakeCtx({ settings: { imageModel: 'grok-imagine' } });
+  const { calls, restore } = stubFetch({
+    imageOpBody: (u) =>
+      u.includes('/image/generate') ? generateJsonResponse() : pngOpResponse(),
+  });
+  try {
+    await generateImage.execute({ prompt: 'a lighthouse' }, ctx);
+    const genCall = calls.find((c) => c.url.includes('/image/generate'));
+    assertEquals(genCall?.body.model, 'venice-sd35');
   } finally {
     restore();
     capTest.resetCache();

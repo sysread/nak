@@ -19,6 +19,8 @@
  * is unit-testable offline against a captured response body.
  */
 
+import { isBlockedModelId } from './blocked-models';
+
 /**
  * One image model as the picker needs it. Flattened from Venice's nested
  * `model_spec`. Only priced models make it this far - `coerceImageModel`
@@ -50,9 +52,9 @@ function usdFrom(block: unknown): number | null {
 
 /**
  * Coerce one raw `/models?type=image` entry into an ImageCatalogModel, or
- * null when the entry is unusable. Dropped: missing id, offline, and -
- * deliberately - any model without a flat per-image USD price. Two kinds
- * of model land in that last bucket:
+ * null when the entry is unusable. Dropped: missing id, offline, blocked
+ * (see ./blocked-models.ts), and - deliberately - any model without a
+ * flat per-image USD price. Two kinds of model land in that last bucket:
  *
  *   1. No pricing block at all - Venice omits it on free / internal
  *      models. (A blank price is NOT a crypto/DIEM thing: Venice prices
@@ -89,6 +91,10 @@ function coerceImageModel(raw: unknown): ImageCatalogModel | null {
   if (usdPerImage === null) return null;
 
   const name = typeof spec.name === 'string' && spec.name.length > 0 ? spec.name : id;
+
+  // Blocked-model policy (./blocked-models.ts): a Grok row never
+  // reaches the picker, on either the id or the display name.
+  if (isBlockedModelId(id, name)) return null;
 
   return {
     id,

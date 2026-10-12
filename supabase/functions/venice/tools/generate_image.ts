@@ -18,6 +18,7 @@
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 import { readPriceCaps, readVeniceKey } from './_venice_key.ts';
 import { assertImageModelWithinCap } from '../../_shared/price-cap.ts';
+import { isBlockedModelId } from '../../_shared/blocked-models.ts';
 import { veniceGenerateImage } from '../../_shared/venice.ts';
 import { GENERATED_IMAGE_RESULT_KEY } from './_generated_image.ts';
 
@@ -35,7 +36,9 @@ const DEFAULT_IMAGE_MODEL = 'venice-sd35';
  * default rather than failing the generation, since a missing preference
  * should never block an image. The Settings picker only ever writes ids
  * the live Venice image catalog advertised, so no capability check is
- * needed here.
+ * needed here. A stored id the blocked-model policy forbids
+ * (../../_shared/blocked-models.ts) reads as unset and the default
+ * serves; the /image-generate route guard covers the direct path.
  */
 async function resolveImageModel(ctx: ToolContext): Promise<string> {
   try {
@@ -45,7 +48,13 @@ async function resolveImageModel(ctx: ToolContext): Promise<string> {
       .eq('user_id', ctx.userId)
       .maybeSingle();
     const configured = (data?.settings as { imageModel?: unknown } | null)?.imageModel;
-    if (typeof configured === 'string' && configured.length > 0) return configured;
+    if (
+      typeof configured === 'string' &&
+      configured.length > 0 &&
+      !isBlockedModelId(configured)
+    ) {
+      return configured;
+    }
   } catch {
     // Settings read failed (transient DB error, etc.) - fall back to the
     // default model rather than aborting the user's image request.

@@ -121,6 +121,13 @@ describe('coerceModelProfile', () => {
     expect(coerceModelProfile({ ...SAMPLE_PROFILE, name: '   ' })).toBeNull();
     expect(coerceModelProfile({ ...SAMPLE_PROFILE, modelId: '' })).toBeNull();
   });
+  it('rejects a profile pointing at a blocked model (Grok)', () => {
+    // Hard owner directive - see src/lib/models/blocked-models.ts. The
+    // dropped profile resolves its threads to the default profile.
+    expect(
+      coerceModelProfile({ ...SAMPLE_PROFILE, modelId: 'grok-41-fast' }),
+    ).toBeNull();
+  });
   it('rejects invalid thinking / verbosity values', () => {
     expect(coerceModelProfile({ ...SAMPLE_PROFILE, thinking: 'extreme' })).toBeNull();
     expect(coerceModelProfile({ ...SAMPLE_PROFILE, verbosity: 'chatty' })).toBeNull();

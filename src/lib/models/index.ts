@@ -31,6 +31,8 @@
  * is needed either.
  */
 
+import { isBlockedModelId } from './blocked-models';
+
 // --- Reasoning / verbosity wire-config knobs -------------------------------
 
 /**
@@ -397,6 +399,11 @@ export function coerceModelProfile(raw: unknown): ModelProfile | null {
   if (typeof r.id !== 'string' || r.id.length === 0) return null;
   if (typeof r.name !== 'string' || r.name.trim().length === 0) return null;
   if (typeof r.modelId !== 'string' || r.modelId.length === 0) return null;
+  // Blocked-model policy (./blocked-models.ts): a persisted profile
+  // pointing at a Grok id is treated as malformed and dropped, same as
+  // any other unusable entry; threads on it resolve to the default
+  // profile through resolveModelProfile.
+  if (isBlockedModelId(r.modelId)) return null;
   if (!isThinkingLevel(r.thinking)) return null;
   if (!isVerbosity(r.verbosity)) return null;
   if (typeof r.contextWindow !== 'number' || !Number.isFinite(r.contextWindow)) {

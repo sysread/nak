@@ -85,6 +85,10 @@ import {
 import { createAgentProgressPublisher } from '../_shared/agent-progress.ts';
 import { persistManualRunOutcome } from '../_shared/manual-run-outcome.ts';
 import { createEdgeLogger } from '../_shared/edge-log.ts';
+import {
+  isBlockedModelId,
+  stripBlockedCatalogEntries,
+} from '../_shared/blocked-models.ts';
 // MCP integration surface. Pure OAuth/transport helpers in
 // ./mcp/oauth.ts (fetch-injectable, unit-testable) per-user token
 // storage in ./mcp/token-store.ts (b-strict service-role), and the
@@ -411,11 +415,14 @@ async function handleKeyUsage(): Promise<Response> {
  * so an arbitrary value never reaches Venice; an unknown/absent value
  * falls back to 'text'.
  *
- * Thin passthrough: relays Venice's JSON verbatim and lets the browser
- * (src/lib/models/catalog.ts for text, image-catalog.ts for image)
- * flatten and coerce it, keeping this handler free of CatalogModel
- * knowledge. POST from the browser (functions.invoke is always POST)
- * even though the upstream call is a GET.
+ * One server-side edit before relay: blocked model entries
+ * (../_shared/blocked-models.ts) are stripped from the catalog, so no
+ * picker - current or stale client - is ever offered one. Everything
+ * else relays verbatim; the browser (src/lib/models/catalog.ts for
+ * text, image-catalog.ts for image) flattens and coerces it, keeping
+ * this handler free of CatalogModel knowledge. POST from the browser
+ * (functions.invoke is always POST) even though the upstream call is a
+ * GET.
  */
 async function handleModels(req: Request): Promise<Response> {
   const env = await requireVeniceEnv();
@@ -435,7 +442,7 @@ async function handleModels(req: Request): Promise<Response> {
 
   try {
     const result = await veniceFetchModels({ apiKey, type });
-    return json(result);
+    return json(stripBlockedCatalogEntries(result));
   } catch (err) {
     if (err instanceof VeniceError) {
       return json({ error: err.message, kind: err.kind }, err.kind === 'rate_limit' ? 429 : 502);
@@ -470,6 +477,15 @@ async function handleComplete(req: Request): Promise<Response> {
   }
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
     return json({ error: 'body must be a JSON object' }, 400);
+  }
+
+  // Blocked-model policy (../_shared/blocked-models.ts): a Grok id in
+  // the wire body is refused before the shared key is even sourced.
+  // The pickers cannot send one; this catches stale stored profiles
+  // and hand-crafted calls.
+  const completeModel = (body as Record<string, unknown>).model;
+  if (typeof completeModel === 'string' && isBlockedModelId(completeModel)) {
+    return json({ error: 'model is not allowed' }, 403);
   }
 
   const env = await requireVeniceEnv();
@@ -549,6 +565,13 @@ async function handleImageGenerate(req: Request): Promise<Response> {
   }
   if (typeof body.model !== 'string' || typeof body.prompt !== 'string') {
     return json({ error: 'body must include `model` and `prompt`' }, 400);
+  }
+
+  // Blocked-model policy (../_shared/blocked-models.ts): the same 403
+  // the chat routes give a Grok id. The image picker cannot send one;
+  // this closes the direct route.
+  if (isBlockedModelId(body.model)) {
+    return json({ error: 'model is not allowed' }, 403);
   }
 
   const env = await requireVeniceEnv();
@@ -1085,6 +1108,16 @@ async function handleStreamFresh(
   const apiKey = await readVeniceKey(ctx.admin);
   if (!apiKey) {
     return json({ error: 'no Venice key configured (app_config unseeded)' }, 503);
+  }
+
+  // Blocked-model policy (../_shared/blocked-models.ts): same posture
+  // as the price-cap check below - a clean 403 before the stream
+  // opens, never a mid-stream failure. The browser cannot send a Grok
+  // id through the pickers or profile coercion; this is the server
+  // backstop for a body built by anything else.
+  const wireModel = (body.body as Record<string, unknown>).model;
+  if (typeof wireModel === 'string' && isBlockedModelId(wireModel)) {
+    return json({ error: 'model is not allowed' }, 403);
   }
 
   // Enforce the project-global model price cap (from app_config, seeded by

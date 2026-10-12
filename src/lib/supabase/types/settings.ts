@@ -9,6 +9,7 @@
  * `../../supabase.ts` so consumers keep importing from `$lib/supabase`.
  */
 import { coerceModelProfiles, type ModelProfile } from '../../models';
+import { isBlockedModelId } from '../../models/blocked-models';
 import { isAccent, isColorMode, isUiStyle, type Accent, type ColorMode, type UiStyle } from '../../theme';
 import { isLogLevel, type LogLevel } from '../../logger.svelte';
 
@@ -292,10 +293,22 @@ export function coerceSettings(raw: unknown): UserSettings {
   // out of the stored blob on the next modelProfiles write.
   const modelProfiles = coerceModelProfiles(r.modelProfiles);
   if (modelProfiles) out.modelProfiles = modelProfiles;
-  if (typeof r.imageModel === 'string' && r.imageModel.length > 0) {
+  // Blocked-model policy (src/lib/models/blocked-models.ts): a stored
+  // Grok id reads as absent, so the override stops applying and the
+  // edge falls back to the default. The stale key sits inert in the
+  // blob until some future settings write reshapes it.
+  if (
+    typeof r.imageModel === 'string' &&
+    r.imageModel.length > 0 &&
+    !isBlockedModelId(r.imageModel)
+  ) {
     out.imageModel = r.imageModel;
   }
-  if (typeof r.editImageModel === 'string' && r.editImageModel.length > 0) {
+  if (
+    typeof r.editImageModel === 'string' &&
+    r.editImageModel.length > 0 &&
+    !isBlockedModelId(r.editImageModel)
+  ) {
     out.editImageModel = r.editImageModel;
   }
   // activeSessions is the canonical session-map key. A legacy
