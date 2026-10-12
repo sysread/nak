@@ -153,7 +153,10 @@ precedent and is deliberate - do not "fix" it back to mirroring.
 - **Not rating changes.** The rating stays user-only
   (`recipe_save` rejects it today). A record may *mention* an
   outcome in prose and carry the `outcome` enum; the stars on the
-  recipe card move only through the UI.
+  recipe card move only through the UI. (Wording precision:
+  record writes issue no `recipes` UPDATE at all, so neither the
+  embedding-clear nor the grocery trigger ever fires - the
+  trigger "not firing" isn't a guard inside the trigger.)
 - **Not touched by revert.** A recipe revert is a normal update
   whose patch comes from a past version row; it writes a new
   version and never reads or writes records. The log survives a
@@ -386,8 +389,10 @@ inheriting it.)
   instead - the batched title query either succeeds (a miss is
   then genuinely "(deleted recipe)") or fails as a whole (every
   row renders "couldn't load"; a network blip must not read as
-  deletion). Offline, the offline-no-data treatment wins over
-  everything: the render-nothing mount-void applies only when
+  deletion). Render precedence when offline: a live search
+  ALWAYS renders the results list (the offline-no-data line
+  governs the log area, add form, and Export all, never the
+  results); the render-nothing mount-void applies only when
   online and resolution is `missing`. Click-time read-through
   stays as-is: a blip at
   click navigates honestly onto the offline-no-data pane.
@@ -428,7 +433,7 @@ several bullets:
 | date/tag filters | reset (every path) | hidden | restored, reset |
 | outcome dropdown | reset (browse) | stays set, filters the search | reset |
 | compose/edit draft | reset (every path) | kept | kept |
-| expanded row | reset (browse rows) | kept | kept; search-result expansion survives until here |
+| expanded row | reset (browse rows) | kept | a search-result expansion dies when the search clears |
 | query + results | kept | - | cleared |
 
 - **Export**: single record to `yyyy-mm-dd-<slug>.md` with
@@ -445,7 +450,13 @@ several bullets:
   only search. Recipes export the whole diary by design; state
   the divergence per the non-conforming rule so nobody "fixes" it
   back after reading the twin. Like the twin, Export all hides at
-  zero records. The section
+  zero records. MECHANISM: online, Export all issues a fresh
+  UNFILTERED `listRecipeRecords(recipeId)` at export time (the
+  retention map cannot satisfy "ignores the filters" - its rows
+  are whatever the fetch-time filters scoped); offline, it
+  exports the retained rows as-is, and if that fetch was
+  filter-scoped the zip is a partial diary - accepted and stated
+  here rather than silently shipped as whole. The section
   receives the resolved `Recipe | null` (nullable exactly during
   the resolution windows above, not a bare title - `recipeToMarkdown`
   needs title + cooklang + source), and Export all disables while
@@ -460,7 +471,12 @@ several bullets:
   THE SAME recipe: retention is a per-recipe-id map kept for the
   session (not just the single last fetch), so revisiting a
   recipe whose log was fetched earlier still shows it offline.
-  The keying governs navigation everywhere: online, an
+  The keying governs navigation everywhere: the per-recipe log
+  view renders FROM THE RETENTION MAP (`map[activeId]`), online
+  included, and a log fetch whose response lands after the open
+  id changed is discarded - the same late-response race the
+  search's abort-controller kills, killed here by construction.
+  Online, an
   id with no cached fetch renders the loading state - never
   another recipe's rows. Offline, navigating to a recipe whose
   log was not fetched this session shows the offline-no-data
@@ -691,7 +707,10 @@ away from it.
   hardcoded count that is already wrong, the same paragraph's
   `GATED_TOOLS` reference is a removed
   mechanism, and the "modal" wording - the component renders
-  inline now);
+  inline now, all in M2; the tools.md/grocery-list.md ghost fixes
+  and the always-on/catalog-size edits land with M3's tools;
+  realtime-relays.md, offline-cache.md, embeddings.md, and
+  architecture.md ride M1's schema/relay work);
   the user-facing
   doc `docs/user/cookbook.md` gains the "why records vs History
   panel" story AND its delete-confirmation description gains the
@@ -711,7 +730,8 @@ away from it.
   `recipe-records`; `docs/dev/embeddings.md`'s EMBED_SOURCES registry
   description gains the `recipe-records` source (and its source
   count stops being a hardcoded number); `docs/dev/tools.md`'s
-  always-on section names the three record reads (and its
+  always-on section names the three recipe record reads (and the
+  wiki record reads one line away - equally stale - and its
   catalog-size figure stops being a hardcoded number);
   `docs/dev/README.md`'s "Cookbook modal" mention joins the
   inline-viewer wording fix;
