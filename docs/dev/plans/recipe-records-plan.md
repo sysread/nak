@@ -135,7 +135,10 @@ browser-side via the `$shared` alias. This extends the existing
 of the wiki record caps, only the content cap is consolidated
 there today - the tag caps live in `_record_helpers.ts` and the
 extraction agent - so the recipe file carries all three from the
-start and the tag caps never re-duplicate.
+start and the tag caps never re-duplicate. The direction (browser
+imports the `_shared` file as canonical, rather than the file
+mirroring the browser) matches the `$shared/cooklang-validate`
+precedent and is deliberate - do not "fix" it back to mirroring.
 
 ### What records are NOT
 
@@ -205,9 +208,12 @@ unreliable.
   mechanical backstop rides the tool result: create never refuses
   (two records on one date are legitimate - a semantic-dedup
   refusal would contradict that), but the create result carries
-  the recipe's same-date sibling records alongside the new row,
-  so the model sees the potential duplicate in the same turn
-  without a second call. The plan accepts a higher duplicate rate
+  the recipe's same-date sibling records alongside the new row -
+  AND the recipe's most recent prior record (date + preview),
+  because the wiki gotcha's second duplicate shape is a later
+  conversation re-describing yesterday's event, which same-date
+  siblings cannot catch. The model sees the likely duplicate in
+  the same turn without a second call. The plan accepts a higher duplicate rate
   than the wiki's (no sweep, no librarian) as the price of no
   sweep.
 - **Merge, don't duplicate, on update** (carried in
@@ -286,7 +292,8 @@ inheriting it.)
   misattribution is not; the expanded row the twin cleared for
   free via its keyed remount).
 - **Rows**: date ("Mon D, YYYY"), outcome chip, tag chips, truncated
-  preview; a row expands to the full content with Edit / Delete.
+  preview; a row expands to the full content with Edit / Export /
+  Delete (the twin's expanded-row shape).
 - **Filters**: from/to date range, tag dropdown, outcome dropdown,
   and a semantic search box (debounce + abort-controller supersede
   wired like RecipeList's search; the merge itself is
@@ -349,7 +356,11 @@ inheriting it.)
   no-op click, and the title batch is not re-run for the whole
   set. Searching the
   whole cooking log from any recipe is the point; per-recipe
-  narrowing is the filters' job. During the resolution window the
+  narrowing is the filters' job. (Outcome survives navigation
+  while date/tag reset not because it is cross-recipe - it is
+  not - but because resetting it while the query and results
+  stay live would desync the dropdown from the displayed
+  results.) During the resolution window the
   pane's placeholder would lie ("Recipe not found." for a recipe
   that exists), and on this hot path (a hit on a recipe outside
   the loaded drawer window) it lies often - so the pane placeholder
@@ -408,7 +419,13 @@ Supporting moves:
 - Mount point: `src/screens/Cookbook.svelte` renders the section in
   the detail pane, gated on pane + selected id so it survives
   routed-recipe resolution windows (see the search-scope bullet)
-  rather than on the `{#if activeRecipe}` content gate, and
+  rather than on the `{#if activeRecipe}` content gate. The pane
+  passes its resolution state down (a `'resolving' | 'found' |
+  'missing'` union or an equivalent fetching flag -
+  `resolveActiveRecipe` returns null for BOTH still-fetching and
+  gone, so the section cannot distinguish them without it); the
+  section derives its mount-void case and the dead-hit-row
+  re-render from that state, and
   rendering nothing when the pane's resolution failed outright
   (another device deleted the open recipe - an empty log under a
   not-found pane would read as "no records yet"; Cookbook.svelte
@@ -443,13 +460,20 @@ Supporting moves:
   a `nak:recipe-records:changed` window event through
   `src/lib/cookbook-events.ts` (the same emit/on pair shape the
   cookbook already uses); RecipeRecords.svelte listens and
-  refetches, so agent-side record writes land live.
+  refetches, so agent-side record writes land live. The
+  section's OWN writes emit the same event directly after the
+  write succeeds (the twin does exactly this) - realtime is the
+  agent-writes path, and a user whose websocket is down but REST
+  is fine still sees their save land.
 - Screen primitives: `src/lib/ui/recipe-records.ts`, pure helpers
   (filter predicates, outcome chip labels and colors, export
   filename slugs), unit-tested next door. The search chain's
   query-embedding step gets a named home too -
-  `searchRecipeRecordsSemantic({ query, limit, outcome })` in a
-  `$lib` sibling module (the `src/lib/wiki.ts` analog of
+  `searchRecipeRecordsSemantic({ query, limit, outcome })` in
+  `src/lib/recipe-records-search.ts` (a new `$lib` sibling; the
+  options-object signature is a deliberate divergence from the
+  twin's positional `(query, limit, deps)` - outcome threading
+  made it readable; the `src/lib/wiki.ts` analog of
   `searchWikiRecordsSemantic`: it calls the embedder itself - no
   embedding parameter, the twin embeds internally too - then the
   facade, then the data-layer merge; `outcome` threads through
@@ -584,6 +608,8 @@ away from it.
   description gains the `recipe-records` source (and its source
   count stops being a hardcoded number); `docs/dev/tools.md`'s
   always-on section names the three record reads;
+  `docs/dev/README.md`'s "Cookbook modal" mention joins the
+  inline-viewer wording fix;
   `docs/qa/use-cases/realtime-relays.md`'s Covers line and
   pg_class audit query gain the fourth relay and its
   replica-identity index (the doc already lags - `wiki_records`
