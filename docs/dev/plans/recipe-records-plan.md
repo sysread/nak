@@ -195,13 +195,16 @@ unreliable.
   separate records (the wiki twin learned this distinction in
   production). The guard is prompt-only (there is no cleanup agent
   - see decision 3), and the wiki's measured leak rate under
-  prompt-only discipline was real; a mechanical backstop comes
-  free in the tool result: on both the create and the
-  duplicate-refusal paths, the edge impl includes the recipe's
-  same-date sibling records, so the model sees the potential
-  duplicate in the same turn without a second call. The plan
-  accepts a higher duplicate rate than the wiki's (no sweep, no
-  librarian) as the price of no sweep.
+  prompt-only discipline was real (~8/127 redundant records in
+  three weeks, sweep + librarian defenses notwithstanding). The
+  mechanical backstop rides the tool result: create never refuses
+  (two records on one date are legitimate - a semantic-dedup
+  refusal would contradict that), but the create result carries
+  the recipe's same-date sibling records alongside the new row,
+  so the model sees the potential duplicate in the same turn
+  without a second call. The plan accepts a higher duplicate rate
+  than the wiki's (no sweep, no librarian) as the price of no
+  sweep.
 - **Merge, don't duplicate, on update** (carried in
   `recipe_record_update`'s description): details arrive piecemeal
   ("the crumb was actually fine on day two"). `recipe_record_get`
@@ -240,12 +243,17 @@ Writes - join `cookingToolbox`:
 - `recipe_record_update` - `id` plus at least one of `date`,
   `content`, `tags`, `outcome`; omitted fields unchanged, `tags`
   replaces the whole array (the `record_update` patch shape).
+  Passing `outcome: null` counts as the one-required-field and
+  clears the classification; the UI's outcome selector gets an
+  "unclassified" option to match.
 - `recipe_record_delete` - `id`.
 
 Wire schemas: `src/lib/tools/recipe_record_*.schema.ts` (schema-only
 exports, with `formatArgs` overrides mirroring `record_create`'s so
 the tool-call pill renders date/outcome as a header and the Markdown
-body as a section). Edge impls:
+body as a section, and a `shortDescription` on each - the catalog
+renders it verbatim, and an omission puts `undefined` in the
+prompt). Edge impls:
 `supabase/functions/venice/tools/recipe_record_*.ts`. Toolbox
 membership is asserted in `tests/tools.test.ts` (the existing
 tripwire).
@@ -266,12 +274,12 @@ history, then its log" is the narrative.
 - **Filters**: from/to date range, tag dropdown, outcome dropdown,
   and a semantic search box (debounce + abort-controller supersede
   wired like RecipeList's search; the merge itself is
-  `searchWikiRecords`' shape - see the search tool above). Search
-  results bypass the date/tag filters by design (the twin's
-  behavior), but an outcome selection is NOT dropped: a set
-  outcome dropdown is passed into the search call as its `outcome`
-  param, so "failures about X" works in the UI, not just via the
-  tools.
+  `searchWikiRecords`' shape - see the search tool above). The
+  combined filter rule: outcome applies in BOTH browse and search
+  modes (a set outcome dropdown is passed into the search call as
+  its `outcome` param, so "failures about X" works in the UI,
+  not just via the tools); date/tag apply to browse only - search
+  results bypass them by design (the twin's behavior).
 - **Search scope: cross-recipe, decided.** The search box searches
   every recipe's records (mirroring `recipe_record_search`), not
   just the open recipe's log; a hit on another recipe is annotated
@@ -288,16 +296,28 @@ history, then its log" is the narrative.
   query on navigation would turn it into search, click, re-type,
   click, re-type); only the date/tag filters reset (they are
   per-recipe narrowing, meaningless once another recipe is open).
-  The scroll-highlight marks the clicked hit inside the
+  The kept query is safe because RecipeRecords stays mounted
+  across navigation - Cookbook.svelte has no `{#key}` on the
+  recipe id and must not grow one; only the per-recipe log
+  refetches. Because the Records section sits below History, the
+  navigation also scrolls the section into view, and the
+  scroll-highlight marks the clicked hit inside the
   still-visible results list - "you are here" (promoted into M2
-  by the round-4 review: without it the user lands blind).
-  Searching the whole cooking log from any recipe is the point;
-  per-recipe narrowing is the filters' job.
+  by the round-4 review: without both, the user lands at the top
+  of the pane, blind to the results). Relay events re-run the
+  active search when one is live (the twin just refetches the
+  log and lets its results go stale; with results this
+  long-lived, staleness would show records deleted by a tool
+  turn). A hit whose recipe was deleted after the search saved
+  renders "(deleted recipe)" with a no-op click. Searching the
+  whole cooking log from any recipe is the point; per-recipe
+  narrowing is the filters' job.
 - **Export**: single record to `yyyy-mm-dd-<slug>.md` with
   date/tags/outcome front matter, and Export all to a zip holding
   `recipe.md` plus one `records/` entry per record (wiki's Export
-  all shape; the recipe itself has only single-file exports
-  today). Export all ignores the active filters/search - the full
+  all shape; recipes have no file downloads at all today -
+  copy-to-clipboard only - so this is the cookbook's first).
+  Export all ignores the active filters/search - the full
   log always, matching the twin's behavior.
   The export helpers live in a new recipe-typed
   `src/lib/recipe-records-export.ts` (a sibling of
@@ -341,7 +361,8 @@ Supporting moves:
   SupabaseService facade. Row types + coercer (`RecipeRecord`,
   `coerceRecipeRecord`) in `src/lib/supabase/types/cookbook.ts`
   (the module's first coercer - recipes are cast raw today; wiki's
-  coercers live in `types/wiki.ts`).
+  coercers live in `types/wiki.ts`), re-exported through the
+  existing `types/index.ts` barrel.
 - Realtime: `subscribeToRecipeRecordChanges` in `realtime.ts` (a
   clone of `subscribeToWikiRecordChanges` over `recipe_records`),
   wired in `Chat.svelte` alongside the existing relays, publishing
@@ -355,6 +376,10 @@ Supporting moves:
 
 ## Milestones
 
+The three milestones land as ONE PR: M2 ships user-visible UI, and
+the mandatory same-PR docs rule forbids splitting the doc updates
+away from it.
+
 - **M1 - Schema + data layer.** Table, triggers, RLS, the two
   realtime deliverables (publication membership + the
   `(id, user_id)` replica-identity index - omit either and M2's
@@ -362,7 +387,9 @@ Supporting moves:
   gotcha documents), embedding RPCs, `EMBED_SOURCES` entry,
   `_shared/recipe-record-limits.ts`, types, SupabaseService slice,
   and `subscribeToRecipeRecordChanges` in `realtime.ts` (data-layer
-  work, so M2's wiring has something to call). Two required test
+  work, so M2's wiring has something to call), plus the head-count
+  query the delete confirm needs (`countRecipeRecords(recipe_id)`
+  in the data layer). Two required test
   edits land here: `supabase/functions/tests/embed-input.test.ts`
   asserts `EMBED_SOURCES`' name list by exact equality, and
   `tests/realtime-subscribe.test.ts` pins every realtime helper's
@@ -442,10 +469,17 @@ Supporting moves:
   ledger gains the "recipe records are online-only, degrade soft"
   line (the dev-docs rule: a feature coupling to another feature's
   ledger must update it); `docs/dev/tools.md`'s write-toolbox
-  section re-enumerates the cooking toolbox;
+  section re-enumerates the cooking toolbox (and fixes its
+  pre-existing `recipe_update` ghost mention on that same line -
+  no such tool exists in the registry);
   `docs/dev/components.md`'s inventory gains the RecipeRecords
   entry; `docs/dev/embeddings.md`'s EMBED_SOURCES registry
-  description gains the `recipe-records` source.
+  description gains the `recipe-records` source;
+  `docs/qa/use-cases/realtime-relays.md`'s Covers line and
+  pg_class audit query gain the fourth relay and its
+  replica-identity index (the doc already lags - `wiki_records`
+  and the grocery relays are missing too; catch it up here
+  rather than inherit the gap).
 - Existing QA use-case delta: `cookbook-recipe-lifecycle.md`
   step 12 pins the delete confirm's copy, which this feature
   changes - update that expectation and re-execute the use-case
