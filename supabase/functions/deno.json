@@ -1,6 +1,7 @@
 {
   "imports": {
     "@supabase/supabase-js": "npm:@supabase/supabase-js@2",
-    "@std/assert": "jsr:@std/assert@1"
+    "@std/assert": "jsr:@std/assert@1",
+    "$shared/recipe-record-limits": "./_shared/recipe-record-limits.ts"
   }
 }

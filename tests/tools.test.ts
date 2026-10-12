@@ -93,6 +93,9 @@ describe('tool registry', () => {
       'recipe_photos_remove',
       'recipe_photos_reorder',
       'recipe_photo_label_set',
+      'recipe_record_create',
+      'recipe_record_update',
+      'recipe_record_delete',
     ]);
     expect(memoriesToolbox.tools.map((t: ToolDef) => t.name)).toEqual([
       'memory_save',
@@ -135,6 +138,9 @@ describe('tool registry', () => {
       'wiki_get',
       'recipe_list',
       'recipe_get',
+      'recipe_record_list',
+      'recipe_record_get',
+      'recipe_record_search',
       'research_docs',
       'web_search',
       'update_title',
@@ -143,17 +149,32 @@ describe('tool registry', () => {
     ]) {
       expect(names).toContain(expected);
     }
-    // And no writes leak into always-on.
+    // And no writes leak into always-on. (The recipe-record writes
+    // ride the cooking toolbox; the wiki record writes the wiki box.)
     for (const write of [
       'memory_save',
       'memory_delete',
       'recipe_save',
-      'recipe_update',
       'recipe_delete',
+      'recipe_record_create',
+      'recipe_record_update',
+      'recipe_record_delete',
       'wiki_librarian',
     ]) {
       expect(names).not.toContain(write);
     }
+  });
+
+  it('cookingToolbox description carries the record-capture trigger', () => {
+    // The toolbox description IS catalog-visible (the catalog renders
+    // toolbox descriptions and per-tool short descriptions, never full
+    // tool descriptions), so the capture trigger rides it: the model
+    // logs a record when the user reports a cook. Pinned here because
+    // the browser registry's import graph does not resolve under Deno
+    // - see supabase/functions/tests/recipe_record_tools.test.ts for
+    // the create-description invariants.
+    expect(cookingToolbox.description).toContain('reports having cooked a recipe');
+    expect(cookingToolbox.description).toContain('say so in the reply');
   });
 
   it('toOpenAIToolDef projects to the function-calling wire shape', () => {

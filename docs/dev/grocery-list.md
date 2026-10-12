@@ -256,7 +256,7 @@ grocery_products / grocery_list_entries":
   destroys memory. `tests/grocery-list.test.ts` runs a JS mirror of
   the exact SQL extraction against `parseCooklang` so drift fails
   the gate. A trigger rather than client cleanup so every write
-  path (modal, server-dispatched `recipe_update` tool, revert) is
+  path (modal, server-dispatched `recipe_save` tool, revert) is
   covered. Bookmark / rating / title changes don't touch `cooklang`
   and leave the list alone. Recipe DELETE is the FK cascade, not
   the trigger.

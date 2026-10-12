@@ -5,7 +5,7 @@
 //
 // No RPC needed - just a DELETE with explicit user_id filter. The
 // CASCADE on recipes.id takes care of recipe_versions /
-// recipe_version_images / topic links.
+// recipe_version_images / recipe_records / topic links.
 
 import { registerTool, type ToolContext, type ToolDef } from '../performToolCall.ts';
 
