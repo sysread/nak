@@ -243,7 +243,17 @@ ride always-on:
   Merge semantics come from `searchWikiRecords`
   (`wiki-records.ts`): embed + ILIKE-on-**content** (recipes' own
   `searchRecipes` ILIKEs on title - records have no title), dedup
-  by id, capped, with its empty-query short-circuit. The edge tool
+  by id, capped, with its empty-query short-circuit - with ONE
+  deliberate fix: the twin's ILIKE leg builds its pattern with
+  `ilikeLogicTreePattern` and applies it to a standalone
+  `.ilike()` filter, which `query-utils.ts` explicitly forbids
+  (PostgREST strips surrounding quotes only inside a logic tree,
+  so the pattern hunts for literal quote characters and the leg
+  is effectively dead - masked by the semantic leg ever firing).
+  The recipe merge uses `ilikeFilterPattern` for the standalone
+  leg instead, and the twin's one-line fix rides the same PR (a
+  fixed copy beside a known-broken template is split-brain).
+  The edge tool
   gaining an ILIKE leg at all is a deliberate divergence from the
   wiki twin's `record_search` (semantic-RPC only, empty on
   embedder failure) so the tool stays useful with the embedder
@@ -305,7 +315,10 @@ inheriting it.)
   for free via its keyed remount).
 - **Rows**: date ("Mon D, YYYY"), outcome chip, tag chips, truncated
   preview; a row expands to the full content with Edit / Export /
-  Delete (the twin's expanded-row shape). A search-hit click
+  Delete (the twin's expanded-row shape). Because a foreign
+  hit's row click NAVIGATES (it never just expands), Edit and
+  Delete only ever touch the open recipe's records - the
+  cross-recipe mutation surface the twin has doesn't exist here. A search-hit click
   navigates AND expands AND highlights the clicked row; the
   expanded-row reset on recipe-id change applies to BROWSE rows
   only - a search-result row stays expanded until the search
@@ -380,7 +393,10 @@ inheriting it.)
   active search when one is live (the twin just refetches the
   log and lets its results go stale; with results this
   long-lived, staleness would show records deleted by a tool
-  turn). A hit whose recipe was deleted after the search saved
+  turn). Sidebar navigation with a live search keeps the results
+  replacing the newly opened recipe's log (the same
+  query-survival rule, named as accepted: the exit is clearing
+  the search; the QA use-case pins it). A hit whose recipe was deleted after the search saved
   resolves at CLICK time: a hit on an offline-cached recipe
   still opens (the read-through decides - clicks always
   navigate); a resolved null while online re-renders the hit row
@@ -619,7 +635,11 @@ away from it.
   query the delete confirm needs (`countRecipeRecords(recipe_id)`
   in the data layer), the batched title lookup the cross-recipe
   hit labels need (`fetchRecipeTitles(ids)` - M2's search UI
-  consumes it), and a pointer comment in
+  consumes it), its four doc updates (realtime-relays.md,
+  offline-cache.md, embeddings.md, architecture.md), the RPC
+  grants the trio needs (the claim/save pair carries the
+  service_role revoke/grant pair; the search RPC keeps
+  `p_user_id` for the edge caller), and a pointer comment in
   `src/lib/recipe-limits.ts` toward the new
   `_shared/recipe-record-limits.ts` (the two neighboring
   "recipe limits" homes have opposite canonical directions - the
@@ -688,7 +708,12 @@ away from it.
   recipe-tool handler template; note wiki's record handlers have
   no edge test file to mirror - `wiki.test.ts` covers toolbox
   composition and prompt invariants only): create/update/delete
-  handlers, argument validation, `source_conversation_id` stamping.
+  handlers, argument validation, `source_conversation_id`
+  stamping, AND the search handler - the only tool with new
+  server-side logic (embedder-failure falls back to ILIKE-only,
+  outcome/recipe_id filters reach both legs, empty query throws,
+  dedup + cap behavior, and the ILIKE pattern shape that guards
+  the logic-tree misuse).
 - `tests/schema-dml-columns.test.ts`: the floor assertions are
   `>=` comparisons, so adding a table cannot trip them upward -
   the suite should simply stay green over the new DML. A floor
@@ -745,8 +770,8 @@ away from it.
   no such tool exists in the registry; `docs/dev/grocery-list.md`
   carries the same ghost and gets the same fix);
   `docs/dev/components.md`'s inventory gains the RecipeRecords
-  entry (and fixes the WikiRecords entry's wrong consumer while
-  there: mounted by Wiki.svelte, not WikiList.svelte);
+  entry (and fixes the WikiRecords entry's stale self-reference
+  consumer while there: mounted by Wiki.svelte);
   `docs/dev/architecture.md`'s facade-slice list gains
   `recipe-records`; `docs/dev/embeddings.md`'s EMBED_SOURCES registry
   description gains the `recipe-records` source (and its source
