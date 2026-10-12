@@ -91,7 +91,8 @@ landing tab move together.
   (`filterEditCatalogByCap`); picking the built-in default
   (`DEFAULT_EDIT_IMAGE_MODEL`, `firered-image-edit`) clears the override
   via `persistEditImageModel`. `upscale_image` and `remove_background`
-  use fixed models and have no picker.
+  use fixed models and have no picker. The internals live in
+  [image-editing](./image-editing.md).
 - **Model profiles** - the user-defined named model configurations
   (`profiles.settings.modelProfiles`, a `ModelProfile[]`). Each card
   is a grip handle + name input + Default radio + delete button, a

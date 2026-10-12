@@ -1,7 +1,9 @@
 # Image Editing Implementation Plan
 
 Status: LANDED - kept for the design rationale. The living references
-are [`../tools.md`](../tools.md) (the tool catalog) and the QA use-case
+are [`../image-editing.md`](../image-editing.md) (dev internals),
+[`../../../user/image-editing.md`](../../../user/image-editing.md)
+(the user-facing page), and the QA use-case
 [`../../../qa/use-cases/image-editing.md`](../../../qa/use-cases/image-editing.md);
 where the implementation diverged from this plan, those docs win.
 Divergences worth knowing: the edit card's tool-name filter needed an

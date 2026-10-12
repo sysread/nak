@@ -189,6 +189,19 @@ tool uses.
   models above it don't appear in the dropdown, with a note saying how
   many were hidden. It's set during setup, not from the app.
 
+## Image editing
+
+Editing existing pictures works the same way and has its own picker:
+Settings -> AI -> **Image editing** chooses the model behind the
+`edit_image` tool (see [Image editing](./image-editing.md) for the
+feature itself). The rows carry one thing the generation picker
+doesn't: a **privacy badge** saying where your picture goes. A lock
+means the model is served on Venice's own infrastructure; a mask
+means the request is forwarded to a third-party provider with the
+image attached. Same live catalog, same per-operation price display,
+same price-cap filtering - the cap here is the shared **per-image-op**
+maximum, not a separate one.
+
 ## Emphasis markdown
 
 A bionic-style scan aid for long replies. When it's on, Nak asks

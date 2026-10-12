@@ -236,7 +236,10 @@ surface lives in the always-on set above.
   background-remove endpoints use fixed models (`upscaler`,
   `bria-bg-remover`); no settings. All three are capped by the same
   flat `maxImageUsd` per-image-op ceiling as generation; the upscale
-  cap is tier-aware (2x vs 4x rates).
+  cap is tier-aware (2x vs 4x rates). The feature's dev doc -
+  [`./image-editing.md`](./image-editing.md) - carries the full
+  internals: wire shapes, the shared machinery, failure modes, and
+  tests.
 
 ## Files
 

@@ -35,6 +35,9 @@ You can reach these pages two ways:
 - [Attachments](./attachments.md) — attach files to a message; how
   they're stored, which tiers can see what, on-upload image
   compression, and managing files from the Artifacts tab.
+- [Image editing](./image-editing.md) — asking Nak to edit, upscale,
+  or cut out pictures it already has: what to ask for, the edit-model
+  picker, and what the privacy badges mean.
 - [Threads](./threads.md) — the conversation drawer, pinning,
   archiving, renaming, deleting.
 - [Forking a conversation](./forking.md) — branch a conversation into
