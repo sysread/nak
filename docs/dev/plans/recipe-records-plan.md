@@ -295,10 +295,14 @@ inheriting it.)
   modes (a set outcome dropdown is passed into the search call as
   its `outcome` param, so "failures about X" works in the UI,
   not just via the tools); date/tag apply to browse only - search
-  results bypass them by design (the twin's behavior). Relay
-  events re-run a live search through the same
-  debounce/abort controller as the keystroke path, so a record-
-  writing chat turn cannot thrash the search.
+  results bypass them by design (the twin's behavior). Changing
+  the outcome dropdown while results are live re-runs the search
+  through the same debounce/abort controller (an outcome change
+  that only refetched the log would silently stop affecting the
+  displayed results); with no live search it just refetches the
+  log. Relay events re-run a live search through the same
+  controller, so a record-writing chat turn cannot thrash the
+  search.
 - **Search scope: cross-recipe, decided.** The search box searches
   every recipe's records (mirroring `recipe_record_search`), not
   just the open recipe's log; a hit on another recipe is annotated
@@ -340,7 +344,10 @@ inheriting it.)
   log and lets its results go stale; with results this
   long-lived, staleness would show records deleted by a tool
   turn). A hit whose recipe was deleted after the search saved
-  renders "(deleted recipe)" with a no-op click. Searching the
+  resolves at CLICK time: the routed-recipe by-id fetch comes
+  back null, the hit row re-renders "(deleted recipe)" with a
+  no-op click, and the title batch is not re-run for the whole
+  set. Searching the
   whole cooking log from any recipe is the point; per-recipe
   narrowing is the filters' job. During the resolution window the
   pane's placeholder would lie ("Recipe not found." for a recipe
@@ -362,10 +369,9 @@ inheriting it.)
   all shape; recipes have no file downloads at all today -
   copy-to-clipboard only - so this is the cookbook's first).
   Export all ignores the active filters/search and exports the
-  full log - a DIVERGENCE from the twin, which exports the
-  date/tag-filtered set and ignores only the search; stated per
-  the non-conforming rule, because a log is a diary and export is
-  its backup path while filters are transient views. The section
+  full log - a conforming port: the twin does exactly this (its
+  Export all passes the unfiltered `records` array, per its own
+  "always the full set" comment). The section
   receives the resolved `Recipe | null` (nullable exactly during
   the resolution windows above, not a bare title - `recipeToMarkdown`
   needs title + cooklang + source), and Export all disables while
@@ -402,9 +408,12 @@ Supporting moves:
 - Mount point: `src/screens/Cookbook.svelte` renders the section in
   the detail pane, gated on pane + selected id so it survives
   routed-recipe resolution windows (see the search-scope bullet)
-  rather than on the `{#if activeRecipe}` content gate (it already
-  computes the offline state the bookmark controls use, and
-  already hosts the History panel Records sits below).
+  rather than on the `{#if activeRecipe}` content gate, and
+  rendering nothing when the pane's resolution failed outright
+  (another device deleted the open recipe - an empty log under a
+  not-found pane would read as "no records yet"; Cookbook.svelte
+  already computes the offline state the bookmark controls use,
+  and already hosts the History panel Records sits below).
 - Recipe delete names the log cost. The cookbook's delete
   confirmation is a `window.confirm` (not an inline strip); its
   message gains "This deletes the recipe and its N records", with
@@ -439,11 +448,13 @@ Supporting moves:
   (filter predicates, outcome chip labels and colors, export
   filename slugs), unit-tested next door. The search chain's
   query-embedding step gets a named home too -
-  `searchRecipeRecordsSemantic({ query, queryEmbedding, limit })`
-  in a `$lib` sibling module (the `src/lib/wiki.ts` analog of
-  `searchWikiRecordsSemantic`: it calls the embedder, then the
-  facade, then the data-layer merge) - so the embed call never
-  lands inside the .svelte file.
+  `searchRecipeRecordsSemantic({ query, limit, outcome })` in a
+  `$lib` sibling module (the `src/lib/wiki.ts` analog of
+  `searchWikiRecordsSemantic`: it calls the embedder itself - no
+  embedding parameter, the twin embeds internally too - then the
+  facade, then the data-layer merge; `outcome` threads through
+  wrapper, facade, merge, and both legs) - so the embed call
+  never lands inside the .svelte file.
 
 ## Milestones
 
@@ -480,7 +491,9 @@ away from it.
   (`supabase/functions/venice/tools/index.ts`), shared edge helpers
   in a new `venice/tools/_recipe_record_helpers.ts` (the
   `_record_helpers.ts` clone: column list, date/tag normalizers,
-  ownership pre-check, plus outcome normalizing), formatArgs, the
+  ownership pre-check, plus outcome normalizing; its file
+  preamble names the distinction from the easily-confused
+  `_recipe_helpers.ts` - photo meta, a different thing), formatArgs, the
   capture trigger + dedup/merge guards in the descriptions, the
   two toolbox description strings (both catalog-visible:
   `cookingToolbox` gains the capture trigger, `alwaysOnToolbox`'s
