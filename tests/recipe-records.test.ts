@@ -20,7 +20,11 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { SupabaseService } from '../src/lib/supabase';
 import { coerceRecipeRecord } from '../src/lib/supabase/types/cookbook';
 import type { RecipeRecord } from '../src/lib/supabase/types/cookbook';
-import { fetchRecipeTitles, searchRecipeRecords } from '../src/lib/supabase/recipe-records';
+import {
+  fetchRecipeTitles,
+  listRecipeRecords,
+  searchRecipeRecords,
+} from '../src/lib/supabase/recipe-records';
 import { searchRecipeRecordsSemantic } from '../src/lib/recipe-records-search';
 import {
   DELETED_RECIPE_LABEL,
@@ -682,5 +686,27 @@ describe('recordSlug / recordExportFilename', () => {
 
   it('the search cap is a named tunable next to RecipeList\'s', () => {
     expect(RECIPE_RECORD_SEARCH_LIMIT).toBe(20);
+  });
+});
+
+describe('listRecipeRecords (jsonb tag filter)', () => {
+  // Regression guard for the QA round-1 bug: supabase-js serializes a
+  // raw JS array as a Postgres array literal (`cs.{a,b}`), which
+  // PostgREST rejects against a jsonb column with a 400 (22P02). The
+  // wire must carry the JSON-stringified containment form.
+  it('serializes the tags filter as a JSON array string, not a Postgres literal', async () => {
+    const { client, calls } = makeClient({ fromData: [] });
+    await listRecipeRecords(client, 'r1', { tags: ['zzqa-rye', 'high-hydration'] });
+    expect(calls.contains?.[0]).toEqual([
+      'tags',
+      JSON.stringify(['zzqa-rye', 'high-hydration']),
+    ]);
+  });
+
+  it('sends no contains filter when tags are absent or empty', async () => {
+    const { client, calls } = makeClient({ fromData: [] });
+    await listRecipeRecords(client, 'r1', {});
+    await listRecipeRecords(client, 'r1', { tags: [] });
+    expect(calls.contains).toBeUndefined();
   });
 });

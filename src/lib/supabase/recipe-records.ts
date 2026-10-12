@@ -67,7 +67,14 @@ export async function listRecipeRecords(
     .order('created_at', { ascending: false });
   if (filters.fromDate) query = query.gte('date', filters.fromDate);
   if (filters.toDate) query = query.lte('date', filters.toDate);
-  if (filters.tags && filters.tags.length > 0) query = query.contains('tags', filters.tags);
+  // JSON.stringify is load-bearing: `tags` is jsonb, and supabase-js
+  // serializes a raw JS array as a Postgres array literal (`cs.{a,b}`),
+  // which PostgREST rejects against jsonb with a 400 (22P02). The
+  // stringified form is the JSON-array containment `cs.["a","b"]` the
+  // column needs. Found by the QA use-case's first run - the wiki twin
+  // shipped the same bug.
+  if (filters.tags && filters.tags.length > 0)
+    query = query.contains('tags', JSON.stringify(filters.tags));
   if (filters.outcome) query = query.eq('outcome', filters.outcome);
   if (filters.limit) query = query.limit(filters.limit);
   const { data, error } = await query;

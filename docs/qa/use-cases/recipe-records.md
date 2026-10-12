@@ -137,7 +137,8 @@ offline posture.
   FULL log, ignoring active filters/search (recipes' deliberate
   divergence from the wiki twin).
 - (12) The record's `embedding` populates (vector(2048)) via the
-  shared backfill loop; the drawer shows the `[embeddings]` line.
+  shared backfill loop - check via PostgREST (`embedding is not
+  null`; the backfill logs server-side, not to the drawer).
   Search now hits it through the vector path.
 - (13) Same recipe offline: the retained rows still render, add/edit
   controls and the filter/search controls disable with copy (the

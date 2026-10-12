@@ -615,7 +615,7 @@
         class="icon-btn"
         onclick={() => void runSearch()}
         disabled={searching || !online}
-        title="Search records"
+        title={online ? 'Search records' : 'Reconnect to search records'}
         aria-label={searching ? 'Searching records' : 'Search records'}
       >
         <!-- Feather "search" - matches the +/download icon buttons. -->
@@ -650,15 +650,32 @@
       {#if !searchMode}
         <label>
           From
-          <input type="date" bind:value={fromDate} onchange={refetchLog} disabled={!online} />
+          <input
+            type="date"
+            bind:value={fromDate}
+            onchange={refetchLog}
+            disabled={!online}
+            title={offlineStatus.online ? undefined : 'Reconnect to filter records'}
+          />
         </label>
         <label>
           To
-          <input type="date" bind:value={toDate} onchange={refetchLog} disabled={!online} />
+          <input
+            type="date"
+            bind:value={toDate}
+            onchange={refetchLog}
+            disabled={!online}
+            title={offlineStatus.online ? undefined : 'Reconnect to filter records'}
+          />
         </label>
         <label>
           Tag
-          <select bind:value={tagFilter} onchange={refetchLog} disabled={!online}>
+          <select
+            bind:value={tagFilter}
+            onchange={refetchLog}
+            disabled={!online}
+            title={offlineStatus.online ? undefined : 'Reconnect to filter records'}
+          >
             <option value="">All</option>
             {#each availableTags as tag (tag)}
               <option value={tag}>{tag}</option>
@@ -668,7 +685,12 @@
       {/if}
       <label>
         Outcome
-        <select bind:value={outcomeFilter} onchange={onOutcomeChange} disabled={!online}>
+        <select
+          bind:value={outcomeFilter}
+          onchange={onOutcomeChange}
+          disabled={!online}
+          title={offlineStatus.online ? undefined : 'Reconnect to filter records'}
+        >
           {#each outcomeFilterOptions() as o (o.value)}
             <option value={o.value}>{o.label}</option>
           {/each}
