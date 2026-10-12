@@ -155,7 +155,10 @@ open panel.
   refresh, via the realtime relay. Its `History` shows one row -
   `Initial version` if the model omitted a change message, otherwise
   the model's own message.
-- (12) The browser confirm gates the delete; `Cancel` leaves the
+- (12) The browser confirm gates the delete and names the log cost:
+  the message reads `This deletes the recipe and its N records. This
+  cannot be undone.` with N from a live head count at confirm time
+  (this QA recipe has no records yet, so N is 0). `Cancel` leaves the
   recipe intact, confirming removes it from the listing and lands the
   panel on the empty / list pane. Unrelated recipes (including
   `QA Agent Soup`) are untouched.

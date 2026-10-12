@@ -162,7 +162,11 @@
     cookbook,
     loadRecipes,
   } from '$lib/cookbook-store.svelte';
-  import { onCookbookChange, emitCookbookChange } from '$lib/cookbook-events';
+  import {
+    onCookbookChange,
+    emitCookbookChange,
+    emitRecipeRecordChange,
+  } from '$lib/cookbook-events';
   import { emitGroceryChange } from '$lib/grocery-events';
   import {
     memoriesStore,
@@ -2108,6 +2112,20 @@
   $effect(() => {
     if (!app.supabase || !sessionUserId) return;
     return app.supabase.subscribeToWikiRecordChanges(sessionUserId, emitWikiRecordChange);
+  });
+
+  // Realtime: the recipe-records leg of the same family. The
+  // recipe_record_* chat tools dispatch in the venice function, where
+  // emitRecipeRecordChange is unreachable, so the open Cookbook detail
+  // pane's Records section learns about agent-side log writes through
+  // this relay. Records join no offline mirror, so unlike the article
+  // and recipes relays there is no syncOfflineCache reconcile here.
+  $effect(() => {
+    if (!app.supabase || !sessionUserId) return;
+    return app.supabase.subscribeToRecipeRecordChanges(
+      sessionUserId,
+      emitRecipeRecordChange
+    );
   });
 
   // Watch the wiki-librarian in-flight lease so every client knows when a

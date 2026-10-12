@@ -1,9 +1,9 @@
 # Cookbook
 
 Personal recipe store. Recipes are authored in Cooklang, persisted to
-Supabase, exposed to the LLM via tool calls, and rendered in a
-modal plus a drawer tab. Storage and tools are memory-shaped; the UI
-follows the Settings modal pattern.
+Supabase, exposed to the LLM via tool calls, and rendered in an
+inline panel plus a drawer tab. Storage and tools are memory-shaped; the UI
+follows the Settings screen's shell conventions.
 
 ## Role in the app
 
@@ -14,14 +14,14 @@ grocery list: every recipe's detail pane carries per-ingredient
 checkboxes that push items onto the Groceries drawer tab (see
 [`./grocery-list.md`](./grocery-list.md)). The model can read,
 write, and edit recipes via tools; the user can do the same via the
-Cookbook modal.
+Cookbook panel.
 
 Storage layout follows `memories` deliberately — recipes are
 user-owned notes that the LLM can also author, same row-level
 security posture, same "freeform text column as source of truth"
 philosophy. Embeddings pipeline added later (see "Embeddings"
 below) for the drawer-side recipe search; the LLM tool path
-(`recipe_list`, `recipe_search`) still uses ILIKE-on-title and is
+(`recipe_list`) still uses ILIKE-on-title and is
 unaffected.
 
 ## Files
@@ -29,7 +29,7 @@ unaffected.
 - `src/lib/cooklang.ts` — inline Cooklang parser + HTML / plain-text / markdown
   renderers. Deliberately no upstream dep. Exports `parseCooklang`,
   `recipeToHtml`, `cooklangToHtml`, `recipeToc`, `recipeToPlainText`,
-  `recipeToMarkdown`, and the size constants the tools and the modal
+  `recipeToMarkdown`, and the size constants the tools and the panel
   share. `recipeToc` is a third projection of the parsed AST (alongside
   the HTML and the export renderers): it returns the detail pane's table
   of contents (Ingredients + Instructions, each with a sub-entry per
@@ -46,7 +46,7 @@ unaffected.
   `CustomEvent` (`nak:recipes:changed`) so tools stay UI-unaware - its
   handler calls `loadRecipes`, i.e. a tool mutation resets the list to
   the top rather than trying to patch a row in the middle of a page.
-- `src/lib/tools/recipe_*.schema.ts` — the nine LLM tools' wire
+- `src/lib/tools/recipe_*.schema.ts` — the eight LLM tools' wire
   schemas (name, description, JSON Schema parameters). Schema only;
   the browser never executes a recipe tool.
 - `supabase/functions/venice/tools/recipe_save.ts`, `recipe_list.ts`,
@@ -59,14 +59,18 @@ unaffected.
   through the realtime relay, not `notifyCookbookChanged` - see the
   relay gotcha below.
 - `src/lib/supabase.ts` — `Recipe`, `RecipeVersion`, `RecipePhoto`,
-  `RecipePhotoMeta`, and `RecipePhotoInput` types + `createRecipe /
+  `RecipePhotoMeta`, `RecipePhotoInput`, and `RecipeRecord` types +
+  `createRecipe /
   updateRecipe / deleteRecipe / getRecipe / listRecipes /
   listRecipesPage / listUpcomingRecipes / listFavoriteRecipes /
   listRecipeVersions / getRecipeVersion / revertRecipe /
   upsertRecipeImage / listRecipePhotos / listRecipePhotoMeta /
   listRecipeVersionPhotoInputs / attachRecipePhotos /
   removeRecipePhotos / reorderRecipePhotos / setRecipePhotoLabels`
-  methods. Lives between the memory methods and the background-worker
+  methods, plus the recipe-record slice (`listRecipeRecords /
+  createRecipeRecord / updateRecipeRecord / deleteRecipeRecord /
+  countRecipeRecords / fetchRecipeTitles / searchRecipeRecords`).
+  Lives between the memory methods and the background-worker
   pipeline block.
   `createRecipe` / `updateRecipe` go through the
   `recipe_create_with_version` / `recipe_update_with_version` RPCs
@@ -77,10 +81,11 @@ unaffected.
   mutations (`attachRecipePhotos` etc.) call dedicated single-
   purpose RPCs that wrap "snapshot a new version + write its links"
   atomically; `setRecipePhotoLabels` is the caption-edit verb.
-- `src/screens/Cookbook.svelte` — three-pane modal (list, detail,
-  edit). Mirrors `Settings.svelte`'s shell / escape / click-outside-
+- `src/screens/Cookbook.svelte` — three-pane inline panel (list, detail,
+  edit; it renders in the chat shell's main area, not a modal).
+  Mirrors `Settings.svelte`'s shell / escape / click-outside-
   to-close conventions; styles scoped locally rather than added to
-  `styles.css` because the modal is an island. The detail pane parses
+  `styles.css` because the panel is an island. The detail pane parses
   the recipe once and feeds both `recipeToHtml` and `recipeToc` off the
   result; the TOC renders as a `<nav class="cookbook-toc">` above the
   rendered body, and a click resolves the target heading by id within
@@ -117,12 +122,45 @@ unaffected.
   rating and revert change messages, the History panel's summary label
   and row states, and the action-bar / bookmark button copy.
   Unit-tested at `tests/cookbook-screen.test.ts`.
+- `src/lib/supabase/recipe-records.ts` — the recipe-records domain
+  slice of the data layer: record CRUD, the filtered listing (date
+  range, tags AND, outcome), the two legs of the cross-recipe search
+  merge (vector RPC + ILIKE-on-content, deduped by id, capped), the
+  delete-confirm head count (`countRecipeRecords`), and the batched
+  title lookup (`fetchRecipeTitles`). Row type + coercer live in
+  `./types/cookbook.ts`; the facade delegates one-for-one.
+- `src/lib/ui/recipe-records.ts` — pure UI-behavior primitives for
+  the Records section (see "Records" below): the per-recipe retention
+  map reducer behind the offline degradation, browse-filter mapping,
+  outcome chip labels/classes + selector options, date formatting,
+  content previews, tag parse/serialize, cross-recipe search-hit
+  labels ("(deleted recipe)" / "couldn't load"), expanded-row
+  affordances, and export filename slugs. Unit-tested in
+  `tests/recipe-records.test.ts` (DOM-free).
+- `src/lib/recipe-records-search.ts` — the embed-the-query wrapper
+  (`searchRecipeRecordsSemantic`): embeds via Venice with a silent
+  ILIKE-only fallback, then delegates to the facade's
+  `searchRecipeRecords`. Service + abort signal are injected (no
+  `app` import), so the component stays embed-free and
+  supersede-able.
+- `src/lib/recipe-records-export.ts` — the recipe-typed export module
+  (sibling of `wiki-export.ts`): a single record as Markdown with
+  date/tags/outcome front matter, and the recipe + records ZIP
+  (`recipe.md` + one `records/` entry per record, numeric-suffix
+  collision dedup). Download/zip touch the DOM + fflate; the builders
+  are pure.
+- `src/components/RecipeRecords.svelte` — the Records section mounted
+  by Cookbook.svelte below the History panel. Composition + DOM glue;
+  every decision lives in the primitives module next door. See
+  "Records" below.
 - `src/screens/Chat.svelte` — drawer tab switcher (`drawerTab`),
-  Recipes list rendering, footer book icon, Cookbook modal mount,
+  Recipes list rendering, footer book icon, Cookbook panel mount,
   `COOKBOOK_CHANGE_EVENT` listener in `onMount`, and the
   recipes-table realtime relay (`subscribeToRecipeChanges` →
   `emitCookbookChange`) that publishes the event when a server-side
-  recipe write lands.
+  recipe write lands. Also hosts the `recipe_records` relay
+  (`subscribeToRecipeRecordChanges` → `emitRecipeRecordChange`) for
+  the Records section's realtime refresh - see "Records" below.
 - `src/components/RecipeList.svelte` — the sidebar listing
   rendered by the Recipes drawer tab. Owns the search input, the
   sort selector (bound to `cookbook.sort`), the topic-filter
@@ -163,11 +201,11 @@ unaffected.
 
 ## Entry points
 
-- **Footer book icon** in the sidebar → opens the Cookbook modal on
+- **Footer book icon** in the sidebar → opens the Cookbook panel on
   the list pane.
 - **Recipes tab** in the drawer → lazy-loads the list (first click
   fetches from Supabase; subsequent switches are free). Clicking a
-  row opens the Cookbook modal on the detail pane for that recipe
+  row opens the Cookbook panel on the detail pane for that recipe
   via the routed-recipe resolution (`route.recipe` from
   `src/lib/routing.svelte.ts`).
 - **LLM tool calls** - `recipe_save (create or edit) / list / get / delete`,
@@ -308,7 +346,7 @@ unaffected.
   names, metadata values) is emitted verbatim - any inline markdown
   the LLM left in the recipe round-trips, by design.
 - `MAX_RECIPE_COOKLANG_CHARS = 20_000`, `MAX_RECIPE_TITLE_CHARS = 160`
-  — shared between the tools and the modal so schema validation
+  — shared between the tools and the panel so schema validation
   agrees everywhere.
 - Tool contract follows the standard `ToolDef` (see `./tools.md`).
   The tools run function-side, so a mutation reaches the UI through
@@ -341,7 +379,7 @@ delta to describe and the tool defaults it to `"Initial version"`
 (matching the backfill seed's naming) rather than bouncing the model
 with an error - the model routinely forgets the field on a brand-new
 recipe. The default lives in the tool, not the service method, so
-non-LLM callers (revert, the modal edit form) stay strict.
+non-LLM callers (revert, the panel edit form) stay strict.
 
 The shape is **denormalized cache + immutable log**: the `recipes`
 row stays the canonical-current state, and `recipe_versions` is the
@@ -360,7 +398,7 @@ under a megabyte).
 
 **Atomicity**: `recipe_update_with_version` takes a `for update`
 lock on the parent row before snapshotting, so concurrent writers
-(the user editing in the modal while the model also calls
+(the user editing in the panel while the model also calls
 the save tool's edit form) serialize. The first writer commits its snapshot;
 the second sees the post-first-commit state and snapshots that. No
 gaps in the history chain, no surprise overwrites.
@@ -378,7 +416,7 @@ recoverable.
 are user-directed UX flows; letting the model revert without an
 explicit user prompt is a footgun without a clear win. The model
 can already author whatever content it wants via the save tool's edit form,
-and the user has revert in the modal. Revisit if a need surfaces.
+and the user has revert in the panel. Revisit if a need surfaces.
 
 **Backfill**: existing recipes that predate the rollout get one
 "Initial version (backfilled)" row inserted at sync time. The seed
@@ -446,6 +484,113 @@ session and clears the marks; starting always begins fresh.
   for a sectioned recipe: the flat parse dedupes across sections
   while the render dedupes within each.
 
+## Records
+
+The cooking log: dated entries capturing the journey - "baked it
+2026-10-04, crumb came out gummy, ferment longer next time" or
+"idea: brown butter variant". The recipe's cooklang is the distilled
+current state and the History panel logs THAT THE SOURCE changed; a
+record is one dated event about what happened when the user cooked.
+Ported from the wiki records feature (see
+[`./wiki.md`](./wiki.md), "wiki_records (the dated journey layer)"):
+same table shape, same tool split (the `recipe_record_*` chat tools
+are a separate milestone), same UI section anatomy. Full design
+decisions live in
+[`./plans/recipe-records-plan.md`](./plans/recipe-records-plan.md).
+
+- **Data**: the `recipe_records` table (see `supabase/schema.sql`)
+  hangs off `recipes` with `on delete cascade`; one record carries
+  `date` (the day the cook happened), `content` (Markdown),
+  `tags` (freeform JSONB array, GIN-indexed), an optional `outcome`
+  enum (`success | mixed | failure`, null = unclassified - the one
+  deliberate divergence from the wiki twin), and
+  `source_conversation_id` (chat-capture provenance, set null on
+  thread delete). Record writes never create version rows, never
+  touch `recipes.updated_at` (the recency sort stays stable, like
+  bookmark toggles), and are untouched by reverts. The embedding
+  quartet + claim RPCs mirror the wiki records trio; the search RPC
+  takes optional `p_recipe_id` / `p_outcome` so filtering happens
+  before the limit.
+- **The section** (`src/components/RecipeRecords.svelte`, mounted by
+  Cookbook.svelte at the bottom of the detail pane, below History -
+  reading order: recipe, then its history, then its log): add form
+  (date / Markdown content / comma-separated tags / outcome selector
+  with an explicit "Unclassified" option), rows (date "Mon D, YYYY" +
+  outcome chip + tag chips + truncated preview) expanding to the full
+  content with Edit / Export / Delete.
+- **Mount contract**: the section mounts on "detail pane open AND a
+  recipe id selected" - NOT inside the `{#if activeRecipe}` content
+  gate, and NOT keyed by recipe id. A cross-recipe search must
+  survive its first click: `activeRecipe` is undefined while the
+  by-id fallback fetch resolves a recipe outside the loaded drawer
+  window, and a keyed remount there would silently kill query,
+  results, and highlight. Only the per-recipe log refetches. The
+  pane passes its resolution state down
+  (`'resolving' | 'found' | 'missing'` - `resolveActiveRecipe`
+  returns null for both still-fetching and gone) and the pane's
+  placeholder is the three-state `missingRecordMessage` primitive.
+- **Filters**: date range + tag apply to the open recipe's log
+  (server-side, via `listRecipeRecords`) and HIDE while a search is
+  live (search results bypass them by design); the outcome dropdown
+  renders and stays live in BOTH modes - a set outcome is passed
+  into the search call, so "failures about X" works in the UI. The
+  full reset/filter state matrix (what resets on recipe-id change vs
+  search start vs search cleared) is pinned in the plan and encoded
+  in `resetsOnRecipeChange` + the section's effects.
+- **Search is cross-recipe**: the box searches every recipe's records
+  (`searchRecipeRecordsSemantic` - embed via Venice with a silent
+  ILIKE-only fallback, then the facade's merge). A hit on another
+  recipe is annotated with that recipe's title, resolved with ONE
+  batched `fetchRecipeTitles` query per result set (sticky labels: a
+  miss is "(deleted recipe)" with a no-op click; a batch failure
+  degrades every foreign row to "couldn't load" rather than reading
+  as deletion). Clicks ALWAYS navigate (`navigate({ recipe: id })`)
+  and keep the query + results alive - "failed rye bakes across
+  everything" is a multi-hit journey; only date/tag reset on the
+  navigation. The scroll pins to after the pane's resolution settles
+  and the log refetch lands, then the scroll-highlight marks the
+  clicked hit inside the still-visible results list. Rows on other
+  recipes render Export only - Edit/Delete belong to the open
+  recipe's records.
+- **Export**: a single record downloads as `yyyy-mm-dd-<slug>.md`
+  with date/tags/outcome front matter; Export all downloads a ZIP
+  holding `recipe.md` plus one `records/` entry per record (the
+  cookbook's first file downloads - recipes were copy-to-clipboard
+  only). Export all IGNORES the active filters/search and exports
+  the full diary - a deliberate divergence from the wiki twin
+  (whose Export all respects date/tag): online it issues a fresh
+  UNFILTERED `listRecipeRecords` at export time, bypassing the
+  retention map (whose entries hold whatever the fetch-time filters
+  scoped); offline it exports the retained rows as-is.
+- **Offline degradation**: records stay online-only but reads
+  degrade soft. The log view renders FROM a per-recipe retention map
+  kept for the session (online included), so revisiting a recipe
+  whose log was fetched earlier still shows it; online map hits
+  revalidate in the background; a failed revalidation keeps the
+  rendered rows - only a COLD fetch failure lands the keyed
+  load-error banner (the map holds `rows | 'error'` per id, so a
+  failed A fetch never shows its banner under B). Offline, an
+  unfetched log shows the offline-no-data line (never the "no
+  records yet" empty state, which would lie); writes and the
+  filter/search SUBMISSIONS disable with copy while the search box
+  stays editable and clearable (clearing is a retention-map read).
+  Records join no IndexedDB mirror - the relay does not call
+  `syncOfflineCache`.
+- **Realtime**: the section's OWN writes emit
+  `nak:recipe-records:changed` directly after success (see
+  `cookbook-events.ts`); server-side writes (the chat tools) arrive
+  through the `subscribeToRecipeRecordChanges` relay wired in
+  Chat.svelte, which publishes the same event. RecipeRecords listens
+  and refetches; a live search re-runs through the same abort
+  controller so a record-writing chat turn cannot thrash it.
+- **Delete confirm names the log cost**: the cookbook's
+  `window.confirm` gains "This deletes the recipe and its N
+  records", with N from `countRecipeRecords` at confirm time (the
+  section's loaded count can be filtered or stale; a failed count
+  confirms without the clause; the Delete button disables while the
+  count is in flight). With no changelog (the plan's decision 2),
+  the cascade delete of the log is silent everywhere else.
+
 ## Embeddings
 
 The drawer's recipe search runs through the same embed-then-merge
@@ -469,7 +614,9 @@ RPCs: `claim_next_pending_recipe`, `save_recipe_embedding_if_claimed`,
 same `for update skip locked` claim discipline. The recipe input
 builder is the `recipes` entry in `EMBED_SOURCES`
 (`supabase/functions/_shared/embed-input.ts`), drained by the
-server-side backfill alongside the other six sources.
+server-side backfill alongside the registry's other sources
+(`recipe-records` joined for the Records feature - see "Records"
+below).
 
 Search wrapper: `SupabaseService.searchRecipes({query, queryEmbedding,
 limit})` merges semantic hits (RPC, cosine order) and ILIKE hits
@@ -479,11 +626,11 @@ keystrokes; the LLM tool path keeps using `listRecipes`.
 
 ## Interactions
 
-- **Tools** (`./tools.md`) — five recipe tools registered in
-  `src/lib/tools/index.ts`'s `TOOLS` array, gated like the memory
-  tools. They appear in the system-prompt catalog automatically via
-  `buildSystemPrompt`'s `GATED_TOOLS` section.
-- **Chat** (`./chat.md`) — hosts the Cookbook modal, the drawer tab,
+- **Tools** (`./tools.md`) — eight recipe tools registered in
+  `src/lib/tools/index.ts`'s `TOOLS` array. Every tool is declared
+  on every request (there is no gating mechanism), so they appear in
+  the system-prompt catalog automatically.
+- **Chat** (`./chat.md`) — hosts the Cookbook panel, the drawer tab,
   and the footer book icon. Adds a `drawerTab` state local to
   Chat.svelte. Registers the `COOKBOOK_CHANGE_EVENT` listener in
   its `onMount`, and runs the recipes-table realtime relay that
@@ -562,7 +709,7 @@ keystrokes; the LLM tool path keeps using `listRecipes`.
   `postgres_changes` subscription on `recipes`
   (`SupabaseService.subscribeToRecipeChanges`, wired in
   Chat.svelte), which fires `emitCookbookChange` - the `window`
-  `CustomEvent` the Cookbook modal and the drawer tab subscribe to
+  `CustomEvent` the Cookbook panel and the drawer tab subscribe to
   via `onCookbookChange`. Same shape as the `wiki_articles` and
   `memories` relays.
 - **DELETE events need the (id, user_id) replica identity.** A
@@ -570,10 +717,10 @@ keystrokes; the LLM tool path keeps using `listRecipes`.
   and realtime drops events its `user_id` filter can't match - so
   with the default primary-key identity, server-side deletes never
   reach the panel. `recipes_replident_idx` in `schema.sql` (and its
-  wiki_articles / memories twins) exists solely to put `user_id`
-  into the old tuple; dropping it silently degrades the identity to
-  NOTHING and breaks DELETE replication. The full rationale lives
-  on the schema block.
+  wiki_articles / memories / recipe_records twins) exists solely to
+  put `user_id` into the old tuple; dropping it silently degrades
+  the identity to NOTHING and breaks DELETE replication. The full
+  rationale lives on the schema block.
 - **Drawer Recipes tab loads lazily.** A session that never opens
   the tab never fetches recipes. The tool layer still loads via
   direct Supabase calls, so a model-driven save works regardless.
@@ -598,8 +745,8 @@ keystrokes; the LLM tool path keeps using `listRecipes`.
 - **Drawer search is semantic; LLM tool path is not.** The
   embedding pipeline (added after the original "no embeddings"
   design - see "Embeddings" below) feeds `searchRecipes` only.
-  The `recipe_list` and `recipe_search` tools the model uses
-  still go through ILIKE-on-title. Two reasons: the model knows
+  The `recipe_list` tool the model uses
+  still goes through ILIKE-on-title. Two reasons: the model knows
   exactly what title it just wrote so meaning matching adds no
   value on the tool path, and keeping the tool's behaviour
   deterministic avoids fuzz on a path the agent reasons about.

@@ -92,7 +92,7 @@ changing a contract that other features depend on.
   `conversation_digests` table, and the Daily digest panel on the
   Chats tab.
 - [Cookbook](./cookbook.md) — `recipes` store + Cooklang
-  parser + the recipe_* tools + the Cookbook modal and
+  parser + the recipe_* tools + the Cookbook panel and
   drawer tab.
 - [Grocery list](./grocery-list.md) — the `grocery_products` /
   `grocery_list_entries` / `grocery_sections` store (durable

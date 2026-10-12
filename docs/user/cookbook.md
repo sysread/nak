@@ -416,6 +416,9 @@ saved, even if you've added, removed, or relabelled photos since.
   reorders with the most-recently-edited recipe at the top.
 - **Delete** from the detail pane. Confirmation is required and the
   delete is permanent — Nak doesn't keep a trash bin for recipes.
+  The confirmation names the full cost: deleting a recipe also
+  deletes its [Records](#records) cooking log ("This deletes the
+  recipe and its N records").
 
 Every save (create or edit) prompts you for a one-line **What
 changed?** note. It's required and lands in the recipe's history so
@@ -449,6 +452,48 @@ Nak (the model) creates versions too. When you ask the model to
 edit a recipe, it provides its own change message describing what
 it changed and why; that message appears in the History panel
 alongside your hand-written ones.
+
+## Records
+
+The History panel answers "what changed in the recipe?" The Records
+section, right below it, answers "what happened when you cooked
+it?" Each record is one dated entry in the recipe's cooking log: an
+iteration ("crumb came out gummy, ferment longer next time"), an
+observation, a success or failure, or an idea for a variation
+("brown butter variant"). Records stick around even when the recipe
+itself gets edited later - the log is the journey, the recipe is
+where the journey landed.
+
+Records live at the bottom of the detail pane. You can also ask Nak
+to log a record during a cooking conversation ("log that I baked
+this today and the crumb was gummy") and it lands here.
+
+- **Adding**: click the **+** button in the Records header. A record
+  is a date, Markdown notes, optional comma-separated tags, and an
+  optional outcome: **Success**, **Mixed**, or **Failure**. Leave
+  the outcome **Unclassified** when a bake doesn't need a verdict.
+- **Rows**: newest cook first. Each row shows the date, the outcome
+  chip, tag chips, and a one-line preview; click a row to read the
+  full entry, with Edit, Export, and Delete underneath.
+- **Filters**: date range, tag, and outcome narrow this recipe's
+  log.
+- **Search is cookbook-wide.** The search box searches every
+  recipe's cooking log by meaning, not just the open recipe's. Hits
+  from other recipes carry that recipe's title, and clicking one
+  opens that recipe and highlights the hit in the results - so
+  "failed rye bakes" becomes a multi-stop tour through your own
+  notes. The search stays live as you hop between recipes; clear it
+  to return to the log.
+- **Export**: the download button on an expanded row saves that
+  record as a Markdown file; the header's download button saves the
+  whole recipe plus its complete log as a ZIP (Export all ignores
+  the filters and search on purpose - you get the full diary).
+- **Offline**: records need the network to load, but a log you've
+  already viewed this session stays readable offline. Writes and
+  filters grey out until you reconnect.
+- **Records hang off the recipe.** Deleting a recipe deletes its
+  log with it - the delete confirmation says how many records it
+  will take.
 
 ## Copying for another app
 

@@ -22,6 +22,43 @@ import { coerceRecipeRecord } from '../src/lib/supabase/types/cookbook';
 import type { RecipeRecord } from '../src/lib/supabase/types/cookbook';
 import { fetchRecipeTitles, searchRecipeRecords } from '../src/lib/supabase/recipe-records';
 import { searchRecipeRecordsSemantic } from '../src/lib/recipe-records-search';
+import {
+  DELETED_RECIPE_LABEL,
+  HIT_TITLE_UNAVAILABLE_LABEL,
+  RECIPE_RECORD_SEARCH_LIMIT,
+  browseFiltersActive,
+  contentPreview,
+  expandedRowActions,
+  formatRecordDate,
+  hitClickable,
+  hitLabel,
+  hitTitleStateFromBatch,
+  listFiltersFromBrowse,
+  offlineNoDataMessage,
+  outcomeChipClass,
+  outcomeChipLabel,
+  outcomeFilterOptions,
+  outcomeFormOptions,
+  parseTags,
+  pruneExpandedId,
+  recordActionTitle,
+  recordExportFilename,
+  recordSlug,
+  recordsEmptyMessage,
+  recordsHeadline,
+  reduceRecipeRecordRetention,
+  resetsOnRecipeChange,
+  retentionEntryFor,
+  serializeTags,
+  todayIso,
+  validateRecordForm,
+  type RecipeRecordRetentionMap,
+} from '../src/lib/ui/recipe-records';
+import {
+  MAX_RECIPE_RECORD_CONTENT_CHARS,
+  MAX_RECIPE_RECORD_TAGS,
+  MAX_RECIPE_RECORD_TAG_CHARS,
+} from '../supabase/functions/_shared/recipe-record-limits';
 
 // --- stubs -------------------------------------------------------------------
 
@@ -343,5 +380,307 @@ describe('fetchRecipeTitles', () => {
     const out = await fetchRecipeTitles(client, ['r1', 'gone']);
     expect(out.has('gone')).toBe(false);
     expect(out.get('r1')).toBe('Sourdough');
+  });
+});
+
+// --- retention map (the offline degradation's core state) ---------------
+
+describe('reduceRecipeRecordRetention', () => {
+  it('files a landed fetch under the id it was FOR', () => {
+    // The late-response race: a fetch for A landing after the open id
+    // changed to B must land in the map under A, never clobber the view.
+    const rows = [makeRow({ id: 'a1' }) as unknown as RecipeRecord];
+    const map = reduceRecipeRecordRetention(new Map(), {
+      type: 'fetch-landed',
+      recipeId: 'A',
+      rows,
+    });
+    expect(retentionEntryFor(map, 'A')).toEqual({ kind: 'rows', rows });
+    expect(retentionEntryFor(map, 'B')).toBeNull();
+  });
+
+  it('a landed fetch REPLACES the entry - revalidation must be able to un-filter', () => {
+    const scoped = [makeRow({ id: 'x' }) as unknown as RecipeRecord];
+    const fresh = [makeRow({ id: 'y' }) as unknown as RecipeRecord];
+    let map: RecipeRecordRetentionMap = new Map([
+      ['A', { kind: 'rows', rows: scoped }],
+    ]);
+    map = reduceRecipeRecordRetention(map, { type: 'fetch-landed', recipeId: 'A', rows: fresh });
+    expect(retentionEntryFor(map, 'A')).toEqual({ kind: 'rows', rows: fresh });
+  });
+
+  it('a cold fetch failure lands error; a failed revalidation keeps the rows', () => {
+    let map: RecipeRecordRetentionMap = new Map();
+    map = reduceRecipeRecordRetention(map, { type: 'fetch-failed', recipeId: 'A' });
+    expect(retentionEntryFor(map, 'A')).toEqual({ kind: 'error' });
+    // Now with rows already rendered, a failed refetch keeps them.
+    const rows = [makeRow({ id: 'keep' }) as unknown as RecipeRecord];
+    map = reduceRecipeRecordRetention(map, { type: 'fetch-landed', recipeId: 'B', rows });
+    map = reduceRecipeRecordRetention(map, { type: 'fetch-failed', recipeId: 'B' });
+    expect(retentionEntryFor(map, 'B')).toEqual({ kind: 'rows', rows });
+  });
+
+  it('open-id-changed is a no-op - the map is keyed per id by construction', () => {
+    const rows = [makeRow({ id: 'a1' }) as unknown as RecipeRecord];
+    const before: RecipeRecordRetentionMap = new Map([
+      ['A', { kind: 'rows', rows }],
+    ]);
+    expect(reduceRecipeRecordRetention(before, { type: 'open-id-changed' })).toBe(before);
+  });
+
+  it('returns a new map so a reactive caller sees the change', () => {
+    const before: RecipeRecordRetentionMap = new Map();
+    const after = reduceRecipeRecordRetention(before, {
+      type: 'fetch-landed',
+      recipeId: 'A',
+      rows: [],
+    });
+    expect(after).not.toBe(before);
+  });
+});
+
+// --- browse filters -------------------------------------------------------
+
+describe('listFiltersFromBrowse / browseFiltersActive', () => {
+  it('drops empty controls and wraps the single tag selection', () => {
+    expect(
+      listFiltersFromBrowse({ fromDate: '2026-10-01', toDate: '', tag: 'rye', outcome: '' })
+    ).toEqual({ fromDate: '2026-10-01', tags: ['rye'] });
+    expect(listFiltersFromBrowse({ fromDate: '', toDate: '', tag: '', outcome: '' })).toEqual({});
+    expect(
+      listFiltersFromBrowse({ fromDate: '', toDate: '2026-10-31', tag: '', outcome: 'failure' })
+    ).toEqual({ toDate: '2026-10-31', outcome: 'failure' });
+  });
+
+  it('reports whether any filter is set (empty-state copy selection)', () => {
+    const empty = { fromDate: '', toDate: '', tag: '', outcome: '' };
+    expect(browseFiltersActive(empty)).toBe(false);
+    expect(browseFiltersActive({ ...empty, outcome: 'mixed' })).toBe(true);
+    expect(browseFiltersActive({ ...empty, tag: 'rye' })).toBe(true);
+  });
+});
+
+// --- outcome chips ---------------------------------------------------------
+
+describe('outcome chips', () => {
+  it('labels the three classifications, null for unclassified rows', () => {
+    expect(outcomeChipLabel('success')).toBe('Success');
+    expect(outcomeChipLabel('mixed')).toBe('Mixed');
+    expect(outcomeChipLabel('failure')).toBe('Failure');
+    expect(outcomeChipLabel(null)).toBeNull();
+    // Defensively, a value outside the check constraint renders no chip.
+    expect(outcomeChipLabel('excellent')).toBeNull();
+  });
+
+  it('maps the same values to chip classes', () => {
+    expect(outcomeChipClass('success')).toBe('recipe-record-outcome-success');
+    expect(outcomeChipClass('mixed')).toBe('recipe-record-outcome-mixed');
+    expect(outcomeChipClass('failure')).toBe('recipe-record-outcome-failure');
+    expect(outcomeChipClass(null)).toBeNull();
+  });
+
+  it('form options lead with Unclassified; filter options have no unclassified mode', () => {
+    expect(outcomeFormOptions()[0]).toEqual({ value: '', label: 'Unclassified' });
+    expect(outcomeFormOptions().map((o) => o.value)).toEqual(['', 'success', 'mixed', 'failure']);
+    expect(outcomeFilterOptions()[0]).toEqual({ value: '', label: 'All' });
+    // "Show me my unclassified bakes" is not a promised surface.
+    expect(outcomeFilterOptions().some((o) => o.label === 'Unclassified')).toBe(false);
+  });
+});
+
+// --- date + preview ---------------------------------------------------------
+
+describe('formatRecordDate / todayIso', () => {
+  it('formats an ISO date as "Mon D, YYYY" without UTC day drift', () => {
+    expect(formatRecordDate('2026-10-04')).toBe('Oct 4, 2026');
+    // A bare YYYY-MM-DD is parsed as a LOCAL date, not UTC midnight -
+    // in negative-offset timezones a UTC parse renders the prior day.
+    expect(formatRecordDate('2026-01-01')).not.toBe('Dec 31, 2025');
+  });
+
+  it('falls back to the raw string for garbage input', () => {
+    expect(formatRecordDate('not-a-date')).toBe('not-a-date');
+  });
+
+  it('todayIso yields the local YYYY-MM-DD', () => {
+    expect(todayIso()).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+});
+
+describe('contentPreview', () => {
+  it('strips markdown syntax and collapses whitespace', () => {
+    // Block markers lose the marker, not the text - a heading's words
+    // still show in the preview.
+    expect(contentPreview('# Heading\n\n**bold** and `code`', 100)).toBe(
+      'Heading bold and code'
+    );
+  });
+
+  it('truncates with an ellipsis at the cap', () => {
+    const out = contentPreview('x'.repeat(150), 100);
+    expect(out.length).toBe(101);
+    expect(out.endsWith('…')).toBe(true);
+  });
+});
+
+describe('parseTags / serializeTags', () => {
+  it('splits, trims, and dedupes case-insensitively', () => {
+    expect(parseTags(' rye, Rye, less-salt ,, variation ')).toEqual([
+      'rye',
+      'less-salt',
+      'variation',
+    ]);
+  });
+
+  it('enforces the shared caps (per-tag length, tag count)', () => {
+    // An over-long tag is truncated to the cap, not dropped.
+    const long = parseTags('x'.repeat(MAX_RECIPE_RECORD_TAG_CHARS + 5));
+    expect(long).toHaveLength(1);
+    expect(long[0]!.length).toBe(MAX_RECIPE_RECORD_TAG_CHARS);
+    const many = Array.from({ length: MAX_RECIPE_RECORD_TAGS + 5 }, (_, i) => `tag${i}`);
+    expect(parseTags(many.join(','))).toHaveLength(MAX_RECIPE_RECORD_TAGS);
+  });
+
+  it('round-trips through serializeTags', () => {
+    const tags = ['rye', 'less-salt'];
+    expect(serializeTags(tags)).toBe('rye, less-salt');
+    expect(parseTags(serializeTags(tags))).toEqual(tags);
+  });
+});
+
+// --- headlines, empty states, write-control copy ------------------------------
+
+describe('recordsHeadline / empty-state copy', () => {
+  it('omits the count at zero', () => {
+    expect(recordsHeadline(0)).toBe('Records');
+    expect(recordsHeadline(12)).toBe('Records (12)');
+  });
+
+  it('picks the empty-state line by remedy', () => {
+    expect(recordsEmptyMessage({ filtered: false, searching: false })).toMatch(/No records yet/);
+    expect(recordsEmptyMessage({ filtered: true, searching: false })).toMatch(/current filters/);
+    expect(recordsEmptyMessage({ filtered: false, searching: true })).toMatch(/your search/);
+  });
+
+  it('the offline-no-data line never reads as an empty log', () => {
+    expect(offlineNoDataMessage()).toMatch(/offline/i);
+    expect(offlineNoDataMessage()).not.toMatch(/no records yet/i);
+  });
+
+  it('write controls degrade with copy, bookmark-style', () => {
+    expect(recordActionTitle(true, 'add')).toBe('Add record');
+    expect(recordActionTitle(false, 'add')).toBe('Reconnect to add records');
+    expect(recordActionTitle(false, 'delete')).toBe('Reconnect to delete records');
+  });
+});
+
+// --- cross-recipe hit labels ----------------------------------------------------
+
+describe('hit labels', () => {
+  const ok = hitTitleStateFromBatch(new Map([['r2', 'Sourdough']]));
+  const failed = hitTitleStateFromBatch(null);
+
+  it('leaves rows on the open recipe unannotated', () => {
+    expect(hitLabel(ok, 'r1', 'r1')).toBeNull();
+  });
+
+  it('annotates foreign hits with the batch-resolved title', () => {
+    expect(hitLabel(ok, 'r2', 'r1')).toBe('Sourdough');
+  });
+
+  it('a batch miss is the only "(deleted recipe)" path', () => {
+    expect(hitLabel(ok, 'gone', 'r1')).toBe(DELETED_RECIPE_LABEL);
+  });
+
+  it('a batch FAILURE degrades every foreign row to "couldn\'t load", not deletion', () => {
+    expect(hitLabel(failed, 'r2', 'r1')).toBe(HIT_TITLE_UNAVAILABLE_LABEL);
+    expect(hitLabel(failed, 'gone', 'r1')).toBe(HIT_TITLE_UNAVAILABLE_LABEL);
+  });
+
+  it('clicks: confirmed-deleted is a no-op; everything else navigates', () => {
+    expect(hitClickable(ok, 'gone')).toBe(false);
+    expect(hitClickable(ok, 'r2')).toBe(true);
+    // A network blip must not read as deletion - the row stays
+    // clickable and cached recipes still open.
+    expect(hitClickable(failed, 'r2')).toBe(true);
+  });
+
+  it('the failed state folds from a null batch result', () => {
+    expect(hitTitleStateFromBatch(new Map()).status).toBe('ok');
+    expect(hitTitleStateFromBatch(null).status).toBe('failed');
+  });
+});
+
+// --- expanded-row affordances + pruning ------------------------------------------
+
+describe('expandedRowActions / pruneExpandedId', () => {
+  it('Edit/Delete follow the open recipe; Export always renders', () => {
+    expect(expandedRowActions('r1', 'r1')).toEqual({ edit: true, export: true, delete: true });
+    // A kept-expanded hit whose recipe stopped matching loses the
+    // mutation affordances - the form can never write a foreign
+    // recipe's record from the new pane.
+    expect(expandedRowActions('r2', 'r1')).toEqual({ edit: false, export: true, delete: false });
+  });
+
+  it('prunes an expansion no longer in the rendered set', () => {
+    const rows = [makeRow({ id: 'a' }), makeRow({ id: 'b' })] as unknown as RecipeRecord[];
+    expect(pruneExpandedId('a', rows)).toBe('a');
+    expect(pruneExpandedId('gone', rows)).toBeNull();
+    expect(pruneExpandedId(null, rows)).toBeNull();
+  });
+});
+
+// --- reset rules (the state matrix) -------------------------------------------------
+
+describe('resetsOnRecipeChange', () => {
+  it('outcome + expanded row reset only in browse mode', () => {
+    expect(resetsOnRecipeChange(false)).toEqual({ outcome: true, expandedRow: true });
+    // While a search is live the outcome filters the search (resetting
+    // it would desync the dropdown from the displayed results) and a
+    // search-result expansion survives until the search clears.
+    expect(resetsOnRecipeChange(true)).toEqual({ outcome: false, expandedRow: false });
+  });
+});
+
+// --- validation + export filenames ---------------------------------------------------
+
+describe('validateRecordForm', () => {
+  it('requires content and the YYYY-MM-DD date shape', () => {
+    expect(validateRecordForm('', '2026-10-04')).toBe('Content is required.');
+    expect(validateRecordForm('Baked a loaf', '10/04/2026')).toBe('Pick a valid date.');
+    expect(validateRecordForm('Baked a loaf', '')).toBe('Pick a valid date.');
+    expect(validateRecordForm('Baked a loaf', '2026-10-04')).toBeNull();
+  });
+
+  it('enforces the shared content cap with the cap in the copy', () => {
+    expect(validateRecordForm('x'.repeat(MAX_RECIPE_RECORD_CONTENT_CHARS + 1), '2026-10-04')).toBe(
+      `Content must be ${MAX_RECIPE_RECORD_CONTENT_CHARS} chars or fewer.`
+    );
+  });
+});
+
+describe('recordSlug / recordExportFilename', () => {
+  it('slugs the content to lowercase alphanumerics + hyphens', () => {
+    expect(recordSlug({ id: 'id-1', content: 'Crumb came out gummy!' })).toBe(
+      'crumb-came-out-gummy'
+    );
+  });
+
+  it('falls back to the id tail so same-date records never collide on an empty slug', () => {
+    expect(recordSlug({ id: 'abcd1234-rest', content: '???' })).toBe('abcd1234');
+  });
+
+  it('the export filename is yyyy-mm-dd-<slug>.md', () => {
+    expect(
+      recordExportFilename({ id: 'id-1', date: '2026-10-04T00:00:00Z', content: 'Gummy crumb' })
+    ).toBe('2026-10-04-gummy-crumb.md');
+    // An unparseable date degrades to a stable prefix, not a crash.
+    expect(recordExportFilename({ id: 'id-1', date: 'x', content: 'Gummy crumb' })).toBe(
+      'undated-gummy-crumb.md'
+    );
+  });
+
+  it('the search cap is a named tunable next to RecipeList\'s', () => {
+    expect(RECIPE_RECORD_SEARCH_LIMIT).toBe(20);
   });
 });
