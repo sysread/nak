@@ -302,7 +302,14 @@ inheriting it.)
   modes (a set outcome dropdown is passed into the search call as
   its `outcome` param, so "failures about X" works in the UI,
   not just via the tools); date/tag apply to browse only - search
-  results bypass them by design (the twin's behavior). Changing
+  results bypass them by design (the twin's behavior), so the
+  twin's hide-filters-while-searching block gets SPLIT: date/tag
+  controls hide (or render inert) during a live search, the
+  outcome dropdown renders and stays live in BOTH modes. An empty
+  search box clears results back to browse (RecipeList's
+  clear-on-empty); the search result cap is a named tunable next
+  to RecipeList's `RECIPE_SEARCH_LIMIT`, not a hardcoded number.
+  Changing
   the outcome dropdown while results are live re-runs the search
   through the same debounce/abort controller (an outcome change
   that only refetched the log would silently stop affecting the
@@ -354,7 +361,15 @@ inheriting it.)
   resolves at CLICK time: the routed-recipe by-id fetch comes
   back null, the hit row re-renders "(deleted recipe)" with a
   no-op click, and the title batch is not re-run for the whole
-  set. Searching the
+  set. The label consults offline status first (`getRecipeCached`
+  returns null for offline-uncached and fetch errors too): offline
+  or errored shows the offline/no-data treatment, and
+  "(deleted recipe)" only for a resolved null while online.
+  Clicking a hit on the OPEN recipe (navigation is a no-op)
+  still fires the scroll-into-view + highlight. The scroll pins
+  to after the pane's resolution settles and the log refetch
+  lands - a scroll issued at click time would land on a section
+  that the body render then pushes out of view. Searching the
   whole cooking log from any recipe is the point; per-recipe
   narrowing is the filters' job. (Outcome survives navigation
   while date/tag reset not because it is cross-recipe - it is
@@ -380,9 +395,15 @@ inheriting it.)
   all shape; recipes have no file downloads at all today -
   copy-to-clipboard only - so this is the cookbook's first).
   Export all ignores the active filters/search and exports the
-  full log - a conforming port: the twin does exactly this (its
-  Export all passes the unfiltered `records` array, per its own
-  "always the full set" comment). The section
+  full log - a DIVERGENCE from the twin, verified against source
+  after two review rounds disagreed: the twin's Export all passes
+  `records`, which `load()` has already server-filtered by
+  date/tag (its "always the full set" comment means "not search
+  results"), so the twin respects date/tag filters and ignores
+  only search. Recipes export the whole diary by design; state
+  the divergence per the non-conforming rule so nobody "fixes" it
+  back after reading the twin. Like the twin, Export all hides at
+  zero records. The section
   receives the resolved `Recipe | null` (nullable exactly during
   the resolution windows above, not a bare title - `recipeToMarkdown`
   needs title + cooklang + source), and Export all disables while
@@ -435,7 +456,9 @@ Supporting moves:
   confirmation is a `window.confirm` (not an inline strip); its
   message gains "This deletes the recipe and its N records", with
   N from a head-count query at confirm time (the section's loaded
-  row count can be filtered or stale); the Delete handler awaits
+  row count can be filtered or stale); the count/copy logic is a
+  pure helper in `src/lib/ui/cookbook-screen.ts` (covered by
+  `tests/cookbook-screen.test.ts`); the Delete handler awaits
   the count and then opens the dialog - an async confirm is fine
   at this scale, but the count is never cached at section-load
   (stale) and a failed count shows the confirm without the count
@@ -495,7 +518,12 @@ away from it.
   and `subscribeToRecipeRecordChanges` in `realtime.ts` (data-layer
   work, so M2's wiring has something to call), plus the head-count
   query the delete confirm needs (`countRecipeRecords(recipe_id)`
-  in the data layer). Two required test
+  in the data layer), and a pointer comment in
+  `src/lib/recipe-limits.ts` toward the new
+  `_shared/recipe-record-limits.ts` (the two neighboring
+  "recipe limits" homes have opposite canonical directions - the
+  comment prevents a future reader from "fixing" the split
+  brain). Two required test
   edits land here: `supabase/functions/tests/embed-input.test.ts`
   asserts `EMBED_SOURCES`' name list by exact equality, and
   `tests/realtime-subscribe.test.ts` pins every realtime helper's
@@ -507,9 +535,11 @@ away from it.
   (including the `searchRecipeRecordsSemantic` wrapper), export
   module, offline degradation, realtime refresh wired through
   `Chat.svelte` + `cookbook-events.ts`, plus the two
-  Cookbook.svelte behavior changes the spec commits to: the
+  Cookbook.svelte behavior changes the spec commits to (the
   pane's `missingRecordMessage` placeholder states and the
-  delete-confirm "N records" line.
+  delete-confirm "N records" line) and their doc updates landing
+  with the code (cookbook.md's Records section, the
+  components.md entry).
 - **M3 - Chat tools.** Six tools wired into the two toolboxes and
   registered in the edge tool barrel
   (`supabase/functions/venice/tools/index.ts`), shared edge helpers
