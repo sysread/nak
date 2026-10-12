@@ -218,8 +218,9 @@ unreliable.
   gotcha's second duplicate shape is a later
   conversation re-describing yesterday's event, which same-date
   siblings cannot catch; the payload carries date + id + a short
-  content preview (~120 chars, the changelog-preview cap), not
-  full bodies - it rides every create call). The model sees the likely duplicate in
+  content preview (120 chars - the changelog-builder cap, not
+  the UI preview's 100; named so the implementer reaches for the
+  right one), not full bodies - it rides every create call). The model sees the likely duplicate in
   the same turn without a second call. The plan accepts a higher duplicate rate
   than the wiki's (no sweep, no librarian) as the price of no
   sweep.
@@ -420,7 +421,10 @@ inheriting it.)
   results); the render-nothing mount-void applies only when
   online and resolution is `missing`. Click-time read-through
   stays as-is: a blip at
-  click navigates honestly onto the offline-no-data pane.
+  click can land the pane on its not-found line while the recipe
+  exists (the pane misreports a blip as not-found; the row
+  labels don't, and the asymmetry is accepted because the label
+  is sticky while the pane recovers on re-navigation).
   Clicking a hit on the OPEN recipe (navigation is a no-op)
   still fires the scroll-into-view + highlight. The scroll pins
   to after the pane's resolution settles and the log refetch
@@ -491,7 +495,10 @@ several bullets:
   log); offline, it
   exports the retained rows as-is, and if that fetch was
   filter-scoped the zip is a partial diary - accepted and stated
-  here rather than silently shipped as whole. The section
+  here rather than silently shipped as whole (the same
+  partiality applies to the offline log view itself: an offline
+  revisit after a filtered fetch shows the scoped subset with no
+  filter UI explaining it - same acceptance). The section
   receives the resolved `Recipe | null` (nullable exactly during
   the resolution windows above, not a bare title - `recipeToMarkdown`
   needs title + cooklang + source), and Export all disables while
@@ -671,8 +678,9 @@ away from it.
   Cookbook.svelte behavior changes the spec commits to (the
   pane's `missingRecordMessage` placeholder states and the
   delete-confirm "N records" line) and their doc updates landing
-  with the code (cookbook.md's Records section, the
-  components.md entry).
+  with the code (cookbook.md's Records section, the user-doc
+  delete-confirm copy, the components.md entries, the
+  cookbook-recipe-lifecycle.md step-12 delta).
 - **M3 - Chat tools.** Six tools wired into the two toolboxes and
   registered in the edge tool barrel
   (`supabase/functions/venice/tools/index.ts`), shared edge helpers
@@ -724,8 +732,10 @@ away from it.
   stamping, AND the search handler - the only tool with new
   server-side logic (embedder-failure falls back to ILIKE-only,
   outcome/recipe_id filters reach both legs, empty query throws,
-  dedup + cap behavior, and the ILIKE pattern shape that guards
-  the logic-tree misuse).
+  dedup + cap behavior, the ILIKE pattern shape that guards the
+  logic-tree misuse, the standalone leg's `.eq('user_id',
+  ctx.userId)` b-strict filter, and the limit clamp named after
+  the twin's 1..30).
 - `tests/schema-dml-columns.test.ts`: the floor assertions are
   `>=` comparisons, so adding a table cannot trip them upward -
   the suite should simply stay green over the new DML. A floor
@@ -734,6 +744,14 @@ away from it.
   chips, filenames - the twin `tests/wiki-records.test.ts` is not
   registered either), so no `environmentMatchGlobs` entry is
   needed in `vite.config.ts`.
+- Twin-fix QA: the one-line ILIKE-leg fix in
+  `src/lib/supabase/wiki-records.ts` revives a user-observable
+  behavior (wiki Records search hits for substring queries, and
+  a working embedder-down fallback), so
+  `docs/qa/use-cases/wiki-records.md`'s search steps are
+  re-executed before/after in the same PR, and the twin's merge
+  gains a pattern-shape assertion (folded into the new
+  recipe-records merge test).
 - QA use-case: `docs/qa/use-cases/recipe-records.md`, mirroring
   `wiki-records.md` minus the sweep step, PLUS steps the twin
   never had - the chat tools are the primary capture path now, so
@@ -782,8 +800,10 @@ away from it.
   no such tool exists in the registry; `docs/dev/grocery-list.md`
   carries the same ghost and gets the same fix);
   `docs/dev/components.md`'s inventory gains the RecipeRecords
-  entry (and fixes the WikiRecords entry's stale self-reference
-  consumer while there: mounted by Wiki.svelte);
+  entry (and fixes BOTH stale Consumers lines in the wiki
+  component entries while there: `WikiRecords` points at
+  `WikiList.svelte` and `WikiChangelogPanel` at
+  `WikiRecords.svelte`; both are mounted by `Wiki.svelte`);
   `docs/dev/architecture.md`'s facade-slice list gains
   `recipe-records`; `docs/dev/embeddings.md`'s EMBED_SOURCES registry
   description gains the `recipe-records` source (and its source
