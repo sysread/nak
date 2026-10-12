@@ -178,7 +178,8 @@ see Scoped out).
   it instead of stacking a duplicate; two cooks on one day are
   separate records (the wiki twin learned this distinction in
   production).
-- **Merge, don't duplicate, on update**: details arrive piecemeal
+- **Merge, don't duplicate, on update** (carried in
+  `recipe_record_update`'s description): details arrive piecemeal
   ("the crumb was actually fine on day two"). `recipe_record_get`
   the record first and pass the merged body; `content` is a
   full-replacement patch, so an update that omits it leaves the
@@ -194,10 +195,15 @@ ride always-on:
 - `recipe_record_get` - one record by id.
 - `recipe_record_search` - semantic search across every recipe's
   records, optional `recipe_id` scope, optional `outcome` filter.
-  Embed + ILIKE-on-content merge, same shape as `searchRecipes`.
-  The `recipe_id` scope and `outcome` filter are deliberate deltas
-  from the wiki twin (whose `record_search` takes only `query` +
-  `limit`): the outcome param is what makes "show me my failed
+  Merge semantics come from `searchWikiRecords`
+  (`wiki-records.ts`): embed + ILIKE-on-**content** (recipes' own
+  `searchRecipes` ILIKEs on title - records have no title), dedup
+  by id, capped, with its empty-query short-circuit. The edge tool
+  gaining an ILIKE leg at all is a deliberate divergence from the
+  wiki twin's `record_search` (semantic-RPC only, empty on
+  embedder failure) so the tool stays useful with the embedder
+  down. The `recipe_id` scope and `outcome` filter are further
+  deltas: the outcome param is what makes "show me my failed
   bakes across everything" a filter and not prose parsing - the
   cross-recipe journey the outcome column exists for.
 
@@ -234,10 +240,14 @@ history, then its log" is the narrative.
 - **Rows**: date ("Mon D, YYYY"), outcome chip, tag chips, truncated
   preview; a row expands to the full content with Edit / Delete.
 - **Filters**: from/to date range, tag dropdown, outcome dropdown,
-  and a semantic search box (debounced embed-then-merge with
-  abort-controller supersede, the same shape as RecipeList's
-  search). Search results bypass the filters by design (the twin's
-  behavior); the outcome dropdown participates in filtering only.
+  and a semantic search box (debounce + abort-controller supersede
+  wired like RecipeList's search; the merge itself is
+  `searchWikiRecords`' shape - see the search tool above). Search
+  results bypass the date/tag filters by design (the twin's
+  behavior), but an outcome selection is NOT dropped: a set
+  outcome dropdown is passed into the search call as its `outcome`
+  param, so "failures about X" works in the UI, not just via the
+  tools.
 - **Search scope: cross-recipe, decided.** The search box searches
   every recipe's records (mirroring `recipe_record_search`), not
   just the open recipe's log; a hit on another recipe is annotated
@@ -248,11 +258,12 @@ history, then its log" is the narrative.
   the detail pane to that recipe through the modal's routed-recipe
   resolution (`route.recipe` from `src/lib/routing.svelte.ts`).
   Navigation resets the search and
-  filters (the twin's remount-on-switch pattern), landing at the
-  top of that recipe's log; a scroll-highlight of the hit row is a
-  cheap follow-on if the landing feels blind. Searching the whole
-  cooking log from any recipe is the point; per-recipe narrowing is
-  the filters' job.
+  filters (the twin's remount-on-switch pattern), and the target
+  row is scroll-highlighted on arrival (promoted into M2 by the
+  round-4 review: without it the user clicks a specific hit and
+  lands blind at the top of another recipe's log). Searching the
+  whole cooking log from any recipe is the point; per-recipe
+  narrowing is the filters' job.
 - **Export**: single record to `yyyy-mm-dd-<slug>.md` with
   date/tags/outcome front matter, and Export all to a zip holding
   `recipe.md` plus one `records/` entry per record (wiki's Export
@@ -265,8 +276,10 @@ history, then its log" is the narrative.
 - **Offline**: records stay online-only, but reads degrade soft:
   offline, the section keeps rendering its last fetch (a mid-cook
   "what did I note last time" still works on the open recipe) and
-  disables only the add/edit/delete controls with copy, the way
-  the bookmark controls degrade. A fresh load with nothing yet
+  disables the add/edit/delete controls with copy, the way the
+  bookmark controls degrade. The filter and search controls
+  disable too - both are server queries, and a failed refetch
+  must not look like an empty log. A fresh load with nothing yet
   fetched (no cached rows) shows a distinct offline-no-data line,
   keyed off the offline status Cookbook.svelte already computes -
   never the "no records yet" empty state, which would lie about
@@ -310,29 +323,46 @@ Supporting moves:
   `(id, user_id)` replica-identity index - omit either and M2's
   relay silently receives nothing, the exact failure the wiki
   gotcha documents), embedding RPCs, `EMBED_SOURCES` entry,
-  `_shared/recipe-record-limits.ts`, types, SupabaseService slice.
-  Gate: `mise run sync` green, the backfill embeds a seeded record,
-  unit tests pass.
+  `_shared/recipe-record-limits.ts`, types, SupabaseService slice,
+  and `subscribeToRecipeRecordChanges` in `realtime.ts` (data-layer
+  work, so M2's wiring has something to call). Two required test
+  edits land here: `supabase/functions/tests/embed-input.test.ts`
+  asserts `EMBED_SOURCES`' name list by exact equality, and
+  `tests/realtime-subscribe.test.ts` pins every realtime helper's
+  topic contract. Gate: `mise run sync` green, the backfill embeds
+  a seeded record, unit tests pass.
 - **M2 - UI.** The Records section in the detail pane (mounted by
   Cookbook.svelte): add / edit / delete, filters, cross-recipe
-  search with navigation, export module, realtime refresh.
+  search with navigation + scroll-highlight of the clicked hit,
+  export module, offline degradation, realtime refresh wired
+  through `Chat.svelte` + `cookbook-events.ts`.
 - **M3 - Chat tools.** Six tools wired into the two toolboxes and
   registered in the edge tool barrel
-  (`supabase/functions/venice/tools/index.ts`), formatArgs, the
+  (`supabase/functions/venice/tools/index.ts`), shared edge helpers
+  in a new `venice/tools/_recipe_record_helpers.ts` (the
+  `_record_helpers.ts` clone: column list, date/tag normalizers,
+  ownership pre-check, plus outcome normalizing), formatArgs, the
   capture trigger + dedup/merge guards in the descriptions, the
   two toolbox description strings (they enumerate members), the
   edge tools' b-strict specifics carried from the twin (explicit
   `user_id` on insert, and a parent-ownership pre-check so a
   record can only be written to a recipe the calling user owns),
-  docs, QA use-case run end to end.
+  validation per the house convention (the dispatcher's central
+  `validateToolArgs` handles the mechanical schema checks the
+  browser-declared schemas already carry; per-tool semantic checks
+  - date format, outcome enum, update's at-least-one-of - use the
+  `ArgErrors` accumulator, never a first-fail throw), docs, QA
+  use-case run end to end.
 
 ## Testing
 
 - `tests/recipe-records.test.ts`: coercers, filters, chip labels,
   export filenames (plain vitest, stubbed client, mirroring the
   wiki-records tests).
-- `tests/tools.test.ts`: toolbox membership assertions updated for
-  the six new tools.
+- `tests/tools.test.ts`: three loops updated for the six new
+  tools - the cookingToolbox membership array (writes), the
+  always-on read list (`toContain`), and the no-writes-leak loop
+  (records writes must not appear outside the cooking toolbox).
 - Edge handler tests modeled on
   `supabase/functions/tests/recipe_save.test.ts` (the existing
   recipe-tool handler template; note wiki's record handlers have
@@ -343,11 +373,31 @@ Supporting moves:
   `>=` comparisons, so adding a table cannot trip them upward -
   the suite should simply stay green over the new DML. A floor
   failing DOWNWARD is a scanner regression, not this change.
+- The planned unit tests are all DOM-free (coercers, filters,
+  chips, filenames - the twin `tests/wiki-records.test.ts` is not
+  registered either), so no `environmentMatchGlobs` entry is
+  needed in `vite.config.ts`.
 - QA use-case: `docs/qa/use-cases/recipe-records.md`, mirroring
-  `wiki-records.md` minus the sweep step (manual CRUD, filters,
-  search, export, embedding backfill, realtime relay).
+  `wiki-records.md` minus the sweep step, PLUS steps the twin
+  never had - the chat tools are the primary capture path now, so
+  the walkthrough covers: the chat-capture journey (tell the model
+  a bake happened; the reply names the new record; opening the
+  modal shows it, which doubles as the realtime-relay proof; a
+  second report of the same event exercises the dedup guard; a
+  detail correction exercises the get-then-merge update), the
+  outcome filter end to end (set via tool and via the dropdown,
+  including the failure-across-recipes search), cross-recipe
+  search click-through + scroll-highlight, the delete confirm's
+  "N records" count, export, embedding backfill, and the offline
+  degradation (stale rows visible, writes and filter/search
+  controls disabled, offline-no-data line on a fresh load). Index
+  it in `docs/qa/README.md`'s use-case list.
 - Docs: `../cookbook.md` gains a Records section; the user-facing
-  doc gains the "why records vs History panel" story.
+  doc gains the "why records vs History panel" story;
+  `docs/dev/offline-cache.md`'s Interactions ledger gains the
+  "recipe records are online-only, degrade soft" line (the
+  dev-docs rule: a feature coupling to another feature's ledger
+  must update it).
 
 ## Scoped out (deliberately)
 
@@ -373,8 +423,10 @@ Supporting moves:
   settings toggle. If capture-by-discussion proves unreliable
   (records forgotten or misdated), revisit then.
 - **Offline cache.** Records stay online-only in v1; the section
-  degrades visibly offline (disabled + copy, like the bookmark
-  controls). The favorite/upcoming offline reconcile is untouched.
+  degrades soft offline (reads render the last fetch, writes and
+  filter/search controls disable with copy). The favorite/upcoming
+  offline reconcile is untouched - records join no IndexedDB
+  mirror.
 - **A capture nudge from cooking mode.** Ending a cooking session
   ("Done cooking") is the app's most reliable "a bake just
   happened" moment, and the section could offer to log a record
@@ -416,5 +468,5 @@ Jeff; recorded so a future session does not re-litigate them.
    the cook report is ambiguous), matching how Jeff described
    using it; a cross-recipe hit click navigates and resets
    search/filters (the twin's remount pattern); offline keeps reads
-   on the last fetch and disables only writes (cooking is the most
+   on the last fetch and disables writes (cooking is the most
    offline-prone context in the app).
